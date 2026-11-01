@@ -231,6 +231,8 @@ pub struct Installer {
     pub target: Option<lodestar_update::Target>,
     /// Verifies a staged version as the supervisor will before running it.
     pub verify: Verify,
+    /// A restart (or shutdown) has been asked for: nothing starts now.
+    pub restarting: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl Installer {
@@ -254,6 +256,7 @@ impl Installer {
             target: super::testing::target()
                 .or_else(|| lodestar_update::Target::from_triple(env!("LODESTAR_BUILD_TARGET"))),
             verify: Box::new(|bin, v| super::overlay::verify(bin, v).is_ok()),
+            restarting: Box::new(|| crate::system::Restart::global().was_requested()),
         }
     }
 }
@@ -291,8 +294,13 @@ struct Inner {
     last_manual: Mutex<Option<Instant>>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
     installer: Installer,
-    /// The version an install under way is for.
+    /// The version an install under way is for; kept after a switch was
+    /// asked for, until the process exits.
     installing: Mutex<Option<Version>>,
+    /// The one-check lock, kept for the rest of the process once a switch
+    /// was asked for: nothing checks, stages or installs again before the
+    /// restart (a second stage would replace the folder the switch names).
+    switching: Mutex<Option<OneAtATime>>,
     /// The version the last install was for, failed or switching: the
     /// schedule doesn't try it again until the next check.
     failed: Mutex<Option<Version>>,
@@ -392,6 +400,7 @@ impl Engine {
                 clock,
                 installer,
                 installing: Mutex::new(None),
+                switching: Mutex::new(None),
                 failed: Mutex::new(None),
                 last_progress: Mutex::new(None),
                 wake: tokio::sync::Notify::new(),
@@ -420,16 +429,25 @@ impl Engine {
                     () = engine.inner.wake.notified() => continue,
                     () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
                 }
+                if engine.switching() {
+                    // The switch keeps the lock until the process exits.
+                    let _ = stop.changed().await;
+                    return;
+                }
                 if engine.due() {
                     // Still due once the lock is ours: a manual check may
                     // have run while this one waited for it.
-                    let one = engine.inner.checking.clone().lock_owned().await;
+                    let Some(one) = engine.one_at_a_time(&mut stop).await else {
+                        return;
+                    };
                     if engine.due() {
                         let _ = engine.run_check_holding(one).await;
                     }
                 }
                 if engine.until_install().is_some_and(|d| d.is_zero()) {
-                    let one = engine.inner.checking.clone().lock_owned().await;
+                    let Some(one) = engine.one_at_a_time(&mut stop).await else {
+                        return;
+                    };
                     // Still due once the lock is ours (an Install now may
                     // have run meanwhile).
                     if let Some((v, true)) = engine.next_install() {
@@ -438,6 +456,20 @@ impl Engine {
                 }
             }
         })
+    }
+
+    /// The one-check lock, or `None` once `stop` is set first (a switch
+    /// may hold the lock until the process exits).
+    async fn one_at_a_time(&self, stop: &mut watch::Receiver<bool>) -> Option<OneAtATime> {
+        tokio::select! {
+            one = self.inner.checking.clone().lock_owned() => Some(one),
+            _ = stop.changed() => None,
+        }
+    }
+
+    /// A switch was asked for: this process is on its way out.
+    fn switching(&self) -> bool {
+        lock(&self.inner.switching).is_some() || (self.inner.installer.restarting)()
     }
 
     /// The install the schedule makes next and whether it's due now.
@@ -1068,6 +1100,9 @@ impl Engine {
         confirm_manual: bool,
     ) -> Result<UpdatesStatus, UpdatesError> {
         let v = layout::parse_version(version).ok_or(UpdatesError::UnknownVersion)?;
+        if self.switching() {
+            return Err(UpdatesError::InstallUnavailable("busy"));
+        }
         self.may_install(&v, confirm_manual)?;
         match when {
             InstallWhen::Window => {
@@ -1134,10 +1169,17 @@ impl Engine {
     /// One install, holding the one-check lock: its events, and on failure
     /// the log line and the `failed` event. A queued version is taken off
     /// the queue either way.
-    async fn run_install(&self, _one: OneAtATime, v: Version) -> Result<(), &'static str> {
+    async fn run_install(&self, one: OneAtATime, v: Version) -> Result<(), &'static str> {
         *lock(&self.inner.installing) = Some(v.clone());
         let result = self.install_steps(&v).await;
-        *lock(&self.inner.installing) = None;
+        if result.is_ok() {
+            // The switch was asked for: keep the lock and `installing`
+            // until the process exits.
+            *lock(&self.inner.switching) = Some(one);
+        } else {
+            *lock(&self.inner.installing) = None;
+            drop(one);
+        }
         // Not again until the next check, whether it failed or is
         // switching (the restart may take a moment).
         *lock(&self.inner.failed) = Some(v.clone());
@@ -1203,9 +1245,16 @@ impl Engine {
             return Err("bad_overlay");
         }
         // §12.2 "At install time": against the trust state and clock now.
-        let (again, _) = self.reverify(&bin, v).await?;
-        lodestar_update::install(&again, v, target, lodestar_update::ArtifactKind::Binary)
-            .map_err(lodestar_update::Error::code)?;
+        // A refusal removes the staged folder, as a bad overlay's is.
+        let again = self.reverify(&bin, v).await.and_then(|(again, _)| {
+            lodestar_update::install(&again, v, target, lodestar_update::ArtifactKind::Binary)
+                .map(|_| ())
+                .map_err(lodestar_update::Error::code)
+        });
+        if let Err(code) = again {
+            let _ = bin.remove_overlay(v);
+            return Err(code);
+        }
 
         self.publish(UpdatesState::Installing, Some(v.to_string()), None);
         (self.inner.installer.switch)(v);
@@ -1620,8 +1669,13 @@ mod tests {
         busy: Arc<Mutex<Option<&'static str>>>,
         /// The versions a switch was asked for.
         switched: Arc<Mutex<Vec<String>>>,
+        /// Runs when a staged overlay is verified; its result is the
+        /// verification's when `Some(false)` (a failure) is returned.
+        on_verify: Arc<Mutex<VerifyHook>>,
         engine: Engine,
     }
+
+    type VerifyHook = Box<dyn Fn() -> Option<bool> + Send>;
 
     type Hook = Arc<dyn Fn(Step) -> io::Result<()> + Send + Sync>;
 
@@ -1661,6 +1715,8 @@ mod tests {
         let busy = Arc::new(Mutex::new(None));
         let switched = Arc::new(Mutex::new(Vec::new()));
         let (b, sw, verify_keys) = (busy.clone(), switched.clone(), trust.clone());
+        let on_verify: Arc<Mutex<VerifyHook>> = Arc::new(Mutex::new(Box::new(|| None)));
+        let hook_verify = on_verify.clone();
         let installer = Installer {
             source: downloads.clone(),
             busy: Box::new(move || *lock(&b)),
@@ -1668,6 +1724,9 @@ mod tests {
             target: Some(lodestar_update::Target::X86_64LinuxMusl),
             // The supervisor's verification, with the test keys.
             verify: Box::new(move |bin, v| {
+                if let Some(result) = (lock(&hook_verify))() {
+                    return result;
+                }
                 let dir = bin.overlay(v);
                 let read = |name| std::fs::read(dir.join(name)).ok();
                 let (Some(m), Some(sig), Some(binary)) = (
@@ -1688,6 +1747,7 @@ mod tests {
                 )
                 .is_ok()
             }),
+            restarting: Box::new(|| false),
         };
         let engine = Engine::with(
             Context {
@@ -1726,6 +1786,7 @@ mod tests {
             downloads,
             busy,
             switched,
+            on_verify,
             engine,
         }
     }
@@ -2429,6 +2490,127 @@ mod tests {
         );
         assert!(!bin.path("0.6.0.part").exists());
         assert!(!bin.path("0.6.0.tmp").exists());
+    }
+
+    /// The last install's `failed` code, with no switch asked for and no
+    /// overlay left behind.
+    async fn install_fails_with(e: &Env, code: &str) {
+        lock(&e.events).clear();
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("failed", |e| e.states().contains(&UpdatesState::Failed))
+            .await;
+        let failed = lock(&e.events).last().cloned().unwrap();
+        assert_eq!(failed.error.as_deref(), Some(code));
+        assert!(e.switched().is_empty(), "{code}: no switch");
+        assert!(
+            Bin::open(&e.data).unwrap().overlays().unwrap().is_empty(),
+            "{code}: the staged folder is removed"
+        );
+        assert_eq!(e.engine.status().installing, None);
+    }
+
+    /// A staged overlay that the supervisor's verification would refuse.
+    #[tokio::test]
+    async fn a_staged_overlay_that_fails_verification_is_removed() {
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        *lock(&e.on_verify) = Box::new(|| Some(false));
+        install_fails_with(&e, "bad_overlay").await;
+    }
+
+    /// The manifest verified again after staging: an expiry passed, or a
+    /// `trust.json` damaged since, refuses the switch.
+    #[tokio::test]
+    async fn the_second_verification_refuses_an_expired_manifest_or_damaged_trust() {
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        // During the overlay's verification, after the first one passed:
+        // the clock moves past the manifest's expiry (7 days).
+        let clock = e.clock.clone();
+        *lock(&e.on_verify) = Box::new(move || {
+            clock.store(NOW + 8 * 86_400, std::sync::atomic::Ordering::Relaxed);
+            None
+        });
+        install_fails_with(&e, "not_current").await;
+
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        let trust = e.bin().join(trust_file::FILE);
+        *lock(&e.on_verify) = Box::new(move || {
+            std::fs::write(&trust, b"{ damaged").unwrap();
+            None
+        });
+        install_fails_with(&e, "trust_damaged").await;
+    }
+
+    /// No room for the binary, the release's index rebuild and the margin.
+    #[tokio::test]
+    async fn no_room_on_the_disk_fails_before_the_download() {
+        let e = env(Mode::Notify);
+        e.serve_with(NOW - 100, "0.6.0", None, |m| {
+            m["releases"][0]["reindex_bytes"] = (u64::MAX / 2).into();
+        });
+        e.engine.run_check().await.unwrap();
+        install_fails_with(&e, "no_space").await;
+        assert!(e.downloads.asked.lock().unwrap().is_empty());
+    }
+
+    /// Once a switch is asked for, nothing installs, checks or stages
+    /// again before the process exits.
+    #[tokio::test]
+    async fn after_a_switch_nothing_installs_again() {
+        let e = env(Mode::Auto);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("switched", |e| !e.switched().is_empty()).await;
+        let staged = Bin::open(&e.data).unwrap().overlay(&Version::new(0, 6, 0));
+        let before = std::fs::metadata(&staged).unwrap().modified().unwrap();
+        assert_eq!(
+            e.engine
+                .install_request("0.6.0", InstallWhen::Now, false)
+                .await,
+            Err(UpdatesError::InstallUnavailable("busy"))
+        );
+        assert!(matches!(
+            e.engine.check_now().await,
+            Err(UpdatesError::RateLimited { .. })
+        ));
+        let s = e.engine.status();
+        assert_eq!(
+            s.installing,
+            Some(Installing {
+                version: "0.6.0".into(),
+                when: InstallWhen::Now
+            })
+        );
+        // The schedule stays out too, though its next check is due.
+        e.set_clock(NOW + 8 * 3600);
+        let (stop, stopped) = watch::channel(false);
+        let task = e.engine.spawn(stopped);
+        e.until("still one switch", |e| {
+            e.engine.inner.switching.lock().unwrap().is_some()
+        })
+        .await;
+        stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("the schedule stops while the switch holds the lock")
+            .unwrap();
+        assert_eq!(e.switched(), ["0.6.0"]);
+        assert_eq!(
+            std::fs::metadata(&staged).unwrap().modified().unwrap(),
+            before
+        );
     }
 
     #[tokio::test]

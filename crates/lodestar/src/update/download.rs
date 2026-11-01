@@ -34,6 +34,11 @@ type BoxFuture<'a, T> = BoxPin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The whole download, every hop included: 256 MiB at about 1 MB/s.
 pub const OVERALL: Duration = Duration::from_secs(30 * 60);
+/// The longest wait for the body's next chunk: a stalled server fails
+/// the download (`timeout`) rather than hold the install for [`OVERALL`].
+pub const IDLE: Duration = Duration::from_secs(60);
+/// Chunks in flight to the writer.
+const QUEUE: usize = 8;
 
 /// One response: its status and `Location`, and its body chunk by chunk.
 pub struct Opened {
@@ -110,9 +115,20 @@ pub async fn download(
     pin: &Pin,
     progress: &mut (dyn FnMut(u64) + Send),
 ) -> Result<PathBuf, DownloadError> {
+    download_within(src, bin, pin, progress, IDLE).await
+}
+
+/// [`download`], waiting at most `idle` for each chunk.
+async fn download_within(
+    src: &dyn Source,
+    bin: &Bin,
+    pin: &Pin,
+    progress: &mut (dyn FnMut(u64) + Send),
+    idle: Duration,
+) -> Result<PathBuf, DownloadError> {
     remove_stale_parts(bin);
     let path = part_path(bin, pin);
-    let result = tokio::time::timeout(OVERALL, fetch_to(src, &path, pin, progress))
+    let result = tokio::time::timeout(OVERALL, fetch_to(src, &path, pin, progress, idle))
         .await
         .unwrap_or(Err(DownloadError::Fetch(CheckError::Timeout)));
     if result.is_err() {
@@ -126,6 +142,7 @@ async fn fetch_to(
     path: &Path,
     pin: &Pin,
     progress: &mut (dyn FnMut(u64) + Send),
+    idle: Duration,
 ) -> Result<(), DownloadError> {
     let mut at = Url::parse(&pin.url).map_err(|_| CheckError::Redirect)?;
     let mut opened = None;
@@ -152,20 +169,48 @@ async fn fetch_to(
     let Some(mut opened) = opened else {
         return Err(CheckError::Redirect.into());
     };
-    let mut file = create_part(path).map_err(|_| DownloadError::Io)?;
-    let mut hash = sha2::Sha256::new();
-    let mut len = 0u64;
-    while let Some(chunk) = opened.body.next().await? {
-        len += chunk.len() as u64;
-        if len > pin.size {
-            return Err(DownloadError::TooLarge);
+    // The file's writes, its hash and its fsync run off the async
+    // workers; this side counts the bytes (the size cap) and reports.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(QUEUE);
+    let target = path.to_path_buf();
+    let writer = tokio::task::spawn_blocking(move || -> io::Result<Sha256> {
+        let mut file = create_part(&target)?;
+        let mut hash = sha2::Sha256::new();
+        while let Some(chunk) = rx.blocking_recv() {
+            hash.update(&chunk);
+            file.write_all(&chunk)?;
         }
-        hash.update(&chunk);
-        file.write_all(&chunk).map_err(|_| DownloadError::Io)?;
-        progress(len);
+        file.sync_all()?;
+        Ok(Sha256(hash.finalize().into()))
+    });
+    let mut len = 0u64;
+    let streamed = async {
+        loop {
+            let next = tokio::time::timeout(idle, opened.body.next())
+                .await
+                .map_err(|_| CheckError::Timeout)??;
+            let Some(chunk) = next else {
+                return Ok(());
+            };
+            len += chunk.len() as u64;
+            if len > pin.size {
+                return Err(DownloadError::TooLarge);
+            }
+            // A writer that stopped has its error below.
+            if tx.send(chunk).await.is_err() {
+                return Ok(());
+            }
+            progress(len);
+        }
     }
-    file.sync_all().map_err(|_| DownloadError::Io)?;
-    if len != pin.size || Sha256(hash.finalize().into()) != pin.sha256 {
+    .await;
+    // The writer ends (and closes the file) before anything is decided,
+    // so a failure's file can be removed.
+    drop(tx);
+    let written = writer.await.map_err(|_| DownloadError::Io)?;
+    streamed?;
+    let hash = written.map_err(|_| DownloadError::Io)?;
+    if len != pin.size || hash != pin.sha256 {
         return Err(DownloadError::Mismatch);
     }
     Ok(())
@@ -402,6 +447,36 @@ pub mod tests {
             download(&f, &bin, &p, &mut |_| {}).await,
             Err(DownloadError::Fetch(CheckError::Status(404)))
         );
+    }
+
+    /// A body that stops sending fails at the idle limit, not the
+    /// overall one, and leaves no file.
+    #[tokio::test]
+    async fn a_stalled_body_times_out_and_leaves_nothing() {
+        struct Stalled;
+        impl Chunks for Stalled {
+            fn next(&mut self) -> BoxFuture<'_, Result<Option<Vec<u8>>, CheckError>> {
+                Box::pin(std::future::pending())
+            }
+        }
+        struct Source1;
+        impl Source for Source1 {
+            fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, CheckError>> {
+                Box::pin(async {
+                    Ok(Opened {
+                        status: 200,
+                        location: None,
+                        body: Box::new(Stalled),
+                    })
+                })
+            }
+        }
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        let p = pin(&binary());
+        let got = download_within(&Source1, &bin, &p, &mut |_| {}, Duration::from_millis(50)).await;
+        assert_eq!(got, Err(DownloadError::Fetch(CheckError::Timeout)));
+        assert!(!part_path(&bin, &p).exists());
     }
 
     /// A `.part` left by an earlier download goes; one planted as a link
