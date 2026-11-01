@@ -47,14 +47,11 @@
 	"shortcuts_conflict_swap": "交换",
 	"shortcuts_conflict_cancel": "取消",
 	"shortcuts_conflict_command": "{key} 也被 {command} 使用；在同时有两者的页面上，两者都不会生效。",
-	"shortcuts_save": "保存",
-	"shortcuts_cancel": "取消",
-	"shortcuts_saved": "键盘设置已保存",
-	"shortcuts_stale": "已在其他标签页或设备中更改；您的修改已保留。",
-	"shortcuts_save_failed": "无法保存键盘设置。",
+	"shortcuts_saved": "已保存。",
+	"shortcuts_stale": "其他标签页或设备也做了更改；两边的更改都已保留。",
+	"shortcuts_save_failed": "无法保存此更改，已恢复为上次保存的设置。",
 	"shortcuts_load_failed": "无法加载键盘设置。",
 	"shortcuts_err_plus": "+ 键不能用作快捷键",
-	"shortcuts_nothing_to_save": "没有需要保存的更改。",
 	"shortcuts_read_only_banner": "这些设置已锁定，您的更改未保存。",
 	"shortcuts_key_comma": "逗号",
 	"shortcuts_key_period": "句点",
@@ -65,5 +62,6 @@
 	"shortcuts_key_backslash": "反斜杠",
 	"shortcuts_key_bracket_left": "左方括号",
 	"shortcuts_key_bracket_right": "右方括号",
-	"shortcuts_key_backtick": "反引号"
+	"shortcuts_key_backtick": "反引号",
+	"shortcuts_undo": "撤销"
 }

@@ -27,8 +27,7 @@ test('a saved remap holds after a reload, and the server refuses a clash', async
 	await page.goto('/dev/shortcuts');
 	await page.getByRole('button', { name: 'Change the key for Next result' }).click();
 	await page.keyboard.press('n');
-	await page.getByRole('button', { name: 'Save' }).click();
-	await expect(page.getByText('Keyboard settings saved')).toBeVisible();
+	await expect(page.getByText('Saved.')).toBeVisible();
 
 	await page.reload();
 	await expect(page.getByTestId('shortcut-key-results.next')).toContainText('N');
@@ -54,7 +53,6 @@ test('a clash the editor cannot see is refused with a 422 and the message shows 
 	await page.reload();
 	await page.getByRole('button', { name: 'Change the key for Next result' }).click();
 	await page.keyboard.press('p');
-	await page.getByRole('button', { name: 'Save' }).click();
 	await expect(page.getByTestId('shortcut-row-results.next')).toContainText(/both use p/);
 	await page.request.patch('/api/v1/settings/preferences', { data: { shortcut_keys: {} } });
 });
