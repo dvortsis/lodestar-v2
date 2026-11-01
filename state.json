@@ -2003,14 +2003,15 @@
       "note": "Playwright core 10m40s on normal run (no trim needed)"
     },
     "S-send": {
-      "status": "CHANGES: revert unrelated prettier reformat of ~88 docs/decisions files; code OK",
+      "status": "review-ready",
       "session": "session_01MMjhn9Bf9rWaxk6ywGj3MY",
       "model": "sonnet",
       "brief": "briefs/S-send.md",
       "launched_at": "2026-11-01T05:52Z",
       "pr": 321,
-      "head": "8b6c055",
-      "ruling": "\u00a72.26: /t 20.8 -> 21.0 KB, drawer 27.2 -> 27.4 KB (Send = \u00a710.5 primary action)"
+      "head": "faf3384",
+      "ruling": "\u00a72.26: /t 20.8 -> 21.0 KB, drawer 27.2 -> 27.4 KB (Send = \u00a710.5 primary action)",
+      "review": "runner MERGE at faf3384"
     },
     "X-discover-headroom": {
       "status": "review-ready",
