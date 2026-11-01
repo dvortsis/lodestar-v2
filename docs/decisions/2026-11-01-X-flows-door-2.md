@@ -26,14 +26,13 @@ Closes the S-filters-2c (#316) review follow-up (`2026-11-01-S-filters-2c.md`, "
 
   | Entry | `main` | This branch | Change | Limit |
   |---|---|---|---|---|
-  | Settings AppearanceScreen (first view) | 28,317 | 27,878 | −439 | 45,000 |
+  | Settings AppearanceScreen (first view) | 28,317 | 27,997 | −320 | 45,000 |
   | Appearance 18+ dialog (on demand) | 19,777 | 20,138 | +361 | 20,600 |
   | Wizard steps (on demand) | 49,395 | 47,250 | −2,145 | 53,600 |
   | Filters flows door (on demand) | 529 | 553 | +24 | 580 |
-  | Filters dialogs (on demand) | 35,351 | 35,344 | −7 | 35,900 |
-  | Settings FiltersScreen (first view) | 30,575 | 30,566 | −9 | 31,000 |
+    | Settings FiltersScreen (first view) | 30,575 | 30,560 | −15 | 31,000 |
 
-  - The Appearance first view fell by 439 B: `adult.svelte` and the dialog's preload list now load on demand, which accounts for the 18+ entry's +361.
+  - The Appearance first view fell by 320 B: `adult.svelte` and the dialog's preload list now load on demand (the 18+ entry's +361), less the small turn-off request it keeps.
   - Wizard steps fell by 2,145 B: the change flow it counted is gated in "Filters dialogs".
-  - Every other entry moved by 7 B or less, from changed chunk hashes. The largest increase among them is "Settings security keys and proxy" (+2 B).
+  - Every other entry moved by −17 to +2 B, from changed chunk hashes.
 - **Not done here (follow-up):** the first-view walks treat `flows-root.ts` as on demand, as they treat the door. So a view that imports `flows-root.ts` with `import()` directly, skipping the door, isn't named by the guard. (`flows-adult.ts` isn't treated that way, so a direct import of it is caught.) The gap predates this slice and covers the Filters, drawer and /t views too. A check that only `flows-door.ts` imports the roots would close it.
