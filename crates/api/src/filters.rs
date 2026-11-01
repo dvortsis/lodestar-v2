@@ -1434,7 +1434,10 @@ impl FiltersApi {
                     row.shadow_until = days(*shadow_days, now);
                 }
                 store.update_rule(&row).map_err(internal)?;
-                if was_unreadable {
+                // Only a change that can fix it, which `assess` already
+                // counts as weakening: an enable-only update needs no
+                // password, so it never releases.
+                if was_unreadable && (q.is_some() || act.is_some() || unless.is_some()) {
                     out.released = Some(self.release_rules(store, &[format!("U-{id}")])?);
                 }
             }

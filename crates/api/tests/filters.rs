@@ -2586,6 +2586,16 @@ async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
     assert_eq!(stand_in.query, lodestar_search::Node::All);
     drop(e);
 
+    // Enabling needs no password, so it never releases what it held.
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "update_rule", "id": rule, "enabled": true }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["released"].is_null(), "{body}");
     let (status, body) = apply(
         &f,
         &cookie,
