@@ -12,12 +12,13 @@ const raw = readFileSync(
 );
 export const SETTINGS_INDEX: Index = JSON.parse(raw.slice(raw.indexOf('\n') + 1));
 
+// data_dir is set by LODESTAR_DATA_DIR and read-only, as in the golden index.
 const value = (v: unknown): components['schemas']['SettingValue'] => ({
 	value: v,
-	source: 'default',
-	read_only: false,
-	restart_required: false,
-	env: null
+	source: 'env',
+	read_only: true,
+	restart_required: true,
+	env: 'LODESTAR_DATA_DIR'
 });
 
 /** Answers the index plus every section: General has its one field, others are empty. */

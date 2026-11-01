@@ -11,9 +11,12 @@ const expect = baseExpect.configure({ timeout: 10_000 });
 test('illustrated state: not found', async ({ page, go, density }) => {
 	await go('/definitely-not-a-page');
 	await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
-	// The scene follows the theme's mode; wait for it only where the viewport leaves room (>= 600 px).
-	if ((page.viewportSize()?.height ?? 0) >= 600)
-		await expect(page.locator('[data-testid="state-screen"] img')).toBeVisible();
+	// The scene is lazy and decoded async: snapshot only once it has actually loaded.
+	const img = page.locator('[data-testid="state-screen"] img');
+	await expect(img).toBeVisible();
+	await expect
+		.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0))
+		.toBe(true);
 	await expectNoA11yViolations(page);
 	if (density === 'comfortable') await expectPageSnapshot(page, 'state-not-found');
 });
