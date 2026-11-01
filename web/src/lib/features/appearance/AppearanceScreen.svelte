@@ -40,6 +40,8 @@
 	/** Saves go one at a time, each with the revision the last one returned. */
 	let queue: Promise<void> = Promise.resolve();
 	let saving = 0;
+	/** Changes still queued: a re-read lays them back over the server's values. */
+	let pending: Partial<Appearance>[] = [];
 	let systemDark = $state(false);
 	const dark = $derived(prefs.mode === 'dark' || (prefs.mode === 'system' && systemDark));
 
@@ -109,6 +111,7 @@
 				return;
 			}
 			({ prefs, locks, revision } = res);
+			for (const p of pending) prefs = { ...prefs, ...p };
 			status = 'ready';
 			void apply(prefs);
 		} catch {
@@ -127,6 +130,7 @@
 		void apply(prefs);
 		markSave(true);
 		saving++;
+		pending.push(patch);
 		queue = queue.then(async () => {
 			try {
 				revision = await save(patch, revision);
@@ -135,6 +139,7 @@
 				// change. Undoing is a change of its own and isn't itself undoable.
 				if (!undoing && saving === 1) undo = before;
 			} catch (e) {
+				pending = pending.filter((p) => p !== patch);
 				// A 2xx that can't be read may have landed: re-read rather than say it failed.
 				if (e instanceof Unreadable) return void (await refresh());
 				// Put back only the fields this change set, and only if nothing newer replaced them.
@@ -145,6 +150,7 @@
 				if (e instanceof ApiError && e.code === 'stale_revision') await refresh();
 				failed = !(e instanceof ApiError && e.status === 401);
 			} finally {
+				pending = pending.filter((p) => p !== patch);
 				saving--;
 				markSave(false);
 			}
@@ -153,15 +159,14 @@
 	}
 
 	/** Where each field is changed: focus goes there after Undo, which removes its own button. */
-	const CONTROL: Record<Name, string> = {
-		theme:
-			'[aria-labelledby="ap-theme"] input[type="radio"]:checked, [data-testid="ap-browse"] button',
-		theme_dark:
-			'[aria-labelledby="ap-theme"] input[type="radio"]:checked, [data-testid="ap-browse"] button',
-		mode: '[aria-labelledby="ap-theme"] [role="radio"][aria-checked="true"]',
-		density: '[aria-labelledby="ap-density"] [role="radio"][aria-checked="true"]',
-		motion: '[aria-labelledby="ap-motion"] [role="radio"][aria-checked="true"]',
-		illustrations: '[data-testid="ap-illustrations"] [role="switch"]'
+	const THEME = '[aria-labelledby="ap-theme"]';
+	const CONTROL: Record<Name, string[]> = {
+		theme: [`${THEME} input[type="radio"]:checked`, '#ap-filter'],
+		theme_dark: ['#ap-dark', `${THEME} [role="switch"]`, '#ap-filter'],
+		mode: [`${THEME} [role="radio"][aria-checked="true"]`],
+		density: ['[aria-labelledby="ap-density"] [role="radio"][aria-checked="true"]'],
+		motion: ['[aria-labelledby="ap-motion"] [role="radio"][aria-checked="true"]'],
+		illustrations: ['[data-testid="ap-illustrations"] [role="switch"]']
 	};
 
 	function undoLast() {
@@ -169,7 +174,12 @@
 		undo = null;
 		void change(back, true);
 		const name = Object.keys(back)[0] as Name;
-		void tick().then(() => document.querySelector<HTMLElement>(CONTROL[name])?.focus());
+		void tick().then(() => {
+			for (const sel of CONTROL[name]) {
+				const el = document.querySelector<HTMLElement>(sel);
+				if (el) return el.focus();
+			}
+		});
 	}
 
 	async function loadAdult() {
@@ -277,7 +287,7 @@
 				<p class="as-body">
 					{m.appearance_current({ theme: prefs.theme })}
 				</p>
-				<div data-testid="ap-browse">
+				<div>
 					<Button onclick={() => void openPicker()}>{m.appearance_browse()}</Button>
 				</div>
 				{#if pickerFailed}<Banner kind="error">{m.appearance_picker_failed()}</Banner>{/if}

@@ -1,5 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { CACHE, applyLook, familyFor } from './prefs';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const patch = vi.hoisted(() => vi.fn());
+vi.mock('$lib/api/client', async (orig) => ({
+	...(await orig<typeof import('$lib/api/client')>()),
+	api: { patch }
+}));
+
+import { CACHE, Unreadable, applyLook, familyFor, save } from './prefs';
 
 const root = document.documentElement;
 beforeEach(() => {
@@ -32,5 +39,16 @@ describe('familyFor', () => {
 		expect(familyFor({ theme: 'a', theme_dark: 'b' }, true)).toBe('b');
 		expect(familyFor({ theme: 'a', theme_dark: 'b' }, false)).toBe('a');
 		expect(familyFor({ theme: 'a', theme_dark: '' }, true)).toBe('a');
+	});
+});
+
+describe('save', () => {
+	it('resolves to the new revision', async () => {
+		patch.mockResolvedValueOnce({ revision: 9 });
+		await expect(save({ density: 'compact' }, 8)).resolves.toBe(9);
+	});
+	it.each([{}, null, { revision: '9' }])('throws Unreadable for a 2xx of %j', async (res) => {
+		patch.mockResolvedValueOnce(res);
+		await expect(save({ density: 'compact' }, 8)).rejects.toBeInstanceOf(Unreadable);
 	});
 });

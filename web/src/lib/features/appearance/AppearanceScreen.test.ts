@@ -258,6 +258,38 @@ describe('AppearanceScreen', () => {
 		);
 	});
 
+	it('Undo of a theme focuses the checked theme in the picker', async () => {
+		const entry = (id: string, mode: string) => ({
+			...{ id, name: id, family: 'Moss', group: 'original', mode, contrast: 'AA' },
+			...{ values: [`#${(0x111111).toString(16)}`], keys: ['--color-base-100'] }
+		});
+		const themes = { v: 1, keys: ['--color-base-100'] };
+		const file = { ...themes, themes: [entry('moss-light', 'light'), entry('moss-dark', 'dark')] };
+		vi.stubGlobal('fetch', async () => new Response(JSON.stringify(file)));
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Browse themes' }));
+		const other = await screen.findByRole('radio', { name: /Moss/ });
+		await fireEvent.click(other);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await wait(() => expect((document.activeElement as HTMLInputElement).checked).toBe(true));
+		expect((document.activeElement as HTMLInputElement).type).toBe('radio');
+		expect(document.activeElement).not.toBe(other);
+		vi.unstubAllGlobals();
+	});
+
+	it('a re-read keeps a change that is still waiting to save', async () => {
+		const a = hold();
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Reduced' }));
+		a.fail(new ApiError(409, 'stale_revision', 'x'));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(2));
+		await wait(() => expect(savePending()).toBe(false));
+		expect(screen.getByRole('radio', { name: 'Reduced' }).getAttribute('aria-checked')).toBe(
+			'true'
+		);
+	});
+
 	it('hides Undo when the field it would change is locked', async () => {
 		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
 			o.path.section === 'content'
@@ -270,6 +302,7 @@ describe('AppearanceScreen', () => {
 		render(AppearanceScreen);
 		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
 		await fireEvent.click(screen.getByRole('radio', { name: 'Cards' }));
+		// The mock accepts B on purpose: it stands in for Undo meeting a lock that arrived meanwhile.
 		a.fail(new ApiError(409, 'stale_revision', 'x'));
 		await screen.findByText(/density \(LODESTAR_DENSITY\)/);
 		await wait(() => expect(savePending()).toBe(false));
