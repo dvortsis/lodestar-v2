@@ -118,7 +118,9 @@
 	{:else}
 		{@const text = about?.id === screen.id ? about.value : undefined}
 		<!-- The purpose arrives with its chunk: its line is kept free meanwhile, so nothing shifts. -->
-		<p class={text ? 'text-muted-text' : 'h-6'}>{text?.purpose?.()}</p>
+		{#if !text || text.purpose}<p class={text ? 'text-muted-text' : 'h-6'}>
+				{text?.purpose?.()}
+			</p>{/if}
 		{#if failed}
 			<Banner kind="error"
 				>{m.settings_form_load_error()}{#snippet action()}<Button dense onclick={() => attempt++}

@@ -114,12 +114,14 @@ it('waits for the form to load before it focuses a #field link', async () => {
 	let release!: () => void;
 	const gate = new Promise<void>((resolve) => (release = resolve));
 	const fetchNow = server.fetch;
+	let asked = 0;
 	vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+		asked++;
 		await gate;
 		return fetchNow(args[0] as string, args[1]);
 	});
 	mount();
-	await new Promise((resolve) => setTimeout(resolve, 50)); // let a wrong early focus happen
+	await waitFor(() => expect(asked).toBeGreaterThan(0), { timeout: 10_000 });
 	expect(screen.queryByRole('switch', { name: 'Pause crawling' })).toBeNull();
 	expect(document.activeElement).toBe(document.body);
 	release();
