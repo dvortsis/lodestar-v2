@@ -1052,15 +1052,19 @@ export default [
 	// title ≈ 25 B, the entry with its icon and body loaders ≈ 40–60 B; the note at the top of
 	// shell/screens.ts). Before X-settings-registry-slim each also carried its purpose and an eager
 	// icon; those now load after the first view, so every view has ≥ 1.3 KB headroom.
+	// runner §2.26, S-filters-2c: Filters & Safety keeps its −2.43 KB (the change flow loads on the
+	// first change, through the flows' door): measured 30.54 KB, limit = measured + ~10% of the cut.
 	...settingsHandBuilt.map(({ name, files }) =>
-		entry(`Settings ${name} (first view)`, files, '45 KB')
+		entry(`Settings ${name} (first view)`, files, name === 'FiltersScreen' ? '31 KB' : '45 KB')
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
 	entry('Appearance theme picker (on demand)', settingsPickerLazy, '5.5 KB'),
 	entry('Appearance 18+ dialog (on demand)', settingsAdultLazy, '20.6 KB'),
 	entry('Appearance theme editor (on demand)', settingsEditorLazy, '13 KB'),
 	// Filters & Safety: its change dialogs and its review queue, beyond the screen's first view.
-	entry('Filters dialogs (on demand)', filtersDialogsLazy, '34.4 KB'),
+	// runner §2.26, S-filters-2c: the change flow moved here from the Filters first view (−2.43 KB
+	// there); Block dialog +1.4 KB. Was 34.4 KB.
+	entry('Filters dialogs (on demand)', filtersDialogsLazy, '35.9 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
