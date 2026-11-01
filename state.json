@@ -2046,6 +2046,13 @@
       "brief": "briefs/X-flows-door-2.md",
       "launched_at": "2026-11-01T06:58Z",
       "review": "runner + /security-review"
+    },
+    "X-flake-security-test": {
+      "status": "building",
+      "session": "session_01MMjhn9LQVnHae8mnKtTLab",
+      "model": "sonnet",
+      "brief": "briefs/X-flake-security-test.md",
+      "launched_at": "2026-11-01T07:31Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2959,7 +2966,6 @@
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice.",
     "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs.",
-    "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI. [recurred 07:00Z: B-update-5b saw 2 of 3 full local runs fail (\"Cancel on the password confirmation sends nothing\", \"an empty password sends nothing\"). NEXT FREE SLOT: brief X-flake-security-test (Sonnet).]",
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
     "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too. [runner 06:38Z: low value \u2014 the icons are ~0.2 KB each and loading them on demand would flicker; do only alongside another lib/ui change]",
