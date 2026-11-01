@@ -50,6 +50,19 @@ function server() {
 					]
 				});
 			if (u.pathname.endsWith('/saved-searches')) return json([]);
+			if (u.pathname.endsWith('/search/fields'))
+				return json({
+					fields: [
+						{ name: 'res', aliases: [], type: 'keyword', operators: ['eq'], facetable: true },
+						{
+							name: 'year',
+							aliases: [],
+							type: 'number',
+							operators: ['eq', 'gte'],
+							facetable: false
+						}
+					]
+				});
 			if (u.pathname.endsWith('/search')) {
 				const body = JSON.parse(String(init?.body)) as { ast: Ast };
 				searchBodies.push(body);
@@ -200,7 +213,7 @@ describe('the Builder', () => {
 		);
 		await fireEvent.click(screen.getByRole('button', { name: 'Builder' }));
 		const panel = await screen.findByRole('region', { name: 'Query builder' }, LAZY);
-		const row = within(panel).getByRole('group', { name: 'Resolution: 720p' });
+		const row = await within(panel).findByRole('group', { name: 'Resolution: 720p' }, LAZY);
 		const value = within(row).getByLabelText('Value') as HTMLInputElement;
 		expect(value.value).toBe('720p');
 		await fireEvent.input(value, { target: { value: '1080p' } });
@@ -214,9 +227,10 @@ describe('the Builder', () => {
 		const { editor } = await setup();
 		await fireEvent.click(screen.getByRole('button', { name: 'Builder' }));
 		const panel = await screen.findByRole('region', { name: 'Query builder' }, LAZY);
+		await within(panel).findByRole('group', { name: 'New filter' }, LAZY);
 		await type(editor, 'res:720p');
 		await waitFor(() => expect(within(panel).getAllByLabelText('Value')).toHaveLength(2), LAZY);
-		const draft = within(panel).getByRole('group', { name: 'New filter' });
+		const draft = await within(panel).findByRole('group', { name: 'New filter' }, LAZY);
 		await fireEvent.input(within(draft).getByLabelText('Value'), { target: { value: '2160p' } });
 		await fireEvent.click(within(draft).getByRole('button', { name: 'Add filter' }));
 		await waitFor(() => expect(editor.textContent).toBe('res:720p res:2160p'), LAZY);
@@ -226,7 +240,7 @@ describe('the Builder', () => {
 		const { editor } = await setup('res:720p');
 		await fireEvent.click(screen.getByRole('button', { name: 'Builder' }));
 		const panel = await screen.findByRole('region', { name: 'Query builder' }, LAZY);
-		const draft = within(panel).getByRole('group', { name: 'New filter' });
+		const draft = await within(panel).findByRole('group', { name: 'New filter' }, LAZY);
 		await fireEvent.input(within(draft).getByLabelText('Value'), { target: { value: 'a b' } });
 		await fireEvent.click(within(draft).getByRole('button', { name: 'Add filter' }));
 		expect(await within(panel).findByText(/Couldn't apply this filter/, {}, LAZY)).toBeTruthy();
@@ -237,7 +251,7 @@ describe('the Builder', () => {
 		await setup('res:720p');
 		await fireEvent.click(screen.getByRole('button', { name: 'Builder' }));
 		const panel = await screen.findByRole('region', { name: 'Query builder' }, LAZY);
-		const draft = within(panel).getByRole('group', { name: 'New filter' });
+		const draft = await within(panel).findByRole('group', { name: 'New filter' }, LAZY);
 		await fireEvent.click(within(draft).getByRole('button', { name: 'Add filter' }));
 		expect(await within(panel).findByText(/Enter a value/, {}, LAZY)).toBeTruthy();
 		await fireEvent.click(

@@ -12,6 +12,8 @@ export interface Option {
 	text: string;
 	/** Torrents it would find (server items only). */
 	count?: number;
+	/** `count` is an estimate (a title past 1,000 matches): shown with "≈". */
+	approx?: boolean;
 	/** The text it puts in, and the characters of the query it replaces (the whole query: Infinity). */
 	insert: string;
 	replace: { start: number; end: number };
@@ -40,6 +42,7 @@ export function buildOptions(
 		kind: i.kind,
 		text: i.text,
 		count: i.count,
+		approx: i.count_approx === true,
 		insert: i.insert,
 		replace: i.replace,
 		run: i.kind === 'did_you_mean'
