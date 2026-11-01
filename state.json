@@ -3213,6 +3213,10 @@
     {
       "t": "2026-11-01T17:42Z",
       "event": "merged #345 FX-4 (7ea22803); all 7 G-m5b blocking findings now fixed on main. Archived FX-4. Launched X-web-cleanup-1 (Sonnet): text-label token in 27 files + ban, 6 coarse copies, .css spacing ramp. Still queued: appearance-undo (Opus, small: wrong-change binding + focus), gate-file-cold (bench)."
+    },
+    {
+      "t": "2026-11-01T17:56Z",
+      "event": "FX-6 opened #348 (b901957a); Opus review running. Web job red = vitest EnvironmentTeardownError in detail/target.page.test.ts (lazy Composition import after teardown) — not FX-6; re-ran once; FX-5 (owns detail) fixes it in its marker-removal push (§2.18)."
     }
   ],
   "reviews": {
