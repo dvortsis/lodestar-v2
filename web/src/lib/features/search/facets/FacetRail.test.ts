@@ -16,6 +16,32 @@ const props = (over: Record<string, unknown> = {}) => ({
 	...over
 });
 
+describe('FacetRail: Adult facets (§20.9)', () => {
+	it('names the adult subtypes the server lists, in words', () => {
+		const data = response({
+			facets: {
+				type: term([['adult', 40]]),
+				adult: term([
+					['scene', 25],
+					['vr', 5]
+				])
+			}
+		});
+		render(FacetRail, props({ data }));
+		expect(screen.getAllByLabelText('Adult').length).toBeGreaterThan(0);
+		expect(screen.getByLabelText('Scene')).toBeTruthy();
+		expect(screen.getByLabelText('VR')).toBeTruthy();
+	});
+
+	it('shows nothing adult when the server lists nothing adult (18+ off)', () => {
+		const data = response({ facets: { type: term([['movie', 812]]) } });
+		render(FacetRail, props({ data }));
+		expect(screen.queryByTestId('facet-adult')).toBeNull();
+		expect(screen.queryByLabelText('Adult')).toBeNull();
+		expect(screen.queryByLabelText('Scene')).toBeNull();
+	});
+});
+
 describe('FacetRail', () => {
 	it('shows the server’s counts with a test id each, and labels types', () => {
 		render(FacetRail, props());
