@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T23:36:00Z",
+  "updated_at": "2026-11-02T00:06:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2216,11 +2216,13 @@
       "notes": "queued: one release after the a..<b parser ships"
     },
     "CR-1b": {
-      "status": "ci",
+      "status": "merged",
       "notes": "Opus; session_01MMjhn8LGnvvgvzGLXVaKuH; behind switch default off; CR-SIM screen; live A/B later on owner hardware",
       "pr": 359,
       "head": "1673b3c4",
-      "note": "main merged in; MERGE on green"
+      "note": "main merged in; MERGE on green",
+      "merge": "2bc8a6fb",
+      "session": "session_01MMjhn8LGnvvgvzGLXVaKuH (archived)"
     },
     "X-web-followups-1101f": {
       "status": "merged",
@@ -2247,17 +2249,19 @@
       "note": "From #357 review: undo effects of fail-closed stand-ins after an upgrade that reads the row again; Is-adult stand-in holds tombstone after 30 days and are not released by removing the rule (§20 false positives must be correctable). Needs persisted state. /security-review. After #357 merges."
     },
     "SRC-16": {
-      "status": "changes",
+      "status": "baselines",
       "model": "sonnet",
       "session": "session_01MMjhnBWJ84LfMg2vn3RGTr",
       "launched": "2026-11-01T22:14Z",
       "pr": 361,
-      "note": "Opus review CHANGES: 404 focus/announce, hidden-tab poll test, 0.99 cap, body.ts forward, polish; also Playwright red on b573f66f"
+      "note": "review fixes in 34896f16; smoke settings screenshots changed (new Jobs nav entry) -> .update-snapshots marker round; MERGE after marker removed and green"
     },
     "X-size-deterministic": {
-      "status": "queued",
+      "status": "building",
       "model": "sonnet",
-      "note": "Size job builds with a fixed version name / GITHUB_SHA so size-limit is deterministic (SHA noise ~30 B > many entries' headroom; root cause of the recurring \"+3 B in CI\"). Owns web/scripts/build-version.mjs and the web.yml size step; full-ci not needed."
+      "note": "Size job builds with a fixed version name / GITHUB_SHA so size-limit is deterministic (SHA noise ~30 B > many entries' headroom; root cause of the recurring \"+3 B in CI\"). Owns web/scripts/build-version.mjs and the web.yml size step; full-ci not needed.",
+      "session": "session_01MMjhnCLZ2M19zNH9kEmbV6",
+      "launched": "2026-11-02T00:05Z"
     },
     "SRC-6": {
       "status": "building",
@@ -3917,5 +3921,5 @@
     "gluetun": "NOT approved; owner decides after baseline ends",
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
-  "queue_note": "Next as slots free: openapi-example-size (Sonnet), F-filter-standin-undo (Opus+SR), X-size-deterministic (Sonnet), SRC-6 (Opus+SR), CR-4 (after CR-1b merges), S-blocklists (after B-subscriptions-api), i9-stage2 (one release later)."
+  "queue_note": "Next as slots free: CR-4 (Opus; wire the merged uTP crate #51 into the fetch pool + DHT socket demux, IPv6 route backoff on route-level evidence, behind a switch; fixes S04), openapi-example-size (after B-subscriptions-api merges; both regenerate openapi), F-filter-standin-undo (Opus+SR), S-blocklists (after B-subscriptions-api), SRC-7/8 (after SRC-6), i9-stage2 (one release later). Seven-day usage warning active: prefer Sonnet slices where they fit."
 }
