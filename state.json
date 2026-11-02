@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T05:15:30Z",
+  "updated_at": "2026-11-02T05:18:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2339,7 +2339,9 @@
     "F-normalize-invisible": {
       "status": "queued",
       "model": "opus",
-      "note": "After X-strip-format-chars merges: crates/filter/src/normalize.rs invisible() misses U+2028/2029, tag chars U+E0000-E007F, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+FFF9-FFFB, U+110BD/13430/1BCA0/1D173 ranges; use lodestar_metainfo::hidden_char. Tightening; /security-review; §20.8 budget."
+      "note": "After X-strip-format-chars merges: crates/filter/src/normalize.rs invisible() misses U+2028/2029, tag chars U+E0000-E007F, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+FFF9-FFFB, U+110BD/13430/1BCA0/1D173 ranges; use lodestar_metainfo::hidden_char. Tightening; /security-review; §20.8 budget.",
+      "brief": "briefs/F-normalize-invisible.md",
+      "notes": "next free slot"
     },
     "P-master-plan-r3": {
       "status": "merged",
@@ -2355,7 +2357,8 @@
       "session": "session_01MMjhn8jpt1tX7E6SGauJH8",
       "launched": "2026-11-02T03:52:04Z",
       "pr": 377,
-      "head": "dd72d579"
+      "head": "dd72d579",
+      "review": "Opus MERGE at dd72d579 (one docs nit sent); merge after R1 soak verdict; archive session once nit head is green"
     },
     "status-connector": {
       "status": "merged",
