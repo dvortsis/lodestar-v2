@@ -8,7 +8,7 @@ The follow-up that `2026-11-02-F-normalize-invisible.md` (#381) left for the run
     - U+FFF9–FFFB (interlinear annotation);
     - U+13430–1343F (Egyptian hieroglyph controls);
     - U+2028 and U+2029 (line and paragraph separators).
-  - On `main` they are word breaks. That lets one split a word past a term: `ba<U+0605>d` reads `ba` `d`, so a `bad` term misses. U+0605 and U+08E2 sit above the following letters, so the split hardly shows.
+  - On `main` they are word breaks. That lets one split a word past a term: `ba<U+0605>d` reads `ba` `d`, so a `bad` term misses. U+0605 and U+08E2 span the digits that follow them, so the split hardly shows.
   - Ignoring them alone would join words a reader sees apart, which is why #381 kept them as breaks.
 - **Both readings, the stricter verdict.**
   - `normalize::visible_mark` names the set (it was `visible_format`, without U+2028/2029).
@@ -27,7 +27,8 @@ The follow-up that `2026-11-02-F-normalize-invisible.md` (#381) left for the run
     - the joined reading keeping visible marks as breaks (`ignored()` without `visible_mark`);
     - no second judgment for them (`mark()` without `visible_mark`);
     - the earlier reading ignoring them too.
-- **Cost (§20.8).** Only names or paths holding a mark take the second judgment. Visible marks are rare in torrent names, and the ASCII fast path never looks for them. The likeliest real source is the Arabic number signs (U+0600–0605) in Arabic names; those names are judged twice. I didn't measure the budget locally (the session's disk was too small for a bench build). The budget benches stay on CI, and the runner should glance at this PR's bench numbers.
+- **Cost (§20.8).** Only names or paths holding a mark take the second judgment. Visible marks are rare in torrent names, and the ASCII fast path never looks for them. The likeliest real source is the Arabic number signs (U+0600–0605) in Arabic names; those names are judged twice. I didn't measure the budget locally (the session's disk was too small for a bench build).
+  - **The bench doesn't exercise the second reading.** The §20.8 budget test (`tests/props.rs`, `budget`) judges generated ASCII release names (`torrents()`), which hold no marks, so its numbers show only the one-judgment path. A marked torrent costs about two judgments, the second with a tokenizer of its own. Adding a marked share to the bench corpus is left for the next brief that touches the budget test.
 - **Stored artefacts.** Nothing that decides a verdict stores normalized tokens, as #381 recorded.
   - **Known gap, fixtures.** A false-positive example saved from now on from a name with a visible mark stores the joined tokens (`core::Fixture::of`). If the earlier reading's hit is what caught it (`alpha<U+2028>beta`, caught by `beta`), the fixtures page won't show that rule catching its own example. Fixtures only feed the counts on that page, never a verdict. Storing the earlier reading's tokens where they differ is left for the next brief that touches fixtures.
   - **For the runner and the list keeper.** The shipped term-list hashes are made in the joined reading. #381 asked for confirmation that no source term holds a format or tag character. That check should also cover U+2028/2029, which are line and paragraph separators, not format characters.
