@@ -462,6 +462,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         render_permit_returns(&mut o, d);
         render_hints(&mut o, d);
         render_stream_dht(&mut o, d);
+        render_target_prefixes(&mut o, d);
         o.one(
             "dht_peer_cancelled_total",
             "counter",
@@ -1123,6 +1124,41 @@ fn render_hints(o: &mut Out, d: &StatsSnapshot) {
     );
 }
 
+/// CR-1b's target-prefix families (docs/metrics.md).
+fn render_target_prefixes(o: &mut Out, d: &StatsSnapshot) {
+    use lodestar_dht::node::TargetKind;
+    for (name, help, values) in [
+        (
+            "dht_target_novel_nodes_total",
+            "Reply contacts new to the sampler's frontier, by the random target that brought them.",
+            &d.target_novel_nodes,
+        ),
+        (
+            "dht_target_prefix_queries_total",
+            "Queries sent with a prefix-cursor target (dht.target_prefixes), by kind.",
+            &d.target_prefix_queries,
+        ),
+    ] {
+        o.family(name, "counter", help);
+        for (i, kind) in TargetKind::ALL.iter().enumerate() {
+            o.value(name, &format!("kind=\"{}\"", kind.as_str()), values[i]);
+        }
+    }
+    o.one(
+        "dht_target_prefix_cycles_total",
+        "counter",
+        "Full passes of a prefix cursor over the 256 eight-bit prefixes.",
+        d.target_prefix_cycles,
+    );
+    // Exported with CR-1b so sample hashes can be read per call.
+    o.one(
+        "dht_sample_sent_total",
+        "counter",
+        "BEP 51 sample_infohashes queries sent.",
+        d.samples_sent,
+    );
+}
+
 /// CR-0d's restart-proof families (docs/metrics.md).
 fn render_restart(o: &mut Out, d: &StatsSnapshot) {
     // CR-0d: why sampling is or isn't running, one label set to 1.
@@ -1614,6 +1650,34 @@ mod tests {
         }
         // Not duplicated: the have-filter and hot columns render elsewhere.
         assert!(!out.contains("have_bytes") && !out.contains("hot_columns"));
+    }
+
+    #[test]
+    fn target_prefix_families_render_each_kind_with_its_own_value() {
+        let d = StatsSnapshot {
+            target_novel_nodes: [1, 2],
+            target_prefix_queries: [3, 4],
+            target_prefix_cycles: 5,
+            samples_sent: 6,
+            ..StatsSnapshot::default()
+        };
+        let mut o = Out(String::new());
+        render_target_prefixes(&mut o, &d);
+        for line in [
+            "# TYPE lodestar_dht_target_novel_nodes_total counter",
+            "lodestar_dht_target_novel_nodes_total{kind=\"explore\"} 1",
+            "lodestar_dht_target_novel_nodes_total{kind=\"sample\"} 2",
+            "lodestar_dht_target_prefix_queries_total{kind=\"explore\"} 3",
+            "lodestar_dht_target_prefix_queries_total{kind=\"sample\"} 4",
+            "lodestar_dht_target_prefix_cycles_total 5",
+            "lodestar_dht_sample_sent_total 6",
+        ] {
+            assert!(
+                o.0.lines().any(|l| l == line),
+                "missing {line:?} in\n{}",
+                o.0
+            );
+        }
     }
 
     #[test]

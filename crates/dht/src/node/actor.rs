@@ -16,6 +16,7 @@ use lodestar_metainfo::InfoHash;
 use super::hints::{self, Hint, Hints};
 use super::lookup::Lookup;
 use super::peers::PeerStore;
+use super::prefixes::Prefixes;
 use super::proof::Proof;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
@@ -24,7 +25,7 @@ use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
     Command, Config, DhtEstimate, ExternalVotes, Harvest, HintFallback, HintReject, Intensity,
-    PeerAdmission, PeerPermit, PermitReturn, QueuedDrop, Snapshot, Source, Stats,
+    PeerAdmission, PeerPermit, PermitReturn, QueuedDrop, Snapshot, Source, Stats, TargetKind,
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
@@ -450,6 +451,8 @@ struct Actor {
     proof: Proof,
     /// CR-1a-H: `None` unless `dht.responder_hints` is on.
     hints: Option<Hints>,
+    /// CR-1b: `None` unless `dht.target_prefixes` is on.
+    prefixes: Option<Prefixes>,
 }
 
 pub(crate) async fn run(
@@ -591,6 +594,7 @@ impl Actor {
         mut rng: StdRng,
     ) -> Self {
         let ids = initial_ids(&cfg, saved, &mut rng);
+        let family_count = local_addrs.len();
         let families = local_addrs
             .iter()
             .map(|addr| Family {
@@ -649,6 +653,7 @@ impl Actor {
             unsolicited_from: UnsolicitedFrom::default(),
             paused: cfg.paused,
             hints: cfg.responder_hints.then(Hints::default),
+            prefixes: cfg.target_prefixes.then(|| Prefixes::new(family_count)),
             proof: Proof::new(
                 cfg.state_path.as_deref(),
                 cfg.restart.as_ref(),
@@ -1327,11 +1332,23 @@ impl Actor {
             } else {
                 r.nodes
             };
+            // CR-1b: which random target, if any, brought these contacts.
+            let kind = match pending.purpose {
+                Purpose::Sample => Some(TargetKind::Sample),
+                Purpose::Lookup(lid) => self
+                    .lookups
+                    .get(&lid)
+                    .is_some_and(|l| l.explore)
+                    .then_some(TargetKind::Explore),
+                Purpose::Ping => None,
+            };
             for n in nodes.iter() {
                 if endpoint_allowed(&self.cfg, n.addr)
                     && !Actor::is_self(&self.ids, &self.local_addrs, &n)
+                    && self.sampler.offer(n, now_i)
+                    && let Some(kind) = kind
                 {
-                    self.sampler.offer(n, now_i);
+                    Stats::inc(&self.stats.target_novel_nodes[kind as usize]);
                 }
             }
         }
@@ -1888,9 +1905,14 @@ impl Actor {
             };
             match sent {
                 Sent::Yes => {
+                    // CR-1b: an exploration lookup's first send uses its prefix.
+                    let prefix_used = std::mem::take(&mut l.prefix_pending);
                     if let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o)) {
                         r.inflight += 1;
                         r.sent += 1;
+                    }
+                    if prefix_used {
+                        self.advance_prefix(family, TargetKind::Explore);
                     }
                 }
                 // A scrape's budget was paid when it started, so running
@@ -2269,8 +2291,17 @@ impl Actor {
                         self.sampler.offer(n, now_i);
                     }
                 }
-                let target = NodeId(self.rng.random());
-                self.start_lookup(sockets, f, target, &[], &[], None);
+                let target = self.routing_target(f, TargetKind::Explore);
+                // `start_lookup` with no seeds, flagged before its first
+                // drive: CR-1b moves the explore cursor on its first send.
+                if self.maintenance_lookups() < MAX_LOOKUPS {
+                    let lid = self.insert_lookup(f, target, &[], None, false, None);
+                    if let Some(l) = self.lookups.get_mut(&lid) {
+                        l.explore = true;
+                        l.prefix_pending = self.prefixes.is_some();
+                    }
+                    self.drive_lookup(sockets, lid);
+                }
             }
         }
         let qps = f64::from(self.cfg.intensity.queries_per_sec());
@@ -2292,17 +2323,42 @@ impl Actor {
                 continue;
             };
             let method = Method::SampleInfohashes {
-                target: NodeId(self.rng.random()),
+                target: self.routing_target(f, TargetKind::Sample),
                 want: Want::default(),
             };
             match self.try_query(sockets, f, n.addr, Some(n.id), method, Purpose::Sample) {
-                Sent::Yes => Stats::inc(&self.stats.samples_sent),
+                Sent::Yes => {
+                    Stats::inc(&self.stats.samples_sent);
+                    self.advance_prefix(f, TargetKind::Sample);
+                }
                 Sent::Throttled => {
                     self.sampler.offer(n, now_i);
                     break;
                 }
                 Sent::Failed => {}
             }
+        }
+    }
+
+    /// A random routing target for `family`: uniform with
+    /// `dht.target_prefixes` off (the same single draw as before CR-1b), or
+    /// the family's next prefix for `kind` with a random suffix.
+    fn routing_target(&mut self, family: usize, kind: TargetKind) -> NodeId {
+        match &self.prefixes {
+            None => NodeId(self.rng.random()),
+            Some(p) => p.target(family, kind, self.rng.random()),
+        }
+    }
+
+    /// CR-1b: the query carrying `kind`'s target went out, so `family`'s
+    /// cursor moves on. Nothing with the switch off.
+    fn advance_prefix(&mut self, family: usize, kind: TargetKind) {
+        let Some(p) = &mut self.prefixes else {
+            return;
+        };
+        Stats::inc(&self.stats.target_prefix_queries[kind as usize]);
+        if p.advance(family, kind) {
+            Stats::inc(&self.stats.target_prefix_cycles);
         }
     }
 
@@ -3672,3 +3728,7 @@ mod hint_tests;
 #[cfg(test)]
 #[path = "stream_tests.rs"]
 mod stream_tests;
+
+#[cfg(test)]
+#[path = "prefix_tests.rs"]
+mod prefix_tests;

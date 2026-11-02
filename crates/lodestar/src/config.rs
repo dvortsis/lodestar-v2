@@ -189,6 +189,10 @@ pub struct Dht {
     /// batches as they arrive. Off by default
     /// (docs/decisions/2026-10-31-CR-1a-S.md); not in the Settings UI.
     pub streaming_peers: bool,
+    /// CR-1b: BEP 51 sample and exploration targets sweep 256 eight-bit
+    /// prefixes instead of drawing uniformly. Off by default
+    /// (docs/decisions/2026-11-01-CR-1b.md); not in the Settings UI.
+    pub target_prefixes: bool,
 }
 
 impl Default for Dht {
@@ -208,6 +212,7 @@ impl Default for Dht {
             coordinated_admission: false,
             responder_hints: false,
             streaming_peers: false,
+            target_prefixes: false,
         }
     }
 }
@@ -682,6 +687,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_STREAMING_PEERS", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_TARGET_PREFIXES") {
+            config.dht.target_prefixes = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_TARGET_PREFIXES", &v))?;
+        }
         // Packaging sets this (the Docker image, the systemd unit).
         if let Some(v) = env("LODESTAR_DHT_WITNESS_DIR").filter(|v| !v.is_empty()) {
             config.dht.restart_witness_dir = Some(PathBuf::from(v));
@@ -741,6 +751,7 @@ impl Config {
                 .safe_restart
                 .then(|| dht::RestartConfig::new(self.dht.restart_witness_dir.clone())),
             responder_hints: self.dht.responder_hints,
+            target_prefixes: self.dht.target_prefixes,
             ..dht::Config::default()
         }
     }
@@ -1239,6 +1250,29 @@ mod tests {
             Some(PathBuf::from("/var/lib/lodestar-witness"))
         );
         assert!(c.layers.in_env("LODESTAR_DHT_WITNESS_DIR"));
+    }
+
+    #[test]
+    fn target_prefixes_is_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.target_prefixes);
+        assert!(!c.dht_config().target_prefixes);
+        let env = |k: &str| (k == "LODESTAR_DHT_TARGET_PREFIXES").then(|| "true".to_string());
+        assert!(
+            Config::load(None, env)
+                .unwrap()
+                .dht_config()
+                .target_prefixes
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\ntarget_prefixes = true\n").unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert!(c.dht_config().target_prefixes);
+        std::fs::write(&path, "[dht]\ntarget_prefixes = 1\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        let bad = |k: &str| (k == "LODESTAR_DHT_TARGET_PREFIXES").then(|| "on".to_string());
+        assert!(Config::load(None, bad).is_err());
     }
 
     #[test]

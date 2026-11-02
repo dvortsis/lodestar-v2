@@ -121,6 +121,8 @@ pub struct Switches {
     pub responder_hints: bool,
     /// CR-1a-S: `dht.streaming_peers`.
     pub streaming_peers: bool,
+    /// CR-1b: `dht.target_prefixes`.
+    pub target_prefixes: bool,
 }
 
 impl Switches {
@@ -133,6 +135,7 @@ impl Switches {
         }
         dht.responder_hints = self.responder_hints;
         pool.streaming_peers = self.streaming_peers;
+        dht.target_prefixes = self.target_prefixes;
     }
 
     /// For the report header: `name=value` of every switch that's on.
@@ -141,6 +144,7 @@ impl Switches {
             (self.coordinated_admission, "coordinated_admission=true"),
             (self.responder_hints, "responder_hints=true"),
             (self.streaming_peers, "streaming_peers=true"),
+            (self.target_prefixes, "target_prefixes=true"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))

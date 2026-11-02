@@ -755,6 +755,19 @@ These series count only with `dht.streaming_peers` on ([the decision](decisions/
 
 **"First fetch ms" isn't one measurement in both arms.** With `dht.streaming_peers` off, these series stay 0, so the CR-1a-S screen uses the mean lookup run time instead (`dht_peer_lookup_seconds_total` over `dht_peer_lookups_answered_total`), because peers arrive only when the lookup ends. That covers every answered lookup, including ones with no peers, and stops at the answer, not at a fetch. With it on, the screen adds the mean time to the first batch to the pool's mean wait from that batch to a fetch start, so it counts only requests that sent a batch and keys that then started a fetch. Compare the two arms only with that caveat: an off-to-on change is a rough guide, not a like-for-like speed-up.
 
+## Target prefixes (CR-1b, 2026-11-01)
+
+With `dht.target_prefixes` on ([the decision](decisions/2026-11-01-CR-1b.md)), each BEP 51 `sample_infohashes` target and each exploration `find_node` target (the lookup the sampler starts when its frontier runs low) takes the next of 256 eight-bit prefixes, with a random suffix, from a cursor per address family and kind. A pass visits each prefix once, in bit-reversed order (0, 128, 64, 192, …). With it off, every target is drawn at random as before. A target steers which routing contacts come back, not which hashes are sampled. No series has an infohash, endpoint or prefix label.
+
+| Series | Meaning |
+|---|---|
+| `dht_target_novel_nodes_total{kind}` | Contacts in replies that entered the sampler's frontier as new, by the kind of random target the query carried: `sample` or `explore`. Contacts from other replies (pings, peer lookups, refreshes) aren't counted. **Counts with the switch on or off**, so both arms of an A/B have it. |
+| `dht_target_prefix_queries_total{kind}` | Uses of a prefix target that went out: each `sample_infohashes` sent (`sample`), and each exploration lookup that sent at least one `find_node` (`explore`, one per lookup, however many queries it sends). A cursor moves only when its query is sent, so throttling, the pause and the restart suppression don't skip a prefix. Stays 0 with the switch off. |
+| `dht_sample_sent_total` | BEP 51 `sample_infohashes` queries sent. Always counts; exported with CR-1b so hashes can be attributed per call. |
+| `dht_target_prefix_cycles_total` | Full passes of a cursor over the 256 prefixes, summed over families and kinds. A pass isn't a claim that the keyspace was covered. Stays 0 with the switch off. |
+
+`dht_target_prefix_queries_total{kind="sample"}` = `dht_sample_sent_total` with the switch on. Hashes are attributed to the sampling call, as before: new sample hashes per call is `dht_harvested_total{strategy="sample"}` over `dht_sample_sent_total`.
+
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 
 The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.

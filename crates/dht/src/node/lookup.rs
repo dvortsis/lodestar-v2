@@ -51,6 +51,12 @@ pub(crate) struct Lookup {
     pub info_hash: Option<InfoHash>,
     /// A BEP 33 scrape: get_peers with `scrape=1`, answered with counts.
     pub scrape: bool,
+    /// CR-1b: the sampler's exploration `find_node`, whose new contacts
+    /// count as `dht_target_novel_nodes_total{kind="explore"}`.
+    pub explore: bool,
+    /// CR-1b: an exploration lookup whose prefix target hasn't been sent
+    /// yet; its first send moves the explore cursor.
+    pub prefix_pending: bool,
     pub started: Instant,
 }
 
@@ -66,6 +72,8 @@ impl Lookup {
             extra_in_flight: 0,
             info_hash: None,
             scrape: false,
+            explore: false,
+            prefix_pending: false,
             started: Instant::now(),
         }
     }
