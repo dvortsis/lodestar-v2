@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T22:36:00Z",
+  "updated_at": "2026-11-02T22:58:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3880,7 +3880,8 @@
       "id": "rc-next-include-402",
       "status": "to-send-with-verdict",
       "ask": "Release backport of #402 (lease leak fix, e9e18714) needs the owner's yes: \u00a72.29 fixed rc.3 = rc.2 + #357 exactly. On r3 FAIL the runner recommends rc.3 = rc.2 + #357 + #402 (one-line adjustment on release), with a fresh frozen soak. On PASS: ship rc.3 as rc.2 + #357 and take #402 in the next release.",
-      "unblocks": "release backport PR of #402; next rc cut"
+      "unblocks": "release backport PR of #402; next rc cut",
+      "prepared": "patches/rc3-402-on-rc2.patch on runner-state: #402 code + its 2 tests on release/v0.5.1 (6be95525), trailing None dropped; fmt ok, clippy -D warnings ok, pipeline 17/17 and sources tests pass. Apply only on owner yes, on top of #377."
     }
   ],
   "external_gates": {

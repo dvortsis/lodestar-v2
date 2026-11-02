@@ -1,0 +1,166 @@
+diff --git a/crates/pipeline/src/worker.rs b/crates/pipeline/src/worker.rs
+index 3783f2c8..ace18cdc 100644
+--- a/crates/pipeline/src/worker.rs
++++ b/crates/pipeline/src/worker.rs
+@@ -84,6 +84,28 @@ impl Funnel for WorkerFunnel {
+             ),
+         }
+     }
++
++    /// Intake granted the sighting a new lease (a reply would have been
++    /// held), and the pool fetched the key lately but didn't store it.
++    /// Without this nothing ends the lease, and the lease tables grow by
++    /// one entry per such sighting (R-mem-triage).
++    ///
++    /// The lease ends as `Invalid` whatever the first fetch's outcome was.
++    /// Prepare rejecting the dictionary is the common case, but a key also
++    /// gets here after the writer refused it for a stopped source
++    /// (`Evicted`), after a Drop rule at commit (`Blocked`, which puts it
++    /// in neither the held set nor the blocklist), or through the writer's
++    /// retry channel, which skips the have-filter for a key committed in
++    /// the meantime. Insights' loss-reason share therefore overcounts
++    /// `invalid` slightly; that's accepted, since the lease has to end and
++    /// tracking the first loss isn't worth it. Each such sighting within
++    /// the pool's recent window is its own harvest and loss, possibly more
++    /// than once per key.
++    fn duplicate(&self, key: &InfoHash, _cohort: i64, _source: SourceId) {
++        if let Some(token) = self.leases.take(key) {
++            self.coordinator.lost(key, token, Loss::Invalid);
++        }
++    }
+ }
+ 
+ /// A prepared torrent on its way to the coordinator (the `Results`
+diff --git a/crates/pipeline/tests/pipeline.rs b/crates/pipeline/tests/pipeline.rs
+index 26ac0865..2c2ad494 100644
+--- a/crates/pipeline/tests/pipeline.rs
++++ b/crates/pipeline/tests/pipeline.rs
+@@ -1115,3 +1115,80 @@ async fn the_gate_counts_new_records_apart_from_each_exclusion() {
+     assert_eq!(buckets[buckets.len() - 1], 1);
+     assert_eq!(gate.dropped.load(Ordering::Relaxed), 0);
+ }
++
++/// A key whose dictionary prepare rejects stays in the pool's recent set.
++/// Seen again, intake grants it a fresh lease and the pool drops it as a
++/// duplicate: the lease must end there, or it's held for the life of the
++/// process (R-mem-triage).
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn a_rejected_key_seen_again_ends_its_new_lease() {
++    // Hashes to its key, but isn't usable metainfo (no pieces).
++    let bad = Seed::v1(b"d4:name3:Bade".to_vec());
++    let key = InfoHash(bad.info_hash);
++    let peer = FakePeer::spawn(vec![bad], Accept::Both, Behavior::Honest, vec![]).await;
++    let (feed, feed_tx) = scripted("feed");
++    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
++    let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
++    let monitor = pipeline.monitor();
++    let outstanding = || monitor.lease_stats().outstanding.load(Ordering::Relaxed);
++
++    feed_tx
++        .send(Found::key(key, 0).with_peers(vec![peer.addr()]))
++        .await
++        .unwrap();
++    until("the first lease lost as invalid", || {
++        pipeline.pool_stats().fetched.load(Ordering::Relaxed) == 1 && outstanding() == 0
++    })
++    .await;
++
++    feed_tx
++        .send(Found::key(key, 0).with_peers(vec![peer.addr()]))
++        .await
++        .unwrap();
++    until("the sighting dropped as a recent duplicate", || {
++        pipeline.intake_stats().to_pool.load(Ordering::Relaxed) == 2
++            && pipeline.pool_stats().duplicates.load(Ordering::Relaxed) == 1
++    })
++    .await;
++    until("its new lease ended", || outstanding() == 0).await;
++    assert_eq!(pipeline.pool_stats().fetched.load(Ordering::Relaxed), 1);
++    let store = pipeline.shutdown().await.unwrap();
++    assert_eq!(store.find(&key).unwrap(), None);
++}
++
++/// A saved queue larger than the pool's cap: the keys the pool can't take
++/// lose their restored leases as evicted instead of keeping them for the
++/// life of the process (R-mem-triage).
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn a_restored_queue_past_the_cap_ends_the_leases_it_drops() {
++    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
++    let source = store.register_source("feed", "1", 0).unwrap();
++    let queued: Vec<lodestar_store::QueuedKey> = [0xa1u8, 0xa2, 0xa3]
++        .iter()
++        .map(|&b| lodestar_store::QueuedKey {
++            info_hash: InfoHash([b; 20]),
++            source,
++            cohort: 0,
++            strategy: 0,
++            priority: 0,
++            attempts: 0,
++            private_source: false,
++        })
++        .collect();
++    store.save_fetch_queue(&queued).unwrap();
++    let (feed, _feed_tx) = scripted("feed");
++    let mut cfg = config();
++    cfg.pool.max_pending = 1;
++    // Nobody finds peers: the one key the pool takes stays queued.
++    cfg.pool.lookup_wait = Duration::from_secs(600);
++    cfg.pool.retry_backoff = Duration::from_secs(600);
++    let pipeline = Pipeline::start(cfg, store, vec![feed]).await.unwrap();
++    let monitor = pipeline.monitor();
++    until("one key queued, two leases ended", || {
++        pipeline.pool_stats().pending.load(Ordering::Relaxed) == 1
++            && monitor.lease_stats().outstanding.load(Ordering::Relaxed) == 1
++    })
++    .await;
++    assert_eq!(pipeline.pool_stats().lost_count(Loss::Evicted), 2);
++    pipeline.shutdown().await.unwrap();
++}
+diff --git a/crates/sources/src/funnel.rs b/crates/sources/src/funnel.rs
+index cafdd6a9..25b136b8 100644
+--- a/crates/sources/src/funnel.rs
++++ b/crates/sources/src/funnel.rs
+@@ -73,6 +73,12 @@ pub trait Funnel: Send + Sync {
+     fn lost(&self, _key: &InfoHash, cohort: i64, source: SourceId, loss: Loss) {
+         self.record(cohort, source, Stage::Lost, Some(loss));
+     }
++
++    /// The pool turned a sighting away, outside a reply, because it
++    /// fetched the key lately. Nothing to count: the key was harvested
++    /// once already. A worker overrides this to end the lease its intake
++    /// granted for the sighting.
++    fn duplicate(&self, _key: &InfoHash, _cohort: i64, _source: SourceId) {}
+ }
+ 
+ /// In-memory per-key accumulators, drained at each flush. A few hundred
+diff --git a/crates/sources/src/pool.rs b/crates/sources/src/pool.rs
+index 48da1305..459b070e 100644
+--- a/crates/sources/src/pool.rs
++++ b/crates/sources/src/pool.rs
+@@ -489,6 +489,11 @@ impl Pool {
+         }
+         if self.recent.contains(&key) {
+             self.stats.duplicates.fetch_add(1, Ordering::Relaxed);
++            // Not a reply: a sighting of its own, which a worker may hold a
++            // new lease for; the funnel ends it (R-mem-triage).
++            if !d.reply {
++                self.funnel.duplicate(&key, d.at.div_euclid(3600), d.source);
++            }
+             return;
+         }
+         if self.entries.contains_key(&key) {
+@@ -554,7 +559,13 @@ impl Pool {
+     }
+ 
+     fn restore(&mut self, q: QueuedKey) {
+-        if self.entries.contains_key(&q.info_hash) || self.entries.len() >= self.cfg.max_pending {
++        if self.entries.contains_key(&q.info_hash) {
++            return;
++        }
++        // A saved queue larger than the cap: the key's restored lease ends
++        // as an eviction, or nothing ever ends it (R-mem-triage).
++        if self.entries.len() >= self.cfg.max_pending {
++            self.lose_untracked(&q.info_hash, q.cohort, q.source, Loss::Evicted);
+             return;
+         }
+         self.entries.insert(
