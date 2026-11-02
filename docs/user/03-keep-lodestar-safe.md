@@ -78,6 +78,12 @@ To use it:
 
 A VPN hides your home IP from peers. It doesn't hide your activity from the VPN provider, and it doesn't make the web UI private. Inbound DHT reach needs a port your provider forwards: allow it in gluetun with `FIREWALL_VPN_INPUT_PORTS` and set **DHT port** in the template to the same number. Without it, Lodestar still crawls with fewer nodes.
 
+### Blocklist downloads and HTTPS_PROXY
+
+`HTTPS_PROXY` is a setting some networks use to send a program's web requests through a middleman server, called a proxy. Lodestar downloads blocklists (public lists of torrents and addresses to block) directly. It ignores `HTTPS_PROXY` for these downloads and uses the container's own network route.
+
+A VPN that covers the whole container still applies, because it works below the program. If you want blocklist downloads to go through a VPN, run Lodestar through a whole-container VPN such as gluetun, as above. Setting `HTTPS_PROXY` won't do it.
+
 <details>
 <summary>Why a busy crawler can slow your home router</summary>
 
