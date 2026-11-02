@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T00:43:00Z",
+  "updated_at": "2026-11-02T00:46:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2204,14 +2204,14 @@
       "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)"
     },
     "B-subscriptions-api": {
-      "status": "changes",
+      "status": "re-review",
       "notes": "queued: Opus + /security-review; prerequisite of S-blocklists; waits for F-filter-load-fail-closed (crates/api/src/filters.rs)",
       "model": "opus",
       "session": "session_01MMjhn8f4Pt2y2Vtwi6Wo7L",
       "launched": "2026-11-01T22:58Z",
-      "note": "Opus review MERGE w/ 2 important; runner requires before merge: held_version binds applied+held; list fetcher through SSRF guard (pre-existing bypass, now API-reachable); url parsing; name chars; polish",
+      "note": "SSRF guard + held_version binding pushed; focused Opus delta re-review running",
       "pr": 362,
-      "head": "2f395b6f"
+      "head": "12b3d60a"
     },
     "i9-stage2": {
       "status": "queued",
@@ -2251,13 +2251,14 @@
       "note": "From #357 review: undo effects of fail-closed stand-ins after an upgrade that reads the row again; Is-adult stand-in holds tombstone after 30 days and are not released by removing the rule (§20 false positives must be correctable). Needs persisted state. /security-review. After #357 merges."
     },
     "SRC-16": {
-      "status": "ci",
+      "status": "merged",
       "model": "sonnet",
-      "session": "session_01MMjhnBWJ84LfMg2vn3RGTr",
+      "session": "session_01MMjhnBWJ84LfMg2vn3RGTr (archived)",
       "launched": "2026-11-01T22:14Z",
       "pr": 361,
       "note": "baselines regenerated (54 Settings PNGs only), marker removed; MERGE on green",
-      "head": "17901449"
+      "head": "17901449",
+      "merge": "815793f6"
     },
     "X-size-deterministic": {
       "status": "ci",
@@ -2276,6 +2277,12 @@
       "pr": 363,
       "head": "fca45e1d",
       "note": "review fixes verified; MERGE on green"
+    },
+    "CR-4": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnBobRgzjNcSJb43XQD",
+      "launched": "2026-11-02T00:45Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
