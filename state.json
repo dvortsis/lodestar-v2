@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T02:53:00Z",
+  "updated_at": "2026-11-02T02:56:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2320,9 +2320,10 @@
       "launched": "2026-11-02T02:52Z"
     },
     "P-master-plan-r2": {
-      "status": "changes",
+      "status": "merged",
       "pr": 369,
-      "note": "owner planning session PR (session_01MMjhnBhSbT15hSFhsbEfoq); Opus review CHANGES: SRC-1 V14 lifts owner migration hold w/o explicit owner confirmation (blocking), proxy q missing, v0.5.2 upgrade gate, owner answers to owner-decisions §2.27, SR notes"
+      "note": "owner planning session; build-plan §0 r2, docs/handoff.md, owner-decisions §2.27, slices.yaml +externals",
+      "merge": "e528c369"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2352,7 +2353,12 @@
     "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session — owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning §10.10 Settings, §12.1 logging, §12.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b. 20:27 #86 MERGED c5f9b74. Session done."
   },
   "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
-  "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
+  "migration_order": {
+    "V12": "release/v0.5.1 (shipped in rc)",
+    "V13": "imports (IMP-1), on main",
+    "V14": "SRC-1 (assigned by master-plan r2; waits ext:owner-migrations-on-main)",
+    "V15": "CR-3 (after SRC-1; waits G-import-50M, owner 50M approval, owner-migrations-on-main)"
+  },
   "decisions": [
     "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the §10.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
     "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
@@ -3380,6 +3386,11 @@
       "id": "q-adult-standin-release",
       "status": "to-send",
       "text": "Owner question (content safety, from #367 F-filter-standin-undo): when an unreadable \"Is adult\" classification rule becomes readable again, the adult holds its stand-in made are NOT released automatically, because storage can't tell them apart from a user's own per-torrent adult correction (releasing could undo a user's child-safety choice permanently). They are counted in an Insights notice and all torrents are re-queued for classification. Automatic release would need a change to the stored rule-id format recording what made a hold adult (e.g. \"CS-5a~C-2+adult\"), plus writer and reclassify changes. Proposal in docs/decisions (F-filter-standin-undo). Recommendation: keep them held for v0.6; build the format change only if you want automatic release."
+    },
+    {
+      "id": "q-migrations-on-main",
+      "status": "to-send",
+      "text": "Owner question (from master-plan r2, #369): may migration-bearing slices merge to main before v0.5.1 is tagged? Your 11-01 21:08Z hold says \"no migrations on main before release cut\"; release/v0.5.1 already exists, so the plan reads this as \"after v0.5.1 is tagged, or sooner if you allow\". SRC-1 (V14, Sources store) is the first one waiting (ext:owner-migrations-on-main)."
     }
   ],
   "external_gates": {
@@ -4007,5 +4018,6 @@
     "gluetun": "NOT approved; owner decides after baseline ends",
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
-  "queue_note": "Next as slots free: openapi-example-size (Sonnet, now unblocked), X-strip-format-chars (Opus, small), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2,Q15), SRC-10e (Q7), SRC-13 (Q3), SRC-15b (Q1), adult stand-in release (q-adult-standin-release). Blocked on release cut: SRC-1. Seven-day usage warning active."
+  "queue_note": "Next as slots free: openapi-example-size (Sonnet, now unblocked), X-strip-format-chars (Opus, small), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2,Q15), SRC-10e (Q7), SRC-13 (Q3), SRC-15b (Q1), adult stand-in release (q-adult-standin-release). Blocked on release cut: SRC-1. Seven-day usage warning active.",
+  "plan_ref": "docs/build-plan.md §0 (r2, #369) + docs/handoff.md"
 }
