@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T15:11:08Z",
+  "updated_at": "2026-11-02T15:26:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2468,7 +2468,7 @@
       ]
     },
     "SRC-2b": {
-      "status": "re-review: fixes verified; 2 cheap important sent (visible_alerts N^2 walk, file: watermark)",
+      "status": "merged",
       "model": "opus",
       "deps": [
         "SRC-2"
@@ -2482,7 +2482,8 @@
       "brief": "briefs/SRC-2b.md",
       "launched": "2026-11-02T11:38Z",
       "pr": 392,
-      "head": "4d5173f5"
+      "head": "4d5173f5",
+      "merge": "53d675ac"
     },
     "SRC-9": {
       "status": "merged",
