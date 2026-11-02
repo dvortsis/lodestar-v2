@@ -26,7 +26,6 @@
 	"settings_shell_guarded_readonly": "需要单独确认流程的设置在此页面中为只读。",
 	"settings_shell_overview": "设置概览",
 	"settings_shell_overview_purpose": "选择分区以查看当前值，并一并保存更改。",
-	"settings_shell_overview_unknown": "此概览尚无法显示安装健康状态和重启状态。",
 	"settings_shell_portability": "备份与迁移",
 	"settings_shell_export_description": "将 Lodestar 中已保存的设置下载为 TOML 导出文件。未保存的修改不会包含在内。此文件使用设置导出格式，而非 config.toml 布局。",
 	"settings_shell_export_exclusions": "不包含密钥、由环境变量控制的值、只读值，以及过滤器、底线、规则包或订阅状态。此操作仅导出设置，不会备份资料库。",

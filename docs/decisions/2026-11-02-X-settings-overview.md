@@ -1,0 +1,7 @@
+# X-settings-overview decisions
+
+- **"Changed from default" tests `source !== 'default'`, and a row shows the source, not the default value.** `GET /settings` sends no default values (its JSON Schema has no `default`), and the brief said no new endpoints. A row shows the label, the current value and where it comes from (saved in the app, `config.toml`, environment variable). It's the same test as the field's modified marker (§10.10.4). Showing the default value needs the schema to carry it; that's a backend follow-up. Refines §10.10.3, which lists a count per screen; the Overview lists the rows too, grouped by screen.
+- **Secrets show "Set" and nothing else.** A `writeOnly` field's value is never read into the row, so nothing can leak through it.
+- **Needs attention uses only what `/system` and `GET /network/check` already report:** a failed or running index rebuild, an address change awaiting confirmation, a filesystem warning, an unreachable DHT port, changes waiting for a restart, and recent errors. Updates, backups, integrations and sources aren't shown until their data is on those endpoints. A failed `/system` or network check leaves "Health information couldn't be loaded", not a blank page.
+- **Rows link to `/settings/<screen>`, and to `#section.field` for changed settings.** They don't turn on Show changed only, because the screens have no URL parameter for it yet.
+- **The Overview loads on demand** (`overview/OverviewScreen.svelte`), so no other Settings page carries it.
