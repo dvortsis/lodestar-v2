@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T00:39:00Z",
+  "updated_at": "2026-11-02T00:43:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3312,6 +3312,11 @@
       "id": "flag-src6-brief",
       "status": "to-send",
       "text": "§2.19 from SRC-6 (#363, Torznab/Newznab parser): golden fixtures are hand-written in real Prowlarr/Jackett/Newznab shapes (nothing recorded); Newznab poster (uploader) is not kept; non-http references kept only as opaque ids; credentials in feed links are stripped before anything is stored."
+    },
+    {
+      "id": "q-subscriptions-proxy",
+      "status": "to-send",
+      "text": "Owner question (privacy trade-off, from #362): blocklist list fetches now go through the SSRF guard, which by §16 ignores system proxies (HTTPS_PROXY), because a proxy resolves names itself and would bypass the private-address check. §20.13 had said list fetches use the proxy egress. Effect: a user who relies on HTTPS_PROXY (not a whole-container VPN such as gluetun, which still applies) would fetch blocklists from their own IP. Lists on the local network, including config lists, are now refused. Recommendation: accept for v0.6 (gluetun is the documented setup); a follow-up could add a guarded proxy mode. main is not shipped, so this can be changed before the v0.6 cut."
     }
   ],
   "external_gates": {
