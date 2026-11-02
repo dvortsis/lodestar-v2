@@ -1738,6 +1738,7 @@ dependencies = [
 name = "lodestar-sources"
 version = "0.5.0"
 dependencies = [
+ "lodestar-integrations",
  "lodestar-metainfo",
  "lodestar-network-policy",
  "lodestar-peer-wire",

@@ -825,3 +825,13 @@ See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
 | Series | Type | Meaning |
 | --- | --- | --- |
 | `filter_rows_unreadable{kind}` | gauge | Stored filter rows the engine couldn't read at its last load, by `kind`: `rule`, `unless`, `class_rule`, `override`, `exception`, `allow`. Enabled withholding rules, the `unless` of an enabled rule and Is adult classification rules fail closed; the rest are skipped, which only tightens. Every kind is rendered, 0 included. It drops back to 0 once the row is fixed or removed. The Insights exception `filter_rows_unreadable` names the rows. |
+
+## Source egress and kill switch (SRC-5, 2026-11-02)
+
+See [the decision](decisions/2026-11-02-SRC-5.md). `PluginEgress::status()` gives these per plugin; SRC-14 renders them. `route` is `direct`, `bind_address`, `interface` or `socks5`.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `source_egress_up{plugin,route}` | gauge | 1 when the plugin's route is up (or direct), 0 when the kill switch is down or the route hasn't been checked yet. A down route also gives its reason in the Sources API. |
+| `source_egress_requests_total{plugin,outcome}` | counter | Requests by outcome: `answered`, `kill_switch_refused` (refused before sending because the route was down), `kill_switch_aborted` (abandoned in flight when the route went down), `policy_refused` (SSRF guard or the plugin's host list), `transport_failed`. |
+| `source_egress_trips_total{plugin}` | counter | Times the route went from up or unchecked to down. |

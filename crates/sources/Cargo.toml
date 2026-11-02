@@ -14,11 +14,12 @@ repository.workspace = true
 testing = []
 
 [dependencies]
+lodestar-integrations.workspace = true
 lodestar-network-policy.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-store.workspace = true
-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
+tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "net"] }
 url = "2.5.8"
 
 [lints]
@@ -26,4 +27,4 @@ workspace = true
 
 [dev-dependencies]
 proptest = "1.11.0"
-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util"] }
+tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util", "net", "io-util"] }
