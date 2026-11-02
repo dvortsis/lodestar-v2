@@ -237,9 +237,136 @@ pub enum SourceNeed {
     Consent,
 }
 
+/// How a source's traffic leaves (§18.4, §18.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressRoute {
+    /// The system's routing table (a VPN that routes the whole container
+    /// still applies).
+    Direct,
+    /// Through a SOCKS5 proxy. Its kill switch is always on: when the
+    /// proxy can't be reached, the source's requests are refused, never
+    /// sent directly.
+    Socks5,
+    /// Through a network interface by name. Not offered yet: the server
+    /// refuses it with `409 route_unavailable`, because DNS lookups would
+    /// leave outside the interface.
+    Interface,
+    /// From a local address. Not offered yet, as for `interface`.
+    BindAddress,
+}
+
+/// Who resolves names on a SOCKS5 route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SocksDns {
+    /// The proxy (`socks5h`): no lookup leaves outside the tunnel. The
+    /// proxy decides what a name reaches, so a public name that resolves
+    /// to an address on the proxy's own network reaches that network.
+    Proxy,
+    /// Lodestar, through its address checks (`socks5`): lookups leave
+    /// outside the tunnel, but every address is checked before the proxy
+    /// is asked.
+    Local,
+}
+
+/// A source's egress setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(example = json!({ "route": "socks5", "proxy": "10.8.0.1:1080" }))]
+pub struct EgressSetting {
+    #[schema(inline)]
+    pub route: EgressRoute,
+    /// For `socks5`: the proxy as `host:port` (a name, an IPv4 address or
+    /// a bracketed IPv6 address). A name is resolved when the source
+    /// starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub proxy: Option<String>,
+    /// For `socks5`: who resolves names. Left out, it's `local` when the
+    /// proxy is on your network (a private or loopback address), where a
+    /// name the proxy resolves could reach your other devices, and
+    /// `proxy` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, inline)]
+    pub dns: Option<SocksDns>,
+}
+
+/// The live state of a source's route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressState {
+    /// Direct: there's nothing to check.
+    Direct,
+    /// Not checked yet.
+    Unchecked,
+    Up,
+    /// The kill switch is on: requests are refused.
+    Down,
+}
+
+/// Counts since the source started (`source_egress_*` in
+/// `docs/metrics.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+pub struct EgressCounts {
+    /// Requests that got an HTTP answer.
+    pub answered: u64,
+    /// Requests abandoned in flight because the route went down.
+    pub kill_switch_aborts: u64,
+    /// Requests refused before sending because the route was down.
+    pub kill_switch_refusals: u64,
+    /// Requests refused by the address checks or the host list.
+    pub policy_refusals: u64,
+    /// Requests that failed to connect, timed out or were too large.
+    pub transport_failures: u64,
+    /// Times the route went down.
+    pub trips: u64,
+}
+
+/// A running source's route, as its kill switch sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct EgressLive {
+    #[schema(inline)]
+    pub counts: EgressCounts,
+    /// What you should know about this route's privacy; null when
+    /// nothing.
+    #[schema(required = true)]
+    pub notice: Option<String>,
+    /// Why it's down; null when it isn't.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+    #[schema(inline)]
+    pub state: EgressState,
+}
+
+/// A source's egress: what's set, how the running source's route is
+/// doing, and warnings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SourceEgress {
+    /// The running source's route; null when it isn't running (a change
+    /// applies at the next start).
+    #[schema(required = true, inline)]
+    pub live: Option<EgressLive>,
+    #[schema(inline)]
+    pub setting: EgressSetting,
+    /// Things to fix or know, such as `HTTPS_PROXY` being set while the
+    /// source connects directly (source plugins never use it).
+    pub warnings: Vec<String>,
+}
+
+/// A source's concurrency, in the plugin's own unit (§18.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SourceAgents {
+    pub count: u32,
+    /// The most the plugin allows; 1 means it can't be changed.
+    pub max: u32,
+}
+
 /// One source plugin of this build.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Source {
+    #[schema(inline)]
+    pub agents: SourceAgents,
     #[schema(inline)]
     pub consent: ConsentClass,
     /// Its class is enabled by acknowledging what's shown (`external`,
@@ -254,8 +381,12 @@ pub struct Source {
     /// The names of its stored credentials; their values are never
     /// returned.
     pub credentials: Vec<String>,
+    /// The windows it runs in when you haven't set any.
+    pub default_schedule: Vec<String>,
     /// Fields `PATCH /sources/{id}` changes now.
     pub editable: Vec<String>,
+    #[schema(inline)]
+    pub egress: SourceEgress,
     /// Its stored state is `enabled`.
     pub enabled: bool,
     /// The hosts it contacts, as `protocol://host`: what an `external`
@@ -265,8 +396,11 @@ pub struct Source {
     pub id: u8,
     pub kinds: Vec<SourceKind>,
     pub name: String,
-    /// Fields planned for the v0.6 sources epic (agents, egress, purge,
-    /// schedule): listed so the UI can show them, refused by `PATCH`.
+    /// The networks it reaches, such as `bt`, `bt_i2p`, `ed2k`,
+    /// `ipfs` or `usenet` (§18.6).
+    pub networks: Vec<String>,
+    /// Fields planned for a later slice (`purge`): listed so the UI can
+    /// show them, refused by `PATCH`.
     pub not_yet_editable: Vec<String>,
     /// What enabling it still needs; null when enabling is a toggle.
     #[schema(required = true, inline)]
@@ -283,6 +417,10 @@ pub struct Source {
     pub restart_required: bool,
     #[schema(inline)]
     pub risk: RiskLevel,
+    /// The daily windows it runs in, as `HH:MM-HH:MM` in the server's
+    /// local time (an end at or before the start wraps past midnight).
+    /// Empty: any time.
+    pub schedule: Vec<String>,
     #[schema(inline)]
     pub state: SourceState,
     pub version: String,
@@ -292,11 +430,20 @@ pub struct Source {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "sources": [{
+        "agents": { "count": 1, "max": 1 },
         "consent": "none",
         "consent_required": false,
         "consent_version": "",
         "credentials": [],
-        "editable": ["enabled", "priority"],
+        "default_schedule": [],
+        "editable": ["agents", "egress", "enabled", "priority", "schedule"],
+        "egress": {
+            "live": { "counts": { "answered": 0, "kill_switch_aborts": 0, "kill_switch_refusals": 0,
+                "policy_refusals": 0, "transport_failures": 0, "trips": 0 },
+                "notice": null, "reason": null, "state": "direct" },
+            "setting": { "route": "direct" },
+            "warnings": []
+        },
         "enabled": true,
         "endpoints": [],
         "health": {
@@ -310,12 +457,14 @@ pub struct Source {
         "kinds": ["discovery", "peer_finder"],
         "name": "Mainline DHT",
         "needs": null,
-        "not_yet_editable": ["agents", "egress", "purge", "schedule"],
+        "networks": ["bt"],
+        "not_yet_editable": ["purge"],
         "password_required": false,
         "plugin": "dht",
         "priority": "normal",
         "restart_required": false,
         "risk": "low",
+        "schedule": [],
         "state": "enabled",
         "version": "0.0.0"
     }]
@@ -352,22 +501,26 @@ pub struct SourcePatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, inline)]
     pub priority: Option<SourcePriority>,
-    /// Not editable before v0.6: refused with `409 not_editable`.
+    /// Its concurrency, 1 to its `agents.max`. Applies at the next start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Value, nullable = false)]
-    pub agents: Option<Value>,
-    /// Not editable before v0.6: refused with `409 not_editable`.
+    #[schema(nullable = false)]
+    pub agents: Option<u32>,
+    /// How its traffic leaves. Applies at the next start. Changing it
+    /// needs the admin `password` (`428 confirm_required`): a route is
+    /// what keeps a source's traffic on your VPN. `interface` and
+    /// `bind_address` are refused (`409 route_unavailable`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Value, nullable = false)]
-    pub egress: Option<Value>,
-    /// Not editable before v0.6: refused with `409 not_editable`.
+    #[schema(nullable = false, inline)]
+    pub egress: Option<EgressSetting>,
+    /// Not editable yet: refused with `409 not_editable`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Value, nullable = false)]
     pub purge: Option<Value>,
-    /// Not editable before v0.6: refused with `409 not_editable`.
+    /// Daily windows as `HH:MM-HH:MM`, at most 8; `[]` runs it any time.
+    /// Applies at the next start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Value, nullable = false)]
-    pub schedule: Option<Value>,
+    #[schema(nullable = false)]
+    pub schedule: Option<Vec<String>>,
 }
 
 impl std::fmt::Debug for SourcePatch {
@@ -378,6 +531,9 @@ impl std::fmt::Debug for SourcePatch {
             .field("password", &self.password.as_ref().map(|_| "…"))
             .field("enabled", &self.enabled)
             .field("priority", &self.priority)
+            .field("agents", &self.agents)
+            .field("egress", &self.egress)
+            .field("schedule", &self.schedule)
             .finish_non_exhaustive()
     }
 }
@@ -407,15 +563,7 @@ impl std::fmt::Debug for CredentialsPatch {
 impl SourcePatch {
     /// The first field given that can't be changed yet.
     pub fn not_yet_editable(&self) -> Option<&'static str> {
-        [
-            ("agents", &self.agents),
-            ("egress", &self.egress),
-            ("purge", &self.purge),
-            ("schedule", &self.schedule),
-        ]
-        .into_iter()
-        .find(|(_, v)| v.is_some())
-        .map(|(name, _)| name)
+        self.purge.is_some().then_some("purge")
     }
 }
 

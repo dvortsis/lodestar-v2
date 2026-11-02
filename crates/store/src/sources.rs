@@ -106,6 +106,37 @@ const CONSENT_KEY: &str = "sources.consent.";
 /// sealed blob; the key file that opens it is outside the database.
 const SECRET_KEY: &str = "sources.secret.";
 
+/// A source's own settings beyond its state and priority (§18.4), each
+/// kept in `settings` under its prefix, then the plugin's manifest id.
+/// Their text is the pipeline's to encode. A purge drops them with the
+/// consent record and credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceSetting {
+    /// How its traffic leaves (direct, or a SOCKS5 proxy).
+    Egress,
+    /// The daily windows it may run in.
+    Schedule,
+    /// Its concurrency, in the plugin's own unit.
+    Agents,
+}
+
+impl SourceSetting {
+    pub const ALL: [SourceSetting; 3] = [
+        SourceSetting::Egress,
+        SourceSetting::Schedule,
+        SourceSetting::Agents,
+    ];
+
+    fn key(self, plugin: &str) -> String {
+        let prefix = match self {
+            SourceSetting::Egress => "sources.egress.",
+            SourceSetting::Schedule => "sources.schedule.",
+            SourceSetting::Agents => "sources.agents.",
+        };
+        format!("{prefix}{plugin}")
+    }
+}
+
 fn secret_prefix(plugin: &str) -> String {
     format!("{SECRET_KEY}{plugin}/")
 }
@@ -118,12 +149,16 @@ fn plugin_of(conn: &Connection, id: SourceId) -> Result<String> {
     .ok_or(Error::NotFound("source"))
 }
 
-/// Removes a source's consent record and credentials (on purge).
+/// Removes a source's consent record, credentials and own settings (on
+/// purge).
 fn drop_records(conn: &Connection, plugin: &str) -> Result<()> {
     conn.execute(
         "DELETE FROM settings WHERE key = ?1",
         [format!("{CONSENT_KEY}{plugin}")],
     )?;
+    for setting in SourceSetting::ALL {
+        conn.execute("DELETE FROM settings WHERE key = ?1", [setting.key(plugin)])?;
+    }
     let prefix = secret_prefix(plugin);
     conn.execute(
         "DELETE FROM settings WHERE substr(key, 1, ?2) = ?1",
@@ -304,6 +339,38 @@ impl Store {
         Ok(())
     }
 
+    /// One of `plugin`'s own settings, as [`Store::set_source_settings`]
+    /// stored it; `None` when it keeps the plugin's default.
+    pub fn source_setting(&self, plugin: &str, setting: SourceSetting) -> Result<Option<String>> {
+        self.setting_text(&setting.key(plugin))
+    }
+
+    /// Sets (`Some`) or resets to the plugin's default (`None`) each of a
+    /// source's settings in `changes`, in one transaction.
+    pub fn set_source_settings(
+        &mut self,
+        id: SourceId,
+        changes: &[(SourceSetting, Option<&str>)],
+    ) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let plugin = plugin_of(&tx, id)?;
+        for (setting, value) in changes {
+            match value {
+                Some(v) => tx.execute(
+                    "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    params![setting.key(&plugin), v],
+                )?,
+                None => tx.execute(
+                    "DELETE FROM settings WHERE key = ?1",
+                    [setting.key(&plugin)],
+                )?,
+            };
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn sources(&self) -> Result<Vec<SourceRow>> {
         let mut stmt = self
             .conn
@@ -391,5 +458,56 @@ impl Store {
             })
         })
         .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StoreConfig;
+
+    #[test]
+    fn source_settings_set_reset_and_purge() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let a = s
+            .register_source_as("feed", "1", SourceState::Disabled, 0)
+            .unwrap();
+        let b = s
+            .register_source_as("feed2", "1", SourceState::Disabled, 0)
+            .unwrap();
+        s.set_source_settings(
+            a,
+            &[
+                (SourceSetting::Egress, Some("e")),
+                (SourceSetting::Schedule, Some("s")),
+                (SourceSetting::Agents, Some("2")),
+            ],
+        )
+        .unwrap();
+        s.set_source_settings(b, &[(SourceSetting::Egress, Some("other"))])
+            .unwrap();
+        assert_eq!(
+            s.source_setting("feed", SourceSetting::Egress).unwrap(),
+            Some("e".into())
+        );
+        // `feed2` doesn't share `feed`'s key, though one id prefixes the other.
+        assert_eq!(
+            s.source_setting("feed2", SourceSetting::Egress).unwrap(),
+            Some("other".into())
+        );
+        s.set_source_settings(a, &[(SourceSetting::Agents, None)])
+            .unwrap();
+        assert_eq!(s.source_setting("feed", SourceSetting::Agents).unwrap(), None);
+        // A purge drops them, and only the purged source's.
+        s.set_source_state(a, SourceState::Purged).unwrap();
+        for setting in SourceSetting::ALL {
+            assert_eq!(s.source_setting("feed", setting).unwrap(), None);
+        }
+        assert!(s.source_setting("feed2", SourceSetting::Egress).unwrap().is_some());
+        let unknown = SourceId::new(9).unwrap();
+        assert!(matches!(
+            s.set_source_settings(unknown, &[(SourceSetting::Egress, Some("e"))]),
+            Err(Error::NotFound(_))
+        ));
     }
 }
