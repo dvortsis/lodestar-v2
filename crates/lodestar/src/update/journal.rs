@@ -158,7 +158,9 @@ pub fn begin(
 }
 
 /// The snapshot a rollback of `failed` would restore (its name), or why
-/// it's refused, without writing anything.
+/// it's refused. It writes nothing but the snapshot itself: choosing one
+/// first scrubs it of every recorded source purge (SRC-14b), which a
+/// rollback would do anyway.
 pub fn preview(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<String>, String> {
     restore_plan(ctx, failed, previous).map(|s| s.map(|s| s.name))
 }

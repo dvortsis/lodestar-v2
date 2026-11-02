@@ -1131,3 +1131,31 @@ async fn drop_source_drops_its_own_keys_and_keeps_shared_ones() {
     let queue = h.stop().await;
     assert_eq!(queue.len(), 1);
 }
+
+/// A key the dropped source saw publicly and another saw privately is
+/// private from then on: whether it was public came from both (SRC-14b).
+#[tokio::test(start_paused = true)]
+async fn drop_source_leaves_a_shared_key_private() {
+    let h = Harness::start(config(), &[], vec![]);
+    h.send(found(1, 9, vec![]));
+    let mut private = found(2, 9, vec![]);
+    private.found.private_source = true;
+    h.send(private);
+    sleep(Duration::from_millis(10)).await;
+    assert!(
+        !h.handle.snapshot().await[0].private_source,
+        "public: one public sighting"
+    );
+    assert_eq!(h.handle.drop_source(src(1)).await, 0);
+    let queue = h.handle.snapshot().await;
+    assert_eq!(queue[0].source, src(2));
+    assert!(
+        queue[0].private_source,
+        "the public sighting went with its source"
+    );
+    // A live public sighting makes it public again.
+    h.send(found(2, 9, vec![]));
+    sleep(Duration::from_millis(10)).await;
+    assert!(!h.handle.snapshot().await[0].private_source);
+    h.stop().await;
+}

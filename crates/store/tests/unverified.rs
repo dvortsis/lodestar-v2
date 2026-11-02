@@ -1453,3 +1453,33 @@ fn a_promotion_writes_nothing_of_a_stopped_source() {
         .unwrap();
     assert_eq!(w.prepared, [lodestar_store::Inserted::Refused]);
 }
+
+/// An item whose public sighting may be a stopped finder's is promoted
+/// private: only a live public sighting makes it public (SRC-14b).
+#[test]
+fn a_promotion_ignores_a_stopped_finders_public_mark() {
+    let mut store = mem();
+    let (dht, nyaa, prowlarr) = sources(&mut store);
+    let p = prepared(&store, "iota");
+    let c = named("Iota");
+    let Put::New(id) = store
+        .put_unverified(&[item(&p.info_hash.0, nyaa, Some(&c))])
+        .unwrap()[0]
+    else {
+        panic!()
+    };
+    let private = NewUnverified {
+        private_source: true,
+        ..item(&p.info_hash.0, prowlarr, None)
+    };
+    store.put_unverified(&[private]).unwrap();
+    store.set_source_state(nyaa, SourceState::Purged).unwrap();
+    // A private fetch by a live source.
+    let fetch = PreparedTorrent {
+        extra_flags: flags::PRIVATE_SOURCE,
+        ..pt(&p, dht)
+    };
+    store.promote(id, &fetch, CODES, T).unwrap();
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_ne!(row.flags & flags::PRIVATE_SOURCE, 0, "stored private");
+}

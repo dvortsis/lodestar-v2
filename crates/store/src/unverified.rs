@@ -649,7 +649,13 @@ impl Store {
             .claims
             .as_ref()
             .filter(|_| stopped & item_source.bit() as u64 == 0);
-        let public = row.flags & PRIVATE == 0 || t.extra_flags & flags::PRIVATE_SOURCE == 0;
+        // The item's public mark may be a stopped finder's sighting: then
+        // it's treated as private, so only a live public sighting (this
+        // fetch, or a later one) makes it public (SRC-14b).
+        let item_public = row.flags & PRIVATE == 0
+            && (row.sources as u64) & stopped == 0
+            && stopped & item_source.bit() as u64 == 0;
+        let public = item_public || t.extra_flags & flags::PRIVATE_SOURCE == 0;
         let claims_private = i64::from(row.flags & CLAIMS_PRIVATE != 0);
         let out = if let Some(existing) = crate::find_any(&tx, p.swarm_hashes())? {
             crate::add_sources(&tx, existing, bits)?;

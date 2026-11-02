@@ -1729,6 +1729,11 @@ impl Pool {
                 continue;
             }
             e.sources = rest;
+            // Whether it's public was the AND of every finder's sightings,
+            // the dropped one's included: which of the rest were private
+            // isn't known, so it's private from here (SRC-14b). A live
+            // public sighting makes it public again.
+            e.private = true;
             if e.source == source {
                 // The lowest remaining finder; its bit is under 64.
                 e.source = SourceId::new(rest.trailing_zeros() as u8).expect("bit under 64");
