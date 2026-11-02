@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T06:39:07Z",
+  "updated_at": "2026-11-02T06:45:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2384,14 +2384,15 @@
       "merge_sha": "8b0037bf"
     },
     "SRC-1": {
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnB5mFJfPfMQNdVkAkV",
       "launched": "2026-11-02T04:37:06Z",
-      "migration": "V14",
+      "migration": "V14 on main",
       "pr": 379,
       "head": "1078437d",
-      "review": "Opus CHANGES: re-judge page bound ignores per-file decode cost; held refile leaves stored torrent under held hash; source-state check on writes (or SRC-14 handoff)"
+      "review": "Opus CHANGES: re-judge page bound ignores per-file decode cost; held refile leaves stored torrent under held hash; source-state check on writes (or SRC-14 handoff)",
+      "merge_sha": "a4f6ebb5"
     },
     "CR-COL-3": {
       "status": "in review",
@@ -2418,7 +2419,11 @@
       "review": "Opus MERGE; small push requested (bind-address refused on all non-Windows, operstate probe, DNS-leak status text and decisions)"
     },
     "SRC-2": {
-      "brief_must": "claim hits on the floor or a CS pattern always carry a hold (from #379 review); watermarks for promoted ids; Insights promotion counting (handed from SRC-1)"
+      "brief_must": "claim hits on the floor or a CS pattern always carry a hold (from #379 review); watermarks for promoted ids; Insights promotion counting (handed from SRC-1)",
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhnAWFNGeB2VZxALptGu",
+      "launched": "2026-11-02T06:45:10Z"
     },
     "SRC-14": {
       "brief_must": "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN"
@@ -2456,7 +2461,8 @@
     "V12": "release/v0.5.1 (shipped in rc)",
     "V13": "imports (IMP-1), on main",
     "V14": "SRC-1 (assigned by master-plan r2; waits ext:owner-migrations-on-main)",
-    "V15": "CR-3 (after SRC-1; waits G-import-50M, owner 50M approval, owner-migrations-on-main)"
+    "V15": "CR-3 (after SRC-1; waits G-import-50M, owner 50M approval, owner-migrations-on-main)",
+    "V14_status": "merged #379 a4f6ebb5"
   },
   "decisions": [
     "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the §10.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
