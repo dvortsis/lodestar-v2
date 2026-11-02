@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T12:39:51Z",
+  "updated_at": "2026-11-02T13:01:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3670,87 +3670,108 @@
     },
     {
       "id": "q-367-in-rc3",
-      "state": "to-send",
+      "state": "sent",
       "text": "rc.3 is exactly rc.2 + #357 (§2.29). #357 alone holds what an unreadable rule stand-in matches and nothing in rc.3 undoes those holds or writes the filter.stand_ins record. Recommendation (planning session and runner): also cherry-pick F-filter-standin-undo (#367) into rc.3 if merged by the cut. Yes/no?",
-      "added": "2026-11-02T03:40:03Z"
+      "added": "2026-11-02T03:40:03Z",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-plan-r3",
-      "state": "to-send",
+      "state": "sent",
       "text": "Master plan r3 (#372) merged: CR-SPEC and CR-COL-3 before any live crawler run; ext:owner-cr-spec (you confirm the measurement spec before the comparator run); X-required-web-checks before your ruleset change (the §2.28 check names do not exist); HANDOVER.md protocol. Decisions in docs/decisions/2026-11-02-master-plan-r3.md for veto.",
-      "added": "2026-11-02T03:40:03Z"
+      "added": "2026-11-02T03:40:03Z",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-status-connector",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T04:09:02Z",
-      "text": "#374 status-connector merged. Runner calls (§2.19): authless connector with secret in URL path accepted (claude.ai offers OAuth or nothing), hardened (>=32-char secret, constant-time check, shared cache, error caching); ~2,100-line lockfile accepted. Rotation steps in docs/decisions/2026-11-02-status-connector.md."
+      "text": "#374 status-connector merged. Runner calls (§2.19): authless connector with secret in URL path accepted (claude.ai offers OAuth or nothing), hardened (>=32-char secret, constant-time check, shared cache, error caching); ~2,100-line lockfile accepted. Rotation steps in docs/decisions/2026-11-02-status-connector.md.",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "confirm-cr-spec",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T04:47:25Z",
-      "text": "Confirm the crawler measurement spec (docs/decisions/2026-11-02-CR-SPEC.md, #375): ext:owner-cr-spec gates the first booked run. Your call O1: the 24 h gate window excludes the 6 h first-start suppression and a 60 min warmup (recommended; run ~31 h) vs includes them (stricter). O2/O3 tighten; O4 Checkpoint 1 uses the lower of additive/multiplicative estimates; O5 new measurement parameters (list in the file); O6 calendar: two ABBA blocks per treatment minimum, ~4 extra host-days for CR-ADM and uTP. No owner number changed."
+      "text": "Confirm the crawler measurement spec (docs/decisions/2026-11-02-CR-SPEC.md, #375): ext:owner-cr-spec gates the first booked run. Your call O1: the 24 h gate window excludes the 6 h first-start suppression and a 60 min warmup (recommended; run ~31 h) vs includes them (stricter). O2/O3 tighten; O4 Checkpoint 1 uses the lower of additive/multiplicative estimates; O5 new measurement parameters (list in the file); O6 calendar: two ABBA blocks per treatment minimum, ~4 extra host-days for CR-ADM and uTP. No owner number changed.",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-dashboard-yaml",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T05:07:22Z",
-      "text": "#376 merged: runner/dashboard.yaml feeds the status connector live; new CI drift check (Status connector / test), not required (adding it to the ruleset is your call). Build plan stays hand-written."
+      "text": "#376 merged: runner/dashboard.yaml feeds the status connector live; new CI drift check (Status connector / test), not required (adding it to the ruleset is your call). Build plan stays hand-written.",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-cr-col-3",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T05:45:57Z",
-      "text": "CR-COL-3 (#378): 17 stricter readings of CR-SPEC (docs/decisions/2026-11-02-CR-COL-3.md); collector logs in with an admin password file (refused unless mode 0600-ish and loopback/private URL), since API keys cannot reach settings/Insights; later option: export preset/pause state in /metrics so no login is needed; proposed dht_switch gauge. Rehearsal in the cloud cannot be valid (no NTP/UDP); the first experiment-host rehearsal must show the healthy CR-ADM permit-identity check."
+      "text": "CR-COL-3 (#378): 17 stricter readings of CR-SPEC (docs/decisions/2026-11-02-CR-COL-3.md); collector logs in with an admin password file (refused unless mode 0600-ish and loopback/private URL), since API keys cannot reach settings/Insights; later option: export preset/pause state in /metrics so no login is needed; proposed dht_switch gauge. Rehearsal in the cloud cannot be valid (no NTP/UDP); the first experiment-host rehearsal must show the healthy CR-ADM permit-identity check.",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "q-egress-dns-leak",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T06:15:51Z",
-      "text": "SRC-5 (#380) per-plugin egress: on the \"network interface\" route, DNS lookups use the system resolver outside the interface (connections never do), so an ISP could see which indexer names a plugin looks up. Recommendation: keep the interface route hidden in the UI until a bound resolver lands (follow-up slice); meanwhile recommend a whole-container VPN (gluetun) or SOCKS5 with proxy DNS. Accept, or ask for the resolver first?"
+      "text": "SRC-5 (#380) per-plugin egress: on the \"network interface\" route, DNS lookups use the system resolver outside the interface (connections never do), so an ISP could see which indexer names a plugin looks up. Recommendation: keep the interface route hidden in the UI until a bound resolver lands (follow-up slice); meanwhile recommend a whole-container VPN (gluetun) or SOCKS5 with proxy DNS. Accept, or ask for the resolver first?",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-src5",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T06:15:51Z",
-      "text": "SRC-5 runner calls (§2.19): plugins ignore HTTPS_PROXY (per-plugin SOCKS5 is the supported proxy; SRC-14 warns if HTTPS_PROXY is set with Direct egress); kill switch always on for non-direct routes (refines \"optional\"); bind-address route refused on non-Windows (weak host model leak); socks5h caveat: a public name resolving to the proxy LAN reaches it (documented, SRC-14 help text)."
+      "text": "SRC-5 runner calls (§2.19): plugins ignore HTTPS_PROXY (per-plugin SOCKS5 is the supported proxy; SRC-14 warns if HTTPS_PROXY is set with Direct egress); kill switch always on for non-direct routes (refines \"optional\"); bind-address route refused on non-Windows (weak host model leak); socks5h caveat: a public name resolving to the proxy LAN reaches it (documented, SRC-14 help text).",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-f-normalize",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T06:29:50Z",
-      "text": "F-normalize-invisible (#381): the filter now ignores characters that render as nothing inside words, using a stricter-of-two-readings rule so it never matches less than before. Deviation from the brief: visible format characters (line separator, Arabic number marks etc.) stay word breaks; a follow-up extends the two-reading rule to them."
+      "text": "F-normalize-invisible (#381): the filter now ignores characters that render as nothing inside words, using a stricter-of-two-readings rule so it never matches less than before. Deviation from the brief: visible format characters (line separator, Arabic number marks etc.) stay word breaks; a follow-up extends the two-reading rule to them.",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-src2-claim-holds",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T08:25:29Z",
-      "text": "SRC-2 (#383): a feed claim whose name hits the floor, a CS pattern or a core term puts that hash on hold (quarantine/tombstone) even before the real metadata is fetched. Content safety requires this, but it means a malicious feed could get a legitimate torrent held by claiming its hash under such a name. User drop rules, packs and lists on claim text only drop the claim (runner ruling). Accept, or prefer core-hit claims to hold only the claim until the verified name is judged?"
+      "text": "SRC-2 (#383): a feed claim whose name hits the floor, a CS pattern or a core term puts that hash on hold (quarantine/tombstone) even before the real metadata is fetched. Content safety requires this, but it means a malicious feed could get a legitimate torrent held by claiming its hash under such a name. User drop rules, packs and lists on claim text only drop the claim (runner ruling). Accept, or prefer core-hit claims to hold only the claim until the verified name is judged?",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-src2-verify-priority",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T08:25:29Z",
-      "text": "SRC-2: verification of unverified items runs under the source fair-share weight with a ~13/s cap, not a separate Low class; before the switch is turned on (SRC-14) a per-source pending cap or Low class is required."
+      "text": "SRC-2: verification of unverified items runs under the source fair-share weight with a ~13/s cap, not a separate Low class; before the switch is turned on (SRC-14) a per-source pending cap or Low class is required.",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "q1-texts-drafted",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T10:32:07Z",
-      "text": "SRC-4 (#388) drafted the four consent texts (External, Account, Restricted, Overlay) in docs/decisions/2026-11-02-SRC-4.md, section \"Draft consent texts\". Please approve or edit them (Q1); SRC-15b (the Sources screen) cannot merge until you do."
+      "text": "SRC-4 (#388) drafted the four consent texts (External, Account, Restricted, Overlay) in docs/decisions/2026-11-02-SRC-4.md, section \"Draft consent texts\". Please approve or edit them (Q1); SRC-15b (the Sources screen) cannot merge until you do.",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "flag-src4",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T10:32:07Z",
-      "text": "SRC-4 refinements (all tighten): Restricted/Overlay ask for the password on every enable, not only first consent; consent-text version is per class with the endpoint digest folded in (an endpoint change asks again); External needs its endpoint list acknowledged; SOCKS5 credentials capped at 255 bytes. Also: the consent ack is bound to the class's consent-text version plus the endpoint digest, not to the plugin manifest's own version (a plugin update that keeps its endpoints doesn't ask again)."
+      "text": "SRC-4 refinements (all tighten): Restricted/Overlay ask for the password on every enable, not only first consent; consent-text version is per class with the endpoint digest folded in (an endpoint change asks again); External needs its endpoint list acknowledged; SOCKS5 credentials capped at 255 bytes. Also: the consent ack is bound to the class's consent-text version plus the endpoint digest, not to the plugin manifest's own version (a plugin update that keeps its endpoints doesn't ask again).",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
     },
     {
       "id": "ruleset-web-e2e-ok",
-      "state": "to-send",
+      "state": "sent",
       "added": "2026-11-02T11:50:00Z",
-      "text": "#384 merged (a880bd5d): CI now always reports two aggregate checks, web-ok and e2e-ok (green on docs-only PRs too, proven on scratch PR #389). Action: add web-ok and e2e-ok as required checks in the main ruleset next to ci-ok. Also: delete the branch scratch/docs-only-proof (PR #389 closed)."
+      "text": "#384 merged (a880bd5d): CI now always reports two aggregate checks, web-ok and e2e-ok (green on docs-only PRs too, proven on scratch PR #389). Action: add web-ok and e2e-ok as required checks in the main ruleset next to ci-ok. Also: delete the branch scratch/docs-only-proof (PR #389 closed).",
+      "sent": "2026-11-02T13:01:51Z (daily summary via session_01MMjhnCw1haVpiSDpYLQQqm)"
+    },
+    {
+      "id": "flag-src14a-schedule",
+      "state": "sent",
+      "added": "2026-11-02T13:01:51Z",
+      "sent": "2026-11-02T13:01:51Z (daily summary)",
+      "text": "SRC-14a: schedule windows and agents stored and reported as enforced:false until scheduler v2; verification switch refused by the API until a per-source cap exists."
     }
   ],
   "external_gates": {
