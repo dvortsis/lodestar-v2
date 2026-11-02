@@ -24,7 +24,92 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (11, V11),
     (12, V12),
     (13, V13),
+    (14, V14),
 ];
+
+/// Sources (SRC-1, `docs/decisions/2026-11-02-SRC-1.md`, architecture
+/// §18.5): keys sources found that have claims but no metadata yet, the
+/// claims of stored torrents, and each source plugin's own state.
+/// Additive only.
+///
+/// - `unverified_items` ids come from `id_seq` and are kept when the item
+///   becomes a torrent (`unverified::promote`). `network` 0 is clearnet
+///   BitTorrent, whose key is a 20-byte swarm hash. `source_id` is the
+///   source whose claims `claims` holds (or, once those are purged, one
+///   that found it); `sources` is every source that found it.
+/// - `claims` and `torrent_claims.data` are `claims::encode` blobs; the
+///   length cap is `claims::MAX_STORED`.
+/// - A hash entering `tombstones`, `quarantine` or `cs_hashes` deletes its
+///   unverified item, journalling the hash so snapshots lose it too, and
+///   the claims of a torrent under that hash. There's no trigger on
+///   `torrents` inserts: the writer promotes (SRC-2), keeping the
+///   crawler's insert free of extra probes.
+/// - `source_state` is the plugin key-value store (`PluginState`).
+const V14: &str = "
+CREATE TABLE unverified_items (
+    id        INTEGER PRIMARY KEY,
+    network   INTEGER NOT NULL CHECK (network BETWEEN 0 AND 15),
+    key       BLOB NOT NULL CHECK (length(key) BETWEEN 1 AND 64
+        AND (network != 0 OR length(key) = 20)),
+    source_id INTEGER NOT NULL REFERENCES sources (id),
+    sources   INTEGER NOT NULL CHECK ((sources >> source_id) & 1 = 1),
+    flags     INTEGER NOT NULL CHECK (flags BETWEEN 0 AND 1),
+    claims    BLOB CHECK (claims IS NULL OR length(claims) BETWEEN 7 AND 1174722),
+    first_at  INTEGER NOT NULL,
+    last_at   INTEGER NOT NULL,
+    UNIQUE (network, key)
+) STRICT;
+
+-- A rowid table: claims run to a megabyte, too big for WITHOUT ROWID.
+CREATE TABLE torrent_claims (
+    torrent_id INTEGER NOT NULL REFERENCES torrents (id) ON DELETE CASCADE,
+    source_id  INTEGER NOT NULL REFERENCES sources (id),
+    data       BLOB NOT NULL CHECK (length(data) BETWEEN 7 AND 1174722),
+    PRIMARY KEY (torrent_id, source_id)
+) STRICT;
+CREATE INDEX torrent_claims_source ON torrent_claims (source_id, torrent_id);
+
+CREATE TABLE source_state (
+    source_id INTEGER NOT NULL REFERENCES sources (id),
+    key       TEXT NOT NULL CHECK (length(CAST(key AS BLOB)) BETWEEN 1 AND 128),
+    value     BLOB NOT NULL CHECK (length(value) <= 65536),
+    PRIMARY KEY (source_id, key)
+) STRICT;
+
+CREATE TRIGGER unverified_tombstoned AFTER INSERT ON tombstones BEGIN
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT key, unixepoch() FROM unverified_items WHERE network = 0 AND key = new.hash
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    DELETE FROM unverified_items WHERE network = 0 AND key = new.hash;
+    DELETE FROM torrent_claims WHERE torrent_id IN (
+        SELECT id FROM torrents WHERE info_hash = new.hash
+        UNION ALL
+        SELECT id FROM torrents
+        WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = new.hash);
+END;
+CREATE TRIGGER unverified_quarantined AFTER INSERT ON quarantine BEGIN
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT key, unixepoch() FROM unverified_items WHERE network = 0 AND key = new.hash
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    DELETE FROM unverified_items WHERE network = 0 AND key = new.hash;
+    DELETE FROM torrent_claims WHERE torrent_id IN (
+        SELECT id FROM torrents WHERE info_hash = new.hash
+        UNION ALL
+        SELECT id FROM torrents
+        WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = new.hash);
+END;
+CREATE TRIGGER unverified_floored AFTER INSERT ON cs_hashes BEGIN
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT key, unixepoch() FROM unverified_items WHERE network = 0 AND key = new.hash
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    DELETE FROM unverified_items WHERE network = 0 AND key = new.hash;
+    DELETE FROM torrent_claims WHERE torrent_id IN (
+        SELECT id FROM torrents WHERE info_hash = new.hash
+        UNION ALL
+        SELECT id FROM torrents
+        WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = new.hash);
+END;
+";
 
 /// Imports (IMP-1, `docs/decisions/2026-10-30-IMP-1.md`): durable jobs
 /// bound to a source identity, their cursors, which torrents each job
@@ -1428,11 +1513,14 @@ mod tests {
         }
     }
 
-    /// The v0.5.1 code path (migrations through V12) opening a V13 store
-    /// refuses it as newer and changes nothing: no migration, no
-    /// snapshot, the file as it was.
+    /// Older builds opening this build's store refuse it as newer and
+    /// change nothing: no migration, no snapshot, the file as it was. The
+    /// v0.5.1 code path (migrations through V12) and a V13 build both
+    /// refuse a V14 store, and so do their read-only connections.
     #[test]
-    fn a_v12_build_refuses_a_v13_store_untouched() {
+    fn older_builds_refuse_a_newer_store_untouched() {
+        let latest = latest_schema_version();
+        assert_eq!(latest, 14);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lodestar.db");
         drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
@@ -1446,38 +1534,202 @@ mod tests {
         };
         let (files, bytes) = (listing(), std::fs::read(&path).unwrap());
 
+        for older in [12, 13] {
+            let mut conn = Connection::open(&path).unwrap();
+            configure(&conn, 0).unwrap();
+            let err =
+                migrate_with(&mut conn, Some(&path), &MIGRATIONS[..older as usize]).unwrap_err();
+            assert!(
+                matches!(err, Error::SchemaTooNew { found, supported }
+                    if found == latest && supported == older),
+                "{err:?}"
+            );
+            assert!(err.to_string().contains("newer than this build supports"));
+            assert_eq!(version(&conn), latest);
+            drop(conn);
+            assert_eq!(listing(), files, "no snapshot or side file left");
+            assert!(
+                std::fs::read(&path).unwrap() == bytes,
+                "the file is unchanged"
+            );
+            let reader =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .unwrap();
+            assert!(matches!(
+                check_current_with(&reader, older),
+                Err(Error::SchemaTooNew { found, supported })
+                    if found == latest && supported == older
+            ));
+            drop(reader);
+        }
+    }
+
+    /// V14 on a V13 store with data: every V13 row is kept, the pre-V14
+    /// snapshot is taken, the new tables start empty, the id sequence is
+    /// untouched, and V13's triggers still work beside V14's.
+    #[test]
+    fn v14_upgrades_a_v13_store_with_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lodestar.db");
         let mut conn = Connection::open(&path).unwrap();
         configure(&conn, 0).unwrap();
-        let err = migrate_with(&mut conn, Some(&path), &MIGRATIONS[..12]).unwrap_err();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..13]).unwrap();
+        conn.execute_batch(&format!(
+            "INSERT INTO sources (id, plugin, version, state, added_at) VALUES (0, 'dht', '1', 0, 0);
+             INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count, file_count,
+                 info_size, flags, discovered_at, metadata_at, last_seen_at, sources, first_source)
+                 VALUES (7, x'{t}', 'kept', 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0);
+             UPDATE id_seq SET next = 8;
+             INSERT INTO import_sources (id, adapter, dataset, schema_sig)
+                 VALUES (1, 'magnetico', x'01', x'02');
+             INSERT INTO import_jobs (id, source, adapter_ver, contract_ver, phase, control,
+                 options, created_at, updated_at) VALUES (1, 1, 1, 1, 2, 0, x'', 0, 0);
+             INSERT INTO import_candidates (hash, job, name, missing, privacy, at)
+                 VALUES (x'{c}', 1, CAST('cand' AS BLOB), 6, 0, 0);",
+            t = "11".repeat(20),
+            c = "22".repeat(20),
+        ))
+        .unwrap();
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 14);
         assert!(
-            matches!(
-                err,
-                Error::SchemaTooNew {
-                    found: 13,
-                    supported: 12
-                }
-            ),
-            "{err:?}"
+            dir.path().join("lodestar.pre-v14.db").exists(),
+            "pre-V14 snapshot"
         );
-        assert!(err.to_string().contains("newer than this build supports"));
-        assert_eq!(version(&conn), 13);
-        drop(conn);
-        assert_eq!(listing(), files, "no snapshot or side file left");
-        assert!(
-            std::fs::read(&path).unwrap() == bytes,
-            "the file is unchanged"
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT count(*) FROM torrents"), 1);
+        assert_eq!(count("SELECT count(*) FROM import_candidates"), 1);
+        assert_eq!(count("SELECT next FROM id_seq"), 8);
+        for table in ["unverified_items", "torrent_claims", "source_state"] {
+            assert_eq!(
+                count(&format!("SELECT count(*) FROM {table}")),
+                0,
+                "{table}"
+            );
+            let strict: i64 = conn
+                .query_row(
+                    "SELECT strict FROM pragma_table_list WHERE name = ?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(strict, 1, "{table} is STRICT");
+        }
+        // V13's trigger and V14's fire on the same hold.
+        conn.execute(
+            "INSERT INTO unverified_items (id, network, key, source_id, sources, flags, claims,
+                 first_at, last_at) VALUES (8, 0, ?1, 0, 1, 0, x'01000000000000', 0, 0)",
+            [&[0x22u8; 20][..]],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'CS-2', 0)",
+            [&[0x22u8; 20][..]],
+        )
+        .unwrap();
+        assert_eq!(count("SELECT count(*) FROM import_candidates"), 0);
+        assert_eq!(count("SELECT count(*) FROM unverified_items"), 0);
+        assert_eq!(count("SELECT count(*) FROM snapshot_deletions"), 1);
+        assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    }
+
+    /// A fresh install runs V1–V14 in order and ends with the same schema
+    /// as an upgrade from V13.
+    #[test]
+    fn v14_on_a_fresh_store_matches_an_upgraded_one() {
+        let schema = |conn: &Connection| -> Vec<(String, String)> {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT name, sql FROM sqlite_schema WHERE sql IS NOT NULL
+                     AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let mut fresh = Connection::open_in_memory().unwrap();
+        migrate_with(&mut fresh, None, MIGRATIONS).unwrap();
+        let mut upgraded = Connection::open_in_memory().unwrap();
+        migrate_with(&mut upgraded, None, &MIGRATIONS[..13]).unwrap();
+        migrate_with(&mut upgraded, None, MIGRATIONS).unwrap();
+        assert_eq!(version(&fresh), 14);
+        assert_eq!(schema(&fresh), schema(&upgraded));
+        let names: Vec<String> = schema(&fresh).into_iter().map(|(n, _)| n).collect();
+        for want in [
+            "unverified_items",
+            "torrent_claims",
+            "torrent_claims_source",
+            "source_state",
+            "unverified_tombstoned",
+            "unverified_quarantined",
+            "unverified_floored",
+        ] {
+            assert!(names.iter().any(|n| n == want), "{want}");
+        }
+        // No trigger on torrent inserts beyond V13's.
+        let on_insert: i64 = fresh
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE type = 'trigger'
+                 AND sql LIKE '%AFTER INSERT ON torrents%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(on_insert, 1, "only V13's import_candidate_stored");
+    }
+
+    /// SRC-1's measurement (`docs/decisions/2026-11-02-SRC-1.md`): V14 on
+    /// a V13 store of 1M torrents, with and without the pre-migration
+    /// snapshot. Run with `cargo test --release -p lodestar-store --lib
+    /// v14_migration_time -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement; writes a ~300 MB store"]
+    fn v14_migration_time_on_a_1m_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lodestar.db");
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..13]).unwrap();
+        conn.execute_batch(
+            "BEGIN;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000000)
+             INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                 file_count, info_size, flags, discovered_at, metadata_at, last_seen_at, sources)
+             SELECT i, randomblob(20), 'Some.Release.Name.2024.1080p.WEB-DL.x264-GROUP.' || i,
+                 i, 16384, 1, 1, 100, 0, 0, 0, 0, 1 FROM n;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000000)
+             INSERT INTO torrent_files (torrent_id, codec, data) SELECT i, 0, randomblob(150) FROM n;
+             UPDATE id_seq SET next = 1000001;
+             COMMIT;",
+        )
+        .unwrap();
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        let t = std::time::Instant::now();
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        let with_snapshot = t.elapsed();
+        // The migration alone, without the snapshot.
+        let mut bare = Connection::open(dir.path().join("lodestar.pre-v14.db")).unwrap();
+        configure(&bare, 0).unwrap();
+        let t = std::time::Instant::now();
+        migrate_with(&mut bare, None, MIGRATIONS).unwrap();
+        let alone = t.elapsed();
+        eprintln!(
+            "1M torrents, {} MB: V14 with snapshot {with_snapshot:?}, migration alone {alone:?}",
+            bytes / 1_000_000
         );
-        // v0.5.1's read-only connections refuse it too.
-        let reader =
-            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        assert!(matches!(
-            check_current_with(&reader, 12),
-            Err(Error::SchemaTooNew {
-                found: 13,
-                supported: 12
-            })
-        ));
-        drop(reader);
+    }
+
+    /// The stored-claims caps in V14's SQL are `claims`' own numbers.
+    #[test]
+    fn v14_claim_caps_match_the_encoding() {
+        let caps = format!(
+            "BETWEEN {} AND {}",
+            crate::claims::encode(&Default::default(), 3).unwrap().len(),
+            crate::claims::MAX_STORED
+        );
+        assert_eq!(V14.matches(&caps).count(), 2, "{caps}");
     }
 
     /// A crash mid-`VACUUM INTO` leaves only a `.tmp`, never a file under
