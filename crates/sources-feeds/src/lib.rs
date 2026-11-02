@@ -5,6 +5,7 @@
 //! `lodestar_sources::claims`) and stops with a typed reason at a cap,
 //! keeping only the items it finished.
 
+pub mod archive_org;
 mod common;
 pub mod rss;
 pub mod torznab;
