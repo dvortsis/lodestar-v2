@@ -493,3 +493,52 @@ fn a_rejudge_runs_beside_apply() {
     assert_eq!(kept, 1_000);
     assert_eq!(s.setting_text(STAND_INS_KEY).unwrap(), None);
 }
+
+/// The shutdown stops a re-judge part-way, promptly: it's checked
+/// between chunks, so the server's stop never waits for the whole run,
+/// and the entry stays recorded for the next start.
+#[test]
+fn the_shutdown_stops_a_rejudge_mid_run() {
+    let f = fixture();
+    let rule = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .add_rule("size:>>", Action::Quarantine.code(), None, None)
+        .unwrap();
+    load(&f.api);
+    f.api.undo_stand_ins(now(), false).unwrap();
+    let u = format!("U-{rule}");
+    let at = since(&f.api, &u);
+    for i in 0..20_000u32 {
+        let mut h = [0u8; 20];
+        h[..4].copy_from_slice(&i.to_be_bytes());
+        h[19] = 7;
+        hold_hash(&f.api, h, &u, Q, at, false, "free name");
+    }
+    fix_rule(&f.api, rule, "keepword", Action::Quarantine, None);
+    load(&f.api);
+    let api = Arc::new(f.api);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let run = {
+        let api = api.clone();
+        std::thread::spawn(move || {
+            let out = api.undo_stand_ins(now(), false);
+            tx.send(out.is_ok()).unwrap();
+        })
+    };
+    api.shutdown.cancel();
+    let finished = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the re-judge stops within 10 s of the shutdown");
+    run.join().unwrap();
+    let record = api
+        .store
+        .lock()
+        .unwrap()
+        .setting_text(STAND_INS_KEY)
+        .unwrap();
+    // Stopped part-way it stays recorded; done before the stop, it's gone.
+    assert_eq!(record.is_some(), !finished, "{record:?}");
+}
