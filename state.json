@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T21:40:00Z",
+  "updated_at": "2026-11-02T22:27:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2613,12 +2613,13 @@
       "merge": "f8ff9bab"
     },
     "R-mem-triage": {
-      "status": "21:40Z: lease fix round 2 committed locally (Funnel::duplicate hook; restore past cap ends leases as Evicted); checking release-branch cherry-pick (rc.2 lose_untracked has no cause arg). Asked to push + open PR; runner waits (bfrk59q4a). Not the r3 slope fix.",
+      "status": "PR #402 head aa30a033: review round fixed (docs-only delta checked by runner); merge on ci-ok green. Not the r3 slope fix.",
       "brief": "briefs/R-mem-triage.md",
       "model": "opus",
       "session": "session_01MMjhnD9Jd88Vzmq6W9Bxro",
       "launched": "2026-11-02T14:55Z",
-      "interim": "2026-11-02T15:51:39Z: live heap <200 B/torrent; anon 2-4 KiB/torrent allocator retention (mimalloc and glibc). Suspects: 1 fetch-pool churn (unaccepted lookups retried every 120 s forever, backlog > cap), 2 allocator retention, 3 sampler states at 200k, 4 lease table unbounded, 5 log ring. Runner ruling: fix churn (give-up rule for unaccepted, clean backlog), keep 200k cap, no politeness loosening; fix leases and log ring by bytes; measure mimalloc purge; project vs 2.0 MiB/h."
+      "interim": "2026-11-02T15:51:39Z: live heap <200 B/torrent; anon 2-4 KiB/torrent allocator retention (mimalloc and glibc). Suspects: 1 fetch-pool churn (unaccepted lookups retried every 120 s forever, backlog > cap), 2 allocator retention, 3 sampler states at 200k, 4 lease table unbounded, 5 log ring. Runner ruling: fix churn (give-up rule for unaccepted, clean backlog), keep 200k cap, no politeness loosening; fix leases and log ring by bytes; measure mimalloc purge; project vs 2.0 MiB/h.",
+      "pr": 402
     },
     "SRC-10a": {
       "status": "merged",
@@ -4631,7 +4632,8 @@
       "text": "Owner relay ~05:00Z: seq 746, elapsed 44,800 s (~5.9 h into baseline), health 200, 0 restarts, 4,539 stored, private 329.95 MiB, WS 463.39 MiB, running. Nothing to act on."
     },
     "2026-11-02T14:23:11Z owner relay seq 1286: 21.45 h elapsed (baseline h14.95), health 200, restarts 0, stored 10,711, private 413.73 MiB, WS 553.85 MiB. Avg +9.3 MiB/h over h6-15 (~13.9 KiB/stored) vs 2.0 MiB/h gate (h12-24 fit not yet run). Asked owner/Antigravity for a preliminary analyze_cr0 memory section and container StartedAt after the 11:00Z backup.",
-    "2026-11-02T14:31:07Z preliminary fit (owner/Antigravity, read-only copy, main analyze_cr0.py): private_bytes h12-~16, 247 samples, slope 6.66 MiB/h CI [4.62, 8.70], not judged (incomplete); peak 441.35 MiB; last seq 1356 14:23:29Z. Containers StartedAt unchanged. 11:00Z appdata backup failed (Backups share full), soak untouched; exclusions not exercised. Likely memory-gate FAIL; R-mem-triage briefed, launches on next free slot."
+    "2026-11-02T14:31:07Z preliminary fit (owner/Antigravity, read-only copy, main analyze_cr0.py): private_bytes h12-~16, 247 samples, slope 6.66 MiB/h CI [4.62, 8.70], not judged (incomplete); peak 441.35 MiB; last seq 1356 14:23:29Z. Containers StartedAt unchanged. 11:00Z appdata backup failed (Backups share full), soak untouched; exclusions not exercised. Likely memory-gate FAIL; R-mem-triage briefed, launches on next free slot.",
+    "22:26Z r3 baseline ended 22:16:16Z; asked dashboard session for the owner-run read-only analyze_cr0 fit on a copy (memory slope h12-24 vs 2.0 MiB/h, stalls/interruptions/coverage, peak). Verdict pending. #402 (R-mem-triage lease fix, head aa30a033) review CHANGES fixed (docs only); waiting ci-ok."
   ],
   "limits": {
     "phase_total": 2,
