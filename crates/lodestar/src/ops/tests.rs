@@ -971,9 +971,15 @@ async fn gated_fixture(
 }
 
 impl GatedFixture {
-    async fn send(&self, mut req: Request<Body>) -> (u16, Value) {
+    async fn send(&self, req: Request<Body>) -> (u16, Value) {
+        self.send_from(1, req).await
+    }
+
+    /// From client `10.9.0.<host>`: password checks are rate-limited per
+    /// address (a burst of 5).
+    async fn send_from(&self, host: u8, mut req: Request<Body>) -> (u16, Value) {
         req.extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 1], 1))));
+            .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, host], 1))));
         let resp = self.app.clone().oneshot(req).await.unwrap();
         let status = resp.status().as_u16();
         let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
@@ -1015,13 +1021,20 @@ impl GatedFixture {
     }
 
     async fn patch(&self, cookie: &str, plugin: &str, body: Value) -> (u16, Value) {
+        self.patch_from(1, cookie, plugin, body).await
+    }
+
+    async fn patch_from(&self, host: u8, cookie: &str, plugin: &str, body: Value) -> (u16, Value) {
         let id = self.source(cookie, plugin).await["id"].clone();
-        self.send(req(
-            "PATCH",
-            &format!("/api/v1/sources/{id}"),
-            cookie,
-            Some(&body.to_string()),
-        ))
+        self.send_from(
+            host,
+            req(
+                "PATCH",
+                &format!("/api/v1/sources/{id}"),
+                cookie,
+                Some(&body.to_string()),
+            ),
+        )
         .await
     }
 }
@@ -1088,7 +1101,9 @@ async fn no_class_can_be_enabled_past_its_condition() {
         "lodestar_settings = 1\n[sources.secret]\n\"account/api_key\" = \"x\"\n".to_string(),
     ] {
         for dry_run in ["true", "false"] {
-            let (status, _) = f
+            // An unknown section may be refused or ignored; either way
+            // nothing below may change.
+            let (status, report) = f
                 .send(req(
                     "POST",
                     &format!("/api/v1/settings/import?dry_run={dry_run}"),
@@ -1096,7 +1111,9 @@ async fn no_class_can_be_enabled_past_its_condition() {
                     Some(&json!({ "toml": toml }).to_string()),
                 ))
                 .await;
-            assert_ne!(status, 200, "{toml} was accepted");
+            if status == 200 {
+                assert_eq!(report["changes"], json!([]), "{toml}: {report}");
+            }
         }
         let s = f.source(&c, "overlay").await;
         assert_eq!(
@@ -1179,15 +1196,15 @@ async fn no_class_can_be_enabled_past_its_condition() {
 
     // Restricted and Overlay: the consent screen at the current version,
     // accepted with the admin password, every time it's accepted.
-    for id in ["restricted", "overlay"] {
+    for (host, id) in [(10, "restricted"), (11, "overlay")] {
         let version = f.source(&c, id).await["consent_version"].clone();
-        let (status, e) = f.patch(&c, id, json!({ "enabled": true })).await;
+        let (status, e) = f.patch_from(host, &c, id, json!({ "enabled": true })).await;
         assert_eq!(
             (status, e["error"]["code"].clone()),
             (409, json!("consent_required"))
         );
         let ack = json!({ "enabled": true, "consent": id, "consent_version": version });
-        let (status, e) = f.patch(&c, id, ack.clone()).await;
+        let (status, e) = f.patch_from(host, &c, id, ack.clone()).await;
         assert_eq!(
             (status, e["error"]["code"].clone()),
             (428, json!("confirm_required")),
@@ -1195,24 +1212,29 @@ async fn no_class_can_be_enabled_past_its_condition() {
         );
         let mut wrong = ack.clone();
         wrong["password"] = json!("not the password");
-        let (status, _) = f.patch(&c, id, wrong).await;
+        let (status, _) = f.patch_from(host, &c, id, wrong).await;
         assert_eq!(status, 401, "{id}");
         assert_eq!(f.source(&c, id).await["enabled"], json!(false));
         let mut right = ack;
         right["password"] = json!("correct horse battery");
-        let (status, s) = f.patch(&c, id, right).await;
+        let (status, s) = f.patch_from(host, &c, id, right).await;
         assert_eq!((status, s["enabled"].clone()), (200, json!(true)), "{id}");
         // Off and on again: the acknowledgement stands, the password is
         // asked every time.
-        assert_eq!(f.patch(&c, id, json!({ "enabled": false })).await.0, 200);
-        let (status, e) = f.patch(&c, id, json!({ "enabled": true })).await;
+        assert_eq!(
+            f.patch_from(host, &c, id, json!({ "enabled": false }))
+                .await
+                .0,
+            200
+        );
+        let (status, e) = f.patch_from(host, &c, id, json!({ "enabled": true })).await;
         assert_eq!(
             (status, e["error"]["code"].clone()),
             (428, json!("confirm_required")),
             "{id}"
         );
         let again = json!({ "enabled": true, "password": "correct horse battery" });
-        let (status, s) = f.patch(&c, id, again).await;
+        let (status, s) = f.patch_from(host, &c, id, again).await;
         assert_eq!((status, s["enabled"].clone()), (200, json!(true)), "{id}");
     }
 

@@ -1753,8 +1753,8 @@ export interface paths {
          *     checks the source's class (§18.7, its `needs`): an `external`,
          *     `restricted` or `overlay` source needs `"consent"` naming its class and
          *     `"consent_version"` (`409 consent_required` otherwise) until that
-         *     version is acknowledged; accepting `restricted` or `overlay` consent
-         *     also needs the admin `"password"` (`428 confirm_required`); an
+         *     version is acknowledged; enabling a `restricted` or `overlay` source
+         *     also needs the admin `"password"`, every time (`428 confirm_required`); an
          *     `account` source needs its credentials stored
          *     (`409 credentials_required`). Agents, egress, purge and the schedule
          *     arrive in v0.6 (`409 not_editable`).
@@ -7405,8 +7405,8 @@ export interface components {
              */
             not_yet_editable: string[];
             /**
-             * @description Accepting its consent asks for the admin password (`restricted`,
-             *     `overlay`).
+             * @description Enabling it asks for the admin password, every time
+             *     (`restricted`, `overlay`).
              */
             password_required: boolean;
             /** @description The manifest id. */
@@ -7525,12 +7525,6 @@ export interface components {
             /** @description Not editable before v0.6: refused with `409 not_editable`. */
             egress?: unknown;
             enabled?: boolean;
-            /**
-             * @description The admin password, to accept `restricted` or `overlay` consent
-             *     (`428 confirm_required` without it). Asked every time; never
-             *     stored or logged.
-             */
-            password?: string;
             /**
              * @description A source's share of the fetch pool (§18.4: weights 1 / 3 / 6 / 10).
              * @enum {string}

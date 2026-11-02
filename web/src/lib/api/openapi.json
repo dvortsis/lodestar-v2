@@ -5753,7 +5753,7 @@
         "tags": [
           "crawler"
         ],
-        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; accepting `restricted` or `overlay` consent\nalso needs the admin `\"password\"` (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress, purge and the schedule\narrive in v0.6 (`409 not_editable`).",
+        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; enabling a `restricted` or `overlay` source\nalso needs the admin `\"password\"`, every time (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress, purge and the schedule\narrive in v0.6 (`409 not_editable`).",
         "operationId": "patchSource",
         "parameters": [
           {
@@ -18467,7 +18467,7 @@
           },
           "password_required": {
             "type": "boolean",
-            "description": "Accepting its consent asks for the admin password (`restricted`,\n`overlay`)."
+            "description": "Enabling it asks for the admin password, every time\n(`restricted`, `overlay`)."
           },
           "plugin": {
             "type": "string",
@@ -18652,11 +18652,6 @@
           },
           "enabled": {
             "type": "boolean"
-          },
-          "password": {
-            "type": "string",
-            "description": "The admin password, to accept `restricted` or `overlay` consent\n(`428 confirm_required` without it). Asked every time; never\nstored or logged.",
-            "writeOnly": true
           },
           "priority": {
             "type": "string",
