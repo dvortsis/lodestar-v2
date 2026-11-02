@@ -1,12 +1,9 @@
 name: Web
 
 on:
+  # A push to main always runs web (ci_changes.py treats non-PR events as applicable).
   push:
     branches: [main]
-    paths:
-      - 'web/**'
-      - 'brand/source/**'
-      - '.github/workflows/web.yml'
   # No path filter: a required check must report on every PR. The `changes` job below
   # decides whether the heavy job runs (applicability: .github/scripts/ci_changes.py WEB).
   pull_request:
@@ -38,6 +35,8 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+        # bash, not the default `bash -e`: the pipe needs pipefail, so a crash in the script fails the step.
+        shell: bash
         run: python3 .github/scripts/ci_changes.py "$EVENT" "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
       - run: python3 .github/scripts/test_ci_changes.py
 
@@ -86,6 +85,7 @@ jobs:
           WEB: ${{ needs.web.result }}
         run: |
           echo "changes=$CHANGES applies=$APPLIES web=$WEB"
+          case "$APPLIES" in true|false) ;; *) echo "applicability output is '$APPLIES', not true/false"; exit 1 ;; esac
           [ "$CHANGES" = success ] || { echo "change detection did not succeed"; exit 1; }
           if [ "$APPLIES" = true ]; then
             [ "$WEB" = success ] || { echo "web applies but its job result is '$WEB'"; exit 1; }

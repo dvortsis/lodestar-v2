@@ -54,7 +54,7 @@ WEB_INPUTS = (
     r"|brand/source/"  # assets.ts builds the UI's brand assets from it
     r"|crates/lodestar/src/settings/golden/"  # settings/logs golden files the UI tests compare against
     r"|crates/lodestar/src/settings/preferences\.rs$|crates/search/src/query\.rs$"  # parsed by UI tests
-    r"|docs/design-tokens\.md$"  # a UI test reads the token spec
+    r"|docs/(design-tokens|themes)\.md$"  # UI tests read the token spec and the theme fixture
     r"|\.github/scripts/ci_changes\.py$"  # this file decides applicability
 )
 WEB = re.compile(rf"^({WEB_INPUTS}|\.github/workflows/web\.yml$)")
