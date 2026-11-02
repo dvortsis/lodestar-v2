@@ -14,4 +14,10 @@ describe('buildVersion', () => {
 	it('ignores an empty SHA', () => {
 		expect(buildVersion({ GITHUB_SHA: ' ' })).toBe(buildVersion({}));
 	});
+	it('lets LODESTAR_BUILD_VERSION override the SHA', () => {
+		expect(buildVersion({ GITHUB_SHA: 'abcdef0123', LODESTAR_BUILD_VERSION: '0000000' })).toBe(
+			'0000000'
+		);
+		expect(buildVersion({ LODESTAR_BUILD_VERSION: ' ' })).toBe(buildVersion({}));
+	});
 });

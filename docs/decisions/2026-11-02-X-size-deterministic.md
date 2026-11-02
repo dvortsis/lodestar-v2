@@ -1,0 +1,5 @@
+# X-size-deterministic decisions
+
+- **`LODESTAR_BUILD_VERSION` overrides `kit.version.name`.** `web/scripts/build-version.mjs` returns it when set; the `web.yml` size step runs `LODESTAR_BUILD_VERSION=0000000 npx vite build` (assets from the earlier build are reused) before `npx size-limit`. Why: the commit SHA changed the app id and chunk hashes, so identical source measured differently per commit (`/t/[hash]` 21.12 vs 21.14 kB locally, ~30 B in CI, #357), failing the §10.1 size gate by chance.
+- **Shipped vs measured.** The shipped build (Docker, release, `npm run build`) is unchanged and keeps the real SHA. The size build differs only in the version string, and is never shipped. "New version available" (`shell/stale.ts`) and About read `_app/version.json` at runtime, and the variable is unset in shipped builds, so they are unaffected.
+- **Verified.** Two builds with different `GITHUB_SHA`: before, `/t/[hash]` 21.12 vs 21.14 kB, Compare 28.83 vs 28.84 kB, Discover 41.24 vs 41.25 kB. With the override the full `size-limit` output is byte-identical. No size limit changed.
