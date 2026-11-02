@@ -48,7 +48,7 @@ The list lives in `state.json` under `watched_sessions`.
 4. **A one-off check about 30 minutes after each launch.**
 
 ## What it does on each wake (reconcile, then act)
-1. **Load state.** Fetch `runner-state` and `main`. Check `runner_session` (see "Who merges"), and make sure the marker file exists. **If `HANDOVER.md` exists at the root of `runner-state`, another agent holds the build** (`docs/handoff.md` §5). Launch nothing, merge nothing, and push nothing except to `runner-state` to register the claimed branches and draft PRs as slices. Resume, remove `HANDOVER.md` and recreate your scheduled tasks only after the owner confirms.
+1. **Load state.** Fetch `runner-state` and `main`. Check `runner_session` (see "Who merges"), and make sure the marker file exists. **If `HANDOVER.md` exists at the root of `runner-state`, another agent holds the build** (`docs/handoff.md` §5). Launch nothing, merge nothing, and push nothing except to `runner-state` to register the claimed branches and draft PRs as slices. Only after the owner confirms: remove `HANDOVER.md`, re-enable the fixed watchdog trigger (it's long-lived; never recreate it), and recreate only your own session-bound tasks (the hourly check).
 2. **Keep `main` green.** If the latest push run of CI on `main` is red in `ci-ok`, find the merge that broke it. Fix it the fastest way:
    - **Revert:** open a revert PR. Its review checks only that it is a clean revert.
    - **Port a fix:** port the fix if one exists.
@@ -85,7 +85,7 @@ The list lives in `state.json` under `watched_sessions`.
    - **while `limits.phase_total` is set, at most that many slices in total**, Opus, helper and docs slices alike (owner §2.25, as applied since 2026-10-30); the limits below apply inside it;
    - at most `max_core` Opus code slices, and only if their `owns` paths are disjoint;
    - at most `max_helpers` Sonnet and Haiku slices;
-   - docs-only slices don't count towards `max_core` or `max_helpers` (they do count towards `phase_total`);
+   - docs-only slices don't count towards `max_core` or `max_helpers` (they do count towards `phase_total`). The runner's own docs PRs aren't slice sessions and don't count; while `HANDOVER.md` exists, each Path B claim counts;
    - at most `max_launches_per_day` new sessions;
    - **never two running slices whose `owns` overlap.** Every slice records its decisions in its own new file under `docs/decisions/`, so no two slices share a decisions file (§16 is closed to new entries);
    - **order:** the ladder in `docs/build-plan.md` §0.2 decides between ready slices; within a rung, critical-path core slices first, then the slices that unblock the most others;

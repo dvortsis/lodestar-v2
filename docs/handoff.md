@@ -59,7 +59,7 @@ Use this path for any agent without Claude's cloud sessions, `send_message` or t
 3. **Claims.** Before you start a slice, add a line for it to `HANDOVER.md` (`<slice id> · <your agent name> · <branch> · <owned paths> · <date> · <state>`) and push. Then branch, and open a **draft PR** as soon as the branch has its first real commit (the decisions-file stub is enough; never an empty commit). Update the state (`building`, `in review`) as it changes, and keep the line until the PR merges.
    - **Slices the runner launched that were still running at the handover** are listed in `HANDOVER.md` as not to touch. The owner archives their sessions or leaves them to finish; you never push to their branches.
 4. **Check before every start and every push:** `git fetch origin runner-state` and read `HANDOVER.md`. If it no longer names you, or a runner has taken the build back, stop and leave your branch as it is.
-5. **A returning runner** reads `HANDOVER.md` first, adopts each claimed branch and draft PR as a registered slice (`runner/README.md`, "Other sessions the runner watches"), and deletes `HANDOVER.md` only after the owner confirms, then re-enables its tasks.
+5. **A returning runner** reads `HANDOVER.md` first, adopts each claimed branch and draft PR as a registered slice (`runner/README.md`, "Other sessions the runner watches"), and deletes `HANDOVER.md` only after the owner confirms. It then re-enables the fixed watchdog trigger and recreates only its own session-bound tasks (`runner/README.md` step 1).
 
 If you can't confirm the runner is stopped and no handover exists, don't take over: ask the owner. If a runner is live, register with it instead.
 

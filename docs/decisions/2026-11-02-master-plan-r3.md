@@ -4,12 +4,12 @@ An external review of the merged r2 plan (#369), done against `e528c369`, found 
 
 ## Owner answer in this session
 - **#357 ships in v0.5.1 as rc.3** (`docs/owner-decisions.md` §2.29). It replaces §2.28's "rc.3 only if the soak must be re-run anyway".
-- **#367 should ride along (runner's recommendation, flagged for veto).** Without F-filter-standin-undo nothing undoes what #357's stand-ins hold, and rc.3 wouldn't write the `filter.stand_ins` record a later upgrade needs to re-judge them. If #367 has merged when rc.3 is cut, it's cherry-picked with #357 and mapped the same way; the delta report states the gap either way.
+- **#367 is the owner's to add.** rc.3 is exactly rc.2 + #357, as §2.29 says (the runner's ruling on #372). Without F-filter-standin-undo (#367), nothing undoes what #357's stand-ins hold, and rc.3 doesn't write the `filter.stand_ins` record a later upgrade needs to re-judge them. The delta report states that gap. The runner recommends adding #367 if it has merged by the cut and puts the question in the owner's daily summary; #367 rides along only on the owner's yes.
 
 ## Runner refinements (flagged under §2.19 and §2.26)
 None of these loosens an owner decision, weakens a security or content-safety decision, or changes an owner-set number. Most tighten.
-- **CR-COL-3 before any live crawler run.** The Linux collector keeps only CR-0's series, so a completed run would lose `searchable_new_total`, the latency histogram and its dropped counter, and every CR-4 series: the gate's own outcome and the proof a treatment was active. The review reproduced this with `sanitize_snapshot`. Every CR-AB gate now depends on CR-COL-3 and a rehearsal.
-- **CR-SPEC, a measurement specification frozen before collection, then confirmed by the owner.** §2.25 makes the exact measurement rules the owner's to confirm before the first acceptance analysis, so CR-COMB depends on `ext:owner-cr-spec`, and CR-COL-3, which implements the rules, depends on CR-SPEC. It fixes the window's start boundary (also for the fresh-directory 24 h soak, whose 6 h suppression would otherwise change the mean and the worst hour by accident), fixed clock hours, carry-over between arms, the cohort, mechanism checks and the analysis. **Latency coverage:** below a stated coverage the p95 is "not measured", never a pass, and dropped samples count as above the threshold when bounding it. `docs/metrics.md` lets bounded queues drop latency samples while throughput still counts, and loss concentrates in congested periods.
+- **CR-COL-3 before any live crawler run.** The Linux collector keeps only CR-0's series, so a completed run would lose `searchable_new_total`, the latency histogram and its dropped counter, and CR-4's family-labelled, connect-timeout, no-route and uTP series (only `fetch_attempts_total` and `fetch_success_total` survive, by `transport`): the gate's own outcome and the proof a treatment was active. The review reproduced this with `sanitize_snapshot`. Every CR-AB gate now depends on CR-COL-3 and a rehearsal.
+- **CR-SPEC, a measurement specification frozen before collection, then confirmed by the owner.** §2.25 makes the exact measurement rules the owner's to confirm before the first acceptance analysis, so the first booked run (CR-AB-COMP) and CR-COMB depend on `ext:owner-cr-spec`, and the spec is confirmed before any data exists, and CR-COL-3, which implements the rules, depends on CR-SPEC. It fixes the window's start boundary (also for the fresh-directory 24 h soak, whose 6 h suppression would otherwise change the mean and the worst hour by accident), consecutive 60-minute intervals counted from the window start (not wall-clock aligned, not rolling), carry-over between arms, the cohort, mechanism checks and the analysis. **Latency coverage:** below a stated coverage the p95 is "not measured", never a pass, and dropped samples count as above the threshold when bounding it. `docs/metrics.md` lets bounded queues drop latency samples while throughput still counts, and loss concentrates in congested periods.
 - **Checkpoint 1 reports a projection with uncertainty,** not a measured ceiling. Isolated gains needn't combine additively or multiplicatively, and 6 h arms don't bound a 24 h worst hour. The owner's choice of Checkpoint 1 (§2.27) is unchanged.
 - **Route backoff keeps CR-4's own gate:** its A/B runs only if a baseline shows `fetch_no_route_total{family="ipv6"} > 0`; otherwise the skip is recorded.
 - **Ordering moved from prose into the graph:**
@@ -41,12 +41,11 @@ None of these loosens an owner decision, weakens a security or content-safety de
   - slices the runner launched before the handover are listed as not to touch.
 - **The v0.5.2 cut freezes a feature manifest first,** and its upgrade smoke pins the v0.5.1 schema and the `<db>.pre-v13.db` snapshot.
 - **The experiment calendar is stated:** about 8–9 measured host-days, plus each arm's suppression and warmup and a ~30 % retry budget, so roughly three weeks of exclusive host time.
-- **D-egress-note:** §2.28 accepted that blocklist fetches ignore `HTTPS_PROXY`. The guide and the Settings text now say so plainly.
-
+- **D-egress-note and X-egress-copy:** §2.28 accepted that blocklist fetches ignore `HTTPS_PROXY`. D-egress-note will say so in the user guide, and X-egress-copy, a follow-up web slice after S-blocklists (#370), in Settings → Blocklists.
 - **X-strip-format-chars is a recorded exception.** The runner launched it while #367, which also owns `crates/api/src/digest.rs`, was merge-on-green. #367 merges first and X-strip-format-chars brings `main` in, so its dependency on #367 is dropped from the graph rather than left contradicting the running state.
 
 ## New slices
-- CR-COL-3, CR-SPEC, G-rebuild-10M, X-required-web-checks, D-egress-note (the user guide; the in-app Blocklists copy is S-blocklists' or a follow-up web slice).
+- CR-COL-3, CR-SPEC, G-rebuild-10M, X-required-web-checks, D-egress-note (the user guide), X-egress-copy (the in-app Blocklists copy, after S-blocklists).
 - A new external, `owner-cr-spec`.
 - B-import-server-2, recorded as deferred.
 - CR-4 recorded as merged (#365).
