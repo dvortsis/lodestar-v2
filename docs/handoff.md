@@ -52,7 +52,14 @@ If Claude is available again and the runner has stopped:
 ## 5. Path B: a single agent without the runner
 Use this path for any agent without Claude's cloud sessions, `send_message` or the runner's scheduled tasks, including agents from other vendors.
 
-**Use Path B only when no runner is live:** `runner_session` in `state.json` names a session that's archived or gone, or `updated_at` is more than 6 hours old, and the owner hasn't restarted one. If a runner is live, register with it instead (`runner/README.md`, "Other sessions the runner watches").
+**Path B starts only with an explicit handover.** A stale timestamp proves nothing: `updated_at` can be old because a state push failed, and the watchdog starts a new runner after 4 hours on its own. So:
+1. **The owner hands over.** The owner disables the scheduled tasks "Lodestar runner watchdog" and the runner's hourly task (claude.ai → scheduled tasks), and tells the runner to stop if it's still reachable.
+2. **The handover is recorded** in `HANDOVER.md` at the root of the `runner-state` branch, by the owner or by you on the owner's explicit instruction. It names who holds the build, since when, that the runner and watchdog are stopped, and the open claims (below).
+3. **Claims.** Before you start a slice, add a line for it to `HANDOVER.md` (`<slice id> · <your agent name> · <branch> · <owned paths> · <date>`) and push. Then branch, and open a **draft PR** as soon as the branch has its first real commit (the decisions-file stub is enough; never an empty commit). Remove the line when the PR is ready for review.
+4. **Check before every start and every push:** `git fetch origin runner-state` and read `HANDOVER.md`. If it no longer names you, or a runner has taken the build back, stop and leave your branch as it is.
+5. **A returning runner** reads `HANDOVER.md` first, adopts each claimed branch and draft PR as a registered slice (`runner/README.md`, "Other sessions the runner watches"), and deletes `HANDOVER.md` only after the owner confirms, then re-enables its tasks.
+
+If you can't confirm the runner is stopped and no handover exists, don't take over: ask the owner. If a runner is live, register with it instead.
 
 **Work serially.** One slice at a time, start to PR. Don't run parallel branches you can't watch.
 
@@ -69,7 +76,7 @@ For each slice:
 6. Run a security review on anything that touches auth, credentials, filters, the cluster, companions, source plugins or untrusted-input parsers.
 7. Open a PR to `main` titled `<id>: <title>`. Describe what changed, the checks and their results, the self-review, shared-file edits needed, missing contract fields and deviations from the spec.
 8. **Don't merge.** Branch protection on `main` requires a PR and the `ci-ok` check. Every PR still needs **a fresh Opus review** before it merges (CLAUDE.md "Merging", owner §2.22), so a Path B PR waits for a Claude runner or session to review it, unless the owner explicitly waives that for the PR. The owner, or a returning runner, merges. Tell the owner the PR is ready and whether it has had that review.
-9. Leave `state.json` alone; it belongs to the runner. Progress lives in the PR and its decisions file, which a returning runner reads. The `external` checks in `runner/slices.yaml` that mention runner-state also accept a merged decisions file or the owner's recorded message, so record owner answers and assignments in your slice's decisions file.
+9. Leave `state.json` alone; it belongs to the runner. Your claims live in `HANDOVER.md`, and progress lives in the draft PR and its decisions file, which a returning runner reads. The `external` checks in `runner/slices.yaml` that mention runner-state also accept a merged decisions file or the owner's recorded message, so record owner answers and assignments in your slice's decisions file.
 
 **Model policy, translated.** Use your strongest model for core work: bencode, KRPC, metainfo, the store format and migrations, the DHT crawler, the peer protocol, search, concurrency, security and anything that parses untrusted input. Smaller models may do well-specified, pattern-following work (Svelte screens per §10, packaging, CI, docs, test scaffolding), and their output is reviewed by the strongest model before it's proposed.
 
@@ -77,10 +84,10 @@ For each slice:
 
 | Runner capability | Without it |
 |---|---|
-| Parallel cloud slices | Serial slices, smallest critical-path first |
+| Parallel cloud slices | Serial slices, smallest critical-path first, each claimed in `HANDOVER.md` |
 | `send_message` between sessions | The PR description and a PR comment for the owner |
 | Merging | A fresh Opus review, then the owner merges (or waives the review for that PR) |
-| Hourly reconcile and watchdog | Reconcile (§2) at the start of every work session |
+| Hourly reconcile and watchdog | Reconcile (§2) and re-read `HANDOVER.md` at the start of every work session and before every push |
 | Owner push notifications | List the owner's open items at the top of your report |
 
 ## 6. Rules you can't break
@@ -103,15 +110,16 @@ Each comes from `CLAUDE.md`, the owner's decisions or the runner's standards.
 The owner's open decisions are in [build-plan §0.3](build-plan.md#03-owner-queue), ordered by what they unblock. The gates (v0.5.1, the crawler's v0.6 gate, import scale, SRC-G, 1.0) are in [§0.4](build-plan.md#04-v051-gate-and-v052) and [§0.6](build-plan.md#06-gates-added-by-this-plan). When you need an owner answer, ask once with your recommendation and keep working on everything else.
 
 ## 8. In flight on 2026-11-02
-Superseded by live state as soon as anything moves; check §2 first. Slots at 02:50Z: **4 of 4** (CR-4, F-filter-standin-undo, S-blocklists, openapi-example-size).
+Superseded by live state as soon as anything moves; check §2 first. Slots at 03:22Z: **4 of 4** (F-filter-standin-undo, openapi-example-size, S-blocklists, X-strip-format-chars). CR-4 merged as #365.
 
 | Item | State | Waits on |
 |---|---|---|
-| CR-4 uTP and IPv6 route backoff (#365) | review fixes verified; merge on green | CI |
-| F-filter-standin-undo (#367) | changes requested by the runner's review | its session's push; owner question on adult holds |
-| S-blocklists | building | — |
-| openapi-example-size (#368) | in review | runner review |
-| Unraid soak r3 on rc.2 | baseline ends 2026-11-02 22:16Z | analysis, then the owner's gluetun leg and tag |
+| F-filter-standin-undo (#367) | runner's review passed; merge on green | CI |
+| openapi-example-size (#368) | runner's review passed; merge on green | CI |
+| S-blocklists (#370) | open | runner review |
+| X-strip-format-chars | building | — |
+| Unraid soak r3 on rc.2 | baseline ends 2026-11-02 22:16Z | analysis; then rc.3 with #357 (owner §2.29), the owner's gluetun leg, rc.3 smoke and tag |
 | Held epics: E-M6, E-v06-workers, E-v06-companions | held | the soak verdict |
-| SRC-1 | not launched; V14 assigned by `docs/decisions/2026-11-02-master-plan-r2.md` | the owner's hold: no migrations on `main` before the v0.5.1 release (`ext:owner-migrations-on-main`) |
-| SRC-7 and everything after it | blocked | owner Q2, Q15 |
+| SRC-1 (V14) | ready; the migration hold is lifted (§2.28) | a free slot |
+| SRC-7 | Q2 and Q15 answered (§2.28) | SRC-2, SRC-4, SRC-5 |
+| CR-COL-3, CR-SPEC | ready | free slots; they gate every booked crawler run |

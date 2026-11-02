@@ -47,7 +47,7 @@ The list lives in `state.json` under `watched_sessions`.
 4. **A one-off check about 30 minutes after each launch.**
 
 ## What it does on each wake (reconcile, then act)
-1. **Load state.** Fetch `runner-state` and `main`. Check `runner_session` (see "Who merges"), and make sure the marker file exists.
+1. **Load state.** Fetch `runner-state` and `main`. Check `runner_session` (see "Who merges"), and make sure the marker file exists. **If `HANDOVER.md` exists at the root of `runner-state`, another agent holds the build** (`docs/handoff.md` §5): launch, merge and push nothing. Adopt its claimed branches and draft PRs as registered slices, and resume only after the owner confirms and `HANDOVER.md` is removed.
 2. **Keep `main` green.** If the latest push run of CI on `main` is red in `ci-ok`, find the merge that broke it. Fix it the fastest way:
    - **Revert:** open a revert PR. Its review checks only that it is a clean revert.
    - **Port a fix:** port the fix if one exists.
@@ -81,12 +81,14 @@ The list lives in `state.json` under `watched_sessions`.
    - An **Opus** slice that fails twice is `parked`, and the owner is notified.
 6. **Compute the ready set.** A slice is ready when every one of its `deps` is `merged` and every `ext:` dependency is satisfied (see the `external` section of `slices.yaml`).
 7. **Launch, within the limits in `slices.yaml`:**
+   - **while `limits.phase_total` is set, at most that many slices in total**, Opus, helper and docs slices alike (owner §2.25, as applied since 2026-10-30); the limits below apply inside it;
    - at most `max_core` Opus code slices, and only if their `owns` paths are disjoint;
    - at most `max_helpers` Sonnet and Haiku slices;
-   - docs-only slices don't count towards either limit;
+   - docs-only slices don't count towards `max_core` or `max_helpers` (they do count towards `phase_total`);
    - at most `max_launches_per_day` new sessions;
    - **never two running slices whose `owns` overlap.** Every slice records its decisions in its own new file under `docs/decisions/`, so no two slices share a decisions file (§16 is closed to new entries);
-   - **order:** critical-path core slices first, then the slices that unblock the most others;
+   - **order:** the ladder in `docs/build-plan.md` §0.2 decides between ready slices; within a rung, critical-path core slices first, then the slices that unblock the most others;
+   - **gates that need an owner host** (`ext:experiment-host`, `ext:import-host`) launch only against a booking for that run; two never share a booking, whatever their `owns`;
    - **size:** a slice estimated at more than ~3,000 changed lines is split before launch: into sequential slices, or into parallel ones against interfaces fixed first. Each PR then lands between other merges instead of chasing `main` (§2.24). Between ~1,500 and ~3,000 lines, keep the slice whole when splitting would cut through an interface that isn't fixed yet.
 8. **Expand epics.**
    - When an `epic` entry's deps are merged, the runner (Opus) reads the relevant architecture sections and the code as it now stands.
