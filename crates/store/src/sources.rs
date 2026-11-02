@@ -191,9 +191,14 @@ impl Store {
         SourceId::from_sql(id)
     }
 
-    /// Sets a source's state. Purging also drops its consent record and
-    /// its credentials, in the same transaction.
+    /// Sets a source's state to anything but enabled. Purging also drops
+    /// its consent record and its credentials, in the same transaction.
+    /// Enabling goes only through [`Store::enable_source`], which the
+    /// consent check (§18.7) sits in front of.
     pub fn set_source_state(&mut self, id: SourceId, state: SourceState) -> Result<()> {
+        if state == SourceState::Enabled {
+            return Err(Error::Invalid("enable a source with enable_source"));
+        }
         let tx = crate::begin_write(&mut self.conn)?;
         tx.execute(
             "UPDATE sources SET state = ?2 WHERE id = ?1",

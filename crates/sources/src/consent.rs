@@ -538,6 +538,15 @@ mod tests {
             ..m.clone()
         };
         assert_eq!(need(&reordered, Some(&ack), &[]), None);
+        // The same for an External source: a new host asks again.
+        let ext = manifest(Consent::External);
+        let ext_ack = Ack::of(&ext);
+        let ext_moved = Manifest {
+            endpoints: &ENDPOINTS[..1],
+            ..ext.clone()
+        };
+        assert_eq!(need(&ext, Some(&ext_ack), &[]), None);
+        assert_eq!(need(&ext_moved, Some(&ext_ack), &[]), Some(Need::Endpoints));
         assert_eq!(version(&manifest(Consent::None)), "");
         assert_eq!(version(&manifest(Consent::Account)), "");
     }
@@ -649,6 +658,12 @@ mod tests {
         assert!(s.source_consent("probe").unwrap().is_some());
         s.set_source_state(id, SourceState::Disabled).unwrap();
         assert_eq!(s.source_secret_names("probe").unwrap(), ["api_key"]);
+        // Enabling goes only through `enable_source`, where the consent
+        // check runs.
+        assert!(matches!(
+            s.set_source_state(id, SourceState::Enabled),
+            Err(lodestar_store::Error::Invalid(_))
+        ));
         s.set_source_state(id, SourceState::Purged).unwrap();
         assert!(s.source_consent("probe").unwrap().is_none());
         assert!(s.source_secret_names("probe").unwrap().is_empty());

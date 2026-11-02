@@ -1043,6 +1043,28 @@ impl GatedFixture {
 /// store may hold.
 const SECRET: &str = "s3cret-Credential-Value";
 
+/// No file under `dir` (the database, its WAL, the key file) holds
+/// [`SECRET`] in plain text: the database holds it only sealed.
+fn assert_no_plaintext(dir: &std::path::Path) {
+    let needle = SECRET.as_bytes();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                let bytes = std::fs::read(&p).unwrap();
+                assert!(
+                    !bytes.windows(needle.len()).any(|w| w == needle),
+                    "{} holds the credential in plain text",
+                    p.display()
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_class_can_be_enabled_past_its_condition() {
     let plugins = gated();
@@ -1249,6 +1271,9 @@ async fn no_class_can_be_enabled_past_its_condition() {
         !text.contains(SECRET) && !text.contains("api_key"),
         "{text}"
     );
+    // While it's stored, it's stored sealed.
+    assert_no_plaintext(f.dir.path());
+
     // Disabling keeps the acknowledgement; removing the credentials of an
     // enabled Account source switches it off.
     let (status, s) = f
@@ -1259,25 +1284,8 @@ async fn no_class_can_be_enabled_past_its_condition() {
         (200, json!(false), json!("credentials"))
     );
 
-    // Nothing in the data directory but the database holds the value,
-    // and the database holds it only sealed.
-    let mut stack = vec![f.dir.path().to_path_buf()];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d).unwrap() {
-            let p = e.unwrap().path();
-            if p.is_dir() {
-                stack.push(p);
-            } else {
-                let bytes = std::fs::read(&p).unwrap();
-                let needle = SECRET.as_bytes();
-                assert!(
-                    !bytes.windows(needle.len()).any(|w| w == needle),
-                    "{}",
-                    p.display()
-                );
-            }
-        }
-    }
+    // And after it's removed.
+    assert_no_plaintext(f.dir.path());
     f.pipeline.shutdown().await.unwrap();
 }
 
@@ -1301,17 +1309,27 @@ async fn a_restart_honours_consent_and_a_new_text_asks_again() {
         )
         .await;
     assert_eq!(status, 200);
+    let ext_version = f.source(&c, "external").await["consent_version"].clone();
+    let (status, _) = f
+        .patch(
+            &c,
+            "external",
+            json!({ "enabled": true, "consent": "external", "consent_version": ext_version }),
+        )
+        .await;
+    assert_eq!(status, 200);
     let GatedFixture { pipeline, dir, .. } = f;
     pipeline.shutdown().await.unwrap();
 
     // Same build: the acknowledged source runs, nothing else does.
     let f = gated_fixture(dir, plugins.iter().map(|(p, _)| p.clone()).collect()).await;
-    eventually("the restricted source runs", String::new, || {
-        ran[3].load(Ordering::SeqCst)
+    eventually("the acknowledged sources run", String::new, || {
+        ran[1].load(Ordering::SeqCst) && ran[3].load(Ordering::SeqCst)
     })
     .await;
     for s in f.pipeline.sources() {
-        assert_eq!(s.enabled, s.plugin == "restricted", "{}", s.plugin);
+        let acked = s.plugin == "restricted" || s.plugin == "external";
+        assert_eq!(s.enabled, acked, "{}", s.plugin);
     }
     let GatedFixture { pipeline, dir, .. } = f;
     pipeline.shutdown().await.unwrap();
@@ -1322,23 +1340,29 @@ async fn a_restart_honours_consent_and_a_new_text_asks_again() {
         protocol: "https",
         host: "elsewhere.example",
     }];
+    // Both an External and a Restricted plugin move.
     let mut plugins = gated();
-    let r = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let mut m = plugins[3].0.manifest().clone();
-    m.endpoints = &MOVED;
-    plugins[3] = (Arc::new(Gated(m, r.clone())), r.clone());
-    let moved = consent::version(plugins[3].0.manifest());
-    assert_ne!(json!(moved), version);
+    let mut moved_ran = Vec::new();
+    for (i, before) in [(1, &ext_version), (3, &version)] {
+        let r = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut m = plugins[i].0.manifest().clone();
+        m.endpoints = &MOVED;
+        plugins[i] = (Arc::new(Gated(m, r.clone())), r.clone());
+        assert_ne!(&json!(consent::version(plugins[i].0.manifest())), before);
+        moved_ran.push(r);
+    }
     let f = gated_fixture(dir, plugins.iter().map(|(p, _)| p.clone()).collect()).await;
     let db = f.dir.path().join("t.db");
     let rows = Store::open(&db, StoreConfig::default())
         .unwrap()
         .sources()
         .unwrap();
-    let row = rows.iter().find(|r| r.plugin == "restricted").unwrap();
-    assert_eq!(row.state, lodestar_store::SourceState::Disabled);
+    for id in ["external", "restricted"] {
+        let row = rows.iter().find(|r| r.plugin == id).unwrap();
+        assert_eq!(row.state, lodestar_store::SourceState::Disabled, "{id}");
+    }
     // Instant checks: the stored state above is what carries the test.
     assert!(f.pipeline.sources().iter().all(|s| !s.running));
-    assert!(!r.load(Ordering::SeqCst));
+    assert!(moved_ran.iter().all(|r| !r.load(Ordering::SeqCst)));
     f.pipeline.shutdown().await.unwrap();
 }
