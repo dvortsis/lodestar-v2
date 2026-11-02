@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T12:24:27Z",
+  "updated_at": "2026-11-02T12:37:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2553,13 +2553,14 @@
       "merge": "8b2efd98"
     },
     "X-settings-overview": {
-      "status": "in review",
+      "status": "merged",
       "session": "session_01MMjhnBmtVGAxZ58UyYRD3A",
       "model": "sonnet",
       "brief": "briefs/X-settings-overview.md",
       "launched": "2026-11-02T11:44Z",
       "pr": 391,
-      "head": "73773938"
+      "head": "73773938",
+      "merge": "77c9308d"
     },
     "SRC-7": {
       "status": "running",
@@ -2567,6 +2568,20 @@
       "model": "opus",
       "session": "session_01MMjhnAf3hHtxzAQnAz9XCo",
       "launched": "2026-11-02T12:24Z"
+    },
+    "X-polish-carry-1102": {
+      "status": "launching",
+      "brief": "briefs/X-polish-carry-1102.md",
+      "model": "sonnet",
+      "items": [
+        "docs-LODESTAR_LOG",
+        "docs-operations-firstrun",
+        "digest-stall-hours",
+        "pw_port",
+        "tailwind_scans_dev_routes",
+        "subscriptions-msg-nit",
+        "backup_unused_mut_windows"
+      ]
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
