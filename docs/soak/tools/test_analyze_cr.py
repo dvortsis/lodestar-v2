@@ -290,6 +290,11 @@ class WindowTests(Base):
         self.assertEqual(report["verdict"], "invalid")
         self.assertIn("t_open_within_7h", self.failed(report))
 
+    def test_null_stop_reason_is_not_a_crash(self):
+        sim = Sim()
+        sim.result = dict(sim.result, reason=None)
+        self.assertValid(self.run_sim(sim))
+
     def test_window_open_shows_no_rates(self):
         sim = Sim()
         sim.result = None
@@ -630,6 +635,21 @@ class EffectTests(unittest.TestCase):
         self.assertEqual(out["fit"]["df"], 7)
         self.assertEqual(out["outcome"], "no_effect")
 
+    def test_no_effect_band_is_ln_095_to_ln_105(self):
+        fit = lambda lo, hi: {"ci": [lo, hi], "effect": 0.0}
+        self.assertEqual(analyze_cr.outcome(fit(math.log(0.951), math.log(1.04)), 2), "no_effect")
+        self.assertEqual(analyze_cr.outcome(fit(math.log(0.95), math.log(1.05)), 2), "no_effect")
+        self.assertEqual(analyze_cr.outcome(fit(math.log(0.949), math.log(1.04)), 2),
+                         "inconclusive_run_blocks_3_and_4")
+        self.assertEqual(analyze_cr.outcome(fit(math.log(0.949), math.log(1.04)), 4),
+                         "inconclusive_switch_stays_off")
+
+    def test_control_segments_survive_a_loss(self):
+        out = self.effect([block("ABBA", [100, 0, 110, 100]), block("BAAB", [110, 99, 100, 111], start=12)])
+        self.assertEqual(out["outcome"], "loss")
+        self.assertEqual(len(out["control_segments"]), 4)
+        self.assertIn("base", analyze_cr.checkpoint1(out, [], None, None))
+
     def test_loss_and_inconclusive(self):
         out = self.effect([block("ABBA", [100, 80, 81, 100]), block("BAAB", [79, 101, 100, 80], start=12)])
         self.assertEqual(out["outcome"], "loss")
@@ -717,7 +737,7 @@ class CheckpointTests(unittest.TestCase):
                "treatment_segments": [{"net": 96, "p95": 300, "p95_measured": True}], "blocks": []}
         adm = {"treatment": "adm", "outcome": "win", "fit": fit(1.1, 0.04, 7),
                "treatment_segments": [{"net": 90, "p95": 600, "p95_measured": True}], "blocks": []}
-        comp = {"numerator": {"window": {"mean_per_min": 150.0}, "worst_hour_per_min": 120.0},
+        comp = {"verdict": "valid", "numerator": {"window": {"mean_per_min": 150.0}, "worst_hour_per_min": 120.0},
                 "timeline": {"process_start_utc": "2026-10-01T00:00:00Z", "window_end_utc": "2026-10-02T01:00:00Z"}}
         cr0 = {"phases": {"baseline": {"hourly": {"0": {"writer_stored_total": {"delta": 3600, "covered_seconds": 3600}},
                                                   "1": {"writer_stored_total": {"delta": 2700, "covered_seconds": 3600}}}}}}
@@ -736,6 +756,16 @@ class CheckpointTests(unittest.TestCase):
         self.assertTrue(out["on_track"])  # 104/min, worst hour 83.2/min, p95 600 s
         self.assertTrue(out["range_below_100"])  # on track, but the runner must say the range dips below 100
         self.assertAlmostEqual(out["fraction_of_comparator"], 104 / 150)
+
+    def test_rehearsal_and_invalid_inputs_are_not_projected(self):
+        utp = {"treatment": "utp", "outcome": "no_effect", "rehearsal": True,
+               "control_segments": [{"net": 100, "p95": 30, "p95_measured": True}] * 4}
+        self.assertIn("error", analyze_cr.checkpoint1(utp, [], None, None))
+        utp["rehearsal"] = False
+        comp = {"verdict": "void", "numerator": {"window": {"mean_per_min": 150.0}, "worst_hour_per_min": 120.0}}
+        out = analyze_cr.checkpoint1(utp, [], comp, None)
+        self.assertIn("comparator_not_used", out)
+        self.assertIsNone(out["comparator_mean_per_min"])
 
     def test_no_winner_projects_r0(self):
         utp = {"treatment": "utp", "outcome": "no_effect", "fit": {"tau": 0.0, "se": 0.02, "df": 3},

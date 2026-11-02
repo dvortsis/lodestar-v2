@@ -890,7 +890,9 @@ def ntp_status(run_command):
         match = re.search(r"(?m)^\s*Offset:\s*([+-]?[0-9.]+)(us|ms|s)\b", detail)
         if match:
             status["offset_seconds"] = abs(float(match[1])) / {"us": 1e6, "ms": 1e3, "s": 1}[match[2]]
-        return status
+            return status
+        kernel = kernel_ntp_status()  # ntpd under systemd: timesyncd has no offset to give
+        return kernel if kernel["source"] == "kernel" else status
     return kernel_ntp_status()
 
 
@@ -1264,6 +1266,8 @@ class Collector:
         if not a.spec_commit or not COMMIT.fullmatch(a.spec_commit):
             raise SystemExit("--spec-commit must name the commit whose CR-SPEC governs this run (rule 7.2).")
         self.checklist = parse_checklist(a.checklist, a.next_run)
+        if not (read_text("/proc/sys/kernel/random/boot_id") or "").strip():
+            raise SystemExit("Cannot read the boot ID; host-activity notes couldn't be placed (rule 6.11).")
 
     def run_json(self):
         a, inst = self.args, self.instance
@@ -1529,6 +1533,14 @@ class Collector:
                            and elapsed >= baseline_at + next_k * hour_seconds):
                         passed.append(next_k)
                         next_k += 1
+                    config = self.run.get("config")
+                    if metrics_ok and isinstance(config, dict) and config.get("settings_api") is None:
+                        try:  # identity's preset: retried until Lodestar's API answers
+                            config["settings_api"] = dict(self.api.settings(), read_at_elapsed=round(elapsed, 1))
+                            self.save(self.run, self.root / "run.json")
+                        except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                                http.client.HTTPException):
+                            pass
                     if passed:  # rule 1.4's boundary scrape: public IP, imports, settings
                         row["boundary"] = passed
                         if "public_ip" not in row:
@@ -1540,7 +1552,8 @@ class Collector:
                 self.write(self.root / "samples.jsonl", dumps(row), append=True)
                 shown = row
                 if self.spec:  # rule 6.11: progress and checks only, never counts or rates
-                    shown = {k: v for k, v in row.items() if k not in ("values", "net", "api")}
+                    shown = {k: v for k, v in row.items()
+                             if k not in ("values", "net", "api", "ip_family_counters", "volumes")}
                     shown["window"] = {"opened": self.suppression_end_at is not None,
                                        "boundaries_passed": next_k, "hours": a.baseline_hours}
                 self.save({"state": "running", "phase": phase, "sample": self.sample, "latest": shown,

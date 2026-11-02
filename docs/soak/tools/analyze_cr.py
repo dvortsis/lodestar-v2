@@ -44,8 +44,9 @@ NTP_OFFSET = 1.0               # D1a
 DRIFT = 5.0                    # D1a
 SWITCH_SECONDS = 600           # rule 2.3
 COMPARATOR_CLEAR = 12 * 3600   # rule 2.2
+STOP_ALLOWANCE = 90            # the collector's stop path: up to 60 s, plus a sample's lag
 GATE_MEAN, GATE_HOUR = 100.0, 70.0  # owner-set (§2.25)
-EFFECT_MARGIN = math.log(1.05)      # rule 6.3: +/- 5 %
+NO_EFFECT = (math.log(0.95), math.log(1.05))  # rule 6.3: τ within [ln 0.95, ln 1.05]
 OTHER_SWITCHES = ("coordinated_admission", "responder_hints", "streaming_peers", "target_prefixes",
                   "utp", "route_backoff")
 ADMISSION_COUNTERS = ("fetch_admission_waits_total", "fetch_admission_wait_cancelled_total",
@@ -375,7 +376,7 @@ def analyze_segment(root):
     }
 
     # Rule 6.6: gaps from process start to the end, failed scrapes and series in the window.
-    marks = [p_e] + [r["e"] for r in span]
+    marks = [p_e] + [r["e"] for r in span_ok]  # a failed scrape doesn't close a gap
     gaps = [b - a for a, b in zip(marks, marks[1:])]
     checks.add("6.6", "scrape_gaps_within_180s", all(g <= MAX_GAP for g in gaps), "missing",
                {"max_gap_seconds": round(max(gaps), 1) if gaps else None})
@@ -397,7 +398,7 @@ def analyze_segment(root):
     checks.add("6.5", "one_process_identity", len(identities) == 1)
     resets = counter_resets(span_ok, kind)
     checks.add("6.5", "no_counter_reset", not resets, detail={"series": resets[:10]} if resets else None)
-    exited = result.get("reason", "").startswith("process_exited") and not complete
+    exited = str(result.get("reason") or "").startswith("process_exited") and not complete
     checks.add("6.5", "no_interruption", not exited and "identity_change" not in result)
 
     # D1a: drift between UTC and elapsed over the segment.
@@ -458,7 +459,7 @@ def counter_resets(scrapes, kind):
 
 
 def host_checklist(checks, run, kind, switches, config):
-    items = run.get("checklist") or {}
+    items = {k: v for k, v in (run.get("checklist") or {}).items() if isinstance(v, dict)}
     docker = (run.get("settings") or {}).get("mode") == "docker"
     missing = [i for i in collect.CHECKLIST_ITEMS if i not in items
                or (items[i].get("state") == "excluded" and not items[i].get("next_run_utc"))
@@ -662,10 +663,11 @@ def mechanism(checks, window, span_ok, t_s, end, switches):
                 continue
             gap = parts[0] - parts[1] - parts[2] - (get(s, "fetch_admission_permit_returns_total", boundary="finder_full") or 0) \
                 - (get(s, "fetch_admission_permit_returns_total", boundary="finder_closed") or 0)
-            if gap != 0:
+            if gap != 0:  # a stretch lasts until the scrape that reads 0 again
                 since = r["e"] if since is None else since
                 longest = max(longest, r["e"] - since)
-            else:
+            elif since is not None:
+                longest = max(longest, r["e"] - since)
                 since = None
         grants = delta(t_s, end, "fetch_admission_grants_total")
         out["coordinated_admission"] = {"on": bool(switches.get("coordinated_admission")), "grants": grants,
@@ -965,7 +967,7 @@ def outcome(fit, valid_blocks):
     lo, hi = fit["ci"]
     if lo > 0 and fit["effect"] >= 0.05:
         return "win"
-    if -EFFECT_MARGIN <= lo and hi <= EFFECT_MARGIN:
+    if NO_EFFECT[0] <= lo and hi <= NO_EFFECT[1]:
         return "no_effect"
     if hi < 0:
         return "loss"
@@ -981,6 +983,11 @@ def analyze_effect(treatment, block_reports):
     paired = len(valid) in (2, 4) and all(orders[i] == ("ABBA" if i % 2 == 0 else "BAAB") for i in range(len(valid)))
     rehearsal = any(r.get("rehearsal") for reports in block_reports for r in reports)
     out["rehearsal"] = rehearsal
+    # Rule 6.9 takes R0 from the uTP controls whatever uTP's outcome, so these come first.
+    out["control_segments"] = [{"net": s["net"], "p95": s["p95"], "p95_measured": s["p95_measured"]}
+                               for b in valid for s, a in zip(b["segments"], b["order"]) if a == "A" and s["verdict"] == "valid"]
+    out["treatment_segments"] = [{"net": s["net"], "p95": s["p95"], "p95_measured": s["p95_measured"]}
+                                 for b in valid for s, a in zip(b["segments"], b["order"]) if a == "B" and s["verdict"] == "valid"]
     if treatment == "route":
         on = [s for b in valid for s, arm in zip(b["segments"], b["order"]) if arm == "B"]
         if on and all(s["verdict"] == "void" for s in on):
@@ -1004,10 +1011,6 @@ def analyze_effect(treatment, block_reports):
                               for arm in "AB"},
         "guardrails": guardrail_fits(valid),
     }
-    out["control_segments"] = [{"net": s["net"], "p95": s["p95"], "p95_measured": s["p95_measured"]}
-                               for b in valid for s, a in zip(b["segments"], b["order"]) if a == "A" and s["verdict"] == "valid"]
-    out["treatment_segments"] = [{"net": s["net"], "p95": s["p95"], "p95_measured": s["p95_measured"]}
-                                 for b in valid for s, a in zip(b["segments"], b["order"]) if a == "B" and s["verdict"] == "valid"]
     return out
 
 
@@ -1058,7 +1061,8 @@ def spacing(comparator, lodestar):
     for rt in lodestar:
         try:
             p0, w0 = parse_utc(rt["process_start_utc"]), parse_utc(rt["window_start_utc"])
-            w1 = parse_utc(rt.get("window_end_utc") or rt["last_scrape_utc"])
+            w1 = max(parse_utc(x) for x in (rt.get("window_end_utc"), rt.get("last_scrape_utc")) if x) \
+                + timedelta(seconds=STOP_ALLOWANCE)
         except (KeyError, TypeError, ValueError):
             out.append("lodestar_timeline_missing")
             continue
@@ -1113,6 +1117,12 @@ def cr0_worst_ratio(report):
 def checkpoint1(utp, others, comparator, cr0):
     """Rule 6.9's projection, with both models and their intervals."""
     out = {"schema": 1, "spec": SPEC, "kind": "projection_not_measurement"}
+    if any(e.get("rehearsal") for e in [utp] + list(others)) or (comparator or {}).get("rehearsal"):
+        out["error"] = "rehearsal evidence: not projected"
+        return out
+    if comparator is not None and comparator.get("verdict") != "valid":
+        out["comparator_not_used"] = f"comparator verdict {comparator.get('verdict')}"
+        comparator = None
     base = [s["net"] for s in utp.get("control_segments") or [] if s["net"] is not None]
     if len(base) < 2:
         out["error"] = "the uTP experiment has fewer than two valid control segments"

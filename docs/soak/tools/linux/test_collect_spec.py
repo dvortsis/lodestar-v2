@@ -248,6 +248,22 @@ class SpecRunTests(SpecBase):
         self.assertEqual(session.settings()["intensity"], "balanced")
         self.assertEqual([p for _, p, _ in api.calls[-3:]], ["/settings/crawler", "/login", "/settings/crawler"])
 
+    def test_settings_identity_is_retried_until_the_api_answers(self):
+        api = FakeAPI()
+        down = {"n": 0}
+
+        def flaky(method, url, body, cookie):
+            if "/settings/" in url and down["n"] < 2:
+                down["n"] += 1
+                return 503, {}, b""
+            return api(method, url, body, cookie)
+        self.spec_run(api=flaky)
+        settings = self.run_doc()["config"]["settings_api"]
+        self.assertEqual(settings["intensity"], "balanced")
+        self.assertIn("read_at_elapsed", settings)
+        report = analyze_cr.analyze_segment(self.root)
+        self.assertEqual(report["verdict"], "valid", [c for c in report["checks"] if not c["ok"]])
+
     def test_comparator_counts_by_a_read_only_query(self):
         counter = {"n": -1}
 
@@ -370,6 +386,8 @@ class SpecUnitTests(unittest.TestCase):
         self.assertEqual(out, {"source": "timedatectl", "synchronized": True, "offset_seconds": 0.00125})
         unsynced = collect.ntp_status(lambda argv: CHRONY.replace("Normal", "Not synchronised") if argv[0] == "chronyc" else None)
         self.assertFalse(unsynced["synchronized"])
+        only_sync = collect.ntp_status(lambda argv: "yes\n" if argv[1] == "show" else None)
+        self.assertIn(only_sync["source"], ("kernel", "timedatectl"))  # ntpd: the kernel's estimate if it has one
         fallback = collect.ntp_status(lambda argv: None)
         self.assertIn(fallback["source"], ("kernel", "unavailable"))
 
