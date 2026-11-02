@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T03:10:00Z",
+  "updated_at": "2026-11-02T03:16:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3337,7 +3337,7 @@
       "id": "q-v06-sources",
       "status": "answered",
       "text": "v0.6 Sources plan (#356) owner questions, each with a recommended answer in docs/plan/2026-11-01-v06-sources.md §5: Q1 consent wording (gates SRC-15b); Q2 ToS/robots position per source (gates SRC-7+); Q3 which torrent caches to contact, privacy (gates SRC-13); Q7 Sukebei adult feed in v0.6, content-safety scope (gates SRC-10e); Q15 how private_source items get metadata, snatch/H&R risk (gates SRC-7).",
-      "answer": "owner 2026-11-02: take the runner recommendation (owner-decisions §2.28, PR #371)"
+      "answer": "owner 2026-11-02 §2.28: Q2 (grey cases still come to owner), Q3, Q7, Q15 per written recommendations; Q1 keeps the owner approval of the consent texts SRC-4 drafts (still pending)"
     },
     {
       "id": "flag-v06-sources-runner",
@@ -3401,6 +3401,11 @@
       "status": "answered",
       "text": "Owner question (from master-plan r2, #369): may migration-bearing slices merge to main before v0.5.1 is tagged? Your 11-01 21:08Z hold says \"no migrations on main before release cut\"; release/v0.5.1 already exists, so the plan reads this as \"after v0.5.1 is tagged, or sooner if you allow\". SRC-1 (V14, Sources store) is the first one waiting (ext:owner-migrations-on-main).",
       "answer": "owner 2026-11-02: take the runner recommendation (owner-decisions §2.28, PR #371)"
+    },
+    {
+      "id": "approve-q1-texts",
+      "status": "waiting",
+      "text": "Approve the consent-class texts (External, Account, Restricted, Overlay) once SRC-4 drafts them in its decisions file; gates SRC-15b (owner-decisions §2.28)."
     }
   ],
   "external_gates": {
