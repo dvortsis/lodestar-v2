@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T15:55:58Z",
+  "updated_at": "2026-11-02T15:56:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2631,9 +2631,11 @@
       "merge": "7d4724c9"
     },
     "SRC-14b": {
-      "status": "launching",
+      "status": "running",
       "brief": "briefs/SRC-14b.md",
-      "model": "opus"
+      "model": "opus",
+      "session": "session_01MMjhnBFNwDh6xVTgXknTDU",
+      "launched": "2026-11-02T15:56Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
