@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T03:20:00Z",
+  "updated_at": "2026-11-02T03:22:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4042,5 +4042,12 @@
   "plan_ref": "docs/build-plan.md §0 (r2, #369) + docs/handoff.md",
   "v051_gate": {
     "upgrade_test": "SATISFIED per owner-decisions §2.28 (#371): r1 upgraded the Oct 22 volume V3->V12 cleanly; crates/store is byte-identical between v0.5.1-rc.1 and v0.5.1-rc.2 (git diff --quiet v0.5.1-rc.1 v0.5.1-rc.2 -- crates/store/), so the migration code matches whichever rc r1 ran. Runner-verified 2026-11-02T03:20Z."
-  }
+  },
+  "watch": [
+    {
+      "id": "flake-restart-wire-windows",
+      "at": "2026-11-02T03:20Z",
+      "text": "lodestar-dht node::actor::restart_wire::no_restored_peer_is_sampled_before_its_deadline failed on windows-latest in #368 (docs-only) at the first assertion: a sample_infohashes reached a peer during first-start suppression. Passed on #365 (CR-4) CI and on main 7f167278. Re-ran once (run 41379221375). If it fails again or shows on main 0c1931ae: treat as real politeness bug, launch an Opus fix slice (suspect CR-4 #365 receive-loop change or a Windows timing race in the test)."
+    }
+  ]
 }
