@@ -9,11 +9,9 @@ name: E2E
 # To regenerate them: web/e2e/README.md "Updating snapshots".
 
 on:
+  # No path filter: a required check must report on every PR. The `changes` job decides
+  # whether the heavy jobs run (applicability: .github/scripts/ci_changes.py E2E).
   pull_request:
-    paths:
-      - 'web/**'
-      - 'brand/source/**'
-      - '.github/workflows/e2e.yml'
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
@@ -35,9 +33,35 @@ defaults:
     working-directory: web
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      applies: ${{ steps.c.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Which files apply (.github/scripts/ci_changes.py)
+        id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/ci_changes.py "$EVENT" "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
+      - run: python3 .github/scripts/test_ci_changes.py
+
   e2e:
     name: playwright (core, matrix, sample, motion, keyboard)
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.update_snapshots)
+    needs: changes
+    if: >-
+      always() && needs.changes.result == 'success' &&
+      ((github.event_name == 'pull_request' && needs.changes.outputs.applies == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.update_snapshots))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container:
@@ -175,7 +199,8 @@ jobs:
 
   lighthouse:
     name: lighthouse (mobile + desktop)
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.applies == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -198,6 +223,43 @@ jobs:
           name: lighthouse-reports
           path: web/.lighthouseci
           retention-days: 14
+
+  # The one check to require in the ruleset (pull requests only). Always reports. Passes when
+  # the comparison jobs passed, or were skipped because no web/E2E input changed. Fails when
+  # any failed or was cancelled, when one that applies did not run, and when the run
+  # REGENERATED baselines (web/e2e/.update-snapshots): a regeneration compares nothing, so it
+  # never counts as acceptance. The session's next push removes the marker and re-runs.
+  e2e-ok:
+    name: e2e-ok
+    needs: [changes, e2e, commit-baselines, lighthouse]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          APPLIES: ${{ needs.changes.outputs.applies }}
+          E2E: ${{ needs.e2e.result }}
+          UPDATED: ${{ needs.e2e.outputs.updated }}
+          BASELINES: ${{ needs.commit-baselines.result }}
+          LIGHTHOUSE: ${{ needs.lighthouse.result }}
+        run: |
+          echo "changes=$CHANGES applies=$APPLIES e2e=$E2E updated=$UPDATED commit-baselines=$BASELINES lighthouse=$LIGHTHOUSE"
+          [ "$CHANGES" = success ] || { echo "change detection did not succeed"; exit 1; }
+          if [ "$UPDATED" = true ]; then
+            echo "This run regenerated snapshot baselines, so it compared nothing. Remove web/e2e/.update-snapshots and push."; exit 1
+          fi
+          case "$BASELINES" in skipped) ;; *) echo "commit-baselines result '$BASELINES' (expected skipped)"; exit 1 ;; esac
+          if [ "$APPLIES" = true ]; then
+            [ "$E2E" = success ] || { echo "e2e applies but its job result is '$E2E'"; exit 1; }
+            [ "$LIGHTHOUSE" = success ] || { echo "lighthouse applies but its job result is '$LIGHTHOUSE'"; exit 1; }
+          else
+            [ "$E2E" = skipped ] && [ "$LIGHTHOUSE" = skipped ] || { echo "E2E does not apply but jobs ran: e2e=$E2E lighthouse=$LIGHTHOUSE"; exit 1; }
+            echo "No E2E input changed; nothing to check."
+          fi
 
   all-themes:
     name: playwright (all-themes)
