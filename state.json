@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T11:43:46Z",
+  "updated_at": "2026-11-02T11:44:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2520,6 +2520,20 @@
       "head": "9b2a7564",
       "review": "runner-reviewed; merge on green",
       "merge": "7fe018c9"
+    },
+    "X-overflow-links": {
+      "status": "running",
+      "session": "session_01MMjhnCi36QS9XT5zJi4LJf",
+      "model": "sonnet",
+      "brief": "briefs/X-overflow-links.md",
+      "launched": "2026-11-02T11:44Z"
+    },
+    "X-settings-overview": {
+      "status": "running",
+      "session": "session_01MMjhnBmtVGAxZ58UyYRD3A",
+      "model": "sonnet",
+      "brief": "briefs/X-settings-overview.md",
+      "launched": "2026-11-02T11:44Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
