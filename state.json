@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T00:31:00Z",
+  "updated_at": "2026-11-02T00:39:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2251,28 +2251,31 @@
       "note": "From #357 review: undo effects of fail-closed stand-ins after an upgrade that reads the row again; Is-adult stand-in holds tombstone after 30 days and are not released by removing the rule (§20 false positives must be correctable). Needs persisted state. /security-review. After #357 merges."
     },
     "SRC-16": {
-      "status": "baselines",
+      "status": "ci",
       "model": "sonnet",
       "session": "session_01MMjhnBWJ84LfMg2vn3RGTr",
       "launched": "2026-11-01T22:14Z",
       "pr": 361,
-      "note": "review fixes in 34896f16; smoke settings screenshots changed (new Jobs nav entry) -> .update-snapshots marker round; MERGE after marker removed and green"
+      "note": "baselines regenerated (54 Settings PNGs only), marker removed; MERGE on green",
+      "head": "17901449"
     },
     "X-size-deterministic": {
-      "status": "building",
+      "status": "ci",
       "model": "sonnet",
-      "note": "Size job builds with a fixed version name / GITHUB_SHA so size-limit is deterministic (SHA noise ~30 B > many entries' headroom; root cause of the recurring \"+3 B in CI\"). Owns web/scripts/build-version.mjs and the web.yml size step; full-ci not needed.",
+      "note": "runner reviewed (19 lines) MERGE on green",
       "session": "session_01MMjhnCLZ2M19zNH9kEmbV6",
-      "launched": "2026-11-02T00:05Z"
+      "launched": "2026-11-02T00:05Z",
+      "pr": 364,
+      "head": "6444469"
     },
     "SRC-6": {
-      "status": "changes",
+      "status": "ci",
       "model": "opus",
       "session": "session_01MMjhnD7opuLZGiYgUPxKba",
       "launched": "2026-11-01T23:35Z",
       "pr": 363,
-      "head": "ff1438f3",
-      "note": "Opus review MERGE + required fix: external_ref credential/host parsing; polish (param values, bidi, \\r copy, dup field, zero hash)"
+      "head": "fca45e1d",
+      "note": "review fixes verified; MERGE on green"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2654,7 +2657,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-01T21:40:00Z",
+  "last_heartbeat": "2026-11-02T00:39:00Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
