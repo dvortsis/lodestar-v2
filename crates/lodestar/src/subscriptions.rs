@@ -42,6 +42,10 @@ pub struct Limits {
     /// §16 SSRF guard): public addresses only, since any signed-in session
     /// can add a list. Tests allow loopback for their fake list server.
     pub policy: NetPolicy,
+    /// One whole fetch, redirects and body included: a slow or dripping
+    /// server can hold a refresh up only this long, and refreshes run one
+    /// list at a time.
+    pub fetch_timeout: Duration,
 }
 
 impl Limits {
@@ -50,6 +54,7 @@ impl Limits {
             max_download: (c.max_download_mib.max(1) << 20) as usize,
             max_expanded: (c.max_expanded_mib.max(1) << 20) as usize,
             policy: NetPolicy::notification(false),
+            fetch_timeout: FETCH_TIMEOUT,
         }
     }
 }
@@ -120,12 +125,14 @@ pub use lodestar_filter::lists::apply;
 
 /// Redirects a list download follows, each checked like the first URL.
 const MAX_REDIRECTS: usize = 5;
+/// A whole list download, at most.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The HTTP client: the §16 SSRF guard (one checked resolution per
 /// connection, no system proxy, no automatic redirects), on the
 /// workspace's rustls with ring.
 fn client(limits: &Limits) -> Result<GuardedClient, NetError> {
-    GuardedClient::new(limits.policy, Duration::from_secs(300))
+    GuardedClient::new(limits.policy, FETCH_TIMEOUT)
 }
 
 /// A parsed list, encoded for the store.
@@ -205,8 +212,19 @@ enum Download {
     },
 }
 
-/// Downloads one list with a conditional request, capped in size.
+/// Downloads one list with a conditional request, capped in size and in
+/// time: [`Limits::fetch_timeout`] covers every hop and the whole body.
 async fn download(
+    client: &GuardedClient,
+    limits: &Limits,
+    sub: &Subscription,
+) -> Result<Download, String> {
+    tokio::time::timeout(limits.fetch_timeout, download_within(client, limits, sub))
+        .await
+        .unwrap_or_else(|_| Err("download failed: it took longer than the time limit".into()))
+}
+
+async fn download_within(
     client: &GuardedClient,
     limits: &Limits,
     sub: &Subscription,
@@ -228,10 +246,14 @@ async fn download(
                 req.headers_mut().insert(name, v);
             }
         }
-        let resp = client
-            .send(req)
-            .await
-            .map_err(|e| format!("download failed: {e}"))?;
+        let resp = client.send(req).await.map_err(|e| match e {
+            // A hop's URL came from the server's Location header, so
+            // the guard's advice on credential fields doesn't apply.
+            NetError::InvalidUrl(_) if hops > 0 => {
+                "download failed: a redirect without a usable location".to_owned()
+            }
+            e => format!("download failed: {e}"),
+        })?;
         if !matches!(resp.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
             break resp;
         }
@@ -773,6 +795,33 @@ mod tests {
         refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
         server.join().unwrap();
         assert!(error(&store).contains("cloud metadata"));
+        assert!(ips.current().is_empty());
+    }
+
+    /// The time limit covers the whole fetch: a server that sends its
+    /// headers and then drips (or stalls) its body is cut off at the
+    /// limit, though no single read times out.
+    #[tokio::test]
+    async fn a_stalled_download_is_cut_off_at_the_time_limit() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/list", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).unwrap();
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n10.0.0.0/8\n")
+                .unwrap();
+            // Hold the body open until the client gives up and hangs up.
+            while sock.read(&mut buf).is_ok_and(|n| n > 0) {}
+        });
+        let (store, filter, ips, mut limits) = setup(vec![list(&url, ListKind::Ip, false)]);
+        limits.fetch_timeout = Duration::from_millis(300);
+        let agent = client(&limits).unwrap();
+        refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
+        server.join().unwrap();
+        let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
+        assert!(sub.error.unwrap().contains("time limit"));
         assert!(ips.current().is_empty());
     }
 

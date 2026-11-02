@@ -50,7 +50,8 @@ fn kind_name(ip: bool) -> &'static str {
 pub(super) struct NewList<'a> {
     pub ip: bool,
     pub action: Action,
-    pub url: &'a str,
+    /// Normalised, as fetched and compared.
+    pub url: String,
     pub name: String,
     pub format: Option<&'a str>,
     pub floor: bool,
@@ -77,6 +78,9 @@ pub(super) fn check_subscribe(change: &Change) -> ApiResult<Option<NewList<'_>>>
         }
     };
     let printable = |s: &str| !s.chars().any(char::is_control);
+    // The name goes into effect warnings: no bidi or other invisible
+    // format characters (Unicode Cf) that could reorder what they say.
+    let plain = |s: &str| printable(s) && !s.chars().any(is_format);
     let bad_url = || {
         bad(
             "bad_list_url",
@@ -102,7 +106,7 @@ pub(super) fn check_subscribe(change: &Change) -> ApiResult<Option<NewList<'_>>>
         Err(_) => return Err(bad_url()),
     };
     if let Some(n) = name
-        && (n.trim().is_empty() || n.chars().count() > MAX_NAME || !printable(n))
+        && (n.trim().is_empty() || n.chars().count() > MAX_NAME || !plain(n))
     {
         return Err(bad("bad_list_name", "A list's name is 1–200 characters.").field("name"));
     }
@@ -152,11 +156,21 @@ pub(super) fn check_subscribe(change: &Change) -> ApiResult<Option<NewList<'_>>>
     Ok(Some(NewList {
         ip,
         action: act,
-        url,
+        url: parsed.as_str().to_owned(),
         name,
         format: format.as_deref(),
         floor: *floor,
     }))
+}
+
+/// Unicode's format characters (general category Cf): bidi controls,
+/// zero-width characters and the like.
+fn is_format(c: char) -> bool {
+    matches!(c as u32,
+        0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
+        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
 pub(super) fn subscription(store: &Store, id: i64) -> ApiResult<Subscription> {
@@ -477,9 +491,9 @@ pub(super) fn strictness_after(store: &Store, change: &Change) -> ApiResult<Opti
     let mut extra = None;
     let (mut skip, mut resume, mut pending) = (None, None, None);
     match change {
-        Change::Subscribe { url, .. } => {
-            if !subs.iter().any(|s| &s.url == url)
-                && let Some(new) = check_subscribe(change)?
+        Change::Subscribe { .. } => {
+            if let Some(new) = check_subscribe(change)?
+                && !subs.iter().any(|s| s.url == new.url)
             {
                 extra = Some(new_candidate(&new));
             }

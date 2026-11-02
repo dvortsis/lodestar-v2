@@ -1640,7 +1640,7 @@ impl FiltersApi {
                 let new = subscriptions::check_subscribe(change)?.ok_or_else(internal_none)?;
                 let id = store
                     .add_subscription(&lodestar_store::NewSubscription {
-                        url: new.url,
+                        url: &new.url,
                         name: &new.name,
                         kind: u8::from(new.ip),
                         format: new.format,

@@ -247,6 +247,16 @@ async fn a_subscribe_is_validated_in_the_preview_and_in_apply() {
             "url",
         ),
         (json!({ "name": "é".repeat(201) }), "bad_list_name", "name"),
+        (
+            json!({ "name": "safe\u{202e}txt.exe" }),
+            "bad_list_name",
+            "name",
+        ),
+        (
+            json!({ "name": "zero\u{200b}width" }),
+            "bad_list_name",
+            "name",
+        ),
         (json!({ "name": " " }), "bad_list_name", "name"),
         (json!({ "action": "hide" }), "bad_list_action", "action"),
         (json!({ "format": "zip" }), "unknown_list_format", "format"),
@@ -315,6 +325,19 @@ async fn a_subscribe_is_validated_in_the_preview_and_in_apply() {
         .find(|e| e["subscription"]["id"] == body["id"])
         .unwrap();
     assert_eq!(entry["subscription"]["name"], "lists.example");
+    // The URL is stored as parsed: one that fetches as it was checked.
+    let spaced =
+        json!({ "op": "subscribe", "url": "\u{a0}HTTPS://Lists.Example/nb", "kind": "content" });
+    let (status, body) = apply(&f, &c, spaced, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let stored = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .subscription(body["id"].as_i64().unwrap())
+        .unwrap();
+    assert_eq!(stored.unwrap().url, "https://lists.example/nb");
 }
 
 #[tokio::test]
