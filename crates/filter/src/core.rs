@@ -525,6 +525,32 @@ pub(crate) fn stronger(first: Option<Hit>, second: Option<Hit>) -> Option<Hit> {
     }
 }
 
+/// The hits of both readings in one list ([`Core::hits`]), its first
+/// switched-on hit the one [`stronger`] picks of the two readings' first:
+/// the earlier reading's hits, then the joined reading's for rules the
+/// earlier reading didn't hit, and the joined reading's first switched-on
+/// hit ahead of them all where it is strictly stronger. A rule hit in both
+/// readings is listed once, with the earlier reading's evidence unless the
+/// joined hit leads.
+fn both_readings(split: Vec<Hit>, joined: Vec<Hit>) -> Vec<Hit> {
+    let first_on = |hits: &[Hit]| hits.iter().find(|h| h.on).cloned();
+    let lead = match (first_on(&split), first_on(&joined)) {
+        (Some(s), Some(j)) if j.action > s.action => Some(j),
+        _ => None,
+    };
+    let mut out: Vec<Hit> = Vec::with_capacity(split.len() + joined.len() + 1);
+    out.extend(lead.clone());
+    let led = |h: &Hit| lead.as_ref().is_some_and(|l| l.rule == h.rule);
+    out.extend(split.into_iter().filter(|h| !led(h)));
+    let earlier = out.len();
+    for h in joined {
+        if out[..earlier].iter().all(|o| o.rule != h.rule) {
+            out.push(h);
+        }
+    }
+    out
+}
+
 fn lexicon(lists: &Lists) -> IdMap<u16> {
     let mut map = IdMap::default();
     let mut add = |h: u64, bit: u16| *map.entry(h).or_insert(0) |= bit;
@@ -775,10 +801,22 @@ impl Core {
     }
 
     /// Every rule's hit, switched on or not (for previews and the review
-    /// queue).
+    /// queue). Its first switched-on hit is [`Core::verdict`].
+    ///
+    /// A text that holds a character the matching once read as a word
+    /// break is read both ways, as the verdict reads it
+    /// (docs/decisions/2026-11-02-F-hits-two-readings.md): the earlier
+    /// reading's hits first, then the joined reading's for rules it
+    /// didn't hit. Where the joined reading's first switched-on hit is
+    /// stronger, and so is the verdict, it leads.
     pub fn hits(&self, item: &Item) -> Vec<Hit> {
         let mut hits: Vec<Hit> = self.floor(item).into_iter().collect();
-        hits.extend(self.patterns(item, &TermSet::default(), None));
+        let none = TermSet::default();
+        let joined = self.patterns(item, &none, None);
+        match self.pattern_hits_split(item, &none) {
+            Some(split) => hits.extend(both_readings(split, joined)),
+            None => hits.extend(joined),
+        }
         hits
     }
 
@@ -1091,6 +1129,73 @@ mod tests {
             codes: TermSet::of(&["codex"]),
         };
         Core::new(lists, CsList::default(), Switches::default())
+    }
+
+    /// [`both_readings`] leads with the hit [`stronger`] picks of the
+    /// two readings' first switched-on hits, the earlier reading's on a
+    /// tie, and lists each rule once. Every pattern rule quarantines
+    /// today, so a strictly stronger joined hit is built here.
+    #[test]
+    fn both_readings_lead_with_the_stronger() {
+        let hit = |rule, action, on, at: u32| Hit {
+            rule,
+            action,
+            on,
+            evidence: vec![Evidence::Sexual {
+                field: Field::Name,
+                pos: at,
+            }],
+        };
+        let q = Action::Quarantine;
+        let first = |hs: &[Hit]| hs.iter().find(|h| h.on).cloned();
+        let cases = [
+            // A tie: the earlier reading's hit and evidence stand.
+            (
+                vec![hit(CoreRule::Cs4a, q, true, 1)],
+                vec![
+                    hit(CoreRule::Cs4a, q, true, 2),
+                    hit(CoreRule::Cs5b, q, true, 2),
+                ],
+            ),
+            // Nothing on in the earlier reading.
+            (
+                vec![hit(CoreRule::Cs4a, q, false, 1)],
+                vec![
+                    hit(CoreRule::Cs4a, q, false, 2),
+                    hit(CoreRule::Cs5b, q, true, 2),
+                ],
+            ),
+            // The joined reading strictly stronger.
+            (
+                vec![hit(CoreRule::Cs5a, Action::Hide, true, 1)],
+                vec![
+                    hit(CoreRule::Cs4a, q, true, 2),
+                    hit(CoreRule::Cs5a, Action::Hide, true, 2),
+                ],
+            ),
+            // Strictly stronger on a rule the earlier reading also hit.
+            (
+                vec![
+                    hit(CoreRule::Cs4a, Action::Hide, true, 1),
+                    hit(CoreRule::Cs5b, q, true, 1),
+                ],
+                vec![hit(CoreRule::Cs5b, q, true, 2)],
+            ),
+            (Vec::new(), vec![hit(CoreRule::Cs4a, q, true, 2)]),
+            (vec![hit(CoreRule::Cs4a, q, true, 1)], Vec::new()),
+        ];
+        for (split, joined) in cases {
+            let verdict = stronger(first(&split), first(&joined));
+            let both = both_readings(split.clone(), joined.clone());
+            assert_eq!(first(&both), verdict, "{split:?} / {joined:?}");
+            let mut rules: Vec<CoreRule> = both.iter().map(|h| h.rule).collect();
+            rules.sort();
+            rules.dedup();
+            assert_eq!(rules.len(), both.len(), "{both:?}");
+            for h in split.iter().chain(&joined) {
+                assert!(both.iter().any(|b| b.rule == h.rule), "{h:?} missing");
+            }
+        }
     }
 
     /// A path whose spelled-out letters run on over a `/` (`l.e.x/a`)
