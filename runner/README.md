@@ -19,6 +19,7 @@ If the runner session is lost, start a new Opus session (Auto mode) with the pro
 - **Every session shares one GitHub account,** so GitHub can't tell the runner from a slice. The hook is a guard against a session merging on its own initiative (as the filter session did with #33, #42, #47 and #52), not against one that sets out to bypass it.
 - **Branch protection on `main`** requires a PR and the `ci-ok` check, with no bypass. `ci-ok` covers the correctness jobs in `ci.yml`. The performance-budget jobs, `web.yml`, `e2e.yml` and `release.yml` (separate, path-filtered workflows that can't be required without stalling PRs that don't trigger them) stay outside it and are judged by the green rule below, as before.
 - **Only one runner at a time.** On every wake, and again right before every merge and every launch, re-read `runner_session` from `origin/runner-state`. If it names another session, this one has been replaced: delete the marker, unsubscribe from every PR, delete its own scheduled tasks and stop. Never force-push `state.json`; on a non-fast-forward push, refetch and re-check `runner_session` first.
+- **A handover pauses the runner.** The same re-reads check for `HANDOVER.md` at the root of `runner-state` (`docs/handoff.md` §5). While it exists, another agent holds the build: launch nothing, merge nothing and push nothing to `main` or slice branches.
 
 ## Files
 | File | Holds | Changes how |
@@ -47,7 +48,7 @@ The list lives in `state.json` under `watched_sessions`.
 4. **A one-off check about 30 minutes after each launch.**
 
 ## What it does on each wake (reconcile, then act)
-1. **Load state.** Fetch `runner-state` and `main`. Check `runner_session` (see "Who merges"), and make sure the marker file exists.
+1. **Load state.** Fetch `runner-state` and `main`. Check `runner_session` (see "Who merges"), and make sure the marker file exists. **If `HANDOVER.md` exists at the root of `runner-state`, another agent holds the build** (`docs/handoff.md` §5). Launch nothing, merge nothing, and push nothing except to `runner-state` to register the claimed branches and draft PRs as slices. Only after the owner confirms: remove `HANDOVER.md`, re-enable the fixed watchdog trigger (it's long-lived; never recreate it), and recreate only your own session-bound tasks (the hourly check).
 2. **Keep `main` green.** If the latest push run of CI on `main` is red in `ci-ok`, find the merge that broke it. Fix it the fastest way:
    - **Revert:** open a revert PR. Its review checks only that it is a clean revert.
    - **Port a fix:** port the fix if one exists.
@@ -81,12 +82,14 @@ The list lives in `state.json` under `watched_sessions`.
    - An **Opus** slice that fails twice is `parked`, and the owner is notified.
 6. **Compute the ready set.** A slice is ready when every one of its `deps` is `merged` and every `ext:` dependency is satisfied (see the `external` section of `slices.yaml`).
 7. **Launch, within the limits in `slices.yaml`:**
+   - **while `limits.phase_total` is set, at most that many slices in total**, Opus, helper and docs slices alike (owner §2.25, as applied since 2026-10-30); the limits below apply inside it;
    - at most `max_core` Opus code slices, and only if their `owns` paths are disjoint;
    - at most `max_helpers` Sonnet and Haiku slices;
-   - docs-only slices don't count towards either limit;
+   - docs-only slices don't count towards `max_core` or `max_helpers` (they do count towards `phase_total`). The runner's own docs PRs aren't slice sessions and don't count; while `HANDOVER.md` exists, each Path B claim counts;
    - at most `max_launches_per_day` new sessions;
    - **never two running slices whose `owns` overlap.** Every slice records its decisions in its own new file under `docs/decisions/`, so no two slices share a decisions file (§16 is closed to new entries);
-   - **order:** critical-path core slices first, then the slices that unblock the most others;
+   - **order:** the ladder in `docs/build-plan.md` §0.2 decides between ready slices; within a rung, critical-path core slices first, then the slices that unblock the most others;
+   - **slices that depend on an owner host** (`ext:experiment-host`, `ext:import-host`) launch only against a booking for that run; two never share a booking, whatever their `owns`;
    - **size:** a slice estimated at more than ~3,000 changed lines is split before launch: into sequential slices, or into parallel ones against interfaces fixed first. Each PR then lands between other merges instead of chasing `main` (§2.24). Between ~1,500 and ~3,000 lines, keep the slice whole when splitting would cut through an interface that isn't fixed yet.
 8. **Expand epics.**
    - When an `epic` entry's deps are merged, the runner (Opus) reads the relevant architecture sections and the code as it now stands.
@@ -134,6 +137,7 @@ There's a **daily summary** on the first wake after 07:00 in the owner's time zo
 
 ## Watchdog
 A scheduled task, **"Lodestar runner watchdog"** (`trig_0172BngAUoA4NRaRWBYiRWVf`), starts a fresh session every 4 hours. It only reads, and it decides from the age of the newest commit on `runner-state`:
+- **Handover:** if `HANDOVER.md` exists at the root of `runner-state`, the watchdog does nothing and ends, whatever the commit's age (`docs/handoff.md` §5).
 - **Quiet:** that commit is 2 to 4 hours old and the runner session isn't `working`. The watchdog nudges the runner once with `send_message`.
 - **Gone:** that commit is more than 4 hours old, so the last nudge didn't help, or the runner session is archived, failed or missing. The watchdog starts a new runner session with the prompt above, tells the old session to stop, and sends the owner one line.
 - **The new runner takes over** by creating the marker and setting `runner_session` to its own id. It then recreates the hourly scheduled task for itself, re-subscribes to every open slice PR, and messages running slices with its session id. An old runner sees the change before its next merge or launch and stops ("Who merges").

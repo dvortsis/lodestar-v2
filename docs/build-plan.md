@@ -1,19 +1,19 @@
 # Lodestar v2 build plan: v0.5.1 → 1.0, with helper-agent orchestration
 
 > First written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
-> **§0 (2026-11-02) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.27 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md` and `docs/decisions/2026-11-02-master-plan-r2.md`.
+> **§0 (2026-11-02, r3) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.29 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md` (an external review's findings).
 > **Picking this up from another session or agent?** Start at [`docs/handoff.md`](handoff.md).
 
 ## 0. Status and plan from 2026-11-02
 
 ### 0.1 Where things stand
-Status as of `main` at `7f167278` (2026-11-02 02:23Z). Live per-slice state is on the `runner-state` branch (`state.json`); reconcile it against `main`'s merges before acting on it ([handoff §2](handoff.md#2-where-the-truth-lives)).
+Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`). Live per-slice state is on the `runner-state` branch (`state.json`); reconcile it against `main`'s merges before acting on it ([handoff §2](handoff.md#2-where-the-truth-lives)).
 
 | Area | Done | In flight | Next |
 |---|---|---|---|
 | **M0–M5** | All merged. G-v05 passed 10-24. **G-m5 passed 11-01** (#352): analytics-validation matrix, reporting overhead 0.08–0.09 % of a 1 % gate, design review with all 7 blocking findings fixed (#340 and FX-1..4; important and polish in FX-5..6) | — | Backlog only (Track B) |
-| **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **Unraid 24 h soak, attempt r3** on rc.2, fresh data directory: baseline 2026-11-01 22:16Z → 2026-11-02 22:16Z. r1 (upgraded the Oct 22 volume V3 → V12 cleanly) tripped the old working-set stop rule at 19.6 h, so it isn't gate evidence; r2 was stopped by the CA Docker Auto Update plugin at 11-01 11:00Z | Verdict; the owner runs the gluetun leg after the baseline; the owner tags `v0.5.1` (§0.4) |
-| **Crawler** | CR-0 accepted (24 h final: **740.6 stored/h ≈ 12.3/min**). Merged, each behind its own switch, all **off by default**: CR-SIM, CR-gate-metrics, CR-ADM (`dht.coordinated_admission`), CR-1a-H (`dht.responder_hints`), CR-1a-S (`dht.streaming_peers`), CR-1b (`dht.target_prefixes`), CR-0d (`dht.safe_restart`), CR-0f, CR-COL | **CR-4** (#365): uTP in the fetch path and IPv6 route backoff, switches `dht.utp` and `dht.route_backoff`; review fixes verified, merging on green | Live A/B runs (none run yet), CR-1c, CR-5 (§0.5) |
+| **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **Unraid 24 h soak, attempt r3** on rc.2, fresh data directory: baseline 2026-11-01 22:16Z → 2026-11-02 22:16Z. r1 (upgraded the Oct 22 volume V3 → V12 cleanly) tripped the old working-set stop rule at 19.6 h, so it isn't gate evidence; r2 was stopped by the CA Docker Auto Update plugin at 11-01 11:00Z | Verdict; rc.3 with #357 (§2.29); the owner runs the gluetun leg after the baseline; the owner tags `v0.5.1` (§0.4) |
+| **Crawler** | CR-0 accepted (24 h final: **740.6 stored/h ≈ 12.3/min**). Merged, each behind its own switch, all **off by default**: CR-SIM, CR-gate-metrics, CR-ADM (`dht.coordinated_admission`), CR-1a-H (`dht.responder_hints`), CR-1a-S (`dht.streaming_peers`), CR-1b (`dht.target_prefixes`), CR-0d (`dht.safe_restart`), CR-0f, CR-COL, **CR-4** (#365: uTP in the fetch path and IPv6 route backoff, `dht.utp` and `dht.route_backoff`) | — | CR-COL-3 and CR-SPEC, then live A/B runs (none run yet), CR-1c, CR-5 (§0.5) |
 | **Imports** | IMP-0..5 merged: PostgreSQL restore runbook, V13 job tables, Magnetico and Bitmagnet adapters, merge/dedupe CLI, imported cohorts kept out of crawl-yield Insights, refile, server-side import part 1 | — | Pilots on real data (§0.6); none run. Only a synthetic figure exists: 100k at ~13,900/s |
 | **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 (V14) now that migrations may land on `main` (owner-decisions §2.28); SRC-7 after SRC-2, SRC-4 and SRC-5 |
 | **Blocklist subscriptions** | B-subscriptions-api (#362) merged | S-blocklists (Sonnet) | — |
@@ -29,12 +29,12 @@ Status as of `main` at `7f167278` (2026-11-02 02:23Z). Live per-slice state is o
 **All findings the 2026-10-30 plan listed as open are fixed** (A1-1..4, A2-1, A3-1..3, DUR-26), except S04 (uTP), which CR-4 addresses, and S03 (admission), which CR-ADM addresses behind its switch.
 
 ### 0.2 Order of work and tracks
-**Concurrency:** at most **four slices at a time in total** in this phase: Opus, helper and docs slices alike, as the runner has applied §2.25 since 10-30 (the owner: "keep 4 slots full"). The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. A seven-day usage warning is active: prefer Sonnet where the delegation policy allows it. **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
+**Concurrency:** at most **four slices at a time in total** in this phase: Opus, helper and docs slices alike, as the runner has applied §2.25 since 10-30 (the owner: "keep 4 slots full"). The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). A seven-day usage warning is active: prefer Sonnet where the delegation policy allows it. **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
 
 **The ladder** (fill free slots in this order; the owner can reorder it in one line):
-1. **Close v0.5.1** (Track R): the soak verdict, the gluetun leg, the tag.
-2. **The crawler's live evidence** (Track C): land CR-4, then the comparator and the A/B runs on the owner's experiment host, up to Checkpoint 1.
-3. **The Sources critical path** (Track S): SRC-1 → SRC-2 → SRC-7, with the owner's Q2/Q15.
+1. **Close v0.5.1** (Track R): the soak verdict, the gluetun leg, rc.3 with #357, the tag.
+2. **The crawler's live evidence** (Track C): CR-SPEC, then CR-COL-3 (no host needed, so they start now), then the comparator and the A/B runs on the owner's experiment host, up to Checkpoint 1.
+3. **The Sources critical path** (Track S): SRC-1 → SRC-2 → SRC-7 (Q2/Q15 answered by §2.28).
 4. **Unhold the epics** once the soak verdict is in: expand E-M6 (gap audit), E-v06-workers, E-v06-companions.
 5. **Expand E-M7**, starting with the schema-bump convergence slice SB-6.
 6. **Import pilots** (Track I), on the owner's import host, never alongside an A/B run.
@@ -47,41 +47,48 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 | Step | Who | Waits on | Exit |
 |---|---|---|---|
 | R1 Unraid soak r3 verdict | runner (analysis), owner (evidence hand-back) | the baseline end, 11-02 22:16Z | `analyze` report: no stall, no interruption, ≥ 24 h covered, memory slope upper 95 % CI ≤ 2 MiB/h on `anon` private memory over hours 12–24, peak reported |
-| R2 gluetun leg (≥ 2 h measured, part of the v0.5.1 gate) | owner runs it after the baseline; runner analyses | R1 | collector run with `--leg gluetun --require-gluetun` |
-| R3 Tag `v0.5.1` from rc.2, approve the release environment, publish | **owner** | R1, R2 | GitHub release published; `:latest` moves |
-| R4 Bring `docs/releases/v0.5.1.md` to `main`, mark `docs/releases/v0.5.0.md` as never released, update the README's release status | docs slice | R3 | — |
-| R5 **v0.5.2 cut from `main`** (recommended, §0.4) | runner | R3 | G-v052 |
-| On failure at R1/R2 | fix PR on `main`, cherry-picked to `release/v0.5.1`, rc.3, a fresh frozen soak. Runs are never stitched | — | — |
+| R2 gluetun leg (≥ 2 h measured, part of the v0.5.1 gate) | owner runs it on rc.2 after the baseline (its evidence carries to rc.3 under the delta rule, like the soak's); runner analyses | R1 | collector run with `--leg gluetun --require-gluetun` |
+| R3 **rc.3 = rc.2 + #357** (F-filter-load-fail-closed), owner's decision 2026-11-02 (§2.29). The runner cherry-picks #357 onto `release/v0.5.1`, checks it applies without pulling other post-cut changes, maps the delta to targeted tests (filter load, stand-ins, the §20.8 budget) and runs CI on the rc.3 SHA. #357 changes filter loading and its reporting (Insights, `/metrics`, the web Insights view), not the crawler lifecycle, sampler or endpoint policy, so r3's soak evidence carries over under the delta rule; a short Unraid smoke of the rc.3 image confirms it starts, upgrades and serves. The delta report states the stand-in gap (below) | runner; owner tags rc.3 | R1 | rc.3 artifacts signed and hashed; delta report |
+| R3b Tag `v0.5.1` from rc.3, approve the release environment, publish | **owner** | R2, R3 | GitHub release published; `:latest` moves |
+| R4 Bring `docs/releases/v0.5.1.md` to `main`, mark `docs/releases/v0.5.0.md` as never released, update the README's release status | docs slice | R3b | — |
+| R5 **v0.5.2 cut from `main`** (recommended, §0.4) | runner | R3b | G-v052 |
+| On failure at R1/R2 | fix PR on `main`, cherry-picked to `release/v0.5.1` together with #357, the next rc, a fresh frozen soak. Runs are never stitched | — | — |
+
+**The stand-in gap in rc.3.** rc.3 is exactly rc.2 + #357 (§2.29, as the runner rules it). #357 alone holds what an unreadable rule's stand-in matches, and nothing in rc.3 undoes those holds: F-filter-standin-undo (#367) re-judges them, and rc.3 doesn't write the `filter.stand_ins` record a later upgrade needs to find them. The delta report states this gap. The runner recommends adding #367 to rc.3 if it has merged by the cut; that goes to the owner in the daily summary, and #367 rides along only on the owner's yes.
 
 **Track C: crawler to the v0.6 gate.** Details, evidence and the checkpoint are in §0.5.
 
 | Step | Who | Waits on |
 |---|---|---|
-| C1 CR-4 (#365) merged | Opus | review fixes |
-| C2 Experiment host ready (one node, one public IP, no imports, not the soak PC) | **owner** | `ext:experiment-host` |
-| C3 Pinned bitmagnet comparator, 24 h, fresh data, its own day | owner runs, runner analyses | C2 |
-| C4 Live ABBA A/B, 6 h measured × ≥ 2 reps per arm: CR-ADM, then CR-4 (uTP, then route backoff) | owner runs, runner analyses | C1, C2 |
+| C0a **CR-COL-3**: the Linux collector and analyzer keep and judge the gate's evidence. Today `collect.py` keeps only the CR-0 series, so `searchable_new_total`, the latency histogram and its dropped counter, and CR-4's family-labelled, connect-timeout, no-route and uTP series are discarded; only `fetch_attempts_total` and `fetch_success_total` survive with their `transport` label (reproduced by the 2026-11-02 review). Retain bounded, validated labels and histogram buckets including `+Inf`; compute searchable rate, hourly minima, latency coverage and per-transport/per-family breakdowns; reject missing evidence and counter resets; fixtures that pass and fail; a short end-to-end rehearsal | Opus | — |
+| C0b **CR-SPEC**: a frozen measurement specification, written before any data is collected (§0.5 "Measurement specification") | Opus (docs) | — |
+| C1 CR-4 merged (#365, 2026-11-02) ✔ | Opus | — |
+| C2 Experiment host ready (one node, one public IP, no imports, not the soak PC), and **booked exclusively per run** (§0.7 calendar) | **owner** | `ext:experiment-host` |
+| C3 Pinned bitmagnet comparator, 24 h, fresh data, its own day | owner runs, runner analyses | C0a, C0b, C2 |
+| C4 Live ABBA A/B, 6 h measured × ≥ 2 reps per arm: CR-ADM, then CR-4 uTP; route backoff only if a baseline shows `fetch_no_route_total{family="ipv6"} > 0` (CR-4's own gate), otherwise recorded as skipped | owner runs, runner analyses | C0a, C0b, C1, C3 |
 | C5 **Checkpoint 1**: projection to the gate, reported to the owner | runner → **owner** | C3, C4 |
 | C6 A/B runs for CR-1a-S, CR-1a-H, CR-1b; build CR-1c (cap sized to the intensity preset) | Opus + owner host | C5 |
-| C7 CR-5 (profile-driven tuning) only on profiler evidence | Opus | C6 |
-| C8 CR-COMB: winning switches default on, 24 h acceptance on the gate metric (G-v06-crawler) | Opus + owner host | C6/C7 |
+| C7 CR-5: profile, then either tune or record a reasoned skip in its decisions file. Either outcome completes it, so CR-COMB can depend on it | Opus | C6 |
+| C8 CR-COMB: winning switches default on, 24 h acceptance on the gate metric (G-v06-crawler) | Opus + owner host | C6, C7 |
 
 **Track I: imports to scale.** Gates in §0.6.
 
 | Step | Who | Waits on |
 |---|---|---|
 | I1 10k and 100k smoke stages (runner) | Opus | — |
+| I1b **SB-6's population contract** (Track M7): each later producer of an SB-6 field ships a resumable backfill, so fields exist and are filled | Opus | SB-6 |
 | I2 X-search-files-3: use the file index's `size` field (added by SB-6; it's an index format change) so cold file-search p95 stays ≤ 150 ms at 10M (`docs/decisions/2026-10-31-X-search-files-2.md`) | Opus | SB-6 |
 | I3 G-import-1M on the owner's data (Bitmagnet dump restored per IMP-0 first) | owner host, runner analyses | `ext:import-host` |
-| I4 G-import-10M, including the SB-6 rebuild measured at 10M | owner host | I2, I3, SB-6 (which waits on SRC-1 → SRC-2) |
-| I5 G-import-50M: measured numbers go to the owner | owner host | I4 |
+| I4 G-import-10M: steady-state v6 import at 10M | owner host | I2, I3, SB-6 (which waits on SRC-1 → SRC-2) |
+| I4b **G-rebuild-10M**: the v5 → v6 blue/green rebuild at 10M. Build and checkpoint a 10M v5 corpus and index with a pinned pre-SB-6 binary, upgrade a copy to SB-6, and measure the rebuild, serving during it, catch-up, the disk high-water mark and an interrupted resume. An initial v6 indexing pass doesn't count as blue/green evidence | owner host, runner analyses | I3, SB-6 |
+| I5 G-import-50M: measured numbers go to the owner, naming which SB-6 fields were populated | owner host | I4, I4b |
 | I6 Full corpus (~40–50M) once the owner approves the 50M numbers (`ext:owner-50m-approval`); then CR-3 (durable partial upgrades, the next free migration), the wizard subset (WIZ-*), IMP-05..08 | Opus | I5 |
-| Parked | B-import-server-2 (import through the running server's writer) adds an API that takes a source path or credentials, which is new attack surface | **owner** |
+| Parked | B-import-server-2 (import through the running server's writer) adds an API that takes a source path or credentials, which is new attack surface. **Online** import targets (1,000/s, writer-share fairness, search latency under import) belong to it, not to the pilots | **owner** |
 
 **Track S: v0.6 Sources.** The plan is `docs/plan/2026-11-01-v06-sources.md` §6. Its critical path is SRC-0 ✔ → **SRC-1** → SRC-2 → **SRC-7** → SRC-10* → SRC-G.
 - **Now:** SRC-4 (consent framework), SRC-5 (egress and kill-switch), SRC-9 (Internet Archive JSON parser). All are Opus with `/security-review`.
-- **SRC-1:** **this update assigns it V14** (`docs/decisions/2026-11-02-master-plan-r2.md`); the runner records it in `migration_order`. It still waits on the owner's hold, restated on 11-01: **no migrations on `main` before the release cut** (`ext:owner-migrations-on-main`: v0.5.1 tagged, or the owner lifts the hold sooner; owner queue #1). Until then SRC-1 can be built and reviewed but not merged; SRC-4, SRC-5 and SRC-9 fill the slots. CR-3, which once reserved V14, takes the next free number after the 50M gate.
-- **SRC-7 needs owner Q2 and Q15.** It's on the critical path, so they head the owner queue (§0.3). Until they're answered, everything from SRC-10 onward waits.
+- **SRC-1:** V14 (`docs/decisions/2026-11-02-master-plan-r2.md`; `migration_order` records it). The owner allowed migrations on `main` before the v0.5.1 tag (§2.28), so `ext:owner-migrations-on-main` holds and SRC-1 may land. CR-3, which once reserved V14, takes V15 after the 50M gate.
+- **SRC-7:** Q2 and Q15 are answered (§2.28), so it waits only on SRC-2, SRC-4, SRC-5 and SRC-6.
 - **SRC-3 depends on SB-6** (Track M7) instead of the old `ext:m7-schema-bump`.
 - **P-v06-rulepacks:** plan the other half of E-v06-sources (curated rule packs, ThePornDB/StashDB enrichment) the same way P-v06-sources-plan did.
 - Verification fetches of unverified keys stay behind `sources.verify_unverified` (off) until the crawler acceptance soak (C8) ends.
@@ -105,35 +112,39 @@ Any worker table goes through the migration queue (§0.7). Interface changes fro
 - the Unraid Community Apps submission (**owner**).
 
 **Track M7 (E-M7, ready to expand).** Already merged: the integrations crate and adapters, notifiers, Send UI. To expand:
-- **SB-6, the schema-bump convergence slice (Opus, first).** Search allows one `SCHEMA_VERSION` bump per milestone (§1.3). SB-6 is the bump 5 → 6. It fixes, in one change: SRC-3's `verified:`/`source:`/`network:` fields; `payload_sig` and the grouping fields; the regex trigram field; file category and `pieces_root`; and `size` in the file index, which X-search-files-3 needs. It waits only on SRC-2 (so the unverified data model is settled), not on E-M7's expansion. Later M7 slices fill these fields; they don't bump again. **It lands before the 10M import pilot**, so the blue/green rebuild is measured at 10M and the 50M corpus is indexed once.
+- **SB-6, the schema-bump convergence slice (Opus, first).** Search allows one `SCHEMA_VERSION` bump per milestone (§1.3). SB-6 is the bump 5 → 6. It fixes, in one change: SRC-3's `verified:`/`source:`/`network:` fields; `payload_sig` and the grouping fields; the regex trigram field; file category and `pieces_root`; and `size` in the file index, which X-search-files-3 needs. It waits only on SRC-2 (so the unverified data model is settled), not on E-M7's expansion. Later M7 slices fill these fields; they don't bump again. It lands before the 10M import pilot.
+  - **Population contract (r3).** A new field is empty on every record indexed before its producer ships: `crates/search/src/rebuild.rs` opens an existing current-version index without rebuilding, and the live indexer visits only new ids and `reindex_log` entries. So SB-6 also defines, and every producer slice (SRC-3, grouping, `payload_sig`, trigram, file category) ships: a per-field **population generation** recorded durably; a **resumable backfill** that walks existing records through `reindex_log` in bounded batches and survives restarts, deletions and filter changes made while it runs; completion criteria; and **truthful availability** while it runs (a query on a partly populated field says so, and a prefilter never treats an unpopulated field as "no match"), built on the existing `missing_fields()` / `unavailable` reporting in `rebuild.rs`. Fields SB-6 can compute from the store (file `size`, `pieces_root`, file category) are filled by SB-6's own blue/green rebuild, which X-search-files-3 relies on. Each producer's acceptance tests SB-6 → import → producer on an existing database, including a restart mid-backfill.
+  - **Cost.** Producers that land after the 50M import rewrite the corpus once each. Either they land before the 50M import, or their backfill time, disk and RSS are measured at 10M and budgeted for 50M. The 50M approval names which fields were populated; a later producer re-checks the affected budgets when its backfill runs.
 - The Torznab server; `.torrent` upload and folder watch (upload needs an **owner** exception to the JSON-only middleware); grouping (MinHash, collapse-by-group, "same file"); the regex prefilter and time-budgeted verify; the enrichment harness and plugins; the usenet tier and IRC announces; the Stremio addon and bitmagnet export.
 
 **Track B: backlog** (fills spare slots; each is small):
 - S-blocklists (running);
 - F-filter-standin-undo (#367);
 - openapi-example-size (#368, in review);
-- X-strip-format-chars (strip every Unicode Cf character in feed titles and digests, from #366's review), after #367 (both touch `crates/api/src/digest.rs`);
+- X-strip-format-chars (strip every Unicode Cf character in feed titles and digests, from #366's review), running; #367 merges first and this slice brings `main` in (both touch `crates/api/src/digest.rs`);
 - i9-stage2 (print the `a..<b` range form), which waits until the release after the one that ships its parser;
 - X-settings-overview: replace the placeholder Settings Overview with needs-attention and changed-from-default (§10.10.8);
 - X-overflow-links: the overflow menu sends Import and Backup to unregistered screens ("unavailable") and lacks Logs and the Syntax guide;
 - Logs event labels (~200 events × 2 messages × 2 locales);
 - FX-4's off-ramp `.css` spacing onto the scale;
-- a polish slice for `carry_forward` (118 items, over the 15 threshold in `runner/README.md` step 9).
+- a polish slice for `carry_forward` (118 items, over the 15 threshold in `runner/README.md` step 9);
+- **X-required-web-checks**: before the owner makes web and E2E checks required (§2.28), add an always-reporting aggregate check per workflow, with explicit applicability (which paths, including backend changes that need E2E) and failure propagation. Today the jobs are named `check + test + build + size` (`web.yml`) and `playwright (core, matrix, sample, motion, keyboard)` (`e2e.yml`), and both workflows are path-filtered, which `runner/README.md` says would stall unrelated PRs if required. Take the exact check names from a real run, show a web-changing PR and a docs-only PR both reporting, and keep snapshot regeneration separate from comparison;
+- **D-egress-note**: the user guide says plainly that blocklist list fetches ignore `HTTPS_PROXY` and use the container's own route (a whole-container VPN still applies), per §2.28's acceptance of #362. The in-app copy under Settings → Blocklists is **X-egress-copy**, a follow-up web slice after S-blocklists (#370), which isn't widened.
 
 ### 0.3 Owner queue
 On 2026-11-02 the owner told the runner to take its recommendation on every question that was waiting (`docs/owner-decisions.md` §2.28). The answers are recorded there; the owner can veto any of them. What's left needs the owner's hands, ordered by what each unblocks. The runner keeps working on everything else meanwhile.
 
 | # | Action | Unblocks |
 |---|---|---|
-| 1 | Hand back the r3 soak evidence; run the gluetun leg after the baseline; tag `v0.5.1` and approve the release environment. (#357 goes into an rc.3 only if the soak must be re-run anyway, otherwise into v0.5.2; r1's upgrade counts if rc.2's migration code matches, per §2.28.) | v0.5.1; the three held epics |
-| 2 | Name the **experiment host** for crawler A/B runs, and when it's free | Track C's live work (C2–C8) and the v0.6 tag |
+| 1 | Hand back the r3 soak evidence; run the gluetun leg after the baseline; tag rc.3 (rc.2 + #357, §2.29) and then `v0.5.1`, and approve the release environment. (r1's upgrade counts if rc.2's migration code matches, per §2.28.) | v0.5.1; the three held epics |
+| 2 | Name the **experiment host** for crawler A/B runs and book its calendar (about three weeks of exclusive use, §0.7) | Track C's live work (C2–C8) and the v0.6 tag |
 | 3 | Create the **nightly signing key** and its environment | update checks on the Nightly channel |
-| 4 | Make `Web / web` and `E2E / run` required checks in the ruleset (§2.28) | safer merges |
+| 4 | Make the web and E2E aggregate checks required in the ruleset (§2.28), **after** X-required-web-checks lands and names them | safer merges |
 | 5 | The Unraid Community Apps submission | M6 |
 | 6 | Approve the Q1 consent texts once SRC-4 drafts them | SRC-15b |
 | Later | **Checkpoint 1** decision (§0.5); the 50M numbers (§0.6); B-import-server-2's API surface and the `.torrent` upload middleware exception (the runner brings a recommendation when they're planned) | the v0.6 tag; the full-corpus import; server-side imports and M7 upload |
 
-Answered by §2.28: Q2, Q3, Q7 and Q15 (Q1 keeps the owner's approval of the drafted texts) (plan `2026-11-01-v06-sources.md` §5), migrations on `main` before the tag (allowed, so SRC-1 may land), #362's egress trade-off (accepted for v0.6), and adult stand-in holds (not released automatically).
+Answered by §2.28 (and #357's release by §2.29): Q2, Q3, Q7 and Q15 (Q1 keeps the owner's approval of the drafted texts) (plan `2026-11-01-v06-sources.md` §5), migrations on `main` before the tag (allowed, so SRC-1 may land), #362's egress trade-off (accepted for v0.6), and adult stand-in holds (not released automatically).
 
 `docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
 
@@ -146,10 +157,11 @@ Answered by §2.28: Q2, Q3, Q7 and Q15 (Q1 keeps the owner's approval of the dra
 - ✔ Windows ≥ 6 h service-mode run of the rc MSI, plus a portable smoke test.
 - ☐ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). Attempt r3 is running on a fresh data directory. **The upgrade test** (the Oct 22 volume, V3 → V12) passed only at r1's start, and r1 itself isn't gate evidence (it stopped at 19.6 h on the old working-set rule; partial slope 1.85 MiB/h, CI [0.92, 2.77]). Per owner-decisions §2.28, r1's clean upgrade counts if rc.2's migration code matches r1's build (the runner checks); otherwise rc.2 gets a short upgrade smoke. Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
 - ☐ ≥ 2 h gluetun leg.
+- ☐ rc.3 = rc.2 + #357 (§2.29), with its delta mapped and a short Unraid smoke (Track R step R3).
 - ✔ Updates ship off (no nightly key yet; the release key exists).
 - ☐ The owner tags, approves the release environment and publishes.
 
-**v0.5.2 (recommended, runner, flagged in the r2 decisions file).** `main` already carries fixes v0.5.1 lacks (B-update-5..6, filter fail-closed, the M5 exit fixes) and diverges fast. Cut `release/v0.5.2` from `main` soon after v0.5.1 ships rather than cherry-picking long chains. The gate is v0.5.1's: the 24 h Linux Docker soak stays the binding memory gate, plus a ≥ 6 h Windows service run, and the delta rule adds re-soaks for crawler lifecycle, sampler or endpoint-policy changes. **A cut from `main` ships one-way migrations** (V13, and V14 if SRC-1 has merged), so the gate adds a V12 → V13+ upgrade smoke on a copy of a v0.5.1 data folder and a rollback-to-snapshot check (`lodestar rollback` to the `pre-vN` snapshot, then v0.5.1 starts on it). Crawler switches stay off in v0.5.2 unless they've passed C8.
+**v0.5.2 (recommended, runner, flagged in the r2 decisions file).** `main` already carries fixes v0.5.1 lacks (B-update-5..6, the M5 exit fixes and later work) and diverges fast. Cut `release/v0.5.2` from `main` soon after v0.5.1 ships rather than cherry-picking long chains. **Freeze the cut first:** a feature manifest that lists every behaviour enabled in the build with its own acceptance, and every partly landed feature (Sources, M7) as inactive or excluded. The gate is v0.5.1's: the 24 h Linux Docker soak stays the binding memory gate, plus a ≥ 6 h Windows service run, and the delta rule adds re-soaks for crawler lifecycle, sampler or endpoint-policy changes. **A cut from `main` ships one-way migrations** (V13, and V14 if SRC-1 has merged), so the gate adds a V12 → V13+ upgrade smoke on a copy of a v0.5.1 data folder, pinned by its schema version and the snapshot file the upgrade writes (`<db>.pre-v13.db`), and a rollback-to-snapshot check: `lodestar rollback` to that file, then the v0.5.1 binary starts on it and serves. Crawler switches stay off in v0.5.2 unless they've passed C8.
 
 ### 0.5 Crawler program
 **Evidence so far.**
@@ -164,15 +176,25 @@ Answered by §2.28: Q2, Q3, Q7 and Q15 (Q1 keeps the owner's approval of the dra
 
 **Reading.** The gate needs about **8×**. The failure mix points at H3 (reachability and transport: TCP timeouts are what uTP-only and NATed peers look like) and H2 (admission churn), more than H1 (lookup latency). So the order is: CR-ADM and CR-4 first, then the H1 candidates.
 
+**Before any live run** (r3):
+- **CR-COL-3 (tooling).** The Linux collector and analyzer must keep and judge the gate's own evidence (Track C step C0a). Without it a completed run permanently lacks its primary outcome and the checks that prove a treatment was active.
+- **CR-SPEC (measurement specification).** A decisions file, frozen before collection and not changed after any data is seen. §2.25 makes the exact measurement rules refinements **the owner confirms before the first acceptance analysis**, so CR-SPEC is flagged to the owner and confirmed **before any data exists**: the first booked run (the comparator, CR-AB-COMP) and CR-COMB both depend on `ext:owner-cr-spec`. CR-COL-3 implements its rules, so it follows CR-SPEC. It fixes:
+  - **the measured window:** it starts at a stated boundary after suppression ends plus a stated warmup, for every run including the 24 h acceptance soak on a fresh directory (whose 6 h first-start suppression is otherwise inside or outside the mean by accident); hours are consecutive 60-minute intervals counted from that start (not wall-clock aligned, not rolling);
+  - **carry-over between arms:** a fresh data directory per arm, or a stated wash-out, and how CR-0d's `dht.safe_restart` is set across arm switches;
+  - **the cohort:** which events count towards an arm (by first sighting inside the window), and how latency samples that straddle a window edge are treated;
+  - **latency coverage:** the maximum share of dropped latency samples (`discovery_to_searchable_dropped_total`) for which a p95 is reported at all; below that coverage the p95 is "not measured", never a pass. Dropped samples are counted as above the threshold when bounding the p95. Unfinished work at the window's end is reported, not dropped;
+  - **mechanism checks** per treatment (for example uTP connects and `dht_utp_in_total` for CR-4), so an arm whose switch didn't take effect is void, not negative;
+  - **the analysis:** effect size with a confidence interval per treatment, and what counts as a win.
+
 **Order** (Track C table, §0.2):
-1. Land CR-4 (#365).
+1. CR-4 is merged (#365).
 2. Run the pinned **bitmagnet comparator early**, before tuning, on the same host and IP, on its own day, from fresh data. It shows what 100/min means there.
-3. Live ABBA runs (6 h measured after suppression and warmup, ≥ 2 repetitions per arm, controlled starting state, treatment boundaries and host activity logged, per-family counters): **CR-ADM**, then **CR-4 uTP** (`dht.utp`), then route backoff (`dht.route_backoff`). Measure each alone.
-4. **Checkpoint 1** (owner's choice, 2026-11-02). After the CR-ADM and CR-4 results, the runner projects the reachable single-node rate from the measured gains and the comparator, against all three thresholds (the 24 h mean, the worst hour and the p95 discovery-to-searchable).
+3. Live ABBA runs per CR-SPEC (6 h measured, ≥ 2 repetitions per arm, treatment boundaries and host activity logged, per-family counters): **CR-ADM**, then **CR-4 uTP** (`dht.utp`), then route backoff (`dht.route_backoff`) **only if a baseline shows `fetch_no_route_total{family="ipv6"} > 0`**, as CR-4's decision requires; it expects no measurable effect, and a skipped arm is recorded, not run. Measure each alone.
+4. **Checkpoint 1** (owner's choice, 2026-11-02). After the CR-ADM and CR-4 results, the runner projects the reachable single-node rate from the measured gains and the comparator, against all three thresholds (the 24 h mean, the worst hour and the p95 discovery-to-searchable). **It's a projection with stated uncertainty, not a measured ceiling:** isolated gains aren't necessarily additive or multiplicative, and 6 h arms don't bound a 24 h worst hour. The failure breakdown justifies testing transport first; it doesn't say how many timeouts uTP recovers. Only CR-COMB's 24 h soak measures the gate.
    - If the projection reaches ≥ 100/min: continue with step 5.
-   - If it doesn't: the runner reports the measured ceiling, the dominant limiter (from the failure and rejection breakdowns), the comparator's rate and the options to the owner **before** CR-5. The owner re-decides. **The runner never loosens the gate.** Sources, workers and M7 continue meanwhile; only the v0.6 tag waits.
+   - If it doesn't: the runner reports the projection and its uncertainty, the dominant limiter (from the failure and rejection breakdowns), the comparator's rate and the options to the owner **before** CR-5. The owner re-decides. **The runner never loosens the gate.** Sources, workers and M7 continue meanwhile; only the v0.6 tag waits.
 5. A/B for CR-1a-S, CR-1a-H, CR-1b; build CR-1c (a lookup cap sized to the intensity preset) after the CR-ADM result.
-6. CR-5 (profile-driven tuning, including the verified-known cache) only on profiler evidence.
+6. CR-5 (profile-driven tuning, including the verified-known cache): profile first, then tune only on profiler evidence, or record a reasoned skip. Either way it completes, and CR-COMB waits for it.
 7. **CR-COMB:** combine the winners, make them default on, and run the 24 h acceptance soak on the gate metric. If the host, its public IP or its network changed since the comparator ran, re-run the comparator first.
 
 **Still unscheduled:** CR-2 (fairness tiers) and CR-3 (durable partial upgrades; Track I step 6). A dual-stack default DHT bind (`[::]`, from CR-0f's follow-ups) and BEP 33 piggyback are CR-4 follow-ups, taken only if CR-4's per-family counters show IPv6 coverage matters.
@@ -191,13 +213,17 @@ Answered by §2.28: Q2, Q3, Q7 and Q15 (Q1 keeps the owner's approval of the dra
 - **Where:** one node, one public IP, a fresh data directory with no imports, the Balanced preset.
 - **Target:** ≥ 100 per minute sustained, comparable to a pinned bitmagnet run. The stretch target is 1,000/min, which remote workers serve.
 - **Thresholds** (decided 2026-10-31 under `docs/owner-decisions.md` §2.26): 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min. That figure runs from the first sighting of the infohash and includes the metadata fetch; it doesn't replace §1.6's "new torrent → searchable < 5 s", which starts once the metadata is stored.
+- **How it's measured:** per CR-SPEC (§0.5), frozen before collection and confirmed by the owner: the window's start boundary, 60-minute intervals from that start for the worst hour, the cohort, and the latency-coverage rule under which a p95 counts.
 - Politeness and network guardrails are never relaxed to reach it. Checkpoint 1 (§0.5) is where a shortfall goes to the owner.
 
 **Import scale:**
+- **The ladder is offline-only:** `lodestar import` runs with the server stopped (the CLI refuses to write while it runs). Online import (through the running server's writer, with writer-share fairness and search latency under import) belongs to B-import-server-2, which is parked, so the pilots don't claim it.
 - Runner smoke stages at 10k and 100k, then the owner's ladder: **1M → 10M**, each measured against §1.6's budgets, including about 2.3 KB per torrent all-in. Any excess, with what drives it, goes to the owner before the next stage.
 - Then a measured **50M gate**, whose numbers go to the owner before the full corpus (~40–50M) is imported.
-- Measured at every stage, never estimated (`docs/decisions/2026-10-30-master-plan.md` "Imports"): bytes per record, source copies and PostgreSQL restore space, backups, the old and new index during a rebuild, the have-filter, `filter_hits` and the review queue, NDCG@10, backup and restore time, cold start, RSS, search p95 (including cold file search), Insights overhead. A backup precedes each stage; removal by job provenance is tested.
-- Pass lines for import speed (runner, `docs/decisions/2026-10-31-IMP-4b.md`): 2,000/s offline, 1,000/s online.
+- Measured at every stage, never estimated (`docs/decisions/2026-10-30-master-plan.md` "Imports"): bytes per record, source copies and PostgreSQL restore space, backups, the old and new index during a rebuild, the have-filter, `filter_hits` and the review queue, relevance (the existing `relevance` judged fixture as a regression check only: it builds its own synthetic corpus, so it says nothing about ranking on pilot data; NDCG on real data waits for P7's judgment set), backup and restore time, cold start, RSS, search p95 (including cold file search), Insights overhead. A backup precedes each stage; removal by job provenance is tested.
+- **Import speed** (runner, `docs/decisions/2026-10-31-IMP-4b.md`): 2,000/s offline is the pilots' pass line. It's measured end to end, to the job's completion with every record durably written **and** indexed, and reported in two parts, write time and index drain, so the synthetic insert figure (13,900/s) can't stand in for it. The 1,000/s online line is B-import-server-2's acceptance, not the pilots'.
+- **The 10M stage has two parts:** steady-state import into a v6 index (G-import-10M), and the v5 → v6 blue/green rebuild from a pinned pre-SB-6 corpus (G-rebuild-10M). Only the second is rebuild evidence.
+- **The 50M approval names the populated feature set.** Passing while trigram, grouping or signature fields are empty doesn't approve their future disk, rebuild and RSS cost; each producer re-checks the affected budgets when its backfill runs (Track M7, SB-6).
 - After the gate: CR-3, then a subset of the wizard, then the other import families (Rats, dhtc, MongoDB, …; `docs/plan/2026-10-29-dht-import-wizards.md`).
 
 **Other gates, for reference:**
@@ -217,17 +243,20 @@ flowchart LR
   R[v0.5.1 soak + tag] --> EP[Unhold E-M6, workers, companions]
   R --> V52[v0.5.2 cut]
   CR4[CR-4 merged] --> AB[A/B: CR-ADM, CR-4]
-  HOST[(owner: experiment host)] --> COMP[bitmagnet comparator]
-  HOST --> AB
+  TOOL[CR-COL-3 + CR-SPEC] --> COMP
+  HOST[(owner: experiment host, booked per run)] --> COMP[bitmagnet comparator]
+  COMP --> AB
   COMP --> CP1{Checkpoint 1}
   AB --> CP1
   CP1 -->|on track| AB2[A/B: CR-1a, CR-1b; CR-1c; CR-5] --> COMB[CR-COMB 24 h] --> G6C[G-v06-crawler]
   CP1 -->|short| OWN[(owner re-decides)]
   SRC1[SRC-1 V14] --> SRC2[SRC-2] --> SRC7[SRC-7]
-  Q[(owner Q2, Q15)] --> SRC7
   SRC7 --> SRC10[SRC-10a..d, 11, 12, 13] --> SRCG[SRC-G]
   SRC2 --> SB6[SB-6 schema bump] --> SRC3[SRC-3] --> SRCG
   SB6 --> I10[G-import-10M]
+  SB6 --> RB10[G-rebuild-10M v5 to v6]
+  I1 --> RB10
+  RB10 --> I50
   I1[G-import-1M] --> I10 --> I50[G-import-50M] --> CR3[CR-3, wizard, import families]
   EP --> W[Workers 1-6] -.ships in.-> V06
   G6C --> V06((v0.6 tag))
@@ -236,9 +265,21 @@ flowchart LR
 ```
 
 **Things that run one at a time:**
-- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: **V14 → SRC-1** (assigned by this update; merges once `ext:owner-migrations-on-main` holds), then whichever of CR-3 (after the 50M gate) and any worker or companion table reaches the slot first. The runner records the queue in `runner-state` `migration_order` (today stale at V11).
+- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: V12 → V13 (merged) → **V14 SRC-1** (§2.28 lifted the migration hold) → **V15 CR-3** (after the 50M gate), with any worker or companion table taking the next number when it reaches the slot. The runner records the queue in `runner-state` `migration_order`.
 - **Search schema:** exactly one `SCHEMA_VERSION` bump per milestone. M7's is SB-6. A slice that needs a new indexed field asks SB-6 to carry it instead of bumping.
-- **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks.
+- **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks. **Bookings are exclusive and per run:** `ext:experiment-host` and `ext:import-host` hold for one booked run, not once for all, so two gates can't share the host because their `owns` happen to be disjoint.
+- **The experiment calendar** (the four-slice cap can't shorten this serial path):
+
+  | Run | Measured time |
+  |---|---|
+  | bitmagnet comparator | 1 day |
+  | CR-ADM, CR-4 uTP (ABBA, 2 reps × 2 arms × 6 h each) | 2 days |
+  | route backoff, only if the baseline shows IPv6 no-route events | 0–1 day |
+  | CR-1a-S, CR-1a-H, CR-1b, CR-1c | 4 days |
+  | CR-COMB 24 h acceptance | 1 day |
+  | **Total measured** | **8–9 days** |
+
+  Add each arm's start-up: a fresh data directory means the 6 h sampling suppression plus warmup before measurement starts, unless CR-SPEC adopts a crash-safe restart between arms. Add a retry budget of about 30 % for interruptions and repeats. **Plan for roughly three weeks of exclusive host time**, and keep the v0.5.x soaks and the import pilots off those days. The runner keeps the booking calendar in `runner-state` and states the next booking in every daily summary.
 - **CI capacity:** each push starts about 37 jobs that every PR queues behind. One push per round of fixes.
 - **Release branches:** fixes for a release land on `main` first and are cherry-picked; nothing is developed on a release branch.
 - **Hub files** (§1.3 table): unchanged.
@@ -251,7 +292,11 @@ flowchart LR
 | uTP can't be simulated | CR-SIM has no transport layer | Live A/B only; `dht.utp` stays off until it wins; the Settings field stays labelled "not active yet" so a saved value can't decide an A/B arm |
 | The owner's machines are a bottleneck | Soak, A/B arms, comparator days and pilots all need them, and each needs exclusive use | §0.7 calendar; the runner states the next machine booking in every daily summary |
 | A host plugin interrupts a run | r2 was stopped by CA Docker Auto Update; Appdata Backup can stop containers | Host checklist before every run: exclude the containers from auto-update and backup plugins and record the next scheduled plugin runs |
-| Search rebuild at scale | A blue/green rebuild needs about 2× index disk and hours at 50M | SB-6 lands before the 10M pilot; its rebuild is measured at 10M; the 50M import indexes once |
+| Search rebuild at scale | A blue/green rebuild needs about 2× index disk and hours at 50M | SB-6 lands before the 10M pilot; G-rebuild-10M measures a real v5 → v6 rebuild at 10M |
+| New fields stay empty on old records | A field added by SB-6 isn't filled on records indexed before its producer ships, so queries and prefilters would be wrong | SB-6's population contract: per-field generation, resumable backfill, truthful availability; backfill cost measured at 10M and named in the 50M approval |
+| Experiment evidence is lost | The Linux collector drops the gate's own series | CR-COL-3 and a rehearsal before any booked run |
+| A measurement decided after the data | Window boundaries, coverage and cohort rules chosen late can bias the gate | CR-SPEC, frozen before collection |
+| Two agents build at once | A stale runner timestamp doesn't prove the runner stopped; the watchdog restarts it after 4 h | The explicit handover in [handoff §5](handoff.md#5-path-b-a-single-agent-without-the-runner): `HANDOVER.md` on `runner-state`, honoured by both paths |
 | Migration contention | Sources, CR-3 and workers each want a migration | §0.7 queue, one at a time |
 | Unverified items in the id sequence | They grow the hot-column arrays | SRC-2 measures RSS at 1M unverified ids; the Q11 cap (1M dead hashes) |
 | Triggers on the crawler's hot path | V13's triggers add up to 4 index probes per insert | No new trigger on `torrents` inserts for Sources; unverified rows reuse V13's trigger pattern (P-v06-sources-plan, Q16); measure insert cost at each import stage |
@@ -262,22 +307,22 @@ flowchart LR
 | Stale runner state | `state.json` shows merged slices as building, and its `migration_order` stops at V11 | A successor reconciles against `main` first ([handoff](handoff.md)); the runner trims `state.json` and moves history to `log/<id>.md` (`runner/README.md` step 10) |
 | Usage runs out mid-slice | A session stops with a half-done branch | Small PRs, one decisions file per slice, the handoff; a branch with no PR is restarted from its brief, not resumed blind |
 | Toolchain debt | MSRV 1.89 and one temporarily allowed clippy lint, `chunks_exact_to_as_chunks` (`Cargo.toml`) | Remove the allow when CI's clippy reaches 1.99 (runner follow-up) |
-| Owner answers arrive late | Q2/Q15 block the Sources critical path | Ask once with a recommendation; fill the slots with SRC-4/5/9, Track B and the epics meanwhile |
+| Owner answers arrive late | Owner actions (host, keys, tags) gate whole tracks | §2.28 delegates decisions to the runner's recommendation; ask once for actions, and fill the slots with Sources, Track B and the epics meanwhile |
 
 ### 0.9 Next actions
 In order, as slots allow (four slices in total; no two with overlapping `owns`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
-1. Finish the in-flight work: CR-4 (#365), F-filter-standin-undo (#367), S-blocklists, openapi-example-size (#368) (4 of 4 slots on 2026-11-02 02:50Z).
-2. Launch SRC-4, SRC-5 and SRC-9; then X-strip-format-chars after #367.
-3. Launch SRC-1 with V14 when the owner's migration hold lifts (v0.5.1 tagged, or the owner says so sooner; owner queue #1). The runner records V14 in `migration_order` now.
-4. After 11-02 22:16Z: analyse the r3 soak; ask the owner for the gluetun leg and the tag (owner queue #1), and in the same message for Q2/Q15 and the experiment host (#2, #3).
+1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z).
+2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars is already running (a recorded exception: it shares `crates/api/src/digest.rs` with #367, which merges first).
+3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first.
+4. After 11-02 22:16Z: analyse the r3 soak; cut rc.3 with #357 (§2.29); ask the owner for the gluetun leg, the rc.3 smoke and the tag (owner queue #1), and in the same message for the experiment host and its calendar (#2).
 5. On the soak verdict: expand E-M6 (gap audit first), E-v06-workers, E-v06-companions.
 6. Launch SB-6 when SRC-2 merges; expand the rest of E-M7; launch P-v06-rulepacks.
-7. Launch the 10k/100k import smoke stages; X-search-files-3 after SB-6.
-8. Drain Track B with whatever slots remain.
+7. Launch the 10k/100k import smoke stages; X-search-files-3 after SB-6; G-rebuild-10M's v5 corpus is built with a pinned pre-SB-6 binary, so it can be prepared whenever the import host is free.
+8. Drain Track B with whatever slots remain, X-required-web-checks first (the owner's ruleset change waits for it).
 
 ### 0.10 History of this section
 - **2026-10-30:** the post-CR-0 plan: lanes L (land the owner's work), F (release blockers), C (crawler candidates behind switches), I (imports), S (Settings reconcile), D (docs), and the v0.5.1 gate. All lanes finished by 11-01. Its text is in git history (`git log -p docs/build-plan.md`) and its reasoning in `docs/decisions/2026-10-30-master-plan.md`.
-- **2026-11-02:** this rewrite (`docs/decisions/2026-11-02-master-plan-r2.md`).
+- **2026-11-02:** this rewrite (`docs/decisions/2026-11-02-master-plan-r2.md`), then §2.28's answers (#371), then r3 after an external review (`docs/decisions/2026-11-02-master-plan-r3.md`).
 
 ---
 
@@ -353,7 +398,7 @@ P0 seams ─► P1 v0.5 MVP ─► P2 M5 ─────────────
                                                      ├─► P4 v0.6: Sources ∥ workers ∥ companions ∥ crawler gate
                                                      └─► P5 M7/v0.7 (SB-6 first) ─► P6 v0.8 ─► P7 M8 → 1.0
 ```
-- **Critical path to v0.6:** the crawler gate (§0.5), which needs the owner's experiment host and may need the owner's re-decision at Checkpoint 1; in parallel, the Sources path SRC-1 → SRC-2 → SRC-7 (needs Q2/Q15) → SRC-10* → SRC-G.
+- **Critical path to v0.6:** the crawler gate (§0.5), which needs the owner's experiment host and may need the owner's re-decision at Checkpoint 1; in parallel, the Sources path SRC-1 → SRC-2 → SRC-7 → SRC-10* → SRC-G.
 - **Critical path to 1.0:** M7's SB-6 and the import scale gates feed P7's 10M/50M performance gates.
 
 ---
