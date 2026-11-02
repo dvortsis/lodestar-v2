@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T09:03:02Z",
+  "updated_at": "2026-11-02T09:17:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2422,14 +2422,15 @@
     },
     "SRC-2": {
       "brief_must": "claim hits on the floor or a CS pattern always carry a hold (from #379 review); watermarks for promoted ids; Insights promotion counting (handed from SRC-1)",
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnAWFNGeB2VZxALptGu",
       "launched": "2026-11-02T06:45:10Z",
       "scope": "approved edit to crates/store/src/unverified.rs promote for exact Insights counting; percolator pickup moved to SRC-2b",
       "pr": 383,
       "head": "16426440",
-      "review": "Opus MERGE; runner round: judge description/publisher, non-core claim hits drop claims only, nits"
+      "review": "Opus MERGE; runner round: judge description/publisher, non-core claim hits drop claims only, nits",
+      "merge_sha": "9911f4d8"
     },
     "SRC-14": {
       "brief_must": "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source)."
@@ -2458,13 +2459,19 @@
     },
     "SRC-4": {
       "notes_runner": "launch after SRC-2 merges (both touch crates/pipeline/src/lib.rs)",
-      "notes_runner2": "expect conflicts in crates/pipeline/src/lib.rs (SRC-2 added intake routing, config, stats)"
+      "notes_runner2": "expect conflicts in crates/pipeline/src/lib.rs (SRC-2 added intake routing, config, stats)",
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhnBnrYC2SRCP6LYaee6",
+      "launched": "2026-11-02T09:17:46Z"
     },
     "X-required-web-checks": {
-      "status": "running",
+      "status": "in review",
       "model": "sonnet",
       "session": "session_01MMjhnC8MJRspRwT6jwCv1W",
-      "launched": "2026-11-02T08:26:41Z"
+      "launched": "2026-11-02T08:26:41Z",
+      "pr": 384,
+      "head": "14f6d63e"
     },
     "X-egress-copy": {
       "status": "merged",
