@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T02:56:00Z",
+  "updated_at": "2026-11-02T02:58:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2324,6 +2324,11 @@
       "pr": 369,
       "note": "owner planning session; build-plan §0 r2, docs/handoff.md, owner-decisions §2.27, slices.yaml +externals",
       "merge": "e528c369"
+    },
+    "F-normalize-invisible": {
+      "status": "queued",
+      "model": "opus",
+      "note": "After X-strip-format-chars merges: crates/filter/src/normalize.rs invisible() misses U+2028/2029, tag chars U+E0000-E007F, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+FFF9-FFFB, U+110BD/13430/1BCA0/1D173 ranges; use lodestar_metainfo::hidden_char. Tightening; /security-review; §20.8 budget."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
