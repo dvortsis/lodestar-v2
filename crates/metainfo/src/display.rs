@@ -42,6 +42,12 @@ pub fn hidden_char(c: char) -> bool {
     if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{E0000}'..='\u{E007F}') {
         return true;
     }
+    format_char(c)
+}
+
+/// Whether `c` is in Unicode general category Cf (format): bidi controls,
+/// zero-width characters, U+FEFF, the soft hyphen and the like.
+pub fn format_char(c: char) -> bool {
     if c < '\u{00AD}' {
         return false;
     }
@@ -76,6 +82,7 @@ mod tests {
     fn matches_the_reference() {
         for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
             let cf = c.general_category() == GeneralCategory::Format;
+            assert_eq!(format_char(c), cf, "U+{:04X}", c as u32);
             if cf {
                 assert!(hidden_char(c), "U+{:04X} is Cf", c as u32);
             }

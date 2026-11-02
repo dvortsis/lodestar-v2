@@ -19,7 +19,7 @@ mod info;
 mod text;
 mod torrent;
 
-pub use display::hidden_char;
+pub use display::{format_char, hidden_char};
 pub use error::{Error, Warning};
 pub use hash::{InfoHash, InfoHashV2, ParseHashError};
 pub use info::{
