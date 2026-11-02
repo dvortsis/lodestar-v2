@@ -101,6 +101,8 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         );
     }
 
+    render_egress(&mut o, &m.sources());
+
     let i = m.intake_stats();
     o.one(
         "intake_received_total",
@@ -606,6 +608,69 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         );
     }
     o.0
+}
+
+/// Each running plugin's egress and kill switch (SRC-5, `docs/metrics.md`
+/// "Source egress and kill switch"). A plugin that isn't running, or has
+/// no egress, has no series.
+fn render_egress(o: &mut Out, sources: &[lodestar_pipeline::SourceStatus]) {
+    use lodestar_sources::{RouteKind, RouteState};
+    let live: Vec<_> = sources
+        .iter()
+        .filter_map(|s| Some((s.plugin, &s.egress.as_ref()?.status)))
+        .collect();
+    o.family(
+        "source_egress_up",
+        "gauge",
+        "1 when the plugin's route is up (or direct), 0 when its kill switch is down or the \
+         route hasn't been checked yet.",
+    );
+    for (plugin, st) in &live {
+        let route = match st.route {
+            RouteKind::Direct => "direct",
+            RouteKind::BindAddress => "bind_address",
+            RouteKind::Interface => "interface",
+            RouteKind::Socks5 => "socks5",
+        };
+        o.value(
+            "source_egress_up",
+            &format!("plugin=\"{plugin}\",route=\"{route}\""),
+            u8::from(st.route == RouteKind::Direct || st.state == RouteState::Up),
+        );
+    }
+    o.family(
+        "source_egress_requests_total",
+        "counter",
+        "The plugin's HTTP requests by outcome.",
+    );
+    for (plugin, st) in &live {
+        let c = st.counters;
+        for (outcome, n) in [
+            ("answered", c.answered),
+            ("kill_switch_refused", c.kill_switch_refusals),
+            ("kill_switch_aborted", c.kill_switch_aborts),
+            ("policy_refused", c.policy_refusals),
+            ("transport_failed", c.transport_failures),
+        ] {
+            o.value(
+                "source_egress_requests_total",
+                &format!("plugin=\"{plugin}\",outcome=\"{outcome}\""),
+                n,
+            );
+        }
+    }
+    o.family(
+        "source_egress_trips_total",
+        "counter",
+        "Times the plugin's route went from up or unchecked to down.",
+    );
+    for (plugin, st) in &live {
+        o.value(
+            "source_egress_trips_total",
+            &format!("plugin=\"{plugin}\""),
+            st.counters.trips,
+        );
+    }
 }
 
 /// The crawler gate (owner-decisions §2.25): new verified records and the
@@ -1708,5 +1773,76 @@ mod tests {
         assert!(out.contains("lodestar_filter_rows_unreadable{kind=\"rule\"} 2"));
         assert!(out.contains("lodestar_filter_rows_unreadable{kind=\"allow\"} 1"));
         assert!(out.contains("lodestar_filter_rows_unreadable{kind=\"class_rule\"} 0"));
+    }
+
+    #[test]
+    fn egress_series_render_per_running_plugin() {
+        use lodestar_sources::{
+            Consent, DownReason, EgressCounters, EgressStatus, Kind, Manifest, Network, Policy,
+            Priority, Risk, RouteKind, RouteState,
+        };
+        static M: Manifest = Manifest {
+            id: "feed",
+            name: "Feed",
+            version: "1",
+            kinds: &[Kind::Discovery],
+            networks: &[Network::Bt],
+            endpoints: &[],
+            risk: Risk::Low,
+            consent: Consent::None,
+            default_priority: Priority::Normal,
+            enabled_by_default: false,
+        };
+        let status =
+            |plugin: &'static str, route, state, egress: bool| lodestar_pipeline::SourceStatus {
+                id: lodestar_store::SourceId::new(0).unwrap(),
+                plugin,
+                name: plugin,
+                running: egress,
+                enabled: egress,
+                dropped: 0,
+                manifest: M.clone(),
+                priority: Priority::Normal,
+                last_error: None,
+                policy: Policy::STRICT,
+                egress: egress.then(|| lodestar_pipeline::EgressLive {
+                    status: EgressStatus {
+                        plugin: plugin.into(),
+                        route,
+                        state,
+                        counters: EgressCounters {
+                            kill_switch_refusals: 3,
+                            trips: 1,
+                            ..EgressCounters::default()
+                        },
+                        notice: None,
+                    },
+                    route: None,
+                    setting: Ok(lodestar_pipeline::control::EgressSetting::Direct),
+                }),
+            };
+        let mut o = Out(String::new());
+        render_egress(
+            &mut o,
+            &[
+                status(
+                    "feed",
+                    RouteKind::Socks5,
+                    RouteState::Down(DownReason::ProxyUnreachable),
+                    true,
+                ),
+                status("dht", RouteKind::Direct, RouteState::Up, true),
+                status("off", RouteKind::Direct, RouteState::Unchecked, false),
+            ],
+        );
+        let out = o.0;
+        assert!(out.contains("lodestar_source_egress_up{plugin=\"feed\",route=\"socks5\"} 0\n"));
+        assert!(out.contains("lodestar_source_egress_up{plugin=\"dht\",route=\"direct\"} 1\n"));
+        assert!(out.contains(
+            "lodestar_source_egress_requests_total{plugin=\"feed\",outcome=\"kill_switch_refused\"} 3\n"
+        ));
+        assert!(out.contains("lodestar_source_egress_trips_total{plugin=\"feed\"} 1\n"));
+        assert!(!out.contains("plugin=\"off\""));
+        assert!(out.contains("# TYPE lodestar_source_egress_requests_total counter"));
     }
 }

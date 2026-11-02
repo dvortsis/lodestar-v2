@@ -366,10 +366,22 @@ fn public_only() -> Endpoints {
     Endpoints::user_entered(NetPolicy::notification(false))
 }
 
+/// A request that failed: in transport, by policy, or at the kill switch
+/// (whose text reads "egress down: …").
 fn transport(r: Result<Response, HttpError>) -> String {
     match r {
         Err(HttpError::Transport(e)) => e,
-        other => panic!("expected a transport error, got {other:?}"),
+        Err(e @ HttpError::EgressDown(_)) => e.to_string(),
+        other => panic!("expected a failed request, got {other:?}"),
+    }
+}
+
+/// A kill-switch refusal or abort: its own variant, so the host isn't
+/// backed off.
+fn egress_down(r: Result<Response, HttpError>) -> String {
+    match r {
+        Err(e @ HttpError::EgressDown(_)) => e.to_string(),
+        other => panic!("expected the kill switch, got {other:?}"),
     }
 }
 
@@ -425,7 +437,7 @@ async fn a_bind_address_route_binds_and_fails_closed_when_the_address_is_gone() 
     let egress = factory(Scripted::new(&[]))
         .build("p", &Egress::BindAddress(gone), lan())
         .await;
-    let err = transport(egress.fetch(&Request::get(server.url("/"))).await);
+    let err = egress_down(egress.fetch(&Request::get(server.url("/"))).await);
     assert!(err.contains("egress down"), "{err}");
     let status = egress.status();
     assert_eq!(
@@ -878,15 +890,15 @@ async fn the_kill_switch_abandons_a_request_in_flight_and_refuses_until_up() {
     switch.0.store(false, Ordering::SeqCst);
     // The request would stall for 30 s; the switch ends it well before
     // the deadline.
-    let err = transport(within(inflight).await.unwrap());
-    assert!(err.contains("egress went down"), "{err}");
+    let err = egress_down(within(inflight).await.unwrap());
+    assert!(err.contains("went down in flight"), "{err}");
     let status = egress.status();
     assert_eq!(status.state, RouteState::Down(DownReason::InterfaceDown));
     assert_eq!(status.counters.kill_switch_aborts, 1);
     assert_eq!(status.counters.trips, 1);
 
     let conns = server.addr;
-    let err = transport(
+    let err = egress_down(
         egress
             .fetch(&Request::get(format!("http://{conns}/")))
             .await,
@@ -1142,4 +1154,223 @@ async fn redirects_drop_credentials_across_origins_and_refuse_downgrades() {
     let (client, _) = table(&[("https://a.example/", moved(302, "file:///etc/passwd"))]);
     let err = transport(send_following(&client, Request::get("https://a.example/")).await);
     assert!(err.contains("left http"), "{err}");
+}
+
+/// The manifest's own hosts (pinned) for a plugin with one endpoint.
+fn pinned() -> Endpoints {
+    Endpoints::manifest(&[Endpoint {
+        protocol: "https",
+        host: "feed.example",
+    }])
+}
+
+/// Who resolves names when the user didn't say depends on where the
+/// plugin's endpoints come from, never on where the proxy is (runner,
+/// #394): the proxy for manifest-pinned hosts, Lodestar for hosts the
+/// user entered.
+#[tokio::test]
+async fn auto_dns_follows_the_endpoints_not_the_proxys_address() {
+    let resolver = Scripted::new(&[
+        ("gluetun", &[&["172.18.0.5"]]),
+        ("tailnet-proxy", &[&["100.64.0.7"]]),
+        ("proxy.vpn.example", &[&["198.51.100.7"]]),
+    ]);
+    let f = factory(resolver);
+    let auto = |host: &str| ProxySpec {
+        host: host.into(),
+        port: 1080,
+        dns: None,
+    };
+    // Private, Mullvad's in-tunnel address, loopback, CGNAT and public;
+    // literals and names alike.
+    for host in [
+        "gluetun",
+        "10.64.0.1",
+        "127.0.0.1",
+        "::1",
+        "tailnet-proxy",
+        "100.64.0.1",
+        "proxy.vpn.example",
+        "203.0.113.9",
+    ] {
+        for (endpoints, want) in [
+            (pinned(), SocksDns::Proxy),
+            (public_only(), SocksDns::Local),
+        ] {
+            let (e, route) = f.build_socks5("p", &auto(host), endpoints).await;
+            match route {
+                Some(Egress::Socks5 { dns, .. }) => assert_eq!(dns, want, "{host}"),
+                other => panic!("{host}: {other:?}"),
+            }
+            let notice = (want == SocksDns::Local).then_some(DNS_OUTSIDE_ROUTE);
+            assert_eq!(e.status().notice, notice, "{host}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_proxy_by_name_resolves_once_and_an_unusable_one_stays_down() {
+    let resolver = Scripted::new(&[
+        ("gluetun", &[&["172.18.0.5"]]),
+        ("nowhere", &[&["0.0.0.0", "224.0.0.1"]]),
+        ("mixed", &[&["0.0.0.0", "172.18.0.9"]]),
+    ]);
+    let f = factory(resolver.clone());
+    let spec = |host: &str, dns| ProxySpec {
+        host: host.into(),
+        port: 1080,
+        dns,
+    };
+    let (_, route) = f.build_socks5("p", &spec("gluetun", None), pinned()).await;
+    assert_eq!(
+        route,
+        Some(Egress::Socks5 {
+            proxy: "172.18.0.5:1080".parse().unwrap(),
+            dns: SocksDns::Proxy
+        })
+    );
+    // The first usable answer is taken.
+    let (_, route) = f.build_socks5("p", &spec("mixed", None), pinned()).await;
+    assert!(
+        matches!(route, Some(Egress::Socks5 { proxy, .. }) if proxy.ip().to_string() == "172.18.0.9")
+    );
+    // A literal isn't looked up, and an explicit choice wins.
+    let before = resolver.lookups();
+    let (_, route) = f
+        .build_socks5("p", &spec("10.8.0.1", Some(SocksDns::Local)), pinned())
+        .await;
+    assert_eq!(resolver.lookups(), before);
+    assert!(matches!(
+        route,
+        Some(Egress::Socks5 {
+            dns: SocksDns::Local,
+            ..
+        })
+    ));
+    // A name that doesn't resolve, or only to addresses no proxy can be
+    // at, and an unusable literal: down for good, and nothing is sent.
+    for host in [
+        "missing",
+        "nowhere",
+        "0.0.0.0",
+        "::",
+        "239.1.1.1",
+        "255.255.255.255",
+    ] {
+        let (e, route) = f.build_socks5("p", &spec(host, None), lan()).await;
+        assert_eq!(route, None, "{host}");
+        assert_eq!(
+            e.status().state,
+            RouteState::Down(DownReason::ProxyUnresolved),
+            "{host}"
+        );
+        // A URL the endpoint policy allows, so the kill switch refuses it.
+        let err = egress_down(e.fetch(&Request::get("http://127.0.0.1:9/")).await);
+        assert!(err.contains("didn't resolve"), "{err}");
+        assert_eq!(e.status().counters.kill_switch_refusals, 1);
+    }
+}
+
+#[tokio::test]
+async fn an_unreadable_setting_is_a_route_that_stays_down() {
+    let f = factory(Scripted::new(&[]));
+    let e = f.unavailable("p", RouteKind::Socks5, DownReason::SettingUnreadable, lan());
+    assert_eq!(
+        e.status().state,
+        RouteState::Down(DownReason::SettingUnreadable)
+    );
+    let err = egress_down(e.fetch(&Request::get("http://127.0.0.1:9/")).await);
+    assert!(err.contains("couldn't be read"), "{err}");
+    assert_eq!(
+        e.check_now().await,
+        RouteState::Down(DownReason::SettingUnreadable)
+    );
+}
+
+#[test]
+fn lan_means_private_loopback_or_link_local() {
+    for ip in [
+        "10.0.0.1",
+        "192.168.1.2",
+        "127.0.0.1",
+        "::1",
+        "fd00::1",
+        "169.254.1.1",
+        "100.64.0.1",
+    ] {
+        assert!(on_lan(ip.parse().unwrap()), "{ip}");
+    }
+    for ip in ["198.51.100.7", "2001:db8::1", "8.8.8.8"] {
+        let ip: IpAddr = ip.parse().unwrap();
+        if net::classify(ip) == AddrClass::Public {
+            assert!(!on_lan(ip));
+        }
+    }
+}
+
+/// A probe whose good answer is trusted for a minute: the window in which
+/// a route can die without the gate noticing.
+struct Trusting(AtomicBool);
+
+impl RouteProbe for Trusting {
+    fn probe(&self) -> BoxFuture<'_, Result<(), DownReason>> {
+        let up = self.0.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if up {
+                Ok(())
+            } else {
+                Err(DownReason::ProxyUnreachable)
+            }
+        })
+    }
+
+    fn ttl(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
+}
+
+#[tokio::test]
+async fn a_route_that_dies_between_probes_is_the_kill_switchs_error_not_the_hosts() {
+    let probe = Arc::new(Trusting(AtomicBool::new(true)));
+    let client = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        DEADLINE,
+        Scripted::new(&[]),
+        &Route::Direct,
+    )
+    .unwrap();
+    let egress = PluginEgress::new(
+        "p",
+        RouteKind::Socks5,
+        Ok(client),
+        Arc::clone(&probe) as Arc<dyn RouteProbe>,
+        lan(),
+    );
+    assert_eq!(egress.check_now().await, RouteState::Up);
+    // The route dies; the gate still trusts its last good probe, so the
+    // request is sent and fails to connect.
+    probe.0.store(false, Ordering::SeqCst);
+    let url = format!("http://{}/", unused_port_addr());
+    let result = egress.fetch(&Request::get(url.clone())).await;
+    let err = egress_down(result.clone());
+    assert!(err.contains("went down in flight"), "{err}");
+    let c = egress.status().counters;
+    assert_eq!((c.kill_switch_aborts, c.transport_failures), (1, 0));
+    // So the plugin's limiter doesn't back the host off.
+    let limiter = HostLimiter::with_seed(
+        crate::Policy::STRICT.limits(&crate::UserLimits::default()),
+        1,
+    );
+    let host = host_key(&url).unwrap();
+    limiter.record(&host, &result, Instant::now());
+    assert_eq!(
+        limiter.state(&host, Instant::now()),
+        crate::HostState::Ready
+    );
+    // With the route up, a refused connection is the host's.
+    probe.0.store(true, Ordering::SeqCst);
+    assert_eq!(egress.check_now().await, RouteState::Up);
+    let result = egress.fetch(&Request::get(url)).await;
+    assert!(matches!(result, Err(HttpError::Transport(_))), "{result:?}");
+    assert_eq!(egress.status().counters.transport_failures, 1);
 }

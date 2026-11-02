@@ -28,8 +28,8 @@ use std::time::Duration;
 
 use lodestar_dht::node::{ExternalVotes, Intensity, StatsSnapshot};
 use lodestar_sources::consent::{self, Ack, CredentialRefusal, Need, Secret, SourceCredentials};
-use lodestar_sources::{Consent, Priority, SourcePlugin, Stage};
-use lodestar_store::{Event, SourceId, SourceState, Store, WriteBatch};
+use lodestar_sources::{Consent, Priority, ProxySpec, SocksDns, SourcePlugin, Stage, Window};
+use lodestar_store::{Event, SourceId, SourceSetting, SourceState, Store, WriteBatch};
 use tokio::time::Instant;
 
 use crate::{DhtSource, Error, Monitor, SourceStatus, event, unix_now};
@@ -68,6 +68,187 @@ pub fn saved_priority(store: &Store, plugin: &'static str) -> Result<Option<Prio
         lodestar_log::log_event!(crate::log_events::PRIORITY_UNREADABLE, plugin = plugin);
     }
     Ok(parsed)
+}
+
+/// A source's egress as the user set it (`sources.egress.<plugin>`). The
+/// network-interface and bind-address routes aren't offered: their DNS
+/// lookups would leave outside them (SRC-5, until a bound resolver exists).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum EgressSetting {
+    #[default]
+    Direct,
+    Socks5(ProxySpec),
+}
+
+impl EgressSetting {
+    /// `direct`, or `socks5 <host> <port> <auto|proxy|local>`.
+    pub fn encode(&self) -> String {
+        match self {
+            EgressSetting::Direct => "direct".into(),
+            EgressSetting::Socks5(p) => {
+                let dns = match p.dns {
+                    None => "auto",
+                    Some(SocksDns::Proxy) => "proxy",
+                    Some(SocksDns::Local) => "local",
+                };
+                format!("socks5 {} {} {dns}", p.host, p.port)
+            }
+        }
+    }
+
+    pub fn decode(text: &str) -> Option<EgressSetting> {
+        let mut parts = text.split(' ');
+        let setting = match parts.next()? {
+            "direct" => EgressSetting::Direct,
+            "socks5" => {
+                let host = parts.next()?;
+                let port: u16 = parts.next()?.parse().ok().filter(|p| *p != 0)?;
+                let dns = match parts.next()? {
+                    "auto" => None,
+                    "proxy" => Some(SocksDns::Proxy),
+                    "local" => Some(SocksDns::Local),
+                    _ => return None,
+                };
+                if !proxy_host_ok(host) {
+                    return None;
+                }
+                EgressSetting::Socks5(ProxySpec {
+                    host: host.to_owned(),
+                    port,
+                    dns,
+                })
+            }
+            _ => return None,
+        };
+        parts.next().is_none().then_some(setting)
+    }
+}
+
+/// A proxy host as the API passes it (`lodestar_api::ops::parse_proxy`'s
+/// rules): an IP literal (no brackets) a proxy can be at
+/// ([`lodestar_sources::egress::usable_proxy`]), or a DNS name of 1–63-byte labels
+/// of letters, digits and hyphens (not at either end), at most 253 bytes,
+/// whose last label isn't a number in disguise.
+pub fn proxy_host_ok(host: &str) -> bool {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return lodestar_sources::egress::usable_proxy(ip);
+    }
+    !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        && !host.split('.').next_back().is_some_and(|l| {
+            l.bytes().all(|b| b.is_ascii_digit()) || l.to_ascii_lowercase().starts_with("0x")
+        })
+}
+
+/// Most windows a source's schedule holds.
+pub const MAX_WINDOWS: usize = 8;
+
+/// Windows as `start-end` minutes, comma-separated (`""`: any time).
+pub fn encode_schedule(windows: &[Window]) -> String {
+    windows
+        .iter()
+        .map(|w| format!("{}-{}", w.start, w.end))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub fn decode_schedule(text: &str) -> Option<Vec<Window>> {
+    if text.is_empty() {
+        return Some(Vec::new());
+    }
+    let windows = text
+        .split(',')
+        .map(|w| {
+            let (a, b) = w.split_once('-')?;
+            let (a, b): (u16, u16) = (a.parse().ok()?, b.parse().ok()?);
+            let day = 24 * 60;
+            (a < day && b < day).then(|| Window::new(a, b))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (windows.len() <= MAX_WINDOWS).then_some(windows)
+}
+
+/// A saved egress setting that doesn't decode (a rollback from a version
+/// with a route this one can't read, a stricter parser, a damaged row).
+/// It's never read as direct: the source's route stays down (fail closed,
+/// runner #394 review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unreadable;
+
+/// A source's saved egress: what's set (absent is direct), or unreadable.
+pub type SavedEgress = Result<EgressSetting, Unreadable>;
+
+/// A source's own settings beyond its state and priority (§18.4). The
+/// schedule and agents are stored and reported only: scheduler v2
+/// enforces them (runner, SRC-14a). An unreadable schedule or agents
+/// value falls back to its default; an unreadable egress doesn't.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSettings {
+    pub egress: SavedEgress,
+    /// `None`: the plugin's default windows.
+    pub schedule: Option<Vec<Window>>,
+    /// `None`: one agent.
+    pub agents: Option<u32>,
+}
+
+impl Default for SourceSettings {
+    fn default() -> SourceSettings {
+        SourceSettings {
+            egress: Ok(EgressSetting::Direct),
+            schedule: None,
+            agents: None,
+        }
+    }
+}
+
+/// `plugin`'s saved settings. A schedule or agents value that isn't
+/// readable keeps its default; an egress that isn't is [`Unreadable`].
+/// Each is logged when `warn` (once, at start: `GET /sources` reads them
+/// on every call).
+pub fn saved_settings(
+    store: &Store,
+    plugin: &'static str,
+    warn: bool,
+) -> Result<SourceSettings, Error> {
+    let read =
+        |setting| -> Result<Option<String>, Error> { Ok(store.source_setting(plugin, setting)?) };
+    let decoded = |text: Option<String>, label: &'static str, ok: bool| {
+        if text.is_some() && !ok && warn {
+            lodestar_log::log_event!(
+                crate::log_events::SOURCE_SETTING_UNREADABLE,
+                plugin = plugin,
+                setting = label
+            );
+        }
+    };
+    let egress = read(SourceSetting::Egress)?;
+    let saved_egress_absent = egress.is_none();
+    let egress_value = egress.as_deref().and_then(EgressSetting::decode);
+    decoded(egress, "egress", egress_value.is_some());
+    let schedule = read(SourceSetting::Schedule)?;
+    let schedule_value = schedule.as_deref().and_then(decode_schedule);
+    decoded(schedule, "schedule", schedule_value.is_some());
+    let agents = read(SourceSetting::Agents)?;
+    let agents_value = agents
+        .as_deref()
+        .and_then(|t| t.parse::<u32>().ok().filter(|n| *n >= 1));
+    decoded(agents, "agents", agents_value.is_some());
+    Ok(SourceSettings {
+        egress: match (egress_value, saved_egress_absent) {
+            (Some(e), _) => Ok(e),
+            (None, true) => Ok(EgressSetting::Direct),
+            (None, false) => Err(Unreadable),
+        },
+        schedule: schedule_value,
+        agents: agents_value,
+    })
 }
 
 /// `"high"` → `high`: the JSON string the value is saved as.
@@ -312,6 +493,64 @@ pub struct SourceView {
     pub consent_version: String,
     /// The names of its stored credentials. Never their values.
     pub credentials: Vec<String>,
+    /// Its egress, schedule and agents as saved (they apply at the next
+    /// start).
+    pub settings: SourceSettings,
+    /// Warnings about its egress, for the Sources screen.
+    pub egress_warnings: Vec<&'static str>,
+}
+
+/// `HTTPS_PROXY` or `ALL_PROXY` is set while a source connects directly.
+pub const WARN_PROXY_ENV: &str = "HTTPS_PROXY or ALL_PROXY is set, but source plugins never use \
+     it: this source connects directly. To send it through a proxy, choose SOCKS5.";
+/// The proxy resolves names and is on the user's network: the trade, plainly
+/// (runner, #394).
+pub const WARN_LAN_PROXY_DNS: &str = "The proxy resolves names, so lookups stay inside the \
+     tunnel. Because the proxy is on your network, a public name that resolves to one of your \
+     devices would reach that device. Choosing Lodestar's DNS prevents that, but lookups then \
+     leave outside the tunnel.";
+/// The saved egress setting can't be read.
+pub const WARN_SETTING_UNREADABLE: &str = "This source's saved network setting couldn't be \
+     read, so its requests are refused rather than sent directly. Set its network route again.";
+
+/// The warnings for a source's egress: `saved` as saved, `live` as it
+/// runs, whether a proxy variable is set, and who resolves names on a
+/// SOCKS5 route left on `auto` for this plugin ([`crate::egress::auto_dns`]).
+/// The running route is judged only while it was built from what's saved:
+/// once the user changes the setting, the warnings follow the new one.
+pub fn egress_warnings(
+    saved: &SavedEgress,
+    live: Option<&crate::EgressLive>,
+    proxy_env: bool,
+    auto_dns: SocksDns,
+) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    let setting = match saved {
+        Ok(s) => s,
+        Err(Unreadable) => return vec![WARN_SETTING_UNREADABLE],
+    };
+    if proxy_env && *setting == EgressSetting::Direct {
+        out.push(WARN_PROXY_ENV);
+    }
+    let current = live.filter(|l| l.setting == *saved);
+    let lan_proxy_dns = match current.and_then(|l| l.route.as_ref()) {
+        Some(lodestar_sources::Egress::Socks5 { proxy, dns }) => {
+            *dns == SocksDns::Proxy && lodestar_sources::egress::on_lan(proxy.ip())
+        }
+        // Not running, or not on what's saved: judge the saved setting.
+        // A name's address is known only once it has resolved.
+        _ => match setting {
+            EgressSetting::Socks5(ProxySpec { host, dns, .. }) => {
+                dns.unwrap_or(auto_dns) == SocksDns::Proxy
+                    && host.parse().is_ok_and(lodestar_sources::egress::on_lan)
+            }
+            EgressSetting::Direct => false,
+        },
+    };
+    if lan_proxy_dns {
+        out.push(WARN_LAN_PROXY_DNS);
+    }
+    out
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -324,8 +563,13 @@ pub struct SourceChange {
     /// ...and the version of what they were shown ([`consent::version`]).
     pub consent_version: Option<String>,
     /// The caller checked the admin password for this change. Accepting
-    /// Restricted or Overlay consent needs it (Q13).
+    /// Restricted or Overlay consent needs it (Q13), and so does any
+    /// egress change.
     pub password_confirmed: bool,
+    pub egress: Option<EgressSetting>,
+    /// `Some(windows)` sets them (`[]`: any time).
+    pub schedule: Option<Vec<Window>>,
+    pub agents: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -346,6 +590,11 @@ pub enum SourceError {
     /// The credentials couldn't be sealed (the key file couldn't be
     /// read or created). Carries nothing secret.
     Sealing,
+    /// A setting was refused: `field` names it, `reason` says why.
+    Invalid {
+        field: &'static str,
+        reason: String,
+    },
     Store(Error),
 }
 
@@ -669,18 +918,27 @@ impl Control {
                 .map(|s| {
                     let need = consent::need_in(&store, &s.manifest)?;
                     let names = store.source_secret_names(s.manifest.id)?;
-                    Ok((s.id, (need, names)))
+                    let settings = saved_settings(&store, s.manifest.id, false)?;
+                    Ok((s.id, (need, names, settings)))
                 })
-                .collect::<Result<HashMap<_, _>, lodestar_store::Error>>()?;
+                .collect::<Result<HashMap<_, _>, Error>>()?;
             (store.sources()?, store.cohorts(hour - 23, hour + 1)?, gates)
         };
         let priorities = self.state().priorities.clone();
         let started_at = self.inner.monitor.started_at();
+        let proxy_env = crate::egress::proxy_env_set();
         Ok(statuses
             .into_iter()
             .map(|status| {
                 let row = rows.iter().find(|r| r.id == status.id);
-                let (need, credentials) = gates.get(&status.id).cloned().unwrap_or_default();
+                let (need, credentials, settings) =
+                    gates.get(&status.id).cloned().unwrap_or_default();
+                let egress_warnings = egress_warnings(
+                    &settings.egress,
+                    status.egress.as_ref(),
+                    proxy_env,
+                    crate::egress::auto_dns(&status.manifest),
+                );
                 let count = |stage: Stage| -> i64 {
                     cohorts
                         .iter()
@@ -701,6 +959,8 @@ impl Control {
                     need,
                     consent_version: consent::version(&status.manifest),
                     credentials,
+                    settings,
+                    egress_warnings,
                     status,
                 }
             })
@@ -724,6 +984,7 @@ impl Control {
         change: SourceChange,
     ) -> Result<SourceView, SourceError> {
         let manifest = self.manifest(id)?;
+        let priority = change.priority;
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
             let mut store = this.inner.store.lock().expect("store lock");
@@ -762,10 +1023,23 @@ impl Control {
                 Some(false) if current == SourceState::Enabled => Some(SourceState::Disabled),
                 _ => None,
             };
+            // A route keeps a source's traffic on the VPN: changing it
+            // needs the password, whatever the source's class.
+            if change.egress.is_some() && !change.password_confirmed {
+                return Err(SourceError::PasswordRequired);
+            }
+            let settings = settings_changes(&change, &this.policy(id)?)?;
             if let Some(p) = change.priority {
                 let key = format!("{PRIORITY_KEY}{}", manifest.id);
                 let value = format!("\"{}\"", priority_name(p));
                 store.set_settings_text(&[(key.as_str(), value.as_str())])?;
+            }
+            if !settings.is_empty() {
+                let changes: Vec<(SourceSetting, Option<&str>)> = settings
+                    .iter()
+                    .map(|(k, v)| (*k, Some(v.as_str())))
+                    .collect();
+                store.set_source_settings(id, &changes)?;
             }
             if let Some(state) = state {
                 if state == SourceState::Enabled {
@@ -783,7 +1057,7 @@ impl Control {
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;
-        if let Some(p) = change.priority {
+        if let Some(p) = priority {
             self.state().priorities.insert(id, p);
             self.inner.monitor.pool().set_weight(id, p.weight()).await;
         }
@@ -868,6 +1142,16 @@ impl Control {
         self.view(id).await
     }
 
+    fn policy(&self, id: SourceId) -> Result<lodestar_sources::Policy, SourceError> {
+        self.inner
+            .monitor
+            .sources()
+            .into_iter()
+            .find(|s| s.id == id)
+            .map(|s| s.policy)
+            .ok_or(SourceError::Unknown)
+    }
+
     fn manifest(&self, id: SourceId) -> Result<lodestar_sources::Manifest, SourceError> {
         self.inner
             .monitor
@@ -892,6 +1176,50 @@ impl Control {
     pub fn store(&self) -> Arc<Mutex<Store>> {
         self.inner.store.clone()
     }
+}
+
+/// The settings `change` writes, encoded and checked against the
+/// plugin's `policy`.
+fn settings_changes(
+    change: &SourceChange,
+    policy: &lodestar_sources::Policy,
+) -> Result<Vec<(SourceSetting, String)>, SourceError> {
+    let mut out = Vec::new();
+    if let Some(e) = &change.egress {
+        if let EgressSetting::Socks5(p) = e
+            && (!proxy_host_ok(&p.host) || p.port == 0)
+        {
+            return Err(SourceError::Invalid {
+                field: "egress.proxy",
+                reason: "the proxy isn't a host and port".into(),
+            });
+        }
+        out.push((SourceSetting::Egress, e.encode()));
+    }
+    if let Some(w) = &change.schedule {
+        if w.len() > MAX_WINDOWS {
+            return Err(SourceError::Invalid {
+                field: "schedule",
+                reason: format!("a schedule holds at most {MAX_WINDOWS} windows"),
+            });
+        }
+        out.push((SourceSetting::Schedule, encode_schedule(w)));
+    }
+    if let Some(n) = change.agents {
+        let max = policy.max_agents.max(1);
+        if n == 0 || n > max {
+            return Err(SourceError::Invalid {
+                field: "agents",
+                reason: if max == 1 {
+                    "this source runs one agent; it can't be changed".into()
+                } else {
+                    format!("this source runs 1 to {max} agents")
+                },
+            });
+        }
+        out.push((SourceSetting::Agents, n.to_string()));
+    }
+    Ok(out)
 }
 
 fn sample(inner: &Inner) {
@@ -1070,5 +1398,164 @@ mod tests {
         );
         assert_eq!(serde_json_str("high"), None);
         assert_eq!(intensity_name(Intensity::Aggressive), "aggressive");
+    }
+
+    #[test]
+    fn egress_settings_round_trip_and_refuse_junk() {
+        let socks = |host: &str, dns| {
+            EgressSetting::Socks5(ProxySpec {
+                host: host.into(),
+                port: 1080,
+                dns,
+            })
+        };
+        for e in [
+            EgressSetting::Direct,
+            socks("10.8.0.1", None),
+            socks("fd00::1", Some(SocksDns::Proxy)),
+            socks("gluetun", Some(SocksDns::Local)),
+        ] {
+            assert_eq!(EgressSetting::decode(&e.encode()), Some(e));
+        }
+        for bad in [
+            "",
+            "vpn",
+            "direct extra",
+            "socks5 h 0 auto",
+            "socks5 h 1080",
+            "socks5 h 1080 auto x",
+            "socks5 h 1080 dns",
+            "socks5 a/b 1080 auto",
+            "socks5 u@h 1080 auto",
+            "socks5 -h 1080 auto",
+            "socks5 127.1 1080 auto",
+            "socks5 0x7f000001 1080 auto",
+            "socks5 0.0.0.0 1080 auto",
+            "socks5 :: 1080 auto",
+            "socks5 239.1.1.1 1080 auto",
+            "interface wg0",
+        ] {
+            assert_eq!(EgressSetting::decode(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn schedules_round_trip_within_bounds() {
+        let w = vec![Window::new(60, 420), Window::new(1410, 15)];
+        assert_eq!(decode_schedule(&encode_schedule(&w)), Some(w));
+        assert_eq!(decode_schedule(""), Some(Vec::new()));
+        assert_eq!(decode_schedule("60-1440"), None);
+        assert_eq!(decode_schedule("60"), None);
+        assert_eq!(decode_schedule(&["1-2"; MAX_WINDOWS + 1].join(",")), None);
+    }
+
+    #[test]
+    fn settings_changes_check_agents_and_proxies() {
+        let strict = lodestar_sources::Policy::STRICT;
+        let wide = lodestar_sources::Policy {
+            max_agents: 4,
+            ..strict
+        };
+        let agents = |n| SourceChange {
+            agents: Some(n),
+            ..SourceChange::default()
+        };
+        assert!(settings_changes(&agents(1), &strict).is_ok());
+        for (n, p) in [(2, &strict), (0, &wide), (5, &wide)] {
+            assert!(
+                matches!(
+                    settings_changes(&agents(n), p),
+                    Err(SourceError::Invalid {
+                        field: "agents",
+                        ..
+                    })
+                ),
+                "{n}"
+            );
+        }
+        assert_eq!(
+            settings_changes(&agents(4), &wide).unwrap(),
+            [(SourceSetting::Agents, "4".to_string())]
+        );
+        let bad = SourceChange {
+            egress: Some(EgressSetting::Socks5(ProxySpec {
+                host: "a b".into(),
+                port: 1,
+                dns: None,
+            })),
+            ..SourceChange::default()
+        };
+        assert!(matches!(
+            settings_changes(&bad, &strict),
+            Err(SourceError::Invalid {
+                field: "egress.proxy",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn egress_warnings_follow_what_is_saved() {
+        use SocksDns::{Local, Proxy};
+        let socks = |host: &str, dns| {
+            Ok(EgressSetting::Socks5(ProxySpec {
+                host: host.into(),
+                port: 1080,
+                dns,
+            }))
+        };
+        let direct: SavedEgress = Ok(EgressSetting::Direct);
+        assert_eq!(
+            egress_warnings(&direct, None, true, Proxy),
+            [WARN_PROXY_ENV]
+        );
+        assert!(egress_warnings(&direct, None, false, Proxy).is_empty());
+        // Unreadable: refused, never direct, so no proxy-variable warning.
+        assert_eq!(
+            egress_warnings(&Err(Unreadable), None, true, Proxy),
+            [WARN_SETTING_UNREADABLE]
+        );
+        // A LAN literal: the trade is named whenever the proxy resolves
+        // names, chosen or by `auto`; not when Lodestar does.
+        for env in [true, false] {
+            for (dns, auto, warned) in [
+                (Some(Proxy), Local, true),
+                (None, Proxy, true),
+                (None, Local, false),
+                (Some(Local), Proxy, false),
+            ] {
+                let got = egress_warnings(&socks("192.168.1.5", dns), None, env, auto);
+                assert_eq!(got == [WARN_LAN_PROXY_DNS], warned, "{dns:?} {auto:?}");
+                assert_eq!(got.is_empty(), !warned);
+            }
+        }
+        // A public proxy, or a name not yet resolved: nothing to say.
+        assert!(egress_warnings(&socks("198.51.100.7", None), None, false, Proxy).is_empty());
+        let named = socks("gluetun", None);
+        assert!(egress_warnings(&named, None, false, Proxy).is_empty());
+        // Running on the saved setting: judged by where the name resolved.
+        let live = |setting: SavedEgress| crate::EgressLive {
+            status: lodestar_sources::EgressStatus {
+                plugin: "p".into(),
+                route: lodestar_sources::RouteKind::Socks5,
+                state: lodestar_sources::RouteState::Up,
+                counters: Default::default(),
+                notice: None,
+            },
+            route: Some(lodestar_sources::Egress::Socks5 {
+                proxy: "172.18.0.5:1080".parse().unwrap(),
+                dns: Proxy,
+            }),
+            setting,
+        };
+        assert_eq!(
+            egress_warnings(&named, Some(&live(named.clone())), false, Proxy),
+            [WARN_LAN_PROXY_DNS]
+        );
+        // The user changed it since the start: the saved setting wins, so
+        // the warning goes away at once, not at the next restart.
+        let fixed = socks("gluetun", Some(Local));
+        assert!(egress_warnings(&fixed, Some(&live(named.clone())), false, Proxy).is_empty());
+        assert!(egress_warnings(&direct, Some(&live(named)), false, Proxy).is_empty());
     }
 }

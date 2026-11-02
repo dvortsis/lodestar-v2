@@ -828,7 +828,7 @@ See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
 
 ## Source egress and kill switch (SRC-5, 2026-11-02)
 
-See [the decision](decisions/2026-11-02-SRC-5.md). `PluginEgress::status()` gives these per plugin; SRC-14 renders them. `route` is `direct`, `bind_address`, `interface` or `socks5`.
+See [the decision](decisions/2026-11-02-SRC-5.md). `PluginEgress::status()` gives these per running plugin, and `/metrics` renders them since SRC-14a ([decision](decisions/2026-11-02-SRC-14a.md)); a plugin that isn't running has no series. `route` is `direct`, `bind_address`, `interface` or `socks5`. `GET /sources` gives the same counts per source under `egress.live.counts`, with the down reason.
 
 | Series | Type | Meaning |
 | --- | --- | --- |

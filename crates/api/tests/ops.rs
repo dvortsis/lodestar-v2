@@ -16,9 +16,11 @@ use axum::extract::ConnectInfo;
 use axum::http::{Request, header};
 use lodestar_api::ops::{
     BoxFuture, ConsentClass, CrawlerRuntime, DhtStatus, ExternalAddress, FetchStatus, NetworkCheck,
-    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, SamplingBlocked, Source, SourceHealth,
-    SourceKind, SourceNeed, SourcePatch, SourcePriority, SourceState, StatsResponse,
+    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, SamplingBlocked, Source, SourceAgents,
+    SourceEgress, SourceHealth, SourceKind, SourceNeed, SourcePatch, SourcePriority,
+    SourceSchedule, SourceState, StatsResponse,
 };
+use lodestar_api::ops::{EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState};
 use lodestar_api::settings::{
     Imported, Saved, SectionValues, SettingSource, SettingValue, SettingsApi, SettingsBatch,
     SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
@@ -123,11 +125,32 @@ struct FakeOps {
 
 fn dht_source() -> Source {
     Source {
+        agents: SourceAgents {
+            count: 1,
+            enforced: false,
+            max: 4,
+        },
         consent: ConsentClass::None,
         consent_required: false,
         consent_version: String::new(),
         credentials: Vec::new(),
-        editable: vec!["enabled".into(), "priority".into()],
+        editable: ["agents", "egress", "enabled", "priority", "schedule"]
+            .map(String::from)
+            .to_vec(),
+        egress: SourceEgress {
+            live: Some(EgressLive {
+                counts: EgressCounts::default(),
+                notice: None,
+                reason: None,
+                state: EgressState::Direct,
+            }),
+            setting: Some(EgressSetting {
+                route: EgressRoute::Direct,
+                proxy: None,
+                dns: None,
+            }),
+            warnings: Vec::new(),
+        },
         enabled: true,
         endpoints: Vec::new(),
         health: SourceHealth {
@@ -141,14 +164,18 @@ fn dht_source() -> Source {
         kinds: vec![SourceKind::Discovery, SourceKind::PeerFinder],
         name: "Mainline DHT".into(),
         needs: None,
-        not_yet_editable: ["agents", "egress", "purge", "schedule"]
-            .map(String::from)
-            .to_vec(),
+        networks: vec!["bt".into()],
+        not_yet_editable: vec!["purge".into()],
         password_required: false,
         plugin: "dht".into(),
         priority: SourcePriority::Normal,
         restart_required: false,
         risk: RiskLevel::Low,
+        schedule: SourceSchedule {
+            default: Vec::new(),
+            enforced: false,
+            windows: Vec::new(),
+        },
         state: SourceState::Enabled,
         version: "0.0.0".into(),
     }
@@ -271,6 +298,25 @@ impl OpsApi for FakeOps {
                     SourceState::Disabled
                 };
                 s.restart_required = on != s.health.running;
+            }
+            if patch.egress.is_some() && !confirmed {
+                return Err(OpsError::PasswordRequired);
+            }
+            if let Some(n) = patch.agents {
+                if n > s.agents.max {
+                    return Err(OpsError::Invalid {
+                        code: "invalid_setting",
+                        field: "agents",
+                        message: "The setting wasn't saved: too many agents.".into(),
+                    });
+                }
+                s.agents.count = n;
+            }
+            if let Some(e) = patch.egress {
+                s.egress.setting = Some(e);
+            }
+            if let Some(w) = patch.schedule {
+                s.schedule.windows = w;
             }
             if let Some(p) = patch.priority {
                 s.priority = p;
@@ -456,13 +502,14 @@ fn req(method: &str, uri: &str, cookie: Option<&str>, body: Option<&str>) -> Req
 }
 
 /// Every route this module serves, with a body for the writes.
-const ROUTES: [(&str, &str, Option<&str>); 9] = [
+const ROUTES: [(&str, &str, Option<&str>); 10] = [
     ("GET", "/api/v1/stats", None),
     ("GET", "/api/v1/crawler", None),
     ("PATCH", "/api/v1/crawler", Some(r#"{"intensity":"low"}"#)),
     ("POST", "/api/v1/crawler/pause", Some("{}")),
     ("POST", "/api/v1/crawler/resume", Some("{}")),
     ("GET", "/api/v1/sources", None),
+    ("GET", "/api/v1/sources/0", None),
     ("PATCH", "/api/v1/sources/0", Some(r#"{"priority":"high"}"#)),
     ("GET", "/api/v1/network/check", None),
     ("POST", "/api/v1/network/check", Some("{}")),
@@ -710,7 +757,7 @@ async fn sources() {
     golden(
         &f,
         "source_not_editable",
-        req("PATCH", "/api/v1/sources/0", c, Some(r#"{"egress":"vpn"}"#)),
+        req("PATCH", "/api/v1/sources/0", c, Some(r#"{"purge":true}"#)),
     )
     .await;
     golden(
@@ -741,6 +788,134 @@ async fn sources() {
         req("PATCH", "/api/v1/sources/0", c, Some(r#"{"weight":7}"#)),
     )
     .await;
+}
+
+#[tokio::test]
+async fn source_settings() {
+    let f = fixture();
+    let cookie = session(&f).await;
+    let c = Some(cookie.as_str());
+    let one = golden(&f, "source_get", req("GET", "/api/v1/sources/0", c, None)).await;
+    assert_eq!(one["schedule"]["enforced"], json!(false));
+    assert_eq!(one["agents"]["enforced"], json!(false));
+    let (status, _) = send(&f, req("GET", "/api/v1/sources/9", c, None)).await;
+    assert_eq!(status, 404);
+    // Schedule and agents need no password; windows come back canonical.
+    let saved = send(
+        &f,
+        req(
+            "PATCH",
+            "/api/v1/sources/0",
+            c,
+            Some(r#"{"schedule":[" 01:00-07:00 ","23:30-00:15"],"agents":3}"#),
+        ),
+    )
+    .await;
+    assert_eq!(saved.0, 200, "{saved:?}");
+    let saved: Value = serde_json::from_str(&saved.1).unwrap();
+    assert_eq!(
+        saved["schedule"]["windows"],
+        json!(["01:00-07:00", "23:30-00:15"])
+    );
+    assert_eq!(saved["agents"]["count"], json!(3));
+    golden(
+        &f,
+        "source_schedule_invalid",
+        req(
+            "PATCH",
+            "/api/v1/sources/0",
+            c,
+            Some(r#"{"schedule":["1am-7am"]}"#),
+        ),
+    )
+    .await;
+    golden(
+        &f,
+        "source_agents_zero",
+        req("PATCH", "/api/v1/sources/0", c, Some(r#"{"agents":0}"#)),
+    )
+    .await;
+    // The interface and bind-address routes aren't offered (their DNS
+    // would leave outside them), password or not.
+    for route in ["interface", "bind_address"] {
+        let body =
+            format!(r#"{{"egress":{{"route":"{route}"}},"password":"correct horse battery"}}"#);
+        let e = golden(
+            &f,
+            &format!("source_egress_{route}"),
+            req("PATCH", "/api/v1/sources/0", c, Some(&body)),
+        )
+        .await;
+        assert_eq!(e["error"]["code"], json!("route_unavailable"));
+    }
+    // An egress change needs the password, and a wrong one is refused
+    // before the source is asked.
+    let socks = r#""egress":{"route":"socks5","proxy":"10.8.0.1:1080"}"#;
+    let e = golden(
+        &f,
+        "source_egress_password_required",
+        req(
+            "PATCH",
+            "/api/v1/sources/0",
+            c,
+            Some(&format!("{{{socks}}}")),
+        ),
+    )
+    .await;
+    assert_eq!(e["error"]["code"], json!("confirm_required"));
+    let (status, _) = send(
+        &f,
+        req(
+            "PATCH",
+            "/api/v1/sources/0",
+            c,
+            Some(&format!(r#"{{{socks},"password":"wrong"}}"#)),
+        ),
+    )
+    .await;
+    assert_ne!(status, 200);
+    assert_eq!(
+        f.ops.sources.lock().unwrap()[0]
+            .egress
+            .setting
+            .as_ref()
+            .map(|s| s.route),
+        Some(EgressRoute::Direct)
+    );
+    for unusable in ["0.0.0.0:1080", "[ff02::1]:1080"] {
+        let body = format!(
+            r#"{{"egress":{{"route":"socks5","proxy":"{unusable}"}},"password":"correct horse battery"}}"#
+        );
+        let (status, e) = send(&f, req("PATCH", "/api/v1/sources/0", c, Some(&body))).await;
+        assert_eq!(status, 400, "{unusable}: {e}");
+        assert!(e.contains("invalid_egress"), "{e}");
+    }
+    golden(
+        &f,
+        "source_egress_proxy_invalid",
+        req(
+            "PATCH",
+            "/api/v1/sources/0",
+            c,
+            Some(r#"{"egress":{"route":"socks5","proxy":"user:pass@10.8.0.1:1080"},"password":"correct horse battery"}"#),
+        ),
+    )
+    .await;
+    let saved = golden(
+        &f,
+        "source_egress_socks5",
+        req(
+            "PATCH",
+            "/api/v1/sources/0",
+            c,
+            Some(&format!(
+                r#"{{{socks},"password":"correct horse battery"}}"#
+            )),
+        ),
+    )
+    .await;
+    assert_eq!(saved["egress"]["setting"]["route"], json!("socks5"));
+    assert!(!saved.to_string().contains("correct horse"));
 }
 
 #[tokio::test]

@@ -73,7 +73,7 @@ pub use saved::{
     Alert, PromotedDue, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits,
 };
 pub use schema::latest_schema_version;
-pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
+pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceSetting, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
 pub use swarm::{
     SwarmRow, SwarmUpdate, TrackerCounts, TrackerRow, TrackerSample, swarm_flags, tracker_state,

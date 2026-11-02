@@ -536,6 +536,22 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_filter_rule_skipped_n,
 		m.settings_logging_ev_pipeline_filter_rule_skipped_h
 	],
+	'pipeline.source_egress_down': [
+		m.settings_logging_ev_pipeline_source_egress_down_n,
+		m.settings_logging_ev_pipeline_source_egress_down_h
+	],
+	'pipeline.source_egress_up': [
+		m.settings_logging_ev_pipeline_source_egress_up_n,
+		m.settings_logging_ev_pipeline_source_egress_up_h
+	],
+	'pipeline.source_proxy_env_ignored': [
+		m.settings_logging_ev_pipeline_source_proxy_env_ignored_n,
+		m.settings_logging_ev_pipeline_source_proxy_env_ignored_h
+	],
+	'pipeline.source_setting_unreadable': [
+		m.settings_logging_ev_pipeline_source_setting_unreadable_n,
+		m.settings_logging_ev_pipeline_source_setting_unreadable_h
+	],
 	'pipeline.source_not_started': [
 		m.settings_logging_ev_pipeline_source_not_started_n,
 		m.settings_logging_ev_pipeline_source_not_started_h

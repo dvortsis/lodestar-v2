@@ -43,9 +43,10 @@ use crate::ApiState;
 use crate::auth;
 pub use crate::dto::ops::{
     ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialsPatch,
-    DhtStatus, ExternalAddress, FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel,
-    SamplingBlocked, Source, SourceHealth, SourceKind, SourceList, SourceNeed, SourcePatch,
-    SourcePriority, SourceState, StatsResponse,
+    DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress,
+    FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel, SamplingBlocked, SocksDns,
+    Source, SourceAgents, SourceEgress, SourceHealth, SourceKind, SourceList, SourceNeed,
+    SourcePatch, SourcePriority, SourceSchedule, SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;
@@ -65,6 +66,7 @@ type Hub = Option<Extension<Arc<EventHub>>>;
     pause,
     resume,
     sources,
+    source,
     patch_source,
     patch_source_credentials,
     network,
@@ -93,10 +95,12 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
     fn sync_crawler(&self) -> BoxFuture<'_, ()>;
     fn stats(&self) -> BoxFuture<'_, StatsResponse>;
     fn sources(&self) -> BoxFuture<'_, Result<Vec<Source>, OpsError>>;
-    /// Applies `patch` (its not-yet-editable fields already refused).
+    /// Applies `patch` (its not-yet-editable fields already refused, its
+    /// egress and schedule already checked, its schedule canonical).
     /// `password_confirmed` says the route checked `patch.password`; the
-    /// implementation refuses to enable a Restricted or Overlay source
-    /// without it ([`OpsError::PasswordRequired`]).
+    /// implementation refuses to enable a Restricted or Overlay source,
+    /// or to change any source's egress, without it
+    /// ([`OpsError::PasswordRequired`]).
     fn patch_source(
         &self,
         id: u8,
@@ -131,6 +135,15 @@ pub enum OpsError {
     /// A credential change was refused; the reason names a rule, never a
     /// value.
     BadCredential(String),
+    /// A setting was refused: `code` and `field` name it, `message`
+    /// says why (never quoting a secret).
+    Invalid {
+        code: &'static str,
+        field: &'static str,
+        message: String,
+    },
+    /// The interface or bind-address route, which isn't offered.
+    RouteUnavailable,
     /// The network check was restarted too recently.
     RateLimited {
         retry_after_secs: u64,
@@ -179,6 +192,12 @@ impl From<OpsError> for ApiError {
                 format!("The credentials weren't saved: {reason}."),
             )
             .field("credentials"),
+            OpsError::Invalid {
+                code,
+                field,
+                message,
+            } => ApiError::bad_request(code, message).field(field),
+            OpsError::RouteUnavailable => route_unavailable(),
             OpsError::RateLimited { retry_after_secs } => ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
@@ -206,7 +225,7 @@ pub fn routes() -> Router<ApiState> {
             .route("/crawler/pause", post(pause))
             .route("/crawler/resume", post(resume))
             .route("/sources", get(sources))
-            .route("/sources/{id}", axum::routing::patch(patch_source))
+            .route("/sources/{id}", get(source).patch(patch_source))
             .route(
                 "/sources/{id}/credentials",
                 axum::routing::patch(patch_source_credentials),
@@ -404,6 +423,181 @@ pub(crate) async fn sources(State(s): State<ApiState>) -> ApiResult<Json<SourceL
     Ok(Json(SourceList { sources }))
 }
 
+/// One source, as `GET /sources` lists it.
+#[utoipa::path(
+    operation_id = "getSource",
+    get,
+    path = "/sources/{id}",
+    tag = "crawler",
+    params(("id" = u8, Path, description = "The source's id, as `GET /sources` lists it.")),
+    responses((status = 200, body = Source))
+)]
+pub(crate) async fn source(
+    State(s): State<ApiState>,
+    Path(id): Path<u8>,
+) -> ApiResult<Json<Source>> {
+    ops(&s)?
+        .sources()
+        .await?
+        .into_iter()
+        .find(|s| s.id == id)
+        .map(Json)
+        .ok_or_else(unknown_source)
+}
+
+/// Most windows a source's schedule holds.
+pub const MAX_WINDOWS: usize = 8;
+
+/// A schedule window, `HH:MM-HH:MM`, as minutes since local midnight
+/// (`start`, `end`); `24:00` isn't a time, so `00:00` ends a day.
+pub fn parse_window(text: &str) -> Option<(u16, u16)> {
+    fn minute(t: &str) -> Option<u16> {
+        let (h, m) = t.split_once(':')?;
+        if h.len() != 2 || m.len() != 2 || !(h.bytes().chain(m.bytes())).all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let (h, m): (u16, u16) = (h.parse().ok()?, m.parse().ok()?);
+        (h < 24 && m < 60).then_some(h * 60 + m)
+    }
+    let (a, b) = text.split_once('-')?;
+    Some((minute(a)?, minute(b)?))
+}
+
+/// The text of a window [`parse_window`] reads.
+pub fn window_text(start: u16, end: u16) -> String {
+    format!(
+        "{:02}:{:02}-{:02}:{:02}",
+        start / 60,
+        start % 60,
+        end / 60,
+        end % 60
+    )
+}
+
+/// A SOCKS5 proxy's `host:port`: a DNS name, an IPv4 literal or a
+/// bracketed IPv6 literal, and a port from 1. The host comes back without
+/// brackets.
+pub fn parse_proxy(text: &str) -> Option<(String, u16)> {
+    let (host, port) = text.rsplit_once(':')?;
+    if port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let port: u16 = port.parse().ok().filter(|p| *p != 0)?;
+    // Not the unspecified address (this machine), multicast or broadcast.
+    let usable = |ip: std::net::IpAddr| {
+        !ip.is_unspecified()
+            && !ip.is_multicast()
+            && ip != std::net::IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
+    };
+    if let Some(v6) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return v6
+            .parse::<std::net::Ipv6Addr>()
+            .ok()
+            .filter(|a| usable((*a).into()))
+            .map(|a| (a.to_string(), port));
+    }
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        return usable(v4.into()).then(|| (host.to_string(), port));
+    }
+    // A DNS name: labels of 1–63 letters, digits and hyphens (not at
+    // either end), 253 bytes in all, not all digits.
+    let name = host.strip_suffix('.').unwrap_or(host);
+    let ok = !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        // Not a number in disguise: an all-digit or `0x` last label is
+        // an address to `getaddrinfo` (`127.1`, `0x7f000001`).
+        && !name.split('.').next_back().is_some_and(|l| {
+            l.bytes().all(|b| b.is_ascii_digit()) || l.to_ascii_lowercase().starts_with("0x")
+        });
+    ok.then(|| (name.to_ascii_lowercase(), port))
+}
+
+/// `409 route_unavailable`: the interface and bind-address routes.
+fn route_unavailable() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "route_unavailable",
+        "Choosing a network interface or a local address isn't offered yet: DNS lookups \
+         would still leave outside it. Run Lodestar's whole container through your VPN, or \
+         use the VPN's SOCKS5 proxy.",
+    )
+    .field("egress.route")
+}
+
+fn invalid(code: &'static str, field: &'static str, message: &'static str) -> ApiError {
+    ApiError::bad_request(code, message).field(field)
+}
+
+/// Checks the settings part of `body` and puts its schedule in canonical
+/// form, so the implementation stores what it was given only once it's
+/// valid.
+fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
+    if let Some(e) = &body.egress {
+        match e.route {
+            EgressRoute::Interface | EgressRoute::BindAddress => {
+                return Err(route_unavailable());
+            }
+            EgressRoute::Direct if e.proxy.is_some() || e.dns.is_some() => {
+                return Err(invalid(
+                    "invalid_egress",
+                    if e.proxy.is_some() {
+                        "egress.proxy"
+                    } else {
+                        "egress.dns"
+                    },
+                    "A direct route takes no proxy or DNS choice.",
+                ));
+            }
+            EgressRoute::Direct => {}
+            EgressRoute::Socks5 => {
+                if e.proxy.as_deref().and_then(parse_proxy).is_none() {
+                    return Err(invalid(
+                        "invalid_egress",
+                        "egress.proxy",
+                        "Give the SOCKS5 proxy as host:port, such as 10.8.0.1:1080 or \
+                         gluetun:1080.",
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(windows) = &mut body.schedule {
+        if windows.len() > MAX_WINDOWS {
+            return Err(invalid(
+                "invalid_schedule",
+                "schedule",
+                "A schedule holds at most 8 windows.",
+            ));
+        }
+        for w in windows.iter_mut() {
+            let Some((start, end)) = parse_window(w.trim()) else {
+                return Err(invalid(
+                    "invalid_schedule",
+                    "schedule",
+                    "Give each window as HH:MM-HH:MM, such as 01:00-07:00.",
+                ));
+            };
+            *w = window_text(start, end);
+        }
+    }
+    if body.agents == Some(0) {
+        return Err(invalid(
+            "invalid_agents",
+            "agents",
+            "A source needs at least one agent; disable it to stop it.",
+        ));
+    }
+    Ok(())
+}
+
 /// Enables or disables a source, or sets its priority. A priority
 /// applies at once; enabling or disabling at the next start. Enabling
 /// checks the source's class (§18.7, its `needs`): an `external`,
@@ -412,8 +606,11 @@ pub(crate) async fn sources(State(s): State<ApiState>) -> ApiResult<Json<SourceL
 /// version is acknowledged; enabling a `restricted` or `overlay` source
 /// also needs the admin `"password"`, every time (`428 confirm_required`); an
 /// `account` source needs its credentials stored
-/// (`409 credentials_required`). Agents, egress, purge and the schedule
-/// arrive in v0.6 (`409 not_editable`).
+/// (`409 credentials_required`). Agents, egress and the schedule apply
+/// at the next start; changing egress needs the admin `"password"`
+/// (`428 confirm_required`), and the `interface` and `bind_address`
+/// routes are refused (`409 route_unavailable`). Purge isn't editable yet
+/// (`409 not_editable`).
 #[utoipa::path(
     operation_id = "patchSource",
     patch,
@@ -436,21 +633,23 @@ pub(crate) async fn patch_source(
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "not_editable",
-            "This can't be changed yet; it arrives with the sources settings in v0.6.",
+            "This can't be changed yet.",
         )
         .field(field));
     }
-    // The password, when sent with an enable, is checked before anything
-    // is read or written. Whether the source needs it (Restricted and
-    // Overlay, every time) is the implementation's to decide.
+    check_settings(&mut body)?;
+    // The password is checked before anything is read or written. A
+    // route change always needs it: the route is what keeps a source's
+    // traffic on the VPN. With an enable, whether the source needs it
+    // (Restricted and Overlay, every time) is the implementation's to
+    // decide.
     let password = body.password.take();
-    let confirmed =
-        if body.enabled == Some(true) && password.as_deref().is_some_and(|p| !p.is_empty()) {
-            auth::confirm_fresh_password(&s.auth, ip, password).await?;
-            true
-        } else {
-            false
-        };
+    let needs_check = body.egress.is_some()
+        || (body.enabled == Some(true) && password.as_deref().is_some_and(|p| !p.is_empty()));
+    if needs_check {
+        auth::confirm_fresh_password(&s.auth, ip, password).await?;
+    }
+    let confirmed = needs_check;
     Ok(Json(ops.patch_source(id, body, confirmed).await?))
 }
 
@@ -626,9 +825,126 @@ mod tests {
         let p: SourcePatch = serde_json::from_value(json!({ "enabled": true })).unwrap();
         assert_eq!(p.not_yet_editable(), None);
         let p: SourcePatch =
-            serde_json::from_value(json!({ "priority": "low", "schedule": "01:00-07:00" }))
-                .unwrap();
-        assert_eq!(p.not_yet_editable(), Some("schedule"));
+            serde_json::from_value(json!({ "priority": "low", "purge": true })).unwrap();
+        assert_eq!(p.not_yet_editable(), Some("purge"));
         assert!(serde_json::from_value::<SourcePatch>(json!({ "weight": 3 })).is_err());
+        // Nothing turns verification on (it waits for a per-source cap).
+        assert!(
+            serde_json::from_value::<SourcePatch>(json!({ "verify_unverified": true })).is_err()
+        );
+        // A schedule is a list of windows, not one string.
+        assert!(
+            serde_json::from_value::<SourcePatch>(json!({ "schedule": "01:00-07:00" })).is_err()
+        );
+    }
+
+    #[test]
+    fn windows_parse_and_print() {
+        assert_eq!(parse_window("01:00-07:00"), Some((60, 420)));
+        assert_eq!(parse_window("22:30-00:00"), Some((1350, 0)));
+        assert_eq!(parse_window("23:59-00:01"), Some((1439, 1)));
+        for bad in [
+            "",
+            "1:00-07:00",
+            "24:00-01:00",
+            "01:60-02:00",
+            "01:00",
+            "01:00-",
+            "+1:00-02:00",
+            "01:00-02:00-03:00",
+            "０1:00-02:00",
+            "01:00 - 02:00",
+        ] {
+            assert_eq!(parse_window(bad), None, "{bad}");
+        }
+        assert_eq!(window_text(1350, 0), "22:30-00:00");
+        for m in [0u16, 59, 60, 1439] {
+            assert_eq!(parse_window(&window_text(m, m)), Some((m, m)));
+        }
+    }
+
+    #[test]
+    fn proxies_parse() {
+        assert_eq!(
+            parse_proxy("10.8.0.1:1080"),
+            Some(("10.8.0.1".into(), 1080))
+        );
+        assert_eq!(
+            parse_proxy("[fd00::1]:1080"),
+            Some(("fd00::1".into(), 1080))
+        );
+        assert_eq!(parse_proxy("Gluetun:1080"), Some(("gluetun".into(), 1080)));
+        assert_eq!(
+            parse_proxy("proxy.example.net.:443"),
+            Some(("proxy.example.net".into(), 443))
+        );
+        for bad in [
+            "",
+            "10.8.0.1",
+            "10.8.0.1:0",
+            "10.8.0.1:65536",
+            "10.8.0.1:+80",
+            "fd00::1:1080",
+            "[fd00::1]",
+            "[10.0.0.1]:80",
+            "-a:80",
+            "a_b:80",
+            "a b:80",
+            "user@host:80",
+            "host/x:80",
+            "1.2.3:80",
+            "127.1:80",
+            "0x7f000001:80",
+            "0.0.0.0:1080",
+            "[::]:1080",
+            "224.0.0.1:1080",
+            "[ff02::1]:1080",
+            "255.255.255.255:1080",
+            "999.1.1.1:80",
+            ":80",
+        ] {
+            assert_eq!(parse_proxy(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn settings_are_checked_and_canonical() {
+        let patch = |v: Value| serde_json::from_value::<SourcePatch>(v).unwrap();
+        let code = |v: Value| check_settings(&mut patch(v)).unwrap_err().code();
+        assert_eq!(
+            code(json!({ "egress": { "route": "interface" } })),
+            "route_unavailable"
+        );
+        assert_eq!(
+            code(json!({ "egress": { "route": "bind_address" } })),
+            "route_unavailable"
+        );
+        assert_eq!(
+            code(json!({ "egress": { "route": "socks5" } })),
+            "invalid_egress"
+        );
+        assert_eq!(
+            code(json!({ "egress": { "route": "direct", "dns": "local" } })),
+            "invalid_egress"
+        );
+        assert_eq!(code(json!({ "schedule": ["1-2"] })), "invalid_schedule");
+        assert_eq!(
+            code(json!({ "schedule": vec!["01:00-02:00"; 9] })),
+            "invalid_schedule"
+        );
+        assert_eq!(code(json!({ "agents": 0 })), "invalid_agents");
+        // An unknown key inside egress is refused, not ignored.
+        assert!(
+            serde_json::from_value::<SourcePatch>(
+                json!({ "egress": { "route": "direct", "via": "x" } })
+            )
+            .is_err()
+        );
+        let mut p = patch(json!({
+            "schedule": [" 01:00-07:00 "],
+            "egress": { "route": "socks5", "proxy": "gluetun:1080" }
+        }));
+        check_settings(&mut p).unwrap();
+        assert_eq!(p.schedule.unwrap(), ["01:00-07:00"]);
     }
 }

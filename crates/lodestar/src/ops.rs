@@ -11,9 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use lodestar_api::ops::{
-    BoxFuture, ConsentClass, CrawlerRuntime, DhtStatus, ExternalAddress, FetchStatus, NetworkCheck,
-    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, SamplingBlocked, Secret, Source,
-    SourceHealth, SourceKind, SourceNeed, SourcePatch, SourcePriority, SourceState, StatsResponse,
+    BoxFuture, ConsentClass, CrawlerRuntime, DhtStatus, EgressCounts, EgressLive, EgressRoute,
+    EgressSetting, EgressState, ExternalAddress, FetchStatus, NetworkCheck, OpsApi, OpsError,
+    PortMapping, ReachReason, RiskLevel, SamplingBlocked, Secret, SocksDns, Source, SourceAgents,
+    SourceEgress, SourceHealth, SourceKind, SourceNeed, SourcePatch, SourcePriority,
+    SourceSchedule, SourceState, StatsResponse, parse_proxy, parse_window, window_text,
 };
 use lodestar_dht::node::{NodeHandle, StatsSnapshot};
 use lodestar_pipeline::Monitor;
@@ -21,16 +23,19 @@ use lodestar_pipeline::control::{
     self, Control, REACH_MIN_SECS, REACH_WINDOW_SECS, SourceChange, SourceError, SourceView,
 };
 use lodestar_sources::consent::{self as consent_rules, Need, SourceCredentials};
-use lodestar_sources::{Consent, Kind, Priority, Risk};
+use lodestar_sources::{Consent, Kind, Network, Priority, ProxySpec, Risk, RouteState, Window};
 use lodestar_store::SourceId;
 
 use crate::http::SearchState;
 use crate::settings::crawler::Crawler;
 
-/// What a source's `PATCH` changes now, and what waits for v0.6.
-/// Credentials have their own route, `PATCH /sources/{id}/credentials`.
-const EDITABLE: [&str; 2] = ["enabled", "priority"];
-const NOT_YET_EDITABLE: [&str; 4] = ["agents", "egress", "purge", "schedule"];
+/// What a source's `PATCH` changes now, and what waits for a later slice
+/// (purge, SRC-14b). Credentials have their own route,
+/// `PATCH /sources/{id}/credentials`.
+const EDITABLE: [&str; 5] = ["agents", "egress", "enabled", "priority", "schedule"];
+const NOT_YET_EDITABLE: [&str; 1] = ["purge"];
+// The API's input bound and the stored bound are one number.
+const _: () = assert!(lodestar_api::ops::MAX_WINDOWS == control::MAX_WINDOWS);
 /// How long the data directory's size is reused before it's measured
 /// again (it walks the directory).
 const SIZE_TTL: Duration = Duration::from_secs(30);
@@ -236,6 +241,83 @@ fn priority_back(p: SourcePriority) -> Priority {
     }
 }
 
+fn windows(w: &[Window]) -> Vec<String> {
+    w.iter().map(|w| window_text(w.start, w.end)).collect()
+}
+
+fn egress_setting(e: &control::EgressSetting) -> EgressSetting {
+    match e {
+        control::EgressSetting::Direct => EgressSetting {
+            route: EgressRoute::Direct,
+            proxy: None,
+            dns: None,
+        },
+        control::EgressSetting::Socks5(p) => EgressSetting {
+            route: EgressRoute::Socks5,
+            proxy: Some(match p.host.parse::<std::net::Ipv6Addr>() {
+                Ok(_) => format!("[{}]:{}", p.host, p.port),
+                Err(_) => format!("{}:{}", p.host, p.port),
+            }),
+            dns: p.dns.map(|d| match d {
+                lodestar_sources::SocksDns::Proxy => SocksDns::Proxy,
+                lodestar_sources::SocksDns::Local => SocksDns::Local,
+            }),
+        },
+    }
+}
+
+/// The route's checked setting back as the pipeline's (the API refused
+/// the interface and bind-address routes, and checked the proxy).
+fn egress_back(e: EgressSetting) -> Result<control::EgressSetting, OpsError> {
+    let invalid = |m: &str| OpsError::Invalid {
+        code: "invalid_egress",
+        field: "egress",
+        message: m.to_string(),
+    };
+    match e.route {
+        EgressRoute::Direct => Ok(control::EgressSetting::Direct),
+        EgressRoute::Socks5 => {
+            let (host, port) = e
+                .proxy
+                .as_deref()
+                .and_then(parse_proxy)
+                .ok_or_else(|| invalid("Give the SOCKS5 proxy as host:port."))?;
+            Ok(control::EgressSetting::Socks5(ProxySpec {
+                host,
+                port,
+                dns: e.dns.map(|d| match d {
+                    SocksDns::Proxy => lodestar_sources::SocksDns::Proxy,
+                    SocksDns::Local => lodestar_sources::SocksDns::Local,
+                }),
+            }))
+        }
+        EgressRoute::Interface | EgressRoute::BindAddress => Err(OpsError::RouteUnavailable),
+    }
+}
+
+fn egress_live(l: &lodestar_pipeline::EgressLive) -> EgressLive {
+    let c = l.status.counters;
+    let (state, reason) = match l.status.state {
+        _ if l.status.route == lodestar_sources::RouteKind::Direct => (EgressState::Direct, None),
+        RouteState::Unchecked => (EgressState::Unchecked, None),
+        RouteState::Up => (EgressState::Up, None),
+        RouteState::Down(r) => (EgressState::Down, Some(r.to_string())),
+    };
+    EgressLive {
+        counts: EgressCounts {
+            answered: c.answered,
+            kill_switch_aborts: c.kill_switch_aborts,
+            kill_switch_refusals: c.kill_switch_refusals,
+            policy_refusals: c.policy_refusals,
+            transport_failures: c.transport_failures,
+            trips: c.trips,
+        },
+        notice: l.status.notice.map(String::from),
+        reason,
+        state,
+    }
+}
+
 fn source(v: SourceView) -> Source {
     let m = &v.status.manifest;
     let state = match v.state {
@@ -245,12 +327,23 @@ fn source(v: SourceView) -> Source {
         lodestar_store::SourceState::Purged => SourceState::Purged,
     };
     let enabled = state == SourceState::Enabled;
+    let policy = &v.status.policy;
     Source {
+        agents: SourceAgents {
+            count: v.settings.agents.unwrap_or(1),
+            enforced: false,
+            max: policy.max_agents.max(1),
+        },
         consent: consent(m.consent),
         consent_required: consent_rules::needs_ack(m.consent),
         consent_version: v.consent_version.clone(),
         credentials: v.credentials.clone(),
         editable: EDITABLE.map(String::from).to_vec(),
+        egress: SourceEgress {
+            live: v.status.egress.as_ref().map(egress_live),
+            setting: v.settings.egress.as_ref().ok().map(egress_setting),
+            warnings: v.egress_warnings.iter().map(|w| w.to_string()).collect(),
+        },
         enabled,
         endpoints: m
             .endpoints
@@ -278,6 +371,20 @@ fn source(v: SourceView) -> Source {
             })
             .collect(),
         name: m.name.to_string(),
+        networks: m
+            .networks
+            .iter()
+            .map(|n| {
+                match n {
+                    Network::Bt => "bt",
+                    Network::BtI2p => "bt_i2p",
+                    Network::Ed2k => "ed2k",
+                    Network::Ipfs => "ipfs",
+                    Network::Usenet => "usenet",
+                }
+                .to_string()
+            })
+            .collect(),
         needs: v.need.map(|n| match n {
             Need::Endpoints => SourceNeed::EndpointsAck,
             Need::Credentials => SourceNeed::Credentials,
@@ -292,6 +399,15 @@ fn source(v: SourceView) -> Source {
             Risk::Low => RiskLevel::Low,
             Risk::Medium => RiskLevel::Medium,
             Risk::High => RiskLevel::High,
+        },
+        schedule: SourceSchedule {
+            default: windows(policy.schedule.0),
+            enforced: false,
+            windows: v
+                .settings
+                .schedule
+                .as_deref()
+                .map_or_else(|| windows(policy.schedule.0), windows),
         },
         state,
         version: v.version,
@@ -309,6 +425,17 @@ fn source_error(e: SourceError) -> OpsError {
         SourceError::CredentialsRequired => OpsError::CredentialsRequired,
         SourceError::Credential(r) => OpsError::BadCredential(r.to_string()),
         SourceError::Sealing => OpsError::Internal("the credential key couldn't be read".into()),
+        // One code per field, whichever layer refused it.
+        SourceError::Invalid { field, reason } => OpsError::Invalid {
+            code: match field.split('.').next() {
+                Some("agents") => "invalid_agents",
+                Some("schedule") => "invalid_schedule",
+                Some("egress") => "invalid_egress",
+                _ => "invalid_setting",
+            },
+            field,
+            message: format!("The setting wasn't saved: {reason}."),
+        },
         SourceError::Store(e) => internal(e),
     }
 }
@@ -403,6 +530,21 @@ impl OpsApi for Ops {
                 consent: patch.consent.map(consent_back),
                 consent_version: patch.consent_version,
                 password_confirmed,
+                egress: patch.egress.map(egress_back).transpose()?,
+                schedule: patch
+                    .schedule
+                    .map(|w| {
+                        w.iter()
+                            .map(|t| parse_window(t).map(|(a, b)| Window::new(a, b)))
+                            .collect::<Option<Vec<_>>>()
+                            .ok_or(OpsError::Invalid {
+                                code: "invalid_schedule",
+                                field: "schedule",
+                                message: "Give each window as HH:MM-HH:MM.".into(),
+                            })
+                    })
+                    .transpose()?,
+                agents: patch.agents,
             };
             self.control
                 .update_source(id, change)

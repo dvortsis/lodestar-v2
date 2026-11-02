@@ -5749,11 +5749,51 @@
       }
     },
     "/sources/{id}": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "One source, as `GET /sources` lists it.",
+        "operationId": "getSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The source's id, as `GET /sources` lists it.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
       "patch": {
         "tags": [
           "crawler"
         ],
-        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; enabling a `restricted` or `overlay` source\nalso needs the admin `\"password\"`, every time (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress, purge and the schedule\narrive in v0.6 (`409 not_editable`).",
+        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; enabling a `restricted` or `overlay` source\nalso needs the admin `\"password\"`, every time (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress and the schedule apply\nat the next start; changing egress needs the admin `\"password\"`\n(`428 confirm_required`), and the `interface` and `bind_address`\nroutes are refused (`409 route_unavailable`). Purge isn't editable yet\n(`409 not_editable`).",
         "operationId": "patchSource",
         "parameters": [
           {
@@ -18358,17 +18398,20 @@
         "type": "object",
         "description": "One source plugin of this build.",
         "required": [
+          "agents",
           "consent",
           "consent_required",
           "consent_version",
           "credentials",
           "editable",
+          "egress",
           "enabled",
           "endpoints",
           "health",
           "id",
           "kinds",
           "name",
+          "networks",
           "not_yet_editable",
           "needs",
           "password_required",
@@ -18376,10 +18419,37 @@
           "priority",
           "restart_required",
           "risk",
+          "schedule",
           "state",
           "version"
         ],
         "properties": {
+          "agents": {
+            "type": "object",
+            "description": "A source's concurrency, in the plugin's own unit (§18.4).",
+            "required": [
+              "count",
+              "enforced",
+              "max"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "enforced": {
+                "type": "boolean",
+                "description": "Whether the running source follows `count`. Always false in this\nversion: it's saved and shown, and the scheduler applies it in a\nlater version. Label it \"not active yet\"."
+              },
+              "max": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The most the plugin allows; 1 means it can't be changed.",
+                "minimum": 0
+              }
+            }
+          },
           "consent": {
             "type": "string",
             "description": "What enabling a source requires (§18.7).",
@@ -18412,6 +18482,167 @@
               "type": "string"
             },
             "description": "Fields `PATCH /sources/{id}` changes now."
+          },
+          "egress": {
+            "type": "object",
+            "description": "A source's egress: what's set, how the running source's route is\ndoing, and warnings.",
+            "required": [
+              "live",
+              "setting",
+              "warnings"
+            ],
+            "properties": {
+              "live": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "description": "A running source's route, as its kill switch sees it.",
+                    "required": [
+                      "counts",
+                      "notice",
+                      "reason",
+                      "state"
+                    ],
+                    "properties": {
+                      "counts": {
+                        "type": "object",
+                        "description": "Counts since the source started (`source_egress_*` in\n`docs/metrics.md`).",
+                        "required": [
+                          "answered",
+                          "kill_switch_aborts",
+                          "kill_switch_refusals",
+                          "policy_refusals",
+                          "transport_failures",
+                          "trips"
+                        ],
+                        "properties": {
+                          "answered": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "Requests that got an HTTP answer.",
+                            "minimum": 0
+                          },
+                          "kill_switch_aborts": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "Requests abandoned in flight because the route went down.",
+                            "minimum": 0
+                          },
+                          "kill_switch_refusals": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "Requests refused before sending because the route was down.",
+                            "minimum": 0
+                          },
+                          "policy_refusals": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "Requests refused by the address checks or the host list.",
+                            "minimum": 0
+                          },
+                          "transport_failures": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "Requests that failed to connect, timed out or were too large.",
+                            "minimum": 0
+                          },
+                          "trips": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "Times the route went down.",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "notice": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "What you should know about this route's privacy; null when\nnothing."
+                      },
+                      "reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Why it's down; null when it isn't."
+                      },
+                      "state": {
+                        "type": "string",
+                        "description": "The live state of a source's route.",
+                        "enum": [
+                          "direct",
+                          "unchecked",
+                          "up",
+                          "down"
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "description": "The running source's route; null when it isn't running (a change\napplies at the next start)."
+              },
+              "setting": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "description": "A source's egress setting.",
+                    "required": [
+                      "route"
+                    ],
+                    "properties": {
+                      "dns": {
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "description": "Who resolves names on a SOCKS5 route.",
+                            "enum": [
+                              "proxy",
+                              "local"
+                            ]
+                          }
+                        ],
+                        "description": "For `socks5`: who resolves names. Left out, it's `proxy` for a\nsource that only reaches its built-in sites, so lookups stay inside\nthe tunnel, and `local` for a source whose sites you enter, so a\npublic name can't reach devices on the proxy's network."
+                      },
+                      "proxy": {
+                        "type": "string",
+                        "description": "For `socks5`: the proxy as `host:port` (a name, an IPv4 address or\na bracketed IPv6 address). A name is resolved when the source\nstarts."
+                      },
+                      "route": {
+                        "type": "string",
+                        "description": "How a source's traffic leaves (§18.4, §18.7).",
+                        "enum": [
+                          "direct",
+                          "socks5",
+                          "interface",
+                          "bind_address"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false,
+                    "example": {
+                      "proxy": "10.8.0.1:1080",
+                      "route": "socks5"
+                    }
+                  }
+                ],
+                "description": "What's saved; null when it can't be read (saved by a newer\nversion, or damaged). An unreadable setting is never taken as\ndirect: the source's requests are refused until you set its route\nagain."
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Things to fix or know, such as `HTTPS_PROXY` being set while the\nsource connects directly (source plugins never use it)."
+              }
+            }
           },
           "enabled": {
             "type": "boolean",
@@ -18458,12 +18689,19 @@
             ],
             "description": "What enabling it still needs; null when enabling is a toggle."
           },
+          "networks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The networks it reaches, such as `bt`, `bt_i2p`, `ed2k`,\n`ipfs` or `usenet` (§18.6)."
+          },
           "not_yet_editable": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Fields planned for the v0.6 sources epic (agents, egress, purge,\nschedule): listed so the UI can show them, refused by `PATCH`."
+            "description": "Fields planned for a later slice (`purge`): listed so the UI can\nshow them, refused by `PATCH`."
           },
           "password_required": {
             "type": "boolean",
@@ -18494,6 +18732,35 @@
               "medium",
               "high"
             ]
+          },
+          "schedule": {
+            "type": "object",
+            "description": "When a source may run (§18.4).",
+            "required": [
+              "default",
+              "enforced",
+              "windows"
+            ],
+            "properties": {
+              "default": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The plugin's own windows, which apply when you haven't set any."
+              },
+              "enforced": {
+                "type": "boolean",
+                "description": "Whether the running source keeps to `windows`. Always false in\nthis version: they're saved and shown, and the scheduler applies\nthem in a later version. Label them \"not active yet\"."
+              },
+              "windows": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The daily windows, as `HH:MM-HH:MM` in the server's local time (an\nend at or before the start wraps past midnight). Empty: any time."
+              }
+            }
           },
           "state": {
             "type": "string",
@@ -18579,14 +18846,41 @@
         "example": {
           "sources": [
             {
+              "agents": {
+                "count": 1,
+                "enforced": false,
+                "max": 1
+              },
               "consent": "none",
               "consent_required": false,
               "consent_version": "",
               "credentials": [],
               "editable": [
+                "agents",
+                "egress",
                 "enabled",
-                "priority"
+                "priority",
+                "schedule"
               ],
+              "egress": {
+                "live": {
+                  "counts": {
+                    "answered": 0,
+                    "kill_switch_aborts": 0,
+                    "kill_switch_refusals": 0,
+                    "policy_refusals": 0,
+                    "transport_failures": 0,
+                    "trips": 0
+                  },
+                  "notice": null,
+                  "reason": null,
+                  "state": "direct"
+                },
+                "setting": {
+                  "route": "direct"
+                },
+                "warnings": []
+              },
               "enabled": true,
               "endpoints": [],
               "health": {
@@ -18603,17 +18897,22 @@
               ],
               "name": "Mainline DHT",
               "needs": null,
+              "networks": [
+                "bt"
+              ],
               "not_yet_editable": [
-                "agents",
-                "egress",
-                "purge",
-                "schedule"
+                "purge"
               ],
               "password_required": false,
               "plugin": "dht",
               "priority": "normal",
               "restart_required": false,
               "risk": "low",
+              "schedule": {
+                "default": [],
+                "enforced": false,
+                "windows": []
+              },
               "state": "enabled",
               "version": "0.0.0"
             }
@@ -18625,7 +18924,10 @@
         "description": "`PATCH /sources/{id}`. Fields left out keep their values. A new\npriority applies at once; enabling or disabling takes effect at the\nnext start (`restart_required`).",
         "properties": {
           "agents": {
-            "description": "Not editable before v0.6: refused with `409 not_editable`."
+            "type": "integer",
+            "format": "int32",
+            "description": "Its concurrency, 1 to its `agents.max`. Applies at the next start.",
+            "minimum": 0
           },
           "consent": {
             "oneOf": [
@@ -18648,7 +18950,50 @@
             "description": "The `consent_version` you were shown, with `consent`."
           },
           "egress": {
-            "description": "Not editable before v0.6: refused with `409 not_editable`."
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "A source's egress setting.",
+                "required": [
+                  "route"
+                ],
+                "properties": {
+                  "dns": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "description": "Who resolves names on a SOCKS5 route.",
+                        "enum": [
+                          "proxy",
+                          "local"
+                        ]
+                      }
+                    ],
+                    "description": "For `socks5`: who resolves names. Left out, it's `proxy` for a\nsource that only reaches its built-in sites, so lookups stay inside\nthe tunnel, and `local` for a source whose sites you enter, so a\npublic name can't reach devices on the proxy's network."
+                  },
+                  "proxy": {
+                    "type": "string",
+                    "description": "For `socks5`: the proxy as `host:port` (a name, an IPv4 address or\na bracketed IPv6 address). A name is resolved when the source\nstarts."
+                  },
+                  "route": {
+                    "type": "string",
+                    "description": "How a source's traffic leaves (§18.4, §18.7).",
+                    "enum": [
+                      "direct",
+                      "socks5",
+                      "interface",
+                      "bind_address"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "example": {
+                  "proxy": "10.8.0.1:1080",
+                  "route": "socks5"
+                }
+              }
+            ],
+            "description": "How its traffic leaves. Applies at the next start. Changing it\nneeds the admin `password` (`428 confirm_required`): a route is\nwhat keeps a source's traffic on your VPN. `interface` and\n`bind_address` are refused (`409 route_unavailable`)."
           },
           "enabled": {
             "type": "boolean"
@@ -18664,10 +19009,14 @@
             ]
           },
           "purge": {
-            "description": "Not editable before v0.6: refused with `409 not_editable`."
+            "description": "Not editable yet: refused with `409 not_editable`."
           },
           "schedule": {
-            "description": "Not editable before v0.6: refused with `409 not_editable`."
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Daily windows as `HH:MM-HH:MM`, at most 8; `[]` runs it any time.\nApplies at the next start."
           }
         },
         "additionalProperties": false,
