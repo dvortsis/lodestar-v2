@@ -11,7 +11,7 @@ document disagree, the architecture document wins and this file is fixed.
 - **One formatter per metric** (§10.12). Facets, rows, the drawer, tooltips,
   tables, chart axes, KPIs, CSV labels and the digest all call the same
   function. No component formats a number itself.
-- **The client never computes counts, cohorts or percentages** (build plan).
+- **The client never computes counts, cohorts or percentages** (build plan P1; now `runner/standards.md` §4).
   Every rate, share, conversion and percentile in this file is computed by the
   server and arrives in the response. Formatters only present.
 - **Every displayed count, KPI and chart container carries a `data-testid`**
