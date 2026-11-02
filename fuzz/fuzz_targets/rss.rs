@@ -4,6 +4,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use lodestar_metainfo::hidden_char;
 use lodestar_sources_feeds::rss::{self, LIMITS, Limits, MAX_CATEGORY, MAX_REF, MAX_TITLE};
 
 fuzz_target!(|data: &[u8]| {
@@ -23,6 +24,7 @@ fuzz_target!(|data: &[u8]| {
             kept += 1;
             assert!(it.hashes.key().is_some());
             assert!(it.title.as_ref().is_none_or(|t| t.len() <= MAX_TITLE));
+            assert!(!it.title.iter().flat_map(|t| t.chars()).any(hidden_char));
             assert!(it.category.as_ref().is_none_or(|c| c.len() <= MAX_CATEGORY));
             for r in [&it.guid, &it.link].into_iter().flatten() {
                 assert!(r.len() <= MAX_REF);

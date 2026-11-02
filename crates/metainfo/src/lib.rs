@@ -12,12 +12,14 @@
 //! Names and paths keep their **raw bytes** plus the [`TextEncoding`] they
 //! were judged to be in, so decoding can be redone when detection improves.
 
+mod display;
 mod error;
 mod hash;
 mod info;
 mod text;
 mod torrent;
 
+pub use display::hidden_char;
 pub use error::{Error, Warning};
 pub use hash::{InfoHash, InfoHashV2, ParseHashError};
 pub use info::{

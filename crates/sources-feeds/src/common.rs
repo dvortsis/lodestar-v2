@@ -174,7 +174,7 @@ pub(crate) fn merge(mut h: Hashes, magnet: Option<Hashes>) -> Hashes {
     h
 }
 
-/// A title with control characters removed, cut to [`MAX_TITLE`] bytes
+/// A title with [`unsafe_char`]s removed, cut to [`MAX_TITLE`] bytes
 /// on a character boundary.
 pub(crate) fn clean_title(s: &str) -> String {
     let mut out = String::with_capacity(s.len().min(MAX_TITLE));
@@ -187,14 +187,12 @@ pub(crate) fn clean_title(s: &str) -> String {
     out
 }
 
-/// Controls, and the bidi and format characters that reorder or hide
-/// text (the set `crates/api/src/digest.rs` strips).
+/// Controls, format characters (Cf, including the bidi controls and
+/// zero-width characters), line separators and tags: the characters that
+/// hide or reorder text ([`lodestar_metainfo::hidden_char`], the set
+/// `crates/api/src/digest.rs` strips too).
 pub(crate) fn unsafe_char(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
-        )
+    lodestar_metainfo::hidden_char(c)
 }
 
 pub(crate) fn is_magnet(s: &str) -> bool {
@@ -609,6 +607,12 @@ mod tests {
             clean_title("a\u{202E}b\u{2066}c\u{200F}d\u{061C}e\u{1}"),
             "abcde"
         );
+        // SRC-8's example, plus a soft hyphen, a tag and a joined emoji.
+        assert_eq!(
+            clean_title("a\u{200B}c\u{FEFF}d\u{2028}e\u{AD}f\u{E0041}g"),
+            "acdefg"
+        );
+        assert_eq!(clean_title("👩\u{200D}💻"), "👩💻");
         let v2h: InfoHashV2 = v2.parse().unwrap();
         let attr = Hashes {
             v1: Some(h),
@@ -696,5 +700,16 @@ mod tests {
         assert_eq!(external_ref("magnet:?xt=urn:btih:00"), None);
         assert_eq!(external_ref(&"a".repeat(MAX_REF + 1)), None);
         assert_eq!(external_ref("a\u{1}b"), None);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn clean_title_strips_and_is_idempotent(
+            s in "(.|[\u{AD}\u{200B}-\u{200F}\u{2028}\u{FEFF}\u{E0000}-\u{E007F}]){0,300}"
+        ) {
+            let t = clean_title(&s);
+            proptest::prop_assert!(!t.chars().any(unsafe_char));
+            proptest::prop_assert_eq!(clean_title(&t), t);
+        }
     }
 }

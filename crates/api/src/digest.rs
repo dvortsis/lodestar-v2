@@ -310,24 +310,13 @@ fn approx(value: &str) -> String {
 // ---------------------------------------------------------------------
 
 /// A string from the response, made safe to print: controls (C0, DEL, C1),
-/// bidi formatting characters and line separators removed, cut to
+/// format characters (Cf: bidi controls, zero-width characters), line
+/// separators and tags removed ([`lodestar_metainfo::hidden_char`]), cut to
 /// [`MAX_FIELD_CHARS`] characters with `…`.
 fn clean(s: &str) -> String {
     let kept: Vec<char> = s
         .chars()
-        .filter(|&c| {
-            !c.is_control()
-                && !matches!(
-                    c,
-                    '\u{61c}'
-                        | '\u{200e}'
-                        | '\u{200f}'
-                        | '\u{202a}'..='\u{202e}'
-                        | '\u{2066}'..='\u{2069}'
-                        | '\u{2028}'
-                        | '\u{2029}'
-                )
-        })
+        .filter(|&c| !lodestar_metainfo::hidden_char(c))
         .collect();
     let mut out: String = if kept.len() > MAX_FIELD_CHARS {
         kept[..MAX_FIELD_CHARS - 1].iter().collect()
@@ -1114,12 +1103,11 @@ mod tests {
         }
 
         #[test]
-        fn clean_is_short_and_printable(s in ".{0,300}") {
+        fn clean_is_short_and_printable(s in "(.|[\u{200B}-\u{200F}\u{2028}\u{FEFF}\u{E0000}-\u{E007F}]){0,300}") {
             let c = clean(&s);
+            prop_assert_eq!(clean(&c), c.clone());
             prop_assert!(c.chars().count() <= MAX_FIELD_CHARS);
-            prop_assert!(!c.chars().any(|c| c.is_control()));
-            let bidi = ['\u{202e}', '\u{2066}', '\u{200f}', '\u{061c}'];
-            prop_assert!(!c.contains(bidi));
+            prop_assert!(!c.chars().any(lodestar_metainfo::hidden_char));
         }
     }
 
@@ -1130,6 +1118,10 @@ mod tests {
             "abcdefg"
         );
         assert_eq!(clean("\u{202e}\u{200f}"), "(blank)");
+        assert_eq!(
+            clean("a\u{200B}c\u{FEFF}d\u{2028}e\u{E0041}f\u{AD}g"),
+            "acdefg"
+        );
         let long = "x".repeat(200);
         let c = clean(&long);
         assert_eq!(c.chars().count(), 64);
