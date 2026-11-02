@@ -293,8 +293,20 @@ impl Services {
         let sealer = pipeline_config.sealer.clone();
         let reenrich = pipeline_config.reenrich.clone();
         let quarantine_secs = pipeline_config.quarantine.as_secs() as i64;
-        let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
         let control = Arc::new(Mutex::new(control));
+        // Each enabled plugin's HTTP client is built on its egress
+        // setting, with its SOCKS5 credentials from the per-source store
+        // (SRC-4, SRC-5). A fixture is served offline: plugins get no
+        // egress, so nothing leaves the machine.
+        pipeline_config.egress = (!crate::fixture::active()).then(|| {
+            lodestar_sources::EgressFactory::new(Arc::new(
+                lodestar_sources::consent::SourceCredentials::new(
+                    control.clone(),
+                    config.data_dir.clone(),
+                ),
+            ))
+        });
+        let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
         // Pause, resume, sources and the network check (B14), applied
         // however the registry's crawler section changes.
         let crawl = Control::start(

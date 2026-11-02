@@ -683,3 +683,184 @@ async fn resume_reaches_a_running_dht(coordinated: bool) {
     }
     pipeline.shutdown().await.unwrap();
 }
+
+/// Fetches its one endpoint through its kit once, and records the result.
+struct Fetches {
+    manifest: Manifest,
+    result: Arc<Mutex<Option<Result<u16, lodestar_sources::HttpError>>>>,
+}
+
+impl SourcePlugin for Fetches {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        Box::pin(async move {
+            let r = ctx
+                .kit
+                .http
+                .send(&lodestar_sources::Request::get("https://feed.example/rss"))
+                .await
+                .map(|r| r.status);
+            *self.result.lock().unwrap() = Some(r);
+            ctx.shutdown.requested().await;
+            Ok(())
+        })
+    }
+}
+
+/// A source's saved SOCKS5 route is what its plugin's requests take: with
+/// the proxy down, the kill switch refuses them (as its own error, so the
+/// host isn't backed off), and the Sources view and its counters say so.
+/// Changing the route needs the password; agents and the schedule are
+/// checked against the plugin and saved.
+#[tokio::test]
+async fn a_source_runs_on_its_saved_egress_and_its_settings_are_checked() {
+    use lodestar_pipeline::control::{EgressSetting, egress_warnings};
+    use lodestar_sources::{
+        DownReason, Egress, EgressFactory, Endpoint, ProxySpec, RouteState, SocksDns, Window,
+    };
+    use lodestar_store::SourceSetting;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    // A port nothing listens on: the stand-in for a VPN proxy that's down.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let saved = EgressSetting::Socks5(ProxySpec {
+        host: "127.0.0.1".into(),
+        port: dead.port(),
+        dns: None,
+    });
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let id = store
+        .register_source_as("feed", "1", SourceState::Enabled, 0)
+        .unwrap();
+    store
+        .set_source_settings(id, &[(SourceSetting::Egress, Some(&saved.encode()))])
+        .unwrap();
+    drop(store);
+
+    let result = Arc::new(Mutex::new(None));
+    let plugin = Arc::new(Fetches {
+        manifest: Manifest {
+            id: "feed",
+            name: "Feed",
+            version: "1",
+            kinds: &[Kind::Discovery],
+            networks: &[Network::Bt],
+            endpoints: &[Endpoint {
+                protocol: "https",
+                host: "feed.example",
+            }],
+            risk: Risk::Low,
+            consent: Consent::None,
+            default_priority: Priority::Normal,
+            enabled_by_default: true,
+        },
+        result: result.clone(),
+    });
+    let config = PipelineConfig {
+        egress: Some(EgressFactory::new(Arc::new(
+            lodestar_sources::egress::NoCredentials,
+        ))),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline::start_with(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![plugin],
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    until("the plugin's request", || result.lock().unwrap().is_some()).await;
+    let got = result.lock().unwrap().take().unwrap();
+    assert!(
+        matches!(got, Err(lodestar_sources::HttpError::EgressDown(_))),
+        "{got:?}"
+    );
+    let status = pipeline.sources().into_iter().next().unwrap();
+    let live = status.egress.clone().unwrap();
+    assert_eq!(
+        live.status.state,
+        RouteState::Down(DownReason::ProxyUnreachable)
+    );
+    assert_eq!(live.status.counters.kill_switch_refusals, 1);
+    assert_eq!(live.status.counters.answered, 0);
+    // A loopback proxy: Lodestar resolves names, not the proxy.
+    assert_eq!(
+        live.route,
+        Some(Egress::Socks5 {
+            proxy: dead,
+            dns: SocksDns::Local
+        })
+    );
+    assert!(egress_warnings(&saved, Some(&live), false).is_empty());
+
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        )),
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    let view = control.sources().unwrap().into_iter().next().unwrap();
+    assert_eq!(view.settings.egress, saved);
+    let direct = SourceChange {
+        egress: Some(EgressSetting::Direct),
+        ..SourceChange::default()
+    };
+    assert!(matches!(
+        control.update_source(id, direct.clone()).await,
+        Err(SourceError::PasswordRequired)
+    ));
+    let view = control
+        .update_source(
+            id,
+            SourceChange {
+                password_confirmed: true,
+                ..direct
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(view.settings.egress, EgressSetting::Direct);
+    // The plugin declares one agent at most (the strict default).
+    assert!(matches!(
+        control
+            .update_source(
+                id,
+                SourceChange {
+                    agents: Some(2),
+                    ..SourceChange::default()
+                },
+            )
+            .await,
+        Err(SourceError::Invalid {
+            field: "agents",
+            ..
+        })
+    ));
+    let view = control
+        .update_source(
+            id,
+            SourceChange {
+                schedule: Some(vec![Window::new(60, 420)]),
+                agents: Some(1),
+                ..SourceChange::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(view.settings.schedule, Some(vec![Window::new(60, 420)]));
+    assert_eq!(view.settings.agents, Some(1));
+    pipeline.shutdown().await.unwrap();
+}

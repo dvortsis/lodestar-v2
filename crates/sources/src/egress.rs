@@ -31,9 +31,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub use lodestar_integrations::net::SocksDns;
 use lodestar_integrations::net::{
-    self, Exchange, GuardedClient, NetError, NetPolicy, Resolve, Route, Socks5Route, SocksAuth,
-    SocksDns, SystemResolver,
+    self, AddrClass, Exchange, GuardedClient, NetError, NetPolicy, Resolve, Route, Socks5Route,
+    SocksAuth, SystemResolver,
 };
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -75,6 +76,38 @@ pub enum RouteKind {
     BindAddress,
     Interface,
     Socks5,
+}
+
+/// A SOCKS5 proxy as the user named it: a host (a DNS name, or an IP
+/// literal without brackets) and a port, and who resolves names (`None`:
+/// [`default_dns`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxySpec {
+    pub host: String,
+    pub port: u16,
+    pub dns: Option<SocksDns>,
+}
+
+/// Whether `ip` is on the user's own network: a private or loopback
+/// address (link-local too). A proxy there is the user's own
+/// infrastructure.
+pub fn on_lan(ip: IpAddr) -> bool {
+    matches!(
+        net::classify(ip),
+        AddrClass::Private | AddrClass::Loopback | AddrClass::LinkLocal
+    )
+}
+
+/// Who resolves names when the user didn't say (runner, #380 review): the
+/// proxy (`socks5h`, no lookup outside the tunnel) unless the proxy is on
+/// the LAN, where a name it resolves could reach the user's own devices,
+/// so Lodestar resolves through its address checks instead.
+pub fn default_dns(proxy: IpAddr) -> SocksDns {
+    if on_lan(proxy) {
+        SocksDns::Local
+    } else {
+        SocksDns::Proxy
+    }
 }
 
 /// The per-source credential store's interface for egress (SRC-4 builds
@@ -208,6 +241,8 @@ pub enum DownReason {
     ClientUnavailable,
     /// A bind address off Windows, where it doesn't pin the interface.
     BindAddressUnsupported,
+    /// The SOCKS5 proxy's name didn't resolve when the plugin started.
+    ProxyUnresolved,
 }
 
 impl fmt::Display for DownReason {
@@ -221,6 +256,9 @@ impl fmt::Display for DownReason {
             DownReason::ProxyUnreachable => "the SOCKS5 proxy isn't reachable",
             DownReason::CredentialsUnavailable => "the proxy's credentials couldn't be read",
             DownReason::ClientUnavailable => "the HTTP client couldn't be built",
+            DownReason::ProxyUnresolved => {
+                "the SOCKS5 proxy's name didn't resolve when the source started; restart Lodestar once it does"
+            }
             DownReason::BindAddressUnsupported => {
                 "a bind address keeps traffic on the VPN only on Windows; choose the interface by name"
             }
@@ -353,6 +391,60 @@ impl EgressFactory {
             PluginEgress::new(plugin, egress.kind(), client, Arc::new(probe), endpoints);
         built.notice = notice(egress);
         built
+    }
+
+    /// The client for `plugin` through the SOCKS5 proxy `spec` names. A
+    /// name is resolved once, now, through the factory's resolver (the
+    /// first answer); when it doesn't resolve, the client is down for good
+    /// with [`DownReason::ProxyUnresolved`]. Also returns the route it
+    /// built, for the plugin's status.
+    pub async fn build_socks5(
+        &self,
+        plugin: &str,
+        spec: &ProxySpec,
+        endpoints: Endpoints,
+    ) -> (PluginEgress, Option<Egress>) {
+        let ip = match spec.host.parse::<IpAddr>() {
+            Ok(ip) => Some(ip),
+            Err(_) => tokio::time::timeout(PROBE_TIMEOUT, self.resolver.resolve(&spec.host))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .and_then(|ips| ips.into_iter().next()),
+        };
+        let Some(ip) = ip else {
+            let down = self.unavailable(
+                plugin,
+                RouteKind::Socks5,
+                DownReason::ProxyUnresolved,
+                endpoints,
+            );
+            return (down, None);
+        };
+        let egress = Egress::Socks5 {
+            proxy: SocketAddr::new(ip, spec.port),
+            dns: spec.dns.unwrap_or_else(|| default_dns(ip)),
+        };
+        (self.build(plugin, &egress, endpoints).await, Some(egress))
+    }
+
+    /// A client for `plugin` whose route couldn't even be described (a
+    /// proxy name that didn't resolve): its kill switch is down for good
+    /// with `reason`, so every request is refused.
+    pub fn unavailable(
+        &self,
+        plugin: &str,
+        route: RouteKind,
+        reason: DownReason,
+        endpoints: Endpoints,
+    ) -> PluginEgress {
+        PluginEgress::new(
+            plugin,
+            route,
+            Err(reason),
+            Arc::new(Probe::Direct),
+            endpoints,
+        )
     }
 
     async fn client(
@@ -654,7 +746,7 @@ impl PluginEgress {
             Ok(c) => c,
             Err(reason) => {
                 Counters::bump(&self.counters.kill_switch_refusals);
-                return Err(HttpError::Transport(format!("egress down: {reason}")));
+                return Err(HttpError::EgressDown(reason.to_string()));
             }
         };
         let mut down = self.state.subscribe();
@@ -673,7 +765,7 @@ impl PluginEgress {
                     _ => DownReason::ClientUnavailable,
                 };
                 Counters::bump(&self.counters.kill_switch_aborts);
-                return Err(HttpError::Transport(format!("egress went down: {reason}")));
+                return Err(HttpError::EgressDown(format!("went down in flight: {reason}")));
             }
         };
         match result {

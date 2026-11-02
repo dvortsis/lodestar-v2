@@ -43,10 +43,10 @@ use crate::ApiState;
 use crate::auth;
 pub use crate::dto::ops::{
     ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialsPatch,
-    DhtStatus, ExternalAddress, FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel,
-    EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, SamplingBlocked, SocksDns,
+    DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress,
+    FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel, SamplingBlocked, SocksDns,
     Source, SourceAgents, SourceEgress, SourceHealth, SourceKind, SourceList, SourceNeed,
-    SourcePatch, SourcePriority, SourceState, StatsResponse,
+    SourcePatch, SourcePriority, SourceSchedule, SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;
@@ -502,7 +502,10 @@ pub fn parse_proxy(text: &str) -> Option<(String, u16)> {
                 && !l.ends_with('-')
                 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
         })
-        && !name.split('.').next_back().is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()));
+        && !name
+            .split('.')
+            .next_back()
+            .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()));
     ok.then(|| (name.to_ascii_lowercase(), port))
 }
 
@@ -621,15 +624,12 @@ pub(crate) async fn patch_source(
     // (Restricted and Overlay, every time) is the implementation's to
     // decide.
     let password = body.password.take();
-    let confirmed = if body.egress.is_some() {
+    let needs_check = body.egress.is_some()
+        || (body.enabled == Some(true) && password.as_deref().is_some_and(|p| !p.is_empty()));
+    if needs_check {
         auth::confirm_fresh_password(&s.auth, ip, password).await?;
-        true
-    } else if body.enabled == Some(true) && password.as_deref().is_some_and(|p| !p.is_empty()) {
-        auth::confirm_fresh_password(&s.auth, ip, password).await?;
-        true
-    } else {
-        false
-    };
+    }
+    let confirmed = needs_check;
     Ok(Json(ops.patch_source(id, body, confirmed).await?))
 }
 
@@ -820,8 +820,16 @@ mod tests {
         assert_eq!(parse_window("22:30-00:00"), Some((1350, 0)));
         assert_eq!(parse_window("23:59-00:01"), Some((1439, 1)));
         for bad in [
-            "", "1:00-07:00", "24:00-01:00", "01:60-02:00", "01:00", "01:00-", "+1:00-02:00",
-            "01:00-02:00-03:00", "０1:00-02:00", "01:00 - 02:00",
+            "",
+            "1:00-07:00",
+            "24:00-01:00",
+            "01:60-02:00",
+            "01:00",
+            "01:00-",
+            "+1:00-02:00",
+            "01:00-02:00-03:00",
+            "０1:00-02:00",
+            "01:00 - 02:00",
         ] {
             assert_eq!(parse_window(bad), None, "{bad}");
         }
@@ -833,8 +841,14 @@ mod tests {
 
     #[test]
     fn proxies_parse() {
-        assert_eq!(parse_proxy("10.8.0.1:1080"), Some(("10.8.0.1".into(), 1080)));
-        assert_eq!(parse_proxy("[fd00::1]:1080"), Some(("fd00::1".into(), 1080)));
+        assert_eq!(
+            parse_proxy("10.8.0.1:1080"),
+            Some(("10.8.0.1".into(), 1080))
+        );
+        assert_eq!(
+            parse_proxy("[fd00::1]:1080"),
+            Some(("fd00::1".into(), 1080))
+        );
         assert_eq!(parse_proxy("Gluetun:1080"), Some(("gluetun".into(), 1080)));
         assert_eq!(
             parse_proxy("proxy.example.net.:443"),
@@ -874,13 +888,19 @@ mod tests {
             code(json!({ "egress": { "route": "bind_address" } })),
             "route_unavailable"
         );
-        assert_eq!(code(json!({ "egress": { "route": "socks5" } })), "invalid_egress");
+        assert_eq!(
+            code(json!({ "egress": { "route": "socks5" } })),
+            "invalid_egress"
+        );
         assert_eq!(
             code(json!({ "egress": { "route": "direct", "dns": "local" } })),
             "invalid_egress"
         );
         assert_eq!(code(json!({ "schedule": ["1-2"] })), "invalid_schedule");
-        assert_eq!(code(json!({ "schedule": vec!["01:00-02:00"; 9] })), "invalid_schedule");
+        assert_eq!(
+            code(json!({ "schedule": vec!["01:00-02:00"; 9] })),
+            "invalid_schedule"
+        );
         assert_eq!(code(json!({ "agents": 0 })), "invalid_agents");
         // An unknown key inside egress is refused, not ignored.
         assert!(

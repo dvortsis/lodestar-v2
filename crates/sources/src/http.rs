@@ -106,6 +106,10 @@ pub enum HttpError {
     Unrecorded(String),
     /// No HTTP client is configured for this plugin (SRC-5 supplies one).
     NoEgress,
+    /// The plugin's egress route is down, so its kill switch refused the
+    /// request or abandoned it in flight. The host isn't at fault, so this
+    /// doesn't back it off: the route coming back is what matters.
+    EgressDown(String),
 }
 
 impl std::fmt::Display for HttpError {
@@ -116,6 +120,7 @@ impl std::fmt::Display for HttpError {
             HttpError::Transport(e) => write!(f, "transport: {e}"),
             HttpError::Unrecorded(e) => write!(f, "no recorded exchange: {e}"),
             HttpError::NoEgress => f.write_str("no HTTP egress configured for this plugin"),
+            HttpError::EgressDown(e) => write!(f, "egress down: {e}"),
         }
     }
 }
@@ -576,6 +581,8 @@ impl HostLimiter {
             Err(HttpError::Transport(_)) => {
                 self.failure(host, now);
             }
+            // Not the host's fault (a kill switch, a missing client, a
+            // block already recorded).
             Err(_) => {}
         }
     }
@@ -863,5 +870,18 @@ mod tests {
         }
         // The ceiling (60 s) is reached and kept.
         assert!(last >= Duration::from_secs(30));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_kill_switch_refusal_doesnt_back_the_host_off() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let now = Instant::now();
+        for _ in 0..5 {
+            l.record("h", &Err(HttpError::EgressDown("vpn".into())), now);
+        }
+        assert_eq!(l.state("h", now), HostState::Ready);
+        // A transport failure does.
+        l.record("h", &Err(HttpError::Transport("reset".into())), now);
+        assert!(matches!(l.state("h", now), HostState::BackingOff { .. }));
     }
 }

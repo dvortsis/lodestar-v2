@@ -118,6 +118,41 @@ lodestar_log::catalogue! {
         message: "A stored filter rule was skipped",
         fields: { what: Label, rule: Size, reason: Label },
     }
+    /// A running source's egress route went down: its kill switch
+    /// refuses its requests until the route is back.
+    SOURCE_EGRESS_DOWN {
+        id: "pipeline.source_egress_down",
+        component: Pipeline,
+        level: Warn,
+        message: "Source egress down; its requests are refused",
+        fields: { plugin: Label, reason: Label },
+    }
+    /// A running source's egress route is back up.
+    SOURCE_EGRESS_UP {
+        id: "pipeline.source_egress_up",
+        component: Pipeline,
+        level: Info,
+        message: "Source egress back up",
+        fields: { plugin: Label },
+    }
+    /// `HTTPS_PROXY` or `ALL_PROXY` is set, but this running source
+    /// connects directly: source plugins never use those variables.
+    SOURCE_PROXY_ENV_IGNORED {
+        id: "pipeline.source_proxy_env_ignored",
+        component: Pipeline,
+        level: Warn,
+        message: "Proxy variable ignored; this source connects directly",
+        fields: { plugin: Label },
+    }
+    /// A source's saved egress, schedule or agents isn't readable; its
+    /// default applies.
+    SOURCE_SETTING_UNREADABLE {
+        id: "pipeline.source_setting_unreadable",
+        component: Pipeline,
+        level: Warn,
+        message: "Ignoring a saved source setting that isn't readable",
+        fields: { plugin: Label, setting: Label },
+    }
     /// A source isn't enabled, so it isn't started.
     SOURCE_NOT_STARTED {
         id: "pipeline.source_not_started",

@@ -373,6 +373,15 @@ fn transport(r: Result<Response, HttpError>) -> String {
     }
 }
 
+/// A kill-switch refusal or abort: its own variant, so the host isn't
+/// backed off.
+fn egress_down(r: Result<Response, HttpError>) -> String {
+    match r {
+        Err(e @ HttpError::EgressDown(_)) => e.to_string(),
+        other => panic!("expected the kill switch, got {other:?}"),
+    }
+}
+
 fn unused_port_addr() -> SocketAddr {
     // Bind and drop: nothing listens there afterwards.
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -425,7 +434,7 @@ async fn a_bind_address_route_binds_and_fails_closed_when_the_address_is_gone() 
     let egress = factory(Scripted::new(&[]))
         .build("p", &Egress::BindAddress(gone), lan())
         .await;
-    let err = transport(egress.fetch(&Request::get(server.url("/"))).await);
+    let err = egress_down(egress.fetch(&Request::get(server.url("/"))).await);
     assert!(err.contains("egress down"), "{err}");
     let status = egress.status();
     assert_eq!(
@@ -878,15 +887,15 @@ async fn the_kill_switch_abandons_a_request_in_flight_and_refuses_until_up() {
     switch.0.store(false, Ordering::SeqCst);
     // The request would stall for 30 s; the switch ends it well before
     // the deadline.
-    let err = transport(within(inflight).await.unwrap());
-    assert!(err.contains("egress went down"), "{err}");
+    let err = egress_down(within(inflight).await.unwrap());
+    assert!(err.contains("went down in flight"), "{err}");
     let status = egress.status();
     assert_eq!(status.state, RouteState::Down(DownReason::InterfaceDown));
     assert_eq!(status.counters.kill_switch_aborts, 1);
     assert_eq!(status.counters.trips, 1);
 
     let conns = server.addr;
-    let err = transport(
+    let err = egress_down(
         egress
             .fetch(&Request::get(format!("http://{conns}/")))
             .await,
@@ -1142,4 +1151,88 @@ async fn redirects_drop_credentials_across_origins_and_refuse_downgrades() {
     let (client, _) = table(&[("https://a.example/", moved(302, "file:///etc/passwd"))]);
     let err = transport(send_following(&client, Request::get("https://a.example/")).await);
     assert!(err.contains("left http"), "{err}");
+}
+
+#[tokio::test]
+async fn a_proxy_by_name_resolves_once_and_defaults_its_dns_by_where_it_is() {
+    let resolver = Scripted::new(&[
+        ("gluetun", &[&["172.18.0.5"]]),
+        ("proxy.vpn.example", &[&["198.51.100.7"]]),
+    ]);
+    let f = factory(resolver.clone());
+    let spec = |host: &str, dns| ProxySpec {
+        host: host.into(),
+        port: 1080,
+        dns,
+    };
+    // On the LAN: Lodestar resolves names itself.
+    let (e, route) = f
+        .build_socks5("p", &spec("gluetun", None), public_only())
+        .await;
+    assert_eq!(
+        route,
+        Some(Egress::Socks5 {
+            proxy: "172.18.0.5:1080".parse().unwrap(),
+            dns: SocksDns::Local
+        })
+    );
+    assert_eq!(e.status().notice, Some(DNS_OUTSIDE_ROUTE));
+    // Elsewhere: the proxy does.
+    let (_, route) = f
+        .build_socks5("p", &spec("proxy.vpn.example", None), public_only())
+        .await;
+    assert!(matches!(
+        route,
+        Some(Egress::Socks5 {
+            dns: SocksDns::Proxy,
+            ..
+        })
+    ));
+    // A literal isn't looked up, and an explicit choice wins.
+    let before = resolver.lookups();
+    let (_, route) = f
+        .build_socks5("p", &spec("10.8.0.1", Some(SocksDns::Proxy)), public_only())
+        .await;
+    assert_eq!(resolver.lookups(), before);
+    assert!(matches!(
+        route,
+        Some(Egress::Socks5 {
+            dns: SocksDns::Proxy,
+            ..
+        })
+    ));
+    // A name that doesn't resolve: down for good, and nothing is sent.
+    let (e, route) = f
+        .build_socks5("p", &spec("missing", None), public_only())
+        .await;
+    assert_eq!(route, None);
+    assert_eq!(
+        e.status().state,
+        RouteState::Down(DownReason::ProxyUnresolved)
+    );
+    let err = egress_down(e.fetch(&Request::get("http://203.0.113.1/")).await);
+    assert!(err.contains("didn't resolve"), "{err}");
+    assert_eq!(e.status().counters.kill_switch_refusals, 1);
+}
+
+#[test]
+fn lan_means_private_loopback_or_link_local() {
+    for ip in [
+        "10.0.0.1",
+        "192.168.1.2",
+        "127.0.0.1",
+        "::1",
+        "fd00::1",
+        "169.254.1.1",
+    ] {
+        assert!(on_lan(ip.parse().unwrap()), "{ip}");
+        assert_eq!(default_dns(ip.parse().unwrap()), SocksDns::Local);
+    }
+    for ip in ["198.51.100.7", "2001:db8::1", "8.8.8.8"] {
+        let ip: IpAddr = ip.parse().unwrap();
+        if net::classify(ip) == AddrClass::Public {
+            assert!(!on_lan(ip));
+            assert_eq!(default_dns(ip), SocksDns::Proxy);
+        }
+    }
 }

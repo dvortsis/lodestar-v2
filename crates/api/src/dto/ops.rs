@@ -358,8 +358,26 @@ pub struct SourceEgress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct SourceAgents {
     pub count: u32,
+    /// Whether the running source follows `count`. Always false in this
+    /// version: it's saved and shown, and the scheduler applies it in a
+    /// later version. Label it "not active yet".
+    pub enforced: bool,
     /// The most the plugin allows; 1 means it can't be changed.
     pub max: u32,
+}
+
+/// When a source may run (§18.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SourceSchedule {
+    /// The plugin's own windows, which apply when you haven't set any.
+    pub default: Vec<String>,
+    /// Whether the running source keeps to `windows`. Always false in
+    /// this version: they're saved and shown, and the scheduler applies
+    /// them in a later version. Label them "not active yet".
+    pub enforced: bool,
+    /// The daily windows, as `HH:MM-HH:MM` in the server's local time (an
+    /// end at or before the start wraps past midnight). Empty: any time.
+    pub windows: Vec<String>,
 }
 
 /// One source plugin of this build.
@@ -381,8 +399,6 @@ pub struct Source {
     /// The names of its stored credentials; their values are never
     /// returned.
     pub credentials: Vec<String>,
-    /// The windows it runs in when you haven't set any.
-    pub default_schedule: Vec<String>,
     /// Fields `PATCH /sources/{id}` changes now.
     pub editable: Vec<String>,
     #[schema(inline)]
@@ -417,10 +433,8 @@ pub struct Source {
     pub restart_required: bool,
     #[schema(inline)]
     pub risk: RiskLevel,
-    /// The daily windows it runs in, as `HH:MM-HH:MM` in the server's
-    /// local time (an end at or before the start wraps past midnight).
-    /// Empty: any time.
-    pub schedule: Vec<String>,
+    #[schema(inline)]
+    pub schedule: SourceSchedule,
     #[schema(inline)]
     pub state: SourceState,
     pub version: String,
@@ -430,12 +444,11 @@ pub struct Source {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "sources": [{
-        "agents": { "count": 1, "max": 1 },
+        "agents": { "count": 1, "enforced": false, "max": 1 },
         "consent": "none",
         "consent_required": false,
         "consent_version": "",
         "credentials": [],
-        "default_schedule": [],
         "editable": ["agents", "egress", "enabled", "priority", "schedule"],
         "egress": {
             "live": { "counts": { "answered": 0, "kill_switch_aborts": 0, "kill_switch_refusals": 0,
@@ -464,7 +477,7 @@ pub struct Source {
         "priority": "normal",
         "restart_required": false,
         "risk": "low",
-        "schedule": [],
+        "schedule": { "default": [], "enforced": false, "windows": [] },
         "state": "enabled",
         "version": "0.0.0"
     }]

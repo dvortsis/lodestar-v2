@@ -21,6 +21,7 @@
 pub mod control;
 mod coordinator;
 mod dht;
+mod egress;
 pub mod enrich;
 pub mod gate;
 mod have;
@@ -144,7 +145,15 @@ pub struct PipelineConfig {
     /// items' metadata through the shared pool so they can be promoted.
     /// Off by default until the crawler acceptance soak closes.
     pub verify_unverified: bool,
+    /// Builds each enabled plugin's HTTP client on its egress setting
+    /// (§18.4, §18.7). `None` (tests): plugins get no egress at all
+    /// ([`lodestar_sources::NoEgress`]), so nothing leaves the machine.
+    pub egress: Option<lodestar_sources::EgressFactory>,
 }
+
+/// How often a running plugin's non-direct route is probed, so a route
+/// that goes down abandons the requests in flight (SRC-5's kill switch).
+pub const EGRESS_PROBE_EVERY: Duration = Duration::from_secs(15);
 
 /// What the scrape scheduler needs besides its settings.
 #[derive(Debug, Clone)]
@@ -180,6 +189,7 @@ impl Default for PipelineConfig {
             health: None,
             gate_follows_index: false,
             verify_unverified: false,
+            egress: None,
         }
     }
 }
@@ -310,6 +320,19 @@ pub struct SourceStatus {
     pub priority: Priority,
     /// Why it stopped, if it stopped with an error.
     pub last_error: Option<String>,
+    /// Its politeness, config and placement (`SourcePlugin::policy`).
+    pub policy: lodestar_sources::Policy,
+    /// Its egress as it runs: `None` when it isn't running or has no
+    /// egress configured.
+    pub egress: Option<EgressLive>,
+}
+
+/// A running plugin's egress: its kill switch's view, and the route it was
+/// built with (`None` when a proxy's name didn't resolve).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EgressLive {
+    pub status: lodestar_sources::EgressStatus,
+    pub route: Option<lodestar_sources::Egress>,
 }
 
 struct SourceEntry {
@@ -320,6 +343,10 @@ struct SourceEntry {
     enabled: bool,
     priority: Priority,
     error: Arc<Mutex<Option<String>>>,
+    egress: Option<(
+        Arc<lodestar_sources::PluginEgress>,
+        Option<lodestar_sources::Egress>,
+    )>,
 }
 
 /// A cheap, cloneable view of a running pipeline's counters, for metrics
@@ -418,6 +445,11 @@ impl Monitor {
                 manifest: s.plugin.manifest().clone(),
                 priority: s.priority,
                 last_error: s.error.lock().expect("source error lock").clone(),
+                policy: *s.plugin.policy(),
+                egress: s.egress.as_ref().map(|(e, route)| EgressLive {
+                    status: e.status(),
+                    route: route.clone(),
+                }),
             })
             .collect()
     }
@@ -562,7 +594,7 @@ impl Pipeline {
         let mut weights = HashMap::new();
         let mut sources = Vec::new();
         let mut tasks = Vec::new();
-        for (plugin, (id, state, saved)) in plugins.into_iter().zip(registered) {
+        for (plugin, (id, state, saved, egress_setting)) in plugins.into_iter().zip(registered) {
             let m = plugin.manifest();
             let priority = saved
                 .or_else(|| config.priorities.get(m.id).copied())
@@ -588,9 +620,27 @@ impl Pipeline {
                     enabled,
                     priority,
                     error,
+                    egress: None,
                 });
                 continue;
             }
+            let egress = match &config.egress {
+                Some(factory) => {
+                    let built = egress::build(factory, m, &egress_setting).await;
+                    egress::watch(m.id, Arc::clone(&built.0), plugin_shutdown.clone());
+                    Some(built)
+                }
+                None => None,
+            };
+            let kit = match &egress {
+                Some((e, _)) => lodestar_sources::Kit::for_plugin(
+                    &*plugin,
+                    Arc::new(lodestar_sources::MemoryState::new()),
+                    Arc::clone(e) as Arc<dyn lodestar_sources::Fetch>,
+                    &lodestar_sources::UserLimits::default(),
+                ),
+                None => lodestar_sources::Kit::default(),
+            };
             let peer_requests = m.is(Kind::PeerFinder).then(|| {
                 let (tx, rx) = mpsc::channel(1024);
                 finders.push(tx);
@@ -605,7 +655,7 @@ impl Pipeline {
                 peer_requests,
                 peer_replies,
                 shutdown: plugin_shutdown.clone(),
-                kit: lodestar_sources::Kit::default(),
+                kit,
             };
             let p = plugin.clone();
             let running = Arc::new(AtomicBool::new(true));
@@ -632,9 +682,11 @@ impl Pipeline {
                 enabled,
                 priority,
                 error,
+                egress,
             });
         }
         drop(emit_tx);
+        egress::warn_proxy_env(&sources_egress_routes(&sources));
 
         let (pool, pool_task) = pool::spawn(
             config.pool.clone(),
@@ -912,6 +964,19 @@ fn saved_refetch(q: &QueuedKey, finders: &std::collections::HashSet<SourceId>) -
     q.strategy == strategy::REFETCH && (q.cohort == REFETCH_COHORT || finders.contains(&q.source))
 }
 
+/// The plugins that run and connect directly, for the proxy warning.
+fn sources_egress_routes(sources: &[SourceEntry]) -> Vec<&'static str> {
+    sources
+        .iter()
+        .filter(|s| {
+            s.egress
+                .as_ref()
+                .is_some_and(|(_, route)| route == &Some(lodestar_sources::Egress::Direct))
+        })
+        .map(|s| s.plugin.manifest().id)
+        .collect()
+}
+
 /// What [`prepare`] needs of a plugin's manifest.
 struct Registering {
     manifest: lodestar_sources::Manifest,
@@ -940,7 +1005,12 @@ fn prepare(
 ) -> Result<
     (
         Store,
-        Vec<(SourceId, SourceState, Option<Priority>)>,
+        Vec<(
+            SourceId,
+            SourceState,
+            Option<Priority>,
+            control::EgressSetting,
+        )>,
         Vec<QueuedKey>,
         Have,
         i64,
@@ -1046,6 +1116,7 @@ fn prepare(
             *id,
             state(id),
             control::saved_priority(&store, m.manifest.id)?,
+            control::saved_settings(&store, m.manifest.id)?.egress,
         ));
     }
     Ok((

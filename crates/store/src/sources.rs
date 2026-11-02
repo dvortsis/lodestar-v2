@@ -497,13 +497,20 @@ mod tests {
         );
         s.set_source_settings(a, &[(SourceSetting::Agents, None)])
             .unwrap();
-        assert_eq!(s.source_setting("feed", SourceSetting::Agents).unwrap(), None);
+        assert_eq!(
+            s.source_setting("feed", SourceSetting::Agents).unwrap(),
+            None
+        );
         // A purge drops them, and only the purged source's.
         s.set_source_state(a, SourceState::Purged).unwrap();
         for setting in SourceSetting::ALL {
             assert_eq!(s.source_setting("feed", setting).unwrap(), None);
         }
-        assert!(s.source_setting("feed2", SourceSetting::Egress).unwrap().is_some());
+        assert!(
+            s.source_setting("feed2", SourceSetting::Egress)
+                .unwrap()
+                .is_some()
+        );
         let unknown = SourceId::new(9).unwrap();
         assert!(matches!(
             s.set_source_settings(unknown, &[(SourceSetting::Egress, Some("e"))]),
