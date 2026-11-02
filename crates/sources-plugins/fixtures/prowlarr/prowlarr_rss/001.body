@@ -1,0 +1,85 @@
+[
+  {
+    "indexerUrls": ["https://public.example/"],
+    "legacyUrls": [],
+    "definitionName": "examplepublic",
+    "description": "Example Public is a public tracker",
+    "language": "en-US",
+    "encoding": "Unicode (UTF-8)",
+    "enable": true,
+    "redirect": false,
+    "supportsRss": true,
+    "supportsSearch": true,
+    "supportsRedirect": false,
+    "supportsPagination": false,
+    "appProfileId": 1,
+    "protocol": "torrent",
+    "privacy": "public",
+    "capabilities": {
+      "limitsMax": 100,
+      "limitsDefault": 100,
+      "categories": [{"id": 2000, "name": "Movies", "subCategories": [{"id": 2040, "name": "Movies/HD", "subCategories": []}]}],
+      "supportsRawSearch": false,
+      "searchParams": ["q"],
+      "tvSearchParams": ["q", "season", "ep"],
+      "movieSearchParams": ["q", "imdbId"],
+      "musicSearchParams": [],
+      "bookSearchParams": []
+    },
+    "priority": 25,
+    "downloadClientId": 0,
+    "added": "2026-10-01T12:00:00Z",
+    "sortName": "example public",
+    "name": "Example Public",
+    "fields": [
+      {"order": 0, "name": "baseUrl", "label": "Base Url", "type": "select", "advanced": false, "selectOptionsProviderAction": "getUrls", "privacy": "normal", "isFloat": false},
+      {"order": 1, "name": "torrentBaseSettings.seedRatio", "label": "Seed Ratio", "type": "number", "advanced": true, "privacy": "normal", "isFloat": true}
+    ],
+    "implementationName": "Cardigann",
+    "implementation": "Cardigann",
+    "configContract": "CardigannSettings",
+    "infoLink": "https://wiki.servarr.com/prowlarr/supported-indexers#examplepublic",
+    "tags": [],
+    "id": 1
+  },
+  {
+    "definitionName": "exampleprivate",
+    "enable": true,
+    "protocol": "torrent",
+    "privacy": "private",
+    "name": "Example Private",
+    "fields": [
+      {"order": 0, "name": "apikey", "label": "API Key", "type": "textbox", "privacy": "apiKey", "isFloat": false}
+    ],
+    "tags": [],
+    "id": 2
+  },
+  {
+    "definitionName": "examplesemi",
+    "enable": false,
+    "protocol": "torrent",
+    "privacy": "semiPrivate",
+    "name": "Example Disabled",
+    "tags": [],
+    "id": 3
+  },
+  {
+    "definitionName": "newznab",
+    "enable": true,
+    "protocol": "usenet",
+    "privacy": "private",
+    "name": "Example Usenet",
+    "tags": [],
+    "id": 4
+  },
+  {
+    "definitionName": "examplenorss",
+    "enable": true,
+    "supportsRss": false,
+    "protocol": "torrent",
+    "privacy": "public",
+    "name": "Example Search Only",
+    "tags": [],
+    "id": 5
+  }
+]

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <atom:link rel="self" type="application/rss+xml" />
+    <title>Example Private</title>
+    <item>
+      <title>Sintel.2010.2160p.WEB-DL-EXAMPLE</title>
+      <guid>https://private.example/details.php?id=77</guid>
+      <prowlarrindexer id="2" type="private">Example Private</prowlarrindexer>
+      <pubDate>Sun, 01 Nov 2026 08:00:00 +0000</pubDate>
+      <size>4294967296</size>
+      <link>http://prowlarr.example:9696/2/download?apikey=REDACTED&amp;link=cXV4</link>
+      <category>2045</category>
+      <torznab:attr name="infohash" value="00112233445566778899aabbccddeeff00112233" />
+      <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:00112233445566778899aabbccddeeff00112233&amp;tr=https%3A%2F%2Fprivate.example%2Fannounce%2FPASSKEY" />
+      <torznab:attr name="tag" value="freeleech" />
+    </item>
+  </channel>
+</rss>

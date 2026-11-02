@@ -20,6 +20,7 @@ lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
 lodestar-sources-feeds = { path = "../crates/sources-feeds" }
 lodestar-sources-importers = { path = "../crates/sources-importers" }
+lodestar-sources-plugins = { path = "../crates/sources-plugins" }
 lodestar-store = { path = "../crates/store" }
 lodestar-tracker-scrape = { path = "../crates/tracker-scrape" }
 lodestar-update = { path = "../crates/update", features = ["testing"] }
@@ -152,6 +153,13 @@ bench = false
 [[bin]]
 name = "claims"
 path = "fuzz_targets/claims.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "prowlarr"
+path = "fuzz_targets/prowlarr.rs"
 test = false
 doc = false
 bench = false

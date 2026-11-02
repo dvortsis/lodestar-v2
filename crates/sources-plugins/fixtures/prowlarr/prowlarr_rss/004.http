@@ -1,0 +1,6 @@
+GET http://prowlarr.example:9696/api/v1/indexer
+Accept: application/json
+X-Api-Key: REDACTED
+
+HTTP 200
+Content-Type: application/json; charset=utf-8
