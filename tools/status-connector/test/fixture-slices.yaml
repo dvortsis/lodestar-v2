@@ -4,6 +4,10 @@ external:
     check: The owner has answered the ToS/robots position for v0.6 sources
   owner-q15:
     check: The owner has answered how private_source items get metadata
+  rel-branch:
+    check: A release branch exists
+  v-tagged:
+    check: The release is tagged
 slices:
   - { id: B0, title: Split the API router, kind: core, model: opus, deps: [] }
   - { id: SRC-0, title: Plugin contract v2, kind: core, model: opus, deps: [] }
@@ -14,3 +18,6 @@ slices:
   - { id: SRC-8, title: RSS parser, kind: core, model: opus, deps: [] }
   - { id: SRC-9, title: Internet Archive parser, kind: core, model: opus, deps: [SRC-6] }
   - { id: SRC-12, title: BEP 48 scrape, kind: core, model: opus, deps: [] }
+  - { id: ZZ-new, title: A slice no placement rule covers, kind: helper, model: sonnet, deps: [] }
+  - { id: SRC-13, title: Torrent caches, kind: core, model: opus, deps: ["ext:undeclared"] }
+  - { id: SRC-AUTO, title: Needs the tagged release, kind: core, model: opus, deps: ["ext:v-tagged"] }

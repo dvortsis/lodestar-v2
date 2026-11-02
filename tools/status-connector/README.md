@@ -15,11 +15,30 @@ It doesn't ask agents to report progress. It reads the trace every agent leaves:
 
 `runner-state/state.json` is read when it exists (it carries the runner's older statuses). Nothing needs it.
 
-## Where the plan structure lives
-`src/meta.json` holds the phases, workstreams, roadmap steps and outside conditions, and `src/plan.ts` holds the rules that place each slice in a workstream. They are a hand-written copy of `docs/build-plan.md` §0. A slice the rules don't recognise lands in "Planned follow-ups". Update both when the plan changes.
+## What it reads, and what you edit
+The connector reads three things live from GitHub and caches them for a minute:
+1. `runner/slices.yaml`: the slices, their dependencies and the `ext:` conditions.
+2. **`runner/dashboard.yaml`**: everything GitHub can't show. Phases and workstreams, which workstream each slice belongs to (`placement`), which outside conditions hold (`conditions`), the owner queue, the gates, the roadmap steps and arrows, the top-of-page notes, the crawler rate and the soak timeline. Its header says which key fits which change.
+3. Pull requests, branches and tags.
+
+So a plan change needs **no redeploy**. The dashboard follows within a minute of the change reaching `main`. Who edits what is a repository rule: slice pull requests edit only their own `placement` and `gates` entries, and the runner edits the rest. See "Keeping the dashboard current" in `CLAUDE.md`.
+
+What follows by itself, with no edit:
+- Progress: a branch, a pull request, a merge.
+- A condition with `auto: tag:<name>` or `auto: branch:<name>` (for example `v051-tagged`) flips when that tag or branch appears on GitHub.
+- A gate with `slice:` takes its status from that slice.
+- A new slice appears. If no `placement` rule covers it, it lands in "Planned follow-ups", and the dashboard shows a warning naming it.
+
+What needs a one-line edit to `runner/dashboard.yaml`: an owner decision made (`met: true`), a new workstream or roadmap step, an epic that has been cut into slices (`expanded:`), a gate measurement, the notes.
+
+## The check that keeps it honest
+```bash
+npm test
+```
+`test/consistency.mjs` compares the real `runner/dashboard.yaml` with the real `runner/slices.yaml` and fails on any drift: a slice no rule covers, an `ext:` condition with no entry, a roadmap step or gate naming a slice that no longer exists. CI runs it on any pull request that touches either file and again on `main` after each merge that does, and the dashboard shows the same problems as a warning at the top. `test/run.mjs` runs the handler against mocked GitHub and a fixture.
 
 ## Deploy from GitHub (recommended)
-`.github/workflows/status-connector.yml` tests the connector on every pull request that touches it and deploys it when such a change reaches `main`. Set these once, under Settings, Secrets and variables, Actions:
+`.github/workflows/status-connector.yml` tests the connector and the plan files on every pull request that touches them, and `status-connector-deploy.yml` deploys the connector when a change to it reaches `main`. Set these once, under Settings, Secrets and variables, Actions:
 
 | Repository secret | Value |
 |---|---|
@@ -57,10 +76,10 @@ Settings, Connectors, Add custom connector.
 - Read-only. The token can't write and the server never calls a write endpoint.
 - Answers are cached in Cloudflare for 60 seconds (older pages of closed pull requests for ten minutes), and a GitHub error is remembered for 30 seconds. See `docs/decisions/2026-11-02-status-connector.md` for the quota limits and how to rotate the secret and token.
 - Anyone with the URL can read slice names and pull request titles. Keep it private. To stop it, delete the connector in claude.ai and the Worker in Cloudflare, and revoke the token.
-- Tools: `plan_nodes`, `plan_road`, `plan_activity`, `plan_recent`, `plan_meta`. None takes arguments.
+- Tools (none takes arguments): `plan_nodes`, `plan_road`, `plan_edges`, `plan_activity`, `plan_recent`, `plan_meta`, `plan_gates`, `plan_owner`, `plan_ext`, `plan_notes`, `plan_crawler`, `plan_soak`.
 
 ## Tests
 ```bash
 npm test
 ```
-Runs the real handler with GitHub mocked and this repository's own `runner/slices.yaml`. It needs no network and no secrets.
+Runs the consistency check and the handler against mocked GitHub. It needs no network and no secrets.

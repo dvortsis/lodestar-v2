@@ -1,3 +1,4 @@
 node_modules/
 .wrangler/
 test/out.mjs
+test/plan.out.mjs

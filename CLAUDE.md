@@ -23,6 +23,14 @@ Read the relevant sections before starting any task. If work changes a decision,
 - **Commits:** imperative subject ≤ 72 chars, a body that explains why, and the Co-Authored-By / Claude-Session trailers the harness supplies. Never put model identifiers in commits, PRs or code.
 - **Tests:** every crate ships unit tests. Parsers (bencode, KRPC, metainfo, query language, release-name parser) also get property tests or `cargo fuzz` targets, plus golden-corpus tests where the plan calls for them. Benchmarks gate budgets once `bench/` exists.
 
+## Keeping the dashboard current
+The roadmap dashboard (`tools/status-connector`, a live view for the owner and for agents of any vendor) reads `runner/slices.yaml`, `runner/dashboard.yaml` and GitHub itself. Progress needs no editing: a branch `slice/<id>`, a PR titled `<id>: <title>` and its merge are read directly, so keep that title format.
+- **One writer per part, so the file doesn't become a conflict magnet.**
+  - **A slice PR edits only the entries for its own ids:** its `placement` rule (a new slice or epic that no rule covers) and the `gates` entry whose `slice:` it completes. Nothing else in the file.
+  - **The runner alone edits the rest:** `notes`, `owner_queue`, `conditions` (including `met: true` when it records an owner answer), `roadmap`, `phases`, `workstreams`, `expanded`, `held`, `crawler` and `soak`. It does so in the PR that records the decision or changes the plan, or in a small PR of its own. Any other session that needs one of those changed tells the runner.
+- **Run `cd tools/status-connector && npm test`** before pushing a change to `runner/slices.yaml` or `runner/dashboard.yaml`. It fails when the two disagree: a slice no placement rule covers, an `ext:` condition with no entry, a roadmap step or gate naming a missing slice, or a condition that `slices.yaml` says holds but `dashboard.yaml` has as `met: false`. CI runs it on any PR that touches either file, and again on `main` after every merge that does, so drift that two green PRs cause together shows at once.
+- **`docs/build-plan.md` §0 is not checked** against `dashboard.yaml`: CI only warns when the first changes without the second. Whoever changes the plan's tracks, gates or roadmap updates `dashboard.yaml` too (the runner, per the rule above).
+
 ## Multi-session work (owner, 2026-10-23, `docs/owner-decisions.md` §2.24)
 Many sessions build this repo at once, and `main` takes dozens of merges a day. These rules keep work landing instead of chasing `main`:
 - **Keep PRs small enough to land between merges.** The runner splits a slice estimated over ~3k changed lines before launch. A reviewed PR that keeps needing `main` goes into the runner's landing lane (`runner/README.md` step 4).

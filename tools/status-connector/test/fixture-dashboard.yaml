@@ -1,0 +1,43 @@
+# A tiny dashboard file for the connector's test. The real one is runner/dashboard.yaml.
+phases:
+  - { id: ph-a, name: Phase A, badge: Shipped, tag: A, plain: The first phase. }
+  - { id: ph-b, name: Phase B, badge: Next, tag: B, plain: The second phase. }
+workstreams:
+  ws-api: { phase: ph-a, name: Engine, plain: The engine. }
+  ws-src: { phase: ph-b, name: Sources, plain: Source plug-ins. }
+  ws-small: { phase: ph-b, name: Follow-ups, plain: Small items. }
+  ws-rounds: { phase: ph-b, name: Rounds, plain: Merged polish. }
+placement:
+  - { ws: ws-api, match: [B0] }
+  - { ws: ws-src, match: ["SRC-*"] }
+  - { ws: ws-api, match: ["/([bad/"] }
+unplaced_workstream: ws-small
+pinned: { NOPE-2: ws-small }
+held: []
+expanded: []
+state_override: {}
+conditions:
+  owner-q2: { met: false, who: you, label: You decide Q2 }
+  owner-q15: { met: false, who: you, label: You decide Q15 }
+  stale-cond: { met: false, who: you, label: Nothing uses this }
+  rel-branch: { met: true, who: done, label: The release branch exists, auto: "branch:release/x" }
+  v-tagged: { met: false, who: you, label: The release is tagged, auto: "tag:v9.9.9" }
+roadmap:
+  steps:
+    - { id: one, label: Step one, plain: First., col: 0, row: 0, members: [B0, SRC-4] }
+    - { id: two, label: Step two, plain: Second., col: 1, row: 0, members: [SRC-7, NOPE-1] }
+  arrows: [[one, two], [two, ghost]]
+gates:
+  - { id: G1, name: Gate one, plain: A gate from a slice., slice: B0, measure: m, target: t, where: w }
+  - { id: G2, name: Gate two, plain: A manual gate., status: not started }
+owner_queue:
+  - { n: 1, type: decision, action: Answer Q2, unblocks: SRC-7, when: Soon }
+notes:
+  updated: "2026-11-02"
+  now: [{ label: Now one, text: Something is happening. }]
+  you: [{ label: You one, text: Something needs you. }]
+crawler:
+  - { label: Measured, value: 12.3, kind: measured, note: n }
+  - { label: Gate, value: 100, kind: gate }
+soak:
+  - { stage: Measured, label: 24 hours, start: "2026-11-01T22:16:16Z", end: "2026-11-02T22:16:16Z" }

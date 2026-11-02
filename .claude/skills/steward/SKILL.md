@@ -17,7 +17,7 @@ You own your slice's PR until it merges. The runner launches slices, runs the fi
 
    Don't give it your own opinion of the code. Ask it for blocking, important and polish findings, as `runner/standards.md` §5 defines them.
 3. Fix every blocking and important finding, then re-run the checks. Do the same for polish findings that are plainly right and in your owned paths.
-4. Open the PR to `main`, titled `<id>: <title>`. Write the description the standing instructions ask for, and add one line on the self-review: how many findings it raised, what you fixed, and what you left and why.
+4. Open the PR to `main`, titled `<id>: <title>` (the roadmap dashboard reads progress from that title and from a `slice/<id>` branch). If the PR adds a slice or epic, add a `placement` rule for it in `runner/dashboard.yaml`; if it completes a gate's slice, update that gate's entry; edit nothing else in that file (the runner alone edits `notes`, `owner_queue` and `conditions`). Then run `cd tools/status-connector && npm test` (CLAUDE.md "Keeping the dashboard current"). Write the description the standing instructions ask for, and add one line on the self-review: how many findings it raised, what you fixed, and what you left and why.
 
 The runner's own fresh review still runs. The self-review is there so that review finds nothing to send back.
 
