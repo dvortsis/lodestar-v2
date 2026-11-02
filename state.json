@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T17:38:33Z",
+  "updated_at": "2026-11-02T17:45:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2631,7 +2631,7 @@
       "merge": "7d4724c9"
     },
     "SRC-14b": {
-      "status": "14b-1 #399 in Opus review; 14b-2 after R-mem-triage merges",
+      "status": "#399 Opus CHANGES: B1 host-wide Retry-After not honoured when every unit 429s; N4 test, N2 comment",
       "brief": "briefs/SRC-14b.md",
       "model": "opus",
       "session": "session_01MMjhnBFNwDh6xVTgXknTDU",
@@ -3996,6 +3996,11 @@
       "id": "glibc-zstd-arena",
       "added": "2026-11-02T17:33:03Z",
       "text": "gnu/Windows builds: glibc per-thread arenas keep the file index level-19 zstd contexts (~17 MB each) -> 3-4 KiB/torrent anon growth. Not the musl soak cause. Consider a shared/pooled zstd context or lower level for gnu/Windows (R-mem-triage update 2)."
+    },
+    {
+      "id": "prowlarr-preconditions",
+      "added": "2026-11-02T17:45:51Z",
+      "text": "Before registering Prowlarr: (1) real recordings (SRC-7-real-recordings); (2) indexer-list poll via Client::send; (3) a unit block should also cover Client::send to the same host (#399 N1); (4) units share MAX_HOSTS (1,024): a manager listing >1,024 indexers with 429/24h can stall its own plugin (#399 N3)."
     }
   ],
   "main_health": [
