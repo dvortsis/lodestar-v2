@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T11:49:18Z",
+  "updated_at": "2026-11-02T11:51:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2438,11 +2438,26 @@
         "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source).",
         "Purge must also scrub pre-migration snapshots (crates/store/src/snapshots.rs, VACUUM INTO, kept 90 days): drop sources.secret.<plugin>.* and sources.consent.<plugin> from each snapshot, or refuse rollback past a purge; secrets.key stays in the data dir, so lodestar rollback would otherwise restore a purged source's sealed credentials and ack (#388 Opus review finding 1)."
       ],
-      "status": "running",
+      "status": "running as SRC-14a",
       "brief": "briefs/SRC-14.md",
       "session": "session_01MMjhnBdFardZHCh5mNqeNX",
       "model": "opus",
-      "launched": "2026-11-02T11:49Z"
+      "launched": "2026-11-02T11:49Z",
+      "split": {
+        "SRC-14a": "API, egress wiring, metrics, schedule/agents stored+reported (enforced:false), verification switch refused",
+        "SRC-14b": "purge job over /jobs + snapshot scrub (brief_must 2) + purge/rollback/crash tests; brief when 14a merges"
+      },
+      "extra_owns": [
+        "crates/pipeline/src/control.rs",
+        "crates/pipeline/src/lib.rs",
+        "crates/sources/src/http.rs",
+        "crates/lodestar/src/metrics.rs",
+        "crates/lodestar/src/main.rs|services.rs",
+        "docs/metrics.md",
+        "crates/pipeline/src/log_events.rs",
+        "crates/api/tests/* OpsApi fakes",
+        "crates/pipeline/tests/control.rs"
+      ]
     },
     "SRC-2b": {
       "status": "running",
