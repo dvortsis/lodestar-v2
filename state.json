@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:55:35Z",
+  "updated_at": "2026-11-02T14:56:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2567,13 +2567,14 @@
       "merge": "77c9308d"
     },
     "SRC-7": {
-      "status": "Opus MERGE; two cheap fixes requested (external_ref proxy-download guid, 404/unparseable list = needs setup)",
+      "status": "merged",
       "brief": "briefs/SRC-7.md",
       "model": "opus",
       "session": "session_01MMjhnAf3hHtxzAQnAz9XCo",
       "launched": "2026-11-02T12:24Z",
       "pr": 395,
-      "head": "5d9eaf78"
+      "head": "5d9eaf78",
+      "merge": "e03fbd30"
     },
     "X-polish-carry-1102": {
       "status": "merged",
@@ -2610,6 +2611,11 @@
       "model": "opus",
       "session": "session_01MMjhnD9Jd88Vzmq6W9Bxro",
       "launched": "2026-11-02T14:55Z"
+    },
+    "SRC-10a": {
+      "status": "launching",
+      "brief": "briefs/SRC-10a.md",
+      "model": "sonnet"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
