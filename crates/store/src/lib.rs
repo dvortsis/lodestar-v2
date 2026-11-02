@@ -373,7 +373,8 @@ pub enum Inserted {
     /// Not written: every source that found it is disabled or purged
     /// (SRC-14b). A fetch that was on its way when its source stopped
     /// mustn't put back what a purge removes. Nothing about it is
-    /// stored, so a live source finding it later stores it as new.
+    /// stored, so a live source finding it later stores it as new (once
+    /// the fetch pool's memory of recent fetches has let it go).
     ///
     /// Only [`WriteBatch::prepared`], the pipeline's fetches, is checked
     /// this way; [`Store::insert`] and `WriteBatch::torrents` (imports)
@@ -446,6 +447,12 @@ pub struct Store {
 }
 
 impl Store {
+    /// The database file and the config this store was opened with, to
+    /// open another connection to it; `None` in memory.
+    pub fn reopen_args(&self) -> Option<(PathBuf, StoreConfig)> {
+        self.path.clone().map(|p| (p, self.config.clone()))
+    }
+
     pub fn open(path: impl AsRef<Path>, config: StoreConfig) -> Result<Store> {
         let path = path.as_ref();
         let conn = Connection::open(path)?;

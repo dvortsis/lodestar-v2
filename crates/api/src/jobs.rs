@@ -361,6 +361,9 @@ impl Drop for Finisher {
 /// The jobs of this server.
 #[derive(Debug, Default)]
 pub struct Jobs {
+    /// Serializes purge starts, so the one-per-source check and the start
+    /// can't interleave.
+    purge_start: Mutex<()>,
     next: AtomicU64,
     jobs: Mutex<HashMap<u64, Arc<Job>>>,
     closed: AtomicBool,
@@ -468,9 +471,21 @@ impl Jobs {
         Ok(job)
     }
 
-    /// Whether a purge of `source` is running.
-    pub(crate) fn purging(&self, source: u8) -> bool {
-        self.jobs().values().any(|j| j.purging() == Some(source))
+    /// Starts a purge job with `details`, unless one for the same source
+    /// is running (`409 purge_running`), checked and started as one step.
+    pub(crate) fn start_purge(&self, details: PurgeJob) -> ApiResult<Arc<Job>> {
+        let _one = lock(&self.purge_start);
+        let source = details.source_id;
+        if self.jobs().values().any(|j| j.purging() == Some(source)) {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "purge_running",
+                "This source is being purged already: follow it in Jobs.",
+            ));
+        }
+        let job = self.start(BackgroundJobKind::Purge)?;
+        job.update_purge(|p| *p = Some(details));
+        Ok(job)
     }
 
     /// Forgets a job that never got going (its setup failed), freeing its

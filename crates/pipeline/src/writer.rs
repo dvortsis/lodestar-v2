@@ -703,8 +703,10 @@ impl Writer {
             }
         }
         // Never stored: not in the have-filter or the hot columns, and the
-        // lease ends as an eviction does, so a live source finding the key
-        // later fetches and stores it.
+        // lease ends as an eviction does. The pool remembers the key as
+        // recently fetched, so a live source's sighting of it is passed
+        // over until that memory rolls over or the next start; then it's
+        // fetched and stored as new.
         for i in outcome.refused {
             let c = &committing[i];
             self.gate.exclude(Excluded::SourceStopped, 1);

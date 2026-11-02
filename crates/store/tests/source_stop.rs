@@ -169,3 +169,30 @@ fn a_batch_racing_a_purge_leaves_nothing_of_the_source() {
         "the DHT's stays"
     );
 }
+
+/// A pool snapshot taken before a purge dropped the source's keys can't
+/// save them after it: a stopped source's keys aren't persisted.
+#[test]
+fn a_stopped_sources_queued_keys_arent_saved() {
+    let (mut store, dht, nyaa) = setup();
+    let key = |n: u8, source| lodestar_store::QueuedKey {
+        info_hash: InfoHash([n; 20]),
+        source,
+        cohort: 0,
+        strategy: 0,
+        priority: 0,
+        attempts: 0,
+        private_source: false,
+    };
+    store.set_source_state(nyaa, SourceState::Disabled).unwrap();
+    store
+        .save_fetch_queue(&[key(1, nyaa), key(2, dht)])
+        .unwrap();
+    let saved: Vec<_> = store
+        .load_fetch_queue()
+        .unwrap()
+        .into_iter()
+        .map(|k| k.source)
+        .collect();
+    assert_eq!(saved, [dht]);
+}

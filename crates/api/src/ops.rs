@@ -43,7 +43,7 @@ use lodestar_store::unverified::{PurgeCursor, PurgeStep};
 
 use crate::ApiState;
 use crate::auth;
-use crate::dto::jobs::{BackgroundJob, BackgroundJobKind, PurgeJob, PurgeRequest, PurgeStage};
+use crate::dto::jobs::{BackgroundJob, PurgeJob, PurgeRequest, PurgeStage};
 pub use crate::dto::ops::{
     ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialsPatch,
     DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress,
@@ -790,27 +790,17 @@ pub(crate) async fn purge_source(
         .find(|src| src.id == id)
         .ok_or_else(unknown_source)?
         .plugin;
-    if jobs.purging(id) {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "purge_running",
-            "This source is being purged already: follow it in Jobs.",
-        ));
-    }
-    let job = jobs.start(BackgroundJobKind::Purge)?;
-    job.update_purge(|p| {
-        *p = Some(PurgeJob {
-            kept: 0,
-            keys_dropped: 0,
-            plugin,
-            snapshots_left: 0,
-            snapshots_scrubbed: 0,
-            source_id: id,
-            stage: PurgeStage::Stopping,
-            torrents_deleted: 0,
-            unverified_deleted: 0,
-        })
-    });
+    let job = jobs.start_purge(PurgeJob {
+        kept: 0,
+        keys_dropped: 0,
+        plugin,
+        snapshots_left: 0,
+        snapshots_scrubbed: 0,
+        source_id: id,
+        stage: PurgeStage::Stopping,
+        torrents_deleted: 0,
+        unverified_deleted: 0,
+    })?;
     let status = job.status();
     tokio::spawn(run_purge(ops, job, id));
     Ok((StatusCode::ACCEPTED, Json(status)))

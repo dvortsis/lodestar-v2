@@ -1046,13 +1046,10 @@ fn purge_one(
     // Purged sources whose records this snapshot still holds: every purge
     // since it was taken (all of them for a rollback's copy, whose time
     // isn't known), as `Store::finish_source_purge` dropped them. A
-    // purge recorded after the snapshot was taken (less the margin) is
-    // left out: the records it holds were saved after that purge.
+    // snapshot taken after a purge (less the margin) is left out of it:
+    // the records it holds were saved after that purge.
     let mut sources = Vec::new();
-    if !live.purged_sources.is_empty()
-        && has_table(&conn, "settings")?
-        && has_table(&conn, "sources")?
-    {
+    if !live.purged_sources.is_empty() && has_table(&conn, "settings")? {
         for (plugin, at) in &live.purged_sources {
             let before = snap
                 .taken_at
@@ -1205,14 +1202,17 @@ fn purged_sources(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
 /// dropped: a consent record, a credential, its own settings, a purge
 /// under way, or its row in a state other than Purged.
 fn holds_source_records(conn: &Connection, plugin: &str) -> rusqlite::Result<bool> {
-    let not_purged = conn
-        .query_row(
-            "SELECT state != 3 FROM sources WHERE plugin = ?1",
-            [plugin],
-            |r| r.get::<_, bool>(0),
-        )
-        .optional()?
-        .unwrap_or(false);
+    // A schema older than the sources table: only `settings` can hold
+    // anything of the source's.
+    let not_purged = has_table(conn, "sources")?
+        && conn
+            .query_row(
+                "SELECT state != 3 FROM sources WHERE plugin = ?1",
+                [plugin],
+                |r| r.get::<_, bool>(0),
+            )
+            .optional()?
+            .unwrap_or(false);
     if not_purged {
         return Ok(true);
     }
@@ -1239,7 +1239,11 @@ fn holds_source_records(conn: &Connection, plugin: &str) -> rusqlite::Result<boo
 /// back to this snapshot goes on scrubbing the others, and asks for fresh
 /// consent and credentials before the source runs again.
 fn scrub_source(tx: &Connection, plugin: &str, at: i64) -> rusqlite::Result<()> {
-    tx.execute("UPDATE sources SET state = 3 WHERE plugin = ?1", [plugin])?;
+    // A snapshot older than sources still takes the record, so a store
+    // rolled back to it goes on scrubbing the newer ones.
+    if has_table(tx, "sources")? {
+        tx.execute("UPDATE sources SET state = 3 WHERE plugin = ?1", [plugin])?;
+    }
     crate::sources::drop_records(tx, plugin)?;
     tx.execute(
         "DELETE FROM settings WHERE key = ?1",

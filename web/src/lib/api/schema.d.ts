@@ -6111,13 +6111,15 @@ export interface components {
             plugin: string;
             /**
              * Format: int64
-             * @description Snapshots that couldn't be scrubbed now; the hourly pass, or a
-             *     rollback, scrubs them before they can be used.
+             * @description Problems the snapshot pass met (a snapshot it couldn't read or
+             *     write now, one of a schema it doesn't know): the hourly pass tries
+             *     again, and a rollback scrubs a snapshot before restoring it.
              */
             snapshots_left: number;
             /**
              * Format: int64
-             * @description Snapshots its credentials and consent were removed from.
+             * @description Snapshots the pass changed: its credentials and consent removed,
+             *     with anything else the pass was due to remove.
              */
             snapshots_scrubbed: number;
             /** Format: int32 */

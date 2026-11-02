@@ -503,47 +503,6 @@ pub struct SourceView {
     pub purge_pending: bool,
 }
 
-/// What a purge job has committed so far, for its progress (SRC-14b).
-/// Each count is of rows already committed: a purge that stops partway
-/// reports what it did, and the rest is done by running it again.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PurgeCounts {
-    /// Keys the fetch pool dropped when the source stopped.
-    pub keys_dropped: u64,
-    pub unverified_deleted: u64,
-    pub unverified_kept: u64,
-    pub claims_deleted: u64,
-    pub torrents_deleted: u64,
-    pub torrents_kept: u64,
-    /// Plugin state keys and persisted fetch-queue keys deleted.
-    pub state_deleted: u64,
-    /// Snapshots whose copy of the source's records was dropped.
-    pub snapshots_scrubbed: u64,
-    /// Snapshots that couldn't be read or written now; the hourly pass
-    /// and any rollback scrub them later.
-    pub snapshots_left: u64,
-}
-
-impl PurgeCounts {
-    /// Adds one store step's counts; the number of rows it covered.
-    pub fn add(&mut self, step: &lodestar_store::unverified::PurgeStep) -> u64 {
-        let n = |v: usize| v as u64;
-        self.unverified_deleted += n(step.unverified_deleted);
-        self.unverified_kept += n(step.unverified_kept);
-        self.claims_deleted += n(step.claims_deleted);
-        self.torrents_deleted += n(step.torrents_deleted.len());
-        self.torrents_kept += n(step.torrents_kept);
-        self.state_deleted += n(step.state_deleted + step.queue_deleted);
-        n(step.unverified_deleted
-            + step.unverified_kept
-            + step.claims_deleted
-            + step.torrents_deleted.len()
-            + step.torrents_kept
-            + step.state_deleted
-            + step.queue_deleted)
-    }
-}
-
 /// `HTTPS_PROXY` or `ALL_PROXY` is set while a source connects directly.
 pub const WARN_PROXY_ENV: &str = "HTTPS_PROXY or ALL_PROXY is set, but source plugins never use \
      it: this source connects directly. To send it through a proxy, choose SOCKS5.";
@@ -1258,12 +1217,21 @@ impl Control {
         let manifest = self.manifest(id)?;
         let store = self.inner.store.clone();
         let (scrubbed, left) = tokio::task::spawn_blocking(move || {
-            let mut store = store.lock().expect("store lock");
             let now = unix_now();
-            store.finish_source_purge(id, now)?;
+            let reopen = {
+                let mut store = store.lock().expect("store lock");
+                store.finish_source_purge(id, now)?;
+                store.reopen_args()
+            };
+            // On a connection of its own, so the shared one (the Sources
+            // routes, the credential lookups) isn't held for the pass.
+            let Some((path, config)) = reopen else {
+                return Ok((0, 0));
+            };
+            let mut own = Store::open(&path, config)?;
             // Filter hits age out on the writer's own tick, not here.
-            let report = store.purge_snapshots(now, i64::MIN);
-            Ok::<_, SourceError>((report.sources as u64, report.warnings.len() as u64))
+            let report = own.purge_snapshots(now, i64::MIN);
+            Ok::<_, SourceError>((report.purged.len() as u64, report.warnings.len() as u64))
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;

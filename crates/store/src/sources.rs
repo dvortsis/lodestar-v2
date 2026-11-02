@@ -510,10 +510,15 @@ impl Store {
     }
 
     /// Replaces the persisted fetch queue (called on shutdown and
-    /// periodically, so a crash loses little).
+    /// periodically, so a crash loses little). Keys of a disabled or
+    /// purged source are left out: the writer would refuse their fetches.
     pub fn save_fetch_queue(&mut self, keys: &[QueuedKey]) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM fetch_queue", [])?;
+        // A disabled or purged source's keys aren't saved (SRC-14b): a
+        // pool snapshot taken before its purge dropped them, or a key
+        // still on its way to the pool then, mustn't outlive the purge.
+        let stopped = stopped_mask(&tx)?;
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO fetch_queue
@@ -521,7 +526,7 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT (info_hash) DO NOTHING",
             )?;
-            for k in keys {
+            for k in keys.iter().filter(|k| stopped & k.source.bit() as u64 == 0) {
                 let flags = if k.private_source { QUEUE_PRIVATE } else { 0 };
                 stmt.execute(params![
                     &k.info_hash.0[..],
