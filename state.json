@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T06:45:10Z",
+  "updated_at": "2026-11-02T06:48:59Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2423,10 +2423,23 @@
       "status": "running",
       "model": "opus",
       "session": "session_01MMjhnAWFNGeB2VZxALptGu",
-      "launched": "2026-11-02T06:45:10Z"
+      "launched": "2026-11-02T06:45:10Z",
+      "scope": "approved edit to crates/store/src/unverified.rs promote for exact Insights counting; percolator pickup moved to SRC-2b"
     },
     "SRC-14": {
       "brief_must": "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN"
+    },
+    "SRC-2b": {
+      "status": "queued",
+      "model": "opus",
+      "deps": [
+        "SRC-2"
+      ],
+      "owns": [
+        "crates/lodestar/src/percolator.rs",
+        "crates/store/src/saved.rs"
+      ],
+      "notes": "percolate promoted ids (below each search watermark); candidate design: consume reindex_log entries, dedupe by (search, torrent), no new table. Gap until then: promoted torrents miss saved-search alerts."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
