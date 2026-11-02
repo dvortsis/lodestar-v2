@@ -15945,7 +15945,7 @@
           "snapshots_left": {
             "type": "integer",
             "format": "int64",
-            "description": "Problems the snapshot pass met (a snapshot it couldn't read or\nwrite now, one of a schema it doesn't know): the hourly pass tries\nagain, and a rollback scrubs a snapshot before restoring it.",
+            "description": "Warnings the snapshot pass raised: every problem it met (a\nsnapshot it couldn't read or write now, one of a schema it doesn't\nknow, a file it couldn't delete), so this counts problems, not only\nsnapshots left unscrubbed. The hourly pass tries again, and a\nrollback scrubs a snapshot before restoring it.",
             "minimum": 0
           },
           "snapshots_scrubbed": {

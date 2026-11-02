@@ -196,3 +196,38 @@ fn a_stopped_sources_queued_keys_arent_saved() {
         .collect();
     assert_eq!(saved, [dht]);
 }
+
+/// A torrent that passes to a live finder because its own stopped is
+/// stored private: a public sighting by the stopped finder can't make it
+/// public through the live one (runner, #400). A live public sighting
+/// makes it public again.
+#[test]
+fn a_torrent_passed_to_a_live_finder_is_stored_private() {
+    let (mut store, dht, nyaa) = setup();
+    store.set_source_state(nyaa, SourceState::Purged).unwrap();
+    let raw = info("Public.Through.The.Purged.One");
+    write(&mut store, &raw, nyaa, 1 << dht.get());
+    let flags = |store: &Store| -> i64 {
+        store
+            .connection()
+            .query_row(
+                "SELECT flags FROM torrents WHERE info_hash = ?1",
+                [&hash(&raw).0[..]],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_ne!(flags(&store) & lodestar_store::flags::PRIVATE_SOURCE, 0);
+    store
+        .write(&WriteBatch {
+            touches: &[Touch {
+                hash: hash(&raw),
+                sources: 1 << dht.get(),
+                at: T + 60,
+                public: true,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert_eq!(flags(&store) & lodestar_store::flags::PRIVATE_SOURCE, 0);
+}

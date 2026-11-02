@@ -1211,8 +1211,10 @@ impl Control {
     /// Ends the purge once every step is done: the source Purged and its
     /// consent record, credentials and settings dropped, in one
     /// transaction, then every snapshot scrubbed of them (the snapshot
-    /// purge's pass). Returns the snapshots scrubbed and those left for
-    /// the hourly pass (or a rollback) to scrub.
+    /// purge's pass). Returns the snapshots the pass changed, and the
+    /// warnings it raised: every problem it met (a snapshot it couldn't
+    /// read or write now, one of an unknown schema, a file it couldn't
+    /// delete), not only snapshots left unscrubbed.
     pub async fn finish_purge(&self, id: SourceId) -> Result<(u64, u64), SourceError> {
         let manifest = self.manifest(id)?;
         let store = self.inner.store.clone();

@@ -117,9 +117,11 @@ pub struct PurgeJob {
     /// Keys waiting to be fetched that were dropped.
     pub keys_dropped: u64,
     pub plugin: String,
-    /// Problems the snapshot pass met (a snapshot it couldn't read or
-    /// write now, one of a schema it doesn't know): the hourly pass tries
-    /// again, and a rollback scrubs a snapshot before restoring it.
+    /// Warnings the snapshot pass raised: every problem it met (a
+    /// snapshot it couldn't read or write now, one of a schema it doesn't
+    /// know, a file it couldn't delete), so this counts problems, not only
+    /// snapshots left unscrubbed. The hourly pass tries again, and a
+    /// rollback scrubs a snapshot before restoring it.
     pub snapshots_left: u64,
     /// Snapshots the pass changed: its credentials and consent removed,
     /// with anything else the pass was due to remove.

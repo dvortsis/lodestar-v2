@@ -6111,9 +6111,11 @@ export interface components {
             plugin: string;
             /**
              * Format: int64
-             * @description Problems the snapshot pass met (a snapshot it couldn't read or
-             *     write now, one of a schema it doesn't know): the hourly pass tries
-             *     again, and a rollback scrubs a snapshot before restoring it.
+             * @description Warnings the snapshot pass raised: every problem it met (a
+             *     snapshot it couldn't read or write now, one of a schema it doesn't
+             *     know, a file it couldn't delete), so this counts problems, not only
+             *     snapshots left unscrubbed. The hourly pass tries again, and a
+             *     rollback scrubs a snapshot before restoring it.
              */
             snapshots_left: number;
             /**

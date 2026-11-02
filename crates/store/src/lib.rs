@@ -596,7 +596,9 @@ impl Store {
                     "UPDATE torrents SET last_seen_at = ?2 WHERE id = ?1 AND last_seen_at <= ?3",
                 )?
                 .execute(params![id, t.at, t.at - LAST_SEEN_WRITE_EVERY])?;
-                if t.public {
+                // A sighting that a stopped source's is merged into can't
+                // make it public: which finder was public isn't known.
+                if t.public && t.sources & stopped == 0 {
                     make_public(&tx, id)?;
                 }
             }
@@ -1117,7 +1119,20 @@ fn commit_live(
         return Ok(Inserted::Refused);
     }
     let source = SourceId::new(live.trailing_zeros() as u8).expect("bit under 64");
-    commit_one(tx, codec, &PreparedTorrent { source, ..*t })
+    // Stored private: whether it's public came from every finder's
+    // sightings, the stopped one's included, and which of the live ones
+    // were private isn't known here. A live public sighting makes it
+    // public again (`make_public`), as for any private-source torrent.
+    let extra_flags = t.extra_flags | flags::PRIVATE_SOURCE;
+    commit_one(
+        tx,
+        codec,
+        &PreparedTorrent {
+            source,
+            extra_flags,
+            ..*t
+        },
+    )
 }
 
 /// Inserts one prepared torrent, or adds its source to the stored one.

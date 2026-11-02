@@ -1182,6 +1182,80 @@ fn purge_one(
     Ok(Outcome::Purged(result?))
 }
 
+/// Applies every source purge `store` records to `snapshot`, in one
+/// transaction, before an update rollback restores it (SRC-14b; the update
+/// journal's `choose_snapshot`). That path renames a pre-migration
+/// snapshot over the store without [`purge_for_restore`], so a snapshot the
+/// hourly pass hasn't reached yet would bring a purged source's
+/// credentials and consent back, and lose the purge's record.
+///
+/// Every purge applies, whatever the snapshot's time, and its record goes
+/// in, as [`purge_for_restore`] does: a restored store goes on scrubbing
+/// the other snapshots. Nothing is written when the snapshot already holds
+/// none of the purged sources' records and every record. The snapshot
+/// ends as one file with its modification time kept. Returns the purges
+/// applied.
+pub fn apply_source_purges(store: &Connection, snapshot: &Path) -> crate::Result<usize> {
+    let purged = purged_sources(store)?;
+    if purged.is_empty() {
+        return Ok(0);
+    }
+    let taken = modified(snapshot);
+    let mut conn = open_rw(snapshot)?;
+    settle_conn(&conn)?;
+    if !has_table(&conn, "settings")? {
+        return Ok(0);
+    }
+    let mut due = Vec::new();
+    {
+        let mut recorded = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        for (plugin, at) in &purged {
+            let have: Option<i64> = recorded
+                .query_row([format!("{}{plugin}", crate::sources::PURGED_KEY)], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            if have.is_none_or(|h| h < *at) || holds_source_records(&conn, plugin)? {
+                due.push((plugin.as_str(), *at));
+            }
+        }
+    }
+    if due.is_empty() {
+        return Ok(0);
+    }
+    conn.pragma_update(None, "secure_delete", true)?;
+    let mode: String = conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
+    let result = (|| -> rusqlite::Result<()> {
+        let tx = crate::begin_write(&mut conn)?;
+        for (plugin, at) in &due {
+            scrub_source(&tx, plugin, *at)?;
+        }
+        tx.commit()
+    })();
+    if mode.eq_ignore_ascii_case("wal") {
+        let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        let _ = conn.pragma_update(None, "journal_mode", "DELETE");
+    }
+    drop(conn);
+    if let Some(t) = taken {
+        let _ = set_modified(snapshot, t);
+    }
+    result?;
+    // A WAL left beside it would be lost with the rename.
+    if settle(snapshot)? || side_exists(snapshot, "-wal") {
+        return Err(crate::Error::Corrupt(
+            "the scrubbed snapshot still has a WAL",
+        ));
+    }
+    Ok(due.len())
+}
+
+fn side_exists(path: &Path, suffix: &str) -> bool {
+    let mut p = path.as_os_str().to_os_string();
+    p.push(suffix);
+    Path::new(&p).exists()
+}
+
 /// The purged sources a store records, with when (`sources.purged.*`).
 fn purged_sources(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
     if !has_table(conn, "settings")? {
