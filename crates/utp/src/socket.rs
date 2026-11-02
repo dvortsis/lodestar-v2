@@ -452,7 +452,8 @@ impl UtpSocket {
             match shared.insert((to, id), conn) {
                 Ok(cell) => break cell,
                 Err(Full) => {
-                    return Err(io::Error::other(
+                    return Err(io::Error::new(
+                        io::ErrorKind::QuotaExceeded,
                         "too many uTP connections (in all or to this IP)",
                     ));
                 }

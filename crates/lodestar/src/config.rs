@@ -198,8 +198,8 @@ pub struct Dht {
     /// (docs/decisions/2026-11-02-CR-4.md); not in the Settings UI (the
     /// `transport` settings stay inactive until the A/B decides).
     pub utp: bool,
-    /// CR-4: after a peer connect fails with "network unreachable", skip
-    /// that address family for a doubling backoff. Off by default
+    /// CR-4: skip peers whose address family has no local route (a
+    /// cached UDP-connect probe). Off by default
     /// (docs/decisions/2026-11-02-CR-4.md); not in the Settings UI.
     pub route_backoff: bool,
 }

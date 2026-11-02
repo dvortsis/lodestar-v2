@@ -3,7 +3,6 @@
 use std::fmt::{self, Write};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 use lodestar_utp::{StatsSnapshot, UtpSocket};
 
@@ -157,21 +156,26 @@ impl FetchStats {
         by_family(
             "fetch_no_route_total",
             "counter",
-            "Peer connections the local network stack refused as unreachable (no route), by family.",
-            &|f| self.routes.no_routes(f),
+            "Peer TCP connects that failed as network unreachable, by family.",
+            &|f| self.routes.unreachables(f),
+        );
+        by_family(
+            "fetch_route_probe_down_total",
+            "counter",
+            "Local route probes that found no route to the family.",
+            &|f| self.routes.probes_down(f),
         );
         by_family(
             "fetch_route_skipped_total",
             "counter",
-            "Fetches not dialled because their family's route is backed off, by family.",
+            "Fetches not dialled because their family has no local route, by family.",
             &|f| self.routes.skips(f),
         );
-        let now = Instant::now();
         by_family(
-            "fetch_route_backoff",
+            "fetch_route_down",
             "gauge",
-            "1 while dials to the family are held back after a no-route error.",
-            &|f| u64::from(self.routes.backed_off(f, now)),
+            "1 while the family's last local route probe found no route.",
+            &|f| u64::from(self.routes.down(f)),
         );
         if let Some(u) = utp {
             let mut one = |name: &str, help: &str, v: u64| {
@@ -224,8 +228,9 @@ mod tests {
             "lodestar_fetch_family_success_total{family=\"ipv6\"} 1",
             "lodestar_fetch_no_route_total{family=\"ipv6\"} 0",
             "lodestar_fetch_route_skipped_total{family=\"ipv4\"} 0",
-            "# TYPE lodestar_fetch_route_backoff gauge",
-            "lodestar_fetch_route_backoff{family=\"ipv6\"} 0",
+            "# TYPE lodestar_fetch_route_down gauge",
+            "lodestar_fetch_route_down{family=\"ipv6\"} 0",
+            "lodestar_fetch_route_probe_down_total{family=\"ipv4\"} 0",
             "lodestar_utp_retransmits_total 7",
             "lodestar_utp_connection_timeouts_total 2",
         ] {

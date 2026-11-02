@@ -1,17 +1,19 @@
-//! Per-family route backoff (CR-4). Only route-level evidence moves it: a
-//! TCP connect that the local stack refuses with "network unreachable"
-//! (no route to that family at all). Peer timeouts, refusals and resets
-//! say nothing about the route and never count.
+//! Per-family route checks (CR-4). A route is "down" only on local
+//! evidence: a UDP `connect` to the peer, which sends nothing and fails
+//! only when the local routing table has no route (or the family has no
+//! socket at all). Peer timeouts, refusals, resets and a remote router's
+//! ICMP never count. The probe's answer is cached per family for
+//! [`PROBE_EVERY`], so a route that comes back (a VPN reconnect) is seen
+//! within seconds. Nothing here runs unless a switch asks for it.
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// The first backoff; each consecutive no-route probe doubles it.
-pub const ROUTE_BACKOFF_MIN: Duration = Duration::from_secs(30);
-pub const ROUTE_BACKOFF_MAX: Duration = Duration::from_secs(15 * 60);
+/// How long a probe's answer stands before the next fetch probes again.
+pub const PROBE_EVERY: Duration = Duration::from_secs(2);
 
 /// 0 for IPv4 (and v4-mapped), 1 for IPv6: the `family` label's index.
 pub fn family_index(addr: SocketAddr) -> usize {
@@ -24,101 +26,105 @@ pub fn family_index(addr: SocketAddr) -> usize {
 
 pub const FAMILIES: [&str; 2] = ["ipv4", "ipv6"];
 
-/// Whether a connect error is route-level evidence: "network
-/// unreachable", confirmed against the local routing table. A TCP connect
-/// also fails that way when a *remote* router answers with ICMP "net
-/// unreachable" for one dead prefix, which says nothing about our route,
-/// so the local table is asked with a UDP `connect`, which sends nothing
-/// and fails only when no local route exists. `HostUnreachable` is left
-/// out (one host, not the family).
-pub fn is_no_route(e: &io::Error, to: SocketAddr) -> bool {
-    e.kind() == io::ErrorKind::NetworkUnreachable && no_local_route(to)
+/// A connect error that says "network unreachable". It's counted only;
+/// it can come from a remote router's ICMP for one prefix, so it never
+/// decides anything on its own.
+pub fn is_unreachable(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::NetworkUnreachable
 }
 
-/// The local routing table has no route to `to`.
-fn no_local_route(to: SocketAddr) -> bool {
+/// Whether the local routing table has a route to `to`.
+pub fn local_route(to: SocketAddr) -> bool {
     let any: SocketAddr = match to {
-        SocketAddr::V4(_) => (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
-        SocketAddr::V6(_) => (std::net::Ipv6Addr::UNSPECIFIED, 0).into(),
+        SocketAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+        SocketAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
     };
     match std::net::UdpSocket::bind(any) {
-        Ok(udp) => udp
+        // Only "unreachable" means no route; any other connect error
+        // (there are hardly any for UDP) doesn't hold dials back.
+        Ok(udp) => !udp
             .connect(to)
             .is_err_and(|e| e.kind() == io::ErrorKind::NetworkUnreachable),
-        // No socket of the family at all: no route either.
-        Err(e) => e.kind() == io::ErrorKind::AddrNotAvailable,
+        // No socket of the family at all (IPv6 disabled gives
+        // EAFNOSUPPORT, which std leaves uncategorised): no route. A
+        // transient bind failure holds the family back for one probe
+        // interval at most.
+        Err(_) => false,
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-struct State {
-    /// Dials to this family are skipped until then.
-    until: Option<Instant>,
-    /// Consecutive no-route probes, for the doubling.
-    strikes: u32,
-}
+/// The last probe per family: when, and whether it found a route.
+type Probe = Option<(Instant, bool)>;
 
-/// Route evidence per family. Its counters always count; it holds dials
-/// back only when the fetcher's `route_backoff` switch is on.
+/// Route evidence per family. Probes run only when a switch calls
+/// [`routed`](Self::routed); the counters always count.
 #[derive(Debug, Default)]
 pub struct Routes {
-    state: [Mutex<State>; 2],
-    no_route: [AtomicU64; 2],
+    probe: [Mutex<Probe>; 2],
+    unreachable: [AtomicU64; 2],
     skipped: [AtomicU64; 2],
+    probes_down: [AtomicU64; 2],
 }
 
 impl Routes {
-    /// A connect failed with no route: counted, and with `back_off` (the
-    /// switch) the family backs off (doubling, capped).
-    pub(crate) fn no_route(&self, family: usize, now: Instant, back_off: bool) {
-        self.no_route[family].fetch_add(1, Ordering::Relaxed);
-        if !back_off {
-            return;
-        }
-        let mut s = lock(&self.state[family]);
-        // One strike per window: the dials already in flight when the
-        // first no-route came back don't each double the backoff.
-        if s.until.is_some_and(|t| now < t) {
-            return;
-        }
-        let step = ROUTE_BACKOFF_MIN.saturating_mul(1 << s.strikes.min(16));
-        s.until = Some(now + step.min(ROUTE_BACKOFF_MAX));
-        s.strikes = s.strikes.saturating_add(1);
+    /// A TCP connect failed as network unreachable (counted only).
+    pub(crate) fn unreachable(&self, family: usize) {
+        self.unreachable[family].fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A connect in this family opened: the route works.
-    pub(crate) fn reached(&self, family: usize) {
-        let mut s = lock(&self.state[family]);
-        if s.strikes != 0 || s.until.is_some() {
-            *s = State::default();
+    /// Whether `addr`'s family has a local route, probing at most once
+    /// per [`PROBE_EVERY`] per family.
+    pub(crate) fn routed(&self, addr: SocketAddr, now: Instant) -> bool {
+        self.routed_with(addr, now, local_route)
+    }
+
+    pub(crate) fn routed_with(
+        &self,
+        addr: SocketAddr,
+        now: Instant,
+        probe: impl FnOnce(SocketAddr) -> bool,
+    ) -> bool {
+        let family = family_index(addr);
+        let mut last = lock(&self.probe[family]);
+        if let Some((at, routed)) = *last
+            && now.saturating_duration_since(at) < PROBE_EVERY
+        {
+            return routed;
         }
-    }
-
-    /// Whether a dial to this family should be skipped now (and counts it).
-    /// Once the backoff ends, dials go out again as probes.
-    pub(crate) fn skip(&self, family: usize, now: Instant) -> bool {
-        let backed_off = lock(&self.state[family]).until.is_some_and(|t| now < t);
-        if backed_off {
-            self.skipped[family].fetch_add(1, Ordering::Relaxed);
+        let routed = probe(addr);
+        if !routed {
+            self.probes_down[family].fetch_add(1, Ordering::Relaxed);
         }
-        backed_off
+        *last = Some((now, routed));
+        routed
     }
 
-    /// Whether the family is backed off at `now` (the gauge).
-    pub fn backed_off(&self, family: usize, now: Instant) -> bool {
-        lock(&self.state[family]).until.is_some_and(|t| now < t)
+    /// A fetch not dialled because its family has no route.
+    pub(crate) fn skipped(&self, family: usize) {
+        self.skipped[family].fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn no_routes(&self, family: usize) -> u64 {
-        self.no_route[family].load(Ordering::Relaxed)
+    /// Whether the family's last probe found no route (the gauge; 0 when
+    /// nothing has probed).
+    pub fn down(&self, family: usize) -> bool {
+        lock(&self.probe[family]).is_some_and(|(_, routed)| !routed)
+    }
+
+    pub fn unreachables(&self, family: usize) -> u64 {
+        self.unreachable[family].load(Ordering::Relaxed)
     }
 
     pub fn skips(&self, family: usize) -> u64 {
         self.skipped[family].load(Ordering::Relaxed)
     }
+
+    /// Probes that found no route.
+    pub fn probes_down(&self, family: usize) -> u64 {
+        self.probes_down[family].load(Ordering::Relaxed)
+    }
 }
 
-fn lock(m: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
+fn lock(m: &Mutex<Probe>) -> std::sync::MutexGuard<'_, Probe> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -127,59 +133,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn families_and_evidence() {
+    fn families_and_the_local_probe() {
         assert_eq!(family_index("1.2.3.4:1".parse().unwrap()), 0);
         assert_eq!(family_index("[::ffff:1.2.3.4]:1".parse().unwrap()), 0);
         assert_eq!(family_index("[2001:db8::1]:1".parse().unwrap()), 1);
-        // Loopback always has a local route, so even "network unreachable"
-        // (as a remote router's ICMP would cause) isn't route-level there.
-        let lo: SocketAddr = "127.0.0.1:9".parse().unwrap();
-        assert!(!is_no_route(&io::ErrorKind::NetworkUnreachable.into(), lo));
-        for k in [
-            io::ErrorKind::HostUnreachable,
-            io::ErrorKind::ConnectionRefused,
-            io::ErrorKind::TimedOut,
-            io::ErrorKind::AddrNotAvailable,
-        ] {
-            assert!(!is_no_route(&k.into(), lo), "{k:?} isn't route-level");
-        }
+        assert!(is_unreachable(&io::ErrorKind::NetworkUnreachable.into()));
+        assert!(!is_unreachable(&io::ErrorKind::HostUnreachable.into()));
+        // Loopback always has a local route.
+        assert!(local_route("127.0.0.1:9".parse().unwrap()));
     }
 
     #[test]
-    fn backs_off_doubling_to_the_cap_and_resets_on_a_connect() {
+    fn a_route_that_comes_back_is_seen_within_one_probe_interval() {
         let r = Routes::default();
+        let v6: SocketAddr = "[2001:db8::1]:1".parse().unwrap();
+        let v4: SocketAddr = "192.0.2.1:1".parse().unwrap();
         let t0 = Instant::now();
-        assert!(!r.skip(1, t0));
-        r.no_route(1, t0, true);
-        assert!(r.skip(1, t0 + Duration::from_secs(29)));
-        assert!(!r.skip(1, t0 + ROUTE_BACKOFF_MIN), "the probe goes out");
-        assert!(!r.backed_off(0, t0), "families are independent");
-        let t1 = t0 + ROUTE_BACKOFF_MIN;
-        r.no_route(1, t1, true);
-        assert!(r.skip(1, t1 + Duration::from_secs(59)));
-        assert!(!r.skip(1, t1 + Duration::from_secs(60)));
-        r.no_route(1, t1 + Duration::from_secs(1), true);
-        assert!(
-            !r.backed_off(1, t1 + Duration::from_secs(60)),
-            "a failure inside the window doesn't strike again"
-        );
-        let mut t = t1 + Duration::from_secs(60);
-        for _ in 0..20 {
-            r.no_route(1, t, true);
-            t += ROUTE_BACKOFF_MAX;
-        }
-        let last = t - ROUTE_BACKOFF_MAX;
-        assert!(r.backed_off(1, last + ROUTE_BACKOFF_MAX - Duration::from_secs(1)));
-        assert!(!r.backed_off(1, last + ROUTE_BACKOFF_MAX), "capped");
-        r.reached(1);
-        assert!(!r.backed_off(1, t1));
-        r.no_route(1, t1, true);
-        assert!(
-            !r.backed_off(1, t1 + ROUTE_BACKOFF_MIN),
-            "back to the minimum"
-        );
-        r.no_route(0, t1, false);
-        assert!(!r.skip(0, t1), "switch off: counted, never backed off");
-        assert_eq!((r.no_routes(1), r.skips(1), r.no_routes(0)), (24, 2, 1));
+        assert!(!r.down(1), "nothing probed yet");
+        assert!(!r.routed_with(v6, t0, |_| false));
+        assert!(r.down(1));
+        // Cached: no probe inside the interval, even if the route is back.
+        let probe_ran = std::cell::Cell::new(false);
+        let probe = |_| {
+            probe_ran.set(true);
+            true
+        };
+        assert!(!r.routed_with(v6, t0 + Duration::from_millis(1999), probe));
+        assert!(!probe_ran.get());
+        // The next interval probes again and sees the route.
+        assert!(r.routed_with(v6, t0 + PROBE_EVERY, |_| true));
+        assert!(!r.down(1));
+        assert!(r.routed_with(v4, t0, |_| true), "families are independent");
+        assert_eq!((r.probes_down(1), r.probes_down(0)), (1, 0));
     }
 }
