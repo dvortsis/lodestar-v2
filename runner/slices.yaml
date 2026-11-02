@@ -9,7 +9,7 @@ limits:
   max_helpers: 16          # Sonnet/Haiku slices at once (owner, 2026-10-22)
   max_launches_per_day: 60 # backstop against runaway loops, not a budget (owner raised from 40, 2026-10-23)
   review_rounds_before_escalation: 2
-  phase_total: 4           # owner §2.25, as applied since 2026-10-30: at most 4 slices at once in total (Opus, helper and docs); remove when the owner lifts it (runner/README.md step 7)
+  phase_total: 2           # owner §2.30 (2026-11-02, weekly usage limit): at most 2 slices at once in total; was 4 (§2.25). Launches are also paused until the soak r3 verdict (§2.30). Remove when the owner lifts it (runner/README.md step 7)
 
 external:
   m4-schema-settled:
@@ -425,6 +425,8 @@ slices:
   - {id: SRC-12, title: "BEP 48 full scrape: streaming bounded parser, one per tracker per day, discovery plugin", kind: core, model: opus, deps: [SRC-0, SRC-7], owns: ["crates/tracker-scrape/src/full.rs", "crates/sources-plugins/src/full_scrape.rs", "fuzz/fuzz_targets/full_scrape.rs"], spec: ["§18.1", "§18.2", "§18.4"], notes: "/security-review"}
   - {id: SRC-13, title: "Torrent-cache enrichment: hash-checked .torrent fetch, never for private_source", kind: core, model: opus, deps: [SRC-2, SRC-5, SRC-7, "ext:owner-q3"], owns: ["crates/sources-plugins/src/torrent_cache.rs", "crates/pipeline/src/torrent_cache.rs"], spec: ["§18.2", "§18.7"], notes: "/security-review"}
   - {id: SRC-14, title: "Sources API v0.6: manifest, health, yield, egress/schedule/agents editable, purge as a job", kind: core, model: opus, deps: [SRC-2, SRC-4, SRC-5], owns: ["crates/api/src/ops.rs", "crates/api/src/dto/ops.rs", "crates/lodestar/src/ops.rs", "crates/store/src/sources.rs", "web/src/lib/api/openapi.json", "web/src/lib/api/schema.d.ts"], spec: ["§18.8", "§10.10.7", "§10.10.8", "§9"], notes: "/security-review; takes over SRC-4's api/ops files after SRC-4 merges"}
+  - {id: SRC-14a, title: "Sources API v0.6: manifest, health, yield, egress/schedule/agents editable (split from SRC-14)", kind: core, model: opus, deps: [SRC-2, SRC-4, SRC-5], notes: "merged #394 (ea7b1e7b); docs/decisions/2026-11-02-SRC-14a.md"}
+  - {id: SRC-14b, title: "Egress hardening (14b-1) and purge job with snapshot scrub (14b-2) (split from SRC-14)", kind: core, model: opus, deps: [SRC-14a], notes: "merged #399 (13676d4e) and #400 (175ddc50); docs/decisions/2026-11-02-SRC-14b*.md"}
   - {id: SRC-15a, title: "Settings → Sources: grouped rows, status pills, toggles, priority, yield sparkline", kind: helper, model: sonnet, deps: [SRC-14], owns: ["web/src/lib/features/sources/**"], spec: ["§18.8", "§10.10", "§10.10.2"]}
   - {id: SRC-15b, title: "Settings → Sources: consent dialogs, credentials, generated config forms, purge flow", kind: helper, model: sonnet, deps: [SRC-15a, "ext:owner-q1"], owns: ["web/src/lib/features/sources/**"], spec: ["§18.7", "§18.8", "§10.10.7", "§10.14"], notes: "/security-review"}
   - {id: SRC-16, title: "Jobs view: progress, rate, ETA, pause/resume/cancel over /jobs", kind: helper, model: sonnet, deps: [], owns: ["web/src/lib/features/jobs/**"], spec: ["§18.8", "§9"], notes: "location per plan Q17 (runner): a Settings screen via features/jobs/screen.ts unless the runner decides otherwise"}

@@ -310,6 +310,8 @@ placement:
 - ws: ws-src-ui
   match:
   - SRC-14
+  - SRC-14a
+  - SRC-14b
   - SRC-15*
   - SRC-16
   - SRC-17
@@ -598,6 +600,8 @@ roadmap:
     row: 6
     members:
     - SRC-14
+    - SRC-14a
+    - SRC-14b
     - SRC-15a
     - SRC-15b
     - SRC-16
