@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T17:33:03Z",
+  "updated_at": "2026-11-02T17:38:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2613,7 +2613,7 @@
       "merge": "f8ff9bab"
     },
     "R-mem-triage": {
-      "status": "update 2: ingest path and capped structures ruled out (musl+mimalloc ~1.3 KiB/torrent, live heap ~150 B, pool 200k plateau ~150 MiB); ~5 of 6.66 MiB/h from live-network-only paths. Asked owner for sanitized r3 .prom snapshots (h6/12/16/latest) + private_bytes series. PR held; code-reading live-network maps meanwhile. Lease leak fix (~2/h) held for the bundled PR.",
+      "status": "code read: no uncapped map on live-network paths (actor pending/tids, sampler 200k, pool per_ip/task_keys, fixed counters, log ring capped 4 MiB). Churn fix lowers level ~150 MiB but not slope. Local commit 9d7b7239 held; waiting for owner r3 .prom snapshots or 22:16Z verdict.",
       "brief": "briefs/R-mem-triage.md",
       "model": "opus",
       "session": "session_01MMjhnD9Jd88Vzmq6W9Bxro",
