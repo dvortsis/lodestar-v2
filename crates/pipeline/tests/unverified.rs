@@ -273,8 +273,13 @@ fn a_core_hit_on_a_stored_torrents_key_holds_and_deletes_it() {
     assert!(store.torrent_claims(id).unwrap().is_empty());
 }
 
+/// Your rule (or a pack, or a list) on claim text drops that source's
+/// claims and holds nothing, in either order (runner, #383): a feed can't
+/// get an unrelated torrent refused by claiming its hash under a name your
+/// rule drops. The torrent is judged on its own verified metadata.
 #[test]
-fn your_drop_rule_holds_a_new_key_but_never_a_stored_torrent() {
+fn your_drop_rule_drops_the_claims_and_holds_nothing_in_either_order() {
+    // The torrent first: the claim is dropped, the torrent stays.
     let (mut store, dht, nyaa) = mem();
     let (id, h) = crawled(&mut store, "Holiday Film", dht);
     let filter = stand_in();
@@ -283,20 +288,117 @@ fn your_drop_rule_holds_a_new_key_but_never_a_stored_torrent() {
         &mut store,
         &filter,
         None,
-        &[
-            found(key(7), nyaa, named("Badword Film", &[])),
-            // Claims never override verified metadata: the claim is
-            // dropped, the torrent stays.
-            found(h, nyaa, named("Badword Film", &[])),
-        ],
+        &[found(h, nyaa, named("Badword Film", &[]))],
     );
-    assert_eq!(n(&stats.held), 1);
-    assert_eq!(n(&stats.dropped), 1);
-    assert!(held(&store, key(7)));
-    assert!(store.unverified(Network::Bt, &key(7)).unwrap().is_none());
+    assert_eq!((n(&stats.held), n(&stats.dropped)), (0, 1));
     assert!(!held(&store, h));
     assert!(store.torrent(id).unwrap().is_some());
     assert!(store.torrent_claims(id).unwrap().is_empty());
+
+    // The claim first: nothing is stored or held, so the crawl later
+    // stores the torrent as usual.
+    let (mut store, dht, nyaa) = mem();
+    let p = store
+        .preparer()
+        .prepare(&Info::parse(&info_bytes("Holiday Film")).unwrap(), None)
+        .unwrap();
+    let h = p.info_hash.0;
+    let (stats, _) = ingest(
+        &mut store,
+        &filter,
+        None,
+        &[found(h, nyaa, named("Badword Film", &[]))],
+    );
+    assert_eq!((n(&stats.held), n(&stats.dropped)), (0, 1));
+    assert!(!held(&store, h));
+    assert!(store.unverified(Network::Bt, &h).unwrap().is_none());
+    let (id, again) = crawled(&mut store, "Holiday Film", dht);
+    assert_eq!(again, h);
+    assert!(store.torrent(id).unwrap().is_some());
+
+    // The source's own earlier claims go with it; another source's stay.
+    let (mut store, _, nyaa) = mem();
+    let feed2 = store.register_source("feed2", "1", T).unwrap();
+    ingest(
+        &mut store,
+        &filter,
+        None,
+        &[
+            found(key(8), nyaa, named("Plain Film", &[])),
+            found(key(9), feed2, named("Plain Film", &[])),
+        ],
+    );
+    ingest(
+        &mut store,
+        &filter,
+        None,
+        &[
+            found(key(8), nyaa, named("Badword Film", &[])),
+            found(key(9), nyaa, named("Badword Film", &[])),
+        ],
+    );
+    assert!(store.unverified(Network::Bt, &key(8)).unwrap().is_none());
+    assert!(!held(&store, key(8)));
+    let kept = store.unverified(Network::Bt, &key(9)).unwrap().unwrap();
+    assert_eq!(kept.source, feed2, "feed2 owns 9's claims: kept");
+}
+
+/// Every stored claim text passes the filter (runner, #383): the
+/// description and the publisher are judged as names are, and a core hit
+/// there holds. Tracker URLs are validated as URLs, not judged as text.
+#[test]
+fn the_description_and_publisher_are_judged_and_trackers_validated() {
+    let (mut store, _, nyaa) = mem();
+    let filter = stand_in();
+    rule(&filter, "badword", Action::Drop);
+    let sealer = Sealer::new(&[9; 32]);
+    let described = Claims {
+        description: Some("A clip. Rolea Lexa.".into()),
+        ..named("Holiday", &[])
+    };
+    let published = Claims {
+        publisher: Some("badword-uploads".into()),
+        ..named("Holiday", &[])
+    };
+    let trackers = Claims {
+        trackers: vec![
+            "udp://tracker.example:1337/announce".into(),
+            "https://t.example/a?passkey=x".into(),
+            "javascript:alert(1)".into(),
+            "http:///nohost".into(),
+            "http://bad host/announce".into(),
+            "file:///etc/passwd".into(),
+        ],
+        ..named("Holiday", &[])
+    };
+    let (stats, _) = ingest(
+        &mut store,
+        &filter,
+        Some(&sealer),
+        &[
+            found(key(1), nyaa, described),
+            found(key(2), nyaa, published),
+            found(key(3), nyaa, trackers),
+        ],
+    );
+    assert_eq!(n(&stats.held), 1, "the description's core hit holds");
+    assert!(held(&store, key(1)));
+    let q = store.quarantined(10).unwrap();
+    assert!(
+        q.iter()
+            .any(|q| q.hash == key(1) && q.rule.starts_with("CS-"))
+    );
+    assert_eq!(n(&stats.dropped), 1, "your rule on the publisher drops");
+    assert!(!held(&store, key(2)));
+    assert!(store.unverified(Network::Bt, &key(2)).unwrap().is_none());
+    let item = store.unverified(Network::Bt, &key(3)).unwrap().unwrap();
+    assert_eq!(
+        item.claims.unwrap().trackers,
+        vec![
+            "udp://tracker.example:1337/announce".to_string(),
+            "https://t.example/a?passkey=x".to_string()
+        ]
+    );
 }
 
 #[test]
@@ -378,9 +480,9 @@ fn a_rule_added_after_storage_removes_stored_items_and_claims() {
     });
     let (_, removed) = sweep(&mut store, &filter, None);
     assert_eq!(removed, 3, "an item and two claims");
-    // The item: removed and held.
+    // The item: removed. Your rule holds nothing (runner, #383).
     assert!(store.unverified(Network::Bt, &key(1)).unwrap().is_none());
-    assert!(held(&store, key(1)));
+    assert!(!held(&store, key(1)));
     assert!(store.unverified(Network::Bt, &key(3)).unwrap().is_some());
     // Your rule on a stored torrent's claims: only the claims go.
     assert!(store.torrent(kept_id).unwrap().is_some());
@@ -493,6 +595,14 @@ fn verification_reads_the_store_a_page_at_a_time() {
     assert!(v.next(&store, 2, T + 60).unwrap().is_empty());
     let again = v.next(&store, 2, T + VERIFY_ROUND_SECS).unwrap();
     assert_eq!(again[0].found.key.0, key(1));
+
+    // A disabled source's items aren't verified.
+    store.set_source_state(nyaa, SourceState::Disabled).unwrap();
+    let mut v = Verify {
+        on: true,
+        ..Verify::default()
+    };
+    assert!(v.next(&store, 10, T).unwrap().is_empty());
 }
 
 /// Resident memory, from `/proc/self/statm` (Linux only).

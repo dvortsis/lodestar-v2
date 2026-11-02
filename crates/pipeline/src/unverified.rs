@@ -178,6 +178,24 @@ impl UnverifiedStats {
     }
 }
 
+/// Whether a claimed tracker is a plausible tracker URL: an `http`,
+/// `https`, `udp` or `wss` scheme, a host, at most the claims' tracker
+/// limit, and no whitespace or control characters. Tracker URLs aren't
+/// names, so they aren't judged as text (runner, #383); anything else a
+/// feed puts there is dropped before storage.
+pub fn tracker_url(t: &str) -> bool {
+    let Some((scheme, rest)) = t.split_once("://") else {
+        return false;
+    };
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "udp" | "wss"
+    ) && t.len() <= claims::MAX_TRACKER
+        && !rest.is_empty()
+        && !rest.starts_with('/')
+        && !t.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// The store's claims for a discovery: the source's claims and
 /// provenance, already clamped by the emitter. `None` when it has none.
 pub fn store_claims(d: &Discovery) -> Option<Claims> {
@@ -194,7 +212,12 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
                 size: f.size,
             })
             .collect(),
-        trackers: c.trackers.clone(),
+        trackers: c
+            .trackers
+            .iter()
+            .filter(|t| tracker_url(t))
+            .cloned()
+            .collect(),
         ids: c
             .ids
             .iter()
@@ -287,11 +310,20 @@ pub fn claimed_files(c: &Claims) -> Vec<FileInfo> {
 /// Judges one key's claims through the full filter pipeline, as ingest
 /// judges a fetched torrent: its hash, then the claimed name and every
 /// claimed file path together, classified as they claim, with your
-/// classification rules. `Some` when it must not be stored:
-/// - a floor or core (CS) rule matched: a hold always, a quarantine when
-///   the rule's own action is weaker than one (the rule for SRC-2 in
-///   `2026-11-02-SRC-1.md`);
-/// - any other rule that drops or quarantines.
+/// classification rules; then the claimed description and the publisher,
+/// each judged as a name the same way (runner, #383: every claim text that
+/// is stored passes the filter). Tracker URLs aren't names: they're
+/// validated as URLs instead ([`store_claims`]).
+///
+/// `Some` when the claims must not be stored:
+/// - a floor or core (CS) rule matched any of the texts: [`Hold::core`],
+///   a hold always, a quarantine when the rule's own action is weaker
+///   than one (the rule for SRC-2 in `2026-11-02-SRC-1.md`). A core hit
+///   on any text wins over another rule's hit on another;
+/// - any other rule that drops or quarantines: not [`Hold::core`]. The
+///   callers drop the source's claims and hold nothing (runner, #383): a
+///   feed must not be able to get an unrelated torrent refused by
+///   claiming its hash under a name your rule drops.
 ///
 /// Weaker decisions (flag, hide, demote) and shadow-mode rules don't stop
 /// storage: an unverified item isn't searchable, and its verified metadata
@@ -303,12 +335,45 @@ pub fn judge(
     sealer: Option<&Sealer>,
     now: i64,
 ) -> Option<Hold> {
-    let name = c.name.as_deref().unwrap_or("");
+    let hashes = vec![key];
     let files = claimed_files(c);
-    let class = classify_corrected(name, &files, Correction::default());
     let size = c
         .size
         .unwrap_or_else(|| files.iter().map(|f| f.size).fold(0, u64::saturating_add));
+    let mut found: Option<Hold> = None;
+    let texts = [
+        (c.name.as_deref().unwrap_or(""), true),
+        (c.description.as_deref().unwrap_or(""), false),
+        (c.publisher.as_deref().unwrap_or(""), false),
+    ];
+    for (i, (text, with_files)) in texts.into_iter().enumerate() {
+        // The name is judged even when empty: the files and the hash.
+        if i > 0 && text.is_empty() {
+            continue;
+        }
+        let files: &[FileInfo] = if with_files { &files } else { &[] };
+        let Some(h) = judge_text(engine, &hashes, text, files, size, sealer, now) else {
+            continue;
+        };
+        if h.core {
+            return Some(h);
+        }
+        found.get_or_insert(h);
+    }
+    found
+}
+
+/// [`judge`] for one text, as a torrent's name, with `files`.
+fn judge_text(
+    engine: &Engine,
+    hashes: &[[u8; 20]],
+    name: &str,
+    files: &[FileInfo],
+    size: u64,
+    sealer: Option<&Sealer>,
+    now: i64,
+) -> Option<Hold> {
+    let class = classify_corrected(name, files, Correction::default());
     let facts = Facts {
         class: &class,
         size,
@@ -317,11 +382,10 @@ pub fn judge(
         discovered_at: now,
         now,
     };
-    let hashes = vec![key];
     let item = Item {
-        hashes: &hashes,
+        hashes,
         name,
-        files: &files,
+        files,
         content_type: class.content_type,
     };
     let (verdict, fix) = judge_with_rules(engine, &item, &class, &facts, now);
@@ -338,11 +402,11 @@ pub fn judge(
     } else {
         Held::Quarantine
     };
-    let sealed = (held == Held::Quarantine)
+    let sealed = (core && held == Held::Quarantine)
         .then(|| sealer.and_then(|s| s.seal(name).ok()))
         .flatten();
     Some(Hold {
-        hashes,
+        hashes: hashes.to_vec(),
         rule: d.rule.id(),
         action: action.code(),
         held,
@@ -411,25 +475,28 @@ pub fn ingest(
             keep.push((d, c));
             continue;
         };
-        match store.find(&d.found.key)? {
-            // A rule that isn't the floor's or the core's never holds a
-            // stored torrent on a claim: verified metadata wins (§18.5).
-            Some(_) if !h.core => UnverifiedStats::add(&stats.dropped, 1),
-            // The floor or the core on a stored torrent: every one of its
-            // swarm hashes is held (a hybrid's other key too), as the
-            // refile does.
-            Some(id) => {
-                if let Some(all) = store.torrent_swarm_hashes(id)? {
-                    for x in all {
-                        if !h.hashes.contains(&x) {
-                            h.hashes.push(x);
-                        }
-                    }
-                }
-                holds.push(h);
-            }
-            None => holds.push(h),
+        if !h.core {
+            // Your rule, a pack or a list: this source's claims are
+            // dropped and nothing is held (runner, #383). A torrent under
+            // the hash is judged on its own verified metadata, whichever
+            // arrives first.
+            drop_source_claims(store, d.found.key.0, d.source)?;
+            UnverifiedStats::add(&stats.dropped, 1);
+            continue;
         }
+        // The floor or the core on a stored torrent: every one of its
+        // swarm hashes is held (a hybrid's other key too), as the refile
+        // does.
+        if let Some(id) = store.find(&d.found.key)?
+            && let Some(all) = store.torrent_swarm_hashes(id)?
+        {
+            for x in all {
+                if !h.hashes.contains(&x) {
+                    h.hashes.push(x);
+                }
+            }
+        }
+        holds.push(h);
     }
     if !holds.is_empty() {
         let hashes: Vec<[u8; 20]> = holds.iter().flat_map(|h| h.hashes.clone()).collect();
@@ -485,6 +552,35 @@ pub fn ingest(
         }
     }
     Ok(out)
+}
+
+/// Removes what `source` claimed about `key`, holding nothing: the
+/// unverified item when its claims are this source's, and this source's
+/// claims on a torrent stored under the key. Each removal is SRC-1's
+/// refile write with no decision.
+fn drop_source_claims(
+    store: &mut Store,
+    key: [u8; 20],
+    source: SourceId,
+) -> Result<(), lodestar_store::Error> {
+    if let Some(item) = store.unverified(Network::Bt, &key)?
+        && item.source == source
+    {
+        let r = RefiledUnverified {
+            id: item.id,
+            filtered: None,
+        };
+        store.refile_unverified(&[r], || true)?;
+    }
+    if let Some(torrent_id) = store.find(&lodestar_metainfo::InfoHash(key))? {
+        let r = RefiledClaims {
+            torrent_id,
+            source,
+            filtered: None,
+        };
+        store.refile_claims(&[r], || true)?;
+    }
+    Ok(())
 }
 
 /// Which table the refile sweep is on.
@@ -708,7 +804,9 @@ fn judge_item(
     let Ok(key) = <[u8; 20]>::try_from(i.key.as_slice()) else {
         return Some((i.id, None));
     };
-    judge(engine, key, claims, sealer, now).map(|h| (i.id, Some(h)))
+    // Only the floor and the core hold; any other rule removes the item
+    // and holds nothing (runner, #383).
+    judge(engine, key, claims, sealer, now).map(|h| (i.id, h.core.then_some(h)))
 }
 
 /// [`judge`] against every swarm hash of a stored torrent.
@@ -757,7 +855,9 @@ impl Verify {
             return Ok(Vec::new());
         }
         self.resume_at = None;
-        let page = store.unverified_after(self.after, limit)?;
+        // Keys only, no claims decoded; a disabled or purged source's
+        // items are passed over.
+        let page = store.pending_keys_after(self.after, limit)?;
         let Some(last) = page.last() else {
             if self.after != 0 {
                 self.after = 0;

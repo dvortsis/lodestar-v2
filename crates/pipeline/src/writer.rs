@@ -1539,15 +1539,13 @@ fn promote(
                 ..r.torrent.clone()
             })
         } else {
-            let fixed = item
-                .claims
+            item.claims
                 .as_ref()
-                .and_then(|c| unverified::with_mismatch(&r.torrent, &r.files, c));
-            if fixed.is_some() {
-                stats.mismatches.fetch_add(1, Ordering::Relaxed);
-            }
-            fixed
+                .and_then(|c| unverified::with_mismatch(&r.torrent, &r.files, c))
         };
+        // Counted once stored under the item's own id: a merge keeps the
+        // stored torrent's enrichment, so there's no mismatch recorded.
+        let mismatch = !stale_class && fixed.is_some();
         let t = PreparedTorrent {
             torrent: fixed.as_ref().unwrap_or(pt.torrent),
             ..*pt
@@ -1555,6 +1553,9 @@ fn promote(
         match store.promote(item.id, &t, unverified::SEARCHABLE, now)? {
             Promoted::Kept(id) => {
                 stats.promoted.fetch_add(1, Ordering::Relaxed);
+                if mismatch {
+                    stats.mismatches.fetch_add(1, Ordering::Relaxed);
+                }
                 // As the row records it: the earlier discovery, and the
                 // item's own source as `first_source`.
                 let cohort = item.first_at.min(pt.discovered_at).div_euclid(3600);
@@ -2811,7 +2812,8 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
-            assert!(store.held_among(&[[0x22; 20]]).unwrap()[0]);
+            // Your rule drops the claims and holds nothing (runner, #383).
+            assert!(!store.held_among(&[[0x22; 20]]).unwrap()[0]);
             assert!(
                 store
                     .unverified(Network::Bt, &[0x33; 20])
@@ -2995,8 +2997,13 @@ mod tests {
                         [0x44; 20]
                     }
                     1 => {
-                        // The item claims "Claimed name": a rule now drops it.
-                        drop_rule(&w.filter, "claimed");
+                        // The item claims "Claimed name": the core now
+                        // holds it.
+                        w.filter.update(|c| {
+                            let mut lists = c.lists().clone();
+                            lists.codes = TermSet::of(&["claimed"]);
+                            c.set_lists(lists);
+                        });
                         w.sweep = unverified::Sweep::default();
                         while !w.sweep.done {
                             w.refile_unverified().await;

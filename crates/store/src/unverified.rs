@@ -136,6 +136,18 @@ pub struct UnverifiedItem {
     pub last_at: i64,
 }
 
+/// An unverified item's key, for the verification cursor (SRC-2): no
+/// claims are read or decoded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingKey {
+    pub id: i64,
+    pub network: Network,
+    pub key: Vec<u8>,
+    /// The source whose claims the item holds.
+    pub source: SourceId,
+    pub private_source: bool,
+}
+
 /// A torrent's claims from one source, for the re-judge sweep.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredClaims {
@@ -390,6 +402,48 @@ impl Store {
             if bytes >= PAGE_BYTES {
                 break;
             }
+        }
+        Ok(out)
+    }
+
+    /// Keys of unverified items after `after` (by id), at most `limit`
+    /// (capped at [`MAX_PAGE`]), whose claims' source is enabled or paused:
+    /// a disabled or purged source's items aren't verified. Their claims
+    /// aren't read (SRC-2's verification cursor).
+    pub fn pending_keys_after(&self, after: i64, limit: usize) -> Result<Vec<PendingKey>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT u.id, u.network, u.key, u.source_id, u.flags
+             FROM unverified_items u JOIN sources s ON s.id = u.source_id
+             WHERE u.id > ?1 AND s.state IN (?2, ?3)
+             ORDER BY u.id LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                after,
+                SourceState::Enabled as i64,
+                SourceState::Paused as i64,
+                limit.clamp(1, MAX_PAGE) as i64
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, network, key, source, flags) = row?;
+            out.push(PendingKey {
+                id,
+                network: Network::from_sql(network)?,
+                key,
+                source: SourceId::from_sql(source)?,
+                private_source: flags & PRIVATE != 0,
+            });
         }
         Ok(out)
     }
