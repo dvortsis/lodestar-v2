@@ -1,7 +1,8 @@
 //! Every cap, malformed JSON, and how the hash sources are chosen.
 
 use lodestar_sources_feeds::archive_org::{
-    Feed, LIMITS, Limits, MAX_COLLECTIONS, MAX_PATH, Stop, parse, parse_each,
+    Feed, Item, LIMITS, Limits, MAX_COLLECTIONS, MAX_IDENTIFIER, MAX_PATH, MAX_TITLE, Stop, parse,
+    parse_each,
 };
 
 const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -392,49 +393,172 @@ fn only_v1_hashes() {
 
 #[test]
 fn metadata_hash_sources() {
-    let hash_of = |body: String| {
+    let parsed = |body: String| {
         let f = parse(body.as_bytes());
-        (
-            f.items.first().and_then(|i| i.hashes.v1),
-            f.page.summary.skipped,
-        )
+        (f.items.into_iter().next(), f.page.summary.skipped)
     };
     let h = |s: &str| Some(s.parse().unwrap());
-    // The first `.torrent` with a `btih` when none is the archive's.
-    let (got, _) = hash_of(metadata(
-        &[torrent("a.torrent", OTHER), torrent("b.torrent", HASH)],
-        "",
-    ));
-    assert_eq!(got, h(OTHER));
-    // The archive's wins; the name compares exactly.
-    let (got, _) = hash_of(metadata(
+    let paths = |it: &Item| it.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>();
+    let btih = format!(r#","btih":"{HASH}""#);
+    // The exact archive torrent wins over another archive torrent, and
+    // isn't listed; any other `.torrent` is.
+    let (it, _) = parsed(metadata(
         &[
             torrent("a.torrent", OTHER),
-            torrent("item_archive.TORRENT", HASH),
+            torrent("old_archive.torrent", OTHER),
+            torrent("item_archive.torrent", HASH),
         ],
         "",
     ));
-    assert_eq!(got, h(OTHER));
-    // A bad archive btih skips the item, even with a good other source.
-    let (got, skipped) = hash_of(metadata(
+    let it = it.unwrap();
+    assert_eq!(it.hashes.v1, h(HASH));
+    assert_eq!(paths(&it), ["a.torrent", "old_archive.torrent"]);
+    // Any `*_archive.torrent` (case aside) when none matches the
+    // identifier, or there is none, ahead of the `btih` field.
+    for meta in ["", r#","identifier":"x""#] {
+        let body = format!(
+            r#"{{"files":[{},{}],"metadata":{{"btih":"{OTHER}"{meta}}}}}"#,
+            torrent("a.torrent", OTHER),
+            torrent("Old_Archive.TORRENT", HASH)
+        );
+        let (it, _) = parsed(body);
+        assert_eq!(it.unwrap().hashes.v1, h(HASH), "{meta}");
+    }
+    // The `btih` field beats an uploader's torrent, which is listed.
+    let (it, _) = parsed(metadata(&[torrent("a.torrent", OTHER)], &btih));
+    let it = it.unwrap();
+    assert_eq!(
+        (it.hashes.v1, paths(&it)),
+        (h(HASH), vec!["a.torrent".into()])
+    );
+    // With only an uploader's torrent, the item claims just its hash and
+    // title: the rest may describe something else.
+    let (it, _) = parsed(metadata(
+        &[torrent("a.torrent", OTHER), file("b.mkv")],
+        r#","title":"T","collection":"c""#,
+    ));
+    let it = it.unwrap();
+    assert_eq!(it.hashes.v1, h(OTHER));
+    assert_eq!(it.title.as_deref(), Some("T"));
+    assert_eq!(
+        (it.identifier, it.link, it.collections.len()),
+        (None, None, 0)
+    );
+    assert_eq!((it.files.len(), it.files_truncated), (0, true));
+    // A bad hash in the chosen source skips the item, even with a good
+    // other source.
+    let (it, skipped) = parsed(metadata(
         &[
             torrent("item_archive.torrent", "nope"),
             torrent("b.torrent", HASH),
         ],
-        &format!(r#","btih":"{HASH}""#),
+        &btih,
     ));
-    assert_eq!((got, skipped.bad_hash), (None, 1));
-    // `btih` on a file that isn't a `.torrent` is no source, and the file
-    // is listed.
-    let (got, skipped) = hash_of(metadata(&[torrent("x.mp4", HASH)], ""));
-    assert_eq!((got, skipped.no_hash), (None, 1));
-    // The `metadata` object's `btih` when no `.torrent` has one; a
-    // `.torrent` without a `btih` is just a file.
-    let body = metadata(&[file("plain.torrent")], &format!(r#","btih":"{HASH}""#));
-    let f = parse(body.as_bytes());
-    assert_eq!(f.items[0].hashes.v1, h(HASH));
-    assert_eq!(f.items[0].files[0].path, "plain.torrent");
+    assert_eq!((it, skipped.bad_hash), (None, 1));
+    // `btih` on a file that isn't a `.torrent` is no source.
+    let (it, skipped) = parsed(metadata(&[torrent("x.mp4", HASH)], ""));
+    assert_eq!((it, skipped.no_hash), (None, 1));
+    // A `.torrent` without a `btih` is just a file.
+    let (it, _) = parsed(metadata(&[file("plain.torrent")], &btih));
+    assert_eq!(paths(&it.unwrap()), ["plain.torrent"]);
     // A dark item: no files, no hash.
-    let (got, skipped) = hash_of(r#"{"is_dark":true,"metadata":{"identifier":"x"}}"#.into());
-    assert_eq!((got, skipped.no_hash), (None, 1));
+    let (it, skipped) = parsed(r#"{"is_dark":true,"metadata":{"identifier":"x"}}"#.into());
+    assert_eq!((it, skipped.no_hash), (None, 1));
+}
+
+#[test]
+fn hidden_file_names_flag_the_list() {
+    let archive = torrent("item_archive.torrent", HASH);
+    let listed = |entries: &[&str]| {
+        let mut files: Vec<String> = entries.iter().map(|e| e.to_string()).collect();
+        files.push(archive.clone());
+        let f = parse(metadata(&files, "").as_bytes());
+        let it = &f.items[0];
+        let paths: Vec<&str> = it.files.iter().map(|f| f.path.as_str()).collect();
+        (paths.join(","), it.files_truncated)
+    };
+    // A name that isn't one string, a second name, an entry that isn't
+    // an object: the file can't be listed truthfully, so the list says
+    // it's incomplete.
+    for bad in [
+        r#"{"name":["ok.mkv","evil.mkv"]}"#,
+        r#"{"name":"ok.mkv","name":"evil.mkv"}"#,
+        r#"{"name":null}"#,
+        r#"{"name":{"x":"evil.mkv"}}"#,
+        r#""evil.mkv""#,
+        r#"["evil.mkv"]"#,
+    ] {
+        assert_eq!(
+            listed(&[bad, r#"{"name":"a"}"#]),
+            ("a".into(), true),
+            "{bad}"
+        );
+    }
+    // A `files` that isn't a list.
+    let body = format!(r#"{{"files":{{"name":"evil.mkv"}},"metadata":{{"btih":"{HASH}"}}}}"#);
+    assert!(parse(body.as_bytes()).items[0].files_truncated);
+    // No name, or only hidden characters: nothing is named, nothing hidden.
+    let hidden = format!(r#"{{"name":"{}{}"}}"#, u("200b"), u("202e"));
+    for nameless in [r#"{"size":"5"}"#, r#"{"name":""}"#, hidden.as_str()] {
+        assert_eq!(
+            listed(&[nameless, r#"{"name":"a"}"#]),
+            ("a".into(), false),
+            "{nameless}"
+        );
+    }
+    // A `.torrent` past the cap that isn't the hash source is a missing
+    // file; the hash source past the cap isn't.
+    let body = metadata(
+        &[
+            file("a"),
+            torrent("u.torrent", OTHER),
+            torrent("item_archive.torrent", HASH),
+        ],
+        "",
+    );
+    let it = &with(
+        &body,
+        &Limits {
+            max_files: 1,
+            ..LIMITS
+        },
+    )
+    .items[0];
+    assert_eq!((it.files.len(), it.files_truncated), (1, true));
+    let body = metadata(&[file("a"), torrent("item_archive.torrent", HASH)], "");
+    let it = &with(
+        &body,
+        &Limits {
+            max_files: 1,
+            ..LIMITS
+        },
+    )
+    .items[0];
+    assert_eq!((it.files.len(), it.files_truncated), (1, false));
+}
+
+#[test]
+fn name_budget_fits_the_claims() {
+    use lodestar_sources::claims;
+    // The title and up to 17 ids (the identifier and the collections)
+    // fit beside the paths in the claims' text budget.
+    let ids = (1 + MAX_COLLECTIONS) * (32 + MAX_IDENTIFIER);
+    assert!(LIMITS.max_name_bytes + MAX_TITLE + ids <= claims::MAX_TOTAL);
+    assert_eq!(MAX_PATH, claims::MAX_PATH);
+    assert_eq!(LIMITS.max_files, claims::MAX_FILES);
+    // The boundary, at the default caps.
+    const P: usize = 4000;
+    let full = LIMITS.max_name_bytes / P;
+    let rest = LIMITS.max_name_bytes - full * P;
+    assert!(rest > 0);
+    let mut files: Vec<String> = (0..full)
+        .map(|i| file(&format!("{i:04}{}", "p".repeat(P - 4))))
+        .collect();
+    files.push(file(&"r".repeat(rest)));
+    files.push(torrent("item_archive.torrent", HASH));
+    let it = &parse(metadata(&files, "").as_bytes()).items[0];
+    assert_eq!((it.files.len(), it.files_truncated), (full + 1, false));
+    files.insert(0, file("x"));
+    let it = &parse(metadata(&files, "").as_bytes()).items[0];
+    assert_eq!((it.files.len(), it.files_truncated), (full + 1, true));
 }

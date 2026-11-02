@@ -116,6 +116,8 @@ fn metadata() {
     assert_eq!(
         it.files,
         vec![
+            // An uploader's torrent is a file; IA's own isn't listed.
+            file("uploader-made.torrent", Some(2048)),
             file("open-movie-example-1.mp4", Some(734_000_000)),
             file("extras/making-of.ogv", Some(3100)),
             file("subs/eng.srt", None),

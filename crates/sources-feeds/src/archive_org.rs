@@ -22,10 +22,13 @@
 //!   "item_size": n}`. The root object is then the item.
 //!
 //! A doc's hash is its `btih` field. A metadata item's hash is the `btih`
-//! of its `<identifier>_archive.torrent` file entry, else of its first
-//! `.torrent` entry with one, else the `metadata` object's `btih`. Only v1
-//! hashes count (`btih` is a v1 hash by name); a malformed one skips the
-//! item (`bad_hash`), a missing one too (`no_hash`).
+//! of its `<identifier>_archive.torrent` file entry, else of any
+//! `*_archive.torrent` entry, else the `metadata` object's `btih`, else of
+//! the first other `.torrent` entry with one; that last may be an
+//! uploader's torrent of something else, so the item then claims only the
+//! hash and title. Only v1 hashes count (`btih` is a v1 hash by name); a
+//! malformed one skips the item (`bad_hash`), a missing one too
+//! (`no_hash`).
 
 use crate::common::{Bad, clean_title, hash, prepare, rfc3339};
 pub use crate::common::{Hashes, MAX_REF, MAX_TITLE, Skipped, Stop, Summary};
@@ -77,7 +80,10 @@ pub const LIMITS: Limits = Limits {
     max_array: 10_000,
     max_text: 64 * 1024,
     max_files: 10_000,
-    max_name_bytes: 1024 * 1024,
+    // The claims' text budget (`MAX_TOTAL`, 1 MiB) less the title and
+    // the ids SRC-10c may claim, so the claims clamp never drops a file
+    // this list kept without saying so.
+    max_name_bytes: 1024 * 1024 - 4096,
 };
 
 /// One file an item lists, as IA states it.
@@ -107,11 +113,14 @@ pub struct Item {
     pub collections: Vec<String>,
     /// [`DETAILS`] and the identifier: the external reference.
     pub link: Option<String>,
-    /// A metadata item's files, without its `.torrent` entries. Empty for
-    /// a search doc.
+    /// A metadata item's files, without the `.torrent` entry the hash came
+    /// from. Empty for a search doc.
     pub files: Vec<File>,
     /// Some files were left out: over [`Limits::max_files`] or
-    /// [`Limits::max_name_bytes`], or a path over [`MAX_PATH`].
+    /// [`Limits::max_name_bytes`], a path over [`MAX_PATH`], an entry
+    /// whose name isn't one string, or files dropped because the hash
+    /// came from an uploader's torrent. Entries with no name, or only
+    /// hidden characters, name nothing and don't set it.
     pub files_truncated: bool,
 }
 
@@ -179,17 +188,35 @@ struct Draft {
     collections: Option<Vec<String>>,
     /// A `btih` field: `Some(None)` when present but not a v1 hash.
     btih: Option<Option<Hashes>>,
-    /// `.torrent` entries with a `btih`: the name (when short) and hash.
-    torrents: Vec<(Option<String>, Option<Hashes>)>,
+    /// `*_archive.torrent` entries with a `btih`, at most [`MAX_TORRENTS`].
+    archives: Vec<Torrent>,
+    /// The first other `.torrent` entry with a `btih`.
+    other: Option<Torrent>,
     files: Vec<File>,
     name_bytes: usize,
     truncated: bool,
+}
+
+/// A `.torrent` entry that can be the item's hash source.
+#[derive(Debug)]
+struct Torrent {
+    /// The path, when short enough to be `<identifier>_archive.torrent`.
+    name: Option<String>,
+    /// `None` when the `btih` isn't a v1 hash.
+    hash: Option<Hashes>,
+    /// Its place in `files`, when it was kept there.
+    file: Option<usize>,
+    /// It was over a cap: unless it's the hash source, a file is missing.
+    dropped: bool,
 }
 
 /// A `files` entry being read.
 #[derive(Default)]
 struct FileDraft {
     name: Option<String>,
+    /// A `name` that isn't one string, or a second `name`: the entry
+    /// can't be listed truthfully.
+    bad_name: bool,
     size: Option<u64>,
     btih: Option<Option<Hashes>>,
 }
@@ -564,6 +591,11 @@ impl<'a> Parser<'a, '_> {
                 match key {
                     "metadata" if self.peek() == Some(b'{') => self.object(|p, k| p.field(d, k)),
                     "files" if self.peek() == Some(b'[') => self.array(|p, _| p.file(d)),
+                    "files" => {
+                        // Not a list: whatever it names isn't listed.
+                        d.truncated = true;
+                        self.skip_in(d)
+                    }
                     "item_size" => self.field(d, key),
                     _ => self.skip_in(d),
                 }
@@ -635,12 +667,22 @@ impl<'a> Parser<'a, '_> {
     /// One `files` entry of a metadata item.
     fn file(&mut self, d: &mut Draft) -> R<()> {
         if self.peek() != Some(b'{') {
+            // An entry that isn't an object may still name a file.
+            d.truncated = true;
             return self.skip_in(d);
         }
         let mut f = FileDraft::default();
+        let mut named = false;
         self.object(|p, k| {
             match k {
-                "name" if f.name.is_none() => f.name = p.first(d)?,
+                "name" if !named && p.peek() == Some(b'"') => {
+                    named = true;
+                    f.name = p.text(d)?.map(|s| s.trim().to_owned());
+                }
+                "name" => {
+                    f.bad_name = true;
+                    p.skip_in(d)?;
+                }
                 "size" if f.size.is_none() => f.size = p.count(d)?,
                 "btih" if f.btih.is_none() => f.btih = Some(p.first(d)?.and_then(|s| btih(&s))),
                 _ => p.skip_in(d)?,
@@ -667,19 +709,16 @@ impl Draft {
         self.bad.get_or_insert(bad);
     }
 
+    /// Lists the entry within the caps. Every `.torrent` is listed; one
+    /// with a `btih` is also a hash candidate, and the one the hash comes
+    /// from is taken out in [`Self::finish`]. An entry with no name, or
+    /// only hidden characters, names nothing and is dropped.
     fn add_file(&mut self, f: FileDraft, l: &Limits) {
-        let Some(name) = f.name else { return };
-        let torrent = name.len() > 8
-            && name
-                .get(name.len() - 8..)
-                .is_some_and(|e| e.eq_ignore_ascii_case(".torrent"));
-        if let (true, Some(h)) = (torrent, f.btih) {
-            if self.torrents.len() < MAX_TORRENTS {
-                let short = (name.len() <= MAX_IDENTIFIER + 16).then_some(name);
-                self.torrents.push((short, h));
-            }
+        if f.bad_name {
+            self.truncated = true;
             return;
         }
+        let Some(name) = f.name else { return };
         let path: String = name
             .chars()
             .filter(|&c| !crate::common::unsafe_char(c))
@@ -687,39 +726,104 @@ impl Draft {
         if path.is_empty() {
             return;
         }
-        if path.len() > MAX_PATH
+        let candidate = f.btih.is_some() && ends_with(&path, ".torrent");
+        let over = path.len() > MAX_PATH
             || self.files.len() >= l.max_files
-            || self.name_bytes + path.len() > l.max_name_bytes
-        {
-            self.truncated = true;
+            || self.name_bytes + path.len() > l.max_name_bytes;
+        // A dropped candidate counts as missing only if it isn't the
+        // hash source, which isn't listed anyway; `finish` decides.
+        let file = if over {
+            self.truncated |= !candidate;
+            None
+        } else {
+            self.name_bytes += path.len();
+            self.files.push(File {
+                path: path.clone(),
+                size: f.size,
+            });
+            Some(self.files.len() - 1)
+        };
+        let Some(hash) = f.btih.filter(|_| candidate) else {
             return;
+        };
+        let t = Torrent {
+            name: (path.len() <= MAX_IDENTIFIER + ARCHIVE.len()).then(|| path.clone()),
+            hash,
+            file,
+            dropped: over,
+        };
+        let slot = if ends_with(&path, ARCHIVE) {
+            if self.archives.len() < MAX_TORRENTS {
+                self.archives.push(t);
+                return;
+            }
+            Some(t)
+        } else if self.other.is_none() {
+            self.other = Some(t);
+            return;
+        } else {
+            Some(t)
+        };
+        // Not remembered as a candidate, so never the hash source.
+        if slot.is_some_and(|t| t.dropped) {
+            self.truncated = true;
         }
-        self.name_bytes += path.len();
-        self.files.push(File { path, size: f.size });
     }
 
     /// The finished item, or the counter it's skipped under.
-    fn finish(self) -> Result<Item, fn(&mut Skipped)> {
+    ///
+    /// The hash comes from IA's own torrent (`<identifier>_archive.torrent`,
+    /// else any `*_archive.torrent`), else the `btih` field, else the first
+    /// other `.torrent`. That last one may be an uploader's torrent of
+    /// something else, so the item then claims only the hash and title.
+    fn finish(mut self) -> Result<Item, fn(&mut Skipped)> {
         match self.bad {
             Some(Bad::OverCap) => return Err(|s| s.over_cap += 1),
             Some(Bad::Malformed) => return Err(|s| s.malformed += 1),
             None => {}
         }
+        let exact = self.identifier.as_ref().map(|i| format!("{i}{ARCHIVE}"));
         let archive = self
-            .identifier
-            .as_ref()
-            .map(|i| format!("{i}_archive.torrent"));
-        let from_files = self
-            .torrents
+            .archives
             .iter()
-            .find(|t| archive.is_some() && t.0 == archive)
-            .or(self.torrents.first())
-            .map(|t| t.1);
-        let hashes = match from_files.or(self.btih) {
-            None => return Err(|s| s.no_hash += 1),
-            Some(None) => return Err(|s| s.bad_hash += 1),
-            Some(Some(h)) => h,
+            .position(|t| exact.is_some() && t.name == exact)
+            .or((!self.archives.is_empty()).then_some(0))
+            .map(|at| self.archives.swap_remove(at));
+        let other = match (&archive, self.btih) {
+            (None, None) => self.other.take(),
+            _ => None,
         };
+        let whole = other.is_none();
+        let source = match (archive, self.btih, other) {
+            (Some(t), _, _) | (None, None, Some(t)) => Some((t.hash, t.file)),
+            (None, Some(h), _) => Some((h, None)),
+            (None, None, None) => None,
+        };
+        let (hashes, file) = match source {
+            None => return Err(|s| s.no_hash += 1),
+            Some((None, _)) => return Err(|s| s.bad_hash += 1),
+            Some((Some(h), file)) => (h, file),
+        };
+        // Candidates that weren't the source and didn't fit are missing.
+        self.truncated |= self.archives.iter().chain(&self.other).any(|t| t.dropped);
+        // The hash source describes the torrent, not a file in it.
+        if let Some(at) = file.filter(|&at| at < self.files.len()) {
+            self.files.remove(at);
+        }
+        if !whole {
+            return Ok(Item {
+                hashes,
+                identifier: None,
+                title: self.title,
+                size: None,
+                published: None,
+                mediatype: None,
+                collections: Vec::new(),
+                link: None,
+                files_truncated: self.truncated || !self.files.is_empty(),
+                files: Vec::new(),
+            });
+        }
         Ok(Item {
             hashes,
             link: self.identifier.as_ref().map(|i| format!("{DETAILS}{i}")),
@@ -733,6 +837,16 @@ impl Draft {
             files_truncated: self.truncated,
         })
     }
+}
+
+/// IA's own torrent of an item is `<identifier>_archive.torrent`.
+const ARCHIVE: &str = "_archive.torrent";
+
+/// Whether `s` ends with `suffix`, ignoring ASCII case.
+fn ends_with(s: &str, suffix: &str) -> bool {
+    s.len() > suffix.len()
+        && s.get(s.len() - suffix.len()..)
+            .is_some_and(|e| e.eq_ignore_ascii_case(suffix))
 }
 
 /// A JSON string's text without its escapes; `None` for a lone surrogate.
