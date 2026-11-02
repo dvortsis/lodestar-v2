@@ -50,7 +50,7 @@ test.describe('keyboard: Settings → Overview', () => {
 	test('lists problems with a link to each fix, and passes axe', async ({ page, go }) => {
 		current = system({
 			restart_required: ['network.http_bind'],
-			diagnostics: { recent_errors: 12 }
+			diagnostics: { changed: [], logging: null, recent_errors: 12 }
 		});
 		reachable = false;
 		await go('/settings');
