@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T00:06:00Z",
+  "updated_at": "2026-11-02T00:20:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2204,12 +2204,14 @@
       "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)"
     },
     "B-subscriptions-api": {
-      "status": "pre-pr",
+      "status": "changes",
       "notes": "queued: Opus + /security-review; prerequisite of S-blocklists; waits for F-filter-load-fail-closed (crates/api/src/filters.rs)",
       "model": "opus",
       "session": "session_01MMjhn8f4Pt2y2Vtwi6Wo7L",
       "launched": "2026-11-01T22:58Z",
-      "note": "~1,880 lines accepted as one PR (tests+generated); 3 security fixes found need regression tests"
+      "note": "Opus review MERGE w/ 2 important; runner requires before merge: held_version binds applied+held; list fetcher through SSRF guard (pre-existing bypass, now API-reachable); url parsing; name chars; polish",
+      "pr": 362,
+      "head": "2f395b6f"
     },
     "i9-stage2": {
       "status": "queued",
@@ -3294,6 +3296,11 @@
       "id": "flag-src0-floors",
       "status": "to-send",
       "text": "§2.26/§2.19 from SRC-0 (#360): global floors under every source plugin's declared caps: ≥1 s between requests to one host, burst ≤4, polls ≥60 s apart, back-off base ≥1 s, ≤1 full scrape per tracker per day (BEP 48). They only tighten; owner-set per-source numbers (Nyaa ≥5 min) stay above them."
+    },
+    {
+      "id": "note-subscriptions-ssrf",
+      "status": "to-send",
+      "text": "Security note: the blocklist-subscription fetcher (crates/lodestar/src/subscriptions.rs) used a plain HTTP client that bypassed the §16 SSRF guard (private/metadata hosts, redirect hops). No API could add a subscription before, so it wasn't reachable; #362 (B-subscriptions-api) adds the subscribe route, and the runner required routing fetches through the guard before merge. Also: a password-gated \"accept narrowed version\" is now bound to both the applied and held versions."
     }
   ],
   "external_gates": {
