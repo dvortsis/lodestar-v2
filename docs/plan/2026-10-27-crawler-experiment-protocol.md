@@ -1,6 +1,10 @@
 # Crawler investigation and experiment protocol
 
 Status: **specified**, pending the next integrated baseline (DUR-02–03, DUR-12).
+**How live runs are measured and judged** (window, carry-over, cohort, latency
+coverage, mechanism checks, analysis, invalidation and published evidence) is fixed
+by [CR-SPEC](../decisions/2026-11-02-CR-SPEC.md), which supersedes this document
+wherever they differ.
 This is an investigation model and candidate contract, not authorization to change
 the running baseline. The interrupted run's approximately 16 hours establish leads,
 not a complete reference or a measured improvement.
@@ -89,19 +93,13 @@ Implement and measure one candidate only after baseline review selects it.
 | Prefix/cooldown experiment | Selected targeting improves useful discoveries | Matched time windows, stored/searchable yield and cost | Separate gate; no baseline target/cooldown change |
 | Transport change | A different peer transport improves conversion | Failure kinds, bytes, CPU and successful metadata | Independent protocol/security acceptance; no combined timeout tuning |
 
-For each experiment freeze: hypothesis, source/binary/configuration identities,
-changed variables, workload/network context, suppression/warmup policy, required
-coverage, analysis exclusions, primary metric, guardrail metrics, and practical
-improvement threshold. Choose the threshold from observed baseline variance and
-operational value *before* running the candidate; do not select it after seeing a
-favorable result. If variance or byte/CPU attribution is missing, record that limit.
-
-Compare elapsed measured windows with per-metric coverage and hourly variation.
-Report stored throughput, searchable throughput and completed-cohort yield
-separately. Include invalid samples, resets, phase boundaries, interrupted periods
-and unsuccessful work. Compare resource use alongside throughput; a higher stored
-rate alone is not an efficiency result. A live network has time-of-day and peer
-population variation, so even matched sequential runs cannot prove causality alone.
+For each experiment, its brief or decisions file, merged before the run,
+freezes the hypothesis, the changed variable and the guardrail metrics.
+Everything else (identities, suppression and warmup, coverage, exclusions, the
+primary metric, the effect estimate and the practical threshold) is CR-SPEC's. Report stored throughput, searchable throughput
+and resource use alongside each other; a higher stored rate alone is not an
+efficiency result. A live network has time-of-day and peer population variation,
+so even matched sequential runs cannot prove causality alone.
 
 Keep a candidate separate until its own fast/medium tests and sustained acceptance
 pass. Do not combine backpressure, streaming, hints, fairness and transport changes
