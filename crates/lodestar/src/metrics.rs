@@ -190,9 +190,9 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     render_stream_pool(&mut o, p);
     // Attempts and successes per transport; the success family replaces
     // the pool's unlabelled count (see `write_prometheus` for how the two
-    // can differ). The uTP socket's own
-    // counters join once the DHT shares its port with uTP.
-    fetch.write_prometheus(None, &mut o.0);
+    // can differ). The uTP socket's own counters join when `dht.utp`
+    // shares the DHT's port with it (CR-4).
+    fetch.write_prometheus(fetch.utp_stats().as_ref(), &mut o.0);
     o.one(
         "fetch_duplicates_total",
         "counter",
@@ -382,6 +382,12 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "counter",
             "Undecodable packets received.",
             d.malformed_in,
+        );
+        o.one(
+            "dht_utp_in_total",
+            "counter",
+            "Datagrams on the DHT's port handed to uTP (dht.utp).",
+            d.utp_in,
         );
         o.one(
             "dht_denied_total",

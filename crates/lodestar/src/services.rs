@@ -236,6 +236,16 @@ impl Services {
             let mut dht_config = config.dht_config();
             dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
             dht_config.paused = crawl_settings.paused;
+            // CR-4 (`dht.utp`): fetches try uTP first over a socket that
+            // shares the DHT's port; the DHT attaches its sockets when it
+            // binds and hands it the uTP datagrams. Off leaves both alone.
+            if config.dht.utp {
+                let port = lodestar_peer_wire::utp::SharedPort::new(Default::default());
+                pipeline_config.fetch.transport = lodestar_peer_wire::Transport::Utp;
+                pipeline_config.fetch.utp = Some(port.socket());
+                fetch_stats.attach_utp(port.socket());
+                dht_config.utp = Some(port);
+            }
             let dht = Arc::new(DhtSource::new(dht_config));
             dht_stats = Some(dht.stats_handle());
             dht_node = Some(dht.node_handle());

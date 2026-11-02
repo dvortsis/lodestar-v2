@@ -1,6 +1,8 @@
 //! Fetch transport: how metadata fetches reach peers. Stored and shown
-//! now; `FetchOptions` and the DHT side take them up with the uTP wiring
-//! (M4), so for now they change nothing but what's saved.
+//! only; they change nothing but what's saved, and the UI labels them
+//! "not active yet". uTP runs behind the CR-4 switch `dht.utp` while its
+//! A/B decides (a saved value would override the experiment's env var);
+//! see docs/decisions/2026-11-02-CR-4.md.
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

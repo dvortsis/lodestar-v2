@@ -1,9 +1,12 @@
 //! Fetch outcomes per transport, so the uTP gain is measurable (§6, §15).
 
 use std::fmt::{self, Write};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lodestar_utp::StatsSnapshot;
+use lodestar_utp::{StatsSnapshot, UtpSocket};
+
+use crate::route::{FAMILIES, Routes};
 
 /// The transport a fetch runs over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -44,15 +47,44 @@ pub struct FetchStats {
     attempts: [AtomicU64; 2],
     successes: [AtomicU64; 2],
     connect_timeouts: [AtomicU64; 2],
+    /// The same attempts and successes by address family (CR-4), indexed
+    /// by [`crate::route::family_index`].
+    family_attempts: [AtomicU64; 2],
+    family_successes: [AtomicU64; 2],
+    /// Route-level evidence and the backoff it drives (CR-4).
+    pub routes: Routes,
+    /// The shared uTP socket, for its counters (`dht.utp` only).
+    utp: OnceLock<UtpSocket>,
 }
 
 impl FetchStats {
-    pub(crate) fn attempted(&self, t: Transport) {
+    pub(crate) fn attempted(&self, t: Transport, family: usize) {
         self.attempts[t.index()].fetch_add(1, Ordering::Relaxed);
+        self.family_attempts[family].fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn succeeded(&self, t: Transport) {
+    pub(crate) fn succeeded(&self, t: Transport, family: usize) {
         self.successes[t.index()].fetch_add(1, Ordering::Relaxed);
+        self.family_successes[family].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Attempts by family: 0 IPv4, 1 IPv6.
+    pub fn family_attempts(&self, family: usize) -> u64 {
+        self.family_attempts[family].load(Ordering::Relaxed)
+    }
+
+    pub fn family_successes(&self, family: usize) -> u64 {
+        self.family_successes[family].load(Ordering::Relaxed)
+    }
+
+    /// Exports `socket`'s counters with these. The first call wins.
+    pub fn attach_utp(&self, socket: UtpSocket) {
+        let _ = self.utp.set(socket);
+    }
+
+    /// The attached uTP socket's counters, if any.
+    pub fn utp_stats(&self) -> Option<StatsSnapshot> {
+        self.utp.get().map(UtpSocket::stats)
     }
 
     pub(crate) fn connect_timed_out(&self, t: Transport) {
@@ -102,6 +134,49 @@ impl FetchStats {
             "Peer connections that didn't open in time, by transport.",
             &|t| self.connect_timeouts(t),
         );
+        let mut by_family = |name: &str, kind: &str, help: &str, value: &dyn Fn(usize) -> u64| {
+            let _ = writeln!(out, "# HELP lodestar_{name} {help}");
+            let _ = writeln!(out, "# TYPE lodestar_{name} {kind}");
+            for (i, f) in FAMILIES.iter().enumerate() {
+                let _ = writeln!(out, "lodestar_{name}{{family=\"{f}\"}} {}", value(i));
+            }
+        };
+        by_family(
+            "fetch_family_attempts_total",
+            "counter",
+            "Metadata fetches attempted, by peer address family.",
+            &|f| self.family_attempts(f),
+        );
+        by_family(
+            "fetch_family_success_total",
+            "counter",
+            "Info dictionaries fetched and verified, by peer address family.",
+            &|f| self.family_successes(f),
+        );
+        by_family(
+            "fetch_no_route_total",
+            "counter",
+            "Peer TCP connects that failed as network unreachable, by family.",
+            &|f| self.routes.unreachables(f),
+        );
+        by_family(
+            "fetch_route_probe_down_total",
+            "counter",
+            "Local route probes that found no route to the family.",
+            &|f| self.routes.probes_down(f),
+        );
+        by_family(
+            "fetch_route_skipped_total",
+            "counter",
+            "Fetches not dialled because their family has no local route, by family.",
+            &|f| self.routes.skips(f),
+        );
+        by_family(
+            "fetch_route_down",
+            "gauge",
+            "1 while the family's last local route probe found no route.",
+            &|f| u64::from(self.routes.down(f)),
+        );
         if let Some(u) = utp {
             let mut one = |name: &str, help: &str, v: u64| {
                 let _ = writeln!(out, "# HELP lodestar_{name} {help}");
@@ -129,10 +204,10 @@ mod tests {
     #[test]
     fn renders_per_transport_counters() {
         let s = FetchStats::default();
-        s.attempted(Transport::Utp);
-        s.attempted(Transport::Utp);
-        s.succeeded(Transport::Utp);
-        s.attempted(Transport::Tcp);
+        s.attempted(Transport::Utp, 0);
+        s.attempted(Transport::Utp, 1);
+        s.succeeded(Transport::Utp, 1);
+        s.attempted(Transport::Tcp, 1);
         s.connect_timed_out(Transport::Utp);
         let utp = StatsSnapshot {
             retransmits: 7,
@@ -148,6 +223,14 @@ mod tests {
             "lodestar_fetch_success_total{transport=\"tcp\"} 0",
             "lodestar_fetch_success_total{transport=\"utp\"} 1",
             "lodestar_fetch_connect_timeouts_total{transport=\"utp\"} 1",
+            "lodestar_fetch_family_attempts_total{family=\"ipv4\"} 1",
+            "lodestar_fetch_family_attempts_total{family=\"ipv6\"} 2",
+            "lodestar_fetch_family_success_total{family=\"ipv6\"} 1",
+            "lodestar_fetch_no_route_total{family=\"ipv6\"} 0",
+            "lodestar_fetch_route_skipped_total{family=\"ipv4\"} 0",
+            "# TYPE lodestar_fetch_route_down gauge",
+            "lodestar_fetch_route_down{family=\"ipv6\"} 0",
+            "lodestar_fetch_route_probe_down_total{family=\"ipv4\"} 0",
             "lodestar_utp_retransmits_total 7",
             "lodestar_utp_connection_timeouts_total 2",
         ] {

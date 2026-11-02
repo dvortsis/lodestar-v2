@@ -19,6 +19,7 @@ lodestar-network-policy.workspace = true
 lodestar-bencode.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-log.workspace = true
+lodestar-utp = { path = "../utp" }
 rand = "0.10"
 sha1 = "0.11"
 sha2 = "0.11"
@@ -27,7 +28,7 @@ tokio = { version = "1.54.0", features = ["net", "time", "rt", "macros", "sync"]
 
 [dev-dependencies]
 proptest = "1.11.0"
-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time", "net", "sync", "test-util"] }
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time", "net", "sync", "test-util", "io-util"] }
 
 [lints]
 workspace = true

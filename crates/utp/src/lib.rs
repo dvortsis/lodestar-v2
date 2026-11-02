@@ -14,11 +14,13 @@
 mod conn;
 mod ledbat;
 pub mod packet;
+mod shared;
 mod socket;
 
 #[doc(hidden)]
 pub mod fuzzing;
 
+pub use shared::SharedPort;
 pub use socket::{Config, DualSink, PacketSink, StatsSnapshot, UtpListener, UtpSocket, UtpStream};
 
 /// What a datagram on the shared DHT/uTP port is.
@@ -55,5 +57,20 @@ mod tests {
         assert_eq!(classify(&[0x41; 5]), Protocol::Unknown);
         assert_eq!(classify(b""), Protocol::Unknown);
         assert_eq!(classify(&[0x61; 20]), Protocol::Unknown);
+    }
+
+    proptest::proptest! {
+        /// The demux never sends bencode to uTP, and never treats a
+        /// datagram shorter than a uTP header as uTP.
+        #[test]
+        fn bencode_is_never_utp_and_short_datagrams_never_are(
+            tail in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..64),
+            short in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..packet::HEADER_LEN),
+        ) {
+            let mut krpc = vec![b'd'];
+            krpc.extend_from_slice(&tail);
+            proptest::prop_assert_eq!(classify(&krpc), Protocol::Krpc);
+            proptest::prop_assert_ne!(classify(&short), Protocol::Utp);
+        }
     }
 }

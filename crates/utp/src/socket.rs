@@ -34,6 +34,13 @@ use crate::packet::{self, PacketType};
 /// an error (the packet is dropped and later retransmitted) instead.
 pub trait PacketSink: Send + Sync + 'static {
     fn send_to(&self, packet: &[u8], to: SocketAddr) -> io::Result<()>;
+
+    /// Whether a send to `to`'s address family can go out at all, so a
+    /// caller can skip uTP for a family with no socket instead of waiting
+    /// for a connect that can't succeed.
+    fn reaches(&self, _to: SocketAddr) -> bool {
+        true
+    }
 }
 
 /// A non-blocking std socket, such as the DHT's sending half. (Not a
@@ -68,6 +75,14 @@ impl PacketSink for DualSink {
         match sink {
             Some(s) => s.send_to(packet, to),
             None => Err(io::ErrorKind::AddrNotAvailable.into()),
+        }
+    }
+
+    fn reaches(&self, to: SocketAddr) -> bool {
+        if to.is_ipv4() {
+            self.v4.as_ref().is_some_and(|s| s.reaches(to))
+        } else {
+            self.v6.as_ref().is_some_and(|s| s.reaches(to))
         }
     }
 }
@@ -334,6 +349,12 @@ impl UtpSocket {
         self.shared.local_addr
     }
 
+    /// Whether the socket can send to `to`'s address family (see
+    /// [`PacketSink::reaches`]).
+    pub fn reaches(&self, to: SocketAddr) -> bool {
+        self.shared.sink.reaches(canonical(to))
+    }
+
     pub fn connections(&self) -> usize {
         lock(&self.shared.conns).cells.len()
     }
@@ -431,7 +452,8 @@ impl UtpSocket {
             match shared.insert((to, id), conn) {
                 Ok(cell) => break cell,
                 Err(Full) => {
-                    return Err(io::Error::other(
+                    return Err(io::Error::new(
+                        io::ErrorKind::QuotaExceeded,
                         "too many uTP connections (in all or to this IP)",
                     ));
                 }

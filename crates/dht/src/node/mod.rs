@@ -168,6 +168,11 @@ pub struct Config {
     /// family, with a random suffix. Off draws every target at random, as
     /// before, and allocates no cursor.
     pub target_prefixes: bool,
+    /// CR-4 (`dht.utp`): the uTP socket sharing this node's port (§5).
+    /// [`Node::start`] attaches its sending sockets, and the receive loop
+    /// hands it every datagram that [`lodestar_utp::classify`] calls uTP.
+    /// `None` (the default) handles every datagram as KRPC, as before.
+    pub utp: Option<lodestar_utp::SharedPort>,
 }
 
 /// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
@@ -235,6 +240,7 @@ impl Default for Config {
             restart: None,
             responder_hints: false,
             target_prefixes: false,
+            utp: None,
         }
     }
 }
@@ -324,6 +330,8 @@ pub struct Stats {
     pub scrapes_with_responders: AtomicU64,
     /// Packets to or from a blocklisted address, not sent or ignored.
     pub denied: AtomicU64,
+    /// CR-4: datagrams on the shared port handed to uTP (`dht.utp` only).
+    pub utp_in: AtomicU64,
     /// Sum of owned requests' run times, admission to answer, in ms.
     pub peer_lookup_millis: AtomicU64,
     /// Owned requests answered to a waiting caller: the time sum's count.
@@ -430,6 +438,7 @@ impl Stats {
             scrapes_dropped: g(&self.scrapes_dropped),
             scrapes_with_responders: g(&self.scrapes_with_responders),
             denied: g(&self.denied),
+            utp_in: g(&self.utp_in),
             peer_lookup_millis: g(&self.peer_lookup_millis),
             peer_lookups_answered: g(&self.peer_lookups_answered),
             hints_captured: g(&self.hints_captured),
@@ -744,6 +753,7 @@ pub struct StatsSnapshot {
     pub scrapes_dropped: u64,
     pub scrapes_with_responders: u64,
     pub denied: u64,
+    pub utp_in: u64,
     pub peer_lookup_millis: u64,
     pub peer_lookups_answered: u64,
     pub hints_captured: u64,
@@ -1033,9 +1043,25 @@ impl Node {
                 "two sockets of the same address family",
             ));
         }
+        if config.utp.as_ref().is_some_and(|u| u.attached()) {
+            // Its sends would still leave from the first node's sockets.
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the uTP port is already attached to another node",
+            ));
+        }
         let mut sockets = Vec::new();
+        let mut utp_sink = lodestar_utp::DualSink::default();
         for addr in &config.bind {
             let (recv, send) = bind(*addr)?;
+            if config.utp.is_some() {
+                let half: Arc<dyn lodestar_utp::PacketSink> = Arc::new(send.try_clone()?);
+                if addr.is_ipv4() {
+                    utp_sink.v4 = Some(half);
+                } else {
+                    utp_sink.v6 = Some(half);
+                }
+            }
             sockets.push((
                 transport::RecvSocket::Udp(recv),
                 transport::SendSocket::Udp(send),
@@ -1045,6 +1071,9 @@ impl Node {
             .iter()
             .map(|(recv, _)| recv.local_addr())
             .collect::<io::Result<Vec<_>>>()?;
+        if let Some(utp) = &config.utp {
+            utp.attach(utp_sink);
+        }
         let rng = {
             use rand::SeedableRng;
             rand::rngs::StdRng::from_rng(&mut rand::rng())

@@ -768,6 +768,22 @@ With `dht.target_prefixes` on ([the decision](decisions/2026-11-01-CR-1b.md)), e
 
 `dht_target_prefix_queries_total{kind="sample"}` = `dht_sample_sent_total` with the switch on. Hashes are attributed to the sampling call, as before: new sample hashes per call is `dht_harvested_total{strategy="sample"}` over `dht_sample_sent_total`.
 
+## uTP and address families (CR-4, 2026-11-02)
+
+Two switches, both off by default and read at start ([the decision](decisions/2026-11-02-CR-4.md)). With `dht.utp` on, metadata fetches try uTP first over a uTP socket that shares the DHT's port (6881), then fall back to TCP. With `dht.route_backoff` on, a fetch first asks the local routing table whether its address family has a route (a UDP `connect`, which sends nothing, cached per family for 2 s) and isn't dialled while it has none; a route that comes back is seen within 2 s. The same probe keeps `dht.utp` from trying uTP to a family with no route. The per-transport series are #51's and keep their names: `fetch_attempts_total`, `fetch_success_total` and `fetch_connect_timeouts_total{transport}`. No series has a peer, endpoint or infohash label.
+
+| Series | Type | Meaning |
+|---|---|---|
+| `utp_retransmits_total`, `utp_connection_timeouts_total` | counter | #51's uTP socket counters: packets sent again, and connections dropped because the peer stopped answering. **Rendered only with `dht.utp` on.** A uTP connect refused by uTP's own connection table (full, or this IP's share full) sends nothing and isn't counted in `fetch_attempts_total{transport="utp"}`. |
+| `fetch_family_attempts_total{family}`, `fetch_family_success_total{family}` | counter | The same attempts and successes as the transport series, by peer address family: `ipv4` (v4-mapped addresses included) or `ipv6`. A uTP try and its TCP fallback count twice, as in the transport series. Count with the switches on or off. |
+| `fetch_no_route_total{family}` | counter | Peer TCP connects that failed as network unreachable (`ENETUNREACH`). Counted only: a remote router's ICMP for one prefix gives the same error, so it decides nothing. Counts with the switches on or off, and is the baseline gate for the route-backoff A/B. |
+| `fetch_route_probe_down_total{family}` | counter | Local route probes that found no route (at most one per family per 2 s). Stays 0 unless `dht.route_backoff` or `dht.utp` is on. |
+| `fetch_route_skipped_total{family}` | counter | Fetches not dialled because their family's last probe found no route. They fail as `unreachable` in `fetch_failures_total` without an attempt. Stays 0 with `dht.route_backoff` off. |
+| `fetch_route_down{family}` | gauge | 1 while the family's last probe found no route. Stays 0 unless a switch probes. |
+| `dht_utp_in_total` | counter | Datagrams on the DHT's port that the receive loop handed to uTP (after the blocklist check). Stays 0 with `dht.utp` off, when every datagram is handled as KRPC as before. With it on, uTP datagrams are not in `dht_packets_in_total`. A blocked uTP datagram is counted in `dht_denied_total` but not in `dht_packets_in_total`, unlike a blocked KRPC one, which is in both. Compare KRPC packet rates across A/B arms with `dht_packets_in_total`. |
+
+The uTP share of fetches is `fetch_attempts_total{transport="utp"}` over the sum of both transports; uTP's success rate is `fetch_success_total{transport="utp"}` over `fetch_attempts_total{transport="utp"}`. A family with no DHT socket (an IPv4-only bind, for example) goes straight to TCP, so its peers add no uTP attempts.
+
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 
 The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.

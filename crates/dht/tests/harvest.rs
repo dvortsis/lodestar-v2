@@ -30,6 +30,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         restart: None,
         responder_hints: false,
         target_prefixes: false,
+        utp: None,
     }
 }
 
