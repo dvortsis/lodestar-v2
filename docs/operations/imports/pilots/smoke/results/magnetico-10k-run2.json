@@ -1,0 +1,313 @@
+{
+ "after_import_offline": {
+  "db": 7700480,
+  "hot": 240,
+  "index": 10098,
+  "total": 7718230,
+  "wal": 0
+ },
+ "backup_post": {
+  "bytes": 7652615,
+  "s": 0.077
+ },
+ "backup_pre": {
+  "bytes": 1557767,
+  "s": 0.026
+ },
+ "bytes_per_record": {
+  "all_in": 1241.6,
+  "basis": 9900,
+  "hot": 0.0,
+  "provenance": 43.0,
+  "search_index": 620.3,
+  "sqlite_file": 620.6,
+  "sqlite_indexes": 31.4,
+  "sqlite_tables": 546.1
+ },
+ "cold": {
+  "first_file_search_hits": 50,
+  "first_file_search_ms": 13.7,
+  "second_same_ms": 7.4,
+  "start_s": 0.117
+ },
+ "cold_start_empty_s": 0.121,
+ "drain": {
+  "job_complete_s": 3.507,
+  "searchable_s": 3.497,
+  "server_start_s": 0.228
+ },
+ "empty": {
+  "db": 1556480,
+  "hot": 240,
+  "index": 10098,
+  "store": {
+   "free": 0,
+   "indexes": 393216,
+   "provenance": 278528,
+   "tables": 868352
+  },
+  "total": 1602759,
+  "wal": 0
+ },
+ "have_filter": {
+  "lodestar_have_bytes": 1310720.0,
+  "lodestar_have_capacity": 1048576.0,
+  "lodestar_have_entries": 9900.0
+ },
+ "import": {
+  "counters": {
+   "candidates": 0,
+   "files_dropped": 0,
+   "filtered": 100,
+   "invalid": 0,
+   "merged": 0,
+   "new": 9900,
+   "partial": 0,
+   "quarantined": 0,
+   "read": 10000,
+   "source_bytes": 5029253
+  },
+  "end_to_end_per_s": 1958.4,
+  "end_to_end_s": 5.106,
+  "ended": "done",
+  "findings": {},
+  "write_per_s": 6215.0,
+  "write_s": 1.609
+ },
+ "insights_round_ms": {
+  "max": 5.4,
+  "mean": 3.1,
+  "share_of_30s_pct": 0.01
+ },
+ "inspect_s": 0.021,
+ "load": {
+  "all": {
+   "n": 7962,
+   "p95_ms": 21.8,
+   "qps": 398.1
+  },
+  "common": {
+   "max_ms": 84.7,
+   "n": 1127,
+   "p50_ms": 5.2,
+   "p95_ms": 17.5
+  },
+  "field": {
+   "max_ms": 87.3,
+   "n": 1150,
+   "p50_ms": 5.2,
+   "p95_ms": 18.0
+  },
+  "file": {
+   "max_ms": 65.3,
+   "n": 2268,
+   "p50_ms": 12.5,
+   "p95_ms": 26.3
+  },
+  "keyword": {
+   "max_ms": 107.6,
+   "n": 2277,
+   "p50_ms": 6.4,
+   "p95_ms": 19.2
+  },
+  "peak_rss": 133189632,
+  "rare": {
+   "max_ms": 77.0,
+   "n": 1140,
+   "p50_ms": 6.5,
+   "p95_ms": 18.6
+  }
+ },
+ "load_1client": {
+  "all": {
+   "n": 4550,
+   "p95_ms": 12.4,
+   "qps": 227.5
+  },
+  "common": {
+   "max_ms": 6.5,
+   "n": 648,
+   "p50_ms": 2.0,
+   "p95_ms": 2.9
+  },
+  "field": {
+   "max_ms": 8.1,
+   "n": 656,
+   "p50_ms": 1.9,
+   "p95_ms": 2.8
+  },
+  "file": {
+   "max_ms": 102.4,
+   "n": 1298,
+   "p50_ms": 9.7,
+   "p95_ms": 14.4
+  },
+  "keyword": {
+   "max_ms": 32.2,
+   "n": 1303,
+   "p50_ms": 2.1,
+   "p95_ms": 3.2
+  },
+  "peak_rss": 131096576,
+  "rare": {
+   "max_ms": 6.3,
+   "n": 645,
+   "p50_ms": 1.9,
+   "p95_ms": 2.8
+  }
+ },
+ "load_insights_1s": {
+  "all": {
+   "n": 8333,
+   "p95_ms": 20.5,
+   "qps": 416.6
+  },
+  "common": {
+   "max_ms": 48.9,
+   "n": 1190,
+   "p50_ms": 5.0,
+   "p95_ms": 16.5
+  },
+  "field": {
+   "max_ms": 90.1,
+   "n": 1187,
+   "p50_ms": 5.0,
+   "p95_ms": 16.8
+  },
+  "file": {
+   "max_ms": 101.0,
+   "n": 2377,
+   "p50_ms": 12.0,
+   "p95_ms": 24.3
+  },
+  "insights_round_ms_mean": 20.3,
+  "keyword": {
+   "max_ms": 94.5,
+   "n": 2384,
+   "p50_ms": 6.1,
+   "p95_ms": 17.8
+  },
+  "peak_rss": 122933248,
+  "rare": {
+   "max_ms": 93.8,
+   "n": 1195,
+   "p50_ms": 6.6,
+   "p95_ms": 18.3
+  }
+ },
+ "overlap_import": {
+  "counters": {
+   "candidates": 0,
+   "files_dropped": 0,
+   "filtered": 5,
+   "invalid": 0,
+   "merged": 495,
+   "new": 500,
+   "partial": 0,
+   "quarantined": 0,
+   "read": 1000,
+   "source_bytes": 511935
+  },
+  "s": 0.167
+ },
+ "page_cache_dropped": true,
+ "remove": {
+  "check": {
+   "expected_after": 995,
+   "job1_only_left_in_store": 0,
+   "job1_sample_found_by_search": 0,
+   "job2_missing_from_store": 0,
+   "job2_sample_found_by_search": 50,
+   "reindex_s": 2.236,
+   "searchable_after": 995,
+   "stored_after": 995
+  },
+  "report": {
+   "candidates_deleted": 0,
+   "deleted": 9405,
+   "job": 1,
+   "kept_seen": 0,
+   "kept_shared": 495,
+   "kept_verified": 0,
+   "kept_yours": 0,
+   "private_candidates_kept": 0,
+   "provenance_removed": 0
+  },
+  "s": 0.676,
+  "stored_before": 10400
+ },
+ "restore": {
+  "copy_s": 0.004,
+  "searchable": 9900,
+  "start_s": 0.232,
+  "stored": 9900,
+  "total_to_searchable_s": 3.652
+ },
+ "review_queue": {
+  "decisions_30d": 0,
+  "next_cursor": null,
+  "quarantine": 0
+ },
+ "rss_after_cold_start": [
+  111063040,
+  126906368,
+  67956736,
+  111063040
+ ],
+ "rss_after_load": [
+  105390080,
+  121233408,
+  66936832,
+  117047296
+ ],
+ "rss_empty_idle": [
+  91430912,
+  107552768,
+  66256896,
+  91430912
+ ],
+ "rss_idle": [
+  108429312,
+  125128704,
+  73314304,
+  210280448
+ ],
+ "sizes": {
+  "counts": {
+   "filter_hits": 0,
+   "import_candidates": 0,
+   "import_membership": 9900,
+   "quarantine": 0,
+   "tombstones": 0,
+   "torrents": 9900,
+   "unverified_items": 0
+  },
+  "db": 7700480,
+  "hot": 240,
+  "index": 6151181,
+  "store": {
+   "free": 0,
+   "indexes": 704512,
+   "provenance": 704512,
+   "tables": 6275072
+  },
+  "top_objects": {
+   "alerts": 16384,
+   "alerts_torrent": 16384,
+   "alerts_unread": 16384,
+   "api_keys": 16384,
+   "import_membership": 114688,
+   "import_membership_job": 114688,
+   "import_quality": 245760,
+   "sqlite_autoindex_torrents_1": 327680,
+   "sqlite_schema": 49152,
+   "torrent_files": 2736128,
+   "torrent_parsed": 1507328,
+   "torrents": 1212416
+  },
+  "total": 13894645,
+  "wal": 0
+ },
+ "source": "m10k.sqlite3",
+ "source_bytes": 8867840
+}

@@ -1,0 +1,40 @@
+{
+    "backup_pre_s": 0.025,
+    "inspect_s": 0.033,
+    "import": {
+        "write_s": 1.807,
+        "counters": {
+            "candidates": 0,
+            "files_dropped": 0,
+            "filtered": 0,
+            "invalid": 0,
+            "merged": 0,
+            "new": 10000,
+            "partial": 0,
+            "quarantined": 0,
+            "read": 10000,
+            "source_bytes": 5414912
+        },
+        "findings": {},
+        "ended": "done",
+        "end_to_end_s": 3.258,
+        "end_to_end_per_s": 3069.3,
+        "write_per_s": 5534.4
+    },
+    "drain": {
+        "server_start_s": 0.196,
+        "searchable_s": 1.451,
+        "job_complete_s": 1.459,
+        "stored": 10000,
+        "searchable": 10000
+    },
+    "sizes": {
+        "db": 7815168,
+        "wal": 0,
+        "index": 6188250,
+        "hot": 240,
+        "total": 14009396
+    },
+    "source_postgres_database_bytes": "43 MB (pg_database_size)",
+    "checker": "all checks passed: PostgreSQL 16.15, SQL_ASCII, 0.10.0 schema, 10000 torrents / 97913 files / 10000 pieces rows, samples sha256 7218c4b8\u2026 (names) f83df03e\u2026 (paths), seed 0"
+}
