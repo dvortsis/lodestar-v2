@@ -28,6 +28,14 @@
 				count: formatCount(e.value, locale),
 				rows: (e.rows ?? []).join(', ')
 			});
+		if (e.kind === 'filter_stand_ins_rejudged')
+			return m.insights_overview_exc_filter_stand_ins_rejudged({
+				released: formatCount(e.value, locale),
+				kept: formatCount(e.counts?.kept ?? null, locale),
+				adult: formatCount(e.counts?.adult ?? null, locale),
+				dropped: formatCount(e.counts?.dropped ?? null, locale),
+				hidden: formatCount(e.counts?.hidden ?? null, locale)
+			});
 		return m.insights_overview_exc_unknown({ kind: e.kind });
 	}
 	function fixText(e: Exception): string {

@@ -400,12 +400,19 @@ pub struct InsightsException {
     /// (hashes in progress, the crawler running, and nothing stored for
     /// 2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`
     /// (stored filter rows that no longer read; filtering fails closed
-    /// for them until they're fixed in Filters & Safety).
+    /// for them until they're fixed in Filters & Safety), or
+    /// `filter_stand_ins_rejudged` (for a week after such rows read
+    /// again: `value` torrents their stand-ins held were released, and
+    /// `counts` has the rest).
     pub kind: String,
     /// The rows an exception is about, as the Filters & Safety screens
     /// name them (`U-3`, `C-2`, …); empty for the other kinds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<String>,
+    /// `filter_stand_ins_rejudged` only: what's still held, and what was
+    /// made while the rows couldn't be read and is left for you to review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counts: Option<StandInCounts>,
     pub severity: Severity,
     /// Unix seconds.
     pub since: i64,
@@ -421,6 +428,22 @@ pub struct InsightsException {
 pub enum Severity {
     Warning,
     Error,
+}
+
+/// The counts of a `filter_stand_ins_rejudged` exception
+/// (docs/decisions/2026-11-02-F-filter-standin-undo.md).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct StandInCounts {
+    /// Still held by the rules as they are, or not judged (a sealed name
+    /// that won't open).
+    pub kept: u64,
+    /// Adult holds made meanwhile; some may be other rules' or your
+    /// corrections'. They stay held.
+    pub adult: u64,
+    /// Torrents a rule without its unreadable `unless` dropped.
+    pub dropped: u64,
+    /// Torrents such a rule hid.
+    pub hidden: u64,
 }
 
 /// Where an exception's fix is: a settings section or a stage page.

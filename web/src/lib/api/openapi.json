@@ -13145,12 +13145,23 @@
           "value"
         ],
         "properties": {
+          "counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StandInCounts",
+                "description": "`filter_stand_ins_rejudged` only: what's still held, and what was\nmade while the rows couldn't be read and is left for you to review."
+              }
+            ]
+          },
           "fix": {
             "$ref": "#/components/schemas/Fix"
           },
           "kind": {
             "type": "string",
-            "description": "`index_lag` (the index more than 30 s behind), `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`\n(stored filter rows that no longer read; filtering fails closed\nfor them until they're fixed in Filters & Safety)."
+            "description": "`index_lag` (the index more than 30 s behind), `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`\n(stored filter rows that no longer read; filtering fails closed\nfor them until they're fixed in Filters & Safety), or\n`filter_stand_ins_rejudged` (for a week after such rows read\nagain: `value` torrents their stand-ins held were released, and\n`counts` has the rest)."
           },
           "rows": {
             "type": "array",
@@ -18598,6 +18609,42 @@
             "type": "integer",
             "format": "int64",
             "description": "The last flush, or the start when there was none since."
+          }
+        }
+      },
+      "StandInCounts": {
+        "type": "object",
+        "description": "The counts of a `filter_stand_ins_rejudged` exception\n(docs/decisions/2026-11-02-F-filter-standin-undo.md).",
+        "required": [
+          "kept",
+          "adult",
+          "dropped",
+          "hidden"
+        ],
+        "properties": {
+          "adult": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Adult holds made meanwhile; some may be other rules' or your\ncorrections'. They stay held.",
+            "minimum": 0
+          },
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents a rule without its unreadable `unless` dropped.",
+            "minimum": 0
+          },
+          "hidden": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents such a rule hid.",
+            "minimum": 0
+          },
+          "kept": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Still held by the rules as they are, or not judged (a sealed name\nthat won't open).",
+            "minimum": 0
           }
         }
       },
