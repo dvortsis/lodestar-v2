@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T13:01:51Z",
+  "updated_at": "2026-11-02T13:49:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2438,7 +2438,7 @@
         "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source).",
         "Purge must also scrub pre-migration snapshots (crates/store/src/snapshots.rs, VACUUM INTO, kept 90 days): drop sources.secret.<plugin>.* and sources.consent.<plugin> from each snapshot, or refuse rollback past a purge; secrets.key stays in the data dir, so lodestar rollback would otherwise restore a purged source's sealed credentials and ack (#388 Opus review finding 1)."
       ],
-      "status": "running as SRC-14a",
+      "status": "SRC-14a in review (Opus review running)",
       "brief": "briefs/SRC-14.md",
       "session": "session_01MMjhnBdFardZHCh5mNqeNX",
       "model": "opus",
@@ -2457,10 +2457,12 @@
         "crates/pipeline/src/log_events.rs",
         "crates/api/tests/* OpsApi fakes",
         "crates/pipeline/tests/control.rs"
-      ]
+      ],
+      "pr": 394,
+      "head": "8e5772a4"
     },
     "SRC-2b": {
-      "status": "running",
+      "status": "CHANGES sent (busy-loop B1, alert order I1, progress I4, tests I2)",
       "model": "opus",
       "deps": [
         "SRC-2"
@@ -2472,7 +2474,9 @@
       "notes": "percolate promoted ids (below each search watermark); candidate design: consume reindex_log entries, dedupe by (search, torrent), no new table. Gap until then: promoted torrents miss saved-search alerts.",
       "session": "session_01MMjhnAD4GBG8DT8wk4sqMq",
       "brief": "briefs/SRC-2b.md",
-      "launched": "2026-11-02T11:38Z"
+      "launched": "2026-11-02T11:38Z",
+      "pr": 392,
+      "head": "8adaac4d"
     },
     "SRC-9": {
       "status": "merged",
@@ -2570,7 +2574,7 @@
       "launched": "2026-11-02T12:24Z"
     },
     "X-polish-carry-1102": {
-      "status": "running",
+      "status": "runner-reviewed; merge on green",
       "brief": "briefs/X-polish-carry-1102.md",
       "model": "sonnet",
       "items": [
@@ -2583,7 +2587,9 @@
         "backup_unused_mut_windows"
       ],
       "session": "session_01MMjhn9GYqGmRTHrEgZpJmP",
-      "launched": "2026-11-02T12:37Z"
+      "launched": "2026-11-02T12:37Z",
+      "pr": 393,
+      "head": "4f0cd651"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3772,6 +3778,18 @@
       "added": "2026-11-02T13:01:51Z",
       "sent": "2026-11-02T13:01:51Z (daily summary)",
       "text": "SRC-14a: schedule windows and agents stored and reported as enforced:false until scheduler v2; verification switch refused by the API until a per-source cap exists."
+    },
+    {
+      "id": "branch-cleanup-1102",
+      "state": "to-send",
+      "added": "2026-11-02T13:49:31Z",
+      "text": "Delete stale branches: slice/SRC-14 (0b0757cb, superseded by slice/SRC-14a) and scratch/docs-only-proof."
+    },
+    {
+      "id": "flag-src14a",
+      "state": "to-send",
+      "added": "2026-11-02T13:49:31Z",
+      "text": "SRC-14a (#394) runner/session calls (§2.19): password required for every egress change, every class; verification switch stays off (API refuses); LAN DNS default for SOCKS5 (see review outcome); schedule/agents stored with enforced:false."
     }
   ],
   "external_gates": {
@@ -3842,6 +3860,11 @@
       "id": "X-settings-defaults-in-schema",
       "added": "2026-11-02T12:22Z",
       "text": "GET /settings JSON Schema carries no default values, so Settings Overview (#391) shows a changed setting's source, not its default. Add `default` to the settings schema (api, generated types) so the Overview and the field modified marker can show the default. Sonnet-able after SRC-14a frees the api files."
+    },
+    {
+      "id": "runner-docs-src14-split",
+      "added": "2026-11-02T13:49:31Z",
+      "text": "Runner docs PR: add SRC-14a/SRC-14b entries to runner/slices.yaml and runner/dashboard.yaml."
     }
   ],
   "main_health": [
