@@ -39,10 +39,19 @@ const CLAIMS_PRIVATE: i64 = 2;
 
 /// Rows in one re-judge page at most.
 pub const MAX_PAGE: usize = 1024;
-/// Decoded claim text in one re-judge page at most. A page always holds
-/// at least one row, so a page holds less than this plus one row's
-/// [`claims::MAX_PLAIN`].
-pub const PAGE_TEXT: usize = 8 << 20;
+/// Decoded claims in one re-judge page at most, by
+/// [`Claims::decoded_size`]. A page always holds at least one row, so it
+/// holds less than this plus one row's largest ([`MAX_ROW`]): under
+/// 9.5 MiB of claims.
+pub const PAGE_BYTES: usize = 8 << 20;
+/// The largest [`Claims::decoded_size`] one row can have: all the text,
+/// the external reference, and every entry at its count limit.
+pub const MAX_ROW: usize = std::mem::size_of::<Claims>()
+    + claims::MAX_TOTAL
+    + claims::MAX_EXTERNAL_REF
+    + claims::MAX_FILES * std::mem::size_of::<claims::ClaimedFile>()
+    + claims::MAX_TRACKERS * std::mem::size_of::<String>()
+    + claims::MAX_IDS * std::mem::size_of::<claims::ExternalId>();
 /// Rows one purge step looks at, at most.
 pub const MAX_PURGE_STEP: usize = 4096;
 
@@ -136,6 +145,16 @@ pub struct StoredClaims {
     pub private_source: bool,
     /// `None` when they don't decode: drop them.
     pub claims: Option<Claims>,
+}
+
+/// What [`Store::refile_unverified`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnverifiedRefiled {
+    /// Unverified items removed.
+    pub ids: Vec<i64>,
+    /// Torrents a held decision deleted: a crawled torrent under the same
+    /// hash, not yet merged with the item. Logged for the search index.
+    pub torrents_deleted: Vec<i64>,
 }
 
 /// What [`Store::refile_claims`] did.
@@ -239,6 +258,12 @@ impl Store {
             check_key(i.network, i.key)?;
         }
         let tx = begin_write(&mut self.conn)?;
+        let mut sources: Vec<SourceId> = items.iter().map(|i| i.source).collect();
+        sources.sort_unstable();
+        sources.dedup();
+        for s in sources {
+            check_running(&tx, s)?;
+        }
         let mut out = Vec::with_capacity(items.len());
         for (item, blob) in items.iter().zip(&blobs) {
             out.push(put_one(&tx, item, blob.as_deref())?);
@@ -259,6 +284,7 @@ impl Store {
     ) -> Result<bool> {
         let blob = encode(claims, self.config.compression_level)?;
         let tx = begin_write(&mut self.conn)?;
+        check_running(&tx, source)?;
         let Some(hashes) = torrent_hashes(&tx, torrent_id)? else {
             return Ok(false);
         };
@@ -301,7 +327,7 @@ impl Store {
 
     /// Unverified items after `after` (by id): one keyset page of the
     /// re-judge sweep or the verification queue. At most `limit` (capped
-    /// at [`MAX_PAGE`]) rows, and no more decoded text than [`PAGE_TEXT`]
+    /// at [`MAX_PAGE`]) rows, and no more decoded claims than [`PAGE_BYTES`]
     /// past the first row.
     pub fn unverified_after(&self, after: i64, limit: usize) -> Result<Vec<UnverifiedItem>> {
         let mut stmt = self.conn.prepare_cached(&format!(
@@ -309,12 +335,12 @@ impl Store {
         ))?;
         let rows = stmt.query_map(params![after, limit.clamp(1, MAX_PAGE) as i64], read_item)?;
         let mut out = Vec::new();
-        let mut text = 0;
+        let mut bytes = 0;
         for row in rows {
             let item = row?.into_item()?;
-            text += item.claims.as_ref().map_or(0, Claims::text_len);
+            bytes += item.claims.as_ref().map_or(0, Claims::decoded_size);
             out.push(item);
-            if text >= PAGE_TEXT {
+            if bytes >= PAGE_BYTES {
                 break;
             }
         }
@@ -335,12 +361,12 @@ impl Store {
             read_claims,
         )?;
         let mut out = Vec::new();
-        let mut text = 0;
+        let mut bytes = 0;
         for row in rows {
             let c = row??;
-            text += c.claims.as_ref().map_or(0, Claims::text_len);
+            bytes += c.claims.as_ref().map_or(0, Claims::decoded_size);
             out.push(c);
-            if text >= PAGE_TEXT {
+            if bytes >= PAGE_BYTES {
                 break;
             }
         }
@@ -354,32 +380,59 @@ impl Store {
     /// `current` is asked inside the transaction whether the rules the
     /// items were judged under are still the engine's; when they aren't,
     /// nothing is written and this returns `None`. Items already gone are
-    /// skipped. Returns the ids removed.
+    /// skipped.
+    ///
+    /// A decision that holds also deletes a torrent stored under the item's
+    /// key or the decision's hashes (crawled before SRC-2's writer merged
+    /// the two), as [`refile_claims`](Store::refile_claims) does: nothing
+    /// stays stored under a held hash.
     pub fn refile_unverified(
         &mut self,
         refiled: &[RefiledUnverified<'_>],
         current: impl FnOnce() -> bool,
-    ) -> Result<Option<Vec<i64>>> {
+    ) -> Result<Option<UnverifiedRefiled>> {
         let tx = begin_write(&mut self.conn)?;
         if !current() {
             return Ok(None);
         }
-        let mut done = Vec::new();
+        let mut done = UnverifiedRefiled::default();
         for r in refiled {
-            let exists = tx
-                .prepare_cached("SELECT 1 FROM unverified_items WHERE id = ?1")?
-                .exists([r.id])?;
-            if !exists {
+            let key: Option<(i64, Vec<u8>)> = tx
+                .prepare_cached("SELECT network, key FROM unverified_items WHERE id = ?1")?
+                .query_row([r.id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()?;
+            let Some((network, key)) = key else {
                 continue;
-            }
+            };
             if let Some(f) = &r.filtered {
                 filter::write(&tx, std::slice::from_ref(f))?;
+                if f.held.is_some() {
+                    let mut hashes: Vec<[u8; 20]> = f.hashes.to_vec();
+                    if network == Network::Bt as i64
+                        && let Ok(k) = <[u8; 20]>::try_from(key.as_slice())
+                    {
+                        hashes.push(k);
+                    }
+                    for h in hashes {
+                        let found =
+                            crate::find_any(&tx, std::iter::once(lodestar_metainfo::InfoHash(h)))?;
+                        if let Some(tid) = found
+                            && !done.torrents_deleted.contains(&tid)
+                        {
+                            tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
+                                .execute([tid])?;
+                            tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                                .execute([tid])?;
+                            done.torrents_deleted.push(tid);
+                        }
+                    }
+                }
             }
             delete_item(&tx, r.id, true)?;
-            done.push(r.id);
+            done.ids.push(r.id);
         }
         tx.commit()?;
-        if !done.is_empty() {
+        if !done.ids.is_empty() {
             self.scrub_wal();
         }
         Ok(Some(done))
@@ -817,6 +870,25 @@ impl RawItem {
 
 fn encode(c: &Claims, level: i32) -> Result<Vec<u8>> {
     claims::encode(c, level).map_err(|_| Error::Invalid("claims over a limit"))
+}
+
+/// Refuses writes from a source that's disabled or purged: a poll still in
+/// flight when the user disabled it, or one finishing after its purge
+/// passed, mustn't put back what the purge removed. Checked inside the
+/// write's transaction, so a purge (which needs the source disabled
+/// first) and a write never interleave. A paused source may still finish.
+fn check_running(conn: &Connection, source: SourceId) -> Result<()> {
+    let state: Option<i64> = conn
+        .prepare_cached("SELECT state FROM sources WHERE id = ?1")?
+        .query_row([source.get()], |r| r.get(0))
+        .optional()?;
+    match state {
+        None => Err(Error::NotFound("source")),
+        Some(s) if s == SourceState::Disabled as i64 || s == SourceState::Purged as i64 => {
+            Err(Error::Invalid("a write from a disabled source"))
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 fn check_key(network: Network, key: &[u8]) -> Result<()> {

@@ -6,8 +6,8 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_store::claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
 use lodestar_store::unverified::{
-    ClaimsRefiled, MAX_PAGE, Network, NewUnverified, PurgeCursor, PurgeStep, Put, RefiledClaims,
-    RefiledUnverified,
+    ClaimsRefiled, MAX_PAGE, MAX_ROW, Network, NewUnverified, PAGE_BYTES, PurgeCursor, PurgeStep,
+    Put, RefiledClaims, RefiledUnverified, UnverifiedRefiled,
 };
 use lodestar_store::{
     Error, Filtered, Held, Prepared, PreparedTorrent, SourceId, SourceState, Store, StoreConfig,
@@ -565,6 +565,118 @@ fn re_judge_pages_are_bounded_and_resumable() {
     big.put_unverified(&items).unwrap();
     let page = big.unverified_after(0, 20).unwrap();
     assert!(page.len() < 20 && page.len() >= 8, "{}", page.len());
+
+    // Many entries and no text: weighed by decoded size, not text. 10,000
+    // empty paths decode to ~400 KB each, so a page stops well before
+    // 1,024 rows, and stays under its bound.
+    let mut empty = mem();
+    let (dht, nyaa, _) = sources(&mut empty);
+    let hollow = Claims {
+        files: vec![
+            ClaimedFile {
+                path: String::new(),
+                size: None
+            };
+            10_000
+        ],
+        ..Claims::default()
+    };
+    assert_eq!(hollow.text_len(), 0);
+    let keys: Vec<[u8; 20]> = (0..60u8).map(|i| [i ^ 0x80; 20]).collect();
+    let items: Vec<_> = keys.iter().map(|k| item(k, nyaa, Some(&hollow))).collect();
+    empty.put_unverified(&items).unwrap();
+    let page = empty.unverified_after(0, MAX_PAGE).unwrap();
+    let held: usize = page
+        .iter()
+        .map(|i| i.claims.as_ref().unwrap().decoded_size())
+        .sum();
+    assert!(page.len() < 60, "{}", page.len());
+    assert!(held < PAGE_BYTES + MAX_ROW, "{held}");
+    // The same for torrent claims.
+    for k in &keys {
+        let p = prepared(&empty, &format!("{k:?}"));
+        let tid = store_torrent(&mut empty, &p, dht);
+        empty.put_claims(tid, nyaa, &hollow, false).unwrap();
+    }
+    let page = empty.claims_after((0, dht), MAX_PAGE).unwrap();
+    assert!(page.len() < 60, "{}", page.len());
+}
+
+/// A held decision on an unverified item also deletes a torrent the
+/// crawler stored under the same hash before the writer merged them.
+#[test]
+fn a_held_item_decision_deletes_a_torrent_under_its_hash() {
+    let mut store = mem();
+    let (dht, nyaa, _) = sources(&mut store);
+    let p = prepared(&store, "crawled meanwhile");
+    store
+        .put_unverified(&[item(&p.info_hash.0, nyaa, Some(&named("blocked")))])
+        .unwrap();
+    let id = store
+        .unverified(Network::Bt, &p.info_hash.0)
+        .unwrap()
+        .unwrap()
+        .id;
+    let tid = store_torrent(&mut store, &p, dht);
+    let hashes = [p.info_hash.0];
+    let r = [RefiledUnverified {
+        id,
+        filtered: Some(Filtered {
+            hashes: &hashes,
+            rule: "CS-2",
+            action: 0,
+            held: Some(Held::Quarantine),
+            sealed: None,
+            evidence: &[],
+            at: T,
+            expires_at: T + 86_400,
+            adult_hold: false,
+        }),
+    }];
+    let reindex = count(&store, "SELECT count(*) FROM reindex_log");
+    assert_eq!(
+        store.refile_unverified(&r, || true).unwrap(),
+        Some(UnverifiedRefiled {
+            ids: vec![id],
+            torrents_deleted: vec![tid]
+        })
+    );
+    assert!(store.torrent(tid).unwrap().is_none());
+    assert_eq!(
+        count(&store, "SELECT count(*) FROM reindex_log"),
+        reindex + 1
+    );
+}
+
+/// A disabled or purged source can't write items or claims: a poll in
+/// flight can't put back what a purge removed. A paused one can finish.
+#[test]
+fn a_disabled_source_cannot_write() {
+    let mut store = mem();
+    let (dht, nyaa, _) = sources(&mut store);
+    let p = prepared(&store, "late");
+    let tid = store_torrent(&mut store, &p, dht);
+    let c = named("late");
+    store.set_source_state(nyaa, SourceState::Paused).unwrap();
+    store
+        .put_unverified(&[item(&[0x77; 20], nyaa, Some(&c))])
+        .unwrap();
+    for state in [SourceState::Disabled, SourceState::Purged] {
+        store.set_source_state(nyaa, state).unwrap();
+        let err = store
+            .put_unverified(&[item(&[0x78; 20], nyaa, Some(&c))])
+            .unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{state:?}: {err:?}");
+        let err = store.put_claims(tid, nyaa, &c, false).unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{state:?}: {err:?}");
+    }
+    assert!(
+        store
+            .unverified(Network::Bt, &[0x78; 20])
+            .unwrap()
+            .is_none()
+    );
+    assert!(store.torrent_claims(tid).unwrap().is_empty());
 }
 
 #[test]
@@ -598,14 +710,17 @@ fn refiling_holds_back_items_and_claims_under_current_rules_only() {
     assert!(store.unverified(Network::Bt, &key).unwrap().is_some());
     assert_eq!(count(&store, "SELECT count(*) FROM tombstones"), 0);
     assert_eq!(
-        store.refile_unverified(&r, || true).unwrap(),
-        Some(vec![id])
+        store.refile_unverified(&r, || true).unwrap().unwrap().ids,
+        vec![id]
     );
     assert!(store.unverified(Network::Bt, &key).unwrap().is_none());
     assert_eq!(count(&store, "SELECT count(*) FROM tombstones"), 1);
     assert_eq!(count(&store, "SELECT count(*) FROM filter_hits"), 1);
     assert!(journalled(&store, &key));
-    assert_eq!(store.refile_unverified(&r, || true).unwrap(), Some(vec![]));
+    assert_eq!(
+        store.refile_unverified(&r, || true).unwrap(),
+        Some(UnverifiedRefiled::default())
+    );
 
     // Torrent claims: the claim goes, the torrent stays (it's judged on
     // its verified metadata).
@@ -655,8 +770,8 @@ fn an_unreadable_blob_is_reported_for_removal() {
         filtered: None,
     }];
     assert_eq!(
-        store.refile_unverified(&r, || true).unwrap(),
-        Some(vec![page[0].id])
+        store.refile_unverified(&r, || true).unwrap().unwrap().ids,
+        vec![page[0].id]
     );
 }
 

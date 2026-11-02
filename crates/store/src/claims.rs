@@ -158,6 +158,20 @@ impl fmt::Debug for Claims {
 }
 
 impl Claims {
+    /// Bytes the decoded claims take in memory, near enough: their text
+    /// plus every entry's own struct. A page of claims is bounded by this,
+    /// not by text alone: 10,000 empty file paths hold no text but still
+    /// take ~400 KB as a `Vec<ClaimedFile>`.
+    pub fn decoded_size(&self) -> usize {
+        use std::mem::size_of;
+        size_of::<Claims>()
+            + self.text_len()
+            + self.provenance.external_ref.as_ref().map_or(0, String::len)
+            + self.files.len() * size_of::<ClaimedFile>()
+            + self.trackers.len() * size_of::<String>()
+            + self.ids.len() * size_of::<ExternalId>()
+    }
+
     /// Bytes of text held, the measure [`MAX_TOTAL`] bounds.
     pub fn text_len(&self) -> usize {
         let len = |s: &Option<String>| s.as_ref().map_or(0, String::len);
