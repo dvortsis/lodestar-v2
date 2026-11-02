@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T15:51:39Z",
+  "updated_at": "2026-11-02T15:55:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2621,13 +2621,19 @@
       "interim": "2026-11-02T15:51:39Z: live heap <200 B/torrent; anon 2-4 KiB/torrent allocator retention (mimalloc and glibc). Suspects: 1 fetch-pool churn (unaccepted lookups retried every 120 s forever, backlog > cap), 2 allocator retention, 3 sampler states at 200k, 4 lease table unbounded, 5 log ring. Runner ruling: fix churn (give-up rule for unaccepted, clean backlog), keep 200k cap, no politeness loosening; fix leases and log ring by bytes; measure mimalloc purge; project vs 2.0 MiB/h."
     },
     "SRC-10a": {
-      "status": "runner-reviewed (Opus); merge on green; plugin HOLD until Q2 check",
+      "status": "merged",
       "brief": "briefs/SRC-10a.md",
       "model": "sonnet",
       "session": "session_01MMjhn9zXhStNQsNasbmKuH",
       "launched": "2026-11-02T14:56Z",
       "pr": 397,
-      "head": "c170d071"
+      "head": "c170d071",
+      "merge": "7d4724c9"
+    },
+    "SRC-14b": {
+      "status": "launching",
+      "brief": "briefs/SRC-14b.md",
+      "model": "opus"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
