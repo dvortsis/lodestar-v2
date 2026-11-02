@@ -32,7 +32,10 @@ pub use clients::{
     ClientInfo, ClientKind, DownloadClient, Feature, Magnet, MagnetError, Selection, TorrentFile,
 };
 pub use metrics::{IntegrationMetrics, MetricsSnapshot};
-pub use net::{AddrClass, GuardedClient, NetError, NetPolicy, Resolve, SystemResolver};
+pub use net::{
+    AddrClass, GuardedClient, NetError, NetPolicy, Resolve, Route, RouteError, Socks5Route,
+    SocksAuth, SocksDns, SystemResolver,
+};
 pub use notify::{
     AttemptError, Channel, DeliveryError, DeliveryOutcome, Notification, NotificationItem,
     NotificationKind, Notifier, RetryPolicy, deliver,

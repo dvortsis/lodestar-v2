@@ -19,6 +19,10 @@
 //! - **No proxy, no automatic redirects.** System proxies would resolve the
 //!   name themselves, so they're off. Redirects are followed only by
 //!   [`GuardedClient::send_following`], which checks every hop.
+//! - **Routes** ([`Route`]): a client can be pinned to a local address, a
+//!   network interface or a SOCKS5 proxy, for per-plugin egress (§18.4).
+//!   The route is the only way out: there's no fallback to a direct
+//!   connection when it's down.
 //! - **No URL in any error or log.** URLs can carry tokens (Discord webhooks
 //!   do), so errors name only the address class; [`redact`] gives a safe
 //!   form for logs.
@@ -34,6 +38,7 @@ use reqwest::header::{AUTHORIZATION, COOKIE, LOCATION};
 use reqwest::{Method, Request, Response, Url};
 
 use crate::BoxFuture;
+use crate::secret::Secret;
 
 /// The class of an IP address, for [`NetPolicy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -203,7 +208,11 @@ impl NetPolicy {
 
     /// Whether this policy lets a connection reach `ip`.
     pub fn check(self, ip: IpAddr) -> Result<(), NetError> {
-        let class = classify(ip);
+        self.check_class(classify(ip))
+    }
+
+    /// Whether this policy lets a connection reach an address of `class`.
+    pub fn check_class(self, class: AddrClass) -> Result<(), NetError> {
         let ok = match class {
             AddrClass::Public => true,
             AddrClass::Private => self.private,
@@ -353,16 +362,50 @@ pub async fn resolve_checked(
 struct GuardResolver {
     inner: Arc<dyn Resolve>,
     policy: NetPolicy,
+    /// A bind-address route binds one address family only; the other
+    /// family's sockets would connect unbound, so its answers are dropped.
+    family: Option<Family>,
+}
+
+/// An IP address family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Family {
+    V4,
+    V6,
+}
+
+impl Family {
+    fn of(ip: IpAddr) -> Family {
+        if ip.is_ipv4() { Family::V4 } else { Family::V6 }
+    }
 }
 
 impl reqwest::dns::Resolve for GuardResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let inner = Arc::clone(&self.inner);
         let policy = self.policy;
+        let family = self.family;
         Box::pin(async move {
-            let addrs = resolve_checked(&*inner, name.as_str(), policy)
-                .await
-                .map_err(|e| Box::new(e) as Box<dyn StdError + Send + Sync>)?;
+            // A SOCKS5 route with local DNS hands IP literals here too.
+            // reqwest passes an IPv6 literal in brackets.
+            let host = name.as_str();
+            let literal = host
+                .strip_prefix('[')
+                .and_then(|h| h.strip_suffix(']'))
+                .unwrap_or(host)
+                .parse::<IpAddr>()
+                .ok();
+            let mut addrs = match literal {
+                Some(ip) => policy.check(ip).map(|()| vec![ip]),
+                None => resolve_checked(&*inner, name.as_str(), policy).await,
+            }
+            .map_err(|e| Box::new(e) as Box<dyn StdError + Send + Sync>)?;
+            if let Some(family) = family {
+                addrs.retain(|ip| Family::of(*ip) == family);
+                if addrs.is_empty() {
+                    return Err(Box::new(NetError::Resolve) as Box<dyn StdError + Send + Sync>);
+                }
+            }
             let addrs: reqwest::dns::Addrs =
                 Box::new(addrs.into_iter().map(|ip| SocketAddr::new(ip, 0)));
             Ok(addrs)
@@ -373,11 +416,199 @@ impl reqwest::dns::Resolve for GuardResolver {
 /// How many redirects [`GuardedClient::send_following`] follows.
 pub const MAX_REDIRECTS: usize = 3;
 
+/// How a [`GuardedClient`]'s connections leave the machine (§5, §18.4).
+///
+/// A route is fixed when the client is built and is the only way out: when
+/// it's unavailable (the address is gone, the interface is down, the proxy
+/// doesn't answer) connections fail. Nothing falls back to a direct
+/// connection.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Route {
+    /// The operating system's routing table.
+    Direct,
+    /// Every socket is bound to this local address before connecting, and
+    /// only destinations of its address family are connected to. Binding
+    /// fails once the address is no longer assigned. On Windows (strong
+    /// host model) that pins the interface owning the address; on Linux
+    /// the routing table still picks the interface, so [`Route::Interface`]
+    /// is the stronger choice there.
+    BindAddress(IpAddr),
+    /// Every socket is bound to this network interface by name
+    /// (`SO_BINDTODEVICE`), so its packets can leave only through it. Linux
+    /// only; elsewhere building the client fails with
+    /// [`RouteError::Unsupported`].
+    Interface(String),
+    /// Every connection is tunnelled through a SOCKS5 proxy.
+    Socks5(Socks5Route),
+}
+
+impl fmt::Debug for Route {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Route::Direct => f.write_str("Direct"),
+            Route::BindAddress(ip) => f.debug_tuple("BindAddress").field(ip).finish(),
+            Route::Interface(name) => f.debug_tuple("Interface").field(name).finish(),
+            Route::Socks5(s) => f.debug_tuple("Socks5").field(s).finish(),
+        }
+    }
+}
+
+/// A SOCKS5 proxy route.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Socks5Route {
+    /// The proxy's address. A literal address, not a name: the proxy is
+    /// infrastructure the user chose, so it isn't checked against the
+    /// destination policy, and a name would be resolved through the guard.
+    pub proxy: SocketAddr,
+    pub dns: SocksDns,
+    /// RFC 1929 user name and password, if the proxy wants them.
+    pub auth: Option<SocksAuth>,
+}
+
+impl fmt::Debug for Socks5Route {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Socks5Route")
+            .field("proxy", &self.proxy)
+            .field("dns", &self.dns)
+            .field("auth", &self.auth.as_ref().map(|_| "…"))
+            .finish()
+    }
+}
+
+/// Where destination names are resolved on a SOCKS5 route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SocksDns {
+    /// The proxy resolves names (`socks5h`), so lookups don't leak outside
+    /// the tunnel. The guard can't see the address the proxy connects to,
+    /// so it checks what it can: literal IP hosts, and names that are
+    /// plainly local (`localhost`, single labels, `.local`, `.lan`,
+    /// `.home.arpa`, `.internal`) are refused unless the policy allows
+    /// loopback or private addresses. Rebinding on the proxy's side can't
+    /// be caught.
+    #[default]
+    Proxy,
+    /// Lodestar resolves names through the guard, refuses the name if any
+    /// answer is disallowed, and sends the proxy a checked address. The
+    /// lookup happens outside the tunnel.
+    Local,
+}
+
+/// SOCKS5 user name and password (RFC 1929). Neither is ever printed.
+#[derive(Clone)]
+pub struct SocksAuth {
+    pub username: Secret,
+    pub password: Secret,
+}
+
+impl PartialEq for SocksAuth {
+    fn eq(&self, other: &SocksAuth) -> bool {
+        self.username.expose() == other.username.expose()
+            && self.password.expose() == other.password.expose()
+    }
+}
+
+impl Eq for SocksAuth {}
+
+impl fmt::Debug for SocksAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SocksAuth(…)")
+    }
+}
+
+/// Why a [`Route`] can't be built. No variant carries a credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteError {
+    /// This platform can't use the route.
+    Unsupported(&'static str),
+    /// The interface name can't be a network interface's name.
+    InvalidInterface,
+    /// A SOCKS5 user name or password is empty or longer than RFC 1929's
+    /// 255 bytes.
+    InvalidCredentials,
+    /// The HTTP client couldn't be built.
+    Build,
+}
+
+impl fmt::Display for RouteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RouteError::Unsupported(why) => f.write_str(why),
+            RouteError::InvalidInterface => f.write_str("that isn't a valid interface name"),
+            RouteError::InvalidCredentials => {
+                f.write_str("the proxy's user name and password must each be 1 to 255 bytes")
+            }
+            RouteError::Build => f.write_str("the HTTP client couldn't be built"),
+        }
+    }
+}
+
+impl StdError for RouteError {}
+
+/// Checks a network interface name as Linux does (`dev_valid_name`): 1 to
+/// 15 bytes, not `.` or `..`, and no `/`, `:`, whitespace or control
+/// characters. So the name is also safe as a single path segment.
+pub fn check_interface_name(name: &str) -> Result<(), RouteError> {
+    let ok = !name.is_empty()
+        && name.len() < 16
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && b != b'/' && b != b':');
+    if ok {
+        Ok(())
+    } else {
+        Err(RouteError::InvalidInterface)
+    }
+}
+
+/// Why [`Route::Interface`] fails off Linux.
+pub const INTERFACE_UNSUPPORTED: &str = "choosing a network interface by name works only on Linux; \
+     choose the interface's address instead";
+
+/// Whether a name is plainly local, so a proxy resolving it would reach
+/// its own loopback, LAN or cloud metadata service: the well-known
+/// metadata names (`metadata.google.internal`, `metadata`,
+/// `instance-data` and `instance-data.*`) are metadata; `localhost` and
+/// `*.localhost` are loopback; single labels and the `.local`, `.lan`,
+/// `.home.arpa` and `.internal` suffixes are private.
+fn local_name_class(host: &str) -> Option<AddrClass> {
+    let d = host.trim_end_matches('.').to_ascii_lowercase();
+    if d == "metadata.google.internal"
+        || d == "metadata"
+        || d == "instance-data"
+        || d.starts_with("instance-data.")
+    {
+        return Some(AddrClass::Metadata);
+    }
+    if d == "localhost" || d.ends_with(".localhost") {
+        return Some(AddrClass::Loopback);
+    }
+    let local = !d.contains('.')
+        || [".local", ".lan", ".home.arpa", ".internal"]
+            .iter()
+            .any(|s| d.ends_with(s));
+    local.then_some(AddrClass::Private)
+}
+
+/// One HTTP answer, read whole within a size limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exchange {
+    pub status: u16,
+    /// Header values that aren't visible ASCII are dropped.
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
 /// An HTTP client that can only reach what its [`NetPolicy`] allows.
 #[derive(Clone)]
 pub struct GuardedClient {
     http: reqwest::Client,
     policy: NetPolicy,
+    /// Names are resolved by a SOCKS5 proxy, out of the guard's sight.
+    remote_dns: bool,
+    /// The only address family a bind-address route can connect to.
+    family: Option<Family>,
 }
 
 impl fmt::Debug for GuardedClient {
@@ -400,23 +631,80 @@ impl GuardedClient {
         timeout: Duration,
         resolver: Arc<dyn Resolve>,
     ) -> Result<GuardedClient, NetError> {
+        GuardedClient::with_route(policy, timeout, resolver, &Route::Direct)
+            .map_err(|_| NetError::Http)
+    }
+
+    /// A client whose every connection takes `route`, and nothing else.
+    pub fn with_route(
+        policy: NetPolicy,
+        timeout: Duration,
+        resolver: Arc<dyn Resolve>,
+        route: &Route,
+    ) -> Result<GuardedClient, RouteError> {
         // The workspace's TLS provider (§16). Only the first install wins,
         // and one installed by the host process is fine too.
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let http = reqwest::Client::builder()
+        let family = match route {
+            Route::BindAddress(ip) => Some(Family::of(*ip)),
+            _ => None,
+        };
+        // `no_proxy` first: it clears the proxy list, and turns system
+        // proxies (and `NO_PROXY`) off.
+        let mut builder = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .referer(false)
             .dns_resolver(Arc::new(GuardResolver {
                 inner: resolver,
                 policy,
+                family,
             }))
             .connect_timeout(timeout.min(Duration::from_secs(10)))
             .timeout(timeout)
-            .user_agent(crate::USER_AGENT)
-            .build()
-            .map_err(|_| NetError::Http)?;
-        Ok(GuardedClient { http, policy })
+            .user_agent(crate::USER_AGENT);
+        let mut remote_dns = false;
+        match route {
+            Route::Direct => {}
+            Route::BindAddress(ip) => builder = builder.local_address(*ip),
+            Route::Interface(name) => {
+                check_interface_name(name)?;
+                #[cfg(target_os = "linux")]
+                {
+                    builder = builder.interface(name);
+                }
+                #[cfg(not(target_os = "linux"))]
+                return Err(RouteError::Unsupported(INTERFACE_UNSUPPORTED));
+            }
+            Route::Socks5(socks) => {
+                let scheme = match socks.dns {
+                    SocksDns::Proxy => "socks5h",
+                    SocksDns::Local => "socks5",
+                };
+                remote_dns = socks.dns == SocksDns::Proxy;
+                // A proxy for every scheme with no exceptions: `Proxy::all`
+                // has no `NO_PROXY` list unless one is given.
+                let mut proxy = reqwest::Proxy::all(format!("{scheme}://{}", socks.proxy))
+                    .map_err(|_| RouteError::Build)?;
+                if let Some(auth) = &socks.auth {
+                    // hyper-util writes each length as one byte unchecked;
+                    // a longer value would desynchronise the handshake.
+                    let fits = |s: &Secret| (1..=255).contains(&s.expose().len());
+                    if !fits(&auth.username) || !fits(&auth.password) {
+                        return Err(RouteError::InvalidCredentials);
+                    }
+                    proxy = proxy.basic_auth(auth.username.expose(), auth.password.expose());
+                }
+                builder = builder.proxy(proxy);
+            }
+        }
+        let http = builder.build().map_err(|_| RouteError::Build)?;
+        Ok(GuardedClient {
+            http,
+            policy,
+            remote_dns,
+            family,
+        })
     }
 
     pub fn policy(&self) -> NetPolicy {
@@ -437,9 +725,72 @@ impl GuardedClient {
     pub async fn send(&self, req: Request) -> Result<Response, NetError> {
         // Literal IP hosts never reach the resolver, so check them here.
         check_url(req.url(), self.policy)?;
+        self.check_route(req.url())?;
         #[allow(clippy::disallowed_methods)] // the one checked call site
         let sent = self.http.execute(req).await;
         sent.map_err(map_reqwest)
+    }
+
+    /// What the route adds to [`check_url`]: a literal of the other family
+    /// on a bind-address route would connect unbound, and a name a proxy
+    /// resolves is checked by its form.
+    fn check_route(&self, url: &Url) -> Result<(), NetError> {
+        match literal_ip(url) {
+            Some(ip) => {
+                if self.family.is_some_and(|f| f != Family::of(ip)) {
+                    return Err(NetError::InvalidUrl(
+                        "the bind address can't reach that address family",
+                    ));
+                }
+            }
+            None if self.remote_dns => {
+                let host = url.host_str().unwrap_or_default();
+                if let Some(class) = local_name_class(host) {
+                    self.policy.check_class(class)?;
+                }
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
+    /// One request without following redirects, the whole body read within
+    /// `limit` bytes and the client's timeout. For callers outside this
+    /// crate that don't build `reqwest` types (source plugins' egress).
+    pub async fn exchange(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: Vec<u8>,
+        limit: usize,
+    ) -> Result<Exchange, NetError> {
+        let method = Method::from_bytes(method.as_bytes()).map_err(|_| NetError::Http)?;
+        let url = Url::parse(url).map_err(|_| NetError::InvalidUrl("it doesn't parse"))?;
+        let mut req = Request::new(method, url);
+        for (name, value) in headers {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| NetError::Http)?;
+            let value =
+                reqwest::header::HeaderValue::from_str(value).map_err(|_| NetError::Http)?;
+            req.headers_mut().append(name, value);
+        }
+        if !body.is_empty() {
+            *req.body_mut() = Some(body.into());
+        }
+        let resp = self.send(req).await?;
+        let status = resp.status().as_u16();
+        let headers = resp
+            .headers()
+            .iter()
+            .filter_map(|(n, v)| Some((n.as_str().to_owned(), v.to_str().ok()?.to_owned())))
+            .collect();
+        let body = read_limited(resp, limit).await?;
+        Ok(Exchange {
+            status,
+            headers,
+            body,
+        })
     }
 
     /// Sends a request, following up to [`MAX_REDIRECTS`] method-preserving
@@ -1212,6 +1563,103 @@ pub(crate) mod tests {
         ] {
             assert!(!local(no), "{no}");
         }
+    }
+
+    #[test]
+    fn interface_names_are_checked_like_linux_does() {
+        for ok in ["lo", "eth0", "wg0", "tun-vpn.1", "a234567890abcde"] {
+            assert_eq!(check_interface_name(ok), Ok(()), "{ok}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../lo",
+            "eth0:1",
+            "has space",
+            "tab\t",
+            "a234567890abcdef",
+            "é",
+        ] {
+            assert_eq!(
+                check_interface_name(bad),
+                Err(RouteError::InvalidInterface),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn plainly_local_names_are_classified() {
+        for (host, want) in [
+            ("localhost", Some(AddrClass::Loopback)),
+            ("LOCALHOST.", Some(AddrClass::Loopback)),
+            ("admin.localhost", Some(AddrClass::Loopback)),
+            ("router", Some(AddrClass::Private)),
+            ("nas.lan", Some(AddrClass::Private)),
+            ("printer.local", Some(AddrClass::Private)),
+            ("box.home.arpa", Some(AddrClass::Private)),
+            ("db.internal", Some(AddrClass::Private)),
+            ("metadata.google.internal.", Some(AddrClass::Metadata)),
+            ("metadata", Some(AddrClass::Metadata)),
+            ("instance-data.ec2.internal", Some(AddrClass::Metadata)),
+            ("nyaa.si", None),
+            ("localhost.example.com", None),
+            ("internal.example", None),
+        ] {
+            assert_eq!(local_name_class(host), want, "{host}");
+        }
+    }
+
+    #[test]
+    fn route_debug_hides_credentials() {
+        let route = Route::Socks5(Socks5Route {
+            proxy: "10.64.0.1:1080".parse().unwrap(),
+            dns: SocksDns::Proxy,
+            auth: Some(SocksAuth {
+                username: Secret::new("acct-1234"),
+                password: Secret::new("hunter2"),
+            }),
+        });
+        let shown = format!("{route:?}");
+        assert!(shown.contains("10.64.0.1:1080"), "{shown}");
+        assert!(
+            !shown.contains("acct-1234") && !shown.contains("hunter2"),
+            "{shown}"
+        );
+    }
+
+    #[tokio::test]
+    async fn guard_resolver_checks_literals_without_the_inner_resolver() {
+        use reqwest::dns::Resolve as _;
+        let inner = ScriptedResolver::new(&[]);
+        let guard = GuardResolver {
+            inner: inner.clone(),
+            policy: NetPolicy::notification(false),
+            family: None,
+        };
+        let name = |s: &str| s.parse::<reqwest::dns::Name>().unwrap();
+        assert!(guard.resolve(name("127.0.0.1")).await.is_err());
+        assert!(guard.resolve(name("[::1]")).await.is_err());
+        let v6: Vec<_> = guard
+            .resolve(name("[2606:4700:4700::1111]"))
+            .await
+            .unwrap()
+            .collect();
+        assert_eq!(
+            v6,
+            vec!["[2606:4700:4700::1111]:0".parse::<SocketAddr>().unwrap()]
+        );
+        let addrs: Vec<_> = guard.resolve(name("8.8.8.8")).await.unwrap().collect();
+        assert_eq!(addrs, vec!["8.8.8.8:0".parse::<SocketAddr>().unwrap()]);
+        // A v6 bind drops v4 answers, so nothing is left.
+        let guard = GuardResolver {
+            inner: inner.clone(),
+            policy: NetPolicy::notification(false),
+            family: Some(Family::V6),
+        };
+        assert!(guard.resolve(name("8.8.8.8")).await.is_err());
+        assert_eq!(inner.lookups.load(Ordering::SeqCst), 0);
     }
 
     #[test]

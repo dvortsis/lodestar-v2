@@ -7,6 +7,7 @@
 //! under global hard caps.
 
 pub mod claims;
+pub mod egress;
 mod funnel;
 pub mod http;
 mod manifest;
@@ -16,6 +17,10 @@ pub mod state;
 pub mod testing;
 
 pub use claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
+pub use egress::{
+    Egress, EgressCounters, EgressCredentials, EgressFactory, EgressStatus, Endpoints,
+    PluginEgress, RouteState,
+};
 pub use funnel::{Funnel, FunnelCounts, Loss, Stage};
 pub use http::{Client, Fetch, HostLimiter, HostState, HttpError, NoEgress, Request, Response};
 pub use manifest::{
