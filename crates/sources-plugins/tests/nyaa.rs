@@ -112,7 +112,7 @@ async fn a_normal_page_is_found_twice_over_two_polls() {
         c.ids,
         [
             id("nyaa-category", "1_2"),
-            id("content-type", "video"),
+            id("content-type", "tv"),
             id("nyaa-flag", "trusted")
         ]
     );
@@ -134,7 +134,7 @@ async fn a_normal_page_is_found_twice_over_two_polls() {
         c.ids,
         [
             id("nyaa-category", "2_1"),
-            id("content-type", "audio"),
+            id("content-type", "music"),
             id("nyaa-flag", "remake")
         ]
     );
@@ -197,7 +197,8 @@ async fn a_dtd_or_a_page_that_is_not_a_feed_finds_nothing() {
 
 #[tokio::test(start_paused = true)]
 async fn a_feed_over_the_item_cap_is_cut_off() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("nyaa_oversized");
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("nyaa_oversized_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut body =
         String::from(r#"<rss xmlns:nyaa="https://nyaa.si/xmlns/nyaa" version="2.0"><channel>"#);
@@ -287,11 +288,11 @@ fn manifest_and_policy() {
 fn content_types_follow_the_main_category() {
     for (cat, want) in [
         ("1_1", Some("video")),
-        ("1_4", Some("video")),
-        ("2_2", Some("audio")),
-        ("3_3", Some("book")),
+        ("1_4", Some("tv")),
+        ("2_2", Some("music")),
+        ("3_3", Some("ebook")),
         ("4_2", Some("video")),
-        ("5_2", Some("image")),
+        ("5_2", Some("images")),
         ("6_1", Some("software")),
         ("6_2", Some("game")),
         ("0_0", None),

@@ -186,16 +186,20 @@ fn unix_now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// What a Nyaa category id (`1_2`) means for the content type claim.
-/// Ids are `<main>_<sub>`; the main category decides, except Software,
-/// where Games are told apart. `None` for an id that isn't known.
+/// What a Nyaa category id (`1_2`) means for the content type claim, as a
+/// `ContentType::as_str` name (`lodestar-classify`). Ids are
+/// `<main>_<sub>`; the main category decides, except AMV (`1_1`, video
+/// rather than tv) and Software, where Games are told apart. Anime is
+/// `tv` as the best guess for most of it; the claim is Low confidence and
+/// the classifier has the last word. `None` for an id that isn't known.
 pub fn content_type(category: &str) -> Option<&'static str> {
     let (main, sub) = category.split_once('_')?;
     match (main, sub) {
-        ("1", _) | ("4", _) => Some("video"),
-        ("2", _) => Some("audio"),
-        ("3", _) => Some("book"),
-        ("5", _) => Some("image"),
+        ("1", "1") | ("4", _) => Some("video"),
+        ("1", _) => Some("tv"),
+        ("2", _) => Some("music"),
+        ("3", _) => Some("ebook"),
+        ("5", _) => Some("images"),
         ("6", "2") => Some("game"),
         ("6", _) => Some("software"),
         _ => None,
