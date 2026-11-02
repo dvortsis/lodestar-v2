@@ -124,15 +124,26 @@ impl EgressSetting {
     }
 }
 
-/// A proxy host as the API passes it: an IP literal (no brackets) or a
-/// DNS name of letters, digits, hyphens and dots, at most 253 bytes.
+/// A proxy host as the API passes it (`lodestar_api::ops::parse_proxy`'s
+/// rules): an IP literal (no brackets), or a DNS name of 1–63-byte labels
+/// of letters, digits and hyphens (not at either end), at most 253 bytes,
+/// whose last label isn't a number in disguise.
 pub fn proxy_host_ok(host: &str) -> bool {
-    host.parse::<std::net::IpAddr>().is_ok()
-        || (!host.is_empty()
-            && host.len() <= 253
-            && host.split('.').all(|l| {
-                !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-            }))
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        && !host.split('.').next_back().is_some_and(|l| {
+            l.bytes().all(|b| b.is_ascii_digit()) || l.to_ascii_lowercase().starts_with("0x")
+        })
 }
 
 /// Most windows a source's schedule holds.
@@ -176,47 +187,39 @@ pub struct SourceSettings {
 }
 
 /// `plugin`'s saved settings. One that isn't readable keeps its default,
-/// with a warning.
-pub fn saved_settings(store: &Store, plugin: &'static str) -> Result<SourceSettings, Error> {
-    fn read<T>(
-        store: &Store,
-        plugin: &'static str,
-        setting: SourceSetting,
-        label: &'static str,
-        decode: impl Fn(&str) -> Option<T>,
-    ) -> Result<Option<T>, Error> {
-        let Some(text) = store.source_setting(plugin, setting)? else {
-            return Ok(None);
-        };
-        let value = decode(&text);
-        if value.is_none() {
+/// with a warning when `warn` (once, at start: `GET /sources` reads them
+/// on every call).
+pub fn saved_settings(
+    store: &Store,
+    plugin: &'static str,
+    warn: bool,
+) -> Result<SourceSettings, Error> {
+    let read =
+        |setting| -> Result<Option<String>, Error> { Ok(store.source_setting(plugin, setting)?) };
+    let decoded = |text: Option<String>, label: &'static str, ok: bool| {
+        if text.is_some() && !ok && warn {
             lodestar_log::log_event!(
                 crate::log_events::SOURCE_SETTING_UNREADABLE,
                 plugin = plugin,
                 setting = label
             );
         }
-        Ok(value)
-    }
+    };
+    let egress = read(SourceSetting::Egress)?;
+    let egress_value = egress.as_deref().and_then(EgressSetting::decode);
+    decoded(egress, "egress", egress_value.is_some());
+    let schedule = read(SourceSetting::Schedule)?;
+    let schedule_value = schedule.as_deref().and_then(decode_schedule);
+    decoded(schedule, "schedule", schedule_value.is_some());
+    let agents = read(SourceSetting::Agents)?;
+    let agents_value = agents
+        .as_deref()
+        .and_then(|t| t.parse::<u32>().ok().filter(|n| *n >= 1));
+    decoded(agents, "agents", agents_value.is_some());
     Ok(SourceSettings {
-        egress: read(
-            store,
-            plugin,
-            SourceSetting::Egress,
-            "egress",
-            EgressSetting::decode,
-        )?
-        .unwrap_or_default(),
-        schedule: read(
-            store,
-            plugin,
-            SourceSetting::Schedule,
-            "schedule",
-            decode_schedule,
-        )?,
-        agents: read(store, plugin, SourceSetting::Agents, "agents", |t| {
-            t.parse::<u32>().ok().filter(|n| *n >= 1)
-        })?,
+        egress: egress_value.unwrap_or_default(),
+        schedule: schedule_value,
+        agents: agents_value,
     })
 }
 
@@ -870,7 +873,7 @@ impl Control {
                 .map(|s| {
                     let need = consent::need_in(&store, &s.manifest)?;
                     let names = store.source_secret_names(s.manifest.id)?;
-                    let settings = saved_settings(&store, s.manifest.id)?;
+                    let settings = saved_settings(&store, s.manifest.id, false)?;
                     Ok((s.id, (need, names, settings)))
                 })
                 .collect::<Result<HashMap<_, _>, Error>>()?;
@@ -1375,6 +1378,9 @@ mod tests {
             "socks5 h 1080 dns",
             "socks5 a/b 1080 auto",
             "socks5 u@h 1080 auto",
+            "socks5 -h 1080 auto",
+            "socks5 127.1 1080 auto",
+            "socks5 0x7f000001 1080 auto",
             "interface wg0",
         ] {
             assert_eq!(EgressSetting::decode(bad), None, "{bad}");
@@ -1388,10 +1394,7 @@ mod tests {
         assert_eq!(decode_schedule(""), Some(Vec::new()));
         assert_eq!(decode_schedule("60-1440"), None);
         assert_eq!(decode_schedule("60"), None);
-        assert_eq!(
-            decode_schedule(&vec!["1-2"; MAX_WINDOWS + 1].join(",")),
-            None
-        );
+        assert_eq!(decode_schedule(&["1-2"; MAX_WINDOWS + 1].join(",")), None);
     }
 
     #[test]

@@ -606,7 +606,9 @@ async fn sources_and_the_network_check() {
         "it stops at the next start"
     );
     // Purge waits for SRC-14b.
-    let (status, e) = f.send(req("PATCH", &uri, c, Some(r#"{"purge":true}"#))).await;
+    let (status, e) = f
+        .send(req("PATCH", &uri, c, Some(r#"{"purge":true}"#)))
+        .await;
     assert_eq!(
         (status, e["error"]["code"].clone()),
         (409, json!("not_editable"))
@@ -614,19 +616,31 @@ async fn sources_and_the_network_check() {
     // The plugin declares one agent: more is refused, and nothing is saved.
     let (status, e) = f.send(req("PATCH", &uri, c, Some(r#"{"agents":4}"#))).await;
     assert_eq!(
-        (status, e["error"]["code"].clone(), e["error"]["field"].clone()),
-        (400, json!("invalid_setting"), json!("agents"))
+        (
+            status,
+            e["error"]["code"].clone(),
+            e["error"]["field"].clone()
+        ),
+        (400, json!("invalid_agents"), json!("agents"))
     );
     // A schedule is saved and shown, and says it isn't enforced yet.
     let (status, saved) = f
-        .send(req("PATCH", &uri, c, Some(r#"{"schedule":["01:00-07:00"]}"#)))
+        .send(req(
+            "PATCH",
+            &uri,
+            c,
+            Some(r#"{"schedule":["01:00-07:00"]}"#),
+        ))
         .await;
     assert_eq!(status, 200, "{saved}");
     assert_eq!(
         saved["schedule"],
         json!({ "default": [], "enforced": false, "windows": ["01:00-07:00"] })
     );
-    assert_eq!(saved["agents"], json!({ "count": 1, "enforced": false, "max": 1 }));
+    assert_eq!(
+        saved["agents"],
+        json!({ "count": 1, "enforced": false, "max": 1 })
+    );
     // A route change needs the password, and an interface is refused.
     let (status, e) = f
         .send(req(
@@ -641,14 +655,22 @@ async fn sources_and_the_network_check() {
         (428, json!("confirm_required"))
     );
     let (status, e) = f
-        .send(req("PATCH", &uri, c, Some(r#"{"egress":{"route":"interface"}}"#)))
+        .send(req(
+            "PATCH",
+            &uri,
+            c,
+            Some(r#"{"egress":{"route":"interface"}}"#),
+        ))
         .await;
     assert_eq!(
         (status, e["error"]["code"].clone()),
         (409, json!("route_unavailable"))
     );
     let (_, list) = f.send(req("GET", "/api/v1/sources", c, None)).await;
-    assert!(list.to_string().contains(r#""setting":{"route":"direct"}"#), "{list}");
+    assert!(
+        list.to_string().contains(r#""setting":{"route":"direct"}"#),
+        "{list}"
+    );
     let (status, e) = f
         .send(req(
             "PATCH",

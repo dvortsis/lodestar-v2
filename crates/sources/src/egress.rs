@@ -786,13 +786,20 @@ impl PluginEgress {
                 Err(refused(&e))
             }
             Err(e) => {
-                Counters::bump(&self.counters.transport_failures);
-                // A failed connection may mean the route just went down;
-                // re-probe so the status says so.
-                if matches!(e, NetError::Connect | NetError::Timeout) && self.probe.ttl().is_some()
+                // A failed connection may mean the route just went down:
+                // re-probe, so the status says so, and so a route outage
+                // is the kill switch's error, not the host's (which would
+                // back it off).
+                if matches!(e, NetError::Connect | NetError::Timeout)
+                    && self.probe.ttl().is_some()
+                    && let RouteState::Down(reason) = self.check_now().await
                 {
-                    self.check_now().await;
+                    Counters::bump(&self.counters.kill_switch_aborts);
+                    return Err(HttpError::EgressDown(format!(
+                        "went down in flight: {reason}"
+                    )));
                 }
+                Counters::bump(&self.counters.transport_failures);
                 Err(HttpError::Transport(e.to_string()))
             }
         }

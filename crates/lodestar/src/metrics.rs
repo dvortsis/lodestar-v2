@@ -610,9 +610,6 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     o.0
 }
 
-/// The crawler gate (owner-decisions §2.25): new verified records and the
-/// same records searchable, by origin; every excluded outcome by reason;
-/// and the time from first sighting to searchable.
 /// Each running plugin's egress and kill switch (SRC-5, `docs/metrics.md`
 /// "Source egress and kill switch"). A plugin that isn't running, or has
 /// no egress, has no series.
@@ -676,6 +673,9 @@ fn render_egress(o: &mut Out, sources: &[lodestar_pipeline::SourceStatus]) {
     }
 }
 
+/// The crawler gate (owner-decisions §2.25): new verified records and the
+/// same records searchable, by origin; every excluded outcome by reason;
+/// and the time from first sighting to searchable.
 fn render_gate(o: &mut Out, g: &GateStats) {
     o.family(
         "metadata_new_verified_total",

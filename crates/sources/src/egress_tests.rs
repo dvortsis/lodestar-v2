@@ -366,10 +366,13 @@ fn public_only() -> Endpoints {
     Endpoints::user_entered(NetPolicy::notification(false))
 }
 
+/// A request that failed: in transport, by policy, or at the kill switch
+/// (whose text reads "egress down: …").
 fn transport(r: Result<Response, HttpError>) -> String {
     match r {
         Err(HttpError::Transport(e)) => e,
-        other => panic!("expected a transport error, got {other:?}"),
+        Err(e @ HttpError::EgressDown(_)) => e.to_string(),
+        other => panic!("expected a failed request, got {other:?}"),
     }
 }
 
@@ -1210,7 +1213,9 @@ async fn a_proxy_by_name_resolves_once_and_defaults_its_dns_by_where_it_is() {
         e.status().state,
         RouteState::Down(DownReason::ProxyUnresolved)
     );
-    let err = egress_down(e.fetch(&Request::get("http://203.0.113.1/")).await);
+    // A URL the endpoint policy allows, so it's the kill switch that refuses.
+    let (e, _) = f.build_socks5("p", &spec("missing", None), lan()).await;
+    let err = egress_down(e.fetch(&Request::get("http://127.0.0.1:9/")).await);
     assert!(err.contains("didn't resolve"), "{err}");
     assert_eq!(e.status().counters.kill_switch_refusals, 1);
 }
@@ -1235,4 +1240,71 @@ fn lan_means_private_loopback_or_link_local() {
             assert_eq!(default_dns(ip), SocksDns::Proxy);
         }
     }
+}
+
+/// A probe whose good answer is trusted for a minute: the window in which
+/// a route can die without the gate noticing.
+struct Trusting(AtomicBool);
+
+impl RouteProbe for Trusting {
+    fn probe(&self) -> BoxFuture<'_, Result<(), DownReason>> {
+        let up = self.0.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if up {
+                Ok(())
+            } else {
+                Err(DownReason::ProxyUnreachable)
+            }
+        })
+    }
+
+    fn ttl(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
+}
+
+#[tokio::test]
+async fn a_route_that_dies_between_probes_is_the_kill_switchs_error_not_the_hosts() {
+    let probe = Arc::new(Trusting(AtomicBool::new(true)));
+    let client = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        DEADLINE,
+        Scripted::new(&[]),
+        &Route::Direct,
+    )
+    .unwrap();
+    let egress = PluginEgress::new(
+        "p",
+        RouteKind::Socks5,
+        Ok(client),
+        Arc::clone(&probe) as Arc<dyn RouteProbe>,
+        lan(),
+    );
+    assert_eq!(egress.check_now().await, RouteState::Up);
+    // The route dies; the gate still trusts its last good probe, so the
+    // request is sent and fails to connect.
+    probe.0.store(false, Ordering::SeqCst);
+    let url = format!("http://{}/", unused_port_addr());
+    let result = egress.fetch(&Request::get(url.clone())).await;
+    let err = egress_down(result.clone());
+    assert!(err.contains("went down in flight"), "{err}");
+    let c = egress.status().counters;
+    assert_eq!((c.kill_switch_aborts, c.transport_failures), (1, 0));
+    // So the plugin's limiter doesn't back the host off.
+    let limiter = HostLimiter::with_seed(
+        crate::Policy::STRICT.limits(&crate::UserLimits::default()),
+        1,
+    );
+    let host = host_key(&url).unwrap();
+    limiter.record(&host, &result, Instant::now());
+    assert_eq!(
+        limiter.state(&host, Instant::now()),
+        crate::HostState::Ready
+    );
+    // With the route up, a refused connection is the host's.
+    probe.0.store(true, Ordering::SeqCst);
+    assert_eq!(egress.check_now().await, RouteState::Up);
+    let result = egress.fetch(&Request::get(url)).await;
+    assert!(matches!(result, Err(HttpError::Transport(_))), "{result:?}");
+    assert_eq!(egress.status().counters.transport_failures, 1);
 }

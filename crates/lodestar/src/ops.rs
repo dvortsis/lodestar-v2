@@ -34,6 +34,8 @@ use crate::settings::crawler::Crawler;
 /// `PATCH /sources/{id}/credentials`.
 const EDITABLE: [&str; 5] = ["agents", "egress", "enabled", "priority", "schedule"];
 const NOT_YET_EDITABLE: [&str; 1] = ["purge"];
+// The API's input bound and the stored bound are one number.
+const _: () = assert!(lodestar_api::ops::MAX_WINDOWS == control::MAX_WINDOWS);
 /// How long the data directory's size is reused before it's measured
 /// again (it walks the directory).
 const SIZE_TTL: Duration = Duration::from_secs(30);
@@ -425,8 +427,14 @@ fn source_error(e: SourceError) -> OpsError {
         SourceError::CredentialsRequired => OpsError::CredentialsRequired,
         SourceError::Credential(r) => OpsError::BadCredential(r.to_string()),
         SourceError::Sealing => OpsError::Internal("the credential key couldn't be read".into()),
+        // One code per field, whichever layer refused it.
         SourceError::Invalid { field, reason } => OpsError::Invalid {
-            code: "invalid_setting",
+            code: match field.split('.').next() {
+                Some("agents") => "invalid_agents",
+                Some("schedule") => "invalid_schedule",
+                Some("egress") => "invalid_egress",
+                _ => "invalid_setting",
+            },
             field,
             message: format!("The setting wasn't saved: {reason}."),
         },

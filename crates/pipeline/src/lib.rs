@@ -446,10 +446,15 @@ impl Monitor {
                 priority: s.priority,
                 last_error: s.error.lock().expect("source error lock").clone(),
                 policy: *s.plugin.policy(),
-                egress: s.egress.as_ref().map(|(e, route)| EgressLive {
-                    status: e.status(),
-                    route: route.clone(),
-                }),
+                // A plugin that stopped has no live route.
+                egress: s
+                    .egress
+                    .as_ref()
+                    .filter(|_| s.running.load(Ordering::Relaxed))
+                    .map(|(e, route)| EgressLive {
+                        status: e.status(),
+                        route: route.clone(),
+                    }),
             })
             .collect()
     }
@@ -458,6 +463,8 @@ impl Monitor {
 pub struct Pipeline {
     monitor: Monitor,
     tasks: Vec<JoinHandle<Result<(), PluginError>>>,
+    /// The egress monitors (`egress::watch`).
+    egress_tasks: Vec<JoinHandle<()>>,
     stop_plugins: watch::Sender<bool>,
     stop_intake: watch::Sender<bool>,
     stop_pool: watch::Sender<bool>,
@@ -594,6 +601,9 @@ impl Pipeline {
         let mut weights = HashMap::new();
         let mut sources = Vec::new();
         let mut tasks = Vec::new();
+        // Each non-direct route's monitor; they end at the plugins'
+        // shutdown.
+        let mut egress_tasks = Vec::new();
         for (plugin, (id, state, saved, egress_setting)) in plugins.into_iter().zip(registered) {
             let m = plugin.manifest();
             let priority = saved
@@ -627,7 +637,12 @@ impl Pipeline {
             let egress = match &config.egress {
                 Some(factory) => {
                     let built = egress::build(factory, m, &egress_setting).await;
-                    egress::watch(m.id, Arc::clone(&built.0), plugin_shutdown.clone());
+                    egress_tasks.extend(egress::watch(
+                        m.id,
+                        Arc::clone(&built.0),
+                        EGRESS_PROBE_EVERY,
+                        plugin_shutdown.clone(),
+                    ));
                     Some(built)
                 }
                 None => None,
@@ -876,6 +891,7 @@ impl Pipeline {
                 gate,
             },
             tasks,
+            egress_tasks,
             stop_plugins,
             stop_intake,
             stop_pool,
@@ -942,6 +958,15 @@ impl Pipeline {
                     lodestar_log::log_event!(log_events::SOURCE_STOP_TIMEOUT, plugin = id);
                     task.abort();
                 }
+            }
+        }
+        // The egress monitors end at the same signal.
+        for mut task in self.egress_tasks {
+            if tokio::time::timeout(PLUGIN_STOP_TIMEOUT, &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
             }
         }
         let _ = self.stop_intake.send(true);
@@ -1116,7 +1141,7 @@ fn prepare(
             *id,
             state(id),
             control::saved_priority(&store, m.manifest.id)?,
-            control::saved_settings(&store, m.manifest.id)?.egress,
+            control::saved_settings(&store, m.manifest.id, true)?.egress,
         ));
     }
     Ok((

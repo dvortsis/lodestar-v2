@@ -532,7 +532,11 @@ fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
             EgressRoute::Direct if e.proxy.is_some() || e.dns.is_some() => {
                 return Err(invalid(
                     "invalid_egress",
-                    "egress.proxy",
+                    if e.proxy.is_some() {
+                        "egress.proxy"
+                    } else {
+                        "egress.dns"
+                    },
                     "A direct route takes no proxy or DNS choice.",
                 ));
             }
@@ -808,6 +812,10 @@ mod tests {
             serde_json::from_value(json!({ "priority": "low", "purge": true })).unwrap();
         assert_eq!(p.not_yet_editable(), Some("purge"));
         assert!(serde_json::from_value::<SourcePatch>(json!({ "weight": 3 })).is_err());
+        // Nothing turns verification on (it waits for a per-source cap).
+        assert!(
+            serde_json::from_value::<SourcePatch>(json!({ "verify_unverified": true })).is_err()
+        );
         // A schedule is a list of windows, not one string.
         assert!(
             serde_json::from_value::<SourcePatch>(json!({ "schedule": "01:00-07:00" })).is_err()
@@ -869,6 +877,8 @@ mod tests {
             "user@host:80",
             "host/x:80",
             "1.2.3:80",
+            "127.1:80",
+            "0x7f000001:80",
             "999.1.1.1:80",
             ":80",
         ] {
