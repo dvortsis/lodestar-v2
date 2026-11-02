@@ -139,7 +139,7 @@ Run 3. Bytes per record are the size minus the empty store's, divided by the tor
 
 | Bytes per record | 10k | 100k | Budget (arch. §3) | What it is |
 |---|---|---|---|---|
-| SQLite tables | 534 | 543 | | `torrent_files` 262, `torrent_parsed` 150, `torrents` 121, filter and quarantine rows 14 at 100k |
+| SQLite tables | 534 | 543 | | `torrent_files` 262, `torrent_parsed` 150, `torrents` 121, filter and quarantine rows ≈ 10 at 100k (14 with their indexes) |
 | SQLite indexes | 30 | 36 | | mostly the unique hash index (31) |
 | Provenance | 42 | 44 | | `import_quality` 23, `import_membership` 11, `import_membership_job` 10 |
 | **SQLite file** | **607** | **623** | ≤ 1,000 | the three above (no free pages, no WAL after a clean stop) |
@@ -151,7 +151,7 @@ Run 3. Bytes per record are the size minus the empty store's, divided by the tor
 | Other sizes | 10k | 100k |
 |---|---|---|
 | Source copy (Magnetico file) | 8.87 MB | 91.4 MB |
-| Source copy (Bitmagnet database, `pg_database_size`) | 44.9 MB (4.5 KB/torrent) | not run |
+| Source copy (Bitmagnet database, `pg_database_size`, run 3) | 44.9 MB (4.5 KB/torrent) | not run |
 | Backup before the stage (empty store) | 1.56 MB, 0.028 s | 1.56 MB, 0.021 s |
 | Backup after import | 7.18 MB, 0.083 s | 59.6 MB, 0.337 s |
 | Restore to searchable (copy, reindex, start, drain) | 3.44 s (copy 0.004 s) | 13.3 s (copy 0.027 s) |
@@ -224,7 +224,7 @@ With four clients, the client and the server share the 4 cores, so these figures
 | Four-client search p95 change with a round every second (30× the UI) | +0.6 ms (runs 1, 2: −1.3 ms) | +2.6 ms (runs 1, 2: −1.4 ms) | +≤ 5 % |
 
 - **The operative gate passes by two orders of magnitude.** That's the round's share of the 30 s period.
-- **The timed delta isn't a reliable signal.** At 30× the UI's rate on saturated cores it ranges from −4 % to +8 % across runs, which is run-to-run noise. G-m5a found the same, and gates only gross regressions on it.
+- **The timed delta isn't a reliable signal.** At 30× the UI's rate on saturated cores it ranges from −6 % to +9 % across runs, which is run-to-run noise. G-m5a found the same, and gates only gross regressions on it.
 
 ### Relevance (regression check only)
 
