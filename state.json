@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T02:01:00Z",
+  "updated_at": "2026-11-02T02:24:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2201,8 +2201,11 @@
       "session": "session_01MMjhnA8E463RsbggYDbphq (archived)"
     },
     "openapi-example-size": {
-      "status": "queued",
-      "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)"
+      "status": "building",
+      "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)",
+      "model": "sonnet",
+      "session": "session_01MMjhn9wh3LAkmzbRpcaekT",
+      "launched": "2026-11-02T02:23Z"
     },
     "B-subscriptions-api": {
       "status": "merged",
@@ -2248,9 +2251,9 @@
       "merge": "d79ce25b"
     },
     "F-filter-standin-undo": {
-      "status": "in-review",
+      "status": "changes",
       "model": "opus",
-      "note": "no schema change; re-judge only; stop at proposal if attribution needs a migration",
+      "note": "Opus review MERGE + runner round: unless stand-in tombstones counted, exact distinct review count, background undo task, polish",
       "session": "session_01MMjhnAK5fBCVsHf7ALi2RM",
       "launched": "2026-11-02T00:51Z",
       "pr": 367,
@@ -2287,22 +2290,23 @@
       "merge": "edc27a2e"
     },
     "CR-4": {
-      "status": "changes",
+      "status": "ci",
       "model": "opus",
       "session": "session_01MMjhnBobRgzjNcSJb43XQD",
       "launched": "2026-11-02T00:45Z",
       "pr": 365,
-      "head": "e983d35",
-      "note": "Opus review MERGE; runner asked one push: cached route probe (recovery in seconds), probe before uTP, gate probe/mutex behind switch, metrics wording, demux proptest, attempts counting, A/B guardrails"
+      "head": "90efaa0",
+      "note": "review fixes verified; MERGE on green"
     },
     "SRC-8": {
-      "status": "ci",
+      "status": "merged",
       "model": "opus",
-      "session": "session_01MMjhnD96xvuDMzkdMWBKDN",
+      "session": "session_01MMjhnD96xvuDMzkdMWBKDN (archived)",
       "launched": "2026-11-02T01:08Z",
       "pr": 366,
       "head": "18fe7a08",
-      "note": "Opus review MERGE (polish only); merge on green"
+      "note": "Opus review MERGE (polish only); merge on green",
+      "merge": "7f167278"
     },
     "X-strip-format-chars": {
       "status": "queued",
