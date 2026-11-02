@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T04:26:14Z",
+  "updated_at": "2026-11-02T04:37:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2258,14 +2258,15 @@
       "merge": "d79ce25b"
     },
     "F-filter-standin-undo": {
-      "status": "ci",
+      "status": "merged",
       "model": "opus",
       "note": "round 3 verified; MERGE on green incl. filter budget",
       "session": "session_01MMjhnAK5fBCVsHf7ALi2RM",
       "launched": "2026-11-02T00:51Z",
       "pr": 367,
       "head": "e10d067",
-      "notes_runner": "03:50Z MSI smoke hung ~46 min (normal 80-110 s) then runner lost; sent back as a likely startup/shutdown hang from the round-3 background undo task; must merge main (openapi regen after #368)."
+      "notes_runner": "03:50Z MSI smoke hung ~46 min (normal 80-110 s) then runner lost; sent back as a likely startup/shutdown hang from the round-3 background undo task; must merge main (openapi regen after #368).",
+      "merge_sha": "785b282c"
     },
     "SRC-16": {
       "status": "merged",
@@ -2325,7 +2326,8 @@
       "launched": "2026-11-02T02:52Z",
       "pr": 373,
       "head": "332a3c43",
-      "review": "Opus MERGE at 332a3c43; final push after #367 merges (merge main + decisions note on tokenizer divergence)"
+      "review": "Opus MERGE at 332a3c43; final push after #367 merges (merge main + decisions note on tokenizer divergence)",
+      "notes2": "told to push final round (merge main) after #367 merged 04:36Z"
     },
     "P-master-plan-r2": {
       "status": "merged",
@@ -2364,6 +2366,13 @@
       "session": "session_01MMjhnBRarxofLxtc79e3pW",
       "launched": "2026-11-02T04:26:14Z",
       "notes": "ladder rung 2; owner confirms (ext:owner-cr-spec) before CR-AB-COMP"
+    },
+    "SRC-1": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhnB5mFJfPfMQNdVkAkV",
+      "launched": "2026-11-02T04:37:06Z",
+      "migration": "V14"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
