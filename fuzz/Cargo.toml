@@ -134,3 +134,10 @@ path = "fuzz_targets/torznab.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "rss"
+path = "fuzz_targets/rss.rs"
+test = false
+doc = false
+bench = false
