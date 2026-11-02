@@ -242,7 +242,7 @@
 	"settings_logging_ev_filters_subscriptions_read_failed_n": "无法读取订阅",
 	"settings_logging_ev_filters_subscriptions_read_failed_h": "无法读取筛选订阅列表。",
 	"settings_logging_ev_filters_subscriptions_client_failed_n": "订阅下载器失败",
-	"settings_logging_ev_filters_subscriptions_client_failed_h": "筛选订阅的下载器无法启动。",
+	"settings_logging_ev_filters_subscriptions_client_failed_h": "筛选订阅的下载器无法启动。请重启 Lodestar 后重试。",
 	"settings_logging_ev_filters_subscriptions_apply_failed_n": "订阅未应用",
 	"settings_logging_ev_filters_subscriptions_apply_failed_h": "无法应用已订阅的筛选。",
 	"settings_logging_ev_alerts_search_unreadable_n": "提醒搜索无法读取",

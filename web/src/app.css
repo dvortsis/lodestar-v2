@@ -3,6 +3,11 @@
 @source not "../**/*.md";
 /* Tests and build scripts hold sample class strings (`!mt-[2px]`) that are not in the app. */
 @source not "../scripts";
+/* Showcase-only routes: a production build must not ship their classes. Dev and test builds link
+   them into src/routes/dev (gitignored, so auto-detection skips it); the explicit @source below
+   scans that link, which is absent from production builds. */
+@source not "./dev-routes";
+@source "./routes/dev";
 @source not "../**/*.test.ts";
 /* themes: false = no built-in daisyUI theme CSS; the compiler's variables (critical.css) drive
    all colour, and tokens.css sets the shape variables. */

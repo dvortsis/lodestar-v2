@@ -76,7 +76,7 @@ compose project a network with `enable_ipv6: true` and an IPv6 subnet. With
 | `LODESTAR_DHT_PORT`    | `6881`            | DHT port (UDP).                            |
 | `LODESTAR_DHT_ENABLED` | `true`            | `false` turns the DHT off.                 |
 | `LODESTAR_INTENSITY`   | `balanced`        | `low`, `balanced` or `aggressive`.         |
-| `LODESTAR_LOG`         | `info`            | Log filter (`error`, `warn`, `info`, `debug`). |
+| `LODESTAR_LOG`         | `info`            | Log filter (`error`, `warn`, `info`, `debug`). While it's set, Settings → Logging is read-only; leave it unset to change logging in the app. |
 | `LODESTAR_DHT_WITNESS_DIR` | `/var/lib/lodestar-witness` | Leave as it is. Where the restart check keeps its record, outside `/data` (used only when the restart check is on: `[dht] safe_restart` or `LODESTAR_DHT_SAFE_RESTART=true`). |
 | `PUID`                 | `65532`           | User ID Lodestar runs as. See below.       |
 | `PGID`                 | `65532`           | Group ID Lodestar runs as. See below.      |

@@ -242,7 +242,7 @@
 	"settings_logging_ev_filters_subscriptions_read_failed_n": "Subscriptions unreadable",
 	"settings_logging_ev_filters_subscriptions_read_failed_h": "The list of filter subscriptions couldn't be read.",
 	"settings_logging_ev_filters_subscriptions_client_failed_n": "Subscription client failed",
-	"settings_logging_ev_filters_subscriptions_client_failed_h": "The downloader for filter subscriptions couldn't start.",
+	"settings_logging_ev_filters_subscriptions_client_failed_h": "The downloader for filter subscriptions couldn't start. Restart Lodestar to try again.",
 	"settings_logging_ev_filters_subscriptions_apply_failed_n": "Subscriptions not applied",
 	"settings_logging_ev_filters_subscriptions_apply_failed_h": "Subscribed filters couldn't be applied.",
 	"settings_logging_ev_alerts_search_unreadable_n": "Alert search unreadable",
