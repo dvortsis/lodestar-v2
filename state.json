@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T19:58:55Z",
+  "updated_at": "2026-11-02T20:53:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4646,12 +4646,18 @@
   ],
   "limits": {
     "phase_total": 2,
-    "phase_total_note": "2026-11-02T15:06:47Z owner (runner session): approaching weekly usage limit; bring worker slots down to two as tasks complete. No new launches until running count < 2. Supersedes the 4-slot rule (§2.24/§2.25 cap) until the owner says otherwise."
+    "phase_total_note": "2026-11-02T15:06:47Z owner (runner session): approaching weekly usage limit; bring worker slots down to two as tasks complete. No new launches until running count < 2. Supersedes the 4-slot rule (§2.24/§2.25 cap) until the owner says otherwise.",
+    "launch_paused": true,
+    "launch_paused_note": "2026-11-02T20:53:52Z owner: once active sessions are pushed, pause starting further sessions until the soak r3 results are in. Runner reports the verdict and resumes launches only on the owner's word. Existing sessions may still push and be merged (SRC-14b-2 #400; R-mem-triage fix PR after the verdict)."
   },
   "owner_instructions": [
     {
       "t": "2026-11-02T15:06:47Z",
       "text": "Approaching weekly limit: once tasks complete, bring the number of worker slots down to two."
+    },
+    {
+      "t": "2026-11-02T20:53:52Z",
+      "text": "Once all active sessions are pushed, pause start of further sessions; wait until the soak results."
     }
   ]
 }
