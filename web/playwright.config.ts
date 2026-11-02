@@ -20,9 +20,12 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 
 // Local override, never set in CI: run an already-installed Chromium instead of the build this
 // @playwright/test pins (cloud sessions ship a different one). Unset = unchanged behaviour.
-// Port for the preview server; set PW_PORT so parallel worktrees don't share one.
-const port = Number(process.env.PW_PORT ?? 4173);
 const chromiumPath = process.env.PW_CHROMIUM_PATH;
+
+// Port for the preview server; set PW_PORT so parallel worktrees don't share one.
+const port = Number(process.env.PW_PORT || 4173);
+if (!Number.isInteger(port) || port < 1 || port > 65535)
+	throw new Error('PW_PORT must be a port number');
 
 const allThemes = !!process.env.E2E_ALL_THEMES || process.argv.join(' ').includes('all-themes');
 const fixture =

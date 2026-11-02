@@ -105,7 +105,7 @@ Nothing is published yet.
 2. On a fresh data directory it prints a one-time **setup token** to the log
    at warn level, with the address to open:
    `First run: open Lodestar in a browser and enter setup token <token> address="http://<this host's address>:8090/"`
-   Use your host's real address in place of the placeholder; the port is the one in `LODESTAR_HTTP_BIND`.
+   Use your host's real address in place of the placeholder; the port is the one in `LODESTAR_HTTP_BIND`. In Docker or Unraid that is the port inside the container; open the host port you mapped to it.
    - Docker/Unraid: `docker logs lodestar` (or the container's **Logs** in
      Unraid).
    - systemd: `journalctl -u lodestar | grep "setup token"`.
