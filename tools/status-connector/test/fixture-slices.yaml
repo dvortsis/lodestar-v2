@@ -14,3 +14,6 @@ slices:
   - { id: SRC-8, title: RSS parser, kind: core, model: opus, deps: [] }
   - { id: SRC-9, title: Internet Archive parser, kind: core, model: opus, deps: [SRC-6] }
   - { id: SRC-12, title: BEP 48 scrape, kind: core, model: opus, deps: [] }
+  - { id: ZZ-new, title: A slice no placement rule covers, kind: helper, model: sonnet, deps: [] }
+  - { id: SRC-13, title: Torrent caches, kind: core, model: opus, deps: ["ext:undeclared"] }
+  - { id: SRC-AUTO, title: Needs the tagged release, kind: core, model: opus, deps: ["ext:v-tagged"] }

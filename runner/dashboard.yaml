@@ -1,0 +1,924 @@
+# Roadmap dashboard data: the plan's structure and the facts GitHub can't show.
+#
+# The roadmap dashboard (tools/status-connector) reads this file live from main, together with
+# runner/slices.yaml and GitHub itself. Progress needs no editing: a branch slice/<id>, a PR
+# titled "<id>: ...", and its merge are read directly.
+#
+# Update this file IN THE SAME PR as any change that moves one of these:
+#   - a slice or epic is added, removed, renamed or re-grouped        -> placement, pinned, expanded
+#   - an owner decision is made, or a new one is needed               -> conditions, owner_queue
+#   - a phase, track or roadmap dependency changes (build-plan 0)     -> phases, workstreams, roadmap
+#   - a gate is defined, measured or passed                           -> gates, crawler, soak
+#   - the top-of-page notes are out of date                           -> notes
+# `cd tools/status-connector && npm test` checks that this file and runner/slices.yaml agree.
+# See docs/handoff.md and CLAUDE.md ("Keeping the dashboard current").
+#
+# placement: first match wins. A pattern is an exact slice id, a prefix ending in *, or /regex/.
+# pinned: a slice forced into one workstream whatever the rules say.
+# conditions: the `ext:` names used in runner/slices.yaml. who: you | runner | soak | time | done.
+#   met: true once it holds. auto: branch:<name> or tag:<name> is read from GitHub and overrides met.
+# gates: give `slice:` to take the status from that slice (done -> passed); otherwise set `status:`.
+phases:
+- id: ph-found
+  name: Foundations to a usable app
+  badge: Shipped
+  plain: 'The base of Lodestar: the engine, the screens for searching and reading torrents, settings, the first-run
+    wizard, filters and the safety rules. Finished through milestone 5.'
+  tag: P0-P2 / M0-M5
+- id: ph-v051
+  name: Release v0.5.1
+  badge: Closing
+  plain: The release you can install now. The code is built and the release candidate is signed. What is left is
+    the 24-hour memory test on your Unraid box, then you tag it.
+  tag: v0.5.1
+- id: ph-crawler
+  name: Discover faster
+  badge: In progress
+  plain: The crawler finds about 12 torrents a minute. The v0.6 gate is 100 a minute. This work builds each idea
+    behind an off switch, then measures it live on a dedicated host.
+  tag: v0.6 gate
+- id: ph-sources
+  name: More places to find torrents
+  badge: In progress
+  plain: Plug-ins that bring in torrents from feeds and indexes (Torznab, RSS, Internet Archive and others), with
+    consent, a kill switch and the safety filters applied first.
+  tag: v0.6
+- id: ph-imports
+  name: Bring in existing libraries
+  badge: Waiting
+  plain: Import big collections from Magnetico and Bitmagnet, then prove Lodestar holds 1 million, 10 million and
+    50 million torrents within its speed and size budgets.
+  tag: Import gates
+- id: ph-platform
+  name: Run it anywhere
+  badge: Held
+  plain: Remote workers on other machines, the companion manager, and the finished packaging for Docker, Unraid
+    and Windows. On hold until the memory test gives its verdict.
+  tag: v0.6 / M6
+- id: ph-m7
+  name: Search and integrations
+  badge: Next
+  plain: Torznab server, torrent upload, grouping of duplicates, regex search, enrichment plug-ins. Download clients
+    and notifiers were built early and are done.
+  tag: v0.7 / M7
+- id: ph-v10
+  name: Hardening to 1.0
+  badge: Later
+  plain: Version 0.8 (plug-ins on workers), then the big relevance, performance, security and chaos checks that
+    must pass before 1.0.
+  tag: v0.8 / M8 / 1.0
+- id: ph-polish
+  name: Backlog, fixes and polish
+  badge: Ongoing
+  plain: Small fixes, review follow-ups and polish rounds that fill spare capacity. The runner launches these as
+    they come up.
+  tag: Ongoing
+workstreams:
+  ws-api:
+    phase: ph-found
+    name: Engine and API
+    plain: Search engine, indexes, the API behind every screen.
+  ws-web:
+    phase: ph-found
+    name: Web foundations
+    plain: Design system, themes, shared components and test setup.
+  ws-search-ui:
+    phase: ph-found
+    name: Search and detail screens
+    plain: Search, results, facets, a torrent's detail page, Compare and Discover.
+  ws-insights:
+    phase: ph-found
+    name: Alerts and Insights
+    plain: Saved-search alerts and the Insights reports.
+  ws-settings:
+    phase: ph-found
+    name: Settings, updates and first run
+    plain: Settings screens, sign-in, logging, the updater and the first-run wizard.
+  ws-filters:
+    phase: ph-found
+    name: Filters and safety
+    plain: Blocking rules, adult-content handling and blocklist subscriptions.
+  ws-ship:
+    phase: ph-found
+    name: Packaging and checks
+    plain: Docker image, end-to-end tests, docs screenshots, translations.
+  ws-gates-found:
+    phase: ph-found
+    name: Gates
+    plain: Exit checks for milestone 5 and the v0.5 MVP.
+  ws-land:
+    phase: ph-v051
+    name: Landing the owner's earlier work
+    plain: Bringing the owner's own branches into the main line.
+  ws-fix:
+    phase: ph-v051
+    name: Release blockers fixed
+    plain: Sign-in, filter, parser and updater fixes needed before v0.5.1.
+  ws-cut:
+    phase: ph-v051
+    name: Soak, notes and tag
+    plain: The soak tools, release notes and the final gate.
+  ws-cr-build:
+    phase: ph-crawler
+    name: Build each experiment (off by default)
+    plain: Each idea is code behind a switch that is off until a live test shows it wins.
+  ws-cr-live:
+    phase: ph-crawler
+    name: Measure live on the experiment host
+    plain: 'Runs on a machine you name: the comparator, then paired on/off runs, then a checkpoint.'
+  ws-cr-tune:
+    phase: ph-crawler
+    name: Tune, combine, accept
+    plain: Profile-driven tuning, then combine the winners and run the 24-hour acceptance.
+  ws-src-core:
+    phase: ph-sources
+    name: Foundations
+    plain: The plug-in contract, storage for unverified items, consent and network controls.
+  ws-src-parse:
+    phase: ph-sources
+    name: Feed readers
+    plain: Safe parsers for Torznab, RSS/Atom and Internet Archive answers.
+  ws-src-plug:
+    phase: ph-sources
+    name: Plug-ins and clients
+    plain: Prowlarr/Jackett, Nyaa, AnimeTosho, Internet Archive, download clients, scrape and caches.
+  ws-src-ui:
+    phase: ph-sources
+    name: Screens and gate
+    plain: Sources in Settings, provenance in the detail view, and the sources gate.
+  ws-src-plan:
+    phase: ph-sources
+    name: Planning
+    plain: Plans for later source work.
+  ws-imp-tools:
+    phase: ph-imports
+    name: Import tools
+    plain: Restore runbook, job tables, adapters, merge and dedupe.
+  ws-imp-scale:
+    phase: ph-imports
+    name: Scale ladder
+    plain: Smoke stages, then 1M, 10M and 50M torrents, then the full library.
+  ws-workers:
+    phase: ph-platform
+    name: Remote workers
+    plain: Run crawling and fetching on other machines. A library exists; nothing wires it yet.
+  ws-companions:
+    phase: ph-platform
+    name: Companion manager
+    plain: Manage helper apps (VPN, clients) from inside Lodestar. No code yet.
+  ws-m6:
+    phase: ph-platform
+    name: Packaging
+    plain: Docker, Unraid, Windows installer and the user guide, audited for gaps.
+  ws-m7-built:
+    phase: ph-m7
+    name: Already built
+    plain: Download clients, notifiers, email and the uTP library.
+  ws-m7-todo:
+    phase: ph-m7
+    name: To plan
+    plain: The v0.7 epic and the one search-schema change it needs.
+  ws-v10:
+    phase: ph-v10
+    name: Later milestones
+    plain: v0.8 and the hardening to 1.0.
+  ws-small:
+    phase: ph-polish
+    name: Planned follow-ups
+    plain: Small known items waiting for a free slot.
+  ws-rounds:
+    phase: ph-polish
+    name: Fix and polish rounds (merged)
+    plain: Review follow-ups and polish the runner launched outside the main graph.
+placement:
+- ws: ws-gates-found
+  match:
+  - G-v05
+  - G-m5
+- ws: ws-settings
+  match:
+  - B2b
+  - B2c
+  - M-settings-form
+  - S-settings-*
+  - M-security-settings
+  - B-log*
+  - S-logs
+  - S-about
+  - B-update
+  - S-updates
+  - S-wizard
+  - S-appearance
+  - S-keys
+  - M-auth
+- ws: ws-filters
+  match:
+  - M-filters-dialogs
+  - S-filters
+  - S-blocklists
+  - B-subscriptions-api
+  - B15
+  - B17
+- ws: ws-search-ui
+  match:
+  - S-search-*
+  - S-detail
+  - S-compare
+  - S-discover
+- ws: ws-insights
+  match:
+  - S-alerts
+  - S-insights-*
+  - B9
+  - B11a
+  - B11b
+  - B11c
+- ws: ws-web
+  match:
+  - W*
+  - C0
+  - C1
+- ws: ws-ship
+  match:
+  - D-docker
+  - R-docs
+  - S-e2e
+  - H-zh
+  - S-doc-shots
+- ws: ws-api
+  match:
+  - /^B\d/
+- ws: ws-land
+  match:
+  - /^L\d$/
+- ws: ws-fix
+  match:
+  - F-*
+  - X-ci-health
+  - L4-followups
+  - S-settings-reconcile
+- ws: ws-cut
+  match:
+  - CR-COL
+  - CR-0d
+  - CR-0f
+  - D-v051
+  - G-v051
+  - D-v051-main
+  - P-v052-cut
+- ws: ws-cr-build
+  match:
+  - CR-SIM
+  - CR-gate-metrics
+  - CR-ADM
+  - CR-1a-H
+  - CR-1a-S
+  - CR-1b
+  - CR-4
+  - CR-1c
+  - CR-SPEC
+  - CR-COL-3
+- ws: ws-cr-live
+  match:
+  - CR-AB-*
+  - CR-CP1
+- ws: ws-cr-tune
+  match:
+  - CR-5
+  - CR-COMB
+  - G-v06-crawler
+- ws: ws-src-core
+  match:
+  - SRC-0
+  - SRC-1
+  - SRC-2
+  - SRC-3
+  - SRC-4
+  - SRC-5
+- ws: ws-src-parse
+  match:
+  - SRC-6
+  - SRC-8
+  - SRC-9
+- ws: ws-src-plug
+  match:
+  - SRC-7
+  - SRC-10*
+  - SRC-11*
+  - SRC-12
+  - SRC-13
+- ws: ws-src-ui
+  match:
+  - SRC-14
+  - SRC-15*
+  - SRC-16
+  - SRC-17
+  - SRC-G
+  - X-egress-copy
+  - D-egress-note
+- ws: ws-src-plan
+  match:
+  - E-v06-sources
+  - P-v06-rulepacks
+- ws: ws-imp-tools
+  match:
+  - IMP-*
+  - B-import-server-2
+- ws: ws-imp-scale
+  match:
+  - X-search-files-3
+  - G-import-*
+  - CR-3
+  - G-rebuild-10M
+- ws: ws-workers
+  match:
+  - E-v06-workers
+- ws: ws-companions
+  match:
+  - E-v06-companions
+- ws: ws-m6
+  match:
+  - E-M6
+  - X-pack-static
+- ws: ws-m7-built
+  match:
+  - X-utp
+  - X-integrations
+  - X-clients
+  - X-notify
+  - X-email
+- ws: ws-m7-todo
+  match:
+  - E-M7
+  - SB-6
+- ws: ws-v10
+  match:
+  - E-v08
+  - E-M8
+unplaced_workstream: ws-small
+pinned:
+  X-required-web-checks: ws-small
+  F-filter-standin-undo: ws-small
+  X-overflow-links: ws-small
+  X-polish-carry-1102: ws-small
+  X-settings-overview: ws-small
+  X-strip-format-chars: ws-small
+  i9-stage2: ws-small
+  openapi-example-size: ws-small
+held:
+- E-M6
+- E-v06-companions
+- E-v06-workers
+expanded:
+- E-v06-sources
+state_override:
+  G-v051: active
+conditions:
+  owner-cr-spec:
+    met: false
+    who: you
+    label: You confirm the frozen crawler measurement specification (CR-SPEC)
+  owner-migrations-on-main:
+    met: false
+    who: you
+    label: v0.5.1 is tagged, or you allow a database migration on main before then
+  m4-schema-settled:
+    met: true
+    who: done
+    label: Store schema settled
+  m4-swarm-fields:
+    met: true
+    who: done
+    label: Swarm fields merged
+  m4-done:
+    met: true
+    who: done
+    label: Milestone 4 complete
+  history-swap:
+    met: true
+    who: done
+    label: History rewrite done
+  release-branch-cut:
+    met: true
+    who: done
+    label: Release branch cut
+    auto: branch:release/v0.5.1
+  migration-slot:
+    met: false
+    who: runner
+    label: A free database-migration number (runner assigns V14)
+  owner-q1:
+    met: false
+    who: you
+    label: You approve the consent wording (Q1)
+  owner-q2:
+    met: false
+    who: you
+    label: You decide the terms-of-service / robots position for sources (Q2)
+  owner-q3:
+    met: false
+    who: you
+    label: You choose which torrent caches may be contacted (Q3)
+  owner-q7:
+    met: false
+    who: you
+    label: You decide whether a Sukebei (adult) feed ships (Q7)
+  owner-q15:
+    met: false
+    who: you
+    label: You decide how private-source items get metadata (Q15)
+  m7-schema-bump:
+    met: false
+    who: runner
+    label: The runner schedules the v0.7 search-schema change
+  owner-signing-cert:
+    met: false
+    who: you
+    label: You provide a code-signing certificate
+  v051-soak-verdict:
+    met: false
+    who: soak
+    label: The 24-hour Unraid memory test gives its verdict
+  v051-tagged:
+    met: false
+    who: you
+    label: You tag and publish v0.5.1
+    auto: tag:v0.5.1
+  experiment-host:
+    met: false
+    who: you
+    label: You name the experiment host and book it
+  owner-checkpoint-1:
+    met: false
+    who: you
+    label: You re-decide at Checkpoint 1 if the crawler projection falls short
+  import-host:
+    met: false
+    who: you
+    label: You name the import host and restore the Bitmagnet dump
+  owner-50m-approval:
+    met: false
+    who: you
+    label: You approve the 50M import numbers
+  owner-upload-exception:
+    met: false
+    who: you
+    label: You decide the torrent-upload exception
+  owner-import-server-surface:
+    met: false
+    who: you
+    label: You approve the import-through-server attack surface
+  release-after-parser:
+    met: false
+    who: time
+    label: A release that reads the new range syntax has shipped
+roadmap:
+  steps:
+  - id: soak
+    label: Unraid memory test (r3)
+    plain: The 24-hour test of release candidate 2 is running. It ends 22:16 UTC on Nov 2.
+    col: 0
+    row: 2
+    members: []
+    override: active
+  - id: gluetun
+    label: VPN (gluetun) leg, 2 h
+    plain: You approve and run a 2-hour test through the VPN.
+    col: 1
+    row: 2
+    members: []
+    override: you
+  - id: tag
+    label: Tag v0.5.1
+    plain: You tag the release and publish it.
+    col: 2
+    row: 2
+    members:
+    - D-v051-main
+    override: you
+  - id: v052
+    label: Cut v0.5.2
+    plain: A new release branch from main, soon after v0.5.1.
+    col: 3
+    row: 2
+    members:
+    - P-v052-cut
+  - id: unhold
+    label: Unhold workers, companions, packaging
+    plain: The three held epics get broken into slices once the soak verdict is in.
+    col: 2
+    row: 4
+    members:
+    - E-M6
+    - E-v06-workers
+    - E-v06-companions
+  - id: cr4
+    label: Build crawler experiments
+    plain: Admission, hints, streaming, prefixes and uTP, each behind an off switch.
+    col: 0
+    row: 0
+    members:
+    - CR-SIM
+    - CR-gate-metrics
+    - CR-ADM
+    - CR-1a-H
+    - CR-1a-S
+    - CR-1b
+    - CR-4
+  - id: crab
+    label: Live A/B on the experiment host
+    plain: Paired on/off runs plus a bitmagnet comparator. Needs your host.
+    col: 1
+    row: 0
+    members:
+    - CR-AB-COMP
+    - CR-AB-ADM
+    - CR-AB-4
+  - id: cp1
+    label: Checkpoint 1
+    plain: Does the measured gain project to 100 torrents a minute? If not, you re-decide.
+    col: 2
+    row: 0
+    members:
+    - CR-CP1
+  - id: crtune
+    label: Tune and combine
+    plain: Remaining experiments, tuning, then the 24-hour acceptance run.
+    col: 3
+    row: 0
+    members:
+    - CR-1c
+    - CR-AB-1
+    - CR-5
+    - CR-COMB
+  - id: g06c
+    label: Crawler gate (100/min)
+    plain: 24 h mean at least 100 a minute, no hour under 70.
+    col: 4
+    row: 0
+    members:
+    - G-v06-crawler
+  - id: src-core
+    label: 'Sources: foundations'
+    plain: Plug-in contract, unverified-item storage, consent, network controls.
+    col: 0
+    row: 6
+    members:
+    - SRC-0
+    - SRC-1
+    - SRC-2
+    - SRC-4
+    - SRC-5
+  - id: src7
+    label: 'Sources: Prowlarr/Jackett'
+    plain: The critical plug-in. Needs your answers to Q2 and Q15.
+    col: 1
+    row: 6
+    members:
+    - SRC-7
+  - id: src-plug
+    label: 'Sources: the plug-ins'
+    plain: Nyaa, AnimeTosho, Internet Archive, clients, scrape, caches.
+    col: 2
+    row: 6
+    members:
+    - SRC-10a
+    - SRC-10b
+    - SRC-10c
+    - SRC-10d
+    - SRC-10e
+    - SRC-11
+    - SRC-11b
+    - SRC-12
+    - SRC-13
+  - id: src-ui
+    label: 'Sources: screens'
+    plain: Settings → Sources, provenance in detail, jobs.
+    col: 3
+    row: 6
+    members:
+    - SRC-14
+    - SRC-15a
+    - SRC-15b
+    - SRC-16
+    - SRC-17
+  - id: srcg
+    label: Sources gate
+    plain: The blocklist applies through every plug-in.
+    col: 4
+    row: 6
+    members:
+    - SRC-G
+  - id: imp
+    label: Import tools
+    plain: Magnetico and Bitmagnet adapters, merge and dedupe.
+    col: 0
+    row: 8
+    members:
+    - IMP-0
+    - IMP-1
+    - IMP-2
+    - IMP-3
+    - IMP-4
+    - IMP-5
+  - id: i1m
+    label: Import 1M pilot
+    plain: On your data, on your import host.
+    col: 1
+    row: 8
+    members:
+    - G-import-smoke
+    - G-import-1M
+    - X-search-files-3
+  - id: i10
+    label: Import 10M pilot
+    plain: Includes the search rebuild measured at 10M.
+    col: 2
+    row: 8
+    members:
+    - G-import-10M
+    - SB-6
+  - id: i50
+    label: Import 50M gate
+    plain: Numbers come to you before the full library.
+    col: 3
+    row: 8
+    members:
+    - G-import-50M
+  - id: workers
+    label: Remote workers
+    plain: Wire the cluster library into a worker command.
+    col: 3
+    row: 4
+    members:
+    - E-v06-workers
+  - id: comp
+    label: Companion manager
+    plain: Helper apps managed inside Lodestar.
+    col: 3
+    row: 5
+    members:
+    - E-v06-companions
+  - id: v06
+    label: v0.6 tag
+    plain: Crawler gate, sources gate, workers and companions all green.
+    col: 5
+    row: 3
+    members: []
+  - id: m7
+    label: v0.7 / M7
+    plain: Torznab server, upload, grouping, regex, enrichment.
+    col: 5
+    row: 7
+    members:
+    - E-M7
+  - id: v08
+    label: v0.8
+    plain: Plug-ins on workers; restricted importers.
+    col: 6
+    row: 5
+    members:
+    - E-v08
+  - id: m8
+    label: Hardening to 1.0
+    plain: Relevance, 10M/50M performance, security review, chaos.
+    col: 7
+    row: 5
+    members:
+    - E-M8
+  arrows:
+  - - soak
+    - gluetun
+  - - gluetun
+    - tag
+  - - tag
+    - v052
+  - - soak
+    - unhold
+  - - tag
+    - unhold
+  - - cr4
+    - crab
+  - - crab
+    - cp1
+  - - cp1
+    - crtune
+  - - crtune
+    - g06c
+  - - g06c
+    - v06
+  - - src-core
+    - src7
+  - - src7
+    - src-plug
+  - - src-plug
+    - srcg
+  - - src-core
+    - src-ui
+  - - src-ui
+    - srcg
+  - - srcg
+    - v06
+  - - imp
+    - i1m
+  - - i1m
+    - i10
+  - - i10
+    - i50
+  - - unhold
+    - workers
+  - - unhold
+    - comp
+  - - workers
+    - v06
+  - - comp
+    - v06
+  - - tag
+    - crab
+  - - i10
+    - m7
+  - - v06
+    - v08
+  - - m7
+    - v08
+  - - v08
+    - m8
+  - - i50
+    - m8
+owner_queue:
+- n: 1
+  type: action
+  action: Hand back the r3 soak evidence, approve and run the 2-hour gluetun leg, then tag v0.5.1 and approve the
+    release environment
+  unblocks: v0.5.1 release; the three held epics
+  when: After 22:16 UTC Nov 2
+- n: 2
+  type: decision
+  action: 'Q2: the terms-of-service / robots position for each source. Q15: how private-source items get metadata'
+  unblocks: Prowlarr/Jackett (SRC-7) and every source plug-in after it
+  when: Before the Sources critical path stalls
+- n: 3
+  type: action
+  action: Name the experiment host for crawler tests, and when it is free
+  unblocks: All live crawler measurement and the v0.6 tag
+  when: Before CR-4 lands
+- n: 4
+  type: decision
+  action: Q1 consent wording, Q3 which torrent caches, Q7 whether a Sukebei feed ships
+  unblocks: Consent dialogs, cache enrichment, Sukebei plug-in
+  when: Later
+- n: 5
+  type: decision
+  action: Release adult stand-in holds automatically? (#367, needs a stored-format change)
+  unblocks: The follow-up to the filter stand-in re-judge
+  when: 'When #367 merges'
+- n: 6
+  type: action
+  action: Create the nightly signing key and its environment
+  unblocks: Update checks on the Nightly channel
+  when: Optional
+- n: 7
+  type: decision
+  action: Make "Web / web" and "E2E / run" required checks (runner recommends yes)
+  unblocks: Safer merges
+  when: Optional
+- n: 8
+  type: decision
+  action: Approve the new attack surface of importing through the running server; decide the torrent-upload middleware
+    exception
+  unblocks: Server-side imports; v0.7 upload
+  when: Later
+- n: 9
+  type: action
+  action: Submit to Unraid Community Apps
+  unblocks: Packaging milestone
+  when: Later
+- n: 10
+  type: decision
+  action: 'Checkpoint 1: re-decide the crawler gate if the projection falls short'
+  unblocks: The v0.6 tag
+  when: After the A/B runs
+- n: 11
+  type: action
+  action: Fix your Backups share minimum free space (500 GB) on the Unraid box
+  unblocks: Appdata Backup protection for the soak
+  when: Optional
+gates:
+- id: G-v05
+  name: v0.5 MVP exit
+  plain: The first usable app works end to end.
+  slice: G-v05
+  measure: Passed 2026-10-24
+  target: ''
+  where: docs/build-plan.md
+- id: G-m5
+  name: Milestone 5 exit
+  plain: Every screen built, checked for numbers, speed and design.
+  slice: G-m5
+  measure: Reporting overhead 0.08-0.09% of a 1% gate; 7 blocking design findings fixed (#352)
+  target: ''
+  where: '#352'
+- id: G-v051
+  name: v0.5.1 release
+  plain: Memory test passes, VPN leg runs, you tag it.
+  slice: G-v051
+  measure: Soak r3 running; baseline ends 2026-11-02 22:16 UTC
+  target: Memory slope upper 95% bound <= 2.0 MiB/h over hours 12-24
+  where: build-plan 0.4
+- id: G-v06-crawler
+  name: Crawler gate (v0.6 tag)
+  plain: The crawler must reach 100 verified torrents a minute.
+  slice: G-v06-crawler
+  measure: 12.3 per min (CR-0, 24 h); 17.0 per min on Windows rc.2
+  target: 24 h mean >= 100/min, no hour < 70, p95 discovery-to-searchable <= 10 min
+  where: build-plan 0.6
+- id: SRC-G
+  name: Sources gate (v0.6)
+  plain: The blocklist and safety rules apply through every source plug-in.
+  slice: SRC-G
+  measure: ''
+  target: See docs/plan/2026-11-01-v06-sources.md section 4.2
+  where: plan
+- id: G-import
+  name: Import scale (1M, 10M, 50M)
+  plain: Lodestar holds big libraries within its speed and size budgets.
+  slice: G-import-50M
+  measure: 'Only a synthetic figure: 100k at about 13,900/s'
+  target: Import >= 2,000/s offline; about 2.3 KB per torrent all-in; cold file search p95 <= 150 ms at 10M
+  where: build-plan 0.6
+- id: G-chaos
+  name: Remote workers chaos gates
+  plain: Workers survive crashes, partitions and restarts.
+  status: not started
+  measure: ''
+  target: architecture 19.8
+  where: architecture
+- id: G-filter-budget
+  name: Filter speed budget
+  plain: Judging a torrent against the rules stays fast.
+  status: held
+  measure: About 55 us in one case on Intel 8573C runners
+  target: 50 us (reported, not held)
+  where: architecture 20.8
+- id: G-10
+  name: 1.0 gates
+  plain: Relevance, 10M performance and size, Windows soak, full security review, chaos, politeness audits.
+  status: not started
+  measure: ''
+  target: architecture 17
+  where: architecture
+crawler:
+- label: CR-0, 24 h on Linux
+  value: 12.3
+  kind: measured
+  note: 'Accepted baseline: 740.6 stored per hour'
+- label: Windows rc.2, service mode
+  value: 17.0
+  kind: measured
+  note: 7 h 10 min run
+- label: Gate for the v0.6 tag
+  value: 100
+  kind: gate
+  note: 24 h mean, no hour below 70. Stretch goal 1,000 a minute, served by remote workers.
+soak:
+- stage: Settling
+  label: 'First 6 hours: sampling is suppressed'
+  start: '2026-11-01T15:46:16Z'
+  end: '2026-11-01T21:46:16Z'
+- stage: Warm-up
+  label: 30 minutes of warm-up
+  start: '2026-11-01T21:46:16Z'
+  end: '2026-11-01T22:16:16Z'
+- stage: Measured
+  label: 24 hours of measurement
+  start: '2026-11-01T22:16:16Z'
+  end: '2026-11-02T22:16:16Z'
+- stage: Event
+  label: Hour 12 begins; the daily backup runs at 11:00 UTC inside it
+  start: '2026-11-02T10:16:16Z'
+  end: '2026-11-02T11:00:00Z'
+notes:
+  updated: '2026-11-02'
+  now:
+  - label: The release is waiting on one test
+    text: Release candidate 2 of v0.5.1 is built and signed. The 24-hour memory test on your Unraid box (attempt
+      3) ends at 22:16 UTC on Nov 2. If memory growth stays under 2 MiB an hour over hours 12 to 24, the test passes.
+  - label: The crawler is the longest road
+    text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
+      The live tests wait for an experiment host you name.
+  - label: Sources are being laid down
+    text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
+      controls and the Internet Archive reader are next. The key plug-in waits for your answers.
+  - label: Four slots, kept busy
+    text: By your instruction the runner launches the next ready piece of work whenever a slot frees. Workers, companions
+      and packaging stay held until the memory test gives its verdict.
+  you:
+  - label: After 22:16 UTC on Nov 2
+    text: Approve the 2-hour VPN (gluetun) leg, hand back the soak evidence, then tag v0.5.1.
+  - label: Answer Q2 and Q15 about sources
+    text: They are on the critical path for the main source plug-in. The runner recommends answers.
+  - label: Name the experiment host
+    text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
+  - label: Optional
+    text: Signing key for nightly updates, required checks on main, the Unraid Backups share minimum free space,
+      and the adult stand-in question.

@@ -24,6 +24,7 @@ If the runner session is lost, start a new Opus session (Auto mode) with the pro
 ## Files
 | File | Holds | Changes how |
 |---|---|---|
+| `runner/dashboard.yaml` | what the roadmap dashboard shows that GitHub can't: workstream placement, outside conditions and whether they hold, the owner queue, gates, roadmap steps, notes | by PR to `main`, in the same PR as the plan change it describes (`CLAUDE.md` "Keeping the dashboard current") |
 | `runner/slices.yaml` | the slice graph: id, model, dependencies, owned paths, exit checks, limits | by PR to `main`, when the plan changes or an epic is expanded |
 | `runner/briefs/<id>.md` | the brief a slice session starts from (template: `build-plan.md` §7) | written by the runner just before launch, committed with the state |
 | `state.json` on branch **`runner-state`** | each slice's status, session id, PR number, review rounds, attempts, and today's launch count | pushed directly by the runner after every change |
@@ -95,6 +96,7 @@ The list lives in `state.json` under `watched_sessions`.
    - When an `epic` entry's deps are merged, the runner (Opus) reads the relevant architecture sections and the code as it now stands.
    - It writes that epic's slices into `slices.yaml`, opens a PR, reviews it and merges it.
    - Later phases are planned this way, with current knowledge, not guessed now.
+   - The same PR updates `runner/dashboard.yaml`: list the expanded epic under `expanded`, and place its new slices (`placement`). `cd tools/status-connector && npm test` checks it.
 9. **Clear the polish backlog.** When `carry_forward` holds more than 15 items, launch one polish slice for the items whose files no running slice owns.
 10. **Save state.** Push `state.json` on every wake, even when nothing changed: the watchdog reads the age of the newest commit. Then schedule the next one-off check.
     - Keep `state.json` small: status fields plus a one-line latest note per slice.

@@ -8,9 +8,16 @@ interface Env { GITHUB_TOKEN: string; GITHUB_REPO: string; PATH_SECRET: string; 
 const TOOLS = [
   ['plan_nodes', 'Every phase, workstream and slice of the Lodestar plan with its state, derived from GitHub. Fields that are empty or zero are left out.'],
   ['plan_road', 'The big roadmap steps with their state rolled up from their slices.'],
+  ['plan_edges', 'Which roadmap step has to finish before which.'],
   ['plan_activity', 'Pull requests merged into main per UTC day, last 14 days with merges.'],
   ['plan_recent', 'The 14 most recently merged pull requests, with who made them (claude or other).'],
-  ['plan_meta', 'Which commit and runner-state push the tables were built from.'],
+  ['plan_meta', 'Which commit the tables were built from, and any problems found in runner/dashboard.yaml.'],
+  ['plan_gates', 'The release and milestone gates with their status and latest measurements.'],
+  ['plan_owner', 'Decisions and actions only the owner can take.'],
+  ['plan_ext', 'The outside conditions the plan waits on, and whether each holds.'],
+  ['plan_notes', 'The plain-language notes at the top of the dashboard.'],
+  ['plan_crawler', 'Measured crawler rates against the v0.6 gate.'],
+  ['plan_soak', 'The phases of the running 24-hour memory test.'],
 ] as const;
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const MIN_SECRET = 32;
@@ -79,17 +86,21 @@ async function load(env: Env) {
   const ttl = Number(env.CACHE_SECONDS ?? 60);
   if (memo && Date.now() - memo.at < Math.min(ttl, 10) * 1000) return memo.plan;
   const repo = env.GITHUB_REPO;
-  const [yamlText, state, open, branches, main, closed] = await Promise.all([
+  const [yamlText, cfgText, state, open, branches, main, closed] = await Promise.all([
     gh(env, `/repos/${repo}/contents/runner/slices.yaml?ref=main`, ttl, true),
+    gh(env, `/repos/${repo}/contents/runner/dashboard.yaml?ref=main`, ttl, true),
     gh(env, `/repos/${repo}/contents/state.json?ref=runner-state`, ttl, true).then((t) => JSON.parse(t)).catch(() => null),
     gh(env, `/repos/${repo}/pulls?state=open&per_page=100`, ttl),
     gh(env, `/repos/${repo}/git/matching-refs/heads/slice/`, ttl).catch(() => []),
     gh(env, `/repos/${repo}/commits/main`, ttl),
     closedPRs(env, ttl),
   ]);
-  const y = parse(yamlText);
+  const y = parse(yamlText); const cfg = parse(cfgText);
+  // names GitHub knows, for conditions that say `auto: branch:x` or `auto: tag:x`
+  const wantsRefs = Object.values(cfg.conditions || {}).some((c: any) => c && c.auto);
+  const refs = wantsRefs ? await Promise.all([gh(env, `/repos/${repo}/git/matching-refs/heads/release/`, ttl).catch(() => []), gh(env, `/repos/${repo}/git/matching-refs/tags/?per_page=100`, ttl * 5).catch(() => [])]).then(([h, t]) => ({ branches: (h as any[]).map((r) => String(r.ref).replace('refs/heads/', '')), tags: (t as any[]).map((r) => String(r.ref).replace('refs/tags/', '')) })) : undefined;
   const plan = buildPlan({
-    slices: y.slices, external: y.external || {}, runnerState: state,
+    slices: y.slices, external: y.external || {}, cfg, refs, runnerState: state,
     mergedPRs: closed.filter((p: any) => p.merged_at).map(toPR), closedPRs: closed.filter((p: any) => !p.merged_at).map(toPR), openPRs: open.map(toPR),
     branches: (branches as any[]).map((b) => String(b.ref).replace('refs/heads/slice/', '')),
     mainSha: main.sha, mainDate: main.commit?.committer?.date || '', now: new Date().toISOString(),
@@ -114,7 +125,7 @@ export default {
     if (id === undefined) return new Response(null, { status: 202 }); // notification
     switch (method) {
       case 'initialize':
-        return rpc(id, { protocolVersion: PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0], capabilities: { tools: {} }, serverInfo: { name: 'lodestar-status', version: '1.1.0' } });
+        return rpc(id, { protocolVersion: PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0], capabilities: { tools: {} }, serverInfo: { name: 'lodestar-status', version: '1.2.0' } });
       case 'ping': return rpc(id, {});
       case 'tools/list':
         return rpc(id, { tools: TOOLS.map(([name, description]) => ({ name, description, inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, openWorldHint: true } })) });

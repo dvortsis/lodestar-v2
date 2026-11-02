@@ -1,17 +1,19 @@
 name: Status connector
 
-# Tests the roadmap dashboard's status connector (tools/status-connector) and
+# Tests the roadmap dashboard's status connector (tools/status-connector), checks that
+# runner/dashboard.yaml still agrees with runner/slices.yaml, and
 # deploys it to Cloudflare Workers when a change reaches main. The deploy needs
 # the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID; without
 # them the tests still run and the deploy is skipped. The Worker's own secrets
 # (GITHUB_TOKEN, PATH_SECRET) live in Cloudflare and are not touched here.
 
 on:
+  # The Worker reads runner/dashboard.yaml and runner/slices.yaml from main when it answers, so a plan change needs no deploy.
   push:
     branches: [main]
     paths: ["tools/status-connector/**", ".github/workflows/status-connector.yml"]
   pull_request:
-    paths: ["tools/status-connector/**", ".github/workflows/status-connector.yml"]
+    paths: ["tools/status-connector/**", "runner/slices.yaml", "runner/dashboard.yaml", "docs/build-plan.md", ".github/workflows/status-connector.yml"]
   workflow_dispatch:
 
 permissions:
@@ -31,6 +33,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
       - run: npm test
+
+  # build-plan.md section 0 and runner/dashboard.yaml describe the same plan. A change to the first without the second
+  # is usually a miss, so say so on the PR (a warning, not a failure: some edits are wording only).
+  plan-docs:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Warn when build-plan.md changes without dashboard.yaml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          if echo "$files" | grep -qx 'docs/build-plan.md' && ! echo "$files" | grep -qx 'runner/dashboard.yaml'; then
+            echo "::warning file=docs/build-plan.md::docs/build-plan.md changed but runner/dashboard.yaml did not. If the change moves the plan (a track, gate, owner decision or roadmap step), update runner/dashboard.yaml in this PR (CLAUDE.md, Keeping the dashboard current)."
+          fi
 
   deploy:
     needs: test

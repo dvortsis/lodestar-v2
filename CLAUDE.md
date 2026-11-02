@@ -23,6 +23,12 @@ Read the relevant sections before starting any task. If work changes a decision,
 - **Commits:** imperative subject ≤ 72 chars, a body that explains why, and the Co-Authored-By / Claude-Session trailers the harness supplies. Never put model identifiers in commits, PRs or code.
 - **Tests:** every crate ships unit tests. Parsers (bencode, KRPC, metainfo, query language, release-name parser) also get property tests or `cargo fuzz` targets, plus golden-corpus tests where the plan calls for them. Benchmarks gate budgets once `bench/` exists.
 
+## Keeping the dashboard current
+The roadmap dashboard (`tools/status-connector`, a live view for the owner and for agents of any vendor) reads `runner/slices.yaml`, `runner/dashboard.yaml` and GitHub itself. Progress needs no editing: a branch `slice/<id>`, a PR titled `<id>: <title>` and its merge are read directly, so keep that title format.
+- **Update `runner/dashboard.yaml` in the same PR** as any change to the plan's shape: a slice or epic added, removed, renamed or re-grouped; an epic expanded (list it under `expanded`); an owner decision made or needed (`conditions`, `owner_queue`); a phase, track, roadmap step or arrow changed (`docs/build-plan.md` §0); a gate defined, measured or passed (`gates`, `crawler`, `soak`); or the top-of-page `notes` gone stale. The file's header says which key fits which change.
+- **Run `cd tools/status-connector && npm test`** before pushing such a change. It fails if `dashboard.yaml` and `slices.yaml` disagree (an unplaced slice, a missing condition, a roadmap step naming a slice that no longer exists). CI runs it on any PR that touches either file or the connector.
+- **A change to `docs/build-plan.md` §0 updates `dashboard.yaml` too.** CI warns when it doesn't; an owner decision that the plan waits on is a one-line `met: true` under `conditions`.
+
 ## Multi-session work (owner, 2026-10-23, `docs/owner-decisions.md` §2.24)
 Many sessions build this repo at once, and `main` takes dozens of merges a day. These rules keep work landing instead of chasing `main`:
 - **Keep PRs small enough to land between merges.** The runner splits a slice estimated over ~3k changed lines before launch. A reviewed PR that keeps needing `main` goes into the runner's landing lane (`runner/README.md` step 4).
