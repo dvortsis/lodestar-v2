@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T04:47:25Z",
+  "updated_at": "2026-11-02T05:07:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2347,12 +2347,14 @@
       "notes": "owner planning session; §2.29 (#357 in v0.5.1 as rc.3 = rc.2 + #357 exactly; runner ruling: #367 only on owner yes). phase_total 4 in slices.yaml; HANDOVER.md protocol; watchdog prompt updated 03:39Z."
     },
     "R-rc3-backport": {
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "brief": "briefs/R-rc3-backport.md",
       "notes": "ladder rung 1. Trial cherry-pick of 736a3028 onto release/v0.5.1 conflicts in api/filters.rs, metrics.md, .size-limit.mjs, insights messages en/zh. PR against release/v0.5.1, full-ci, /security-review; runner merges after R1 verdict. Launch on the first free slot.",
       "session": "session_01MMjhn8jpt1tX7E6SGauJH8",
-      "launched": "2026-11-02T03:52:04Z"
+      "launched": "2026-11-02T03:52:04Z",
+      "pr": 377,
+      "head": "dd72d579"
     },
     "status-connector": {
       "status": "merged",
@@ -2381,6 +2383,12 @@
       "model": "opus",
       "session": "session_01MMjhnAf2DUuJQnN2TePHc1",
       "launched": "2026-11-02T04:47:25Z"
+    },
+    "dashboard-yaml": {
+      "status": "merged",
+      "pr": 376,
+      "merge_sha": "5ecbfd67",
+      "notes": "owner-requested via dashboard session. Runner owns notes/owner_queue/conditions in runner/dashboard.yaml; set met: true in the same PR as recording an owner answer. Runner §2.19 calls: check not required (owner ruleset call); build plan stays hand-written."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3487,6 +3495,12 @@
       "state": "to-send",
       "added": "2026-11-02T04:47:25Z",
       "text": "Confirm the crawler measurement spec (docs/decisions/2026-11-02-CR-SPEC.md, #375): ext:owner-cr-spec gates the first booked run. Your call O1: the 24 h gate window excludes the 6 h first-start suppression and a 60 min warmup (recommended; run ~31 h) vs includes them (stricter). O2/O3 tighten; O4 Checkpoint 1 uses the lower of additive/multiplicative estimates; O5 new measurement parameters (list in the file); O6 calendar: two ABBA blocks per treatment minimum, ~4 extra host-days for CR-ADM and uTP. No owner number changed."
+    },
+    {
+      "id": "flag-dashboard-yaml",
+      "state": "to-send",
+      "added": "2026-11-02T05:07:22Z",
+      "text": "#376 merged: runner/dashboard.yaml feeds the status connector live; new CI drift check (Status connector / test), not required (adding it to the ruleset is your call). Build plan stays hand-written."
     }
   ],
   "external_gates": {
@@ -4139,6 +4153,12 @@
       "id": "fuzz-lock-stale",
       "note": "fuzz/Cargo.lock stale on main since #365 (peer-wire -> lodestar-utp); any cargo-fuzz build rewrites it. Fold into a small slice.",
       "added": "2026-11-02T03:52:04Z"
+    }
+  ],
+  "soak_notes": [
+    {
+      "at": "2026-11-02T05:07:22Z",
+      "text": "Owner relay ~05:00Z: seq 746, elapsed 44,800 s (~5.9 h into baseline), health 200, 0 restarts, 4,539 stored, private 329.95 MiB, WS 463.39 MiB, running. Nothing to act on."
     }
   ]
 }
