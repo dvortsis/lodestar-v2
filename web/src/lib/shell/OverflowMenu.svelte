@@ -1,5 +1,5 @@
 <script lang="ts">
-	// The overflow menu (§10.3): Import, Backup, Logs, Syntax guide, About. A separate file so the
+	// The overflow menu (§10.3): the items of MORE in nav.ts (only screens that exist). A separate file so the
 	// menu primitive (Bits UI + positioning) loads on first use instead of with the page.
 	import IconMore from '~icons/ph/dots-three';
 	import { goto } from '$app/navigation';

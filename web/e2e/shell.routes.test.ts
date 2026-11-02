@@ -64,6 +64,7 @@ test.describe('navigation', () => {
 		await expect(menu.getByRole('menuitem')).toHaveText(['Logs', 'About']);
 		await menu.getByRole('menuitem', { name: 'About' }).click();
 		await expect(page).toHaveURL(/\/settings\/about/);
+		await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible();
 	});
 
 	test('the overflow menu opens Logs on a real screen', async ({ page, go, mock }) => {
@@ -81,7 +82,9 @@ test.describe('navigation', () => {
 		await page.getByTestId('more-button').click();
 		await page.getByRole('menu', { name: 'More' }).getByRole('menuitem', { name: 'Logs' }).click();
 		await expect(page).toHaveURL(/\/logs/);
-		await expect(page.getByText('Page not found')).toBeHidden();
+		await expect(
+			page.getByRole('main').getByRole('heading', { level: 1, name: 'Live log' })
+		).toBeVisible();
 	});
 });
 

@@ -28,7 +28,7 @@ export interface MoreItem {
 	label: () => string;
 }
 
-// Shared by navigation and the palette. Only existing routes are offered (§10.3), and
+// The overflow menu's items. Only existing routes are offered (§10.3), and
 // nav.test.ts fails when an href names neither a route nor a registered Settings screen.
 // Import and Backup return when their Settings screens register; the Syntax guide, when
 // /help/syntax exists.
