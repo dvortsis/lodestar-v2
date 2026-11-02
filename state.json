@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:56:51Z",
+  "updated_at": "2026-11-02T15:05:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2438,7 +2438,7 @@
         "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source).",
         "Purge must also scrub pre-migration snapshots (crates/store/src/snapshots.rs, VACUUM INTO, kept 90 days): drop sources.secret.<plugin>.* and sources.consent.<plugin> from each snapshot, or refuse rollback past a purge; secrets.key stays in the data dir, so lodestar rollback would otherwise restore a purged source's sealed credentials and ack (#388 Opus review finding 1)."
       ],
-      "status": "#394 Opus CHANGES: B1 unreadable egress fails open; DNS ruling sent",
+      "status": "#394 Opus re-review MERGE; merge on green",
       "brief": "briefs/SRC-14.md",
       "session": "session_01MMjhnBdFardZHCh5mNqeNX",
       "model": "opus",
@@ -2459,7 +2459,13 @@
         "crates/pipeline/tests/control.rs"
       ],
       "pr": 394,
-      "head": "8e5772a4"
+      "head": "0d58b3e9",
+      "brief_must_14b": [
+        "IPv4-mapped addresses ([::ffff:0.0.0.0], [::ffff:224.0.0.1]) pass usable_proxy/parse_proxy: convert with to_ipv4_mapped() before the check",
+        "SRC-14a decisions file lines 89/102: unreadable value keeps its default is true only for priority/schedule/agents, not egress",
+        "Wire SRC-7 Prowlarr registration (docs/decisions/2026-11-02-SRC-7.md) and add route-level delay after EgressDown; scope http.rs 429/5xx blocks to the poll unit",
+        "Purge job over /jobs + snapshot scrub (brief_must 2 of SRC-14)"
+      ]
     },
     "SRC-2b": {
       "status": "re-review: fixes verified; 2 cheap important sent (visible_alerts N^2 walk, file: watermark)",
@@ -3940,6 +3946,11 @@
       "id": "build-plan-1.6-cite",
       "added": "2026-11-02T14:54:52Z",
       "text": "build-plan §0.6 cites \"§1.6 budgets\", which does not exist; fix the reference in the next runner plan edit."
+    },
+    {
+      "id": "SRC-15b-lan-dns-info",
+      "added": "2026-11-02T15:05:44Z",
+      "text": "SRC-15b: present WARN_LAN_PROXY_DNS as information (it now shows for the recommended gluetun-style setup with auto DNS), not as something to fix."
     }
   ],
   "main_health": [
