@@ -957,6 +957,51 @@ async fn classification_rules_requeue_matching_torrents_and_corrections_are_fixt
     assert_eq!(body["error"]["code"], json!("class_rule_not_found"));
 }
 
+/// F-filter-load-fail-closed (rc.3 backport): removing a stored
+/// classification rule whose query no longer parses re-queues every stored
+/// torrent if it was an Is adult rule (it matched everything while it was
+/// loaded) and nothing if it was a Not adult rule (it was skipped).
+#[tokio::test]
+async fn removing_an_unreadable_class_rule_requeues_by_kind() {
+    let f = fixture_with(Some(SearchIndex::in_memory().unwrap()));
+    let c = logged_in(&f).await;
+    store_torrent(&f, "Holiday.Clips.2023.Lexb.mp4", 900 << 20);
+    store_torrent(&f, "The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", 8 << 30);
+    let (adult, not_adult) = {
+        let mut store = f.api.store.lock().unwrap();
+        enrich_all(&mut store);
+        let index = f.api.index.as_ref().unwrap().index();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+        (
+            store.add_class_rule("size:>>", true).unwrap(),
+            store.add_class_rule("size:>>", false).unwrap(),
+        )
+    };
+    let remove = |id: i64| {
+        post(
+            "/api/v1/classify/rules/remove",
+            Some(&c),
+            json!({ "id": id }),
+        )
+    };
+    let (status, _, body) = call(&f.app, remove(not_adult)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], Value::Null, "a skipped rule marked nothing");
+    let (status, _, body) = call(&f.app, remove(adult)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], json!(2), "everything is classified again");
+    let store = f.api.store.lock().unwrap();
+    assert_eq!(
+        store
+            .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
 /// Enriches every stored torrent, as the pipeline's background pass does.
 fn enrich_all(store: &mut Store) {
     let ids = store
