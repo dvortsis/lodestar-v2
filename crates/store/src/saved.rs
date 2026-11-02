@@ -223,7 +223,7 @@ impl Store {
                  (SELECT count(*) FROM alerts a
                       WHERE a.saved_search_id = s.id AND a.read_at IS NULL),
                  (SELECT a.created_at FROM alerts a WHERE a.saved_search_id = s.id
-                      ORDER BY a.torrent_id DESC LIMIT 1)
+                      ORDER BY a.id DESC LIMIT 1)
              FROM saved_searches s ORDER BY s.id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -331,8 +331,11 @@ impl Store {
         Ok(created)
     }
 
-    /// A saved search's alerts, newest first: up to `limit` below the
-    /// torrent id `before` (the previous page's last), or from the newest.
+    /// A saved search's alerts, newest recorded first: up to `limit` below
+    /// the alert id `before` (the previous page's last), or from the
+    /// newest. Newest recorded, not highest torrent id: a promoted
+    /// torrent's alert is new though its id is old (SRC-2b), and marking
+    /// read through the top row must cover it.
     pub fn alerts(
         &self,
         saved_search_id: i64,
@@ -341,8 +344,8 @@ impl Store {
     ) -> Result<Vec<Alert>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT id, saved_search_id, torrent_id, created_at, read_at FROM alerts
-             WHERE saved_search_id = ?1 AND torrent_id < ?2
-             ORDER BY torrent_id DESC LIMIT ?3",
+             WHERE saved_search_id = ?1 AND id < ?2
+             ORDER BY id DESC LIMIT ?3",
         )?;
         let rows = stmt.query_map(
             params![
@@ -447,12 +450,12 @@ impl Store {
     }
 
     /// A saved search's alerts on torrents that may be shown, newest
-    /// first: up to `limit` below the torrent id `before`, or from the
-    /// newest. `hidden_type` is as [`Store::unread_shown`] takes it;
-    /// `public_only` also leaves out private-source torrents (a feed,
-    /// §18.7). The rule runs in SQL, walking the search's alerts by
-    /// torrent id, so a search whose matches are mostly withheld costs
-    /// one index scan rather than a lookup per row.
+    /// recorded first: up to `limit` below the alert id `before`, or from
+    /// the newest (as [`Store::alerts`]). `hidden_type` is as
+    /// [`Store::unread_shown`] takes it; `public_only` also leaves out
+    /// private-source torrents (a feed, §18.7). The rule runs in SQL over
+    /// the search's alerts (at most `keep` after a prune, sorted once), so
+    /// a search whose matches are mostly withheld costs no lookup per row.
     pub fn shown_alerts(
         &self,
         saved_search_id: i64,
@@ -470,8 +473,8 @@ impl Store {
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT a.id, a.saved_search_id, a.torrent_id, a.created_at, a.read_at
              FROM alerts a JOIN torrents t ON t.id = a.torrent_id
-             WHERE a.saved_search_id = :search AND a.torrent_id < :before AND {SHOWN}
-             ORDER BY a.torrent_id DESC LIMIT :limit"
+             WHERE a.saved_search_id = :search AND a.id < :before AND {SHOWN}
+             ORDER BY a.id DESC LIMIT :limit"
         ))?;
         let rows = stmt.query_map(
             rusqlite::named_params! {
@@ -687,6 +690,83 @@ mod tests {
         assert_eq!(seqs(&s, i64::MAX), vec![100]);
     }
 
+    /// A promoted torrent's alert is recorded after alerts on higher
+    /// torrent ids: it lists first, survives a prune that keeps the
+    /// newest, and marking read through the top row covers it.
+    #[test]
+    fn a_promoted_alert_is_the_newest_for_listing_pruning_and_reading() {
+        let mut s = test_store(10);
+        let a = s.create_saved_search(&input("a"), 0, 0).unwrap();
+        s.record_percolation(10, &[hits(a, &[5, 6, 7])], 1).unwrap();
+        queue_promoted(&s.conn, 1).unwrap();
+        let created = s.record_promoted(1, &[(hits(a, &[2]), AST)], 2).unwrap();
+        assert_eq!(created.len(), 1);
+        let t = |v: Vec<Alert>| v.iter().map(|x| x.torrent_id).collect::<Vec<_>>();
+        assert_eq!(t(s.alerts(a, None, 10).unwrap()), [2, 7, 6, 5]);
+        assert_eq!(
+            t(s.shown_alerts(a, None, 10, None, false).unwrap()),
+            [2, 7, 6, 5]
+        );
+        let top = s.alerts(a, None, 1).unwrap()[0].id;
+        assert_eq!(t(s.alerts(a, Some(top), 10).unwrap()), [7, 6, 5]);
+        assert_eq!(s.saved_searches().unwrap()[0].last_alert_at, Some(2));
+        assert_eq!(s.mark_alerts_read(Some(a), top, 3).unwrap(), 4);
+        assert_eq!(s.prune_alerts(2).unwrap(), 2);
+        assert_eq!(t(s.alerts(a, None, 10).unwrap()), [2, 7]);
+    }
+
+    /// As `record_percolation_unchanged`: a search paused or edited after
+    /// the match gets nothing, and the rows are consumed all the same. An
+    /// Adult torrent's alert is recorded and withheld when it's read.
+    #[test]
+    fn record_promoted_skips_a_search_paused_or_edited_meanwhile() {
+        let mut s = test_store(10);
+        let paused = s.create_saved_search(&input("p"), 10, 0).unwrap();
+        let edited = s.create_saved_search(&input("e"), 10, 0).unwrap();
+        let adult = s.create_saved_search(&input("x"), 10, 0).unwrap();
+        s.update_saved_search(
+            paused,
+            &SavedSearchInput {
+                paused: true,
+                ..input("p")
+            },
+            10,
+            0,
+        )
+        .unwrap();
+        queue_promoted(&s.conn, 4).unwrap();
+        let old = r#"{"op":"term","word":"old"}"#;
+        let created = s
+            .record_promoted(
+                4,
+                &[
+                    (hits(paused, &[3]), AST),
+                    (hits(edited, &[3]), old),
+                    (hits(adult, &[4]), AST),
+                ],
+                1,
+            )
+            .unwrap();
+        assert_eq!(t_ids(&created), [4]);
+        assert!(s.promoted_due(i64::MAX, 10).unwrap().is_empty());
+        s.conn
+            .execute_batch(
+                "UPDATE torrents SET content_type = 11 WHERE id = 4;
+                 INSERT INTO torrent_parsed (torrent_id, parser_ver, data) VALUES (4, 1, x'00');",
+            )
+            .unwrap();
+        assert!(
+            s.shown_alerts(adult, None, 10, Some(11), false)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(s.unread_shown(Some(11)).unwrap(), 0);
+    }
+
+    fn t_ids(v: &[Alert]) -> Vec<i64> {
+        v.iter().map(|x| x.torrent_id).collect()
+    }
+
     #[test]
     fn round_trip_and_update() {
         let mut s = test_store(0);
@@ -855,7 +935,7 @@ mod tests {
             page.iter().map(|x| x.torrent_id).collect::<Vec<_>>(),
             [13, 8]
         );
-        let next = s.alerts(a, Some(8), 10).unwrap();
+        let next = s.alerts(a, Some(page[1].id), 10).unwrap();
         assert_eq!(next.iter().map(|x| x.torrent_id).collect::<Vec<_>>(), [6]);
     }
 

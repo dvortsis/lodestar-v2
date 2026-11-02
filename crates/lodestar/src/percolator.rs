@@ -315,17 +315,26 @@ fn run_promoted(
         max_range: 1,
     };
     let mut hits: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    // The run's first row always finishes, whatever the forward run left
+    // of the budget, so the queue moves however busy the runs are.
+    let first = CancelToken::new();
     let mut done = None;
-    for row in &rows {
-        if row.torrent_id > indexed
-            || !matched_promoted(index, &parsed, row, limits, now, cancel, &mut hits)?
-        {
+    let mut stopped = false;
+    for (i, row) in rows.iter().enumerate() {
+        // A row the index hasn't reached waits for a later commit (or the
+        // idle poll): not `more`, which would spin until it's indexed.
+        if row.torrent_id > indexed {
+            break;
+        }
+        let token = if i == 0 { &first } else { cancel };
+        if !matched_promoted(index, &parsed, row, limits, now, token, &mut hits)? {
+            stopped = true;
             break;
         }
         done = Some(row.seq);
         run.promoted += 1;
     }
-    run.more |= done != Some(last) || rows.len() == PROMOTED_BATCH;
+    run.more |= stopped || (done == Some(last) && rows.len() == PROMOTED_BATCH);
     let Some(done) = done else {
         return Ok(());
     };
@@ -1186,22 +1195,31 @@ mod tests {
             Promoted::Merged(stored)
         );
         // Held: a CS-1 hash arrived before its metadata.
+        // Held: a hybrid whose other hash is CS-1 (holding the item's own
+        // key would take the item with it, V14).
         let held = unverified(&mut s.store, "Promo.Held.Even");
         let raw = info("Promo.Held.Even");
         let parsed = lodestar_metainfo::Info::parse(&raw).unwrap();
-        let hash = s
+        let mut hybrid = s.store.preparer().prepare(&parsed, None).unwrap();
+        hybrid.info_hash_v2 = Some(lodestar_metainfo::InfoHashV2([0xcd; 32]));
+        s.store.add_cs_hashes(&[[0xcd; 20]], 0, NOW).unwrap();
+        let got = s
             .store
-            .preparer()
-            .prepare(&parsed, None)
-            .unwrap()
-            .info_hash
-            .0;
-        s.store.add_cs_hashes(&[hash], 0, NOW).unwrap();
-        // The hold takes the item with it (V14), so nothing is promoted.
-        assert_eq!(
-            promote(&mut s.store, held, "Promo.Held.Even", 0),
-            Promoted::Gone
-        );
+            .promote(
+                held,
+                &PreparedTorrent {
+                    torrent: &hybrid,
+                    discovered_at: NOW,
+                    metadata_at: NOW,
+                    extra_flags: 0,
+                    source: SourceId::new(0).unwrap(),
+                    verified: true,
+                },
+                CODES,
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(got, Promoted::Held);
         // Hidden by a filter rule.
         assert_eq!(
             promote(&mut s.store, item, "Promo.Even", flags::HIDDEN),
@@ -1225,6 +1243,115 @@ mod tests {
             .collect();
         assert_eq!(shown, vec![stored]);
         assert_eq!(s.store.unread_shown(None).unwrap(), 2, "`stored` twice");
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+    }
+
+    /// The runner's case: the index's log seq passed the promotion before
+    /// its ids reached the promoted one (a rebuild from empty, a backlog).
+    #[test]
+    fn a_row_the_index_has_not_reached_waits_without_spinning() {
+        let mut s = setup(0);
+        add(&mut s.store, &names(0, 5));
+        let item = unverified(&mut s.store, "Promo.Even");
+        add(&mut s.store, &names(5, 20));
+        let promo = save(&mut s.store, "promo", "Promo", 21);
+        assert_eq!(
+            promote(&mut s.store, item, "Promo.Even", 0),
+            Promoted::Kept(item)
+        );
+        s.index = SearchIndex::in_memory().unwrap();
+        let mut w = s.index.writer(15 << 20).unwrap();
+        w.catch_up(&mut s.store, 2).unwrap();
+        w.commit().unwrap();
+        assert!(s.index.watermark().unwrap() < item);
+        let applied = s.index.reindex_watermark().unwrap();
+        assert_eq!(
+            s.store.promoted_due(applied, 10).unwrap().len(),
+            1,
+            "applied"
+        );
+        for _ in 0..3 {
+            let r = run(&mut s, 2);
+            assert_eq!((r.promoted, r.more), (0, false), "it waits, not spins");
+        }
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        while w.catch_up(&mut s.store, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        let r = run(&mut s, 2);
+        assert_eq!((r.promoted, r.more), (1, false));
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+    }
+
+    /// A search still below the promoted id meets it in its own range,
+    /// once, and the promoted pass adds nothing to it.
+    #[test]
+    fn a_search_below_the_promoted_id_alerts_once() {
+        let (mut s, item, promo, _) = promo_setup();
+        let w = s.index.watermark().unwrap();
+        let low = save(&mut s.store, "low", "Promo", 0);
+        promote(&mut s.store, item, "Promo.Even", 0);
+        index_all(&s.index, &mut s.store);
+        let r = run(&mut s, w);
+        assert_eq!(r.promoted, 1);
+        assert_eq!(alert_ids(&s.store, low), vec![item]);
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+        let again = run(&mut s, w);
+        assert_eq!((again.alerts, again.promoted), (0, 0));
+    }
+
+    #[test]
+    fn an_unreadable_search_does_not_hold_the_queue() {
+        let (mut s, item, promo, even) = promo_setup();
+        let w = s.index.watermark().unwrap();
+        let e = s.store.saved_search(even).unwrap().unwrap();
+        s.store
+            .update_saved_search(
+                even,
+                &SavedSearchInput {
+                    name: &e.name,
+                    query: &e.query,
+                    ast: r#"{"op":"no such op"}"#,
+                    sort: None,
+                    alert: true,
+                    rss: false,
+                    channels: 0,
+                    paused: false,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        promote(&mut s.store, item, "Promo.Even", 0);
+        index_all(&s.index, &mut s.store);
+        let r = run(&mut s, w);
+        assert_eq!((r.promoted, r.unreadable), (1, 0));
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+        assert!(alert_ids(&s.store, even).is_empty());
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+    }
+
+    /// Quarantined after promotion, before the percolator ran: it's
+    /// deleted, so nothing alerts and the row is still consumed.
+    #[test]
+    fn a_quarantined_promotion_does_not_alert() {
+        let (mut s, item, promo, _) = promo_setup();
+        let w = s.index.watermark().unwrap();
+        promote(&mut s.store, item, "Promo.Even", 0);
+        index_all(&s.index, &mut s.store);
+        let raw = info("Promo.Even");
+        let parsed = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let hash = s
+            .store
+            .preparer()
+            .prepare(&parsed, None)
+            .unwrap()
+            .info_hash
+            .0;
+        assert_eq!(s.store.delete_torrents(&[hash]).unwrap(), vec![item]);
+        index_all(&s.index, &mut s.store);
+        let r = run(&mut s, w);
+        assert_eq!((r.promoted, r.alerts), (1, 0));
+        assert!(alert_ids(&s.store, promo).is_empty());
         assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
     }
 

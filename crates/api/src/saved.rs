@@ -70,7 +70,7 @@ fn visible_alerts(store: &Store, id: i64, adult: bool) -> ApiResult<(u64, u64, O
     loop {
         let page = store.alerts(id, before, 200).map_err(internal)?;
         let end = page.len() < 200;
-        before = page.last().map(|a| a.torrent_id);
+        before = page.last().map(|a| a.id);
         for a in page {
             if shown_row(store, a.torrent_id, false, adult)?.is_none() {
                 continue;
