@@ -1,0 +1,23 @@
+[package]
+name = "lodestar-sources-feeds"
+description = "Bounded, streaming parsers for the feeds discovery sources read (Torznab/Newznab, later RSS and JSON)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+lodestar-metainfo.workspace = true
+# The workspace's existing pin (crates/integrations); approved for this
+# crate in the SRC-6 brief. No default features: no encodings, no serde,
+# no HTML entities.
+quick-xml = { version = "=0.42.0", default-features = false }
+
+[dev-dependencies]
+lodestar-sources.workspace = true
+proptest = "1.11.0"
+
+[lints]
+workspace = true

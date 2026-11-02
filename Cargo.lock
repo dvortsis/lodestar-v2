@@ -1746,6 +1746,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-sources-feeds"
+version = "0.5.0"
+dependencies = [
+ "lodestar-metainfo",
+ "lodestar-sources",
+ "proptest",
+ "quick-xml",
+]
+
+[[package]]
 name = "lodestar-sources-importers"
 version = "0.5.0"
 dependencies = [
