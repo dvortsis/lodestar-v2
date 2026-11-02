@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:20:37Z",
+  "updated_at": "2026-11-02T14:23:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2462,7 +2462,7 @@
       "head": "8e5772a4"
     },
     "SRC-2b": {
-      "status": "CHANGES sent (busy-loop B1, alert order I1, progress I4, tests I2)",
+      "status": "re-review: fixes verified; 2 cheap important sent (visible_alerts N^2 walk, file: watermark)",
       "model": "opus",
       "deps": [
         "SRC-2"
@@ -2476,7 +2476,7 @@
       "brief": "briefs/SRC-2b.md",
       "launched": "2026-11-02T11:38Z",
       "pr": 392,
-      "head": "8adaac4d"
+      "head": "4d5173f5"
     },
     "SRC-9": {
       "status": "merged",
@@ -4511,6 +4511,7 @@
     {
       "at": "2026-11-02T05:07:22Z",
       "text": "Owner relay ~05:00Z: seq 746, elapsed 44,800 s (~5.9 h into baseline), health 200, 0 restarts, 4,539 stored, private 329.95 MiB, WS 463.39 MiB, running. Nothing to act on."
-    }
+    },
+    "2026-11-02T14:23:11Z owner relay seq 1286: 21.45 h elapsed (baseline h14.95), health 200, restarts 0, stored 10,711, private 413.73 MiB, WS 553.85 MiB. Avg +9.3 MiB/h over h6-15 (~13.9 KiB/stored) vs 2.0 MiB/h gate (h12-24 fit not yet run). Asked owner/Antigravity for a preliminary analyze_cr0 memory section and container StartedAt after the 11:00Z backup."
   ]
 }
