@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T22:27:00Z",
+  "updated_at": "2026-11-02T22:31:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2613,7 +2613,7 @@
       "merge": "f8ff9bab"
     },
     "R-mem-triage": {
-      "status": "PR #402 head aa30a033: review round fixed (docs-only delta checked by runner); merge on ci-ok green. Not the r3 slope fix.",
+      "status": "#402 merged e9e18714 (lease leak fix + dev-only memory harnesses + findings). Not the r3 slope fix. Release backport: drop trailing None in Pool::restore lose_untracked (rc.2 signature). Session kept for r3 data; archive after soak work concludes.",
       "brief": "briefs/R-mem-triage.md",
       "model": "opus",
       "session": "session_01MMjhnD9Jd88Vzmq6W9Bxro",
