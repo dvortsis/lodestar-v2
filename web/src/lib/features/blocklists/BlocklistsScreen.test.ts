@@ -32,6 +32,7 @@ describe('blocklist subscriptions', () => {
 		setup();
 		await screen.findByTestId('catalog-bt_blocklists');
 		expect(screen.getByTestId('blocklists-empty')).toBeTruthy();
+		expect(screen.getByTestId('blocklists-egress').textContent).toContain('HTTPS_PROXY');
 		expect(
 			screen.getByText(
 				'Blocks about 31.0% of public IPv4 addresses · measured by Lodestar, not yet fetched'

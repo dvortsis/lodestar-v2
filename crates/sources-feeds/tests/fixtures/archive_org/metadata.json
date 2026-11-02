@@ -1,0 +1,31 @@
+{
+  "created": 1793536496,
+  "d1": "ia000000.us.archive.example",
+  "dir": "/0/items/open-movie-example-1",
+  "files": [
+    {"name": "uploader-made.torrent", "source": "original", "size": "2048", "btih": "1111111111111111111111111111111111111111", "format": "Unknown"},
+    {"name": "open-movie-example-1.mp4", "source": "original", "size": "734000000", "md5": "00000000000000000000000000000000", "format": "MPEG4"},
+    {"name": "extras/making-of.ogv", "source": "derivative", "original": "open-movie-example-1.mp4", "size": 3100, "format": "Ogg Video"},
+    {"name": "subs/\u202eeng.srt", "source": "original", "size": "not a number"},
+    {"name": "open-movie-example-1_archive.torrent", "source": "metadata", "btih": "0123456789abcdef0123456789abcdef01234567", "mtime": "1793536496", "size": "15342", "format": "Archive BitTorrent"},
+    {"name": "open-movie-example-1_meta.xml", "source": "original", "size": "1200", "format": "Metadata"},
+    {"name": "open-movie-example-1_files.xml", "source": "original", "format": "Metadata"}
+  ],
+  "files_count": 7,
+  "item_last_updated": 1793536496,
+  "item_size": 734003200,
+  "metadata": {
+    "identifier": "open-movie-example-1",
+    "mediatype": "movies",
+    "collection": ["opensource_movies", "community"],
+    "title": "Open Movie Example \u2014 Part One",
+    "description": "A synthetic item written for the tests.",
+    "licenseurl": "https://creativecommons.org/licenses/by/4.0/",
+    "publicdate": "2026-10-30 08:15:00",
+    "addeddate": "2026-10-30 08:00:00",
+    "subject": ["open", "movie"]
+  },
+  "server": "ia000000.us.archive.example",
+  "uniq": 123456789,
+  "workable_servers": ["ia000000.us.archive.example"]
+}

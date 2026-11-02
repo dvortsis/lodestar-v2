@@ -16,6 +16,12 @@ use lodestar_store::{
 use rusqlite::params;
 
 const T: i64 = 1_700_000_000;
+/// The codes Insights counts searchable torrents under (`lodestar::insights::CODES`).
+const CODES: lodestar_store::SearchableCodes = lodestar_store::SearchableCodes {
+    stage: 5,
+    newly: 10,
+    delay: 11,
+};
 
 fn mem() -> Store {
     Store::open_in_memory(StoreConfig::default()).unwrap()
@@ -362,7 +368,7 @@ fn a_held_hash_never_comes_back() {
             "{how:?}"
         );
         assert_eq!(
-            store.promote(id, &pt(&p, dht)).unwrap(),
+            store.promote(id, &pt(&p, dht), CODES, T).unwrap(),
             lodestar_store::unverified::Promoted::Gone
         );
         // A torrent the writer stored before the hold (or by mistake).
@@ -396,7 +402,10 @@ fn promotion_keeps_the_id_and_moves_the_claims() {
     let next = next_id(&store);
     let reindex = count(&store, "SELECT count(*) FROM reindex_log");
 
-    assert_eq!(store.promote(id, &pt(&p, dht)).unwrap(), Promoted::Kept(id));
+    assert_eq!(
+        store.promote(id, &pt(&p, dht), CODES, T).unwrap(),
+        Promoted::Kept(id)
+    );
     let row = store.torrent(id).unwrap().unwrap();
     assert_eq!(row.info_hash, p.info_hash);
     assert_eq!(
@@ -423,7 +432,10 @@ fn promotion_keeps_the_id_and_moves_the_claims() {
         reindex + 1,
         "below the index watermark, so logged for re-indexing"
     );
-    assert_eq!(store.promote(id, &pt(&p, dht)).unwrap(), Promoted::Gone);
+    assert_eq!(
+        store.promote(id, &pt(&p, dht), CODES, T).unwrap(),
+        Promoted::Gone
+    );
 }
 
 #[test]
@@ -458,7 +470,7 @@ fn promotion_merges_into_a_torrent_stored_meanwhile() {
         .id();
     assert_ne!(tid, id);
     assert_eq!(
-        store.promote(id, &pt(&p, dht)).unwrap(),
+        store.promote(id, &pt(&p, dht), CODES, T).unwrap(),
         Promoted::Merged(tid)
     );
     assert_eq!(store.torrent_claims(tid).unwrap().len(), 1);
@@ -486,7 +498,7 @@ fn promotion_refuses_another_key_and_honours_holds() {
         .unwrap()
         .unwrap()
         .id;
-    let err = store.promote(id, &pt(&wrong, dht)).unwrap_err();
+    let err = store.promote(id, &pt(&wrong, dht), CODES, T).unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err:?}");
     assert!(
         store
@@ -500,7 +512,7 @@ fn promotion_refuses_another_key_and_honours_holds() {
     hybrid.info_hash_v2 = Some(lodestar_metainfo::InfoHashV2([0xcd; 32]));
     hold(&mut store, Hold::CsHash, [0xcd; 20]);
     assert_eq!(
-        store.promote(id, &pt(&hybrid, dht)).unwrap(),
+        store.promote(id, &pt(&hybrid, dht), CODES, T).unwrap(),
         Promoted::Held
     );
     assert!(
@@ -911,6 +923,77 @@ fn purge_removes_only_what_the_source_alone_found() {
     assert_eq!(again, PurgeStep::default());
 }
 
+/// SRC-1's reconciliation, for promoted torrents (SRC-2): a promotion
+/// below the searchable watermark is counted as newly searchable in its
+/// own transaction, one above it is left to `record_searchable`, and
+/// either way a purge that deletes it leaves Insights' newly searchable
+/// minus removed equal to the torrents stored.
+#[test]
+fn purge_reconciles_promoted_torrents() {
+    let mut store = mem();
+    let (_, nyaa, _) = sources(&mut store);
+    let c = named("promoted");
+    let newly = |store: &Store| {
+        count(
+            store,
+            "SELECT coalesce(sum(value), 0) FROM rollup_hour WHERE metric = 10",
+        )
+    };
+    let removed = |store: &Store| {
+        count(
+            store,
+            "SELECT coalesce(sum(value), 0) FROM rollup_hour WHERE metric = 15",
+        )
+    };
+    // Two items; the index then passes the first one's id only.
+    let (ka, kb) = (
+        prepared(&store, "promoted a"),
+        prepared(&store, "promoted b"),
+    );
+    store
+        .put_unverified(&[item(&ka.info_hash.0, nyaa, Some(&c))])
+        .unwrap();
+    let a = store
+        .unverified(Network::Bt, &ka.info_hash.0)
+        .unwrap()
+        .unwrap()
+        .id;
+    store.record_searchable(a, T, CODES).unwrap();
+    store
+        .put_unverified(&[item(&kb.info_hash.0, nyaa, Some(&c))])
+        .unwrap();
+    let b = store
+        .unverified(Network::Bt, &kb.info_hash.0)
+        .unwrap()
+        .unwrap()
+        .id;
+    assert!(b > a);
+    assert_eq!(newly(&store), 0, "no torrents yet");
+
+    // Fetched through the feed itself (a verification fetch), so only
+    // the feed found them.
+    assert_eq!(
+        store.promote(a, &pt(&ka, nyaa), CODES, T).unwrap(),
+        lodestar_store::unverified::Promoted::Kept(a)
+    );
+    assert_eq!(newly(&store), 1, "below the watermark: counted at once");
+    assert_eq!(
+        store.promote(b, &pt(&kb, nyaa), CODES, T).unwrap(),
+        lodestar_store::unverified::Promoted::Kept(b)
+    );
+    assert_eq!(newly(&store), 1, "above it: not yet");
+    store.record_searchable(b, T + 60, CODES).unwrap();
+    assert_eq!(newly(&store), 2, "counted once, when the index passes it");
+    let torrents = count(&store, "SELECT count(*) FROM torrents");
+    assert_eq!(newly(&store) - removed(&store), torrents);
+
+    store.set_source_state(nyaa, SourceState::Disabled).unwrap();
+    let (total, _) = purge_all(&mut store, nyaa, 100);
+    assert_eq!(total.torrents_deleted.len(), 2);
+    assert_eq!(count(&store, "SELECT count(*) FROM torrents"), 0);
+    assert_eq!(newly(&store) - removed(&store), 0, "the rollups reconcile");
+}
+
 #[test]
 fn purged_names_leave_the_database_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -1118,7 +1201,10 @@ fn a_private_promotion_stays_private() {
         extra_flags: flags::PRIVATE_SOURCE,
         ..pt(&p, prowlarr)
     };
-    assert_eq!(store.promote(id, &fetched).unwrap(), Promoted::Kept(id));
+    assert_eq!(
+        store.promote(id, &fetched, CODES, T).unwrap(),
+        Promoted::Kept(id)
+    );
     let row = store.torrent(id).unwrap().unwrap();
     assert_ne!(row.flags & flags::PRIVATE_SOURCE, 0);
     assert_eq!(
@@ -1193,6 +1279,8 @@ fn promotion_needs_verified_metadata() {
                 verified: false,
                 ..pt(&p, dht)
             },
+            CODES,
+            T,
         )
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err:?}");

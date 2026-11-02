@@ -29,6 +29,7 @@
 	"blocklists_remove_title": "移除 {name}",
 	"blocklists_catalog_heading": "可用名单",
 	"blocklists_catalog_help": "连接前会先显示你的名单将变得多严格，之后才会应用。",
+	"blocklists_catalog_egress": "名单是直接下载的，不会经过 HTTPS_PROXY。覆盖整个容器的 VPN 仍然有效。",
 	"blocklists_kind_ip": "地址",
 	"blocklists_kind_content": "种子",
 	"blocklists_connected": "已连接",

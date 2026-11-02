@@ -42,6 +42,10 @@ A router rule that sends traffic from the internet to one device on your network
 
 A rule that connects a port on your server to the port an app listens on inside its container.
 
+## Proxy (HTTPS_PROXY)
+
+A middleman server that some networks send web requests through, set with the `HTTPS_PROXY` variable. Lodestar ignores it for blocklist downloads; see [Blocklist downloads and HTTPS_PROXY](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn).
+
 ## PUID and PGID
 
 The user ID and group ID a container runs as. They decide who owns the files in the data folder.

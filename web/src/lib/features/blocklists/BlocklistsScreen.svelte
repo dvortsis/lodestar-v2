@@ -218,6 +218,9 @@
 				{m.blocklists_catalog_heading()}
 			</h2>
 			<p class="text-muted-text">{m.blocklists_catalog_help()}</p>
+			<p class="text-small text-muted-text" data-testid="blocklists-egress">
+				{m.blocklists_catalog_egress()}
+			</p>
 			<ul class="flex flex-col gap-3" data-testid="blocklists-catalog">
 				{#each d.catalog as l (l.key)}
 					<li

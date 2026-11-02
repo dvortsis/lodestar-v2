@@ -284,6 +284,141 @@ pub(crate) fn raise_watermark(
     Ok(Some((hour, max_id, last_id)))
 }
 
+/// What [`Store::record_searchable`] counts per torrent made searchable,
+/// shared with a promotion's count ([`count_promoted`]) so both write
+/// exactly the same rows.
+#[derive(Default)]
+pub(crate) struct Tally {
+    newly: HashMap<(u32, i64), i64>,
+    cohorts: HashMap<(i64, u8), i64>,
+    delays: HashMap<(i64, i64), i64>,
+    torrents: u64,
+    imported: u64,
+}
+
+impl Tally {
+    /// One torrent (its `torrents` columns) made searchable at `at`.
+    fn add(
+        &mut self,
+        discovered_at: i64,
+        source: Option<i64>,
+        kind: Option<i64>,
+        flags: i64,
+        at: i64,
+    ) -> Result<()> {
+        let is_import = flags & crate::flags::IMPORTED != 0;
+        self.torrents += 1;
+        let dim = kind
+            .and_then(|k| u32::try_from(k).ok())
+            .filter(|&k| k < UNCLASSIFIED)
+            .unwrap_or(UNCLASSIFIED);
+        *self.newly.entry((dim, i64::from(is_import))).or_default() += 1;
+        if is_import {
+            self.imported += 1;
+            return Ok(());
+        }
+        let Some(source) = source else {
+            return Ok(());
+        };
+        let cohort = discovered_at.div_euclid(3600);
+        *self
+            .cohorts
+            .entry((cohort, SourceId::from_sql(source)?.get()))
+            .or_default() += 1;
+        *self
+            .delays
+            .entry((cohort, log_bucket(at - discovered_at)))
+            .or_default() += 1;
+        Ok(())
+    }
+
+    /// Writes the counts, newly searchable in `hour`. Returns the
+    /// earliest discovery cohort counted.
+    fn write(self, tx: &Connection, hour: i64, codes: SearchableCodes) -> Result<Option<i64>> {
+        let mut counters: Vec<Counter> = self
+            .newly
+            .into_iter()
+            .map(|((dim, key), value)| Counter {
+                hour,
+                metric: codes.newly,
+                dim,
+                key,
+                value,
+            })
+            .chain(
+                self.delays
+                    .into_iter()
+                    .map(|((cohort, key), value)| Counter {
+                        hour: cohort,
+                        metric: codes.delay,
+                        dim: 0,
+                        key,
+                        value,
+                    }),
+            )
+            .collect();
+        counters.sort_by_key(|c| (c.hour, c.metric, c.dim, c.key));
+        let mut cohort_rows = Vec::with_capacity(self.cohorts.len());
+        for ((cohort, source), count) in self.cohorts {
+            cohort_rows.push(CohortCount {
+                cohort,
+                source: SourceId::from_sql(i64::from(source))?,
+                stage: codes.stage,
+                reason: 0,
+                count,
+            });
+        }
+        cohort_rows.sort_by_key(|c| (c.cohort, c.source));
+        let first_cohort = cohort_rows.first().map(|c| c.cohort);
+        write(tx, &counters, &cohort_rows, &[])?;
+        // The imported total stays exact: these imports, in the same
+        // transaction (the delete trigger takes them off again).
+        if self.imported > 0 {
+            tx.prepare_cached(
+                "UPDATE insights_state SET value = value + ?1 WHERE key = 'imported'",
+            )?
+            .execute([self.imported as i64])?;
+        }
+        Ok(first_cohort)
+    }
+}
+
+/// Counts a promoted torrent (`Store::promote`, SRC-2) as newly
+/// searchable at `at`, inside the promotion's transaction, when its id is
+/// at or below the searchable watermark: [`Store::record_searchable`]
+/// counts only ids above it, so it never would, while V11's
+/// `torrents_removed` trigger counts the torrent's later deletion. An id
+/// above the watermark is left to `record_searchable`, which counts it
+/// when the watermark passes it. Being in one transaction with the insert,
+/// the check can't race `record_searchable` on another connection: one of
+/// the two counts it, never both. Returns whether it counted.
+pub(crate) fn count_promoted(
+    tx: &Connection,
+    id: i64,
+    at: i64,
+    codes: SearchableCodes,
+) -> Result<bool> {
+    let (max_hour, max_id): (i64, i64) = tx.query_row(
+        "SELECT coalesce(max(hour), 0), coalesce(max(last_id), 0) FROM index_watermark_hour",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if id > max_id {
+        return Ok(false);
+    }
+    let row: (i64, Option<i64>, Option<i64>, i64) = tx.query_row(
+        "SELECT discovered_at, first_source, content_type, flags FROM torrents WHERE id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    let mut tally = Tally::default();
+    tally.add(row.0, row.1, row.2, row.3, at)?;
+    // As `raise_watermark` picks the hour: never before the last one.
+    let hour = at.div_euclid(3600).max(max_hour).max(1);
+    tally.write(tx, hour, codes)?;
+    Ok(true)
+}
+
 /// Ids one `record_searchable` transaction covers at most, so a large
 /// range (the first start after an upgrade, a swap) never holds the write
 /// lock for long.
@@ -359,10 +494,7 @@ impl Store {
         else {
             return Ok(None);
         };
-        let mut newly: HashMap<(u32, i64), i64> = HashMap::new();
-        let mut cohorts: HashMap<(i64, u8), i64> = HashMap::new();
-        let mut delays: HashMap<(i64, i64), i64> = HashMap::new();
-        let (mut torrents, mut imported) = (0u64, 0u64);
+        let mut tally = Tally::default();
         {
             let mut stmt = tx.prepare_cached(
                 "SELECT discovered_at, first_source, content_type, flags FROM torrents
@@ -370,69 +502,11 @@ impl Store {
             )?;
             let mut rows = stmt.query(params![after, last_id])?;
             while let Some(r) = rows.next()? {
-                let discovered_at: i64 = r.get(0)?;
-                let source: Option<i64> = r.get(1)?;
-                let kind: Option<i64> = r.get(2)?;
-                let is_import = r.get::<_, i64>(3)? & crate::flags::IMPORTED != 0;
-                torrents += 1;
-                let dim = kind
-                    .and_then(|k| u32::try_from(k).ok())
-                    .filter(|&k| k < UNCLASSIFIED)
-                    .unwrap_or(UNCLASSIFIED);
-                *newly.entry((dim, i64::from(is_import))).or_default() += 1;
-                if is_import {
-                    imported += 1;
-                    continue;
-                }
-                let Some(source) = source else { continue };
-                let cohort = discovered_at.div_euclid(3600);
-                *cohorts
-                    .entry((cohort, SourceId::from_sql(source)?.get()))
-                    .or_default() += 1;
-                *delays
-                    .entry((cohort, log_bucket(at - discovered_at)))
-                    .or_default() += 1;
+                tally.add(r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, at)?;
             }
         }
-        let mut counters: Vec<Counter> = newly
-            .into_iter()
-            .map(|((dim, key), value)| Counter {
-                hour,
-                metric: codes.newly,
-                dim,
-                key,
-                value,
-            })
-            .chain(delays.into_iter().map(|((cohort, key), value)| Counter {
-                hour: cohort,
-                metric: codes.delay,
-                dim: 0,
-                key,
-                value,
-            }))
-            .collect();
-        counters.sort_by_key(|c| (c.hour, c.metric, c.dim, c.key));
-        let mut cohort_rows = Vec::with_capacity(cohorts.len());
-        for ((cohort, source), count) in cohorts {
-            cohort_rows.push(CohortCount {
-                cohort,
-                source: SourceId::from_sql(i64::from(source))?,
-                stage: codes.stage,
-                reason: 0,
-                count,
-            });
-        }
-        cohort_rows.sort_by_key(|c| (c.cohort, c.source));
-        let first_cohort = cohort_rows.first().map(|c| c.cohort);
-        write(&tx, &counters, &cohort_rows, &[])?;
-        // The imported total stays exact: this range's imports, in the
-        // same transaction (the delete trigger takes them off again).
-        if imported > 0 {
-            tx.prepare_cached(
-                "UPDATE insights_state SET value = value + ?1 WHERE key = 'imported'",
-            )?
-            .execute([imported as i64])?;
-        }
+        let (torrents, imported) = (tally.torrents, tally.imported);
+        let first_cohort = tally.write(&tx, hour, codes)?;
         tx.commit()?;
         Ok(Some(Searchable {
             after,
