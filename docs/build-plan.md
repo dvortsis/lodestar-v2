@@ -1,139 +1,284 @@
-# Lodestar v2 build plan: M5 → 1.0, with helper-agent orchestration
+# Lodestar v2 build plan: v0.5.1 → 1.0, with helper-agent orchestration
 
-> Written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
-> **§0 (2026-10-30) is the current plan.** It sits above the phases below and reorders the work after the CR-0 soak. The phases keep their numbers. The owner's answers are in `docs/owner-decisions.md` §2.25, and the runner's choices are in `docs/decisions/2026-10-30-master-plan.md`.
+> First written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
+> **§0 (2026-11-02) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25 and §2.26 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md` and `docs/decisions/2026-11-02-master-plan-r2.md`.
+> **Picking this up from another session or agent?** Start at [`docs/handoff.md`](handoff.md).
 
-## 0. Status and plan from 2026-10-30
+## 0. Status and plan from 2026-11-02
 
 ### 0.1 Where things stand
-- **Built.** M0–M4 are merged, along with most of M5 (89 slices) and the M6 packaging slices. G-v05 passed on Oct 24.
-- **The v0.5.0 crawler was too slow.** It stored about 23 torrents an hour. The source had two defects, both reproduced offline (`docs/soak/2026-10-24-v0.5.0-metadata-throughput.md`):
-  - **S01:** stalled lookups held their slots;
-  - **S02:** the pool's and the DHT's request lifetimes diverged.
-- **CR-0 fixes both** (`docs/plan/dht-crawler-implementation-plan-2026-10-25.md`). A native Windows soak of CR-0 (build `744b84d6`) recorded this at its 16 h checkpoint:
-  - 717.5 stored per hour;
-  - no errors and no cap violations;
-  - 63.7M actor capacity rejections, with 98.9% of evictions happening before an accepted lookup.
+Status as of `main` at `7f167278` (2026-11-02 ~02:00Z). Live per-slice state is on the `runner-state` branch (`state.json`); reconcile it against `main`'s merges before acting on it ([handoff §2](handoff.md#2-where-the-truth-lives)).
 
-  This is not a controlled speedup. The v0.5.0 and CR-0 runs used different windows, and an external download overlapped the CR-0 run.
-- **The owner's local work is landing on the rewritten `main`.** It came from `fix/dht-cr0`, `work/soak-followups` and `work/soak-settings`. The owner force-pushed the rewritten history to `main` on 2026-10-30 (`058d9937`, §2.25), and it lands as L1–L7.
-- **Open findings that no branch fixes:**
-  - **A2-1 (security):** a failed `auth.json` save still swaps the credentials.
-  - **A3-1..3 (content safety):**
-    - one list's exceptions suppress other lists;
-    - reclassification tests run against an empty hash set;
-    - a neutralized term still counts inside phrases and NEAR.
-  - **A1-1..4:** metainfo parser edge cases (BEP 47 symlinks and padding, mixed `path.utf-8`, v2 symlink targets).
-  - **DUR-26:** updater write errors are swallowed.
-  - **S03/S04:** admission and uTP.
+| Area | Done | In flight | Next |
+|---|---|---|---|
+| **M0–M5** | All merged. G-v05 passed 10-24. **G-m5 passed 11-01** (#352): analytics-validation matrix, reporting overhead 0.08–0.09 % of a 1 % gate, design review with all 7 blocking findings fixed (FX-1..6) | — | Backlog only (Track B) |
+| **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **Unraid 24 h soak, attempt r3** on rc.2: baseline 2026-11-01 22:16Z → 2026-11-02 22:16Z. (no gate verdict is recorded for r1, 10-30/31; r2 was stopped by the CA Docker Auto Update plugin at 11-01 11:00Z) | Verdict, gluetun leg (owner decides after the baseline), owner tags `v0.5.1` (§0.4) |
+| **Crawler** | CR-0 accepted (24 h final: **740.6 stored/h ≈ 12.3/min**). Merged, each behind its own switch, all **off by default**: CR-SIM, CR-gate-metrics, CR-ADM (`dht.coordinated_admission`), CR-1a-H (`dht.responder_hints`), CR-1a-S (`dht.streaming_peers`), CR-1b (`dht.target_prefixes`), CR-0d (`dht.safe_restart`), CR-0f, CR-COL | **CR-4** (#365): uTP in the fetch path and IPv6 route backoff, switches `dht.utp` and `dht.route_backoff`, review fixes requested | Live A/B runs (none run yet), CR-1c, CR-5 (§0.5) |
+| **Imports** | IMP-0..5 merged: PostgreSQL restore runbook, V13 job tables, Magnetico and Bitmagnet adapters, merge/dedupe CLI, imported cohorts kept out of crawl-yield Insights, refile, server-side import part 1 | — | Pilots on real data (§0.6); none run. Only a synthetic figure exists: 100k at ~13,900/s |
+| **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 when the migration slot is assigned; SRC-7 blocked on owner Q2/Q15 |
+| **Blocklist subscriptions** | B-subscriptions-api (#362) merged | S-blocklists (Sonnet) | — |
+| **Filters** | F-auth, F-filters (+packs, neutral-perf, xcpu), F-metainfo, F-updater, F-status, F-filter-load-fail-closed (#357) | F-filter-standin-undo (#367), with an owner question on releasing adult stand-in holds | — |
+| **Update engine** | B-update-1..6 (signed manifest, install, rollback, fail-closed checks). Ships **disabled** in v0.5.1 | — | Owner: nightly signing key |
+| **Remote workers** | `crates/cluster` library: cluster CA, mTLS 1.3, join tokens, postcard-over-WebSocket protocol, leases and fencing (~104 tests) | — | Epic **held** until the soak verdict. **Nothing wires it**: there is no `lodestar worker` command, though `packaging/unraid/lodestar-worker.xml` calls one |
+| **Companions** | — | — | Epic held until the soak verdict. No code |
+| **M6 packaging** | CLI (`backup`, `rollback`, `vacuum`, `reindex`, `stats`, `import`, …), Windows service and port handling, WiX MSI and portable zip, Unraid templates (main, gluetun, worker), systemd unit, Linux tarball, Docker multi-arch, smoke jobs, user guide in `docs/user/` | — | Epic held until the soak verdict; expansion starts with a gap audit (§0.2 Track M6) |
+| **M7** | Pulled forward and merged: download clients (qBittorrent, Transmission, Deluge, rTorrent, aria2), notifiers (webhook, ntfy, Discord, email, RSS), secret storage and SSRF guard, Send UI, uTP library | — | Epic ready to expand (deps met) |
 
-### 0.2 Order of work
-At most four helper slices at a time in this phase (§2.25), filled in this order (the owner can reorder it):
-1. **L**, **F** and **CR-COL**, which the v0.5.1 Linux soak needs;
-2. the **v0.5.1 cut**;
-3. **C**;
-4. **I**;
-5. **S**;
-6. the M5 screen backlog (§3 P2);
-7. the v0.6 epics.
+**Code facts** (they replace the 2026-10-22 "what the code shows" list, which is gone): the store is at **V13**; search is at `SCHEMA_VERSION` **5** with a working blue/green rebuild (`crates/search/src/rebuild.rs`); `crates/utp` is a real BEP 29 library that CR-4 is wiring in; the only production source plugin is `DhtSource` (`crates/pipeline/src/dht.rs`); there is no Torznab server (only an outbound connection test in `crates/integrations/src/torznab.rs`); scheduled CI runs live in `ci.yml` and `e2e.yml`, so there is no `nightly.yml`. Rust has 4 TODOs and no `todo!()`.
 
-**D** (docs) rides along. Sessions branch from `main`.
+**All findings the 2026-10-30 plan listed as open are fixed** (A1-1..4, A2-1, A3-1..3, DUR-26), except S04 (uTP), which CR-4 addresses, and S03 (admission), which CR-ADM addresses behind its switch.
 
-| Lane | Slices | Notes |
+### 0.2 Order of work and tracks
+**Concurrency:** at most **four helper slices at a time** in this phase (§2.25). The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. A seven-day usage warning is active: prefer Sonnet where the delegation policy allows it. Docs-only slices don't count.
+
+**The ladder** (fill free slots in this order; the owner can reorder it in one line):
+1. **Close v0.5.1** (Track R): the soak verdict, the gluetun leg, the tag.
+2. **The crawler's live evidence** (Track C): land CR-4, then the comparator and the A/B runs on the owner's experiment host, up to Checkpoint 1.
+3. **The Sources critical path** (Track S): SRC-1 → SRC-2 → SRC-7, with the owner's Q2/Q15.
+4. **Unhold the epics** once the soak verdict is in: expand E-M6 (gap audit), E-v06-workers, E-v06-companions.
+5. **Expand E-M7**, starting with the schema-bump convergence slice SB-6.
+6. **Import pilots** (Track I), on the owner's import host, never alongside an A/B run.
+7. **Backlog and polish** (Track B).
+
+Each track below lists its steps in order. "Owner" marks a step only the owner can take; `ext:` names match the `external` section of `runner/slices.yaml`.
+
+**Track R: release**
+
+| Step | Who | Waits on | Exit |
+|---|---|---|---|
+| R1 Unraid soak r3 verdict | runner (analysis), owner (evidence hand-back) | the baseline end, 11-02 22:16Z | `analyze` report: no stall, no interruption, ≥ 24 h covered, memory slope upper 95 % CI ≤ 2 MiB/h on `anon` private memory over hours 12–24, peak reported |
+| R2 gluetun leg (≥ 2 h measured) | owner approves and runs; runner analyses | R1 | collector run with `--leg gluetun --require-gluetun` |
+| R3 Tag `v0.5.1` from rc.2, approve the release environment, publish | **owner** | R1, R2 | GitHub release published; `:latest` moves |
+| R4 Bring `docs/releases/v0.5.1.md` to `main`, mark `docs/releases/v0.5.0.md` as never released, update the README's release status | docs slice | R3 | — |
+| R5 **v0.5.2 cut from `main`** (recommended, §0.4) | runner | R3 | G-v052 |
+| On failure at R1/R2 | fix PR on `main`, cherry-picked to `release/v0.5.1`, rc.3, a fresh frozen soak. Runs are never stitched | — | — |
+
+**Track C: crawler to the v0.6 gate.** Details, evidence and the checkpoint are in §0.5.
+
+| Step | Who | Waits on |
 |---|---|---|
-| **L: land the owner's work** | L1–L7, contiguous commit ranges merged in order | Ranges and reviews are in the decisions file. A blocking review finding is fixed before merge, even in soaked code |
-| **F: release-blocking fixes** (Opus) | F-auth (A2-1), F-filters (A3-1..3, tightening, with property tests), F-metainfo (A1-1..4, golden corpus and fuzz), F-updater (DUR-26, a typed persistence error), F-status (stored/hour plus a stall warning; the uTP setting labelled "not active yet") | F-auth and F-filters get `/security-review` |
-| **C: crawler** (Opus; no live runs on the soak PC) | CR-SIM (deterministic replay), CR-ADM, CR-1a-H, CR-1a-S (each behind its own switch), CR-0d (crash-safe restart snapshot), the gate counters. CR-COL (Linux collector) is in this lane but launches with L and F | Merges behind switches. Not in v0.5.1 unless the release delta includes it |
-| **I: imports** (Opus for parsers and the store) | IMP-0 (PostgreSQL 16 restore runbook and checker, `SQL_ASCII` as raw bytes), IMP-1 (job table, **V13**), IMP-2 (Magnetico, read-only), IMP-3 (Bitmagnet adapter hardening), IMP-4 (merge, dedupe and CLI), IMP-5 (imported cohorts kept out of crawl-yield Insights) | V13 and later wait for the release branch. Recovery waits for CR-3 |
-| **S: Settings** | S-settings-reconcile: `848e10a0` as the base (after L6, which carries `9c065fcb`), plus the paused `S-settings-1` / `M-settings-form-3` | Budgets fixed by code splitting, never by raising limits |
-| **D: docs** | D-v051: release notes, the restart sampling delay, "the index grows over days", don't run `:nightly` on real data | Built from the release branch |
+| C1 CR-4 (#365) merged | Opus | review fixes |
+| C2 Experiment host ready (one node, one public IP, no imports, not the soak PC) | **owner** | `ext:experiment-host` |
+| C3 Pinned bitmagnet comparator, 24 h, fresh data, its own day | owner runs, runner analyses | C2 |
+| C4 Live ABBA A/B, 6 h measured × ≥ 2 reps per arm: CR-ADM, then CR-4 (uTP, then route backoff) | owner runs, runner analyses | C1, C2 |
+| C5 **Checkpoint 1**: projection to the gate, reported to the owner | runner → **owner** | C3, C4 |
+| C6 A/B runs for CR-1a-S, CR-1a-H, CR-1b; build CR-1c (cap sized to the intensity preset) | Opus + owner host | C5 |
+| C7 CR-5 (profile-driven tuning) only on profiler evidence | Opus | C6 |
+| C8 CR-COMB: winning switches default on, 24 h acceptance on the gate metric (G-v06-crawler) | Opus + owner host | C6/C7 |
 
-### 0.3 After the CR-0 soak
-1. **Close out the soak:**
-   - collector stop and clean-shutdown evidence;
-   - `docs/soak/tools/analyze_cr0.py`;
-   - an acceptance review against the DUR terms (`docs/plan/2026-10-27-baseline-execution.md`);
-   - a published report.
+**Track I: imports to scale.** Gates in §0.6.
 
-   A failure or an interruption means a fix and a fresh frozen soak; runs are never stitched together.
-2. **The old pre-CR-0 Docker crawler is never restarted.** The `v0.5.1-rc` image replaces it on the same volume.
+| Step | Who | Waits on |
+|---|---|---|
+| I1 10k and 100k smoke stages (runner) | Opus | — |
+| I2 X-search-files-3: index `size` in the file index, so cold file-search p95 stays ≤ 150 ms at 10M (`docs/decisions/2026-10-31-X-search-files-2.md`) | Opus | — |
+| I3 G-import-1M on the owner's data (Bitmagnet dump restored per IMP-0 first) | owner host, runner analyses | `ext:import-host` |
+| I4 G-import-10M, including the SB-6 rebuild measured at 10M | owner host | I2, I3, SB-6 |
+| I5 G-import-50M: numbers to the owner | **owner** approves | I4 |
+| I6 Full corpus (~40–50M); then CR-3 (durable partial upgrades, the next free migration), the wizard subset (WIZ-*), IMP-05..08 | Opus | I5 |
+| Parked | B-import-server-2 (import through the running server's writer) adds an API that takes a source path or credentials, which is new attack surface | **owner** |
 
-### 0.4 v0.5.1 gate
-- **Release branch and candidates.** Cut a release branch at a fixed SHA. Build `v0.5.1-rc.N` artifacts and record their hashes.
-- **Delta from the soak.** Map the changes since the soaked `744b84d6` to targeted tests. A non-trivial change to the crawler lifecycle, the sampler or the endpoint policy means another soak.
-- **Merged first:** L1–L7 and F-*.
-- **The CR-0 soak is accepted.** Done on 2026-10-30, with memory judged on baseline hours 12–24 (`docs/decisions/2026-10-30-CR-0-acceptance.md`).
-- **CI:** every workflow (`ci-ok`, Web, E2E with all-themes, Release) is dispatched on the cutoff SHA and green, with no regenerated baselines.
-- **Windows:** a ≥ 6 h **service-mode** run of the rc MSI, plus a portable smoke test.
-- **Linux:** a **24 h Docker soak on the owner's Unraid box** with CR-COL. It includes a ≥ 2 h gluetun leg and is the upgrade test of the Oct 22 volume. It is **the binding memory gate**: over hours 12–24 of the measured window, the upper 95% CI bound of the slope of anonymous private memory (the collector's `private_bytes`; see `docs/decisions/2026-10-30-CR-0-acceptance.md`) must be ≤ 2 MiB/h. Report the slope with its CI and the run's peak (owner, 2026-10-30, #189).
-- **Updates** stay off unless real signing keys and a manifest exist.
-- **Release:** the owner tags `v0.5.1`, approves the release environment and publishes.
+**Track S: v0.6 Sources.** The plan is `docs/plan/2026-11-01-v06-sources.md` §6. Its critical path is SRC-0 ✔ → **SRC-1** → SRC-2 → **SRC-7** → SRC-10* → SRC-G.
+- **Now:** SRC-4 (consent framework), SRC-5 (egress and kill-switch), SRC-9 (Internet Archive JSON parser). All are Opus with `/security-review`.
+- **SRC-1:** `ext:release-branch-cut` is satisfied (the branch exists). It waits only on `ext:migration-slot`. **The runner assigns it V14 now** (r2 decisions file). CR-3, which once reserved V14, takes the next free number after the 50M gate.
+- **SRC-7 needs owner Q2 and Q15.** It's on the critical path, so they head the owner queue (§0.3). Until they're answered, everything from SRC-10 onward waits.
+- **SRC-3 depends on SB-6** (Track M7) instead of the old `ext:m7-schema-bump`.
+- **P-v06-rulepacks:** plan the other half of E-v06-sources (curated rule packs, ThePornDB/StashDB enrichment) the same way P-v06-sources-plan did.
+- Verification fetches of unverified keys stay behind `sources.verify_unverified` (off) until the crawler acceptance soak (C8) ends.
+
+**Track W: remote workers (E-v06-workers, held for the soak verdict).** The expansion starts from what's built: the library covers P4 steps 1–2. Still to build, in order:
+1. the `lodestar worker` subcommand and the coordinator side in `crates/lodestar`, wired to `ClusterServer`/`WorkerSession`;
+2. have-filter replication (today the worker ignores the message);
+3. the `sharded(keyspace)` DHT;
+4. fetch and prepare on workers, plus the spool;
+5. the chaos harness and the §19.8 gates;
+6. Settings → Workers and per-worker Insights (Sonnet).
+
+Any worker table goes through the migration queue (§0.7). Interface changes from the crawler program keep `crates/cluster`'s chaos and transport tests green.
+
+**Track K: companions (E-v06-companions, held).** No code. Expand per P4: signed catalogue, checksum and signature checks, supervised child processes, encrypted credentials (Opus), then compose and CA-template generation, detection adapters and the Companions UI (Sonnet).
+
+**Track M6 (E-M6, held).** Most of P3 is built (§0.1). The expansion is a **gap audit** against P3 and §14, then slices for what's missing. Known items:
+- FUSE and network-filesystem detection: verify whether it exists;
+- the worker template: label it "requires v0.6" more prominently, or keep it out of the CA submission until Track W step 1 lands;
+- the user guide refreshed for v0.5.1 (the first hours are slow because of the 6 h sampling suppression; `docs/decisions/2026-10-31-owner-delegation.md`);
+- the Unraid Community Apps submission (**owner**).
+
+**Track M7 (E-M7, ready to expand).** Already merged: the integrations crate and adapters, notifiers, Send UI. To expand:
+- **SB-6, the schema-bump convergence slice (Opus, first).** Search allows one `SCHEMA_VERSION` bump per milestone (§1.3). SB-6 is the bump 5 → 6. It fixes, in one change: SRC-3's `verified:`/`source:`/`network:` fields; `payload_sig` and the grouping fields; the regex trigram field; file category and `pieces_root`. Later M7 slices fill these fields; they don't bump again. **It lands before the 10M import pilot**, so the blue/green rebuild is measured at 10M and the 50M corpus is indexed once.
+- The Torznab server; `.torrent` upload and folder watch (upload needs an **owner** exception to the JSON-only middleware); grouping (MinHash, collapse-by-group, "same file"); the regex prefilter and time-budgeted verify; the enrichment harness and plugins; the usenet tier and IRC announces; the Stremio addon and bitmagnet export.
+
+**Track B: backlog** (fills spare slots; each is small):
+- S-blocklists (running);
+- F-filter-standin-undo (#367);
+- openapi-example-size;
+- X-strip-format-chars (strip every Unicode Cf character in feed titles and digests, from #366's review);
+- i9-stage2 (print the `a..<b` range form), which waits until the release after the one that ships its parser;
+- X-settings-overview: replace the placeholder Settings Overview with needs-attention and changed-from-default (§10.10.8);
+- X-overflow-links: the overflow menu sends Import and Backup to unregistered screens ("unavailable") and lacks Logs and the Syntax guide;
+- Logs event labels (~200 events × 2 messages × 2 locales);
+- FX-4's off-ramp `.css` spacing onto the scale;
+- a polish slice for `carry_forward` (118 items, over the 15 threshold in `runner/README.md` step 9).
+
+### 0.3 Owner queue
+Ordered by what each answer unblocks. The runner keeps working on everything else meanwhile.
+
+| # | Decision or action | Unblocks |
+|---|---|---|
+| 1 | Hand back the r3 soak evidence; approve and run the gluetun leg; tag `v0.5.1` and approve the release environment | v0.5.1; the three held epics |
+| 2 | **Q2** (ToS/robots position per source) and **Q15** (how `private_source` items get metadata), plan `2026-11-01-v06-sources.md` §5 | SRC-7 and the whole Sources critical path |
+| 3 | Name the **experiment host** for crawler A/B runs, and when it's free | Track C's live work (C2–C8) and the v0.6 tag |
+| 4 | **Q1** (consent wording), **Q3** (which torrent caches), **Q7** (Sukebei feed) | SRC-15b, SRC-13, SRC-10e |
+| 5 | Release adult stand-in holds automatically? (#367; needs a stored-format change) | F-filter-standin-undo's follow-up |
+| 6 | Create the **nightly signing key** and its environment | update checks on the Nightly channel |
+| 7 | Make `Web / web` and `E2E / run` required checks (the runner recommends yes) | safer merges |
+| 8 | B-import-server-2's new API surface; the `.torrent` upload middleware exception | server-side imports; M7 upload |
+| 9 | The Unraid Community Apps submission | M6 |
+| Later | **Checkpoint 1** decision (§0.5); the 50M numbers (§0.6) | the v0.6 tag; the full-corpus import |
+
+`docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
+
+### 0.4 v0.5.1 gate (and v0.5.2)
+**v0.5.1** (G-v051), from the 2026-10-30 plan:
+- ✔ Release branch at a fixed SHA (`c3f6341a`); `v0.5.1-rc.N` candidates with hashes (rc.2 `6be95525`).
+- ✔ Delta from the soaked `744b84d6` mapped to targeted tests.
+- ✔ L1–L7 and F-* merged; the CR-0 soak accepted (`docs/decisions/2026-10-30-CR-0-acceptance.md`).
+- ✔ Every workflow green on rc.2, no regenerated baselines.
+- ✔ Windows ≥ 6 h service-mode run of the rc MSI, plus a portable smoke test.
+- ☐ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). It's also the V3 → V12 upgrade test. Attempt r3 is running. Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
+- ☐ ≥ 2 h gluetun leg.
+- ✔ Updates ship off (no nightly key yet; the release key exists).
+- ☐ The owner tags, approves the release environment and publishes.
+
+**v0.5.2 (recommended, runner, flagged in the r2 decisions file).** `main` already carries fixes v0.5.1 lacks (B-update-5..6, filter fail-closed, the M5 exit fixes) and diverges fast. Cut `release/v0.5.2` from `main` soon after v0.5.1 ships rather than cherry-picking long chains. Same delta rule: a non-trivial change to the crawler lifecycle, the sampler or the endpoint policy means a full 24 h Unraid soak; otherwise a 6 h Windows service run plus a short Unraid smoke. Crawler switches stay off in v0.5.2 unless they've passed C8.
 
 ### 0.5 Crawler program
-**Hypotheses for the next limiter:**
-- H1: lookup latency × the 32-request cap;
-- H2: admission and retry churn;
-- H3: reachability and transport.
+**Evidence so far.**
+- CR-0 24 h final (`docs/soak/evidence/2026-10-30-cr0-final/cr0-final.md`): 12.3 stored/min. Fetch success is about 4.4 %. Of 389,644 fetch failures, **74 % timed out**, 15 % were unreachable and 11 % refused. The DHT actor rejected 95.6M peer requests for capacity.
+- rc.2 runs: Windows service mode 17.0/min; Unraid r1's 14 h preliminary ~11/min.
+- CR-SIM screens (IPv4 only, approximate routing, no churn, so a screen never replaces a live run):
+  - CR-ADM: Better on 8/8 seeds in all four scenarios, +26 % to +50 %, capacity refusals to 0.
+  - CR-1a-H: inconclusive; ~94 % of hints expire unused.
+  - CR-1a-S: +7.5 % in `healthy` only; fetches start 4.6–16× sooner.
+  - CR-1b: inconclusive; worse 8/8 on one secondary under admission pressure. Expected to stay off.
+  - CR-4: can't be screened (the simulator has no transport layer).
 
-**Order:**
-1. Screen each candidate in CR-SIM.
-2. Run a 6 h measured A/B per candidate, in ABBA order with at least two repetitions:
-   1. CR-ADM;
-   2. CR-1a-H;
-   3. CR-1a-S;
-   4. then CR-1c (a cap sized to the intensity preset);
-   5. CR-1b (target prefixes);
-   6. CR-4 (uTP and IPv6);
-   7. CR-5.
-3. Combine the candidates that win.
-4. Run a 24 h acceptance soak.
+**Reading.** The gate needs about **8×**. The failure mix points at H3 (reachability and transport: TCP timeouts are what uTP-only and NATed peers look like) and H2 (admission churn), more than H1 (lookup latency). So the order is: CR-ADM and CR-4 first, then the H1 candidates.
 
-**Rules for the runs:**
-- Each run happens on the dedicated experiment host when one exists.
-- No imports run on that host during a run.
-- The bitmagnet comparator runs on separate days from fresh data.
+**Order** (Track C table, §0.2):
+1. Land CR-4 (#365).
+2. Run the pinned **bitmagnet comparator early**, before tuning, on the same host and IP, on its own day, from fresh data. It shows what 100/min means there.
+3. Live ABBA runs (6 h measured after suppression and warmup, ≥ 2 repetitions per arm, controlled starting state, treatment boundaries and host activity logged, per-family counters): **CR-ADM**, then **CR-4 uTP** (`dht.utp`), then route backoff (`dht.route_backoff`). Measure each alone.
+4. **Checkpoint 1** (owner's choice, 2026-11-02). After the CR-ADM and CR-4 results, the runner projects the reachable single-node rate from the measured gains and the comparator.
+   - If the projection reaches ≥ 100/min: continue with step 5.
+   - If it doesn't: the runner reports the measured ceiling, the dominant limiter (from the failure and rejection breakdowns), the comparator's rate and the options to the owner **before** CR-5. The owner re-decides. **The runner never loosens the gate.** Sources, workers and M7 continue meanwhile; only the v0.6 tag waits.
+5. A/B for CR-1a-S, CR-1a-H, CR-1b; build CR-1c (a lookup cap sized to the intensity preset) after the CR-ADM result.
+6. CR-5 (profile-driven tuning, including the verified-known cache) only on profiler evidence.
+7. **CR-COMB:** combine the winners, make them default on, and run the 24 h acceptance soak on the gate metric.
+
+**Still unscheduled:** CR-2 (fairness tiers) and CR-3 (durable partial upgrades; Track I step 6). A dual-stack default DHT bind (`[::]`, from CR-0f's follow-ups) and BEP 33 piggyback are CR-4 follow-ups, taken only if CR-4's per-family counters show IPv6 coverage matters.
+
+**Rules for every run:**
+- on the dedicated experiment host, never the soak PC;
+- no imports on that host during a run;
+- the comparator on separate days, never back to back with a Lodestar run, version pinned;
+- Defender exclusion recorded on Windows;
+- packets/s, bytes, connects/s, open sockets and router/NAT health recorded;
+- BEP 51 intervals, per-IP limits and the §18 politeness caps are never tuned away.
 
 ### 0.6 Gates added by this plan
-- **Crawler (gates v0.6):**
-  - **What counts:** unique infohashes fetched and verified from the network in this run, committed and searchable.
-  - **Where it's measured:** one node, one public IP, a fresh data directory with no imports, the Balanced preset.
-  - **Target:** ≥ 100 per minute sustained, comparable to a pinned bitmagnet run. The stretch target is 1,000/min, which remote workers also serve.
-  - **Thresholds (decided 2026-10-31 under `docs/owner-decisions.md` §2.26):** 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min. That figure runs from the first sighting of the infohash and includes the metadata fetch; it doesn't replace §1.6's "new torrent → searchable < 5 s", which starts once the metadata is stored.
-  - Politeness and network guardrails are never relaxed to reach it.
-- **Import scale:**
-  - pilots at 10k → 100k → 1M → 10M, each measured against §1.6's budgets, including about 2.3 KB per torrent all-in; any excess goes to the owner (the owner's ladder in §2.25 is 1M → 10M → 50M; 10k and 100k are runner smoke stages);
-  - then a measured 50M gate, whose numbers go to the owner;
-  - capacity is measured at each stage, never estimated (decisions file).
-  - After the gate: CR-3 recovery, then a subset of the wizard, then the other source families.
+**Crawler (gates the v0.6 tag):**
+- **What counts:** unique infohashes fetched and verified from the network in this run, committed and searchable. Imports, recovery, rediscoveries, filtered or quarantined items and failures are reported separately. Rows a rule hides still count as searchable (`docs/decisions/2026-10-30-CR-gate-metrics.md`).
+- **Where:** one node, one public IP, a fresh data directory with no imports, the Balanced preset.
+- **Target:** ≥ 100 per minute sustained, comparable to a pinned bitmagnet run. The stretch target is 1,000/min, which remote workers serve.
+- **Thresholds** (decided 2026-10-31 under `docs/owner-decisions.md` §2.26): 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min. That figure runs from the first sighting of the infohash and includes the metadata fetch; it doesn't replace §1.6's "new torrent → searchable < 5 s", which starts once the metadata is stored.
+- Politeness and network guardrails are never relaxed to reach it. Checkpoint 1 (§0.5) is where a shortfall goes to the owner.
 
-## Context
+**Import scale:**
+- Runner smoke stages at 10k and 100k, then the owner's ladder: **1M → 10M**, each measured against §1.6's budgets, including about 2.3 KB per torrent all-in. Any excess, with what drives it, goes to the owner before the next stage.
+- Then a measured **50M gate**, whose numbers go to the owner before the full corpus (~40–50M) is imported.
+- Measured at every stage, never estimated (`docs/decisions/2026-10-30-master-plan.md` "Imports"): bytes per record, source copies and PostgreSQL restore space, backups, the old and new index during a rebuild, the have-filter, `filter_hits` and the review queue, NDCG@10, backup and restore time, cold start, RSS, search p95 (including cold file search), Insights overhead. A backup precedes each stage; removal by job provenance is tested.
+- Pass lines for import speed (runner, `docs/decisions/2026-10-31-IMP-4b.md`): 2,000/s offline, 1,000/s online.
+- After the gate: CR-3, then a subset of the wizard, then the other import families (Rats, dhtc, MongoDB, …; `docs/plan/2026-10-29-dht-import-wizards.md`).
 
-**Crawler follow-up (2026-10-25):** [CR-0 and the subsequent crawler sequence](plan/dht-crawler-implementation-plan-2026-10-25.md) consolidate the post-v0.5 architecture review. CR-0 covers sampler/restart correctness, endpoint checks, diagnostics and reliable lookup ownership; the repaired baseline follows before yield experiments. This adds a cross-cutting correctness prerequisite without renumbering P0–P4 or making packaging depend on an experiment. See [CR-0 decisions](decisions/2026-10-25-CR-0.md).
-**Unblocked soak follow-ups (2026-10-26):** [retention, search and UI preparation](plan/2026-10-26-soak-followups.md) records isolated fixes and the post-soak validation order. Source preparation is complete only when recorded; runtime acceptance remains gated on actual collector completion. These fixes do not advance CR-1 or renumber milestones.
+**Other gates, for reference:**
 
-M0–M3 are merged: the crawler with MSE fetch, store schema v3, the Tantivy torrent and file indexes, the query language, enrichment and the worker boundary. There's also a minimal API (setup, login, parse, search with offset paging, detail, files) and a 211-line status page.
+| Gate | Where it's defined | Status |
+|---|---|---|
+| G-v051 | §0.4 | soak and tag pending |
+| G-v052 (proposed) | §0.4 | after v0.5.1 |
+| SRC-G (v0.6 sources) | plan `2026-11-01-v06-sources.md` §4.2 | not started |
+| §19.8 chaos gates (workers) | architecture §19.8 | not started |
+| §20.8 filter budget (50 µs) | architecture §20.8, owner §2.20 | held; the Neutralize case is reported, not held, at ~55 µs on Intel 8573C runners |
+| §17 1.0 gates (NDCG@10, 10M perf and size, Windows soak, full security review, chaos, politeness and purge audits) | architecture §17, P7 below | after M7/v0.8 |
 
-M4 is being built **in other sessions**. Merged so far:
-- `ContentType::Adult` (#28);
-- the `filter` crate with the child-safety core (#29);
-- the filter wired into store and pipeline (migration V4, #31);
-- `title_stem` (#30, search `SCHEMA_VERSION` 4).
+### 0.7 Dependencies and serial points
+```mermaid
+flowchart LR
+  R[v0.5.1 soak + tag] --> EP[Unhold E-M6, workers, companions]
+  R --> V52[v0.5.2 cut]
+  CR4[CR-4 merged] --> AB[A/B: CR-ADM, CR-4]
+  HOST[(owner: experiment host)] --> COMP[bitmagnet comparator]
+  HOST --> AB
+  COMP --> CP1{Checkpoint 1}
+  AB --> CP1
+  CP1 -->|on track| AB2[A/B: CR-1a, CR-1b; CR-1c; CR-5] --> COMB[CR-COMB 24 h] --> G6C[G-v06-crawler]
+  CP1 -->|short| OWN[(owner re-decides)]
+  SRC1[SRC-1 V14] --> SRC2[SRC-2] --> SRC7[SRC-7]
+  Q[(owner Q2, Q15)] --> SRC7
+  SRC7 --> SRC10[SRC-10a..d, 11, 12, 13] --> SRCG[SRC-G]
+  SRC2 --> SB6[SB-6 schema bump] --> SRC3[SRC-3] --> SRCG
+  SB6 --> I10[G-import-10M]
+  I1[G-import-1M] --> I10 --> I50[G-import-50M] --> CR3[CR-3, wizard, import families]
+  EP --> W[Workers 1-6] --> V06
+  G6C --> V06((v0.6 tag))
+  SRCG --> V06
+  EP --> K[Companions] --> V06
+```
 
-Still open: tracker scrape, BEP 33 and hot columns (#32), and blocklist subscriptions (#33, migration V5). This plan uses M4's fields and APIs but doesn't build them.
+**Things that run one at a time:**
+- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: **V14 → SRC-1**, then CR-3, then any worker or companion table, in the order their slices reach the slot. The runner records the queue in `runner-state` `migration_order` (today stale at V11).
+- **Search schema:** exactly one `SCHEMA_VERSION` bump per milestone. M7's is SB-6. A slice that needs a new indexed field asks SB-6 to carry it instead of bumping.
+- **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks.
+- **CI capacity:** each push starts about 37 jobs that every PR queues behind. One push per round of fixes.
+- **Release branches:** fixes for a release land on `main` first and are cherry-picked; nothing is developed on a release branch.
+- **Hub files** (§1.3 table): unchanged.
 
-What the code shows (checked):
-- `web/` and `packaging/` don't exist.
-- API handlers return untyped `json!` values, so there's no typed contract yet.
-- Routes are split between `crates/api/src/lib.rs` and `crates/lodestar/src/http.rs`.
-- Migrations are one append-only array in `crates/store/src/schema.rs`. M4 is actively adding to it (V4 merged, V5 open).
-- The `settings` table already exists.
-- `index_watermark_hour` doesn't exist yet.
-- There's no blue/green index rebuild, so any `SCHEMA_VERSION` bump today starts from an empty index.
-- CI is a single `ci.yml`.
+### 0.8 Anticipated complications
 
-The owner wants the rest of the application planned in detail through 1.0, with an outline after that. It should use as many helper agents as add value without trading away quality. So this plan covers both what gets built and how the work is cut, delegated and reviewed.
+| Complication | Why it matters | Mitigation |
+|---|---|---|
+| The crawler gap may be structural | One IP and BEP 51's per-node intervals may cap discovery well below 100/min, whatever we tune | The early comparator shows what's possible on the same IP; Checkpoint 1 brings it to the owner before CR-5; workers (more IPs) serve the stretch |
+| uTP can't be simulated | CR-SIM has no transport layer | Live A/B only; `dht.utp` stays off until it wins; the Settings field stays labelled "not active yet" so a saved value can't decide an A/B arm |
+| The owner's machines are a bottleneck | Soak, A/B arms, comparator days and pilots all need them, and each needs exclusive use | §0.7 calendar; the runner states the next machine booking in every daily summary |
+| A host plugin interrupts a run | r2 was stopped by CA Docker Auto Update; Appdata Backup can stop containers | Host checklist before every run: exclude the containers from auto-update and backup plugins and record the next scheduled plugin runs |
+| Search rebuild at scale | A blue/green rebuild needs about 2× index disk and hours at 50M | SB-6 lands before the 10M pilot; its rebuild is measured at 10M; the 50M import indexes once |
+| Migration contention | Sources, CR-3 and workers each want a migration | §0.7 queue, one at a time |
+| Unverified items in the id sequence | They grow the hot-column arrays | SRC-2 measures RSS at 1M unverified ids; the Q11 cap (1M dead hashes) |
+| Triggers on the crawler's hot path | V13's triggers add up to 4 index probes per insert | No new trigger for Sources (r2, Q16); measure insert cost at each import stage |
+| The filter budget on common runners | The Neutralize case projects ~55 µs on Intel 8573C against 50 µs | Reported, not held (`docs/decisions/2026-10-30-F-filters-neutral-perf.md`); revisit if rule packs add Neutralize terms |
+| File search at 10M | Cold p95 projected over 150 ms | X-search-files-3 before the 10M pilot |
+| `main` outruns the release branch | Cherry-pick chains get long and risky | v0.5.2 soon after v0.5.1 |
+| Promises the binary can't keep | The Unraid worker template calls a missing `worker` command; Settings Overview is a placeholder; menu links lead to "unavailable" | Track M6 gap audit, Track B items |
+| Stale runner state | `state.json` shows merged slices as building, and its `migration_order` stops at V11 | A successor reconciles against `main` first ([handoff](handoff.md)); the runner trims `state.json` and moves history to `log/<id>.md` (`runner/README.md` step 10) |
+| Usage runs out mid-slice | A session stops with a half-done branch | Small PRs, one decisions file per slice, the handoff; a branch with no PR is restarted from its brief, not resumed blind |
+| Toolchain debt | MSRV 1.89 and two temporarily allowed clippy lints (`docs/decisions/2026-10-30-CR-0d.md`) | Remove the allows when CI's clippy reaches 1.99 (runner follow-up) |
+| Owner answers arrive late | Q2/Q15 block the Sources critical path | Ask once with a recommendation; fill the slots with SRC-4/5/9, Track B and the epics meanwhile |
 
-`docs/architecture.md` stays the source of truth for *what* is built. This document covers *order and delegation*. When a slice changes a decision, the slice adds a file under `docs/decisions/`, not an edit to this file.
+### 0.9 Next actions
+In order, as slots allow (four helper slots; Opus slices with disjoint `owns`):
+1. Finish the in-flight PRs: CR-4 (#365), F-filter-standin-undo (#367), S-blocklists.
+2. Launch SRC-4, SRC-5 and SRC-9; launch openapi-example-size and X-strip-format-chars as small fillers.
+3. Assign V14 to SRC-1 in `runner-state` and launch SRC-1.
+4. After 11-02 22:16Z: analyse the r3 soak; ask the owner for the gluetun leg and the tag (owner queue #1), and in the same message for Q2/Q15 and the experiment host (#2, #3).
+5. On the soak verdict: expand E-M6 (gap audit first), E-v06-workers, E-v06-companions.
+6. Expand E-M7, with SB-6 as its first slice; launch P-v06-rulepacks.
+7. Launch X-search-files-3 and the 10k/100k import smoke stages.
+8. Drain Track B with whatever slots remain.
+
+### 0.10 History of this section
+- **2026-10-30:** the post-CR-0 plan: lanes L (land the owner's work), F (release blockers), C (crawler candidates behind switches), I (imports), S (Settings reconcile), D (docs), and the v0.5.1 gate. All lanes finished by 11-01. Its text is in git history (`git log -p docs/build-plan.md`) and its reasoning in `docs/decisions/2026-10-30-master-plan.md`.
+- **2026-11-02:** this rewrite (`docs/decisions/2026-11-02-master-plan-r2.md`).
 
 ---
 
@@ -160,289 +305,104 @@ The owner wants the rest of the application planned in detail through 1.0, with 
 - serde-derived JSON clients;
 - simple CRUD endpoints that follow an established pattern.
 
-**Haiku helpers** do mechanical work only:
-- generating the 47 non-Riverstone theme JSONs from a palette table the main session writes;
-- message-key extraction and renames;
-- formatting sweeps.
+**Haiku helpers** do mechanical work only: generated theme files, message-key extraction and renames, formatting sweeps.
 
 **What's never delegated:** parsers of untrusted input, on-disk formats, concurrency-heavy code, security and content-safety logic.
 
 To protect the critical path, **the main session writes almost no Svelte.** Its time goes to Rust and to reviews.
 
+A non-Claude agent picking up the work maps this to "use your strongest model for core, parser, store, concurrency and security work, and never hand those to a weaker one" ([handoff §5](handoff.md#5-path-b-a-single-agent-without-the-runner)).
+
 ### 1.2 How a helper runs
-- **Launch:** Agent tool with `isolation: "worktree"`, `run_in_background: true` and the model above. Each helper branches from the latest merged foundations (tag `web-foundations-v1` once it exists).
-- **Brief:** every helper gets one, using the template in §7.
-- **Cap: at most 4 helpers at once**, alongside the main session's own Rust track. *(Superseded for the build runner: `runner/slices.yaml` `limits` allow 16 core and 16 helper slices, owner 2026-10-22; the same applies to the "at most 4" waves below.)* Review bandwidth is the bottleneck, not how many agents can be spawned. The main track pauses when reviews queue up.
-- **Review gate** (main session, for every helper result):
+- **Launch:** the runner starts each slice in its own cloud session (`runner/README.md`). Inside a session, a helper is an Agent with `isolation: "worktree"`, `run_in_background: true` and the model above, branched from `main`.
+- **Brief:** every slice gets one, using the template in §7. The runner keeps them on the `runner-state` branch under `briefs/`.
+- **Cap:** at most four helper slices at a time in the current phase (owner §2.25). `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
+- **Review gate** (for every result):
   - read the whole diff;
   - run `npm run check`, `npx vitest run`, `npx size-limit` and the affected Playwright specs;
   - run `cargo fmt --check`, `clippy -D warnings` and `test` wherever Rust is touched;
   - run `/code-review high` on diffs over 400 lines;
-  - run `/security-review` on anything touching auth, credentials, filters, the cluster or companions;
+  - run `/security-review` on anything touching auth, credentials, filters, the cluster, companions or source plugins;
   - redo weak output on Opus rather than patching it piecemeal.
-- **Unanchored second read** for the riskiest main-session PRs (leases and cursors, rebuild and swap, percolator, mTLS join and fencing, uTP, companion verification, the filters API). A fresh Opus review agent gets only the diff and the spec sections, not the author's conclusions.
+- **Unanchored second read** for the riskiest PRs (leases and cursors, rebuild and swap, percolator, mTLS join and fencing, uTP, companion verification, the filters API, plugin consent). A fresh Opus review agent gets only the diff and the spec sections, not the author's conclusions.
 - **Workflow scripts are optional.** Any wave can run as a `Workflow` script instead of hand-launched agents, but only if the owner explicitly says "use a workflow".
 
 ### 1.3 Seams that make parallel work safe
-1. **Contract-first API.**
-   - Typed DTO structs with utoipa `ToSchema` produce `/openapi.json`.
-   - A bin writes `web/src/lib/api/openapi.json`, and `openapi-typescript` turns it into `schema.d.ts` (types only, nothing at runtime).
-   - CI fails if either generated file is stale.
-   - Each new endpoint first lands as typed structs plus a `501` stub with an example, so screens can start early.
-   - Helpers use only the generated types. A missing field is a request to the main session, never a local type.
-2. **Fixture backend.**
-   - `lodestar serve --fixture` (main session) builds a deterministic data directory with known facet counts, cohorts, events and saved searches. M4 fields are present both as null and as populated values.
-   - Until it exists, a W6 mock replays the OpenAPI examples.
-   - The M5 exit tests run against the real binary.
-3. **Token contract.** `docs/design-tokens.md` fixes every CSS custom-property name before the theme compiler and the primitives start, so both can proceed in parallel.
-4. **M4 contract.** Agree the nullable field names with the M4 session up front:
-   - swarm: `seeders`, `leechers`, `trackers_reporting`, `trackers_checked`, `last_scrape_at`, `dht_seeds`, the swarm-history shape;
-   - filters: `hidden_by_filter`, `why`;
-   - Adult: `adult_kind`.
-
-   "Never scraped" is `null`, so the UI's "—" state is built and tested now.
+1. **Contract-first API.** Typed DTOs with utoipa produce `/openapi.json`; a bin writes `web/src/lib/api/openapi.json` and `openapi-typescript` turns it into `schema.d.ts`. CI fails if either is stale. New endpoints can land first as typed structs plus a `501` stub with an example. Helpers use only the generated types; a missing field is a request to the main session, never a local type.
+2. **Fixture backend.** `lodestar serve --fixture` builds a deterministic data directory; screens and E2E run against it.
+3. **Token contract.** `docs/design-tokens.md` fixes every CSS custom-property name.
+4. **Nullable fields.** "Never measured" is `null`, so the UI's "—" state is built and tested before a source exists.
 5. **Points that must run one at a time:**
 
 | Shared thing | Rule |
 |---|---|
-| `crates/store/src/schema.rs` migrations | Main session only. One M5 migration, merged after M4's schema lands; renumber on rebase |
-| `crates/search` `SCHEMA_VERSION` | Exactly one bump per milestone (M5: facets; M7: trigram, `payload_sig`, file category/`pieces_root`, v0.6 network/source/verified fields), and only after the blue/green rebuild lands |
-| `crates/api/src/lib.rs`, `crates/lodestar/src/services.rs` | After the router split, each slice adds one line; merged in sequence |
-| `openapi.json` / `schema.d.ts` | Regenerated after a rebase, never merged by hand |
-| `web/package.json` and the lockfile | W0 pins every expected dependency up front. Adding one later needs main-session approval |
-| `.github/workflows/*` | Split into `ci.yml` (Rust), `web.yml`, `e2e.yml`, `release.yml` and `nightly.yml`, with one owner at a time |
-| Messages | One message file per feature (`features/*/messages/{en,zh}.json`), merged by a script, so translations never conflict |
+| `crates/store/src/schema.rs` migrations | One migration PR at a time (`ext:migration-slot`), Opus only, in the queue in §0.7 (V14 → SRC-1 next) |
+| `crates/search` `SCHEMA_VERSION` | Exactly one bump per milestone, through the blue/green rebuild. M5's was v5 (facets). M7's is **SB-6** (v6), which carries SRC-3's `verified:`/`source:`/`network:` fields, `payload_sig`, the trigram field and file category/`pieces_root` |
+| `crates/api/src/lib.rs`, `crates/lodestar/src/services.rs` | Each slice adds one line; merged in sequence |
+| `openapi.json` / `schema.d.ts` | Regenerated after bringing in `main`, never merged by hand |
+| `web/package.json` and the lockfile | A new dependency needs main-session approval |
+| `.github/workflows/*` | `ci.yml` (Rust, with `ci-ok`), `web.yml`, `e2e.yml`, `release.yml`, `freshness.yml`; scheduled jobs live inside `ci.yml` and `e2e.yml` (there is no `nightly.yml`). One owner at a time |
+| Messages | One message file per feature (`features/*/messages/{en,zh}.json`), merged by a script |
 
 ---
 
 ## 2. Sequencing and critical path
 ```
-P0 seams ─► P1 v0.5 MVP (min M5 + Docker) ─► P2 M5 complete ─► P3 M6 ─┐
-                                                                       ├─► P5 M7/v0.7 ─► P6 v0.8 ─► P7 M8 → 1.0
-                                       P4 v0.6 (overlaps P3) ──────────┘
+P0 seams ─► P1 v0.5 MVP ─► P2 M5 ──────────────► v0.5.1 ─► v0.5.2
+   (done)       (done)       (done 11-01)            │
+                                                     ├─► P3 M6 (mostly built; gap audit)
+                                                     ├─► P4 v0.6: Sources ∥ workers ∥ companions ∥ crawler gate
+                                                     └─► P5 M7/v0.7 (SB-6 first) ─► P6 v0.8 ─► P7 M8 → 1.0
 ```
-- **Ship v0.5 first.** §14's MVP cut line is M0–M3 plus the minimum of M5 plus Docker. That puts a usable product out before the long tail of M5.
-- **Critical path:** the main session's Rust queue, then B15 (the filters API, which waits on M4), then the Filters & Safety UI, then `design-review`. Everything else (web, packaging, CI and docs) runs alongside on helpers.
-- **Main-session order for M5:** B0 → B1 → B3 → B2 → B5b → B5a → B8 → B4 → B6 → B16 → B11a → B7 → B12 → B9 → B5c → B13 → B14 → B11b → B15.
+- **Critical path to v0.6:** the crawler gate (§0.5), which needs the owner's experiment host and may need the owner's re-decision at Checkpoint 1; in parallel, the Sources path SRC-1 → SRC-2 → SRC-7 (needs Q2/Q15) → SRC-10* → SRC-G.
+- **Critical path to 1.0:** M7's SB-6 and the import scale gates feed P7's 10M/50M performance gates.
 
 ---
 
 ## 3. Phases and slices
-Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main session, **[S]** = Sonnet, **[H]** = Haiku.
+Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main session or an Opus slice, **[S]** = Sonnet, **[H]** = Haiku.
 
-### P0: Seams (mostly main, serial)
-- **B0 [M] Split the API router.** One module per domain, each exposing `routes()`. A shared error envelope `{error:{code,message,field?}}`. A `crates/lodestar/src/services.rs` builder so `main.rs` stops growing.
-- **B1 [M] Typed DTOs + utoipa + `/openapi.json`.** Plus the generator bin and a drift check.
-- **B3 [M] Embedded SPA.**
-  - Brotli and gzip precompressed files, immutable caching for `/_app/immutable`, SPA fallback.
-  - CSP with the hash of the pre-paint script.
-  - A stub when `web/build` is absent, so `cargo test` needs no Node.
-  - The status page moves to `/status`.
-- **B2 [M] Settings registry.**
-  - Typed sections, layered as defaults < `config.toml` < DB < env. Fields set by the environment are read-only and say so.
-  - `GET/PATCH /settings/{section}` with a JSON schema for form generation.
-  - Live changes go out over `watch` channels, and fields that need a restart are flagged.
-  - Needs no migration.
-- **Web foundations (helpers, in parallel with B0–B2):**
-  - **W0 [S] Scaffold.** SvelteKit 2 + adapter-static (`ssr=false`), strict TS, Tailwind v4 + daisyUI 5, Bits UI, TanStack Virtual, unplugin-icons (Phosphor), Paraglide, eslint + svelte-check. Every dependency is pinned; versions were checked on npm (bits-ui 2.20, daisyui 5.7, tailwindcss 4.3, uplot 1.6, paraglide 2.29, openapi-typescript 7.13, fontsource Atkinson Next/Mono 5.3). Empty pages for every §10.3 route. size-limit budgets from §10.1. A lint rule bans hex literals and arbitrary Tailwind values in `.svelte` files. **The main session reviews W0 closely**, because every later helper builds on its conventions.
-  - **W1 [S] Theme compiler** `web/scripts/themes.ts`.
-    - OKLCH derivation and every §10.18 gate.
-    - Golden tests reproduce the §10.18 table (e.g. `primary-ink #4A7789`).
-    - Outputs critical CSS for Riverstone, a lazy `themes.json` and a pre-paint script under 1 KB.
-    - The main session reviews the colour maths.
-  - **W1b [H] The other 47 theme JSONs**, from the main-session palette table. The compiler's gates catch bad values.
-  - **W3 [S] Asset pipeline** `web/scripts/assets.ts`. Uses sharp; checks SHA256SUMS; makes AVIF/WebP at 360/540/724; builds favicons and the manifest; turns the compass SVG into CSS variables; gates each scene at 45 KB or less.
-  - **W4 [S] Per-feature Paraglide messages**, plus the merge script.
-  - **W6 [S] Test harness.**
-    - vitest + testing-library.
-    - Playwright projects for breakpoints × themes × densities, an axe helper, the OpenAPI-example mock and Lighthouse CI.
-    - The CI split into `web.yml`/`e2e.yml`.
-  - **Then W2 [S] tokens/daisyUI mapping/font subsets** (Next ≤ 35 KB, Mono ≤ 25 KB, tabular numerals verified) **and W5 [S] typed client.**
-    - W5 covers abort and latest-wins, 401 → login, the error envelope, URL ⇄ AST state, and SSE batched per animation frame and paused while the tab is hidden.
-    - The main session reviews W5 line by line.
-  - **Contracts [M].** `docs/design-tokens.md` and `docs/ui-glossary.md`. `docs/metrics.md` plus the formatter spec, which W8 implements.
-- At P0 start: `add_repo dvortsis/skills`, so helpers can read `ui-design-skills`.
+### Done: P0–P2 (M0–M5)
+- **P0 seams:** router split and error envelope (B0), typed DTOs and OpenAPI (B1), embedded SPA (B3), settings registry (B2), web foundations (W0–W9), the contract docs.
+- **P1 v0.5 MVP:** blue/green rebuild (B5b), searcher leases (B5a), the M5 migration (B8, V10), SSE (B4), facets (B6, search schema v5), the fixture server (B16), primitives, charts, formatters, app shell, search UI, detail drawer, Docker. G-v05 passed 2026-10-24.
+- **P2 M5:** Insights (B11a–c), suggest (B7), API keys and feed tokens (B12), percolator and alerts (B9), result cache (B5c), siblings/compare/discover (B13), stats and crawler control (B14), export and jobs (B10b), filters API (B15), settings API and form engine, every Settings screen, the wizard, update engine and screens, logging core and screens, Filters & Safety, keyboard map, Playwright matrix and Lighthouse, zh catalogue. **G-m5 passed 2026-11-01** (`docs/decisions/2026-11-01-G-m5.md`).
+- Every slice's decisions are in `docs/decisions/`; the slice graph and its history are in `runner/slices.yaml` and on `runner-state`.
 
-### P1: v0.5 MVP (minimum M5 + Docker)
-**Main track:**
-- **B5b** Background rebuild into a new versioned directory, atomic swap, progress. Must land before any schema bump.
-- **B5a** Searcher leases with cursors (10 min), cancel tokens between segments, exact count on demand.
-- **B8** The single M5 migration, after M4's schema merges:
-  - user data: `saved_searches`, `alerts`, `user_items`, `collections`, `collection_items`;
-  - auth: `api_keys`;
-  - reporting: `index_watermark_hour`, `query_log` (opt-in);
-  - the store APIs for all of them.
-- **B4** SSE `/events`:
-  - a broadcast hub with topics;
-  - heartbeats and `Last-Event-ID`;
-  - a bounded buffer per client, with a `resync` event for clients that lag;
-  - a connection cap;
-  - a commit hook in `crates/search/src/live.rs`.
-- **B6** `/facets`:
-  - disjunctive term facets;
-  - histograms: size (log bins), discovered, year;
-  - seeders/trackers buckets behind a flag until M4 lands;
-  - sampling above 1M with "≈";
-  - analytics-validation fixture tests;
-  - schema bump #1, together with B7.
-- **B16** `lodestar serve --fixture`.
+### P3: M6 packaging (mostly built; Track M6)
+Built: the clap CLI with `backup`, `rollback`, `vacuum`, `reindex`, `stats` and more; the Windows service entrypoint, port warnings and runtime work; the WiX MSI (service, firewall rules, opt-in Defender exclusion) and portable zip; Unraid templates (main, gluetun, worker); the systemd unit, Linux tarballs and the `release.yml` matrix; smoke jobs; the user guide in `docs/user/`.
+To audit and finish (E-M6 expansion): FUSE and network-filesystem detection; the worker template's v0.6 labelling; the user guide's v0.5.1 refresh; anything else the gap audit finds.
+**Owner actions:** the Unraid CA submission. The code-signing certificate is deferred (§2.23): Windows builds ship unsigned, and the guide covers the SmartScreen warning.
 
-**Helper waves (at most 4 at once, disjoint directories):**
-- **W7a–d [S×2]** Primitives in four directories under `src/lib/ui/`:
-  - controls and fields;
-  - labels and feedback;
-  - overlays (Bits UI);
-  - lists, tables and tree (virtual ARIA).
+### P4: v0.6
+**Remote workers v1 (§19), Opus, about 6 PRs.** Built: cluster CA, mTLS and one-time join tokens; the postcard-over-WebSocket protocol, heartbeats and fencing (library only). To build: wiring and the `worker` command, have-filter replication, `sharded(keyspace)` DHT, fetch and prepare on workers plus the spool, the chaos harness and §19.8 gates (Track W). **[S]** Settings → Workers and per-worker Insights.
 
-  Each helper takes two groups. Each primitive gets keyboard and state tests.
-- **W7e [S] Charts** in `src/lib/charts/`: CategoryBar, HBarList, Histogram + brush, Sparkline, KPI, a lazy uPlot LineChart wrapper, DataTableAlternative.
-- **W8 [S] Formatters** in `src/lib/format/`: one per metric, IEC sizes, null vs 0 vs "≈". The main session reviews every line.
-- **W9 [S] App shell:**
-  - top bar, nav and status pill;
-  - command palette and keyboard registry (each feature registers from its own file);
-  - illustrated full-page states and responsive nav;
-  - auth screens, whose setup-token and login state machines are written by the main session.
-
-  After W9, tag **`web-foundations-v1`**.
-- **Search UI [S], three PRs:**
-  1. query bar and highlighter, active-filter strip, chips;
-  2. facet rail and results list (Comfortable/Compact) with all §10.4 states;
-  3. toolbar and cursor infinite scroll.
-- **Detail drawer and `/t/{hash}` [S]:** summary, composition bar list, file tree (Web Worker above 2k files), parsed metadata, raw viewer, copy magnet.
-- **Docker [S]:**
-  - a multi-arch musl `distroless/static` image, with mimalloc;
-  - PUID/PGID handled by the binary, since distroless has no shell;
-  - HEALTHCHECK and a `docker-compose.yml`;
-  - `release.yml` with `nightly` and version tags;
-  - a CI smoke test.
-
-**Rule: the client never computes counts, cohorts or percentages.** Every number comes from the server through the W8 formatters and carries a `data-testid`.
-
-**v0.5 exit:**
-- Keyboard-only Playwright on the fixture backend: search → drawer → copy magnet.
-- axe clean.
-- size-limit: first load ≤ 100 KB, JS ≤ 45 KB.
-- `docker compose up` reaches `/healthz`, and a fixture search returns hits.
-
-### P2: M5 complete
-**Main track:**
-- **B11a** Insights overview: KPIs, cohort finality, compare period, events, the "stale" flag.
-- **B7** `/suggest` (term prefixes, an FST over titles, fields and units, "did you mean") and natural phrasing on `/parse`.
-- **B12** API keys and feed tokens, rate limits, the fresh-password confirmation primitive (§20.11), proxy-header auth.
-- **B9** Percolator: each commit runs saved searches over ids above the watermark → alerts → SSE, plus RSS per saved search.
-- **B5c** Result cache and `?explain=1`.
-- **B13** Siblings, batch detail for Compare, `/discover` ("rising" after M4).
-- **B14** `/stats`, `/crawler` (pause and live intensity), `/sources`, and the wizard's network check.
-- **B11b** The five stage endpoints, `export.csv`, daily compaction and `lodestar rollup --repair`.
-- **B10b** `/export` and `/jobs` (streamed and throttled).
-- **B15** Filters API (§20.7), once M4's engine merges: CRUD, preview job, warnings, password gate, review queue, `classify` corrections.
-
-**Helper slices [S]:**
-- **B10a:** CRUD for user items, collections and saved searches, following B1's pattern.
-- **B11c:** digest rendering and preview.
-
-**Screens (at most 4 at once).** Each owns only `features/<x>/` and `routes/<x>/`:
-- **Search completion:**
-  - autocomplete, smart chips with a natural-phrasing preview, and the Builder (round-trips through the server AST);
-  - table mode with a column chooser, selection and the bulk bar;
-  - the live "N new" banner, zero-result recovery, and cards density.
-- **Compare**, including the narrow-screen re-architecture.
-- **Discover.**
-- **Alerts:** list, detail with the "New since" divider, and create/pause/delete dialogs.
-- **Insights, in three PRs:** the overview story, the five stage pages, then print and digest settings.
-- **Settings and the wizard** (architecture §10.10):
-  - **[M] B2b, B2c:** API additions (schema hints, revisions, batch patch, preview, test, preferences, SSE, export/import; then `/system`, restart, the HTTP-address keep-or-revert timer).
-  - **[M] M-settings-form:** the form engine every screen and the wizard use (draft store, validation and server-error mapping, atomic save, conflict merge, leave guard, drafts, Undo, the `SettingField` and widget registry).
-  - **[S] S-settings-1:** the shell (grouped navigation, Overview, list → detail, settings search and palette entries, restart banner, Show changed only, View as config.toml) and the generated screens: General, Crawler, Network & VPN, Storage & retention, Search & ranking.
-  - **[S] S-settings-2:** Integrations, Notifications, Trackers, Insights & digest, Language & region.
-  - **[M] B-update:** the update engine (§12.2): the signed manifest and key chain (key changes need the recovery key), levels and channels, the single update check, the overlay supervisor with probation, and automatic rollback. `/security-review` required. The Windows MSI path and manifest signing in `release.yml` come with M6.
-  - **[S] S-updates:** Settings → Updates and the wizard's Updates step (§10.10.14).
-  - **[S] S-about:** Settings → About (§10.10.13). B2c provides `/system` and `licenses.json`; Check now uses B-update's signed check.
-  - **[M] M-security-settings:** the Security screen (password, sessions, API keys, proxy auth).
-  - **[M] B-log1, B-log2:** the logging core (§12.1): the event catalogue (`log_event!`) with per-event switches and counters, and per-kind data switches per output (Private by default), enforced by typed wrappers, a CI check and a canary test; the rotating log file; then the ring buffer, the admin-only `GET /logs/stream` (not the `/events` hub) and the file API.
-  - **[S] S-logs:** Settings → Logging and the live log at `/logs` (§10.10.12).
-  - the first-run wizard, reusing the same fields;
-  - Appearance: theme picker and custom-theme editor with a live contrast report.
-- **Filters & Safety:** rules, editor, preview, review queue, the CSX-5 override list, "Block this…", Not junk / Not adult, Show adult (18+) and Adult facets. Helpers do layout only. The main session writes the dialog state machines, all guardrails stay on the server, and `/security-review` runs on it.
-- **Keyboard map:** remapping and the shortcut sheet (§10.16).
-- **Playwright matrix and Lighthouse CI.**
-- **[H]** zh catalogue fill and icon-registration sweeps.
-
-**M5 exit [M]:**
-- the `analytics-validation` matrix: facets against independent SQL, histogram bins, and the §10.17 Insights reconciliation;
-- the reporting-overhead benchmark (§3);
-- a `design-review` pass with every blocking finding fixed;
-- Playwright breakpoints × themes × densities, plus reduced motion and keyboard-only, and Lighthouse budgets;
-- an "M5 decisions" file in `docs/decisions/`.
-
-### P3: M6 packaging
-- **[M]**
-  - The CLI moves to clap, with `backup`, `rollback`, `vacuum`, `reindex` and `stats`.
-  - FUSE and network-filesystem detection.
-  - Windows-specific runtime work: the service entrypoint (`windows-service`), below-normal priority, the ephemeral-port warning, mmap delete-retry and `SO_LINGER(0)`.
-- **[S]**
-  - Unraid CA template, plus worker and gluetun variants.
-  - WiX MSI via cargo-wix: service, firewall rules, opt-in Defender exclusion, Start-menu shortcut. Plus a portable zip.
-  - A systemd unit, tarballs and the full `release.yml` matrix.
-  - Smoke jobs: Docker; Windows MSI → service → `/healthz`; Linux tarball.
-  - **The user guide** (`docs/user/`, written with `github-docs` and the `user-docs` layer, owner's decision §2.14). github-docs' outline: Before you start, Install Lodestar (Unraid, Docker, Windows, Linux), Set up Lodestar, Keep Lodestar safe, Everyday use (updates, backups), Troubleshooting, then the answers, settings reference, glossary, revisions and index. Screenshots come from `S-doc-shots`, and diagrams are Mermaid. `docs/operations.md` is rewritten for the same reader, or folded into the guide. It's written today for readers who already know Docker, ports and environment variables. The guide's required **Keep Lodestar safe** chapter (github-docs) carries `user-docs` §6.
-- **Owner actions:** the Unraid CA submission. The code-signing certificate is deferred (`docs/owner-decisions.md` §2.23): Windows builds ship unsigned, and the guide covers the SmartScreen warning.
-
-### P4: v0.6 (overlaps P3)
-**Remote workers v1 (§19), main session only, about 6 PRs in `crates/cluster`:**
-1. cluster CA, mTLS and one-time join tokens;
-2. the postcard-over-WebSocket protocol, heartbeats and fencing;
-3. have-filter replication;
-4. `sharded(keyspace)` DHT;
-5. fetch and prepare on workers, plus the spool;
-6. the chaos test harness and the §19.8 gates.
-
-**[S]** Settings → Workers and per-worker Insights.
-
-**Companion manager:**
+**Companion manager (Track K):**
 - **[M]** the signed catalogue, checksum and signature checks, supervised child processes and encrypted credentials.
 - **[S]** compose and CA-template generation, detection adapters and the Companions UI.
 
-**Sources:**
-- **[M]** the unverified tier and claims (§18.5), the consent framework, and Prowlarr/Jackett. Prowlarr/Jackett is plugin #1 and sets the contract-test pattern with recorded fixtures.
-- Then Nyaa RSS, AnimeTosho, Internet Archive, Academic/official lists and download clients as a source:
-  - the main session writes the feed and XML parsers;
-  - **[S]** writes the plugin glue, manifests and tests, one file each, in parallel.
-- **[M]** BEP 48 full scrape, built on M4's scraper, and torrent-cache enrichment.
-- **[S]** Settings → Sources and the Jobs view.
+**Sources (Track S):** sliced into SRC-0..17 and SRC-G by `docs/plan/2026-11-01-v06-sources.md`: the unverified tier and claims (§18.5), the consent framework, egress and kill-switch, Prowlarr/Jackett as plugin #1, Nyaa, AnimeTosho, Internet Archive, Academic and official lists, download clients as a source, BEP 48 full scrape, torrent-cache enrichment, the Sources API and UI, the Jobs view. Parsers are Opus; plugin glue is Sonnet after SRC-7 sets the pattern.
 
-**Filters:**
-- **[M]** curated rule packs.
-- **[S]** ThePornDB/StashDB enrichment, following the plugin pattern.
+**Filters:** **[M]** curated rule packs; **[S]** ThePornDB/StashDB enrichment following the plugin pattern. To be planned by P-v06-rulepacks.
 
-**v0.6 tag gate (§0.6):**
-- The single-node crawler gate passes.
-- The interface changes from the crawler program (CR-ADM, CR-1a) keep `crates/cluster` and its chaos and transport tests green.
+**v0.6 tag gate:**
+- the single-node crawler gate passes (§0.6), or the owner re-decides at Checkpoint 1;
+- SRC-G passes;
+- the §19.8 chaos gates pass;
+- the interface changes from the crawler program keep `crates/cluster`'s chaos and transport tests green.
 
 Feature work on workers, companions and sources continues in parallel; only the tag waits.
 
 ### P5: M7 / v0.7
-- **[M]**
-  - The Torznab server.
-  - `.torrent` upload and folder watch.
-  - Grouping (MinHash, collapse-by-group), `payload_sig`/`sig:` and "same file". These are search schema bump #2, rebuilt blue/green.
-  - The regex trigram field, prefilter and time-budgeted verify.
-  - **uTP (BEP 29)** behind a flag, with its success rate measured.
-  - Secret storage and the SSRF guard.
-- **Download clients:**
-  - **[M]** the `crates/integrations` trait and the qBittorrent adapter.
-  - **[S], in parallel:** the Transmission, Deluge, rTorrent and Aria2 adapters, and the webhook, ntfy, Discord, email and RSS senders, all with recorded fixtures.
-  - **[S]** the Send / bulk-send / "Send selected files" UI.
-- **Enrichment plugins** (srrDB, PreDB, Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid):
-  - **[M]** the HTTP, egress, rate-limit and cache harness, plus the first plugin;
-  - **[S]** the rest, at most 4 at a time, one module each;
-  - the main session reviews each response parser.
+- **[M] SB-6 first** (§0.2 Track M7): the one search schema bump, rebuilt blue/green.
+- **[M]** The Torznab server; `.torrent` upload (owner exception needed) and folder watch; grouping (MinHash, collapse-by-group), `payload_sig`/`sig:` and "same file"; the regex trigram prefilter and time-budgeted verify.
+- **Already built:** the integrations trait and adapters (qBittorrent, Transmission, Deluge, rTorrent, aria2), the notifiers (webhook, ntfy, Discord, email, RSS), secret storage and the SSRF guard, the Send UI. uTP moved into the crawler program (CR-4).
+- **Enrichment plugins** (srrDB, PreDB, Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid): **[M]** the HTTP, egress, rate-limit and cache harness plus the first plugin (reusing SRC-5's egress); **[S]** the rest, one module each; every response parser reviewed by Opus.
 - **[M]** The usenet tier, IRC announces and PreDB's IRC feed.
 - **[S]** Stremio addon and bitmagnet export.
 
 ### P6: v0.8
 - **[M]** Placement for singleton, account and overlay plugins on workers; companions on workers; the Anna's Archive / LibGen importer (restricted consent).
-- **[S]** Nostr NIP-35 and Lemmy plugin glue (parsers are main-session work).
+- **[S]** Nostr NIP-35 and Lemmy plugin glue (parsers are Opus work).
 
 ### P7: M8 hardening → 1.0
 - **[M]**
@@ -455,8 +415,8 @@ Feature work on workers, companions and sources continues in parallel; only the 
   - The chaos gates green.
 - **[S]**
   - CI wiring for those gates.
-  - Docs: `query-language.md`, `relevance.md`, `themes.md`, a user guide, and a README with the brand lockups.
-  - A nightly job running Playwright and axe across all 48 themes.
+  - Docs: `query-language.md`, `relevance.md`, `themes.md`, the user guide, a README with the brand lockups.
+  - Playwright and axe across all 48 themes on a schedule.
 - Release 1.0 when every §17 gate is green.
 
 ### After 1.0 (outline)
@@ -465,46 +425,41 @@ Feature work on workers, companions and sources continues in parallel; only the 
 - v1.3: IPFS and IPNI
 - v1.x: the micro-piece prober (consent-gated), embedded WireGuard, saved-search auto-send
 
-Each gets its own detailed plan when it's reached. All of the protocol work is main-session work.
+Each gets its own detailed plan when it's reached. All of the protocol work is Opus work.
 
 ---
 
 ## 4. Where helpers add value, and where they don't
-- **High value.** These are many disjoint files with tight specs, roughly 60% of the remaining lines:
-  - Svelte foundations, primitives and screens;
-  - the theme JSONs;
-  - packaging and CI;
-  - adapters and plugin glue after a main-session pattern;
-  - Playwright matrices and docs.
+- **High value.** Many disjoint files with tight specs: Svelte screens, theme files, packaging and CI, adapters and plugin glue after an Opus pattern, Playwright matrices and docs.
 - **Little or negative value.** Splitting search, the percolator, leases and rebuild, the cluster, uTP or schema work across agents. These have tight invariants and shared files, and reviewing split work would cost more than writing it. The same goes for two helpers on one screen, or a helper inventing API shapes.
 
-## 5. Risks and mitigations
+## 5. Standing risks
+The current risks are in §0.8. These standing mitigations still apply:
+
 | Risk | Mitigation |
 |---|---|
-| Helpers drift from §10 | Briefs cite exact § and skill paths; token names fixed first; the lint ban on hex and arbitrary values; snapshots and axe in Riverstone light/dark on every PR (all 48 themes nightly); `design-review` per screen |
+| Helpers drift from §10 | Briefs cite exact § and skill paths; the hex and arbitrary-value ban; snapshots and axe in Riverstone light/dark on every PR (all 48 themes on a schedule); `design-review` per screen |
 | API contract drift | Generated OpenAPI → TS types, a CI drift check, `501` stubs with examples |
-| Screens blocked on endpoints | Stubs plus the W6 mock now; the B16 fixture server for exit tests |
-| M4 slips or its fields are missing | Nullable fields and a tested "—" state; Filters & Safety and seeders facets gated on M4, not blocking v0.5 |
-| Migration or schema collisions | Main session only; one migration per milestone, rebased after M4; one search schema bump per milestone, after B5b |
-| Conflicts in shared files | Router split, per-feature messages, pinned dependencies, no barrel files; hub edits reported, then applied by the main session |
-| Bundle creep | size-limit per route chunk in every helper's acceptance commands; no new dependencies without approval |
-| Review backlog lowers quality | Cap of 4 helpers; the main track pauses for reviews; weak output redone on Opus |
+| Conflicts in shared files | Per-feature messages and screens, one line per slice in hub files, no barrel files |
+| Bundle creep | size-limit per route chunk in every slice's checks; fixed by code splitting, never by raising limits without a recorded §2.26 decision |
+| Review backlog lowers quality | The helper cap; the main track pauses for reviews; weak output redone on Opus |
 
 ## 6. Verification
 - **Every PR:**
   - Rust: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`;
-  - web: `npm run check`, `npx vitest run`, `npx size-limit`;
+  - web: `npm run check`, `npx vitest run`, `npm run build`, `npx size-limit`, and `npx playwright test` for anything with an e2e spec;
   - `git fetch origin main` before pushing (clones are shallow).
-- **v0.5 / M5 / M6–M8 exits:** as listed in each phase, which mirrors §14 and §17. That covers analytics-validation, design-review, Playwright and axe, Lighthouse, the reporting overhead, Docker/Windows/Linux smoke, the chaos, filter and NDCG gates, and 10M perf and size.
+- **Milestone exits:** as listed in each phase and in §0.6, mirroring architecture §14 and §17.
 
 ## 7. Helper brief template
 ```
-Goal: <one sentence>.   Model: sonnet|haiku.   isolation: worktree, from tag <web-foundations-v1|main>.
-Read first: docs/architecture.md §<n>; ui-design-skills/skills/<x>/SKILL.md; docs/design-tokens.md; web/src/lib/api/schema.d.ts
+Goal: <one sentence>.   Model: opus|sonnet|haiku.   Branch: slice/<id> from main.
+Read first: CLAUDE.md; runner/standards.md; docs/architecture.md §<n>; the plan or decisions files for this area;
+  ui-design-skills/skills/<x>/SKILL.md and docs/design-tokens.md (UI only); web/src/lib/api/schema.d.ts (web only)
 Own (create/edit): <paths>.   Do not edit: hub files (§1.3), package.json, anything not listed.
 Inputs: <endpoints / fixtures>.   Out of scope: <list>.
-Done when: npm run check && npx vitest run <dir> && npx size-limit && npx playwright test <spec> pass;
-  no hex/arbitrary values; strings only in features/<x>/messages; ≤ 1,500 changed lines.
+Done when: <the slice's checks>, plus CLAUDE.md's "Before pushing" checks; no hex/arbitrary values;
+  strings only in features/<x>/messages; ≲ 1,500 changed lines; decisions in docs/decisions/<date>-<id>.md.
 Report: files changed, hub edits needed, missing contract fields, deviations from spec and why.
 ```
 
@@ -512,12 +467,7 @@ Report: files changed, hub edits needed, missing contract fields, deviations fro
 `runner/README.md` describes a long-lived Opus **runner session**:
 - It starts each slice in a new cloud session as soon as the slice's dependencies are merged.
 - It has a fresh Opus reviewer check every PR.
-- It merges PRs that are green and have no blocking findings, as the owner allowed on 2026-10-22.
-- It keeps going around the clock.
+- It merges PRs that are green and have no blocking findings (owner, 2026-10-22; only the runner merges, §2.22).
+- It keeps going around the clock, with a watchdog that restarts it.
 
-The slice graph is in `runner/slices.yaml`.
-
-## 9. First steps
-1. Start B0 (router split) on the main track.
-2. In parallel, launch W0 (scaffold) as the first helper.
-3. Then the contract docs: `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`.
+The slice graph is in `runner/slices.yaml`; live state is on the `runner-state` branch. If no runner can run, [`docs/handoff.md`](handoff.md) describes how a single agent continues safely.
