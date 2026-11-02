@@ -291,12 +291,18 @@ impl Parser<'_> {
                 self.close(emit);
                 Ok(())
             }
+            // The raw length is checked first: normalising only shrinks
+            // text, and it copies.
             Event::Text(t) if self.collecting() => {
-                self.text(&t.xml10_content());
+                if self.fits(t.len()) {
+                    self.text(&t.xml10_content());
+                }
                 Ok(())
             }
             Event::CData(t) if self.collecting() => {
-                self.text(&t.xml10_content());
+                if self.fits(t.len()) {
+                    self.text(&t.xml10_content());
+                }
                 Ok(())
             }
             Event::Text(_) | Event::CData(_) => Ok(()),
@@ -353,13 +359,16 @@ impl Parser<'_> {
         if self.depth != d.depth + 1 || d.bad.is_some() {
             return Ok(());
         }
+        // A field is collected only while its slot is empty: a repeat
+        // costs nothing and can't spoil the item.
+        let it = &d.item;
         d.field = match name {
-            "title" => Some(Field::Title),
-            "guid" => Some(Field::Guid),
-            "link" => Some(Field::Link),
-            "size" => Some(Field::Size),
-            "pubDate" => Some(Field::PubDate),
-            "category" => Some(Field::Category),
+            "title" if it.title.is_none() => Some(Field::Title),
+            "guid" if it.guid.is_none() => Some(Field::Guid),
+            "link" if it.link.is_none() => Some(Field::Link),
+            "size" if d.size_el.is_none() => Some(Field::Size),
+            "pubDate" if it.published.is_none() => Some(Field::PubDate),
+            "category" if it.categories.len() < MAX_CATEGORIES => Some(Field::Category),
             "torznab:attr" | "newznab:attr" => {
                 let torznab = name.starts_with('t');
                 d.torznab |= torznab;
@@ -427,18 +436,27 @@ impl Parser<'_> {
 
     /// Text at the current position: kept only inside a field.
     fn text(&mut self, s: &str) {
-        let max = self.limits.max_text;
-        let Some(d) = self.draft.as_mut() else { return };
-        if d.field.is_none() || self.depth != d.depth + 1 {
+        if !self.collecting() || !self.fits(s.len()) {
             return;
         }
-        if d.buf.len() + s.len() > max {
-            d.bad = Some(Bad::OverCap);
-            d.field = None;
-            d.buf = String::new();
-        } else {
+        if let Some(d) = self.draft.as_mut() {
             d.buf.push_str(s);
         }
+    }
+
+    /// Whether `n` more bytes fit the field; if not, the item is spoiled.
+    fn fits(&mut self, n: usize) -> bool {
+        let max = self.limits.max_text;
+        let Some(d) = self.draft.as_mut() else {
+            return false;
+        };
+        if d.buf.len() + n <= max {
+            return true;
+        }
+        d.bad = Some(Bad::OverCap);
+        d.field = None;
+        d.buf = String::new();
+        false
     }
 
     fn spoil(&mut self, bad: Bad) {
@@ -509,7 +527,7 @@ impl Draft {
             "uploadvolumefactor" => factor(&mut it.upload_factor),
             "tag" => {
                 let fits = it.tags.len() < MAX_TAGS && !v.is_empty() && v.len() <= MAX_TAG;
-                if fits && !v.chars().any(char::is_control) && !it.tags.iter().any(|t| t == v) {
+                if fits && !v.chars().any(unsafe_char) && !it.tags.iter().any(|t| t == v) {
                     it.tags.push(v.to_owned());
                 }
             }
@@ -580,13 +598,23 @@ fn merge(mut h: Hashes, magnet: Option<Hashes>) -> Hashes {
 /// on a character boundary.
 fn clean_title(s: &str) -> String {
     let mut out = String::with_capacity(s.len().min(MAX_TITLE));
-    for c in s.chars().filter(|c| !c.is_control()) {
+    for c in s.chars().filter(|&c| !unsafe_char(c)) {
         if out.len() + c.len_utf8() > MAX_TITLE {
             break;
         }
         out.push(c);
     }
     out
+}
+
+/// Controls, and the bidi and format characters that reorder or hide
+/// text (the set `crates/api/src/digest.rs` strips).
+fn unsafe_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
+        )
 }
 
 fn push_category(cats: &mut Vec<u32>, v: &str) {
@@ -630,7 +658,8 @@ fn hash(s: &str) -> Option<Hashes> {
         64 => (None, Some(s.parse().ok()?)),
         _ => return None,
     };
-    Some(Hashes { v1, v2 })
+    let h = Hashes { v1, v2 };
+    (!is_zero(&h)).then_some(h)
 }
 
 /// The hashes in a magnet's `xt` parameters: `urn:btih:` (v1, hex or
@@ -661,7 +690,14 @@ fn magnet_hashes(m: &str) -> Option<Hashes> {
             h.v2 = xt[13..].parse().ok();
         }
     }
-    (h.v1.is_some() || h.v2.is_some()).then_some(h)
+    (h.v1.is_some() || h.v2.is_some())
+        .then_some(h)
+        .filter(|h| !is_zero(h))
+}
+
+/// An all-zero hash is a placeholder, never a torrent.
+fn is_zero(h: &Hashes) -> bool {
+    h.v1 == Some(InfoHash([0; 20])) || h.v2 == Some(InfoHashV2([0; 32]))
 }
 
 /// RFC 4648 base32 (case-insensitive, no padding) of exactly 20 bytes.
@@ -743,12 +779,18 @@ pub fn external_ref(s: &str) -> Option<String> {
     };
     let (scheme, rest) = s.split_at(scheme_len);
     let rest = rest.split('#').next().unwrap_or_default();
-    // The authority first: a password may hold `&` or `=`.
-    let auth_end = rest.find(['/', '?']).unwrap_or(rest.len());
+    // The authority ends at any delimiter a browser or server might take
+    // (`\` is `/` to a browser). After the user info, the host must be a
+    // plain name, an IPv4 address or a bracketed IPv6 literal, with an
+    // optional port; anything else could be read as another host.
+    let auth_end = rest.find(['/', '?', '\\', '&', ';']).unwrap_or(rest.len());
     let (authority, rest) = rest.split_at(auth_end);
     let host = authority.rsplit('@').next().unwrap_or_default();
+    if !plain_host(host) {
+        return None;
+    }
     // nZEDb-style links start the query with `&` (`/getnzb/x.nzb&i=1&r=key`).
-    let (path, query) = match rest.find(['?', '&']) {
+    let (path, query) = match rest.find(['?', '&', ';']) {
         Some(at) => (&rest[..at], Some(&rest[at + 1..])),
         None => (rest, None),
     };
@@ -757,9 +799,17 @@ pub fn external_ref(s: &str) -> Option<String> {
         .into_iter()
         .flat_map(|q| q.split(['&', ';']))
         .filter(|p| {
-            let name = p.split('=').next().unwrap_or_default();
-            // A name that doesn't decode can't be checked, so it goes.
-            !p.is_empty() && percent_decode(name).is_some_and(|n| !is_credential(&n))
+            let (name, value) = p.split_once('=').unwrap_or((p, ""));
+            // A name or value that doesn't decode can't be checked, so it
+            // goes; so does a value that is a URL or holds a credential.
+            !p.is_empty()
+                && percent_decode(name).is_some_and(|n| !is_credential(&n))
+                && percent_decode(value).is_some_and(|v| {
+                    !v.contains("://")
+                        && !v
+                            .split(['?', '&', ';'])
+                            .any(|kv| kv.split_once('=').is_some_and(|(k, _)| is_credential(k)))
+                })
         })
         .collect();
     if !kept.is_empty() {
@@ -767,6 +817,37 @@ pub fn external_ref(s: &str) -> Option<String> {
         out.push_str(&kept.join("&"));
     }
     Some(out)
+}
+
+/// `name`, `1.2.3.4` or `[::1]`, each with an optional `:port`.
+fn plain_host(h: &str) -> bool {
+    let (name, port) = match h.strip_prefix('[') {
+        Some(v6) => match v6.split_once(']') {
+            Some((addr, rest)) if !addr.is_empty() => {
+                if !addr
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() || b".:".contains(&b))
+                {
+                    return false;
+                }
+                ("v6", rest)
+            }
+            _ => return false,
+        },
+        None => match h.find(':') {
+            Some(at) => (&h[..at], &h[at..]),
+            None => (h, ""),
+        },
+    };
+    let port_ok = port.is_empty()
+        || port
+            .strip_prefix(':')
+            .is_some_and(|p| (1..=5).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()));
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
+        && port_ok
 }
 
 fn is_credential(name: &str) -> bool {
@@ -915,6 +996,16 @@ mod tests {
         assert_eq!(magnet_hashes("magnet:?xt=urn:btih:nope"), None);
         assert_eq!(magnet_hashes("magnet:?xt=urn:btih:%zz"), None);
         assert_eq!(percent_decode("%+f"), None);
+        assert_eq!(hash(&"0".repeat(40)), None);
+        assert_eq!(hash(&"0".repeat(64)), None);
+        assert_eq!(
+            magnet_hashes(&format!("magnet:?xt=urn:btih:{}", "0".repeat(40))),
+            None
+        );
+        assert_eq!(
+            clean_title("a\u{202E}b\u{2066}c\u{200F}d\u{061C}e\u{1}"),
+            "abcde"
+        );
         let v2h: InfoHashV2 = v2.parse().unwrap();
         let attr = Hashes {
             v1: Some(h),
@@ -960,15 +1051,40 @@ mod tests {
             external_ref("https://nzb.example/getnzb/ab.nzb&i=1&r=KEY").as_deref(),
             Some("https://nzb.example/getnzb/ab.nzb")
         );
-        assert_eq!(
-            external_ref("http://user:p&ss=x@h.example/d?id=1").as_deref(),
-            Some("http://h.example/d?id=1")
-        );
+        // A password with `&` ends the authority early; the leftover
+        // isn't a plain host, so nothing is kept.
+        assert_eq!(external_ref("http://user:p&ss=x@h.example/d?id=1"), None);
         assert_eq!(
             external_ref("https://t.example/d?id=1;passkey=S&api%6Bey=S&hash=S").as_deref(),
             Some("https://t.example/d?id=1")
         );
         assert_eq!(external_ref("//h.example/dl?apikey=K"), None);
+        assert_eq!(
+            external_ref("http://h.example&apikey=K").as_deref(),
+            Some("http://h.example")
+        );
+        assert_eq!(
+            external_ref("https://h.example;passkey=K").as_deref(),
+            Some("https://h.example")
+        );
+        assert_eq!(
+            external_ref("https://h.example\\@evil/d?apikey=K").as_deref(),
+            Some("https://h.example\\@evil/d")
+        );
+        assert_eq!(external_ref("https://h.exa mple/"), None);
+        assert_eq!(external_ref("https://h.example:99999999/"), None);
+        assert_eq!(
+            external_ref("http://[::1]:9696/x").as_deref(),
+            Some("http://[::1]:9696/x")
+        );
+        // Credentials inside a value: a wrapped URL, or a key=value pair.
+        assert_eq!(
+            external_ref(
+                "https://p.example/dl?link=https%3A%2F%2Ft%2Fd%3Fid%3D1&id=2&x=a%26passkey%3DS"
+            )
+            .as_deref(),
+            Some("https://p.example/dl?id=2")
+        );
         assert_eq!(external_ref("javascript:alert(1)"), None);
         assert_eq!(
             external_ref("urn:uuid:1234").as_deref(),

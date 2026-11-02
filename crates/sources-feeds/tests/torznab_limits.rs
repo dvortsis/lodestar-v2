@@ -245,3 +245,22 @@ fn byte_order_mark_is_fine() {
     assert_eq!(titles(&f), ["a"]);
     assert_eq!(f.summary.stop, None);
 }
+
+#[test]
+fn repeated_fields_and_raw_text_are_capped_before_copying() {
+    let limits = Limits {
+        max_text: 64,
+        ..LIMITS
+    };
+    // A later duplicate is never collected, so it can't spoil the item.
+    let dup = format!(
+        r#"<item><title>first</title><title>{}</title><torznab:attr name="infohash" value="{HASH}"/></item>"#,
+        "x".repeat(100)
+    );
+    let f = with(&feed(&dup), &limits);
+    assert_eq!(titles(&f), ["first"]);
+    assert_eq!(f.summary.skipped, Skipped::default());
+    // Raw text over the cap is refused before `\r\n` normalisation copies it.
+    let crlf = item(&"a\r\n".repeat(30));
+    assert_eq!(with(&feed(&crlf), &limits).summary.skipped.over_cap, 1);
+}
