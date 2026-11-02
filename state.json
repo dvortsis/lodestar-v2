@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T17:14:49Z",
+  "updated_at": "2026-11-02T17:30:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2631,7 +2631,7 @@
       "merge": "7d4724c9"
     },
     "SRC-14b": {
-      "status": "running as 14b-1 (egress hardening); 14b-2 (purge job + scrub) after 14b-1 and R-mem-triage merge",
+      "status": "14b-1 #399 in Opus review; 14b-2 after R-mem-triage merges",
       "brief": "briefs/SRC-14b.md",
       "model": "opus",
       "session": "session_01MMjhnBFNwDh6xVTgXknTDU",
@@ -2639,7 +2639,9 @@
       "split_14b": {
         "14b-1": "egress hardening + 14a decisions fix",
         "14b-2": "purge job, Pool::drop_source after R-mem-triage, per-plugin stop, snapshot scrub with restore-time apply, crash-safe, purged marker survives rollback"
-      }
+      },
+      "pr": 399,
+      "head": "a14422e7"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3858,6 +3860,12 @@
       "state": "to-send",
       "added": "2026-11-02T15:11:08Z",
       "text": "Q2 (ToS/robots) check for nyaa.si RSS could not be done: the cloud proxy refuses nyaa.si for every session. The Nyaa plugin (#397) is merged but unregistered and held until the check is recorded. Action: check https://nyaa.si/robots.txt and its terms for automated RSS polling (one request per 5 min), or allow nyaa.si in the environment network policy so a session can record it."
+    },
+    {
+      "id": "flag-src14b1-backoff",
+      "state": "to-send",
+      "added": "2026-11-02T17:30:31Z",
+      "text": "SRC-14b-1 (#399, §2.19): 429/5xx back-off now scoped per poll unit (one Prowlarr indexer no longer blocks the whole manager); connect errors stay host-wide, and two different units failing in a row also back off the whole host."
     }
   ],
   "external_gates": {
@@ -3978,6 +3986,11 @@
       "id": "record-2-slot-limit",
       "added": "2026-11-02T15:06:47Z",
       "text": "Next runner docs PR: record the owner's 2-slot instruction in docs/owner-decisions.md and set runner/slices.yaml limits.phase_total: 2 (with SRC-14a/14b entries)."
+    },
+    {
+      "id": "SRC-7-indexers-poll-send",
+      "added": "2026-11-02T17:30:31Z",
+      "text": "Prowlarr indexer-list poll should go through Client::send so a rate limit on it is host-scoped (SRC-14b-1 handoff; docs/decisions/2026-11-02-SRC-14b*.md)."
     }
   ],
   "main_health": [
