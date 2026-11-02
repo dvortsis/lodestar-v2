@@ -105,7 +105,10 @@ pub fn claims_kib(d: &Discovery) -> u32 {
 /// runs on the writer's task and must not block: hand the ids off and
 /// return. Nothing is published while no sink is set.
 #[derive(Default)]
-pub struct PromotedHook(std::sync::RwLock<Option<Box<dyn Fn(&[i64]) + Send + Sync>>>);
+pub struct PromotedHook(std::sync::RwLock<Option<PromotedSink>>);
+
+/// A [`PromotedHook`]'s sink.
+type PromotedSink = Box<dyn Fn(&[i64]) + Send + Sync>;
 
 impl std::fmt::Debug for PromotedHook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
