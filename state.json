@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T10:32:07Z",
+  "updated_at": "2026-11-02T10:43:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2502,14 +2502,15 @@
       "head": "b22b4deb"
     },
     "F-hits-two-readings": {
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBEaKCUgMGXvtAec3d",
       "launched": "2026-11-02T09:18:58Z",
       "notes": "urgent: fuzz (lists) invariant verdict==hits().find(on) broken on main since #381 (Core::hits reports one reading). Found on #384 run 41418515977. Separate small PR by the F-visible session.",
       "pr": 386,
       "head": "9b2a7564",
-      "review": "runner-reviewed; merge on green"
+      "review": "runner-reviewed; merge on green",
+      "merge": "7fe018c9"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
