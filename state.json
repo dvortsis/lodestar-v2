@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T03:16:00Z",
+  "updated_at": "2026-11-02T03:20:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3406,6 +3406,11 @@
       "id": "approve-q1-texts",
       "status": "waiting",
       "text": "Approve the consent-class texts (External, Account, Restricted, Overlay) once SRC-4 drafts them in its decisions file; gates SRC-15b (owner-decisions §2.28)."
+    },
+    {
+      "id": "note-upgrade-test",
+      "status": "to-send",
+      "text": "Upgrade test settled under §2.28: r1's clean V3->V12 upgrade of the Oct 22 volume counts, because crates/store (all migrations) is byte-identical between rc.1 and rc.2. No extra upgrade smoke needed for rc.2."
     }
   ],
   "external_gates": {
@@ -4034,5 +4039,8 @@
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
   "queue_note": "Next as slots free: openapi-example-size (Sonnet, now unblocked), X-strip-format-chars (Opus, small), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2,Q15), SRC-10e (Q7), SRC-13 (Q3), SRC-15b (Q1), adult stand-in release (q-adult-standin-release). Blocked on release cut: SRC-1. Seven-day usage warning active.",
-  "plan_ref": "docs/build-plan.md §0 (r2, #369) + docs/handoff.md"
+  "plan_ref": "docs/build-plan.md §0 (r2, #369) + docs/handoff.md",
+  "v051_gate": {
+    "upgrade_test": "SATISFIED per owner-decisions §2.28 (#371): r1 upgraded the Oct 22 volume V3->V12 cleanly; crates/store is byte-identical between v0.5.1-rc.1 and v0.5.1-rc.2 (git diff --quiet v0.5.1-rc.1 v0.5.1-rc.2 -- crates/store/), so the migration code matches whichever rc r1 ran. Runner-verified 2026-11-02T03:20Z."
+  }
 }
