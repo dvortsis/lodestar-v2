@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:08:10Z",
+  "updated_at": "2026-11-02T14:20:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2438,7 +2438,7 @@
         "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source).",
         "Purge must also scrub pre-migration snapshots (crates/store/src/snapshots.rs, VACUUM INTO, kept 90 days): drop sources.secret.<plugin>.* and sources.consent.<plugin> from each snapshot, or refuse rollback past a purge; secrets.key stays in the data dir, so lodestar rollback would otherwise restore a purged source's sealed credentials and ack (#388 Opus review finding 1)."
       ],
-      "status": "SRC-14a in review (Opus review running)",
+      "status": "#394 Opus CHANGES: B1 unreadable egress fails open; DNS ruling sent",
       "brief": "briefs/SRC-14.md",
       "session": "session_01MMjhnBdFardZHCh5mNqeNX",
       "model": "opus",
@@ -3800,6 +3800,12 @@
       "state": "to-send",
       "added": "2026-11-02T13:49:31Z",
       "text": "SRC-14a (#394) runner/session calls (§2.19): password required for every egress change, every class; verification switch stays off (API refuses); LAN DNS default for SOCKS5 (see review outcome); schedule/agents stored with enforced:false."
+    },
+    {
+      "id": "flag-socks-dns-auto",
+      "state": "to-send",
+      "added": "2026-11-02T14:20:37Z",
+      "text": "Runner changed its #380 ruling (§2.19, privacy vs SSRF): SOCKS5 \"auto\" DNS now resolves through the proxy (socks5h) for plugins with fixed manifest endpoints, whatever the proxy address. The old rule (local DNS whenever the proxy is on a LAN/private address) leaked every indexer lookup outside the tunnel for gluetun (172.x), Mullvad (10.64.0.1) and Tor/VPN-client (127.0.0.1) users. Plugins with user-entered endpoints (Prowlarr) keep local DNS by default; the Sources screen will make it an explicit choice there. Veto to keep local DNS everywhere."
     }
   ],
   "external_gates": {
@@ -3890,6 +3896,11 @@
       "id": "SRC-7-real-recordings",
       "added": "2026-11-02T14:08:10Z",
       "text": "Replace SRC-7 hand-written fixtures with real scrubbed Prowlarr and Jackett recordings; verify X-Api-Key on /{id}/api and guid shapes. Before users can enable the Prowlarr plugin. Needs a real Prowlarr instance (owner or docker in a session with network)."
+    },
+    {
+      "id": "SRC-14b-route-pacing",
+      "added": "2026-11-02T14:20:37Z",
+      "text": "SRC-14b: add a route-level delay in PluginEgress after EgressDown so a plugin retry loop cannot spin while the kill switch is down (#394 review I1), before wiring SRC-7."
     }
   ],
   "main_health": [
