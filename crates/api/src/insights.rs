@@ -1867,8 +1867,9 @@ pub(crate) async fn overview_response(
 
 /// Rows that had failed closed read again, and their stand-ins' holds
 /// were judged again (docs/decisions/2026-11-02-F-filter-standin-undo.md):
-/// a warning for a week, with how many were released (`value`) and how
-/// many the rules still hold (`rows`, as one number).
+/// a warning for a week, with how many were released (`value`), and in
+/// `rows` two numbers: how many the rules still hold, and how many adult
+/// holds are left for the review queue.
 fn stand_ins_rejudged(r: crate::filters::Rejudged) -> InsightsException {
     InsightsException {
         fix: Fix {
@@ -1876,7 +1877,7 @@ fn stand_ins_rejudged(r: crate::filters::Rejudged) -> InsightsException {
             target: "filters".into(),
         },
         kind: "filter_stand_ins_rejudged".into(),
-        rows: vec![r.kept.to_string()],
+        rows: vec![r.kept.to_string(), r.review.to_string()],
         severity: Severity::Warning,
         since: r.at,
         unit: Some("torrents".into()),

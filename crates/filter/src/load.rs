@@ -143,65 +143,96 @@ impl Unreadable {
 /// The `settings` key of the [`StandIns`] record.
 pub const STAND_INS_KEY: &str = "filter.stand_ins";
 
+/// One row that failed closed ([`StandIns`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandIn {
+    /// `U-3` (a rule or its `unless`) or `C-2` (an Is adult
+    /// classification rule).
+    pub label: String,
+    /// When it was first found failing closed, in Unix seconds: every
+    /// hold its stand-in made is that time or later.
+    pub since: i64,
+    /// When it was first found no longer failing closed: its stand-in
+    /// made nothing from then on, so holds from then are the real rule's.
+    pub until: Option<i64>,
+}
+
 /// The rows that failed closed, kept across restarts in the store's
 /// `settings` so their stand-ins' holds can be re-judged once the rows
 /// read again, after an upgrade back or a repair
-/// (docs/decisions/2026-11-02-F-filter-standin-undo.md). One entry per
-/// row, as its label (`U-3` for a rule or its `unless`, `C-2` for an Is
-/// adult classification rule) and when it was first found, in Unix
-/// seconds: every hold its stand-in made is that time or later. Stored
-/// as `U-3@1700000000 C-2@1700000100`. Labels this version doesn't know
-/// are kept as they are.
+/// (docs/decisions/2026-11-02-F-filter-standin-undo.md). Stored as
+/// `U-3@1700000000 C-2@1700000100~1700000900`. Labels this version
+/// doesn't know are kept as they are.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StandIns(pub Vec<(String, i64)>);
+pub struct StandIns(pub Vec<StandIn>);
 
 impl StandIns {
     /// `None` when the text isn't a record.
     pub fn decode(text: &str) -> Option<StandIns> {
         text.split_whitespace()
             .map(|t| {
-                let (label, since) = t.split_once('@')?;
-                Some((label.to_owned(), since.parse().ok()?))
+                let (label, times) = t.split_once('@')?;
+                let (since, until) = match times.split_once('~') {
+                    Some((s, u)) => (s.parse().ok()?, Some(u.parse().ok()?)),
+                    None => (times.parse().ok()?, None),
+                };
+                Some(StandIn {
+                    label: label.to_owned(),
+                    since,
+                    until,
+                })
             })
             .collect::<Option<Vec<_>>>()
             .map(StandIns)
     }
 
     pub fn encode(&self) -> String {
-        let parts: Vec<String> = self.0.iter().map(|(l, s)| format!("{l}@{s}")).collect();
+        let parts: Vec<String> = self
+            .0
+            .iter()
+            .map(|e| match e.until {
+                Some(u) => format!("{}@{}~{u}", e.label, e.since),
+                None => format!("{}@{}", e.label, e.since),
+            })
+            .collect();
         parts.join(" ")
     }
 
-    /// Merges a load's unreadable rows into the record. Returns the new
-    /// record and the entries whose row no longer fails closed (it reads
-    /// again, was removed or switched off): their holds are to be
-    /// re-judged, and they stay in the record until that's done, so a stop
-    /// part-way leaves it to redo. A row that still fails closed keeps the
-    /// earliest time it was found.
-    pub fn reconcile(&self, unreadable: &[Unreadable]) -> (StandIns, Vec<(String, i64)>) {
-        let mut current: Vec<(String, i64)> = Vec::new();
+    /// Merges a load's unreadable rows into the record, at `now`. Returns
+    /// the new record and the entries whose row no longer fails closed (it
+    /// reads again, was removed or switched off), with `until` set the
+    /// first time that's seen: their holds are to be re-judged, and they
+    /// stay in the record until that's done, so a stop part-way leaves it
+    /// to redo. A row that still fails closed keeps the earliest time it
+    /// was found, and one that fails again after recovering starts afresh.
+    pub fn reconcile(&self, unreadable: &[Unreadable], now: i64) -> (StandIns, Vec<StandIn>) {
+        let mut current: Vec<StandIn> = Vec::new();
         for u in unreadable.iter().filter(|u| u.fails_closed) {
             let label = u.label();
             let since = self
                 .0
                 .iter()
-                .filter(|(l, _)| *l == label)
-                .map(|(_, s)| *s)
+                .filter(|e| e.label == label && e.until.is_none())
+                .map(|e| e.since)
                 .fold(u.since, i64::min);
-            match current.iter_mut().find(|(l, _)| *l == label) {
-                Some(e) => e.1 = e.1.min(since),
-                None => current.push((label, since)),
+            match current.iter_mut().find(|e| e.label == label) {
+                Some(e) => e.since = e.since.min(since),
+                None => current.push(StandIn {
+                    label,
+                    since,
+                    until: None,
+                }),
             }
         }
         let (mut recovered, mut other) = (Vec::new(), Vec::new());
         for e in &self.0 {
-            if current.iter().any(|(l, _)| *l == e.0) {
-                continue;
-            }
-            if StandIns::scope(&e.0).is_some() {
-                recovered.push(e.clone());
-            } else {
+            if StandIns::rule(&e.label).is_none() && !e.label.starts_with("C-") {
                 other.push(e.clone());
+            } else if e.until.is_some() || !current.iter().any(|c| c.label == e.label) {
+                recovered.push(StandIn {
+                    until: e.until.or(Some(now)),
+                    ..e.clone()
+                });
             }
         }
         current.extend(recovered.iter().cloned());
@@ -209,30 +240,17 @@ impl StandIns {
         (StandIns(current), recovered)
     }
 
-    /// The record without one entry, once its holds are re-judged. An
-    /// entry found again since (another time) stays.
-    pub fn without(&self, label: &str, since: i64) -> StandIns {
-        StandIns(
-            self.0
-                .iter()
-                .filter(|(l, s)| !(l == label && *s == since))
-                .cloned()
-                .collect(),
-        )
+    /// The record without one entry, once its holds are re-judged.
+    pub fn without(&self, done: &StandIn) -> StandIns {
+        StandIns(self.0.iter().filter(|e| *e != done).cloned().collect())
     }
 
-    /// Which holds an entry's stand-in may have made: `Some(Some(rule))`
-    /// for a rule's (`U-3`), `Some(None)` for every adult hold (an Is
-    /// adult classification rule's, `C-2`), `None` for a label this
-    /// version doesn't know.
-    pub fn scope(label: &str) -> Option<Option<&str>> {
-        let (kind, id) = label.split_once('-')?;
+    /// The stored rule id of a rule's stand-in (`U-3`), or `None` for any
+    /// other label.
+    pub fn rule(label: &str) -> Option<&str> {
+        let id = label.strip_prefix("U-")?;
         id.parse::<u32>().ok()?;
-        match kind {
-            "U" => Some(Some(label)),
-            "C" => Some(None),
-            _ => None,
-        }
+        Some(label)
     }
 }
 
@@ -596,28 +614,50 @@ mod tests {
         };
         assert_eq!(StandIns::decode(""), Some(StandIns::default()));
         assert_eq!(StandIns::decode("U-3@x"), None);
-        let before = StandIns::decode("U-3@100 C-2@50 X-9@7").unwrap();
+        assert_eq!(StandIns::decode("U-3@1~x"), None);
+        let before = StandIns::decode("U-3@100 C-2@50 U-7@10~20 X-9@7").unwrap();
         assert_eq!(StandIns::decode(&before.encode()), Some(before.clone()));
         // U-3 still fails closed (its query and its `unless`: one row),
-        // C-2 reads again, U-4 is new, the skipped O-5 isn't recorded.
-        let (record, recovered) = before.reconcile(&[
-            u(RowKind::Rule, 3, 900, true),
-            u(RowKind::Unless, 3, 900, true),
-            u(RowKind::Rule, 4, 900, true),
-            u(RowKind::Override, 5, 900, false),
-        ]);
-        assert_eq!(recovered, vec![("C-2".to_owned(), 50)]);
+        // C-2 reads again, U-7 had already recovered, U-4 is new, the
+        // skipped O-5 isn't recorded.
+        let (record, recovered) = before.reconcile(
+            &[
+                u(RowKind::Rule, 3, 900, true),
+                u(RowKind::Unless, 3, 900, true),
+                u(RowKind::Rule, 4, 900, true),
+                u(RowKind::Override, 5, 900, false),
+            ],
+            1000,
+        );
+        let labels: Vec<String> = recovered
+            .iter()
+            .map(|e| StandIns(vec![e.clone()]).encode())
+            .collect();
+        assert_eq!(labels, ["C-2@50~1000", "U-7@10~20"]);
         assert_eq!(
             record.encode(),
-            "U-3@100 U-4@900 C-2@50 X-9@7",
-            "the earliest time, and the recovered entry until it's done"
+            "U-3@100 U-4@900 C-2@50~1000 U-7@10~20 X-9@7",
+            "the earliest time, and recovered entries until they're done"
         );
-        assert_eq!(record.without("C-2", 50).encode(), "U-3@100 U-4@900 X-9@7");
-        assert_eq!(record.without("C-2", 51), record);
-        assert_eq!(StandIns::scope("U-3"), Some(Some("U-3")));
-        assert_eq!(StandIns::scope("C-2"), Some(None));
-        assert_eq!(StandIns::scope("X-9"), None);
-        assert_eq!(StandIns::scope("U-x"), None);
+        assert_eq!(
+            record.without(&recovered[0]).encode(),
+            "U-3@100 U-4@900 U-7@10~20 X-9@7"
+        );
+        // U-7 fails again: a new entry, the recovered one still to do.
+        let (record, recovered) = record.reconcile(&[u(RowKind::Rule, 7, 2000, true)], 2000);
+        assert_eq!(
+            recovered.len(),
+            4,
+            "U-3, U-4, C-2 and U-7's old one: {recovered:?}"
+        );
+        assert!(
+            record.encode().starts_with("U-7@2000 "),
+            "{}",
+            record.encode()
+        );
+        assert_eq!(StandIns::rule("U-3"), Some("U-3"));
+        assert_eq!(StandIns::rule("C-2"), None);
+        assert_eq!(StandIns::rule("U-x"), None);
     }
 
     #[test]

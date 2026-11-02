@@ -58,13 +58,14 @@ lodestar_log::catalogue! {
     }
     /// Rows that failed closed read again, and what their stand-ins held
     /// was judged again by the rules as they are: counts only, never an
-    /// item (§20.11).
+    /// item (§20.11). `review` is the adult holds left for the review
+    /// queue.
     FILTERS_STAND_INS_REJUDGED {
         id: "filters.stand_ins_rejudged",
         component: Filters,
         level: Info,
         message: "Filter rows that couldn't be read do again; what their stand-ins held was judged again",
-        fields: { released: Size, kept: Size },
+        fields: { released: Size, kept: Size, review: Size },
     }
     /// A core rule's hashed example couldn't be read.
     FILTERS_FIXTURE_UNREADABLE {

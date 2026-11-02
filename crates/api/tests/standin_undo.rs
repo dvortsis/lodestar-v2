@@ -3,6 +3,7 @@
 //! and only what they wouldn't hold is released
 //! (docs/decisions/2026-11-02-F-filter-standin-undo.md).
 
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,7 +11,9 @@ use std::time::Duration;
 use lodestar_api::filters::{Change, FiltersApi};
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::load::STAND_INS_KEY;
-use lodestar_filter::{Action, Core, CsList, Engine, Handle, HeldSet, Lists, Origin, Sealer};
+use lodestar_filter::{
+    Action, Core, CsList, Engine, Handle, HeldSet, ListLayer, Lists, Origin, Sealer,
+};
 use lodestar_store::{Filtered, Held, Store, StoreConfig, WriteBatch};
 
 struct Fixture {
@@ -150,9 +153,25 @@ fn fix_rule(api: &FiltersApi, id: i64, query: &str, action: Action, unless: Opti
     s.update_rule(&row).unwrap();
 }
 
+/// When the record says `label`'s stand-in started.
+fn since(api: &FiltersApi, label: &str) -> i64 {
+    let rec = record(api).unwrap();
+    let e = rec
+        .split(' ')
+        .find(|e| e.starts_with(&format!("{label}@")))
+        .unwrap_or_else(|| panic!("{label} in {rec}"));
+    e[label.len() + 1..]
+        .split('~')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
 /// A rule's query unreadable, then readable again after a restart: the
-/// stand-in's holds that the real rule, the floor or another rule still
-/// make stay; the rest are released, and holds from before stay.
+/// stand-in's quarantine that the real rule, the floor, a list or another
+/// rule still holds stays; the rest is released. Holds from before, and a
+/// sealed name that won't open, stay.
 #[test]
 fn a_rules_stand_in_holds_are_judged_again_when_it_reads() {
     let f = fixture();
@@ -167,74 +186,96 @@ fn a_rules_stand_in_holds_are_judged_again_when_it_reads() {
     };
     load(&f.api);
     assert_eq!(f.api.undo_stand_ins(now()).unwrap(), None);
-    let rec = record(&f.api).unwrap();
-    assert!(rec.starts_with(&format!("U-{rule}@")), "{rec}");
-    let since: i64 = rec.split('@').nth(1).unwrap().parse().unwrap();
     let u = format!("U-{rule}");
-    let at = since + 1;
+    let at = since(&f.api, &u);
     hold(&f.api, (1, &u, Q, at, false, "cam rip 2025"));
     hold(&f.api, (2, &u, Q, at, false, "nice movie"));
-    hold(&f.api, (3, &u, Q, since - 100, false, "older one"));
+    hold(&f.api, (3, &u, Q, at - 100, false, "older one"));
     hold(&f.api, (4, &u, Q, at, false, "floor listed"));
     hold(&f.api, (5, &u, Q, at, false, "othername x"));
-    hold(&f.api, (6, &u, T, at, true, ""));
-    // The floor holds 4 by hash.
+    hold(&f.api, (6, &u, Q, at, false, "listed"));
+    hold(&f.api, (7, &u, Q, at, false, "sealed badly"));
     f.api
-        .engine
-        .update(|c| c.cs.add_hash([4; 20], Origin::Imported));
+        .store
+        .lock()
+        .unwrap()
+        .connection()
+        .execute(
+            "UPDATE quarantine SET sealed = x'00' WHERE hash = ?1",
+            [&[7u8; 20][..]],
+        )
+        .unwrap();
 
-    // The next start reads the rule again.
+    // The next start reads the rule again; the floor has 4, a list 6.
     fix_rule(&f.api, rule, "cam", Action::Quarantine, None);
     let api = restart(&f);
     api.engine
         .update(|c| c.cs.add_hash([4; 20], Origin::Imported));
+    api.engine.update_engine(|e| {
+        let hashes = Arc::new(HashSet::from([[6u8; 20]]));
+        let layer = ListLayer {
+            id: 1,
+            action: Action::Drop,
+            hashes,
+        };
+        e.set_list(Some(layer), 1);
+    });
     let done = api.undo_stand_ins(now()).unwrap().unwrap();
-    assert_eq!((done.released, done.kept), (2, 3), "{done:?}");
+    assert_eq!((done.released, done.kept, done.review), (1, 5, 0));
     assert!(held(&api, 1), "the real rule holds it");
     assert!(!held(&api, 2), "only the stand-in held it");
     assert!(held(&api, 3), "before the stand-in: the real rule's");
     assert!(held(&api, 4), "the floor holds it");
     assert!(held(&api, 5), "U-{other} drops it");
-    assert!(!held(&api, 6), "its adult tombstone is released by hash");
+    assert!(held(&api, 6), "the list drops it");
+    assert!(held(&api, 7), "a name that won't open can't be judged");
     assert_eq!(record(&api), None, "done, so it's no longer recorded");
     let notice = lodestar_api::filters::stand_in_notice(&api.store.lock().unwrap(), now());
-    assert_eq!(notice.map(|n| (n.released, n.kept)), Some((2, 3)));
+    assert_eq!(notice, Some(done));
     // Nothing more to do on the next run.
     assert_eq!(api.undo_stand_ins(now()).unwrap(), None);
 }
 
 /// An unreadable `unless` makes its rule a stand-in that applies without
-/// it; once it reads, what the `unless` lets through is released.
+/// it, and an unknown action code one that quarantines within its query;
+/// once they read, what the real rules let through is released.
 #[test]
-fn an_unless_stand_in_holds_are_judged_again_when_it_reads() {
+fn unless_and_action_stand_ins_are_judged_again_when_they_read() {
     let f = fixture();
-    let rule = f
-        .api
-        .store
-        .lock()
-        .unwrap()
-        .add_rule("spam", Action::Drop.code(), None, Some("size:>>"))
-        .unwrap();
+    let (spam, cam) = {
+        let mut s = f.api.store.lock().unwrap();
+        (
+            s.add_rule("spam", Action::Drop.code(), None, Some("size:>>"))
+                .unwrap(),
+            s.add_rule("cam", 99, None, None).unwrap(),
+        )
+    };
     load(&f.api);
     f.api.undo_stand_ins(now()).unwrap();
-    let u = format!("U-{rule}");
-    let at = now() + 1;
+    let (u, c) = (format!("U-{spam}"), format!("U-{cam}"));
+    let at = since(&f.api, &u);
     hold(&f.api, (1, &u, Q, at, false, "spam goodgroup"));
     hold(&f.api, (2, &u, Q, at, false, "spam badgroup"));
-    fix_rule(&f.api, rule, "spam", Action::Drop, Some("goodgroup"));
+    hold(&f.api, (3, &c, Q, at, false, "cam rip"));
+    fix_rule(&f.api, spam, "spam", Action::Drop, Some("goodgroup"));
+    fix_rule(&f.api, cam, "cam", Action::Hide, None);
     load(&f.api);
     let done = f.api.undo_stand_ins(now()).unwrap().unwrap();
-    assert_eq!((done.released, done.kept), (1, 1));
+    assert_eq!((done.released, done.kept), (2, 1));
     assert!(!held(&f.api, 1), "its unless lets it through");
     assert!(held(&f.api, 2));
+    assert!(
+        !held(&f.api, 3),
+        "hide doesn't hold back: stored hidden on its refetch"
+    );
 }
 
-/// An unreadable Is adult classification rule marks everything adult;
-/// once it reads, its adult holds (quarantine and tombstones, made before
-/// or after the 30-day purge) are judged again, and every stored torrent
-/// is queued to be classified again.
+/// An unreadable Is adult classification rule marks everything adult.
+/// Once it reads, its adult holds stay (a correction's look the same, and
+/// nothing could make one again): they're counted for review, and every
+/// stored torrent is queued to be classified again.
 #[test]
-fn an_is_adult_stand_ins_adult_holds_are_judged_again_when_it_reads() {
+fn an_is_adult_stand_ins_adult_holds_stay_for_review() {
     let f = fixture();
     let class = f
         .api
@@ -245,42 +286,25 @@ fn an_is_adult_stand_ins_adult_holds_are_judged_again_when_it_reads() {
         .unwrap();
     load(&f.api);
     f.api.undo_stand_ins(now()).unwrap();
-    assert!(record(&f.api).unwrap().starts_with(&format!("C-{class}@")));
-    let at = now() + 1_000;
+    let at = since(&f.api, &format!("C-{class}"));
     hold(&f.api, (1, "CS-5a", Q, at, true, "some name"));
     hold(&f.api, (2, "CS-5a", T, at, true, ""));
     hold(&f.api, (3, "CS-5a", T, at - 86_400, true, ""));
-    hold(&f.api, (4, "CS-5b", T, at, true, ""));
-    hold(&f.api, (5, "CS-5a", Q, at, false, "not adult-held"));
-    // The 30-day purge turns the adult quarantine 6 into a tombstone.
-    hold(&f.api, (6, "CS-5a", Q, at - 500, true, "x"));
+    hold(&f.api, (4, "CS-5a", Q, at, false, "not adult-held"));
     f.api
         .store
         .lock()
         .unwrap()
-        .purge_filter(at - 500 + 86_400, 0)
+        .connection()
+        .execute("UPDATE class_rules SET query = 'studiox'", [])
         .unwrap();
-    assert!(held(&f.api, 1) && held(&f.api, 5), "not expired");
-    assert!(held(&f.api, 6), "a tombstone now");
-    {
-        let s = f.api.store.lock().unwrap();
-        s.connection()
-            .execute("UPDATE class_rules SET query = 'studiox'", [])
-            .unwrap();
-    }
-    f.api
-        .engine
-        .update(|c| c.cs.add_hash([4; 20], Origin::Imported));
     load(&f.api);
     assert!(f.api.engine.current().unreadable.is_empty());
     let done = f.api.undo_stand_ins(now()).unwrap().unwrap();
-    assert!(!held(&f.api, 1));
-    assert!(!held(&f.api, 2), "its tombstone is released");
-    assert!(held(&f.api, 3), "made before the rule was unreadable");
-    assert!(held(&f.api, 4), "the floor still refuses it");
-    assert!(held(&f.api, 5), "not an adult hold");
-    assert!(!held(&f.api, 6), "a purged adult hold is released too");
-    assert_eq!((done.released, done.kept), (3, 1));
+    assert_eq!((done.released, done.kept, done.review), (0, 0, 2));
+    for h in 1..=4 {
+        assert!(held(&f.api, h), "{h} stays held");
+    }
     let requeue = f
         .api
         .store
@@ -296,10 +320,10 @@ fn an_is_adult_stand_ins_adult_holds_are_judged_again_when_it_reads() {
     assert_eq!(record(&f.api), None);
 }
 
-/// Removing an unreadable Is adult rule through the API also re-judges
-/// its adult holds: before, they became tombstones for good.
+/// Removing an unreadable Is adult rule through the API counts its adult
+/// holds for review, and leaves them held.
 #[test]
-fn removing_an_unreadable_is_adult_rule_releases_its_adult_holds() {
+fn removing_an_unreadable_is_adult_rule_counts_its_adult_holds() {
     let f = fixture();
     let class = f
         .api
@@ -310,14 +334,19 @@ fn removing_an_unreadable_is_adult_rule_releases_its_adult_holds() {
         .unwrap();
     load(&f.api);
     f.api.undo_stand_ins(now()).unwrap();
-    hold(&f.api, (1, "CS-5a", T, now() + 1, true, ""));
+    let at = since(&f.api, &format!("C-{class}"));
+    hold(&f.api, (1, "CS-5a", T, at, true, ""));
     f.api.remove_class_rule(class, now()).unwrap();
-    assert!(!held(&f.api, 1));
+    assert!(held(&f.api, 1));
+    let notice = lodestar_api::filters::stand_in_notice(&f.api.store.lock().unwrap(), now());
+    assert_eq!(notice.map(|n| n.review), Some(1));
     assert_eq!(record(&f.api), None);
 }
 
-/// A row that still fails closed keeps its holds and its first time, and
-/// a stop part-way leaves the entry recorded for the next start.
+/// A row that still fails closed keeps its holds and its first time; an
+/// engine that hasn't loaded the rules releases nothing; a stop part-way
+/// leaves the entry recorded, and what the real rule held after the row
+/// read again isn't the stand-in's.
 #[test]
 fn a_row_still_unreadable_keeps_its_holds_and_a_stop_redoes_it() {
     let f = fixture();
@@ -331,21 +360,30 @@ fn a_row_still_unreadable_keeps_its_holds_and_a_stop_redoes_it() {
     load(&f.api);
     f.api.undo_stand_ins(now()).unwrap();
     let first = record(&f.api).unwrap();
-    hold(&f.api, (1, &format!("U-{rule}"), Q, now() + 1, false, "a"));
+    let u = format!("U-{rule}");
+    let at = since(&f.api, &u);
+    hold(&f.api, (1, &u, Q, at, false, "a"));
     let api = restart(&f);
     assert_eq!(api.undo_stand_ins(now() + 10).unwrap(), None);
     assert_eq!(record(&api).unwrap(), first, "its first time is kept");
+    // An engine without the rules loaded lists nothing unreadable.
+    api.engine.update_engine(|e| e.unreadable.clear());
+    assert_eq!(api.undo_stand_ins(now()).unwrap(), None);
+    assert_eq!(record(&api).unwrap(), first, "the row doesn't read");
     assert!(held(&api, 1));
-    fix_rule(&api, rule, "cam", Action::Hide, None);
+    fix_rule(&api, rule, "keepword", Action::Quarantine, None);
     load(&api);
     api.shutdown.cancel();
     assert!(api.undo_stand_ins(now()).is_err(), "the shutdown stops it");
-    assert_eq!(record(&api).unwrap(), first, "still to do");
+    assert!(record(&api).unwrap().starts_with(&format!("{first}~")));
     assert!(held(&api, 1));
+    // The real rule quarantines after it read again.
+    hold(&api, (2, &u, Q, now() + 100, false, "real one"));
     let api = restart(&f);
     let done = api.undo_stand_ins(now()).unwrap().unwrap();
-    assert_eq!(done.released, 1);
+    assert_eq!((done.released, done.kept), (1, 0));
     assert!(!held(&api, 1));
+    assert!(held(&api, 2), "outside the stand-in's window");
 }
 
 /// Changes applied while a re-judge runs: each re-judge chunk sees one
@@ -363,7 +401,7 @@ fn a_rejudge_runs_beside_apply() {
     load(&f.api);
     f.api.undo_stand_ins(now()).unwrap();
     let u = format!("U-{rule}");
-    let at = now() + 1;
+    let at = since(&f.api, &u);
     for i in 0..2_000u32 {
         let mut h = [0u8; 20];
         h[..4].copy_from_slice(&i.to_be_bytes());

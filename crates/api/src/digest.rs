@@ -535,9 +535,11 @@ fn alert(e: &InsightsException) -> Alert {
         ),
         ("filter_stand_ins_rejudged", value) => format!(
             "Saved filter rows that couldn't be read work again. What filtering held back in \
-             their place was checked again with your rules: {} released, {} still held.",
+             their place was checked again with your rules: {} released, {} still held, {} \
+             adult holds to review in Filters & Safety.",
             value.as_deref().unwrap_or("some"),
-            e.rows.first().map_or("some", String::as_str)
+            e.rows.first().map_or("some", String::as_str),
+            e.rows.get(1).map_or("some", String::as_str)
         ),
         ("yield_below_baseline", None) => {
             "Yield for the newest completed cohorts is below the 7 days before them.".into()

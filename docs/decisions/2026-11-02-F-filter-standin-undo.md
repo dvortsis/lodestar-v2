@@ -1,29 +1,55 @@
 # F-filter-standin-undo decisions
 
-This follows `2026-11-01-F-filter-load-fail-closed.md` (#357) and closes its known limitation: once a row that failed closed reads again (an upgrade back, a repaired row), what its stand-in held is judged again by the rules as they are, and only what they wouldn't hold is released (§20 says false positives must be correctable). The runner decided the scope under the owner's content-safety rules. **No schema change and no migration.**
+This follows `2026-11-01-F-filter-load-fail-closed.md` (#357). It undoes what stand-ins did once their rows read again (an upgrade back, a repaired row), where that can be told apart safely, and says what can't. §20 says false positives must be correctable. The runner set the scope under the owner's content-safety rules. **No schema change and no migration.**
 
-## Telling a stand-in's holds apart
-- **What's stored already.** A hold row (`quarantine`, `tombstones`) keeps the rule id and `at`, the time it was made. A rule's stand-in holds under the rule's own id (`U-3`), and an adult hold carries the `+adult` mark on the Adult-only core rule that made it (`CS-5a+adult`). An adult hold doesn't name the classification rule that made the torrent adult. The purge copies a quarantine's `at` into the tombstone it becomes, so a tombstone keeps the time of its hold.
-- **What was missing: which rows failed closed, and since when, across restarts.** #357 kept that in memory only (`Engine::unreadable`, reset on restart), so after an upgrade back nothing knew. It's now kept in one `settings` row, `filter.stand_ins`: one entry per row that fails closed, as its label and when it was first found, e.g. `U-3@1762041600 C-2@1762045200` (`lodestar_filter::load::StandIns`). It's a value under a new key in an existing table, not a schema change. It holds rule ids and a time, never an item, so it isn't the record of releases §20.11 rules out. Labels this version doesn't know are kept as they are.
-- **A rule's stand-in (rule, action or `unless` unreadable): `U-n`.** Its holds are the rows of `U-n` or `U-n+adult` made at or after its `since`. Before `since` the rule was readable, so those are the real rule's and are left alone.
-- **An Is adult classification rule's stand-in: `C-n`.** Its holds are every adult hold (`…+adult`) made at or after its `since`, in quarantine and in tombstones. That's wider than what the stand-in alone made: a readable Is adult rule's adult holds from the same time are in the set too. Re-judging keeps those, since the readable rule still marks them adult.
-- **Recognising a tombstone.** A tombstone a stand-in's adult hold left is a `+adult` tombstone whose `at` is at or after `since`; the 30-day purge doesn't change that. A tombstone that doesn't match stays. One case attributes wider: the purge lets an adult hold's mark replace another rule's tombstone (never the floor's). If it's in the set, it's re-judged like the rest, and the other rule holds it again when it's fetched.
-- **Recorded when.** At every start, and after every filter change once the engine is reloaded (`FiltersApi::undo_stand_ins`): the rows the engine's load found failing closed are merged into the record, keeping the earliest time. `since` is the load's time, before any batch is judged on that engine, so every hold the stand-in makes is at `since` or later.
-- **Only from this version on.** The version that can't read the row writes the record. A rollback to a version from before this slice records nothing, and the manual steps in #357's file still apply to holds made under it.
+## Recording which rows failed closed
+- **What was missing:** which rows failed closed, and when, across restarts. #357 kept that in memory only (`Engine::unreadable`, reset on restart), so after an upgrade back nothing knew.
+- **Where it's kept now:** one `settings` row, `filter.stand_ins` (`lodestar_filter::load::StandIns`). It's a value under a new key in an existing table, not a schema change.
+  - **One entry per row that fails closed:** its label, the time it was first found (`since`), and, once it no longer fails closed, the time that was first seen (`until`). Example: `U-3@1762041600 C-2@1762045200~1762090000`.
+  - **Labels and times only, never an item,** so it isn't the record of releases that §20.11 rules out. #357's file says these labels are never stored; that no longer holds for this record.
+  - Labels this version doesn't know are kept as they are.
+- **When it's updated:** at every start, and after every filter change once the engine is reloaded (`FiltersApi::undo_stand_ins`).
+  - `since` is the load's time, before any batch is judged on that engine.
+  - A rule entry counts as recovered only once the stored row reads (or is gone), checked in the store, so an engine that hasn't loaded the rules never releases anything.
+- **Only from this version on.** The version that can't read the row is the one that writes the record. A rollback to a version from before this slice records nothing, and #357's manual steps still apply to holds made under it.
 
-## Re-judging, never a blanket release
-- **When.** A recorded row that no longer fails closed (it reads again, was removed or switched off) is re-judged at the next start or change. It stays recorded until every one of its holds has been through, so a stop part-way redoes it. Only the shutdown stops it.
-- **How.** A chunk of 512 hold rows at a time, under the control store's lock. Filter changes reload the engine under the same lock (§20.13: the engine changes first, then release), so the engine can't change in the middle of a chunk. Each row is judged by `Engine::holds`: the full engine, with the floor (CS-1 and CS-8 hashes), lists, your rules with their exceptions, *Always allow* and CSX-5, packs and your classification rules, on what's kept of the torrent: its hash, and its quarantine's sealed name (a tombstone has none). A row the engine would quarantine or drop stays. Anything weaker (hide, demote, flag, nothing) is released.
-- **A release is judged again in full.** Releasing only makes the hash fetchable again. When intake fetches it, the writer judges the whole torrent, files and classification included, before anything is stored. A hold that only file evidence explains is made again then. This is how every release in Filters & Safety works (§20.10), and nothing is shown or stored meanwhile.
-- **Rows a writer replaced stay.** A row is deleted only if its hash, stored rule and `at` are still as read (`Store::release_rows`). A writer that held the hash again meanwhile, by any rule, keeps its hold. Intake's held set is updated under its own lock from the store (`HeldSet::remove_released`, as every release does).
-- **Adult labels.** When a `C-n` entry recovers, every stored torrent is queued to be classified again (`classify.requeue_all`, set before the entry leaves the record, so a stop still redoes it). Re-enrichment then relabels them with the readable rules. Removing an unreadable Is adult rule already re-queued; now its adult holds are re-judged too.
-- **Editing or removing an unreadable rule** still releases all of its holds first, as #357 did (`update_rule`, `remove_rule`, behind the password). The re-judge then finds nothing left for it.
+## A rule's stand-in (query, action or `unless` unreadable): re-judged
+- **Telling its holds apart:** a rule's stand-in only ever quarantines, under the rule's own id, and never as an adult hold (an adult hold is always an Adult-only core rule's). So its holds are exactly the `quarantine` rows of `U-n` with `since ≤ at ≤ until`.
+  - Before `since` they're the real rule's.
+  - After `until` the real rule, readable again, made them.
+  - Rows from the second `until` falls in can be either. They're re-judged, which costs at most a refetch.
+  - Tombstones are never a rule stand-in's, so none is touched.
+- **How they're re-judged:** a chunk of 512 at a time, under the control store's lock.
+  - Filter changes reload the engine under that same lock (§20.13: the engine changes first, then release), so the engine can't change partway through a chunk.
+  - Each row goes through `Engine::holds`, with its hash and its sealed name: the floor (CS-1 and CS-8 hashes), lists, *Always allow*, CSX-5, your rules with their exceptions, and your classification rules.
+  - A row the engine would quarantine or drop stays. Anything weaker (hide, demote, flag, nothing) is released.
+  - **A sealed name that won't open stays held:** it can't be judged.
+- **A release is judged again in full.** Releasing only makes the hash fetchable again. When intake fetches it, the writer judges the whole torrent, files, sizes and classification included, before anything is stored. Packs and rules that read those are applied then. This is how every release in Filters & Safety works (§20.10), and nothing is shown or stored in between.
+- **Rows a writer has replaced stay.** A row is deleted only if its hash, rule and `at` are still as read (`Store::release_rows`). Intake's held set follows the store under its own lock (`HeldSet::remove_released`).
+- **Editing or removing an unreadable rule** still releases all its holds first, as #357 did (behind the password). The re-judge then finds nothing left.
+
+## An Is adult classification rule's stand-in: adult holds stay
+- **They can't be told apart safely.** An adult hold (`…+adult`) is made when your **per-torrent correction** or a classification rule makes a torrent adult that detection didn't. Its row records neither which one did it nor which rule. The correction is deleted with the stored torrent, so a refetch can't make the hold again (§20.9; the purge comment in `crates/store/src/filter.rs` says the same).
+- **Re-judging them would be a loosening.** Re-judging by name would release a hold that your correction made while the rule was unreadable, and the Adult-only child-safety checks would never see that torrent again. That's not a readable rule's own decision, so per the brief it **stays held**, in quarantine and as a tombstone, before and after the 30-day purge.
+- **What happens instead:**
+  - Every stored torrent is queued to be classified again (`classify.requeue_all`, set before the entry leaves the record). Re-enrichment relabels them with the readable rules and your corrections.
+  - The adult holds made in the stand-in's window are **counted for review** in the Insights notice. The review queue releases them one at a time, with the adult-hold warning and the password (§20.11).
+  - Removing an unreadable Is adult rule does the same.
+- **Proposal for the runner (not built):** to release these automatically, an adult hold must record what made it adult.
+  - That means a change to the stored rule-id format, for example `CS-5a~C-2+adult` for a classification rule's hold and the plain `+adult` for a correction's. The `+adult` suffix keeps older versions' purge and adult-hold reads working.
+  - It also means the writer and reclassify paths passing the deciding rule's id (`ClassRules::decide` would return it).
+  - It's an on-disk format change across `pipeline` and `filter`, so it's a decision for the runner and owner, not this slice.
 
 ## Gates and surfacing
-- **No password for the automatic re-judge** (the runner's position, and my reading of §20.11 agrees). It releases only what the rules you wrote, now readable, wouldn't hold, and every release is judged again in full before it's stored. The stand-in was the engine guessing for a row it couldn't read, not a protection you chose. §20.11's password guards weakening *your* rules; this changes none of them. Removing, disabling or editing a rule still asks for it.
-- **No manual "release all stand-in holds" action.** It would release past what the rules hold, so it would need the password and an effect warning, and the review queue already releases single items that way.
-- **Insights notice `filter_stand_ins_rejudged`**, a warning for 7 days after a re-judge: `value` is how many were released, `rows` holds the one number still held. Stored in `settings` as `filter.stand_in_undo` (`{at} {released} {kept}`), counts only. One new string, en and zh, and a digest line.
-- **Log event `filters.stand_ins_rejudged`** (Info) with the counts `released` and `kept`. Never a hash, name or rule text.
+- **No password for the automatic re-judge.** That's the runner's position, and my reading of §20.11 agrees: it releases only rule stand-in quarantine that the rules you wrote, now readable, wouldn't hold, and each release is judged again in full before anything is stored. The stand-in was the engine's fallback for a row it couldn't read, not a protection you chose. Removing, disabling or editing a rule still asks for the password.
+- **No manual "release all stand-in holds" action.** The review queue already releases items one at a time, with the warning and the password.
+- **Insights notice `filter_stand_ins_rejudged`:** a warning for 7 days, also shown when a run stopped partway.
+  - `value` is how many were released.
+  - `rows` holds two numbers: how many are still held, and how many adult holds are left to review.
+  - It's stored as `filter.stand_in_undo` (`{at} {released} {kept} {review}`), counts only.
+  - New strings, en and zh: the notice and the log event's name and help. The digest gets a matching line.
+- **Log event `filters.stand_ins_rejudged`** (Info): the counts `released`, `kept` and `review`, never a hash, name or rule text.
 
 ## Budgets
-- The hot path is unchanged. The record is read and written at start and after each change: one `settings` row. Re-judging costs one judgement per hold in its set, once, after a row reads again. It runs in the change's request, or in the start's background task.
+- The hot path is unchanged. The record is one `settings` row, read and written at start and after each change.
+- A re-judge costs one judgement per row in a stand-in's window, once, after its row reads again, using the `quarantine_rule` index. It runs in the change's request, or in the start's background task.

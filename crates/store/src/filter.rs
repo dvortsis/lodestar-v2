@@ -122,24 +122,14 @@ pub struct Quarantined {
     pub adult_hold: bool,
 }
 
-/// One quarantine or tombstone row as stored ([`Store::holds_since`]),
-/// for releasing it only if it's unchanged ([`Store::release_rows`]).
+/// One quarantine row ([`Store::quarantine_between`]), for releasing it
+/// only if it's unchanged ([`Store::release_rows`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoldRow {
-    pub table: Held,
     pub hash: [u8; 20],
-    /// The stored rule id, with the adult-hold mark if it has one.
-    pub stored: String,
+    pub rule: String,
     pub at: i64,
-    /// The sealed name (quarantine only).
     pub sealed: Option<Vec<u8>>,
-}
-
-impl HoldRow {
-    /// The rule that made it, without the adult-hold mark.
-    pub fn rule(&self) -> &str {
-        self.stored.strip_suffix(ADULT_HOLD).unwrap_or(&self.stored)
-    }
 }
 
 /// One tombstone.
@@ -629,50 +619,39 @@ impl Store {
             .is_some())
     }
 
-    /// Holds made at or after `since` in `table`, oldest first, after the
-    /// `(at, hash)` cursor `after`: those of `rule` (plain or as an adult
-    /// hold), or with `rule` `None` every adult hold. What a stand-in for
-    /// an unreadable row may have made while it was loaded
-    /// (docs/decisions/2026-11-02-F-filter-standin-undo.md).
-    pub fn holds_since(
+    /// `rule`'s quarantine made in `since..=until`, oldest first, after the
+    /// `(at, hash)` cursor `after`: what a rule's stand-in made while its
+    /// row couldn't be read (docs/decisions/2026-11-02-F-filter-standin-undo.md).
+    /// A stand-in only quarantines, and never as an adult hold.
+    pub fn quarantine_between(
         &self,
-        table: Held,
-        rule: Option<&str>,
-        since: i64,
+        rule: &str,
+        (since, until): (i64, i64),
         after: Option<(i64, [u8; 20])>,
         limit: usize,
     ) -> Result<Vec<HoldRow>> {
-        let (name, sealed) = match table {
-            Held::Quarantine => ("quarantine", "sealed"),
-            Held::Tombstone => ("tombstones", "NULL"),
-        };
-        let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT hash, rule, at, {sealed} FROM {name}
-             WHERE at >= ?1
-               AND (CASE WHEN ?2 IS NULL THEN substr(rule, -length(?3)) = ?3
-                         ELSE rule IN (?2, ?2 || ?3) END)
-               AND (at, hash) > (?4, ?5)
-             ORDER BY at, hash LIMIT ?6"
-        ))?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT hash, at, sealed FROM quarantine
+             WHERE rule = ?1 AND at >= ?2 AND at <= ?3 AND (at, hash) > (?4, ?5)
+             ORDER BY at, hash LIMIT ?6",
+        )?;
         let (at, hash) = after.unwrap_or((i64::MIN, [0; 20]));
         let rows = stmt.query_map(
-            params![since, rule, ADULT_HOLD, at, &hash[..], limit as i64],
+            params![rule, since, until, at, &hash[..], limit as i64],
             |r| {
                 Ok((
                     r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<Vec<u8>>>(3)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<Vec<u8>>>(2)?,
                 ))
             },
         )?;
         let mut out = Vec::new();
         for row in rows {
-            let (hash, stored, at, sealed) = row?;
+            let (hash, at, sealed) = row?;
             out.push(HoldRow {
-                table,
                 hash: hash20(hash)?,
-                stored,
+                rule: rule.to_owned(),
                 at,
                 sealed,
             });
@@ -680,8 +659,22 @@ impl Store {
         Ok(out)
     }
 
-    /// Releases these hold rows if each is still as read: a row a writer
-    /// has replaced since (another rule, a newer time) stays. One
+    /// How many hashes adult holds made in `since..=until` hold, in
+    /// quarantine or as tombstones.
+    pub fn adult_holds_between(&self, (since, until): (i64, i64)) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(DISTINCT hash) FROM (
+                 SELECT hash, rule, at FROM quarantine
+                 UNION ALL SELECT hash, rule, at FROM tombstones
+             ) WHERE at >= ?1 AND at <= ?2 AND substr(rule, -length(?3)) = ?3",
+            params![since, until, ADULT_HOLD],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
+    /// Releases these quarantine rows if each is still as read: a row a
+    /// writer has replaced since (another rule, a newer time) stays. One
     /// transaction. Returns the hashes nothing holds any more, for intake.
     pub fn release_rows(&mut self, rows: &[HoldRow]) -> Result<Vec<[u8; 20]>> {
         if rows.is_empty() {
@@ -690,19 +683,12 @@ impl Store {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut free = Vec::new();
         {
-            let mut held = tx.prepare_cached(
-                "SELECT 1 FROM quarantine WHERE hash = ?1
-                 UNION ALL SELECT 1 FROM tombstones WHERE hash = ?1",
+            let mut del = tx.prepare_cached(
+                "DELETE FROM quarantine WHERE hash = ?1 AND rule = ?2 AND at = ?3",
             )?;
+            let mut held = tx.prepare_cached("SELECT 1 FROM tombstones WHERE hash = ?1")?;
             for r in rows {
-                let table = match r.table {
-                    Held::Quarantine => "quarantine",
-                    Held::Tombstone => "tombstones",
-                };
-                let mut del = tx.prepare_cached(&format!(
-                    "DELETE FROM {table} WHERE hash = ?1 AND rule = ?2 AND at = ?3"
-                ))?;
-                if del.execute(params![&r.hash[..], r.stored, r.at])? > 0
+                if del.execute(params![&r.hash[..], r.rule, r.at])? > 0
                     && !held.exists([&r.hash[..]])?
                 {
                     free.push(r.hash);
@@ -1163,18 +1149,20 @@ mod tests {
         assert!(s.quarantined(10).unwrap().is_empty());
     }
 
-    /// A stand-in's holds are read by rule, time and adult mark, and
+    /// A stand-in's quarantine is read by rule and time window, and
     /// released only while unchanged: a writer's newer hold stays.
     #[test]
-    fn holds_since_reads_and_release_rows_keeps_replaced_rows() {
+    fn quarantine_between_reads_and_release_rows_keeps_replaced_rows() {
         let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
         let rows: &[(&str, u8, &str, i64)] = &[
             ("quarantine", 1, "U-3", 5),
             ("quarantine", 2, "U-3", 20),
-            ("quarantine", 3, "U-3+adult", 21),
-            ("quarantine", 4, "CS-5a+adult", 22),
-            ("tombstones", 5, "CS-5a+adult", 23),
-            ("tombstones", 6, "U-4", 24),
+            ("quarantine", 3, "U-3", 21),
+            ("quarantine", 4, "U-3", 40),
+            ("quarantine", 5, "CS-5a+adult", 22),
+            ("tombstones", 6, "CS-5a+adult", 23),
+            ("tombstones", 5, "CS-5a+adult", 24),
+            ("tombstones", 7, "U-4", 24),
         ];
         for (table, h, rule, at) in rows {
             let cols = if *table == "quarantine" {
@@ -1190,19 +1178,17 @@ mod tests {
                 .unwrap();
         }
         let hashes = |v: &[HoldRow]| v.iter().map(|r| r.hash[0]).collect::<Vec<_>>();
-        let q = s
-            .holds_since(Held::Quarantine, Some("U-3"), 10, None, 10)
-            .unwrap();
-        assert_eq!(hashes(&q), [2, 3], "before `since` is the real rule's");
-        assert_eq!(q[1].rule(), "U-3");
+        let q = s.quarantine_between("U-3", (10, 30), None, 10).unwrap();
+        assert_eq!(hashes(&q), [2, 3], "only the window");
+        assert_eq!(
+            hashes(&s.quarantine_between("U-3", (5, 20), None, 10).unwrap()),
+            [1, 2]
+        );
         let page = s
-            .holds_since(Held::Quarantine, Some("U-3"), 10, Some((20, [2; 20])), 10)
+            .quarantine_between("U-3", (10, 30), Some((20, [2; 20])), 10)
             .unwrap();
         assert_eq!(hashes(&page), [3]);
-        let adult = s.holds_since(Held::Quarantine, None, 10, None, 10).unwrap();
-        assert_eq!(hashes(&adult), [3, 4]);
-        let tombs = s.holds_since(Held::Tombstone, None, 10, None, 10).unwrap();
-        assert_eq!(hashes(&tombs), [5]);
+        assert_eq!(s.adult_holds_between((10, 30)).unwrap(), 2);
         // A writer holds 2 again meanwhile: its row isn't the one read.
         s.conn
             .execute(
@@ -1210,9 +1196,8 @@ mod tests {
                 [&[2u8; 20][..]],
             )
             .unwrap();
-        let freed = s.release_rows(&[q[0].clone(), q[1].clone()]).unwrap();
+        let freed = s.release_rows(&q).unwrap();
         assert_eq!(freed, vec![[3; 20]]);
         assert!(s.held_among(&[[2; 20]]).unwrap()[0]);
-        assert_eq!(s.release_rows(&tombs).unwrap(), vec![[5; 20]]);
     }
 }

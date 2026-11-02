@@ -410,11 +410,12 @@ impl Engine {
 
     /// Whether this engine would hold back (quarantine or drop) a held
     /// torrent, judged from what's kept of it: its hash, and the name its
-    /// quarantine sealed (empty for a tombstone). Every layer judges it,
-    /// the floor, lists, your rules with their exceptions, packs and your
-    /// classification rules. Re-judging a stand-in's holds keeps those it
-    /// says yes to; one it releases is judged in full, files included,
-    /// when it's fetched again, before anything is stored
+    /// quarantine sealed. The floor, lists, *Always allow*, CSX-5, your
+    /// rules with their exceptions and your classification rules judge
+    /// it; packs and anything that reads files, sizes or classification
+    /// can't, without the torrent. Re-judging a stand-in's quarantine keeps
+    /// what it says yes to; one it releases is judged in full, files
+    /// included, when it's fetched again, before anything is stored
     /// (docs/decisions/2026-11-02-F-filter-standin-undo.md).
     pub fn holds(&self, hash: &[u8; 20], name: &str, now: i64) -> bool {
         let hashes = [*hash];
