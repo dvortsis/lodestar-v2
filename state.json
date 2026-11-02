@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T05:26:20Z",
+  "updated_at": "2026-11-02T05:45:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2362,7 +2362,8 @@
       "head": "84821101",
       "review": "Opus MERGE at dd72d579 (one docs nit sent); merge after R1 soak verdict; archive session once nit head is green",
       "session_archived": "2026-11-02T05:26:20Z",
-      "notes_runner2": "runner watches #377 CI (docs-only last commit; re-run once on flake) and merges after R1 verdict"
+      "notes_runner2": "runner watches #377 CI (docs-only last commit; re-run once on flake) and merges after R1 verdict",
+      "ci": "green at 84821101, mergeable clean; merge after R1"
     },
     "status-connector": {
       "status": "merged",
@@ -2387,10 +2388,13 @@
       "migration": "V14"
     },
     "CR-COL-3": {
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "session": "session_01MMjhnAf2DUuJQnN2TePHc1",
-      "launched": "2026-11-02T04:47:25Z"
+      "launched": "2026-11-02T04:47:25Z",
+      "pr": 378,
+      "head": "0ecf8762",
+      "notes_runner": "Opus review CHANGES fixed and runner-verified at 0ecf8762; CI green; merge after rehearsal summary (~11:15-11:45Z)."
     },
     "dashboard-yaml": {
       "status": "merged",
@@ -3515,6 +3519,12 @@
       "state": "to-send",
       "added": "2026-11-02T05:07:22Z",
       "text": "#376 merged: runner/dashboard.yaml feeds the status connector live; new CI drift check (Status connector / test), not required (adding it to the ruleset is your call). Build plan stays hand-written."
+    },
+    {
+      "id": "flag-cr-col-3",
+      "state": "to-send",
+      "added": "2026-11-02T05:45:57Z",
+      "text": "CR-COL-3 (#378): 17 stricter readings of CR-SPEC (docs/decisions/2026-11-02-CR-COL-3.md); collector logs in with an admin password file (refused unless mode 0600-ish and loopback/private URL), since API keys cannot reach settings/Insights; later option: export preset/pause state in /metrics so no login is needed; proposed dht_switch gauge. Rehearsal in the cloud cannot be valid (no NTP/UDP); the first experiment-host rehearsal must show the healthy CR-ADM permit-identity check."
     }
   ],
   "external_gates": {
