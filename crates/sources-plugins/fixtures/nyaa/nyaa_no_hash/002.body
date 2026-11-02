@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:nyaa="https://nyaa.si/xmlns/nyaa" version="2.0">
+	<channel>
+		<title>Nyaa - Home - Torrent File RSS</title>
+		<description>RSS Feed for Home</description>
+		<link>https://nyaa.si/</link>
+		<atom:link href="https://nyaa.si/?page=rss" rel="self" type="application/rss+xml" />
+		<item>
+			<title>Tears of Steel (No Hash)</title>
+			<link>https://nyaa.si/download/2000010.torrent</link>
+			<guid isPermaLink="true">https://nyaa.si/view/2000010</guid>
+			<nyaa:seeders>1</nyaa:seeders>
+			<nyaa:categoryId>4_1</nyaa:categoryId>
+			<nyaa:size>700 MiB</nyaa:size>
+		</item>
+		<item>
+			<title>Tears of Steel (2012) [720p]</title>
+			<link>https://nyaa.si/download/2000011.torrent</link>
+			<guid isPermaLink="true">https://nyaa.si/view/2000011</guid>
+			<pubDate>Mon, 02 Nov 2026 09:00:00 -0000</pubDate>
+			<nyaa:seeders>12</nyaa:seeders>
+			<nyaa:leechers>3</nyaa:leechers>
+			<nyaa:downloads>40</nyaa:downloads>
+			<nyaa:infoHash>99887766554433221100ffeeddccbbaa99887766</nyaa:infoHash>
+			<nyaa:categoryId>4_1</nyaa:categoryId>
+			<nyaa:category>Category</nyaa:category>
+			<nyaa:size>700.0 MiB</nyaa:size>
+			<nyaa:comments>0</nyaa:comments>
+			<nyaa:trusted>No</nyaa:trusted>
+			<nyaa:remake>No</nyaa:remake>
+			<description><![CDATA[#2000011 | Tears of Steel (2012) [720p]]]></description>
+		</item>
+	</channel>
+</rss>
