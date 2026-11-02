@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T05:18:52Z",
+  "updated_at": "2026-11-02T05:26:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2337,11 +2337,13 @@
       "merge": "e528c369"
     },
     "F-normalize-invisible": {
-      "status": "queued",
+      "status": "running",
       "model": "opus",
       "note": "After X-strip-format-chars merges: crates/filter/src/normalize.rs invisible() misses U+2028/2029, tag chars U+E0000-E007F, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+FFF9-FFFB, U+110BD/13430/1BCA0/1D173 ranges; use lodestar_metainfo::hidden_char. Tightening; /security-review; §20.8 budget.",
       "brief": "briefs/F-normalize-invisible.md",
-      "notes": "next free slot"
+      "notes": "next free slot",
+      "session": "session_01MMjhnBREHKxLcJVVxu1dip",
+      "launched": "2026-11-02T05:26:20Z"
     },
     "P-master-plan-r3": {
       "status": "merged",
@@ -2350,15 +2352,17 @@
       "notes": "owner planning session; §2.29 (#357 in v0.5.1 as rc.3 = rc.2 + #357 exactly; runner ruling: #367 only on owner yes). phase_total 4 in slices.yaml; HANDOVER.md protocol; watchdog prompt updated 03:39Z."
     },
     "R-rc3-backport": {
-      "status": "in review",
+      "status": "awaiting-R1",
       "model": "opus",
       "brief": "briefs/R-rc3-backport.md",
       "notes": "ladder rung 1. Trial cherry-pick of 736a3028 onto release/v0.5.1 conflicts in api/filters.rs, metrics.md, .size-limit.mjs, insights messages en/zh. PR against release/v0.5.1, full-ci, /security-review; runner merges after R1 verdict. Launch on the first free slot.",
       "session": "session_01MMjhn8jpt1tX7E6SGauJH8",
       "launched": "2026-11-02T03:52:04Z",
       "pr": 377,
-      "head": "dd72d579",
-      "review": "Opus MERGE at dd72d579 (one docs nit sent); merge after R1 soak verdict; archive session once nit head is green"
+      "head": "84821101",
+      "review": "Opus MERGE at dd72d579 (one docs nit sent); merge after R1 soak verdict; archive session once nit head is green",
+      "session_archived": "2026-11-02T05:26:20Z",
+      "notes_runner2": "runner watches #377 CI (docs-only last commit; re-run once on flake) and merges after R1 verdict"
     },
     "status-connector": {
       "status": "merged",
