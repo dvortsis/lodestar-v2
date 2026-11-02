@@ -1,40 +1,55 @@
 # F-normalize-invisible decisions (#381)
 
-A content-safety follow-up to `2026-11-02-X-strip-format-chars.md` (#373), which listed format characters the filter's normalization (§20.4) didn't ignore. A character that renders as nothing inside a word, in a name that reaches the filter without the feed cleaning (DHT names, imports), splits that word past a term rule while it still looks whole.
+A content-safety follow-up to `2026-11-02-X-strip-format-chars.md` (#373), which listed format characters the filter's normalization (§20.4) didn't ignore. A character that renders as nothing can sit inside a word in a name that reaches the filter without the feed cleaning (DHT names, imports). There it splits the word past a term rule while the word still looks whole.
 
-- **`invisible()` in `crates/filter/src/normalize.rs` now ignores every Cf character that renders as nothing.**
-  - "Renders as nothing" is Unicode's Default_Ignorable_Code_Point, the set browsers and HarfBuzz hide. The old hand-picked list was already that set, minus a few ranges.
-  - It reuses `lodestar_metainfo::format_char` (the Unicode 17.0 Cf table from #373) and excludes the Cf characters that show. A Cf character a later table adds is ignored by default, and a test that sorts every Cf character into ignored or visible names it.
-  - **Newly ignored:** U+1BCA0–1BCA3 (shorthand format controls), U+1D173–1D17A (musical format controls), and the tag block U+E0000–E007F, assigned or not.
-  - **Kept, unchanged:** everything it ignored before, including the non-Cf fillers U+034F, U+115F, U+1160, U+17B4, U+17B5, U+3164, U+FE00–FE0F and U+FFA0.
+- **`invisible()` in `crates/filter/src/normalize.rs` now ignores every character that renders as nothing.**
+  - That is Unicode's Default_Ignorable_Code_Point, the set browsers and HarfBuzz hide. The old hand-picked list was already that set, minus a few ranges.
+  - It reuses `lodestar_metainfo::format_char` (the Unicode 17.0 Cf table from #373) and excludes the Cf characters that show.
+  - **Newly ignored** (`newly_ignored()`):
+    - U+2065 and U+FFF0–FFF8 (unassigned, default-ignorable);
+    - U+1BCA0–1BCA3 (shorthand format controls) and U+1D173–1D17A (musical format controls);
+    - U+E0000–E0FFF, the tags and the rest of plane 14 outside the variation selectors. The variation selectors are combining marks, which were already dropped.
+  - **Kept:** everything it ignored before, including the non-Cf fillers U+034F, U+115F, U+1160, U+17B4, U+17B5, U+3164, U+FE00–FE0F and U+FFA0.
   - `lodestar-metainfo` was already in the filter's dependency graph (through the store and search crates), so the new direct dependency adds no crate.
-- **The Cf characters that show stay word breaks, as before.**
-  - These were on the #373 list: U+0600–0605, U+06DD, U+070F, U+0890–0891, U+08E2, U+110BD and U+110CD (prepended concatenation marks), U+FFF9–FFFB (interlinear annotation) and U+13430–1343F (Egyptian hieroglyph controls). U+2028/2029 (line and paragraph separators, not Cf) were on it too.
-  - None of them is default-ignorable. They render as a glyph, a box or a line break, so they split a word visibly, like punctuation does.
-  - Ignoring them would join two words a reader sees apart. `alpha<U+2028>beta` would read as `alphabeta`, and a rule for `beta` would miss it: that would loosen matching. The fresh review found this in the first version of this PR, which followed the brief's list.
-  - A test pins `alpha<c>beta` to read as `alpha beta` for each of them.
-- **It only tightens.**
-  - Each newly ignored character renders as nothing, so a word it splits now reads as the word a reader sees.
-  - Two words with only such a character between them also read as one word. That is what a reader sees too, and someone writing a name could type the joined word directly. The old list already worked this way.
+- **Never looser than before, by a two-reading rule** (the runner's design, from its review).
+  - Ignoring a character that used to be a word break also joins two words. On `main`, `a<U+E0001>girl` read as `a` `girl`, so a term `girl` hit. Ignored, it reads as `agirl`, and `girl` would miss. Someone writing a name gains nothing from that, but the same bytes must never match less than they did.
+  - A name or path that holds a newly ignored character is therefore read twice:
+    - once with the characters ignored;
+    - once with them as word breaks: `Tokenizer::splitting`, the matching before.
+  - **Core terms hit if they hit in either reading.**
+    - Each reading is judged on its own: the first switched-on hit that no exception covers.
+    - The stronger of the two decisions stands, and the earlier reading's wins a tie (`Engine::below_overrides`, `Core::verdict`).
+    - `Core::pattern_hits` returns the hits of both readings.
+  - **Override and Neutralize keyword entries release, so one applies only if it matches in both readings** (`rules::keyword_in`).
+    - The keyword is read the same way in each.
+    - In the earlier reading, a Neutralize entry neutralizes its word in that reading (`rules::neutral_split_set`).
+    - A Neutralize keyword that is more than one word in the earlier reading couldn't have been saved then, so it never applies.
+  - **What doesn't change.** User query rules and their `unless`, allow entries and packs read through the search tokenizer (`fasttok`). They are unchanged and read as before.
+  - **Cost.** ASCII text and text without a newly ignored character take one pass as before. Only a name or path that holds one pays for the second reading, with a tokenizer of its own.
+  - **Tests:**
+    - Unit tests check that the splitting reader gives exactly the tokens of the text with each newly ignored character a space, which is the matching before.
+    - A walk over every code point checks that `newly_ignored()` is exactly what `invisible()` ignores that the old list didn't.
+    - `tests/two_readings.rs` checks that inserting newly ignored characters never makes a decision weaker than with them as spaces, with Override and Neutralize entries in play.
+    - Disabling either half of the rule makes that test fail.
+- **Deviation from the brief, for the owner: the Cf characters that show stay word breaks.**
+  - The brief listed these from #373: U+0600–0605, U+06DD, U+070F, U+0890–0891, U+08E2, U+110BD and U+110CD (prepended concatenation marks), U+FFF9–FFFB (interlinear annotation), U+13430–1343F (Egyptian hieroglyph controls) and U+2028/2029 (line and paragraph separators, not Cf).
+  - None of them is default-ignorable. They render as a glyph, a box or a line break, so they split a word visibly, like punctuation.
+  - Ignoring them alone would join words a reader sees apart, which loosens matching. The fresh review found this in the first version, and the runner agreed to keep them as breaks.
+  - Tests pin `alpha<c>beta` to read as `alpha beta` for each of them.
+  - **Follow-up for the runner:** extend the two-reading rule to these characters as well, so a word they split also reads joined. U+0605 and U+08E2 are the strongest case: they are marks placed above the following characters, so the split hardly shows.
 - **No stored artefact that decides a verdict holds the normalized form.**
   - User rules, keywords, overrides, exceptions and allow entries are stored as text (`filter_rules`, `override_list`, `filter_exceptions`) and normalized on each load, the same way torrent text is.
-  - Every rule that parsed before still parses. Query parsing doesn't go through `invisible()`. A keyword's validation counts its words, and joining never adds words. None of the newly ignored characters is a letter or digit, so no keyword loses its words, and a one-word Neutralize keyword stays one word.
-  - `filter_fixtures` keeps a core rule's hashed examples as normalized tokens (`core::Fixture::encode`), because the name itself isn't kept. An example saved from a name that held a newly ignored character keeps its old split tokens.
-    - Fixtures only feed the passing and failing counts on the fixtures page (`FiltersApi::fixtures`), never a verdict. At worst one example is counted wrongly.
-    - They can't be worked out again without the name, and this slice doesn't own the store, so they're left as they are.
+  - Every rule that parsed before still parses. Query parsing doesn't go through `invisible()`. A keyword's validation counts its words in the joined reading, and joining never adds words.
+  - `filter_fixtures` keeps a core rule's hashed examples as normalized tokens (`core::Fixture::encode`), because the name itself isn't kept. An example saved from a name with a newly ignored character keeps the earlier reading's tokens.
+    - Fixtures only feed the passing and failing counts on the fixtures page (`FiltersApi::fixtures`), never a verdict.
+    - They can't be worked out again without the name, so they're left as they are.
   - `filter.stand_ins` and the unreadable-row list are keyed by rule id, and the engine's version is a counter. Neither depends on tokens.
-  - The shipped core and pack term lists are hashes of tokens (`examples/hash_terms.rs`).
-    - A source term that held one of the newly ignored characters would have been hashed as split words.
+  - The shipped core and pack term lists are hashes of tokens (`examples/hash_terms.rs`), made in the joined reading.
+    - A source term with a newly ignored character would hash differently now. The earlier reading still sees the split words as text, but the list holds only the new hashes.
     - The plain lists are kept out of the repository, so this slice can't check them.
     - The runner should have the list keeper confirm that no source term holds a format or tag character.
-- **The reference tokenizer test** (`tests/normalize_reference.rs`) writes the same set out on its own, so it doesn't share the code under test's table.
-  - Its generator now includes newly ignored and visible characters, so the test still checks that the planned tokenizer gives exactly the reference's tokens.
-  - `format_char` itself is checked against `unicode-properties`, but a Cf character added in a newer Unicode only shows up once that dev-dependency is bumped.
-- **Tests:**
-  - One walks every code point. It checks that `invisible()` is exactly the set written out in the test, that every Cf character is either ignored or a known visible one, and that `hel<c>lo` gives the tokens of `hello` for every ignored character.
-  - Golden cases cover both ends of each newly ignored range, and each visible range.
-  - A property test inserts any ignored character anywhere in a text. The tokens never change, and neither does whether a keyword matches.
+- **The reference tokenizer test** (`tests/normalize_reference.rs`) writes the ignored set out on its own, so it doesn't share the table of the code under test. Its generator includes newly ignored and visible characters.
+  - `format_char` is checked against `unicode-properties`. A Cf character added in a newer Unicode only shows up once that dev-dependency is bumped, and the walk over every code point then names it.
 - **Out of scope: the search tokenizer.** `crates/search/src/tokenizer.rs` treats every Cf character as a word break, U+200B and U+00AD included.
-  - User query rules read through it (`fasttok`), so their words, phrases and NEAR windows still split on any of them.
-  - Only the core, pack terms and keyword entries read through `normalize`.
+  - User query rules read through it, so their words, phrases and NEAR windows still split on all of them.
   - Changing it is the separate follow-up X-tokenizer-cf, which may need an index rebuild. That follow-up should drop only the default-ignorable characters, as this one does.

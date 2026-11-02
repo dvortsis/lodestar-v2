@@ -185,17 +185,31 @@ impl Override {
     /// torrent: a keyword's tokens, and the neutralized word, its hash for
     /// the core and its key for queries ([`crate::matcher::neutral_key`]).
     fn prepare(&self) -> Prepared {
-        let keyword = match &self.what {
-            Match::Keyword(k) => keyword_tokens(k),
-            _ => Vec::new(),
+        let (keyword, keyword_split) = match &self.what {
+            Match::Keyword(k) => {
+                let (joined, split) = (keyword_tokens(k), keyword_tokens_split(k));
+                let split = (split != joined).then_some(split);
+                (joined, split)
+            }
+            _ => (Vec::new(), None),
         };
+        // A Neutralize keyword is one word. One that reads as more in the
+        // earlier reading couldn't have been saved then, so it doesn't
+        // apply ([`override_matches`]).
+        let never = self.strength == Strength::Neutralize
+            && keyword_split.as_ref().is_some_and(|s| s.len() > 1);
         let neutral = match (&self.what, self.strength) {
             (Match::Keyword(k), Strength::Neutralize) => keyword
                 .first()
                 .map(|t| (t.hash, crate::matcher::neutral_key(k))),
             _ => None,
         };
-        Prepared { keyword, neutral }
+        Prepared {
+            keyword,
+            keyword_split,
+            never,
+            neutral,
+        }
     }
 }
 
@@ -205,6 +219,12 @@ impl Override {
 pub(crate) struct Prepared {
     /// A keyword entry's tokens ([`keyword_tokens`]).
     keyword: Vec<Token>,
+    /// Its tokens in the earlier reading ([`keyword_tokens_split`]), if
+    /// they differ.
+    keyword_split: Option<Vec<Token>>,
+    /// A Neutralize entry that is more than one word in the earlier
+    /// reading: it never applies.
+    never: bool,
     pub(crate) neutral: Option<(u64, String)>,
 }
 
@@ -287,6 +307,20 @@ pub(crate) fn keyword_tokens(k: &str) -> Vec<Token> {
     out
 }
 
+/// [`keyword_tokens`] in the earlier reading, with the characters
+/// [`normalize::Tokenizer::splitting`] names as word breaks.
+fn keyword_tokens_split(k: &str) -> Vec<Token> {
+    let mut all = Vec::new();
+    normalize::Tokenizer::splitting().text(k, &mut all);
+    let mut out: Vec<Token> = Vec::new();
+    for t in all {
+        if out.iter().all(|o| o.pos != t.pos) {
+            out.push(t);
+        }
+    }
+    out
+}
+
 /// Whether the keyword's words appear in a row in the text.
 #[cfg(test)]
 fn has_keyword(words: &[Token], text: &str) -> bool {
@@ -312,28 +346,49 @@ pub(crate) fn in_a_row(words: &[Token], tokens: &[Token]) -> bool {
 /// Whether a [`Match`] covers the torrent.
 pub(crate) fn matches(what: &Match, item: &Item, doc: &Doc) -> bool {
     match what {
-        Match::Keyword(k) => keyword_in(&keyword_tokens(k), doc),
-        _ => matches_prepared(what, &[], item, doc),
+        Match::Keyword(k) => {
+            let split = keyword_tokens_split(k);
+            keyword_in(&keyword_tokens(k), Some(&split), doc)
+        }
+        _ => matches_prepared(what, &[], None, item, doc),
     }
 }
 
 /// [`matches`] for an entry whose keyword tokens are worked out.
 pub(crate) fn override_matches(o: &Override, p: &Prepared, item: &Item, doc: &Doc) -> bool {
-    matches_prepared(&o.what, &p.keyword, item, doc)
+    !p.never && matches_prepared(&o.what, &p.keyword, p.keyword_split.as_deref(), item, doc)
 }
 
-fn matches_prepared(what: &Match, keyword: &[Token], item: &Item, doc: &Doc) -> bool {
+fn matches_prepared(
+    what: &Match,
+    keyword: &[Token],
+    keyword_split: Option<&[Token]>,
+    item: &Item,
+    doc: &Doc,
+) -> bool {
     match what {
         Match::Hashes(hs) => item.hashes.iter().any(|h| hs.contains(h)),
         Match::Payload(sig) => payload_sig(item.files).is_some_and(|p| p.sig == *sig),
-        Match::Keyword(_) => keyword_in(keyword, doc),
+        Match::Keyword(_) => keyword_in(keyword, keyword_split, doc),
         Match::Query(q) => doc.matches(q, &[]),
     }
 }
 
-/// Whether a keyword's words are in a row in the name or a path.
-fn keyword_in(words: &[Token], doc: &Doc) -> bool {
-    doc.normalized().any(|t| in_a_row(words, t))
+/// Whether a keyword's words are in a row in the name or a path, in both
+/// readings: keyword entries release, so one applies only where it would
+/// have applied before characters once read as word breaks were ignored
+/// (docs/decisions/2026-11-02-F-normalize-invisible.md). `split` is the
+/// keyword in the earlier reading, if it differs.
+fn keyword_in(words: &[Token], split: Option<&[Token]>, doc: &Doc) -> bool {
+    if !doc.normalized().any(|t| in_a_row(words, t)) {
+        return false;
+    }
+    let words = split.unwrap_or(words);
+    match doc.normalized_split() {
+        Some(mut texts) => texts.any(|t| in_a_row(words, t)),
+        None if split.is_some() => doc.normalized().any(|t| in_a_row(words, t)),
+        None => true,
+    }
 }
 
 /// The neutral sets of the active Neutralize entries.
@@ -350,6 +405,19 @@ pub(crate) fn neutral_sets(entries: &[&Prepared]) -> (TermSet, Vec<String>) {
         }
     }
     (set, words)
+}
+
+/// The neutral set of the active Neutralize entries in the earlier
+/// reading ([`keyword_tokens_split`]), for the core's pass over it.
+pub(crate) fn neutral_split_set(entries: &[&Prepared]) -> TermSet {
+    let mut set = TermSet::default();
+    for e in entries.iter().filter(|e| e.neutral.is_some()) {
+        let words = e.keyword_split.as_ref().unwrap_or(&e.keyword);
+        if let Some(t) = words.first() {
+            set.insert(t.hash);
+        }
+    }
+    set
 }
 
 #[cfg(test)]

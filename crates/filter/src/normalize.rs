@@ -104,9 +104,10 @@ fn confusable(c: char) -> char {
 /// those that render as nothing (Unicode's Default_Ignorable_Code_Point,
 /// which browsers and HarfBuzz hide). That is every format character
 /// (category Cf, [`lodestar_metainfo::format_char`]) except the
-/// [`visible_format`] ones, the tag block U+E0000–E007F (assigned or
-/// not), and fillers that show as nothing (Hangul fillers, Khmer inherent
-/// vowels, variation selectors, the combining grapheme joiner).
+/// [`visible_format`] ones; U+2065, U+FFF0–FFF8 and U+E0000–E0FFF (the
+/// tags and plane 14's unassigned code points); and fillers that show as
+/// nothing (Hangul fillers, Khmer inherent vowels, variation selectors,
+/// the combining grapheme joiner).
 #[inline]
 fn invisible(c: char) -> bool {
     // Nothing below the soft hyphen is invisible.
@@ -122,9 +123,37 @@ fn invisible(c: char) -> bool {
             | '\u{17B5}'
             | '\u{3164}'
             | '\u{FE00}'..='\u{FE0F}'
+            | '\u{2065}'
             | '\u{FFA0}'
-            | '\u{E0000}'..='\u{E007F}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{E0000}'..='\u{E0FFF}'
     ) || (lodestar_metainfo::format_char(c) && !visible_format(c))
+}
+
+/// The characters [`invisible`] ignores that the matching before
+/// F-normalize-invisible read as word breaks. A text holding one is read
+/// both ways (`docs/decisions/2026-11-02-F-normalize-invisible.md`): a
+/// term hits if it hits in either reading, and an entry that releases
+/// applies only if it matches in both, so no text matches less than it
+/// did. Variation selectors (U+E0100–E01EF) are combining marks, dropped
+/// either way.
+fn newly_ignored(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2065}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
+}
+
+/// Whether some text reads differently with [`newly_ignored`] characters
+/// as word breaks: only non-ASCII text that holds one.
+pub(crate) fn splits<'t>(texts: impl IntoIterator<Item = &'t str>) -> bool {
+    texts
+        .into_iter()
+        .any(|t| !t.is_ascii() && t.chars().any(newly_ignored))
 }
 
 /// Format characters that show: the prepended concatenation marks (Arabic
@@ -220,9 +249,21 @@ pub struct Tokenizer {
     /// [`paths_apart`]'s folders, kept so their buffers carry over
     /// between torrents.
     folders: [Paused; FOLDERS],
+    /// Reads [`newly_ignored`] characters as word breaks, as the matching
+    /// before them did ([`Tokenizer::splitting`]).
+    split: bool,
 }
 
 impl Tokenizer {
+    /// A tokenizer that reads [`newly_ignored`] characters as word breaks:
+    /// the earlier reading, kept for texts that hold one ([`splits`]).
+    pub(crate) fn splitting() -> Tokenizer {
+        Tokenizer {
+            split: true,
+            ..Tokenizer::default()
+        }
+    }
+
     /// Appends the tokens of `text` to `out`, positions starting at 0.
     pub fn text(&mut self, text: &str, out: &mut Vec<Token>) {
         self.begin(out.len(), 0);
@@ -293,7 +334,13 @@ impl Tokenizer {
             }
         } else {
             for c in text.nfkd() {
-                if is_combining_mark(c) || invisible(c) {
+                if is_combining_mark(c) {
+                    continue;
+                }
+                if invisible(c) {
+                    if self.split && newly_ignored(c) {
+                        self.end_word(out);
+                    }
                     continue;
                 }
                 let c = match confusable(c) {
@@ -762,9 +809,10 @@ mod tests {
         '\u{110CD}',
     ];
 
-    /// `invisible` is exactly the default-ignorable characters among Cf,
-    /// the tag block and the fillers, written out here on their own, and
-    /// every Cf character is either ignored or a known visible one.
+    /// `invisible` is exactly Unicode's default-ignorable characters,
+    /// written out here on their own; every Cf character is either ignored
+    /// or a known visible one; and [`newly_ignored`] is exactly what it
+    /// ignores that the matching before didn't.
     #[test]
     fn invisible_is_exactly_the_default_ignorables() {
         let expected = |c: char| {
@@ -778,20 +826,48 @@ mod tests {
                     | '\u{180E}'
                     | '\u{200B}'..='\u{200F}'
                     | '\u{202A}'..='\u{202E}'
+                    | '\u{2060}'..='\u{206F}'
+                    | '\u{3164}'
+                    | '\u{FE00}'..='\u{FE0F}'
+                    | '\u{FEFF}'
+                    | '\u{FFA0}'
+                    | '\u{FFF0}'..='\u{FFF8}'
+                    | '\u{1BCA0}'..='\u{1BCA3}'
+                    | '\u{1D173}'..='\u{1D17A}'
+                    | '\u{E0000}'..='\u{E0FFF}'
+            )
+        };
+        // What the matching before ignored, verbatim.
+        let before = |c: char| {
+            matches!(
+                c,
+                '\u{00AD}'
+                    | '\u{034F}'
+                    | '\u{061C}'
+                    | '\u{115F}'
+                    | '\u{1160}'
+                    | '\u{17B4}'
+                    | '\u{17B5}'
+                    | '\u{180E}'
+                    | '\u{200B}'..='\u{200F}'
+                    | '\u{202A}'..='\u{202E}'
                     | '\u{2060}'..='\u{2064}'
                     | '\u{2066}'..='\u{206F}'
                     | '\u{3164}'
                     | '\u{FE00}'..='\u{FE0F}'
                     | '\u{FEFF}'
                     | '\u{FFA0}'
-                    | '\u{1BCA0}'..='\u{1BCA3}'
-                    | '\u{1D173}'..='\u{1D17A}'
-                    | '\u{E0000}'..='\u{E007F}'
             )
         };
         for c in (0..=0x10FFFF).filter_map(char::from_u32) {
             let at = c as u32;
             assert_eq!(invisible(c), expected(c), "U+{at:04X}");
+            // The splitting reader breaks words exactly where the
+            // matching before did.
+            if !is_combining_mark(c) {
+                let newly = invisible(c) && !before(c);
+                assert_eq!(newly_ignored(c), newly, "U+{at:04X}");
+            }
             if lodestar_metainfo::format_char(c) {
                 assert!(invisible(c) || visible_format(c), "U+{at:04X} is Cf");
             }
@@ -808,6 +884,9 @@ mod tests {
     fn newly_ignored_ranges_join_a_word() {
         let alpha_beta = crate::rules::keyword_tokens("alpha beta");
         for c in [
+            '\u{2065}',
+            '\u{FFF0}',
+            '\u{FFF8}',
             '\u{1BCA0}',
             '\u{1BCA3}',
             '\u{1D173}',
@@ -817,6 +896,10 @@ mod tests {
             '\u{E0002}',
             '\u{E0020}',
             '\u{E007F}',
+            '\u{E0080}',
+            '\u{E00FF}',
+            '\u{E01F0}',
+            '\u{E0FFF}',
         ] {
             let at = c as u32;
             assert!(has(&format!("hel{c}lo"), "hello", 0), "U+{at:04X}");
@@ -895,6 +978,22 @@ mod tests {
                 crate::rules::in_a_row(&words, &plain),
                 crate::rules::in_a_row(&words, &hidden)
             );
+        }
+
+        /// The splitting reader gives exactly the tokens of the text with
+        /// each newly ignored character a space: the matching before.
+        #[test]
+        fn the_splitting_reader_reads_as_before(
+            text in "([a-e]|[a-e]{3,6}|[0-9]{1,3}|[@$]|é|ｂ|e\u{301}|[ ./_-]|\u{200B}|\u{2065}|\u{FFF0}|\u{1BCA0}|\u{1D173}|\u{E0001}|\u{E0041}|\u{E0FFF}){0,16}",
+        ) {
+            let mut split = Vec::new();
+            Tokenizer::splitting().text(&text, &mut split);
+            let spaced: String = text
+                .chars()
+                .map(|c| if newly_ignored(c) { ' ' } else { c })
+                .collect();
+            proptest::prop_assert_eq!(split, toks(&spaced));
+            proptest::prop_assert_eq!(splits([text.as_str()]), text != spaced);
         }
 
         /// Wherever a path is marked, its segments read apart give the

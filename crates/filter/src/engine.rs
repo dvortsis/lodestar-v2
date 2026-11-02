@@ -257,12 +257,14 @@ impl Engine {
             shadow: shadow_overrides,
         } = self.released(item, doc, now);
         let (neutral_set, neutral_words) = rules::neutral_sets(&neutral);
+        let neutral_split = rules::neutral_split_set(&neutral);
         if !overridden {
             v.decision = self.below_overrides(
                 item,
                 facts,
                 doc,
                 &neutral_set,
+                &neutral_split,
                 &neutral_words,
                 now,
                 &mut v.shadow,
@@ -287,14 +289,25 @@ impl Engine {
         facts: Option<&Facts>,
         doc: &Doc,
         neutral: &TermSet,
+        neutral_split: &TermSet,
         neutral_words: &[String],
         now: i64,
         shadow: &mut Vec<Decision>,
     ) -> Option<Decision> {
-        for hit in self.core.pattern_hits_read(item, neutral, doc.read()) {
-            if hit.on && !self.excepted(RuleRef::Core(hit.rule), item, doc) {
-                return Some(hit.into());
-            }
+        // A text that holds a character matching once read as a word
+        // break is read both ways, each with its own exceptions, and the
+        // stronger hit stands: nothing matches less than it did.
+        let first = |hits: Vec<crate::core::Hit>| {
+            hits.into_iter()
+                .find(|h| h.on && !self.excepted(RuleRef::Core(h.rule), item, doc))
+        };
+        let hit = first(self.core.pattern_hits_read(item, neutral, doc.read()));
+        let hit = match self.core.pattern_hits_split(item, neutral_split) {
+            Some(split) => crate::core::stronger(hit, first(split)),
+            None => hit,
+        };
+        if let Some(hit) = hit {
+            return Some(hit.into());
         }
         // Neutralizing only takes evidence away: an allow query must
         // match without the neutralized words too, so one that needs a

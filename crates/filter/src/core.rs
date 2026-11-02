@@ -517,6 +517,14 @@ const PLAIN: &[(u16, &[&str])] = &[
 
 /// Every term the core reads, compiled into one map: one lookup per
 /// token.
+/// The hit with the stronger action, the first on a tie.
+pub(crate) fn stronger(first: Option<Hit>, second: Option<Hit>) -> Option<Hit> {
+    match (first, second) {
+        (Some(f), Some(s)) => Some(if s.action > f.action { s } else { f }),
+        (f, s) => f.or(s),
+    }
+}
+
 fn lexicon(lists: &Lists) -> IdMap<u16> {
     let mut map = IdMap::default();
     let mut add = |h: u64, bit: u16| *map.entry(h).or_insert(0) |= bit;
@@ -693,9 +701,13 @@ impl Core {
         if let Some(hit) = self.floor(item) {
             return Some(hit);
         }
-        self.patterns(item, &TermSet::default(), None)
-            .into_iter()
-            .find(|h| h.on)
+        let none = TermSet::default();
+        let first = |hits: Vec<Hit>| hits.into_iter().find(|h| h.on);
+        let hit = first(self.patterns(item, &none, None));
+        match self.pattern_hits_split(item, &none) {
+            Some(split) => stronger(hit, first(split)),
+            None => hit,
+        }
     }
 
     /// The floor alone (CS-1a/1b, CS-8a): final when it hits.
@@ -705,8 +717,32 @@ impl Core {
 
     /// Every pattern rule's hit, switched on or not. `neutral` words are
     /// ignored as evidence (CSX-5 *Neutralize term*, §20.5.5).
+    ///
+    /// A text that holds a character matching once read as a word break
+    /// is read both ways (`Core::pattern_hits_split`), and this has the
+    /// hits of both: a rule hits if it hits in either reading.
     pub fn pattern_hits(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
-        self.patterns(item, neutral, None)
+        let mut hits = self.patterns(item, neutral, None);
+        hits.extend(self.pattern_hits_split(item, neutral).into_iter().flatten());
+        hits
+    }
+
+    /// The hits of the earlier reading, with the characters
+    /// [`Tokenizer::splitting`] names as word breaks, if the item's name
+    /// or a path holds one; `None` otherwise, when both readings are the
+    /// same. Rare, so it pays for a tokenizer of its own.
+    pub(crate) fn pattern_hits_split(&self, item: &Item, neutral: &TermSet) -> Option<Vec<Hit>> {
+        let paths = item
+            .files
+            .iter()
+            .take(MAX_FILES)
+            .flat_map(|f| f.path.iter().map(String::as_str));
+        if !normalize::splits(std::iter::once(item.name).chain(paths)) {
+            return None;
+        }
+        let mut tok = Tokenizer::splitting();
+        let mut scratch = Scratch::default();
+        Some(self.patterns_with(&mut tok, &mut scratch, item, neutral, None))
     }
 
     /// [`Core::pattern_hits`], reusing `read`, the item's name and paths
