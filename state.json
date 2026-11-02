@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T12:24:13Z",
+  "updated_at": "2026-11-02T12:24:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2562,9 +2562,11 @@
       "head": "73773938"
     },
     "SRC-7": {
-      "status": "launching",
+      "status": "running",
       "brief": "briefs/SRC-7.md",
-      "model": "opus"
+      "model": "opus",
+      "session": "session_01MMjhnAf3hHtxzAQnAz9XCo",
+      "launched": "2026-11-02T12:24Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
