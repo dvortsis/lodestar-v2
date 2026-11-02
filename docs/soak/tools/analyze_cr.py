@@ -933,7 +933,9 @@ def judge_block(reports, treatment):
             gap = None
         if gap is None or gap > SWITCH_SECONDS or gap < 0:
             problems.append("arm_switch_over_10_minutes")
-        if a["clean_stop"] is not True:
+        # A clean stop is proven by the collector reading exit 0 (Docker), or by the next start
+        # resuming: CR-0d resumes only after a clean stop. Native mode can't read an exit code.
+        if a["clean_stop"] is not True and b["reason_at_start"] != "resumed":
             problems.append("arm_switch_not_a_clean_stop")
     a_means = [s["net"] for s, arm in zip(segs, arms) if arm == "A" and s["verdict"] == "valid"]
     if any(m is None or m <= 0 for m in a_means):

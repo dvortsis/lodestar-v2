@@ -706,6 +706,9 @@ class EffectTests(unittest.TestCase):
         self.assertIn("arm_switch_over_10_minutes", analyze_cr.judge_block(slow, "utp")["problems"])
         unclean = block("ABBA", [100, 110, 110, 100], clean=False)
         self.assertIn("arm_switch_not_a_clean_stop", analyze_cr.judge_block(unclean, "utp")["problems"])
+        for s in unclean[1:]:  # native mode: the next start resuming proves the stop was clean
+            s["startup"] = {"suppression_reason_at_start": "resumed"}
+        self.assertNotIn("arm_switch_not_a_clean_stop", analyze_cr.judge_block(unclean, "utp")["problems"])
         digests = block("ABBA", [100, 110, 110, 100])
         digests[2]["identity"]["image_digest"] = "sha256:" + "c" * 64
         self.assertIn("image_digest_differs", analyze_cr.judge_block(digests, "utp")["problems"])
