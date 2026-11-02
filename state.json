@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T01:58:00Z",
+  "updated_at": "2026-11-02T02:01:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2283,12 +2283,13 @@
       "merge": "edc27a2e"
     },
     "CR-4": {
-      "status": "in-review",
+      "status": "changes",
       "model": "opus",
       "session": "session_01MMjhnBobRgzjNcSJb43XQD",
       "launched": "2026-11-02T00:45Z",
       "pr": 365,
-      "head": "e983d35"
+      "head": "e983d35",
+      "note": "Opus review MERGE; runner asked one push: cached route probe (recovery in seconds), probe before uTP, gate probe/mutex behind switch, metrics wording, demux proptest, attempts counting, A/B guardrails"
     },
     "SRC-8": {
       "status": "ci",
@@ -3350,6 +3351,11 @@
       "id": "flag-src8",
       "status": "to-send",
       "text": "§2.19 from SRC-8 (#366, RSS/Atom parser): only Nyaa's exact namespace URI is read (a Sukebei variant waits on Q7; adding it later is one line); an enclosure length is not used as the content size; a malformed attribute anywhere stops the parse of that feed."
+    },
+    {
+      "id": "flag-cr4",
+      "status": "to-send",
+      "text": "§2.19 from CR-4 (#365): two independent switches (dht.utp, dht.route_backoff), both off by default; the Settings \"transport\" option stays labelled \"not active yet\" rather than wired, so a saved setting can't silently pick an A/B arm; IPv6 route evidence = a local \"network unreachable\" confirmed by a local UDP route probe (never a remote packet); per-family metric series added alongside #51's names. CR-SIM can't model transports, so measurement is a live ABBA per switch."
     }
   ],
   "external_gates": {
