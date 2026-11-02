@@ -4813,13 +4813,17 @@ export interface components {
         };
         /** @description An exception (§10.9.2 level 5): text + icon + a fix action. */
         InsightsException: {
+            counts?: null | components["schemas"]["StandInCounts"];
             fix: components["schemas"]["Fix"];
             /**
              * @description `index_lag` (the index more than 30 s behind), `cohort_stalled`
              *     (hashes in progress, the crawler running, and nothing stored for
              *     2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`
              *     (stored filter rows that no longer read; filtering fails closed
-             *     for them until they're fixed in Filters & Safety).
+             *     for them until they're fixed in Filters & Safety), or
+             *     `filter_stand_ins_rejudged` (for a week after such rows read
+             *     again: `value` torrents their stand-ins held were released, and
+             *     `counts` has the rest).
              */
             kind: string;
             /**
@@ -7491,6 +7495,34 @@ export interface components {
              * @description The last flush, or the start when there was none since.
              */
             since: number;
+        };
+        /**
+         * @description The counts of a `filter_stand_ins_rejudged` exception
+         *     (docs/decisions/2026-11-02-F-filter-standin-undo.md).
+         */
+        StandInCounts: {
+            /**
+             * Format: int64
+             * @description Adult holds made meanwhile; some may be other rules' or your
+             *     corrections'. They stay held.
+             */
+            adult: number;
+            /**
+             * Format: int64
+             * @description Torrents a rule without its unreadable `unless` dropped.
+             */
+            dropped: number;
+            /**
+             * Format: int64
+             * @description Torrents such a rule hid.
+             */
+            hidden: number;
+            /**
+             * Format: int64
+             * @description Still held by the rules as they are, or not judged (a sealed name
+             *     that won't open).
+             */
+            kept: number;
         };
         /**
          * @description `GET /stats`: what the global bar and status pill show

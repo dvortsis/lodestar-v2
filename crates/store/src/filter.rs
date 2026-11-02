@@ -125,6 +125,16 @@ pub struct Quarantined {
     pub adult_hold: bool,
 }
 
+/// One quarantine row ([`Store::quarantine_between`]), for releasing it
+/// only if it's unchanged ([`Store::release_rows`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldRow {
+    pub hash: [u8; 20],
+    pub rule: String,
+    pub at: i64,
+    pub sealed: Option<Vec<u8>>,
+}
+
 /// One tombstone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tombstone {
@@ -684,6 +694,115 @@ impl Store {
             .is_some())
     }
 
+    /// `rule`'s quarantine made in `since..=until`, oldest first, after the
+    /// `(at, hash)` cursor `after`: what a rule's stand-in made while its
+    /// row couldn't be read (docs/decisions/2026-11-02-F-filter-standin-undo.md).
+    /// A stand-in never holds as an adult hold.
+    pub fn quarantine_between(
+        &self,
+        rule: &str,
+        (since, until): (i64, i64),
+        after: Option<(i64, [u8; 20])>,
+        limit: usize,
+    ) -> Result<Vec<HoldRow>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT hash, at, sealed FROM quarantine
+             WHERE rule = ?1 AND at >= ?2 AND at <= ?3 AND (at, hash) > (?4, ?5)
+             ORDER BY at, hash LIMIT ?6",
+        )?;
+        let (at, hash) = after.unwrap_or((i64::MIN, [0; 20]));
+        let rows = stmt.query_map(
+            params![rule, since, until, at, &hash[..], limit as i64],
+            |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<Vec<u8>>>(2)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (hash, at, sealed) = row?;
+            out.push(HoldRow {
+                hash: hash20(hash)?,
+                rule: rule.to_owned(),
+                at,
+                sealed,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The hashes adult holds made in `since..=until` hold, in quarantine
+    /// or as tombstones.
+    pub fn adult_holds_between(&self, (since, until): (i64, i64)) -> Result<Vec<[u8; 20]>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT hash FROM (
+                 SELECT hash, rule, at FROM quarantine
+                 UNION ALL SELECT hash, rule, at FROM tombstones
+             ) WHERE at >= ?1 AND at <= ?2 AND substr(rule, -length(?3)) = ?3",
+        )?;
+        let rows = stmt.query_map(params![since, until, ADULT_HOLD], |r| {
+            r.get::<_, Vec<u8>>(0)
+        })?;
+        rows.map(|h| hash20(h?)).collect()
+    }
+
+    /// How many of `rule`'s tombstones were made in `since..=until`.
+    pub fn tombstones_between(&self, rule: &str, (since, until): (i64, i64)) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(*) FROM tombstones WHERE rule = ?1 AND at >= ?2 AND at <= ?3",
+            params![rule, since, until],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
+    /// How many torrents `rule` applied `action` to (not in shadow mode)
+    /// in `since..=until`, as `filter_hits` still records them.
+    pub fn hits_between(
+        &self,
+        rule: &str,
+        action: u8,
+        (since, until): (i64, i64),
+    ) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(DISTINCT hash) FROM filter_hits
+             WHERE rule = ?1 AND action = ?2 AND at >= ?3 AND at <= ?4",
+            params![rule, action, since, until],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
+    /// Releases these quarantine rows if each is still as read: a row a
+    /// writer has replaced since (another rule, a newer time) stays. One
+    /// transaction. Returns the hashes nothing holds any more, for intake.
+    pub fn release_rows(&mut self, rows: &[HoldRow]) -> Result<Vec<[u8; 20]>> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tx = crate::begin_write(&mut self.conn)?;
+        let mut free = Vec::new();
+        {
+            let mut del = tx.prepare_cached(
+                "DELETE FROM quarantine WHERE hash = ?1 AND rule = ?2 AND at = ?3",
+            )?;
+            let mut held = tx.prepare_cached("SELECT 1 FROM tombstones WHERE hash = ?1")?;
+            for r in rows {
+                if del.execute(params![&r.hash[..], r.rule, r.at])? > 0
+                    && !held.exists([&r.hash[..]])?
+                {
+                    free.push(r.hash);
+                }
+            }
+        }
+        tx.commit()?;
+        self.scrub_wal();
+        Ok(free)
+    }
+
     /// Filter hits since `since`, oldest first.
     pub fn filter_hits(&self, since: i64) -> Result<Vec<FilterHit>> {
         let mut stmt = self.conn.prepare_cached(
@@ -1131,5 +1250,71 @@ mod tests {
         assert!(!freed.contains(&hashes[0]));
         assert!(calls >= 2, "{calls}");
         assert!(s.quarantined(10).unwrap().is_empty());
+    }
+
+    /// A stand-in's quarantine is read by rule and time window, and
+    /// released only while unchanged: a writer's newer hold stays.
+    #[test]
+    fn quarantine_between_reads_and_release_rows_keeps_replaced_rows() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let rows: &[(&str, u8, &str, i64)] = &[
+            ("quarantine", 1, "U-3", 5),
+            ("quarantine", 2, "U-3", 20),
+            ("quarantine", 3, "U-3", 21),
+            ("quarantine", 4, "U-3", 40),
+            ("quarantine", 5, "CS-5a+adult", 22),
+            ("tombstones", 6, "CS-5a+adult", 23),
+            ("tombstones", 5, "CS-5a+adult", 24),
+            ("tombstones", 7, "U-4", 24),
+        ];
+        for (table, h, rule, at) in rows {
+            let cols = if *table == "quarantine" {
+                "(hash, rule, at, expires_at) VALUES (?1, ?2, ?3, 99)"
+            } else {
+                "(hash, rule, at) VALUES (?1, ?2, ?3)"
+            };
+            s.conn
+                .execute(
+                    &format!("INSERT INTO {table} {cols}"),
+                    params![&[*h; 20][..], rule, at],
+                )
+                .unwrap();
+        }
+        let hashes = |v: &[HoldRow]| v.iter().map(|r| r.hash[0]).collect::<Vec<_>>();
+        let q = s.quarantine_between("U-3", (10, 30), None, 10).unwrap();
+        assert_eq!(hashes(&q), [2, 3], "only the window");
+        assert_eq!(
+            hashes(&s.quarantine_between("U-3", (5, 20), None, 10).unwrap()),
+            [1, 2]
+        );
+        let page = s
+            .quarantine_between("U-3", (10, 30), Some((20, [2; 20])), 10)
+            .unwrap();
+        assert_eq!(hashes(&page), [3]);
+        assert_eq!(s.adult_holds_between((10, 30)).unwrap().len(), 2);
+        assert_eq!(s.tombstones_between("U-4", (10, 30)).unwrap(), 1);
+        assert_eq!(s.tombstones_between("U-4", (25, 30)).unwrap(), 0);
+        s.conn
+            .execute(
+                "INSERT INTO filter_hits (hash, rule, action, at, evidence)
+                 VALUES (?1, 'U-3', 2, 21, x''), (?1, 'U-3', 2, 22, x''), (?2, 'U-3', 130, 21, x'')",
+                params![&[8u8; 20][..], &[9u8; 20][..]],
+            )
+            .unwrap();
+        assert_eq!(
+            s.hits_between("U-3", 2, (10, 30)).unwrap(),
+            1,
+            "once, not in shadow"
+        );
+        // A writer holds 2 again meanwhile: its row isn't the one read.
+        s.conn
+            .execute(
+                "UPDATE quarantine SET rule = 'U-9', at = 30 WHERE hash = ?1",
+                [&[2u8; 20][..]],
+            )
+            .unwrap();
+        let freed = s.release_rows(&q).unwrap();
+        assert_eq!(freed, vec![[3; 20]]);
+        assert!(s.held_among(&[[2; 20]]).unwrap()[0]);
     }
 }

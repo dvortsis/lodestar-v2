@@ -533,6 +533,16 @@ fn alert(e: &InsightsException) -> Alert {
             value.as_deref().unwrap_or("some"),
             e.rows.join(", ")
         ),
+        ("filter_stand_ins_rejudged", value) => format!(
+            "Saved filter rows that couldn't be read work again. What filtering held back in \
+             their place was checked again with your rules: {} released, {} still held, {} \
+             to review in Filters & Safety.",
+            value.as_deref().unwrap_or("some"),
+            e.counts.as_ref().map_or(0, |c| c.kept),
+            e.counts
+                .as_ref()
+                .map_or(0, |c| c.adult + c.dropped + c.hidden)
+        ),
         ("yield_below_baseline", None) => {
             "Yield for the newest completed cohorts is below the 7 days before them.".into()
         }
@@ -1205,6 +1215,7 @@ mod tests {
             fix: f,
             kind: kind.into(),
             rows: Vec::new(),
+            counts: None,
             severity: Severity::Warning,
             since: T - 600,
             unit: unit.map(Into::into),

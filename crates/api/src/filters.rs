@@ -54,6 +54,9 @@ pub use crate::dto::filters::{
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{ClientIp, Json as JsonBody, Path, Query, same_origin_json};
 
+mod standin;
+pub use standin::{Rejudged, stand_in_notice};
+
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
 #[openapi(paths(
@@ -2617,6 +2620,10 @@ impl FiltersApi {
     /// A full re-mark is one re-queue; failed, it stays and its error is
     /// returned. Returns how many an index finished.
     pub fn resume_requeues(&self, now: i64) -> ApiResult<usize> {
+        // First what stand-ins of rows that read again did: it may add a
+        // full re-mark. Its failure is logged where it happens and leaves
+        // them recorded.
+        let _ = self.undo_stand_ins(now, false);
         // Read under its own statement: the store guard mustn't live on
         // into the re-queue, which takes the lock itself.
         let pending = pending_requeues(&self.store())?;
@@ -2897,9 +2904,24 @@ pub(crate) async fn remove_class_rule(
 ) -> ApiResult<Json<ClassRuleRemoved>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
-    tokio::task::spawn_blocking(move || f.remove_class_rule(body.id, crate::unix_now()).map(Json))
-        .await
-        .map_err(internal)?
+    let api = f.clone();
+    let (removed, requeued_all) = tokio::task::spawn_blocking(move || {
+        // An unreadable rule's removal re-queues every stored torrent.
+        let unreadable = f
+            .store()
+            .class_rules()
+            .map_err(internal)?
+            .iter()
+            .any(|r| r.0 == body.id && parse(&r.1).is_err());
+        f.remove_class_rule(body.id, crate::unix_now())
+            .map(|r| (r, unreadable))
+    })
+    .await
+    .map_err(internal)??;
+    // The engine is reloaded: what stand-ins of rows that read again did
+    // is judged again, after this request.
+    api.undo_in_background(requeued_all);
+    Ok(Json(removed))
 }
 
 /// Starts a preview in the background; poll it by its id.
@@ -3006,9 +3028,14 @@ pub(crate) async fn apply(
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     let auth = s.auth.clone();
-    tokio::task::spawn_blocking(move || apply_change(&f, &auth, ip, body))
+    let api = f.clone();
+    let out = tokio::task::spawn_blocking(move || apply_change(&f, &auth, ip, body))
         .await
-        .map_err(internal)?
+        .map_err(internal)??;
+    // The engine is reloaded: what stand-ins of rows that read again did
+    // is judged again, after this request.
+    api.undo_in_background(false);
+    Ok(out)
 }
 
 fn apply_change(

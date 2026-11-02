@@ -369,6 +369,8 @@
 	"settings_logging_ev_filters_change_detail_h": "筛选规则的变更内容及详情。",
 	"settings_logging_ev_filters_rule_skipped_n": "筛选规则已跳过",
 	"settings_logging_ev_filters_rule_skipped_h": "某条筛选规则无法使用，已跳过。",
+	"settings_logging_ev_filters_stand_ins_rejudged_n": "过滤条目已恢复读取",
+	"settings_logging_ev_filters_stand_ins_rejudged_h": "之前无法读取的过滤条目已恢复；代为拦截的内容已重新检查。",
 	"settings_logging_ev_filters_fixture_unreadable_n": "演示筛选无法读取",
 	"settings_logging_ev_filters_fixture_unreadable_h": "无法读取演示筛选数据。",
 	"settings_logging_ev_auth_setup_complete_n": "设置已完成",

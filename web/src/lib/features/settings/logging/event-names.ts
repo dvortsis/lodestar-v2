@@ -383,6 +383,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_filters_rule_skipped_n,
 		m.settings_logging_ev_filters_rule_skipped_h
 	],
+	'filters.stand_ins_rejudged': [
+		m.settings_logging_ev_filters_stand_ins_rejudged_n,
+		m.settings_logging_ev_filters_stand_ins_rejudged_h
+	],
 	'filters.fixture_unreadable': [
 		m.settings_logging_ev_filters_fixture_unreadable_n,
 		m.settings_logging_ev_filters_fixture_unreadable_h
