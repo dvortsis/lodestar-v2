@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:31:07Z",
+  "updated_at": "2026-11-02T14:54:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2595,11 +2595,13 @@
       "merge": "b39912f7"
     },
     "G-import-smoke": {
-      "status": "running",
+      "status": "runner-reviewed (docs-only); merge on green",
       "brief": "briefs/G-import-smoke.md",
       "model": "opus",
       "session": "session_01MMjhn9hrbtdGJ9R8ApgDt9",
-      "launched": "2026-11-02T14:02Z"
+      "launched": "2026-11-02T14:02Z",
+      "pr": 396,
+      "head": "7e9de192"
     },
     "R-mem-triage": {
       "status": "queued (next free slot, ladder #1)",
@@ -3912,6 +3914,21 @@
       "id": "SRC-14b-route-pacing",
       "added": "2026-11-02T14:20:37Z",
       "text": "SRC-14b: add a route-level delay in PluginEgress after EgressDown so a plugin retry loop cannot spin while the kill switch is down (#394 review I1), before wiring SRC-7."
+    },
+    {
+      "id": "writer-expect-shutdown-panic",
+      "added": "2026-11-02T14:54:52Z",
+      "text": "crates/pipeline/src/writer.rs:592 expect panics on runtime shutdown when the HTTP port is already in use, logging \"Lodestar crashed\" (G-import-smoke repro in docs/operations/imports/pilots/smoke/README.md). After SRC-14a frees pipeline files."
+    },
+    {
+      "id": "rss-after-drain",
+      "added": "2026-11-02T14:54:52Z",
+      "text": "RSS stays near peak after a large import drain (290 MB at 100k vs 191 MB after restart). Measure at 10M against the 1 GB budget; consider allocator trimming. Relate to R-mem-triage findings."
+    },
+    {
+      "id": "build-plan-1.6-cite",
+      "added": "2026-11-02T14:54:52Z",
+      "text": "build-plan §0.6 cites \"§1.6 budgets\", which does not exist; fix the reference in the next runner plan edit."
     }
   ],
   "main_health": [
