@@ -19,8 +19,8 @@
 //!   operational control, not a filter change.
 //! - **Consent (§18.7):** the server refuses to enable a source until its
 //!   class's condition holds (the binary checks it against the store;
-//!   this crate only checks the password). Accepting `restricted` or
-//!   `overlay` consent needs the admin password, every time (Q13).
+//!   this crate only checks the password). Enabling a `restricted` or
+//!   `overlay` source needs the admin password, every time (Q13, §20.11).
 //! - **Credentials** (`PATCH /sources/{id}/credentials`) are taken in and
 //!   never given back: no response, error or log line holds a value. The
 //!   body is read by hand, so a malformed one is refused without quoting
@@ -95,7 +95,7 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
     fn sources(&self) -> BoxFuture<'_, Result<Vec<Source>, OpsError>>;
     /// Applies `patch` (its not-yet-editable fields already refused).
     /// `password_confirmed` says the route checked `patch.password`; the
-    /// implementation refuses to accept Restricted or Overlay consent
+    /// implementation refuses to enable a Restricted or Overlay source
     /// without it ([`OpsError::PasswordRequired`]).
     fn patch_source(
         &self,
@@ -124,7 +124,7 @@ pub enum OpsError {
         class: ConsentClass,
         version: String,
     },
-    /// Accepting this consent needs the admin password.
+    /// Enabling this source needs the admin password.
     PasswordRequired,
     /// Enabling the source needs its credentials stored first.
     CredentialsRequired,
@@ -409,8 +409,8 @@ pub(crate) async fn sources(State(s): State<ApiState>) -> ApiResult<Json<SourceL
 /// checks the source's class (§18.7, its `needs`): an `external`,
 /// `restricted` or `overlay` source needs `"consent"` naming its class and
 /// `"consent_version"` (`409 consent_required` otherwise) until that
-/// version is acknowledged; accepting `restricted` or `overlay` consent
-/// also needs the admin `"password"` (`428 confirm_required`); an
+/// version is acknowledged; enabling a `restricted` or `overlay` source
+/// also needs the admin `"password"`, every time (`428 confirm_required`); an
 /// `account` source needs its credentials stored
 /// (`409 credentials_required`). Agents, egress, purge and the schedule
 /// arrive in v0.6 (`409 not_editable`).
@@ -440,21 +440,17 @@ pub(crate) async fn patch_source(
         )
         .field(field));
     }
-    // The password confirms accepting Restricted or Overlay consent, and
-    // is checked before anything is read or written. Whether the source
-    // needs it is the implementation's to decide.
+    // The password, when sent with an enable, is checked before anything
+    // is read or written. Whether the source needs it (Restricted and
+    // Overlay, every time) is the implementation's to decide.
     let password = body.password.take();
-    let accepting = body.enabled == Some(true)
-        && matches!(
-            body.consent,
-            Some(ConsentClass::Restricted | ConsentClass::Overlay)
-        );
-    let confirmed = if accepting && password.as_deref().is_some_and(|p| !p.is_empty()) {
-        auth::confirm_fresh_password(&s.auth, ip, password).await?;
-        true
-    } else {
-        false
-    };
+    let confirmed =
+        if body.enabled == Some(true) && password.as_deref().is_some_and(|p| !p.is_empty()) {
+            auth::confirm_fresh_password(&s.auth, ip, password).await?;
+            true
+        } else {
+            false
+        };
     Ok(Json(ops.patch_source(id, body, confirmed).await?))
 }
 

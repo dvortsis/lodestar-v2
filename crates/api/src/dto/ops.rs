@@ -232,7 +232,8 @@ pub enum SourceNeed {
     /// (`PATCH /sources/{id}/credentials`).
     Credentials,
     /// A `restricted` or `overlay` source: show the consent screen, then
-    /// enable with `consent`, `consent_version` and the admin `password`.
+    /// enable with `consent`, `consent_version` and the admin `password`
+    /// (which enabling it always needs).
     Consent,
 }
 
@@ -270,8 +271,8 @@ pub struct Source {
     /// What enabling it still needs; null when enabling is a toggle.
     #[schema(required = true, inline)]
     pub needs: Option<SourceNeed>,
-    /// Accepting its consent asks for the admin password (`restricted`,
-    /// `overlay`).
+    /// Enabling it asks for the admin password, every time
+    /// (`restricted`, `overlay`).
     pub password_required: bool,
     /// The manifest id.
     pub plugin: String,
@@ -339,10 +340,10 @@ pub struct SourcePatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub consent_version: Option<String>,
-    /// The admin password, to accept `restricted` or `overlay` consent
+    /// The admin password, to enable a `restricted` or `overlay` source
     /// (`428 confirm_required` without it). Asked every time; never
-    /// stored or logged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// stored, logged or serialized.
+    #[serde(default, skip_serializing)]
     #[schema(nullable = false, write_only)]
     pub password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,7 +388,7 @@ impl std::fmt::Debug for SourcePatch {
 /// `egress.socks5.password` for the source's SOCKS5 proxy; values are
 /// 1–4096 bytes; a source holds at most 16. Values are never returned,
 /// logged or exported.
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Default, PartialEq, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(example = json!({ "credentials": { "api_key": "…", "old_token": null } }))]
 pub struct CredentialsPatch {

@@ -127,7 +127,7 @@ fn dht_source() -> Source {
         consent_required: false,
         consent_version: String::new(),
         credentials: Vec::new(),
-        editable: vec!["credentials".into(), "enabled".into(), "priority".into()],
+        editable: vec!["enabled".into(), "priority".into()],
         enabled: true,
         endpoints: Vec::new(),
         health: SourceHealth {
@@ -260,6 +260,7 @@ impl OpsApi for FakeOps {
                 });
             }
             if patch.enabled == Some(true) && !s.enabled && s.password_required && !confirmed {
+                // Enabling Restricted or Overlay needs it every time.
                 return Err(OpsError::PasswordRequired);
             }
             if let Some(on) = patch.enabled {

@@ -1058,21 +1058,45 @@ async fn no_class_can_be_enabled_past_its_condition() {
     // None: a toggle.
     assert_eq!(f.patch(&c, "none", json!({ "enabled": true })).await.0, 200);
 
-    // A settings import can't enable a source or record consent: the
-    // registry has no such field, and source state isn't settings.
+    // A settings import can't enable a source, record consent or plant a
+    // credential: the registry has no such field, and source state isn't
+    // settings. The forged record uses the real version, so it would
+    // count if it landed.
+    let overlay_version = f.source(&c, "overlay").await["consent_version"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let forged = format!("overlay|{overlay_version}|1");
+    let db = f.dir.path().join("t.db");
+    let sources_keys = || {
+        Store::open_reader(&db, StoreConfig::default())
+            .unwrap()
+            .connection()
+            .prepare("SELECT key FROM settings WHERE key LIKE 'sources.%' ORDER BY key")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let before = sources_keys();
     for toml in [
-        "lodestar_settings = 1\n[sources]\noverlay = true\n",
-        "lodestar_settings = 1\n[\"sources.consent\"]\noverlay = \"overlay|1-0|1\"\n",
-        "lodestar_settings = 1\n[crawler]\n\"sources.consent.overlay\" = \"overlay|1-0|1\"\n",
+        "lodestar_settings = 1\n[sources]\noverlay = true\n".to_string(),
+        format!("lodestar_settings = 1\n[\"sources.consent\"]\noverlay = \"{forged}\"\n"),
+        format!("lodestar_settings = 1\n[sources.consent]\noverlay = \"{forged}\"\n"),
+        format!("lodestar_settings = 1\n[crawler]\n\"sources.consent.overlay\" = \"{forged}\"\n"),
+        "lodestar_settings = 1\n[sources.secret]\n\"account/api_key\" = \"x\"\n".to_string(),
     ] {
         for dry_run in ["true", "false"] {
-            f.send(req(
-                "POST",
-                &format!("/api/v1/settings/import?dry_run={dry_run}"),
-                &c,
-                Some(&json!({ "toml": toml }).to_string()),
-            ))
-            .await;
+            let (status, _) = f
+                .send(req(
+                    "POST",
+                    &format!("/api/v1/settings/import?dry_run={dry_run}"),
+                    &c,
+                    Some(&json!({ "toml": toml }).to_string()),
+                ))
+                .await;
+            assert_ne!(status, 200, "{toml} was accepted");
         }
         let s = f.source(&c, "overlay").await;
         assert_eq!(
@@ -1080,6 +1104,7 @@ async fn no_class_can_be_enabled_past_its_condition() {
             (json!(false), json!("consent")),
             "{toml}"
         );
+        assert_eq!(sources_keys(), before, "{toml}");
     }
 
     // External: refused without the acknowledgement, or with a stale or
@@ -1176,6 +1201,18 @@ async fn no_class_can_be_enabled_past_its_condition() {
         let mut right = ack;
         right["password"] = json!("correct horse battery");
         let (status, s) = f.patch(&c, id, right).await;
+        assert_eq!((status, s["enabled"].clone()), (200, json!(true)), "{id}");
+        // Off and on again: the acknowledgement stands, the password is
+        // asked every time.
+        assert_eq!(f.patch(&c, id, json!({ "enabled": false })).await.0, 200);
+        let (status, e) = f.patch(&c, id, json!({ "enabled": true })).await;
+        assert_eq!(
+            (status, e["error"]["code"].clone()),
+            (428, json!("confirm_required")),
+            "{id}"
+        );
+        let again = json!({ "enabled": true, "password": "correct horse battery" });
+        let (status, s) = f.patch(&c, id, again).await;
         assert_eq!((status, s["enabled"].clone()), (200, json!(true)), "{id}");
     }
 
@@ -1278,6 +1315,7 @@ async fn a_restart_honours_consent_and_a_new_text_asks_again() {
         .unwrap();
     let row = rows.iter().find(|r| r.plugin == "restricted").unwrap();
     assert_eq!(row.state, lodestar_store::SourceState::Disabled);
+    // Instant checks: the stored state above is what carries the test.
     assert!(f.pipeline.sources().iter().all(|s| !s.running));
     assert!(!r.load(Ordering::SeqCst));
     f.pipeline.shutdown().await.unwrap();

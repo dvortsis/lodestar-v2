@@ -175,6 +175,25 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     assert_eq!(view.state, SourceState::Enabled);
     assert_eq!(view.need, None);
     assert!(!view.status.running, "it starts at the next start");
+    // Switched off and on again: the acknowledgement stands, but the
+    // password is asked every time.
+    let off_change = SourceChange {
+        enabled: Some(false),
+        ..SourceChange::default()
+    };
+    control
+        .update_source(off, off_change.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        control.update_source(off, enable(None, None, false)).await,
+        Err(SourceError::PasswordRequired)
+    ));
+    let view = control
+        .update_source(off, enable(None, None, true))
+        .await
+        .unwrap();
+    assert_eq!(view.state, SourceState::Enabled);
     // An External source needs its endpoint list acknowledged, with no
     // password.
     assert!(matches!(

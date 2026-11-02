@@ -127,7 +127,7 @@ fn drop_records(conn: &Connection, plugin: &str) -> Result<()> {
     let prefix = secret_prefix(plugin);
     conn.execute(
         "DELETE FROM settings WHERE substr(key, 1, ?2) = ?1",
-        params![prefix, prefix.len() as i64],
+        params![prefix, prefix.chars().count() as i64],
     )?;
     Ok(())
 }
@@ -152,6 +152,11 @@ impl Store {
         first: SourceState,
         now: i64,
     ) -> Result<SourceId> {
+        // `/` ends the plugin's part of a credential key: an id holding one
+        // could reach another plugin's credentials.
+        if plugin.is_empty() || plugin.contains('/') {
+            return Err(Error::Invalid("source plugin id"));
+        }
         let tx = crate::begin_write(&mut self.conn)?;
         let existing: Option<i64> = tx
             .query_row("SELECT id FROM sources WHERE plugin = ?1", [plugin], |r| {
@@ -241,7 +246,8 @@ impl Store {
             "SELECT substr(key, ?2 + 1) FROM settings
              WHERE substr(key, 1, ?2) = ?1 ORDER BY key",
         )?;
-        let rows = stmt.query_map(params![prefix, prefix.len() as i64], |r| r.get(0))?;
+        // `substr` counts characters, not bytes.
+        let rows = stmt.query_map(params![prefix, prefix.chars().count() as i64], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

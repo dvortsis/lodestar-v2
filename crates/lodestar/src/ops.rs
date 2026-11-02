@@ -28,7 +28,8 @@ use crate::http::SearchState;
 use crate::settings::crawler::Crawler;
 
 /// What a source's `PATCH` changes now, and what waits for v0.6.
-const EDITABLE: [&str; 3] = ["credentials", "enabled", "priority"];
+/// Credentials have their own route, `PATCH /sources/{id}/credentials`.
+const EDITABLE: [&str; 2] = ["enabled", "priority"];
 const NOT_YET_EDITABLE: [&str; 4] = ["agents", "egress", "purge", "schedule"];
 /// How long the data directory's size is reused before it's measured
 /// again (it walks the directory).

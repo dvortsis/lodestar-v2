@@ -102,14 +102,6 @@ pub fn intensity_name(i: Intensity) -> &'static str {
     }
 }
 
-/// Whether enabling a source of this class needs the consent screen
-/// (§18.7): Restricted and Overlay do, with the password (Q13); External
-/// needs its endpoint list acknowledged, Account its credentials, and
-/// None is a toggle.
-pub fn needs_consent(c: Consent) -> bool {
-    consent::needs_password(c)
-}
-
 /// One sample of the counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Sample {
@@ -723,7 +715,8 @@ impl Control {
     /// - External, Restricted and Overlay need `change.consent` and
     ///   `change.consent_version` naming the class and the current version
     ///   unless an acknowledgement of that version is stored; Restricted
-    ///   and Overlay also need `change.password_confirmed` to accept one.
+    ///   and Overlay also need `change.password_confirmed`, every time
+    ///   they're enabled.
     /// - Account needs credentials stored ([`Control::update_credentials`]).
     pub async fn update_source(
         &self,
@@ -755,13 +748,14 @@ impl Control {
                                     version: wanted,
                                 });
                             }
-                            if consent::needs_password(manifest.consent)
-                                && !change.password_confirmed
-                            {
-                                return Err(SourceError::PasswordRequired);
-                            }
                             ack = Some(Ack::of(&manifest).encode());
                         }
+                    }
+                    // Enabling Restricted or Overlay asks for the password
+                    // every time, not only when the consent is first
+                    // accepted (§20.11: never remembered).
+                    if consent::needs_password(manifest.consent) && !change.password_confirmed {
+                        return Err(SourceError::PasswordRequired);
                     }
                     Some(SourceState::Enabled)
                 }
@@ -810,7 +804,7 @@ impl Control {
         for (name, value) in &changes {
             consent::check_name(name).map_err(SourceError::Credential)?;
             if let Some(v) = value {
-                consent::check_value(v).map_err(SourceError::Credential)?;
+                consent::check_value(name, v).map_err(SourceError::Credential)?;
             }
         }
         let this = self.clone();
@@ -1061,11 +1055,6 @@ mod tests {
 
     #[test]
     fn consent_and_names() {
-        assert!(!needs_consent(Consent::None));
-        assert!(!needs_consent(Consent::External));
-        assert!(!needs_consent(Consent::Account));
-        assert!(needs_consent(Consent::Restricted));
-        assert!(needs_consent(Consent::Overlay));
         for p in [
             Priority::Low,
             Priority::Normal,

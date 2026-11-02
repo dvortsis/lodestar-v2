@@ -258,7 +258,9 @@ impl std::fmt::Display for CredentialRefusal {
             CredentialRefusal::Name => {
                 "a credential name is 1 to 64 lowercase letters, digits or underscores"
             }
-            CredentialRefusal::Value => "a credential value is 1 to 4096 bytes",
+            CredentialRefusal::Value => {
+                "a credential value is 1 to 4096 bytes, and a SOCKS5 user name or password 1 to 255"
+            }
             CredentialRefusal::TooMany => "a source holds at most 16 credentials",
         })
     }
@@ -278,9 +280,19 @@ pub fn check_name(name: &str) -> Result<(), CredentialRefusal> {
     }
 }
 
-/// Checks a credential's value.
-pub fn check_value(value: &Secret) -> Result<(), CredentialRefusal> {
-    if value.is_empty() || value.expose().len() > MAX_VALUE {
+/// The longest SOCKS5 user name or password (RFC 1929).
+pub const MAX_SOCKS5_VALUE: usize = 255;
+
+/// Checks a credential's value: 1–[`MAX_VALUE`] bytes, or
+/// 1–[`MAX_SOCKS5_VALUE`] for the SOCKS5 pair, which RFC 1929 limits and
+/// SRC-5's route would otherwise refuse only when it's built.
+pub fn check_value(name: &str, value: &Secret) -> Result<(), CredentialRefusal> {
+    let max = if is_egress_name(name) {
+        MAX_SOCKS5_VALUE
+    } else {
+        MAX_VALUE
+    };
+    if value.is_empty() || value.expose().len() > max {
         Err(CredentialRefusal::Value)
     } else {
         Ok(())
@@ -551,9 +563,14 @@ mod tests {
         for bad in ["", "Api", "a.b", "egress.other", "a/b", long.as_str()] {
             assert_eq!(check_name(bad), Err(CredentialRefusal::Name), "{bad}");
         }
-        assert!(check_value(&Secret::new("x")).is_ok());
-        assert!(check_value(&Secret::new("")).is_err());
-        assert!(check_value(&Secret::new("x".repeat(MAX_VALUE + 1))).is_err());
+        assert!(check_value("k", &Secret::new("x")).is_ok());
+        assert!(check_value("k", &Secret::new("")).is_err());
+        assert!(check_value("k", &Secret::new("x".repeat(MAX_VALUE))).is_ok());
+        assert!(check_value("k", &Secret::new("x".repeat(MAX_VALUE + 1))).is_err());
+        let socks = "x".repeat(MAX_SOCKS5_VALUE);
+        assert!(check_value(SOCKS5_PASSWORD, &Secret::new(socks.as_str())).is_ok());
+        let long = "x".repeat(MAX_SOCKS5_VALUE + 1);
+        assert!(check_value(SOCKS5_USERNAME, &Secret::new(long.as_str())).is_err());
     }
 
     fn creds() -> (SourceCredentials, Arc<Mutex<Store>>, SourceId) {
