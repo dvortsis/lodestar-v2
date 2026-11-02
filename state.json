@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:54:52Z",
+  "updated_at": "2026-11-02T14:55:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2595,18 +2595,21 @@
       "merge": "b39912f7"
     },
     "G-import-smoke": {
-      "status": "runner-reviewed (docs-only); merge on green",
+      "status": "merged",
       "brief": "briefs/G-import-smoke.md",
       "model": "opus",
       "session": "session_01MMjhn9hrbtdGJ9R8ApgDt9",
       "launched": "2026-11-02T14:02Z",
       "pr": 396,
-      "head": "7e9de192"
+      "head": "7e9de192",
+      "merge": "f8ff9bab"
     },
     "R-mem-triage": {
-      "status": "queued (next free slot, ladder #1)",
+      "status": "running",
       "brief": "briefs/R-mem-triage.md",
-      "model": "opus"
+      "model": "opus",
+      "session": "session_01MMjhnD9Jd88Vzmq6W9Bxro",
+      "launched": "2026-11-02T14:55Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
