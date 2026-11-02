@@ -93,10 +93,10 @@ Implement and measure one candidate only after baseline review selects it.
 | Prefix/cooldown experiment | Selected targeting improves useful discoveries | Matched time windows, stored/searchable yield and cost | Separate gate; no baseline target/cooldown change |
 | Transport change | A different peer transport improves conversion | Failure kinds, bytes, CPU and successful metadata | Independent protocol/security acceptance; no combined timeout tuning |
 
-For each experiment, its brief or decisions file, merged before the run, freezes
-the hypothesis, the changed variable and the guardrail metrics. Everything else (identities, suppression and
-warmup, coverage, exclusions, the primary metric, the effect estimate and the
-practical threshold) is CR-SPEC's. Report stored throughput, searchable throughput
+For each experiment, its brief or decisions file, merged before the run,
+freezes the hypothesis, the changed variable and the guardrail metrics.
+Everything else (identities, suppression and warmup, coverage, exclusions, the
+primary metric, the effect estimate and the practical threshold) is CR-SPEC's. Report stored throughput, searchable throughput
 and resource use alongside each other; a higher stored rate alone is not an
 efficiency result. A live network has time-of-day and peer population variation,
 so even matched sequential runs cannot prove causality alone.
