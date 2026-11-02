@@ -393,6 +393,7 @@ fn source(v: SourceView) -> Source {
         not_yet_editable: NOT_YET_EDITABLE.map(String::from).to_vec(),
         password_required: consent_rules::needs_password(m.consent),
         plugin: m.id.to_string(),
+        purge_pending: v.purge_pending,
         priority: priority(v.priority),
         restart_required: enabled != v.status.enabled,
         risk: match m.risk {
@@ -565,6 +566,54 @@ impl OpsApi for Ops {
                 .update_credentials(id, &self.credentials, changes)
                 .await
                 .map(source)
+                .map_err(source_error)
+        })
+    }
+
+    fn begin_purge(
+        &self,
+        id: u8,
+        password_confirmed: bool,
+    ) -> BoxFuture<'_, Result<(String, u64), OpsError>> {
+        Box::pin(async move {
+            let source = SourceId::new(id).ok_or(OpsError::UnknownSource)?;
+            let keys = self
+                .control
+                .begin_purge(source, password_confirmed)
+                .await
+                .map_err(source_error)?;
+            let plugin = self
+                .control
+                .sources()
+                .map_err(internal)?
+                .into_iter()
+                .find(|v| v.status.id == source)
+                .map(|v| v.status.manifest.id.to_string())
+                .ok_or(OpsError::UnknownSource)?;
+            Ok((plugin, keys))
+        })
+    }
+
+    fn purge_step(
+        &self,
+        id: u8,
+        from: lodestar_store::unverified::PurgeCursor,
+    ) -> BoxFuture<'_, Result<lodestar_store::unverified::PurgeStep, OpsError>> {
+        Box::pin(async move {
+            let source = SourceId::new(id).ok_or(OpsError::UnknownSource)?;
+            self.control
+                .purge_step(source, from)
+                .await
+                .map_err(source_error)
+        })
+    }
+
+    fn finish_purge(&self, id: u8) -> BoxFuture<'_, Result<(u64, u64), OpsError>> {
+        Box::pin(async move {
+            let source = SourceId::new(id).ok_or(OpsError::UnknownSource)?;
+            self.control
+                .finish_purge(source)
+                .await
                 .map_err(source_error)
         })
     }

@@ -39,8 +39,11 @@ use axum::{Json, Router};
 use serde_json::{Map, Value};
 use utoipa::OpenApi;
 
+use lodestar_store::unverified::{PurgeCursor, PurgeStep};
+
 use crate::ApiState;
 use crate::auth;
+use crate::dto::jobs::{BackgroundJob, BackgroundJobKind, PurgeJob, PurgeRequest, PurgeStage};
 pub use crate::dto::ops::{
     ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialsPatch,
     DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress,
@@ -51,6 +54,7 @@ pub use crate::dto::ops::{
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;
 use crate::extract::{ClientIp, Json as JsonBody, Path, same_origin_json};
+use crate::jobs::{Finisher, Job, Jobs, Stop};
 use crate::settings::{SettingsApi, SettingsBatch, SettingsPatch, save_and_announce};
 pub use lodestar_integrations::Secret;
 
@@ -69,6 +73,7 @@ type Hub = Option<Extension<Arc<EventHub>>>;
     source,
     patch_source,
     patch_source_credentials,
+    purge_source,
     network,
     restart_network
 ))]
@@ -114,6 +119,32 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
         id: u8,
         changes: Vec<(String, Option<Secret>)>,
     ) -> BoxFuture<'_, Result<Source, OpsError>>;
+    /// Starts purging the source (SRC-14b), or starts an unfinished
+    /// purge over: turns it off, records the purge, stops its plugin and
+    /// drops its queued keys. Returns its manifest id and the keys
+    /// dropped. Refused without `password_confirmed`. A process without
+    /// sources (the default) knows none.
+    fn begin_purge(
+        &self,
+        _id: u8,
+        _password_confirmed: bool,
+    ) -> BoxFuture<'_, Result<(String, u64), OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
+    /// One step of the purge, in one transaction.
+    fn purge_step(
+        &self,
+        _id: u8,
+        _from: PurgeCursor,
+    ) -> BoxFuture<'_, Result<PurgeStep, OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
+    /// Ends it: the source Purged with its credentials, consent and
+    /// settings dropped, then the snapshots scrubbed. Returns the
+    /// snapshots scrubbed and those left for later.
+    fn finish_purge(&self, _id: u8) -> BoxFuture<'_, Result<(u64, u64), OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
     fn network(&self) -> NetworkCheck;
     fn restart_network_check(&self) -> Result<NetworkCheck, OpsError>;
 }
@@ -616,8 +647,8 @@ fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
 /// (`409 credentials_required`). Agents, egress and the schedule apply
 /// at the next start; changing egress needs the admin `"password"`
 /// (`428 confirm_required`), and the `interface` and `bind_address`
-/// routes are refused (`409 route_unavailable`). Purge isn't editable yet
-/// (`409 not_editable`).
+/// routes are refused (`409 route_unavailable`). A purge isn't a field:
+/// it's `POST /sources/{id}/purge` (`409 not_editable` here).
 #[utoipa::path(
     operation_id = "patchSource",
     patch,
@@ -640,7 +671,7 @@ pub(crate) async fn patch_source(
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "not_editable",
-            "This can't be changed yet.",
+            "Purge a source with POST /sources/{id}/purge, which runs as a job.",
         )
         .field(field));
     }
@@ -712,6 +743,131 @@ fn credential_changes(body: Value) -> ApiResult<Vec<(String, Option<Secret>)>> {
             _ => Err(shape()),
         })
         .collect()
+}
+
+/// `POST /sources/{id}/purge`, beside `/jobs`, whose registry it shares.
+pub(crate) fn purge_routes() -> Router<ApiState> {
+    Router::new().route("/sources/{id}/purge", post(purge_source))
+}
+
+/// How long a paused purge waits to be resumed before it fails.
+const PURGE_PAUSE_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Purges a source: removes what only it found, its claims and plugin
+/// state, its credentials, consent record and settings, and their copies
+/// in the store's snapshots (§18.1, §18.7). It runs as a job (`/jobs`),
+/// with progress, pause and cancel. It needs the admin `"password"`
+/// every time (`428 confirm_required`, `401`): it can't be undone.
+///
+/// The source is turned off first. A purge that stops partway (cancelled,
+/// failed, or cut short by a restart) keeps what it did and the source
+/// off (`purge_pending` in `GET /sources`); purging again finishes it.
+/// `409 purge_running` while one runs for this source.
+#[utoipa::path(
+    operation_id = "purgeSource",
+    post,
+    path = "/sources/{id}/purge",
+    tag = "crawler",
+    params(("id" = u8, Path, description = "The source's id, as `GET /sources` lists it.")),
+    request_body = PurgeRequest,
+    responses((status = 202, body = BackgroundJob))
+)]
+pub(crate) async fn purge_source(
+    State(s): State<ApiState>,
+    Extension(jobs): Extension<Arc<Jobs>>,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+    Path(id): Path<u8>,
+    JsonBody(body): JsonBody<PurgeRequest>,
+) -> ApiResult<(StatusCode, Json<BackgroundJob>)> {
+    same_origin_json(&headers)?;
+    let ops = ops(&s)?;
+    auth::confirm_fresh_password(&s.auth, ip, body.password).await?;
+    let plugin = ops
+        .sources()
+        .await?
+        .into_iter()
+        .find(|src| src.id == id)
+        .ok_or_else(unknown_source)?
+        .plugin;
+    if jobs.purging(id) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "purge_running",
+            "This source is being purged already: follow it in Jobs.",
+        ));
+    }
+    let job = jobs.start(BackgroundJobKind::Purge)?;
+    job.update_purge(|p| {
+        *p = Some(PurgeJob {
+            kept: 0,
+            keys_dropped: 0,
+            plugin,
+            snapshots_left: 0,
+            snapshots_scrubbed: 0,
+            source_id: id,
+            stage: PurgeStage::Stopping,
+            torrents_deleted: 0,
+            unverified_deleted: 0,
+        })
+    });
+    let status = job.status();
+    tokio::spawn(run_purge(ops, job, id));
+    Ok((StatusCode::ACCEPTED, Json(status)))
+}
+
+/// The purge job's worker. Every count it reports was committed.
+async fn run_purge(ops: Arc<dyn OpsApi>, job: Arc<Job>, id: u8) {
+    let _finisher = Finisher(job.clone());
+    let stage = |job: &Job, stage| job.update_purge(|p| p.iter_mut().for_each(|p| p.stage = stage));
+    let result = async {
+        let (_, keys) = ops.begin_purge(id, true).await?;
+        job.update_purge(|p| p.iter_mut().for_each(|p| p.keys_dropped = keys));
+        stage(&job, PurgeStage::Removing);
+        let mut cursor = Some(PurgeCursor::START);
+        while let Some(from) = cursor {
+            match job.checkpoint(PURGE_PAUSE_LIMIT).await {
+                Ok(()) => {}
+                Err(Stop::Cancelled) => return Ok(false),
+                Err(Stop::PauseExpired) => {
+                    return Err(OpsError::Internal("the purge was paused too long".into()));
+                }
+            }
+            let step = ops.purge_step(id, from).await?;
+            cursor = step.next;
+            let rows = step.unverified_deleted
+                + step.unverified_kept
+                + step.claims_deleted
+                + step.torrents_deleted.len()
+                + step.torrents_kept
+                + step.state_deleted
+                + step.queue_deleted;
+            job.add(rows as u64, 0);
+            job.update_purge(|p| {
+                if let Some(p) = p {
+                    p.torrents_deleted += step.torrents_deleted.len() as u64;
+                    p.kept += step.torrents_kept as u64;
+                    p.unverified_deleted += step.unverified_deleted as u64;
+                }
+            });
+        }
+        stage(&job, PurgeStage::Finishing);
+        let (scrubbed, left) = ops.finish_purge(id).await?;
+        job.update_purge(|p| {
+            if let Some(p) = p {
+                p.snapshots_scrubbed = scrubbed;
+                p.snapshots_left = left;
+                p.stage = PurgeStage::Purged;
+            }
+        });
+        Ok::<_, OpsError>(true)
+    }
+    .await;
+    match result {
+        Ok(true) => job.finish_done(),
+        Ok(false) => job.finish_cancelled(),
+        Err(e) => job.finish_failed(e.into()),
+    }
 }
 
 /// The network check: our address as other DHT nodes see it, and

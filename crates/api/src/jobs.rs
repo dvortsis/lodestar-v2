@@ -34,7 +34,7 @@ use utoipa::OpenApi;
 
 use crate::dto::error::ErrorEnvelope;
 use crate::dto::jobs::{
-    BackgroundJob, BackgroundJobKind, BackgroundJobState, BackgroundJobs, ExportJob,
+    BackgroundJob, BackgroundJobKind, BackgroundJobState, BackgroundJobs, ExportJob, PurgeJob,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Path, same_origin_json};
@@ -65,7 +65,8 @@ pub fn routes() -> Router<ApiState> {
             .route("/jobs/{id}/pause", post(pause_job))
             .route("/jobs/{id}/resume", post(resume_job))
             .route("/jobs/{id}/cancel", post(cancel_job))
-            .merge(export::routes()),
+            .merge(export::routes())
+            .merge(crate::ops::purge_routes()),
     )
     .layer(middleware::from_fn(move |mut req: Request, next: Next| {
         // The server's registry if it gave one, else this router's own.
@@ -122,6 +123,7 @@ pub(crate) struct Job {
     total_approx: AtomicBool,
     clock: Mutex<Clock>,
     export: Mutex<Option<ExportJob>>,
+    purge: Mutex<Option<PurgeJob>>,
     /// The outcome, the instant it was reached and its Unix time.
     finished: Mutex<Option<(Outcome, Instant, i64)>>,
 }
@@ -146,6 +148,7 @@ impl Job {
                 since: Some(Instant::now()),
             }),
             export: Mutex::new(None),
+            purge: Mutex::new(None),
             finished: Mutex::new(None),
         }
     }
@@ -168,6 +171,19 @@ impl Job {
 
     pub(crate) fn set_export(&self, export: ExportJob) {
         *lock(&self.export) = Some(export);
+    }
+
+    /// Sets or updates a purge's details.
+    pub(crate) fn update_purge(&self, f: impl FnOnce(&mut Option<PurgeJob>)) {
+        f(&mut lock(&self.purge));
+    }
+
+    /// The source a purge job is purging, while it hasn't finished.
+    fn purging(&self) -> Option<u8> {
+        if self.finished_at().is_some() {
+            return None;
+        }
+        lock(&self.purge).as_ref().map(|p| p.source_id)
     }
 
     pub(crate) fn mark_truncated(&self) {
@@ -315,6 +331,7 @@ impl Job {
             eta_s,
             error,
             export: lock(&self.export).clone(),
+            purge: lock(&self.purge).clone(),
             finished_at,
             id: self.id,
             kind: self.kind,
@@ -449,6 +466,11 @@ impl Jobs {
         let job = Arc::new(Job::new(id, kind, crate::unix_now()));
         jobs.insert(id, job.clone());
         Ok(job)
+    }
+
+    /// Whether a purge of `source` is running.
+    pub(crate) fn purging(&self, source: u8) -> bool {
+        self.jobs().values().any(|j| j.purging() == Some(source))
     }
 
     /// Forgets a job that never got going (its setup failed), freeing its

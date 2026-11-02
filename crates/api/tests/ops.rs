@@ -26,6 +26,7 @@ use lodestar_api::settings::{
     SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
 };
 use lodestar_api::{ApiState, Auth, router};
+use lodestar_store::unverified::{PurgeCursor, PurgeStep};
 use lodestar_store::{Store, StoreConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -121,6 +122,10 @@ struct FakeOps {
     calls: Mutex<Vec<String>>,
     sources: Mutex<Vec<Source>>,
     restarted: Mutex<bool>,
+    /// Purge steps the test lets run, and those that ran.
+    purge_permits: Mutex<u32>,
+    purge_steps: Mutex<u32>,
+    purge_wake: tokio::sync::Notify,
 }
 
 fn dht_source() -> Source {
@@ -168,6 +173,7 @@ fn dht_source() -> Source {
         not_yet_editable: vec!["purge".into()],
         password_required: false,
         plugin: "dht".into(),
+        purge_pending: false,
         priority: SourcePriority::Normal,
         restart_required: false,
         risk: RiskLevel::Low,
@@ -367,6 +373,57 @@ impl OpsApi for FakeOps {
             window_s: 600,
             window_started_at: Some(1_699_999_970),
         }
+    }
+
+    fn begin_purge(
+        &self,
+        id: u8,
+        confirmed: bool,
+    ) -> BoxFuture<'_, Result<(String, u64), OpsError>> {
+        Box::pin(async move {
+            assert!(confirmed, "the route checked the password");
+            self.calls.lock().unwrap().push(format!("begin_purge {id}"));
+            Ok(("dht".into(), 5))
+        })
+    }
+
+    /// Three steps of one deleted torrent each, each waiting for a permit.
+    fn purge_step(
+        &self,
+        _id: u8,
+        _from: PurgeCursor,
+    ) -> BoxFuture<'_, Result<PurgeStep, OpsError>> {
+        Box::pin(async move {
+            loop {
+                let woken = self.purge_wake.notified();
+                {
+                    let mut p = self.purge_permits.lock().unwrap();
+                    if *p > 0 {
+                        *p -= 1;
+                        break;
+                    }
+                }
+                woken.await;
+            }
+            let mut n = self.purge_steps.lock().unwrap();
+            *n += 1;
+            Ok(PurgeStep {
+                next: (!(*n).is_multiple_of(3)).then_some(PurgeCursor::START),
+                torrents_deleted: vec![i64::from(*n)],
+                torrents_kept: 2,
+                ..PurgeStep::default()
+            })
+        })
+    }
+
+    fn finish_purge(&self, id: u8) -> BoxFuture<'_, Result<(u64, u64), OpsError>> {
+        Box::pin(async move {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("finish_purge {id}"));
+            Ok((2, 0))
+        })
     }
 
     fn restart_network_check(&self) -> Result<NetworkCheck, OpsError> {
@@ -949,4 +1006,122 @@ async fn without_a_running_crawler_the_routes_say_so() {
         assert_eq!(status, 503, "{method} {uri}: {text}");
         assert!(text.contains("ops_unavailable"), "{text}");
     }
+}
+
+impl FakeOps {
+    fn permit(&self, n: u32) {
+        *self.purge_permits.lock().unwrap() += n;
+        self.purge_wake.notify_waiters();
+    }
+}
+
+/// Polls `GET /jobs/{id}` until `done` holds, for at most 10 s.
+async fn job_until(f: &Fixture, cookie: &str, id: u64, done: impl Fn(&Value) -> bool) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let (_, body) = send(
+            f,
+            req("GET", &format!("/api/v1/jobs/{id}"), Some(cookie), None),
+        )
+        .await;
+        let job: Value = serde_json::from_str(&body).unwrap();
+        if done(&job) {
+            return job;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the job didn't get there: {job}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+/// A purge runs as a job behind the password, reports only what it
+/// committed when it's cancelled, and finishes when it's run again
+/// (SRC-14b).
+#[tokio::test]
+async fn purging_a_source_is_a_job() {
+    let f = fixture();
+    let cookie = session(&f).await;
+    let purge = |id: u8, body: &str| {
+        req(
+            "POST",
+            &format!("/api/v1/sources/{id}/purge"),
+            Some(&cookie),
+            Some(body),
+        )
+    };
+    // The password, every time; and a source that exists.
+    let (status, body) = send(&f, purge(0, "{}")).await;
+    assert_eq!(status, 428, "{body}");
+    let (status, _) = send(&f, purge(0, r#"{"password":"wrong"}"#)).await;
+    assert_eq!(status, 401);
+    let ok = r#"{"password":"correct horse battery"}"#;
+    let (status, _) = send(&f, purge(9, ok)).await;
+    assert_eq!(status, 404);
+
+    let (status, body) = send(&f, purge(0, ok)).await;
+    assert_eq!(status, 202, "{body}");
+    let job: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(job["kind"], json!("purge"));
+    assert_eq!(job["purge"]["source_id"], json!(0));
+    let id = job["id"].as_u64().unwrap();
+    // One at a time per source.
+    let (status, body) = send(&f, purge(0, ok)).await;
+    assert_eq!(status, 409, "{body}");
+    assert!(body.contains("purge_running"));
+
+    // One step commits, then it's cancelled. A step already waiting
+    // still commits; nothing after the cancel starts. The job reports
+    // exactly the steps that committed.
+    f.ops.permit(1);
+    job_until(&f, &cookie, id, |j| {
+        j["purge"]["torrents_deleted"] == json!(1)
+    })
+    .await;
+    let (status, _) = send(
+        &f,
+        req(
+            "POST",
+            &format!("/api/v1/jobs/{id}/cancel"),
+            Some(&cookie),
+            Some("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    f.ops.permit(1);
+    let job = job_until(&f, &cookie, id, |j| j["state"] == json!("cancelled")).await;
+    let ran = u64::from(*f.ops.purge_steps.lock().unwrap());
+    assert!((1..=2).contains(&ran), "{ran}");
+    assert_eq!(
+        job["purge"]["torrents_deleted"],
+        json!(ran),
+        "the committed steps"
+    );
+    assert_eq!(job["purge"]["kept"], json!(2 * ran));
+    assert_eq!(job["purge"]["keys_dropped"], json!(5));
+    assert_eq!(job["purge"]["stage"], json!("removing"));
+    assert!(
+        !f.ops
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.starts_with("finish_purge"))
+    );
+
+    // Run again: it starts over and finishes.
+    let (status, body) = send(&f, purge(0, ok)).await;
+    assert_eq!(status, 202, "{body}");
+    let id = serde_json::from_str::<Value>(&body).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    f.ops.permit(10);
+    let job = job_until(&f, &cookie, id, |j| j["state"] == json!("done")).await;
+    assert_eq!(job["purge"]["stage"], json!("purged"));
+    assert_eq!(job["purge"]["snapshots_scrubbed"], json!(2));
+    let calls = f.ops.calls.lock().unwrap().clone();
+    assert_eq!(calls.iter().filter(|c| *c == "begin_purge 0").count(), 2);
+    assert!(calls.contains(&"finish_purge 0".to_string()));
 }

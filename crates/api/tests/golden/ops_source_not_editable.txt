@@ -1,2 +1,2 @@
 409
-{"error":{"code":"not_editable","field":"purge","message":"This can't be changed yet."}}
+{"error":{"code":"not_editable","field":"purge","message":"Purge a source with POST /sources/{id}/purge, which runs as a job."}}

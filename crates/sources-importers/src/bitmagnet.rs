@@ -1822,6 +1822,8 @@ pub async fn import(
                     report.partial += u64::from(*partial);
                 }
                 lodestar_store::Inserted::Existing(_) => report.existing += 1,
+                // `Store::insert` never refuses (SRC-14b).
+                lodestar_store::Inserted::Refused => {}
             }
         }
         cursor = b.position;

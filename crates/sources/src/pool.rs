@@ -234,6 +234,7 @@ enum Cmd {
     Snapshot(oneshot::Sender<Vec<QueuedKey>>),
     Queued(oneshot::Sender<Vec<(SourceId, usize)>>),
     SetPaused(bool),
+    DropSource(SourceId, oneshot::Sender<usize>),
 }
 
 /// Talks to a running pool.
@@ -272,6 +273,18 @@ impl PoolHandle {
     /// lookups already out finish or time out as usual.
     pub async fn set_paused(&self, paused: bool) {
         let _ = self.cmds.send(Cmd::SetPaused(paused)).await;
+    }
+
+    /// Drops every key only `source` found, in whatever state (a fetch in
+    /// flight is abandoned when it ends), for a purge (SRC-14b). A key
+    /// other sources found too stays without `source`'s bit, and passes to
+    /// the lowest of them when `source` found it first. A dropped key ends
+    /// as evicted, which releases its lease. Returns the keys dropped; 0
+    /// when the pool has stopped.
+    pub async fn drop_source(&self, source: SourceId) -> usize {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.cmds.send(Cmd::DropSource(source, tx)).await;
+        rx.await.unwrap_or(0)
     }
 
     /// Keys ready to fetch, per source.
@@ -601,6 +614,9 @@ impl Pool {
                     let unused = a.drop_held();
                     self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
                 }
+            }
+            Cmd::DropSource(source, reply) => {
+                let _ = reply.send(self.drop_source(source));
             }
             Cmd::Queued(reply) => {
                 let mut q: Vec<(SourceId, usize)> = self
@@ -1697,6 +1713,31 @@ impl Pool {
             }
         }
         false
+    }
+
+    /// See [`PoolHandle::drop_source`].
+    fn drop_source(&mut self, source: SourceId) -> usize {
+        let bit = 1u64 << source.get();
+        let mut only = Vec::new();
+        for (key, e) in &mut self.entries {
+            if e.sources & bit == 0 && e.source != source {
+                continue;
+            }
+            let rest = e.sources & !bit;
+            if rest == 0 {
+                only.push(*key);
+                continue;
+            }
+            e.sources = rest;
+            if e.source == source {
+                // The lowest remaining finder; its bit is under 64.
+                e.source = SourceId::new(rest.trailing_zeros() as u8).expect("bit under 64");
+            }
+        }
+        for key in &only {
+            self.lose(*key, Loss::Evicted);
+        }
+        only.len()
     }
 
     fn lose(&mut self, key: InfoHash, loss: Loss) {

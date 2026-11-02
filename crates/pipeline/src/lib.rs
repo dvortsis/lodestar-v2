@@ -347,6 +347,11 @@ struct SourceEntry {
     priority: Priority,
     error: Arc<Mutex<Option<String>>>,
     egress: Option<egress::Built>,
+    /// Stops this plugin alone ([`Monitor::stop_source`]); `None` for one
+    /// that never started. The pipeline's own shutdown sets it too.
+    stop: Option<Arc<watch::Sender<bool>>>,
+    /// The plugin's task, to abort one that ignores its stop.
+    task: Option<tokio::task::AbortHandle>,
 }
 
 /// A cheap, cloneable view of a running pipeline's counters, for metrics
@@ -378,6 +383,38 @@ impl std::fmt::Debug for Monitor {
 impl Monitor {
     pub fn pool(&self) -> &PoolHandle {
         &self.pool
+    }
+
+    /// Stops source `id`'s plugin alone, for a purge (SRC-14b): signals
+    /// its stop, waits up to the plugin stop timeout for it to end, then
+    /// aborts it, and drops every key it queued in the pool (a key others
+    /// found too keeps them). Returns the number of keys dropped. A
+    /// source that isn't running only has its keys dropped. Its egress
+    /// monitor ends with it.
+    pub async fn stop_source(&self, id: SourceId) -> usize {
+        if let Some(s) = self.sources.iter().find(|s| s.id == id) {
+            if let Some(stop) = &s.stop {
+                let _ = stop.send(true);
+            }
+            let running = Arc::clone(&s.running);
+            let ended = tokio::time::timeout(PLUGIN_STOP_TIMEOUT, async {
+                while running.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            if ended.is_err() {
+                lodestar_log::log_event!(
+                    log_events::SOURCE_STOP_TIMEOUT,
+                    plugin = s.plugin.manifest().id
+                );
+                if let Some(task) = &s.task {
+                    task.abort();
+                }
+                s.running.store(false, Ordering::Relaxed);
+            }
+        }
+        self.pool.drop_source(id).await
     }
 
     pub fn pool_stats(&self) -> &PoolStats {
@@ -655,8 +692,23 @@ impl Pipeline {
                     priority,
                     error,
                     egress: None,
+                    stop: None,
+                    task: None,
                 });
                 continue;
+            }
+            // Its own stop, which the pipeline's plugin shutdown also
+            // sets, so one plugin can be stopped alone (a purge).
+            let (stop, own_shutdown) = Shutdown::new();
+            let stop = Arc::new(stop);
+            {
+                let (stop, mut all) = (Arc::clone(&stop), plugin_shutdown.clone());
+                // Ends with the pipeline's plugin shutdown; holds `stop`
+                // so the plugin's receiver never sees it dropped early.
+                egress_tasks.push(tokio::spawn(async move {
+                    all.requested().await;
+                    let _ = stop.send(true);
+                }));
             }
             let egress = built.remove(&id);
             if let Some(b) = &egress {
@@ -664,7 +716,7 @@ impl Pipeline {
                     m.id,
                     Arc::clone(&b.egress),
                     EGRESS_PROBE_EVERY,
-                    plugin_shutdown.clone(),
+                    own_shutdown.clone(),
                 ));
             }
             let kit = match &egress {
@@ -689,14 +741,14 @@ impl Pipeline {
                 emitter: emitter.clone(),
                 peer_requests,
                 peer_replies,
-                shutdown: plugin_shutdown.clone(),
+                shutdown: own_shutdown,
                 kit,
             };
             let p = plugin.clone();
             let running = Arc::new(AtomicBool::new(true));
             let flag = running.clone();
             let last_error = Arc::clone(&error);
-            tasks.push(tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 let result = p.run(ctx).await;
                 flag.store(false, Ordering::Relaxed);
                 if let Err(e) = &result {
@@ -708,7 +760,9 @@ impl Pipeline {
                     *last_error.lock().expect("source error lock") = Some(e.to_string());
                 }
                 result
-            }));
+            });
+            let abort = task.abort_handle();
+            tasks.push(task);
             sources.push(SourceEntry {
                 id,
                 plugin,
@@ -718,6 +772,8 @@ impl Pipeline {
                 priority,
                 error,
                 egress,
+                stop: Some(stop),
+                task: Some(abort),
             });
         }
         drop(emit_tx);

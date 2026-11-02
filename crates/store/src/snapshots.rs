@@ -414,6 +414,9 @@ pub struct PurgeReport {
     pub candidates: usize,
     /// Unverified items deleted from snapshots.
     pub unverified: usize,
+    /// Purged sources whose consent record, credentials and settings were
+    /// dropped from a snapshot, counted once per snapshot (SRC-14b).
+    pub sources: usize,
     /// Snapshots skipped or failed, and why; for the log.
     pub warnings: Vec<String>,
 }
@@ -479,6 +482,9 @@ struct Live {
     user_ids: Vec<(i64, HashSet<i64>)>,
     /// Revoked API keys and feed tokens: id and when.
     revoked: HashMap<i64, i64>,
+    /// Purged sources (SRC-14b): the plugin and when its purge ended
+    /// (`sources.purged.<plugin>`). Few, so every pass reads them all.
+    purged_sources: Vec<(String, i64)>,
 }
 
 /// V10 tables with AUTOINCREMENT ids whose deleted rows a snapshot loses.
@@ -550,6 +556,7 @@ impl Live {
         } else {
             HashMap::new()
         };
+        let purged_sources = purged_sources(conn)?;
         Ok(Live {
             deleted,
             sealed,
@@ -558,6 +565,7 @@ impl Live {
             oldest_query,
             user_ids,
             revoked,
+            purged_sources,
         })
     }
 
@@ -693,6 +701,16 @@ impl Store {
                 "dropping old snapshot deletion evidence failed: {e}"
             ));
         }
+        // A purge older than every snapshot it could match is done with.
+        let old_purges = format!("{}%", crate::sources::PURGED_KEY);
+        if let Err(e) = self.conn.execute(
+            "DELETE FROM settings WHERE key LIKE ?1 AND typeof(value) = 'integer' AND value < ?2",
+            params![old_purges, now.saturating_sub(JOURNAL_SECS)],
+        ) {
+            report
+                .warnings
+                .push(format!("dropping old source purge records failed: {e}"));
+        }
         // A redated snapshot's real time is unknown: everything is looked
         // up in it this pass.
         let since_for = |marks: &Marks, s: &Snapshot| {
@@ -741,6 +759,7 @@ impl Store {
                     report.user_data += n.user_data;
                     report.candidates += n.candidates;
                     report.unverified += n.unverified;
+                    report.sources += n.sources;
                     report.purged.push(snap.path.clone());
                 }
                 Err(e) => {
@@ -798,6 +817,8 @@ enum Outcome {
 
 #[derive(Debug, Default)]
 struct Counts {
+    /// Purged sources whose records were dropped (SRC-14b).
+    sources: usize,
     torrents: usize,
     quarantine: usize,
     query_log: usize,
@@ -1022,7 +1043,29 @@ fn purge_one(
         Some(c) if plan.filter && has_table(c.holds, "cs_hashes")? => Some(c.holds),
         _ => None,
     };
+    // Purged sources whose records this snapshot still holds: every purge
+    // since it was taken (all of them for a rollback's copy, whose time
+    // isn't known), as `Store::finish_source_purge` dropped them. A
+    // purge recorded after the snapshot was taken (less the margin) is
+    // left out: the records it holds were saved after that purge.
+    let mut sources = Vec::new();
+    if !live.purged_sources.is_empty()
+        && has_table(&conn, "settings")?
+        && has_table(&conn, "sources")?
+    {
+        for (plugin, at) in &live.purged_sources {
+            let before = snap
+                .taken_at
+                .is_none_or(|t| *at >= t.saturating_sub(TAKEN_MARGIN));
+            // A rollback's copy takes every purge's record, whatever it
+            // holds, so the restored store goes on scrubbing the others.
+            if before && (carry.is_some() || holds_source_records(&conn, plugin)?) {
+                sources.push((plugin.as_str(), *at));
+            }
+        }
+    }
     if ids.is_empty()
+        && sources.is_empty()
         && holds.is_none()
         && journal.is_empty()
         && candidates.is_empty()
@@ -1116,8 +1159,14 @@ fn purge_one(
                 params![&h[..], at],
             )?;
         }
+        // In this transaction with the rest: the snapshot is either
+        // unchanged (and found again next pass) or holds none of them.
+        for (plugin, at) in &sources {
+            scrub_source(&tx, plugin, *at)?;
+        }
         tx.commit()?;
         Ok(Counts {
+            sources: sources.len(),
             torrents,
             quarantine,
             query_log,
@@ -1134,6 +1183,74 @@ fn purge_one(
     }
     restore_time(conn);
     Ok(Outcome::Purged(result?))
+}
+
+/// The purged sources a store records, with when (`sources.purged.*`).
+fn purged_sources(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
+    if !has_table(conn, "settings")? {
+        return Ok(Vec::new());
+    }
+    let prefix = crate::sources::PURGED_KEY;
+    let mut stmt = conn.prepare(
+        "SELECT substr(key, ?2 + 1), value FROM settings
+         WHERE substr(key, 1, ?2) = ?1 AND typeof(value) = 'integer'",
+    )?;
+    let rows = stmt.query_map(params![prefix, prefix.chars().count() as i64], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    rows.collect()
+}
+
+/// Whether a snapshot still holds anything of `plugin`'s that its purge
+/// dropped: a consent record, a credential, its own settings, a purge
+/// under way, or its row in a state other than Purged.
+fn holds_source_records(conn: &Connection, plugin: &str) -> rusqlite::Result<bool> {
+    let not_purged = conn
+        .query_row(
+            "SELECT state != 3 FROM sources WHERE plugin = ?1",
+            [plugin],
+            |r| r.get::<_, bool>(0),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if not_purged {
+        return Ok(true);
+    }
+    let mut exact = conn.prepare("SELECT 1 FROM settings WHERE key = ?1")?;
+    for key in crate::sources::record_keys(plugin)
+        .into_iter()
+        .chain([format!("sources.purging.{plugin}")])
+    {
+        if exact.exists([key])? {
+            return Ok(true);
+        }
+    }
+    let prefix = crate::sources::secret_prefix(plugin);
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM settings WHERE substr(key, 1, ?2) = ?1)",
+        params![prefix, prefix.chars().count() as i64],
+        |r| r.get(0),
+    )
+}
+
+/// Applies `plugin`'s purge (at `at`) to a snapshot, in `tx`: its row
+/// Purged and its records dropped, as `Store::finish_source_purge` left
+/// the live store. The purge's own record goes in too, so a store rolled
+/// back to this snapshot goes on scrubbing the others, and asks for fresh
+/// consent and credentials before the source runs again.
+fn scrub_source(tx: &Connection, plugin: &str, at: i64) -> rusqlite::Result<()> {
+    tx.execute("UPDATE sources SET state = 3 WHERE plugin = ?1", [plugin])?;
+    crate::sources::drop_records(tx, plugin)?;
+    tx.execute(
+        "DELETE FROM settings WHERE key = ?1",
+        [format!("sources.purging.{plugin}")],
+    )?;
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = max(value, excluded.value)",
+        params![format!("{}{plugin}", crate::sources::PURGED_KEY), at],
+    )?;
+    Ok(())
 }
 
 /// How strong a tombstone or quarantine hold under `rule` is, in SQL with
@@ -3222,5 +3339,137 @@ mod tests {
             assert!(r.warnings.is_empty(), "{:?}", r.warnings);
             eprintln!("tick {}: {:?}", i + 1, start.elapsed());
         }
+    }
+
+    /// A source with a sealed credential and a consent record, then
+    /// purged at `T + DAY`; a snapshot of it from before, at `T`.
+    fn purged_after_snapshot(dir: &Path) -> (Store, PathBuf, PathBuf) {
+        let (mut store, db) = live(dir);
+        let id = store
+            .register_source_as("nyaa", "1", crate::SourceState::Disabled, T)
+            .unwrap();
+        store
+            .update_source_secrets(id, &[("api_key", b"SEALED-SECRET-1")], &[], None)
+            .unwrap();
+        store.enable_source(id, Some("CONSENT-ACK-1")).unwrap();
+        let snap = take(&store, &db, 14, T);
+        store.begin_source_purge(id, T + DAY).unwrap();
+        let mut c = Some(crate::unverified::PurgeCursor::START);
+        while let Some(at) = c {
+            c = store.purge_source(id, at, 100).unwrap().next;
+        }
+        store.finish_source_purge(id, T + DAY).unwrap();
+        (store, db, snap)
+    }
+
+    fn source_rows(path: &Path) -> (Vec<String>, i64) {
+        let conn = Connection::open(path).unwrap();
+        let keys = conn
+            .prepare("SELECT key FROM settings WHERE key LIKE 'sources.%' ORDER BY key")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let state = conn
+            .query_row("SELECT state FROM sources WHERE plugin = 'nyaa'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        (keys, state)
+    }
+
+    /// A rollback across a purge brings back none of the source's
+    /// credentials or consent, whether or not the hourly pass has run
+    /// (SRC-14b, runner conditions 1 and 3).
+    #[test]
+    fn a_rollback_across_a_purge_brings_back_no_credentials_or_consent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _db, snap) = purged_after_snapshot(dir.path());
+        assert!(contains(&snap, b"SEALED-SECRET-1"));
+        // Restored before any pass: the copy is scrubbed first.
+        let copy = dir.path().join("restore.tmp");
+        std::fs::copy(&snap, &copy).unwrap();
+        purge_for_restore(store.connection(), &copy, T + 2 * DAY).unwrap();
+        let (keys, state) = source_rows(&copy);
+        assert_eq!(keys, ["sources.purged.nyaa"], "the purge's record survives");
+        assert_eq!(state, 3, "purged: enabling it asks for consent again");
+        assert!(!contains(&copy, b"SEALED-SECRET-1"));
+        assert!(!contains(&copy, b"CONSENT-ACK-1"));
+        assert!(!side(&copy, "-wal").exists());
+        // The hourly pass scrubs the snapshot itself.
+        let r = store.purge_snapshots(T + 2 * DAY, i64::MIN);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.sources, 1);
+        assert!(!contains(&snap, b"SEALED-SECRET-1"));
+        assert!(!contains(&snap, b"CONSENT-ACK-1"));
+        quick_check(&snap);
+        // And a restore of it after the pass is as clean.
+        std::fs::copy(&snap, &copy).unwrap();
+        purge_for_restore(store.connection(), &copy, T + 2 * DAY).unwrap();
+        assert_eq!(source_rows(&copy).0, ["sources.purged.nyaa"]);
+        // A second pass finds nothing left to do.
+        assert_eq!(store.purge_snapshots(T + 2 * DAY, i64::MIN).sources, 0);
+    }
+
+    /// A snapshot taken after the purge keeps what was saved since: a
+    /// source enabled again with new credentials.
+    #[test]
+    fn a_snapshot_taken_after_the_purge_keeps_new_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db, _) = purged_after_snapshot(dir.path());
+        let id = store.sources().unwrap()[0].id;
+        store
+            .update_source_secrets(id, &[("api_key", b"SEALED-SECRET-2")], &[], None)
+            .unwrap();
+        let later = take(&store, &db, 15, T + 3 * DAY);
+        store.purge_snapshots(T + 3 * DAY, i64::MIN);
+        assert!(contains(&later, b"SEALED-SECRET-2"));
+    }
+
+    /// A scrub that stops partway leaves the snapshot as it was, still
+    /// holding the records, and the next pass scrubs it; one that
+    /// committed but stopped before folding its WAL is folded in, scrubbed
+    /// (runner condition 2).
+    #[test]
+    fn a_scrub_interrupted_partway_is_done_again_or_folded_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _db, snap) = purged_after_snapshot(dir.path());
+        {
+            // Stopped before its commit: rolled back.
+            let mut conn = open_rw(&snap).unwrap();
+            conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+            let tx = conn.transaction().unwrap();
+            crate::sources::drop_records(&tx, "nyaa").unwrap();
+            drop(tx);
+        }
+        assert!(holds_source_records(&Connection::open(&snap).unwrap(), "nyaa").unwrap());
+        assert_eq!(store.purge_snapshots(T + 2 * DAY, i64::MIN).sources, 1);
+        assert!(!contains(&snap, b"SEALED-SECRET-1"));
+
+        // Committed in the WAL, then stopped before the checkpoint: the
+        // files as a crash leaves them, copied while the writer is open.
+        std::fs::create_dir(dir.path().join("b")).unwrap();
+        let (mut store, _db2, snap) = purged_after_snapshot(&dir.path().join("b"));
+        let crashed = dir.path().join("b").join("lodestar.pre-v13.db");
+        {
+            let conn = open_rw(&snap).unwrap();
+            conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+            conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+            scrub_source(&conn, "nyaa", T + DAY).unwrap();
+            std::fs::copy(&snap, &crashed).unwrap();
+            std::fs::copy(side(&snap, "-wal"), side(&crashed, "-wal")).unwrap();
+        }
+        set_modified(&crashed, T).unwrap();
+        assert!(
+            contains(&crashed, b"SEALED-SECRET-1"),
+            "the main file isn't written yet"
+        );
+        // The pass folds the WAL in first: scrubbed, and one file again.
+        store.purge_snapshots(T + 2 * DAY, i64::MIN);
+        assert!(!side(&crashed, "-wal").exists());
+        assert!(!holds_source_records(&Connection::open(&crashed).unwrap(), "nyaa").unwrap());
+        quick_check(&crashed);
+        assert_eq!(store.purge_snapshots(T + 2 * DAY, i64::MIN).sources, 0);
     }
 }
