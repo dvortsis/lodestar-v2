@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn the_promoted_queue_reads_in_seq_order_up_to_what_the_index_applied() {
-        let mut s = test_store();
+        let mut s = test_store(0);
         let a = s.create_saved_search(&input("a"), 0, 0).unwrap();
         for seq in [100, 9, 10] {
             queue_promoted(&s.conn, seq).unwrap();
