@@ -42,4 +42,8 @@ jobs:
       - run: npm run check
       - run: npx vitest run
       - run: npm run build
+      # Size is measured on a rebuild with a fixed version name: the commit SHA otherwise changes
+      # the app id and chunk hashes (~30 B of noise per route). Only the version string differs
+      # from the build above.
+      - run: LODESTAR_BUILD_VERSION=0000000 npm run build
       - run: npx size-limit
