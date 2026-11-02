@@ -62,13 +62,18 @@ pub struct PercolatorConfig {
     /// Ids one search covers per run, so a catch-up after downtime is
     /// several short runs.
     pub max_range: i64,
-    /// Alerts kept per saved search: the newest, by torrent id. A run
+    /// Alerts kept per saved search: the newest recorded (a promoted
+    /// torrent's alert is new though its id is old, SRC-2b). A run
     /// records at most this many per search too.
     pub keep: usize,
     /// How often alerts are pruned to `keep`.
     pub prune_every: Duration,
     /// After a failed run, the next waits this long (or for a commit).
     pub retry: Duration,
+    /// An idle task looks at the promoted queue this often: an index
+    /// commit that only replays `reindex_log` (a promotion) doesn't wake
+    /// it, since the commit hook reports new torrents only (SRC-2b).
+    pub promoted_poll: Duration,
 }
 
 impl Default for PercolatorConfig {
@@ -79,6 +84,7 @@ impl Default for PercolatorConfig {
             keep: 1_000,
             prune_every: Duration::from_secs(3600),
             retry: Duration::from_secs(5),
+            promoted_poll: Duration::from_secs(10),
         }
     }
 }
@@ -286,6 +292,10 @@ fn run_promoted(
     // what the refreshed reader sees.
     let applied = index.reindex_watermark()?;
     let rows = store.promoted_due(applied, PROMOTED_BATCH)?;
+    // An index rebuilt from empty commits the log's head before its ids
+    // reach a promoted one: the row waits until they do, or it would be
+    // matched against nothing and lost.
+    let indexed = index.watermark()?;
     let Some(last) = rows.last().map(|r| r.seq) else {
         return Ok(());
     };
@@ -307,7 +317,9 @@ fn run_promoted(
     let mut hits: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
     let mut done = None;
     for row in &rows {
-        if !matched_promoted(index, &parsed, row, limits, now, cancel, &mut hits)? {
+        if row.torrent_id > indexed
+            || !matched_promoted(index, &parsed, row, limits, now, cancel, &mut hits)?
+        {
             break;
         }
         done = Some(row.seq);
@@ -444,6 +456,7 @@ pub fn spawn(
                     _ = stopped.wait_for(|s| *s) => return,
                     () = wake.notify.notified() => {}
                     () = tokio::time::sleep_until(next_prune) => {}
+                    () = tokio::time::sleep(config.promoted_poll) => {}
                 }
             } else if *stopped.borrow() || stopped.has_changed().is_err() {
                 return;
@@ -1004,8 +1017,6 @@ mod tests {
         Arc::try_unwrap(serving).unwrap().shutdown().unwrap();
     }
 
-    /// The sink only raises an atomic and wakes: with the task never
-    /// running at all, the indexer commits everything as fast as without.
     const CODES: SearchableCodes = SearchableCodes {
         stage: 5,
         newly: 10,
@@ -1118,8 +1129,9 @@ mod tests {
         index_all(&s.index, &mut s.store);
         let due = s.store.promoted_due(i64::MAX, 10).unwrap();
         assert_eq!(due.len(), 1);
-        // The hit for `promo` was committed, its queue row wasn't: the
-        // row stays and the replay matches the same id again.
+        // The state a crash would leave if the hits and the row weren't one
+        // transaction (they are): `promo`'s hit committed, its queue row
+        // not. The row stays, and the replay matches the same id again.
         let ast = s.store.saved_search(promo).unwrap().unwrap().ast;
         let created = s
             .store
@@ -1185,10 +1197,11 @@ mod tests {
             .info_hash
             .0;
         s.store.add_cs_hashes(&[hash], 0, NOW).unwrap();
-        assert!(matches!(
+        // The hold takes the item with it (V14), so nothing is promoted.
+        assert_eq!(
             promote(&mut s.store, held, "Promo.Held.Even", 0),
-            Promoted::Held | Promoted::Gone
-        ));
+            Promoted::Gone
+        );
         // Hidden by a filter rule.
         assert_eq!(
             promote(&mut s.store, item, "Promo.Even", flags::HIDDEN),
@@ -1211,6 +1224,7 @@ mod tests {
             .map(|a| a.torrent_id)
             .collect();
         assert_eq!(shown, vec![stored]);
+        assert_eq!(s.store.unread_shown(None).unwrap(), 2, "`stored` twice");
         assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
     }
 
@@ -1276,6 +1290,8 @@ mod tests {
         );
     }
 
+    /// The sink only raises an atomic and wakes: with the task never
+    /// running at all, the indexer commits everything as fast as without.
     #[test]
     fn a_stalled_task_never_delays_a_commit() {
         let mut s = setup(0);
@@ -1547,6 +1563,67 @@ mod tests {
         while alert_ids(&store, last).len() < 10 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        stop.send(true).unwrap();
+        task.await.unwrap();
+        hub.close();
+        drop(handle);
+        Arc::try_unwrap(serving).unwrap().shutdown().unwrap();
+    }
+    /// A quiet instance: a promotion's commit adds no torrent, so the
+    /// hook doesn't wake the task; the idle poll finds it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_task_alerts_on_a_promotion_with_no_new_torrents() {
+        use lodestar_api::events::{EventSources, EventsConfig};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("s.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let item = unverified(&mut store, "Promo.Even");
+        add(&mut store, &names(0, 20));
+        let serving = Arc::new(
+            Serving::open_or_rebuild(
+                &tmp.path().join("index"),
+                &db,
+                ServingConfig {
+                    live: LiveConfig {
+                        heap_bytes: 15 << 20,
+                        ..LiveConfig::default()
+                    },
+                    ..ServingConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        let handle = SearchHandle::serving(serving.clone());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while handle.index().watermark().unwrap() < 21 {
+            assert!(Instant::now() < deadline, "the index caught up");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let promo = save(&mut store, "promo", "Promo", 21);
+        let hub = EventHub::start(EventsConfig::default(), EventSources::default());
+        let (stop, stopped) = watch::channel(false);
+        let task = spawn(
+            handle.clone(),
+            serving.commit_hook(),
+            Store::open(&db, StoreConfig::default()).unwrap(),
+            hub.clone(),
+            AdultVisibility::default(),
+            stopped,
+            PercolatorConfig {
+                promoted_poll: Duration::from_millis(200),
+                ..quick()
+            },
+        );
+        assert_eq!(
+            promote(&mut store, item, "Promo.Even", 0),
+            Promoted::Kept(item)
+        );
+        while alert_ids(&store, promo).is_empty() {
+            assert!(Instant::now() < deadline, "the promotion alerted");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(alert_ids(&store, promo), vec![item]);
         stop.send(true).unwrap();
         task.await.unwrap();
         hub.close();

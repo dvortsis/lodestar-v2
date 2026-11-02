@@ -100,7 +100,8 @@ pub struct PromotedDue {
 }
 
 /// The queue's `settings` keys: this prefix and the `reindex_log` seq in
-/// 20 digits, so key order is seq order.
+/// 20 digits, so key order is seq order. Values are text, as every
+/// setting a prefix read returns must be.
 const PROMOTED: &str = "percolator.promoted.";
 
 fn promoted_key(seq: i64) -> String {
@@ -112,7 +113,7 @@ fn promoted_key(seq: i64) -> String {
 pub(crate) fn queue_promoted(tx: &Connection, seq: i64) -> Result<()> {
     tx.prepare_cached(
         "INSERT INTO settings (key, value)
-         SELECT ?1, coalesce(max(id), 0) FROM saved_searches",
+         SELECT ?1, CAST(coalesce(max(id), 0) AS TEXT) FROM saved_searches",
     )?
     .execute([promoted_key(seq)])?;
     Ok(())
@@ -400,9 +401,9 @@ impl Store {
         let mut deleted = 0;
         {
             let mut stmt = tx.prepare_cached(
-                "DELETE FROM alerts WHERE saved_search_id = ?1 AND torrent_id <= (
-                     SELECT torrent_id FROM alerts WHERE saved_search_id = ?1
-                     ORDER BY torrent_id DESC LIMIT 1 OFFSET ?2)",
+                "DELETE FROM alerts WHERE saved_search_id = ?1 AND id <= (
+                     SELECT id FROM alerts WHERE saved_search_id = ?1
+                     ORDER BY id DESC LIMIT 1 OFFSET ?2)",
             )?;
             for id in ids {
                 deleted += stmt.execute(params![id, sql_limit(keep)])?;
@@ -534,7 +535,8 @@ impl Store {
     /// nothing, so it's still consumed.
     pub fn promoted_due(&self, applied: i64, limit: usize) -> Result<Vec<PromotedDue>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT CAST(substr(s.key, ?3) AS INTEGER), coalesce(r.torrent_id, 0), s.value
+            "SELECT CAST(substr(s.key, ?3) AS INTEGER), coalesce(r.torrent_id, 0),
+                    CAST(s.value AS INTEGER)
              FROM settings s LEFT JOIN reindex_log r
                  ON r.seq = CAST(substr(s.key, ?3) AS INTEGER)
              WHERE s.key > ?1 AND s.key <= ?2 ORDER BY s.key LIMIT ?4",
