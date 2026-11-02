@@ -14,6 +14,7 @@
 //! writer task drives it.
 
 mod api_keys;
+pub mod claims;
 mod collections;
 mod compress;
 pub mod filetree;
@@ -33,6 +34,7 @@ pub mod snapshots;
 mod sources;
 mod subscriptions;
 mod swarm;
+pub mod unverified;
 mod user_data;
 mod user_items;
 

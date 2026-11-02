@@ -298,12 +298,15 @@ pub(crate) struct Plan {
     /// Drop import candidates whose hash the live store deleted or holds
     /// (`import_candidates`, v13+).
     candidates: bool,
+    /// Drop unverified items whose hash the live store deleted or holds
+    /// (`unverified_items`, v14+). Torrent claims go with their torrents.
+    unverified: bool,
 }
 
 impl Plan {
     /// The newest schema version this table knows. A new migration must
     /// say here what its schema means for the purge.
-    pub(crate) const KNOWN_THROUGH: i64 = 13;
+    pub(crate) const KNOWN_THROUGH: i64 = 14;
 
     /// Per schema version (see the PR's table and `docs/decisions`):
     ///
@@ -313,6 +316,7 @@ impl Plan {
     /// | 4–9 | purged | purged | absent |
     /// | 10–12 | purged | purged | purged |
     /// | 13 | purged, and import candidates | purged | purged |
+    /// | 14 | purged, with candidates and unverified items | purged | purged |
     /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
@@ -324,6 +328,7 @@ impl Plan {
                 query_log: false,
                 user_data: false,
                 candidates: false,
+                unverified: false,
             }),
             // V4 adds cs_hashes, tombstones, quarantine (hash, rule,
             // sealed, at, expires_at) and filter_hits (at), unchanged
@@ -336,6 +341,7 @@ impl Plan {
                 query_log: false,
                 user_data: false,
                 candidates: false,
+                unverified: false,
             }),
             // V10 adds your data (saved searches, alerts, marks,
             // collections), API keys and the query log. Alerts, marks and
@@ -358,16 +364,30 @@ impl Plan {
                 query_log: true,
                 user_data: true,
                 candidates: false,
+                unverified: false,
             }),
             // V13 adds imports (IMP-1). Candidates hold hashes and names
             // that aren't torrents, so they go by hash; the other import
             // tables cascade from torrents or hold no names.
-            13..=Self::KNOWN_THROUGH => Some(Plan {
+            13 => Some(Plan {
                 torrents: true,
                 filter: true,
                 query_log: true,
                 user_data: true,
                 candidates: true,
+                unverified: false,
+            }),
+            // V14 adds Sources (SRC-1). Unverified items hold keys and
+            // claim names that aren't torrents, so they go by hash, as
+            // candidates do. Torrent claims cascade from torrents; plugin
+            // state holds no names.
+            14..=Self::KNOWN_THROUGH => Some(Plan {
+                torrents: true,
+                filter: true,
+                query_log: true,
+                user_data: true,
+                candidates: true,
+                unverified: true,
             }),
             _ => None,
         }
@@ -392,6 +412,8 @@ pub struct PurgeReport {
     pub user_data: usize,
     /// Import candidates deleted from snapshots.
     pub candidates: usize,
+    /// Unverified items deleted from snapshots.
+    pub unverified: usize,
     /// Snapshots skipped or failed, and why; for the log.
     pub warnings: Vec<String>,
 }
@@ -718,6 +740,7 @@ impl Store {
                     report.query_log += n.query_log;
                     report.user_data += n.user_data;
                     report.candidates += n.candidates;
+                    report.unverified += n.unverified;
                     report.purged.push(snap.path.clone());
                 }
                 Err(e) => {
@@ -780,6 +803,7 @@ struct Counts {
     query_log: usize,
     user_data: usize,
     candidates: usize,
+    unverified: usize,
 }
 
 /// Deletes a snapshot and any side file SQLite left beside it: whether
@@ -899,6 +923,7 @@ fn purge_one(
     // its modification time touched).
     let mut ids = BTreeSet::new();
     let mut candidates = BTreeSet::new();
+    let mut unverified = BTreeSet::new();
     if plan.torrents {
         // `since` is no earlier than a day before the snapshot was taken:
         // a hash deleted before that and fetched again stays in it.
@@ -907,11 +932,20 @@ fn purge_one(
             .candidates
             .then(|| conn.prepare(CANDIDATE_BY_HASH))
             .transpose()?;
+        let mut find_unverified = plan
+            .unverified
+            .then(|| conn.prepare(UNVERIFIED_BY_HASH))
+            .transpose()?;
         for h in live.reported.iter().chain(recent.map(|(h, _)| h)) {
             ids.extend(crate::find_any(&conn, std::iter::once(InfoHash(*h)))?);
             if let Some(stmt) = &mut find {
                 for c in stmt.query_map([&h[..]], |r| r.get::<_, Vec<u8>>(0))? {
                     candidates.insert(c?);
+                }
+            }
+            if let Some(stmt) = &mut find_unverified {
+                for id in stmt.query_map([&h[..]], |r| r.get::<_, i64>(0))? {
+                    unverified.insert(id?);
                 }
             }
         }
@@ -992,6 +1026,7 @@ fn purge_one(
         && holds.is_none()
         && journal.is_empty()
         && candidates.is_empty()
+        && unverified.is_empty()
         && unsealed.is_empty()
         && expiring == 0
         && hits == 0
@@ -1024,6 +1059,10 @@ fn purge_one(
         let mut candidates_gone = 0;
         for h in &candidates {
             candidates_gone += tx.execute("DELETE FROM import_candidates WHERE hash = ?1", [h])?;
+        }
+        let mut unverified_gone = 0;
+        for id in &unverified {
+            unverified_gone += tx.execute("DELETE FROM unverified_items WHERE id = ?1", [id])?;
         }
         // Before the quarantine purge below, which then expires and
         // unseals the merged rows as the store's own tick would.
@@ -1084,6 +1123,7 @@ fn purge_one(
             query_log,
             user_data,
             candidates: candidates_gone,
+            unverified: unverified_gone,
         })
     })();
     if wal {
@@ -1415,6 +1455,9 @@ pub fn purge_for_restore(
         Outcome::Purged(n) => Some(n.torrents),
     })
 }
+
+/// A snapshot's unverified BitTorrent item under a hash.
+const UNVERIFIED_BY_HASH: &str = "SELECT id FROM unverified_items WHERE network = 0 AND key = ?1";
 
 /// A snapshot's candidates under a hash, primary or truncated v2.
 const CANDIDATE_BY_HASH: &str = "SELECT hash FROM import_candidates WHERE hash = ?1
@@ -2062,6 +2105,7 @@ mod tests {
             assert_eq!(plan.query_log, v >= 10, "v{v}");
             assert_eq!(plan.user_data, v >= 10, "v{v}");
             assert_eq!(plan.candidates, v >= 13, "v{v}");
+            assert_eq!(plan.unverified, v >= 14, "v{v}");
         }
         assert_eq!(Plan::for_version(0), None);
         assert_eq!(Plan::for_version(latest + 1), None);
@@ -2792,6 +2836,79 @@ mod tests {
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         assert_eq!(r.candidates, 1, "{r:?}");
         assert!(!contains(&snap, marker.as_bytes()));
+    }
+
+    /// A V14 snapshot loses an unverified item, claims included, whose
+    /// hash the live store held after it was taken (the hold's trigger
+    /// journals it), and one a source purge deleted; the torrent claims of
+    /// a deleted torrent go with it. Unrelated items stay.
+    #[test]
+    fn held_and_purged_unverified_items_leave_v14_snapshots() {
+        use crate::claims::Claims;
+        use crate::unverified::{Network, NewUnverified, PurgeCursor};
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let nyaa = store.register_source("nyaa", "1", T).unwrap();
+        let other = store.register_source("other", "1", T).unwrap();
+        let claims = |name: &str| Claims {
+            name: Some(name.into()),
+            ..Claims::default()
+        };
+        let (held, purged, kept) = (
+            claims("unverified-held-marker-9c1e"),
+            claims("unverified-purged-marker-4b77"),
+            claims("unverified-kept-marker-0d3a"),
+        );
+        let put = |store: &mut Store, key: [u8; 20], source, c: &Claims| {
+            store
+                .put_unverified(&[NewUnverified {
+                    network: Network::Bt,
+                    key: &key,
+                    source,
+                    private_source: false,
+                    claims: Some(c),
+                    at: T,
+                }])
+                .unwrap();
+        };
+        put(&mut store, [0x61; 20], other, &held);
+        put(&mut store, [0x62; 20], nyaa, &purged);
+        put(&mut store, [0x63; 20], other, &kept);
+        insert_torrent(store.connection(), 900, [0x64; 20], "claimed torrent");
+        let claim_marker = "torrent-claim-marker-77aa";
+        assert!(
+            store
+                .put_claims(900, other, &claims(claim_marker), false)
+                .unwrap()
+        );
+        let snap = take(&store, &db, 14, T);
+
+        store
+            .connection()
+            .execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'CS-2', ?2)",
+                rusqlite::params![&[0x61u8; 20][..], T + DAY],
+            )
+            .unwrap();
+        store
+            .set_source_state(nyaa, crate::SourceState::Disabled)
+            .unwrap();
+        let mut cursor = Some(PurgeCursor::START);
+        while let Some(c) = cursor {
+            cursor = store.purge_source(nyaa, c, 100).unwrap().next;
+        }
+        store.delete_torrents(&[[0x64; 20]]).unwrap();
+        stamp(&store, T + DAY);
+
+        let r = store.purge_snapshots(T + 2 * DAY, 0);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.unverified, 2, "{r:?}");
+        assert_eq!(r.torrents, 1, "{r:?}");
+        assert!(!contains(&snap, b"unverified-held-marker-9c1e"));
+        assert!(!contains(&snap, b"unverified-purged-marker-4b77"));
+        assert!(!contains(&snap, claim_marker.as_bytes()));
+        assert!(contains(&snap, b"unverified-kept-marker-0d3a"));
+        quick_check(&snap);
     }
 
     /// After a full pass, only holds recorded since the last pass (less a

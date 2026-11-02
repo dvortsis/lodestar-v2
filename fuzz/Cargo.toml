@@ -141,3 +141,10 @@ path = "fuzz_targets/rss.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "claims"
+path = "fuzz_targets/claims.rs"
+test = false
+doc = false
+bench = false
