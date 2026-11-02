@@ -7,6 +7,7 @@
 //! under global hard caps.
 
 pub mod claims;
+pub mod consent;
 pub mod egress;
 mod funnel;
 pub mod http;

@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use lodestar_dht::node::{ExternalVotes, Intensity, StatsSnapshot};
+use lodestar_sources::consent::{self, Ack, CredentialRefusal, Need, Secret, SourceCredentials};
 use lodestar_sources::{Consent, Priority, SourcePlugin, Stage};
 use lodestar_store::{Event, SourceId, SourceState, Store, WriteBatch};
 use tokio::time::Instant;
@@ -99,13 +100,6 @@ pub fn intensity_name(i: Intensity) -> &'static str {
         Intensity::Balanced => "balanced",
         Intensity::Aggressive => "aggressive",
     }
-}
-
-/// Whether enabling a source of this class needs the consent screen
-/// (§18.7): Restricted and Overlay do; None and External are a toggle,
-/// and Account asks for credentials instead.
-pub fn needs_consent(c: Consent) -> bool {
-    matches!(c, Consent::Restricted | Consent::Overlay)
 }
 
 /// One sample of the counters.
@@ -311,23 +305,47 @@ pub struct SourceView {
     pub stored_24h: i64,
     /// When it last started (the pipeline's start), if it ran.
     pub last_run: Option<i64>,
+    /// What enabling it still needs (§18.7); `None` when it's a toggle.
+    pub need: Option<Need>,
+    /// The version an acknowledgement must name ([`consent::version`]);
+    /// empty for a class that's never acknowledged.
+    pub consent_version: String,
+    /// The names of its stored credentials. Never their values.
+    pub credentials: Vec<String>,
 }
 
-/// A change to one source. `None` leaves a field as it is.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceChange {
     pub enabled: Option<bool>,
     pub priority: Option<Priority>,
-    /// The consent class the user agreed to, for enabling a source whose
-    /// class needs it.
+    /// The consent class the user acknowledged, for enabling a source
+    /// whose class needs it...
     pub consent: Option<Consent>,
+    /// ...and the version of what they were shown ([`consent::version`]).
+    pub consent_version: Option<String>,
+    /// The caller checked the admin password for this change. Accepting
+    /// Restricted or Overlay consent needs it (Q13).
+    pub password_confirmed: bool,
 }
 
 #[derive(Debug)]
 pub enum SourceError {
     Unknown,
-    /// Enabling needs consent to this class first.
-    ConsentRequired(Consent),
+    /// Enabling needs an acknowledgement of this class, at this version
+    /// (a missing, wrong or stale one).
+    ConsentRequired {
+        class: Consent,
+        version: String,
+    },
+    /// Accepting this class's consent needs the admin password.
+    PasswordRequired,
+    /// Enabling needs the source's credentials stored first.
+    CredentialsRequired,
+    /// A credential change was refused.
+    Credential(CredentialRefusal),
+    /// The credentials couldn't be sealed (the key file couldn't be
+    /// read or created). Carries nothing secret.
+    Sealing,
     Store(Error),
 }
 
@@ -342,6 +360,9 @@ impl From<lodestar_store::Error> for SourceError {
         SourceError::Store(Error::Store(e))
     }
 }
+
+/// One credential change: a value to store, or `None` to remove it.
+pub type CredentialChange = (String, Option<Secret>);
 
 #[derive(Debug)]
 struct State {
@@ -641,9 +662,17 @@ impl Control {
     pub fn sources(&self) -> Result<Vec<SourceView>, Error> {
         let statuses = self.inner.monitor.sources();
         let hour = unix_now().div_euclid(3600);
-        let (rows, cohorts) = {
+        let (rows, cohorts, gates) = {
             let store = self.inner.store.lock().expect("store lock");
-            (store.sources()?, store.cohorts(hour - 23, hour + 1)?)
+            let gates = statuses
+                .iter()
+                .map(|s| {
+                    let need = consent::need_in(&store, &s.manifest)?;
+                    let names = store.source_secret_names(s.manifest.id)?;
+                    Ok((s.id, (need, names)))
+                })
+                .collect::<Result<HashMap<_, _>, lodestar_store::Error>>()?;
+            (store.sources()?, store.cohorts(hour - 23, hour + 1)?, gates)
         };
         let priorities = self.state().priorities.clone();
         let started_at = self.inner.monitor.started_at();
@@ -651,6 +680,7 @@ impl Control {
             .into_iter()
             .map(|status| {
                 let row = rows.iter().find(|r| r.id == status.id);
+                let (need, credentials) = gates.get(&status.id).cloned().unwrap_or_default();
                 let count = |stage: Stage| -> i64 {
                     cohorts
                         .iter()
@@ -668,6 +698,9 @@ impl Control {
                     harvested_24h: count(Stage::Harvested),
                     stored_24h: count(Stage::Stored),
                     last_run: status.enabled.then_some(started_at),
+                    need,
+                    consent_version: consent::version(&status.manifest),
+                    credentials,
                     status,
                 }
             })
@@ -676,21 +709,21 @@ impl Control {
 
     /// Enables or disables a source and sets its priority. The priority
     /// applies at once; whether the source runs changes at the next
-    /// start. Enabling a source whose consent class needs it requires
-    /// `change.consent` to name that class.
+    /// start. Enabling checks the source's class condition (§18.7,
+    /// [`consent::need`]) against the store under the store's lock, and
+    /// writes a new acknowledgement and the state in one transaction:
+    /// - External, Restricted and Overlay need `change.consent` and
+    ///   `change.consent_version` naming the class and the current version
+    ///   unless an acknowledgement of that version is stored; Restricted
+    ///   and Overlay also need `change.password_confirmed`, every time
+    ///   they're enabled.
+    /// - Account needs credentials stored ([`Control::update_credentials`]).
     pub async fn update_source(
         &self,
         id: SourceId,
         change: SourceChange,
     ) -> Result<SourceView, SourceError> {
-        let status = self
-            .inner
-            .monitor
-            .sources()
-            .into_iter()
-            .find(|s| s.id == id)
-            .ok_or(SourceError::Unknown)?;
-        let manifest = status.manifest.clone();
+        let manifest = self.manifest(id)?;
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
             let mut store = this.inner.store.lock().expect("store lock");
@@ -699,10 +732,30 @@ impl Control {
                 .into_iter()
                 .find(|r| r.id == id)
                 .map_or(SourceState::Enabled, |r| r.state);
+            let mut ack = None;
             let state = match change.enabled {
                 Some(true) if current != SourceState::Enabled => {
-                    if needs_consent(manifest.consent) && change.consent != Some(manifest.consent) {
-                        return Err(SourceError::ConsentRequired(manifest.consent));
+                    match consent::need_in(&store, &manifest)? {
+                        None => {}
+                        Some(Need::Credentials) => return Err(SourceError::CredentialsRequired),
+                        Some(Need::Endpoints | Need::Consent) => {
+                            let wanted = consent::version(&manifest);
+                            if change.consent != Some(manifest.consent)
+                                || change.consent_version.as_deref() != Some(wanted.as_str())
+                            {
+                                return Err(SourceError::ConsentRequired {
+                                    class: manifest.consent,
+                                    version: wanted,
+                                });
+                            }
+                            ack = Some(Ack::of(&manifest).encode());
+                        }
+                    }
+                    // Enabling Restricted or Overlay asks for the password
+                    // every time, not only when the consent is first
+                    // accepted (§20.11: never remembered).
+                    if consent::needs_password(manifest.consent) && !change.password_confirmed {
+                        return Err(SourceError::PasswordRequired);
                     }
                     Some(SourceState::Enabled)
                 }
@@ -715,7 +768,11 @@ impl Control {
                 store.set_settings_text(&[(key.as_str(), value.as_str())])?;
             }
             if let Some(state) = state {
-                store.set_source_state(id, state)?;
+                if state == SourceState::Enabled {
+                    store.enable_source(id, ack.as_deref())?;
+                } else {
+                    store.set_source_state(id, state)?;
+                }
                 lodestar_log::log_event!(
                     crate::log_events::SOURCE_STATE_CHANGED,
                     plugin = manifest.id,
@@ -730,6 +787,98 @@ impl Control {
             self.state().priorities.insert(id, p);
             self.inner.monitor.pool().set_weight(id, p.weight()).await;
         }
+        self.view(id).await
+    }
+
+    /// Stores or removes a source's credentials, sealed by `sealer` under
+    /// the source's own context. Removing what an enabled Account source
+    /// needs disables it in the same write. Values are never returned,
+    /// logged or put in an error.
+    pub async fn update_credentials(
+        &self,
+        id: SourceId,
+        sealer: &SourceCredentials,
+        changes: Vec<CredentialChange>,
+    ) -> Result<SourceView, SourceError> {
+        let manifest = self.manifest(id)?;
+        for (name, value) in &changes {
+            consent::check_name(name).map_err(SourceError::Credential)?;
+            if let Some(v) = value {
+                consent::check_value(name, v).map_err(SourceError::Credential)?;
+            }
+        }
+        let this = self.clone();
+        let sealer = sealer.clone();
+        tokio::task::spawn_blocking(move || {
+            // Sealed before the store's lock is taken: it may create the
+            // key file.
+            let mut set = Vec::new();
+            let mut remove = Vec::new();
+            for (name, value) in &changes {
+                match value {
+                    Some(v) => set.push((
+                        name.as_str(),
+                        sealer
+                            .seal(manifest.id, name, v)
+                            .map_err(|_| SourceError::Sealing)?,
+                    )),
+                    None => remove.push(name.as_str()),
+                }
+            }
+            let mut store = this.inner.store.lock().expect("store lock");
+            let mut names: std::collections::BTreeSet<String> = store
+                .source_secret_names(manifest.id)?
+                .into_iter()
+                .collect();
+            for (n, _) in &set {
+                names.insert((*n).to_string());
+            }
+            for n in &remove {
+                names.remove(*n);
+            }
+            if names.len() > consent::MAX_CREDENTIALS {
+                return Err(SourceError::Credential(CredentialRefusal::TooMany));
+            }
+            let current = store
+                .sources()?
+                .into_iter()
+                .find(|r| r.id == id)
+                .map(|r| r.state);
+            let names: Vec<String> = names.into_iter().collect();
+            let ack = store
+                .source_consent(manifest.id)?
+                .as_deref()
+                .and_then(Ack::decode);
+            let lapses = current == Some(SourceState::Enabled)
+                && consent::need(&manifest, ack.as_ref(), &names).is_some();
+            let state = lapses.then_some(SourceState::Disabled);
+            let set: Vec<(&str, &[u8])> = set.iter().map(|(n, v)| (*n, v.as_slice())).collect();
+            store.update_source_secrets(id, &set, &remove, state)?;
+            if let Some(state) = state {
+                lodestar_log::log_event!(
+                    crate::log_events::SOURCE_STATE_CHANGED,
+                    plugin = manifest.id,
+                    state = crate::log_events::state(state)
+                );
+            }
+            Ok::<_, SourceError>(())
+        })
+        .await
+        .map_err(|e| SourceError::Store(Error::Join(e)))??;
+        self.view(id).await
+    }
+
+    fn manifest(&self, id: SourceId) -> Result<lodestar_sources::Manifest, SourceError> {
+        self.inner
+            .monitor
+            .sources()
+            .into_iter()
+            .find(|s| s.id == id)
+            .map(|s| s.manifest)
+            .ok_or(SourceError::Unknown)
+    }
+
+    async fn view(&self, id: SourceId) -> Result<SourceView, SourceError> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || this.sources())
             .await
@@ -737,6 +886,11 @@ impl Control {
             .into_iter()
             .find(|v| v.status.id == id)
             .ok_or(SourceError::Unknown)
+    }
+
+    /// The store the control writes through (for the credential store).
+    pub fn store(&self) -> Arc<Mutex<Store>> {
+        self.inner.store.clone()
     }
 }
 
@@ -901,11 +1055,6 @@ mod tests {
 
     #[test]
     fn consent_and_names() {
-        assert!(!needs_consent(Consent::None));
-        assert!(!needs_consent(Consent::External));
-        assert!(!needs_consent(Consent::Account));
-        assert!(needs_consent(Consent::Restricted));
-        assert!(needs_consent(Consent::Overlay));
         for p in [
             Priority::Low,
             Priority::Normal,

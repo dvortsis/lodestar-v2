@@ -98,10 +98,65 @@ pub(crate) fn next_id(conn: &Connection) -> Result<i64> {
         .query_row([], |r| r.get(0))?)
 }
 
+/// Where a source's consent record lives in `settings`: this, then the
+/// plugin's manifest id. Its text is the sources crate's to encode.
+const CONSENT_KEY: &str = "sources.consent.";
+/// Where a source's sealed credentials live in `settings`: this, the
+/// plugin's manifest id, `/`, then the credential's name. The value is the
+/// sealed blob; the key file that opens it is outside the database.
+const SECRET_KEY: &str = "sources.secret.";
+
+fn secret_prefix(plugin: &str) -> String {
+    format!("{SECRET_KEY}{plugin}/")
+}
+
+fn plugin_of(conn: &Connection, id: SourceId) -> Result<String> {
+    conn.query_row("SELECT plugin FROM sources WHERE id = ?1", [id.0], |r| {
+        r.get(0)
+    })
+    .optional()?
+    .ok_or(Error::NotFound("source"))
+}
+
+/// Removes a source's consent record and credentials (on purge).
+fn drop_records(conn: &Connection, plugin: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM settings WHERE key = ?1",
+        [format!("{CONSENT_KEY}{plugin}")],
+    )?;
+    let prefix = secret_prefix(plugin);
+    conn.execute(
+        "DELETE FROM settings WHERE substr(key, 1, ?2) = ?1",
+        params![prefix, prefix.chars().count() as i64],
+    )?;
+    Ok(())
+}
+
 impl Store {
     /// Returns `plugin`'s id, registering it as enabled on first sight, and
-    /// records the running version.
+    /// records the running version. For importers and tests: the
+    /// pipeline registers plugins with [`Store::register_source_as`], so a
+    /// plugin that needs consent is never enabled, even for a moment.
     pub fn register_source(&mut self, plugin: &str, version: &str, now: i64) -> Result<SourceId> {
+        self.register_source_as(plugin, version, SourceState::Enabled, now)
+    }
+
+    /// Returns `plugin`'s id and records the running version. A plugin
+    /// seen for the first time is registered in state `first`, in the
+    /// same write, so a crash can't leave it in any other state (§18.7).
+    /// A known plugin keeps its stored state.
+    pub fn register_source_as(
+        &mut self,
+        plugin: &str,
+        version: &str,
+        first: SourceState,
+        now: i64,
+    ) -> Result<SourceId> {
+        // `/` ends the plugin's part of a credential key: an id holding one
+        // could reach another plugin's credentials.
+        if plugin.is_empty() || plugin.contains('/') {
+            return Err(Error::Invalid("source plugin id"));
+        }
         let tx = crate::begin_write(&mut self.conn)?;
         let existing: Option<i64> = tx
             .query_row("SELECT id FROM sources WHERE plugin = ?1", [plugin], |r| {
@@ -111,7 +166,7 @@ impl Store {
         let id = match existing {
             Some(id) => {
                 tx.execute(
-                    "UPDATE sources SET version = ?2 WHERE id = ?1",
+                    "UPDATE sources SET version = ?2 WHERE id = ?1 AND version != ?2",
                     params![id, version],
                 )?;
                 id
@@ -127,7 +182,7 @@ impl Store {
                 tx.execute(
                     "INSERT INTO sources (id, plugin, version, state, added_at)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![id, plugin, version, SourceState::Enabled as i64, now],
+                    params![id, plugin, version, first as i64, now],
                 )?;
                 id
             }
@@ -136,11 +191,116 @@ impl Store {
         SourceId::from_sql(id)
     }
 
+    /// Sets a source's state to anything but enabled. Purging also drops
+    /// its consent record and its credentials, in the same transaction.
+    /// Enabling goes only through [`Store::enable_source`], which the
+    /// consent check (§18.7) sits in front of.
     pub fn set_source_state(&mut self, id: SourceId, state: SourceState) -> Result<()> {
-        self.conn.execute(
+        if state == SourceState::Enabled {
+            return Err(Error::Invalid("enable a source with enable_source"));
+        }
+        let tx = crate::begin_write(&mut self.conn)?;
+        tx.execute(
             "UPDATE sources SET state = ?2 WHERE id = ?1",
             params![id.0, state as i64],
         )?;
+        if state == SourceState::Purged {
+            let plugin = plugin_of(&tx, id)?;
+            drop_records(&tx, &plugin)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Enables a source and, when given, stores its new consent record,
+    /// in one transaction: the record and the state agree after a crash.
+    pub fn enable_source(&mut self, id: SourceId, consent: Option<&str>) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let plugin = plugin_of(&tx, id)?;
+        if let Some(record) = consent {
+            tx.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![format!("{CONSENT_KEY}{plugin}"), record],
+            )?;
+        }
+        tx.execute(
+            "UPDATE sources SET state = ?2 WHERE id = ?1",
+            params![id.0, SourceState::Enabled as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `plugin`'s consent record, as [`Store::enable_source`] stored it.
+    pub fn source_consent(&self, plugin: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [format!("{CONSENT_KEY}{plugin}")],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    /// The names of the credentials stored for `plugin`, sorted.
+    pub fn source_secret_names(&self, plugin: &str) -> Result<Vec<String>> {
+        let prefix = secret_prefix(plugin);
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT substr(key, ?2 + 1) FROM settings
+             WHERE substr(key, 1, ?2) = ?1 ORDER BY key",
+        )?;
+        // `substr` counts characters, not bytes.
+        let rows = stmt.query_map(params![prefix, prefix.chars().count() as i64], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// One sealed credential of `plugin`'s.
+    pub fn source_secret(&self, plugin: &str, name: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [format!("{}{name}", secret_prefix(plugin))],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?)
+    }
+
+    /// Stores the sealed credentials in `set`, removes those named in
+    /// `remove` and, when given, sets the source's state, all in one
+    /// transaction (removing what an enabled source needs disables it in
+    /// the same write).
+    pub fn update_source_secrets(
+        &mut self,
+        id: SourceId,
+        set: &[(&str, &[u8])],
+        remove: &[&str],
+        state: Option<SourceState>,
+    ) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let prefix = secret_prefix(&plugin_of(&tx, id)?);
+        {
+            let mut upsert = tx.prepare_cached(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            )?;
+            for (name, sealed) in set {
+                upsert.execute(params![format!("{prefix}{name}"), sealed])?;
+            }
+            let mut delete = tx.prepare_cached("DELETE FROM settings WHERE key = ?1")?;
+            for name in remove {
+                delete.execute([format!("{prefix}{name}")])?;
+            }
+        }
+        if let Some(state) = state {
+            tx.execute(
+                "UPDATE sources SET state = ?2 WHERE id = ?1",
+                params![id.0, state as i64],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 

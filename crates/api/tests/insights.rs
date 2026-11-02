@@ -105,7 +105,20 @@ impl OpsApi for FakeOps {
         Box::pin(async { Ok(Vec::new()) })
     }
 
-    fn patch_source(&self, _: u8, _: SourcePatch) -> BoxFuture<'_, Result<Source, OpsError>> {
+    fn patch_source(
+        &self,
+        _: u8,
+        _: SourcePatch,
+        _: bool,
+    ) -> BoxFuture<'_, Result<Source, OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
+
+    fn patch_source_credentials(
+        &self,
+        _: u8,
+        _: Vec<(String, Option<lodestar_api::ops::Secret>)>,
+    ) -> BoxFuture<'_, Result<Source, OpsError>> {
         Box::pin(async { Err(OpsError::UnknownSource) })
     }
 

@@ -221,17 +221,46 @@ pub struct SourceHealth {
     pub stored_24h: i64,
 }
 
+/// What enabling a source still needs (§18.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceNeed {
+    /// An `external` source: show the endpoint list, then enable with
+    /// `consent` and `consent_version`.
+    EndpointsAck,
+    /// An `account` source: store its credentials first
+    /// (`PATCH /sources/{id}/credentials`).
+    Credentials,
+    /// A `restricted` or `overlay` source: show the consent screen, then
+    /// enable with `consent`, `consent_version` and the admin `password`
+    /// (which enabling it always needs).
+    Consent,
+}
+
 /// One source plugin of this build.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Source {
     #[schema(inline)]
     pub consent: ConsentClass,
-    /// Enabling it needs `"consent"` naming its class.
+    /// Its class is enabled by acknowledging what's shown (`external`,
+    /// `restricted`, `overlay`): enabling it sends `"consent"` naming the
+    /// class and `"consent_version"`, unless that version is already
+    /// acknowledged.
     pub consent_required: bool,
+    /// The version an acknowledgement must name. It changes when the
+    /// class's consent text or the source's endpoints change, and then
+    /// the source asks again. Empty for `none` and `account`.
+    pub consent_version: String,
+    /// The names of its stored credentials; their values are never
+    /// returned.
+    pub credentials: Vec<String>,
     /// Fields `PATCH /sources/{id}` changes now.
     pub editable: Vec<String>,
     /// Its stored state is `enabled`.
     pub enabled: bool,
+    /// The hosts it contacts, as `protocol://host`: what an `external`
+    /// source's acknowledgement covers.
+    pub endpoints: Vec<String>,
     pub health: SourceHealth,
     pub id: u8,
     pub kinds: Vec<SourceKind>,
@@ -239,6 +268,12 @@ pub struct Source {
     /// Fields planned for the v0.6 sources epic (agents, egress, purge,
     /// schedule): listed so the UI can show them, refused by `PATCH`.
     pub not_yet_editable: Vec<String>,
+    /// What enabling it still needs; null when enabling is a toggle.
+    #[schema(required = true, inline)]
+    pub needs: Option<SourceNeed>,
+    /// Enabling it asks for the admin password, every time
+    /// (`restricted`, `overlay`).
+    pub password_required: bool,
     /// The manifest id.
     pub plugin: String,
     #[schema(inline)]
@@ -259,8 +294,11 @@ pub struct Source {
     "sources": [{
         "consent": "none",
         "consent_required": false,
+        "consent_version": "",
+        "credentials": [],
         "editable": ["enabled", "priority"],
         "enabled": true,
+        "endpoints": [],
         "health": {
             "harvested_24h": 1840221,
             "last_error": null,
@@ -271,7 +309,9 @@ pub struct Source {
         "id": 0,
         "kinds": ["discovery", "peer_finder"],
         "name": "Mainline DHT",
+        "needs": null,
         "not_yet_editable": ["agents", "egress", "purge", "schedule"],
+        "password_required": false,
         "plugin": "dht",
         "priority": "normal",
         "restart_required": false,
@@ -287,15 +327,25 @@ pub struct SourceList {
 /// `PATCH /sources/{id}`. Fields left out keep their values. A new
 /// priority applies at once; enabling or disabling takes effect at the
 /// next start (`restart_required`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(example = json!({ "enabled": true, "priority": "high" }))]
 pub struct SourcePatch {
-    /// The consent class you agree to; needed to enable a source whose
-    /// class is `restricted` or `overlay`, and must be that class.
+    /// The consent class you acknowledge; needed to enable a source whose
+    /// `needs` is `endpoints_ack` or `consent`, and must be its class.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, inline)]
     pub consent: Option<ConsentClass>,
+    /// The `consent_version` you were shown, with `consent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub consent_version: Option<String>,
+    /// The admin password, to enable a `restricted` or `overlay` source
+    /// (`428 confirm_required` without it). Asked every time; never
+    /// stored, logged or serialized.
+    #[serde(default, skip_serializing)]
+    #[schema(nullable = false, write_only)]
+    pub password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub enabled: Option<bool>,
@@ -318,6 +368,40 @@ pub struct SourcePatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Value, nullable = false)]
     pub schedule: Option<Value>,
+}
+
+impl std::fmt::Debug for SourcePatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourcePatch")
+            .field("consent", &self.consent)
+            .field("consent_version", &self.consent_version)
+            .field("password", &self.password.as_ref().map(|_| "…"))
+            .field("enabled", &self.enabled)
+            .field("priority", &self.priority)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `PATCH /sources/{id}/credentials`: credential names to values (a
+/// string stores it, sealed; `null` removes it). Names are 1–64 of
+/// `a-z`, `0-9` and `_`, or `egress.socks5.username` and
+/// `egress.socks5.password` for the source's SOCKS5 proxy; values are
+/// 1–4096 bytes; a source holds at most 16. Values are never returned,
+/// logged or exported.
+#[derive(Clone, Default, PartialEq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(example = json!({ "credentials": { "api_key": "…", "old_token": null } }))]
+pub struct CredentialsPatch {
+    #[schema(value_type = std::collections::BTreeMap<String, Option<String>>, write_only)]
+    pub credentials: std::collections::BTreeMap<String, Option<String>>,
+}
+
+impl std::fmt::Debug for CredentialsPatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialsPatch")
+            .field("names", &self.credentials.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl SourcePatch {

@@ -5753,7 +5753,7 @@
         "tags": [
           "crawler"
         ],
-        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling a\n`restricted` or `overlay` source needs `\"consent\"` naming its class\n(`409 consent_required` otherwise). Agents, egress, purge and the\nschedule arrive in v0.6 (`409 not_editable`).",
+        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; enabling a `restricted` or `overlay` source\nalso needs the admin `\"password\"`, every time (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress, purge and the schedule\narrive in v0.6 (`409 not_editable`).",
         "operationId": "patchSource",
         "parameters": [
           {
@@ -5773,6 +5773,58 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SourcePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/sources/{id}/credentials": {
+      "patch": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Stores or removes a source's credentials: each name maps to a value\n(stored, sealed with the install's key) or `null` (removed). Values\nare never returned: the response lists the names stored. Removing what\nan enabled `account` source needs disables it. `400\ninvalid_credentials` names the rule a change broke, never a value.",
+        "operationId": "patchSourceCredentials",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The source's id, as `GET /sources` lists it.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsPatch"
               }
             }
           },
@@ -10098,6 +10150,36 @@
           "secret": {
             "type": "string",
             "description": "The whole secret (`lsk_…` or `lsf_…`). Shown only now: Lodestar\nkeeps its hash, not the secret."
+          }
+        }
+      },
+      "CredentialsPatch": {
+        "type": "object",
+        "description": "`PATCH /sources/{id}/credentials`: credential names to values (a\nstring stores it, sealed; `null` removes it). Names are 1–64 of\n`a-z`, `0-9` and `_`, or `egress.socks5.username` and\n`egress.socks5.password` for the source's SOCKS5 proxy; values are\n1–4096 bytes; a source holds at most 16. Values are never returned,\nlogged or exported.",
+        "required": [
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "propertyNames": {
+              "type": "string",
+              "writeOnly": true
+            }
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "credentials": {
+            "api_key": "…",
+            "old_token": null
           }
         }
       },
@@ -18278,13 +18360,18 @@
         "required": [
           "consent",
           "consent_required",
+          "consent_version",
+          "credentials",
           "editable",
           "enabled",
+          "endpoints",
           "health",
           "id",
           "kinds",
           "name",
           "not_yet_editable",
+          "needs",
+          "password_required",
           "plugin",
           "priority",
           "restart_required",
@@ -18306,7 +18393,18 @@
           },
           "consent_required": {
             "type": "boolean",
-            "description": "Enabling it needs `\"consent\"` naming its class."
+            "description": "Its class is enabled by acknowledging what's shown (`external`,\n`restricted`, `overlay`): enabling it sends `\"consent\"` naming the\nclass and `\"consent_version\"`, unless that version is already\nacknowledged."
+          },
+          "consent_version": {
+            "type": "string",
+            "description": "The version an acknowledgement must name. It changes when the\nclass's consent text or the source's endpoints change, and then\nthe source asks again. Empty for `none` and `account`."
+          },
+          "credentials": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The names of its stored credentials; their values are never\nreturned."
           },
           "editable": {
             "type": "array",
@@ -18318,6 +18416,13 @@
           "enabled": {
             "type": "boolean",
             "description": "Its stored state is `enabled`."
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The hosts it contacts, as `protocol://host`: what an `external`\nsource's acknowledgement covers."
           },
           "health": {
             "$ref": "#/components/schemas/SourceHealth"
@@ -18336,12 +18441,33 @@
           "name": {
             "type": "string"
           },
+          "needs": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "description": "What enabling a source still needs (§18.7).",
+                "enum": [
+                  "endpoints_ack",
+                  "credentials",
+                  "consent"
+                ]
+              }
+            ],
+            "description": "What enabling it still needs; null when enabling is a toggle."
+          },
           "not_yet_editable": {
             "type": "array",
             "items": {
               "type": "string"
             },
             "description": "Fields planned for the v0.6 sources epic (agents, egress, purge,\nschedule): listed so the UI can show them, refused by `PATCH`."
+          },
+          "password_required": {
+            "type": "boolean",
+            "description": "Enabling it asks for the admin password, every time\n(`restricted`, `overlay`)."
           },
           "plugin": {
             "type": "string",
@@ -18455,11 +18581,14 @@
             {
               "consent": "none",
               "consent_required": false,
+              "consent_version": "",
+              "credentials": [],
               "editable": [
                 "enabled",
                 "priority"
               ],
               "enabled": true,
+              "endpoints": [],
               "health": {
                 "harvested_24h": 1840221,
                 "last_error": null,
@@ -18473,12 +18602,14 @@
                 "peer_finder"
               ],
               "name": "Mainline DHT",
+              "needs": null,
               "not_yet_editable": [
                 "agents",
                 "egress",
                 "purge",
                 "schedule"
               ],
+              "password_required": false,
               "plugin": "dht",
               "priority": "normal",
               "restart_required": false,
@@ -18510,7 +18641,11 @@
                 ]
               }
             ],
-            "description": "The consent class you agree to; needed to enable a source whose\nclass is `restricted` or `overlay`, and must be that class."
+            "description": "The consent class you acknowledge; needed to enable a source whose\n`needs` is `endpoints_ack` or `consent`, and must be its class."
+          },
+          "consent_version": {
+            "type": "string",
+            "description": "The `consent_version` you were shown, with `consent`."
           },
           "egress": {
             "description": "Not editable before v0.6: refused with `409 not_editable`."

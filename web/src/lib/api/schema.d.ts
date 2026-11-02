@@ -1749,12 +1749,40 @@ export interface paths {
         head?: never;
         /**
          * Enables or disables a source, or sets its priority. A priority
-         *     applies at once; enabling or disabling at the next start. Enabling a
-         *     `restricted` or `overlay` source needs `"consent"` naming its class
-         *     (`409 consent_required` otherwise). Agents, egress, purge and the
-         *     schedule arrive in v0.6 (`409 not_editable`).
+         *     applies at once; enabling or disabling at the next start. Enabling
+         *     checks the source's class (§18.7, its `needs`): an `external`,
+         *     `restricted` or `overlay` source needs `"consent"` naming its class and
+         *     `"consent_version"` (`409 consent_required` otherwise) until that
+         *     version is acknowledged; enabling a `restricted` or `overlay` source
+         *     also needs the admin `"password"`, every time (`428 confirm_required`); an
+         *     `account` source needs its credentials stored
+         *     (`409 credentials_required`). Agents, egress, purge and the schedule
+         *     arrive in v0.6 (`409 not_editable`).
          */
         patch: operations["patchSource"];
+        trace?: never;
+    };
+    "/sources/{id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Stores or removes a source's credentials: each name maps to a value
+         *     (stored, sealed with the install's key) or `null` (removed). Values
+         *     are never returned: the response lists the names stored. Removing what
+         *     an enabled `account` source needs disables it. `400
+         *     invalid_credentials` names the rule a change broke, never a value.
+         */
+        patch: operations["patchSourceCredentials"];
         trace?: never;
     };
     "/stats": {
@@ -3444,6 +3472,25 @@ export interface components {
              *     keeps its hash, not the secret.
              */
             secret: string;
+        };
+        /**
+         * @description `PATCH /sources/{id}/credentials`: credential names to values (a
+         *     string stores it, sealed; `null` removes it). Names are 1–64 of
+         *     `a-z`, `0-9` and `_`, or `egress.socks5.username` and
+         *     `egress.socks5.password` for the source's SOCKS5 proxy; values are
+         *     1–4096 bytes; a source holds at most 16. Values are never returned,
+         *     logged or exported.
+         * @example {
+         *       "credentials": {
+         *         "api_key": "…",
+         *         "old_token": null
+         *       }
+         *     }
+         */
+        CredentialsPatch: {
+            credentials: {
+                [key: string]: string | null;
+            };
         };
         /** @description The data formats a bug report needs, and why an upgrade might reindex. */
         DataFormats: {
@@ -7318,22 +7365,50 @@ export interface components {
              * @enum {string}
              */
             consent: "none" | "external" | "account" | "restricted" | "overlay";
-            /** @description Enabling it needs `"consent"` naming its class. */
+            /**
+             * @description Its class is enabled by acknowledging what's shown (`external`,
+             *     `restricted`, `overlay`): enabling it sends `"consent"` naming the
+             *     class and `"consent_version"`, unless that version is already
+             *     acknowledged.
+             */
             consent_required: boolean;
+            /**
+             * @description The version an acknowledgement must name. It changes when the
+             *     class's consent text or the source's endpoints change, and then
+             *     the source asks again. Empty for `none` and `account`.
+             */
+            consent_version: string;
+            /**
+             * @description The names of its stored credentials; their values are never
+             *     returned.
+             */
+            credentials: string[];
             /** @description Fields `PATCH /sources/{id}` changes now. */
             editable: string[];
             /** @description Its stored state is `enabled`. */
             enabled: boolean;
+            /**
+             * @description The hosts it contacts, as `protocol://host`: what an `external`
+             *     source's acknowledgement covers.
+             */
+            endpoints: string[];
             health: components["schemas"]["SourceHealth"];
             /** Format: int32 */
             id: number;
             kinds: components["schemas"]["SourceKind"][];
             name: string;
+            /** @description What enabling it still needs; null when enabling is a toggle. */
+            needs: null | ("endpoints_ack" | "credentials" | "consent");
             /**
              * @description Fields planned for the v0.6 sources epic (agents, egress, purge,
              *     schedule): listed so the UI can show them, refused by `PATCH`.
              */
             not_yet_editable: string[];
+            /**
+             * @description Enabling it asks for the admin password, every time
+             *     (`restricted`, `overlay`).
+             */
+            password_required: boolean;
             /** @description The manifest id. */
             plugin: string;
             /**
@@ -7386,11 +7461,14 @@ export interface components {
          *         {
          *           "consent": "none",
          *           "consent_required": false,
+         *           "consent_version": "",
+         *           "credentials": [],
          *           "editable": [
          *             "enabled",
          *             "priority"
          *           ],
          *           "enabled": true,
+         *           "endpoints": [],
          *           "health": {
          *             "harvested_24h": 1840221,
          *             "last_error": null,
@@ -7404,12 +7482,14 @@ export interface components {
          *             "peer_finder"
          *           ],
          *           "name": "Mainline DHT",
+         *           "needs": null,
          *           "not_yet_editable": [
          *             "agents",
          *             "egress",
          *             "purge",
          *             "schedule"
          *           ],
+         *           "password_required": false,
          *           "plugin": "dht",
          *           "priority": "normal",
          *           "restart_required": false,
@@ -7436,10 +7516,12 @@ export interface components {
             /** @description Not editable before v0.6: refused with `409 not_editable`. */
             agents?: unknown;
             /**
-             * @description The consent class you agree to; needed to enable a source whose
-             *     class is `restricted` or `overlay`, and must be that class.
+             * @description The consent class you acknowledge; needed to enable a source whose
+             *     `needs` is `endpoints_ack` or `consent`, and must be its class.
              */
             consent?: "none" | "external" | "account" | "restricted" | "overlay";
+            /** @description The `consent_version` you were shown, with `consent`. */
+            consent_version?: string;
             /** @description Not editable before v0.6: refused with `409 not_editable`. */
             egress?: unknown;
             enabled?: boolean;
@@ -12065,6 +12147,33 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SourcePatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchSourceCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's id, as `GET /sources` lists it. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialsPatch"];
             };
         };
         responses: {
