@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:56:32Z",
+  "updated_at": "2026-11-02T14:56:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2613,9 +2613,11 @@
       "launched": "2026-11-02T14:55Z"
     },
     "SRC-10a": {
-      "status": "launching",
+      "status": "running",
       "brief": "briefs/SRC-10a.md",
-      "model": "sonnet"
+      "model": "sonnet",
+      "session": "session_01MMjhn9zXhStNQsNasbmKuH",
+      "launched": "2026-11-02T14:56Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
