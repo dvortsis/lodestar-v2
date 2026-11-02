@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T19:43:15Z",
+  "updated_at": "2026-11-02T19:58:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2631,7 +2631,7 @@
       "merge": "7d4724c9"
     },
     "SRC-14b": {
-      "status": "14b-2 #400 in Opus review",
+      "status": "#400 Opus CHANGES: B1 update-rollback restores unscrubbed snapshot (journal.rs choose_snapshot); privacy: purged public finder can make torrent public (commit_live extra_flags); snapshots_left doc",
       "brief": "briefs/SRC-14b.md",
       "model": "opus",
       "session": "session_01MMjhnBFNwDh6xVTgXknTDU",
@@ -4024,6 +4024,11 @@
       "id": "pool-recent-refused",
       "added": "2026-11-02T19:43:15Z",
       "text": "Pool recent-fetch memory skips a refused key re-sighting until it rolls over (SRC-14b-2 handoff)."
+    },
+    {
+      "id": "insights-purged-source-credit",
+      "added": "2026-11-02T19:58:55Z",
+      "text": "Insights credit Stage::Stored to a purged source after lease reassignment (writer.rs:698); stopped-only touches count as rediscoveries. Noise only (SRC-14b-2 review)."
     }
   ],
   "main_health": [
