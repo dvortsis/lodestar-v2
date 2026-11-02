@@ -125,12 +125,13 @@ impl EgressSetting {
 }
 
 /// A proxy host as the API passes it (`lodestar_api::ops::parse_proxy`'s
-/// rules): an IP literal (no brackets), or a DNS name of 1–63-byte labels
+/// rules): an IP literal (no brackets) a proxy can be at
+/// ([`lodestar_sources::egress::usable_proxy`]), or a DNS name of 1–63-byte labels
 /// of letters, digits and hyphens (not at either end), at most 253 bytes,
 /// whose last label isn't a number in disguise.
 pub fn proxy_host_ok(host: &str) -> bool {
-    if host.parse::<std::net::IpAddr>().is_ok() {
-        return true;
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return lodestar_sources::egress::usable_proxy(ip);
     }
     !host.is_empty()
         && host.len() <= 253
@@ -174,20 +175,42 @@ pub fn decode_schedule(text: &str) -> Option<Vec<Window>> {
     (windows.len() <= MAX_WINDOWS).then_some(windows)
 }
 
+/// A saved egress setting that doesn't decode (a rollback from a version
+/// with a route this one can't read, a stricter parser, a damaged row).
+/// It's never read as direct: the source's route stays down (fail closed,
+/// runner #394 review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unreadable;
+
+/// A source's saved egress: what's set (absent is direct), or unreadable.
+pub type SavedEgress = Result<EgressSetting, Unreadable>;
+
 /// A source's own settings beyond its state and priority (§18.4). The
 /// schedule and agents are stored and reported only: scheduler v2
-/// enforces them (runner, SRC-14a).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// enforces them (runner, SRC-14a). An unreadable schedule or agents
+/// value falls back to its default; an unreadable egress doesn't.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceSettings {
-    pub egress: EgressSetting,
+    pub egress: SavedEgress,
     /// `None`: the plugin's default windows.
     pub schedule: Option<Vec<Window>>,
     /// `None`: one agent.
     pub agents: Option<u32>,
 }
 
-/// `plugin`'s saved settings. One that isn't readable keeps its default,
-/// with a warning when `warn` (once, at start: `GET /sources` reads them
+impl Default for SourceSettings {
+    fn default() -> SourceSettings {
+        SourceSettings {
+            egress: Ok(EgressSetting::Direct),
+            schedule: None,
+            agents: None,
+        }
+    }
+}
+
+/// `plugin`'s saved settings. A schedule or agents value that isn't
+/// readable keeps its default; an egress that isn't is [`Unreadable`].
+/// Each is logged when `warn` (once, at start: `GET /sources` reads them
 /// on every call).
 pub fn saved_settings(
     store: &Store,
@@ -206,6 +229,7 @@ pub fn saved_settings(
         }
     };
     let egress = read(SourceSetting::Egress)?;
+    let saved_egress_absent = egress.is_none();
     let egress_value = egress.as_deref().and_then(EgressSetting::decode);
     decoded(egress, "egress", egress_value.is_some());
     let schedule = read(SourceSetting::Schedule)?;
@@ -217,7 +241,11 @@ pub fn saved_settings(
         .and_then(|t| t.parse::<u32>().ok().filter(|n| *n >= 1));
     decoded(agents, "agents", agents_value.is_some());
     Ok(SourceSettings {
-        egress: egress_value.unwrap_or_default(),
+        egress: match (egress_value, saved_egress_absent) {
+            (Some(e), _) => Ok(e),
+            (None, true) => Ok(EgressSetting::Direct),
+            (None, false) => Err(Unreadable),
+        },
         schedule: schedule_value,
         agents: agents_value,
     })
@@ -475,32 +503,49 @@ pub struct SourceView {
 /// `HTTPS_PROXY` or `ALL_PROXY` is set while a source connects directly.
 pub const WARN_PROXY_ENV: &str = "HTTPS_PROXY or ALL_PROXY is set, but source plugins never use \
      it: this source connects directly. To send it through a proxy, choose SOCKS5.";
-/// The proxy resolves names and is on the LAN.
-pub const WARN_LAN_PROXY_DNS: &str = "The proxy resolves names and is on your network: a public \
-     name that resolves to one of your devices would reach it. Let Lodestar resolve names unless \
-     the proxy's own DNS is what keeps lookups private.";
+/// The proxy resolves names and is on the user's network: the trade, plainly
+/// (runner, #394).
+pub const WARN_LAN_PROXY_DNS: &str = "The proxy resolves names, so lookups stay inside the \
+     tunnel. Because the proxy is on your network, a public name that resolves to one of your \
+     devices would reach that device. Choosing Lodestar's DNS prevents that, but lookups then \
+     leave outside the tunnel.";
+/// The saved egress setting can't be read.
+pub const WARN_SETTING_UNREADABLE: &str = "This source's saved network setting couldn't be \
+     read, so its requests are refused rather than sent directly. Set its network route again.";
 
-/// The warnings for a source's egress: `settings` as saved, `live` as it
-/// runs, and whether a proxy variable is set.
+/// The warnings for a source's egress: `saved` as saved, `live` as it
+/// runs, whether a proxy variable is set, and who resolves names on a
+/// SOCKS5 route left on `auto` for this plugin ([`crate::egress::auto_dns`]).
+/// The running route is judged only while it was built from what's saved:
+/// once the user changes the setting, the warnings follow the new one.
 pub fn egress_warnings(
-    settings: &EgressSetting,
+    saved: &SavedEgress,
     live: Option<&crate::EgressLive>,
     proxy_env: bool,
+    auto_dns: SocksDns,
 ) -> Vec<&'static str> {
     let mut out = Vec::new();
-    if proxy_env && *settings == EgressSetting::Direct {
+    let setting = match saved {
+        Ok(s) => s,
+        Err(Unreadable) => return vec![WARN_SETTING_UNREADABLE],
+    };
+    if proxy_env && *setting == EgressSetting::Direct {
         out.push(WARN_PROXY_ENV);
     }
-    let lan_proxy_dns = match live.and_then(|l| l.route.as_ref()) {
-        Some(lodestar_sources::Egress::Socks5 {
-            proxy,
-            dns: SocksDns::Proxy,
-        }) => lodestar_sources::egress::on_lan(proxy.ip()),
-        _ => matches!(
-            settings,
-            EgressSetting::Socks5(ProxySpec { host, dns: Some(SocksDns::Proxy), .. })
-                if host.parse().is_ok_and(lodestar_sources::egress::on_lan)
-        ),
+    let current = live.filter(|l| l.setting == *saved);
+    let lan_proxy_dns = match current.and_then(|l| l.route.as_ref()) {
+        Some(lodestar_sources::Egress::Socks5 { proxy, dns }) => {
+            *dns == SocksDns::Proxy && lodestar_sources::egress::on_lan(proxy.ip())
+        }
+        // Not running, or not on what's saved: judge the saved setting.
+        // A name's address is known only once it has resolved.
+        _ => match setting {
+            EgressSetting::Socks5(ProxySpec { host, dns, .. }) => {
+                dns.unwrap_or(auto_dns) == SocksDns::Proxy
+                    && host.parse().is_ok_and(lodestar_sources::egress::on_lan)
+            }
+            EgressSetting::Direct => false,
+        },
     };
     if lan_proxy_dns {
         out.push(WARN_LAN_PROXY_DNS);
@@ -888,8 +933,12 @@ impl Control {
                 let row = rows.iter().find(|r| r.id == status.id);
                 let (need, credentials, settings) =
                     gates.get(&status.id).cloned().unwrap_or_default();
-                let egress_warnings =
-                    egress_warnings(&settings.egress, status.egress.as_ref(), proxy_env);
+                let egress_warnings = egress_warnings(
+                    &settings.egress,
+                    status.egress.as_ref(),
+                    proxy_env,
+                    crate::egress::auto_dns(&status.manifest),
+                );
                 let count = |stage: Stage| -> i64 {
                     cohorts
                         .iter()
@@ -1381,6 +1430,9 @@ mod tests {
             "socks5 -h 1080 auto",
             "socks5 127.1 1080 auto",
             "socks5 0x7f000001 1080 auto",
+            "socks5 0.0.0.0 1080 auto",
+            "socks5 :: 1080 auto",
+            "socks5 239.1.1.1 1080 auto",
             "interface wg0",
         ] {
             assert_eq!(EgressSetting::decode(bad), None, "{bad}");
@@ -1443,32 +1495,46 @@ mod tests {
     }
 
     #[test]
-    fn egress_warnings_name_the_proxy_variable_and_lan_dns() {
-        let lan_proxy_dns = EgressSetting::Socks5(ProxySpec {
-            host: "192.168.1.5".into(),
-            port: 1080,
-            dns: Some(SocksDns::Proxy),
-        });
+    fn egress_warnings_follow_what_is_saved() {
+        use SocksDns::{Local, Proxy};
+        let socks = |host: &str, dns| {
+            Ok(EgressSetting::Socks5(ProxySpec {
+                host: host.into(),
+                port: 1080,
+                dns,
+            }))
+        };
+        let direct: SavedEgress = Ok(EgressSetting::Direct);
         assert_eq!(
-            egress_warnings(&EgressSetting::Direct, None, true),
+            egress_warnings(&direct, None, true, Proxy),
             [WARN_PROXY_ENV]
         );
-        assert!(egress_warnings(&EgressSetting::Direct, None, false).is_empty());
-        // The proxy variable doesn't matter once a proxy is chosen.
+        assert!(egress_warnings(&direct, None, false, Proxy).is_empty());
+        // Unreadable: refused, never direct, so no proxy-variable warning.
+        assert_eq!(
+            egress_warnings(&Err(Unreadable), None, true, Proxy),
+            [WARN_SETTING_UNREADABLE]
+        );
+        // A LAN literal: the trade is named whenever the proxy resolves
+        // names, chosen or by `auto`; not when Lodestar does.
         for env in [true, false] {
-            assert_eq!(
-                egress_warnings(&lan_proxy_dns, None, env),
-                [WARN_LAN_PROXY_DNS]
-            );
+            for (dns, auto, warned) in [
+                (Some(Proxy), Local, true),
+                (None, Proxy, true),
+                (None, Local, false),
+                (Some(Local), Proxy, false),
+            ] {
+                let got = egress_warnings(&socks("192.168.1.5", dns), None, env, auto);
+                assert_eq!(got == [WARN_LAN_PROXY_DNS], warned, "{dns:?} {auto:?}");
+                assert_eq!(got.is_empty(), !warned);
+            }
         }
-        // A name is judged by where it resolved when the source started.
-        let named = EgressSetting::Socks5(ProxySpec {
-            host: "gluetun".into(),
-            port: 1080,
-            dns: Some(SocksDns::Proxy),
-        });
-        assert!(egress_warnings(&named, None, false).is_empty());
-        let live = crate::EgressLive {
+        // A public proxy, or a name not yet resolved: nothing to say.
+        assert!(egress_warnings(&socks("198.51.100.7", None), None, false, Proxy).is_empty());
+        let named = socks("gluetun", None);
+        assert!(egress_warnings(&named, None, false, Proxy).is_empty());
+        // Running on the saved setting: judged by where the name resolved.
+        let live = |setting: SavedEgress| crate::EgressLive {
             status: lodestar_sources::EgressStatus {
                 plugin: "p".into(),
                 route: lodestar_sources::RouteKind::Socks5,
@@ -1478,12 +1544,18 @@ mod tests {
             },
             route: Some(lodestar_sources::Egress::Socks5 {
                 proxy: "172.18.0.5:1080".parse().unwrap(),
-                dns: SocksDns::Proxy,
+                dns: Proxy,
             }),
+            setting,
         };
         assert_eq!(
-            egress_warnings(&named, Some(&live), false),
+            egress_warnings(&named, Some(&live(named.clone())), false, Proxy),
             [WARN_LAN_PROXY_DNS]
         );
+        // The user changed it since the start: the saved setting wins, so
+        // the warning goes away at once, not at the next restart.
+        let fixed = socks("gluetun", Some(Local));
+        assert!(egress_warnings(&fixed, Some(&live(named.clone())), false, Proxy).is_empty());
+        assert!(egress_warnings(&direct, Some(&live(named)), false, Proxy).is_empty());
     }
 }

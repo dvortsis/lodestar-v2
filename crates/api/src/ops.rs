@@ -142,6 +142,8 @@ pub enum OpsError {
         field: &'static str,
         message: String,
     },
+    /// The interface or bind-address route, which isn't offered.
+    RouteUnavailable,
     /// The network check was restarted too recently.
     RateLimited {
         retry_after_secs: u64,
@@ -195,6 +197,7 @@ impl From<OpsError> for ApiError {
                 field,
                 message,
             } => ApiError::bad_request(code, message).field(field),
+            OpsError::RouteUnavailable => route_unavailable(),
             OpsError::RateLimited { retry_after_secs } => ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
@@ -481,14 +484,21 @@ pub fn parse_proxy(text: &str) -> Option<(String, u16)> {
         return None;
     }
     let port: u16 = port.parse().ok().filter(|p| *p != 0)?;
+    // Not the unspecified address (this machine), multicast or broadcast.
+    let usable = |ip: std::net::IpAddr| {
+        !ip.is_unspecified()
+            && !ip.is_multicast()
+            && ip != std::net::IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
+    };
     if let Some(v6) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
         return v6
             .parse::<std::net::Ipv6Addr>()
             .ok()
+            .filter(|a| usable((*a).into()))
             .map(|a| (a.to_string(), port));
     }
-    if host.parse::<std::net::Ipv4Addr>().is_ok() {
-        return Some((host.to_string(), port));
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        return usable(v4.into()).then(|| (host.to_string(), port));
     }
     // A DNS name: labels of 1–63 letters, digits and hyphens (not at
     // either end), 253 bytes in all, not all digits.
@@ -510,6 +520,18 @@ pub fn parse_proxy(text: &str) -> Option<(String, u16)> {
     ok.then(|| (name.to_ascii_lowercase(), port))
 }
 
+/// `409 route_unavailable`: the interface and bind-address routes.
+fn route_unavailable() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "route_unavailable",
+        "Choosing a network interface or a local address isn't offered yet: DNS lookups \
+         would still leave outside it. Run Lodestar's whole container through your VPN, or \
+         use the VPN's SOCKS5 proxy.",
+    )
+    .field("egress.route")
+}
+
 fn invalid(code: &'static str, field: &'static str, message: &'static str) -> ApiError {
     ApiError::bad_request(code, message).field(field)
 }
@@ -521,14 +543,7 @@ fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
     if let Some(e) = &body.egress {
         match e.route {
             EgressRoute::Interface | EgressRoute::BindAddress => {
-                return Err(ApiError::new(
-                    StatusCode::CONFLICT,
-                    "route_unavailable",
-                    "Choosing a network interface or a local address isn't offered yet: \
-                     DNS lookups would still leave outside it. Run Lodestar's whole \
-                     container through your VPN, or use the VPN's SOCKS5 proxy.",
-                )
-                .field("egress.route"));
+                return Err(route_unavailable());
             }
             EgressRoute::Direct if e.proxy.is_some() || e.dns.is_some() => {
                 return Err(invalid(
@@ -880,6 +895,11 @@ mod tests {
             "1.2.3:80",
             "127.1:80",
             "0x7f000001:80",
+            "0.0.0.0:1080",
+            "[::]:1080",
+            "224.0.0.1:1080",
+            "[ff02::1]:1080",
+            "255.255.255.255:1080",
             "999.1.1.1:80",
             ":80",
         ] {

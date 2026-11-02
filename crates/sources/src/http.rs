@@ -109,6 +109,12 @@ pub enum HttpError {
     /// The plugin's egress route is down, so its kill switch refused the
     /// request or abandoned it in flight. The host isn't at fault, so this
     /// doesn't back it off: the route coming back is what matters.
+    ///
+    /// **Plugin contract:** this comes back at once while the route is
+    /// down, and nothing paces a retry (the host isn't backed off). A
+    /// plugin must not retry in a loop: it waits at least its poll
+    /// interval before trying again. A route-level delay comes with the
+    /// first HTTP plugin's wiring (SRC-14b).
     EgressDown(String),
 }
 

@@ -291,9 +291,7 @@ fn egress_back(e: EgressSetting) -> Result<control::EgressSetting, OpsError> {
                 }),
             }))
         }
-        EgressRoute::Interface | EgressRoute::BindAddress => {
-            Err(invalid("That route isn't offered yet."))
-        }
+        EgressRoute::Interface | EgressRoute::BindAddress => Err(OpsError::RouteUnavailable),
     }
 }
 
@@ -343,7 +341,7 @@ fn source(v: SourceView) -> Source {
         editable: EDITABLE.map(String::from).to_vec(),
         egress: SourceEgress {
             live: v.status.egress.as_ref().map(egress_live),
-            setting: egress_setting(&v.settings.egress),
+            setting: v.settings.egress.as_ref().ok().map(egress_setting),
             warnings: v.egress_warnings.iter().map(|w| w.to_string()).collect(),
         },
         enabled,

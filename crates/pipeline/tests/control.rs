@@ -791,15 +791,21 @@ async fn a_source_runs_on_its_saved_egress_and_its_settings_are_checked() {
     );
     assert_eq!(live.status.counters.kill_switch_refusals, 1);
     assert_eq!(live.status.counters.answered, 0);
-    // A loopback proxy: Lodestar resolves names, not the proxy.
+    // Left on `auto`, a plugin pinned to its manifest's hosts lets the
+    // proxy resolve names, wherever the proxy is (runner, #394).
     assert_eq!(
         live.route,
         Some(Egress::Socks5 {
             proxy: dead,
-            dns: SocksDns::Local
+            dns: SocksDns::Proxy
         })
     );
-    assert!(egress_warnings(&saved, Some(&live), false).is_empty());
+    assert_eq!(live.setting, Ok(saved.clone()));
+    // Proxy DNS on a proxy on this machine: the trade is named.
+    assert_eq!(
+        egress_warnings(&Ok(saved.clone()), Some(&live), false, SocksDns::Proxy),
+        [lodestar_pipeline::control::WARN_LAN_PROXY_DNS]
+    );
 
     let control = Control::start(
         pipeline.monitor(),
@@ -813,7 +819,7 @@ async fn a_source_runs_on_its_saved_egress_and_its_settings_are_checked() {
     .await
     .unwrap();
     let view = control.sources().unwrap().into_iter().next().unwrap();
-    assert_eq!(view.settings.egress, saved);
+    assert_eq!(view.settings.egress, Ok(saved));
     let direct = SourceChange {
         egress: Some(EgressSetting::Direct),
         ..SourceChange::default()
@@ -832,7 +838,7 @@ async fn a_source_runs_on_its_saved_egress_and_its_settings_are_checked() {
         )
         .await
         .unwrap();
-    assert_eq!(view.settings.egress, EgressSetting::Direct);
+    assert_eq!(view.settings.egress, Ok(EgressSetting::Direct));
     // The plugin declares one agent at most (the strict default).
     assert!(matches!(
         control
@@ -862,5 +868,120 @@ async fn a_source_runs_on_its_saved_egress_and_its_settings_are_checked() {
         .unwrap();
     assert_eq!(view.settings.schedule, Some(vec![Window::new(60, 420)]));
     assert_eq!(view.settings.agents, Some(1));
+    pipeline.shutdown().await.unwrap();
+}
+
+/// An egress setting this build can't read fails closed (runner, #394):
+/// the plugin runs with its route down for good, every request is refused,
+/// and the view says the setting is unreadable instead of direct. A
+/// schedule that can't be read falls back to its default.
+#[tokio::test]
+async fn an_unreadable_egress_setting_refuses_every_request() {
+    use lodestar_pipeline::control::{Unreadable, WARN_SETTING_UNREADABLE, egress_warnings};
+    use lodestar_sources::{DownReason, EgressFactory, Endpoint, RouteState, SocksDns};
+    use lodestar_store::SourceSetting;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    // A route a later build might add, and a damaged SOCKS5 value.
+    let rows = [
+        ("newer", "interface wg0"),
+        ("damaged", "socks5 10.8.0.1 1080"),
+    ];
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    for (plugin, text) in rows {
+        let id = store
+            .register_source_as(plugin, "1", SourceState::Enabled, 0)
+            .unwrap();
+        store
+            .set_source_settings(
+                id,
+                &[
+                    (SourceSetting::Egress, Some(text)),
+                    (SourceSetting::Schedule, Some("not a schedule")),
+                ],
+            )
+            .unwrap();
+    }
+    drop(store);
+    let results: Vec<_> = rows.iter().map(|_| Arc::new(Mutex::new(None))).collect();
+    let plugins: Vec<Arc<dyn SourcePlugin>> = rows
+        .iter()
+        .zip(&results)
+        .map(|((id, _), result)| {
+            Arc::new(Fetches {
+                manifest: Manifest {
+                    id,
+                    name: id,
+                    version: "1",
+                    kinds: &[Kind::Discovery],
+                    networks: &[Network::Bt],
+                    endpoints: &[Endpoint {
+                        protocol: "https",
+                        host: "feed.example",
+                    }],
+                    risk: Risk::Low,
+                    consent: Consent::None,
+                    default_priority: Priority::Normal,
+                    enabled_by_default: true,
+                },
+                result: result.clone(),
+            }) as Arc<dyn SourcePlugin>
+        })
+        .collect();
+    let config = PipelineConfig {
+        egress: Some(EgressFactory::new(Arc::new(
+            lodestar_sources::egress::NoCredentials,
+        ))),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline::start_with(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        plugins,
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    for result in &results {
+        until("the plugin's request", || result.lock().unwrap().is_some()).await;
+        let got = result.lock().unwrap().take().unwrap();
+        assert!(
+            matches!(&got, Err(lodestar_sources::HttpError::EgressDown(e)) if e.contains("couldn't be read")),
+            "{got:?}"
+        );
+    }
+    for status in pipeline.sources() {
+        let live = status.egress.clone().unwrap();
+        assert_eq!(
+            live.status.state,
+            RouteState::Down(DownReason::SettingUnreadable),
+            "{}",
+            status.plugin
+        );
+        assert_eq!(live.route, None);
+        assert_eq!(live.setting, Err(Unreadable));
+        assert_eq!(live.status.counters.kill_switch_refusals, 1);
+    }
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        )),
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    for view in control.sources().unwrap() {
+        assert_eq!(view.settings.egress, Err(Unreadable));
+        assert_eq!(view.settings.schedule, None, "its default applies");
+        assert_eq!(view.egress_warnings, [WARN_SETTING_UNREADABLE]);
+    }
+    assert_eq!(
+        egress_warnings(&Err(Unreadable), None, true, SocksDns::Proxy),
+        [WARN_SETTING_UNREADABLE]
+    );
     pipeline.shutdown().await.unwrap();
 }

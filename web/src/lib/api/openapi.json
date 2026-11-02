@@ -18587,45 +18587,53 @@
                 "description": "The running source's route; null when it isn't running (a change\napplies at the next start)."
               },
               "setting": {
-                "type": "object",
-                "description": "A source's egress setting.",
-                "required": [
-                  "route"
-                ],
-                "properties": {
-                  "dns": {
-                    "oneOf": [
-                      {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "description": "A source's egress setting.",
+                    "required": [
+                      "route"
+                    ],
+                    "properties": {
+                      "dns": {
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "description": "Who resolves names on a SOCKS5 route.",
+                            "enum": [
+                              "proxy",
+                              "local"
+                            ]
+                          }
+                        ],
+                        "description": "For `socks5`: who resolves names. Left out, it's `proxy` for a\nsource that only reaches its built-in sites, so lookups stay inside\nthe tunnel, and `local` for a source whose sites you enter, so a\npublic name can't reach devices on the proxy's network."
+                      },
+                      "proxy": {
                         "type": "string",
-                        "description": "Who resolves names on a SOCKS5 route.",
+                        "description": "For `socks5`: the proxy as `host:port` (a name, an IPv4 address or\na bracketed IPv6 address). A name is resolved when the source\nstarts."
+                      },
+                      "route": {
+                        "type": "string",
+                        "description": "How a source's traffic leaves (§18.4, §18.7).",
                         "enum": [
-                          "proxy",
-                          "local"
+                          "direct",
+                          "socks5",
+                          "interface",
+                          "bind_address"
                         ]
                       }
-                    ],
-                    "description": "For `socks5`: who resolves names. Left out, it's `local` when the\nproxy is on your network (a private or loopback address), where a\nname the proxy resolves could reach your other devices, and\n`proxy` otherwise."
-                  },
-                  "proxy": {
-                    "type": "string",
-                    "description": "For `socks5`: the proxy as `host:port` (a name, an IPv4 address or\na bracketed IPv6 address). A name is resolved when the source\nstarts."
-                  },
-                  "route": {
-                    "type": "string",
-                    "description": "How a source's traffic leaves (§18.4, §18.7).",
-                    "enum": [
-                      "direct",
-                      "socks5",
-                      "interface",
-                      "bind_address"
-                    ]
+                    },
+                    "additionalProperties": false,
+                    "example": {
+                      "proxy": "10.8.0.1:1080",
+                      "route": "socks5"
+                    }
                   }
-                },
-                "additionalProperties": false,
-                "example": {
-                  "proxy": "10.8.0.1:1080",
-                  "route": "socks5"
-                }
+                ],
+                "description": "What's saved; null when it can't be read (saved by a newer\nversion, or damaged). An unreadable setting is never taken as\ndirect: the source's requests are refused until you set its route\nagain."
               },
               "warnings": {
                 "type": "array",
@@ -18961,7 +18969,7 @@
                         ]
                       }
                     ],
-                    "description": "For `socks5`: who resolves names. Left out, it's `local` when the\nproxy is on your network (a private or loopback address), where a\nname the proxy resolves could reach your other devices, and\n`proxy` otherwise."
+                    "description": "For `socks5`: who resolves names. Left out, it's `proxy` for a\nsource that only reaches its built-in sites, so lookups stay inside\nthe tunnel, and `local` for a source whose sites you enter, so a\npublic name can't reach devices on the proxy's network."
                   },
                   "proxy": {
                     "type": "string",

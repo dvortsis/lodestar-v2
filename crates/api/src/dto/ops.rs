@@ -283,10 +283,10 @@ pub struct EgressSetting {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub proxy: Option<String>,
-    /// For `socks5`: who resolves names. Left out, it's `local` when the
-    /// proxy is on your network (a private or loopback address), where a
-    /// name the proxy resolves could reach your other devices, and
-    /// `proxy` otherwise.
+    /// For `socks5`: who resolves names. Left out, it's `proxy` for a
+    /// source that only reaches its built-in sites, so lookups stay inside
+    /// the tunnel, and `local` for a source whose sites you enter, so a
+    /// public name can't reach devices on the proxy's network.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, inline)]
     pub dns: Option<SocksDns>,
@@ -347,8 +347,12 @@ pub struct SourceEgress {
     /// applies at the next start).
     #[schema(required = true, inline)]
     pub live: Option<EgressLive>,
-    #[schema(inline)]
-    pub setting: EgressSetting,
+    /// What's saved; null when it can't be read (saved by a newer
+    /// version, or damaged). An unreadable setting is never taken as
+    /// direct: the source's requests are refused until you set its route
+    /// again.
+    #[schema(required = true, inline)]
+    pub setting: Option<EgressSetting>,
     /// Things to fix or know, such as `HTTPS_PROXY` being set while the
     /// source connects directly (source plugins never use it).
     pub warnings: Vec<String>,

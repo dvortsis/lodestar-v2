@@ -1156,11 +1156,64 @@ async fn redirects_drop_credentials_across_origins_and_refuse_downgrades() {
     assert!(err.contains("left http"), "{err}");
 }
 
+/// The manifest's own hosts (pinned) for a plugin with one endpoint.
+fn pinned() -> Endpoints {
+    Endpoints::manifest(&[Endpoint {
+        protocol: "https",
+        host: "feed.example",
+    }])
+}
+
+/// Who resolves names when the user didn't say depends on where the
+/// plugin's endpoints come from, never on where the proxy is (runner,
+/// #394): the proxy for manifest-pinned hosts, Lodestar for hosts the
+/// user entered.
 #[tokio::test]
-async fn a_proxy_by_name_resolves_once_and_defaults_its_dns_by_where_it_is() {
+async fn auto_dns_follows_the_endpoints_not_the_proxys_address() {
     let resolver = Scripted::new(&[
         ("gluetun", &[&["172.18.0.5"]]),
+        ("tailnet-proxy", &[&["100.64.0.7"]]),
         ("proxy.vpn.example", &[&["198.51.100.7"]]),
+    ]);
+    let f = factory(resolver);
+    let auto = |host: &str| ProxySpec {
+        host: host.into(),
+        port: 1080,
+        dns: None,
+    };
+    // Private, Mullvad's in-tunnel address, loopback, CGNAT and public;
+    // literals and names alike.
+    for host in [
+        "gluetun",
+        "10.64.0.1",
+        "127.0.0.1",
+        "::1",
+        "tailnet-proxy",
+        "100.64.0.1",
+        "proxy.vpn.example",
+        "203.0.113.9",
+    ] {
+        for (endpoints, want) in [
+            (pinned(), SocksDns::Proxy),
+            (public_only(), SocksDns::Local),
+        ] {
+            let (e, route) = f.build_socks5("p", &auto(host), endpoints).await;
+            match route {
+                Some(Egress::Socks5 { dns, .. }) => assert_eq!(dns, want, "{host}"),
+                other => panic!("{host}: {other:?}"),
+            }
+            let notice = (want == SocksDns::Local).then_some(DNS_OUTSIDE_ROUTE);
+            assert_eq!(e.status().notice, notice, "{host}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_proxy_by_name_resolves_once_and_an_unusable_one_stays_down() {
+    let resolver = Scripted::new(&[
+        ("gluetun", &[&["172.18.0.5"]]),
+        ("nowhere", &[&["0.0.0.0", "224.0.0.1"]]),
+        ("mixed", &[&["0.0.0.0", "172.18.0.9"]]),
     ]);
     let f = factory(resolver.clone());
     let spec = |host: &str, dns| ProxySpec {
@@ -1168,56 +1221,70 @@ async fn a_proxy_by_name_resolves_once_and_defaults_its_dns_by_where_it_is() {
         port: 1080,
         dns,
     };
-    // On the LAN: Lodestar resolves names itself.
-    let (e, route) = f
-        .build_socks5("p", &spec("gluetun", None), public_only())
-        .await;
+    let (_, route) = f.build_socks5("p", &spec("gluetun", None), pinned()).await;
     assert_eq!(
         route,
         Some(Egress::Socks5 {
             proxy: "172.18.0.5:1080".parse().unwrap(),
-            dns: SocksDns::Local
+            dns: SocksDns::Proxy
         })
     );
-    assert_eq!(e.status().notice, Some(DNS_OUTSIDE_ROUTE));
-    // Elsewhere: the proxy does.
-    let (_, route) = f
-        .build_socks5("p", &spec("proxy.vpn.example", None), public_only())
-        .await;
-    assert!(matches!(
-        route,
-        Some(Egress::Socks5 {
-            dns: SocksDns::Proxy,
-            ..
-        })
-    ));
+    // The first usable answer is taken.
+    let (_, route) = f.build_socks5("p", &spec("mixed", None), pinned()).await;
+    assert!(
+        matches!(route, Some(Egress::Socks5 { proxy, .. }) if proxy.ip().to_string() == "172.18.0.9")
+    );
     // A literal isn't looked up, and an explicit choice wins.
     let before = resolver.lookups();
     let (_, route) = f
-        .build_socks5("p", &spec("10.8.0.1", Some(SocksDns::Proxy)), public_only())
+        .build_socks5("p", &spec("10.8.0.1", Some(SocksDns::Local)), pinned())
         .await;
     assert_eq!(resolver.lookups(), before);
     assert!(matches!(
         route,
         Some(Egress::Socks5 {
-            dns: SocksDns::Proxy,
+            dns: SocksDns::Local,
             ..
         })
     ));
-    // A name that doesn't resolve: down for good, and nothing is sent.
-    let (e, route) = f
-        .build_socks5("p", &spec("missing", None), public_only())
-        .await;
-    assert_eq!(route, None);
+    // A name that doesn't resolve, or only to addresses no proxy can be
+    // at, and an unusable literal: down for good, and nothing is sent.
+    for host in [
+        "missing",
+        "nowhere",
+        "0.0.0.0",
+        "::",
+        "239.1.1.1",
+        "255.255.255.255",
+    ] {
+        let (e, route) = f.build_socks5("p", &spec(host, None), lan()).await;
+        assert_eq!(route, None, "{host}");
+        assert_eq!(
+            e.status().state,
+            RouteState::Down(DownReason::ProxyUnresolved),
+            "{host}"
+        );
+        // A URL the endpoint policy allows, so the kill switch refuses it.
+        let err = egress_down(e.fetch(&Request::get("http://127.0.0.1:9/")).await);
+        assert!(err.contains("didn't resolve"), "{err}");
+        assert_eq!(e.status().counters.kill_switch_refusals, 1);
+    }
+}
+
+#[tokio::test]
+async fn an_unreadable_setting_is_a_route_that_stays_down() {
+    let f = factory(Scripted::new(&[]));
+    let e = f.unavailable("p", RouteKind::Socks5, DownReason::SettingUnreadable, lan());
     assert_eq!(
         e.status().state,
-        RouteState::Down(DownReason::ProxyUnresolved)
+        RouteState::Down(DownReason::SettingUnreadable)
     );
-    // A URL the endpoint policy allows, so it's the kill switch that refuses.
-    let (e, _) = f.build_socks5("p", &spec("missing", None), lan()).await;
     let err = egress_down(e.fetch(&Request::get("http://127.0.0.1:9/")).await);
-    assert!(err.contains("didn't resolve"), "{err}");
-    assert_eq!(e.status().counters.kill_switch_refusals, 1);
+    assert!(err.contains("couldn't be read"), "{err}");
+    assert_eq!(
+        e.check_now().await,
+        RouteState::Down(DownReason::SettingUnreadable)
+    );
 }
 
 #[test]
@@ -1229,15 +1296,14 @@ fn lan_means_private_loopback_or_link_local() {
         "::1",
         "fd00::1",
         "169.254.1.1",
+        "100.64.0.1",
     ] {
         assert!(on_lan(ip.parse().unwrap()), "{ip}");
-        assert_eq!(default_dns(ip.parse().unwrap()), SocksDns::Local);
     }
     for ip in ["198.51.100.7", "2001:db8::1", "8.8.8.8"] {
         let ip: IpAddr = ip.parse().unwrap();
         if net::classify(ip) == AddrClass::Public {
             assert!(!on_lan(ip));
-            assert_eq!(default_dns(ip), SocksDns::Proxy);
         }
     }
 }

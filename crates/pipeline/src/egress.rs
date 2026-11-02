@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use lodestar_sources::{
     DownReason, Egress, EgressFactory, Endpoints, Manifest, PluginEgress, RouteKind, RouteState,
-    Shutdown,
+    Shutdown, SocksDns,
 };
 use tokio::task::JoinHandle;
 
-use crate::control::EgressSetting;
+use crate::control::{EgressSetting, SavedEgress, Unreadable};
 use crate::log_events;
 
 /// The environment variables a user sets to proxy a program's HTTPS
@@ -29,24 +29,51 @@ fn proxy_env_in(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
         .any(|k| get(k).is_some_and(|v| !v.is_empty()))
 }
 
-/// Builds `m`'s client on `setting`: the manifest's endpoints, through
-/// the route it names. Also returns the route it was built with (`None`
-/// when a proxy's name didn't resolve; the client is then down for good).
-pub async fn build(
-    factory: &EgressFactory,
-    m: &Manifest,
-    setting: &EgressSetting,
-) -> (Arc<PluginEgress>, Option<Egress>) {
-    let endpoints = Endpoints::manifest(m.endpoints);
-    match setting {
-        EgressSetting::Direct => {
-            let e = factory.build(m.id, &Egress::Direct, endpoints).await;
-            (Arc::new(e), Some(Egress::Direct))
+/// The hosts `m`'s requests may reach: its manifest's own. (A plugin
+/// whose endpoints the user enters needs `Endpoints::user_entered`; the
+/// first is SRC-7's.)
+pub fn endpoints(m: &Manifest) -> Endpoints {
+    Endpoints::manifest(m.endpoints)
+}
+
+/// Who resolves names for `m` on a SOCKS5 route the user left on `auto`.
+pub fn auto_dns(m: &Manifest) -> SocksDns {
+    lodestar_sources::egress::default_dns(&endpoints(m))
+}
+
+/// A plugin's client, the route it was built with (`None` when it
+/// couldn't be: a proxy name that didn't resolve, an unreadable setting),
+/// and the saved setting it was built from.
+pub struct Built {
+    pub egress: Arc<PluginEgress>,
+    pub route: Option<Egress>,
+    pub setting: SavedEgress,
+}
+
+/// Builds `m`'s client on its saved `setting`, through the route it
+/// names. An unreadable setting fails closed: the route is down for good
+/// ([`DownReason::SettingUnreadable`]), never direct.
+pub async fn build(factory: &EgressFactory, m: &Manifest, setting: &SavedEgress) -> Built {
+    let (egress, route) = match setting {
+        Ok(EgressSetting::Direct) => {
+            let e = factory.build(m.id, &Egress::Direct, endpoints(m)).await;
+            (e, Some(Egress::Direct))
         }
-        EgressSetting::Socks5(spec) => {
-            let (e, route) = factory.build_socks5(m.id, spec, endpoints).await;
-            (Arc::new(e), route)
+        Ok(EgressSetting::Socks5(spec)) => factory.build_socks5(m.id, spec, endpoints(m)).await,
+        Err(Unreadable) => {
+            let e = factory.unavailable(
+                m.id,
+                RouteKind::Socks5,
+                DownReason::SettingUnreadable,
+                endpoints(m),
+            );
+            (e, None)
         }
+    };
+    Built {
+        egress: Arc::new(egress),
+        route,
+        setting: setting.clone(),
     }
 }
 
@@ -64,6 +91,7 @@ pub fn reason_label(reason: DownReason) -> &'static str {
         DownReason::ClientUnavailable => "client_unavailable",
         DownReason::BindAddressUnsupported => "bind_address_unsupported",
         DownReason::ProxyUnresolved => "proxy_unresolved",
+        DownReason::SettingUnreadable => "setting_unreadable",
     }
 }
 
@@ -198,7 +226,9 @@ mod tests {
     #[tokio::test]
     async fn the_monitor_follows_the_route_and_stops_at_shutdown() {
         let factory = EgressFactory::new(Arc::new(lodestar_sources::egress::NoCredentials));
-        let (direct, _) = build(&factory, manifest(), &EgressSetting::Direct).await;
+        let direct = build(&factory, manifest(), &Ok(EgressSetting::Direct))
+            .await
+            .egress;
         let (_stop, shutdown) = Shutdown::new();
         assert!(watch("feed", direct, Duration::from_millis(20), shutdown).is_none());
 
@@ -209,7 +239,7 @@ mod tests {
             port: addr.port(),
             dns: None,
         });
-        let (egress, _) = build(&factory, manifest(), &setting).await;
+        let egress = build(&factory, manifest(), &Ok(setting)).await.egress;
         let (stop, shutdown) = Shutdown::new();
         let task = watch(
             "feed",

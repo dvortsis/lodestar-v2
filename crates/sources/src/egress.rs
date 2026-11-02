@@ -98,15 +98,24 @@ pub fn on_lan(ip: IpAddr) -> bool {
     )
 }
 
-/// Who resolves names when the user didn't say (runner, #380 review): the
-/// proxy (`socks5h`, no lookup outside the tunnel) unless the proxy is on
-/// the LAN, where a name it resolves could reach the user's own devices,
-/// so Lodestar resolves through its address checks instead.
-pub fn default_dns(proxy: IpAddr) -> SocksDns {
-    if on_lan(proxy) {
-        SocksDns::Local
-    } else {
+/// Whether a proxy can be at `ip`: not the unspecified address (which
+/// connects to this machine), multicast or broadcast.
+pub fn usable_proxy(ip: IpAddr) -> bool {
+    !ip.is_unspecified() && !ip.is_multicast() && ip != IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
+}
+
+/// Who resolves names when the user didn't say (runner, #394 review,
+/// replacing the #380 ruling): the proxy (`socks5h`, so no lookup leaves
+/// outside the tunnel) for a plugin pinned to its manifest's hosts, where
+/// a name can't steer a request anywhere else, whatever the proxy's
+/// address. Lodestar (`socks5`, through its address checks) for a plugin
+/// whose endpoints the user enters, where a public name that the proxy
+/// resolves to its own network would otherwise reach that network.
+pub fn default_dns(endpoints: &Endpoints) -> SocksDns {
+    if endpoints.pinned {
         SocksDns::Proxy
+    } else {
+        SocksDns::Local
     }
 }
 
@@ -154,6 +163,9 @@ pub struct Endpoints {
     /// The hosts ([`host_key`]) the plugin may reach, each with the one
     /// scheme it may use (`None`: http or https); `None` for any host.
     hosts: Option<Vec<(Option<&'static str>, String)>>,
+    /// The hosts are the manifest's own ([`Endpoints::manifest`]), not ones
+    /// the user entered.
+    pinned: bool,
 }
 
 impl Endpoints {
@@ -173,6 +185,7 @@ impl Endpoints {
         Endpoints {
             policy: NetPolicy::notification(false),
             hosts: Some(hosts),
+            pinned: true,
         }
     }
 
@@ -182,6 +195,7 @@ impl Endpoints {
         Endpoints {
             policy,
             hosts: None,
+            pinned: false,
         }
     }
 
@@ -198,6 +212,11 @@ impl Endpoints {
 
     pub fn policy(&self) -> NetPolicy {
         self.policy
+    }
+
+    /// The hosts are the manifest's own, not ones the user entered.
+    pub fn pinned(&self) -> bool {
+        self.pinned
     }
 
     /// Checks a request's URL before anything is resolved or connected:
@@ -241,8 +260,13 @@ pub enum DownReason {
     ClientUnavailable,
     /// A bind address off Windows, where it doesn't pin the interface.
     BindAddressUnsupported,
-    /// The SOCKS5 proxy's name didn't resolve when the plugin started.
+    /// The SOCKS5 proxy's name didn't resolve (to a usable address:
+    /// [`usable_proxy`]) when the plugin started.
     ProxyUnresolved,
+    /// The source's saved egress setting couldn't be read (a rollback, a
+    /// newer route, a damaged row): it's refused rather than read as
+    /// direct, which would leave the VPN.
+    SettingUnreadable,
 }
 
 impl fmt::Display for DownReason {
@@ -256,8 +280,11 @@ impl fmt::Display for DownReason {
             DownReason::ProxyUnreachable => "the SOCKS5 proxy isn't reachable",
             DownReason::CredentialsUnavailable => "the proxy's credentials couldn't be read",
             DownReason::ClientUnavailable => "the HTTP client couldn't be built",
+            DownReason::SettingUnreadable => {
+                "the source's saved network setting couldn't be read; set its network route again"
+            }
             DownReason::ProxyUnresolved => {
-                "the SOCKS5 proxy's name didn't resolve when the source started; restart Lodestar once it does"
+                "the SOCKS5 proxy's name didn't resolve to a usable address when the source started; restart Lodestar once it does"
             }
             DownReason::BindAddressUnsupported => {
                 "a bind address keeps traffic on the VPN only on Windows; choose the interface by name"
@@ -405,12 +432,12 @@ impl EgressFactory {
         endpoints: Endpoints,
     ) -> (PluginEgress, Option<Egress>) {
         let ip = match spec.host.parse::<IpAddr>() {
-            Ok(ip) => Some(ip),
+            Ok(ip) => Some(ip).filter(|ip| usable_proxy(*ip)),
             Err(_) => tokio::time::timeout(PROBE_TIMEOUT, self.resolver.resolve(&spec.host))
                 .await
                 .ok()
                 .and_then(Result::ok)
-                .and_then(|ips| ips.into_iter().next()),
+                .and_then(|ips| ips.into_iter().find(|ip| usable_proxy(*ip))),
         };
         let Some(ip) = ip else {
             let down = self.unavailable(
@@ -423,7 +450,7 @@ impl EgressFactory {
         };
         let egress = Egress::Socks5 {
             proxy: SocketAddr::new(ip, spec.port),
-            dns: spec.dns.unwrap_or_else(|| default_dns(ip)),
+            dns: spec.dns.unwrap_or_else(|| default_dns(&endpoints)),
         };
         (self.build(plugin, &egress, endpoints).await, Some(egress))
     }

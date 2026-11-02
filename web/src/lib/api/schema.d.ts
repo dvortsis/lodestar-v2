@@ -7465,18 +7465,17 @@ export interface components {
                     state: "direct" | "unchecked" | "up" | "down";
                 };
                 /**
-                 * @description A source's egress setting.
-                 * @example {
-                 *       "proxy": "10.8.0.1:1080",
-                 *       "route": "socks5"
-                 *     }
+                 * @description What's saved; null when it can't be read (saved by a newer
+                 *     version, or damaged). An unreadable setting is never taken as
+                 *     direct: the source's requests are refused until you set its route
+                 *     again.
                  */
-                setting: {
+                setting: null | {
                     /**
-                     * @description For `socks5`: who resolves names. Left out, it's `local` when the
-                     *     proxy is on your network (a private or loopback address), where a
-                     *     name the proxy resolves could reach your other devices, and
-                     *     `proxy` otherwise.
+                     * @description For `socks5`: who resolves names. Left out, it's `proxy` for a
+                     *     source that only reaches its built-in sites, so lookups stay inside
+                     *     the tunnel, and `local` for a source whose sites you enter, so a
+                     *     public name can't reach devices on the proxy's network.
                      */
                     dns?: "proxy" | "local";
                     /**
@@ -7698,10 +7697,10 @@ export interface components {
              */
             egress?: {
                 /**
-                 * @description For `socks5`: who resolves names. Left out, it's `local` when the
-                 *     proxy is on your network (a private or loopback address), where a
-                 *     name the proxy resolves could reach your other devices, and
-                 *     `proxy` otherwise.
+                 * @description For `socks5`: who resolves names. Left out, it's `proxy` for a
+                 *     source that only reaches its built-in sites, so lookups stay inside
+                 *     the tunnel, and `local` for a source whose sites you enter, so a
+                 *     public name can't reach devices on the proxy's network.
                  */
                 dns?: "proxy" | "local";
                 /**

@@ -144,11 +144,11 @@ fn dht_source() -> Source {
                 reason: None,
                 state: EgressState::Direct,
             }),
-            setting: EgressSetting {
+            setting: Some(EgressSetting {
                 route: EgressRoute::Direct,
                 proxy: None,
                 dns: None,
-            },
+            }),
             warnings: Vec::new(),
         },
         enabled: true,
@@ -313,7 +313,7 @@ impl OpsApi for FakeOps {
                 s.agents.count = n;
             }
             if let Some(e) = patch.egress {
-                s.egress.setting = e;
+                s.egress.setting = Some(e);
             }
             if let Some(w) = patch.schedule {
                 s.schedule.windows = w;
@@ -875,9 +875,21 @@ async fn source_settings() {
     .await;
     assert_ne!(status, 200);
     assert_eq!(
-        f.ops.sources.lock().unwrap()[0].egress.setting.route,
-        EgressRoute::Direct
+        f.ops.sources.lock().unwrap()[0]
+            .egress
+            .setting
+            .as_ref()
+            .map(|s| s.route),
+        Some(EgressRoute::Direct)
     );
+    for unusable in ["0.0.0.0:1080", "[ff02::1]:1080"] {
+        let body = format!(
+            r#"{{"egress":{{"route":"socks5","proxy":"{unusable}"}},"password":"correct horse battery"}}"#
+        );
+        let (status, e) = send(&f, req("PATCH", "/api/v1/sources/0", c, Some(&body))).await;
+        assert_eq!(status, 400, "{unusable}: {e}");
+        assert!(e.contains("invalid_egress"), "{e}");
+    }
     golden(
         &f,
         "source_egress_proxy_invalid",

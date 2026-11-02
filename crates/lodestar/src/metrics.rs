@@ -1818,6 +1818,7 @@ mod tests {
                         notice: None,
                     },
                     route: None,
+                    setting: Ok(lodestar_pipeline::control::EgressSetting::Direct),
                 }),
             };
         let mut o = Out(String::new());

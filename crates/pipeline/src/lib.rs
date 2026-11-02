@@ -327,12 +327,15 @@ pub struct SourceStatus {
     pub egress: Option<EgressLive>,
 }
 
-/// A running plugin's egress: its kill switch's view, and the route it was
-/// built with (`None` when a proxy's name didn't resolve).
+/// A running plugin's egress: its kill switch's view, the route it was
+/// built with (`None` when it couldn't be: a proxy name that didn't
+/// resolve, an unreadable setting), and the saved setting it was built
+/// from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EgressLive {
     pub status: lodestar_sources::EgressStatus,
     pub route: Option<lodestar_sources::Egress>,
+    pub setting: control::SavedEgress,
 }
 
 struct SourceEntry {
@@ -343,10 +346,7 @@ struct SourceEntry {
     enabled: bool,
     priority: Priority,
     error: Arc<Mutex<Option<String>>>,
-    egress: Option<(
-        Arc<lodestar_sources::PluginEgress>,
-        Option<lodestar_sources::Egress>,
-    )>,
+    egress: Option<egress::Built>,
 }
 
 /// A cheap, cloneable view of a running pipeline's counters, for metrics
@@ -451,9 +451,10 @@ impl Monitor {
                     .egress
                     .as_ref()
                     .filter(|_| s.running.load(Ordering::Relaxed))
-                    .map(|(e, route)| EgressLive {
-                        status: e.status(),
-                        route: route.clone(),
+                    .map(|b| EgressLive {
+                        status: b.egress.status(),
+                        route: b.route.clone(),
+                        setting: b.setting.clone(),
                     }),
             })
             .collect()
@@ -604,7 +605,30 @@ impl Pipeline {
         // Each non-direct route's monitor; they end at the plugins'
         // shutdown.
         let mut egress_tasks = Vec::new();
-        for (plugin, (id, state, saved, egress_setting)) in plugins.into_iter().zip(registered) {
+        // Every enabled plugin's client, built at once: a proxy's name may
+        // take a few seconds to resolve, or to fail to.
+        let mut built = HashMap::new();
+        if let Some(factory) = &config.egress {
+            let mut set = tokio::task::JoinSet::new();
+            for (plugin, (id, state, _, setting)) in plugins.iter().zip(&registered) {
+                if *state != SourceState::Enabled {
+                    continue;
+                }
+                let (factory, plugin, setting, id) =
+                    (factory.clone(), plugin.clone(), setting.clone(), *id);
+                set.spawn(async move {
+                    (
+                        id,
+                        egress::build(&factory, plugin.manifest(), &setting).await,
+                    )
+                });
+            }
+            while let Some(done) = set.join_next().await {
+                let (id, b) = done.map_err(Error::Join)?;
+                built.insert(id, b);
+            }
+        }
+        for (plugin, (id, state, saved, _)) in plugins.into_iter().zip(registered) {
             let m = plugin.manifest();
             let priority = saved
                 .or_else(|| config.priorities.get(m.id).copied())
@@ -634,24 +658,20 @@ impl Pipeline {
                 });
                 continue;
             }
-            let egress = match &config.egress {
-                Some(factory) => {
-                    let built = egress::build(factory, m, &egress_setting).await;
-                    egress_tasks.extend(egress::watch(
-                        m.id,
-                        Arc::clone(&built.0),
-                        EGRESS_PROBE_EVERY,
-                        plugin_shutdown.clone(),
-                    ));
-                    Some(built)
-                }
-                None => None,
-            };
+            let egress = built.remove(&id);
+            if let Some(b) = &egress {
+                egress_tasks.extend(egress::watch(
+                    m.id,
+                    Arc::clone(&b.egress),
+                    EGRESS_PROBE_EVERY,
+                    plugin_shutdown.clone(),
+                ));
+            }
             let kit = match &egress {
-                Some((e, _)) => lodestar_sources::Kit::for_plugin(
+                Some(b) => lodestar_sources::Kit::for_plugin(
                     &*plugin,
                     Arc::new(lodestar_sources::MemoryState::new()),
-                    Arc::clone(e) as Arc<dyn lodestar_sources::Fetch>,
+                    Arc::clone(&b.egress) as Arc<dyn lodestar_sources::Fetch>,
                     &lodestar_sources::UserLimits::default(),
                 ),
                 None => lodestar_sources::Kit::default(),
@@ -996,7 +1016,7 @@ fn sources_egress_routes(sources: &[SourceEntry]) -> Vec<&'static str> {
         .filter(|s| {
             s.egress
                 .as_ref()
-                .is_some_and(|(_, route)| route == &Some(lodestar_sources::Egress::Direct))
+                .is_some_and(|b| b.route == Some(lodestar_sources::Egress::Direct))
         })
         .map(|s| s.plugin.manifest().id)
         .collect()
@@ -1034,7 +1054,7 @@ fn prepare(
             SourceId,
             SourceState,
             Option<Priority>,
-            control::EgressSetting,
+            control::SavedEgress,
         )>,
         Vec<QueuedKey>,
         Have,
