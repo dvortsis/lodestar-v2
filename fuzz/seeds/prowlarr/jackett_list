@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<indexers>
+  <indexer id="examplepublic" configured="true">
+    <title>Example Public</title>
+    <description>Example Public is a public tracker.</description>
+    <link>https://public.example/</link>
+    <language>en-US</language>
+    <type>public</type>
+    <caps>
+      <server title="Jackett" />
+      <limits default="100" max="100" />
+      <searching>
+        <search available="yes" supportedParams="q" />
+        <tv-search available="yes" supportedParams="q,season,ep" />
+      </searching>
+      <categories>
+        <category id="2000" name="Movies">
+          <subcat id="2040" name="Movies/HD" />
+        </category>
+      </categories>
+    </caps>
+  </indexer>
+  <indexer id="example-semi" configured="true">
+    <title>Example Semi</title>
+    <description>Example Semi is a semi-private tracker.</description>
+    <link>https://semi.example/</link>
+    <language>en-US</language>
+    <type>semi-private</type>
+    <caps><server title="Jackett" /></caps>
+  </indexer>
+  <indexer id="example-unconfigured" configured="false">
+    <title>Example Unconfigured</title>
+    <type>public</type>
+  </indexer>
+  <indexer id="all" configured="true">
+    <title>All</title>
+    <type>public</type>
+  </indexer>
+</indexers>

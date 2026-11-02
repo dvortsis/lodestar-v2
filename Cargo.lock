@@ -1781,6 +1781,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-sources-plugins"
+version = "0.5.0"
+dependencies = [
+ "lodestar-integrations",
+ "lodestar-metainfo",
+ "lodestar-sources",
+ "lodestar-sources-feeds",
+ "lodestar-store",
+ "proptest",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "lodestar-store"
 version = "0.5.0"
 dependencies = [
