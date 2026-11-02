@@ -276,6 +276,20 @@ impl CsList {
         }
     }
 
+    /// Keeps only the floor-marked lists `keep` names.
+    pub fn retain_lists(&mut self, keep: impl Fn(u32) -> bool) {
+        self.lists.retain(|(i, _)| keep(*i));
+    }
+
+    /// Whether the floor holds `hash` other than through list `list`.
+    pub fn held_without_list(&self, hash: &[u8; 20], list: u32) -> bool {
+        self.hashes.contains_key(hash)
+            || self
+                .lists
+                .iter()
+                .any(|(i, l)| *i != list && l.contains(hash))
+    }
+
     pub fn len(&self) -> usize {
         self.hashes.len()
     }

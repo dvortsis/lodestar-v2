@@ -125,9 +125,17 @@ pub enum Change {
         enabled: bool,
     },
     /// Accepts or discards a version the sanity gates held back.
+    ///
+    /// Accepting one that drops entries is weakening, so it's confirmed
+    /// with the password for the version the warning described: send back
+    /// the assessment's [`Assessment::held_version`] as `held`. A refresh
+    /// that holds another version in between makes apply refuse with 409
+    /// `changed_since_preview`.
     ResolveHeld {
         id: i64,
         accept: bool,
+        /// The previewed `held_version`.
+        held: Option<String>,
     },
     /// Settles floor entries a config file or a floor-marked list dropped
     /// (owner's decision §2.7). They stay blocked until this: `remove`
@@ -214,6 +222,23 @@ pub struct Assessment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub floor_entries: Option<Vec<String>>,
+    /// For a subscription change: how strict your lists would be after
+    /// it, as the enabled lists together (§2.9). Subscribing shows what
+    /// a list adds; unsubscribing or pausing shows what's left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub strictness: Option<Strictness>,
+    /// For `resolve_held`: the held version's fingerprint (64 hex
+    /// digits). Send it back as `held` to accept with the password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub held_version: Option<String>,
+    /// For `resolve_held` accepted: entries the applied version blocks
+    /// that the held one doesn't (hashes for a content list, ranges for
+    /// an IP list).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub unblocked: Option<usize>,
     /// All of them, for applying.
     #[serde(skip)]
     pub(crate) settles: Option<Vec<[u8; 20]>>,
@@ -243,7 +268,9 @@ pub struct ApplyResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub name: Option<String>,
-    /// `core_switch` off: quarantined items released.
+    /// `core_switch` off, `remove_rule`, `unsubscribe`,
+    /// `pause_subscription` off, `resolve_held` accepted: hashes released
+    /// from quarantine and tombstones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub released: Option<usize>,
@@ -505,6 +532,49 @@ pub struct StrictnessList {
     /// The figures are a catalog measurement, not this list's data.
     pub measured: bool,
     pub name: String,
+}
+
+/// `GET /filters/subscriptions`: the one-click catalog, your lists, and
+/// how strict the enabled ones are together (§2.9, §20.13). Nothing is
+/// subscribed by default; connecting is `subscribe` through
+/// `/filters/preview` and `/filters/apply`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Subscriptions {
+    pub catalog: Vec<CatalogList>,
+    /// Your lists, paused ones included, each with its own figures.
+    pub connected: Vec<ConnectedList>,
+    /// The enabled lists together.
+    pub strictness: Strictness,
+}
+
+/// A list in the one-click catalog. Send `url`, `kind` and `format` as a
+/// `subscribe` change to connect it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CatalogList {
+    /// What it blocks, in plain language.
+    pub about: String,
+    /// Its catalog measurement, or its own data once connected.
+    pub figures: StrictnessList,
+    /// `hashes`, `p2p`, `dat` or `cidr`.
+    pub format: String,
+    pub key: String,
+    /// `content` or `ip`.
+    pub kind: String,
+    pub name: String,
+    /// The subscription's id once you connected it.
+    #[schema(required = true)]
+    pub subscription: Option<i64>,
+    pub url: String,
+}
+
+/// One of your lists and its own figures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ConnectedList {
+    pub figures: StrictnessList,
+    /// A version the sanity gates held back waits for *Accept anyway*
+    /// or *Keep previous* (`resolve_held`).
+    pub held: bool,
+    pub subscription: SubscriptionEntry,
 }
 
 /// A list subscription (§20.6).

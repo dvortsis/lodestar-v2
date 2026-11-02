@@ -173,7 +173,7 @@ pub fn change_detail(change: &Change) -> String {
         Change::PauseSubscription { id, enabled } => {
             format!("pause_subscription id={id} enabled={enabled}")
         }
-        Change::ResolveHeld { id, accept } => format!("resolve_held id={id} accept={accept}"),
+        Change::ResolveHeld { id, accept, .. } => format!("resolve_held id={id} accept={accept}"),
         Change::ResolveFloorRemoval {
             source,
             hashes,

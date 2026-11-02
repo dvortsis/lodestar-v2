@@ -450,6 +450,29 @@ impl IpSet {
         n as f64 / (hi - lo) as f64
     }
 
+    /// Whether every address in `other` is in this set too, so swapping
+    /// `other` for this set unblocks nothing.
+    pub fn covers(&self, other: &IpSet) -> bool {
+        self.uncovered(other) == 0
+    }
+
+    /// How many of `other`'s ranges aren't wholly in this set: what
+    /// swapping `other` for this set unblocks, by range.
+    pub fn uncovered(&self, other: &IpSet) -> usize {
+        fn missing<T: Ord + Copy>(have: &[(T, T)], want: &[(T, T)]) -> usize {
+            // Both are merged, so a covered range lies in one of `have`'s.
+            // A decoded inverted range (`a > b`) is empty in `contains`;
+            // it only ever counts as missing here, never as covering.
+            want.iter()
+                .filter(|&&(a, b)| {
+                    let i = have.partition_point(|&(lo, _)| lo <= a);
+                    !(i > 0 && have[i - 1].0 <= have[i - 1].1 && have[i - 1].1 >= b)
+                })
+                .count()
+        }
+        missing(&self.v4, &other.v4) + missing(&self.v6, &other.v6)
+    }
+
     pub fn v4_ranges(&self) -> usize {
         self.v4.len()
     }
@@ -584,6 +607,11 @@ pub fn apply(store: &Store, filter: &Handle, ips: &SharedIps) -> Result<(), Stri
     }
     ips.replace(set);
     filter.update_engine(|e| {
+        // A list that's no longer subscribed stops applying too, so
+        // nothing released for it is held by it again.
+        let known: HashSet<u32> = subs.iter().map(|s| s.id as u32).collect();
+        e.retain_lists(|id| known.contains(&id));
+        e.core.cs.retain_lists(|id| known.contains(&id));
         for (s, hashes) in content {
             let id = s.id as u32;
             if s.floor {
@@ -720,6 +748,24 @@ mod tests {
         assert!((set.v4_coverage() - (1u64 << 24) as f64 / (1u64 << 32) as f64).abs() < 1e-6);
         let both = IpSet::union([&set, &edge]);
         assert_eq!(both.len(), 6);
+    }
+
+    #[test]
+    fn covers_means_nothing_is_unblocked() {
+        let v4 = |a, b| IpRange::V4(a, b);
+        let wide = IpSet::new([v4(10, 20), v4(21, 30), IpRange::V6(5, 9)]);
+        let empty = IpSet::default();
+        assert!(wide.covers(&empty) && wide.covers(&wide));
+        assert!(!empty.covers(&wide));
+        // Adjacent ranges merge, so a range across the join is covered.
+        assert!(wide.covers(&IpSet::new([v4(15, 25), IpRange::V6(6, 9)])));
+        for gone in [v4(9, 12), v4(29, 31), v4(40, 40), IpRange::V6(9, 10)] {
+            assert!(!wide.covers(&IpSet::new([gone])), "{gone:?}");
+        }
+        let gap = IpSet::new([v4(10, 14), v4(16, 20)]);
+        assert!(!gap.covers(&IpSet::new([v4(12, 18)])));
+        assert_eq!(gap.uncovered(&wide), 2, "both of wide's ranges");
+        assert_eq!(wide.uncovered(&gap), 0);
     }
 
     #[test]

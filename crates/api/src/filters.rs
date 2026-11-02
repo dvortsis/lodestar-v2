@@ -45,8 +45,7 @@ use crate::dto::filters::{
     CorrectResponse, Decision, DecisionCount, Detection, DetectionExample, ExceptionEntry,
     FixtureCounts, Fixtures, JobPhase, JobProgress, JobStarted, JobState, JobStatus, OverrideEntry,
     Overview, PackRuleState, PackState, PendingFloorEntry, QuarantineEntry, Queue, QueueQuery,
-    RuleEntry, Strictness, StrictnessList, SubscriptionEntry, TestResponse, TestResult,
-    TombstoneEntry, Tombstones, TombstonesQuery,
+    RuleEntry, Strictness, TestResponse, TestResult, TombstoneEntry, Tombstones, TombstonesQuery,
 };
 pub use crate::dto::filters::{
     Assessment, Change, ChangeBody, ClassRuleBody, CorrectBody, IdBody, MatchInput, Preview,
@@ -64,6 +63,7 @@ use crate::extract::{ClientIp, Json as JsonBody, Path, Query, same_origin_json};
     fixtures,
     test,
     strictness,
+    subscriptions::list,
     classes,
     correct,
     add_class_rule,
@@ -75,6 +75,8 @@ use crate::extract::{ClientIp, Json as JsonBody, Path, Query, same_origin_json};
     apply
 ))]
 pub(crate) struct ApiDoc;
+
+mod subscriptions;
 
 /// What the filters API works with. The store is the writable control
 /// connection, not the ingest writer's.
@@ -122,6 +124,7 @@ pub fn routes() -> Router<ApiState> {
             .route("/filters/fixtures", get(fixtures))
             .route("/filters/test", post(test))
             .route("/filters/strictness", post(strictness))
+            .route("/filters/subscriptions", get(subscriptions::list))
             .route("/classify", get(classes))
             .route("/classify/correct", post(correct))
             .route("/classify/rules", post(add_class_rule))
@@ -147,8 +150,17 @@ fn conflict(code: &'static str, message: impl Into<String>) -> ApiError {
     ApiError::new(StatusCode::CONFLICT, code, message.into())
 }
 
+fn nothing_held() -> ApiError {
+    conflict("nothing_held", "No version of that list is held.")
+}
+
+fn internal_none() -> ApiError {
+    internal("a subscribe change without a list")
+}
+
 /// The state changed since the preview so that this change now weakens
-/// filtering: it must be previewed (and confirmed) again.
+/// filtering (or weakens it differently): it must be previewed and
+/// confirmed again.
 fn changed_since_preview() -> ApiError {
     conflict(
         "changed_since_preview",
@@ -779,13 +791,6 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: 
             "This shows the name of a torrent a filter held back. Nothing about it is stored."
                 .to_owned()
         }
-        Change::Unsubscribe { .. } | Change::PauseSubscription { .. } => format!(
-            "This stops applying the list: what it blocked can be fetched or contacted again. {n}"
-        ),
-        Change::ResolveHeld { .. } => format!(
-            "This applies a version the sanity gates held back because it shrank sharply: \
-             entries it no longer has stop being blocked. {n}"
-        ),
         Change::Subscribe { .. } => {
             "Marking this list as part of the locked floor blocks its torrents beyond any \
              override, and you can't release them while they're on it. Only do this for a \
@@ -1034,30 +1039,37 @@ impl FiltersApi {
                 hex20(hash)?;
                 a.weakening = true;
             }
-            Change::Unsubscribe { id } => {
+            Change::Unsubscribe { id } | Change::PauseSubscription { id, enabled: false } => {
+                let store = self.store();
+                let sub = subscriptions::subscription(&store, *id)?;
                 a.weakening = true;
-                a.preview = rules(vec![format!("L-{id}")]);
+                a.preview = rules(vec![subscriptions::rule_id(*id)]);
+                a.preview.removed_from_floor = subscriptions::floor_leaving(&store, &engine, &sub)?;
             }
-            Change::PauseSubscription { id, enabled } => {
-                if !enabled {
-                    a.weakening = true;
-                    a.preview = rules(vec![format!("L-{id}")]);
-                }
+            Change::PauseSubscription { id, .. } => {
+                subscriptions::subscription(&self.store(), *id)?;
             }
-            Change::ResolveHeld { id, accept } => {
-                let sub = self
-                    .store()
-                    .subscription(*id)
-                    .map_err(internal)?
-                    .ok_or_else(|| {
-                        not_found("subscription_not_found", "There's no such subscription.")
-                    })?;
-                let shrank = sub.error.as_deref().is_some_and(|e| e.contains("shrank"));
-                // A floor-marked list's removals wait for a decision of
-                // their own (§2.7), so accepting one releases nothing.
-                if *accept && shrank && !sub.floor {
+            Change::ResolveHeld { id, accept, .. } => {
+                let store = self.store();
+                let sub = subscriptions::subscription(&store, *id)?;
+                let effect = subscriptions::held_effect(&store, &sub)?.ok_or_else(nothing_held)?;
+                a.held_version = Some(effect.version.clone());
+                // Any entry the held version drops stops being blocked,
+                // whether it shrank or grew. A floor-marked list's removals
+                // wait for a decision of their own (§2.7), so accepting one
+                // releases nothing.
+                if *accept && effect.loosens && !sub.floor {
+                    let (quarantine, tombstones, _) =
+                        subscriptions::dropped_holds(&store, *id, &effect.dropped)?;
                     a.weakening = true;
-                    a.preview = rules(vec![format!("L-{id}")]);
+                    a.unblocked = Some(effect.unblocked);
+                    // Exact: the list's holds on what it drops. The 30-day
+                    // figures count the whole list, so they're left out.
+                    a.preview = Preview {
+                        quarantine,
+                        tombstones,
+                        ..Preview::default()
+                    };
                 }
             }
             Change::ResolveFloorRemoval {
@@ -1090,15 +1102,11 @@ impl FiltersApi {
                 }
                 a.settles = Some(chosen);
             }
-            Change::Subscribe { floor, kind, .. } => {
-                if *floor && kind != "content" {
-                    return Err(bad(
-                        "floor_needs_content_list",
-                        "Only content lists can join the floor.",
-                    )
-                    .field("floor"));
-                }
-                a.confirm = *floor;
+            Change::Subscribe { .. } => {
+                // Validated here too, so the preview reports what apply
+                // would refuse.
+                let new = subscriptions::check_subscribe(change)?;
+                a.confirm = new.is_some_and(|n| n.floor);
             }
             Change::Undo => {
                 a.weakening = true;
@@ -1126,6 +1134,21 @@ impl FiltersApi {
                 adult_hold,
             ));
         }
+        if let (
+            true,
+            Change::Unsubscribe { id }
+            | Change::PauseSubscription { id, .. }
+            | Change::ResolveHeld { id, .. },
+        ) = (a.weakening, change)
+        {
+            let sub = subscriptions::subscription(&self.store(), *id)?;
+            let n = count_line(&a.preview);
+            let unblocked = a.unblocked.unwrap_or_default();
+            a.warning = Some(subscriptions::warning(
+                change, &sub, &a.preview, unblocked, &n,
+            ));
+        }
+        a.strictness = subscriptions::strictness_after(&self.store(), change)?;
         progress.begin(DONE, 0);
         Ok(a)
     }
@@ -1613,63 +1636,16 @@ impl FiltersApi {
                     })?;
                 out.name = Some(name);
             }
-            Change::Subscribe {
-                url,
-                name,
-                kind,
-                format,
-                action: act,
-                floor,
-                refresh_hours,
-            } => {
-                let ip = match kind.as_str() {
-                    "ip" => true,
-                    "content" => false,
-                    _ => {
-                        return Err(bad("unknown_list_kind", "A list's kind is content or ip.")
-                            .field("kind"));
-                    }
-                };
-                if !(url.starts_with("https://") || url.starts_with("http://")) {
-                    return Err(
-                        bad("bad_list_url", "The list's URL must be http or https.").field("url")
-                    );
-                }
-                let act = act
-                    .as_deref()
-                    .map(action)
-                    .transpose()?
-                    .unwrap_or(Action::Drop);
-                if !act.protective() {
-                    return Err(
-                        bad("bad_list_action", "A list's action is drop or quarantine.")
-                            .field("action"),
-                    );
-                }
-                if let Some(f) = format {
-                    let fm = lodestar_filter::lists::Format::from_name(f).ok_or_else(|| {
-                        bad(
-                            "unknown_list_format",
-                            "The format must be hashes, p2p, dat or cidr.",
-                        )
-                        .field("format")
-                    })?;
-                    if fm.is_ip() != ip {
-                        return Err(bad(
-                            "list_format_mismatch",
-                            "That format doesn't fit this kind of list.",
-                        )
-                        .field("format"));
-                    }
-                }
+            Change::Subscribe { refresh_hours, .. } => {
+                let new = subscriptions::check_subscribe(change)?.ok_or_else(internal_none)?;
                 let id = store
                     .add_subscription(&lodestar_store::NewSubscription {
-                        url,
-                        name: name.as_deref().unwrap_or(url),
-                        kind: u8::from(ip),
-                        format: format.as_deref(),
-                        action: act.code(),
-                        floor: *floor && !ip,
+                        url: &new.url,
+                        name: &new.name,
+                        kind: u8::from(new.ip),
+                        format: new.format,
+                        action: new.action.code(),
+                        floor: new.floor,
                         interval_secs: i64::from(refresh_hours.unwrap_or(24).max(1)) * 3600,
                     })
                     .map_err(internal)?;
@@ -1679,7 +1655,7 @@ impl FiltersApi {
                 if !store.remove_subscription(*id).map_err(internal)? {
                     return Err(gone());
                 }
-                self.release_list(store, *id)?;
+                out.released = Some(self.release_list(store, *id)?);
             }
             Change::PauseSubscription { id, enabled } => {
                 if !store
@@ -1689,19 +1665,40 @@ impl FiltersApi {
                     return Err(gone());
                 }
                 if !enabled {
-                    self.release_list(store, *id)?;
+                    out.released = Some(self.release_list(store, *id)?);
                 }
             }
-            Change::ResolveHeld { id, accept } => {
-                let sub = store.subscription(*id).map_err(internal)?.ok_or_else(|| {
-                    not_found("subscription_not_found", "There's no such subscription.")
-                })?;
-                let shrank = sub.error.as_deref().is_some_and(|e| e.contains("shrank"));
-                if *accept && shrank && !sub.floor && !out.assessment.confirm {
+            Change::ResolveHeld { id, accept, held } => {
+                // Read again under the lock: a refresh since the preview
+                // may have held another version. The password confirmed
+                // the version the client names, so a loosening accept
+                // applies only that one.
+                let sub = subscriptions::subscription(store, *id)?;
+                let effect = subscriptions::held_effect(store, &sub)?.ok_or_else(nothing_held)?;
+                let loosens = *accept && effect.loosens && !sub.floor;
+                if loosens
+                    && (!out.assessment.confirm || held.as_deref() != Some(effect.version.as_str()))
+                {
                     return Err(changed_since_preview());
                 }
+                let holds = if loosens {
+                    subscriptions::dropped_holds(store, *id, &effect.dropped)?.2
+                } else {
+                    Vec::new()
+                };
                 if !store.resolve_held(*id, *accept, now).map_err(internal)? {
-                    return Err(conflict("nothing_held", "No version of that list is held."));
+                    return Err(nothing_held());
+                }
+                if loosens {
+                    // The list's layer swaps first, so nothing released is
+                    // held by it again.
+                    lodestar_filter::lists::apply(store, &self.engine, &self.ips)
+                        .map_err(internal)?;
+                    out.released = Some(self.release_list_hashes(
+                        store,
+                        &subscriptions::rule_id(*id),
+                        &holds,
+                    )?);
                 }
             }
             Change::ResolveFloorRemoval {
@@ -1772,11 +1769,25 @@ impl FiltersApi {
     }
 
     /// A list that stopped applying lets what it holds go. The list layer
-    /// is rebuilt first, so nothing released is held by it again.
-    fn release_list(&self, store: &mut Store, id: i64) -> ApiResult<()> {
+    /// is rebuilt first, so nothing released is held by it again. Returns
+    /// how many hashes were released.
+    fn release_list(&self, store: &mut Store, id: i64) -> ApiResult<usize> {
         lodestar_filter::lists::apply(store, &self.engine, &self.ips).map_err(internal)?;
-        self.release_rules(store, &[format!("L-{id}")])?;
-        Ok(())
+        self.release_rules(store, &[subscriptions::rule_id(id)])
+    }
+
+    /// Releases `rule`'s holds on `hashes` only (a list version that
+    /// dropped them); holds by other rules stay.
+    fn release_list_hashes(
+        &self,
+        store: &mut Store,
+        rule: &str,
+        hashes: &[[u8; 20]],
+    ) -> ApiResult<usize> {
+        let mut freed = Vec::new();
+        let n = store.release_rule_hashes(rule, hashes, |h| freed.extend_from_slice(h));
+        self.unhold(store, &freed)?;
+        n.map_err(internal)
     }
 
     /// The rule set, switches and lists, as the Filters & Safety screens
@@ -1903,29 +1914,7 @@ impl FiltersApi {
                     unless: r.unless_query.clone(),
                 })
                 .collect(),
-            subscriptions: subs
-                .iter()
-                .map(|s| SubscriptionEntry {
-                    action: action_name(s.action),
-                    checked_at: s.checked_at,
-                    enabled: s.enabled,
-                    entries: s.entries,
-                    error: s.error.clone(),
-                    floor: s.floor,
-                    format: s.format.clone(),
-                    id: s.id,
-                    kind: if s.kind == lodestar_filter::lists::KIND_IP {
-                        "ip"
-                    } else {
-                        "content"
-                    }
-                    .to_string(),
-                    name: s.name.clone(),
-                    status: s.status.clone(),
-                    updated_at: s.updated_at,
-                    url: s.url.clone(),
-                })
-                .collect(),
+            subscriptions: subs.iter().map(subscriptions::entry).collect(),
             version: engine.version,
         })
     }
@@ -2014,7 +2003,7 @@ impl FiltersApi {
     /// Lists already fetched are measured from their data; catalog lists
     /// not subscribed yet use the catalog's measurement.
     pub fn strictness(&self, body: &StrictnessBody) -> ApiResult<Strictness> {
-        use lodestar_filter::strictness::{self, Candidate, Category, Facts};
+        use lodestar_filter::strictness::{self, Candidate};
         let store = self.store();
         let subs = store.subscriptions().map_err(internal)?;
         let mut ids: Vec<i64> = Vec::new();
@@ -2035,69 +2024,9 @@ impl FiltersApi {
             let s = subs.iter().find(|s| s.id == id).ok_or_else(|| {
                 not_found("subscription_not_found", "There's no such subscription.")
             })?;
-            let ip = s.kind == lodestar_filter::lists::KIND_IP;
-            let listed = strictness::CATALOG.iter().find(|e| e.url == s.url);
-            let categories = match (listed, ip, s.floor) {
-                (Some(e), _, _) => e.categories.to_vec(),
-                (None, true, _) => vec![Category::Peers],
-                (None, false, true) => vec![Category::ChildAbuse],
-                (None, false, false) => vec![Category::Content],
-            };
-            let data = store.subscription_data(id, false).map_err(internal)?;
-            let facts = match (data, ip) {
-                (Some(d), true) => {
-                    lodestar_filter::lists::IpSet::decode(&d).map_or(Facts::Unknown, Facts::Ips)
-                }
-                (Some(d), false) => {
-                    let mut n = (d.len() / 20) as u64;
-                    if s.floor {
-                        n += store
-                            .pending_floor_of(&FloorSource::List(id))
-                            .map_err(internal)?
-                            .len() as u64;
-                    }
-                    Facts::Hashes(n)
-                }
-                (None, _) => listed.map_or(Facts::Unknown, |e| Facts::Measured(e.measured)),
-            };
-            candidates.push(Candidate {
-                name: s.name.clone(),
-                ip,
-                floor: s.floor && !ip,
-                categories,
-                facts,
-            });
+            candidates.push(subscriptions::candidate(&store, s, false)?);
         }
-        let a = strictness::assess(&candidates);
-        let cats = |c: &[Category]| c.iter().map(|c| c.as_str().to_string()).collect::<Vec<_>>();
-        Ok(Strictness {
-            categories: cats(&a.categories),
-            estimate: a.estimate,
-            floor_hashes: a.floor_hashes,
-            hashes: a.hashes,
-            ipv4_public_share: a.v4_public_share,
-            ipv4_share: a.v4_share,
-            ipv6_ranges: a.v6_ranges,
-            ipv6_share: a.v6_share,
-            level: a.level.as_str().to_string(),
-            lists: a
-                .lists
-                .iter()
-                .map(|l| StrictnessList {
-                    categories: cats(&l.categories),
-                    floor: l.floor,
-                    hashes: l.hashes,
-                    ipv4_public_share: l.v4_public_share,
-                    ipv4_share: l.v4_share,
-                    ipv6_ranges: l.v6_ranges,
-                    kind: if l.ip { "ip" } else { "content" }.to_string(),
-                    measured: l.measured,
-                    name: l.name.clone(),
-                })
-                .collect(),
-            text: a.text,
-            unknown: a.unknown,
-        })
+        Ok(subscriptions::to_dto(&strictness::assess(&candidates)))
     }
 }
 
@@ -3117,6 +3046,19 @@ fn apply_change(
                         "Name the entries to remove: send back the floor_entries the warning listed as hashes.",
                     )
                     .field("hashes"));
+                }
+                // Likewise a held version: the one the warning described.
+                if let Change::ResolveHeld {
+                    accept: true,
+                    held: None,
+                    ..
+                } = &body.change
+                {
+                    return Err(bad(
+                        "held_needs_version",
+                        "Name the version to accept: send back the held_version the warning described as held.",
+                    )
+                    .field("held"));
                 }
                 auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?
             }

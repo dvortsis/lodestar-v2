@@ -2066,6 +2066,35 @@
         ]
       }
     },
+    "/filters/subscriptions": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "The one-click catalog and your lists, each with what it blocks, and\nhow strict the enabled lists are together (§2.9, §20.13). Connect,\npause, remove or settle a held version with `/filters/preview` and\n`/filters/apply`.",
+        "operationId": "getFilterSubscriptions",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subscriptions"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/filters/test": {
       "post": {
         "tags": [
@@ -7332,7 +7361,7 @@
           },
           "released": {
             "type": "integer",
-            "description": "`core_switch` off: quarantined items released.",
+            "description": "`core_switch` off, `remove_rule`, `unsubscribe`,\n`pause_subscription` off, `resolve_held` accepted: hashes released\nfrom quarantine and tombstones.",
             "minimum": 0
           },
           "removed": {
@@ -7375,6 +7404,10 @@
             },
             "description": "For a floor removal: the entries the warning counts, 40 hex digits\neach. A removal settles at most 10,000 at a time, so a longer\npending list goes in batches. Send these back as `hashes` to\nconfirm the removal with the password."
           },
+          "held_version": {
+            "type": "string",
+            "description": "For `resolve_held`: the held version's fingerprint (64 hex\ndigits). Send it back as `held` to accept with the password."
+          },
           "neutralize": {
             "oneOf": [
               {
@@ -7388,6 +7421,15 @@
           },
           "preview": {
             "$ref": "#/components/schemas/Preview"
+          },
+          "strictness": {
+            "$ref": "#/components/schemas/Strictness",
+            "description": "For a subscription change: how strict your lists would be after\nit, as the enabled lists together (§2.9). Subscribing shows what\na list adds; unsubscribing or pausing shows what's left."
+          },
+          "unblocked": {
+            "type": "integer",
+            "description": "For `resolve_held` accepted: entries the applied version blocks\nthat the held one doesn't (hashes for a content list, ranges for\nan IP list).",
+            "minimum": 0
           },
           "warning": {
             "type": [
@@ -8192,6 +8234,55 @@
           }
         }
       },
+      "CatalogList": {
+        "type": "object",
+        "description": "A list in the one-click catalog. Send `url`, `kind` and `format` as a\n`subscribe` change to connect it.",
+        "required": [
+          "about",
+          "figures",
+          "format",
+          "key",
+          "kind",
+          "name",
+          "subscription",
+          "url"
+        ],
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What it blocks, in plain language."
+          },
+          "figures": {
+            "$ref": "#/components/schemas/StrictnessList",
+            "description": "Its catalog measurement, or its own data once connected."
+          },
+          "format": {
+            "type": "string",
+            "description": "`hashes`, `p2p`, `dat` or `cidr`."
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`content` or `ip`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "subscription": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The subscription's id once you connected it."
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "Change": {
         "oneOf": [
           {
@@ -8721,7 +8812,7 @@
           },
           {
             "type": "object",
-            "description": "Accepts or discards a version the sanity gates held back.",
+            "description": "Accepts or discards a version the sanity gates held back.\n\nAccepting one that drops entries is weakening, so it's confirmed\nwith the password for the version the warning described: send back\nthe assessment's [`Assessment::held_version`] as `held`. A refresh\nthat holds another version in between makes apply refuse with 409\n`changed_since_preview`.",
             "required": [
               "id",
               "accept",
@@ -8730,6 +8821,13 @@
             "properties": {
               "accept": {
                 "type": "boolean"
+              },
+              "held": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The previewed `held_version`."
               },
               "id": {
                 "type": "integer",
@@ -9558,6 +9656,27 @@
           "password": {
             "type": "string",
             "description": "The admin password, every time. Without it the answer is 428\n`confirm_required`."
+          }
+        }
+      },
+      "ConnectedList": {
+        "type": "object",
+        "description": "One of your lists and its own figures.",
+        "required": [
+          "figures",
+          "held",
+          "subscription"
+        ],
+        "properties": {
+          "figures": {
+            "$ref": "#/components/schemas/StrictnessList"
+          },
+          "held": {
+            "type": "boolean",
+            "description": "A version the sanity gates held back waits for *Accept anyway*\nor *Keep previous* (`resolve_held`)."
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionEntry"
           }
         }
       },
@@ -18870,6 +18989,34 @@
           },
           "url": {
             "type": "string"
+          }
+        }
+      },
+      "Subscriptions": {
+        "type": "object",
+        "description": "`GET /filters/subscriptions`: the one-click catalog, your lists, and\nhow strict the enabled ones are together (§2.9, §20.13). Nothing is\nsubscribed by default; connecting is `subscribe` through\n`/filters/preview` and `/filters/apply`.",
+        "required": [
+          "catalog",
+          "connected",
+          "strictness"
+        ],
+        "properties": {
+          "catalog": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogList"
+            }
+          },
+          "connected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectedList"
+            },
+            "description": "Your lists, paused ones included, each with its own figures."
+          },
+          "strictness": {
+            "$ref": "#/components/schemas/Strictness",
+            "description": "The enabled lists together."
           }
         }
       },

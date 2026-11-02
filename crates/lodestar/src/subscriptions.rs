@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use lodestar_filter::lists::{self, Format, IpSet, SharedIps};
 use lodestar_filter::{Action, Handle};
+use lodestar_integrations::net::{GuardedClient, NetError, NetPolicy};
 use lodestar_log::{Count, Error, Url, log_event};
 use lodestar_store::{NewSubscription, Refresh, Store, Subscription};
 use tokio::sync::watch;
@@ -37,9 +38,14 @@ const TICK: Duration = Duration::from_secs(60);
 pub struct Limits {
     pub max_download: usize,
     pub max_expanded: usize,
-    /// Use the `HTTPS_PROXY`-style environment, as the rest of the egress
-    /// does (§5).
-    pub proxy_from_env: bool,
+    /// What a list URL, a redirect or a name's addresses may reach (the
+    /// §16 SSRF guard): public addresses only, since any signed-in session
+    /// can add a list. Tests allow loopback for their fake list server.
+    pub policy: NetPolicy,
+    /// One whole fetch, redirects and body included: a slow or dripping
+    /// server can hold a refresh up only this long, and refreshes run one
+    /// list at a time.
+    pub fetch_timeout: Duration,
 }
 
 impl Limits {
@@ -47,7 +53,8 @@ impl Limits {
         Limits {
             max_download: (c.max_download_mib.max(1) << 20) as usize,
             max_expanded: (c.max_expanded_mib.max(1) << 20) as usize,
-            proxy_from_env: true,
+            policy: NetPolicy::notification(false),
+            fetch_timeout: FETCH_TIMEOUT,
         }
     }
 }
@@ -116,21 +123,16 @@ pub fn sync_config(store: &mut Store, c: &Subscriptions) -> Result<(), String> {
 
 pub use lodestar_filter::lists::apply;
 
-/// The HTTP client (§16: reqwest on rustls with ring, as the tracker
-/// scraper uses).
-fn client(limits: &Limits) -> Result<reqwest::Client, reqwest::Error> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let builder = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .connect_timeout(Duration::from_secs(20))
-        .user_agent(concat!("Lodestar/", env!("CARGO_PKG_VERSION")))
-        .redirect(reqwest::redirect::Policy::limited(5));
-    let builder = if limits.proxy_from_env {
-        builder
-    } else {
-        builder.no_proxy()
-    };
-    builder.build()
+/// Redirects a list download follows, each checked like the first URL.
+const MAX_REDIRECTS: usize = 5;
+/// A whole list download, at most.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The HTTP client: the §16 SSRF guard (one checked resolution per
+/// connection, no system proxy, no automatic redirects), on the
+/// workspace's rustls with ring.
+fn client(limits: &Limits) -> Result<GuardedClient, NetError> {
+    GuardedClient::new(limits.policy, FETCH_TIMEOUT)
 }
 
 /// A parsed list, encoded for the store.
@@ -210,23 +212,66 @@ enum Download {
     },
 }
 
-/// Downloads one list with a conditional request, capped in size.
+/// Downloads one list with a conditional request, capped in size and in
+/// time: [`Limits::fetch_timeout`] covers every hop and the whole body.
 async fn download(
-    client: &reqwest::Client,
+    client: &GuardedClient,
     limits: &Limits,
     sub: &Subscription,
 ) -> Result<Download, String> {
-    let mut req = client.get(&sub.url);
-    if let Some(e) = &sub.etag {
-        req = req.header("If-None-Match", e);
-    }
-    if let Some(m) = &sub.last_modified {
-        req = req.header("If-Modified-Since", m);
-    }
-    let mut resp = req
-        .send()
+    tokio::time::timeout(limits.fetch_timeout, download_within(client, limits, sub))
         .await
-        .map_err(|e| format!("download failed: {e}"))?;
+        .unwrap_or_else(|_| Err("download failed: it took longer than the time limit".into()))
+}
+
+async fn download_within(
+    client: &GuardedClient,
+    limits: &Limits,
+    sub: &Subscription,
+) -> Result<Download, String> {
+    use reqwest::header::{HeaderValue, IF_MODIFIED_SINCE, IF_NONE_MATCH, LOCATION};
+    let mut url =
+        reqwest::Url::parse(&sub.url).map_err(|_| "the list's URL doesn't parse".to_owned())?;
+    let mut hops = 0;
+    // Every hop goes through the guard's `send`, which checks the URL and
+    // every address its name resolves to; a GET is safe to repeat.
+    let mut resp = loop {
+        let mut req = reqwest::Request::new(reqwest::Method::GET, url.clone());
+        let validators = [
+            (IF_NONE_MATCH, &sub.etag),
+            (IF_MODIFIED_SINCE, &sub.last_modified),
+        ];
+        for (name, value) in validators {
+            if let Some(v) = value.as_deref().and_then(|v| HeaderValue::from_str(v).ok()) {
+                req.headers_mut().insert(name, v);
+            }
+        }
+        let resp = client.send(req).await.map_err(|e| match e {
+            // A hop's URL came from the server's Location header, so
+            // the guard's advice on credential fields doesn't apply.
+            NetError::InvalidUrl(_) if hops > 0 => {
+                "download failed: a redirect without a usable location".to_owned()
+            }
+            e => format!("download failed: {e}"),
+        })?;
+        if !matches!(resp.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+            break resp;
+        }
+        hops += 1;
+        if hops > MAX_REDIRECTS {
+            return Err("download failed: too many redirects".into());
+        }
+        let target = resp
+            .headers()
+            .get(LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|loc| resp.url().join(loc).ok())
+            .ok_or("download failed: a redirect without a usable location")?;
+        if resp.url().scheme() == "https" && target.scheme() != "https" {
+            return Err("download failed: refused a redirect from https to http".into());
+        }
+        url = target;
+    };
     match resp.status().as_u16() {
         304 => return Ok(Download::NotModified),
         200 => {}
@@ -243,7 +288,8 @@ async fn download(
     while let Some(chunk) = resp
         .chunk()
         .await
-        .map_err(|e| format!("download failed: {e}"))?
+        // reqwest's text can quote the URL, which can carry a key.
+        .map_err(|_| "download failed: the connection broke while reading the list".to_owned())?
     {
         if body.len() + chunk.len() > limits.max_download {
             return Err("the list is larger than the download limit".into());
@@ -364,7 +410,7 @@ fn lock(store: &Mutex<Store>) -> std::sync::MutexGuard<'_, Store> {
 /// store run on the blocking pool.
 pub async fn refresh_due(
     store: &Arc<Mutex<Store>>,
-    client: &reqwest::Client,
+    client: &GuardedClient,
     limits: &Limits,
     filter: &Arc<Handle>,
     ips: &Arc<SharedIps>,
@@ -492,6 +538,16 @@ mod tests {
                     head.push_str(&line);
                 }
                 seen.push(head);
+                // A 302's body is where it redirects to.
+                if status == 302 {
+                    let to = String::from_utf8(body).unwrap();
+                    write!(
+                        sock,
+                        "HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .unwrap();
+                    continue;
+                }
                 let reason = if status == 304 { "Not Modified" } else { "OK" };
                 write!(
                     sock,
@@ -518,7 +574,8 @@ mod tests {
         };
         sync_config(&mut store, &config).unwrap();
         let limits = Limits {
-            proxy_from_env: false,
+            // The fake list server is on loopback.
+            policy: NetPolicy::download_client(),
             ..Limits::from_config(&config)
         };
         (
@@ -686,6 +743,85 @@ mod tests {
         let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
         assert!(sub.error.unwrap().contains("isn't text"));
         server.join().unwrap();
+        assert!(ips.current().is_empty());
+    }
+
+    /// The §16 SSRF guard holds for list fetches: a literal private or
+    /// loopback address, a name that resolves to one, and a redirect to
+    /// the metadata service are all refused before any connection, and
+    /// recorded as the list's error.
+    #[tokio::test]
+    async fn list_fetches_reach_only_what_the_guard_allows() {
+        struct Private;
+        impl lodestar_integrations::Resolve for Private {
+            fn resolve<'a>(
+                &'a self,
+                _host: &'a str,
+            ) -> lodestar_integrations::BoxFuture<'a, std::io::Result<Vec<IpAddr>>> {
+                Box::pin(async { Ok(vec!["10.1.2.3".parse().unwrap()]) })
+            }
+        }
+        let error = |store: &Arc<Mutex<Store>>| {
+            let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
+            assert_eq!(sub.status, "error");
+            sub.error.unwrap()
+        };
+        let public = NetPolicy::notification(false);
+        for (url, class) in [
+            ("http://127.0.0.1:9/list", "loopback"),
+            ("http://192.168.1.1/list", "private-network"),
+            ("http://169.254.169.254/latest/meta-data", "cloud metadata"),
+        ] {
+            let (store, filter, ips, mut limits) = setup(vec![list(url, ListKind::Ip, false)]);
+            limits.policy = public;
+            let agent = client(&limits).unwrap();
+            refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
+            assert!(error(&store).contains(class), "{url}");
+        }
+        // A name that resolves to a private address.
+        let (store, filter, ips, limits) =
+            setup(vec![list("http://lists.example/l", ListKind::Ip, false)]);
+        let agent =
+            GuardedClient::with_resolver(public, Duration::from_secs(10), Arc::new(Private))
+                .unwrap();
+        refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
+        assert!(error(&store).contains("private-network"));
+        // A redirect to the metadata service, from a server the policy
+        // allows (loopback, in tests).
+        let meta = b"http://169.254.169.254/latest/meta-data".to_vec();
+        let (url, server) = serve(vec![(302, meta)]);
+        let (store, filter, ips, limits) = setup(vec![list(&url, ListKind::Ip, false)]);
+        let agent = client(&limits).unwrap();
+        refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
+        server.join().unwrap();
+        assert!(error(&store).contains("cloud metadata"));
+        assert!(ips.current().is_empty());
+    }
+
+    /// The time limit covers the whole fetch: a server that sends its
+    /// headers and then drips (or stalls) its body is cut off at the
+    /// limit, though no single read times out.
+    #[tokio::test]
+    async fn a_stalled_download_is_cut_off_at_the_time_limit() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/list", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).unwrap();
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n10.0.0.0/8\n")
+                .unwrap();
+            // Hold the body open until the client gives up and hangs up.
+            while sock.read(&mut buf).is_ok_and(|n| n > 0) {}
+        });
+        let (store, filter, ips, mut limits) = setup(vec![list(&url, ListKind::Ip, false)]);
+        limits.fetch_timeout = Duration::from_millis(300);
+        let agent = client(&limits).unwrap();
+        refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
+        server.join().unwrap();
+        let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
+        assert!(sub.error.unwrap().contains("time limit"));
         assert!(ips.current().is_empty());
     }
 
