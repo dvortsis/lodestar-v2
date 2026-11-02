@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T11:51:39Z",
+  "updated_at": "2026-11-02T12:19:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2543,18 +2543,22 @@
       "merge": "7fe018c9"
     },
     "X-overflow-links": {
-      "status": "running",
+      "status": "in review",
       "session": "session_01MMjhnCi36QS9XT5zJi4LJf",
       "model": "sonnet",
       "brief": "briefs/X-overflow-links.md",
-      "launched": "2026-11-02T11:44Z"
+      "launched": "2026-11-02T11:44Z",
+      "pr": 390,
+      "head": "4376d3ae"
     },
     "X-settings-overview": {
-      "status": "running",
+      "status": "in review",
       "session": "session_01MMjhnBmtVGAxZ58UyYRD3A",
       "model": "sonnet",
       "brief": "briefs/X-settings-overview.md",
-      "launched": "2026-11-02T11:44Z"
+      "launched": "2026-11-02T11:44Z",
+      "pr": 391,
+      "head": "73773938"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3787,6 +3791,11 @@
       "id": "F-visible-format-two-readings",
       "added": "2026-11-02T06:29:50Z",
       "text": "Extend the two-reading rule to visible Cf format chars (U+2028/9, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD/CD, U+FFF9-FFFB, U+13430-1343F); U+0605 and U+08E2 strongest case. After #381."
+    },
+    {
+      "id": "X-settings-defaults-in-schema",
+      "added": "2026-11-02T12:22Z",
+      "text": "GET /settings JSON Schema carries no default values, so Settings Overview (#391) shows a changed setting's source, not its default. Add `default` to the settings schema (api, generated types) so the Overview and the field modified marker can show the default. Sonnet-able after SRC-14a frees the api files."
     }
   ],
   "main_health": [
