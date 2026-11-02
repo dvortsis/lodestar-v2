@@ -391,6 +391,47 @@ describe('floor removals', () => {
 	});
 });
 
+describe('accepting a held version', () => {
+	const accept = { op: 'resolve_held', id: 4, accept: true } as const;
+	const shown = weakening({ held_version: 'a'.repeat(64) });
+
+	it('sends the previewed held_version as held, with the password', () => {
+		const ctx = run(previewed(shown, accept), { type: 'confirm', password: 'pw', now: T0 });
+		const body = (ctx.effects[0] as Extract<Effect, { type: 'apply' }>).body;
+		expect(body.change).toEqual({ ...accept, held: 'a'.repeat(64) });
+		expect(body.password).toBe('pw');
+	});
+
+	it('keeping the previous version sends no held', () => {
+		const keep = { op: 'resolve_held', id: 4, accept: false } as const;
+		expect(forApply(keep, shown)).toEqual(keep);
+	});
+
+	it('a different held_version after the preview is a changed assessment', () => {
+		expect(assessmentDiffers(shown, weakening({ held_version: 'b'.repeat(64) }))).toBe(true);
+		expect(assessmentDiffers(shown, weakening({ held_version: 'a'.repeat(64) }))).toBe(false);
+	});
+
+	it('a 428 with another held_version asks again, and a 409 re-previews', () => {
+		const ctx = run(previewed(shown, accept), { type: 'confirm', password: 'pw', now: T0 }).ctx;
+		const other = weakening({ held_version: 'b'.repeat(64) });
+		const asked = run(ctx, {
+			type: 'apply_error',
+			seq: ctx.seq,
+			error: err(428, 'confirm_required', { assessment: other }),
+			now: T0
+		}).ctx;
+		expect(asked.state).toMatchObject({ kind: 'confirm', changed: true, assessment: other });
+		const again = run(ctx, {
+			type: 'apply_error',
+			seq: ctx.seq,
+			error: err(409, 'changed_since_preview'),
+			now: T0
+		});
+		expect(kind(again.ctx.state)).toBe('previewing');
+	});
+});
+
 describe('variants', () => {
 	it('re-preview from review or confirm with the new change', () => {
 		const shadowed = { op: 'add_rule', query: 'x', action: 'hide', shadow_days: 7 } as const;

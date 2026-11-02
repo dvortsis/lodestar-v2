@@ -37,6 +37,7 @@ const EN = [
 	'Search & ranking',
 	'Trackers',
 	'Filters & Safety',
+	'Blocklist subscriptions',
 	'Integrations',
 	'Notifications',
 	'Insights & digest',
