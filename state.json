@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T05:07:22Z",
+  "updated_at": "2026-11-02T05:15:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2319,7 +2319,7 @@
       "merge": "7f167278"
     },
     "X-strip-format-chars": {
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "note": "From #366 review: common.rs unsafe_char and api/digest.rs strip bidi but not other Cf (U+200B-200D, U+2060-2064, U+FEFF, U+00AD, U+2028/2029, tag chars). One small PR covering both, with tests.",
       "session": "session_01MMjhnCTS1gioZcMs1q3TuW",
@@ -2327,7 +2327,8 @@
       "pr": 373,
       "head": "332a3c43",
       "review": "Opus MERGE at 332a3c43; final push after #367 merges (merge main + decisions note on tokenizer divergence)",
-      "notes2": "told to push final round (merge main) after #367 merged 04:36Z"
+      "notes2": "told to push final round (merge main) after #367 merged 04:36Z",
+      "merge_sha": "3b2e2a58"
     },
     "P-master-plan-r2": {
       "status": "merged",
@@ -2389,6 +2390,12 @@
       "pr": 376,
       "merge_sha": "5ecbfd67",
       "notes": "owner-requested via dashboard session. Runner owns notes/owner_queue/conditions in runner/dashboard.yaml; set met: true in the same PR as recording an owner answer. Runner §2.19 calls: check not required (owner ruleset call); build plan stays hand-written."
+    },
+    "SRC-5": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhnD4a7x1Xa5Vz9BC3AS",
+      "launched": "2026-11-02T05:15:30Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
