@@ -59,5 +59,6 @@
 	"blocklists_wizard_load_failed": "Couldn't load the lists. You can connect them later in Settings.",
 	"blocklists_wizard_strictness_failed": "Couldn't work out how strict your choice is, so nothing can be connected from here. Skip this step and connect lists in Settings.",
 	"blocklists_wizard_failed": "{name} wasn't connected: {message}",
-	"blocklists_wizard_needs_settings": "{name} needs your password or a closer look. Connect it in Settings → Blocklist subscriptions."
+	"blocklists_wizard_needs_settings": "{name} needs your password or a closer look. Connect it in Settings → Blocklist subscriptions.",
+	"blocklists_wizard_review": "This is how strict your choice is. Press Continue again to connect it, or untick a list."
 }

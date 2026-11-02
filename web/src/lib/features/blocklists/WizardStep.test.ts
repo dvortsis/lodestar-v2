@@ -52,6 +52,30 @@ describe('wizard blocklist step', () => {
 		expect(apply.password).toBeUndefined();
 	});
 
+	it('Continue pressed while the assessment is pending shows the warning and connects nothing', async () => {
+		const { component } = setup();
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		net.on('POST /filters/strictness', async () => {
+			await gate;
+			return { body: strictness({ level: 'severe', text: 'Severe: blocks a third.' }) };
+		});
+		await fireEvent.click(await screen.findByTestId('wizard-blocklist-bt_blocklists'));
+		await wait(() => expect(net.to('/filters/strictness')).toHaveLength(1));
+		const a = strengthening();
+		net.on('GET /filters/preview/jobs/{id}', { body: finished(a) });
+		net.on('POST /filters/apply', { body: applied(a, { id: 9 }) });
+		const early = component.save();
+		release();
+		expect(await early).toBe(false);
+		await wait(() => expect(screen.getByTestId('blocklists-level').textContent).toBe('Severe'));
+		expect(screen.getByTestId('wizard-blocklists-review')).toBeTruthy();
+		expect(net.to('/filters/apply')).toHaveLength(0);
+		expect(net.to('/filters/preview')).toHaveLength(0);
+		expect(await component.save()).toBe(true);
+		expect(net.to('/filters/apply')).toHaveLength(1);
+	});
+
 	it('connects nothing when the server wants a confirmation, and points to Settings', async () => {
 		const { component } = setup();
 		await fireEvent.click(await screen.findByTestId('wizard-blocklist-bt_blocklists'));

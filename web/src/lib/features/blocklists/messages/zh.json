@@ -59,5 +59,6 @@
 	"blocklists_wizard_load_failed": "无法加载名单。你可以稍后在“设置”中连接。",
 	"blocklists_wizard_strictness_failed": "无法确定你的选择有多严格，因此无法在此连接。请跳过此步骤，并在“设置”中连接名单。",
 	"blocklists_wizard_failed": "未能连接 {name}：{message}",
-	"blocklists_wizard_needs_settings": "{name} 需要你的密码或进一步确认。请在“设置”→“黑名单订阅”中连接。"
+	"blocklists_wizard_needs_settings": "{name} 需要你的密码或进一步确认。请在“设置”→“黑名单订阅”中连接。",
+	"blocklists_wizard_review": "这是你的选择的严格程度。再次点击“继续”以连接，或取消勾选某个名单。"
 }

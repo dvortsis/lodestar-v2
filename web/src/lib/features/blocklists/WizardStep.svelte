@@ -19,6 +19,8 @@
 	let checked = $state<Record<string, boolean>>({});
 	let strictness = $state.raw<Strictness>();
 	let strictFailed = $state(false);
+	/** Continue was pressed early: the warning is now shown and wants a second press. */
+	let review = $state(false);
 	let problem = $state<{ name: string; message: string | null }>();
 	const stop = new AbortController();
 	let gen = 0;
@@ -48,6 +50,7 @@
 		const mine = ++gen;
 		strictness = undefined;
 		strictFailed = false;
+		review = false;
 		if (!keys.length || !data) return;
 		const ids = data.connected.filter((c) => c.subscription.enabled).map((c) => c.subscription.id);
 		assessing = api
@@ -69,9 +72,13 @@
 		problem = undefined;
 		if (!chosen.length) return true;
 		// The warning for this exact choice must have been shown before anything is connected.
-		// Continue waits for it, so pressing early still shows the warning first.
-		await assessing;
-		if (!strictness) return false;
+		// Pressed before the warning was on screen: wait for it, show it, and stay. Connecting takes
+		// a second press, so the warning for this exact choice is always seen first.
+		if (!strictness) {
+			await assessing;
+			review = !!strictness;
+			return false;
+		}
 		const flows = await (await import('../filters/flows-door')).load();
 		const result = await connectLists(chosen, flows, stop.signal);
 		if (!result.failed) {
@@ -115,6 +122,9 @@
 		<p class="text-muted-text" data-testid="wizard-blocklists-none">{m.blocklists_wizard_none()}</p>
 	{:else if strictness}
 		<StrictnessNote {strictness} />
+		{#if review}
+			<p role="status" data-testid="wizard-blocklists-review">{m.blocklists_wizard_review()}</p>
+		{/if}
 	{:else if strictFailed}
 		<Banner kind="error">{m.blocklists_wizard_strictness_failed()}</Banner>
 	{:else}
