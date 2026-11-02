@@ -345,9 +345,9 @@ class CleanRunTests(Base):
         self.assertFalse(self.report()["clean_shutdown"])
 
     def test_full_production_window_on_virtual_clock(self):
-        args = collect.build_parser().parse_args(
+        args = collect.resolve_defaults(collect.build_parser().parse_args(
             ["--mode", "docker", "--root", str(self.root), "--commit", COMMIT, "--intensity", "balanced", "--url", self.lodestar.url,
-             "--min-free-bytes", "3", "--warn-free-bytes", "2", "--stop-free-bytes", "1"])
+             "--min-free-bytes", "3", "--warn-free-bytes", "2", "--stop-free-bytes", "1"]))
         self.assertEqual((args.warmup_minutes, args.baseline_hours), (30, 24))
         direct = lambda url: self.lodestar.respond(url.rsplit("/", 1)[1] and "/" + url.rsplit("/", 1)[1])
         c = collect.Collector(args, self.docker(), clock=self.clock.clock, sleep=self.clock.sleep, now=self.clock.now,

@@ -221,12 +221,64 @@ v0.5.1 bar is an upper bound ≤ 2 MiB/h (owner, 2026-10-30;
 `docs/decisions/2026-10-30-CR-0-acceptance.md`). A restart inside the window or
 a window that isn't fully covered is not judged.
 
+## CR-SPEC crawler runs (CR-COL-3)
+
+The comparator, every A/B arm and the CR-COMB acceptance soak are collected with
+`--run-kind` and judged by `../analyze_cr.py` under
+`docs/decisions/2026-11-02-CR-SPEC.md`. See `docs/decisions/2026-11-02-CR-COL-3.md`
+for what is kept and why.
+
+```sh
+python3 collect.py --mode docker --container lodestar --cgroup-root /host/cgroup \
+  --proc-root /host/proc --url http://127.0.0.1:8484 --root /evidence/utp-b1-s1 \
+  --commit <source commit> --spec-commit <commit of CR-SPEC in force> \
+  --run-kind ab --treatment utp --intensity balanced --stop \
+  --password-file /secrets/lodestar-admin \
+  --checklist auto_update=excluded --next-run auto_update=2026-11-10T03:00:00Z \
+  --checklist backup=excluded --next-run backup=2026-11-09T03:00:00Z
+```
+
+- `--run-kind ab` measures 6 h after a 60 min warmup; `comb` and `comparator`
+  measure 24 h. These are fixed outside `--rehearsal`.
+- `--password-file`: the admin password, for the settings and Insights checks
+  (API keys can't reach them). It's read at each login and never written.
+- `--proc-root /host/proc` (mount the host's `/proc` read-only): the network
+  counters. Without it they're reported as not available.
+- `--stop` on every A/B segment: an arm switch must be a clean stop.
+- The comparator: `--run-kind comparator --container bitmagnet
+  --postgres-container bitmagnet-postgres`. It counts `SELECT count(*) FROM
+  torrents` in a read-only session at every scrape.
+- **Host activity:** write each event when it happens, with
+  `python3 collect.py note --root <run> --category <category>`. Categories:
+  `import`, `other_crawler`, `array_operation`, `host_reboot`,
+  `plugin_container_action`, `link_outage`, `router_outage`,
+  `public_ip_change`, `power_event` (or `other` for a note that invalidates
+  nothing).
+- While a window is open, `status.json` shows progress only, never counts or
+  rates. Don't open `samples.jsonl` until the run ends (rule 6.11).
+
+Judge and publish:
+
+```sh
+python3 docs/soak/tools/analyze_cr.py segment <run> --output <seg.json> --publish <bundle-dir>
+python3 docs/soak/tools/analyze_cr.py effect --treatment utp \
+  --block a1.json b1.json b2.json a2.json --block b3.json a3.json a4.json b4.json
+python3 docs/soak/tools/analyze_cr.py gate comb.json --comparator comp.json
+```
+
+The bundle is aggregates and hourly rows only. `publish` refuses anything
+address- or infohash-shaped.
+
 ## Tests
 
 ```sh
-python3 -m unittest discover -s docs/soak/tools/linux -p 'test_*.py' -v
-python3 -m unittest discover -s docs/soak/tools -p 'test_*.py'
+python3 -I -m unittest discover -s docs/soak/tools/linux -p 'test_*.py' -v
+python3 -I -m unittest discover -s docs/soak/tools -p 'test_*.py'
 ```
+
+`test_collect_spec.py` runs each CR-SPEC run kind on the virtual clock and has
+`analyze_cr.py` judge it; `../test_analyze_cr.py` has a passing and a failing
+fixture for each rule the analyzer judges.
 
 The Linux tests use a fake HTTP server on 127.0.0.1, fake cgroup and `/proc`
 trees, a fake Docker API and a virtual clock. They need no network and no

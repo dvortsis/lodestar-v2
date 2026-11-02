@@ -33,6 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -75,10 +76,68 @@ STORAGE = (
     "search_result_cache_bytes",
     "have_bytes", "hot_columns_bytes",
 )
-KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE)
+# CR-COL-3: the crawler gate's evidence (docs/decisions/2026-11-02-CR-SPEC.md rules
+# 3, 4, 5 and 6.10). Each labelled series lists its label keys, in rendered order,
+# with the only values it may carry (docs/metrics.md); any other label set is dropped.
+LATENCY_EDGES = ("1", "2", "5", "10", "30", "60", "120", "300", "600", "1800", "3600", "7200", "+Inf")
+SUPPRESSION_REASONS = frozenset((
+    "off", "locked", "first_start", "corrupt", "version", "dirty", "off_run", "data_dir",
+    "node_identity", "foreign_run", "snapshot_mismatch", "no_witness", "generation",
+    "horizon_changed", "clock_backward", "stale", "invalidate_failed", "resumed"))
+_ORIGIN = (("origin", frozenset(("network", "recovery", "import"))),)
+_TRANSPORT = (("transport", frozenset(("tcp", "utp"))),)
+_FAMILY = (("family", frozenset(("ipv4", "ipv6"))),)
+_KIND = frozenset(("arrival", "retry", "requeue"))
+LABELLED = {
+    "searchable_new_total": _ORIGIN,
+    "metadata_new_verified_total": _ORIGIN,
+    "metadata_excluded_total": (("reason", frozenset((
+        "already_stored", "rediscovered", "filtered", "quarantined", "invalid_metainfo",
+        "failed_verification", "duplicate", "store_failed"))),),
+    "fetch_failures_total": (("kind", frozenset((
+        "unreachable", "timed_out", "refused", "encryption_failed", "invalid", "oversize",
+        "hash_mismatch"))),),
+    "fetch_lost_total": (("reason", frozenset((
+        "no_peers", "timed_out", "refused", "encryption_failed", "oversize", "invalid", "blocked",
+        "evicted", "gave_up", "unreachable"))),),
+    "fetch_attempts_total": _TRANSPORT,
+    "fetch_success_total": _TRANSPORT,
+    "fetch_connect_timeouts_total": _TRANSPORT,
+    "fetch_family_attempts_total": _FAMILY,
+    "fetch_family_success_total": _FAMILY,
+    "fetch_no_route_total": _FAMILY,
+    "fetch_route_probe_down_total": _FAMILY,
+    "fetch_route_skipped_total": _FAMILY,
+    "fetch_route_down": _FAMILY,
+    "fetch_admission_waits_total": (("kind", _KIND),),
+    "fetch_admission_wait_cancelled_total": (("reason", frozenset(("evicted", "peers"))),),
+    "fetch_admission_grants_total": (("kind", _KIND), ("class", frozenset(("interactive", "background")))),
+    "fetch_admission_refusals_total": (("reason", frozenset(("refused", "unacknowledged"))),),
+    "fetch_admission_permit_returns_total": (("boundary", frozenset(("finder_full", "finder_closed", "unused"))),),
+    "dht_peer_permit_returns_total": (("boundary", frozenset((
+        "completed", "cancelled_queued", "cancelled_active", "paused", "refused", "ack_failed",
+        "handoff_failed", "shutdown"))),),
+    "dht_peer_rejection_reasons_total": (("reason", frozenset(("capacity", "paused", "caller_closed"))),),
+    "dht_peer_queued_dropped_total": (("reason", frozenset(("caller_closed", "paused"))),),
+    "fetch_evicted_service_total": (("stage", frozenset(("unaccepted", "lookup", "peers", "fetch"))),),
+    "dht_harvested_total": (("strategy", frozenset(("sample", "get_peers", "announce"))),),
+    "dht_sample_suppression_reason": (("reason", SUPPRESSION_REASONS),),
+    "discovery_to_searchable_seconds_bucket": (("le", frozenset(LATENCY_EDGES)),),
+}
+# Gate series that carry no labels.
+PLAIN = frozenset((
+    "discovery_to_searchable_seconds_count", "discovery_to_searchable_seconds_sum",
+    "discovery_to_searchable_dropped_total", "fetch_admission_wakeups_total",
+    "fetch_admission_holds_total", "fetch_admission_waiters", "fetch_admission_permits_in_use",
+    "dht_utp_in_total", "utp_retransmits_total", "utp_connection_timeouts_total",
+    "dht_sample_sent_total", "dht_throttled_total",
+))
+MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 250
+KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE) | frozenset(LABELLED) | PLAIN
 NUMBER = r"[0-9]+(?:\.[0-9]+)?"
 SERIES = re.compile(r"^lodestar_([a-z_0-9]+)(\{[^{}\r\n]*\})? (" + NUMBER + r")\r?$")
 SAFE_LABELS = re.compile(r'^\{[a-z_]+="[a-z_0-9]{1,24}"(,[a-z_]+="[a-z_0-9]{1,24}")*\}$')
+LABEL_PAIR = re.compile(r'([a-z_]+)="([^"\\]*)"')
 FAMILY = re.compile(r'(?:^|[{,])(?:ip_)?family="(v4|v6|ipv4|ipv6)"')
 COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 
@@ -98,18 +157,41 @@ def read_metric(text, name):
     return float(match[1])
 
 
-def sanitize_snapshot(text):
-    """Keep allowlisted series with plain enum-like labels; drop everything else."""
+def labels_allowed(name, labels):
+    """A gate series' labels must be exactly its keys, in order, with known values."""
+    schema = LABELLED.get(name)
+    if schema is None:
+        if name in PLAIN:
+            return not labels
+        return not labels or bool(SAFE_LABELS.fullmatch(labels))  # CR-0's series, as before
+    if not labels:
+        return False
+    pairs = LABEL_PAIR.findall(labels)
+    if "{" + ",".join(f'{k}="{v}"' for k, v in pairs) + "}" != labels or len(pairs) != len(schema):
+        return False
+    return all(k == key and v in allowed for (k, v), (key, allowed) in zip(pairs, schema))
+
+
+def sanitize_snapshot(text, flags=None):
+    """Keep allowlisted series with validated labels; drop everything else.
+
+    At most MAX_SERIES series are kept; past that the snapshot is cut off and
+    `flags["series_capped"]` is set, so the analyzer can treat it as missing.
+    """
     seen, out = set(), []
     for line in text.splitlines():
         match = SERIES.fullmatch(line)
         if not match or match[1] not in KEEP:
             continue
         name, labels, value = match.groups()
-        if labels and not SAFE_LABELS.fullmatch(labels):
+        if not labels_allowed(name, labels):
             continue
         if (name, labels) in seen:
             continue
+        if len(out) >= MAX_SERIES:
+            if flags is not None:
+                flags["series_capped"] = True
+            break
         seen.add((name, labels))
         out.append(f"lodestar_{name}{labels or ''} {value}")
     return "\n".join(out) + "\n"
@@ -210,14 +292,19 @@ class DockerAPI:
     def __init__(self, socket_path, timeout=5):
         self.socket_path, self.timeout = socket_path, timeout
 
-    def request(self, method, path, timeout=None):
+    def request(self, method, path, timeout=None, body=None, raw=False):
         conn = UnixHTTPConnection(self.socket_path, timeout or self.timeout)
         try:
-            conn.request(method, path)
+            if body is None:
+                conn.request(method, path)
+            else:
+                conn.request(method, path, json.dumps(body), {"Content-Type": "application/json"})
             response = conn.getresponse()
-            body = response.read()
+            data = response.read(8 << 20)
+            if raw:
+                return response.status, data
             try:
-                doc = json.loads(body) if body else None
+                doc = json.loads(data) if data else None
             except ValueError:
                 doc = None
             return response.status, doc
@@ -230,13 +317,19 @@ class DockerAPI:
     def post(self, path, timeout=None):
         return self.request("POST", path, timeout)
 
+    def post_json(self, path, body, timeout=None):
+        return self.request("POST", path, timeout, body=body)
+
+    def post_raw(self, path, body, timeout=None):
+        return self.request("POST", path, timeout, body=body, raw=True)
+
 
 class DockerInstance:
     kind = "docker"
 
     def __init__(self, api, container, cgroup_root="/sys/fs/cgroup", cgroup_path=None,
-                 stop_timeout=60, clock=time.monotonic, sleep=time.sleep):
-        self.api, self.container = api, container
+                 stop_timeout=60, clock=time.monotonic, sleep=time.sleep, proc_root="/proc"):
+        self.api, self.container, self.proc = api, container, Path(proc_root)
         self.cgroup_root, self.cgroup_path = Path(cgroup_root), cgroup_path
         self.stop_timeout, self.clock, self.sleep = stop_timeout, clock, sleep
         self.id = self.started_at = self.identity = None
@@ -319,6 +412,24 @@ class DockerInstance:
         self.doc = doc
         self._read_parent()
         return OK
+
+    def environment(self):
+        """The container's configured environment and mounts (docker inspect)."""
+        env = {}
+        for item in (self.doc.get("Config") or {}).get("Env") or []:
+            key, sep, value = str(item).partition("=")
+            if sep:
+                env[key] = value
+        mounts = [{"destination": str(m.get("Destination", "")), "type": str(m.get("Type", ""))}
+                  for m in self.doc.get("Mounts") or [] if isinstance(m, dict)]
+        return env, mounts
+
+    def started_utc(self):
+        try:
+            text = re.sub(r"\.(\d{6})\d*", r".\1", str(self.started_at)).replace("Z", "+00:00")
+            return datetime.fromisoformat(text)
+        except ValueError:
+            return None
 
     def row_extra(self):
         state = self.doc.get("State") or {}
@@ -512,6 +623,19 @@ class NativeInstance:
     def row_extra(self):
         return {}
 
+    def environment(self):
+        """/proc/<pid>/environ (needs the same user or root); None if unreadable."""
+        try:
+            raw = (self.proc / str(self.pid) / "environ").read_bytes()
+        except OSError:
+            return None, None
+        env = {}
+        for item in raw.split(b"\0"):
+            key, sep, value = item.decode("utf-8", "replace").partition("=")
+            if sep:
+                env[key] = value
+        return env, None
+
     def resources(self):
         out, base = {}, self.proc / str(self.pid)
         status = read_text(base / "status") or ""
@@ -663,12 +787,389 @@ def endpoint_reached(elapsed, end_at, ok, baseline_start):
     return ok and baseline_start is not None and end_at is not None and elapsed >= end_at
 
 
+# ------------------------------------------------- CR-COL-3: gate evidence (CR-SPEC)
+# Run kinds measured under docs/decisions/2026-11-02-CR-SPEC.md; `cr0` keeps the old flow.
+SPEC_KINDS = ("ab", "comb", "comparator")
+SPEC_HOURS = {"ab": 6, "comb": 24, "comparator": 24}  # rule 1.3
+SPEC_WARMUP_MINUTES = 60  # rule 1.1
+TREATMENTS = {"adm": "coordinated_admission", "utp": "utp", "route": "route_backoff"}
+# Every crawler switch and its environment variable (crates/lodestar/src/config.rs).
+SWITCH_ENV = {
+    "safe_restart": "LODESTAR_DHT_SAFE_RESTART",
+    "coordinated_admission": "LODESTAR_DHT_COORDINATED_ADMISSION",
+    "responder_hints": "LODESTAR_DHT_RESPONDER_HINTS",
+    "streaming_peers": "LODESTAR_DHT_STREAMING_PEERS",
+    "target_prefixes": "LODESTAR_DHT_TARGET_PREFIXES",
+    "utp": "LODESTAR_DHT_UTP",
+    "route_backoff": "LODESTAR_DHT_ROUTE_BACKOFF",
+}
+PRESETS = ("low", "balanced", "aggressive")
+CHECKLIST_ITEMS = ("auto_update", "backup")
+CHECKLIST_STATES = ("excluded", "not_applicable")
+# Rule 6.11's fixed host-activity categories.
+ACTIVITY_CATEGORIES = ("import", "other_crawler", "array_operation", "host_reboot",
+                       "plugin_container_action", "link_outage", "router_outage",
+                       "public_ip_change", "power_event")
+# Rule 5.4: the comparator's count, read-only, taken at every scrape.
+COMPARATOR_QUERY = "SELECT count(*) FROM torrents"
+COMPARATOR_ENV = "PGOPTIONS=-c default_transaction_read_only=on"
+DEFAULT_IP_ECHO = "https://api.ipify.org"
+BOUNDARY_SECONDS = 90  # rule 1.4
+FIRST_START_SECONDS = 6 * 3600
+
+
+def open_eligible(values, process_age):
+    """D6: the scrape that can be T_open. The DHT reads suppression 0 with reason
+    `off` for about a second after start, before its restart check reports, so a
+    zero beside `off` counts only once the full 6 h suppression could have run."""
+    if values.get("dht_sample_suppression_seconds") != 0:
+        return False
+    return values.get("suppression_reason") != "off" or process_age >= FIRST_START_SECONDS
+
+
+def suppression_reason(text):
+    """The one reason label set to 1, or None when it isn't exactly one known reason."""
+    found = [m[1] for m in re.finditer(r'(?m)^lodestar_dht_sample_suppression_reason\{reason="([a-z_]+)"\} 1\r?$', text)]
+    return found[0] if len(found) == 1 and found[0] in SUPPRESSION_REASONS else None
+
+
+def parse_bool(value):
+    """Rust's bool parser: exactly `true` or `false`."""
+    return {"true": True, "false": False}.get(value)
+
+
+def config_identity(env, mounts=None):
+    """Switch states and preset from the instance's environment (D1, rule 7.2).
+
+    Only the variables named in SWITCH_ENV, LODESTAR_INTENSITY and the two paths
+    are read; paths are reduced to facts, never kept. An unparsable value makes
+    that field None, which the analyzer treats as missing identity."""
+    switches, sources = {}, {}
+    for name, var in SWITCH_ENV.items():
+        if var in env:
+            switches[name], sources[name] = parse_bool(env[var]), "env"
+        else:
+            switches[name], sources[name] = False, "default"
+    preset = env.get("LODESTAR_INTENSITY")
+    out = {"switches": switches, "switch_sources": sources,
+           "env_preset": preset if preset in PRESETS else (None if preset is not None else "unset")}
+    witness, data = env.get("LODESTAR_DHT_WITNESS_DIR") or None, env.get("LODESTAR_DATA_DIR") or None
+    info = {"configured": witness is not None}
+    if witness is not None and mounts is not None:
+        def under(path, root):
+            return path == root or path.startswith(root.rstrip("/") + "/")
+        holder = max((m for m in mounts if under(witness, m["destination"])),
+                     key=lambda m: len(m["destination"]), default=None)
+        data_holder = max((m for m in mounts if data and under(data, m["destination"])),
+                          key=lambda m: len(m["destination"]), default=None)
+        info["host_mounted"] = bool(holder and holder["type"] == "bind")
+        info["outside_data_dir"] = (data is not None and not under(witness, data)
+                                    and (holder is None or holder is not data_holder))
+    elif witness is not None:  # native: the host's own filesystem
+        info["host_mounted"] = True
+        info["outside_data_dir"] = data is not None and not (
+            witness == data or witness.startswith(data.rstrip("/") + "/"))
+    out["witness"] = info
+    return out
+
+
+def ntp_status(run_command):
+    """D1a: the host's NTP state at a process start. chrony first, then
+    systemd-timesyncd, then the kernel's own flag (works inside a container)."""
+    out = run_command(["chronyc", "-n", "tracking"])
+    if out:
+        offset = re.search(r"(?m)^System time\s*:\s*([0-9.]+) seconds (fast|slow)", out)
+        leap = re.search(r"(?m)^Leap status\s*:\s*(\S.*)$", out)
+        if offset and leap:
+            return {"source": "chronyc", "synchronized": leap[1].strip() == "Normal",
+                    "offset_seconds": float(offset[1])}
+    out = run_command(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
+    if out and out.strip() in ("yes", "no"):
+        status = {"source": "timedatectl", "synchronized": out.strip() == "yes", "offset_seconds": None}
+        detail = run_command(["timedatectl", "timesync-status"]) or ""
+        match = re.search(r"(?m)^\s*Offset:\s*([+-]?[0-9.]+)(us|ms|s)\b", detail)
+        if match:
+            status["offset_seconds"] = abs(float(match[1])) / {"us": 1e6, "ms": 1e3, "s": 1}[match[2]]
+        return status
+    return kernel_ntp_status()
+
+
+def kernel_ntp_status():
+    """ntp_adjtime(2) read-only: STA_UNSYNC and the estimated error."""
+    try:
+        import ctypes
+        import ctypes.util
+
+        class Timex(ctypes.Structure):
+            _fields_ = [("modes", ctypes.c_uint), ("offset", ctypes.c_long), ("freq", ctypes.c_long),
+                        ("maxerror", ctypes.c_long), ("esterror", ctypes.c_long), ("status", ctypes.c_int),
+                        ("constant", ctypes.c_long), ("precision", ctypes.c_long),
+                        ("tolerance", ctypes.c_long), ("time_sec", ctypes.c_long),
+                        ("time_usec", ctypes.c_long), ("tick", ctypes.c_long),
+                        ("pad", ctypes.c_byte * 256)]
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        timex = Timex()
+        state = libc.ntp_adjtime(ctypes.byref(timex))
+    except (OSError, AttributeError, ImportError):
+        return {"source": "unavailable", "synchronized": None, "offset_seconds": None}
+    if state < 0:
+        return {"source": "unavailable", "synchronized": None, "offset_seconds": None}
+    unsync = bool(timex.status & 0x0040) or state == 5  # STA_UNSYNC, TIME_ERROR
+    return {"source": "kernel", "synchronized": not unsync,
+            "offset_seconds": None if unsync else max(timex.esterror, 0) / 1e6}
+
+
+def subprocess_output(argv, timeout=5):
+    import subprocess
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def net_counters(proc_root, pid):
+    """Rule 7.1: the process's network namespace counters, summed over
+    non-loopback interfaces, and its socket counts. Absent if unreadable."""
+    if not pid:
+        return None
+    base = Path(proc_root) / str(pid) / "net"
+    dev, sockstat = read_text(base / "dev"), read_text(base / "sockstat")
+    if dev is None or sockstat is None:
+        return None
+    out = {"rx_bytes": 0, "tx_bytes": 0, "rx_packets": 0, "tx_packets": 0}
+    for line in dev.splitlines()[2:]:
+        name, _, fields = line.partition(":")
+        parts = fields.split()
+        if name.strip() == "lo" or len(parts) < 16:
+            continue
+        try:
+            out["rx_bytes"] += int(parts[0])
+            out["rx_packets"] += int(parts[1])
+            out["tx_bytes"] += int(parts[8])
+            out["tx_packets"] += int(parts[9])
+        except ValueError:
+            return None
+    for key, pattern in (("sockets_used", r"(?m)^sockets: used (\d+)"),
+                         ("tcp_inuse", r"(?m)^TCP: inuse (\d+)"), ("udp_inuse", r"(?m)^UDP: inuse (\d+)")):
+        match = re.search(pattern, sockstat)
+        if match:
+            out[key] = int(match[1])
+    return out
+
+
+def ip_echo(url, timeout=10):
+    """One lookup to a fixed IP-echo service, without any proxy (rule 6.5)."""
+    status, body = http_get(url, timeout=timeout, limit=128)
+    if status != 200:
+        raise ValueError("ip echo status")
+    return str(ipaddress.ip_address(body.decode("ascii").strip()))
+
+
+class PublicIP:
+    """Keeps the reference address in memory only; evidence gets the verdict."""
+
+    def __init__(self, url, lookup=ip_echo):
+        self.url, self.lookup, self.reference = url, lookup, None
+
+    def check(self):
+        try:
+            address = self.lookup(self.url)
+        except (OSError, ValueError, UnicodeError, http.client.HTTPException):
+            return "failed"
+        if self.reference is None:
+            self.reference = address
+            return "reference"
+        return "unchanged" if address == self.reference else "changed"
+
+
+class LodestarAPI:
+    """A logged-in session for the settings and Insights APIs (rule 5.5, §8).
+
+    API keys can't reach them, so the collector logs in with the admin password
+    from a file. The password and the cookie stay in memory; neither is written."""
+
+    def __init__(self, base, password_file, request=None):
+        self.base = base.rstrip("/") + "/api/v1"
+        self.password_file = password_file
+        self.request = request or api_request
+        self.cookie = None
+
+    def _login(self):
+        password = Path(self.password_file).read_text(encoding="utf-8").strip()
+        status, headers, _ = self.request("POST", self.base + "/login", {"password": password}, None)
+        cookie = re.search(r"(?:^|,\s*)(lodestar_session=[^;,\s]+)", headers.get("set-cookie", ""))
+        if status != 200 or not cookie:
+            raise ValueError("login refused")
+        self.cookie = cookie[1]
+
+    def get(self, path):
+        for attempt in (0, 1):
+            if self.cookie is None:
+                self._login()
+            status, _, body = self.request("GET", self.base + path, None, self.cookie)
+            if status == 401 and attempt == 0:
+                self.cookie = None
+                continue
+            if status != 200:
+                raise ValueError("api status")
+            return json.loads(body)
+        raise ValueError("api login")
+
+    def settings(self):
+        """The effective preset and whether the crawler is paused, with their sources."""
+        crawler = self.get("/settings/crawler")
+        fields = crawler.get("fields") or {}
+        out = {}
+        for name in ("intensity", "paused"):
+            field = fields.get(name) or {}
+            value, source = field.get("value"), field.get("source")
+            if name == "intensity" and value not in PRESETS:
+                value = None
+            if name == "paused" and not isinstance(value, bool):
+                value = None
+            out[name] = value
+            out[name + "_source"] = source if source in ("default", "file", "db", "env") else "other"
+        pending = crawler.get("restart_required")
+        out["restart_pending"] = bool(pending) if isinstance(pending, list) else None
+        return out
+
+    def imports(self, from_unix, to_unix):
+        """Counts of import, pause and preset annotations in the range; no job details."""
+        doc = self.get(f"/insights/events?from={int(from_unix)}&to={int(to_unix)}")
+        kinds = Counter(a.get("kind") for a in doc.get("annotations") or [] if isinstance(a, dict))
+        return {"from_unix": int(from_unix), "to_unix": int(to_unix),
+                "import_started": kinds["import_started"], "import_finished": kinds["import_finished"],
+                "intensity_changes": kinds["intensity"], "paused": kinds["paused"] + len(doc.get("paused") or []),
+                "truncated": bool(doc.get("truncated"))}
+
+
+def api_request(method, url, body, cookie, timeout=10):
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json", "Accept-Encoding": "identity"})
+    if cookie:
+        request.add_header("Cookie", cookie)
+    try:
+        with OPENER.open(request, timeout=timeout) as response:
+            return response.status, {k.lower(): v for k, v in response.headers.items()}, response.read(1 << 20)
+    except urllib.error.HTTPError as error:
+        return error.code, {}, b""
+
+
+def demux_docker_stream(raw):
+    """stdout of a non-TTY exec: 8-byte frame headers (stream, 0, 0, 0, size)."""
+    out, i = bytearray(), 0
+    while i + 8 <= len(raw):
+        stream, size = raw[i], int.from_bytes(raw[i + 4:i + 8], "big")
+        if stream == 1:
+            out += raw[i + 8:i + 8 + size]
+        i += 8 + size
+    return bytes(out)
+
+
+def comparator_count(api, container, user, database):
+    """Rule 5.4: bitmagnet's stored torrents, by a read-only query inside its
+    Postgres container (Docker exec). Returns an int, or None on any failure."""
+    cmd = ["psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database,
+           "-c", COMPARATOR_QUERY]
+    try:
+        status, doc = api.post_json(f"/containers/{urllib.parse.quote(container, safe='')}/exec",
+                                    {"AttachStdout": True, "AttachStderr": True, "Env": [COMPARATOR_ENV],
+                                     "Cmd": cmd})
+        if status != 201 or not isinstance(doc, dict) or "Id" not in doc:
+            return None
+        status, raw = api.post_raw(f"/exec/{doc['Id']}/start", {"Detach": False, "Tty": False}, timeout=60)
+        if status != 200:
+            return None
+        status, info = api.get(f"/exec/{doc['Id']}/json")
+        if status != 200 or not isinstance(info, dict) or info.get("ExitCode") != 0:
+            return None
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    text = demux_docker_stream(raw).decode("ascii", "replace").strip()
+    return int(text) if re.fullmatch(r"[0-9]{1,15}", text) else None
+
+
+def resolve_defaults(args):
+    """Window defaults: CR-0's 30 min and 24 h, or CR-SPEC's 60 min and the kind's hours."""
+    for name, default in (("run_kind", "cr0"), ("treatment", None), ("hour_seconds", 3600.0),
+                          ("sample_seconds", SAMPLE_SECONDS), ("ip_echo_url", DEFAULT_IP_ECHO),
+                          ("password_file", None), ("checklist", []), ("next_run", []),
+                          ("postgres_container", None), ("postgres_user", "postgres"),
+                          ("postgres_db", "bitmagnet"), ("spec_commit", None)):
+        if not hasattr(args, name):
+            setattr(args, name, default)
+    spec = args.run_kind in SPEC_KINDS
+    if args.warmup_minutes is None:
+        args.warmup_minutes = SPEC_WARMUP_MINUTES if spec else 30
+    if args.baseline_hours is None:
+        args.baseline_hours = SPEC_HOURS[args.run_kind] if spec else 24
+    return args
+
+
+def parse_checklist(items, next_runs):
+    """Rule 6.5's host checklist: each item excluded (with its next scheduled run)
+    or not applicable, as the operator states it at launch."""
+    out = {}
+    for text in items:
+        item, _, state = text.partition("=")
+        if item not in CHECKLIST_ITEMS or state not in CHECKLIST_STATES or item in out:
+            raise SystemExit(f"--checklist takes ITEM=STATE once per item; items {CHECKLIST_ITEMS}, "
+                             f"states {CHECKLIST_STATES}.")
+        out[item] = {"state": state}
+    for text in next_runs:
+        item, _, when = text.partition("=")
+        try:
+            stamp = datetime.fromisoformat(when.replace("Z", "+00:00"))
+        except ValueError:
+            stamp = None
+        if item not in out or out[item]["state"] != "excluded" or stamp is None or stamp.tzinfo is None:
+            raise SystemExit("--next-run takes ITEM=<UTC time> for an item checked as excluded.")
+        out[item]["next_run_utc"] = iso(stamp.astimezone(timezone.utc))
+    return out
+
+
+def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sys/kernel/random/boot_id"):
+    """`collect.py note`: a host-activity entry (rule 6.11), stamped with UTC and
+    the collector's own elapsed_seconds, appended to the run's private log."""
+    parser = argparse.ArgumentParser(prog="collect.py note", description=note_command.__doc__)
+    parser.add_argument("--root", required=True, help="The running collector's evidence directory")
+    parser.add_argument("--category", required=True, choices=ACTIVITY_CATEGORIES + ("other",))
+    parser.add_argument("--text", default="", help="Private detail (at most 200 characters); never published")
+    args = parser.parse_args(argv)
+    if len(args.text) > 200 or any(ord(c) < 32 for c in args.text):
+        parser.error("--text must be one line of at most 200 characters")
+    root = Path(args.root)
+    try:
+        run = json.loads((root / "run.json").read_text(encoding="utf-8"))
+        origin = run["clock"]["monotonic_origin"]
+    except (OSError, ValueError, KeyError, TypeError):
+        sys.stderr.write("Not a CR-COL-3 run directory (run.json has no clock origin).\n")
+        return 2
+    boot = (read_text(boot_id_path) or "").strip()
+    entry = {"time": iso(now()), "elapsed_seconds": round(clock() - origin, 1), "category": args.category,
+             "same_boot": bool(boot) and boot == run["clock"].get("boot_id"),
+             "collector_finished": (root / "result.json").exists(), "text": args.text}
+    append_line(root / "activity.jsonl", dumps(entry))
+    print(f"Recorded {args.category} at elapsed {entry['elapsed_seconds']:.1f} s ({entry['time']}).")
+    return 0
+
+
 class Collector:
     def __init__(self, args, instance, *, clock=time.monotonic, sleep=time.sleep,
-                 now=utc_now, fetch=http_get, volumes=statvfs_volumes):
+                 now=utc_now, fetch=http_get, volumes=statvfs_volumes, ip_lookup=ip_echo,
+                 api_call=None, run_command=subprocess_output):
         self.args, self.instance = args, instance
         self.clock, self.sleep, self.now, self.fetch, self.volume_reader = clock, sleep, now, fetch, volumes
         self.root = Path(args.root)
+        self.kind = getattr(args, "run_kind", "cr0")
+        self.spec = self.kind in SPEC_KINDS
+        resolve_defaults(args)
+        self.ip = PublicIP(getattr(args, "ip_echo_url", DEFAULT_IP_ECHO), ip_lookup)
+        self.api = (LodestarAPI(args.url, args.password_file, api_call)
+                    if getattr(args, "password_file", None) else None)
+        self.run_command = run_command
         self.stop_flag = threading.Event()
         self.stop_signal = None
         self.reason = "collector_error"
@@ -708,7 +1209,9 @@ class Collector:
         if a.leg == "gluetun" and not a.require_gluetun:
             raise SystemExit("--leg gluetun requires --require-gluetun.")
         hours = 2 if a.leg == "gluetun" else 24
-        if (a.warmup_minutes < 30 or a.baseline_hours < hours) and not a.rehearsal:
+        if self.spec:
+            self.prepare_spec()
+        elif (a.warmup_minutes < 30 or a.baseline_hours < hours) and not a.rehearsal:
             raise SystemExit(f"Baseline requires at least 30 minutes warmup and {hours} measured hours.")
         if not (0 < a.stop_free_bytes < a.warn_free_bytes <= a.min_free_bytes):
             raise SystemExit("Invalid storage guardrails.")
@@ -736,6 +1239,31 @@ class Collector:
         if any(v["free_bytes"] < a.min_free_bytes for v in self.volumes_now):
             raise SystemExit("Insufficient free disk space for soak launch.")
         (self.root / "metrics").mkdir()
+
+    def prepare_spec(self):
+        """CR-SPEC run kinds: fixed windows outside rehearsals, and the sources §8 needs."""
+        a = self.args
+        if a.leg != "main" or a.require_gluetun:
+            raise SystemExit("CR-SPEC run kinds have no gluetun leg.")
+        if (a.run_kind == "ab") != (a.treatment is not None):
+            raise SystemExit("--treatment is required with --run-kind ab, and only with it.")
+        if not a.rehearsal and (a.warmup_minutes != SPEC_WARMUP_MINUTES or a.baseline_hours != SPEC_HOURS[a.run_kind]
+                                or a.hour_seconds != 3600 or a.sample_seconds != SAMPLE_SECONDS):
+            raise SystemExit(f"--run-kind {a.run_kind} measures {SPEC_HOURS[a.run_kind]} h after a "
+                             f"{SPEC_WARMUP_MINUTES} min warmup (CR-SPEC rule 1); other values need --rehearsal.")
+        if a.baseline_hours != int(a.baseline_hours) or a.hour_seconds < 60:
+            raise SystemExit("The window must be whole hours of at least 60 s.")
+        echo = urllib.parse.urlsplit(a.ip_echo_url)
+        if echo.scheme != "https" and not (a.rehearsal and echo.scheme == "http"):
+            raise SystemExit("--ip-echo-url must be https (http only in a rehearsal).")
+        if a.run_kind == "comparator":
+            if self.instance.kind != "docker" or not a.postgres_container:
+                raise SystemExit("--run-kind comparator needs --mode docker and --postgres-container.")
+        elif not a.password_file or not Path(a.password_file).is_file():
+            raise SystemExit("--password-file is required: the settings and Insights checks need a login.")
+        if not a.spec_commit or not COMMIT.fullmatch(a.spec_commit):
+            raise SystemExit("--spec-commit must name the commit whose CR-SPEC governs this run (rule 7.2).")
+        self.checklist = parse_checklist(a.checklist, a.next_run)
 
     def run_json(self):
         a, inst = self.args, self.instance
@@ -771,6 +1299,29 @@ class Collector:
         }
         if inst.kind == "docker":
             run["cgroup_version"] = 2 if (Path(a.cgroup_root) / "cgroup.controllers").exists() else None
+        if self.spec:
+            settings.update(run_kind=a.run_kind, treatment=a.treatment, hour_seconds=a.hour_seconds,
+                            sample_seconds=a.sample_seconds, spec_commit=a.spec_commit,
+                            spec="docs/decisions/2026-11-02-CR-SPEC.md")
+            run["clock"] = {"monotonic_origin": self.started,
+                            "boot_id": (read_text("/proc/sys/kernel/random/boot_id") or "").strip() or None,
+                            "ntp_start": ntp_status(self.run_command)}
+            run["checklist"] = self.checklist
+            if a.run_kind == "comparator":
+                started = inst.started_utc()
+                run["process_started_utc"] = iso(started) if started else None
+                run["comparator"] = {"query": COMPARATOR_QUERY, "session": COMPARATOR_ENV.split("=", 1)[1]}
+            else:
+                env, mounts = inst.environment()
+                identity = config_identity(env, mounts) if env is not None else None
+                if identity is not None:
+                    try:
+                        identity["settings_api"] = self.api.settings()
+                    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                            http.client.HTTPException):
+                        identity["settings_api"] = None
+                        self.note("settings API unavailable at start")
+                run["config"] = identity
         self.run = {k: v for k, v in run.items() if v is not None}
         self.save(self.run, self.root / "run.json")
         write_text(self.root / "samples.jsonl", "")  # the analyzer requires it even if no sample lands
@@ -783,6 +1334,7 @@ class Collector:
         except OSError as error:
             raise SystemExit(f"Cannot prepare the run ({type(error).__name__}).") from None
         status_path, started = self.root / "status.json", self.clock()
+        self.started = started
         phase = "startup"
         self.sample = 0
         suppression_seen = False
@@ -795,6 +1347,9 @@ class Collector:
         self.verdict = self.start_time = None
         history, volumes = {}, self.volumes_now
         next_sample, next_watch = 5.0, 0.0
+        hour_seconds, next_k, ip_retry = a.hour_seconds, 0, None
+        horizon = (8 + a.baseline_hours) * 3600 if not self.spec else (
+            7 * 3600 + (a.warmup_minutes * 60 + a.baseline_hours * hour_seconds) + 600)
         self.shutdown = None
         self.finalization_errors = 0
         try:
@@ -805,7 +1360,7 @@ class Collector:
                 if self.stop_flag.is_set() or (self.root / "stop.request").exists():
                     self.reason = "operator_stop"
                     break
-                if elapsed >= (8 + a.baseline_hours) * 3600:
+                if elapsed >= horizon:
                     self.reason = "overall_deadline_without_complete_baseline"
                     break
                 if elapsed >= next_watch:
@@ -846,7 +1401,7 @@ class Collector:
                 if elapsed < next_sample:
                     self.sleep(a.tick_seconds)
                     continue
-                next_sample = elapsed + SAMPLE_SECONDS
+                next_sample = elapsed + a.sample_seconds
                 verdict = self.instance.check()
                 if verdict.kind in ("exited", "changed"):
                     self.verdict, self.reason = verdict, verdict.reason
@@ -859,21 +1414,41 @@ class Collector:
                         break
                     continue
                 unverified_since = None
+                elapsed = self.clock() - started  # D1a: UTC and elapsed read together
                 stamp = self.now()
-                health = self.probe("/healthz")
-                bad_health = 0 if health == 200 else bad_health + 1
-                values, metrics_ok, text = {}, False, ""
-                try:
-                    status, body = self.fetch(a.url.rstrip("/") + "/metrics")
-                    if status != 200:
-                        raise ValueError("metrics status")
-                    text = body.decode("utf-8")
-                    values = {name: read_metric(text, name) for name in REQUIRED}
-                    metrics_ok, bad_metrics = True, 0
-                except (OSError, ValueError, http.client.HTTPException):
-                    values, bad_metrics = {}, bad_metrics + 1
-                    self.note("metrics unavailable or missing required fields")
-                if metrics_ok:
+                values, metrics_ok, text, flags = {}, False, "", {}
+                if self.kind == "comparator":
+                    health = None
+                    count = comparator_count(self.instance.api, a.postgres_container, a.postgres_user, a.postgres_db)
+                    if count is None:
+                        bad_metrics += 1
+                        self.note("comparator count unavailable")
+                    else:
+                        values, metrics_ok, bad_metrics = {"comparator_torrents": count}, True, 0
+                        if baseline_at is None:
+                            started_utc = self.instance.started_utc()
+                            if started_utc is not None:  # rule 1.2: ws = its process start + 60 min
+                                process_elapsed = elapsed - (stamp - started_utc).total_seconds()
+                                baseline_at = process_elapsed + a.warmup_minutes * 60
+                                end_at = baseline_at + a.baseline_hours * hour_seconds
+                                self.suppression_end_at = iso(started_utc)
+                    if baseline_at is not None and elapsed >= baseline_at and self.baseline_start is None:
+                        self.baseline_start = iso(stamp)
+                        self.note(f"window started; collecting {a.baseline_hours:g} hours")
+                else:
+                    health = self.probe("/healthz")
+                    bad_health = 0 if health == 200 else bad_health + 1
+                    try:
+                        status, body = self.fetch(a.url.rstrip("/") + "/metrics")
+                        if status != 200:
+                            raise ValueError("metrics status")
+                        text = body.decode("utf-8")
+                        values = {name: read_metric(text, name) for name in REQUIRED}
+                        metrics_ok, bad_metrics = True, 0
+                    except (OSError, ValueError, http.client.HTTPException):
+                        values, bad_metrics = {}, bad_metrics + 1
+                        self.note("metrics unavailable or missing required fields")
+                if metrics_ok and self.kind != "comparator":
                     start_time = values["start_time_seconds"]
                     if self.start_time is None:
                         self.start_time = start_time
@@ -883,18 +1458,26 @@ class Collector:
                                                observed_start_time_seconds=start_time)
                         self.reason = self.verdict.reason
                         break
-                    snapshot = sanitize_snapshot(text)
+                    snapshot = sanitize_snapshot(text, flags)
                     self.write(self.root / "metrics" / f"{self.sample:05d}.prom", snapshot)
+                    reason = suppression_reason(text)
                     if values["dht_sample_suppression_seconds"] > 0:
                         suppression_seen = True
-                    if suppression_seen and values["dht_sample_suppression_seconds"] == 0 and baseline_at is None:
+                    if self.spec:  # D6: the first eligible zero, however the run started
+                        opened = open_eligible({"dht_sample_suppression_seconds": values["dht_sample_suppression_seconds"],
+                                                "suppression_reason": reason},
+                                               stamp.timestamp() - values["start_time_seconds"])
+                    else:
+                        opened = suppression_seen and values["dht_sample_suppression_seconds"] == 0
+                    if opened and baseline_at is None:
                         self.suppression_end_at = iso(stamp)
                         baseline_at = elapsed + a.warmup_minutes * 60
-                        end_at = baseline_at + a.baseline_hours * 3600
+                        end_at = baseline_at + a.baseline_hours * hour_seconds
                         self.note(f"sampling suppression ended; warming up for {a.warmup_minutes:g} minutes")
                     if baseline_at is not None and elapsed >= baseline_at and self.baseline_start is None:
                         self.baseline_start = iso(stamp)
-                        end_at = elapsed + a.baseline_hours * 3600
+                        if not self.spec:  # CR-SPEC's window ends at ws + hours, not t_s + hours (rule 1.4)
+                            end_at = elapsed + a.baseline_hours * 3600
                         self.write(self.root / "baseline-start.prom", snapshot)
                         self.note(f"baseline started; collecting {a.baseline_hours:g} hours")
                     over = (values["dht_peer_active"] + values["dht_peer_queued"] > 32
@@ -927,8 +1510,40 @@ class Collector:
                 family = ip_family_counters(text) if metrics_ok else {}
                 if family:
                     row["ip_family_counters"] = family
+                if self.spec:
+                    if health is None:
+                        row.pop("health")
+                    if metrics_ok and self.kind != "comparator":
+                        row["suppression_reason"] = reason
+                    if flags:
+                        row.update(flags)
+                    net = net_counters(self.instance.proc, self.instance.process_id)
+                    if net is not None:
+                        row["net"] = net
+                    if self.ip.reference is None or ip_retry is not None:  # the reference, or a boundary retry
+                        row["public_ip"] = self.ip.check()
+                        if row["public_ip"] != "failed" or (ip_retry is not None and elapsed > ip_retry):
+                            ip_retry = None
+                    passed = []
+                    while (baseline_at is not None and metrics_ok and next_k <= a.baseline_hours
+                           and elapsed >= baseline_at + next_k * hour_seconds):
+                        passed.append(next_k)
+                        next_k += 1
+                    if passed:  # rule 1.4's boundary scrape: public IP, imports, settings
+                        row["boundary"] = passed
+                        if "public_ip" not in row:
+                            row["public_ip"] = self.ip.check()
+                        ip_retry = (baseline_at + passed[-1] * hour_seconds + BOUNDARY_SECONDS
+                                    if row["public_ip"] == "failed" else None)
+                        if self.kind != "comparator":
+                            row["api"] = self.api_checks(values["start_time_seconds"], stamp)
                 self.write(self.root / "samples.jsonl", dumps(row), append=True)
-                self.save({"state": "running", "phase": phase, "sample": self.sample, "latest": row,
+                shown = row
+                if self.spec:  # rule 6.11: progress and checks only, never counts or rates
+                    shown = {k: v for k, v in row.items() if k not in ("values", "net", "api")}
+                    shown["window"] = {"opened": self.suppression_end_at is not None,
+                                       "boundaries_passed": next_k, "hours": a.baseline_hours}
+                self.save({"state": "running", "phase": phase, "sample": self.sample, "latest": shown,
                            **self.memory_evidence(),
                            "suppression_ended": self.suppression_end_at, "baseline_started": self.baseline_start,
                            "expected_end": iso(stamp + timedelta(seconds=end_at - elapsed)) if end_at else None},
@@ -946,10 +1561,11 @@ class Collector:
                 if bad_memory >= 5:
                     self.reason = memory_reason
                     break
-                if metrics_ok and values["dht_peer_active"] > 0 and elapsed - last_progress >= 300:
+                if (metrics_ok and self.kind != "comparator" and values["dht_peer_active"] > 0
+                        and elapsed - last_progress >= 300):
                     self.reason = "active_peer_requests_without_completion_for_five_minutes"
                     break
-                if endpoint_reached(elapsed, end_at, metrics_ok and health == 200, self.baseline_start):
+                if endpoint_reached(elapsed, end_at, metrics_ok and health in (200, None), self.baseline_start):
                     self.reason = "baseline_window_complete"
                     break
         except Exception as error:  # evidence_write_error keeps its own reason
@@ -960,6 +1576,16 @@ class Collector:
         finally:
             self.finish(status_path, started)
         return self.exit_code()
+
+    def api_checks(self, start_time, stamp):
+        """Rule 5.5: imports and preset changes since the process started, and the
+        settings now. A failure is recorded as unavailable, never as a pass."""
+        try:
+            return {"imports": self.api.imports(start_time - 60, stamp.timestamp() + 60),
+                    "settings": self.api.settings()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
+            self.note("settings or Insights API unavailable at a boundary")
+            return {"error": "unavailable"}
 
     def probe(self, path):
         try:
@@ -992,6 +1618,8 @@ class Collector:
             "assessment": "Evidence collected; review required before any acceptance or performance claim.",
         }
         result.update(self.memory_evidence())
+        if self.spec:
+            result["ntp_end"] = ntp_status(self.run_command)
         if self.stop_signal and self.reason == "operator_stop":
             result["stop_signal"] = self.stop_signal
         if self.verdict is not None:
@@ -1056,12 +1684,30 @@ def build_parser():
     p.add_argument("--cgroup-root", default="/sys/fs/cgroup", help="Host cgroup v2 mount (docker mode)")
     p.add_argument("--cgroup-path", help="Explicit container cgroup directory (docker mode)")
     p.add_argument("--pid", type=int, help="Lodestar process id (native mode)")
-    p.add_argument("--proc-root", default="/proc", help="proc mount to read (native mode)")
+    p.add_argument("--proc-root", default="/proc",
+                   help="proc mount to read (native mode; docker mode: the host's, for network counters)")
     p.add_argument("--url", default="http://127.0.0.1:8484", help="Lodestar base URL, as this collector reaches it")
     p.add_argument("--root", required=True, help="New, empty evidence directory")
     p.add_argument("--commit", required=True, help="Source commit under test (lowercase hex)")
-    p.add_argument("--warmup-minutes", type=float, default=30)
-    p.add_argument("--baseline-hours", type=float, default=24)
+    p.add_argument("--warmup-minutes", type=float, default=None,
+                   help="Default 30 (cr0) or 60 (CR-SPEC kinds, fixed outside rehearsals)")
+    p.add_argument("--baseline-hours", type=float, default=None,
+                   help="Default 24 (cr0, comb, comparator) or 6 (ab)")
+    p.add_argument("--run-kind", choices=("cr0",) + SPEC_KINDS, default="cr0",
+                   help="cr0: the v0.5.1 soak. ab, comb, comparator: a CR-SPEC crawler run")
+    p.add_argument("--treatment", choices=sorted(TREATMENTS), help="The A/B's treatment (--run-kind ab)")
+    p.add_argument("--spec-commit", help="Commit of docs/decisions/2026-11-02-CR-SPEC.md in force (CR-SPEC kinds)")
+    p.add_argument("--password-file", help="Admin password for the settings and Insights checks (CR-SPEC kinds)")
+    p.add_argument("--ip-echo-url", default=DEFAULT_IP_ECHO, help="Fixed IP-echo service for the public-IP check")
+    p.add_argument("--checklist", action="append", default=[], metavar="ITEM=STATE",
+                   help="Host checklist: auto_update or backup = excluded or not_applicable (repeatable)")
+    p.add_argument("--next-run", action="append", default=[], metavar="ITEM=UTC",
+                   help="An excluded item's next scheduled run, in UTC (repeatable)")
+    p.add_argument("--postgres-container", help="bitmagnet's Postgres container (--run-kind comparator)")
+    p.add_argument("--postgres-user", default="postgres")
+    p.add_argument("--postgres-db", default="bitmagnet")
+    p.add_argument("--hour-seconds", type=float, default=3600.0, help=argparse.SUPPRESS)  # rehearsal only
+    p.add_argument("--sample-seconds", type=float, default=SAMPLE_SECONDS, help=argparse.SUPPRESS)
     p.add_argument("--rehearsal", action="store_true", help="Allow shorter windows; marked in run.json")
     p.add_argument("--storage-path", action="append", default=[], help="Extra path whose filesystem to guard (repeatable)")
     p.add_argument("--min-free-bytes", type=int, default=50 * GIB)
@@ -1082,16 +1728,20 @@ def make_instance(args, parser):
     if args.mode == "docker":
         if not args.container:
             parser.error("--container is required in docker mode")
-        return DockerInstance(DockerAPI(args.docker_socket), args.container, args.cgroup_root, args.cgroup_path)
+        return DockerInstance(DockerAPI(args.docker_socket), args.container, args.cgroup_root, args.cgroup_path,
+                              proc_root=args.proc_root)
     if args.pid is None:
         parser.error("--pid is required in native mode")
     return NativeInstance(args.pid, args.proc_root)
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["note"]:
+        return note_command(argv[1:])
     parser = build_parser()
-    args = parser.parse_args(argv)
-    for name in ("warmup_minutes", "baseline_hours", "tick_seconds"):
+    args = resolve_defaults(parser.parse_args(argv))
+    for name in ("warmup_minutes", "baseline_hours", "tick_seconds", "hour_seconds", "sample_seconds"):
         if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive and finite")
     collector = Collector(args, make_instance(args, parser))
