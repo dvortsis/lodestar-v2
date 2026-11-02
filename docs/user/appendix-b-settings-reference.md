@@ -21,7 +21,7 @@ container variable with key `LODESTAR_LOG` to set how much Lodestar logs on ever
 (`error`, `warn`, `info` or `debug`). While it is set, Logging verbosity in Settings can't be changed.
 **Recommended:** leave it unset; the default is `info`.
 
-Blocklist downloads ignore the `HTTPS_PROXY` variable, a setting that sends web requests through a proxy server. They use the container's own route, so a VPN that covers the whole container still applies. **Recommended:** to send them through a VPN, use the gluetun template ([section 3.3](03-keep-lodestar-safe.md#blocklist-downloads-and-https_proxy)), not a proxy variable.
+Blocklist downloads ignore the `HTTPS_PROXY` variable, a setting that sends web requests through a proxy server. They use the container's own route, so a VPN that covers the whole container still applies. **Recommended:** to send them through a VPN, use the gluetun template ([section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn)), not a proxy variable.
 
 <!-- nav:start -->
 ---

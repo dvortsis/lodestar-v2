@@ -40,7 +40,7 @@ The setup token is a one-time key to a fresh instance. It appears in the log unt
 If someone could have read the token before you used it, create the password now. Once an admin exists, the token stops working and can't be used to claim the instance.
 
 ## 3.3 Decide about the DHT port and a VPN
-<!-- index: DHT port; gluetun; VPN; connection tracking -->
+<!-- index: DHT port; gluetun; VPN; connection tracking; HTTPS_PROXY; proxy; blocklist downloads -->
 
 Lodestar works without any router change. It reaches fewer nodes, but it still finds and fetches torrents. You have three ways to run it.
 
