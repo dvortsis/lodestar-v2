@@ -508,10 +508,16 @@ fn alert(e: &InsightsException) -> Alert {
         ("index_lag", Some(v)) => format!("The search index is {v} behind."),
         ("index_lag", None) => "The search index is behind.".into(),
         ("cohort_stalled", Some(v)) => {
-            format!("Nothing was stored for 2 hours while {v} torrents are in progress.")
+            format!(
+                "Nothing was stored for {} hours while {v} torrents are in progress.",
+                crate::insights::STALL_HOURS
+            )
         }
         ("cohort_stalled", None) => {
-            "Nothing was stored for 2 hours while torrents are in progress.".into()
+            format!(
+                "Nothing was stored for {} hours while torrents are in progress.",
+                crate::insights::STALL_HOURS
+            )
         }
         ("yield_below_baseline", Some(v)) => {
             format!("Yield is {v} for the newest completed cohorts, below the 7 days before them.")
@@ -820,7 +826,11 @@ fn render_text(m: &Model, alerts: usize) -> String {
         t.push('\n');
     }
     if m.alerts.len() > alerts {
-        let _ = writeln!(t, "- And {} more in Insights.", m.alerts.len() - alerts);
+        let _ = writeln!(
+            t,
+            "- And {} more in Insights.",
+            format_count((m.alerts.len() - alerts) as u64)
+        );
     }
 
     let _ = writeln!(t, "\nOpen Insights: {}", m.insights);

@@ -3,6 +3,8 @@
 Playwright + axe + an OpenAPI mock, plus Lighthouse CI. Architecture §10.17; budgets §10.1.
 Chromium only. Locally it is the preinstalled one in `/opt/pw-browsers`: **never run `playwright install`**. CI runs in the pinned Playwright container, which ships the browser. Locally, snapshot tests have no valid baselines (see Snapshots): use `--ignore-snapshots` for everything else.
 
+**Port:** the preview server uses port 4173. Set `PW_PORT=<port>` to use another, so parallel worktrees don't reach each other's servers; the preview runs with `--strictPort`, so a busy port fails instead of moving.
+
 **Cloud sessions:** the preinstalled Chromium is a different build from the one `@playwright/test` pins, so point Playwright at it with `PW_CHROMIUM_PATH` (no symlink folder, no `PLAYWRIGHT_BROWSERS_PATH`):
 
 ```sh
@@ -13,7 +15,7 @@ CI never sets it, so CI's browser and screenshots are unchanged. Local screensho
 
 ## Projects
 
-Filter with `--project=<name>` (globs work). Every project starts the web server from `playwright.config.ts` (`npm run build && npm run preview`, cold ~73 s on CI, so its timeout is 180 s; an already-running server on :4173 is reused locally).
+Filter with `--project=<name>` (globs work). Every project starts the web server from `playwright.config.ts` (`npm run build && npm run preview`, cold ~73 s on CI, so its timeout is 180 s; an already-running server on the port is reused locally).
 
 | Project                   | Runs                                                                                                                                                                                                                    | Script                                  |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
@@ -40,7 +42,7 @@ E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
 
 **In CI** the `fixture` job in `e2e.yml` runs nightly and on manual dispatch (Actions → E2E → Run workflow, on any branch; leave `update_snapshots` off). It is not a pull-request check and not part of `ci-ok`. A `fixture-build` job builds the release binary (UI embedded) on `ubuntu-latest`; the Playwright container downloads it, starts it on `127.0.0.1:8291`, waits up to 120 s for `/healthz`, and runs this project with `E2E_FIXTURE=1` set (the workers need it to find the project). A failure uploads `playwright-report-fixture` with the server log.
 
-Name the project exactly (`--project=fixture`; a glob does not select it). Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on :4173 is reused); the fixture specs never use it.
+Name the project exactly (`--project=fixture`; a glob does not select it). Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on the port is reused); the fixture specs never use it.
 
 **Rotating sample.** `sampleThemes(seed)` (`support/themes.ts`) takes the 46 non-Riverstone themes, permutes them with a coprime stride and returns a 6-wide window that moves by 6 each run. The seed is `GITHUB_RUN_NUMBER`, or the day number locally. Eight consecutive runs cover every theme.
 

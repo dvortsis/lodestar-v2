@@ -20,6 +20,8 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 
 // Local override, never set in CI: run an already-installed Chromium instead of the build this
 // @playwright/test pins (cloud sessions ship a different one). Unset = unchanged behaviour.
+// Port for the preview server; set PW_PORT so parallel worktrees don't share one.
+const port = Number(process.env.PW_PORT ?? 4173);
 const chromiumPath = process.env.PW_CHROMIUM_PATH;
 
 const allThemes = !!process.env.E2E_ALL_THEMES || process.argv.join(' ').includes('all-themes');
@@ -64,15 +66,15 @@ export default defineConfig<Appearance>({
 	workers: process.env.CI ? 4 : undefined,
 	reporter: [['list'], ['html', { open: 'never' }]],
 	webServer: {
-		command: 'npm run build && npm run preview -- --port 4173',
+		command: 'npm run build && npm run preview -- --port ' + port + ' --strictPort',
 		env: { VITE_DEV_ROUTES: '1' },
-		port: 4173,
+		port,
 		// A cold `npm run assets` takes ~73 s on CI.
 		timeout: 180_000,
 		reuseExistingServer: !process.env.CI
 	},
 	use: {
-		baseURL: 'http://localhost:4173',
+		baseURL: `http://localhost:${port}`,
 		...(chromiumPath ? { launchOptions: { executablePath: chromiumPath } } : {})
 	},
 	projects: [

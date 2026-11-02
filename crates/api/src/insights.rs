@@ -191,7 +191,7 @@ pub const INDEX_LAG_S: u64 = 30;
 const INDEX_LAG_ERROR_S: u64 = 600;
 /// `cohort_stalled`: nothing stored for this many full hours while the
 /// crawler ran and hashes were in progress.
-const STALL_HOURS: i64 = 2;
+pub(crate) const STALL_HOURS: i64 = 2;
 /// An hour counts as "the crawler ran" for `cohort_stalled` with at
 /// least this much coverage.
 const STALL_COVERAGE_S: i64 = 3000;
