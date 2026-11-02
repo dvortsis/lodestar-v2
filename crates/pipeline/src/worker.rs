@@ -98,6 +98,18 @@ impl Funnel for WorkerFunnel {
             ),
         }
     }
+
+    /// Intake granted the sighting a new lease (a reply would have been
+    /// held), and the pool fetched the key lately. It isn't stored (stored
+    /// keys stop at the have-filter) or blocked (refused at intake), so
+    /// prepare found its dictionary invalid: the new lease ends as that
+    /// loss did. Without this nothing ends it, and the lease tables grow
+    /// by one entry per such sighting (R-mem-triage).
+    fn duplicate(&self, key: &InfoHash, _cohort: i64, _source: SourceId) {
+        if let Some(token) = self.leases.take(key) {
+            self.coordinator.lost(key, token, Loss::Invalid);
+        }
+    }
 }
 
 /// A prepared torrent on its way to the coordinator (the `Results`

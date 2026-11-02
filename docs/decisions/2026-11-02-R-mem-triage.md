@@ -1,6 +1,6 @@
 # R-mem-triage decisions (triage of rc.2's anonymous-memory slope)
 
-Runner brief R-mem-triage, 2026-11-02, Track R. rc.2 is `release/v0.5.1` at 6be95525. The Linux Docker soak r3 measured its `private_bytes` slope (the cgroup's `anon`) at 6.66 MiB/h, 95% CI [4.62, 8.70], over baseline hours 12–16, about 10–14 KiB per stored torrent. This file records what was measured, what was ruled out, and what is still open. **No code change to the shipped binary is made here.**
+Runner brief R-mem-triage, 2026-11-02, Track R. rc.2 is `release/v0.5.1` at 6be95525. The Linux Docker soak r3 measured its `private_bytes` slope (the cgroup's `anon`) at 6.66 MiB/h, 95% CI [4.62, 8.70], over baseline hours 12–16, about 10–14 KiB per stored torrent. This file records what was measured, what was ruled out and what is still open, plus one small leak fix. **It does not explain or fix r3's slope.**
 
 ## How it was measured
 - **Two harnesses, in `bench/examples/` as dev-dependencies, so they stay out of the binary and the bench gates' change detection:**
@@ -46,7 +46,7 @@ Everything below is bounded, except where marked.
 | Pool `admitted` | Compacted at 2× entries + 1024 |
 | Pool `lookup_backlog` | Cleaned lazily. In the 10-24 run it was 204,821 at the end, against 200,000 pending |
 | Pool `recent` | 50k |
-| Coordinator `LeaseTable` and `WorkerLeases` | Track pending keys. **Unbounded leak, about 200 B per key:** a fetched key rejected in prepare and seen again gets a new lease, which the pool drops as a recent duplicate without ending it (about 2/h in CR-0; filed as a follow-up) |
+| Coordinator `LeaseTable` and `WorkerLeases` | Track pending keys. Two leaks, fixed here (below) |
 | DHT sampler states and expiry | `MAX_KNOWN` 200k, about 35–45 MB at the cap |
 | Sampler frontier | 20k |
 | `PeerStore` | 10k hashes × 50 peers, 30 min TTL |
@@ -71,8 +71,21 @@ Everything below is bounded, except where marked.
 | `request_log` | 512 routes |
 | SQLite page caches | About 2 MB per connection (the default) |
 
+## The lease leaks (fixed)
+- **A key rejected in prepare and seen again kept a lease forever.**
+  - Intake grants the sighting a new lease. The pool drops it as a recent duplicate, and nothing ended the lease, so `LeaseTable` and `WorkerLeases` grew by about 200 B per such sighting. CR-0 saw about 2 an hour, so this isn't the slope.
+  - **The fix:** the pool now calls a new `Funnel::duplicate` hook when it turns away a non-reply sighting as recent (`crates/sources/src/pool.rs`, `Pool::on_discovery`).
+  - **The default hook does nothing.** Pool-only users such as `crawler-sim` see a stored key again with no have-filter in front of it, so its goldens are unchanged.
+  - **The worker's funnel ends the lease as `Loss::Invalid`** (`crates/pipeline/src/worker.rs`, `WorkerFunnel::duplicate`). Inside the pipeline that is the only way such a sighting gets a new lease: stored keys stop at the have-filter, blocked ones are refused at intake, and a key still in flight is held, which makes its sighting a reply.
+  - **The funnel effect:** the sighting was already counted as a harvest at grant, so the loss balances it. Insights' funnel gains one `Invalid` loss per such sighting, where before that harvest never had an outcome.
+- **A saved queue larger than the pool's cap kept the leases of the keys it dropped.**
+  - `Pool::restore` now ends each dropped key's restored lease as `Loss::Evicted` ("dropped from the full queue"). This happens at most once per start.
+- **Left as designed:** the writer's `STORE_WRITE_FAILED` path keeps the failed batch's leases on purpose, so its keys aren't fetched again in that run (`crates/pipeline/src/writer.rs`). It is bounded by store failures.
+- **Tests, written to fail first:** `a_rejected_key_seen_again_ends_its_new_lease` and `a_restored_queue_past_the_cap_ends_the_leases_it_drops` in `crates/pipeline/tests/pipeline.rs`.
+- **Delta (build plan §0.4):** both changes touch the **crawler lifecycle**: the pool's handling of a recent duplicate, and of a restored key past the cap. They don't touch the sampler or the endpoint policy. A re-soak is assumed anyway.
+
 ## What is open
 - **About 80% of r3's slope (roughly 5 MiB/h) is not reproduced** by anything that runs without the live network.
   - The harnesses lack DHT replies and their timing, real peers, real TCP fetch failures (about 16k/h in CR-0) and hours of wall time.
   - The next step is to diff r3's own metrics snapshots (about 250 series a minute, already collected) against `private_bytes` over hours 6–16, and find whichever gauge rises with it.
-- **The size of a re-soak is the runner's to set under build plan §0.4.** This file changes no line in the crawler lifecycle, the sampler or the endpoint policy: it only adds two dev-only examples and their dev-dependencies.
+- **The size of a re-soak is the runner's to set under build plan §0.4.** The harnesses are dev-only examples; the lease fixes are the only lines touching the crawler lifecycle.
