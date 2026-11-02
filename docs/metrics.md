@@ -768,6 +768,21 @@ With `dht.target_prefixes` on ([the decision](decisions/2026-11-01-CR-1b.md)), e
 
 `dht_target_prefix_queries_total{kind="sample"}` = `dht_sample_sent_total` with the switch on. Hashes are attributed to the sampling call, as before: new sample hashes per call is `dht_harvested_total{strategy="sample"}` over `dht_sample_sent_total`.
 
+## uTP and address families (CR-4, 2026-11-02)
+
+Two switches, both off by default and read at start ([the decision](decisions/2026-11-02-CR-4.md)). With `dht.utp` on, metadata fetches try uTP first over a uTP socket that shares the DHT's port (6881), then fall back to TCP. With `dht.route_backoff` on, a peer connect that the local stack refuses as "network unreachable" holds back that address family's dials for a backoff that doubles from 30 s to 15 min and resets on the family's next successful connect. The per-transport series are #51's and keep their names: `fetch_attempts_total`, `fetch_success_total` and `fetch_connect_timeouts_total{transport}`. No series has a peer, endpoint or infohash label.
+
+| Series | Type | Meaning |
+|---|---|---|
+| `utp_retransmits_total`, `utp_connection_timeouts_total` | counter | #51's uTP socket counters: packets sent again, and connections dropped because the peer stopped answering. **Rendered only with `dht.utp` on.** |
+| `fetch_family_attempts_total{family}`, `fetch_family_success_total{family}` | counter | The same attempts and successes as the transport series, by peer address family: `ipv4` (v4-mapped addresses included) or `ipv6`. A uTP try and its TCP fallback count twice, as in the transport series. Count with the switches on or off. |
+| `fetch_no_route_total{family}` | counter | TCP connects the local network stack refused as unreachable (`ENETUNREACH`): route-level evidence. Timeouts, refusals and resets never count here. Counts with the switch on or off. |
+| `fetch_route_skipped_total{family}` | counter | Fetches not dialled because their family is backed off. They fail as `unreachable` in `fetch_failures_total` without an attempt. Stays 0 with `dht.route_backoff` off. |
+| `fetch_route_backoff{family}` | gauge | 1 while that family's dials are held back. Stays 0 with `dht.route_backoff` off. |
+| `dht_utp_in_total` | counter | Datagrams on the DHT's port that the receive loop handed to uTP (after the blocklist check). Stays 0 with `dht.utp` off, when every datagram is handled as KRPC as before. |
+
+The uTP share of fetches is `fetch_attempts_total{transport="utp"}` over the sum of both transports; uTP's success rate is `fetch_success_total{transport="utp"}` over `fetch_attempts_total{transport="utp"}`. A family with no DHT socket (an IPv4-only bind, for example) goes straight to TCP, so its peers add no uTP attempts.
+
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 
 The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.

@@ -1595,6 +1595,7 @@ dependencies = [
  "lodestar-log",
  "lodestar-metainfo",
  "lodestar-network-policy",
+ "lodestar-utp",
  "proptest",
  "rand 0.10.3",
  "sha1",

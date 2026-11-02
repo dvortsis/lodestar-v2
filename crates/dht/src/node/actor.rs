@@ -507,7 +507,7 @@ pub(crate) async fn run(
             } => {
                 if let Ok((n, from)) = r {
                     let buf = if family == 0 { &buf0 } else { &buf1 };
-                    actor.on_packet(&sockets, family, &buf[..n], from);
+                    actor.on_datagram(&sockets, family, &buf[..n], from);
                 }
             }
         }
@@ -1050,6 +1050,30 @@ impl Actor {
             }
         }
         p
+    }
+
+    /// CR-4's shared-port demux: with `utp` set, a datagram that looks
+    /// like uTP goes to the uTP socket (after the same deny check), and
+    /// everything else to KRPC. Without it, everything is KRPC, as before.
+    fn on_datagram(
+        &mut self,
+        sockets: &[SendSocket],
+        family: usize,
+        data: &[u8],
+        from: SocketAddr,
+    ) {
+        if let Some(utp) = &self.cfg.utp
+            && lodestar_utp::classify(data) == lodestar_utp::Protocol::Utp
+        {
+            if self.cfg.deny.as_ref().is_some_and(|d| d.denies(from.ip())) {
+                Stats::inc(&self.stats.denied);
+            } else {
+                Stats::inc(&self.stats.utp_in);
+                utp.feed(data, from);
+            }
+            return;
+        }
+        self.on_packet(sockets, family, data, from);
     }
 
     fn on_packet(&mut self, sockets: &[SendSocket], family: usize, data: &[u8], from: SocketAddr) {

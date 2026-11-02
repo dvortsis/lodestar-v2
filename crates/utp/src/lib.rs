@@ -14,11 +14,13 @@
 mod conn;
 mod ledbat;
 pub mod packet;
+mod shared;
 mod socket;
 
 #[doc(hidden)]
 pub mod fuzzing;
 
+pub use shared::SharedPort;
 pub use socket::{Config, DualSink, PacketSink, StatsSnapshot, UtpListener, UtpSocket, UtpStream};
 
 /// What a datagram on the shared DHT/uTP port is.

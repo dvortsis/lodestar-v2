@@ -193,6 +193,15 @@ pub struct Dht {
     /// prefixes instead of drawing uniformly. Off by default
     /// (docs/decisions/2026-11-01-CR-1b.md); not in the Settings UI.
     pub target_prefixes: bool,
+    /// CR-4: metadata fetches try uTP first, over a uTP socket sharing
+    /// the DHT's port, and fall back to TCP. Off by default
+    /// (docs/decisions/2026-11-02-CR-4.md); not in the Settings UI (the
+    /// `transport` settings stay inactive until the A/B decides).
+    pub utp: bool,
+    /// CR-4: after a peer connect fails with "network unreachable", skip
+    /// that address family for a doubling backoff. Off by default
+    /// (docs/decisions/2026-11-02-CR-4.md); not in the Settings UI.
+    pub route_backoff: bool,
 }
 
 impl Default for Dht {
@@ -213,6 +222,8 @@ impl Default for Dht {
             responder_hints: false,
             streaming_peers: false,
             target_prefixes: false,
+            utp: false,
+            route_backoff: false,
         }
     }
 }
@@ -692,6 +703,14 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_TARGET_PREFIXES", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_UTP") {
+            config.dht.utp = v.parse().map_err(|_| parse("LODESTAR_DHT_UTP", &v))?;
+        }
+        if let Some(v) = env("LODESTAR_DHT_ROUTE_BACKOFF") {
+            config.dht.route_backoff = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_ROUTE_BACKOFF", &v))?;
+        }
         // Packaging sets this (the Docker image, the systemd unit).
         if let Some(v) = env("LODESTAR_DHT_WITNESS_DIR").filter(|v| !v.is_empty()) {
             config.dht.restart_witness_dir = Some(PathBuf::from(v));
@@ -776,6 +795,9 @@ impl Config {
                 EncryptionName::Require => Encryption::Require,
                 EncryptionName::Disable => Encryption::Disable,
             },
+            // CR-4's uTP half needs the DHT's socket, so it's wired where
+            // the DHT starts (`services`), not here.
+            route_backoff: self.dht.route_backoff,
             ..FetchOptions::default()
         };
         // Config files add to the floor through the store at start
@@ -1272,6 +1294,30 @@ mod tests {
         std::fs::write(&path, "[dht]\ntarget_prefixes = 1\n").unwrap();
         assert!(Config::load(Some(&path), no_env).is_err());
         let bad = |k: &str| (k == "LODESTAR_DHT_TARGET_PREFIXES").then(|| "on".to_string());
+        assert!(Config::load(None, bad).is_err());
+    }
+
+    #[test]
+    fn utp_and_route_backoff_are_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.utp && !c.dht.route_backoff);
+        let fetch = c.pipeline_config().unwrap().fetch;
+        assert_eq!(fetch.transport, lodestar_peer_wire::Transport::Tcp);
+        assert!(fetch.utp.is_none() && !fetch.route_backoff);
+        assert!(c.dht_config().utp.is_none());
+        let env = |k: &str| {
+            matches!(k, "LODESTAR_DHT_UTP" | "LODESTAR_DHT_ROUTE_BACKOFF").then(|| "true".into())
+        };
+        let c = Config::load(None, env).unwrap();
+        assert!(c.dht.utp && c.pipeline_config().unwrap().fetch.route_backoff);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nutp = true\nroute_backoff = true\n").unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert!(c.dht.utp && c.dht.route_backoff);
+        std::fs::write(&path, "[dht]\nutp = 1\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        let bad = |k: &str| (k == "LODESTAR_DHT_UTP").then(|| "on".to_string());
         assert!(Config::load(None, bad).is_err());
     }
 

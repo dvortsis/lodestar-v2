@@ -14,6 +14,7 @@ pub mod log_events;
 pub mod message;
 pub mod mse;
 mod rc4;
+pub mod route;
 mod stats;
 mod wire;
 

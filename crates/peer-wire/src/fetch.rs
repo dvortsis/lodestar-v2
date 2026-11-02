@@ -21,6 +21,7 @@ use crate::message::{
     self, HANDSHAKE_LEN, METADATA_PIECE, MetadataMessage, OUR_UT_METADATA, OUR_UT_PEX,
 };
 use crate::mse::{self, Ciphers};
+use crate::route;
 use crate::stats::{FetchStats, Transport};
 use crate::wire::{Incoming, Wire};
 
@@ -62,6 +63,10 @@ pub struct FetchOptions {
     pub deny: Option<Deny>,
     /// Explicit opt-in for isolated/local workflows. Public discovery leaves false.
     pub allow_private: bool,
+    /// CR-4 (`dht.route_backoff`): after a connect fails with "network
+    /// unreachable", skip that address family's peers for a doubling
+    /// backoff (`crate::route`). Off counts the evidence and dials as before.
+    pub route_backoff: bool,
 }
 
 /// A live address check, shared with whoever keeps the lists current.
@@ -101,6 +106,7 @@ impl Default for FetchOptions {
             stats: Arc::new(FetchStats::default()),
             deny: None,
             allow_private: false,
+            route_backoff: false,
         }
     }
 }
@@ -174,13 +180,23 @@ async fn fetch_any(
     if !opts.allows(addr) {
         return Err(Error::Denied);
     }
+    let family = route::family_index(addr);
+    if opts.route_backoff && opts.stats.routes.skip(family, std::time::Instant::now()) {
+        return Err(Error::Connect(io::Error::new(
+            io::ErrorKind::NetworkUnreachable,
+            "no route to this address family (backing off)",
+        )));
+    }
     let deadline = Instant::now() + opts.timeout;
     if opts.transport == Transport::Tcp {
         return fetch_via(Transport::Tcp, addr, info_hash, opts, deadline)
             .await
             .0;
     }
-    if opts.utp.is_none() && opts.fallback_to_tcp {
+    // No uTP socket, or none for this family (the DHT bound only the
+    // other one): straight to TCP rather than waiting out a uTP connect.
+    let utp_reaches = opts.utp.as_ref().is_some_and(|u| u.reaches(addr));
+    if !utp_reaches && opts.fallback_to_tcp {
         return fetch_via(Transport::Tcp, addr, info_hash, opts, deadline)
             .await
             .0;
@@ -204,7 +220,8 @@ async fn fetch_via(
     opts: &FetchOptions,
     deadline: Instant,
 ) -> (Result<Fetched, Error>, bool) {
-    opts.stats.attempted(transport);
+    let family = route::family_index(addr);
+    opts.stats.attempted(transport, family);
     let connected = AtomicBool::new(false);
     let connected = &connected;
     let run = |encrypted: bool| async move {
@@ -226,7 +243,7 @@ async fn fetch_via(
         },
     };
     match &r {
-        Ok(_) => opts.stats.succeeded(transport),
+        Ok(_) => opts.stats.succeeded(transport, family),
         Err(e) => {
             let kind = e.kind();
             lodestar_log::log_event!(
@@ -261,10 +278,18 @@ async fn attempt(
     };
     match transport {
         Transport::Tcp => {
+            let family = route::family_index(addr);
             let tcp = timeout(opts.connect_timeout, TcpStream::connect(addr))
                 .await
                 .map_err(|_| timed_out())?
-                .map_err(Error::Connect)?;
+                .map_err(|e| {
+                    if route::is_no_route(&e) {
+                        let now = std::time::Instant::now();
+                        opts.stats.routes.no_route(family, now, opts.route_backoff);
+                    }
+                    Error::Connect(e)
+                })?;
+            opts.stats.routes.reached(family);
             prepare_outbound(&tcp);
             connected.store(true, Ordering::Relaxed);
             fetch_on_stream(BufReader::new(tcp), info_hash, opts, encrypted).await
@@ -522,6 +547,29 @@ impl Assembly {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With `route_backoff` on, a backed-off family isn't dialled: the
+    /// fetch fails at once as unreachable, counts a skip and no attempt,
+    /// and the other family is untouched.
+    #[tokio::test]
+    async fn a_backed_off_family_is_skipped_without_a_dial() {
+        let opts = FetchOptions {
+            route_backoff: true,
+            ..FetchOptions::default()
+        };
+        opts.stats
+            .routes
+            .no_route(1, std::time::Instant::now(), true);
+        let v6: SocketAddr = "[2606:4700::1111]:6881".parse().unwrap();
+        let r = fetch(v6, InfoHash([1; 20]), &opts).await;
+        assert!(
+            matches!(&r, Err(Error::Connect(e)) if e.kind() == io::ErrorKind::NetworkUnreachable),
+            "{r:?}"
+        );
+        assert_eq!(opts.stats.routes.skips(1), 1);
+        assert_eq!(opts.stats.family_attempts(1), 0);
+        assert!(!opts.stats.routes.backed_off(0, std::time::Instant::now()));
+    }
 
     /// A fetch counts once, by its final result: a success or a
     /// blocklisted address doesn't count, any other failure does by its
