@@ -218,7 +218,9 @@ const bodyMaps = {
 	SecurityScreen: [],
 	LoggingScreen: ['logging'],
 	// Jobs reads no settings section.
-	JobsScreen: []
+	JobsScreen: [],
+	// Blocklist subscriptions (S-blocklists) reads none either.
+	BlocklistsScreen: []
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
@@ -339,7 +341,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [
-	/features\/(?:settings\/(?:security|logging|about|updates)|filters|jobs)\/body\.ts$/
+	/features\/(?:settings\/(?:security|logging|about|updates)|filters|jobs|blocklists)\/body\.ts$/
 ];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
@@ -966,7 +968,10 @@ if (Object.keys(manifest).length && !toolbarLazy.some((f) => f.endsWith('.js')))
 
 // The first-run wizard (S-wizard): its steps load when they open (`WizardPage` LOADERS).
 const wizardSteps = [/features\/wizard\/\w+Step\.svelte$/];
-const wizardFirst = own('/welcome', { onDemand: wizardSteps });
+// The blocklist step (S-blocklists) lives in its feature and has its own entry below, so the
+// wizard steps' limit is not raised for it.
+const blocklistStep = [/features\/blocklists\/WizardStep\.svelte$/];
+const wizardFirst = own('/welcome', { onDemand: [...wizardSteps, ...blocklistStep] });
 // A step is measured from its own module, beyond the first view, and stops at the engine's lazy
 // parts (controls, previews, the edit chunk, the section maps), which "Settings controls (on
 // demand)", "Settings edit chunk (on demand)" and "Settings messages (on demand)" gate already.
@@ -984,6 +989,15 @@ const wizardLazy = requireMeasuredJs('Wizard steps (on demand)', [
 			)
 	)
 ]);
+
+const blocklistStepLazy = requireMeasuredJs(
+	'Blocklist wizard step (on demand)',
+	Object.keys(manifest)
+		.filter((key) => blocklistStep.some((re) => re.test(key)))
+		.flatMap((key) =>
+			ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsMessages], false, wizardFirst)
+		)
+);
 
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
@@ -1034,6 +1048,7 @@ const flowsCarried = [
 	],
 	['Welcome route', wizardFirst],
 	['Wizard steps (on demand)', wizardLazy],
+	['Blocklist wizard step (on demand)', blocklistStepLazy],
 	['Search results (lazy)', resultsLazy],
 	['Detail drawer', drawerView],
 	['/t/[hash] route', torrentView]
@@ -1161,7 +1176,13 @@ export default [
 		entry(
 			`Settings ${name} (first view)`,
 			files,
-			name === 'FiltersScreen' ? '31 KB' : name === 'JobsScreen' ? '28.5 KB' : '45 KB'
+			name === 'FiltersScreen'
+				? '31 KB'
+				: name === 'JobsScreen'
+					? '28.5 KB'
+					: name === 'BlocklistsScreen'
+						? '30.4 KB'
+						: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
@@ -1316,7 +1337,9 @@ export default [
 	// them. Limits: measured + 10%. Part 2 (S-wizard-2) adds the download client's cards and the
 	// rule-pack step's flow, which load with their steps: 32.97 -> 48.74 KB, limit 53.6 KB.
 	entry('Welcome route (own JS + CSS)', wizardFirst, '16.5 KB'),
-	entry('Wizard steps (on demand)', wizardLazy, '53.6 KB')
+	entry('Wizard steps (on demand)', wizardLazy, '53.6 KB'),
+	// S-blocklists: the wizard's blocklist step, measured separately so the limit above stays.
+	entry('Blocklist wizard step (on demand)', blocklistStepLazy, '8.3 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB
 ];
