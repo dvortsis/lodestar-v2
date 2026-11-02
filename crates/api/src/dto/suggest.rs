@@ -137,7 +137,7 @@ pub enum FieldType {
     Text,
     /// A plain number (`year:2019..2021`).
     Number,
-    /// Bytes, with an optional unit (`size:>4GB`).
+    /// Bytes, with an optional unit (`size:>4GiB`).
     Size,
     /// A UTC day, a day range or an age (`discovered:<7d`).
     Date,
@@ -154,7 +154,7 @@ pub enum FieldType {
     /// A file category's share (`cat:video>=80%`); `values` are the
     /// categories.
     Share,
-    /// A clause over single files, `file:(ext:flac size:>50MB)`.
+    /// A clause over single files, `file:(ext:flac size:>50MiB)`.
     File,
     /// A time of day or a range, `22:00..02:00`.
     Time,
