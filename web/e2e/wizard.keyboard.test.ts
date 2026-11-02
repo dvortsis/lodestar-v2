@@ -34,6 +34,46 @@ test.describe('first-run wizard', () => {
 			status: 200,
 			body: { packs: [...packs].map(([id, on]) => ({ id, on, rules: [] })) }
 		})) as never);
+		// The blocklist step: nothing connected, one catalog list.
+		mock.on('getFilterSubscriptions', {
+			catalog: [
+				{
+					about: 'Addresses seen sharing for anti-P2P outfits.',
+					figures: {
+						categories: [],
+						floor: false,
+						hashes: null,
+						ipv4_public_share: 0.31,
+						ipv4_share: 0.2,
+						ipv6_ranges: 0,
+						kind: 'ip',
+						measured: true,
+						name: 'BT_BlockLists'
+					},
+					format: 'p2p',
+					key: 'bt_blocklists',
+					kind: 'ip',
+					name: 'BT_BlockLists',
+					subscription: null,
+					url: 'https://lists.example.org/bt.p2p.gz'
+				}
+			],
+			connected: [],
+			strictness: {
+				categories: [],
+				estimate: false,
+				floor_hashes: 0,
+				hashes: 0,
+				ipv4_public_share: 0,
+				ipv4_share: 0,
+				ipv6_ranges: 0,
+				ipv6_share: 0,
+				level: 'none',
+				lists: [],
+				text: '',
+				unknown: []
+			}
+		} as never);
 		mock.on('startFilterPreviewJob', { job: 1 } as never);
 		mock.on('getFilterPreviewJob', finished(strengthening()) as never);
 		mock.on('applyFilterChange', ((r: { postDataJSON(): { change: { id: string } } }) => {
@@ -90,6 +130,12 @@ test.describe('first-run wizard', () => {
 		await expect(page.getByTestId('wizard-pack-spam')).not.toBeChecked();
 		await kbd.tabTo(page.getByRole('button', { name: 'Save and continue' }));
 		await kbd.press('Enter');
+		// Blocklists: off by default, nothing pre-checked; Skip sends nothing.
+		await expect(h2(page, 'Blocklists')).toBeFocused();
+		await expect(page.getByTestId('wizard-blocklist-bt_blocklists')).not.toBeChecked();
+		await expectNoA11yViolations(page);
+		await kbd.tabTo(page.getByRole('button', { name: 'Skip this step' }));
+		await kbd.press('Enter');
 		await expect(h2(page, 'Updates')).toBeFocused();
 		expect(applyBodies).toEqual(
 			['malware', 'lures', 'fakes', 'scams'].map((id) => ({
@@ -134,6 +180,7 @@ test.describe('first-run wizard', () => {
 		await go('/welcome');
 		await page.getByRole('button', { name: 'Skip this step' }).click();
 		await page.getByRole('button', { name: 'Continue' }).click();
+		await page.getByRole('button', { name: 'Skip this step' }).click();
 		await page.getByRole('button', { name: 'Skip this step' }).click();
 		await page.getByRole('button', { name: 'Skip this step' }).click();
 		await page.getByRole('button', { name: 'Skip this step' }).click();

@@ -42,6 +42,7 @@
 	onDestroy(() => stop.abort());
 
 	// What the chosen set would be, together with the lists already connected and enabled.
+	let assessing: Promise<unknown> = Promise.resolve();
 	$effect(() => {
 		const keys = chosen.map((l) => l.key);
 		const mine = ++gen;
@@ -49,7 +50,7 @@
 		strictFailed = false;
 		if (!keys.length || !data) return;
 		const ids = data.connected.filter((c) => c.subscription.enabled).map((c) => c.subscription.id);
-		api
+		assessing = api
 			.post('/filters/strictness', {
 				body: { catalog: keys, subscriptions: ids },
 				signal: stop.signal
@@ -68,6 +69,8 @@
 		problem = undefined;
 		if (!chosen.length) return true;
 		// The warning for this exact choice must have been shown before anything is connected.
+		// Continue waits for it, so pressing early still shows the warning first.
+		await assessing;
 		if (!strictness) return false;
 		const flows = await (await import('../filters/flows-door')).load();
 		const result = await connectLists(chosen, flows, stop.signal);
@@ -115,7 +118,7 @@
 	{:else if strictFailed}
 		<Banner kind="error">{m.blocklists_wizard_strictness_failed()}</Banner>
 	{:else}
-		<p class="text-muted-text" aria-busy="true">{m.blocklists_loading()}</p>
+		<p class="text-muted-text" role="status" aria-busy="true">{m.blocklists_loading()}</p>
 	{/if}
 	{#if problem}
 		<Banner kind="error">

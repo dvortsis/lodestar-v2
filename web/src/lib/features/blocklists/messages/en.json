@@ -16,7 +16,7 @@
 	"blocklists_measured": "measured by Lodestar, not yet fetched",
 	"blocklists_updated": "updated {when}",
 	"blocklists_list_error": "The last update failed: {error}",
-	"blocklists_held_text": "The newest version of this list is much smaller or different, so it was held back. Keep the previous version, or accept the new one.",
+	"blocklists_held_text": "The newest version of this list is empty, much smaller or much larger than before, so it was held back. Keep the previous version, or accept the new one.",
 	"blocklists_accept": "Accept anyway",
 	"blocklists_accept_title": "Accept the held version of {name}",
 	"blocklists_keep": "Keep previous",

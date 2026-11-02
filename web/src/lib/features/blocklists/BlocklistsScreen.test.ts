@@ -100,6 +100,37 @@ describe('blocklist subscriptions', () => {
 		expect(screen.getByLabelText(/password/i)).toBeTruthy();
 	});
 
+	it('accepting a held version asks for the password and sends the previewed held_version', async () => {
+		setup(subscriptions({ connected: [connected(4, {}, true)] }));
+		const held = 'a'.repeat(64);
+		const a = weakening({
+			held_version: held,
+			unblocked: 12,
+			warning: 'Accepting lets 12 entries through.'
+		});
+		net.on('GET /filters/preview/jobs/{id}', { body: finished(a) });
+		net.on('POST /filters/apply', { body: applied(a, { released: 9 }) });
+		await fireEvent.click(await screen.findByTestId('list-4-accept'));
+		const pw = await screen.findByTestId('change-password');
+		expect(net.to('/filters/apply')).toHaveLength(0);
+		await fireEvent.input(pw, { target: { value: 'hunter2' } });
+		await fireEvent.click(await screen.findByTestId('change-apply'));
+		await wait(() => expect(net.to('/filters/apply')).toHaveLength(1));
+		expect(applyBody()).toMatchObject({
+			change: { op: 'resolve_held', id: 4, accept: true, held },
+			password: 'hunter2'
+		});
+		await wait(() => expect(screen.getByTestId('changed-released').textContent).toContain('9'));
+	});
+
+	it('pausing an enabled list asks for the password first', async () => {
+		setup(subscriptions({ connected: [connected(4)] }));
+		net.on('GET /filters/preview/jobs/{id}', { body: finished(weakening()) });
+		await fireEvent.click(await screen.findByTestId('list-4-pause'));
+		await screen.findByTestId('change-password');
+		expect(net.to('/filters/apply')).toHaveLength(0);
+	});
+
 	it('shows the server\u2019s sentence when the address is refused, and applies nothing', async () => {
 		setup();
 		net.on('POST /filters/preview/jobs', {

@@ -101,7 +101,10 @@
 			working = false;
 		}
 	}
-	const skip = () => go(advance(progress, 'skipped'));
+	// A step that is saving can't be skipped meanwhile.
+	const skip = () => {
+		if (!working) go(advance(progress, 'skipped'));
+	};
 	const previous = () => go(back(progress));
 
 	const status = (id: StepId): 'done' | 'skipped' | 'current' | 'later' =>

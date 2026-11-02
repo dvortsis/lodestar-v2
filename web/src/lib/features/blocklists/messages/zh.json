@@ -16,7 +16,7 @@
 	"blocklists_measured": "由 Lodestar 测得，尚未获取",
 	"blocklists_updated": "更新于 {when}",
 	"blocklists_list_error": "上次更新失败：{error}",
-	"blocklists_held_text": "此名单的最新版本明显更小或有所不同，因此被搁置。你可以保留上一个版本，或接受新版本。",
+	"blocklists_held_text": "此名单的最新版本为空，或比之前小很多或大很多，因此被搁置。你可以保留上一个版本，或接受新版本。",
 	"blocklists_accept": "仍然接受",
 	"blocklists_accept_title": "接受 {name} 的搁置版本",
 	"blocklists_keep": "保留上一个版本",
