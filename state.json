@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T15:06:47Z",
+  "updated_at": "2026-11-02T15:11:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2619,11 +2619,13 @@
       "launched": "2026-11-02T14:55Z"
     },
     "SRC-10a": {
-      "status": "running",
+      "status": "runner-reviewed (Opus); merge on green; plugin HOLD until Q2 check",
       "brief": "briefs/SRC-10a.md",
       "model": "sonnet",
       "session": "session_01MMjhn9zXhStNQsNasbmKuH",
-      "launched": "2026-11-02T14:56Z"
+      "launched": "2026-11-02T14:56Z",
+      "pr": 397,
+      "head": "c170d071"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3836,6 +3838,12 @@
       "state": "to-send",
       "added": "2026-11-02T14:31:07Z",
       "text": "Unraid Backups share is full: the 11:00Z appdata backup failed (\"No space left on device\") but its retention clean-up still deleted ab_20261003_040001. After the soak: free space, re-run one backup and confirm the soak containers are excluded."
+    },
+    {
+      "id": "q2-nyaa-check",
+      "state": "to-send",
+      "added": "2026-11-02T15:11:08Z",
+      "text": "Q2 (ToS/robots) check for nyaa.si RSS could not be done: the cloud proxy refuses nyaa.si for every session. The Nyaa plugin (#397) is merged but unregistered and held until the check is recorded. Action: check https://nyaa.si/robots.txt and its terms for automated RSS polling (one request per 5 min), or allow nyaa.si in the environment network policy so a session can record it."
     }
   ],
   "external_gates": {
