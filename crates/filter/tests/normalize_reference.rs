@@ -82,23 +82,32 @@ mod reference {
     }
 
     /// Invisible characters that would otherwise split or disguise a word:
-    /// every Cf character, the separators, the tag block and the fillers
-    /// (docs/decisions/2026-11-02-F-normalize-invisible.md).
+    /// the default-ignorable ones among Cf, the tag block and the fillers
+    /// (docs/decisions/2026-11-02-F-normalize-invisible.md). Written out
+    /// on their own, so the reference doesn't share the tokenizer's table.
     fn invisible(c: char) -> bool {
         matches!(
             c,
-            '\u{034F}'
+            '\u{00AD}'
+                | '\u{034F}'
+                | '\u{061C}'
                 | '\u{115F}'
                 | '\u{1160}'
                 | '\u{17B4}'
                 | '\u{17B5}'
-                | '\u{2028}'
-                | '\u{2029}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{206F}'
                 | '\u{3164}'
                 | '\u{FE00}'..='\u{FE0F}'
+                | '\u{FEFF}'
                 | '\u{FFA0}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
                 | '\u{E0000}'..='\u{E007F}'
-        ) || lodestar_metainfo::format_char(c)
+        )
     }
 
     fn leet(c: char) -> Option<char> {

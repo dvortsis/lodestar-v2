@@ -4,9 +4,9 @@
 //!   (full-width `ｐ` → `p`, `é` → `e`).
 //! - Look-alike letters mapped to Latin (Cyrillic `р` → `p`, Greek `ο` →
 //!   `o`): the common confusables, not the whole UTS #39 table.
-//! - Every format character (Unicode Cf), the line and paragraph
-//!   separators, tag characters and blank fillers removed, so they can't
-//!   split a word.
+//! - Characters that render as nothing (zero-width and other invisible
+//!   format characters, tag characters, blank fillers) removed, so they
+//!   can't split a word.
 //! - Words split at letter/digit boundaries (`16yo` → `16 yo`), with the
 //!   whole word kept at the first part's position.
 //! - Letter-for-number swaps undone as an alternative form (`h3ll0` also
@@ -101,15 +101,15 @@ fn confusable(c: char) -> char {
 }
 
 /// Invisible characters that would otherwise split or disguise a word:
-/// every format character (category Cf, [`lodestar_metainfo::format_char`],
-/// the same table the feed and digest cleaning strip), the line and
-/// paragraph separators, the tag block U+E0000–E007F (assigned or not),
-/// and fillers that show as nothing (Hangul fillers, Khmer inherent
+/// those that render as nothing (Unicode's Default_Ignorable_Code_Point,
+/// which browsers and HarfBuzz hide). That is every format character
+/// (category Cf, [`lodestar_metainfo::format_char`]) except the
+/// [`visible_format`] ones, the tag block U+E0000–E007F (assigned or
+/// not), and fillers that show as nothing (Hangul fillers, Khmer inherent
 /// vowels, variation selectors, the combining grapheme joiner).
 #[inline]
 fn invisible(c: char) -> bool {
-    // Nothing below the soft hyphen is invisible: Latin-1 and ASCII stay
-    // one comparison.
+    // Nothing below the soft hyphen is invisible.
     if c < '\u{00AD}' {
         return false;
     }
@@ -120,13 +120,33 @@ fn invisible(c: char) -> bool {
             | '\u{1160}'
             | '\u{17B4}'
             | '\u{17B5}'
-            | '\u{2028}'
-            | '\u{2029}'
             | '\u{3164}'
             | '\u{FE00}'..='\u{FE0F}'
             | '\u{FFA0}'
             | '\u{E0000}'..='\u{E007F}'
-    ) || lodestar_metainfo::format_char(c)
+    ) || (lodestar_metainfo::format_char(c) && !visible_format(c))
+}
+
+/// Format characters that show: the prepended concatenation marks (Arabic
+/// number signs, Syriac abbreviation, Kaithi number signs), the
+/// interlinear annotation marks and the Egyptian hieroglyph controls.
+/// None is default-ignorable, so they render as a glyph or a box and
+/// split a word visibly, like punctuation: they stay word breaks. Ignoring
+/// one would join two words a reader sees apart, so a rule for the second
+/// would miss.
+fn visible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0600}'..='\u{0605}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{13430}'..='\u{1343F}'
+    )
 }
 
 fn leet(c: char) -> Option<char> {
@@ -273,7 +293,7 @@ impl Tokenizer {
             }
         } else {
             for c in text.nfkd() {
-                if invisible(c) || is_combining_mark(c) {
+                if is_combining_mark(c) || invisible(c) {
                     continue;
                 }
                 let c = match confusable(c) {
@@ -722,8 +742,7 @@ mod tests {
         assert_eq!(toks(&huge).len(), 1);
     }
 
-    /// Every character [`invisible`] ignores: all of Cf, the separators,
-    /// the tag block and the fillers.
+    /// Every character [`invisible`] ignores.
     fn all_invisible() -> Vec<char> {
         (0..=0x10FFFF)
             .filter_map(char::from_u32)
@@ -731,54 +750,64 @@ mod tests {
             .collect()
     }
 
+    /// The format characters that show, which stay word breaks.
+    const VISIBLE: [char; 8] = [
+        '\u{0600}',
+        '\u{0605}',
+        '\u{06DD}',
+        '\u{070F}',
+        '\u{0890}',
+        '\u{08E2}',
+        '\u{110BD}',
+        '\u{110CD}',
+    ];
+
+    /// `invisible` is exactly the default-ignorable characters among Cf,
+    /// the tag block and the fillers, written out here on their own, and
+    /// every Cf character is either ignored or a known visible one.
     #[test]
-    fn every_format_character_is_ignored() {
-        let all = all_invisible();
+    fn invisible_is_exactly_the_default_ignorables() {
+        let expected = |c: char| {
+            matches!(
+                c,
+                '\u{00AD}'
+                    | '\u{034F}'
+                    | '\u{061C}'
+                    | '\u{115F}'..='\u{1160}'
+                    | '\u{17B4}'..='\u{17B5}'
+                    | '\u{180E}'
+                    | '\u{200B}'..='\u{200F}'
+                    | '\u{202A}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{2066}'..='\u{206F}'
+                    | '\u{3164}'
+                    | '\u{FE00}'..='\u{FE0F}'
+                    | '\u{FEFF}'
+                    | '\u{FFA0}'
+                    | '\u{1BCA0}'..='\u{1BCA3}'
+                    | '\u{1D173}'..='\u{1D17A}'
+                    | '\u{E0000}'..='\u{E007F}'
+            )
+        };
         for c in (0..=0x10FFFF).filter_map(char::from_u32) {
+            let at = c as u32;
+            assert_eq!(invisible(c), expected(c), "U+{at:04X}");
             if lodestar_metainfo::format_char(c) {
-                assert!(all.contains(&c), "U+{:04X} is Cf", c as u32);
+                assert!(invisible(c) || visible_format(c), "U+{at:04X} is Cf");
             }
         }
-        // The non-Cf fillers it ignored before are still ignored.
-        for c in [
-            '\u{034F}', '\u{115F}', '\u{1160}', '\u{17B4}', '\u{17B5}', '\u{3164}', '\u{FE00}',
-            '\u{FE0F}', '\u{FFA0}',
-        ] {
-            assert!(invisible(c), "U+{:04X}", c as u32);
-        }
-        // Letters, digits, spaces and visible punctuation aren't.
-        for c in [
-            'a', 'é', 'р', '1', ' ', '.', '\u{00A0}', '\u{3000}', '\u{FFFC}', '\u{FFFD}',
-        ] {
-            assert!(!invisible(c), "U+{:04X}", c as u32);
-        }
         let hello = toks("hello");
-        for c in all {
+        for c in all_invisible() {
             assert_eq!(toks(&format!("hel{c}lo")), hello, "U+{:04X}", c as u32);
         }
     }
 
-    /// Golden cases for the ranges `invisible` didn't cover before
-    /// (docs/decisions/2026-11-02-F-normalize-invisible.md).
+    /// Golden cases: the ranges `invisible` didn't cover before join a
+    /// word (docs/decisions/2026-11-02-F-normalize-invisible.md).
     #[test]
-    fn newly_covered_ranges_join_words() {
+    fn newly_ignored_ranges_join_a_word() {
         let alpha_beta = crate::rules::keyword_tokens("alpha beta");
         for c in [
-            '\u{0600}',
-            '\u{0605}',
-            '\u{06DD}',
-            '\u{070F}',
-            '\u{0890}',
-            '\u{0891}',
-            '\u{08E2}',
-            '\u{2028}',
-            '\u{2029}',
-            '\u{FFF9}',
-            '\u{FFFB}',
-            '\u{110BD}',
-            '\u{110CD}',
-            '\u{13430}',
-            '\u{1343F}',
             '\u{1BCA0}',
             '\u{1BCA3}',
             '\u{1D173}',
@@ -792,10 +821,30 @@ mod tests {
             let at = c as u32;
             assert!(has(&format!("hel{c}lo"), "hello", 0), "U+{at:04X}");
             assert!(!has(&format!("hel{c}lo"), "hel", 0), "U+{at:04X}");
-            let text = format!("The.Al{c}pha.{c}Be{c}ta{c}.2019");
             let mut t = Vec::new();
-            tokens(&text, &mut t);
+            tokens(&format!("The.Al{c}pha.{c}Be{c}ta{c}.2019"), &mut t);
             assert!(crate::rules::in_a_row(&alpha_beta, &t), "U+{at:04X}");
+            // Between two words, as between any two letters, it reads as
+            // nothing: what shows is one word.
+            assert!(has(&format!("alpha{c}beta"), "alphabeta", 0), "U+{at:04X}");
+        }
+    }
+
+    /// Golden cases: the format characters that show, and the line and
+    /// paragraph separators, still break words, as they did.
+    #[test]
+    fn visible_breaks_still_split() {
+        for c in VISIBLE
+            .into_iter()
+            .chain(['\u{0891}', '\u{FFF9}', '\u{FFFB}', '\u{13430}', '\u{1343F}'])
+            .chain(['\u{2028}', '\u{2029}'])
+        {
+            let at = c as u32;
+            let text = format!("alpha{c}beta");
+            assert!(has(&text, "alpha", 0), "U+{at:04X}");
+            assert!(has(&text, "beta", 1), "U+{at:04X}");
+            assert!(!has(&text, "alphabeta", 0), "U+{at:04X}");
+            assert_eq!(toks(&text), toks("alpha beta"), "U+{at:04X}");
         }
     }
 
@@ -826,7 +875,8 @@ mod tests {
     proptest::proptest! {
         /// Inserting any character `invisible` ignores, anywhere in a
         /// text, never changes its tokens, so never whether a term rule
-        /// (a keyword, a core term, a NEAR window) matches.
+        /// that reads them matches (a core or pack term, a keyword, the
+        /// core's windows).
         #[test]
         fn an_invisible_character_never_changes_a_match(
             text in "([a-e]|[a-e]{3,6}|[0-9]{1,3}|[@$]|é|ｂ|\u{0435}|e\u{301}|[ ./_-]){0,12}",
