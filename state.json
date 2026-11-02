@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T11:38:05Z",
+  "updated_at": "2026-11-02T11:43:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2396,13 +2396,14 @@
       "merge_sha": "a4f6ebb5"
     },
     "CR-COL-3": {
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnAf2DUuJQnN2TePHc1",
       "launched": "2026-11-02T04:47:25Z",
       "pr": 378,
       "head": "0ecf8762",
-      "notes_runner": "Opus review CHANGES fixed and runner-verified at 0ecf8762; CI green; merge after rehearsal summary (~11:15-11:45Z)."
+      "notes_runner": "Opus review CHANGES fixed and runner-verified at 0ecf8762; CI green; merge after rehearsal summary (~11:15-11:45Z).",
+      "merge": "03f4abab"
     },
     "dashboard-yaml": {
       "status": "merged",
@@ -2474,12 +2475,13 @@
       "head": "a19ed6b8"
     },
     "X-required-web-checks": {
-      "status": "in review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01MMjhnC8MJRspRwT6jwCv1W",
       "launched": "2026-11-02T08:26:41Z",
       "pr": 384,
-      "head": "14f6d63e"
+      "head": "14f6d63e",
+      "merge": "a880bd5d"
     },
     "X-egress-copy": {
       "status": "merged",
@@ -3679,6 +3681,12 @@
       "state": "to-send",
       "added": "2026-11-02T10:32:07Z",
       "text": "SRC-4 refinements (all tighten): Restricted/Overlay ask for the password on every enable, not only first consent; consent-text version is per class with the endpoint digest folded in (an endpoint change asks again); External needs its endpoint list acknowledged; SOCKS5 credentials capped at 255 bytes. Also: the consent ack is bound to the class's consent-text version plus the endpoint digest, not to the plugin manifest's own version (a plugin update that keeps its endpoints doesn't ask again)."
+    },
+    {
+      "id": "ruleset-web-e2e-ok",
+      "state": "to-send",
+      "added": "2026-11-02T11:50:00Z",
+      "text": "#384 merged (a880bd5d): CI now always reports two aggregate checks, web-ok and e2e-ok (green on docs-only PRs too, proven on scratch PR #389). Action: add web-ok and e2e-ok as required checks in the main ruleset next to ci-ok. Also: delete the branch scratch/docs-only-proof (PR #389 closed)."
     }
   ],
   "external_gates": {
