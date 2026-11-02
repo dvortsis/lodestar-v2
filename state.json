@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T18:31:29Z",
+  "updated_at": "2026-11-02T18:38:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2631,7 +2631,7 @@
       "merge": "7d4724c9"
     },
     "SRC-14b": {
-      "status": "14b-1 merged (13676d4e); 14b-2 running in same session (Pool::drop_source as a new self-contained method; may need a main merge after R-mem-triage)",
+      "status": "14b-2 running: option 1 approved (state mask in Store::write txn; Inserted::Refused; store lib.rs + writer.rs call sites)",
       "brief": "briefs/SRC-14b.md",
       "model": "opus",
       "session": "session_01MMjhnBFNwDh6xVTgXknTDU",
@@ -3031,7 +3031,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-02T16:22:33Z",
+  "last_heartbeat": "2026-11-02T18:38:54Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
