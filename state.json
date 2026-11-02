@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T09:39:02Z",
+  "updated_at": "2026-11-02T10:32:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2460,10 +2460,12 @@
     "SRC-4": {
       "notes_runner": "launch after SRC-2 merges (both touch crates/pipeline/src/lib.rs)",
       "notes_runner2": "expect conflicts in crates/pipeline/src/lib.rs (SRC-2 added intake routing, config, stats)",
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "session": "session_01MMjhnBnrYC2SRCP6LYaee6",
-      "launched": "2026-11-02T09:17:46Z"
+      "launched": "2026-11-02T09:17:46Z",
+      "pr": 388,
+      "head": "a19ed6b8"
     },
     "X-required-web-checks": {
       "status": "in review",
@@ -2492,17 +2494,22 @@
       "merge_sha": "73024354"
     },
     "F-visible-format-two-readings": {
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "session": "session_01MMjhnBEaKCUgMGXvtAec3d",
-      "launched": "2026-11-02T09:03:02Z"
+      "launched": "2026-11-02T09:03:02Z",
+      "pr": 387,
+      "head": "b22b4deb"
     },
     "F-hits-two-readings": {
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "session": "session_01MMjhnBEaKCUgMGXvtAec3d",
       "launched": "2026-11-02T09:18:58Z",
-      "notes": "urgent: fuzz (lists) invariant verdict==hits().find(on) broken on main since #381 (Core::hits reports one reading). Found on #384 run 41418515977. Separate small PR by the F-visible session."
+      "notes": "urgent: fuzz (lists) invariant verdict==hits().find(on) broken on main since #381 (Core::hits reports one reading). Found on #384 run 41418515977. Separate small PR by the F-visible session.",
+      "pr": 386,
+      "head": "9b2a7564",
+      "review": "runner-reviewed; merge on green"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3652,6 +3659,18 @@
       "state": "to-send",
       "added": "2026-11-02T08:25:29Z",
       "text": "SRC-2: verification of unverified items runs under the source fair-share weight with a ~13/s cap, not a separate Low class; before the switch is turned on (SRC-14) a per-source pending cap or Low class is required."
+    },
+    {
+      "id": "q1-texts-drafted",
+      "state": "to-send",
+      "added": "2026-11-02T10:32:07Z",
+      "text": "SRC-4 (#388) drafted the four consent texts (External, Account, Restricted, Overlay) in docs/decisions/2026-11-02-SRC-4.md, section \"Draft consent texts\". Please approve or edit them (Q1); SRC-15b (the Sources screen) cannot merge until you do."
+    },
+    {
+      "id": "flag-src4",
+      "state": "to-send",
+      "added": "2026-11-02T10:32:07Z",
+      "text": "SRC-4 refinements (all tighten): Restricted/Overlay ask for the password on every enable, not only first consent; consent-text version is per class with the endpoint digest folded in (an endpoint change asks again); External needs its endpoint list acknowledged; SOCKS5 credentials capped at 255 bytes."
     }
   ],
   "external_gates": {
