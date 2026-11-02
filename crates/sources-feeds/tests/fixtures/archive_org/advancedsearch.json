@@ -1,0 +1,58 @@
+{
+  "responseHeader": {
+    "status": 0,
+    "QTime": 7,
+    "params": {
+      "query": "mediatype:(movies OR audio)",
+      "qin": "mediatype:(movies OR audio)",
+      "fields": "identifier,title,btih,item_size,publicdate,addeddate,mediatype,collection",
+      "wt": "json",
+      "sort": "publicdate desc",
+      "rows": "50",
+      "start": 0
+    }
+  },
+  "response": {
+    "numFound": 5,
+    "start": 0,
+    "docs": [
+      {
+        "identifier": "open-movie-example-1",
+        "title": "Open Movie Example \u2014 Part One",
+        "btih": "0123456789abcdef0123456789abcdef01234567",
+        "item_size": 734003200,
+        "publicdate": "2026-10-30T08:15:00Z",
+        "mediatype": "movies",
+        "collection": ["opensource_movies", "community", "not a collection"],
+        "description": "<p>Long HTML the parser never reads.</p>",
+        "downloads": 12
+      },
+      {
+        "identifier": "public-domain-audio-2",
+        "title": ["Public Domain Audio Two", "A second title"],
+        "btih": "ZHQVOY7XELZD5GFCTXWN7LRUDOMNKMCW",
+        "item_size": "52428800",
+        "addeddate": "2026-10-29 12:00:00",
+        "mediatype": "audio",
+        "collection": "audio_music"
+      },
+      {
+        "identifier": "no-torrent-yet-3",
+        "title": "No torrent yet",
+        "mediatype": "texts"
+      },
+      {
+        "identifier": "bad-hash-4",
+        "title": "A hash that isn't one",
+        "btih": "not-a-hash"
+      },
+      {
+        "identifier": "not/an identifier",
+        "title": "  Hidden\u202e and\u200b zero\u2028width  ",
+        "btih": "89abcdef0123456789abcdef0123456789abcdef",
+        "publicdate": "yesterday",
+        "mediatype": "Movies"
+      }
+    ]
+  }
+}

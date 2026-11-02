@@ -143,6 +143,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "archive_org"
+path = "fuzz_targets/archive_org.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "claims"
 path = "fuzz_targets/claims.rs"
 test = false
