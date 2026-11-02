@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T06:57:49Z",
+  "updated_at": "2026-11-02T08:25:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2345,8 +2345,8 @@
       "session": "session_01MMjhnBREHKxLcJVVxu1dip",
       "launched": "2026-11-02T05:26:20Z",
       "pr": 381,
-      "head": "9824c2c1",
-      "review": "Opus CHANGES: incomplete default-ignorable set; loosens same input vs main (a<E0001>girl) -> required stricter-of-two-readings design (scope widened to engine/matcher/rules)"
+      "head": "a74d356a",
+      "review": "round-3 MERGE + final round verified; merge on green"
     },
     "P-master-plan-r3": {
       "status": "merged",
@@ -2421,14 +2421,17 @@
     },
     "SRC-2": {
       "brief_must": "claim hits on the floor or a CS pattern always carry a hold (from #379 review); watermarks for promoted ids; Insights promotion counting (handed from SRC-1)",
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "session": "session_01MMjhnAWFNGeB2VZxALptGu",
       "launched": "2026-11-02T06:45:10Z",
-      "scope": "approved edit to crates/store/src/unverified.rs promote for exact Insights counting; percolator pickup moved to SRC-2b"
+      "scope": "approved edit to crates/store/src/unverified.rs promote for exact Insights counting; percolator pickup moved to SRC-2b",
+      "pr": 383,
+      "head": "16426440",
+      "review": "Opus MERGE; runner round: judge description/publisher, non-core claim hits drop claims only, nits"
     },
     "SRC-14": {
-      "brief_must": "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN"
+      "brief_must": "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source)."
     },
     "SRC-2b": {
       "status": "queued",
@@ -2443,13 +2446,17 @@
       "notes": "percolate promoted ids (below each search watermark); candidate design: consume reindex_log entries, dedupe by (search, torrent), no new table. Gap until then: promoted torrents miss saved-search alerts."
     },
     "SRC-9": {
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "session": "session_01MMjhnA8qmKPqEfsMnPxySE",
-      "launched": "2026-11-02T06:57:49Z"
+      "launched": "2026-11-02T06:57:49Z",
+      "pr": 382,
+      "head": "5d92de9",
+      "review": "Opus CHANGES fixed, runner-verified; merge on green"
     },
     "SRC-4": {
-      "notes_runner": "launch after SRC-2 merges (both touch crates/pipeline/src/lib.rs)"
+      "notes_runner": "launch after SRC-2 merges (both touch crates/pipeline/src/lib.rs)",
+      "notes_runner2": "expect conflicts in crates/pipeline/src/lib.rs (SRC-2 added intake routing, config, stats)"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3587,6 +3594,18 @@
       "state": "to-send",
       "added": "2026-11-02T06:29:50Z",
       "text": "F-normalize-invisible (#381): the filter now ignores characters that render as nothing inside words, using a stricter-of-two-readings rule so it never matches less than before. Deviation from the brief: visible format characters (line separator, Arabic number marks etc.) stay word breaks; a follow-up extends the two-reading rule to them."
+    },
+    {
+      "id": "flag-src2-claim-holds",
+      "state": "to-send",
+      "added": "2026-11-02T08:25:29Z",
+      "text": "SRC-2 (#383): a feed claim whose name hits the floor, a CS pattern or a core term puts that hash on hold (quarantine/tombstone) even before the real metadata is fetched. Content safety requires this, but it means a malicious feed could get a legitimate torrent held by claiming its hash under such a name. User drop rules, packs and lists on claim text only drop the claim (runner ruling). Accept, or prefer core-hit claims to hold only the claim until the verified name is judged?"
+    },
+    {
+      "id": "flag-src2-verify-priority",
+      "state": "to-send",
+      "added": "2026-11-02T08:25:29Z",
+      "text": "SRC-2: verification of unverified items runs under the source fair-share weight with a ~13/s cap, not a separate Low class; before the switch is turned on (SRC-14) a per-source pending cap or Low class is required."
     }
   ],
   "external_gates": {
