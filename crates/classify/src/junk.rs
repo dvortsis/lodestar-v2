@@ -27,6 +27,9 @@ pub enum JunkReason {
     ArchiveForMedia,
     /// HD video claimed, but the video files are tiny.
     TinyVideo,
+    /// A source's claimed file list contradicts the verified one (§18.5):
+    /// see [`claim_mismatch`].
+    ClaimMismatch,
 }
 
 impl JunkReason {
@@ -42,6 +45,7 @@ impl JunkReason {
             JunkReason::NameMismatch => 40,
             JunkReason::ArchiveForMedia => 30,
             JunkReason::TinyVideo => 40,
+            JunkReason::ClaimMismatch => 30,
         }
     }
 
@@ -57,6 +61,7 @@ impl JunkReason {
             JunkReason::NameMismatch => "name-mismatch",
             JunkReason::ArchiveForMedia => "archive-for-media",
             JunkReason::TinyVideo => "tiny-video",
+            JunkReason::ClaimMismatch => "claim-mismatch",
         }
     }
 
@@ -72,6 +77,7 @@ impl JunkReason {
             NameMismatch,
             ArchiveForMedia,
             TinyVideo,
+            ClaimMismatch,
         ]
         .into_iter()
         .find(|r| r.as_str() == key)
@@ -89,6 +95,7 @@ impl JunkReason {
             JunkReason::NameMismatch => "The name doesn't match the files",
             JunkReason::ArchiveForMedia => "The name promises media, but the files are an archive",
             JunkReason::TinyVideo => "The video files are too small for the quality claimed",
+            JunkReason::ClaimMismatch => "The files don't match what the source listed",
         }
     }
 }
@@ -185,6 +192,70 @@ pub(crate) fn score(
         reasons.push(JunkReason::TinyVideo);
     }
     finish(reasons)
+}
+
+impl Junk {
+    /// Adds a reason once and scores again, as [`score`] would have.
+    pub fn add(&mut self, reason: JunkReason) {
+        if !self.reasons.contains(&reason) {
+            self.reasons.push(reason);
+            *self = finish(std::mem::take(&mut self.reasons));
+        }
+    }
+}
+
+/// A claimed file: its path below the root, and its size if the source
+/// gave one.
+#[derive(Debug, Clone, Copy)]
+pub struct ClaimedFile<'a> {
+    pub path: &'a str,
+    pub size: Option<u64>,
+}
+
+/// Whether a source's claimed file list contradicts the verified one
+/// (§18.5, the `claim-mismatch` reason). Claims are hints and verified
+/// metadata is the truth, so this only *records* the disagreement: it
+/// never changes the verified list.
+///
+/// Files are matched by name (the last path segment, ASCII
+/// case-insensitive), since sources differ on the root folder and
+/// separators. It's a contradiction when:
+/// - fewer than half of the claimed files have a verified file of that
+///   name, or
+/// - a matched file's claimed size differs from every verified file of
+///   that name.
+///
+/// An empty claimed list asserts nothing and never contradicts. Padding
+/// files are ignored on the verified side. Linear in the two lists.
+pub fn claim_mismatch(verified: &[FileInfo], claimed: &[ClaimedFile<'_>]) -> bool {
+    if claimed.is_empty() {
+        return false;
+    }
+    let mut sizes: std::collections::HashMap<String, Vec<u64>> =
+        std::collections::HashMap::with_capacity(verified.len());
+    for f in verified.iter().filter(|f| !f.padding) {
+        sizes
+            .entry(f.name().to_ascii_lowercase())
+            .or_default()
+            .push(f.size);
+    }
+    let mut matched = 0usize;
+    for c in claimed {
+        let name = c
+            .path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(c.path)
+            .to_ascii_lowercase();
+        let Some(found) = sizes.get(&name) else {
+            continue;
+        };
+        if c.size.is_some_and(|s| !found.contains(&s)) {
+            return true;
+        }
+        matched += 1;
+    }
+    matched * 2 < claimed.len()
 }
 
 fn finish(reasons: Vec<JunkReason>) -> Junk {
@@ -324,10 +395,70 @@ mod tests {
             NameMismatch,
             ArchiveForMedia,
             TinyVideo,
+            ClaimMismatch,
         ];
+        for r in all {
+            assert_eq!(JunkReason::from_key(r.as_str()), Some(r));
+        }
         let mut names: Vec<&str> = all.iter().map(|r| r.as_str()).collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), all.len());
+    }
+
+    fn verified(files: &[(&str, u64)]) -> Vec<FileInfo> {
+        files
+            .iter()
+            .map(|(p, s)| FileInfo::new(p.split('/').map(String::from).collect(), *s))
+            .collect()
+    }
+
+    fn claimed<'a>(files: &[(&'a str, Option<u64>)]) -> Vec<ClaimedFile<'a>> {
+        files
+            .iter()
+            .map(|&(path, size)| ClaimedFile { path, size })
+            .collect()
+    }
+
+    #[test]
+    fn a_claimed_list_that_agrees_is_no_mismatch() {
+        let v = verified(&[("Show/E01.mkv", 900), ("Show/E02.mkv", 800)]);
+        // Another root, other separators, other case, sizes left out.
+        let c = claimed(&[("show\\e01.MKV", Some(900)), ("E02.mkv", None)]);
+        assert!(!claim_mismatch(&v, &c));
+        // An empty claimed list asserts nothing.
+        assert!(!claim_mismatch(&v, &[]));
+        // Half the claimed files found is still agreement.
+        let c = claimed(&[("E01.mkv", None), ("extra.nfo", None)]);
+        assert!(!claim_mismatch(&v, &c));
+    }
+
+    #[test]
+    fn a_contradicting_list_is_a_mismatch() {
+        let v = verified(&[("Show/E01.mkv", 900), ("Show/E02.mkv", 800)]);
+        // Other files altogether.
+        let c = claimed(&[("Film.2020.mkv", Some(5)), ("sample.mkv", None)]);
+        assert!(claim_mismatch(&v, &c));
+        // The right name with a different size.
+        let c = claimed(&[("E01.mkv", Some(901)), ("E02.mkv", Some(800))]);
+        assert!(claim_mismatch(&v, &c));
+        // Padding files are not content.
+        let mut v = verified(&[("Show/E01.mkv", 900)]);
+        v.push(FileInfo {
+            padding: true,
+            ..FileInfo::new(vec![".pad".into(), "0".into()], 3)
+        });
+        assert!(claim_mismatch(&v, &claimed(&[("0", Some(3))])));
+    }
+
+    #[test]
+    fn adding_a_reason_scores_it_once() {
+        let mut j = Junk::default();
+        j.add(JunkReason::ClaimMismatch);
+        j.add(JunkReason::ClaimMismatch);
+        assert_eq!(j.reasons, vec![JunkReason::ClaimMismatch]);
+        assert_eq!(j.score, JunkReason::ClaimMismatch.weight());
+        j.add(JunkReason::PaddingOnly);
+        assert_eq!(j.score, 100, "capped");
     }
 }
