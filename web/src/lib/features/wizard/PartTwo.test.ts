@@ -57,7 +57,7 @@ describe('rule-pack step', () => {
 		start('packs');
 		await box('malware');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
-		await heading('Updates');
+		await heading('Blocklists');
 		expect(applies().map((c) => c.body)).toEqual(
 			PACK_IDS.map((id) => ({ change: { op: 'pack_switch', id, on: true } }))
 		);
@@ -70,7 +70,7 @@ describe('rule-pack step', () => {
 		start('packs');
 		await fireEvent.click(await box('spam'));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
-		await heading('Updates');
+		await heading('Blocklists');
 		const bodies = applies().map((c) => c.body as { change: { on: boolean }; password?: string });
 		expect(bodies).toHaveLength(4);
 		expect(bodies.every((b) => b.change.on === true && !('password' in b))).toBe(true);
@@ -81,7 +81,7 @@ describe('rule-pack step', () => {
 		start('packs');
 		await box('malware');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
-		await heading('Updates');
+		await heading('Blocklists');
 		expect(posts()).toEqual([]);
 		expect(server.packs.some((p) => p.on)).toBe(false);
 		expect(progress().skipped).toEqual(['packs']);
@@ -91,7 +91,7 @@ describe('rule-pack step', () => {
 		start('packs');
 		for (const id of PACK_IDS) await fireEvent.click(await box(id));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
-		await heading('Updates');
+		await heading('Blocklists');
 		expect(posts()).toEqual([]);
 		expect(server.packs.some((p) => p.on)).toBe(false);
 	});
@@ -106,7 +106,7 @@ describe('rule-pack step', () => {
 		expect(malware.disabled).toBe(true);
 		for (const id of PACK_IDS.slice(1)) expect((await box(id)).checked).toBe(false);
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
-		await heading('Updates');
+		await heading('Blocklists');
 		expect(posts()).toEqual([]);
 	});
 
@@ -173,7 +173,7 @@ describe('rule-pack step', () => {
 		start('packs');
 		await box('malware');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
-		await heading('Updates');
+		await heading('Blocklists');
 		const bodies = applies().map((c) => c.body as { change: { id: string; on: boolean } });
 		expect(bodies).toHaveLength(6);
 		expect(bodies.every((b) => b.change.on === true)).toBe(true);

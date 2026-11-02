@@ -9,6 +9,8 @@ A from-scratch DHT crawler and torrent-metadata search engine: one Rust binary w
 4. **`ui-design-skills`:** only for what 1–3 leave open (see UI rules).
 5. **The task's brief.**
 
+Picking up from another session or agent? Start at `docs/handoff.md`.
+
 Read the relevant sections before starting any task. If work changes a decision, add a file under `docs/decisions/` in the same PR (see its README); don't append to §16 any more. If it reverses or loosens one of the owner's decisions, weakens a security or content-safety decision, or changes a number the owner set, stop and ask the owner (the runner decides performance and UX changes to owner-set numbers under `docs/owner-decisions.md` §2.26). Any other refinement of an owner decision is the runner's call: record it in the PR's decisions file and name it in the PR description, and the runner flags it to the owner (`docs/owner-decisions.md` §2.19). Builds run through `docs/build-plan.md` and `runner/`; **`runner/standards.md` is the bar for every slice and review.**
 
 ## Working conventions

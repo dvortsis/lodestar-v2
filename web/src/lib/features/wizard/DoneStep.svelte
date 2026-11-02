@@ -13,6 +13,7 @@
 		storage: () => m.wizard_step_storage(),
 		download: () => m.wizard_step_download(),
 		packs: () => m.wizard_step_packs(),
+		blocklists: () => m.blocklists_wizard_title(),
 		updates: () => m.wizard_step_updates(),
 		done: () => m.wizard_step_done()
 	};

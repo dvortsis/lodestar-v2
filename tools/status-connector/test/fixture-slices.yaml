@@ -1,0 +1,16 @@
+# A tiny slice graph for the connector's test. The real one is runner/slices.yaml.
+external:
+  owner-q2:
+    check: The owner has answered the ToS/robots position for v0.6 sources
+  owner-q15:
+    check: The owner has answered how private_source items get metadata
+slices:
+  - { id: B0, title: Split the API router, kind: core, model: opus, deps: [] }
+  - { id: SRC-0, title: Plugin contract v2, kind: core, model: opus, deps: [] }
+  - { id: SRC-4, title: Consent framework, kind: core, model: opus, deps: [SRC-0] }
+  - { id: SRC-5, title: Per-plugin egress, kind: core, model: opus, deps: [SRC-0] }
+  - { id: SRC-6, title: Torznab parser, kind: core, model: opus, deps: [] }
+  - { id: SRC-7, title: Prowlarr plugin, kind: core, model: opus, deps: [SRC-4, SRC-5, SRC-6, "ext:owner-q2", "ext:owner-q15"] }
+  - { id: SRC-8, title: RSS parser, kind: core, model: opus, deps: [] }
+  - { id: SRC-9, title: Internet Archive parser, kind: core, model: opus, deps: [SRC-6] }
+  - { id: SRC-12, title: BEP 48 scrape, kind: core, model: opus, deps: [] }

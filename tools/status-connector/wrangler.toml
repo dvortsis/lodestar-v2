@@ -1,0 +1,7 @@
+name = "lodestar-status"
+main = "src/index.ts"
+compatibility_date = "2025-10-01"
+
+[vars]
+GITHUB_REPO = "dvortsis/lodestar-v2"
+# Secrets (set with `npx wrangler secret put`, never in this file): GITHUB_TOKEN, PATH_SECRET
