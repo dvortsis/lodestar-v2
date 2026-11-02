@@ -1741,7 +1741,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** One source, as `GET /sources` lists it. */
+        get: operations["getSource"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1756,8 +1757,11 @@ export interface paths {
          *     version is acknowledged; enabling a `restricted` or `overlay` source
          *     also needs the admin `"password"`, every time (`428 confirm_required`); an
          *     `account` source needs its credentials stored
-         *     (`409 credentials_required`). Agents, egress, purge and the schedule
-         *     arrive in v0.6 (`409 not_editable`).
+         *     (`409 credentials_required`). Agents, egress and the schedule apply
+         *     at the next start; changing egress needs the admin `"password"`
+         *     (`428 confirm_required`), and the `interface` and `bind_address`
+         *     routes are refused (`409 route_unavailable`). Purge isn't editable yet
+         *     (`409 not_editable`).
          */
         patch: operations["patchSource"];
         trace?: never;
@@ -7360,6 +7364,22 @@ export interface components {
         };
         /** @description One source plugin of this build. */
         Source: {
+            /** @description A source's concurrency, in the plugin's own unit (§18.4). */
+            agents: {
+                /** Format: int32 */
+                count: number;
+                /**
+                 * @description Whether the running source follows `count`. Always false in this
+                 *     version: it's saved and shown, and the scheduler applies it in a
+                 *     later version. Label it "not active yet".
+                 */
+                enforced: boolean;
+                /**
+                 * Format: int32
+                 * @description The most the plugin allows; 1 means it can't be changed.
+                 */
+                max: number;
+            };
             /**
              * @description What enabling a source requires (§18.7).
              * @enum {string}
@@ -7385,6 +7405,98 @@ export interface components {
             credentials: string[];
             /** @description Fields `PATCH /sources/{id}` changes now. */
             editable: string[];
+            /**
+             * @description A source's egress: what's set, how the running source's route is
+             *     doing, and warnings.
+             */
+            egress: {
+                /**
+                 * @description The running source's route; null when it isn't running (a change
+                 *     applies at the next start).
+                 */
+                live: null | {
+                    /**
+                     * @description Counts since the source started (`source_egress_*` in
+                     *     `docs/metrics.md`).
+                     */
+                    counts: {
+                        /**
+                         * Format: int64
+                         * @description Requests that got an HTTP answer.
+                         */
+                        answered: number;
+                        /**
+                         * Format: int64
+                         * @description Requests abandoned in flight because the route went down.
+                         */
+                        kill_switch_aborts: number;
+                        /**
+                         * Format: int64
+                         * @description Requests refused before sending because the route was down.
+                         */
+                        kill_switch_refusals: number;
+                        /**
+                         * Format: int64
+                         * @description Requests refused by the address checks or the host list.
+                         */
+                        policy_refusals: number;
+                        /**
+                         * Format: int64
+                         * @description Requests that failed to connect, timed out or were too large.
+                         */
+                        transport_failures: number;
+                        /**
+                         * Format: int64
+                         * @description Times the route went down.
+                         */
+                        trips: number;
+                    };
+                    /**
+                     * @description What you should know about this route's privacy; null when
+                     *     nothing.
+                     */
+                    notice: string | null;
+                    /** @description Why it's down; null when it isn't. */
+                    reason: string | null;
+                    /**
+                     * @description The live state of a source's route.
+                     * @enum {string}
+                     */
+                    state: "direct" | "unchecked" | "up" | "down";
+                };
+                /**
+                 * @description A source's egress setting.
+                 * @example {
+                 *       "proxy": "10.8.0.1:1080",
+                 *       "route": "socks5"
+                 *     }
+                 */
+                setting: {
+                    /**
+                     * @description For `socks5`: who resolves names. Left out, it's `local` when the
+                     *     proxy is on your network (a private or loopback address), where a
+                     *     name the proxy resolves could reach your other devices, and
+                     *     `proxy` otherwise.
+                     */
+                    dns?: "proxy" | "local";
+                    /**
+                     * @description For `socks5`: the proxy as `host:port` (a name, an IPv4 address or
+                     *     a bracketed IPv6 address). A name is resolved when the source
+                     *     starts.
+                     */
+                    proxy?: string;
+                    /**
+                     * @description How a source's traffic leaves (§18.4, §18.7).
+                     * @enum {string}
+                     */
+                    route: "direct" | "socks5" | "interface" | "bind_address";
+                };
+                /**
+                 * @description Things to fix or know, such as `HTTPS_PROXY` being set while the
+                 *     source connects directly (source plugins never use it).
+                 */
+                warnings: string[];
+            };
             /** @description Its stored state is `enabled`. */
             enabled: boolean;
             /**
@@ -7400,8 +7512,13 @@ export interface components {
             /** @description What enabling it still needs; null when enabling is a toggle. */
             needs: null | ("endpoints_ack" | "credentials" | "consent");
             /**
-             * @description Fields planned for the v0.6 sources epic (agents, egress, purge,
-             *     schedule): listed so the UI can show them, refused by `PATCH`.
+             * @description The networks it reaches, such as `bt`, `bt_i2p`, `ed2k`,
+             *     `ipfs` or `usenet` (§18.6).
+             */
+            networks: string[];
+            /**
+             * @description Fields planned for a later slice (`purge`): listed so the UI can
+             *     show them, refused by `PATCH`.
              */
             not_yet_editable: string[];
             /**
@@ -7423,6 +7540,22 @@ export interface components {
             restart_required: boolean;
             /** @enum {string} */
             risk: "low" | "medium" | "high";
+            /** @description When a source may run (§18.4). */
+            schedule: {
+                /** @description The plugin's own windows, which apply when you haven't set any. */
+                default: string[];
+                /**
+                 * @description Whether the running source keeps to `windows`. Always false in
+                 *     this version: they're saved and shown, and the scheduler applies
+                 *     them in a later version. Label them "not active yet".
+                 */
+                enforced: boolean;
+                /**
+                 * @description The daily windows, as `HH:MM-HH:MM` in the server's local time (an
+                 *     end at or before the start wraps past midnight). Empty: any time.
+                 */
+                windows: string[];
+            };
             /**
              * @description A source's stored lifecycle state (§18.1).
              * @enum {string}
@@ -7459,14 +7592,41 @@ export interface components {
          * @example {
          *       "sources": [
          *         {
+         *           "agents": {
+         *             "count": 1,
+         *             "enforced": false,
+         *             "max": 1
+         *           },
          *           "consent": "none",
          *           "consent_required": false,
          *           "consent_version": "",
          *           "credentials": [],
          *           "editable": [
+         *             "agents",
+         *             "egress",
          *             "enabled",
-         *             "priority"
+         *             "priority",
+         *             "schedule"
          *           ],
+         *           "egress": {
+         *             "live": {
+         *               "counts": {
+         *                 "answered": 0,
+         *                 "kill_switch_aborts": 0,
+         *                 "kill_switch_refusals": 0,
+         *                 "policy_refusals": 0,
+         *                 "transport_failures": 0,
+         *                 "trips": 0
+         *               },
+         *               "notice": null,
+         *               "reason": null,
+         *               "state": "direct"
+         *             },
+         *             "setting": {
+         *               "route": "direct"
+         *             },
+         *             "warnings": []
+         *           },
          *           "enabled": true,
          *           "endpoints": [],
          *           "health": {
@@ -7483,17 +7643,22 @@ export interface components {
          *           ],
          *           "name": "Mainline DHT",
          *           "needs": null,
+         *           "networks": [
+         *             "bt"
+         *           ],
          *           "not_yet_editable": [
-         *             "agents",
-         *             "egress",
-         *             "purge",
-         *             "schedule"
+         *             "purge"
          *           ],
          *           "password_required": false,
          *           "plugin": "dht",
          *           "priority": "normal",
          *           "restart_required": false,
          *           "risk": "low",
+         *           "schedule": {
+         *             "default": [],
+         *             "enforced": false,
+         *             "windows": []
+         *           },
          *           "state": "enabled",
          *           "version": "0.0.0"
          *         }
@@ -7513,8 +7678,11 @@ export interface components {
          *     }
          */
         SourcePatch: {
-            /** @description Not editable before v0.6: refused with `409 not_editable`. */
-            agents?: unknown;
+            /**
+             * Format: int32
+             * @description Its concurrency, 1 to its `agents.max`. Applies at the next start.
+             */
+            agents?: number;
             /**
              * @description The consent class you acknowledge; needed to enable a source whose
              *     `needs` is `endpoints_ack` or `consent`, and must be its class.
@@ -7522,18 +7690,45 @@ export interface components {
             consent?: "none" | "external" | "account" | "restricted" | "overlay";
             /** @description The `consent_version` you were shown, with `consent`. */
             consent_version?: string;
-            /** @description Not editable before v0.6: refused with `409 not_editable`. */
-            egress?: unknown;
+            /**
+             * @description How its traffic leaves. Applies at the next start. Changing it
+             *     needs the admin `password` (`428 confirm_required`): a route is
+             *     what keeps a source's traffic on your VPN. `interface` and
+             *     `bind_address` are refused (`409 route_unavailable`).
+             */
+            egress?: {
+                /**
+                 * @description For `socks5`: who resolves names. Left out, it's `local` when the
+                 *     proxy is on your network (a private or loopback address), where a
+                 *     name the proxy resolves could reach your other devices, and
+                 *     `proxy` otherwise.
+                 */
+                dns?: "proxy" | "local";
+                /**
+                 * @description For `socks5`: the proxy as `host:port` (a name, an IPv4 address or
+                 *     a bracketed IPv6 address). A name is resolved when the source
+                 *     starts.
+                 */
+                proxy?: string;
+                /**
+                 * @description How a source's traffic leaves (§18.4, §18.7).
+                 * @enum {string}
+                 */
+                route: "direct" | "socks5" | "interface" | "bind_address";
+            };
             enabled?: boolean;
             /**
              * @description A source's share of the fetch pool (§18.4: weights 1 / 3 / 6 / 10).
              * @enum {string}
              */
             priority?: "low" | "normal" | "high" | "max";
-            /** @description Not editable before v0.6: refused with `409 not_editable`. */
+            /** @description Not editable yet: refused with `409 not_editable`. */
             purge?: unknown;
-            /** @description Not editable before v0.6: refused with `409 not_editable`. */
-            schedule?: unknown;
+            /**
+             * @description Daily windows as `HH:MM-HH:MM`, at most 8; `[]` runs it any time.
+             *     Applies at the next start.
+             */
+            schedule?: string[];
         };
         /** @description The stage strip (§10.9.1, `docs/metrics.md` §6.1). */
         Stages: {
@@ -12129,6 +12324,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's id, as `GET /sources` lists it. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
                 };
             };
             default: components["responses"]["Error"];

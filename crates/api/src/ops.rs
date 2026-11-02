@@ -502,10 +502,11 @@ pub fn parse_proxy(text: &str) -> Option<(String, u16)> {
                 && !l.ends_with('-')
                 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
         })
-        && !name
-            .split('.')
-            .next_back()
-            .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()));
+        // Not a number in disguise: an all-digit or `0x` last label is
+        // an address to `getaddrinfo` (`127.1`, `0x7f000001`).
+        && !name.split('.').next_back().is_some_and(|l| {
+            l.bytes().all(|b| b.is_ascii_digit()) || l.to_ascii_lowercase().starts_with("0x")
+        });
     ok.then(|| (name.to_ascii_lowercase(), port))
 }
 
