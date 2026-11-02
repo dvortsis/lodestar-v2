@@ -25,6 +25,7 @@ use crate::dto::filters::{
     Subscriptions,
 };
 use crate::error::{ApiResult, internal};
+use lodestar_integrations::net::{NetError, NetPolicy, parse_url};
 
 /// The longest list URL and name accepted.
 const MAX_URL: usize = 2048;
@@ -50,7 +51,7 @@ pub(super) struct NewList<'a> {
     pub ip: bool,
     pub action: Action,
     pub url: &'a str,
-    pub name: &'a str,
+    pub name: String,
     pub format: Option<&'a str>,
     pub floor: bool,
 }
@@ -76,18 +77,45 @@ pub(super) fn check_subscribe(change: &Change) -> ApiResult<Option<NewList<'_>>>
         }
     };
     let printable = |s: &str| !s.chars().any(char::is_control);
-    if !(url.starts_with("https://") || url.starts_with("http://"))
-        || url.len() > MAX_URL
-        || !printable(url)
-        || url.contains(' ')
-    {
-        return Err(bad("bad_list_url", "The list's URL must be http or https.").field("url"));
+    let bad_url = || {
+        bad(
+            "bad_list_url",
+            "The list's URL must be http or https, with a host and no user name or password.",
+        )
+        .field("url")
+    };
+    if url.len() > MAX_URL || !printable(url) || url.contains(' ') {
+        return Err(bad_url());
     }
+    // The SSRF guard's DNS-free checks (§16): scheme, host, no
+    // credentials, and a literal address only if it's public. The fetch
+    // checks every resolved address and redirect again.
+    let parsed = match parse_url(url, NetPolicy::notification(false)) {
+        Ok(u) => u,
+        Err(NetError::Blocked(_)) => {
+            return Err(bad(
+                "list_url_refused",
+                "Lists are fetched from public addresses only, never a private, loopback or metadata address.",
+            )
+            .field("url"));
+        }
+        Err(_) => return Err(bad_url()),
+    };
     if let Some(n) = name
-        && (n.trim().is_empty() || n.len() > MAX_NAME || !printable(n))
+        && (n.trim().is_empty() || n.chars().count() > MAX_NAME || !printable(n))
     {
         return Err(bad("bad_list_name", "A list's name is 1–200 characters.").field("name"));
     }
+    // Without a name, the host names it.
+    let name = match name {
+        Some(n) => n.clone(),
+        None => parsed
+            .host_str()
+            .unwrap_or_default()
+            .chars()
+            .take(MAX_NAME)
+            .collect(),
+    };
     let act = act
         .as_deref()
         .map(action)
@@ -125,7 +153,7 @@ pub(super) fn check_subscribe(change: &Change) -> ApiResult<Option<NewList<'_>>>
         ip,
         action: act,
         url,
-        name: name.as_deref().unwrap_or(url),
+        name,
         format: format.as_deref(),
         floor: *floor,
     }))
@@ -154,13 +182,18 @@ pub(super) struct HeldEffect {
 
 /// `None` when no version is held. Read under the store lock in apply, so
 /// a refresh since the preview can't widen what the password confirmed
-/// without a 409.
+/// without a 409: the fingerprint binds the applied version as well as
+/// the held one, because what accepting unblocks is their difference.
 pub(super) fn held_effect(store: &Store, sub: &Subscription) -> ApiResult<Option<HeldEffect>> {
     let Some(held) = store.subscription_data(sub.id, true).map_err(internal)? else {
         return Ok(None);
     };
     let applied = store.subscription_data(sub.id, false).map_err(internal)?;
-    let digest = sha2::Sha256::digest(&held);
+    let base = sha2::Sha256::digest(applied.as_deref().unwrap_or_default());
+    let digest = sha2::Sha256::new()
+        .chain_update(base)
+        .chain_update(&held)
+        .finalize();
     let mut effect = HeldEffect {
         version: digest.iter().map(|b| format!("{b:02x}")).collect(),
         loosens: false,
@@ -261,14 +294,21 @@ pub(super) fn warning(
     match change {
         Change::ResolveHeld { .. } => format!(
             "This applies the version of {} the sanity gates held back. {unblocked} {} it \
-             no longer has stop being blocked. {what} {n} Safer: keep the previous version \
-             until the publisher's next update.",
+             no longer has {} blocked. {what} {} Safer: keep the previous version until the \
+             publisher's next update.",
             sub.name,
-            if sub.kind == KIND_IP {
-                "address ranges"
+            match (sub.kind == KIND_IP, unblocked == 1) {
+                (true, true) => "address range",
+                (true, false) => "address ranges",
+                (false, true) => "entry",
+                (false, false) => "entries",
+            },
+            if unblocked == 1 {
+                "stops being"
             } else {
-                "entries"
-            }
+                "stop being"
+            },
+            holds_line(p)
         ),
         Change::PauseSubscription { .. } => format!(
             "Pausing {} stops applying it until you resume it. {what}{floor} {n}",
@@ -279,6 +319,20 @@ pub(super) fn warning(
              Safer: pause it, or add an exception for what it got wrong.",
             sub.name
         ),
+    }
+}
+
+/// What accepting a held version releases now, exactly: the list's holds
+/// on the entries it drops. (The 30-day figures count the whole list, so
+/// they'd overstate it.)
+fn holds_line(p: &Preview) -> String {
+    if p.quarantine + p.tombstones == 0 {
+        "Nothing it holds now is released.".to_owned()
+    } else {
+        format!(
+            "{} items in quarantine would be released and {} dropped items could be fetched again.",
+            p.quarantine, p.tombstones
+        )
     }
 }
 
@@ -336,7 +390,7 @@ fn new_candidate(new: &NewList<'_>) -> Candidate {
             ..Candidate::from_catalog(e)
         },
         None => Candidate {
-            name: new.name.to_owned(),
+            name: new.name.clone(),
             ip: new.ip,
             floor: new.floor,
             categories: vec![match (new.ip, new.floor) {
@@ -410,6 +464,15 @@ pub(super) fn entry(s: &Subscription) -> SubscriptionEntry {
 /// How strict the enabled lists would be after a subscription change;
 /// `None` for any other change.
 pub(super) fn strictness_after(store: &Store, change: &Change) -> ApiResult<Option<Strictness>> {
+    if !matches!(
+        change,
+        Change::Subscribe { .. }
+            | Change::Unsubscribe { .. }
+            | Change::PauseSubscription { .. }
+            | Change::ResolveHeld { .. }
+    ) {
+        return Ok(None);
+    }
     let subs = store.subscriptions().map_err(internal)?;
     let mut extra = None;
     let (mut skip, mut resume, mut pending) = (None, None, None);

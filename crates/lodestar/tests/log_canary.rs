@@ -386,7 +386,7 @@ impl Server {
         let r = self.post(
             "/api/v1/filters/apply",
             &format!(
-                r#"{{"change":{{"op":"subscribe","url":"http://127.0.0.1:9/{PASSKEY}/list{n}.txt?passkey={PASSKEY}","kind":"content"}}}}"#
+                r#"{{"change":{{"op":"subscribe","url":"http://lists.invalid:9/{PASSKEY}/list{n}.txt?passkey={PASSKEY}","kind":"content"}}}}"#
             ),
         );
         assert!(r.starts_with("HTTP/1.0 200"), "{r}");
@@ -800,7 +800,7 @@ fn run_1_private_shows_no_fixture_identifier() {
         ],
     );
     // A subscription's URL is hidden with URLs off.
-    assert!(!all_file.contains("127.0.0.1:9/"), "{all_file}");
+    assert!(!all_file.contains("lists.invalid:9/"), "{all_file}");
 }
 
 #[test]

@@ -1063,10 +1063,12 @@ impl FiltersApi {
                         subscriptions::dropped_holds(&store, *id, &effect.dropped)?;
                     a.weakening = true;
                     a.unblocked = Some(effect.unblocked);
+                    // Exact: the list's holds on what it drops. The 30-day
+                    // figures count the whole list, so they're left out.
                     a.preview = Preview {
                         quarantine,
                         tombstones,
-                        ..rules(vec![subscriptions::rule_id(*id)])
+                        ..Preview::default()
                     };
                 }
             }
@@ -1639,7 +1641,7 @@ impl FiltersApi {
                 let id = store
                     .add_subscription(&lodestar_store::NewSubscription {
                         url: new.url,
-                        name: new.name,
+                        name: &new.name,
                         kind: u8::from(new.ip),
                         format: new.format,
                         action: new.action.code(),

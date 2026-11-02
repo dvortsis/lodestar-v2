@@ -215,6 +215,38 @@ async fn a_subscribe_is_validated_in_the_preview_and_in_apply() {
             "url",
         ),
         (json!({ "url": long }), "bad_list_url", "url"),
+        (
+            json!({ "url": "https://user:pw@lists.example/a" }),
+            "bad_list_url",
+            "url",
+        ),
+        (json!({ "url": "https://" }), "bad_list_url", "url"),
+        (
+            json!({ "url": "http://169.254.169.254/latest" }),
+            "list_url_refused",
+            "url",
+        ),
+        (
+            json!({ "url": "http://10.0.0.1/a" }),
+            "list_url_refused",
+            "url",
+        ),
+        (
+            json!({ "url": "http://127.0.0.1/a" }),
+            "list_url_refused",
+            "url",
+        ),
+        (
+            json!({ "url": "http://[::1]/a" }),
+            "list_url_refused",
+            "url",
+        ),
+        (
+            json!({ "url": "http://0x7f.1/a" }),
+            "list_url_refused",
+            "url",
+        ),
+        (json!({ "name": "é".repeat(201) }), "bad_list_name", "name"),
         (json!({ "name": " " }), "bad_list_name", "name"),
         (json!({ "action": "hide" }), "bad_list_action", "action"),
         (json!({ "format": "zip" }), "unknown_list_format", "format"),
@@ -270,6 +302,19 @@ async fn a_subscribe_is_validated_in_the_preview_and_in_apply() {
         listing(&f, &c).await["connected"][0]["subscription"]["floor"],
         true
     );
+    // A name counts characters, not bytes; without one, the host names it.
+    let named = json!({ "op": "subscribe", "url": "https://lists.example/n", "kind": "content",
+        "name": "é".repeat(200) });
+    assert_eq!(apply(&f, &c, named, None).await.0, StatusCode::OK);
+    let (_, body) = apply(&f, &c, base, None).await;
+    let l = listing(&f, &c).await;
+    let entry = l["connected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["subscription"]["id"] == body["id"])
+        .unwrap();
+    assert_eq!(entry["subscription"]["name"], "lists.example");
 }
 
 #[tokio::test]
@@ -395,7 +440,15 @@ async fn accepting_a_version_that_drops_entries_needs_the_password() {
     assert!(a["warning"].as_str().unwrap().contains("held back"));
     assert_eq!(a["strictness"]["hashes"], 3);
     assert_eq!(a["unblocked"], 1, "{a}");
-    assert!(a["warning"].as_str().unwrap().contains("1 entries"));
+    let w = a["warning"].as_str().unwrap();
+    assert!(
+        w.contains("1 entry it no longer has stops being blocked"),
+        "{w}"
+    );
+    assert!(
+        w.contains("1 items in quarantine") && !w.contains("30 days"),
+        "{w}"
+    );
     let (status, body) = apply_from(&f, &c, 4, accept.clone(), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
     // The password confirms the version the warning described, so it's
@@ -431,7 +484,7 @@ async fn a_version_held_after_the_preview_is_refused() {
     let f = fixture();
     let c = logged_in(&f).await;
     let now = lodestar_api_now();
-    let h: Vec<[u8; 20]> = (0..4u8).map(|i| [0x50 + i; 20]).collect();
+    let h: Vec<[u8; 20]> = (0..6u8).map(|i| [0x50 + i; 20]).collect();
     let id = add_list(&f, "https://lists.example/swap", false, false);
     version(&f, id, &[h[0], h[1], h[2]].concat(), false);
     version(&f, id, &[h[0], h[1], h[3]].concat(), true);
@@ -451,9 +504,28 @@ async fn a_version_held_after_the_preview_is_refused() {
     assert_eq!(code(&body), "changed_since_preview");
     assert!(h[..3].iter().all(|x| held(&f, *x) && blocked(&f, *x)));
     // Previewed again, it names the new version.
-    let (_, b) = preview(&f, &c, accept).await;
+    let (_, b) = preview(&f, &c, accept.clone()).await;
     assert_eq!(b["unblocked"], 3);
     assert_ne!(b["held_version"], a["held_version"]);
+
+    // The same held bytes against another applied version unblock
+    // something else, so the fingerprint changes too: a refresh applies B
+    // (which clears the held one), then the publisher's version is held
+    // again against B.
+    let x = [h[0], h[1], h[3]].concat();
+    version(&f, id, &[h[0], h[1], h[2]].concat(), false);
+    version(&f, id, &x, true);
+    let (_, a) = preview(&f, &c, accept.clone()).await;
+    assert_eq!(a["unblocked"], 1, "{a}");
+    version(&f, id, &[h[0], h[1], h[2], h[4], h[5]].concat(), false);
+    version(&f, id, &x, true);
+    let mut named = accept.clone();
+    named["held"] = a["held_version"].clone();
+    let (status, body) = apply_from(&f, &c, 8, named, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(code(&body), "changed_since_preview");
+    assert!(blocked(&f, h[4]) && blocked(&f, h[5]), "nothing applied");
+    assert_eq!(preview(&f, &c, accept).await.1["unblocked"], 3);
 }
 
 #[tokio::test]
