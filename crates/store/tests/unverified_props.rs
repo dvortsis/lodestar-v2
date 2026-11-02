@@ -206,7 +206,7 @@ proptest! {
                         extra_flags: 0,
                         source: dht,
                         verified: true,
-                    }).unwrap();
+                    }, lodestar_store::SearchableCodes { stage: 5, newly: 10, delay: 11 }, 0).unwrap();
                     match stored {
                         None => prop_assert_eq!(out, Promoted::Kept(item.id)),
                         Some(t) => prop_assert_eq!(out, Promoted::Merged(t)),

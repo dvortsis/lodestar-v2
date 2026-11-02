@@ -27,6 +27,7 @@ mod have;
 pub mod health;
 pub mod log_events;
 mod rollups;
+pub mod unverified;
 mod worker;
 mod writer;
 
@@ -139,6 +140,10 @@ pub struct PipelineConfig {
     /// ([`gate::GateStats::searchable`]), so the writer hands new ids
     /// over from its first commit. Off with search off.
     pub gate_follows_index: bool,
+    /// `sources.verify_unverified` (§18.4, plan SRC-2): fetch unverified
+    /// items' metadata through the shared pool so they can be promoted.
+    /// Off by default until the crawler acceptance soak closes.
+    pub verify_unverified: bool,
 }
 
 /// What the scrape scheduler needs besides its settings.
@@ -174,6 +179,7 @@ impl Default for PipelineConfig {
             hot: None,
             health: None,
             gate_follows_index: false,
+            verify_unverified: false,
         }
     }
 }
@@ -282,6 +288,9 @@ pub struct IntakeStats {
     pub dropped: AtomicU64,
     /// Keys refused before fetching: CS-1 hashes, tombstones, quarantine.
     pub refused: AtomicU64,
+    /// Discoveries with claims sent to the writer to judge and store as
+    /// unverified items (SRC-2), not to the pool.
+    pub claims: AtomicU64,
 }
 
 /// One plugin of this build, running or not.
@@ -540,6 +549,10 @@ impl Pipeline {
         let (pool_tx, pool_rx) = mpsc::channel(config.intake_capacity);
         let (touch_tx, touch_rx) = mpsc::channel(config.intake_capacity);
         let (retry_tx, retry_rx) = mpsc::channel(config.intake_capacity);
+        let (claims_tx, claims_rx) = mpsc::channel(config.intake_capacity);
+        let claims_budget = Arc::new(tokio::sync::Semaphore::new(
+            unverified::CLAIMS_BUDGET_KIB as usize,
+        ));
         // Small: each entry holds a whole info dictionary or prepared row.
         let (out_tx, out_rx) = mpsc::channel(64);
         let (results_tx, results_rx) = mpsc::channel(64);
@@ -654,6 +667,8 @@ impl Pipeline {
                 leases: leases.clone(),
                 to_pool: pool_tx.clone(),
                 touches: touch_tx,
+                claims: claims_tx,
+                claims_budget,
                 rollups: rollups.clone(),
                 stats: intake_stats.clone(),
                 filter: config.filter.clone(),
@@ -774,6 +789,11 @@ impl Pipeline {
             hot: config.hot.clone(),
             health: health.clone(),
             candidates: Default::default(),
+            sweep: Default::default(),
+            verify: unverified::Verify {
+                on: config.verify_unverified,
+                ..Default::default()
+            },
             #[cfg(test)]
             between: None,
             #[cfg(test)]
@@ -787,6 +807,7 @@ impl Pipeline {
             retry: retry_tx,
             finish: finish_rx,
             swarm: swarm_rx,
+            claims: claims_rx,
         }));
 
         Ok(Pipeline {
@@ -1022,6 +1043,10 @@ struct Intake {
     leases: Arc<WorkerLeases>,
     to_pool: mpsc::Sender<Discovery>,
     touches: mpsc::Sender<Discovery>,
+    /// Discoveries with claims, to the writer (SRC-2), each holding its
+    /// share of `claims_budget` so the channel is bounded in bytes.
+    claims: mpsc::Sender<unverified::Claimed>,
+    claims_budget: Arc<tokio::sync::Semaphore>,
     rollups: Arc<Rollups>,
     stats: Arc<IntakeStats>,
     filter: Arc<Handle>,
@@ -1054,6 +1079,36 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
                 i64::from(d.found.strategy),
                 1,
             );
+            // A key with claims is judged and stored by the writer, as an
+            // unverified item or as claims on the torrent that holds it
+            // (SRC-2), never fetched from here: verification fetches go
+            // through the writer's cursor, behind its switch. A held key
+            // is refused first, as below, and the store refuses it too.
+            if d.found.claims.is_some() {
+                let key = d.found.key.0;
+                if io.held.contains(&key) || io.filter.current().blocked_hash(&[key]).is_some() {
+                    io.stats.refused.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                io.stats.claims.fetch_add(1, Ordering::Relaxed);
+                // Waiting for budget or room backs up into the emitters,
+                // as for the pool.
+                let kib = unverified::claims_kib(&d);
+                let permit = tokio::select! {
+                    biased;
+                    _ = shutdown.requested() => break,
+                    p = io.claims_budget.clone().acquire_many_owned(kib) => match p {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    },
+                };
+                tokio::select! {
+                    biased;
+                    _ = shutdown.requested() => break,
+                    sent = io.claims.send((d, permit)) => if sent.is_err() { break },
+                }
+                continue;
+            }
             if io.have.contains(&d.found.key) {
                 io.stats.known.fetch_add(1, Ordering::Relaxed);
                 if io.touches.try_send(d.clone()).is_err() {
