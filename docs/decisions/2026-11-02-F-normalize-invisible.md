@@ -13,24 +13,24 @@ A content-safety follow-up to `2026-11-02-X-strip-format-chars.md` (#373), which
   - `lodestar-metainfo` was already in the filter's dependency graph (through the store and search crates), so the new direct dependency adds no crate.
 - **Never looser than before, by a two-reading rule** (the runner's design, from its review).
   - Ignoring a character that used to be a word break also joins two words. On `main`, `a<U+E0001>girl` read as `a` `girl`, so a term `girl` hit. Ignored, it reads as `agirl`, and `girl` would miss. Someone writing a name gains nothing from that, but the same bytes must never match less than they did.
-  - A name or path that holds a newly ignored character is therefore read twice:
-    - once with the characters ignored;
-    - once with them as word breaks: `Tokenizer::splitting`, the matching before.
-  - **Core terms hit if they hit in either reading.**
-    - Each reading is judged on its own: the first switched-on hit that no exception covers.
-    - The stronger of the two decisions stands, and the earlier reading's wins a tie (`Engine::below_overrides`, `Core::verdict`).
-    - `Core::pattern_hits` returns the hits of both readings.
-  - **Override and Neutralize keyword entries release, so one applies only if it matches in both readings** (`rules::keyword_in`).
-    - The keyword is read the same way in each.
-    - In the earlier reading, a Neutralize entry neutralizes its word in that reading (`rules::neutral_split_set`).
-    - A Neutralize keyword that is more than one word in the earlier reading couldn't have been saved then, so it never applies.
-  - **What doesn't change.** User query rules and their `unless`, allow entries and packs read through the search tokenizer (`fasttok`). They are unchanged and read as before.
-  - **Cost.** ASCII text and text without a newly ignored character take one pass as before. Only a name or path that holds one pays for the second reading, with a tokenizer of its own.
+  - **So the torrent is judged twice, each time from the top, and the stricter verdict stands** (`Engine::judge_doc`). This happens when the name or a path holds a newly ignored character, or when an override, neutralize or exception keyword does.
+    - **The joined reading** ignores the characters, in the text and the keywords alike.
+    - **The earlier reading** reads them as word breaks (`Tokenizer::splitting`), exactly as `main` did.
+    - Each reading is a full judgment: core hits, exceptions, override and neutralize entries, allow entries, your rules, packs and lists, each matched in that reading (`matcher::Reading`).
+    - `stricter` keeps the stronger decision, and the earlier reading's on a tie, so its rule and evidence stay as they were. `Core::verdict` does the same, and `Core::pattern_hits` lists the earlier reading's hits first.
+    - A core hit that only the joined reading has can't pre-empt a layer that decided more on `main`: the earlier reading reaches that layer as `main` did, and the stricter verdict is never weaker than the earlier reading's.
+  - **Keywords stored with such a character.**
+    - An override keyword saved before with one inside a word read as two words. Joined, it reads as one word and can cover texts it didn't, but the earlier reading still matches it as two, so it never covers more than it did.
+    - A Neutralize keyword is one word. One that is two words in the earlier reading couldn't have been saved before, so it never applies in that reading (`Prepared::never`). If it did, it would neutralize its joined word there. A Neutralize keyword of one word in the earlier reading has the same first word joined (`a_neutral_word_reads_the_same`), so one neutral set serves both readings.
+    - Keyword exceptions are refused when saved, but match per reading like the rest.
+  - **What doesn't change.** User query rules and their `unless`, allow entries and packs read through the search tokenizer (`fasttok`), which is the same in both readings.
+  - **Cost.** ASCII text, and text and keywords without a newly ignored character, are judged once as before. Only a torrent with one is judged twice. Its earlier reading has a tokenizer of its own.
   - **Tests:**
-    - Unit tests check that the splitting reader gives exactly the tokens of the text with each newly ignored character a space, which is the matching before.
+    - The normalize unit tests check that the splitting reader gives exactly the tokens of the text with each newly ignored character a space, which is how `main` read it.
     - A walk over every code point checks that `newly_ignored()` is exactly what `invisible()` ignores that the old list didn't.
-    - `tests/two_readings.rs` checks that inserting newly ignored characters never makes a decision weaker than with them as spaces, with Override and Neutralize entries in play.
-    - Disabling either half of the rule makes that test fail.
+    - `tests/two_readings.rs` checks that, for names and paths with marks, the decision is never weaker than that of an engine with the marks spaced in the text and the keywords. The mix includes override and neutralize entries (some marked), drop and hide lists, a user Drop rule and packs.
+    - Golden cases cover a term split off, a release entry and a keyword exception that match only one reading, a two-word Neutralize keyword, and a list or user rule below a joined-only core hit.
+    - Each of five mutations makes a test fail: no second judgment, a second judgment triggered by the text only, exceptions read joined, the earlier reading's core read joined, and the `never` flag ignored.
 - **Deviation from the brief, for the owner: the Cf characters that show stay word breaks.**
   - The brief listed these from #373: U+0600–0605, U+06DD, U+070F, U+0890–0891, U+08E2, U+110BD and U+110CD (prepended concatenation marks), U+FFF9–FFFB (interlinear annotation), U+13430–1343F (Egyptian hieroglyph controls) and U+2028/2029 (line and paragraph separators, not Cf).
   - None of them is default-ignorable. They render as a glyph, a box or a line break, so they split a word visibly, like punctuation.

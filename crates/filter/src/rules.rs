@@ -8,7 +8,7 @@ use lodestar_search::Node;
 use crate::core::{Action, Item};
 use crate::engine::RuleRef;
 use crate::hash::TermSet;
-use crate::matcher::Doc;
+use crate::matcher::{Doc, Reading};
 use crate::normalize::{self, Token};
 use crate::payload::payload_sig;
 use crate::prefilter::RuleList;
@@ -195,7 +195,9 @@ impl Override {
         };
         // A Neutralize keyword is one word. One that reads as more in the
         // earlier reading couldn't have been saved then, so it doesn't
-        // apply ([`override_matches`]).
+        // apply ([`override_matches`]). One that reads as one word there
+        // reads as the same word joined (`a_neutral_word_reads_the_same`),
+        // so one neutral set serves both readings.
         let never = self.strength == Strength::Neutralize
             && keyword_split.as_ref().is_some_and(|s| s.len() > 1);
         let neutral = match (&self.what, self.strength) {
@@ -239,6 +241,12 @@ pub struct OverrideList {
 }
 
 impl OverrideList {
+    /// Whether an entry's keyword reads differently in the two readings
+    /// (`crate::matcher::Reading`), so torrents are judged in both.
+    pub(crate) fn reads_twice(&self) -> bool {
+        self.prepared().any(|(_, p)| p.keyword_split.is_some())
+    }
+
     /// Each entry with what judging needs of it.
     pub(crate) fn prepared(&self) -> impl Iterator<Item = (&Override, &Prepared)> {
         let prepared = self
@@ -343,20 +351,30 @@ pub(crate) fn in_a_row(words: &[Token], tokens: &[Token]) -> bool {
     })
 }
 
-/// Whether a [`Match`] covers the torrent.
-pub(crate) fn matches(what: &Match, item: &Item, doc: &Doc) -> bool {
+/// Whether a [`Match`] covers the torrent in one [`Reading`].
+pub(crate) fn matches(what: &Match, item: &Item, doc: &Doc, reading: Reading) -> bool {
     match what {
         Match::Keyword(k) => {
-            let split = keyword_tokens_split(k);
-            keyword_in(&keyword_tokens(k), Some(&split), doc)
+            let split = (reading == Reading::Before).then(|| keyword_tokens_split(k));
+            keyword_in(&keyword_tokens(k), split.as_deref(), doc, reading)
         }
-        _ => matches_prepared(what, &[], None, item, doc),
+        _ => matches_prepared(what, &[], None, item, doc, reading),
     }
 }
 
 /// [`matches`] for an entry whose keyword tokens are worked out.
-pub(crate) fn override_matches(o: &Override, p: &Prepared, item: &Item, doc: &Doc) -> bool {
-    !p.never && matches_prepared(&o.what, &p.keyword, p.keyword_split.as_deref(), item, doc)
+pub(crate) fn override_matches(
+    o: &Override,
+    p: &Prepared,
+    item: &Item,
+    doc: &Doc,
+    reading: Reading,
+) -> bool {
+    if reading == Reading::Before && p.never {
+        return false;
+    }
+    let split = p.keyword_split.as_deref();
+    matches_prepared(&o.what, &p.keyword, split, item, doc, reading)
 }
 
 fn matches_prepared(
@@ -365,29 +383,30 @@ fn matches_prepared(
     keyword_split: Option<&[Token]>,
     item: &Item,
     doc: &Doc,
+    reading: Reading,
 ) -> bool {
     match what {
         Match::Hashes(hs) => item.hashes.iter().any(|h| hs.contains(h)),
         Match::Payload(sig) => payload_sig(item.files).is_some_and(|p| p.sig == *sig),
-        Match::Keyword(_) => keyword_in(keyword, keyword_split, doc),
+        Match::Keyword(_) => keyword_in(keyword, keyword_split, doc, reading),
         Match::Query(q) => doc.matches(q, &[]),
     }
 }
 
-/// Whether a keyword's words are in a row in the name or a path, in both
-/// readings: keyword entries release, so one applies only where it would
-/// have applied before characters once read as word breaks were ignored
-/// (docs/decisions/2026-11-02-F-normalize-invisible.md). `split` is the
+/// Whether a keyword's words are in a row in the name or a path, in one
+/// [`Reading`]: the keyword and the text read the same way. `split` is the
 /// keyword in the earlier reading, if it differs.
-fn keyword_in(words: &[Token], split: Option<&[Token]>, doc: &Doc) -> bool {
-    if !doc.normalized().any(|t| in_a_row(words, t)) {
-        return false;
-    }
-    let words = split.unwrap_or(words);
-    match doc.normalized_split() {
-        Some(mut texts) => texts.any(|t| in_a_row(words, t)),
-        None if split.is_some() => doc.normalized().any(|t| in_a_row(words, t)),
-        None => true,
+fn keyword_in(words: &[Token], split: Option<&[Token]>, doc: &Doc, reading: Reading) -> bool {
+    match (reading, doc.normalized_split()) {
+        (Reading::Before, Some(mut texts)) => {
+            let words = split.unwrap_or(words);
+            texts.any(|t| in_a_row(words, t))
+        }
+        (Reading::Before, None) => {
+            let words = split.unwrap_or(words);
+            doc.normalized().any(|t| in_a_row(words, t))
+        }
+        (Reading::Joined, _) => doc.normalized().any(|t| in_a_row(words, t)),
     }
 }
 
@@ -405,19 +424,6 @@ pub(crate) fn neutral_sets(entries: &[&Prepared]) -> (TermSet, Vec<String>) {
         }
     }
     (set, words)
-}
-
-/// The neutral set of the active Neutralize entries in the earlier
-/// reading ([`keyword_tokens_split`]), for the core's pass over it.
-pub(crate) fn neutral_split_set(entries: &[&Prepared]) -> TermSet {
-    let mut set = TermSet::default();
-    for e in entries.iter().filter(|e| e.neutral.is_some()) {
-        let words = e.keyword_split.as_ref().unwrap_or(&e.keyword);
-        if let Some(t) = words.first() {
-            set.insert(t.hash);
-        }
-    }
-    set
 }
 
 #[cfg(test)]
@@ -474,5 +480,21 @@ mod tests {
         assert!(has_keyword(&w, "the al\u{200B}pha b3ta"));
         assert!(!has_keyword(&w, "beta alpha"));
         assert!(!has_keyword(&w, "alphabet"));
+    }
+
+    proptest::proptest! {
+        /// A keyword of one word in the earlier reading has the same first
+        /// word joined, so a Neutralize entry neutralizes the same word in
+        /// both readings.
+        #[test]
+        fn a_neutral_word_reads_the_same(
+            k in "([a-c]{1,3}|[0-9]{1,2}|[@$]|é|\u{200B}|\u{2065}|\u{E0001}|\u{1D173}| ){1,6}",
+        ) {
+            let split = keyword_tokens_split(&k);
+            if split.len() == 1 {
+                let joined = keyword_tokens(&k);
+                proptest::prop_assert_eq!(joined.first().map(|t| t.hash), Some(split[0].hash), "{:?}", k);
+            }
+        }
     }
 }

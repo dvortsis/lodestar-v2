@@ -603,6 +603,18 @@ impl Tri {
     }
 }
 
+/// Which reading of the name and paths a pass judges, where they hold a
+/// character the matching once read as a word break
+/// ([`crate::normalize::Tokenizer::splitting`]). Elsewhere both are the
+/// same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reading {
+    /// The characters ignored: how text reads now.
+    Joined,
+    /// The characters as word breaks: how text read before.
+    Before,
+}
+
 /// A torrent prepared for many rule evaluations: tokens and enrichment
 /// are computed once, on first use.
 pub struct Doc<'a> {
@@ -815,6 +827,12 @@ impl<'a> Doc<'a> {
             .chain(ends.iter().copied())
             .zip(ends)
             .map(|(from, to)| &tokens[from..*to])
+    }
+
+    /// Whether the name or a path reads differently in the two
+    /// [`Reading`]s.
+    pub(crate) fn reads_twice(&self) -> bool {
+        self.normalized_split().is_some()
     }
 
     /// [`Doc::normalized`] in the earlier reading, if the name or a path

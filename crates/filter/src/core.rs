@@ -704,8 +704,10 @@ impl Core {
         let none = TermSet::default();
         let first = |hits: Vec<Hit>| hits.into_iter().find(|h| h.on);
         let hit = first(self.patterns(item, &none, None));
+        // The earlier reading's hit wins a tie, so its rule and evidence
+        // stay as they were.
         match self.pattern_hits_split(item, &none) {
-            Some(split) => stronger(hit, first(split)),
+            Some(split) => stronger(first(split), hit),
             None => hit,
         }
     }
@@ -720,11 +722,17 @@ impl Core {
     ///
     /// A text that holds a character matching once read as a word break
     /// is read both ways (`Core::pattern_hits_split`), and this has the
-    /// hits of both: a rule hits if it hits in either reading.
+    /// hits of both, the earlier reading's first: a rule hits if it hits
+    /// in either reading.
     pub fn pattern_hits(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
-        let mut hits = self.patterns(item, neutral, None);
-        hits.extend(self.pattern_hits_split(item, neutral).into_iter().flatten());
-        hits
+        let joined = self.patterns(item, neutral, None);
+        match self.pattern_hits_split(item, neutral) {
+            Some(mut hits) => {
+                hits.extend(joined);
+                hits
+            }
+            None => joined,
+        }
     }
 
     /// The hits of the earlier reading, with the characters
