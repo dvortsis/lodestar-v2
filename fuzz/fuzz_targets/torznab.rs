@@ -4,6 +4,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use lodestar_metainfo::hidden_char;
 use lodestar_sources_feeds::torznab::{
     self, Kind, LIMITS, Limits, MAX_CATEGORIES, MAX_REF, MAX_TAGS, MAX_TITLE,
 };
@@ -24,6 +25,8 @@ fuzz_target!(|data: &[u8]| {
         let summary = torznab::parse_each(body, limits, |it| {
             kept += 1;
             assert!(it.title.as_ref().is_none_or(|t| t.len() <= MAX_TITLE));
+            let shown = it.title.iter().chain(&it.tags);
+            assert!(!shown.flat_map(|t| t.chars()).any(hidden_char));
             assert!(it.categories.len() <= MAX_CATEGORIES && it.tags.len() <= MAX_TAGS);
             for r in [&it.guid, &it.link].into_iter().flatten() {
                 assert!(r.len() <= MAX_REF);

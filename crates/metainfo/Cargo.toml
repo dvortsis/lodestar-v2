@@ -23,3 +23,5 @@ encoding_rs = "0.8.35"
 # Integration tests only: parsed files must survive the store's blob codec.
 lodestar-store.workspace = true
 proptest = "1.11.0"
+# The reference for the format-character table (already in the lock).
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }

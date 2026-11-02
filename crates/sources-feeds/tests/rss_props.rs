@@ -1,6 +1,7 @@
 //! Property tests: never panics, never exceeds a cap, uses an item whole
 //! or not at all, and reads back what a well-formed feed says.
 
+use lodestar_metainfo::hidden_char;
 use lodestar_sources_feeds::rss::{
     Feed, Hashes, LIMITS, Limits, MAX_CATEGORY, MAX_REF, MAX_TITLE, parse, parse_each,
 };
@@ -25,6 +26,7 @@ fn check(f: &Feed, limits: &Limits) {
                 .as_ref()
                 .is_none_or(|t| t.len() <= MAX_TITLE && !t.is_empty())
         );
+        assert!(!it.title.iter().flat_map(|t| t.chars()).any(hidden_char));
         assert!(it.category.as_ref().is_none_or(|c| c.len() <= MAX_CATEGORY));
         for r in [&it.guid, &it.link].into_iter().flatten() {
             assert!(r.len() <= MAX_REF);
@@ -57,8 +59,9 @@ fn fragment() -> impl Strategy<Value = String> {
         Just("<!DOCTYPE x>".to_string()),
         Just("&unknown;".to_string()),
         Just("&#x202E;".to_string()),
+        Just("&#x200B;&#xFEFF;&#x2028;&#xE0041;&#xAD;".to_string()),
         Just("<![CDATA[x]]>".to_string()),
-        "[a-z<>&;/\"= \u{202E}]{0,12}",
+        "[a-z<>&;/\"= \u{202E}\u{200B}\u{200D}\u{FEFF}\u{2028}\u{E0041}]{0,12}",
     ]
 }
 

@@ -1,7 +1,7 @@
 //! Property tests: never panics, never exceeds a cap, uses an item whole
 //! or not at all, and reads back what a well-formed feed says.
 
-use lodestar_metainfo::InfoHash;
+use lodestar_metainfo::{InfoHash, hidden_char};
 use lodestar_sources_feeds::torznab::{
     Feed, Hashes, Kind, LIMITS, Limits, MAX_CATEGORIES, MAX_REF, MAX_TAGS, MAX_TITLE, parse,
     parse_each,
@@ -25,6 +25,8 @@ fn check(f: &Feed, limits: &Limits) {
                 .as_ref()
                 .is_none_or(|t| t.len() <= MAX_TITLE && !t.is_empty())
         );
+        let shown = it.title.iter().chain(&it.tags);
+        assert!(!shown.flat_map(|t| t.chars()).any(hidden_char));
         assert!(it.categories.len() <= MAX_CATEGORIES);
         assert!(it.tags.len() <= MAX_TAGS);
         for r in [&it.guid, &it.link].into_iter().flatten() {
@@ -67,6 +69,8 @@ fn fragment() -> impl Strategy<Value = String> {
         Just("&amp;".to_string()),
         Just("&bogus;".to_string()),
         Just("&#x1F600;".to_string()),
+        Just("a\u{200B}&#xFEFF;b\u{2028}\u{E0041}&#xAD;".to_string()),
+        Just(r#"<torznab:attr name="tag" value="x&#x200B;y"/>"#.to_string()),
         Just("<!DOCTYPE x>".to_string()),
         Just("<!-- c -->".to_string()),
         Just("<a b=\"1\" b=\"2\">".to_string()),
