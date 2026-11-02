@@ -69,10 +69,14 @@ pub enum Excluded {
     Duplicate = 6,
     /// The store transaction failed; the batch was lost.
     StoreFailed = 7,
+    /// Fetched, but every source that found it was disabled or purged by
+    /// the time it was written, so it wasn't stored (SRC-14b,
+    /// `Inserted::Refused`).
+    SourceStopped = 8,
 }
 
 /// Every excluded outcome, with its `reason` label.
-pub const EXCLUDED: [(Excluded, &str); 8] = [
+pub const EXCLUDED: [(Excluded, &str); 9] = [
     (Excluded::AlreadyStored, "already_stored"),
     (Excluded::Rediscovered, "rediscovered"),
     (Excluded::Filtered, "filtered"),
@@ -81,6 +85,7 @@ pub const EXCLUDED: [(Excluded, &str); 8] = [
     (Excluded::FailedVerification, "failed_verification"),
     (Excluded::Duplicate, "duplicate"),
     (Excluded::StoreFailed, "store_failed"),
+    (Excluded::SourceStopped, "source_stopped"),
 ];
 
 /// Discovery-to-searchable bucket bounds, in seconds (`le`). The

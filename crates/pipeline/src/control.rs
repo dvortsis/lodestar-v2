@@ -498,6 +498,9 @@ pub struct SourceView {
     pub settings: SourceSettings,
     /// Warnings about its egress, for the Sources screen.
     pub egress_warnings: Vec<&'static str>,
+    /// A purge started and didn't finish (a crash, a cancel or an error):
+    /// the source stays off until a purge run again finishes it.
+    pub purge_pending: bool,
 }
 
 /// `HTTPS_PROXY` or `ALL_PROXY` is set while a source connects directly.
@@ -919,7 +922,8 @@ impl Control {
                     let need = consent::need_in(&store, &s.manifest)?;
                     let names = store.source_secret_names(s.manifest.id)?;
                     let settings = saved_settings(&store, s.manifest.id, false)?;
-                    Ok((s.id, (need, names, settings)))
+                    let pending = store.source_purge_started(s.manifest.id)?.is_some();
+                    Ok((s.id, (need, names, settings, pending)))
                 })
                 .collect::<Result<HashMap<_, _>, Error>>()?;
             (store.sources()?, store.cohorts(hour - 23, hour + 1)?, gates)
@@ -931,7 +935,7 @@ impl Control {
             .into_iter()
             .map(|status| {
                 let row = rows.iter().find(|r| r.id == status.id);
-                let (need, credentials, settings) =
+                let (need, credentials, settings, purge_pending) =
                     gates.get(&status.id).cloned().unwrap_or_default();
                 let egress_warnings = egress_warnings(
                     &settings.egress,
@@ -961,6 +965,7 @@ impl Control {
                     credentials,
                     settings,
                     egress_warnings,
+                    purge_pending,
                     status,
                 }
             })
@@ -996,6 +1001,15 @@ impl Control {
             let mut ack = None;
             let state = match change.enabled {
                 Some(true) if current != SourceState::Enabled => {
+                    // A purge under way finishes first (SRC-14b).
+                    if store.source_purge_started(manifest.id)?.is_some() {
+                        return Err(SourceError::Invalid {
+                            field: "enabled",
+                            reason: "a purge of this source didn't finish: purge it again \
+                                     to finish, then enable it"
+                                .into(),
+                        });
+                    }
                     match consent::need_in(&store, &manifest)? {
                         None => {}
                         Some(Need::Credentials) => return Err(SourceError::CredentialsRequired),
@@ -1140,6 +1154,95 @@ impl Control {
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;
         self.view(id).await
+    }
+
+    /// Starts purging source `id` (§18.1, SRC-14b), or starts it over: the
+    /// first part of a purge job. Needs the admin password (the caller
+    /// checked it: `password_confirmed`). Disables the source and records
+    /// the purge in the store, so nothing it finds is written from here,
+    /// then stops its plugin and drops its keys from the fetch pool.
+    /// Returns the keys dropped.
+    pub async fn begin_purge(
+        &self,
+        id: SourceId,
+        password_confirmed: bool,
+    ) -> Result<u64, SourceError> {
+        let manifest = self.manifest(id)?;
+        if !password_confirmed {
+            return Err(SourceError::PasswordRequired);
+        }
+        let store = self.inner.store.clone();
+        tokio::task::spawn_blocking(move || {
+            store
+                .lock()
+                .expect("store lock")
+                .begin_source_purge(id, unix_now())
+        })
+        .await
+        .map_err(|e| SourceError::Store(Error::Join(e)))??;
+        lodestar_log::log_event!(
+            crate::log_events::SOURCE_STATE_CHANGED,
+            plugin = manifest.id,
+            state = crate::log_events::state(SourceState::Disabled)
+        );
+        Ok(self.inner.monitor.stop_source(id).await as u64)
+    }
+
+    /// One step of the purge: at most `MAX_PURGE_STEP` rows, in one
+    /// transaction (`Store::purge_source`).
+    pub async fn purge_step(
+        &self,
+        id: SourceId,
+        from: lodestar_store::unverified::PurgeCursor,
+    ) -> Result<lodestar_store::unverified::PurgeStep, SourceError> {
+        let store = self.inner.store.clone();
+        tokio::task::spawn_blocking(move || {
+            store.lock().expect("store lock").purge_source(
+                id,
+                from,
+                lodestar_store::unverified::MAX_PURGE_STEP,
+            )
+        })
+        .await
+        .map_err(|e| SourceError::Store(Error::Join(e)))?
+        .map_err(SourceError::from)
+    }
+
+    /// Ends the purge once every step is done: the source Purged and its
+    /// consent record, credentials and settings dropped, in one
+    /// transaction, then every snapshot scrubbed of them (the snapshot
+    /// purge's pass). Returns the snapshots the pass changed, and the
+    /// warnings it raised: every problem it met (a snapshot it couldn't
+    /// read or write now, one of an unknown schema, a file it couldn't
+    /// delete), not only snapshots left unscrubbed.
+    pub async fn finish_purge(&self, id: SourceId) -> Result<(u64, u64), SourceError> {
+        let manifest = self.manifest(id)?;
+        let store = self.inner.store.clone();
+        let (scrubbed, left) = tokio::task::spawn_blocking(move || {
+            let now = unix_now();
+            let reopen = {
+                let mut store = store.lock().expect("store lock");
+                store.finish_source_purge(id, now)?;
+                store.reopen_args()
+            };
+            // On a connection of its own, so the shared one (the Sources
+            // routes, the credential lookups) isn't held for the pass.
+            let Some((path, config)) = reopen else {
+                return Ok((0, 0));
+            };
+            let mut own = Store::open(&path, config)?;
+            // Filter hits age out on the writer's own tick, not here.
+            let report = own.purge_snapshots(now, i64::MIN);
+            Ok::<_, SourceError>((report.purged.len() as u64, report.warnings.len() as u64))
+        })
+        .await
+        .map_err(|e| SourceError::Store(Error::Join(e)))??;
+        lodestar_log::log_event!(
+            crate::log_events::SOURCE_STATE_CHANGED,
+            plugin = manifest.id,
+            state = crate::log_events::state(SourceState::Purged)
+        );
+        Ok((scrubbed, left))
     }
 
     fn policy(&self, id: SourceId) -> Result<lodestar_sources::Policy, SourceError> {

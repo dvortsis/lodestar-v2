@@ -985,3 +985,98 @@ async fn an_unreadable_egress_setting_refuses_every_request() {
     );
     pipeline.shutdown().await.unwrap();
 }
+
+/// A purge stops its source's plugin at once, survives a crash partway
+/// (the source stays off, what was done stays done, and enabling waits
+/// for the purge), and finishes when it's run again (SRC-14b).
+#[tokio::test]
+async fn a_purge_stops_the_source_survives_a_crash_and_finishes_when_run_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let start = |store| async {
+        let (p, ran) = probe_with("nyaa", Consent::None, true);
+        let pipeline = Pipeline::start_with(
+            PipelineConfig::default(),
+            store,
+            vec![p as Arc<dyn SourcePlugin>],
+            Arc::new(NoFetch),
+        )
+        .await
+        .unwrap();
+        let control = Control::start(
+            pipeline.monitor(),
+            None,
+            Arc::new(Mutex::new(
+                Store::open(&db, StoreConfig::default()).unwrap(),
+            )),
+            false,
+            Intensity::Balanced,
+        )
+        .await
+        .unwrap();
+        (pipeline, control, ran)
+    };
+    let (pipeline, control, ran) = start(Store::open(&db, StoreConfig::default()).unwrap()).await;
+    until("the source runs", || ran.load(Ordering::SeqCst)).await;
+    let id = pipeline.sources()[0].id;
+    {
+        let store = control.store();
+        let mut store = store.lock().unwrap();
+        store
+            .update_source_secrets(id, &[("api_key", b"sealed")], &[], None)
+            .unwrap();
+    }
+    // Only with the password.
+    assert!(matches!(
+        control.begin_purge(id, false).await,
+        Err(SourceError::PasswordRequired)
+    ));
+    assert!(pipeline.sources()[0].running);
+    control.begin_purge(id, true).await.unwrap();
+    // Its plugin stopped at once, not at the next restart.
+    assert!(!pipeline.sources()[0].running);
+    // The "crash": nothing more of the purge runs.
+    drop(control);
+    drop(pipeline.shutdown().await.unwrap());
+
+    let check = Store::open(&db, StoreConfig::default()).unwrap();
+    assert_eq!(stored(&db, "nyaa"), SourceState::Disabled);
+    assert!(check.source_purge_started("nyaa").unwrap().is_some());
+    assert_eq!(
+        check.source_secret_names("nyaa").unwrap(),
+        ["api_key"],
+        "not finished"
+    );
+    drop(check);
+
+    // After a restart it stays off, says so, and can't be enabled yet.
+    let (pipeline, control, ran) = start(Store::open(&db, StoreConfig::default()).unwrap()).await;
+    assert!(!ran.load(Ordering::SeqCst));
+    assert!(control.sources().unwrap()[0].purge_pending);
+    let enable = SourceChange {
+        enabled: Some(true),
+        ..SourceChange::default()
+    };
+    assert!(matches!(
+        control.update_source(id, enable.clone()).await,
+        Err(SourceError::Invalid {
+            field: "enabled",
+            ..
+        })
+    ));
+    // Run again, it finishes: everything of the source's is gone.
+    control.begin_purge(id, true).await.unwrap();
+    let mut cursor = Some(lodestar_store::unverified::PurgeCursor::START);
+    while let Some(from) = cursor {
+        cursor = control.purge_step(id, from).await.unwrap().next;
+    }
+    control.finish_purge(id).await.unwrap();
+    let view = &control.sources().unwrap()[0];
+    assert!(!view.purge_pending);
+    assert_eq!(view.state, SourceState::Purged);
+    assert!(view.credentials.is_empty());
+    // Purged is a fresh, disabled source: it can be enabled again.
+    control.update_source(id, enable).await.unwrap();
+    drop(control);
+    pipeline.shutdown().await.unwrap();
+}

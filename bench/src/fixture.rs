@@ -474,6 +474,8 @@ pub fn build(dir: &Path, anchor: i64) -> Result<Manifest, Error> {
                 lodestar_store::Inserted::Existing(_) => {
                     return Err(format!("{}: a duplicate info hash", specs[i].key).into());
                 }
+                // `Store::insert` never refuses (SRC-14b).
+                lodestar_store::Inserted::Refused => unreachable!("insert never refuses"),
             }
         }
     }

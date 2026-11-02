@@ -1103,3 +1103,59 @@ async fn a_stale_timer_cannot_expire_a_rediscovered_keys_lookup() {
     let saved = task.await.unwrap();
     assert_eq!(saved.len(), 1);
 }
+
+/// A purge drops what only its source found, in any state, and keeps what
+/// others found too under them (SRC-14b).
+#[tokio::test(start_paused = true)]
+async fn drop_source_drops_its_own_keys_and_keeps_shared_ones() {
+    let mut h = Harness::start(config(), &[], vec![]);
+    // Key 1 is fetching, key 2 is looking for peers, key 3 is shared.
+    h.script(peer(1, 1), 5_000, Ok(()));
+    h.send(found(1, 1, vec![peer(1, 1)]));
+    h.send(found(1, 2, vec![]));
+    h.send(found(1, 3, vec![]));
+    h.send(found(2, 3, vec![]));
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(h.fake.started.lock().unwrap().len(), 1);
+
+    assert_eq!(h.handle.drop_source(src(1)).await, 2);
+    let queue = h.handle.snapshot().await;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].info_hash, key(3));
+    assert_eq!(queue[0].source, src(2), "the remaining finder takes it");
+    // The fetch in flight ends unseen: nothing comes out for key 1.
+    sleep(Duration::from_secs(10)).await;
+    assert!(h.out.try_recv().is_err());
+    // Nothing left of the source's: a second drop finds none.
+    assert_eq!(h.handle.drop_source(src(1)).await, 0);
+    let queue = h.stop().await;
+    assert_eq!(queue.len(), 1);
+}
+
+/// A key the dropped source saw publicly and another saw privately is
+/// private from then on: whether it was public came from both (SRC-14b).
+#[tokio::test(start_paused = true)]
+async fn drop_source_leaves_a_shared_key_private() {
+    let h = Harness::start(config(), &[], vec![]);
+    h.send(found(1, 9, vec![]));
+    let mut private = found(2, 9, vec![]);
+    private.found.private_source = true;
+    h.send(private);
+    sleep(Duration::from_millis(10)).await;
+    assert!(
+        !h.handle.snapshot().await[0].private_source,
+        "public: one public sighting"
+    );
+    assert_eq!(h.handle.drop_source(src(1)).await, 0);
+    let queue = h.handle.snapshot().await;
+    assert_eq!(queue[0].source, src(2));
+    assert!(
+        queue[0].private_source,
+        "the public sighting went with its source"
+    );
+    // A live public sighting makes it public again.
+    h.send(found(2, 9, vec![]));
+    sleep(Duration::from_millis(10)).await;
+    assert!(!h.handle.snapshot().await[0].private_source);
+    h.stop().await;
+}

@@ -419,8 +419,8 @@ pub struct Source {
     /// The networks it reaches, such as `bt`, `bt_i2p`, `ed2k`,
     /// `ipfs` or `usenet` (§18.6).
     pub networks: Vec<String>,
-    /// Fields planned for a later slice (`purge`): listed so the UI can
-    /// show them, refused by `PATCH`.
+    /// Fields `PATCH` refuses: `purge`, which runs as a job through
+    /// `POST /sources/{id}/purge`.
     pub not_yet_editable: Vec<String>,
     /// What enabling it still needs; null when enabling is a toggle.
     #[schema(required = true, inline)]
@@ -432,6 +432,10 @@ pub struct Source {
     pub plugin: String,
     #[schema(inline)]
     pub priority: SourcePriority,
+    /// A purge started and didn't finish (cancelled, failed, or cut short
+    /// by a restart): what it removed stays removed, and the source stays
+    /// off until a purge run again finishes it.
+    pub purge_pending: bool,
     /// Its stored state differs from what's running: it starts or stops
     /// at the next restart.
     pub restart_required: bool,
@@ -479,6 +483,7 @@ pub struct Source {
         "password_required": false,
         "plugin": "dht",
         "priority": "normal",
+        "purge_pending": false,
         "restart_required": false,
         "risk": "low",
         "schedule": { "default": [], "enforced": false, "windows": [] },

@@ -252,6 +252,9 @@ struct Outcome {
     failed: Option<lodestar_store::Error>,
     /// Results the authoritative blocklist rejected.
     blocked: Vec<usize>,
+    /// Results the store refused: every source that found them had
+    /// stopped (`Inserted::Refused`, SRC-14b). Never stored.
+    refused: Vec<usize>,
     /// Per touch: the torrent's id, if the store had it.
     touched: Vec<Option<i64>>,
     /// Per swarm update: whether its torrent still exists.
@@ -698,6 +701,17 @@ impl Writer {
             } else {
                 self.stats.existing.fetch_add(1, Ordering::Relaxed);
             }
+        }
+        // Never stored: not in the have-filter or the hot columns, and the
+        // lease ends as an eviction does. The pool remembers the key as
+        // recently fetched, so a live source's sighting of it is passed
+        // over until that memory rolls over or the next start; then it's
+        // fetched and stored as new.
+        for i in outcome.refused {
+            let c = &committing[i];
+            self.gate.exclude(Excluded::SourceStopped, 1);
+            self.coordinator
+                .lost(&c.results.key, c.results.token, Loss::Evicted);
         }
         for i in outcome.blocked {
             let c = &committing[i];
@@ -1416,6 +1430,7 @@ fn transaction(
                 promoted_as,
                 failed: Some(e),
                 blocked: promo_held,
+                refused: Vec::new(),
                 touched: Vec::new(),
                 swarm: Vec::new(),
                 stale_class: stale_promo,
@@ -1423,10 +1438,19 @@ fn transaction(
         }
         Err(e) => return Err(e),
     };
+    let mut refused = Vec::new();
     let stored = rest
         .iter()
         .zip(&written.prepared)
-        .map(|(&i, ins)| (i, ins.id(), matches!(ins, Inserted::New(_))))
+        .filter_map(|(&i, ins)| match ins.stored() {
+            Some(id) => Some((i, id, matches!(ins, Inserted::New(_)))),
+            None => {
+                refused.push(i);
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
         .chain(promoted)
         .map(|(i, id, new)| (i, id, new, hashes_of(i)))
         .collect();
@@ -1435,6 +1459,7 @@ fn transaction(
         promoted_as,
         failed: None,
         blocked,
+        refused,
         stale_class: written.stale_class || stale_promo,
         touched: written.touched[extra..].to_vec(),
         swarm: written.swarm,

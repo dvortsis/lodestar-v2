@@ -1760,8 +1760,8 @@ export interface paths {
          *     (`409 credentials_required`). Agents, egress and the schedule apply
          *     at the next start; changing egress needs the admin `"password"`
          *     (`428 confirm_required`), and the `interface` and `bind_address`
-         *     routes are refused (`409 route_unavailable`). Purge isn't editable yet
-         *     (`409 not_editable`).
+         *     routes are refused (`409 route_unavailable`). A purge isn't a field:
+         *     it's `POST /sources/{id}/purge` (`409 not_editable` here).
          */
         patch: operations["patchSource"];
         trace?: never;
@@ -1787,6 +1787,33 @@ export interface paths {
          *     invalid_credentials` names the rule a change broke, never a value.
          */
         patch: operations["patchSourceCredentials"];
+        trace?: never;
+    };
+    "/sources/{id}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purges a source: removes what only it found, its claims and plugin
+         *     state, its credentials, consent record and settings, and their copies
+         *     in the store's snapshots (§18.1, §18.7). It runs as a job (`/jobs`),
+         *     with progress, pause and cancel. It needs the admin `"password"`
+         *     every time (`428 confirm_required`, `401`): it can't be undone.
+         * @description The source is turned off first. A purge that stops partway (cancelled,
+         *     failed, or cut short by a restart) keeps what it did and the source
+         *     off (`purge_pending` in `GET /sources`); purging again finishes it.
+         *     `409 purge_running` while one runs for this source.
+         */
+        post: operations["purgeSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/stats": {
@@ -2597,6 +2624,8 @@ export interface components {
             /** Format: int64 */
             id: number;
             kind: components["schemas"]["BackgroundJobKind"];
+            /** @description A purge's own details. */
+            purge?: components["schemas"]["PurgeJob"];
             /**
              * Format: double
              * @description Items read per second (`done` and `skipped`), paused time left
@@ -2626,10 +2655,11 @@ export interface components {
         };
         /**
          * @description What a job does. `import` is reserved for the importer framework
-         *     (§18.8): nothing starts one yet, but the Jobs view can render both.
+         *     (§18.8): nothing starts one yet, but the Jobs view can render it.
+         *     `purge` removes a source's data (`POST /sources/{id}/purge`).
          * @enum {string}
          */
-        BackgroundJobKind: "export" | "import";
+        BackgroundJobKind: "export" | "import" | "purge";
         /**
          * @description Where a job is. `running` and `paused` hold one of the running
          *     slots; the rest are finished and kept for 10 minutes.
@@ -6061,6 +6091,63 @@ export interface components {
             /** @description IP addresses or CIDR ranges, at most 64. Required to turn it on. */
             trusted?: string[];
         };
+        /**
+         * @description What a purge job reports besides its progress. Every count is of
+         *     changes already saved: a purge that stopped (cancelled, failed, or cut
+         *     short by a restart) did exactly this much, and the source stays off
+         *     until a purge run again finishes it.
+         */
+        PurgeJob: {
+            /**
+             * Format: int64
+             * @description Torrents others found too, kept without this source.
+             */
+            kept: number;
+            /**
+             * Format: int64
+             * @description Keys waiting to be fetched that were dropped.
+             */
+            keys_dropped: number;
+            plugin: string;
+            /**
+             * Format: int64
+             * @description Warnings the snapshot pass raised: every problem it met (a
+             *     snapshot it couldn't read or write now, one of a schema it doesn't
+             *     know, a file it couldn't delete), so this counts problems, not only
+             *     snapshots left unscrubbed. The hourly pass tries again, and a
+             *     rollback scrubs a snapshot before restoring it.
+             */
+            snapshots_left: number;
+            /**
+             * Format: int64
+             * @description Snapshots the pass changed: its credentials and consent removed,
+             *     with anything else the pass was due to remove.
+             */
+            snapshots_scrubbed: number;
+            /** Format: int32 */
+            source_id: number;
+            stage: components["schemas"]["PurgeStage"];
+            /**
+             * Format: int64
+             * @description Torrents only this source found, deleted.
+             */
+            torrents_deleted: number;
+            /**
+             * Format: int64
+             * @description Items without metadata only this source found, deleted.
+             */
+            unverified_deleted: number;
+        };
+        /** @description `POST /sources/{id}/purge`. */
+        PurgeRequest: {
+            /** @description The admin password, checked fresh: a purge can't be undone. */
+            password?: string | null;
+        };
+        /**
+         * @description Where a purge is.
+         * @enum {string}
+         */
+        PurgeStage: "stopping" | "removing" | "finishing" | "purged";
         QuarantineEntry: {
             /**
              * @description Held only because you relabelled it adult (a correction or a
@@ -7516,8 +7603,8 @@ export interface components {
              */
             networks: string[];
             /**
-             * @description Fields planned for a later slice (`purge`): listed so the UI can
-             *     show them, refused by `PATCH`.
+             * @description Fields `PATCH` refuses: `purge`, which runs as a job through
+             *     `POST /sources/{id}/purge`.
              */
             not_yet_editable: string[];
             /**
@@ -7532,6 +7619,12 @@ export interface components {
              * @enum {string}
              */
             priority: "low" | "normal" | "high" | "max";
+            /**
+             * @description A purge started and didn't finish (cancelled, failed, or cut short
+             *     by a restart): what it removed stays removed, and the source stays
+             *     off until a purge run again finishes it.
+             */
+            purge_pending: boolean;
             /**
              * @description Its stored state differs from what's running: it starts or stops
              *     at the next restart.
@@ -7651,6 +7744,7 @@ export interface components {
          *           "password_required": false,
          *           "plugin": "dht",
          *           "priority": "normal",
+         *           "purge_pending": false,
          *           "restart_required": false,
          *           "risk": "low",
          *           "schedule": {
@@ -12400,6 +12494,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Source"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    purgeSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's id, as `GET /sources` lists it. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PurgeRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
                 };
             };
             default: components["responses"]["Error"];

@@ -158,7 +158,9 @@ pub fn begin(
 }
 
 /// The snapshot a rollback of `failed` would restore (its name), or why
-/// it's refused, without writing anything.
+/// it's refused. It writes nothing but the snapshot itself: choosing one
+/// first scrubs it of every recorded source purge (SRC-14b), which a
+/// rollback would do anyway.
 pub fn preview(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<String>, String> {
     restore_plan(ctx, failed, previous).map(|s| s.map(|s| s.name))
 }
@@ -411,6 +413,14 @@ fn choose_snapshot(db: &Path, from: i64, before: &[String]) -> Option<SnapshotRe
         .filter(|s| matches!(s.kind, SnapKind::PreMigration { version, .. } if version == from + 1))
         .max_by_key(|s| s.kind)?;
     snapshots::settle(&snap.path).ok()?;
+    // Every source purge the store records goes into the snapshot before
+    // it's verified and hashed (SRC-14b): restored as it was, it would
+    // bring a purged source's credentials and consent back. A snapshot
+    // that can't be scrubbed isn't used.
+    if db.is_file() {
+        let live = util::open_read_only(db).ok()?;
+        snapshots::apply_source_purges(&live, &snap.path).ok()?;
+    }
     let conn = util::open_read_only(&snap.path).ok()?;
     util::quick_check(&conn).ok()?;
     if util::schema_version(&conn).ok()? != from {
@@ -707,6 +717,57 @@ mod tests {
             }
             assert_rolled_back(&s);
         }
+    }
+
+    /// An update rollback restores no purged source's credentials or
+    /// consent, even from a snapshot the hourly pass hasn't scrubbed, and
+    /// the purge's record survives it (SRC-14b).
+    #[test]
+    fn an_update_rollback_brings_back_nothing_a_purge_removed() {
+        let s = setup();
+        let latest = lodestar_store::latest_schema_version();
+        let snap = s
+            .ctx
+            .db
+            .with_file_name(format!("lodestar.pre-v{}.db", latest + 1));
+        // The snapshot holds the source as it was before its purge.
+        let conn = lodestar_store::rusqlite::Connection::open(&snap).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sources (id, plugin, version, state, added_at)
+                 VALUES (5, 'nyaa', '1', 0, 1);
+             INSERT INTO settings (key, value) VALUES
+                 ('sources.consent.nyaa', 'CONSENT-ACK-1'),
+                 ('sources.secret.nyaa/api_key', X'5345414C45442D534543524554');",
+        )
+        .unwrap();
+        drop(conn);
+        {
+            let mut live = Store::open(&s.ctx.db, StoreConfig::default()).unwrap();
+            let id = live.register_source("nyaa", "1", 1).unwrap();
+            live.begin_source_purge(id, 100).unwrap();
+            live.finish_source_purge(id, 100).unwrap();
+        }
+        let j = begin_it(&s);
+        assert!(j.snapshot.is_some(), "the scrubbed snapshot verifies");
+        finish(&s.ctx, j).unwrap();
+        let conn = lodestar_store::rusqlite::Connection::open(&s.ctx.db).unwrap();
+        let keys: Vec<String> = conn
+            .prepare("SELECT key FROM settings WHERE key LIKE 'sources.%' ORDER BY key")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(keys, ["sources.purged.nyaa"]);
+        let state: i64 = conn
+            .query_row("SELECT state FROM sources WHERE plugin = 'nyaa'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(state, 3);
+        let bytes = fs::read(&s.ctx.db).unwrap();
+        assert!(!bytes.windows(13).any(|w| w == b"SEALED-SECRET"));
+        assert!(!bytes.windows(11).any(|w| w == b"CONSENT-ACK"));
     }
 
     /// §12.2: no rollback can undo a revocation. `trust.json` (the
