@@ -24,6 +24,15 @@
 //!   ([`lodestar_api::search_live::percolate_live`]). So they never
 //!   delay an alert; when the budget runs out first they're `more`, and
 //!   the next run (straight away) takes them.
+//! - **Promoted torrents** (SRC-2b, `docs/decisions/2026-11-02-SRC-2b.md`)
+//!   keep an id below the watermarks, so the range never reaches them.
+//!   `promote` queues each one durably ([`Store::promoted_due`]); after
+//!   the saved searches, a run takes up to [`PROMOTED_BATCH`] of them that
+//!   the serving index has applied, matches each against the searches
+//!   that existed when it was promoted and have passed its id, and
+//!   records the hits and drops the rows in one transaction
+//!   ([`Store::record_promoted`]). A merge adds no torrent, so it's not
+//!   queued.
 //! - **Logs** name saved-search ids and counts, never a query or a
 //!   torrent name (§12.1).
 //! - **Fixture mode** never starts it (`fixture::unless_offline`), so the
@@ -39,7 +48,7 @@ use lodestar_api::events::EventHub;
 use lodestar_search::{
     CancelToken, CommitHook, Due, Node, PercolateLimits, SearchHandle, SearchIndex, percolate,
 };
-use lodestar_store::{Alert, SearchHits, Store};
+use lodestar_store::{Alert, PromotedDue, SearchHits, Store};
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
@@ -73,6 +82,10 @@ impl Default for PercolatorConfig {
         }
     }
 }
+
+/// Queued promotions one run takes at most: each is one tiny search per
+/// saved search, so a batch stays well inside the budget.
+pub const PROMOTED_BATCH: usize = 256;
 
 /// What the commit hook hands the task.
 #[derive(Debug, Default)]
@@ -111,6 +124,9 @@ pub struct Run {
     pub created: Vec<Alert>,
     /// Live queries that ran, after the saved searches.
     pub live: usize,
+    /// Promoted torrents percolated, and what that took.
+    pub promoted: usize,
+    pub promoted_took: Duration,
 }
 
 /// What the task remembers between runs.
@@ -191,15 +207,21 @@ pub fn run_once(
             ast,
         ));
     }
-    let mut failed = None;
+    let mut failed: Option<BoxError> = None;
     for (end, hits) in &by_end {
         match store.record_percolation_unchanged(*end, hits, now) {
             Ok(created) => run.created.extend(created),
             Err(e) => {
-                failed = Some(e);
+                failed = Some(e.into());
                 break;
             }
         }
+    }
+    if failed.is_none() {
+        let started = Instant::now();
+        let promoted = run_promoted(index, store, &cancel, now, &mut run);
+        run.promoted_took = started.elapsed();
+        failed = promoted.err();
     }
     run.alerts = run.created.len();
     // Announced even when a later transaction failed: the earlier ones
@@ -233,19 +255,126 @@ pub fn run_once(
         run.more |= live.more;
     }
     if let Some(e) = failed {
-        return Err(e.into());
+        return Err(e);
     }
-    if run.searches > 0 || run.unreadable > 0 {
+    if run.searches > 0 || run.unreadable > 0 || run.promoted > 0 {
         lodestar_log::log_event!(
             crate::logging::events::ALERTS_RUN,
             searches = lodestar_log::Count(run.searches as u64),
             through = lodestar_log::Count(through.unsigned_abs()),
             alerts = lodestar_log::Count(run.alerts as u64),
             unreadable = lodestar_log::Count(run.unreadable as u64),
-            more = run.more
+            more = run.more,
+            promoted = lodestar_log::Count(run.promoted as u64),
+            promoted_ms = lodestar_log::Count(run.promoted_took.as_millis() as u64)
         );
     }
     Ok(run)
+}
+
+/// Percolates up to [`PROMOTED_BATCH`] queued promotions (see the module
+/// docs) on what's left of `cancel`'s budget, adding their alerts to
+/// `run`. Rows the budget didn't reach stay queued and `run.more` is set.
+fn run_promoted(
+    index: &SearchIndex,
+    store: &mut Store,
+    cancel: &CancelToken,
+    now: i64,
+    run: &mut Run,
+) -> Result<(), BoxError> {
+    // The entry first, then the reader: a torrent the entry names is in
+    // what the refreshed reader sees.
+    let applied = index.reindex_watermark()?;
+    let rows = store.promoted_due(applied, PROMOTED_BATCH)?;
+    let Some(last) = rows.last().map(|r| r.seq) else {
+        return Ok(());
+    };
+    index.refresh()?;
+    // Every active search; one with an unreadable query gets nothing (the
+    // forward run logs it).
+    let searches = store.percolation_due(i64::MAX)?;
+    let parsed: Vec<(i64, i64, &str, Node)> = searches
+        .iter()
+        .filter_map(|s| {
+            let node = serde_json::from_str::<Node>(&s.ast).ok()?;
+            Some((s.id, s.watermark, s.ast.as_str(), node))
+        })
+        .collect();
+    let limits = PercolateLimits {
+        keep: 1,
+        max_range: 1,
+    };
+    let mut hits: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    let mut done = None;
+    for row in &rows {
+        if !matched_promoted(index, &parsed, row, limits, now, cancel, &mut hits)? {
+            break;
+        }
+        done = Some(row.seq);
+        run.promoted += 1;
+    }
+    run.more |= done != Some(last) || rows.len() == PROMOTED_BATCH;
+    let Some(done) = done else {
+        return Ok(());
+    };
+    let asts: HashMap<i64, &str> = parsed.iter().map(|p| (p.0, p.2)).collect();
+    let results: Vec<(SearchHits<'_>, &str)> = hits
+        .iter()
+        .map(|(id, torrent_ids)| {
+            (
+                SearchHits {
+                    saved_search_id: *id,
+                    torrent_ids,
+                },
+                asts.get(id).copied().unwrap_or_default(),
+            )
+        })
+        .collect();
+    run.created
+        .extend(store.record_promoted(done, &results, now)?);
+    Ok(())
+}
+
+/// Matches one promoted torrent against the searches it's due for: those
+/// that existed when it was promoted and whose watermark has passed its
+/// id (a search below it meets it in its own range). Whether the budget
+/// let them all run; a search that fails in the index is passed over, so
+/// one bad query can't hold the queue.
+fn matched_promoted(
+    index: &SearchIndex,
+    searches: &[(i64, i64, &str, Node)],
+    row: &PromotedDue,
+    limits: PercolateLimits,
+    now: i64,
+    cancel: &CancelToken,
+    hits: &mut BTreeMap<i64, Vec<i64>>,
+) -> Result<bool, BoxError> {
+    let due: Vec<Due<'_>> = searches
+        .iter()
+        .filter(|(id, watermark, ..)| *id <= row.searches_through && *watermark >= row.torrent_id)
+        .map(|(id, _, _, node)| Due {
+            id: *id,
+            watermark: row.torrent_id - 1,
+            query: node,
+            utc_offset: 0,
+            count_only: false,
+            stems: false,
+            stoppable: false,
+        })
+        .collect();
+    if due.is_empty() || row.torrent_id <= 0 {
+        return Ok(true);
+    }
+    let p = percolate(index, &due, row.torrent_id, limits, now, cancel)?;
+    if p.stopped {
+        return Ok(false);
+    }
+    for m in p.matched {
+        if m.torrent_ids.contains(&row.torrent_id) {
+            hits.entry(m.id).or_default().push(row.torrent_id);
+        }
+    }
+    Ok(true)
 }
 
 /// Keeps each saved search's newest `keep` alerts.
@@ -405,7 +534,12 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use lodestar_search::{LiveConfig, LiveIndexer, Serving, ServingConfig, parse};
-    use lodestar_store::{NewTorrent, SavedSearchInput, SourceId, StoreConfig};
+    use lodestar_store::claims::Claims;
+    use lodestar_store::unverified::{Network, NewUnverified, Promoted};
+    use lodestar_store::{
+        NewTorrent, PreparedTorrent, SavedSearchInput, SearchableCodes, SourceId, StoreConfig,
+        flags,
+    };
 
     use super::*;
 
@@ -872,6 +1006,276 @@ mod tests {
 
     /// The sink only raises an atomic and wakes: with the task never
     /// running at all, the indexer commits everything as fast as without.
+    const CODES: SearchableCodes = SearchableCodes {
+        stage: 5,
+        newly: 10,
+        delay: 11,
+    };
+
+    /// A feed's unverified item for `name`: its id, below every torrent
+    /// stored after it.
+    fn unverified(store: &mut Store, name: &str) -> i64 {
+        let feed = store.register_source("feed", "1", NOW).unwrap();
+        let raw = info(name);
+        let parsed = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let hash = store.preparer().prepare(&parsed, None).unwrap().info_hash.0;
+        let claims = Claims {
+            name: Some(name.into()),
+            ..Claims::default()
+        };
+        store
+            .put_unverified(&[NewUnverified {
+                network: Network::Bt,
+                key: &hash,
+                source: feed,
+                private_source: false,
+                claims: Some(&claims),
+                at: NOW,
+            }])
+            .unwrap();
+        store.unverified(Network::Bt, &hash).unwrap().unwrap().id
+    }
+
+    /// Its verified metadata arrives: `name`'s info dict promotes item `id`.
+    fn promote(store: &mut Store, id: i64, name: &str, extra_flags: i64) -> Promoted {
+        let raw = info(name);
+        let parsed = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let prepared = store.preparer().prepare(&parsed, None).unwrap();
+        store
+            .promote(
+                id,
+                &PreparedTorrent {
+                    torrent: &prepared,
+                    discovered_at: NOW,
+                    metadata_at: NOW,
+                    extra_flags,
+                    source: SourceId::new(0).unwrap(),
+                    verified: true,
+                },
+                CODES,
+                NOW,
+            )
+            .unwrap()
+    }
+
+    /// An unverified item `Promo.Even` below 20 indexed torrents, and a
+    /// search for `Promo` (and one for `Even`) whose watermark has passed
+    /// it: the forward run will never reach the item's id.
+    fn promo_setup() -> (Setup, i64, i64, i64) {
+        let mut s = setup(0);
+        let item = unverified(&mut s.store, "Promo.Even");
+        add(&mut s.store, &names(0, 20));
+        index_all(&s.index, &mut s.store);
+        let w = s.index.watermark().unwrap();
+        assert!(w > item);
+        let promo = save(&mut s.store, "promo", "Promo", w);
+        let even = save(&mut s.store, "even", "Even", w);
+        (s, item, promo, even)
+    }
+
+    fn run(s: &mut Setup, through: i64) -> Run {
+        run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            through,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_promoted_id_below_the_watermark_alerts_once() {
+        let (mut s, item, promo, even) = promo_setup();
+        let w = s.index.watermark().unwrap();
+        assert_eq!(
+            promote(&mut s.store, item, "Promo.Even", 0),
+            Promoted::Kept(item)
+        );
+        // Not before the index has applied the promotion.
+        let r = run(&mut s, w);
+        assert_eq!((r.promoted, r.alerts), (0, 0));
+        assert!(alert_ids(&s.store, promo).is_empty());
+        index_all(&s.index, &mut s.store);
+        let r = run(&mut s, w);
+        assert_eq!((r.promoted, r.alerts, r.more), (1, 2, false));
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+        assert_eq!(alert_ids(&s.store, even), vec![item]);
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+        // Nothing twice.
+        let r = run(&mut s, w);
+        assert_eq!((r.promoted, r.alerts), (0, 0));
+        assert_eq!(s.store.saved_search(promo).unwrap().unwrap().watermark, w);
+    }
+
+    #[test]
+    fn a_crash_between_hit_and_cursor_replays_without_duplicates() {
+        let (mut s, item, promo, even) = promo_setup();
+        let w = s.index.watermark().unwrap();
+        promote(&mut s.store, item, "Promo.Even", 0);
+        index_all(&s.index, &mut s.store);
+        let due = s.store.promoted_due(i64::MAX, 10).unwrap();
+        assert_eq!(due.len(), 1);
+        // The hit for `promo` was committed, its queue row wasn't: the
+        // row stays and the replay matches the same id again.
+        let ast = s.store.saved_search(promo).unwrap().unwrap().ast;
+        let created = s
+            .store
+            .record_promoted(
+                due[0].seq - 1,
+                &[(
+                    SearchHits {
+                        saved_search_id: promo,
+                        torrent_ids: &[item],
+                    },
+                    ast.as_str(),
+                )],
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap(), due);
+        // A restart: the row is read from the file again.
+        s.store = Store::open(&s.db, StoreConfig::default()).unwrap();
+        let r = run(&mut s, w);
+        assert_eq!((r.promoted, r.alerts), (1, 1), "only `even` is new");
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+        assert_eq!(alert_ids(&s.store, even), vec![item]);
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn restart_continuity_and_no_backfill() {
+        let (mut s, item, promo, _) = promo_setup();
+        let w = s.index.watermark().unwrap();
+        promote(&mut s.store, item, "Promo.Even", 0);
+        // Created after the promotion, at the index's watermark: like any
+        // new search, it doesn't alert on what came before it.
+        let later = save(&mut s.store, "later", "Promo", w);
+        index_all(&s.index, &mut s.store);
+        // Restart before the percolator ran.
+        s.store = Store::open(&s.db, StoreConfig::default()).unwrap();
+        run(&mut s, w);
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+        assert!(alert_ids(&s.store, later).is_empty());
+    }
+
+    #[test]
+    fn a_merge_held_or_hidden_promotion_does_not_alert() {
+        let (mut s, item, promo, even) = promo_setup();
+        let w = s.index.watermark().unwrap();
+        // Merged: the crawler stored the hash before its item was fetched.
+        let merged = unverified(&mut s.store, "Promo.Merged.Even");
+        let stored = add(&mut s.store, &["Promo.Merged.Even".to_string()])[0];
+        assert_eq!(
+            promote(&mut s.store, merged, "Promo.Merged.Even", 0),
+            Promoted::Merged(stored)
+        );
+        // Held: a CS-1 hash arrived before its metadata.
+        let held = unverified(&mut s.store, "Promo.Held.Even");
+        let raw = info("Promo.Held.Even");
+        let parsed = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let hash = s
+            .store
+            .preparer()
+            .prepare(&parsed, None)
+            .unwrap()
+            .info_hash
+            .0;
+        s.store.add_cs_hashes(&[hash], 0, NOW).unwrap();
+        assert!(matches!(
+            promote(&mut s.store, held, "Promo.Held.Even", 0),
+            Promoted::Held | Promoted::Gone
+        ));
+        // Hidden by a filter rule.
+        assert_eq!(
+            promote(&mut s.store, item, "Promo.Even", flags::HIDDEN),
+            Promoted::Kept(item)
+        );
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        index_all(&s.index, &mut s.store);
+        let through = s.index.watermark().unwrap();
+        run(&mut s, through);
+        // The merged torrent alerts once, in its own range, as any new
+        // torrent; the promotion that found it adds nothing.
+        assert_eq!(alert_ids(&s.store, promo), vec![item, stored]);
+        assert!(stored > w);
+        // A hidden torrent's alert is never shown or counted (B8).
+        let shown: Vec<i64> = s
+            .store
+            .shown_alerts(even, None, 10, None, false)
+            .unwrap()
+            .iter()
+            .map(|a| a.torrent_id)
+            .collect();
+        assert_eq!(shown, vec![stored]);
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_full_batch_leaves_the_rest_for_the_next_run() {
+        let mut s = setup(0);
+        let items: Vec<i64> = (0..PROMOTED_BATCH + 3)
+            .map(|i| unverified(&mut s.store, &format!("Promo.{i}")))
+            .collect();
+        add(&mut s.store, &names(0, 5));
+        index_all(&s.index, &mut s.store);
+        let w = s.index.watermark().unwrap();
+        let promo = save(&mut s.store, "promo", "Promo", w);
+        for (i, id) in items.iter().enumerate() {
+            promote(&mut s.store, *id, &format!("Promo.{i}"), 0);
+        }
+        index_all(&s.index, &mut s.store);
+        let first = run(&mut s, w);
+        assert_eq!((first.promoted, first.more), (PROMOTED_BATCH, true));
+        let second = run(&mut s, w);
+        assert_eq!((second.promoted, second.more), (3, false));
+        assert_eq!(alert_ids(&s.store, promo), items);
+    }
+
+    /// The cost of one full batch, for the decisions file:
+    /// `cargo test --release -p lodestar promoted_batch_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement"]
+    fn promoted_batch_cost() {
+        let mut s = setup(0);
+        let items: Vec<i64> = (0..PROMOTED_BATCH)
+            .map(|i| unverified(&mut s.store, &format!("Promo.{i}")))
+            .collect();
+        add(&mut s.store, &names(0, 10_000));
+        index_all(&s.index, &mut s.store);
+        let w = s.index.watermark().unwrap();
+        for i in 0..20 {
+            let q = if i % 2 == 0 { "Promo" } else { "Show Even" };
+            save(&mut s.store, &format!("s{i}"), q, w);
+        }
+        for (i, id) in items.iter().enumerate() {
+            promote(&mut s.store, *id, &format!("Promo.{i}"), 0);
+        }
+        index_all(&s.index, &mut s.store);
+        let config = PercolatorConfig {
+            budget: Duration::from_secs(60),
+            ..quick()
+        };
+        let r = run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            w,
+            &config,
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
+        assert_eq!(r.promoted, PROMOTED_BATCH);
+        println!(
+            "{} promoted x 20 searches: {:?}, {} alerts",
+            r.promoted, r.promoted_took, r.alerts
+        );
+    }
+
     #[test]
     fn a_stalled_task_never_delays_a_commit() {
         let mut s = setup(0);

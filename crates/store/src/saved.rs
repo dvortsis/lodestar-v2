@@ -7,8 +7,15 @@
 //! crash between the two can only re-run a range, never skip one; a
 //! repeated hit is ignored. The store keeps the query text and AST as the
 //! API gives them: parsing and compiling belong to the search crate.
+//!
+//! **Promoted torrents** (SRC-2b, `docs/decisions/2026-11-02-SRC-2b.md`)
+//! keep an id below the watermarks, so the forward run never sees them.
+//! [`Store::promote`] queues each kept id in `settings`, keyed by its
+//! `reindex_log` entry; the percolator reads the queue in that order
+//! ([`Store::promoted_due`]) and records the hits and drops the rows it
+//! covered in one transaction ([`Store::record_promoted`]).
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::user_data::{check_name, check_text, sql_limit};
 use crate::{Error, Result, Store, flags};
@@ -78,6 +85,37 @@ pub struct Alert {
 pub struct SearchHits<'a> {
     pub saved_search_id: i64,
     pub torrent_ids: &'a [i64],
+}
+
+/// One queued promotion (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromotedDue {
+    /// Its `reindex_log` entry.
+    pub seq: i64,
+    pub torrent_id: i64,
+    /// The highest saved-search id when it was promoted. Ids are
+    /// `AUTOINCREMENT`, so a search above it was created later and
+    /// doesn't alert on it (no backfill, as for the forward run).
+    pub searches_through: i64,
+}
+
+/// The queue's `settings` keys: this prefix and the `reindex_log` seq in
+/// 20 digits, so key order is seq order.
+const PROMOTED: &str = "percolator.promoted.";
+
+fn promoted_key(seq: i64) -> String {
+    format!("{PROMOTED}{:020}", seq.max(0))
+}
+
+/// Queues a kept promotion whose `reindex_log` entry is `seq`, in the
+/// promotion's own transaction.
+pub(crate) fn queue_promoted(tx: &Connection, seq: i64) -> Result<()> {
+    tx.prepare_cached(
+        "INSERT INTO settings (key, value)
+         SELECT ?1, coalesce(max(id), 0) FROM saved_searches",
+    )?
+    .execute([promoted_key(seq)])?;
+    Ok(())
 }
 
 const COLUMNS: &str =
@@ -489,6 +527,64 @@ impl Store {
         tx.commit()?;
         Ok(created)
     }
+
+    /// Up to `limit` queued promotions whose `reindex_log` entry is at or
+    /// below `applied` (what the serving index has applied), oldest
+    /// first. A row whose entry is gone reads as torrent 0, which matches
+    /// nothing, so it's still consumed.
+    pub fn promoted_due(&self, applied: i64, limit: usize) -> Result<Vec<PromotedDue>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT CAST(substr(s.key, ?3) AS INTEGER), coalesce(r.torrent_id, 0), s.value
+             FROM settings s LEFT JOIN reindex_log r
+                 ON r.seq = CAST(substr(s.key, ?3) AS INTEGER)
+             WHERE s.key > ?1 AND s.key <= ?2 ORDER BY s.key LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                PROMOTED,
+                promoted_key(applied),
+                PROMOTED.len() as i64 + 1,
+                sql_limit(limit)
+            ],
+            |r| {
+                Ok(PromotedDue {
+                    seq: r.get(0)?,
+                    torrent_id: r.get(1)?,
+                    searches_through: r.get(2)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Records the percolation of every queued promotion up to `seq`, in
+    /// one transaction: each search's hits become alerts, checked as
+    /// [`Store::record_percolation_unchanged`] checks them (a search paused
+    /// or edited meanwhile gets none), and those queue rows are dropped.
+    /// No watermark moves. A crash before the commit replays the rows; a
+    /// hit recorded already (by the forward run or a replay) is ignored.
+    pub fn record_promoted(
+        &mut self,
+        seq: i64,
+        results: &[(SearchHits<'_>, &str)],
+        now: i64,
+    ) -> Result<Vec<Alert>> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let mut created = Vec::new();
+        for (r, ast) in results {
+            let current: Option<(bool, String)> = tx
+                .prepare_cached("SELECT paused, ast FROM saved_searches WHERE id = ?1")?
+                .query_row([r.saved_search_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()?;
+            if current.is_some_and(|(paused, current)| !paused && current == *ast) {
+                insert_alerts(&tx, r, i64::MIN, now, &mut created)?;
+            }
+        }
+        tx.prepare_cached("DELETE FROM settings WHERE key > ?1 AND key <= ?2")?
+            .execute(params![PROMOTED, promoted_key(seq)])?;
+        tx.commit()?;
+        Ok(created)
+    }
 }
 
 fn record_hits(
@@ -505,6 +601,21 @@ fn record_hits(
     let Some(watermark) = watermark else {
         return Ok(());
     };
+    insert_alerts(tx, r, watermark, now, created)?;
+    tx.prepare_cached("UPDATE saved_searches SET watermark = max(watermark, ?2) WHERE id = ?1")?
+        .execute(params![r.saved_search_id, through])?;
+    Ok(())
+}
+
+/// `r`'s hits above `after` that are still torrents become alerts; one
+/// recorded already is left as it is.
+fn insert_alerts(
+    tx: &Transaction<'_>,
+    r: &SearchHits<'_>,
+    after: i64,
+    now: i64,
+    created: &mut Vec<Alert>,
+) -> Result<()> {
     let mut insert = tx.prepare_cached(
         "INSERT INTO alerts (saved_search_id, torrent_id, created_at)
          SELECT ?1, id, ?3 FROM torrents WHERE id = ?2
@@ -513,7 +624,7 @@ fn record_hits(
     let mut ids = r.torrent_ids.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    for t in ids.into_iter().filter(|&t| t > watermark) {
+    for t in ids.into_iter().filter(|&t| t > after) {
         if insert.execute(params![r.saved_search_id, t, now])? > 0 {
             created.push(Alert {
                 id: tx.last_insert_rowid(),
@@ -524,8 +635,6 @@ fn record_hits(
             });
         }
     }
-    tx.prepare_cached("UPDATE saved_searches SET watermark = max(watermark, ?2) WHERE id = ?1")?
-        .execute(params![r.saved_search_id, through])?;
     Ok(())
 }
 
@@ -554,6 +663,26 @@ mod tests {
             saved_search_id: id,
             torrent_ids: t,
         }
+    }
+
+    #[test]
+    fn the_promoted_queue_reads_in_seq_order_up_to_what_the_index_applied() {
+        let mut s = test_store();
+        let a = s.create_saved_search(&input("a"), 0, 0).unwrap();
+        for seq in [100, 9, 10] {
+            queue_promoted(&s.conn, seq).unwrap();
+        }
+        let seqs = |s: &Store, applied| -> Vec<i64> {
+            let due = s.promoted_due(applied, 10).unwrap();
+            due.iter().map(|d| d.seq).collect()
+        };
+        assert_eq!(seqs(&s, 10), vec![9, 10]);
+        assert_eq!(seqs(&s, i64::MAX), vec![9, 10, 100]);
+        // No `reindex_log` entry behind it: torrent 0, consumed all the same.
+        let due = s.promoted_due(i64::MAX, 1).unwrap();
+        assert_eq!((due[0].torrent_id, due[0].searches_through), (0, a));
+        assert!(s.record_promoted(10, &[], 0).unwrap().is_empty());
+        assert_eq!(seqs(&s, i64::MAX), vec![100]);
     }
 
     #[test]

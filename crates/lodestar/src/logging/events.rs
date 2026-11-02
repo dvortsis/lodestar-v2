@@ -423,13 +423,23 @@ lodestar_log::catalogue! {
         message: "Announcing new alerts failed; they're recorded and listed",
         fields: {},
     }
-    /// One percolator run: counts only, never a query.
+    /// One percolator run: counts only, never a query. `promoted` is the
+    /// promoted torrents it percolated (SRC-2b) and `promoted_ms` what
+    /// that batch took.
     ALERTS_RUN {
         id: "alerts.run",
         component: Search,
         level: Debug,
         message: "Percolator run",
-        fields: { searches: Label, through: Label, alerts: Label, unreadable: Label, more: Label },
+        fields: {
+            searches: Label,
+            through: Label,
+            alerts: Label,
+            unreadable: Label,
+            more: Label,
+            promoted: Label,
+            promoted_ms: Label,
+        },
     }
     /// New alerts were found.
     ALERTS_FOUND {

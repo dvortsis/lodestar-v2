@@ -810,6 +810,16 @@ impl SearchIndex {
         Ok(watermarks_of(&self.index)?.0)
     }
 
+    /// The last `reindex_log` entry both indexes have committed (0 for a
+    /// new index). A torrent id that entry names is searchable once this
+    /// handle is [refreshed](Self::refresh): the file index commits and
+    /// reloads before the torrent index commits.
+    pub fn reindex_watermark(&self) -> Result<i64> {
+        Ok(watermarks_of(&self.index)?
+            .1
+            .min(watermarks_of(&self.files.index)?.1))
+    }
+
     /// The highest torrent id whose files are indexed.
     pub fn files_watermark(&self) -> Result<i64> {
         Ok(watermarks_of(&self.files.index)?.0)
