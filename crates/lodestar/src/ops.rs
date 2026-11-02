@@ -12,14 +12,15 @@ use std::time::{Duration, Instant};
 
 use lodestar_api::ops::{
     BoxFuture, ConsentClass, CrawlerRuntime, DhtStatus, ExternalAddress, FetchStatus, NetworkCheck,
-    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, SamplingBlocked, Source, SourceHealth,
-    SourceKind, SourcePatch, SourcePriority, SourceState, StatsResponse,
+    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, SamplingBlocked, Secret, Source,
+    SourceHealth, SourceKind, SourceNeed, SourcePatch, SourcePriority, SourceState, StatsResponse,
 };
 use lodestar_dht::node::{NodeHandle, StatsSnapshot};
 use lodestar_pipeline::Monitor;
 use lodestar_pipeline::control::{
     self, Control, REACH_MIN_SECS, REACH_WINDOW_SECS, SourceChange, SourceError, SourceView,
 };
+use lodestar_sources::consent::{self as consent_rules, Need, SourceCredentials};
 use lodestar_sources::{Consent, Kind, Priority, Risk};
 use lodestar_store::SourceId;
 
@@ -27,7 +28,7 @@ use crate::http::SearchState;
 use crate::settings::crawler::Crawler;
 
 /// What a source's `PATCH` changes now, and what waits for v0.6.
-const EDITABLE: [&str; 2] = ["enabled", "priority"];
+const EDITABLE: [&str; 3] = ["credentials", "enabled", "priority"];
 const NOT_YET_EDITABLE: [&str; 4] = ["agents", "egress", "purge", "schedule"];
 /// How long the data directory's size is reused before it's measured
 /// again (it walks the directory).
@@ -68,6 +69,8 @@ pub struct Ops {
     size: SizeCache,
     /// `None` when the DHT is off.
     dht: Option<DhtReport>,
+    /// The per-source credential store, over the install's key file.
+    pub credentials: SourceCredentials,
 }
 
 impl std::fmt::Debug for Ops {
@@ -86,7 +89,9 @@ impl Ops {
         search: Option<SearchState>,
         data_dir: PathBuf,
     ) -> Ops {
+        let credentials = SourceCredentials::new(control.store(), data_dir.clone());
         Ops {
+            credentials,
             control,
             crawler,
             monitor,
@@ -241,9 +246,16 @@ fn source(v: SourceView) -> Source {
     let enabled = state == SourceState::Enabled;
     Source {
         consent: consent(m.consent),
-        consent_required: control::needs_consent(m.consent),
+        consent_required: consent_rules::needs_ack(m.consent),
+        consent_version: v.consent_version.clone(),
+        credentials: v.credentials.clone(),
         editable: EDITABLE.map(String::from).to_vec(),
         enabled,
+        endpoints: m
+            .endpoints
+            .iter()
+            .map(|e| format!("{}://{}", e.protocol, e.host))
+            .collect(),
         health: SourceHealth {
             harvested_24h: v.harvested_24h,
             last_error: v.status.last_error.clone(),
@@ -265,7 +277,13 @@ fn source(v: SourceView) -> Source {
             })
             .collect(),
         name: m.name.to_string(),
+        needs: v.need.map(|n| match n {
+            Need::Endpoints => SourceNeed::EndpointsAck,
+            Need::Credentials => SourceNeed::Credentials,
+            Need::Consent => SourceNeed::Consent,
+        }),
         not_yet_editable: NOT_YET_EDITABLE.map(String::from).to_vec(),
+        password_required: consent_rules::needs_password(m.consent),
         plugin: m.id.to_string(),
         priority: priority(v.priority),
         restart_required: enabled != v.status.enabled,
@@ -276,6 +294,21 @@ fn source(v: SourceView) -> Source {
         },
         state,
         version: v.version,
+    }
+}
+
+fn source_error(e: SourceError) -> OpsError {
+    match e {
+        SourceError::Unknown => OpsError::UnknownSource,
+        SourceError::ConsentRequired { class, version } => OpsError::ConsentRequired {
+            class: consent(class),
+            version,
+        },
+        SourceError::PasswordRequired => OpsError::PasswordRequired,
+        SourceError::CredentialsRequired => OpsError::CredentialsRequired,
+        SourceError::Credential(r) => OpsError::BadCredential(r.to_string()),
+        SourceError::Sealing => OpsError::Internal("the credential key couldn't be read".into()),
+        SourceError::Store(e) => internal(e),
     }
 }
 
@@ -355,20 +388,41 @@ impl OpsApi for Ops {
         })
     }
 
-    fn patch_source(&self, id: u8, patch: SourcePatch) -> BoxFuture<'_, Result<Source, OpsError>> {
+    fn patch_source(
+        &self,
+        id: u8,
+        patch: SourcePatch,
+        password_confirmed: bool,
+    ) -> BoxFuture<'_, Result<Source, OpsError>> {
         Box::pin(async move {
             let id = SourceId::new(id).ok_or(OpsError::UnknownSource)?;
             let change = SourceChange {
                 enabled: patch.enabled,
                 priority: patch.priority.map(priority_back),
                 consent: patch.consent.map(consent_back),
+                consent_version: patch.consent_version,
+                password_confirmed,
             };
-            match self.control.update_source(id, change).await {
-                Ok(v) => Ok(source(v)),
-                Err(SourceError::Unknown) => Err(OpsError::UnknownSource),
-                Err(SourceError::ConsentRequired(c)) => Err(OpsError::ConsentRequired(consent(c))),
-                Err(SourceError::Store(e)) => Err(internal(e)),
-            }
+            self.control
+                .update_source(id, change)
+                .await
+                .map(source)
+                .map_err(source_error)
+        })
+    }
+
+    fn patch_source_credentials(
+        &self,
+        id: u8,
+        changes: Vec<(String, Option<Secret>)>,
+    ) -> BoxFuture<'_, Result<Source, OpsError>> {
+        Box::pin(async move {
+            let id = SourceId::new(id).ok_or(OpsError::UnknownSource)?;
+            self.control
+                .update_credentials(id, &self.credentials, changes)
+                .await
+                .map(source)
+                .map_err(source_error)
         })
     }
 

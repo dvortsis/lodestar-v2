@@ -17,7 +17,7 @@ use axum::http::{Request, header};
 use lodestar_api::ops::{
     BoxFuture, ConsentClass, CrawlerRuntime, DhtStatus, ExternalAddress, FetchStatus, NetworkCheck,
     OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, SamplingBlocked, Source, SourceHealth,
-    SourceKind, SourcePatch, SourcePriority, SourceState, StatsResponse,
+    SourceKind, SourceNeed, SourcePatch, SourcePriority, SourceState, StatsResponse,
 };
 use lodestar_api::settings::{
     Imported, Saved, SectionValues, SettingSource, SettingValue, SettingsApi, SettingsBatch,
@@ -125,8 +125,11 @@ fn dht_source() -> Source {
     Source {
         consent: ConsentClass::None,
         consent_required: false,
-        editable: vec!["enabled".into(), "priority".into()],
+        consent_version: String::new(),
+        credentials: Vec::new(),
+        editable: vec!["credentials".into(), "enabled".into(), "priority".into()],
         enabled: true,
+        endpoints: Vec::new(),
         health: SourceHealth {
             harvested_24h: 1200,
             last_error: None,
@@ -137,9 +140,11 @@ fn dht_source() -> Source {
         id: 0,
         kinds: vec![SourceKind::Discovery, SourceKind::PeerFinder],
         name: "Mainline DHT".into(),
+        needs: None,
         not_yet_editable: ["agents", "egress", "purge", "schedule"]
             .map(String::from)
             .to_vec(),
+        password_required: false,
         plugin: "dht".into(),
         priority: SourcePriority::Normal,
         restart_required: false,
@@ -153,7 +158,9 @@ fn restricted_source() -> Source {
     Source {
         consent: ConsentClass::Restricted,
         consent_required: true,
+        consent_version: "1-00000000000000ff".into(),
         enabled: false,
+        endpoints: vec!["https://shadow.example".into()],
         health: SourceHealth {
             harvested_24h: 0,
             last_error: None,
@@ -164,6 +171,8 @@ fn restricted_source() -> Source {
         id: 1,
         kinds: vec![SourceKind::Importer],
         name: "Shadow library".into(),
+        needs: Some(SourceNeed::Consent),
+        password_required: true,
         plugin: "shadow".into(),
         priority: SourcePriority::Low,
         risk: RiskLevel::High,
@@ -227,7 +236,12 @@ impl OpsApi for FakeOps {
         Box::pin(async move { Ok(self.sources.lock().unwrap().clone()) })
     }
 
-    fn patch_source(&self, id: u8, patch: SourcePatch) -> BoxFuture<'_, Result<Source, OpsError>> {
+    fn patch_source(
+        &self,
+        id: u8,
+        patch: SourcePatch,
+        confirmed: bool,
+    ) -> BoxFuture<'_, Result<Source, OpsError>> {
         Box::pin(async move {
             let mut sources = self.sources.lock().unwrap();
             let s = sources
@@ -237,9 +251,16 @@ impl OpsApi for FakeOps {
             if patch.enabled == Some(true)
                 && !s.enabled
                 && s.consent_required
-                && patch.consent != Some(s.consent)
+                && (patch.consent != Some(s.consent)
+                    || patch.consent_version.as_deref() != Some(s.consent_version.as_str()))
             {
-                return Err(OpsError::ConsentRequired(s.consent));
+                return Err(OpsError::ConsentRequired {
+                    class: s.consent,
+                    version: s.consent_version.clone(),
+                });
+            }
+            if patch.enabled == Some(true) && !s.enabled && s.password_required && !confirmed {
+                return Err(OpsError::PasswordRequired);
             }
             if let Some(on) = patch.enabled {
                 s.enabled = on;
@@ -253,6 +274,28 @@ impl OpsApi for FakeOps {
             if let Some(p) = patch.priority {
                 s.priority = p;
             }
+            Ok(s.clone())
+        })
+    }
+
+    fn patch_source_credentials(
+        &self,
+        id: u8,
+        changes: Vec<(String, Option<lodestar_api::ops::Secret>)>,
+    ) -> BoxFuture<'_, Result<Source, OpsError>> {
+        Box::pin(async move {
+            let mut sources = self.sources.lock().unwrap();
+            let s = sources
+                .iter_mut()
+                .find(|s| s.id == id)
+                .ok_or(OpsError::UnknownSource)?;
+            for (name, value) in changes {
+                s.credentials.retain(|n| *n != name);
+                if value.is_some() {
+                    s.credentials.push(name);
+                }
+            }
+            s.credentials.sort();
             Ok(s.clone())
         })
     }
@@ -584,6 +627,48 @@ async fn sources() {
     )
     .await;
     assert_eq!(e["error"]["code"], json!("consent_required"));
+    // The right class at an old version asks again.
+    let e = golden(
+        &f,
+        "source_consent_stale",
+        req(
+            "PATCH",
+            "/api/v1/sources/1",
+            c,
+            Some(
+                r#"{"enabled":true,"consent":"restricted","consent_version":"0-00000000000000ff"}"#,
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(e["error"]["code"], json!("consent_required"));
+    // Accepting Restricted consent needs the password, and a wrong one is
+    // refused before the source is asked.
+    let e = golden(
+        &f,
+        "source_consent_password_required",
+        req(
+            "PATCH",
+            "/api/v1/sources/1",
+            c,
+            Some(
+                r#"{"enabled":true,"consent":"restricted","consent_version":"1-00000000000000ff"}"#,
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(e["error"]["code"], json!("confirm_required"));
+    let e = send(
+        &f,
+        req(
+            "PATCH",
+            "/api/v1/sources/1",
+            c,
+            Some(r#"{"enabled":true,"consent":"restricted","consent_version":"1-00000000000000ff","password":"wrong"}"#),
+        ),
+    )
+    .await;
+    assert_ne!(e.0, 200, "{e:?}");
     golden(
         &f,
         "source_consent_given",
@@ -591,10 +676,36 @@ async fn sources() {
             "PATCH",
             "/api/v1/sources/1",
             c,
-            Some(r#"{"enabled":true,"consent":"restricted"}"#),
+            Some(r#"{"enabled":true,"consent":"restricted","consent_version":"1-00000000000000ff","password":"correct horse battery"}"#),
         ),
     )
     .await;
+    // Credentials go in and only their names come back.
+    let saved = golden(
+        &f,
+        "source_credentials",
+        req(
+            "PATCH",
+            "/api/v1/sources/1/credentials",
+            c,
+            Some(r#"{"credentials":{"api_key":"hunter2-value","old":null}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(saved["credentials"], json!(["api_key"]));
+    assert!(!saved.to_string().contains("hunter2"));
+    let e = golden(
+        &f,
+        "source_credentials_malformed",
+        req(
+            "PATCH",
+            "/api/v1/sources/1/credentials",
+            c,
+            Some(r#"{"credentials":{"api_key":12345}}"#),
+        ),
+    )
+    .await;
+    assert!(!e.to_string().contains("12345"));
     golden(
         &f,
         "source_not_editable",

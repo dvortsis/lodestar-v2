@@ -17,6 +17,14 @@
 //! - **Security:** every route is behind a session; writes are
 //!   same-origin JSON. Pause and resume need no password: they're an
 //!   operational control, not a filter change.
+//! - **Consent (§18.7):** the server refuses to enable a source until its
+//!   class's condition holds (the binary checks it against the store;
+//!   this crate only checks the password). Accepting `restricted` or
+//!   `overlay` consent needs the admin password, every time (Q13).
+//! - **Credentials** (`PATCH /sources/{id}/credentials`) are taken in and
+//!   never given back: no response, error or log line holds a value. The
+//!   body is read by hand, so a malformed one is refused without quoting
+//!   it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,15 +42,16 @@ use utoipa::OpenApi;
 use crate::ApiState;
 use crate::auth;
 pub use crate::dto::ops::{
-    ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, DhtStatus,
-    ExternalAddress, FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel,
-    SamplingBlocked, Source, SourceHealth, SourceKind, SourceList, SourcePatch, SourcePriority,
-    SourceState, StatsResponse,
+    ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialsPatch,
+    DhtStatus, ExternalAddress, FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel,
+    SamplingBlocked, Source, SourceHealth, SourceKind, SourceList, SourceNeed, SourcePatch,
+    SourcePriority, SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;
-use crate::extract::{Json as JsonBody, Path, same_origin_json};
+use crate::extract::{ClientIp, Json as JsonBody, Path, same_origin_json};
 use crate::settings::{SettingsApi, SettingsBatch, SettingsPatch, save_and_announce};
+pub use lodestar_integrations::Secret;
 
 /// The `/events` hub, when the server layers one.
 type Hub = Option<Extension<Arc<EventHub>>>;
@@ -57,6 +66,7 @@ type Hub = Option<Extension<Arc<EventHub>>>;
     resume,
     sources,
     patch_source,
+    patch_source_credentials,
     network,
     restart_network
 ))]
@@ -84,7 +94,22 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
     fn stats(&self) -> BoxFuture<'_, StatsResponse>;
     fn sources(&self) -> BoxFuture<'_, Result<Vec<Source>, OpsError>>;
     /// Applies `patch` (its not-yet-editable fields already refused).
-    fn patch_source(&self, id: u8, patch: SourcePatch) -> BoxFuture<'_, Result<Source, OpsError>>;
+    /// `password_confirmed` says the route checked `patch.password`; the
+    /// implementation refuses to accept Restricted or Overlay consent
+    /// without it ([`OpsError::PasswordRequired`]).
+    fn patch_source(
+        &self,
+        id: u8,
+        patch: SourcePatch,
+        password_confirmed: bool,
+    ) -> BoxFuture<'_, Result<Source, OpsError>>;
+    /// Stores (`Some`) or removes (`None`) the source's credentials,
+    /// sealed. Never returns, logs or quotes a value.
+    fn patch_source_credentials(
+        &self,
+        id: u8,
+        changes: Vec<(String, Option<Secret>)>,
+    ) -> BoxFuture<'_, Result<Source, OpsError>>;
     fn network(&self) -> NetworkCheck;
     fn restart_network_check(&self) -> Result<NetworkCheck, OpsError>;
 }
@@ -93,8 +118,19 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpsError {
     UnknownSource,
-    /// Enabling the source needs consent to its class.
-    ConsentRequired(ConsentClass),
+    /// Enabling the source needs an acknowledgement of its class at this
+    /// version (none, a wrong one or a stale one was sent).
+    ConsentRequired {
+        class: ConsentClass,
+        version: String,
+    },
+    /// Accepting this consent needs the admin password.
+    PasswordRequired,
+    /// Enabling the source needs its credentials stored first.
+    CredentialsRequired,
+    /// A credential change was refused; the reason names a rule, never a
+    /// value.
+    BadCredential(String),
     /// The network check was restarted too recently.
     RateLimited {
         retry_after_secs: u64,
@@ -117,18 +153,32 @@ impl From<OpsError> for ApiError {
     fn from(e: OpsError) -> ApiError {
         match e {
             OpsError::UnknownSource => unknown_source(),
-            OpsError::ConsentRequired(class) => {
+            OpsError::ConsentRequired { class, version } => {
                 let name = class_name(class);
                 ApiError::new(
                     StatusCode::CONFLICT,
                     "consent_required",
                     format!(
                         "Enabling this source needs your consent: its class is \"{name}\". \
-                         Show the consent screen, then send \"consent\": \"{name}\"."
+                         Show what it contacts and the consent text, then send \
+                         \"consent\": \"{name}\" and \"consent_version\": \"{version}\"."
                     ),
                 )
                 .field("consent")
             }
+            OpsError::PasswordRequired => auth::confirm_required(),
+            OpsError::CredentialsRequired => ApiError::new(
+                StatusCode::CONFLICT,
+                "credentials_required",
+                "This source signs in to an account. Save its credentials first, then enable it.",
+            )
+            .field("credentials"),
+            OpsError::BadCredential(reason) => ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_credentials",
+                format!("The credentials weren't saved: {reason}."),
+            )
+            .field("credentials"),
             OpsError::RateLimited { retry_after_secs } => ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
@@ -157,6 +207,10 @@ pub fn routes() -> Router<ApiState> {
             .route("/crawler/resume", post(resume))
             .route("/sources", get(sources))
             .route("/sources/{id}", axum::routing::patch(patch_source))
+            .route(
+                "/sources/{id}/credentials",
+                axum::routing::patch(patch_source_credentials),
+            )
             .route("/network/check", get(network).post(restart_network)),
     )
 }
@@ -351,10 +405,15 @@ pub(crate) async fn sources(State(s): State<ApiState>) -> ApiResult<Json<SourceL
 }
 
 /// Enables or disables a source, or sets its priority. A priority
-/// applies at once; enabling or disabling at the next start. Enabling a
-/// `restricted` or `overlay` source needs `"consent"` naming its class
-/// (`409 consent_required` otherwise). Agents, egress, purge and the
-/// schedule arrive in v0.6 (`409 not_editable`).
+/// applies at once; enabling or disabling at the next start. Enabling
+/// checks the source's class (§18.7, its `needs`): an `external`,
+/// `restricted` or `overlay` source needs `"consent"` naming its class and
+/// `"consent_version"` (`409 consent_required` otherwise) until that
+/// version is acknowledged; accepting `restricted` or `overlay` consent
+/// also needs the admin `"password"` (`428 confirm_required`); an
+/// `account` source needs its credentials stored
+/// (`409 credentials_required`). Agents, egress, purge and the schedule
+/// arrive in v0.6 (`409 not_editable`).
 #[utoipa::path(
     operation_id = "patchSource",
     patch,
@@ -366,9 +425,10 @@ pub(crate) async fn sources(State(s): State<ApiState>) -> ApiResult<Json<SourceL
 )]
 pub(crate) async fn patch_source(
     State(s): State<ApiState>,
+    ClientIp(ip): ClientIp,
     headers: HeaderMap,
     Path(id): Path<u8>,
-    JsonBody(body): JsonBody<SourcePatch>,
+    JsonBody(mut body): JsonBody<SourcePatch>,
 ) -> ApiResult<Json<Source>> {
     same_origin_json(&headers)?;
     let ops = ops(&s)?;
@@ -380,7 +440,76 @@ pub(crate) async fn patch_source(
         )
         .field(field));
     }
-    Ok(Json(ops.patch_source(id, body).await?))
+    // The password confirms accepting Restricted or Overlay consent, and
+    // is checked before anything is read or written. Whether the source
+    // needs it is the implementation's to decide.
+    let password = body.password.take();
+    let accepting = body.enabled == Some(true)
+        && matches!(
+            body.consent,
+            Some(ConsentClass::Restricted | ConsentClass::Overlay)
+        );
+    let confirmed = if accepting && password.as_deref().is_some_and(|p| !p.is_empty()) {
+        auth::confirm_fresh_password(&s.auth, ip, password).await?;
+        true
+    } else {
+        false
+    };
+    Ok(Json(ops.patch_source(id, body, confirmed).await?))
+}
+
+/// Stores or removes a source's credentials: each name maps to a value
+/// (stored, sealed with the install's key) or `null` (removed). Values
+/// are never returned: the response lists the names stored. Removing what
+/// an enabled `account` source needs disables it. `400
+/// invalid_credentials` names the rule a change broke, never a value.
+#[utoipa::path(
+    operation_id = "patchSourceCredentials",
+    patch,
+    path = "/sources/{id}/credentials",
+    tag = "crawler",
+    params(("id" = u8, Path, description = "The source's id, as `GET /sources` lists it.")),
+    request_body = CredentialsPatch,
+    responses((status = 200, body = Source))
+)]
+pub(crate) async fn patch_source_credentials(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<u8>,
+    JsonBody(body): JsonBody<Value>,
+) -> ApiResult<Json<Source>> {
+    same_origin_json(&headers)?;
+    let ops = ops(&s)?;
+    let changes = credential_changes(body)?;
+    Ok(Json(ops.patch_source_credentials(id, changes).await?))
+}
+
+/// The changes in a `CredentialsPatch` body, read by hand so a refusal
+/// never quotes a value (serde's messages can).
+fn credential_changes(body: Value) -> ApiResult<Vec<(String, Option<Secret>)>> {
+    let shape = || {
+        ApiError::bad_request(
+            "invalid_credentials",
+            "Send {\"credentials\": {\"<name>\": \"<value>\" or null}}.",
+        )
+        .field("credentials")
+    };
+    let Value::Object(mut top) = body else {
+        return Err(shape());
+    };
+    let Some(Value::Object(map)) = top.remove("credentials") else {
+        return Err(shape());
+    };
+    if !top.is_empty() {
+        return Err(shape());
+    }
+    map.into_iter()
+        .map(|(name, v)| match v {
+            Value::String(v) => Ok((name, Some(Secret::new(v)))),
+            Value::Null => Ok((name, None)),
+            _ => Err(shape()),
+        })
+        .collect()
 }
 
 /// The network check: our address as other DHT nodes see it, and
@@ -420,7 +549,10 @@ mod tests {
 
     #[test]
     fn refusals_map_to_the_envelope() {
-        let e = ApiError::from(OpsError::ConsentRequired(ConsentClass::Restricted));
+        let e = ApiError::from(OpsError::ConsentRequired {
+            class: ConsentClass::Restricted,
+            version: "1-00ff".into(),
+        });
         assert_eq!(
             (e.status(), e.code()),
             (StatusCode::CONFLICT, "consent_required")
@@ -431,6 +563,17 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("\"restricted\"")
+        );
+        assert!(e.body().to_string().contains("1-00ff"));
+        let e = ApiError::from(OpsError::PasswordRequired);
+        assert_eq!(
+            (e.status(), e.code()),
+            (StatusCode::PRECONDITION_REQUIRED, "confirm_required")
+        );
+        let e = ApiError::from(OpsError::CredentialsRequired);
+        assert_eq!(
+            (e.status(), e.code()),
+            (StatusCode::CONFLICT, "credentials_required")
         );
         let e = ApiError::from(OpsError::UnknownSource);
         assert_eq!(
@@ -450,6 +593,36 @@ mod tests {
         let e = ApiError::from(OpsError::Internal("disk /secret".into()));
         assert_eq!(e.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!e.body().to_string().contains("secret"));
+    }
+
+    #[test]
+    fn a_malformed_credentials_body_is_refused_without_quoting_it() {
+        for body in [
+            json!("hunter2-secret"),
+            json!({ "credentials": "hunter2-secret" }),
+            json!({ "credentials": { "api_key": 424242 } }),
+            json!({ "credentials": { "api_key": ["hunter2-secret"] } }),
+            json!({ "credentials": {}, "extra": "hunter2-secret" }),
+        ] {
+            let e = credential_changes(body).unwrap_err();
+            assert_eq!(e.code(), "invalid_credentials");
+            let text = e.body().to_string();
+            assert!(
+                !text.contains("hunter2") && !text.contains("424242"),
+                "{text}"
+            );
+        }
+        let changes =
+            credential_changes(json!({ "credentials": { "a": "x", "b": null } })).unwrap();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].1.as_ref().map(Secret::expose), Some("x"));
+        assert!(changes[1].1.is_none());
+        // Debug never prints a password or a value.
+        let p: SourcePatch = serde_json::from_value(json!({ "password": "hunter2" })).unwrap();
+        assert!(!format!("{p:?}").contains("hunter2"));
+        let c: CredentialsPatch =
+            serde_json::from_value(json!({ "credentials": { "k": "hunter2" } })).unwrap();
+        assert!(!format!("{c:?}").contains("hunter2"));
     }
 
     #[test]

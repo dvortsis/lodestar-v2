@@ -15,6 +15,7 @@ use lodestar_dht::node::Intensity;
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
 use lodestar_pipeline::{Control, DhtSource, Pipeline, PipelineConfig, event};
+use lodestar_sources::consent;
 use lodestar_sources::{
     BoxFuture, Consent, Fetcher, Found, Kind, Manifest, Network, PluginError, PoolConfig, Priority,
     Risk, SourceCtx, SourcePlugin,
@@ -847,4 +848,437 @@ fn sampling_blocked_follows_the_dht_report() {
         node: Arc::default(),
     };
     assert_eq!(stopped.live(), None);
+}
+
+/// A source of each class, doing nothing while it runs.
+struct Gated(Manifest, Arc<std::sync::atomic::AtomicBool>);
+
+impl SourcePlugin for Gated {
+    fn manifest(&self) -> &Manifest {
+        &self.0
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        self.1.store(true, Ordering::SeqCst);
+        Box::pin(async move {
+            ctx.shutdown.requested().await;
+            Ok(())
+        })
+    }
+}
+
+const GATED: [(&str, Consent); 5] = [
+    ("none", Consent::None),
+    ("external", Consent::External),
+    ("account", Consent::Account),
+    ("restricted", Consent::Restricted),
+    ("overlay", Consent::Overlay),
+];
+
+fn gated() -> Vec<(Arc<dyn SourcePlugin>, Arc<std::sync::atomic::AtomicBool>)> {
+    GATED
+        .iter()
+        .map(|(id, consent)| {
+            let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let m = Manifest {
+                id,
+                name: id,
+                version: "1",
+                kinds: &[Kind::Discovery],
+                networks: &[Network::Bt],
+                endpoints: &[lodestar_sources::Endpoint {
+                    protocol: "https",
+                    host: "example.org",
+                }],
+                risk: Risk::High,
+                consent: *consent,
+                default_priority: Priority::Normal,
+                enabled_by_default: false,
+            };
+            (
+                Arc::new(Gated(m, ran.clone())) as Arc<dyn SourcePlugin>,
+                ran,
+            )
+        })
+        .collect()
+}
+
+struct GatedFixture {
+    app: Router,
+    auth: Arc<Auth>,
+    pipeline: Pipeline,
+    dir: tempfile::TempDir,
+}
+
+async fn gated_fixture(
+    dir: tempfile::TempDir,
+    plugins: Vec<Arc<dyn SourcePlugin>>,
+) -> GatedFixture {
+    let config = Config::load(None, |_| None).unwrap();
+    let db = dir.path().join("t.db");
+    let control_store = Arc::new(Mutex::new(
+        Store::open(&db, StoreConfig::default()).unwrap(),
+    ));
+    let registry = Arc::new(Registry::load(&config, control_store.clone()).unwrap());
+    let pipeline = Pipeline::start_with(
+        PipelineConfig::default(),
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        plugins,
+        Arc::new(Counting::default()),
+    )
+    .await
+    .unwrap();
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        control_store,
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    let ops = Arc::new(Ops::new(
+        control,
+        registry.subscribe(),
+        pipeline.monitor(),
+        None,
+        dir.path().to_path_buf(),
+    ));
+    let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
+    let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let app = Router::new().nest(
+        "/api/v1",
+        router(ApiState {
+            auth: auth.clone(),
+            index: None,
+            reader: Arc::new(Mutex::new(reader)),
+            filters: None,
+            settings: Some(registry),
+            ops: Some(ops),
+            user_data: None,
+            adult: Default::default(),
+            insights: None,
+            hot: None,
+            events: None,
+        }),
+    );
+    GatedFixture {
+        app,
+        auth,
+        pipeline,
+        dir,
+    }
+}
+
+impl GatedFixture {
+    async fn send(&self, mut req: Request<Body>) -> (u16, Value) {
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 1], 1))));
+        let resp = self.app.clone().oneshot(req).await.unwrap();
+        let status = resp.status().as_u16();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(!text.contains(SECRET), "a credential left in a response");
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::String(text)),
+        )
+    }
+
+    async fn session(&self) -> String {
+        let token = self.auth.setup_token().unwrap();
+        let mut req = Request::post("/api/v1/setup")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({ "token": token, "password": "correct horse battery" }).to_string(),
+            ))
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 2], 1))));
+        let resp = self.app.clone().oneshot(req).await.unwrap();
+        let cookie = resp.headers()[header::SET_COOKIE].to_str().unwrap();
+        cookie.split(';').next().unwrap().to_string()
+    }
+
+    async fn source(&self, cookie: &str, plugin: &str) -> Value {
+        let (status, list) = self.send(req("GET", "/api/v1/sources", cookie, None)).await;
+        assert_eq!(status, 200);
+        list["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["plugin"] == json!(plugin))
+            .unwrap()
+            .clone()
+    }
+
+    async fn patch(&self, cookie: &str, plugin: &str, body: Value) -> (u16, Value) {
+        let id = self.source(cookie, plugin).await["id"].clone();
+        self.send(req(
+            "PATCH",
+            &format!("/api/v1/sources/{id}"),
+            cookie,
+            Some(&body.to_string()),
+        ))
+        .await
+    }
+}
+
+/// A credential value no response, export or file but the key-sealed
+/// store may hold.
+const SECRET: &str = "s3cret-Credential-Value";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_class_can_be_enabled_past_its_condition() {
+    let plugins = gated();
+    let f = gated_fixture(
+        tempfile::tempdir().unwrap(),
+        plugins.iter().map(|(p, _)| p.clone()).collect(),
+    )
+    .await;
+    let c = f.session().await;
+
+    // Every class starts off, and says what it needs.
+    for (id, need) in [
+        ("none", Value::Null),
+        ("external", json!("endpoints_ack")),
+        ("account", json!("credentials")),
+        ("restricted", json!("consent")),
+        ("overlay", json!("consent")),
+    ] {
+        let s = f.source(&c, id).await;
+        assert_eq!(
+            (s["enabled"].clone(), s["needs"].clone()),
+            (json!(false), need),
+            "{id}"
+        );
+    }
+    // None: a toggle.
+    assert_eq!(f.patch(&c, "none", json!({ "enabled": true })).await.0, 200);
+
+    // A settings import can't enable a source or record consent: the
+    // registry has no such field, and source state isn't settings.
+    for toml in [
+        "lodestar_settings = 1\n[sources]\noverlay = true\n",
+        "lodestar_settings = 1\n[\"sources.consent\"]\noverlay = \"overlay|1-0|1\"\n",
+        "lodestar_settings = 1\n[crawler]\n\"sources.consent.overlay\" = \"overlay|1-0|1\"\n",
+    ] {
+        for dry_run in ["true", "false"] {
+            f.send(req(
+                "POST",
+                &format!("/api/v1/settings/import?dry_run={dry_run}"),
+                &c,
+                Some(&json!({ "toml": toml }).to_string()),
+            ))
+            .await;
+        }
+        let s = f.source(&c, "overlay").await;
+        assert_eq!(
+            (s["enabled"].clone(), s["needs"].clone()),
+            (json!(false), json!("consent")),
+            "{toml}"
+        );
+    }
+
+    // External: refused without the acknowledgement, or with a stale or
+    // borrowed one; accepted with its own, no password.
+    let ext = f.source(&c, "external").await;
+    let version = ext["consent_version"].as_str().unwrap().to_string();
+    assert_eq!(ext["endpoints"], json!(["https://example.org"]));
+    for body in [
+        json!({ "enabled": true }),
+        json!({ "enabled": true, "consent": "external" }),
+        json!({ "enabled": true, "consent": "external", "consent_version": "0-0" }),
+        json!({ "enabled": true, "consent": "none", "consent_version": version }),
+        json!({ "enabled": true, "consent": "overlay", "consent_version": version }),
+    ] {
+        let (status, e) = f.patch(&c, "external", body.clone()).await;
+        assert_eq!(
+            (status, e["error"]["code"].clone()),
+            (409, json!("consent_required")),
+            "{body}"
+        );
+    }
+    let (status, s) = f
+        .patch(
+            &c,
+            "external",
+            json!({ "enabled": true, "consent": "external", "consent_version": version }),
+        )
+        .await;
+    assert_eq!(
+        (status, s["enabled"].clone(), s["needs"].clone()),
+        (200, json!(true), Value::Null)
+    );
+
+    // Account: refused until credentials are stored, whatever is sent.
+    for body in [
+        json!({ "enabled": true }),
+        json!({ "enabled": true, "consent": "account", "consent_version": "" }),
+    ] {
+        let (status, e) = f.patch(&c, "account", body).await;
+        assert_eq!(
+            (status, e["error"]["code"].clone()),
+            (409, json!("credentials_required"))
+        );
+    }
+    let id = f.source(&c, "account").await["id"].clone();
+    let creds = |body: Value| {
+        req(
+            "PATCH",
+            &format!("/api/v1/sources/{id}/credentials"),
+            &c,
+            Some(&body.to_string()),
+        )
+    };
+    let (status, s) = f
+        .send(creds(json!({ "credentials": { "api_key": SECRET } })))
+        .await;
+    assert_eq!(
+        (status, s["credentials"].clone()),
+        (200, json!(["api_key"]))
+    );
+    let (status, e) = f
+        .send(creds(json!({ "credentials": { "Bad/Name": SECRET } })))
+        .await;
+    assert_eq!(
+        (status, e["error"]["code"].clone()),
+        (400, json!("invalid_credentials"))
+    );
+    assert_eq!(
+        f.patch(&c, "account", json!({ "enabled": true })).await.0,
+        200
+    );
+
+    // Restricted and Overlay: the consent screen at the current version,
+    // accepted with the admin password, every time it's accepted.
+    for id in ["restricted", "overlay"] {
+        let version = f.source(&c, id).await["consent_version"].clone();
+        let (status, e) = f.patch(&c, id, json!({ "enabled": true })).await;
+        assert_eq!(
+            (status, e["error"]["code"].clone()),
+            (409, json!("consent_required"))
+        );
+        let ack = json!({ "enabled": true, "consent": id, "consent_version": version });
+        let (status, e) = f.patch(&c, id, ack.clone()).await;
+        assert_eq!(
+            (status, e["error"]["code"].clone()),
+            (428, json!("confirm_required")),
+            "{id}"
+        );
+        let mut wrong = ack.clone();
+        wrong["password"] = json!("not the password");
+        let (status, _) = f.patch(&c, id, wrong).await;
+        assert_eq!(status, 401, "{id}");
+        assert_eq!(f.source(&c, id).await["enabled"], json!(false));
+        let mut right = ack;
+        right["password"] = json!("correct horse battery");
+        let (status, s) = f.patch(&c, id, right).await;
+        assert_eq!((status, s["enabled"].clone()), (200, json!(true)), "{id}");
+    }
+
+    // Settings: an import can't enable a source or record consent, and
+    // the export carries no credential.
+    let (status, export) = f
+        .send(req("GET", "/api/v1/settings/export", &c, None))
+        .await;
+    assert_eq!(status, 200);
+    let text = export.to_string();
+    assert!(
+        !text.contains(SECRET) && !text.contains("api_key"),
+        "{text}"
+    );
+    // Disabling keeps the acknowledgement; removing the credentials of an
+    // enabled Account source switches it off.
+    let (status, s) = f
+        .send(creds(json!({ "credentials": { "api_key": null } })))
+        .await;
+    assert_eq!(
+        (status, s["enabled"].clone(), s["needs"].clone()),
+        (200, json!(false), json!("credentials"))
+    );
+
+    // Nothing in the data directory but the database holds the value,
+    // and the database holds it only sealed.
+    let mut stack = vec![f.dir.path().to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                let bytes = std::fs::read(&p).unwrap();
+                let needle = SECRET.as_bytes();
+                assert!(
+                    !bytes.windows(needle.len()).any(|w| w == needle),
+                    "{}",
+                    p.display()
+                );
+            }
+        }
+    }
+    f.pipeline.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_honours_consent_and_a_new_text_asks_again() {
+    let plugins = gated();
+    let ran: Vec<_> = plugins.iter().map(|(_, r)| r.clone()).collect();
+    let f = gated_fixture(
+        tempfile::tempdir().unwrap(),
+        plugins.iter().map(|(p, _)| p.clone()).collect(),
+    )
+    .await;
+    let c = f.session().await;
+    let version = f.source(&c, "restricted").await["consent_version"].clone();
+    let (status, _) = f
+        .patch(
+            &c,
+            "restricted",
+            json!({ "enabled": true, "consent": "restricted", "consent_version": version,
+                    "password": "correct horse battery" }),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let GatedFixture { pipeline, dir, .. } = f;
+    pipeline.shutdown().await.unwrap();
+
+    // Same build: the acknowledged source runs, nothing else does.
+    let f = gated_fixture(dir, plugins.iter().map(|(p, _)| p.clone()).collect()).await;
+    eventually("the restricted source runs", String::new, || {
+        ran[3].load(Ordering::SeqCst)
+    })
+    .await;
+    for s in f.pipeline.sources() {
+        assert_eq!(s.enabled, s.plugin == "restricted", "{}", s.plugin);
+    }
+    let GatedFixture { pipeline, dir, .. } = f;
+    pipeline.shutdown().await.unwrap();
+
+    // A plugin update that contacts a new host is a new version: it's
+    // off after the restart, and asks again.
+    static MOVED: [lodestar_sources::Endpoint; 1] = [lodestar_sources::Endpoint {
+        protocol: "https",
+        host: "elsewhere.example",
+    }];
+    let mut plugins = gated();
+    let r = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut m = plugins[3].0.manifest().clone();
+    m.endpoints = &MOVED;
+    plugins[3] = (Arc::new(Gated(m, r.clone())), r.clone());
+    let moved = consent::version(plugins[3].0.manifest());
+    assert_ne!(json!(moved), version);
+    let f = gated_fixture(dir, plugins.iter().map(|(p, _)| p.clone()).collect()).await;
+    let db = f.dir.path().join("t.db");
+    let rows = Store::open(&db, StoreConfig::default())
+        .unwrap()
+        .sources()
+        .unwrap();
+    let row = rows.iter().find(|r| r.plugin == "restricted").unwrap();
+    assert_eq!(row.state, lodestar_store::SourceState::Disabled);
+    assert!(f.pipeline.sources().iter().all(|s| !s.running));
+    assert!(!r.load(Ordering::SeqCst));
+    f.pipeline.shutdown().await.unwrap();
 }

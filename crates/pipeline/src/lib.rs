@@ -471,10 +471,8 @@ impl Pipeline {
             .map(|p| {
                 let m = p.manifest();
                 Registering {
-                    id: m.id,
-                    version: m.version,
+                    manifest: m.clone(),
                     peer_finder: m.is(Kind::PeerFinder),
-                    enabled_by_default: m.enabled_by_default,
                 }
             })
             .collect();
@@ -916,10 +914,20 @@ fn saved_refetch(q: &QueuedKey, finders: &std::collections::HashSet<SourceId>) -
 
 /// What [`prepare`] needs of a plugin's manifest.
 struct Registering {
-    id: &'static str,
-    version: &'static str,
+    manifest: lodestar_sources::Manifest,
     peer_finder: bool,
-    enabled_by_default: bool,
+}
+
+/// How a plugin seen for the first time is registered: only a plugin on
+/// by default (the Mainline DHT, §18.1) whose class needs nothing more
+/// than a toggle starts enabled; the rest wait for the user, and their
+/// consent (§18.7).
+fn first_state(m: &lodestar_sources::Manifest) -> SourceState {
+    if m.enabled_by_default && lodestar_sources::consent::need(m, None, &[]).is_none() {
+        SourceState::Enabled
+    } else {
+        SourceState::Disabled
+    }
 }
 
 /// Registers the plugins, loads the queue, builds the have-filter and
@@ -942,18 +950,31 @@ fn prepare(
     Error,
 > {
     let now = unix_now();
-    let known: std::collections::HashSet<String> =
-        store.sources()?.into_iter().map(|r| r.plugin).collect();
+    // One write per plugin: a new one is registered in its first state,
+    // so a crash can't leave a consent-gated plugin enabled.
     let ids = manifests
         .iter()
-        .map(|m| store.register_source(m.id, m.version, now))
+        .map(|r| {
+            let m = &r.manifest;
+            store.register_source_as(m.id, m.version, first_state(m), now)
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    // A plugin seen for the first time starts as its manifest says: only
-    // the Mainline DHT is on out of the box (§18.1), and the others wait
-    // for the user (and their consent, §18.7).
-    for (m, id) in manifests.iter().zip(&ids) {
-        if !known.contains(m.id) && !m.enabled_by_default {
+    // Every start checks each enabled source's class condition again
+    // (§18.7, §18.9): one whose consent text or endpoints changed since
+    // it was acknowledged, whose credentials are gone, or that was
+    // enabled some other way, is switched off before it can run.
+    let rows = store.sources()?;
+    for (r, id) in manifests.iter().zip(&ids) {
+        let enabled = rows
+            .iter()
+            .any(|row| row.id == *id && row.state == SourceState::Enabled);
+        if enabled && lodestar_sources::consent::need_in(&store, &r.manifest)?.is_some() {
             store.set_source_state(*id, SourceState::Disabled)?;
+            lodestar_log::log_event!(
+                log_events::SOURCE_STATE_CHANGED,
+                plugin = r.manifest.id,
+                state = log_events::state(SourceState::Disabled)
+            );
         }
     }
     let states: HashMap<SourceId, SourceState> = store
@@ -1021,7 +1042,11 @@ fn prepare(
     let filter = StoreFilter::read(&store)?;
     let mut sources = Vec::with_capacity(ids.len());
     for (m, id) in manifests.iter().zip(&ids) {
-        sources.push((*id, state(id), control::saved_priority(&store, m.id)?));
+        sources.push((
+            *id,
+            state(id),
+            control::saved_priority(&store, m.manifest.id)?,
+        ));
     }
     Ok((
         store,

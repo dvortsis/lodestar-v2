@@ -200,7 +200,19 @@ impl OpsApi for Ops {
     fn sources(&self) -> BoxFuture<'_, Result<Vec<OpsSource>, OpsError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
-    fn patch_source(&self, _: u8, _: SourcePatch) -> BoxFuture<'_, Result<OpsSource, OpsError>> {
+    fn patch_source(
+        &self,
+        _: u8,
+        _: SourcePatch,
+        _: bool,
+    ) -> BoxFuture<'_, Result<OpsSource, OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
+    fn patch_source_credentials(
+        &self,
+        _: u8,
+        _: Vec<(String, Option<lodestar_api::ops::Secret>)>,
+    ) -> BoxFuture<'_, Result<OpsSource, OpsError>> {
         Box::pin(async { Err(OpsError::UnknownSource) })
     }
     fn network(&self) -> NetworkCheck {

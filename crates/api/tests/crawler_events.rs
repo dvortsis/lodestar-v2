@@ -126,7 +126,20 @@ impl OpsApi for FakeOps {
         unreachable!()
     }
 
-    fn patch_source(&self, _: u8, _: SourcePatch) -> BoxFuture<'_, Result<Source, OpsError>> {
+    fn patch_source(
+        &self,
+        _: u8,
+        _: SourcePatch,
+        _: bool,
+    ) -> BoxFuture<'_, Result<Source, OpsError>> {
+        unreachable!()
+    }
+
+    fn patch_source_credentials(
+        &self,
+        _: u8,
+        _: Vec<(String, Option<lodestar_api::ops::Secret>)>,
+    ) -> BoxFuture<'_, Result<Source, OpsError>> {
         unreachable!()
     }
 
