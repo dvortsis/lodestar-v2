@@ -776,10 +776,10 @@ Two switches, both off by default and read at start ([the decision](decisions/20
 |---|---|---|
 | `utp_retransmits_total`, `utp_connection_timeouts_total` | counter | #51's uTP socket counters: packets sent again, and connections dropped because the peer stopped answering. **Rendered only with `dht.utp` on.** |
 | `fetch_family_attempts_total{family}`, `fetch_family_success_total{family}` | counter | The same attempts and successes as the transport series, by peer address family: `ipv4` (v4-mapped addresses included) or `ipv6`. A uTP try and its TCP fallback count twice, as in the transport series. Count with the switches on or off. |
-| `fetch_no_route_total{family}` | counter | TCP connects the local network stack refused as unreachable (`ENETUNREACH`): route-level evidence. Timeouts, refusals and resets never count here. Counts with the switch on or off. |
+| `fetch_no_route_total{family}` | counter | TCP connects that failed as network unreachable (`ENETUNREACH`) while the local routing table also has no route to the address (checked with a UDP connect, which sends nothing): route-level evidence. A remote router's ICMP "net unreachable" for one dead prefix doesn't count. Timeouts, refusals and resets never count here. Counts with the switch on or off. |
 | `fetch_route_skipped_total{family}` | counter | Fetches not dialled because their family is backed off. They fail as `unreachable` in `fetch_failures_total` without an attempt. Stays 0 with `dht.route_backoff` off. |
 | `fetch_route_backoff{family}` | gauge | 1 while that family's dials are held back. Stays 0 with `dht.route_backoff` off. |
-| `dht_utp_in_total` | counter | Datagrams on the DHT's port that the receive loop handed to uTP (after the blocklist check). Stays 0 with `dht.utp` off, when every datagram is handled as KRPC as before. |
+| `dht_utp_in_total` | counter | Datagrams on the DHT's port that the receive loop handed to uTP (after the blocklist check). Stays 0 with `dht.utp` off, when every datagram is handled as KRPC as before. With it on, `dht_packets_in_total` (and `dht_denied_total` for blocked uTP) no longer includes these, so compare KRPC packet rates across A/B arms as `dht_packets_in_total`, not the socket's total. |
 
 The uTP share of fetches is `fetch_attempts_total{transport="utp"}` over the sum of both transports; uTP's success rate is `fetch_success_total{transport="utp"}` over `fetch_attempts_total{transport="utp"}`. A family with no DHT socket (an IPv4-only bind, for example) goes straight to TCP, so its peers add no uTP attempts.
 

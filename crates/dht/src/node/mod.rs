@@ -1043,6 +1043,13 @@ impl Node {
                 "two sockets of the same address family",
             ));
         }
+        if config.utp.as_ref().is_some_and(|u| u.attached()) {
+            // Its sends would still leave from the first node's sockets.
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the uTP port is already attached to another node",
+            ));
+        }
         let mut sockets = Vec::new();
         let mut utp_sink = lodestar_utp::DualSink::default();
         for addr in &config.bind {

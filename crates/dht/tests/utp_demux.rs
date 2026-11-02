@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use lodestar_dht::node::{Config, Node};
+use lodestar_dht::node::{Config, Deny, Node};
 use lodestar_utp::{SharedPort, UtpSocket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
@@ -92,5 +92,34 @@ async fn without_utp_a_utp_datagram_is_malformed_krpc_as_before() {
     }
     let stats = node.stats();
     assert_eq!((stats.malformed_in, stats.utp_in), (1, 0));
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_denied_address_never_reaches_utp() {
+    let port = SharedPort::new(lodestar_utp::Config::default());
+    let deny = Deny(std::sync::Arc::new(|ip: std::net::IpAddr| ip.is_loopback()));
+    let node = Node::start(
+        Config {
+            deny: Some(deny),
+            ..config(Some(port.clone()))
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    udp.send_to(&[0x41; 20], node.local_addrs()[0]).unwrap();
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    while node.stats().denied == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let stats = node.stats();
+    assert_eq!((stats.denied, stats.utp_in), (1, 0));
+    assert_eq!(port.socket().stats().packets_in, 0);
+    assert!(
+        Node::start(config(Some(port)), None).await.is_err(),
+        "one node per uTP port"
+    );
     node.shutdown().await.unwrap();
 }

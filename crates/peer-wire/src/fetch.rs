@@ -283,7 +283,7 @@ async fn attempt(
                 .await
                 .map_err(|_| timed_out())?
                 .map_err(|e| {
-                    if route::is_no_route(&e) {
+                    if route::is_no_route(&e, addr) {
                         let now = std::time::Instant::now();
                         opts.stats.routes.no_route(family, now, opts.route_backoff);
                     }
