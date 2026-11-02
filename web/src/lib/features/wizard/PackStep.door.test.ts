@@ -44,7 +44,7 @@ describe("rule-pack step through the flows' door", () => {
 		await screen.findByTestId('wizard-pack-malware');
 		expect(load).not.toHaveBeenCalled();
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
-		await screen.findByRole('heading', { level: 2, name: 'Updates' });
+		await screen.findByRole('heading', { level: 2, name: 'Blocklists' });
 		expect(load).toHaveBeenCalledTimes(1);
 		expect(server.packs.map((p) => p.id)).toEqual(PACK_IDS);
 		expect(server.packs.every((p) => p.on)).toBe(true);

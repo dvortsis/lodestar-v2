@@ -4,7 +4,15 @@
 // loader in the shell, nothing else (docs/decisions/2026-10-31-S-wizard.md).
 
 export type StepId =
-	'network' | 'how' | 'intensity' | 'storage' | 'download' | 'packs' | 'updates' | 'done';
+	| 'network'
+	| 'how'
+	| 'intensity'
+	| 'storage'
+	| 'download'
+	| 'packs'
+	| 'blocklists'
+	| 'updates'
+	| 'done';
 
 /** Where the hidden import step slots in, by the step it follows. Nothing renders from this. */
 export const SLOTS = { import: 'storage' } as const;
@@ -24,6 +32,7 @@ export const STEPS: readonly StepInfo[] = [
 	{ id: 'storage', optional: true, settings: 'storage' },
 	{ id: 'download', optional: true, settings: 'integrations' },
 	{ id: 'packs', optional: true, settings: 'filters' },
+	{ id: 'blocklists', optional: true, settings: 'blocklists' },
 	{ id: 'updates', optional: true, settings: 'updates' },
 	{ id: 'done', optional: false, settings: 'general' }
 ];

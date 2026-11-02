@@ -24,6 +24,7 @@ describe('the screen registry', () => {
 			'search',
 			'trackers',
 			'filters',
+			'blocklists',
 			'integrations',
 			'notifications',
 			'insights',
