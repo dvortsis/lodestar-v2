@@ -8,9 +8,11 @@ use lodestar_filter::lists;
 use lodestar_filter::{Core, CsList, Item, Lists, Switches, TermSet};
 use proptest::prelude::*;
 
-/// The characters the matching once read as word breaks and now ignores,
-/// at the ends of each range.
-const MARKS: [char; 8] = [
+/// The characters the matching once read as word breaks and the joined
+/// reading now ignores, at the ends of each range: the invisible ones
+/// (#381) and the format marks that show, with the line and paragraph
+/// separators (docs/decisions/2026-11-02-F-visible-format-two-readings.md).
+const MARKS: [char; 16] = [
     '\u{2065}',
     '\u{FFF0}',
     '\u{FFF3}',
@@ -19,6 +21,14 @@ const MARKS: [char; 8] = [
     '\u{1D173}',
     '\u{E0001}',
     '\u{E0FFF}',
+    '\u{0600}',
+    '\u{0605}',
+    '\u{08E2}',
+    '\u{110BD}',
+    '\u{FFF9}',
+    '\u{1343F}',
+    '\u{2028}',
+    '\u{2029}',
 ];
 
 /// What the fuzz target checks, for one text read as it reads it.
@@ -67,6 +77,39 @@ fn the_fuzz_crash_agrees() {
     let text = lists::decode(data, 1 << 20).unwrap();
     assert!(text.contains('\u{FFF3}'));
     agrees(&shipped(), &text).unwrap();
+}
+
+/// Golden cases for the visible marks: a term only the joined reading
+/// has (`le<c>xa`), and one only the earlier reading has (`zz<c>lexa`),
+/// each leads the hits as it decides the verdict.
+#[test]
+fn a_visible_mark_agrees_both_ways() {
+    let core = stand_in();
+    for c in [
+        '\u{0605}',
+        '\u{08E2}',
+        '\u{FFF9}',
+        '\u{13430}',
+        '\u{2028}',
+        '\u{2029}',
+    ] {
+        for name in [
+            format!("Title rolea le{c}xa"),
+            format!("Title rolea zz{c}lexa"),
+        ] {
+            let files = [FileInfo::new(vec!["a.mkv".into()], 1)];
+            let item = Item {
+                hashes: &[[0; 20]],
+                name: &name,
+                files: &files,
+                content_type: ContentType::Video,
+            };
+            let verdict = core.verdict(&item);
+            assert!(verdict.is_some(), "U+{:04X}: {name:?}", c as u32);
+            assert_eq!(core.hits(&item).into_iter().find(|h| h.on), verdict);
+            agrees(&core, &name).unwrap();
+        }
+    }
 }
 
 /// Stand-in terms as in `two_readings.rs`: `lexa` sexual, `rolea` child
