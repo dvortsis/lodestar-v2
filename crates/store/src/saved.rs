@@ -7,8 +7,15 @@
 //! crash between the two can only re-run a range, never skip one; a
 //! repeated hit is ignored. The store keeps the query text and AST as the
 //! API gives them: parsing and compiling belong to the search crate.
+//!
+//! **Promoted torrents** (SRC-2b, `docs/decisions/2026-11-02-SRC-2b.md`)
+//! keep an id below the watermarks, so the forward run never sees them.
+//! [`Store::promote`] queues each kept id in `settings`, keyed by its
+//! `reindex_log` entry; the percolator reads the queue in that order
+//! ([`Store::promoted_due`]) and records the hits and drops the rows it
+//! covered in one transaction ([`Store::record_promoted`]).
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::user_data::{check_name, check_text, sql_limit};
 use crate::{Error, Result, Store, flags};
@@ -78,6 +85,38 @@ pub struct Alert {
 pub struct SearchHits<'a> {
     pub saved_search_id: i64,
     pub torrent_ids: &'a [i64],
+}
+
+/// One queued promotion (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromotedDue {
+    /// Its `reindex_log` entry.
+    pub seq: i64,
+    pub torrent_id: i64,
+    /// The highest saved-search id when it was promoted. Ids are
+    /// `AUTOINCREMENT`, so a search above it was created later and
+    /// doesn't alert on it (no backfill, as for the forward run).
+    pub searches_through: i64,
+}
+
+/// The queue's `settings` keys: this prefix and the `reindex_log` seq in
+/// 20 digits, so key order is seq order. Values are text, as every
+/// setting a prefix read returns must be.
+const PROMOTED: &str = "percolator.promoted.";
+
+fn promoted_key(seq: i64) -> String {
+    format!("{PROMOTED}{:020}", seq.max(0))
+}
+
+/// Queues a kept promotion whose `reindex_log` entry is `seq`, in the
+/// promotion's own transaction.
+pub(crate) fn queue_promoted(tx: &Connection, seq: i64) -> Result<()> {
+    tx.prepare_cached(
+        "INSERT INTO settings (key, value)
+         SELECT ?1, CAST(coalesce(max(id), 0) AS TEXT) FROM saved_searches",
+    )?
+    .execute([promoted_key(seq)])?;
+    Ok(())
 }
 
 const COLUMNS: &str =
@@ -184,7 +223,7 @@ impl Store {
                  (SELECT count(*) FROM alerts a
                       WHERE a.saved_search_id = s.id AND a.read_at IS NULL),
                  (SELECT a.created_at FROM alerts a WHERE a.saved_search_id = s.id
-                      ORDER BY a.torrent_id DESC LIMIT 1)
+                      ORDER BY a.id DESC LIMIT 1)
              FROM saved_searches s ORDER BY s.id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -292,8 +331,11 @@ impl Store {
         Ok(created)
     }
 
-    /// A saved search's alerts, newest first: up to `limit` below the
-    /// torrent id `before` (the previous page's last), or from the newest.
+    /// A saved search's alerts, newest recorded first: up to `limit` below
+    /// the alert id `before` (the previous page's last), or from the
+    /// newest. Newest recorded, not highest torrent id: a promoted
+    /// torrent's alert is new though its id is old (SRC-2b), and marking
+    /// read through the top row must cover it.
     pub fn alerts(
         &self,
         saved_search_id: i64,
@@ -302,8 +344,8 @@ impl Store {
     ) -> Result<Vec<Alert>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT id, saved_search_id, torrent_id, created_at, read_at FROM alerts
-             WHERE saved_search_id = ?1 AND torrent_id < ?2
-             ORDER BY torrent_id DESC LIMIT ?3",
+             WHERE saved_search_id = ?1 AND id < ?2
+             ORDER BY id DESC LIMIT ?3",
         )?;
         let rows = stmt.query_map(
             params![
@@ -362,9 +404,9 @@ impl Store {
         let mut deleted = 0;
         {
             let mut stmt = tx.prepare_cached(
-                "DELETE FROM alerts WHERE saved_search_id = ?1 AND torrent_id <= (
-                     SELECT torrent_id FROM alerts WHERE saved_search_id = ?1
-                     ORDER BY torrent_id DESC LIMIT 1 OFFSET ?2)",
+                "DELETE FROM alerts WHERE saved_search_id = ?1 AND id <= (
+                     SELECT id FROM alerts WHERE saved_search_id = ?1
+                     ORDER BY id DESC LIMIT 1 OFFSET ?2)",
             )?;
             for id in ids {
                 deleted += stmt.execute(params![id, sql_limit(keep)])?;
@@ -408,12 +450,12 @@ impl Store {
     }
 
     /// A saved search's alerts on torrents that may be shown, newest
-    /// first: up to `limit` below the torrent id `before`, or from the
-    /// newest. `hidden_type` is as [`Store::unread_shown`] takes it;
-    /// `public_only` also leaves out private-source torrents (a feed,
-    /// §18.7). The rule runs in SQL, walking the search's alerts by
-    /// torrent id, so a search whose matches are mostly withheld costs
-    /// one index scan rather than a lookup per row.
+    /// recorded first: up to `limit` below the alert id `before`, or from
+    /// the newest (as [`Store::alerts`]). `hidden_type` is as
+    /// [`Store::unread_shown`] takes it; `public_only` also leaves out
+    /// private-source torrents (a feed, §18.7). The rule runs in SQL over
+    /// the search's alerts (at most `keep` after a prune, sorted once), so
+    /// a search whose matches are mostly withheld costs no lookup per row.
     pub fn shown_alerts(
         &self,
         saved_search_id: i64,
@@ -431,8 +473,8 @@ impl Store {
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT a.id, a.saved_search_id, a.torrent_id, a.created_at, a.read_at
              FROM alerts a JOIN torrents t ON t.id = a.torrent_id
-             WHERE a.saved_search_id = :search AND a.torrent_id < :before AND {SHOWN}
-             ORDER BY a.torrent_id DESC LIMIT :limit"
+             WHERE a.saved_search_id = :search AND a.id < :before AND {SHOWN}
+             ORDER BY a.id DESC LIMIT :limit"
         ))?;
         let rows = stmt.query_map(
             rusqlite::named_params! {
@@ -489,6 +531,65 @@ impl Store {
         tx.commit()?;
         Ok(created)
     }
+
+    /// Up to `limit` queued promotions whose `reindex_log` entry is at or
+    /// below `applied` (what the serving index has applied), oldest
+    /// first. A row whose entry is gone reads as torrent 0, which matches
+    /// nothing, so it's still consumed.
+    pub fn promoted_due(&self, applied: i64, limit: usize) -> Result<Vec<PromotedDue>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT CAST(substr(s.key, ?3) AS INTEGER), coalesce(r.torrent_id, 0),
+                    CAST(s.value AS INTEGER)
+             FROM settings s LEFT JOIN reindex_log r
+                 ON r.seq = CAST(substr(s.key, ?3) AS INTEGER)
+             WHERE s.key > ?1 AND s.key <= ?2 ORDER BY s.key LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                PROMOTED,
+                promoted_key(applied),
+                PROMOTED.len() as i64 + 1,
+                sql_limit(limit)
+            ],
+            |r| {
+                Ok(PromotedDue {
+                    seq: r.get(0)?,
+                    torrent_id: r.get(1)?,
+                    searches_through: r.get(2)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Records the percolation of every queued promotion up to `seq`, in
+    /// one transaction: each search's hits become alerts, checked as
+    /// [`Store::record_percolation_unchanged`] checks them (a search paused
+    /// or edited meanwhile gets none), and those queue rows are dropped.
+    /// No watermark moves. A crash before the commit replays the rows; a
+    /// hit recorded already (by the forward run or a replay) is ignored.
+    pub fn record_promoted(
+        &mut self,
+        seq: i64,
+        results: &[(SearchHits<'_>, &str)],
+        now: i64,
+    ) -> Result<Vec<Alert>> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let mut created = Vec::new();
+        for (r, ast) in results {
+            let current: Option<(bool, String)> = tx
+                .prepare_cached("SELECT paused, ast FROM saved_searches WHERE id = ?1")?
+                .query_row([r.saved_search_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()?;
+            if current.is_some_and(|(paused, current)| !paused && current == *ast) {
+                insert_alerts(&tx, r, i64::MIN, now, &mut created)?;
+            }
+        }
+        tx.prepare_cached("DELETE FROM settings WHERE key > ?1 AND key <= ?2")?
+            .execute(params![PROMOTED, promoted_key(seq)])?;
+        tx.commit()?;
+        Ok(created)
+    }
 }
 
 fn record_hits(
@@ -505,6 +606,21 @@ fn record_hits(
     let Some(watermark) = watermark else {
         return Ok(());
     };
+    insert_alerts(tx, r, watermark, now, created)?;
+    tx.prepare_cached("UPDATE saved_searches SET watermark = max(watermark, ?2) WHERE id = ?1")?
+        .execute(params![r.saved_search_id, through])?;
+    Ok(())
+}
+
+/// `r`'s hits above `after` that are still torrents become alerts; one
+/// recorded already is left as it is.
+fn insert_alerts(
+    tx: &Transaction<'_>,
+    r: &SearchHits<'_>,
+    after: i64,
+    now: i64,
+    created: &mut Vec<Alert>,
+) -> Result<()> {
     let mut insert = tx.prepare_cached(
         "INSERT INTO alerts (saved_search_id, torrent_id, created_at)
          SELECT ?1, id, ?3 FROM torrents WHERE id = ?2
@@ -513,7 +629,7 @@ fn record_hits(
     let mut ids = r.torrent_ids.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    for t in ids.into_iter().filter(|&t| t > watermark) {
+    for t in ids.into_iter().filter(|&t| t > after) {
         if insert.execute(params![r.saved_search_id, t, now])? > 0 {
             created.push(Alert {
                 id: tx.last_insert_rowid(),
@@ -524,8 +640,6 @@ fn record_hits(
             });
         }
     }
-    tx.prepare_cached("UPDATE saved_searches SET watermark = max(watermark, ?2) WHERE id = ?1")?
-        .execute(params![r.saved_search_id, through])?;
     Ok(())
 }
 
@@ -554,6 +668,103 @@ mod tests {
             saved_search_id: id,
             torrent_ids: t,
         }
+    }
+
+    #[test]
+    fn the_promoted_queue_reads_in_seq_order_up_to_what_the_index_applied() {
+        let mut s = test_store(0);
+        let a = s.create_saved_search(&input("a"), 0, 0).unwrap();
+        for seq in [100, 9, 10] {
+            queue_promoted(&s.conn, seq).unwrap();
+        }
+        let seqs = |s: &Store, applied| -> Vec<i64> {
+            let due = s.promoted_due(applied, 10).unwrap();
+            due.iter().map(|d| d.seq).collect()
+        };
+        assert_eq!(seqs(&s, 10), vec![9, 10]);
+        assert_eq!(seqs(&s, i64::MAX), vec![9, 10, 100]);
+        // No `reindex_log` entry behind it: torrent 0, consumed all the same.
+        let due = s.promoted_due(i64::MAX, 1).unwrap();
+        assert_eq!((due[0].torrent_id, due[0].searches_through), (0, a));
+        assert!(s.record_promoted(10, &[], 0).unwrap().is_empty());
+        assert_eq!(seqs(&s, i64::MAX), vec![100]);
+    }
+
+    /// A promoted torrent's alert is recorded after alerts on higher
+    /// torrent ids: it lists first, survives a prune that keeps the
+    /// newest, and marking read through the top row covers it.
+    #[test]
+    fn a_promoted_alert_is_the_newest_for_listing_pruning_and_reading() {
+        let mut s = test_store(10);
+        let a = s.create_saved_search(&input("a"), 0, 0).unwrap();
+        s.record_percolation(10, &[hits(a, &[5, 6, 7])], 1).unwrap();
+        queue_promoted(&s.conn, 1).unwrap();
+        let created = s.record_promoted(1, &[(hits(a, &[2]), AST)], 2).unwrap();
+        assert_eq!(created.len(), 1);
+        let t = |v: Vec<Alert>| v.iter().map(|x| x.torrent_id).collect::<Vec<_>>();
+        assert_eq!(t(s.alerts(a, None, 10).unwrap()), [2, 7, 6, 5]);
+        assert_eq!(
+            t(s.shown_alerts(a, None, 10, None, false).unwrap()),
+            [2, 7, 6, 5]
+        );
+        let top = s.alerts(a, None, 1).unwrap()[0].id;
+        assert_eq!(t(s.alerts(a, Some(top), 10).unwrap()), [7, 6, 5]);
+        assert_eq!(s.saved_searches().unwrap()[0].last_alert_at, Some(2));
+        assert_eq!(s.mark_alerts_read(Some(a), top, 3).unwrap(), 4);
+        assert_eq!(s.prune_alerts(2).unwrap(), 2);
+        assert_eq!(t(s.alerts(a, None, 10).unwrap()), [2, 7]);
+    }
+
+    /// As `record_percolation_unchanged`: a search paused or edited after
+    /// the match gets nothing, and the rows are consumed all the same. An
+    /// Adult torrent's alert is recorded and withheld when it's read.
+    #[test]
+    fn record_promoted_skips_a_search_paused_or_edited_meanwhile() {
+        let mut s = test_store(10);
+        let paused = s.create_saved_search(&input("p"), 10, 0).unwrap();
+        let edited = s.create_saved_search(&input("e"), 10, 0).unwrap();
+        let adult = s.create_saved_search(&input("x"), 10, 0).unwrap();
+        s.update_saved_search(
+            paused,
+            &SavedSearchInput {
+                paused: true,
+                ..input("p")
+            },
+            10,
+            0,
+        )
+        .unwrap();
+        queue_promoted(&s.conn, 4).unwrap();
+        let old = r#"{"op":"term","word":"old"}"#;
+        let created = s
+            .record_promoted(
+                4,
+                &[
+                    (hits(paused, &[3]), AST),
+                    (hits(edited, &[3]), old),
+                    (hits(adult, &[4]), AST),
+                ],
+                1,
+            )
+            .unwrap();
+        assert_eq!(t_ids(&created), [4]);
+        assert!(s.promoted_due(i64::MAX, 10).unwrap().is_empty());
+        s.conn
+            .execute_batch(
+                "UPDATE torrents SET content_type = 11 WHERE id = 4;
+                 INSERT INTO torrent_parsed (torrent_id, parser_ver, data) VALUES (4, 1, x'00');",
+            )
+            .unwrap();
+        assert!(
+            s.shown_alerts(adult, None, 10, Some(11), false)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(s.unread_shown(Some(11)).unwrap(), 0);
+    }
+
+    fn t_ids(v: &[Alert]) -> Vec<i64> {
+        v.iter().map(|x| x.torrent_id).collect()
     }
 
     #[test]
@@ -724,7 +935,7 @@ mod tests {
             page.iter().map(|x| x.torrent_id).collect::<Vec<_>>(),
             [13, 8]
         );
-        let next = s.alerts(a, Some(8), 10).unwrap();
+        let next = s.alerts(a, Some(page[1].id), 10).unwrap();
         assert_eq!(next.iter().map(|x| x.torrent_id).collect::<Vec<_>>(), [6]);
     }
 

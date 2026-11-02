@@ -224,7 +224,7 @@ pub(crate) async fn list(
                 read: a.read_at.is_some(),
                 torrent: hit_row(&store, s.hot.as_deref(), &row, e)?,
             });
-            last = Some(a.torrent_id);
+            last = Some(a.id);
         }
         Ok(Json(AlertsPage {
             items,

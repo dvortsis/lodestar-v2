@@ -388,7 +388,8 @@ async fn pages_skip_withheld_rows_and_their_cursor_names_a_shown_one() {
         uri = format!("{base}?limit=1&cursor={next}");
     }
     assert_eq!(seen, [6, 5, 2, 1]);
-    // Never a withheld torrent's id (3 hidden, 4 Adult).
+    // Never a withheld row's alert id (3 hidden, 4 Adult); here alert ids
+    // equal torrent ids.
     assert_eq!(cursors, ["6", "5", "2"]);
     // A page of 2 that ends on withheld rows still knows it's last.
     let page = send(&f.app, get(&format!("{base}?limit=2&cursor=5"), Some(&c)))
@@ -603,7 +604,10 @@ async fn many_withheld_alerts_page_and_feed_correctly() {
         let Some(next) = page["next_cursor"].as_str() else {
             break;
         };
-        assert!(shown.contains(&next.parse().unwrap()), "{next}");
+        // The cursor is the last shown row's alert id (SRC-2b: lists
+        // are newest recorded first), never a withheld one's.
+        let last = page["items"].as_array().unwrap().last().unwrap()["id"].clone();
+        assert_eq!(next, last.to_string(), "{next}");
         uri = format!("{base}?limit=2&cursor={next}");
     }
     assert_eq!(seen, shown);

@@ -588,7 +588,9 @@ impl Store {
     /// transaction (see [`Promoted`]). The torrent keeps the item's id and
     /// gains its sources and claims; `t.source` is added too. It stays
     /// private-source if the item was and `t` says so. The id goes into
-    /// `reindex_log`: it's below the search index's id watermark.
+    /// `reindex_log`: it's below the search index's id watermark. A kept
+    /// id is also queued for the percolator (SRC-2b,
+    /// [`Store::promoted_due`]).
     ///
     /// `Error::Invalid` when `t`'s hashes don't include the item's key, or
     /// `t` isn't verified metadata (§18.5: only that promotes).
@@ -687,6 +689,7 @@ impl Store {
             }
             tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
                 .execute([id])?;
+            crate::saved::queue_promoted(&tx, tx.last_insert_rowid())?;
             crate::insights::count_promoted(&tx, id, at, codes)?;
             Promoted::Kept(id)
         };
