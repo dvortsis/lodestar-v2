@@ -1,0 +1,18 @@
+# F-normalize-invisible decisions (#PR)
+
+A content-safety follow-up to `2026-11-02-X-strip-format-chars.md` (#373), which listed format characters the filter's normalization (§20.4) didn't ignore. Any of them inside a word in a name that reaches the filter without the feed cleaning (DHT names, imports) could split that word past a term rule.
+
+- **`invisible()` in `crates/filter/src/normalize.rs` now ignores every Unicode Cf character.**
+  - It reuses `lodestar_metainfo::format_char`, the Unicode 17.0 Cf table #373 added, with its reference test against `unicode-properties`. A later Unicode that adds Cf characters fails that test, and the filter follows the table.
+  - `lodestar-metainfo` was already in the filter's dependency graph (through the store and search crates), so the new direct dependency adds no crate.
+  - It also ignores U+2028/2029 and the whole tag block U+E0000–E007F, assigned or not, the same extra classes `hidden_char` strips from feed titles.
+  - It keeps the non-Cf fillers it ignored before: U+034F, U+115F, U+1160, U+17B4, U+17B5, U+3164, U+FE00–FE0F and U+FFA0.
+  - Below U+00AD nothing is invisible, so Latin-1 text costs one comparison. ASCII text never reaches the check.
+- **It only tightens.** A word hidden-split by one of these characters now reads as the word, so it meets the rules meant for it. Two words with only such a character between them now read as one word. Someone writing a name gains nothing from that: they could write the joined word directly. The filter now reads these names the way the feed and digest cleaning shows them.
+- **No stored artefact holds the normalized form.**
+  - User rules, keywords, overrides, exceptions and allow entries are stored as their text (`filter_rules`, `override_list`, `filter_exceptions`) and normalized on each load, the same way torrent text is. A keyword that held one of these characters reads as the joined word on both sides. Every rule that parsed before still parses: query parsing doesn't go through `invisible()`, and a keyword's validation counts its words, which joining never adds to. None of the newly ignored characters is a letter or digit, so no keyword that had words loses them, and a one-word Neutralize keyword stays one word.
+  - `filter.stand_ins` and the unreadable-row list are keyed by rule id, and the engine's version is a counter. Neither depends on tokens.
+  - The shipped core and pack term lists are hashes of tokens (`examples/hash_terms.rs`). A source term that held one of the newly covered characters would have hashed as split words. The plain lists are kept out of the repository, so this slice can't check them. Shipped terms are plain words, and whoever re-hashes a list now gets the joined form. The runner should have the list keeper confirm no source term holds a Cf character.
+- **The reference tokenizer test** (`tests/normalize_reference.rs`) takes the same `invisible()`, and its generator now includes characters from the new ranges, so the planned tokenizer is still checked to give exactly the reference's tokens.
+- **Tests.** One walks every code point and checks that each Cf character is ignored and `hel<c>lo` gives `hello`'s tokens. Golden cases cover each newly covered range for a word and a keyword. A property test inserts any ignored character anywhere in a text and checks that the tokens, and whether a keyword matches, never change.
+- **Out of scope: the search tokenizer.** `crates/search/src/tokenizer.rs` still splits words on some Cf characters (ZWNJ, ZWJ). User query rules read through it (`fasttok`), so they still see such a split. Changing it is the separate follow-up X-tokenizer-cf, which may need an index rebuild.

@@ -4,8 +4,9 @@
 //!   (full-width `ｐ` → `p`, `é` → `e`).
 //! - Look-alike letters mapped to Latin (Cyrillic `р` → `p`, Greek `ο` →
 //!   `o`): the common confusables, not the whole UTS #39 table.
-//! - Zero-width and other invisible format characters removed, so they
-//!   can't split a word.
+//! - Every format character (Unicode Cf), the line and paragraph
+//!   separators, tag characters and blank fillers removed, so they can't
+//!   split a word.
 //! - Words split at letter/digit boundaries (`16yo` → `16 yo`), with the
 //!   whole word kept at the first part's position.
 //! - Letter-for-number swaps undone as an alternative form (`h3ll0` also
@@ -99,27 +100,33 @@ fn confusable(c: char) -> char {
     }
 }
 
-/// Invisible characters that would otherwise split or disguise a word.
+/// Invisible characters that would otherwise split or disguise a word:
+/// every format character (category Cf, [`lodestar_metainfo::format_char`],
+/// the same table the feed and digest cleaning strip), the line and
+/// paragraph separators, the tag block U+E0000–E007F (assigned or not),
+/// and fillers that show as nothing (Hangul fillers, Khmer inherent
+/// vowels, variation selectors, the combining grapheme joiner).
+#[inline]
 fn invisible(c: char) -> bool {
+    // Nothing below the soft hyphen is invisible: Latin-1 and ASCII stay
+    // one comparison.
+    if c < '\u{00AD}' {
+        return false;
+    }
     matches!(
         c,
-        '\u{00AD}'
-            | '\u{034F}'
-            | '\u{061C}'
+        '\u{034F}'
             | '\u{115F}'
             | '\u{1160}'
             | '\u{17B4}'
             | '\u{17B5}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{206F}'
+            | '\u{2028}'
+            | '\u{2029}'
             | '\u{3164}'
             | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}'
             | '\u{FFA0}'
-    )
+            | '\u{E0000}'..='\u{E007F}'
+    ) || lodestar_metainfo::format_char(c)
 }
 
 fn leet(c: char) -> Option<char> {
@@ -715,6 +722,83 @@ mod tests {
         assert_eq!(toks(&huge).len(), 1);
     }
 
+    /// Every character [`invisible`] ignores: all of Cf, the separators,
+    /// the tag block and the fillers.
+    fn all_invisible() -> Vec<char> {
+        (0..=0x10FFFF)
+            .filter_map(char::from_u32)
+            .filter(|&c| invisible(c))
+            .collect()
+    }
+
+    #[test]
+    fn every_format_character_is_ignored() {
+        let all = all_invisible();
+        for c in (0..=0x10FFFF).filter_map(char::from_u32) {
+            if lodestar_metainfo::format_char(c) {
+                assert!(all.contains(&c), "U+{:04X} is Cf", c as u32);
+            }
+        }
+        // The non-Cf fillers it ignored before are still ignored.
+        for c in [
+            '\u{034F}', '\u{115F}', '\u{1160}', '\u{17B4}', '\u{17B5}', '\u{3164}', '\u{FE00}',
+            '\u{FE0F}', '\u{FFA0}',
+        ] {
+            assert!(invisible(c), "U+{:04X}", c as u32);
+        }
+        // Letters, digits, spaces and visible punctuation aren't.
+        for c in [
+            'a', 'é', 'р', '1', ' ', '.', '\u{00A0}', '\u{3000}', '\u{FFFC}', '\u{FFFD}',
+        ] {
+            assert!(!invisible(c), "U+{:04X}", c as u32);
+        }
+        let hello = toks("hello");
+        for c in all {
+            assert_eq!(toks(&format!("hel{c}lo")), hello, "U+{:04X}", c as u32);
+        }
+    }
+
+    /// Golden cases for the ranges `invisible` didn't cover before
+    /// (docs/decisions/2026-11-02-F-normalize-invisible.md).
+    #[test]
+    fn newly_covered_ranges_join_words() {
+        let alpha_beta = crate::rules::keyword_tokens("alpha beta");
+        for c in [
+            '\u{0600}',
+            '\u{0605}',
+            '\u{06DD}',
+            '\u{070F}',
+            '\u{0890}',
+            '\u{0891}',
+            '\u{08E2}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{FFF9}',
+            '\u{FFFB}',
+            '\u{110BD}',
+            '\u{110CD}',
+            '\u{13430}',
+            '\u{1343F}',
+            '\u{1BCA0}',
+            '\u{1BCA3}',
+            '\u{1D173}',
+            '\u{1D17A}',
+            '\u{E0000}',
+            '\u{E0001}',
+            '\u{E0002}',
+            '\u{E0020}',
+            '\u{E007F}',
+        ] {
+            let at = c as u32;
+            assert!(has(&format!("hel{c}lo"), "hello", 0), "U+{at:04X}");
+            assert!(!has(&format!("hel{c}lo"), "hel", 0), "U+{at:04X}");
+            let text = format!("The.Al{c}pha.{c}Be{c}ta{c}.2019");
+            let mut t = Vec::new();
+            tokens(&text, &mut t);
+            assert!(crate::rules::in_a_row(&alpha_beta, &t), "U+{at:04X}");
+        }
+    }
+
     fn read_apart(paths: &[Vec<String>]) -> (Vec<Token>, Vec<usize>, Vec<bool>) {
         let (mut out, mut ends, mut apart) = (Vec::new(), vec![0], Vec::new());
         paths_apart(
@@ -740,6 +824,29 @@ mod tests {
     }
 
     proptest::proptest! {
+        /// Inserting any character `invisible` ignores, anywhere in a
+        /// text, never changes its tokens, so never whether a term rule
+        /// (a keyword, a core term, a NEAR window) matches.
+        #[test]
+        fn an_invisible_character_never_changes_a_match(
+            text in "([a-e]|[a-e]{3,6}|[0-9]{1,3}|[@$]|é|ｂ|\u{0435}|e\u{301}|[ ./_-]){0,12}",
+            rule in "[a-e]{1,6}( [a-e]{1,6}){0,2}",
+            inserts in proptest::collection::vec((proptest::sample::select(all_invisible()), 0usize..64), 1..4),
+        ) {
+            let mut spliced: Vec<char> = text.chars().collect();
+            for (c, at) in &inserts {
+                spliced.insert(at % (spliced.len() + 1), *c);
+            }
+            let spliced: String = spliced.into_iter().collect();
+            let (plain, hidden) = (toks(&text), toks(&spliced));
+            proptest::prop_assert_eq!(&plain, &hidden);
+            let words = crate::rules::keyword_tokens(&rule);
+            proptest::prop_assert_eq!(
+                crate::rules::in_a_row(&words, &plain),
+                crate::rules::in_a_row(&words, &hidden)
+            );
+        }
+
         /// Wherever a path is marked, its segments read apart give the
         /// tokens of its joined text: letters on both sides of a `/`,
         /// look-alikes, combining marks, folders shared and forgotten.

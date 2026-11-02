@@ -1613,6 +1613,7 @@ dependencies = [
  "getrandom 0.3.4",
  "lodestar-classify",
  "lodestar-log",
+ "lodestar-metainfo",
  "lodestar-search",
  "lodestar-store",
  "proptest",
