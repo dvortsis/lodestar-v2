@@ -989,6 +989,16 @@ async fn removing_an_unreadable_class_rule_requeues_by_kind() {
     let (status, _, body) = call(&f.app, remove(not_adult)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["queued"], Value::Null, "a skipped rule marked nothing");
+    {
+        let store = f.api.store.lock().unwrap();
+        assert!(
+            store
+                .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+                .unwrap()
+                .is_empty(),
+            "nothing marked"
+        );
+    }
     let (status, _, body) = call(&f.app, remove(adult)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["queued"], json!(2), "everything is classified again");

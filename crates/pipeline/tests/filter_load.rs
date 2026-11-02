@@ -37,8 +37,11 @@ fn unparseable_rows_fail_closed_at_start_and_the_floor_stays() {
         CsList::default(),
         Switches::default(),
     )));
-    // As the pipeline's start does: the floor from the filter state, then
-    // the stored rules and classification rules.
+    // As the pipeline's start does (`Pipeline::start` in
+    // crates/pipeline/src/lib.rs, the `load_filter` and `update_engine`
+    // calls after `prepare`): the floor from the filter state, then the
+    // stored rules and classification rules. CS-8 signatures and switches
+    // aren't stored here, so they're left out.
     let state = store.filter_state().unwrap();
     filter.update(|core| {
         for (hash, origin) in &state.cs_hashes {
