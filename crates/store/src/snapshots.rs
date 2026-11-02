@@ -2876,7 +2876,11 @@ mod tests {
         put(&mut store, [0x63; 20], other, &kept);
         insert_torrent(store.connection(), 900, [0x64; 20], "claimed torrent");
         let claim_marker = "torrent-claim-marker-77aa";
-        assert!(store.put_claims(900, other, &claims(claim_marker)).unwrap());
+        assert!(
+            store
+                .put_claims(900, other, &claims(claim_marker), false)
+                .unwrap()
+        );
         let snap = take(&store, &db, 14, T);
 
         store

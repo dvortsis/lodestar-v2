@@ -58,8 +58,9 @@ pub const MAX_EXTERNAL_REF: usize = 2048;
 /// clamps it.
 pub const MAX_TOTAL: usize = 1024 * 1024;
 /// The largest plain body: the text, the external reference, and the
-/// framing (at most 12 bytes a file, under 3 KiB for the rest).
-pub const MAX_PLAIN: usize = MAX_TOTAL + MAX_EXTERNAL_REF + MAX_FILES * 12 + 4096;
+/// framing: at most 13 bytes a file (a 2-byte path length, the size flag
+/// and a 10-byte size) and under 3 KiB for the rest.
+pub const MAX_PLAIN: usize = MAX_TOTAL + MAX_EXTERNAL_REF + MAX_FILES * 13 + 4096;
 /// The largest stored blob: a body is stored raw when zstd doesn't make it
 /// smaller. The schema's `CHECK` holds the same number.
 pub const MAX_STORED: usize = MAX_PLAIN + 2;
@@ -78,7 +79,7 @@ const PUBLISHED_AT: u8 = 1 << 5;
 const KNOWN: u8 = (1 << 6) - 1;
 
 /// One claimed file. The size is what the source says, not what's true.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ClaimedFile {
     /// May be empty: the filter pipeline judges it (SRC-0).
     pub path: String,
@@ -86,10 +87,30 @@ pub struct ClaimedFile {
 }
 
 /// An external ID such as `imdb:tt0111161`. The scheme is lower case.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ExternalId {
     pub scheme: String,
     pub value: String,
+}
+
+/// The path's length only, as for [`Claims`].
+impl fmt::Debug for ClaimedFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClaimedFile")
+            .field("path_len", &self.path.len())
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
+/// The scheme, but the value's length only.
+impl fmt::Debug for ExternalId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExternalId")
+            .field("scheme_len", &self.scheme.len())
+            .field("value_len", &self.value.len())
+            .finish()
+    }
 }
 
 /// How much the source's word is worth, as its plugin judges it.
@@ -270,8 +291,13 @@ pub fn decode(blob: &[u8]) -> Result<Claims, ClaimsError> {
             if body.len() > MAX_PLAIN {
                 return Err(ClaimsError::Limit("body"));
             }
+            // Reserve what the frame declares, never more than the cap: a
+            // larger body fails the decompression instead.
+            let declared = zstd::zstd_safe::get_frame_content_size(body)
+                .map_err(|_| ClaimsError::Compression)?
+                .map_or(MAX_PLAIN, |n| n.min(MAX_PLAIN as u64) as usize);
             let plain =
-                zstd::bulk::decompress(body, MAX_PLAIN).map_err(|_| ClaimsError::Compression)?;
+                zstd::bulk::decompress(body, declared).map_err(|_| ClaimsError::Compression)?;
             decode_plain(&plain)
         }
         c => Err(ClaimsError::Codec(c)),
@@ -341,7 +367,9 @@ pub fn encode_plain(claims: &Claims) -> Result<Vec<u8>, ClaimsError> {
         put_str(&mut out, &i.scheme);
         put_str(&mut out, &i.value);
     }
-    debug_assert!(out.len() <= MAX_PLAIN);
+    if out.len() > MAX_PLAIN {
+        return Err(ClaimsError::Limit("body"));
+    }
     Ok(out)
 }
 
@@ -722,10 +750,49 @@ mod tests {
         assert_eq!(decode(&blob).unwrap(), c);
     }
 
+    /// Long paths need a 2-byte length: the worst framing per file still
+    /// fits the bound, raw and compressed.
+    #[test]
+    fn the_worst_framing_fits_the_bounds() {
+        for path in [
+            "p".repeat(128),
+            (0..128u8).map(|i| (b'!' + i % 90) as char).collect(),
+        ] {
+            let mut c = Claims {
+                size: Some(u64::MAX),
+                provenance: Provenance {
+                    external_ref: Some("e".repeat(MAX_EXTERNAL_REF)),
+                    published_at: Some(i64::MIN),
+                    confidence: Confidence::High,
+                },
+                ..Claims::default()
+            };
+            let long = MAX_TOTAL / 128;
+            c.files = (0..MAX_FILES)
+                .map(|i| ClaimedFile {
+                    path: if i < long {
+                        path.clone()
+                    } else {
+                        String::new()
+                    },
+                    size: Some(u64::MAX),
+                })
+                .collect();
+            assert!(c.check().is_ok());
+            let plain = encode_plain(&c).unwrap();
+            assert!(plain.len() <= MAX_PLAIN, "{} > {MAX_PLAIN}", plain.len());
+            let blob = encode(&c, 3).unwrap();
+            assert!(blob.len() <= MAX_STORED);
+            assert_eq!(decode(&blob).unwrap(), c);
+        }
+    }
+
     #[test]
     fn debug_shows_no_text() {
-        let s = format!("{:?}", sample());
+        let c = sample();
+        let s = format!("{c:?} {:?} {:?}", c.files, c.ids);
         assert!(!s.contains("Some.Show"), "{s}");
+        assert!(!s.contains("tt0111161"), "{s}");
         assert!(!s.contains("uploader"), "{s}");
     }
 }

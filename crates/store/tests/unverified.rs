@@ -6,7 +6,8 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_store::claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
 use lodestar_store::unverified::{
-    MAX_PAGE, Network, NewUnverified, PurgeCursor, PurgeStep, Put, RefiledClaims, RefiledUnverified,
+    ClaimsRefiled, MAX_PAGE, Network, NewUnverified, PurgeCursor, PurgeStep, Put, RefiledClaims,
+    RefiledUnverified,
 };
 use lodestar_store::{
     Error, Filtered, Held, Prepared, PreparedTorrent, SourceId, SourceState, Store, StoreConfig,
@@ -102,6 +103,16 @@ fn store_torrent(store: &mut Store, p: &Prepared, source: SourceId) -> i64 {
         .unwrap()
         .prepared[0]
         .id()
+}
+
+/// A torrent's claims as `(source, private, claims)`.
+fn claims_of(store: &Store, id: i64) -> Vec<(SourceId, bool, Claims)> {
+    store
+        .torrent_claims(id)
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.source, c.private_source, c.claims.unwrap()))
+        .collect()
 }
 
 fn count(store: &Store, sql: &str) -> i64 {
@@ -207,7 +218,7 @@ fn a_key_already_stored_gets_claims_on_the_torrent() {
         .put_unverified(&[item(&p.info_hash.0, nyaa, Some(&c))])
         .unwrap();
     assert_eq!(put, vec![Put::Torrent(id)]);
-    assert_eq!(store.torrent_claims(id).unwrap(), vec![(nyaa, c)]);
+    assert_eq!(claims_of(&store, id), vec![(nyaa, false, c)]);
     let row = store.torrent(id).unwrap().unwrap();
     assert_eq!(row.sources, (1 << dht.get()) | (1 << nyaa.get()));
     assert_eq!(count(&store, "SELECT count(*) FROM unverified_items"), 0);
@@ -296,7 +307,7 @@ fn every_hold_removes_unverified_items_and_claims() {
         store.put_unverified(&[item(&key, nyaa, Some(&c))]).unwrap();
         let p = prepared(&store, "held torrent");
         let id = store_torrent(&mut store, &p, dht);
-        assert!(store.put_claims(id, nyaa, &c).unwrap());
+        assert!(store.put_claims(id, nyaa, &c, false).unwrap());
 
         hold(&mut store, how, key);
         assert!(
@@ -325,7 +336,7 @@ fn a_truncated_v2_hold_removes_a_hybrids_claims() {
             params![id, &v2[..]],
         )
         .unwrap();
-    assert!(store.put_claims(id, nyaa, &named("hybrid")).unwrap());
+    assert!(store.put_claims(id, nyaa, &named("hybrid"), false).unwrap());
     let mut t = [0u8; 20];
     t.copy_from_slice(&v2[..20]);
     hold(&mut store, Hold::Tombstone, t);
@@ -356,7 +367,7 @@ fn a_held_hash_never_comes_back() {
         );
         // A torrent the writer stored before the hold (or by mistake).
         let tid = store_torrent(&mut store, &p, dht);
-        assert!(!store.put_claims(tid, nyaa, &c).unwrap(), "{how:?}");
+        assert!(!store.put_claims(tid, nyaa, &c, false).unwrap(), "{how:?}");
         assert_eq!(count(&store, "SELECT count(*) FROM unverified_items"), 0);
         assert_eq!(count(&store, "SELECT count(*) FROM torrent_claims"), 0);
     }
@@ -395,7 +406,7 @@ fn promotion_keeps_the_id_and_moves_the_claims() {
     assert_eq!(row.first_source, Some(nyaa));
     assert_eq!(row.discovered_at, T, "first found as unverified");
     assert_eq!(row.flags & flags::PRIVATE_SOURCE, 0);
-    assert_eq!(store.torrent_claims(id).unwrap(), vec![(nyaa, c)]);
+    assert_eq!(claims_of(&store, id), vec![(nyaa, false, c)]);
     assert!(
         store
             .unverified(Network::Bt, &p.info_hash.0)
@@ -600,7 +611,7 @@ fn refiling_holds_back_items_and_claims_under_current_rules_only() {
     // its verified metadata).
     let p = prepared(&store, "kappa");
     let tid = store_torrent(&mut store, &p, dht);
-    store.put_claims(tid, nyaa, &bad).unwrap();
+    store.put_claims(tid, nyaa, &bad, false).unwrap();
     let page = store.claims_after((0, dht), 10).unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].claims.as_ref(), Some(&bad));
@@ -610,7 +621,13 @@ fn refiling_holds_back_items_and_claims_under_current_rules_only() {
         filtered: None,
     }];
     assert_eq!(store.refile_claims(&rc, || false).unwrap(), None);
-    assert_eq!(store.refile_claims(&rc, || true).unwrap(), Some(1));
+    assert_eq!(
+        store.refile_claims(&rc, || true).unwrap(),
+        Some(ClaimsRefiled {
+            claims: 1,
+            torrents_deleted: vec![]
+        })
+    );
     assert!(store.torrent_claims(tid).unwrap().is_empty());
     assert!(store.torrent(tid).unwrap().is_some());
     assert!(store.claims_after((tid, nyaa), 10).unwrap().is_empty());
@@ -657,6 +674,7 @@ fn purge_all(store: &mut Store, source: SourceId, limit: usize) -> (PurgeStep, u
         total.torrents_deleted.extend(&s.torrents_deleted);
         total.torrents_kept += s.torrents_kept;
         total.state_deleted += s.state_deleted;
+        total.queue_deleted += s.queue_deleted;
         match s.next {
             Some(c) => cursor = c,
             None => return (total, steps),
@@ -704,8 +722,8 @@ fn purge_removes_only_what_the_source_alone_found() {
     let tb = store_torrent(&mut store, &pb, dht);
     store_torrent(&mut store, &pb, nyaa);
     let tc = store_torrent(&mut store, &pc, dht);
-    store.put_claims(tb, nyaa, &cn).unwrap();
-    store.put_claims(tc, prowlarr, &cp).unwrap();
+    store.put_claims(tb, nyaa, &cn, false).unwrap();
+    store.put_claims(tc, prowlarr, &cp, false).unwrap();
     store.set_plugin_state(nyaa, "cursor", Some(b"42")).unwrap();
     store
         .set_plugin_state(prowlarr, "cursor", Some(b"7"))
@@ -946,8 +964,8 @@ fn space_per_row() {
             "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count, file_count,
                  info_size, flags, discovered_at, metadata_at, last_seen_at, sources)
              SELECT id, key, 'x', 1, 1, 1, 1, 1, 0, 0, 0, 0, 2 FROM unverified_items;
-             INSERT INTO torrent_claims (torrent_id, source_id, data)
-             SELECT id, source_id, claims FROM unverified_items;",
+             INSERT INTO torrent_claims (torrent_id, source_id, flags, data)
+             SELECT id, source_id, 0, claims FROM unverified_items;",
         )
         .unwrap();
     let tc = size(&store, "torrent_claims")
@@ -960,4 +978,211 @@ fn space_per_row() {
         items / i64::from(n),
         tc / i64::from(n),
     );
+}
+
+/// An item found and fetched only privately stays private-source when
+/// promoted, and its claims keep their private mark.
+#[test]
+fn a_private_promotion_stays_private() {
+    use lodestar_store::unverified::Promoted;
+    let mut store = mem();
+    let (_, _, prowlarr) = sources(&mut store);
+    let p = prepared(&store, "private one");
+    store
+        .put_unverified(&[NewUnverified {
+            private_source: true,
+            ..item(&p.info_hash.0, prowlarr, Some(&named("Private")))
+        }])
+        .unwrap();
+    let id = store
+        .unverified(Network::Bt, &p.info_hash.0)
+        .unwrap()
+        .unwrap()
+        .id;
+    let fetched = PreparedTorrent {
+        extra_flags: flags::PRIVATE_SOURCE,
+        ..pt(&p, prowlarr)
+    };
+    assert_eq!(store.promote(id, &fetched).unwrap(), Promoted::Kept(id));
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_ne!(row.flags & flags::PRIVATE_SOURCE, 0);
+    assert_eq!(
+        claims_of(&store, id),
+        vec![(prowlarr, true, named("Private"))]
+    );
+}
+
+/// Claims that came through a private source keep that mark when the key
+/// is later seen publicly; only public claims replacing them clear it. A
+/// stored torrent's claims carry the mark of the sighting that wrote them.
+#[test]
+fn private_claims_stay_marked() {
+    let mut store = mem();
+    let (dht, nyaa, prowlarr) = sources(&mut store);
+    let key = [0x70u8; 20];
+    let private = |c| NewUnverified {
+        private_source: true,
+        ..item(&key, prowlarr, Some(c))
+    };
+    let (a, b) = (named("indexer name"), named("public name"));
+    store.put_unverified(&[private(&a)]).unwrap();
+    store.put_unverified(&[item(&key, nyaa, None)]).unwrap();
+    let got = store.unverified(Network::Bt, &key).unwrap().unwrap();
+    assert!(!got.private_source, "seen publicly");
+    assert!(got.claims_private, "the claims are still the indexer's");
+    store
+        .put_unverified(&[item(&key, prowlarr, Some(&b))])
+        .unwrap();
+    assert!(
+        !store
+            .unverified(Network::Bt, &key)
+            .unwrap()
+            .unwrap()
+            .claims_private
+    );
+
+    let p = prepared(&store, "public torrent");
+    let tid = store_torrent(&mut store, &p, dht);
+    store
+        .put_unverified(&[NewUnverified {
+            private_source: true,
+            ..item(&p.info_hash.0, prowlarr, Some(&a))
+        }])
+        .unwrap();
+    assert_eq!(claims_of(&store, tid), vec![(prowlarr, true, a)]);
+    let row = store.torrent(tid).unwrap().unwrap();
+    assert_eq!(
+        row.flags & flags::PRIVATE_SOURCE,
+        0,
+        "a public torrent stays public"
+    );
+}
+
+#[test]
+fn promotion_needs_verified_metadata() {
+    let mut store = mem();
+    let (dht, nyaa, _) = sources(&mut store);
+    let p = prepared(&store, "unverified meta");
+    store
+        .put_unverified(&[item(&p.info_hash.0, nyaa, Some(&named("x")))])
+        .unwrap();
+    let id = store
+        .unverified(Network::Bt, &p.info_hash.0)
+        .unwrap()
+        .unwrap()
+        .id;
+    let err = store
+        .promote(
+            id,
+            &PreparedTorrent {
+                verified: false,
+                ..pt(&p, dht)
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+}
+
+/// A held decision on a torrent's claims deletes the torrent too, so
+/// nothing stays stored under a held hash.
+#[test]
+fn a_held_claim_decision_deletes_the_torrent() {
+    for held in [Held::Tombstone, Held::Quarantine] {
+        let mut store = mem();
+        let (dht, nyaa, _) = sources(&mut store);
+        let p = prepared(&store, "claimed");
+        let tid = store_torrent(&mut store, &p, dht);
+        store
+            .put_claims(tid, nyaa, &named("blocked"), false)
+            .unwrap();
+        let hashes = [p.info_hash.0];
+        let rc = [RefiledClaims {
+            torrent_id: tid,
+            source: nyaa,
+            filtered: Some(Filtered {
+                hashes: &hashes,
+                rule: "CS-2",
+                action: 0,
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at: T,
+                expires_at: T + 86_400,
+                adult_hold: false,
+            }),
+        }];
+        let reindex = count(&store, "SELECT count(*) FROM reindex_log");
+        assert_eq!(
+            store.refile_claims(&rc, || true).unwrap(),
+            Some(ClaimsRefiled {
+                claims: 1,
+                torrents_deleted: vec![tid]
+            })
+        );
+        assert!(store.torrent(tid).unwrap().is_none(), "{held:?}");
+        assert!(journalled(&store, &p.info_hash.0));
+        assert_eq!(
+            count(&store, "SELECT count(*) FROM reindex_log"),
+            reindex + 1
+        );
+    }
+}
+
+/// Source 63 is the sign bit of SQLite's 64-bit integers: the bitset, the
+/// schema's check and the purge all handle it.
+#[test]
+fn source_63_works_everywhere() {
+    let mut store = mem();
+    let ids: Vec<SourceId> = (0..64)
+        .map(|i| store.register_source(&format!("s{i}"), "1", T).unwrap())
+        .collect();
+    let (s1, s63) = (ids[1], ids[63]);
+    assert_eq!(s63.get(), 63);
+    let c = named("sixty-three");
+    let (only, shared) = ([0x63u8; 20], [0x64u8; 20]);
+    store.put_unverified(&[item(&only, s63, Some(&c))]).unwrap();
+    store
+        .put_unverified(&[item(&shared, s63, Some(&c))])
+        .unwrap();
+    store.put_unverified(&[item(&shared, s1, None)]).unwrap();
+    let got = store.unverified(Network::Bt, &shared).unwrap().unwrap();
+    assert_eq!(got.sources, (1 << 63) | (1 << 1));
+    let p = prepared(&store, "found by 63");
+    let tid = store_torrent(&mut store, &p, s63);
+    assert_eq!(store.torrent(tid).unwrap().unwrap().sources, 1 << 63);
+    store.put_claims(tid, s63, &c, false).unwrap();
+
+    store.set_source_state(s63, SourceState::Disabled).unwrap();
+    let (total, _) = purge_all(&mut store, s63, 1);
+    assert_eq!(total.unverified_deleted, 1);
+    assert_eq!(total.unverified_kept, 1);
+    assert_eq!(total.torrents_deleted, vec![tid]);
+    assert_eq!(total.claims_deleted, 1);
+    let got = store.unverified(Network::Bt, &shared).unwrap().unwrap();
+    assert_eq!((got.source, got.sources, got.claims), (s1, 1 << 1, None));
+    assert!(store.unverified(Network::Bt, &only).unwrap().is_none());
+}
+
+/// A purge also drops the keys the source queued for fetching, so none is
+/// stored under its bit afterwards.
+#[test]
+fn purge_drops_the_sources_queued_keys() {
+    let mut store = mem();
+    let (dht, nyaa, _) = sources(&mut store);
+    let key = |b: u8| lodestar_store::QueuedKey {
+        info_hash: lodestar_metainfo::InfoHash([b; 20]),
+        source: if b == 1 { nyaa } else { dht },
+        cohort: 0,
+        strategy: 0,
+        priority: 0,
+        attempts: 0,
+        private_source: false,
+    };
+    store.save_fetch_queue(&[key(1), key(2)]).unwrap();
+    store.set_source_state(nyaa, SourceState::Disabled).unwrap();
+    let (total, _) = purge_all(&mut store, nyaa, 10);
+    assert_eq!(total.queue_deleted, 1);
+    let left = store.load_fetch_queue().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].source, dht);
 }

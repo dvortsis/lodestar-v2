@@ -53,8 +53,10 @@ CREATE TABLE unverified_items (
         AND (network != 0 OR length(key) = 20)),
     source_id INTEGER NOT NULL REFERENCES sources (id),
     sources   INTEGER NOT NULL CHECK ((sources >> source_id) & 1 = 1),
-    flags     INTEGER NOT NULL CHECK (flags BETWEEN 0 AND 1),
-    claims    BLOB CHECK (claims IS NULL OR length(claims) BETWEEN 7 AND 1174722),
+    -- 1: found only through private sources; 2: its claims came
+    -- through one.
+    flags     INTEGER NOT NULL CHECK (flags BETWEEN 0 AND 3),
+    claims    BLOB CHECK (claims IS NULL OR length(claims) BETWEEN 7 AND 1184722),
     first_at  INTEGER NOT NULL,
     last_at   INTEGER NOT NULL,
     UNIQUE (network, key)
@@ -64,7 +66,9 @@ CREATE TABLE unverified_items (
 CREATE TABLE torrent_claims (
     torrent_id INTEGER NOT NULL REFERENCES torrents (id) ON DELETE CASCADE,
     source_id  INTEGER NOT NULL REFERENCES sources (id),
-    data       BLOB NOT NULL CHECK (length(data) BETWEEN 7 AND 1174722),
+    -- 1: the claims came through a private source (never exported).
+    flags      INTEGER NOT NULL CHECK (flags BETWEEN 0 AND 1),
+    data       BLOB NOT NULL CHECK (length(data) BETWEEN 7 AND 1184722),
     PRIMARY KEY (torrent_id, source_id)
 ) STRICT;
 CREATE INDEX torrent_claims_source ON torrent_claims (source_id, torrent_id);

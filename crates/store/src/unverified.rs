@@ -30,6 +30,12 @@ use crate::{Error, PreparedTorrent, Result, Store, begin_write, flags};
 /// `unverified_items.flags`: found only through private sources (§18.7).
 /// Never sent to public peer finding. A public sighting clears it.
 const PRIVATE: i64 = 1;
+/// `unverified_items.flags`, and `torrent_claims.flags` as 1: the claims
+/// came through a private source (a private indexer's names, tracker URLs
+/// with passkeys). Unlike [`PRIVATE`], a public sighting of the key
+/// doesn't clear it: only public claims replacing them do. Private claims
+/// never leave the instance (§18.7).
+const CLAIMS_PRIVATE: i64 = 2;
 
 /// Rows in one re-judge page at most.
 pub const MAX_PAGE: usize = 1024;
@@ -109,6 +115,8 @@ pub struct UnverifiedItem {
     /// Every source that found it, a bitset over [`SourceId`]s.
     pub sources: u64,
     pub private_source: bool,
+    /// The claims came through a private source.
+    pub claims_private: bool,
     /// `None` when the item has none (they were purged), or they don't
     /// decode (`unreadable`).
     pub claims: Option<Claims>,
@@ -123,8 +131,21 @@ pub struct UnverifiedItem {
 pub struct StoredClaims {
     pub torrent_id: i64,
     pub source: SourceId,
+    /// They came through a private source (§18.7): never exported or
+    /// served beyond this instance.
+    pub private_source: bool,
     /// `None` when they don't decode: drop them.
     pub claims: Option<Claims>,
+}
+
+/// What [`Store::refile_claims`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClaimsRefiled {
+    /// Claim rows removed.
+    pub claims: usize,
+    /// Torrents a held decision deleted, logged for the search index as
+    /// [`Store::delete_torrents`] does.
+    pub torrents_deleted: Vec<i64>,
 }
 
 /// An unverified item the rules now hold back, or that can't be judged.
@@ -200,6 +221,8 @@ pub struct PurgeStep {
     pub torrents_kept: usize,
     /// Plugin state keys deleted.
     pub state_deleted: usize,
+    /// Persisted fetch-queue keys of this source dropped.
+    pub queue_deleted: usize,
 }
 
 impl Store {
@@ -224,13 +247,15 @@ impl Store {
         Ok(out)
     }
 
-    /// Stores `source`'s claims on a torrent, replacing its earlier ones.
+    /// Stores `source`'s claims on a torrent, replacing its earlier ones;
+    /// `private_source` when they came through a private source (§18.7).
     /// False when the torrent isn't stored or one of its hashes is held.
     pub fn put_claims(
         &mut self,
         torrent_id: i64,
         source: SourceId,
         claims: &Claims,
+        private_source: bool,
     ) -> Result<bool> {
         let blob = encode(claims, self.config.compression_level)?;
         let tx = begin_write(&mut self.conn)?;
@@ -240,25 +265,24 @@ impl Store {
         if held(&tx, &hashes)? {
             return Ok(false);
         }
-        write_claims(&tx, torrent_id, source, &blob)?;
+        write_claims(&tx, torrent_id, source, &blob, private_source)?;
         tx.commit()?;
         Ok(true)
     }
 
     /// A torrent's claims, by source. Claims that don't decode are left
     /// out.
-    pub fn torrent_claims(&self, torrent_id: i64) -> Result<Vec<(SourceId, Claims)>> {
+    pub fn torrent_claims(&self, torrent_id: i64) -> Result<Vec<StoredClaims>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT source_id, data FROM torrent_claims WHERE torrent_id = ?1 ORDER BY source_id",
+            "SELECT torrent_id, source_id, flags, data FROM torrent_claims
+             WHERE torrent_id = ?1 ORDER BY source_id",
         )?;
-        let rows = stmt.query_map([torrent_id], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
-        })?;
+        let rows = stmt.query_map([torrent_id], read_claims)?;
         let mut out = Vec::new();
         for row in rows {
-            let (source, data) = row?;
-            if let Ok(c) = claims::decode(&data) {
-                out.push((SourceId::from_sql(source)?, c));
+            let c = row??;
+            if c.claims.is_some() {
+                out.push(c);
             }
         }
         Ok(out)
@@ -302,31 +326,20 @@ impl Store {
     /// [`unverified_after`](Store::unverified_after).
     pub fn claims_after(&self, after: (i64, SourceId), limit: usize) -> Result<Vec<StoredClaims>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT torrent_id, source_id, data FROM torrent_claims
+            "SELECT torrent_id, source_id, flags, data FROM torrent_claims
              WHERE (torrent_id, source_id) > (?1, ?2)
              ORDER BY torrent_id, source_id LIMIT ?3",
         )?;
         let rows = stmt.query_map(
             params![after.0, after.1.get(), limit.clamp(1, MAX_PAGE) as i64],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, Vec<u8>>(2)?,
-                ))
-            },
+            read_claims,
         )?;
         let mut out = Vec::new();
         let mut text = 0;
         for row in rows {
-            let (torrent_id, source, data) = row?;
-            let claims = claims::decode(&data).ok();
-            text += claims.as_ref().map_or(0, Claims::text_len);
-            out.push(StoredClaims {
-                torrent_id,
-                source: SourceId::from_sql(source)?,
-                claims,
-            });
+            let c = row??;
+            text += c.claims.as_ref().map_or(0, Claims::text_len);
+            out.push(c);
             if text >= PAGE_TEXT {
                 break;
             }
@@ -374,19 +387,19 @@ impl Store {
 
     /// Removes torrent claims the rules now hold back (or that can't be
     /// judged), as [`refile_unverified`](Store::refile_unverified) does
-    /// for items. The torrents themselves are judged on their verified
-    /// metadata, not here. Returns how many were removed, or `None` when
-    /// the rules moved on.
+    /// for items. A decision that holds (a tombstone or quarantine) also
+    /// deletes the torrent, as the stored-torrent refile does: nothing
+    /// stays stored under a held hash. `None` when the rules moved on.
     pub fn refile_claims(
         &mut self,
         refiled: &[RefiledClaims<'_>],
         current: impl FnOnce() -> bool,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Option<ClaimsRefiled>> {
         let tx = begin_write(&mut self.conn)?;
         if !current() {
             return Ok(None);
         }
-        let mut done = 0;
+        let mut done = ClaimsRefiled::default();
         for r in refiled {
             let n = tx
                 .prepare_cached(
@@ -396,13 +409,22 @@ impl Store {
             if n == 0 {
                 continue;
             }
-            if let Some(f) = &r.filtered {
-                filter::write(&tx, std::slice::from_ref(f))?;
+            done.claims += n;
+            let Some(f) = &r.filtered else { continue };
+            filter::write(&tx, std::slice::from_ref(f))?;
+            if f.held.is_some()
+                && tx
+                    .prepare_cached("DELETE FROM torrents WHERE id = ?1")?
+                    .execute([r.torrent_id])?
+                    > 0
+            {
+                tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                    .execute([r.torrent_id])?;
+                done.torrents_deleted.push(r.torrent_id);
             }
-            done += n;
         }
         tx.commit()?;
-        if done > 0 {
+        if done.claims > 0 {
             self.scrub_wal();
         }
         Ok(Some(done))
@@ -414,9 +436,13 @@ impl Store {
     /// private-source if the item was and `t` says so. The id goes into
     /// `reindex_log`: it's below the search index's id watermark.
     ///
-    /// `Error::Invalid` when `t`'s hashes don't include the item's key.
+    /// `Error::Invalid` when `t`'s hashes don't include the item's key, or
+    /// `t` isn't verified metadata (§18.5: only that promotes).
     pub fn promote(&mut self, id: i64, t: &PreparedTorrent<'_>) -> Result<Promoted> {
         let p = t.torrent;
+        if !t.verified {
+            return Err(Error::Invalid("promotion needs verified metadata"));
+        }
         if p.files.dict_id.is_some_and(|d| !self.codec.has_dict(d)) {
             return Err(Error::Corrupt("prepared blob names an unknown dictionary"));
         }
@@ -445,17 +471,28 @@ impl Store {
         let item_source = SourceId::from_sql(row.source)?;
         let bits = (row.sources as u64) | t.source.bit() as u64;
         let public = row.flags & PRIVATE == 0 || t.extra_flags & flags::PRIVATE_SOURCE == 0;
+        let claims_private = i64::from(row.flags & CLAIMS_PRIVATE != 0);
         let out = if let Some(existing) = crate::find_any(&tx, p.swarm_hashes())? {
             crate::add_sources(&tx, existing, bits)?;
             if public {
                 crate::make_public(&tx, existing)?;
             }
+            // As `commit_one`: an import's partial file list gets the
+            // fetched one.
+            if t.extra_flags & flags::FILES_PARTIAL == 0 {
+                crate::upgrade_partial(&tx, existing, t)?;
+            }
             if let Some(blob) = &row.claims {
                 tx.prepare_cached(
-                    "INSERT INTO torrent_claims (torrent_id, source_id, data) VALUES (?1, ?2, ?3)
-                     ON CONFLICT DO NOTHING",
+                    "INSERT INTO torrent_claims (torrent_id, source_id, flags, data)
+                     VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",
                 )?
-                .execute(params![existing, item_source.get(), blob])?;
+                .execute(params![
+                    existing,
+                    item_source.get(),
+                    claims_private,
+                    blob
+                ])?;
             }
             Promoted::Merged(existing)
         } else {
@@ -470,6 +507,9 @@ impl Store {
             // item's id for this one insert, then put it back. The item's
             // id came from the sequence and was never a torrent's.
             let next: i64 = tx.query_row("SELECT next FROM id_seq", [], |r| r.get(0))?;
+            if id <= 0 || id >= next {
+                return Err(Error::Corrupt("unverified id outside the issued sequence"));
+            }
             tx.execute("UPDATE id_seq SET next = ?1", [id])?;
             let got = crate::insert_new(&tx, p, fl, discovered, t.metadata_at, item_source)?;
             tx.execute("UPDATE id_seq SET next = ?1", [next])?;
@@ -478,7 +518,7 @@ impl Store {
             }
             crate::add_sources(&tx, id, bits)?;
             if let Some(blob) = &row.claims {
-                write_claims(&tx, id, item_source, blob)?;
+                write_claims(&tx, id, item_source, blob, claims_private != 0)?;
             }
             tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
                 .execute([id])?;
@@ -547,7 +587,8 @@ impl Store {
                     } else if owner == i64::from(source.get()) {
                         tx.prepare_cached(
                             "UPDATE unverified_items
-                             SET sources = ?2, source_id = ?3, claims = NULL WHERE id = ?1",
+                             SET sources = ?2, source_id = ?3, claims = NULL, flags = flags & ~2
+                             WHERE id = ?1",
                         )?
                         .execute(params![
                             id,
@@ -608,6 +649,12 @@ impl Store {
             Stage::State => {
                 step.state_deleted = tx
                     .prepare_cached("DELETE FROM source_state WHERE source_id = ?1")?
+                    .execute([source.get()])?;
+                // Keys it queued before it was disabled would otherwise be
+                // stored under its bit after the purge. The pipeline's
+                // in-memory queue is SRC-14's to drop.
+                step.queue_deleted = tx
+                    .prepare_cached("DELETE FROM fetch_queue WHERE source = ?1")?
                     .execute([source.get()])?;
             }
         }
@@ -759,6 +806,7 @@ impl RawItem {
             source: SourceId::from_sql(self.source)?,
             sources: self.sources as u64,
             private_source: self.flags & PRIVATE != 0,
+            claims_private: self.flags & CLAIMS_PRIVATE != 0,
             claims,
             unreadable,
             first_at: self.first_at,
@@ -801,7 +849,7 @@ fn put_one(tx: &Transaction<'_>, item: &NewUnverified<'_>, blob: Option<&[u8]>) 
             crate::make_public(tx, id)?;
         }
         if let Some(blob) = blob {
-            write_claims(tx, id, item.source, blob)?;
+            write_claims(tx, id, item.source, blob, item.private_source)?;
         }
         return Ok(Put::Torrent(id));
     }
@@ -814,15 +862,22 @@ fn put_one(tx: &Transaction<'_>, item: &NewUnverified<'_>, blob: Option<&[u8]>) 
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?;
-    // A public sighting clears the private mark; a private one never sets it.
+    // A public sighting clears the item's private mark; a private one
+    // never sets it. The claims' mark follows whichever claims are kept.
     let keep_private = if item.private_source { PRIVATE } else { 0 };
+    let claims_private = if item.private_source {
+        CLAIMS_PRIVATE
+    } else {
+        0
+    };
     match existing {
         Some((id, owner, bare)) => {
             let take = blob.is_some() && (bare || owner == i64::from(item.source.get()));
             tx.prepare_cached(
                 "UPDATE unverified_items SET
                      sources = sources | ?2,
-                     flags = flags & ?3,
+                     flags = (flags & ?3)
+                         | CASE WHEN ?5 THEN ?8 ELSE flags & 2 END,
                      last_at = max(last_at, ?4),
                      source_id = CASE WHEN ?5 THEN ?6 ELSE source_id END,
                      claims = CASE WHEN ?5 THEN ?7 ELSE claims END
@@ -835,7 +890,8 @@ fn put_one(tx: &Transaction<'_>, item: &NewUnverified<'_>, blob: Option<&[u8]>) 
                 item.at,
                 take,
                 item.source.get(),
-                blob
+                blob,
+                claims_private
             ])?;
             Ok(Put::Existing(id))
         }
@@ -855,7 +911,7 @@ fn put_one(tx: &Transaction<'_>, item: &NewUnverified<'_>, blob: Option<&[u8]>) 
                 key,
                 item.source.get(),
                 bit,
-                keep_private,
+                keep_private | claims_private,
                 blob,
                 item.at
             ])?;
@@ -864,13 +920,35 @@ fn put_one(tx: &Transaction<'_>, item: &NewUnverified<'_>, blob: Option<&[u8]>) 
     }
 }
 
-fn write_claims(conn: &Connection, torrent_id: i64, source: SourceId, blob: &[u8]) -> Result<()> {
+fn write_claims(
+    conn: &Connection,
+    torrent_id: i64,
+    source: SourceId,
+    blob: &[u8],
+    private_source: bool,
+) -> Result<()> {
     conn.prepare_cached(
-        "INSERT INTO torrent_claims (torrent_id, source_id, data) VALUES (?1, ?2, ?3)
-         ON CONFLICT DO UPDATE SET data = excluded.data",
+        "INSERT INTO torrent_claims (torrent_id, source_id, flags, data) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT DO UPDATE SET flags = excluded.flags, data = excluded.data",
     )?
-    .execute(params![torrent_id, source.get(), blob])?;
+    .execute(params![
+        torrent_id,
+        source.get(),
+        i64::from(private_source),
+        blob
+    ])?;
     Ok(())
+}
+
+fn read_claims(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<StoredClaims>> {
+    let (torrent_id, source, flags, data): (i64, i64, i64, Vec<u8>) =
+        (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+    Ok(SourceId::from_sql(source).map(|source| StoredClaims {
+        torrent_id,
+        source,
+        private_source: flags & 1 != 0,
+        claims: claims::decode(&data).ok(),
+    }))
 }
 
 /// Deletes an unverified item, journalling its key when `journal` (a
