@@ -12,3 +12,5 @@
 - **A crash in change detection fails the check.** The step uses `shell: bash` (pipefail) and each aggregate fails unless the output is exactly `true` or `false`, so an empty output can't skip the heavy jobs and pass.
 - **`web.yml` has no push path filter;** main always runs web.
 - `test_ci_changes.py` covers the rules, including a docs-only diff, and runs in each `changes` job.
+
+(Scratch docs-only proof; not for merge.)
