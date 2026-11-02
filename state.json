@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T22:58:00Z",
+  "updated_at": "2026-11-02T23:10:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3878,7 +3878,7 @@
     },
     {
       "id": "rc-next-include-402",
-      "status": "to-send-with-verdict",
+      "status": "to-send-now",
       "ask": "Release backport of #402 (lease leak fix, e9e18714) needs the owner's yes: \u00a72.29 fixed rc.3 = rc.2 + #357 exactly. On r3 FAIL the runner recommends rc.3 = rc.2 + #357 + #402 (one-line adjustment on release), with a fresh frozen soak. On PASS: ship rc.3 as rc.2 + #357 and take #402 in the next release.",
       "unblocks": "release backport PR of #402; next rc cut",
       "prepared": "patches/rc3-402-on-rc2.patch on runner-state: #402 code + its 2 tests on release/v0.5.1 (6be95525), trailing None dropped; fmt ok, clippy -D warnings ok, pipeline 17/17 and sources tests pass. Apply only on owner yes, on top of #377."
@@ -4640,7 +4640,8 @@
     },
     "2026-11-02T14:23:11Z owner relay seq 1286: 21.45 h elapsed (baseline h14.95), health 200, restarts 0, stored 10,711, private 413.73 MiB, WS 553.85 MiB. Avg +9.3 MiB/h over h6-15 (~13.9 KiB/stored) vs 2.0 MiB/h gate (h12-24 fit not yet run). Asked owner/Antigravity for a preliminary analyze_cr0 memory section and container StartedAt after the 11:00Z backup.",
     "2026-11-02T14:31:07Z preliminary fit (owner/Antigravity, read-only copy, main analyze_cr0.py): private_bytes h12-~16, 247 samples, slope 6.66 MiB/h CI [4.62, 8.70], not judged (incomplete); peak 441.35 MiB; last seq 1356 14:23:29Z. Containers StartedAt unchanged. 11:00Z appdata backup failed (Backups share full), soak untouched; exclusions not exercised. Likely memory-gate FAIL; R-mem-triage briefed, launches on next free slot.",
-    "22:26Z r3 baseline ended 22:16:16Z; asked dashboard session for the owner-run read-only analyze_cr0 fit on a copy (memory slope h12-24 vs 2.0 MiB/h, stalls/interruptions/coverage, peak). Verdict pending. #402 (R-mem-triage lease fix, head aa30a033) review CHANGES fixed (docs only); waiting ci-ok."
+    "22:26Z r3 baseline ended 22:16:16Z; asked dashboard session for the owner-run read-only analyze_cr0 fit on a copy (memory slope h12-24 vs 2.0 MiB/h, stalls/interruptions/coverage, peak). Verdict pending. #402 (R-mem-triage lease fix, head aa30a033) review CHANGES fixed (docs only); waiting ci-ok.",
+    "23:10Z r3 data (owner-run, sanitized snapshot brief; analyze_cr0 report NOT yet run): runner OLS on every-10th private_bytes sample over baseline h12-24 (n=73) = 2.53 MiB/h, naive 95% CI [1.15, 3.90] vs bar upper<=2.0 -> provisional FAIL (point estimate itself > bar). Peak 481 MiB (seq 1690). Preliminary 6.66 (h12-16) was inflated by the short window. Coverage: seq 0-1829 continuous at ~600 s per 10 samples, last at baseline 24.01 h; writer_errors 0, search_errors 0. Stored 16,719 at h24 (665/h over h12-24). Lead: anon slope 2.53 MiB/h ~ search_index_bytes growth 2.09 MiB/h (3.9 KiB anon vs 3.2 KB index per torrent); db 1.0 MiB/h. Step jump 98->283 MiB at seq 370 (~6.2 h, warmup) = pool filling to 200k cap."
   ],
   "limits": {
     "phase_total": 2,
