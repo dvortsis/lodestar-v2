@@ -13,7 +13,10 @@ request gets:
 - a benchmark gate, the importer test or a fuzz target only if it touches a
   crate that job builds, following the workspace's path dependencies (the
   logging bench: `lodestar-log` or the binary's `logging/` runtime);
-- the soak tools' Python tests only if it touches `docs/soak/tools/`.
+- the soak tools' Python tests only if it touches `docs/soak/tools/`;
+- `web` and `e2e` for web.yml / e2e.yml (see WEB_INPUTS below). Those two
+  workflows always run on a pull request and use these outputs to skip their
+  heavy jobs, so their `web-ok` / `e2e-ok` aggregates can be required.
 
 Prints `key=value` lines for $GITHUB_OUTPUT. Usage:
     ci_changes.py <event> <base-sha> <head-sha> [<labels as JSON>]
@@ -41,6 +44,24 @@ RUST_ALSO = re.compile(
     # rust.json embeds these notices; licenses.py --check runs with the Rust job.
     r"|^LICENSE$|^brand/LICENSE\.md$"
 )
+
+# Web and E2E applicability. Both workflows run on every pull request; these
+# patterns decide whether their heavy jobs do. Files the web tests read from
+# outside web/ are listed one by one (found by grepping web/ for `../crates`,
+# `../docs`, `../brand`).
+WEB_INPUTS = (
+    r"web/"  # the app, its tests and web/src/lib/api/openapi.json (api:types is checked against it)
+    r"|brand/source/"  # assets.ts builds the UI's brand assets from it
+    r"|crates/lodestar/src/settings/golden/"  # settings/logs golden files the UI tests compare against
+    r"|crates/lodestar/src/settings/preferences\.rs$|crates/search/src/query\.rs$"  # parsed by UI tests
+    r"|docs/(design-tokens|themes)\.md$"  # UI tests read the token spec and the theme fixture
+    r"|\.github/scripts/ci_changes\.py$"  # this file decides applicability
+)
+WEB = re.compile(rf"^({WEB_INPUTS}|\.github/workflows/web\.yml$)")
+# E2E drives the built UI, so it needs everything web does, plus crates/api/:
+# the API contract that openapi.json is generated from. Docs, other crates and
+# unrelated workflows never apply.
+E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 
 EVERYTHING = re.compile(
     r"^(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|\.cargo/|\.github/workflows/ci\.yml"
@@ -118,7 +139,14 @@ def main() -> None:
 
     if event != "pull_request" or "full-ci" in labels:
         out.update(
-            rust="true", bench="true", filter="true", importer="true", log_bench="true", soak_tools="true"
+            rust="true",
+            bench="true",
+            filter="true",
+            importer="true",
+            log_bench="true",
+            soak_tools="true",
+            web="true",
+            e2e="true",
         )
         out["fuzz"] = json.dumps(FUZZ)
         out["test_os"] = json.dumps(["ubuntu-latest", "windows-latest", "macos-latest"])
@@ -133,6 +161,9 @@ def main() -> None:
         capture_output=True,
         text=True,
     ).stdout.split()
+
+    out["web"] = str(any(WEB.match(f) for f in changed)).lower()
+    out["e2e"] = str(any(E2E.match(f) for f in changed)).lower()
 
     pkgs = packages()
     everything = any(EVERYTHING.match(f) for f in changed)
