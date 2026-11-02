@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T12:19:40Z",
+  "updated_at": "2026-11-02T12:24:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2543,13 +2543,14 @@
       "merge": "7fe018c9"
     },
     "X-overflow-links": {
-      "status": "in review",
+      "status": "merged",
       "session": "session_01MMjhnCi36QS9XT5zJi4LJf",
       "model": "sonnet",
       "brief": "briefs/X-overflow-links.md",
       "launched": "2026-11-02T11:44Z",
       "pr": 390,
-      "head": "4376d3ae"
+      "head": "4376d3ae",
+      "merge": "8b2efd98"
     },
     "X-settings-overview": {
       "status": "in review",
@@ -2559,6 +2560,11 @@
       "launched": "2026-11-02T11:44Z",
       "pr": 391,
       "head": "73773938"
+    },
+    "SRC-7": {
+      "status": "launching",
+      "brief": "briefs/SRC-7.md",
+      "model": "opus"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
