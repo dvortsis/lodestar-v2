@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T06:48:59Z",
+  "updated_at": "2026-11-02T06:57:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2410,13 +2410,14 @@
       "notes": "owner-requested via dashboard session. Runner owns notes/owner_queue/conditions in runner/dashboard.yaml; set met: true in the same PR as recording an owner answer. Runner §2.19 calls: check not required (owner ruleset call); build plan stays hand-written."
     },
     "SRC-5": {
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnD4a7x1Xa5Vz9BC3AS",
       "launched": "2026-11-02T05:15:30Z",
       "pr": 380,
       "head": "c47f6b1a",
-      "review": "Opus MERGE; small push requested (bind-address refused on all non-Windows, operstate probe, DNS-leak status text and decisions)"
+      "review": "Opus MERGE; small push requested (bind-address refused on all non-Windows, operstate probe, DNS-leak status text and decisions)",
+      "merge_sha": "86fa2bbc"
     },
     "SRC-2": {
       "brief_must": "claim hits on the floor or a CS pattern always carry a hold (from #379 review); watermarks for promoted ids; Insights promotion counting (handed from SRC-1)",
@@ -2440,6 +2441,15 @@
         "crates/store/src/saved.rs"
       ],
       "notes": "percolate promoted ids (below each search watermark); candidate design: consume reindex_log entries, dedupe by (search, torrent), no new table. Gap until then: promoted torrents miss saved-search alerts."
+    },
+    "SRC-9": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhnA8qmKPqEfsMnPxySE",
+      "launched": "2026-11-02T06:57:49Z"
+    },
+    "SRC-4": {
+      "notes_runner": "launch after SRC-2 merges (both touch crates/pipeline/src/lib.rs)"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
