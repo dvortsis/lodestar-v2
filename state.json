@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T08:26:41Z",
+  "updated_at": "2026-11-02T08:33:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2447,13 +2447,14 @@
       "notes": "percolate promoted ids (below each search watermark); candidate design: consume reindex_log entries, dedupe by (search, torrent), no new table. Gap until then: promoted torrents miss saved-search alerts."
     },
     "SRC-9": {
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnA8qmKPqEfsMnPxySE",
       "launched": "2026-11-02T06:57:49Z",
       "pr": 382,
       "head": "5d92de9",
-      "review": "Opus CHANGES fixed, runner-verified; merge on green"
+      "review": "Opus CHANGES fixed, runner-verified; merge on green",
+      "merge_sha": "5d44a8a5"
     },
     "SRC-4": {
       "notes_runner": "launch after SRC-2 merges (both touch crates/pipeline/src/lib.rs)",
@@ -2464,6 +2465,20 @@
       "model": "sonnet",
       "session": "session_01MMjhnC8MJRspRwT6jwCv1W",
       "launched": "2026-11-02T08:26:41Z"
+    },
+    "X-egress-copy": {
+      "status": "running",
+      "model": "sonnet",
+      "session": "session_01MMjhnA6rwhgQBEqAzgw9Nb",
+      "launched": "2026-11-02T08:33:17Z",
+      "notes": "combined into one PR"
+    },
+    "D-egress-note": {
+      "status": "running",
+      "model": "sonnet",
+      "session": "session_01MMjhnA6rwhgQBEqAzgw9Nb",
+      "launched": "2026-11-02T08:33:17Z",
+      "notes": "combined into one PR"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
