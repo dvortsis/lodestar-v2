@@ -387,7 +387,14 @@ impl reqwest::dns::Resolve for GuardResolver {
         let family = self.family;
         Box::pin(async move {
             // A SOCKS5 route with local DNS hands IP literals here too.
-            let literal = name.as_str().parse::<IpAddr>().ok();
+            // reqwest passes an IPv6 literal in brackets.
+            let host = name.as_str();
+            let literal = host
+                .strip_prefix('[')
+                .and_then(|h| h.strip_suffix(']'))
+                .unwrap_or(host)
+                .parse::<IpAddr>()
+                .ok();
             let mut addrs = match literal {
                 Some(ip) => policy.check(ip).map(|()| vec![ip]),
                 None => resolve_checked(&*inner, name.as_str(), policy).await,
@@ -515,6 +522,9 @@ pub enum RouteError {
     Unsupported(&'static str),
     /// The interface name can't be a network interface's name.
     InvalidInterface,
+    /// A SOCKS5 user name or password is empty or longer than RFC 1929's
+    /// 255 bytes.
+    InvalidCredentials,
     /// The HTTP client couldn't be built.
     Build,
 }
@@ -524,6 +534,9 @@ impl fmt::Display for RouteError {
         match self {
             RouteError::Unsupported(why) => f.write_str(why),
             RouteError::InvalidInterface => f.write_str("that isn't a valid interface name"),
+            RouteError::InvalidCredentials => {
+                f.write_str("the proxy's user name and password must each be 1 to 255 bytes")
+            }
             RouteError::Build => f.write_str("the HTTP client couldn't be built"),
         }
     }
@@ -554,11 +567,20 @@ pub const INTERFACE_UNSUPPORTED: &str = "choosing a network interface by name wo
      choose the interface's address instead";
 
 /// Whether a name is plainly local, so a proxy resolving it would reach
-/// its own loopback or LAN: `localhost` and `*.localhost` are loopback;
-/// single labels and the `.local`, `.lan`, `.home.arpa` and `.internal`
-/// suffixes are private.
+/// its own loopback, LAN or cloud metadata service: the well-known
+/// metadata names (`metadata.google.internal`, `metadata`,
+/// `instance-data` and `instance-data.*`) are metadata; `localhost` and
+/// `*.localhost` are loopback; single labels and the `.local`, `.lan`,
+/// `.home.arpa` and `.internal` suffixes are private.
 fn local_name_class(host: &str) -> Option<AddrClass> {
     let d = host.trim_end_matches('.').to_ascii_lowercase();
+    if d == "metadata.google.internal"
+        || d == "metadata"
+        || d == "instance-data"
+        || d.starts_with("instance-data.")
+    {
+        return Some(AddrClass::Metadata);
+    }
     if d == "localhost" || d.ends_with(".localhost") {
         return Some(AddrClass::Loopback);
     }
@@ -665,6 +687,12 @@ impl GuardedClient {
                 let mut proxy = reqwest::Proxy::all(format!("{scheme}://{}", socks.proxy))
                     .map_err(|_| RouteError::Build)?;
                 if let Some(auth) = &socks.auth {
+                    // hyper-util writes each length as one byte unchecked;
+                    // a longer value would desynchronise the handshake.
+                    let fits = |s: &Secret| (1..=255).contains(&s.expose().len());
+                    if !fits(&auth.username) || !fits(&auth.password) {
+                        return Err(RouteError::InvalidCredentials);
+                    }
                     proxy = proxy.basic_auth(auth.username.expose(), auth.password.expose());
                 }
                 builder = builder.proxy(proxy);
@@ -1572,6 +1600,9 @@ pub(crate) mod tests {
             ("printer.local", Some(AddrClass::Private)),
             ("box.home.arpa", Some(AddrClass::Private)),
             ("db.internal", Some(AddrClass::Private)),
+            ("metadata.google.internal.", Some(AddrClass::Metadata)),
+            ("metadata", Some(AddrClass::Metadata)),
+            ("instance-data.ec2.internal", Some(AddrClass::Metadata)),
             ("nyaa.si", None),
             ("localhost.example.com", None),
             ("internal.example", None),
@@ -1609,6 +1640,16 @@ pub(crate) mod tests {
         };
         let name = |s: &str| s.parse::<reqwest::dns::Name>().unwrap();
         assert!(guard.resolve(name("127.0.0.1")).await.is_err());
+        assert!(guard.resolve(name("[::1]")).await.is_err());
+        let v6: Vec<_> = guard
+            .resolve(name("[2606:4700:4700::1111]"))
+            .await
+            .unwrap()
+            .collect();
+        assert_eq!(
+            v6,
+            vec!["[2606:4700:4700::1111]:0".parse::<SocketAddr>().unwrap()]
+        );
         let addrs: Vec<_> = guard.resolve(name("8.8.8.8")).await.unwrap().collect();
         assert_eq!(addrs, vec!["8.8.8.8:0".parse::<SocketAddr>().unwrap()]);
         // A v6 bind drops v4 answers, so nothing is left.

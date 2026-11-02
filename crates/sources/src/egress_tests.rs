@@ -58,6 +58,8 @@ struct Server {
     addr: SocketAddr,
     /// Connections accepted.
     conns: Arc<AtomicUsize>,
+    /// The client address of each connection.
+    peers: Arc<Mutex<Vec<SocketAddr>>>,
     /// The request line of each request, as it arrives.
     requests: mpsc::UnboundedReceiver<String>,
     _task: JoinHandle<()>,
@@ -77,14 +79,17 @@ async fn serve(handler: impl Fn(&str) -> Reply + Send + Sync + 'static) -> Serve
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let conns = Arc::new(AtomicUsize::new(0));
+    let peers = Arc::new(Mutex::new(Vec::new()));
     let (tx, requests) = mpsc::unbounded_channel();
     let handler = Arc::new(handler);
     let counted = Arc::clone(&conns);
+    let seen = Arc::clone(&peers);
     let task = tokio::spawn(async move {
         loop {
-            let Ok((mut sock, _)) = listener.accept().await else {
+            let Ok((mut sock, peer)) = listener.accept().await else {
                 return;
             };
+            seen.lock().unwrap().push(peer);
             counted.fetch_add(1, Ordering::SeqCst);
             let tx = tx.clone();
             let handler = Arc::clone(&handler);
@@ -108,6 +113,7 @@ async fn serve(handler: impl Fn(&str) -> Reply + Send + Sync + 'static) -> Serve
     Server {
         addr,
         conns,
+        peers,
         requests,
         _task: task,
     }
@@ -400,6 +406,7 @@ async fn direct_route_reaches_what_the_policy_allows() {
 
 // ---------------------------------------------------------------- bind address
 
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn a_bind_address_route_binds_and_fails_closed_when_the_address_is_gone() {
     let server = serve(|_| ok("bound")).await;
@@ -429,15 +436,81 @@ async fn a_bind_address_route_binds_and_fails_closed_when_the_address_is_gone() 
     assert_eq!(server.conns(), 1, "nothing went out another way");
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_bind_address_egress_is_refused_on_linux() {
+    let server = serve(|_| ok("no")).await;
+    let lo: IpAddr = "127.0.0.1".parse().unwrap();
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::BindAddress(lo), lan())
+        .await;
+    let err = transport(egress.fetch(&Request::get(server.url("/"))).await);
+    assert!(err.contains("choose the interface by name"), "{err}");
+    assert_eq!(
+        egress.status().state,
+        RouteState::Down(DownReason::BindAddressOnLinux)
+    );
+    assert_eq!(server.conns(), 0);
+}
+
+/// A client on `route` whose kill switch always says up, so a test sees
+/// what the socket itself does when the route is unusable.
+fn probe_says_up(route: &Route, resolver: Arc<Scripted>) -> PluginEgress {
+    let client =
+        GuardedClient::with_route(NetPolicy::download_client(), DEADLINE, resolver, route).unwrap();
+    PluginEgress::new(
+        "p",
+        RouteKind::Interface,
+        Ok(client),
+        Arc::new(Switch(AtomicBool::new(true))),
+        lan(),
+    )
+}
+
+#[tokio::test]
+async fn the_bound_socket_fails_closed_even_when_the_probe_says_up() {
+    let server = serve(|_| ok("leak")).await;
+    // 192.0.2.1 (TEST-NET-1) is never assigned here.
+    let route = Route::BindAddress("192.0.2.1".parse().unwrap());
+    let egress = probe_says_up(&route, Scripted::new(&[]));
+    transport(egress.fetch(&Request::get(server.url("/"))).await);
+    assert_eq!(server.conns(), 0, "the connect never left unbound");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_socket_is_bound_to_the_chosen_address() {
+    let server = serve(|_| ok("bound")).await;
+    let route = Route::BindAddress("127.0.0.2".parse().unwrap());
+    let egress = probe_says_up(&route, Scripted::new(&[]));
+    let resp = egress.fetch(&Request::get(server.url("/"))).await.unwrap();
+    assert_eq!(resp.body, b"bound");
+    let peers = server.peers.lock().unwrap().clone();
+    assert_eq!(peers.len(), 1);
+    assert_eq!(peers[0].ip(), "127.0.0.2".parse::<IpAddr>().unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_device_bound_socket_fails_closed_even_when_the_probe_says_up() {
+    let server = serve(|_| ok("leak")).await;
+    let route = Route::Interface("lodestar-nope0".into());
+    let egress = probe_says_up(&route, Scripted::new(&[]));
+    transport(egress.fetch(&Request::get(server.url("/"))).await);
+    assert_eq!(
+        server.conns(),
+        0,
+        "the connect never left on another device"
+    );
+}
+
 #[tokio::test]
 async fn a_bind_address_route_never_connects_to_the_other_family() {
     // An IPv4 bind would leave an IPv6 socket unbound (on the default
     // route), so IPv6 answers and literals are refused.
     let resolver = Scripted::new(&[("v6only.test", &[&["::1"]])]);
-    let lo: IpAddr = "127.0.0.1".parse().unwrap();
-    let egress = factory(Arc::clone(&resolver))
-        .build("p", &Egress::BindAddress(lo), lan())
-        .await;
+    let route = Route::BindAddress("127.0.0.1".parse().unwrap());
+    let egress = probe_says_up(&route, Arc::clone(&resolver));
     transport(egress.fetch(&Request::get("http://v6only.test:9/")).await);
     assert_eq!(resolver.lookups(), 1);
     transport(egress.fetch(&Request::get("http://[::1]:9/")).await);
@@ -632,6 +705,20 @@ async fn socks_credentials_come_from_the_store_and_never_show() {
         );
         assert!(!shown.contains("lodestar-user"), "{shown}");
     }
+
+    // RFC 1929 caps each at 255 bytes; a longer one keeps the route down.
+    let long: &'static str = Box::leak("x".repeat(256).into_boxed_str());
+    let too_long = EgressFactory::with_resolver(
+        Arc::new(Creds(Some(("lodestar-user", long)))),
+        Scripted::new(&[]),
+    )
+    .build("p", &route, lan_any())
+    .await;
+    transport(too_long.fetch(&Request::get(&url)).await);
+    assert_eq!(
+        too_long.status().state,
+        RouteState::Down(DownReason::CredentialsUnavailable)
+    );
 
     // A store that can't answer keeps the route down.
     let broken = EgressFactory::with_resolver(Arc::new(BrokenStore), Scripted::new(&[]))
@@ -881,6 +968,7 @@ async fn manifest_endpoints_are_public_only_and_limited_to_declared_hosts() {
         "https://sub.nyaa.si/",
         "https://tracker.example/",
         "https://nyaa.si.evil.example/",
+        "http://plain.example/",
     ] {
         let err = transport(egress.fetch(&Request::get(url)).await);
         assert!(
@@ -890,8 +978,12 @@ async fn manifest_endpoints_are_public_only_and_limited_to_declared_hosts() {
     }
     assert_eq!(resolver.lookups(), 0, "refused before any lookup");
     // A declared host that resolves somewhere private is refused after DNS.
-    let err = transport(egress.fetch(&Request::get("http://NYAA.si/")).await);
+    let err = transport(egress.fetch(&Request::get("https://NYAA.si/")).await);
     assert!(err.contains("loopback"), "{err}");
+    assert_eq!(resolver.lookups(), 1);
+    // Declared as https, so not over http.
+    let err = transport(egress.fetch(&Request::get("http://nyaa.si/")).await);
+    assert!(err.contains("isn't one of the plugin's endpoints"), "{err}");
     assert_eq!(resolver.lookups(), 1);
 }
 

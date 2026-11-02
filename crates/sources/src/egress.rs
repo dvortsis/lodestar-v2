@@ -118,21 +118,24 @@ impl EgressCredentials for NoCredentials {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints {
     policy: NetPolicy,
-    /// Host keys ([`host_key`]) the plugin may reach; `None` for any.
-    hosts: Option<Vec<String>>,
+    /// The hosts ([`host_key`]) the plugin may reach, each with the one
+    /// scheme it may use (`None`: http or https); `None` for any host.
+    hosts: Option<Vec<(Option<&'static str>, String)>>,
 }
 
 impl Endpoints {
     /// A plugin's built-in public endpoints: public addresses only, and
     /// only the `http`/`https` hosts its manifest declares (exactly, no
-    /// subdomains).
+    /// subdomains), each over the scheme it's declared with.
     pub fn manifest(endpoints: &[Endpoint]) -> Endpoints {
         let hosts = endpoints
             .iter()
-            .filter(|e| {
-                e.protocol.eq_ignore_ascii_case("http") || e.protocol.eq_ignore_ascii_case("https")
+            .filter_map(|e| {
+                let scheme = ["http", "https"]
+                    .into_iter()
+                    .find(|s| e.protocol.eq_ignore_ascii_case(s))?;
+                Some((Some(scheme), host_key(&format!("http://{}/", e.host))?))
             })
-            .filter_map(|e| host_key(&format!("http://{}/", e.host)))
             .collect();
         Endpoints {
             policy: NetPolicy::notification(false),
@@ -154,7 +157,7 @@ impl Endpoints {
         self.hosts = Some(
             hosts
                 .iter()
-                .filter_map(|h| host_key(&format!("http://{}/", h.as_ref())))
+                .filter_map(|h| Some((None, host_key(&format!("http://{}/", h.as_ref()))?)))
                 .collect(),
         );
         self
@@ -171,7 +174,10 @@ impl Endpoints {
         net::check_url(&parsed, self.policy)?;
         if let Some(hosts) = &self.hosts {
             let key = host_key(url).ok_or(NetError::InvalidUrl("it has no host"))?;
-            if !hosts.contains(&key) {
+            let listed = hosts
+                .iter()
+                .any(|(scheme, host)| *host == key && scheme.is_none_or(|s| s == parsed.scheme()));
+            if !listed {
                 return Err(NetError::InvalidUrl(
                     "the host isn't one of the plugin's endpoints",
                 ));
@@ -200,6 +206,8 @@ pub enum DownReason {
     CredentialsUnavailable,
     /// The HTTP client couldn't be built.
     ClientUnavailable,
+    /// A bind address on Linux, where it doesn't pin the interface.
+    BindAddressOnLinux,
 }
 
 impl fmt::Display for DownReason {
@@ -213,6 +221,9 @@ impl fmt::Display for DownReason {
             DownReason::ProxyUnreachable => "the SOCKS5 proxy isn't reachable",
             DownReason::CredentialsUnavailable => "the proxy's credentials couldn't be read",
             DownReason::ClientUnavailable => "the HTTP client couldn't be built",
+            DownReason::BindAddressOnLinux => {
+                "on Linux a bind address doesn't keep traffic on the VPN; choose the interface by name"
+            }
         })
     }
 }
@@ -328,6 +339,12 @@ impl EgressFactory {
     ) -> Result<GuardedClient, DownReason> {
         let route = match egress {
             Egress::Direct => Route::Direct,
+            // On Linux the routing table, not the bound address, picks the
+            // interface, so a downed VPN interface that keeps its address
+            // would leak; the interface route is the safe choice there.
+            Egress::BindAddress(_) if cfg!(target_os = "linux") => {
+                return Err(DownReason::BindAddressOnLinux);
+            }
             Egress::BindAddress(ip) => Route::BindAddress(*ip),
             Egress::Interface(name) => Route::Interface(name.clone()),
             Egress::Socks5 { proxy, dns } => {
@@ -347,6 +364,7 @@ impl EgressFactory {
             |e| match e {
                 net::RouteError::Unsupported(_) => DownReason::Unsupported,
                 net::RouteError::InvalidInterface => DownReason::InvalidInterface,
+                net::RouteError::InvalidCredentials => DownReason::CredentialsUnavailable,
                 net::RouteError::Build => DownReason::ClientUnavailable,
             },
         )
@@ -461,6 +479,7 @@ pub struct PluginEgress {
     state: watch::Sender<RouteState>,
     /// When the route last probed good.
     probed_up: Mutex<Option<Instant>>,
+    probing: tokio::sync::Mutex<()>,
     counters: Counters,
 }
 
@@ -490,6 +509,7 @@ impl PluginEgress {
             endpoints,
             state: watch::Sender::new(RouteState::Unchecked),
             probed_up: Mutex::new(None),
+            probing: tokio::sync::Mutex::new(()),
             counters: Counters::default(),
         };
         match egress.client {
@@ -530,6 +550,9 @@ impl PluginEgress {
 
     /// Probes the route now and publishes the result.
     pub async fn check_now(&self) -> RouteState {
+        // One probe at a time, so a slow good answer can't overwrite a
+        // newer bad one.
+        let _probing = self.probing.lock().await;
         let next = match self.client {
             Err(reason) => RouteState::Down(reason),
             Ok(_) => match self.probe.probe().await {
