@@ -1,1 +1,2 @@
-[{"id": 7, "enable": true, "protocol": "torrent", "privacy": "public", "name": "Example Down"}]
+[{"id": 7, "enable": true, "protocol": "torrent", "privacy": "public", "name": "Example Down"},
+ {"id": 8, "enable": true, "protocol": "torrent", "privacy": "public", "name": "Example Up"}]

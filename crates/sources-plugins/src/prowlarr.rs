@@ -275,6 +275,7 @@ fn fail(msg: &str) -> PluginError {
 /// The manager refused the API key: the plugin stops and says so, rather
 /// than knocking every 15 minutes.
 const REFUSED: &str = "the indexer manager refused the API key";
+const REDIRECTED: &str = "needs setup: the indexer manager redirected the request; check the address (http or https, and any base path)";
 
 impl Prowlarr {
     async fn run_inner(&self, ctx: SourceCtx) -> Result<(), PluginError> {
@@ -312,6 +313,7 @@ impl Prowlarr {
             let indexers = match listed {
                 Ok(list) => list,
                 Err(Failure::Refused) => return Err(fail(REFUSED)),
+                Err(Failure::Redirected) => return Err(fail(REDIRECTED)),
                 // The next list waits for the poll gate.
                 Err(Failure::Other) => continue,
                 Err(Failure::Closed) => return Ok(()),
@@ -321,7 +323,7 @@ impl Prowlarr {
                 r = poll_all(&job, indexers) => r,
             };
             match polled {
-                Ok(()) | Err(Failure::Other) => {}
+                Ok(()) | Err(Failure::Other | Failure::Redirected) => {}
                 Err(Failure::Refused) => return Err(fail(REFUSED)),
                 Err(Failure::Closed) => return Ok(()),
             }
@@ -346,6 +348,10 @@ enum Failure {
     Other,
     /// The pipeline shut down.
     Closed,
+    /// The list answered with a redirect, which is never followed: the
+    /// address needs correcting (often `http` for `https`, or a missing
+    /// base path).
+    Redirected,
 }
 
 /// One indexer, as the manager listed it.
@@ -393,7 +399,11 @@ impl Job {
     }
 
     async fn list(&self) -> Result<Vec<Indexer>, Failure> {
-        let res = answer(self.http.poll("indexers", &self.list_request()).await)?;
+        let res = self.http.poll("indexers", &self.list_request()).await;
+        if matches!(&res, Ok(r) if (300..400).contains(&r.status)) {
+            return Err(Failure::Redirected);
+        }
+        let res = answer(res)?;
         parse_indexers(self.config.manager, &res).map_err(|e| match e {
             ListError::Refused => Failure::Refused,
             _ => Failure::Other,
@@ -491,8 +501,9 @@ pub fn to_found(item: Item, private: bool, manager_host: &str, now: i64) -> Opti
     let external_ref = if private {
         None
     } else {
+        let link = item.link;
         item.guid
-            .filter(|g| host_key(g).is_none_or(|h| h != manager_host))
+            .filter(|g| Some(g) != link.as_ref() && host_key(g).is_none_or(|h| h != manager_host))
     };
     let published_at = item
         .published
@@ -574,6 +585,8 @@ fn prowlarr_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
         protocol: Option<String>,
         #[serde(default)]
         privacy: Option<String>,
+        #[serde(default, rename = "supportsRss")]
+        supports_rss: Option<bool>,
     }
 
     struct List(Vec<Indexer>);
@@ -602,7 +615,9 @@ fn prowlarr_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
                 let Some(id) = raw.id.filter(|_| raw.enable) else {
                     continue;
                 };
-                if raw.protocol.as_deref() != Some("torrent") {
+                // An indexer without RSS answers an empty search with
+                // nothing; asking every 15 minutes only costs it.
+                if raw.protocol.as_deref() != Some("torrent") || raw.supports_rss == Some(false) {
                     continue;
                 }
                 out.push(Indexer {

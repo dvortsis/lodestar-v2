@@ -71,5 +71,15 @@
     "name": "Example Usenet",
     "tags": [],
     "id": 4
+  },
+  {
+    "definitionName": "examplenorss",
+    "enable": true,
+    "supportsRss": false,
+    "protocol": "torrent",
+    "privacy": "public",
+    "name": "Example Search Only",
+    "tags": [],
+    "id": 5
   }
 ]

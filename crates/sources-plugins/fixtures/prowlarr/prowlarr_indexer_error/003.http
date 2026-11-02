@@ -1,0 +1,5 @@
+GET http://prowlarr.example:9696/8/api?t=search&extended=1&limit=100
+X-Api-Key: REDACTED
+
+HTTP 200
+Content-Type: application/rss+xml; charset=utf-8

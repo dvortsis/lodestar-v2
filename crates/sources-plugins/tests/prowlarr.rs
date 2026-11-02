@@ -14,7 +14,8 @@ use lodestar_sources::{
 };
 use lodestar_sources_feeds::torznab::{Hashes, Item, Kind};
 use lodestar_sources_plugins::prowlarr::{
-    self, Config, ListError, MAX_INDEXERS, MAX_SIZE, Manager, Prowlarr, parse_indexers, to_found,
+    self, Config, ConfigError, ListError, MAX_INDEXERS, MAX_SIZE, Manager, Prowlarr,
+    parse_indexers, to_found,
 };
 use lodestar_sources_plugins::{Credentials, StaticCredentials};
 use lodestar_store::SourceId;
@@ -87,7 +88,7 @@ fn assert_spacing(replayer: &Replayer, min: Duration) {
 async fn prowlarr_polls_each_enabled_torrent_indexer() {
     let p = plugin("http://prowlarr.example:9696/", Manager::Prowlarr);
     // Two cycles: the list, indexers 1 (public) and 2 (private); never 3
-    // (disabled) or 4 (Usenet), and no download link.
+    // (disabled), 4 (Usenet) or 5 (no RSS), and no download link.
     let (got, replayer) = replay(&p, "prowlarr_rss", 6, 5).await;
     assert_spacing(&replayer, POLL);
     let by_key = |h: &'static str| got.iter().filter(move |d| d.found.key == hash(h));
@@ -185,8 +186,12 @@ async fn jackett_polls_configured_indexers_but_not_all() {
 #[tokio::test(start_paused = true)]
 async fn an_indexer_error_is_skipped_and_polling_goes_on() {
     let p = plugin("http://prowlarr.example:9696", Manager::Prowlarr);
-    let (got, _) = replay(&p, "prowlarr_indexer_error", 2, 0).await;
-    assert!(got.is_empty());
+    // Indexer 7 answers 500; indexer 8 is still polled and its find sent.
+    let (got, _) = replay(&p, "prowlarr_indexer_error", 3, 1).await;
+    assert_eq!(
+        got[0].found.key,
+        hash("0a0b0c0d0e0f101112131415161718191a1b1c1d")
+    );
 }
 
 async fn ends_with_error(p: Arc<Prowlarr>, case: Option<&str>) -> String {
@@ -219,6 +224,16 @@ async fn a_refused_key_stops_the_plugin() {
         assert!(e.contains("refused the API key"), "{e}");
         assert!(!e.contains("REDACTED"));
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_redirect_asks_for_the_address_to_be_fixed() {
+    let p = plugin("http://prowlarr.example:9696", Manager::Prowlarr);
+    let e = ends_with_error(p, Some("prowlarr_redirect")).await;
+    assert!(
+        e.starts_with("needs setup") && !e.contains("https://"),
+        "{e}"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -291,7 +306,7 @@ fn config_is_checked() {
     // A key in the plain settings is refused: it's a credential.
     let e = Config::from_json(r#"{"url":"http://p.example","manager":"prowlarr","api_key":"k"}"#)
         .unwrap_err();
-    assert!(!e.to_string().contains('k') || !e.to_string().contains("\"k\""));
+    assert_eq!(e, ConfigError("the settings don't match the form"));
     assert!(Config::from_json(r#"{"url":"http://p.example","manager":"sonarr"}"#).is_err());
 }
 
@@ -482,11 +497,15 @@ prop_compose! {
         v1 in proptest::option::of(any::<[u8; 20]>()),
         size in any::<Option<u64>>(),
         published in any::<Option<i64>>(),
-        guid in proptest::option::of("(https?://(m|t)\\.example/[a-z0-9]{0,8}|urn:x:[a-z]{0,4})"),
+        guid in proptest::option::of("(https?://(m|t)\\.example/[a-z0-9.]{0,8}|urn:x:[a-z]{0,4})"),
+        same in any::<bool>(),
     ) -> Item {
         let mut it = item(Kind::Torrent(Hashes { v1: v1.map(InfoHash), v2: None }));
         it.size = size;
         it.published = published;
+        if same {
+            it.link = guid.clone();
+        }
         it.guid = guid;
         it
     }
