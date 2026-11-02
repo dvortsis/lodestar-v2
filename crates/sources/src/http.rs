@@ -317,6 +317,10 @@ struct Host {
     blocked_until: Option<Instant>,
     /// Full-scrape grants in the last 24 h, oldest first.
     scrapes: VecDeque<Instant>,
+    /// The poll unit whose failure was this host's last answer
+    /// ([`HostLimiter::record_poll`]): a different unit failing next
+    /// means the host itself is failing.
+    unit_failed: Option<String>,
 }
 
 impl Host {
@@ -327,6 +331,7 @@ impl Host {
             retry_at: None,
             blocked_until: None,
             scrapes: VecDeque::new(),
+            unit_failed: None,
         }
     }
 
@@ -379,7 +384,9 @@ impl Hosts {
     /// host that answered held a token a moment ago, so its outcome is
     /// never dropped for want of room. The map can pass [`MAX_HOSTS`]
     /// only by hosts with requests in flight, and shrinks back as they go
-    /// idle.
+    /// idle. A poll unit's entry is made through the capped
+    /// [`entry`](Self::entry) first ([`HostLimiter::record_poll`]), so
+    /// units never pass it.
     fn entry_for_answer(&mut self, host: &str, now: Instant) -> &mut Host {
         self.map
             .entry(host.to_owned())
@@ -596,6 +603,13 @@ impl HostLimiter {
     /// failing stays on the host: a transport failure (connect, reset,
     /// timeout) and a 401 or 403 (a key the whole host refuses), as in
     /// [`record`](Self::record). A normal answer resets both.
+    ///
+    /// **Two different units failing in a row** (a 5xx or a rate limit,
+    /// with no normal answer between) is the host failing, not one unit:
+    /// the host backs off too, so a manager that's down behind a reverse
+    /// proxy isn't asked once per unit per back-off step. And when the
+    /// table has no room for the unit ([`MAX_HOSTS`]), the answer goes
+    /// on the host, the safer side.
     pub fn record_poll(
         &self,
         host: &str,
@@ -608,7 +622,24 @@ impl HostLimiter {
             _ => return self.record(host, result, now),
         };
         let key = unit_key(unit);
-        match classify(res) {
+        let verdict = classify(res);
+        // The unit's entry, made within the cap (or the host takes it).
+        if self.lock().entry(&key, now, &self.limits).is_err() {
+            return self.record(host, result, now);
+        }
+        let host_failing = {
+            let mut hosts = self.lock();
+            let h = hosts.entry_for_answer(host, now);
+            if verdict == Verdict::Ok {
+                h.unit_failed = None;
+                false
+            } else {
+                let other = h.unit_failed.as_deref().is_some_and(|u| u != unit);
+                h.unit_failed = Some(unit.to_owned());
+                other
+            }
+        };
+        match verdict {
             Verdict::Ok => {
                 self.success(host);
                 self.success(&key);
@@ -621,6 +652,9 @@ impl HostLimiter {
                 let wait = d.map_or(self.limits.backoff.max, |d| d.max(backoff));
                 self.block(&key, later(now, wait), now);
             }
+        }
+        if host_failing {
+            self.failure(host, now);
         }
     }
 
@@ -1046,6 +1080,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sent(&c), before + 1);
+    }
+
+    /// Two different units failing in a row is the host failing: it backs
+    /// off too. A normal answer between them keeps it on the units.
+    #[tokio::test(start_paused = true)]
+    async fn different_units_failing_in_a_row_back_the_host_off() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let now = Instant::now();
+        let answer = |status: u16| {
+            Ok(Response {
+                status,
+                headers: vec![],
+                body: vec![],
+            })
+        };
+        l.record_poll("m", "a", &answer(502), now);
+        // The same unit again is still that unit.
+        l.record_poll("m", "a", &answer(502), now);
+        l.record_poll("m", "b", &answer(200), now);
+        l.record_poll("m", "c", &answer(503), now);
+        assert_eq!(l.state("m", now), HostState::Ready);
+        l.record_poll("m", "d", &answer(500), now);
+        assert!(matches!(l.state("m", now), HostState::BackingOff { .. }));
+    }
+
+    /// Units never grow the table past [`MAX_HOSTS`]: without room, the
+    /// answer goes on the host.
+    #[tokio::test(start_paused = true)]
+    async fn units_stay_within_the_table() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let now = Instant::now();
+        let limited = Ok(Response {
+            status: 429,
+            headers: vec![("Retry-After".into(), "3600".into())],
+            body: vec![],
+        });
+        for i in 0..MAX_HOSTS + 10 {
+            l.record_poll("m", &format!("ix-{i}"), &limited, now);
+        }
+        assert!(
+            l.lock().map.len() <= MAX_HOSTS + 1,
+            "{}",
+            l.lock().map.len()
+        );
+        assert!(matches!(l.state("m", now), HostState::Blocked { .. }));
     }
 
     /// What says the host is failing (a connection that fails, a key it

@@ -803,7 +803,12 @@ impl PluginEgress {
                 Counters::bump(&self.counters.kill_switch_refusals);
                 // Paced, so a plugin that retries at once can't spin
                 // while the route is down; cut short when it comes up.
-                let streak = self.down_streak.fetch_add(1, Ordering::Relaxed);
+                let streak = self
+                    .down_streak
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                        Some(n.saturating_add(1))
+                    })
+                    .unwrap_or(u32::MAX);
                 let mut up = self.state.subscribe();
                 tokio::select! {
                     () = tokio::time::sleep(down_delay(streak)) => {}

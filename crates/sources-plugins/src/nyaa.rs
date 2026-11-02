@@ -96,8 +96,6 @@ const POLICY: Policy = Policy {
     // §18.2/§19.5: one instance polls the feed.
     distribution: Distribution::Singleton,
     schedule: Schedule::ALWAYS,
-    // One agent, the strict default (SRC-14a).
-    max_agents: 1,
 };
 
 /// The Nyaa plugin.
