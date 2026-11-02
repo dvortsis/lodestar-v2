@@ -392,6 +392,7 @@ async fn direct_route_reaches_what_the_policy_allows() {
     let status = egress.status();
     assert_eq!(status.route, RouteKind::Direct);
     assert_eq!(status.state, RouteState::Up);
+    assert_eq!(status.notice, None);
     assert_eq!(status.counters.answered, 1);
 
     // The same fixture under a public-only policy is never connected to.
@@ -406,7 +407,7 @@ async fn direct_route_reaches_what_the_policy_allows() {
 
 // ---------------------------------------------------------------- bind address
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
 #[tokio::test]
 async fn a_bind_address_route_binds_and_fails_closed_when_the_address_is_gone() {
     let server = serve(|_| ok("bound")).await;
@@ -436,19 +437,19 @@ async fn a_bind_address_route_binds_and_fails_closed_when_the_address_is_gone() 
     assert_eq!(server.conns(), 1, "nothing went out another way");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 #[tokio::test]
-async fn a_bind_address_egress_is_refused_on_linux() {
+async fn a_bind_address_egress_is_refused_off_windows() {
     let server = serve(|_| ok("no")).await;
     let lo: IpAddr = "127.0.0.1".parse().unwrap();
     let egress = factory(Scripted::new(&[]))
         .build("p", &Egress::BindAddress(lo), lan())
         .await;
     let err = transport(egress.fetch(&Request::get(server.url("/"))).await);
-    assert!(err.contains("choose the interface by name"), "{err}");
+    assert!(err.contains("only on Windows"), "{err}");
     assert_eq!(
         egress.status().state,
-        RouteState::Down(DownReason::BindAddressOnLinux)
+        RouteState::Down(DownReason::BindAddressUnsupported)
     );
     assert_eq!(server.conns(), 0);
 }
@@ -475,6 +476,19 @@ async fn the_bound_socket_fails_closed_even_when_the_probe_says_up() {
     let egress = probe_says_up(&route, Scripted::new(&[]));
     transport(egress.fetch(&Request::get(server.url("/"))).await);
     assert_eq!(server.conns(), 0, "the connect never left unbound");
+}
+
+#[tokio::test]
+async fn a_dead_proxy_fails_closed_even_when_the_probe_says_up() {
+    let server = serve(|_| ok("leak")).await;
+    let route = Route::Socks5(Socks5Route {
+        proxy: unused_port_addr(),
+        dns: SocksDns::Proxy,
+        auth: None,
+    });
+    let egress = probe_says_up(&route, Scripted::new(&[]));
+    transport(egress.fetch(&Request::get(server.url("/"))).await);
+    assert_eq!(server.conns(), 0, "no direct fallback");
 }
 
 #[cfg(target_os = "linux")]
@@ -529,6 +543,7 @@ async fn an_interface_route_binds_by_name_and_fails_closed_without_it() {
     let resp = egress.fetch(&Request::get(server.url("/"))).await.unwrap();
     assert_eq!(resp.body, b"via lo");
     assert_eq!(egress.status().state, RouteState::Up);
+    assert_eq!(egress.status().notice, Some(DNS_OUTSIDE_ROUTE));
 
     // A missing interface: a VPN tunnel that isn't there.
     let egress = factory(Scripted::new(&[]))

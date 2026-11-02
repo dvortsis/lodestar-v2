@@ -206,8 +206,8 @@ pub enum DownReason {
     CredentialsUnavailable,
     /// The HTTP client couldn't be built.
     ClientUnavailable,
-    /// A bind address on Linux, where it doesn't pin the interface.
-    BindAddressOnLinux,
+    /// A bind address off Windows, where it doesn't pin the interface.
+    BindAddressUnsupported,
 }
 
 impl fmt::Display for DownReason {
@@ -221,8 +221,8 @@ impl fmt::Display for DownReason {
             DownReason::ProxyUnreachable => "the SOCKS5 proxy isn't reachable",
             DownReason::CredentialsUnavailable => "the proxy's credentials couldn't be read",
             DownReason::ClientUnavailable => "the HTTP client couldn't be built",
-            DownReason::BindAddressOnLinux => {
-                "on Linux a bind address doesn't keep traffic on the VPN; choose the interface by name"
+            DownReason::BindAddressUnsupported => {
+                "a bind address keeps traffic on the VPN only on Windows; choose the interface by name"
             }
         })
     }
@@ -262,6 +262,27 @@ pub struct EgressStatus {
     pub route: RouteKind,
     pub state: RouteState,
     pub counters: EgressCounters,
+    /// What the user should know about this route's privacy, if anything.
+    pub notice: Option<&'static str>,
+}
+
+/// The notice for routes whose DNS lookups don't take the route.
+pub const DNS_OUTSIDE_ROUTE: &str = "DNS lookups use the system resolver, outside the chosen route";
+
+fn notice(egress: &Egress) -> Option<&'static str> {
+    match egress {
+        Egress::Direct
+        | Egress::Socks5 {
+            dns: SocksDns::Proxy,
+            ..
+        } => None,
+        Egress::BindAddress(_)
+        | Egress::Interface(_)
+        | Egress::Socks5 {
+            dns: SocksDns::Local,
+            ..
+        } => Some(DNS_OUTSIDE_ROUTE),
+    }
 }
 
 /// The longest request timeout a plugin gets.
@@ -328,7 +349,10 @@ impl EgressFactory {
             Egress::Socks5 { proxy, .. } => Probe::Socks(*proxy),
         };
         let client = self.client(plugin, egress, endpoints.policy).await;
-        PluginEgress::new(plugin, egress.kind(), client, Arc::new(probe), endpoints)
+        let mut built =
+            PluginEgress::new(plugin, egress.kind(), client, Arc::new(probe), endpoints);
+        built.notice = notice(egress);
+        built
     }
 
     async fn client(
@@ -339,11 +363,11 @@ impl EgressFactory {
     ) -> Result<GuardedClient, DownReason> {
         let route = match egress {
             Egress::Direct => Route::Direct,
-            // On Linux the routing table, not the bound address, picks the
-            // interface, so a downed VPN interface that keeps its address
-            // would leak; the interface route is the safe choice there.
-            Egress::BindAddress(_) if cfg!(target_os = "linux") => {
-                return Err(DownReason::BindAddressOnLinux);
+            // Off Windows (weak host model: Linux, macOS, BSD) the routing
+            // table, not the bound address, picks the interface, so a downed
+            // VPN interface that keeps its address would leak.
+            Egress::BindAddress(_) if cfg!(not(windows)) => {
+                return Err(DownReason::BindAddressUnsupported);
             }
             Egress::BindAddress(ip) => Route::BindAddress(*ip),
             Egress::Interface(name) => Route::Interface(name.clone()),
@@ -417,9 +441,12 @@ impl RouteProbe for Probe {
     }
 }
 
-/// Whether the interface exists and is administratively up, from
-/// `/sys/class/net/<name>/flags` (`IFF_UP`). The name is checked first, so
-/// it's one path segment.
+/// Whether the interface exists and its link is usable: administratively
+/// up (`IFF_UP` in `/sys/class/net/<name>/flags`), an operational state
+/// that isn't down (`operstate`; tunnels report `unknown`), and a carrier
+/// where the kernel reports one. A WireGuard tunnel with no live peer still
+/// reads up: the kernel can't tell. The name is checked first, so it's one
+/// path segment.
 #[cfg(target_os = "linux")]
 fn interface_up(name: &str) -> Result<(), DownReason> {
     net::check_interface_name(name).map_err(|_| DownReason::InvalidInterface)?;
@@ -429,6 +456,19 @@ fn interface_up(name: &str) -> Result<(), DownReason> {
         .map_err(|_| DownReason::InterfaceMissing)?;
     const IFF_UP: u32 = 0x1;
     if flags & IFF_UP == 0 {
+        return Err(DownReason::InterfaceDown);
+    }
+    let read = |file: &str| std::fs::read_to_string(format!("/sys/class/net/{name}/{file}"));
+    let oper = read("operstate").map_err(|_| DownReason::InterfaceMissing)?;
+    if matches!(
+        oper.trim(),
+        "down" | "lowerlayerdown" | "notpresent" | "dormant"
+    ) {
+        return Err(DownReason::InterfaceDown);
+    }
+    // `carrier` can't be read while the interface is down; it's 0 when the
+    // link has no carrier.
+    if read("carrier").is_ok_and(|c| c.trim() == "0") {
         return Err(DownReason::InterfaceDown);
     }
     Ok(())
@@ -480,6 +520,7 @@ pub struct PluginEgress {
     /// When the route last probed good.
     probed_up: Mutex<Option<Instant>>,
     probing: tokio::sync::Mutex<()>,
+    notice: Option<&'static str>,
     counters: Counters,
 }
 
@@ -510,6 +551,7 @@ impl PluginEgress {
             state: watch::Sender::new(RouteState::Unchecked),
             probed_up: Mutex::new(None),
             probing: tokio::sync::Mutex::new(()),
+            notice: None,
             counters: Counters::default(),
         };
         match egress.client {
@@ -527,6 +569,7 @@ impl PluginEgress {
             route: self.route,
             state: *self.state.borrow(),
             counters: self.counters.snapshot(),
+            notice: self.notice,
         }
     }
 
