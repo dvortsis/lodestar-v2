@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T15:26:41Z",
+  "updated_at": "2026-11-02T15:38:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2438,7 +2438,7 @@
         "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source).",
         "Purge must also scrub pre-migration snapshots (crates/store/src/snapshots.rs, VACUUM INTO, kept 90 days): drop sources.secret.<plugin>.* and sources.consent.<plugin> from each snapshot, or refuse rollback past a purge; secrets.key stays in the data dir, so lodestar rollback would otherwise restore a purged source's sealed credentials and ack (#388 Opus review finding 1)."
       ],
-      "status": "#394 Opus re-review MERGE; merge on green",
+      "status": "SRC-14a merged (ea7b1e7b); SRC-14b next when a slot frees (limit 2)",
       "brief": "briefs/SRC-14.md",
       "session": "session_01MMjhnBdFardZHCh5mNqeNX",
       "model": "opus",
