@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T05:45:57Z",
+  "updated_at": "2026-11-02T05:58:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2381,11 +2381,14 @@
       "merge_sha": "8b0037bf"
     },
     "SRC-1": {
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "session": "session_01MMjhnB5mFJfPfMQNdVkAkV",
       "launched": "2026-11-02T04:37:06Z",
-      "migration": "V14"
+      "migration": "V14",
+      "pr": 379,
+      "head": "1078437d",
+      "review": "Opus CHANGES: re-judge page bound ignores per-file decode cost; held refile leaves stored torrent under held hash; source-state check on writes (or SRC-14 handoff)"
     },
     "CR-COL-3": {
       "status": "in review",
@@ -2407,6 +2410,9 @@
       "model": "opus",
       "session": "session_01MMjhnD4a7x1Xa5Vz9BC3AS",
       "launched": "2026-11-02T05:15:30Z"
+    },
+    "SRC-2": {
+      "brief_must": "claim hits on the floor or a CS pattern always carry a hold (from #379 review); watermarks for promoted ids; Insights promotion counting (handed from SRC-1)"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
