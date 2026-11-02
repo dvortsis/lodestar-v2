@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T22:31:00Z",
+  "updated_at": "2026-11-02T22:36:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3875,6 +3875,12 @@
       "state": "to-send",
       "added": "2026-11-02T19:43:15Z",
       "text": "SRC-14b-2 (#400, \u00a72.19): purging a source now requires the admin password every time (\u00a710.10.7 asks only for a confirmation dialog). Tightens."
+    },
+    {
+      "id": "rc-next-include-402",
+      "status": "to-send-with-verdict",
+      "ask": "Release backport of #402 (lease leak fix, e9e18714) needs the owner's yes: \u00a72.29 fixed rc.3 = rc.2 + #357 exactly. On r3 FAIL the runner recommends rc.3 = rc.2 + #357 + #402 (one-line adjustment on release), with a fresh frozen soak. On PASS: ship rc.3 as rc.2 + #357 and take #402 in the next release.",
+      "unblocks": "release backport PR of #402; next rc cut"
     }
   ],
   "external_gates": {
