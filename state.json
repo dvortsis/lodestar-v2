@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T02:58:00Z",
+  "updated_at": "2026-11-02T03:10:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2352,7 +2352,8 @@
     "merge_freeze_for_48": "CANCELLED 00:42: no freeze. M4 stops chasing main; reviewers review #48's own diff; one final main merge after reviews, mechanical delta verified by runner.",
     "push_state_every_wake": "Watchdog trig_0172BngAUoA4NRaRWBYiRWVf (every 4h from 04:12) judges liveness by runner-state commit age: push state.json on every wake, even if nothing changed.",
     "slots_always_full": "owner 2026-11-01 21:08Z: keep 4 slice sessions busy whenever unblocked slices exist; runner picks order; holds unchanged (E-v06-workers/companions, E-M6 until soak verdict; no migrations on main before release cut; owner questions wait)",
-    "size_remeasure_rule": "dropped 2026-11-02 after #364: size builds use a fixed version, so CI sizes are deterministic"
+    "size_remeasure_rule": "dropped 2026-11-02 after #364: size builds use a fixed version, so CI sizes are deterministic",
+    "owner_delegation_2026_11_02": "Owner: \"For any questions waiting on me: Use your recommended solution, for best UX/ performance.\" Recorded as owner-decisions §2.28 (#371). Externals owner-q1/q2/q3/q7/q15 and owner-migrations-on-main hold; holds on E-v06-workers/companions/E-M6 (soak verdict) unchanged."
   },
   "watched_sessions": {
     "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session — owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning §10.10 Settings, §12.1 logging, §12.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b. 20:27 #86 MERGED c5f9b74. Session done."
@@ -3334,8 +3335,9 @@
     },
     {
       "id": "q-v06-sources",
-      "status": "to-send",
-      "text": "v0.6 Sources plan (#356) owner questions, each with a recommended answer in docs/plan/2026-11-01-v06-sources.md §5: Q1 consent wording (gates SRC-15b); Q2 ToS/robots position per source (gates SRC-7+); Q3 which torrent caches to contact, privacy (gates SRC-13); Q7 Sukebei adult feed in v0.6, content-safety scope (gates SRC-10e); Q15 how private_source items get metadata, snatch/H&R risk (gates SRC-7)."
+      "status": "answered",
+      "text": "v0.6 Sources plan (#356) owner questions, each with a recommended answer in docs/plan/2026-11-01-v06-sources.md §5: Q1 consent wording (gates SRC-15b); Q2 ToS/robots position per source (gates SRC-7+); Q3 which torrent caches to contact, privacy (gates SRC-13); Q7 Sukebei adult feed in v0.6, content-safety scope (gates SRC-10e); Q15 how private_source items get metadata, snatch/H&R risk (gates SRC-7).",
+      "answer": "owner 2026-11-02: take the runner recommendation (owner-decisions §2.28, PR #371)"
     },
     {
       "id": "flag-v06-sources-runner",
@@ -3374,8 +3376,9 @@
     },
     {
       "id": "q-subscriptions-proxy",
-      "status": "to-send",
-      "text": "Owner question (privacy trade-off, from #362): blocklist list fetches now go through the SSRF guard, which by §16 ignores system proxies (HTTPS_PROXY), because a proxy resolves names itself and would bypass the private-address check. §20.13 had said list fetches use the proxy egress. Effect: a user who relies on HTTPS_PROXY (not a whole-container VPN such as gluetun, which still applies) would fetch blocklists from their own IP. Lists on the local network, including config lists, are now refused. Recommendation: accept for v0.6 (gluetun is the documented setup); a follow-up could add a guarded proxy mode. main is not shipped, so this can be changed before the v0.6 cut."
+      "status": "answered",
+      "text": "Owner question (privacy trade-off, from #362): blocklist list fetches now go through the SSRF guard, which by §16 ignores system proxies (HTTPS_PROXY), because a proxy resolves names itself and would bypass the private-address check. §20.13 had said list fetches use the proxy egress. Effect: a user who relies on HTTPS_PROXY (not a whole-container VPN such as gluetun, which still applies) would fetch blocklists from their own IP. Lists on the local network, including config lists, are now refused. Recommendation: accept for v0.6 (gluetun is the documented setup); a follow-up could add a guarded proxy mode. main is not shipped, so this can be changed before the v0.6 cut.",
+      "answer": "owner 2026-11-02: take the runner recommendation (owner-decisions §2.28, PR #371)"
     },
     {
       "id": "flag-src8",
@@ -3389,13 +3392,15 @@
     },
     {
       "id": "q-adult-standin-release",
-      "status": "to-send",
-      "text": "Owner question (content safety, from #367 F-filter-standin-undo): when an unreadable \"Is adult\" classification rule becomes readable again, the adult holds its stand-in made are NOT released automatically, because storage can't tell them apart from a user's own per-torrent adult correction (releasing could undo a user's child-safety choice permanently). They are counted in an Insights notice and all torrents are re-queued for classification. Automatic release would need a change to the stored rule-id format recording what made a hold adult (e.g. \"CS-5a~C-2+adult\"), plus writer and reclassify changes. Proposal in docs/decisions (F-filter-standin-undo). Recommendation: keep them held for v0.6; build the format change only if you want automatic release."
+      "status": "answered",
+      "text": "Owner question (content safety, from #367 F-filter-standin-undo): when an unreadable \"Is adult\" classification rule becomes readable again, the adult holds its stand-in made are NOT released automatically, because storage can't tell them apart from a user's own per-torrent adult correction (releasing could undo a user's child-safety choice permanently). They are counted in an Insights notice and all torrents are re-queued for classification. Automatic release would need a change to the stored rule-id format recording what made a hold adult (e.g. \"CS-5a~C-2+adult\"), plus writer and reclassify changes. Proposal in docs/decisions (F-filter-standin-undo). Recommendation: keep them held for v0.6; build the format change only if you want automatic release.",
+      "answer": "owner 2026-11-02: take the runner recommendation (owner-decisions §2.28, PR #371)"
     },
     {
       "id": "q-migrations-on-main",
-      "status": "to-send",
-      "text": "Owner question (from master-plan r2, #369): may migration-bearing slices merge to main before v0.5.1 is tagged? Your 11-01 21:08Z hold says \"no migrations on main before release cut\"; release/v0.5.1 already exists, so the plan reads this as \"after v0.5.1 is tagged, or sooner if you allow\". SRC-1 (V14, Sources store) is the first one waiting (ext:owner-migrations-on-main)."
+      "status": "answered",
+      "text": "Owner question (from master-plan r2, #369): may migration-bearing slices merge to main before v0.5.1 is tagged? Your 11-01 21:08Z hold says \"no migrations on main before release cut\"; release/v0.5.1 already exists, so the plan reads this as \"after v0.5.1 is tagged, or sooner if you allow\". SRC-1 (V14, Sources store) is the first one waiting (ext:owner-migrations-on-main).",
+      "answer": "owner 2026-11-02: take the runner recommendation (owner-decisions §2.28, PR #371)"
     }
   ],
   "external_gates": {
