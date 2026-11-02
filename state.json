@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:02:25Z",
+  "updated_at": "2026-11-02T14:08:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2567,13 +2567,13 @@
       "merge": "77c9308d"
     },
     "SRC-7": {
-      "status": "in review (Opus review running)",
+      "status": "Opus MERGE; two cheap fixes requested (external_ref proxy-download guid, 404/unparseable list = needs setup)",
       "brief": "briefs/SRC-7.md",
       "model": "opus",
       "session": "session_01MMjhnAf3hHtxzAQnAz9XCo",
       "launched": "2026-11-02T12:24Z",
       "pr": 395,
-      "head": "7671b501"
+      "head": "5d9eaf78"
     },
     "X-polish-carry-1102": {
       "status": "merged",
@@ -3885,6 +3885,11 @@
       "id": "X-http-scoped-backoff",
       "added": "2026-11-02T13:51:04Z",
       "text": "crates/sources/src/http.rs: 429 Retry-After or repeated 5xx from one Prowlarr indexer blocks/backs off the whole manager host for up to 24h. Scope blocks and back-off to the poll unit. Must land before users can enable the Prowlarr plugin. After #394 merges (http.rs owner)."
+    },
+    {
+      "id": "SRC-7-real-recordings",
+      "added": "2026-11-02T14:08:10Z",
+      "text": "Replace SRC-7 hand-written fixtures with real scrubbed Prowlarr and Jackett recordings; verify X-Api-Key on /{id}/api and guid shapes. Before users can enable the Prowlarr plugin. Needs a real Prowlarr instance (owner or docker in a session with network)."
     }
   ],
   "main_health": [
