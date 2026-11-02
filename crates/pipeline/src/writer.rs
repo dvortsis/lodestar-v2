@@ -19,9 +19,10 @@ use lodestar_filter::{
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::hot::flags as hot_flags;
+use lodestar_store::unverified::{Network, Promoted, RefiledUnverified};
 use lodestar_store::{
-    CohortCount, Counter, Event, Filtered, Held, HotColumns, Inserted, PreparedTorrent, QueuedKey,
-    SHADOW, SourceId, Store, SwarmUpdate, Touch, WriteBatch, flags, swarm_flags,
+    CohortCount, Counter, Event, Filtered, Held, HotColumns, Inserted, Prepared, PreparedTorrent,
+    QueuedKey, SHADOW, SourceId, Store, SwarmUpdate, Touch, WriteBatch, flags, swarm_flags,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval_at};
@@ -31,6 +32,7 @@ use crate::gate::{Excluded, GateStats, Origin};
 use crate::have::{Bloom, Have, capacity_for};
 use crate::health::HealthHandle;
 use crate::rollups::{Rollups, metric};
+use crate::unverified::{self, UnverifiedStats};
 use crate::worker::{Results, collect};
 use crate::{event, unix_now};
 
@@ -76,6 +78,8 @@ pub struct WriterStats {
     pub enriched: AtomicU64,
     /// Scrape results stored.
     pub swarm_updates: AtomicU64,
+    /// The unverified pipeline: claims judged, stored, held, promoted.
+    pub unverified: UnverifiedStats,
 }
 
 pub(crate) struct WriterIo {
@@ -89,6 +93,9 @@ pub(crate) struct WriterIo {
     pub finish: oneshot::Receiver<Vec<QueuedKey>>,
     /// Scrape rounds from the health service.
     pub swarm: mpsc::Receiver<Vec<SwarmUpdate>>,
+    /// Discoveries with claims, from intake: judged, then stored as
+    /// unverified items or claims (SRC-2).
+    pub claims: mpsc::Receiver<unverified::Claimed>,
 }
 
 pub(crate) struct Writer {
@@ -120,6 +127,10 @@ pub(crate) struct Writer {
     pub health: Option<HealthHandle>,
     /// The import-candidate refile sweep.
     pub candidates: CandidateSweep,
+    /// The unverified-item and claims refile sweep (SRC-2).
+    pub sweep: unverified::Sweep,
+    /// The verification cursor (`sources.verify_unverified`).
+    pub verify: unverified::Verify,
     /// Runs between a sweep or backfill batch's commit and its hold
     /// check, so tests can land a release or a rule change exactly there.
     #[cfg(test)]
@@ -167,12 +178,12 @@ pub(crate) struct Backoff {
 
 impl Backoff {
     /// Not waiting out an error.
-    fn ready(&self) -> bool {
+    pub(crate) fn ready(&self) -> bool {
         self.retry_at.is_none()
     }
 
     /// A store error (`SQLITE_BUSY` past the busy timeout, say).
-    fn failed(&mut self, now: i64) {
+    pub(crate) fn failed(&mut self, now: i64) {
         self.failures = self.failures.saturating_add(1);
         let backoff = RETRY_FIRST
             .saturating_mul(1 << (self.failures - 1).min(10))
@@ -181,12 +192,12 @@ impl Backoff {
     }
 
     /// A batch went through: the next error waits the shortest time.
-    fn succeeded(&mut self) {
+    pub(crate) fn succeeded(&mut self) {
         self.failures = 0;
     }
 
     /// Ends the wait once it's due.
-    fn retry_due(&mut self, now: i64) {
+    pub(crate) fn retry_due(&mut self, now: i64) {
         if self.retry_at.is_some_and(|at| now >= at) {
             self.retry_at = None;
         }
@@ -231,6 +242,14 @@ struct Committing {
 struct Outcome {
     /// Per stored or already-stored result: (index, new?, swarm hashes).
     stored: Vec<(usize, i64, bool, Vec<InfoHash>)>,
+    /// Promoted results, by index, with the cohort and source their
+    /// torrent row records (the item's first sighting and finder): the
+    /// funnel's Stored stage goes there, where Insights counts it
+    /// searchable (`Store::promote`).
+    promoted_as: Vec<(usize, i64, SourceId)>,
+    /// The batch's write failed after its promotions committed: only
+    /// those (and promotion holds) are in `stored` and `blocked`.
+    failed: Option<lodestar_store::Error>,
     /// Results the authoritative blocklist rejected.
     blocked: Vec<usize>,
     /// Per touch: the torrent's id, if the store had it.
@@ -270,11 +289,30 @@ impl Writer {
                 Some(swarm) = io.swarm.recv() => {
                     self.commit(Vec::new(), Vec::new(), swarm, Vec::new(), &io.retry).await;
                 }
+                Some(first) = io.claims.recv() => {
+                    // Up to `batch_max` discoveries and `CLAIMS_STEP_KIB`
+                    // of claims, so one step stays short.
+                    let mut kib = first.1.num_permits();
+                    let mut batch = vec![first];
+                    while batch.len() < self.cfg.batch_max
+                        && kib < unverified::CLAIMS_STEP_KIB as usize
+                    {
+                        match io.claims.try_recv() {
+                            Ok(d) => {
+                                kib += d.1.num_permits();
+                                batch.push(d);
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    self.ingest_claims(batch).await;
+                }
                 Some(queue) = io.queues.recv() => self.save_queue(queue).await,
                 // Always ready until done; the unbiased select gives it a
                 // fair share between ingest batches.
                 () = std::future::ready(()), if self.backfill_ready() => self.backfill().await,
                 () = std::future::ready(()), if self.candidates.ready() => self.refile_candidates().await,
+                () = std::future::ready(()), if self.sweep.ready() => self.refile_unverified().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
                         self.backfill_after = 0;
@@ -282,13 +320,27 @@ impl Writer {
                     }
                     self.note_engine();
                     self.candidates.backoff.retry_due(unix_now());
+                    self.sweep.backoff.retry_due(unix_now());
                     self.backfill_backoff.retry_due(unix_now());
+                    self.verify(&io.retry).await;
                     self.commit(Vec::new(), Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
                     }
                 }
             }
+        }
+        // Claims already handed over are judged and kept: intake stopped
+        // before the writer, so this is bounded by its channel.
+        let mut batch = Vec::new();
+        while let Ok(d) = io.claims.try_recv() {
+            batch.push(d);
+            if batch.len() >= self.cfg.batch_max.max(1) {
+                self.ingest_claims(std::mem::take(&mut batch)).await;
+            }
+        }
+        if !batch.is_empty() {
+            self.ingest_claims(batch).await;
         }
         // Scrape rounds already handed over are kept: the health service
         // stopped before the pipeline's inputs did.
@@ -463,10 +515,46 @@ impl Writer {
             .flat_map(|c| c.results.torrent.swarm_hashes().map(|h| h.0))
             .collect();
         let held = self.held.clone();
+        let stats = self.stats.clone();
+        // Promotion judges the item's stored claims again under these rules.
+        let engine = self.filter.current();
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
         #[cfg(test)]
         let (between, marked, filter) = (self.between, self.marked, self.filter.clone());
         let (store, committing, touches, swarm, result) = tokio::task::spawn_blocking(move || {
+            // Held since it was judged, before this batch marks its own: a
+            // claim's hold (SRC-2), a report, a list. Its verified metadata
+            // passed, but nothing is stored under a held hash.
+            let refused: Vec<bool> = committing
+                .iter()
+                .map(|c| {
+                    c.results
+                        .torrent
+                        .swarm_hashes()
+                        .any(|h| held.contains(&h.0))
+                })
+                .collect();
             let pending = (!holding.is_empty()).then(|| held.pend(&holding));
+            // A promotion that a claim now holds marks its hashes as the
+            // batch's own holds are marked: before its write.
+            let promo_pending = std::cell::RefCell::new(Vec::new());
+            let mark = |_st: &Store, hs: &[[u8; 20]]| {
+                promo_pending.borrow_mut().push(held.pend(hs));
+                #[cfg(test)]
+                if let Some(f) = marked {
+                    f(_st, &held, &filter, hs);
+                }
+            };
+            let promo = Promo {
+                engine: &engine,
+                ctx: unverified::Ctx {
+                    sealer: sealer.as_deref(),
+                    quarantine_secs,
+                },
+                stats: &stats.unverified,
+                mark: &mark,
+            };
             #[cfg(test)]
             if let (Some(f), Some(_)) = (marked, &pending) {
                 f(&store, &held, &filter, &holding);
@@ -483,20 +571,41 @@ impl Writer {
                 now,
                 quarantine_until,
                 class_gen,
+                &refused,
+                &promo,
             );
+            let promo_pending = promo_pending.into_inner();
             #[cfg(test)]
-            if let (Some(f), Some(_)) = (between, &pending) {
+            if let Some(f) = between
+                && (pending.is_some() || !promo_pending.is_empty())
+            {
                 f(&mut store, &held, &filter);
             }
             // Committed or rolled back: the store says which hold.
             hold_committed(&store, pending, true);
+            for p in promo_pending {
+                hold_committed(&store, Some(p), true);
+            }
             (store, committing, touches, swarm, result)
         })
         .await
         .expect("writer transaction task");
         self.store = Some(store);
         let outcome = match result {
-            Ok(o) => o,
+            Ok(mut o) => {
+                if let Some(e) = o.failed.take() {
+                    // The batch is lost but its promotions committed in
+                    // their own transactions: they're accounted below.
+                    self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                    let lost = committing.len() - o.stored.len() - o.blocked.len();
+                    self.gate.exclude(Excluded::StoreFailed, lost as u64);
+                    lodestar_log::log_event!(
+                        crate::log_events::STORE_WRITE_FAILED,
+                        error = crate::log_events::store_error(&e)
+                    );
+                }
+                o
+            }
             Err(e) => {
                 // The batch and its counters are lost; keep going. Its
                 // leases stay held, so the keys aren't fetched again in
@@ -557,8 +666,12 @@ impl Writer {
                 continue;
             };
             if crawled {
-                self.funnel
-                    .record(lease.cohort, lease.source, Stage::Stored, None);
+                let (cohort, source) = outcome
+                    .promoted_as
+                    .iter()
+                    .find(|(j, _, _)| *j == i)
+                    .map_or((lease.cohort, lease.source), |&(_, c, s)| (c, s));
+                self.funnel.record(cohort, source, Stage::Stored, None);
             }
             if new {
                 self.stats.stored.fetch_add(1, Ordering::Relaxed);
@@ -714,6 +827,224 @@ impl Writer {
                 version: Some(version),
                 ..CandidateSweep::default()
             };
+        }
+        if self.sweep.version != Some(version) {
+            self.sweep.restart(version);
+        }
+    }
+
+    /// Judges a batch of discoveries with claims and stores what the rules
+    /// let through ([`unverified::ingest`]): filtering comes before
+    /// storage, and a hold is marked for intake before its commit.
+    async fn ingest_claims(&mut self, claimed: Vec<unverified::Claimed>) {
+        // The budget is given back when the batch is done, stored or not.
+        let (batch, _permits): (Vec<Discovery>, Vec<_>) = claimed.into_iter().unzip();
+        let store = self.store.take().expect("store");
+        let filter = self.filter.clone();
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let held = self.held.clone();
+        let stats = self.stats.clone();
+        #[cfg(test)]
+        let (between, marked) = (self.between, self.marked);
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let engine = filter.current();
+            let pending = std::cell::RefCell::new(None);
+            let mark = |_st: &Store, hs: &[[u8; 20]]| {
+                *pending.borrow_mut() = Some(held.pend(hs));
+                #[cfg(test)]
+                if let Some(f) = marked {
+                    f(_st, &held, &filter, hs);
+                }
+            };
+            let ctx = unverified::Ctx {
+                sealer: sealer.as_deref(),
+                quarantine_secs,
+            };
+            let result = unverified::ingest(
+                &mut store,
+                &engine,
+                ctx,
+                &batch,
+                &stats.unverified,
+                unix_now(),
+                &mark,
+            );
+            let pending = pending.into_inner();
+            #[cfg(test)]
+            if let (Some(f), Some(_)) = (between, &pending) {
+                f(&mut store, &held, &filter);
+            }
+            // Committed or failed: the store says which hold.
+            hold_committed(&store, pending, true);
+            (store, result)
+        })
+        .await
+        .expect("claims task");
+        self.store = Some(store);
+        match result {
+            Ok(done) => {
+                self.stats.transactions.fetch_add(1, Ordering::Relaxed);
+                // A feed's sighting of a stored torrent is a rediscovery, as
+                // a bare one is in `commit`.
+                for (id, at, source, strategy) in done.touched {
+                    if let Some(hot) = &self.hot {
+                        hot.touch(id as u64, at.clamp(0, i64::from(u32::MAX - 1)) as u32);
+                    }
+                    if let Some(health) = &self.health {
+                        health.rediscovered(id);
+                    }
+                    self.stats.rediscovered.fetch_add(1, Ordering::Relaxed);
+                    self.gate.exclude(Excluded::Rediscovered, 1);
+                    self.rollups
+                        .add(at, metric::REDISCOVERED, source, i64::from(strategy), 1);
+                }
+            }
+            Err(e) => {
+                // The batch is lost; its sources send their items again.
+                // The error carries no claim text.
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::STORE_WRITE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
+    /// One step of the unverified refile sweep ([`unverified::refile_step`]).
+    async fn refile_unverified(&mut self) {
+        let store = self.store.take().expect("store");
+        let filter = self.filter.clone();
+        let version = *self
+            .sweep
+            .version
+            .get_or_insert_with(|| filter.current().version);
+        let (phase, after_item, after_claims) = (
+            self.sweep.phase,
+            self.sweep.after_item,
+            self.sweep.after_claims,
+        );
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let held = self.held.clone();
+        #[cfg(test)]
+        let (between, marked) = (self.between, self.marked);
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let pending = std::cell::RefCell::new(None);
+            let mark = |_st: &Store, hs: &[[u8; 20]]| {
+                *pending.borrow_mut() = Some(held.pend(hs));
+                #[cfg(test)]
+                if let Some(f) = marked {
+                    f(_st, &held, &filter, hs);
+                }
+            };
+            let ctx = unverified::Ctx {
+                sealer: sealer.as_deref(),
+                quarantine_secs,
+            };
+            let result = unverified::refile_step(
+                &mut store,
+                &filter,
+                version,
+                phase,
+                after_item,
+                after_claims,
+                ctx,
+                unix_now(),
+                &mark,
+            );
+            let pending = pending.into_inner();
+            #[cfg(test)]
+            if let (Some(f), Some(_)) = (between, &pending) {
+                f(&mut store, &held, &filter);
+            }
+            // Committed, rejected or failed: the store says which hold.
+            hold_committed(&store, pending, false);
+            (store, result)
+        })
+        .await
+        .expect("unverified refile task");
+        self.store = Some(store);
+        match result {
+            // The rules changed: all of it again, under the new ones.
+            Ok(step) if step.rejected => self.sweep.restart(self.filter.current().version),
+            Ok(step) => {
+                self.sweep.backoff.succeeded();
+                self.stats
+                    .unverified
+                    .refiled
+                    .fetch_add(step.removed as u64, Ordering::Relaxed);
+                self.sweep.after_item = step.after_item;
+                self.sweep.after_claims = step.after_claims;
+                if step.end {
+                    match phase {
+                        unverified::Phase::Items => self.sweep.phase = unverified::Phase::Claims,
+                        unverified::Phase::Claims => {
+                            self.sweep.done = true;
+                            self.stats.unverified.sweeps.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // The same step again after a backoff, so what the current
+                // rules hold doesn't stay at rest. No claim text in it.
+                self.sweep.backoff.failed(unix_now());
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::ENRICHMENT_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
+    /// Hands the next few unverified keys to intake for fetching, when
+    /// verification is on ([`unverified::Verify`]). Never more than half
+    /// of what intake's retry channel has room for, so have-filter
+    /// retries keep theirs, and at most [`unverified::VERIFY_PER_FLUSH`].
+    async fn verify(&mut self, retry: &mpsc::Sender<Discovery>) {
+        if !self.verify.on {
+            return;
+        }
+        let limit = unverified::VERIFY_PER_FLUSH.min(retry.capacity() / 2);
+        if limit == 0 {
+            return;
+        }
+        let store = self.store.take().expect("store");
+        let mut verify = std::mem::take(&mut self.verify);
+        let (store, verify, result) = tokio::task::spawn_blocking(move || {
+            let r = verify.next(&store, limit, unix_now());
+            (store, verify, r)
+        })
+        .await
+        .expect("verify task");
+        self.store = Some(store);
+        self.verify = verify;
+        match result {
+            Ok(keys) => {
+                for d in keys {
+                    // Room was checked above; a key that still finds it
+                    // full comes round again with the next pass.
+                    if retry.try_send(d).is_err() {
+                        break;
+                    }
+                    self.stats
+                        .unverified
+                        .verify_sent
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Err(e) => {
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::STORE_WRITE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
         }
     }
 
@@ -899,6 +1230,8 @@ fn transaction(
     now: i64,
     quarantine_until: i64,
     class_gen: Option<i64>,
+    refused: &[bool],
+    promo: &Promo<'_>,
 ) -> Result<Outcome, lodestar_store::Error> {
     // Filtered torrents are never stored: a drop leaves a tombstone, a
     // quarantine a sealed name (§20.3). Other actions (from rules that
@@ -908,8 +1241,8 @@ fn transaction(
         Some(Action::Quarantine) => Some(Held::Quarantine),
         _ => None,
     };
-    let (blocked, accepted): (Vec<usize>, Vec<usize>) =
-        (0..committing.len()).partition(|&i| held(&committing[i]).is_some());
+    let (mut blocked, accepted): (Vec<usize>, Vec<usize>) = (0..committing.len())
+        .partition(|&i| held(&committing[i]).is_some() || refused.get(i).copied().unwrap_or(false));
     // One hit per decision (held, marked or shadow), for the review
     // queue and the replay (§20.7).
     let records: Vec<(usize, &Decision, bool)> = committing
@@ -952,7 +1285,7 @@ fn transaction(
             }
         })
         .collect();
-    let prepared: Vec<PreparedTorrent<'_>> = accepted
+    let all_prepared: Vec<PreparedTorrent<'_>> = accepted
         .iter()
         .map(|&i| {
             let Committing { results, lease, .. } = &committing[i];
@@ -981,10 +1314,48 @@ fn transaction(
             }
         })
         .collect();
+    // Promotion (§18.5): a verified torrent whose hash an unverified item
+    // holds promotes it under the item's id, whichever path fetched it
+    // (a verification fetch, or the crawler finding the same hash), and is
+    // never stored twice. Before the batch's inserts, so the id is kept.
+    // A store with no unverified items (no source with claims) skips it.
+    let mut promoted: Vec<(usize, i64, bool)> = Vec::new();
+    let mut promoted_as: Vec<(usize, i64, SourceId)> = Vec::new();
+    let mut promo_held: Vec<usize> = Vec::new();
+    let mut rest: Vec<usize> = Vec::with_capacity(accepted.len());
+    let mut prepared: Vec<PreparedTorrent<'_>> = Vec::with_capacity(accepted.len());
+    let check = !accepted.is_empty() && store.has_unverified()?;
+    // The classification rules changed since the batch was classified
+    // (§20.9): a promotion is stored without its enrichment, so the
+    // background pass enriches it under the current rules, as `write`
+    // marks its own rows.
+    let stale_promo = check && class_gen.is_some() && store.class_gen().ok() != class_gen;
+    for (&i, pt) in accepted.iter().zip(&all_prepared) {
+        if !check {
+            rest.push(i);
+            prepared.push(*pt);
+            continue;
+        }
+        match promote(store, &committing[i].results, pt, now, stale_promo, promo)? {
+            Promotion::None => {
+                rest.push(i);
+                prepared.push(*pt);
+            }
+            Promotion::Stored(id, new, by) => {
+                promoted.push((i, id, new));
+                if let Some((cohort, source)) = by {
+                    promoted_as.push((i, cohort, source));
+                }
+            }
+            Promotion::Held => promo_held.push(i),
+        }
+    }
+    blocked.extend(&promo_held);
     // Other sources that reported a key while it was leased, then the
     // rediscoveries.
     let mut all_touches: Vec<Touch> = accepted
         .iter()
+        .filter(|i| !blocked.contains(i))
         .map(|&i| &committing[i])
         .map(|c| {
             (
@@ -1008,7 +1379,8 @@ fn transaction(
         at: d.at,
         public: !d.found.private_source,
     }));
-    let written = store.write(&WriteBatch {
+    let hashes_of = |i: usize| committing[i].results.torrent.swarm_hashes().collect();
+    let written = match store.write(&WriteBatch {
         prepared: &prepared,
         touches: &all_touches,
         swarm,
@@ -1018,26 +1390,173 @@ fn transaction(
         filtered: &filtered,
         class_gen,
         ..WriteBatch::default()
-    })?;
-    let stored = accepted
+    }) {
+        Ok(w) => w,
+        // The promotions before it committed on their own: report them.
+        Err(e) if !promoted.is_empty() || !promo_held.is_empty() => {
+            return Ok(Outcome {
+                stored: promoted
+                    .into_iter()
+                    .map(|(i, id, new)| (i, id, new, hashes_of(i)))
+                    .collect(),
+                promoted_as,
+                failed: Some(e),
+                blocked: promo_held,
+                touched: Vec::new(),
+                swarm: Vec::new(),
+                stale_class: stale_promo,
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    let stored = rest
         .iter()
         .zip(&written.prepared)
-        .map(|(&i, ins)| {
-            (
-                i,
-                ins.id(),
-                matches!(ins, Inserted::New(_)),
-                committing[i].results.torrent.swarm_hashes().collect(),
-            )
-        })
+        .map(|(&i, ins)| (i, ins.id(), matches!(ins, Inserted::New(_))))
+        .chain(promoted)
+        .map(|(i, id, new)| (i, id, new, hashes_of(i)))
         .collect();
     Ok(Outcome {
         stored,
+        promoted_as,
+        failed: None,
         blocked,
-        stale_class: written.stale_class,
+        stale_class: written.stale_class || stale_promo,
         touched: written.touched[extra..].to_vec(),
         swarm: written.swarm,
     })
+}
+
+/// What promotion needs besides the store: the rules to judge an item's
+/// claims again under, and how to hold and mark what they hold.
+struct Promo<'a> {
+    engine: &'a Engine,
+    ctx: unverified::Ctx<'a>,
+    stats: &'a UnverifiedStats,
+    mark: &'a dyn Fn(&Store, &[[u8; 20]]),
+}
+
+/// What [`promote`] did with one verified torrent.
+enum Promotion {
+    /// No unverified item holds its hashes: it's inserted as usual.
+    None,
+    /// Promoted (`true`: under the item's id) or merged into a torrent
+    /// already stored under the hash (`false`). A kept one carries the
+    /// cohort and source its row records, for the funnel.
+    Stored(i64, bool, Option<(i64, SourceId)>),
+    /// One of its hashes was held since it was judged: not stored.
+    Held,
+}
+
+/// Promotes the unverified items under a verified torrent's swarm hashes
+/// (one, or two for a hybrid whose v1 and v2 keys were found apart).
+///
+/// **The duplicate check costs one probe of `unverified_items`' unique
+/// `(network, key)` index per swarm hash**, on every crawler insert (the
+/// per-insert measurement in `2026-11-02-SRC-2.md`). There's no trigger
+/// on `torrents` inserts (SRC-1).
+///
+/// The item's claims never change the verified metadata: a claimed file
+/// list that contradicts it only adds the `claim-mismatch` junk reason
+/// (§18.5). The promotion is counted as newly searchable when its id is
+/// already below the index watermark (`Store::promote`).
+fn promote(
+    store: &mut Store,
+    r: &Results,
+    pt: &PreparedTorrent<'_>,
+    now: i64,
+    stale_class: bool,
+    promo: &Promo<'_>,
+) -> Result<Promotion, lodestar_store::Error> {
+    let stats = promo.stats;
+    let mut out = Promotion::None;
+    let hashes: Vec<[u8; 20]> = r.torrent.swarm_hashes().map(|h| h.0).collect();
+    for h in r.torrent.swarm_hashes() {
+        let Some(item) = store.unverified(Network::Bt, &h.0)? else {
+            continue;
+        };
+        // The claims are judged again under the current rules first: a
+        // rule added since they were stored, which the sweep hasn't
+        // reached yet, must not let them be promoted.
+        let hold = match &item.claims {
+            Some(c) => unverified::judge(promo.engine, h.0, c, promo.ctx.sealer, now),
+            None => None,
+        };
+        match hold {
+            // The floor or the core: the hash is held, and nothing is
+            // stored under it (the item goes, journalled).
+            Some(mut hold) if hold.core => {
+                hold.hashes = hashes.clone();
+                (promo.mark)(store, &hold.hashes);
+                let f = hold.filtered(now, promo.ctx.quarantine_secs);
+                let refiled = RefiledUnverified {
+                    id: item.id,
+                    filtered: Some(f),
+                };
+                store.refile_unverified(&[refiled], || true)?;
+                stats.held.fetch_add(1, Ordering::Relaxed);
+                return Ok(Promotion::Held);
+            }
+            // Any other hold, or claims that can't be read: the claims
+            // can't override verified metadata, so they're dropped (the
+            // item goes) and the torrent is judged on its own.
+            Some(_) => {
+                let refiled = RefiledUnverified {
+                    id: item.id,
+                    filtered: None,
+                };
+                store.refile_unverified(&[refiled], || true)?;
+                stats.dropped.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            None if item.unreadable => {
+                let refiled = RefiledUnverified {
+                    id: item.id,
+                    filtered: None,
+                };
+                store.refile_unverified(&[refiled], || true)?;
+                continue;
+            }
+            None => {}
+        }
+        let fixed = if stale_class {
+            Some(Prepared {
+                enrichment: None,
+                ..r.torrent.clone()
+            })
+        } else {
+            let fixed = item
+                .claims
+                .as_ref()
+                .and_then(|c| unverified::with_mismatch(&r.torrent, &r.files, c));
+            if fixed.is_some() {
+                stats.mismatches.fetch_add(1, Ordering::Relaxed);
+            }
+            fixed
+        };
+        let t = PreparedTorrent {
+            torrent: fixed.as_ref().unwrap_or(pt.torrent),
+            ..*pt
+        };
+        match store.promote(item.id, &t, unverified::SEARCHABLE, now)? {
+            Promoted::Kept(id) => {
+                stats.promoted.fetch_add(1, Ordering::Relaxed);
+                // As the row records it: the earlier discovery, and the
+                // item's own source as `first_source`.
+                let cohort = item.first_at.min(pt.discovered_at).div_euclid(3600);
+                out = Promotion::Stored(id, true, Some((cohort, item.source)));
+            }
+            Promoted::Merged(id) => {
+                stats.merged.fetch_add(1, Ordering::Relaxed);
+                if matches!(out, Promotion::None) {
+                    out = Promotion::Stored(id, false, None);
+                }
+            }
+            Promoted::Held => return Ok(Promotion::Held),
+            Promoted::Gone => {}
+        }
+    }
+    Ok(out)
 }
 
 /// The flag bits for a rule that keeps a torrent but changes how it's
@@ -1144,6 +1663,12 @@ mod tests {
             hot: None,
             health: None,
             candidates: Default::default(),
+            // Off unless a test starts it.
+            sweep: unverified::Sweep {
+                done: true,
+                ..Default::default()
+            },
+            verify: Default::default(),
             between: None,
             marked: None,
         }
@@ -1932,6 +2457,7 @@ mod tests {
         let (swarm_tx, swarm) = mpsc::channel(1);
         let (retry, _retry_rx) = mpsc::channel(1);
         let (finish_tx, finish) = oneshot::channel();
+        let (claims_tx, claims) = mpsc::channel(1);
         let run = tokio::spawn(w.run(WriterIo {
             results,
             touches,
@@ -1939,8 +2465,9 @@ mod tests {
             retry,
             finish,
             swarm,
+            claims,
         }));
-        drop((results_tx, touches_tx, queues_tx, swarm_tx));
+        drop((results_tx, touches_tx, queues_tx, swarm_tx, claims_tx));
         finish_tx.send(Vec::new()).unwrap();
         tokio::time::timeout(Duration::from_secs(10), run)
             .await
@@ -1983,6 +2510,547 @@ mod tests {
                 .filter(|l| l.to_lowercase().contains(&needle))
                 .cloned()
                 .collect()
+        }
+    }
+
+    mod promotion {
+        use super::*;
+        use lodestar_classify::JunkReason;
+        use lodestar_store::claims::{ClaimedFile, Claims};
+        use lodestar_store::hot::Col;
+        use lodestar_store::unverified::{NewUnverified, Put};
+
+        fn sum(store: &Store, metric: u32) -> i64 {
+            store
+                .connection()
+                .query_row(
+                    "SELECT coalesce(sum(value), 0) FROM rollup_hour WHERE metric = ?1",
+                    [metric],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        }
+
+        /// A store with the DHT (0) and a feed (1), and an unverified item
+        /// from the feed under `key`, claiming files the torrent hasn't.
+        fn with_item(key: [u8; 20]) -> (Store, i64) {
+            let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+            store.register_source("dht", "1", 0).unwrap();
+            let feed = store.register_source("feed", "1", 0).unwrap();
+            let claims = Claims {
+                name: Some("Claimed name".into()),
+                files: vec![ClaimedFile {
+                    path: "Other.mkv".into(),
+                    size: Some(5),
+                }],
+                ..Claims::default()
+            };
+            let put = store
+                .put_unverified(&[NewUnverified {
+                    network: Network::Bt,
+                    key: &key,
+                    source: feed,
+                    private_source: false,
+                    claims: Some(&claims),
+                    at: 100,
+                }])
+                .unwrap();
+            let Put::New(id) = put[0] else {
+                panic!("{put:?}")
+            };
+            (store, id)
+        }
+
+        /// The duplicate-insert gate (plan SRC-2): the crawler (or a
+        /// verification fetch) delivers the hash a source found first. It
+        /// promotes the item under the item's id, never a second row; the
+        /// claims move, a contradicting file list only adds the junk
+        /// reason, and Insights counts it once, so deleting it later
+        /// reconciles.
+        #[tokio::test]
+        async fn a_fetched_unverified_item_is_promoted_under_its_own_id() {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let gate = Arc::new(GateStats::new(0));
+            let r = results();
+            let key = r.key;
+            let (mut store, id) = with_item(key.0);
+            // The index is already past the item's id (later torrents were
+            // indexed), so `record_searchable` would never count it.
+            store
+                .record_searchable(id + 10, 7200, unverified::SEARCHABLE)
+                .unwrap();
+            assert_eq!(sum(&store, metric::NEWLY_SEARCHABLE), 0);
+            let hot = Arc::new(HotColumns::new());
+            let mut w = writer(store, coordinator.clone(), gate.clone());
+            w.hot = Some(hot.clone());
+            let (retry, _rx) = mpsc::channel(4);
+            w.commit(
+                vec![leased(&coordinator, r)],
+                vec![],
+                vec![],
+                vec![],
+                &retry,
+            )
+            .await;
+
+            let u = &w.stats.unverified;
+            assert_eq!(u.promoted.load(Ordering::Relaxed), 1);
+            assert_eq!(u.mismatches.load(Ordering::Relaxed), 1);
+            assert_eq!(w.stats.stored.load(Ordering::Relaxed), 1);
+            assert_eq!(gate.new_verified(Origin::Network), 1);
+            assert_ne!(hot.get(Col::LastSeen, id as u64), lodestar_store::NEVER);
+            let store = w.store.as_mut().unwrap();
+            assert_eq!(store.find(&key).unwrap(), Some(id), "the item's id");
+            assert!(store.unverified(Network::Bt, &key.0).unwrap().is_none());
+            assert_eq!(store.torrent_claims(id).unwrap().len(), 1);
+            // Verified metadata stands; the mismatch is a junk reason.
+            let (name, junk): (String, i64) = store
+                .connection()
+                .query_row(
+                    "SELECT name, junk_score FROM torrents WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(name, format!("{NAME}.mp4"));
+            assert!(junk >= i64::from(JunkReason::ClaimMismatch.weight()));
+            let data: Vec<u8> = store
+                .connection()
+                .query_row(
+                    "SELECT data FROM torrent_parsed WHERE torrent_id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let record = Record::decode(&data).unwrap();
+            assert!(record.junk.reasons.contains(&JunkReason::ClaimMismatch));
+            // Counted once as newly searchable; its deletion as removed.
+            assert_eq!(sum(store, metric::NEWLY_SEARCHABLE), 1);
+            store.delete_torrents(&[key.0]).unwrap();
+            assert_eq!(sum(store, metric::REMOVED), 1);
+            let left: i64 = store
+                .connection()
+                .query_row("SELECT count(*) FROM torrents", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                sum(store, metric::NEWLY_SEARCHABLE) - sum(store, metric::REMOVED),
+                left
+            );
+            // It's in `reindex_log`, so the index replays it.
+            let replay = store.reindex_after(0, 10).unwrap();
+            assert!(replay.iter().any(|&(_, t)| t == id));
+        }
+
+        /// A torrent stored under the hash before the writer saw the item
+        /// (a crawled row the writer couldn't merge yet): the item merges
+        /// into it, and nothing is stored twice.
+        #[tokio::test]
+        async fn a_crawled_duplicate_merges() {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let gate = Arc::new(GateStats::new(0));
+            let r = results();
+            let key = r.key;
+            let (mut store, item) = with_item(key.0);
+            let dht = SourceId::new(0).unwrap();
+            let existing = store
+                .write(&WriteBatch {
+                    prepared: &[PreparedTorrent {
+                        torrent: &r.torrent,
+                        discovered_at: 0,
+                        metadata_at: 0,
+                        extra_flags: 0,
+                        source: dht,
+                        verified: true,
+                    }],
+                    ..WriteBatch::default()
+                })
+                .unwrap()
+                .prepared[0]
+                .id();
+            assert_ne!(existing, item);
+            let mut w = writer(store, coordinator.clone(), gate.clone());
+            let (retry, _rx) = mpsc::channel(4);
+            w.commit(
+                vec![leased(&coordinator, r)],
+                vec![],
+                vec![],
+                vec![],
+                &retry,
+            )
+            .await;
+            assert_eq!(w.stats.unverified.merged.load(Ordering::Relaxed), 1);
+            assert_eq!(gate.excluded(Excluded::AlreadyStored), 1);
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(store.find(&key).unwrap(), Some(existing));
+            assert!(store.unverified(Network::Bt, &key.0).unwrap().is_none());
+            assert_eq!(store.torrent_claims(existing).unwrap().len(), 1);
+            let rows: i64 = store
+                .connection()
+                .query_row("SELECT count(*) FROM torrents", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(rows, 1);
+        }
+
+        /// The running writer stores discoveries with claims, and its sweep
+        /// judges stored ones again at start.
+        #[tokio::test]
+        async fn the_writer_stores_claims_and_sweeps_at_start() {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let (mut store, _) = with_item([0x11; 20]);
+            let feed = SourceId::new(1).unwrap();
+            // Stored before a rule that now drops it.
+            let claims = Claims {
+                name: Some("Badword film".into()),
+                ..Claims::default()
+            };
+            store
+                .put_unverified(&[NewUnverified {
+                    network: Network::Bt,
+                    key: &[0x22; 20],
+                    source: feed,
+                    private_source: false,
+                    claims: Some(&claims),
+                    at: 100,
+                }])
+                .unwrap();
+            let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+            w.filter.update_engine(|e| {
+                let notes = e.load_rules(&lodestar_store::RuleSet {
+                    rules: vec![lodestar_store::RuleRow {
+                        id: 1,
+                        query: "badword".into(),
+                        action: Action::Drop.code(),
+                        enabled: true,
+                        shadow_until: None,
+                        unless_query: None,
+                    }],
+                    ..Default::default()
+                });
+                assert!(notes.is_empty());
+            });
+            w.sweep = unverified::Sweep::default();
+            let stats = w.stats.clone();
+            let (results_tx, results) = mpsc::channel(1);
+            let (touches_tx, touches) = mpsc::channel(1);
+            let (queues_tx, queues) = mpsc::channel(1);
+            let (swarm_tx, swarm) = mpsc::channel(1);
+            let (retry, _retry_rx) = mpsc::channel(1);
+            let (finish_tx, finish) = oneshot::channel();
+            let (claims_tx, claims_rx) = mpsc::channel(4);
+            let found = lodestar_sources::Found::key(InfoHash([0x33; 20]), 0).with_claims(
+                lodestar_sources::Claims {
+                    name: Some("Plain film".into()),
+                    ..Default::default()
+                },
+            );
+            let budget = Arc::new(tokio::sync::Semaphore::new(4));
+            let permit = budget.clone().acquire_owned().await.unwrap();
+            claims_tx
+                .send((
+                    Discovery {
+                        source: feed,
+                        found,
+                        at: 100,
+                        reply: false,
+                    },
+                    permit,
+                ))
+                .await
+                .unwrap();
+            let run = tokio::spawn(w.run(WriterIo {
+                results,
+                touches,
+                queues,
+                retry,
+                finish,
+                swarm,
+                claims: claims_rx,
+            }));
+            // The sweep runs between inputs; wait for it with a deadline.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while stats.unverified.sweeps.load(Ordering::Relaxed) == 0
+                || stats.unverified.stored.load(Ordering::Relaxed) == 0
+            {
+                assert!(Instant::now() < deadline, "the sweep and the claims");
+                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            drop((results_tx, touches_tx, queues_tx, swarm_tx, claims_tx));
+            finish_tx.send(Vec::new()).unwrap();
+            let store = tokio::time::timeout(Duration::from_secs(10), run)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                store
+                    .unverified(Network::Bt, &[0x22; 20])
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(store.held_among(&[[0x22; 20]]).unwrap()[0]);
+            assert!(
+                store
+                    .unverified(Network::Bt, &[0x33; 20])
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                store
+                    .unverified(Network::Bt, &[0x11; 20])
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        fn claimed(key: [u8; 20], name: &str) -> unverified::Claimed {
+            let budget = Arc::new(tokio::sync::Semaphore::new(1));
+            let permit = budget.try_acquire_owned().unwrap();
+            let found = lodestar_sources::Found::key(InfoHash(key), 0).with_claims(
+                lodestar_sources::Claims {
+                    name: Some(name.into()),
+                    ..Default::default()
+                },
+            );
+            let d = Discovery {
+                source: SourceId::new(1).unwrap(),
+                found,
+                at: 100,
+                reply: false,
+            };
+            (d, permit)
+        }
+
+        fn drop_rule(filter: &Handle, query: &str) {
+            filter.update_engine(|e| {
+                let notes = e.load_rules(&lodestar_store::RuleSet {
+                    rules: vec![lodestar_store::RuleRow {
+                        id: 1,
+                        query: query.into(),
+                        action: Action::Drop.code(),
+                        enabled: true,
+                        shadow_until: None,
+                        unless_query: None,
+                    }],
+                    ..Default::default()
+                });
+                assert!(notes.is_empty(), "{notes:?}");
+            });
+        }
+
+        /// Review B1: a claim holds a hash while its fetch is in flight.
+        /// The verified metadata passes, but nothing is stored under the
+        /// held hash.
+        #[tokio::test]
+        async fn a_hash_a_claim_held_after_judging_is_never_stored() {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let gate = Arc::new(GateStats::new(0));
+            let (store, _) = with_item([0x11; 20]);
+            let mut w = writer(store, coordinator.clone(), gate.clone());
+            let r = leased(&coordinator, results());
+            let key = r.key;
+            w.ingest_claims(vec![claimed(key.0, "Rolea Lexa clip")])
+                .await;
+            assert!(w.held.contains(&key.0));
+            let (retry, _rx) = mpsc::channel(4);
+            w.commit(vec![r], vec![], vec![], vec![], &retry).await;
+            let store = w.store.as_ref().unwrap();
+            assert_eq!(store.find(&key).unwrap(), None, "not stored");
+            assert_eq!(gate.excluded(Excluded::Filtered), 1);
+            assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
+        }
+
+        /// Review B2: a rule added after an item was stored, before the
+        /// sweep reached it, still decides at promotion. The core holds
+        /// the hash and nothing is stored; your rule only drops the claims
+        /// (they never override verified metadata), so the torrent is
+        /// stored under a new id without them.
+        #[tokio::test]
+        async fn promotion_judges_the_claims_under_the_current_rules() {
+            for core in [true, false] {
+                let funnel = Arc::new(FunnelCounts::default());
+                let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+                let r = results();
+                let key = r.key;
+                let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+                store.register_source("dht", "1", 0).unwrap();
+                let feed = store.register_source("feed", "1", 0).unwrap();
+                let claims = Claims {
+                    name: Some("Badword Codez clip".into()),
+                    ..Claims::default()
+                };
+                let put = store
+                    .put_unverified(&[NewUnverified {
+                        network: Network::Bt,
+                        key: &key.0,
+                        source: feed,
+                        private_source: false,
+                        claims: Some(&claims),
+                        at: 100,
+                    }])
+                    .unwrap();
+                let Put::New(item) = put[0] else { panic!() };
+                let mut w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+                if core {
+                    w.filter.update(|c| {
+                        let mut lists = c.lists().clone();
+                        lists.codes = TermSet::of(&["codez"]);
+                        c.set_lists(lists);
+                    });
+                } else {
+                    drop_rule(&w.filter, "badword");
+                }
+                let (retry, _rx) = mpsc::channel(4);
+                w.commit(
+                    vec![leased(&coordinator, r)],
+                    vec![],
+                    vec![],
+                    vec![],
+                    &retry,
+                )
+                .await;
+                let u = &w.stats.unverified;
+                let store = w.store.as_ref().unwrap();
+                assert!(store.unverified(Network::Bt, &key.0).unwrap().is_none());
+                assert_eq!(u.promoted.load(Ordering::Relaxed), 0, "core {core}");
+                if core {
+                    assert_eq!(u.held.load(Ordering::Relaxed), 1);
+                    assert!(store.held_among(&[key.0]).unwrap()[0]);
+                    assert!(w.held.contains(&key.0));
+                    assert_eq!(store.find(&key).unwrap(), None);
+                    agrees_with_store(&w);
+                } else {
+                    assert_eq!(u.dropped.load(Ordering::Relaxed), 1);
+                    let id = store.find(&key).unwrap().expect("stored");
+                    assert_ne!(id, item, "a new id: the claims were dropped");
+                    assert!(store.torrent_claims(id).unwrap().is_empty());
+                    assert!(!store.held_among(&[key.0]).unwrap()[0]);
+                }
+            }
+        }
+
+        /// The pre-commit marks (`2026-10-31-B-held-precommit.md`) on the
+        /// three paths SRC-2 adds that hold: a claim at ingest, the refile
+        /// sweep, and a promotion. Each marks its hashes before its commit,
+        /// and afterwards intake refuses exactly what the store holds.
+        #[tokio::test]
+        async fn claim_holds_are_refused_from_before_their_commit() {
+            use std::sync::atomic::AtomicUsize;
+            static HOOKS: AtomicUsize = AtomicUsize::new(0);
+            fn marked(store: &Store, held: &HeldSet, _: &Handle, hs: &[[u8; 20]]) {
+                HOOKS.fetch_add(1, Ordering::Relaxed);
+                assert!(!hs.is_empty() && held.pending_len() > 0);
+                assert!(
+                    store.held_among(hs).unwrap().iter().all(|h| !h),
+                    "marked before C"
+                );
+                for h in hs {
+                    assert!(held.contains(h), "pending, so refused");
+                }
+            }
+            fn between(store: &mut Store, held: &HeldSet, _: &Handle) {
+                HOOKS.fetch_add(1, Ordering::Relaxed);
+                for (h, _) in store.filter_state().unwrap().held {
+                    assert!(held.contains(&h), "committed, so refused");
+                }
+            }
+            for arm in 0..3 {
+                HOOKS.store(0, Ordering::Relaxed);
+                let funnel = Arc::new(FunnelCounts::default());
+                let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+                let r = results();
+                let key = r.key.0;
+                let (store, _) = with_item(key);
+                let mut w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+                w.marked = Some(marked);
+                w.between = Some(between);
+                let h = match arm {
+                    0 => {
+                        w.ingest_claims(vec![claimed([0x44; 20], "Rolea Lexa clip")])
+                            .await;
+                        [0x44; 20]
+                    }
+                    1 => {
+                        // The item claims "Claimed name": a rule now drops it.
+                        drop_rule(&w.filter, "claimed");
+                        w.sweep = unverified::Sweep::default();
+                        while !w.sweep.done {
+                            w.refile_unverified().await;
+                        }
+                        key
+                    }
+                    _ => {
+                        w.filter.update(|c| {
+                            let mut lists = c.lists().clone();
+                            lists.codes = TermSet::of(&["claimed"]);
+                            c.set_lists(lists);
+                        });
+                        let (retry, _rx) = mpsc::channel(4);
+                        w.commit(
+                            vec![leased(&coordinator, r)],
+                            vec![],
+                            vec![],
+                            vec![],
+                            &retry,
+                        )
+                        .await;
+                        key
+                    }
+                };
+                assert!(
+                    HOOKS.load(Ordering::Relaxed) >= 2,
+                    "arm {arm}: both hooks ran"
+                );
+                assert!(w.held.contains(&h), "arm {arm}: held");
+                assert_eq!(w.held.pending_len(), 0, "arm {arm}: no mark left");
+                agrees_with_store(&w);
+            }
+        }
+
+        /// Claims already handed to the writer when the pipeline stops are
+        /// judged and stored, not lost.
+        #[tokio::test]
+        async fn claims_waiting_at_shutdown_are_stored() {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let (store, _) = with_item([0x11; 20]);
+            let w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+            let (results_tx, results) = mpsc::channel(1);
+            let (touches_tx, touches) = mpsc::channel(1);
+            let (queues_tx, queues) = mpsc::channel(1);
+            let (swarm_tx, swarm) = mpsc::channel(1);
+            let (retry, _retry_rx) = mpsc::channel(1);
+            let (finish_tx, finish) = oneshot::channel();
+            let (claims_tx, claims) = mpsc::channel(8);
+            for k in 0x50..0x54u8 {
+                claims_tx
+                    .send(claimed([k; 20], "Plain film"))
+                    .await
+                    .unwrap();
+            }
+            drop((results_tx, touches_tx, queues_tx, swarm_tx, claims_tx));
+            finish_tx.send(Vec::new()).unwrap();
+            let store = tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::spawn(w.run(WriterIo {
+                    results,
+                    touches,
+                    queues,
+                    retry,
+                    finish,
+                    swarm,
+                    claims,
+                })),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            for k in 0x50..0x54u8 {
+                assert!(store.unverified(Network::Bt, &[k; 20]).unwrap().is_some());
+            }
         }
     }
 }

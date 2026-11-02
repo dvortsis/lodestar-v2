@@ -24,6 +24,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::claims::{self, Claims};
 use crate::filter::{self, Filtered};
+use crate::insights::SearchableCodes;
 use crate::sources::{SourceId, SourceState};
 use crate::{Error, PreparedTorrent, Result, Store, begin_write, flags};
 
@@ -314,6 +315,52 @@ impl Store {
         Ok(out)
     }
 
+    /// Writes the holds a source's claims earned (SRC-2: a filter hit and
+    /// a tombstone or quarantine each) and deletes any torrent stored under
+    /// their hashes, in one transaction, so nothing is ever left stored
+    /// under a held hash. Returns the torrents deleted, logged for the
+    /// search index as [`Store::delete_torrents`] does.
+    pub fn hold_claims(&mut self, holds: &[Filtered<'_>]) -> Result<Vec<i64>> {
+        let tx = begin_write(&mut self.conn)?;
+        filter::write(&tx, holds)?;
+        let mut ids = Vec::new();
+        for f in holds.iter().filter(|f| f.held.is_some()) {
+            for h in f.hashes {
+                let found = crate::find_any(&tx, std::iter::once(lodestar_metainfo::InfoHash(*h)))?;
+                if let Some(id) = found
+                    && !ids.contains(&id)
+                {
+                    tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?
+                        .execute([id])?;
+                    tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                        .execute([id])?;
+                    ids.push(id);
+                }
+            }
+        }
+        tx.commit()?;
+        if !ids.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(ids)
+    }
+
+    /// Whether any unverified item is stored: the writer's duplicate check
+    /// is skipped for a batch when none is (SRC-2), so a store with no
+    /// sources pays one cheap read per batch, not a probe per insert.
+    pub fn has_unverified(&self) -> Result<bool> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT EXISTS (SELECT 1 FROM unverified_items)")?
+            .query_row([], |r| r.get(0))?)
+    }
+
+    /// A stored torrent's swarm hashes (its v1 hash, and a hybrid's
+    /// truncated v2 one), for judging its claims again (SRC-2).
+    pub fn torrent_swarm_hashes(&self, torrent_id: i64) -> Result<Option<Vec<[u8; 20]>>> {
+        torrent_hashes(&self.conn, torrent_id)
+    }
+
     /// The unverified item under a key.
     pub fn unverified(&self, network: Network, key: &[u8]) -> Result<Option<UnverifiedItem>> {
         let mut stmt = self.conn.prepare_cached(&format!(
@@ -491,7 +538,18 @@ impl Store {
     ///
     /// `Error::Invalid` when `t`'s hashes don't include the item's key, or
     /// `t` isn't verified metadata (§18.5: only that promotes).
-    pub fn promote(&mut self, id: i64, t: &PreparedTorrent<'_>) -> Result<Promoted> {
+    ///
+    /// **Insights** (SRC-2): a kept id at or below the searchable watermark
+    /// is counted as newly searchable at `at` under `codes`, in this
+    /// transaction ([`crate::insights::count_promoted`]), so a promoted
+    /// torrent deleted later leaves the rollups consistent.
+    pub fn promote(
+        &mut self,
+        id: i64,
+        t: &PreparedTorrent<'_>,
+        codes: SearchableCodes,
+        at: i64,
+    ) -> Result<Promoted> {
         let p = t.torrent;
         if !t.verified {
             return Err(Error::Invalid("promotion needs verified metadata"));
@@ -575,6 +633,7 @@ impl Store {
             }
             tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
                 .execute([id])?;
+            crate::insights::count_promoted(&tx, id, at, codes)?;
             Promoted::Kept(id)
         };
         // A promotion isn't a deletion: nothing is journalled.
