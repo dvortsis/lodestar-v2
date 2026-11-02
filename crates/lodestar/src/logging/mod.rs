@@ -104,6 +104,7 @@ pub const TARGETS: &[(&str, Component)] = &[
     ("lodestar_utp", Component::Fetch),
     ("lodestar_sources", Component::Sources),
     ("lodestar_sources_importers", Component::Sources),
+    ("lodestar_sources_feeds", Component::Sources),
     ("lodestar_tracker_scrape", Component::Sources),
     ("lodestar_pipeline", Component::Pipeline),
     ("lodestar_store", Component::Pipeline),

@@ -291,14 +291,16 @@ impl Parser<'_> {
                 self.close(emit);
                 Ok(())
             }
-            Event::Text(t) => {
+            Event::Text(t) if self.collecting() => {
                 self.text(&t.xml10_content());
                 Ok(())
             }
-            Event::CData(t) => {
+            Event::CData(t) if self.collecting() => {
                 self.text(&t.xml10_content());
                 Ok(())
             }
+            Event::Text(_) | Event::CData(_) => Ok(()),
+            Event::GeneralRef(_) if self.draft.is_none() => Ok(()),
             Event::GeneralRef(r) => {
                 let resolved = match r.resolve_char_ref() {
                     Ok(Some(c)) => Some(c.encode_utf8(&mut [0; 4]).to_owned()),
@@ -416,6 +418,13 @@ impl Parser<'_> {
         }
     }
 
+    /// True when text here is kept: inside a field, not deeper.
+    fn collecting(&self) -> bool {
+        self.draft
+            .as_ref()
+            .is_some_and(|d| d.field.is_some() && self.depth == d.depth + 1)
+    }
+
     /// Text at the current position: kept only inside a field.
     fn text(&mut self, s: &str) {
         let max = self.limits.max_text;
@@ -464,6 +473,7 @@ impl Draft {
         let t = s.trim();
         let it = &mut self.item;
         match f {
+            _ if t.is_empty() => {}
             Field::Title if it.title.is_none() => it.title = Some(clean_title(t)),
             Field::Guid if it.guid.is_none() => it.guid = Some(t.to_owned()),
             Field::Link if it.link.is_none() => it.link = Some(t.to_owned()),
@@ -522,9 +532,10 @@ impl Draft {
             .into_iter()
             .flatten()
             .find(|s| is_magnet(s));
+        let from_magnet = magnet.and_then(|m| magnet_hashes(m));
         let kind = match (self.infohash, magnet) {
-            (Some(h), _) => h.map(Kind::Torrent),
-            (None, Some(m)) => magnet_hashes(m).map(Kind::Torrent),
+            (Some(h), _) => h.map(|h| Kind::Torrent(merge(h, from_magnet))),
+            (None, Some(_)) => from_magnet.map(Kind::Torrent),
             (None, None) if self.newznab && !self.torznab => Some(Kind::Usenet),
             (None, None) => return Err(|s| s.no_hash += 1),
         };
@@ -549,6 +560,20 @@ impl Draft {
             link: it.link.as_deref().and_then(external_ref),
         })
     }
+}
+
+/// The attribute's hash, with the magnet's other version when the two
+/// agree on the version they share: Prowlarr sends `infohash` (v1) and a
+/// hybrid's v2 only in the magnet.
+fn merge(mut h: Hashes, magnet: Option<Hashes>) -> Hashes {
+    let Some(m) = magnet else { return h };
+    let v1 = h.v1.is_none() || m.v1.is_none() || h.v1 == m.v1;
+    let v2 = h.v2.is_none() || m.v2.is_none() || h.v2 == m.v2;
+    if v1 && v2 {
+        h.v1 = h.v1.or(m.v1);
+        h.v2 = h.v2.or(m.v2);
+    }
+    h
 }
 
 /// A title with control characters removed, cut to [`MAX_TITLE`] bytes
@@ -673,6 +698,9 @@ fn percent_decode(s: &str) -> Option<String> {
     while i < b.len() {
         if b[i] == b'%' {
             let hex = s.get(i + 1..i + 3)?;
+            if !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
             out.push(u8::from_str_radix(hex, 16).ok()?);
             i += 3;
         } else {
@@ -691,8 +719,11 @@ fn percent_decode(s: &str) -> Option<String> {
 /// info and every query parameter whose name looks like a credential
 /// (`apikey`, `passkey`, `torrent_pass`, `token`, `auth`, …) are removed:
 /// Prowlarr and Jackett download links carry the manager's API key.
-/// Credentials in a path can't be told apart and stay; private indexers'
-/// items are `private_source` and never leave the machine (§18.7).
+/// Parameters split on `&` and `;`, and names are percent-decoded first.
+/// A reference that isn't http(s) is kept only when it's an opaque id of
+/// ASCII letters, digits and `.:_-`. Credentials in a path can't be told
+/// apart and stay; private indexers' items are `private_source` and
+/// never leave the machine (§18.7).
 pub fn external_ref(s: &str) -> Option<String> {
     let s = s.trim();
     if s.is_empty() || s.len() > MAX_REF || is_magnet(s) || s.chars().any(char::is_control) {
@@ -703,23 +734,33 @@ pub fn external_ref(s: &str) -> Option<String> {
         .find(|p| s.get(..p.len()).is_some_and(|x| x.eq_ignore_ascii_case(p)))
         .map(str::len);
     let Some(scheme_len) = scheme_len else {
-        return Some(s.to_owned());
+        // Anything else is kept only as an opaque id (`urn:uuid:…`, a
+        // number): no query to hide a key in, nothing a page could run.
+        let opaque = s
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".:_-".contains(&b));
+        return opaque.then(|| s.to_owned());
     };
     let (scheme, rest) = s.split_at(scheme_len);
     let rest = rest.split('#').next().unwrap_or_default();
+    // The authority first: a password may hold `&` or `=`.
+    let auth_end = rest.find(['/', '?']).unwrap_or(rest.len());
+    let (authority, rest) = rest.split_at(auth_end);
+    let host = authority.rsplit('@').next().unwrap_or_default();
     // nZEDb-style links start the query with `&` (`/getnzb/x.nzb&i=1&r=key`).
-    let (before_query, query) = match rest.find(['?', '&']) {
+    let (path, query) = match rest.find(['?', '&']) {
         Some(at) => (&rest[..at], Some(&rest[at + 1..])),
         None => (rest, None),
     };
-    let auth_end = before_query.find('/').unwrap_or(before_query.len());
-    let (authority, path) = before_query.split_at(auth_end);
-    let host = authority.rsplit('@').next().unwrap_or_default();
     let mut out = format!("{scheme}{host}{path}");
     let kept: Vec<&str> = query
         .into_iter()
-        .flat_map(|q| q.split('&'))
-        .filter(|p| !p.is_empty() && !is_credential(p.split('=').next().unwrap_or_default()))
+        .flat_map(|q| q.split(['&', ';']))
+        .filter(|p| {
+            let name = p.split('=').next().unwrap_or_default();
+            // A name that doesn't decode can't be checked, so it goes.
+            !p.is_empty() && percent_decode(name).is_some_and(|n| !is_credential(&n))
+        })
         .collect();
     if !kept.is_empty() {
         out.push('?');
@@ -737,7 +778,7 @@ fn is_credential(name: &str) -> bool {
     .any(|w| n.contains(w))
         || matches!(
             n.as_str(),
-            "sid" | "uid" | "sig" | "pid" | "user" | "u" | "i" | "r"
+            "sid" | "uid" | "sig" | "pid" | "user" | "u" | "i" | "r" | "k" | "pk" | "h" | "hash"
         )
 }
 
@@ -873,6 +914,26 @@ mod tests {
         assert_eq!(got.v2.map(|h| h.0), Some([0xaa; 32]));
         assert_eq!(magnet_hashes("magnet:?xt=urn:btih:nope"), None);
         assert_eq!(magnet_hashes("magnet:?xt=urn:btih:%zz"), None);
+        assert_eq!(percent_decode("%+f"), None);
+        let v2h: InfoHashV2 = v2.parse().unwrap();
+        let attr = Hashes {
+            v1: Some(h),
+            v2: None,
+        };
+        let both = Hashes {
+            v1: Some(h),
+            v2: Some(v2h),
+        };
+        assert_eq!(merge(attr, Some(both)), both);
+        let other = Some(Hashes {
+            v1: Some(InfoHash([1; 20])),
+            v2: Some(v2h),
+        });
+        assert_eq!(
+            merge(attr, other),
+            attr,
+            "a disagreeing magnet adds nothing"
+        );
     }
 
     #[test]
@@ -899,6 +960,16 @@ mod tests {
             external_ref("https://nzb.example/getnzb/ab.nzb&i=1&r=KEY").as_deref(),
             Some("https://nzb.example/getnzb/ab.nzb")
         );
+        assert_eq!(
+            external_ref("http://user:p&ss=x@h.example/d?id=1").as_deref(),
+            Some("http://h.example/d?id=1")
+        );
+        assert_eq!(
+            external_ref("https://t.example/d?id=1;passkey=S&api%6Bey=S&hash=S").as_deref(),
+            Some("https://t.example/d?id=1")
+        );
+        assert_eq!(external_ref("//h.example/dl?apikey=K"), None);
+        assert_eq!(external_ref("javascript:alert(1)"), None);
         assert_eq!(
             external_ref("urn:uuid:1234").as_deref(),
             Some("urn:uuid:1234")

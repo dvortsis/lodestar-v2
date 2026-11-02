@@ -289,3 +289,20 @@ fn a_cut_feed_keeps_the_finished_items() {
     assert_eq!(feed.items.len(), 1);
     assert_eq!(feed.summary.stop, Some(Stop::Malformed));
 }
+
+#[test]
+fn a_hybrid_magnet_adds_v2_and_empty_fields_wait_for_real_ones() {
+    let body = format!(
+        r#"<rss><channel><item><title/><title>Spring</title><guid></guid><guid>urn:example:1</guid>
+<torznab:attr name="infohash" value="{HEX}"/>
+<torznab:attr name="magneturl" value="magnet:?xt=urn:btih:{HEX}&amp;xt=urn:btmh:1220{V2}"/></item></channel></rss>"#
+    );
+    let feed = parse(body.as_bytes());
+    let mut want = blank(Kind::Torrent(Hashes {
+        v1: Some(HEX.parse().unwrap()),
+        v2: Some(V2.parse().unwrap()),
+    }));
+    want.title = Some("Spring".into());
+    want.guid = Some("urn:example:1".into());
+    assert_eq!(feed.items, vec![want]);
+}
