@@ -1,0 +1,1 @@
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:n="https://nyaa.si/xmlns/nyaa"><entry><title>T</title><id>urn:uuid:1</id><link rel="alternate" href="https://at.example/v"/><link href="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"/><published>2026-11-02T09:00:00+01:00</published><n:seeders>5</n:seeders></entry></feed>
