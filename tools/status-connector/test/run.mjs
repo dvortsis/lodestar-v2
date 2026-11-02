@@ -24,7 +24,7 @@ let github = {
     pr(5, 'SRC-12: Scrape', 'slice/SRC-12', '', false),                                  // closed, never merged
   ],
   open: [pr(3, 'SRC-5: Per-plugin egress', 'agent-x/egress', '', false)],                // open PR
-  tags: [],
+  tags: [], tagsFail: false,
   refs: [{ ref: 'refs/heads/slice/SRC-9' }, { ref: 'refs/heads/slice/SRC-12' }],            // branch only; SRC-12's PR was closed unmerged
   fail: false,
 };
@@ -33,7 +33,7 @@ globalThis.fetch = async (url) => {
   if (github.fail) return new Response('rate limited', { status: 403 });
   if (p.endsWith('/contents/runner/slices.yaml')) return new Response(slicesYaml);
   if (p.endsWith('/contents/runner/dashboard.yaml')) return new Response(dashYaml);
-  if (p.includes('/git/matching-refs/tags/')) return json(github.tags);
+  if (p.includes('/git/matching-refs/tags/')) return github.tagsFail ? new Response('boom', { status: 500 }) : json(github.tags);
   if (p.includes('/git/matching-refs/heads/release/')) return json([]);
   if (p.endsWith('/contents/state.json')) return new Response('missing', { status: 404 }); // optional
   if (p.endsWith('/pulls') && u.searchParams.get('state') === 'open') return json(github.open);
@@ -82,6 +82,9 @@ assert.ok(warnings.includes('Slices not placed:1'), 'the unplaced slice is repor
 assert.ok(warnings.includes('Unknown slice:NOPE-1'), 'a roadmap step naming a missing slice is reported');
 assert.ok(warnings.some((w) => w.startsWith('Unknown roadmap step')), 'an arrow naming a missing step is reported');
 assert.ok(warnings.includes('Condition not described:undeclared'), 'an ext: condition the file does not describe is reported');
+assert.ok(warnings.includes('Unknown slice:NOPE-2'), 'a pinned id that is not in slices.yaml is reported');
+assert.ok(warnings.includes('Condition unused:stale-cond'), 'a described condition nothing uses is reported');
+assert.ok(warnings.some((w) => w.startsWith('Bad placement pattern')), 'a regex that does not compile is reported, and does not stop the refresh');
 assert.equal(by['SRC-13'].state, 'waiting', 'a condition slices.yaml names but dashboard.yaml lacks counts as unmet');
 const gates = (await tool('plan_gates')).rows; assert.equal(gates.find((g) => g.id === 'G1').status, 'passed', 'a gate follows its slice'); assert.equal(gates.find((g) => g.id === 'G2').status, 'not started');
 assert.equal((await tool('plan_owner')).rows.length, 1); assert.equal((await tool('plan_edges')).rows.length, 1, 'an arrow to a missing step is dropped');
@@ -93,9 +96,18 @@ assert.equal(by['SRC-AUTO'].state, 'you', 'waits on the untagged release');
 const recent = (await tool('plan_recent')).rows; assert.equal(recent.length, 3); assert.equal(recent.find((r) => r.pr === 2).agent, 'other');
 assert.equal((await tool('plan_meta')).rows.find((r) => r.key === 'main').value, 'abcdef01');
 
+// an `auto:` condition follows GitHub: no such branch means it is unmet, even though the file says met
+assert.equal((await tool('plan_ext')).rows.find((e) => e.key === 'rel-branch').met, false);
+// if GitHub can't answer, the file's value stands instead of flipping to unmet
+github.tagsFail = true;
+const tagless = await call({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'plan_ext', arguments: {} } }, '/mcp/' + SECRET, 'POST', { ...env, CACHE_SECONDS: '0' });
+assert.equal(JSON.parse((await tagless.json()).result.content[0].text).find((e) => e.key === 'rel-branch').met, true, 'a refs failure keeps the file value');
+github.tagsFail = false;
+
 // once the tag exists the condition holds, with no edit to any file
 github.tags = [{ ref: 'refs/tags/v9.9.9' }];
-const after = await call({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'plan_nodes', arguments: {} } }, '/mcp/' + SECRET, 'POST', { ...env, CACHE_SECONDS: '0' });
+// (another repo name, so the 30 s memory of the failed refs call above does not apply)
+const after = await call({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'plan_nodes', arguments: {} } }, '/mcp/' + SECRET, 'POST', { ...env, CACHE_SECONDS: '0', GITHUB_REPO: 'o/r2' });
 const afterNodes = JSON.parse((await after.json()).result.content[0].text);
 assert.equal(afterNodes.find((n) => n.id === 'SRC-AUTO').state, 'ready', 'a tag appearing on GitHub releases what waited on it');
 github.tags = [];

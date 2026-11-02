@@ -1,17 +1,15 @@
 name: Status connector
 
-# Tests the roadmap dashboard's status connector (tools/status-connector), checks that
-# runner/dashboard.yaml still agrees with runner/slices.yaml, and
-# deploys it to Cloudflare Workers when a change reaches main. The deploy needs
-# the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID; without
-# them the tests still run and the deploy is skipped. The Worker's own secrets
-# (GITHUB_TOKEN, PATH_SECRET) live in Cloudflare and are not touched here.
+# Tests the roadmap dashboard's status connector (tools/status-connector) and checks that
+# runner/dashboard.yaml still agrees with runner/slices.yaml. It runs on pull requests that
+# touch either plan file, and again on every push to main that does, so two individually green
+# PRs that drift together go red on main at once. Deploying is a separate workflow
+# (status-connector-deploy.yml) that runs only when the connector itself changes.
 
 on:
-  # The Worker reads runner/dashboard.yaml and runner/slices.yaml from main when it answers, so a plan change needs no deploy.
   push:
     branches: [main]
-    paths: ["tools/status-connector/**", ".github/workflows/status-connector.yml"]
+    paths: ["tools/status-connector/**", "runner/slices.yaml", "runner/dashboard.yaml", ".github/workflows/status-connector.yml"]
   pull_request:
     paths: ["tools/status-connector/**", "runner/slices.yaml", "runner/dashboard.yaml", "docs/build-plan.md", ".github/workflows/status-connector.yml"]
   workflow_dispatch:
@@ -34,8 +32,9 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  # build-plan.md section 0 and runner/dashboard.yaml describe the same plan. A change to the first without the second
-  # is usually a miss, so say so on the PR (a warning, not a failure: some edits are wording only).
+  # build-plan.md section 0 and runner/dashboard.yaml describe the same plan, but nothing can check prose against
+  # YAML. A change to the first without the second is usually a miss, so say so on the PR. It is a warning, not a
+  # failure: some edits are wording only.
   plan-docs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -53,31 +52,3 @@ jobs:
           if echo "$files" | grep -qx 'docs/build-plan.md' && ! echo "$files" | grep -qx 'runner/dashboard.yaml'; then
             echo "::warning file=docs/build-plan.md::docs/build-plan.md changed but runner/dashboard.yaml did not. If the change moves the plan (a track, gate, owner decision or roadmap step), update runner/dashboard.yaml in this PR (CLAUDE.md, Keeping the dashboard current)."
           fi
-
-  deploy:
-    needs: test
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    # A named environment lets the owner require approval before a deploy (Settings, Environments).
-    environment: status-connector-deploy
-    env:
-      # Only whether the secrets exist is visible to every step. The token values are given to the deploy step alone.
-      HAVE_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
-    defaults:
-      run:
-        working-directory: tools/status-connector
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Skip when the Cloudflare secrets are not set
-        if: env.HAVE_CLOUDFLARE != 'true'
-        run: echo "CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is not set; skipping the deploy."
-      # Install runs package scripts, so it runs before any Cloudflare credential is in the environment.
-      - name: Install
-        if: env.HAVE_CLOUDFLARE == 'true'
-        run: npm ci
-      - name: Deploy
-        if: env.HAVE_CLOUDFLARE == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy

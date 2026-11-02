@@ -379,7 +379,7 @@ conditions:
     who: you
     label: You confirm the frozen crawler measurement specification (CR-SPEC)
   owner-migrations-on-main:
-    met: false
+    met: true
     who: you
     label: v0.5.1 is tagged, or you allow a database migration on main before then
   m4-schema-settled:
@@ -412,19 +412,19 @@ conditions:
     who: you
     label: You approve the consent wording (Q1)
   owner-q2:
-    met: false
+    met: true
     who: you
     label: You decide the terms-of-service / robots position for sources (Q2)
   owner-q3:
-    met: false
+    met: true
     who: you
     label: You choose which torrent caches may be contacted (Q3)
   owner-q7:
-    met: false
+    met: true
     who: you
     label: You decide whether a Sukebei (adult) feed ships (Q7)
   owner-q15:
-    met: false
+    met: true
     who: you
     label: You decide how private-source items get metadata (Q15)
   m7-schema-bump:
@@ -754,9 +754,9 @@ owner_queue:
   when: After 22:16 UTC Nov 2
 - n: 2
   type: decision
-  action: 'Q2: the terms-of-service / robots position for each source. Q15: how private-source items get metadata'
-  unblocks: Prowlarr/Jackett (SRC-7) and every source plug-in after it
-  when: Before the Sources critical path stalls
+  action: Confirm CR-SPEC, the frozen crawler measurement specification, including its open question O1
+  unblocks: The first crawler acceptance analysis (CR-COL-3, the live A/B runs)
+  when: Before the first A/B run
 - n: 3
   type: action
   action: Name the experiment host for crawler tests, and when it is free
@@ -764,14 +764,14 @@ owner_queue:
   when: Before CR-4 lands
 - n: 4
   type: decision
-  action: Q1 consent wording, Q3 which torrent caches, Q7 whether a Sukebei feed ships
-  unblocks: Consent dialogs, cache enrichment, Sukebei plug-in
-  when: Later
+  action: Approve the plain-language consent texts that SRC-4 drafts (Q1)
+  unblocks: The consent dialogs and credentials screen (SRC-15b)
+  when: After SRC-4 merges, before SRC-15b
 - n: 5
   type: decision
-  action: Release adult stand-in holds automatically? (#367, needs a stored-format change)
-  unblocks: The follow-up to the filter stand-in re-judge
-  when: 'When #367 merges'
+  action: Does #367 (the filter stand-in re-judge, merged as 785b282c) join rc.3? Yes or no.
+  unblocks: What rc.3 contains, and so whether the r3 soak evidence still covers it
+  when: Before rc.3 is built
 - n: 6
   type: action
   action: Create the nightly signing key and its environment
@@ -903,22 +903,25 @@ notes:
   - label: The release is waiting on one test
     text: Release candidate 2 of v0.5.1 is built and signed. The 24-hour memory test on your Unraid box (attempt
       3) ends at 22:16 UTC on Nov 2. If memory growth stays under 2 MiB an hour over hours 12 to 24, the test passes.
+      Release candidate 3 will be rc.2 plus the filter fail-closed fix (#357), ported as #377 against the release branch and merged after the verdict.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
       The live tests wait for an experiment host you name.
   - label: Sources are being laid down
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
-      controls and the Internet Archive reader are next. The key plug-in waits for your answers.
+      controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
+      the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
   - label: Four slots, kept busy
     text: By your instruction the runner launches the next ready piece of work whenever a slot frees. Workers, companions
       and packaging stay held until the memory test gives its verdict.
   you:
   - label: After 22:16 UTC on Nov 2
     text: Approve the 2-hour VPN (gluetun) leg, hand back the soak evidence, then tag v0.5.1.
-  - label: Answer Q2 and Q15 about sources
-    text: They are on the critical path for the main source plug-in. The runner recommends answers.
+  - label: Confirm the crawler measurement specification
+    text: CR-SPEC freezes how every crawler run is measured. It needs your confirmation, including its open question O1, before the first acceptance analysis.
+  - label: Say whether #367 joins rc.3
+    text: The filter stand-in re-judge was merged after the release cut. Yes or no decides what rc.3 contains.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Optional
-    text: Signing key for nightly updates, required checks on main, the Unraid Backups share minimum free space,
-      and the adult stand-in question.
+    text: Signing key for nightly updates, required checks on main, and the Unraid Backups share minimum free space.

@@ -21,7 +21,7 @@ The connector reads three things live from GitHub and caches them for a minute:
 2. **`runner/dashboard.yaml`**: everything GitHub can't show. Phases and workstreams, which workstream each slice belongs to (`placement`), which outside conditions hold (`conditions`), the owner queue, the gates, the roadmap steps and arrows, the top-of-page notes, the crawler rate and the soak timeline. Its header says which key fits which change.
 3. Pull requests, branches and tags.
 
-So a plan change needs **no redeploy**. Edit `runner/dashboard.yaml` in the same pull request as the change, and the dashboard follows within a minute. This is a repository rule: see "Keeping the dashboard current" in `CLAUDE.md`.
+So a plan change needs **no redeploy**. The dashboard follows within a minute of the change reaching `main`. Who edits what is a repository rule: slice pull requests edit only their own `placement` and `gates` entries, and the runner edits the rest. See "Keeping the dashboard current" in `CLAUDE.md`.
 
 What follows by itself, with no edit:
 - Progress: a branch, a pull request, a merge.
@@ -35,10 +35,10 @@ What needs a one-line edit to `runner/dashboard.yaml`: an owner decision made (`
 ```bash
 npm test
 ```
-`test/consistency.mjs` compares the real `runner/dashboard.yaml` with the real `runner/slices.yaml` and fails on any drift: a slice no rule covers, an `ext:` condition with no entry, a roadmap step or gate naming a slice that no longer exists. CI runs it on any pull request that touches either file, and the dashboard shows the same problems as a warning at the top. `test/run.mjs` runs the handler against mocked GitHub and a fixture.
+`test/consistency.mjs` compares the real `runner/dashboard.yaml` with the real `runner/slices.yaml` and fails on any drift: a slice no rule covers, an `ext:` condition with no entry, a roadmap step or gate naming a slice that no longer exists. CI runs it on any pull request that touches either file and again on `main` after each merge that does, and the dashboard shows the same problems as a warning at the top. `test/run.mjs` runs the handler against mocked GitHub and a fixture.
 
 ## Deploy from GitHub (recommended)
-`.github/workflows/status-connector.yml` tests the connector on every pull request that touches it and deploys it when such a change reaches `main`. Set these once, under Settings, Secrets and variables, Actions:
+`.github/workflows/status-connector.yml` tests the connector and the plan files on every pull request that touches them, and `status-connector-deploy.yml` deploys the connector when a change to it reaches `main`. Set these once, under Settings, Secrets and variables, Actions:
 
 | Repository secret | Value |
 |---|---|

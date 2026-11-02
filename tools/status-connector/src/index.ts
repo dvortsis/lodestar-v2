@@ -98,7 +98,8 @@ async function load(env: Env) {
   const y = parse(yamlText); const cfg = parse(cfgText);
   // names GitHub knows, for conditions that say `auto: branch:x` or `auto: tag:x`
   const wantsRefs = Object.values(cfg.conditions || {}).some((c: any) => c && c.auto);
-  const refs = wantsRefs ? await Promise.all([gh(env, `/repos/${repo}/git/matching-refs/heads/release/`, ttl).catch(() => []), gh(env, `/repos/${repo}/git/matching-refs/tags/?per_page=100`, ttl * 5).catch(() => [])]).then(([h, t]) => ({ branches: (h as any[]).map((r) => String(r.ref).replace('refs/heads/', '')), tags: (t as any[]).map((r) => String(r.ref).replace('refs/tags/', '')) })) : undefined;
+  // if GitHub can't answer, say nothing about refs, so an `auto:` condition keeps its file value instead of flipping to unmet
+  const refs = wantsRefs ? await Promise.all([gh(env, `/repos/${repo}/git/matching-refs/heads/release/`, ttl), gh(env, `/repos/${repo}/git/matching-refs/tags/?per_page=100`, ttl * 5)]).then(([h, t]) => ({ branches: (h as any[]).map((r) => String(r.ref).replace('refs/heads/', '')), tags: (t as any[]).map((r) => String(r.ref).replace('refs/tags/', '')) })).catch(() => undefined) : undefined;
   const plan = buildPlan({
     slices: y.slices, external: y.external || {}, cfg, refs, runnerState: state,
     mergedPRs: closed.filter((p: any) => p.merged_at).map(toPR), closedPRs: closed.filter((p: any) => !p.merged_at).map(toPR), openPRs: open.map(toPR),

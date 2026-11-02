@@ -16,7 +16,11 @@ export interface Inputs {
   now: string;
 }
 
-const hit = (id: string, p: string) => (p.startsWith('/') ? new RegExp(p.slice(1, -1)).test(id) : p.endsWith('*') ? id.startsWith(p.slice(0, -1)) : id === p);
+// a /regex/ that does not compile matches nothing (it is reported by buildPlan, never thrown on every refresh)
+const hit = (id: string, p: string) => {
+  if (p.startsWith('/')) { try { return new RegExp(p.slice(1, -1)).test(id); } catch { return false; } }
+  return p.endsWith('*') ? id.startsWith(p.slice(0, -1)) : id === p;
+};
 export function place(cfg: any, id: string): { ws: string; placed: boolean } {
   const pin = cfg.pinned?.[id]; if (pin) return { ws: pin, placed: true };
   for (const r of cfg.placement || []) if ((r.match || []).some((p: string) => hit(id, p))) return { ws: r.ws, placed: true };
@@ -51,6 +55,8 @@ export function buildPlan(inp: Inputs) {
     EXT[k] = { met: false, who: k.startsWith('owner-') ? 'you' : 'runner', label: ((inp.external || {})[k]?.check || k).slice(0, 90) };
     warn('Condition not described', k, 'runner/slices.yaml uses ext:' + k + ' but runner/dashboard.yaml has no conditions entry for it');
   }
+  for (const k of Object.keys(EXT)) if (!used.has(k)) warn('Condition unused', k, 'runner/dashboard.yaml describes ext:' + k + ' but runner/slices.yaml neither lists nor uses it; remove it or add it to the external section');
+  for (const r of cfg.placement || []) for (const p of r.match || []) if (p.startsWith('/')) { try { new RegExp(p.slice(1, -1)); } catch (e: any) { warn('Bad placement pattern', p, 'for ' + r.ws + ': ' + (e?.message || e) + '. It matches nothing until fixed'); } }
   const HELD = new Set<string>(cfg.held || []), EXPANDED = new Set<string>(cfg.expanded || []);
   const mergedById: Record<string, { pr: number; agent: string }> = {};
   const mergedNums = new Set<number>();
@@ -105,6 +111,7 @@ export function buildPlan(inp: Inputs) {
   const first = (t: any) => String(t || '').replace(/\n/g, ' ').trim().slice(0, 240);
 
   const wsIds = new Set(Object.keys(cfg.workstreams || {}));
+  for (const id of Object.keys(cfg.pinned || {})) if (!byid[id]) warn('Unknown slice', id, 'dashboard.yaml pinned: names a slice that is not in runner/slices.yaml');
   const nodes: any[] = [];
   for (const p of cfg.phases || []) nodes.push({ id: p.id, parent: 'root', level: 'phase', title: p.name, plain: p.plain, badge: p.badge, tag: p.tag });
   for (const [id, w] of Object.entries(cfg.workstreams || {}) as any) nodes.push({ id, parent: w.phase, level: 'ws', title: w.name, plain: w.plain });

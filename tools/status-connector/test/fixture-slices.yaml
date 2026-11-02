@@ -4,6 +4,10 @@ external:
     check: The owner has answered the ToS/robots position for v0.6 sources
   owner-q15:
     check: The owner has answered how private_source items get metadata
+  rel-branch:
+    check: A release branch exists
+  v-tagged:
+    check: The release is tagged
 slices:
   - { id: B0, title: Split the API router, kind: core, model: opus, deps: [] }
   - { id: SRC-0, title: Plugin contract v2, kind: core, model: opus, deps: [] }

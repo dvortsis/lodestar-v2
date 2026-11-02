@@ -10,14 +10,17 @@ workstreams:
 placement:
   - { ws: ws-api, match: [B0] }
   - { ws: ws-src, match: ["SRC-*"] }
+  - { ws: ws-api, match: ["/([bad/"] }
 unplaced_workstream: ws-small
-pinned: {}
+pinned: { NOPE-2: ws-small }
 held: []
 expanded: []
 state_override: {}
 conditions:
   owner-q2: { met: false, who: you, label: You decide Q2 }
   owner-q15: { met: false, who: you, label: You decide Q15 }
+  stale-cond: { met: false, who: you, label: Nothing uses this }
+  rel-branch: { met: true, who: done, label: The release branch exists, auto: "branch:release/x" }
   v-tagged: { met: false, who: you, label: The release is tagged, auto: "tag:v9.9.9" }
 roadmap:
   steps:
