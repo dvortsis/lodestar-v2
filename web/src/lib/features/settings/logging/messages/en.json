@@ -369,6 +369,8 @@
 	"settings_logging_ev_filters_change_detail_h": "What changed in a filter rule, with the details.",
 	"settings_logging_ev_filters_rule_skipped_n": "Filter rule skipped",
 	"settings_logging_ev_filters_rule_skipped_h": "A filter rule couldn't be used and was skipped.",
+	"settings_logging_ev_filters_stand_ins_rejudged_n": "Filter rows read again",
+	"settings_logging_ev_filters_stand_ins_rejudged_h": "Filter rows that couldn't be read work again; what was held in their place was checked again.",
 	"settings_logging_ev_filters_fixture_unreadable_n": "Demo filters unreadable",
 	"settings_logging_ev_filters_fixture_unreadable_h": "Demo filter data couldn't be read.",
 	"settings_logging_ev_auth_setup_complete_n": "Setup finished",

@@ -1830,21 +1830,24 @@ pub(crate) async fn overview_response(
     };
     let adult = s.adult.shown();
     let reader = s.reader.clone();
-    let mut response = tokio::task::spawn_blocking(move || -> ApiResult<OverviewResponse> {
+    type Read = (OverviewResponse, Option<crate::filters::Rejudged>);
+    let (mut response, rejudged) = tokio::task::spawn_blocking(move || -> ApiResult<Read> {
         let store = reader.lock().unwrap_or_else(PoisonError::into_inner);
+        let rejudged = crate::filters::stand_in_notice(&store, now);
         // Before the snapshot begins, so sums read from it are never kept
         // past a forget made meanwhile.
         let generation = source.cache().generation();
         // The grain is decided by `compacted_before_day` read in the same
         // snapshot as the rows, so a compaction beside it can't make a
         // day count twice or not at all.
-        store
+        let response = store
             .read_snapshot(|store| {
                 Ok(overview_in_snapshot(
                     store, &q, compare, now, adult, &*source, generation,
                 ))
             })
-            .map_err(internal)?
+            .map_err(internal)??;
+        Ok((response, rejudged))
     })
     .await
     .map_err(internal)??;
@@ -1856,7 +1859,29 @@ pub(crate) async fn overview_response(
     {
         response.exceptions.insert(0, e);
     }
+    if let Some(r) = rejudged {
+        response.exceptions.push(stand_ins_rejudged(r));
+    }
     Ok(response)
+}
+
+/// Rows that had failed closed read again, and their stand-ins' holds
+/// were judged again (docs/decisions/2026-11-02-F-filter-standin-undo.md):
+/// a warning for a week, with how many were released (`value`) and how
+/// many the rules still hold (`rows`, as one number).
+fn stand_ins_rejudged(r: crate::filters::Rejudged) -> InsightsException {
+    InsightsException {
+        fix: Fix {
+            kind: "settings".into(),
+            target: "filters".into(),
+        },
+        kind: "filter_stand_ins_rejudged".into(),
+        rows: vec![r.kept.to_string()],
+        severity: Severity::Warning,
+        since: r.at,
+        unit: Some("torrents".into()),
+        value: Some(r.released as f64),
+    }
 }
 
 /// [`unreadable_rows`] names at most this many.

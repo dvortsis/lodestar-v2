@@ -408,6 +408,27 @@ impl Engine {
             .last()
     }
 
+    /// Whether this engine would hold back (quarantine or drop) a held
+    /// torrent, judged from what's kept of it: its hash, and the name its
+    /// quarantine sealed (empty for a tombstone). Every layer judges it,
+    /// the floor, lists, your rules with their exceptions, packs and your
+    /// classification rules. Re-judging a stand-in's holds keeps those it
+    /// says yes to; one it releases is judged in full, files included,
+    /// when it's fetched again, before anything is stored
+    /// (docs/decisions/2026-11-02-F-filter-standin-undo.md).
+    pub fn holds(&self, hash: &[u8; 20], name: &str, now: i64) -> bool {
+        let hashes = [*hash];
+        let item = Item {
+            hashes: &hashes,
+            name,
+            files: &[],
+            content_type: ContentType::Other,
+        };
+        let withholds = |d: Option<Decision>| d.is_some_and(|d| d.action >= Action::Quarantine);
+        withholds(self.blocked_hash(&hashes))
+            || withholds(self.judge_classified(&item, None, now).0.decision)
+    }
+
     /// Every subscribed list that has one of these hashes, in order.
     fn listed<'a>(&'a self, hashes: &'a [[u8; 20]]) -> impl Iterator<Item = Decision> + 'a {
         self.lists

@@ -28,6 +28,11 @@
 				count: formatCount(e.value, locale),
 				rows: (e.rows ?? []).join(', ')
 			});
+		if (e.kind === 'filter_stand_ins_rejudged')
+			return m.insights_overview_exc_filter_stand_ins_rejudged({
+				released: formatCount(e.value, locale),
+				kept: formatCount(Number(e.rows?.[0] ?? 0), locale)
+			});
 		return m.insights_overview_exc_unknown({ kind: e.kind });
 	}
 	function fixText(e: Exception): string {

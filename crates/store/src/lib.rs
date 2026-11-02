@@ -50,7 +50,8 @@ pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
-    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, Quarantined, Refiled, SHADOW, Tombstone,
+    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow, Quarantined, Refiled, SHADOW,
+    Tombstone,
 };
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};

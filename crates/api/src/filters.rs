@@ -55,6 +55,9 @@ pub use crate::dto::filters::{
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{ClientIp, Json as JsonBody, Path, Query, same_origin_json};
 
+mod standin;
+pub use standin::{Rejudged, stand_in_notice};
+
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
 #[openapi(paths(
@@ -1768,6 +1771,11 @@ impl FiltersApi {
             change = lodestar_log::Detail(&crate::log_events::change_detail(change)),
             version = version
         );
+        drop(guard);
+        // With the engine reloaded, a row that reads again has its
+        // stand-in's holds re-judged. A failure leaves them recorded for
+        // the next change or start.
+        let _ = self.undo_stand_ins(now);
         Ok(out)
     }
 
@@ -2525,6 +2533,8 @@ impl FiltersApi {
         self.rules_changed(&mut store)?;
         drop(store);
         let (queued, truncated) = self.requeue_text(&q, now)?;
+        // An unreadable Is adult rule's adult holds are judged again.
+        let _ = self.undo_stand_ins(now);
         Ok(ClassRuleRemoved { queued, truncated })
     }
 
@@ -2688,6 +2698,10 @@ impl FiltersApi {
     /// A full re-mark is one re-queue; failed, it stays and its error is
     /// returned. Returns how many an index finished.
     pub fn resume_requeues(&self, now: i64) -> ApiResult<usize> {
+        // First what stand-ins of rows that read again did: it may add a
+        // full re-mark. Its failure is logged where it happens and leaves
+        // them recorded.
+        let _ = self.undo_stand_ins(now);
         // Read under its own statement: the store guard mustn't live on
         // into the re-queue, which takes the lock itself.
         let pending = pending_requeues(&self.store())?;

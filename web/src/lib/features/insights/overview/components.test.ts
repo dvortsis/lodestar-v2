@@ -219,6 +219,24 @@ describe('Exceptions', () => {
 		).toBe('/settings/filters');
 	});
 
+	it('counts what was judged again once filter rows read again', () => {
+		render(Exceptions, {
+			exceptions: [
+				{
+					kind: 'filter_stand_ins_rejudged',
+					severity: 'warning',
+					since: 1,
+					unit: 'torrents',
+					value: 12,
+					rows: ['3'],
+					fix: { kind: 'settings', target: 'filters' }
+				}
+			]
+		});
+		const row = screen.getByTestId('insights-exception-filter_stand_ins_rejudged');
+		expect(row.textContent).toContain('12 released, 3 still held');
+	});
+
 	it('says so when nothing needs attention', () => {
 		render(Exceptions, { exceptions: [] });
 		expect(text('insights-exceptions-empty')).toBe('Nothing needs attention');

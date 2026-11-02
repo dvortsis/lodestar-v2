@@ -533,6 +533,12 @@ fn alert(e: &InsightsException) -> Alert {
             value.as_deref().unwrap_or("some"),
             e.rows.join(", ")
         ),
+        ("filter_stand_ins_rejudged", value) => format!(
+            "Saved filter rows that couldn't be read work again. What filtering held back in \
+             their place was checked again with your rules: {} released, {} still held.",
+            value.as_deref().unwrap_or("some"),
+            e.rows.first().map_or("some", String::as_str)
+        ),
         ("yield_below_baseline", None) => {
             "Yield for the newest completed cohorts is below the 7 days before them.".into()
         }

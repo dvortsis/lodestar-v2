@@ -4742,7 +4742,10 @@ export interface components {
              *     (hashes in progress, the crawler running, and nothing stored for
              *     2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`
              *     (stored filter rows that no longer read; filtering fails closed
-             *     for them until they're fixed in Filters & Safety).
+             *     for them until they're fixed in Filters & Safety), or
+             *     `filter_stand_ins_rejudged` (for a week after such rows read
+             *     again: `value` torrents their stand-ins held were released, and
+             *     `rows` holds the one number the rules as they are still hold).
              */
             kind: string;
             /**
