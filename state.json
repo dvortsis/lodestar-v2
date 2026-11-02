@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T15:05:44Z",
+  "updated_at": "2026-11-02T15:06:47Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3951,6 +3951,11 @@
       "id": "SRC-15b-lan-dns-info",
       "added": "2026-11-02T15:05:44Z",
       "text": "SRC-15b: present WARN_LAN_PROXY_DNS as information (it now shows for the recommended gluetun-style setup with auto DNS), not as something to fix."
+    },
+    {
+      "id": "record-2-slot-limit",
+      "added": "2026-11-02T15:06:47Z",
+      "text": "Next runner docs PR: record the owner's 2-slot instruction in docs/owner-decisions.md and set runner/slices.yaml limits.phase_total: 2 (with SRC-14a/14b entries)."
     }
   ],
   "main_health": [
@@ -4564,5 +4569,15 @@
     },
     "2026-11-02T14:23:11Z owner relay seq 1286: 21.45 h elapsed (baseline h14.95), health 200, restarts 0, stored 10,711, private 413.73 MiB, WS 553.85 MiB. Avg +9.3 MiB/h over h6-15 (~13.9 KiB/stored) vs 2.0 MiB/h gate (h12-24 fit not yet run). Asked owner/Antigravity for a preliminary analyze_cr0 memory section and container StartedAt after the 11:00Z backup.",
     "2026-11-02T14:31:07Z preliminary fit (owner/Antigravity, read-only copy, main analyze_cr0.py): private_bytes h12-~16, 247 samples, slope 6.66 MiB/h CI [4.62, 8.70], not judged (incomplete); peak 441.35 MiB; last seq 1356 14:23:29Z. Containers StartedAt unchanged. 11:00Z appdata backup failed (Backups share full), soak untouched; exclusions not exercised. Likely memory-gate FAIL; R-mem-triage briefed, launches on next free slot."
+  ],
+  "limits": {
+    "phase_total": 2,
+    "phase_total_note": "2026-11-02T15:06:47Z owner (runner session): approaching weekly usage limit; bring worker slots down to two as tasks complete. No new launches until running count < 2. Supersedes the 4-slot rule (§2.24/§2.25 cap) until the owner says otherwise."
+  },
+  "owner_instructions": [
+    {
+      "t": "2026-11-02T15:06:47Z",
+      "text": "Approaching weekly limit: once tasks complete, bring the number of worker slots down to two."
+    }
   ]
 }
