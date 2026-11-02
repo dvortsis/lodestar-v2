@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T04:37:06Z",
+  "updated_at": "2026-11-02T04:47:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2361,11 +2361,13 @@
       "notes": "owner-requested via dashboard session; not a runner slice. Runner §2.19 calls: authless connector with path secret accepted (claude.ai offers OAuth or nothing) with constant-time check and >=32-char secret; lockfile size accepted."
     },
     "CR-SPEC": {
-      "status": "running",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBRarxofLxtc79e3pW",
       "launched": "2026-11-02T04:26:14Z",
-      "notes": "ladder rung 2; owner confirms (ext:owner-cr-spec) before CR-AB-COMP"
+      "notes": "ladder rung 2; owner confirms (ext:owner-cr-spec) before CR-AB-COMP",
+      "pr": 375,
+      "merge_sha": "8b0037bf"
     },
     "SRC-1": {
       "status": "running",
@@ -2373,6 +2375,12 @@
       "session": "session_01MMjhnB5mFJfPfMQNdVkAkV",
       "launched": "2026-11-02T04:37:06Z",
       "migration": "V14"
+    },
+    "CR-COL-3": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhnAf2DUuJQnN2TePHc1",
+      "launched": "2026-11-02T04:47:25Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3473,6 +3481,12 @@
       "state": "to-send",
       "added": "2026-11-02T04:09:02Z",
       "text": "#374 status-connector merged. Runner calls (§2.19): authless connector with secret in URL path accepted (claude.ai offers OAuth or nothing), hardened (>=32-char secret, constant-time check, shared cache, error caching); ~2,100-line lockfile accepted. Rotation steps in docs/decisions/2026-11-02-status-connector.md."
+    },
+    {
+      "id": "confirm-cr-spec",
+      "state": "to-send",
+      "added": "2026-11-02T04:47:25Z",
+      "text": "Confirm the crawler measurement spec (docs/decisions/2026-11-02-CR-SPEC.md, #375): ext:owner-cr-spec gates the first booked run. Your call O1: the 24 h gate window excludes the 6 h first-start suppression and a 60 min warmup (recommended; run ~31 h) vs includes them (stricter). O2/O3 tighten; O4 Checkpoint 1 uses the lower of additive/multiplicative estimates; O5 new measurement parameters (list in the file); O6 calendar: two ABBA blocks per treatment minimum, ~4 extra host-days for CR-ADM and uTP. No owner number changed."
     }
   ],
   "external_gates": {
@@ -3526,7 +3540,7 @@
     {
       "id": "X-cf-dedupe",
       "added": "2026-11-02T04:09:02Z",
-      "text": "Hand-written invisible/Cf sets remain: crates/api/src/filters/subscriptions.rs is_format (unless #373 reuses display.rs), crates/lodestar/src/settings/preferences.rs:176, crates/filter/src/normalize.rs (F-normalize-invisible). Reuse metainfo display.rs."
+      "text": "Hand-written invisible/Cf sets remain: crates/api/src/filters/subscriptions.rs is_format (unless #373 reuses display.rs), crates/lodestar/src/settings/preferences.rs:176, crates/filter/src/normalize.rs (F-normalize-invisible). Reuse metainfo display.rs. Also crates/api/src/export.rs:920 csv_cell escapes only the old bidi set (escapes, not strips; lower risk). #373 already reuses format_char in subscriptions.rs."
     }
   ],
   "main_health": [
