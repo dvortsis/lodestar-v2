@@ -171,6 +171,12 @@ impl Override {
             (Match::Keyword(k), _) if keyword_tokens(k).is_empty() => {
                 Err(Invalid("the keyword is empty"))
             }
+            // A character that shows as nothing inside a word: the keyword
+            // reads one way now and another the way torrents were read
+            // before, so it would match neither as written.
+            (Match::Keyword(k), _) if keyword_tokens(k) != keyword_tokens_split(k) => Err(Invalid(
+                "the keyword has an invisible character inside a word; type it without one",
+            )),
             (Match::Keyword(k), Strength::Neutralize) if keyword_tokens(k).len() > 1 => {
                 Err(Invalid("Neutralize term takes one word"))
             }
@@ -237,22 +243,40 @@ pub(crate) struct Prepared {
 #[derive(Debug, Clone, Default)]
 pub struct OverrideList {
     list: Vec<Override>,
-    prepared: std::sync::OnceLock<Box<[Prepared]>>,
+    prepared: std::sync::OnceLock<PreparedList>,
+}
+
+/// [`OverrideList`]'s entries worked out, and which are marked
+/// ([`OverrideList::marked`]).
+#[derive(Debug, Clone)]
+struct PreparedList {
+    entries: Box<[Prepared]>,
+    marked: Box<[usize]>,
 }
 
 impl OverrideList {
-    /// Whether an entry's keyword reads differently in the two readings
-    /// (`crate::matcher::Reading`), so torrents are judged in both.
-    pub(crate) fn reads_twice(&self) -> bool {
-        self.prepared().any(|(_, p)| p.keyword_split.is_some())
+    /// The entries whose keyword reads differently in the two readings
+    /// (`crate::matcher::Reading`): saved before such keywords were
+    /// refused, and usually none. Found once per entry list.
+    pub(crate) fn marked(&self) -> impl Iterator<Item = (&Override, &Prepared)> {
+        let p = self.prepared_list();
+        p.marked.iter().map(|&i| (&self.list[i], &p.entries[i]))
     }
 
     /// Each entry with what judging needs of it.
     pub(crate) fn prepared(&self) -> impl Iterator<Item = (&Override, &Prepared)> {
-        let prepared = self
-            .prepared
-            .get_or_init(|| self.list.iter().map(Override::prepare).collect());
-        self.list.iter().zip(prepared.iter())
+        self.list.iter().zip(self.prepared_list().entries.iter())
+    }
+
+    fn prepared_list(&self) -> &PreparedList {
+        self.prepared.get_or_init(|| {
+            let entries: Box<[Prepared]> = self.list.iter().map(Override::prepare).collect();
+            let marked = (entries.iter().enumerate())
+                .filter(|(_, p)| p.keyword_split.is_some())
+                .map(|(i, _)| i)
+                .collect();
+            PreparedList { entries, marked }
+        })
     }
 }
 

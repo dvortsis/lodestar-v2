@@ -13,18 +13,20 @@ A content-safety follow-up to `2026-11-02-X-strip-format-chars.md` (#373), which
   - `lodestar-metainfo` was already in the filter's dependency graph (through the store and search crates), so the new direct dependency adds no crate.
 - **Never looser than before, by a two-reading rule** (the runner's design, from its review).
   - Ignoring a character that used to be a word break also joins two words. On `main`, `a<U+E0001>girl` read as `a` `girl`, so a term `girl` hit. Ignored, it reads as `agirl`, and `girl` would miss. Someone writing a name gains nothing from that, but the same bytes must never match less than they did.
-  - **So the torrent is judged twice, each time from the top, and the stricter verdict stands** (`Engine::judge_doc`). This happens when the name or a path holds a newly ignored character, or when an override, neutralize or exception keyword does.
+  - **So the torrent is judged twice, each time from the top, and the stricter verdict stands** (`Engine::judge_doc`). This happens when the name or a path holds a newly ignored character, or when a keyword entry that holds one (`OverrideList::marked`, and keyword exceptions) matches this torrent differently in the two readings. Elsewhere the two judgments are the same, so one is made.
     - **The joined reading** ignores the characters, in the text and the keywords alike.
     - **The earlier reading** reads them as word breaks (`Tokenizer::splitting`), exactly as `main` did.
     - Each reading is a full judgment: core hits, exceptions, override and neutralize entries, allow entries, your rules, packs and lists, each matched in that reading (`matcher::Reading`).
     - `stricter` keeps the stronger decision, and the earlier reading's on a tie, so its rule and evidence stay as they were. `Core::verdict` does the same, and `Core::pattern_hits` lists the earlier reading's hits first.
     - A core hit that only the joined reading has can't pre-empt a layer that decided more on `main`: the earlier reading reaches that layer as `main` did, and the stricter verdict is never weaker than the earlier reading's.
+  - **New keywords with such a character inside a word are refused** (`Override::validate`: "the keyword has an invisible character inside a word"). A keyword like that reads one way joined and another in the earlier reading, so it would match neither as written. At the edge of a word it reads the same both ways and is accepted. Keywords stored before this change keep working through the two judgments.
+  - **Shadow override entries are logged once,** at the decision that stands, even when they match in both readings.
   - **Keywords stored with such a character.**
     - An override keyword saved before with one inside a word read as two words. Joined, it reads as one word and can cover texts it didn't, but the earlier reading still matches it as two, so it never covers more than it did.
     - A Neutralize keyword is one word. One that is two words in the earlier reading couldn't have been saved before, so it never applies in that reading (`Prepared::never`). If it did, it would neutralize its joined word there. A Neutralize keyword of one word in the earlier reading has the same first word joined (`a_neutral_word_reads_the_same`), so one neutral set serves both readings.
     - Keyword exceptions are refused when saved, but match per reading like the rest.
   - **What doesn't change.** User query rules and their `unless`, allow entries and packs read through the search tokenizer (`fasttok`), which is the same in both readings.
-  - **Cost.** ASCII text, and text and keywords without a newly ignored character, are judged once as before. Only a torrent with one is judged twice. Its earlier reading has a tokenizer of its own.
+  - **Cost.** A torrent is judged once, as before, unless its name or a path holds a newly ignored character, or a marked keyword entry matches it differently in the two readings. A marked entry costs one keyword check per torrent in each reading. The marked entries are found once per entry list, and the earlier reading has a tokenizer of its own.
   - **Tests:**
     - The normalize unit tests check that the splitting reader gives exactly the tokens of the text with each newly ignored character a space, which is how `main` read it.
     - A walk over every code point checks that `newly_ignored()` is exactly what `invisible()` ignores that the old list didn't.

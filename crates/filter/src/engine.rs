@@ -250,34 +250,56 @@ impl Engine {
 
     /// [`Engine::judge`] past the floor, on a prepared torrent.
     ///
-    /// Where a name, a path or a keyword entry holds a character the
-    /// matching once read as a word break, the torrent is judged in both
-    /// readings ([`Reading`]), each from the top, and the stricter verdict
-    /// stands (the earlier reading's on a
-    /// tie): no torrent is decided more weakly than it was
-    /// (docs/decisions/2026-11-02-F-normalize-invisible.md).
+    /// Where a name or a path holds a character the matching once read as
+    /// a word break, or a keyword entry that holds one matches differently
+    /// in the two readings, the torrent is judged in both readings
+    /// ([`Reading`]), each from the top, and the stricter verdict stands
+    /// (the earlier reading's on a tie): no torrent is decided more weakly
+    /// than it was (docs/decisions/2026-11-02-F-normalize-invisible.md).
+    /// Elsewhere the two judgments are the same, so one is made.
     fn judge_doc(&self, item: &Item, facts: Option<&Facts>, doc: &Doc, now: i64) -> Verdict {
-        let joined = self.judge_reading(item, facts, doc, now, Reading::Joined);
-        if !(doc.reads_twice() || self.keywords_read_twice()) {
-            return joined;
+        let (mut v, mut released) = self.judge_reading(item, facts, doc, now, Reading::Joined);
+        if doc.reads_twice() || self.keywords_differ(item, doc) {
+            let (before, also) = self.judge_reading(item, facts, doc, now, Reading::Before);
+            v = stricter(before, v);
+            for id in also {
+                if !released.contains(&id) {
+                    released.push(id);
+                }
+            }
         }
-        let before = self.judge_reading(item, facts, doc, now, Reading::Before);
-        stricter(before, joined)
+        // Shadow override entries are logged once, at the decision that
+        // stands.
+        if let Some(d) = &v.decision {
+            for id in released {
+                v.shadow.push(Decision {
+                    rule: RuleRef::Override(id),
+                    action: d.action,
+                    evidence: vec![Evidence::Released],
+                });
+            }
+        }
+        v
     }
 
-    /// Whether an override, neutralize or exception keyword reads
-    /// differently in the two readings: one saved before with such a
-    /// character inside a word reads as one word now, and could cover
-    /// more texts in that reading alone.
-    fn keywords_read_twice(&self) -> bool {
-        self.overrides.reads_twice()
-            || self.exceptions.iter().any(|e| match &e.what {
-                Match::Keyword(k) => crate::normalize::splits([k.as_str()]),
-                _ => false,
+    /// Whether a keyword entry matches this torrent differently in the two
+    /// readings: only entries whose keyword reads differently are checked
+    /// (`OverrideList::marked`, and keyword exceptions, which are refused
+    /// when saved). Where none does, and the text reads the same both
+    /// ways, the two judgments are the same.
+    fn keywords_differ(&self, item: &Item, doc: &Doc) -> bool {
+        let both = |f: &dyn Fn(Reading) -> bool| f(Reading::Joined) != f(Reading::Before);
+        self.overrides
+            .marked()
+            .any(|(o, p)| both(&|r| rules::override_matches(o, p, item, doc, r)))
+            || self.exceptions.iter().any(|e| {
+                matches!(&e.what, Match::Keyword(k) if crate::normalize::splits([k.as_str()]))
+                    && both(&|r| rules::matches(&e.what, item, doc, r))
             })
     }
 
-    /// [`Engine::judge_doc`] in one reading.
+    /// [`Engine::judge_doc`] in one reading: the verdict, and the shadow
+    /// override entries that matched.
     fn judge_reading(
         &self,
         item: &Item,
@@ -285,7 +307,7 @@ impl Engine {
         doc: &Doc,
         now: i64,
         reading: Reading,
-    ) -> Verdict {
+    ) -> (Verdict, Vec<u32>) {
         let mut v = Verdict::default();
         let Released {
             overridden,
@@ -305,16 +327,7 @@ impl Engine {
                 &mut v.shadow,
             );
         }
-        if let Some(d) = &v.decision {
-            for id in shadow_overrides {
-                v.shadow.push(Decision {
-                    rule: RuleRef::Override(id),
-                    action: d.action,
-                    evidence: vec![Evidence::Released],
-                });
-            }
-        }
-        v
+        (v, shadow_overrides)
     }
 
     #[allow(clippy::too_many_arguments)]

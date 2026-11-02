@@ -197,6 +197,45 @@ fn a_hit_only_joined_never_pre_empts_a_stronger_layer() {
     }
 }
 
+#[test]
+fn a_shadow_override_is_logged_once() {
+    let mut e = engine(vec![Override {
+        shadow_until: Some(2000),
+        ..keyword("title", Strength::Override)
+    }]);
+    e.packs = PackSwitches::default();
+    for c in NEWLY {
+        let name = format!("Title rolea a{c}lexa");
+        let files = [FileInfo::new(vec!["a.mkv".into()], 1 << 30)];
+        let item = Item {
+            hashes: &[H],
+            name: &name,
+            files: &files,
+            content_type: lodestar_classify::ContentType::Video,
+        };
+        let v = e.judge(&item, None, 1000);
+        assert!(v.decision.is_some(), "U+{:04X}", c as u32);
+        let logged = v.shadow.iter().filter(|d| d.rule == RuleRef::Override(1));
+        assert_eq!(logged.count(), 1, "U+{:04X}", c as u32);
+    }
+}
+
+#[test]
+fn a_marked_keyword_is_refused() {
+    for c in NEWLY {
+        for strength in [Strength::Override, Strength::Neutralize] {
+            let at = c as u32;
+            let inside = keyword(&format!("le{c}xa"), strength);
+            assert!(inside.validate().is_err(), "U+{at:04X}");
+            // At the edge of a word it reads the same both ways.
+            assert!(
+                keyword(&format!("lexa{c}"), strength).validate().is_ok(),
+                "U+{at:04X}"
+            );
+        }
+    }
+}
+
 fn drop_rule(q: &str) -> UserRule {
     UserRule {
         id: 3,
@@ -268,11 +307,26 @@ fn run() -> impl Strategy<Value = String> {
     })
 }
 
-/// [`run`]s around a pair of pieces joined by a mark, so a word is read
-/// both ways.
+/// [`run`]s around a pair of pieces, usually joined by a mark, so a word
+/// is read both ways.
 fn text() -> impl Strategy<Value = String> {
-    let joined = (piece(), prop::sample::select(NEWLY.to_vec()), piece());
-    (run(), joined, run()).prop_map(|(a, (p, m, q), b)| format!("{a} {p}{m}{q} {b}"))
+    let mark = prop::option::weighted(0.7, prop::sample::select(NEWLY.to_vec()));
+    let joined = (piece(), mark, piece());
+    (run(), joined, run()).prop_map(|(a, (p, m, q), b)| {
+        format!("{a} {p}{}{q} {b}", m.map(String::from).unwrap_or_default())
+    })
+}
+
+/// [`text`], or plain pieces with no mark at all, so a marked keyword
+/// alone has to bring the earlier reading in.
+fn maybe_marked() -> impl Strategy<Value = String> {
+    let plain = prop::collection::vec((piece(), prop::sample::select(vec![" ", ".", ""])), 0..5)
+        .prop_map(|v| {
+            v.into_iter()
+                .map(|(p, s)| format!("{p}{s}"))
+                .collect::<String>()
+        });
+    prop_oneof![text(), plain]
 }
 
 proptest! {
@@ -286,8 +340,8 @@ proptest! {
     /// pack or rule of yours.
     #[test]
     fn never_looser_than_before(
-        name in text(),
-        path in text(),
+        name in maybe_marked(),
+        path in maybe_marked(),
         overrides in prop::collection::vec(entry(), 1..4),
         list in prop::option::of(prop::sample::select(vec![Action::Hide, Action::Drop])),
         rule in prop::option::of(prop::sample::select(vec!["title", "lexa", "yo", "zz"])),
