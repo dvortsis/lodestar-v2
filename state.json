@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T00:46:00Z",
+  "updated_at": "2026-11-02T00:52:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2204,12 +2204,12 @@
       "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)"
     },
     "B-subscriptions-api": {
-      "status": "re-review",
+      "status": "fixing",
       "notes": "queued: Opus + /security-review; prerequisite of S-blocklists; waits for F-filter-load-fail-closed (crates/api/src/filters.rs)",
       "model": "opus",
       "session": "session_01MMjhn8f4Pt2y2Vtwi6Wo7L",
       "launched": "2026-11-01T22:58Z",
-      "note": "SSRF guard + held_version binding pushed; focused Opus delta re-review running",
+      "note": "delta re-review MERGE; last push: whole-fetch timeout, store normalised URL, redirect error text, name Cf chars",
       "pr": 362,
       "head": "12b3d60a"
     },
@@ -2246,9 +2246,11 @@
       "merge": "d79ce25b"
     },
     "F-filter-standin-undo": {
-      "status": "queued",
+      "status": "building",
       "model": "opus",
-      "note": "From #357 review: undo effects of fail-closed stand-ins after an upgrade that reads the row again; Is-adult stand-in holds tombstone after 30 days and are not released by removing the rule (§20 false positives must be correctable). Needs persisted state. /security-review. After #357 merges."
+      "note": "no schema change; re-judge only; stop at proposal if attribution needs a migration",
+      "session": "session_01MMjhnAK5fBCVsHf7ALi2RM",
+      "launched": "2026-11-02T00:51Z"
     },
     "SRC-16": {
       "status": "merged",
@@ -2261,13 +2263,14 @@
       "merge": "815793f6"
     },
     "X-size-deterministic": {
-      "status": "ci",
+      "status": "merged",
       "model": "sonnet",
       "note": "runner reviewed (19 lines) MERGE on green",
-      "session": "session_01MMjhnCLZ2M19zNH9kEmbV6",
+      "session": "session_01MMjhnCLZ2M19zNH9kEmbV6 (archived)",
       "launched": "2026-11-02T00:05Z",
       "pr": 364,
-      "head": "6444469"
+      "head": "6444469",
+      "merge": "9fa8b010"
     },
     "SRC-6": {
       "status": "ci",
@@ -2305,7 +2308,8 @@
     "owner_2026_10_22_rules": "Owner in runner session 22:2x: 'Yes, I agree to 1 and 2'. (1) a check also red on main, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block merge; comment on PR. (2) runner decides refinements of owner decisions that don't reverse/loosen them, weaken security/content-safety, or change owner numbers; record in docs/decisions and flag to owner. Repo doc update (diff in scratchpad/owner-rules.diff) was denied by the permission classifier; owner to commit or allow.",
     "merge_freeze_for_48": "CANCELLED 00:42: no freeze. M4 stops chasing main; reviewers review #48's own diff; one final main merge after reviews, mechanical delta verified by runner.",
     "push_state_every_wake": "Watchdog trig_0172BngAUoA4NRaRWBYiRWVf (every 4h from 04:12) judges liveness by runner-state commit age: push state.json on every wake, even if nothing changed.",
-    "slots_always_full": "owner 2026-11-01 21:08Z: keep 4 slice sessions busy whenever unblocked slices exist; runner picks order; holds unchanged (E-v06-workers/companions, E-M6 until soak verdict; no migrations on main before release cut; owner questions wait)"
+    "slots_always_full": "owner 2026-11-01 21:08Z: keep 4 slice sessions busy whenever unblocked slices exist; runner picks order; holds unchanged (E-v06-workers/companions, E-M6 until soak verdict; no migrations on main before release cut; owner questions wait)",
+    "size_remeasure_rule": "dropped 2026-11-02 after #364: size builds use a fixed version, so CI sizes are deterministic"
   },
   "watched_sessions": {
     "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session — owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning §10.10 Settings, §12.1 logging, §12.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b. 20:27 #86 MERGED c5f9b74. Session done."
