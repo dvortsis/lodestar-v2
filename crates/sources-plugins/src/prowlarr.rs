@@ -125,6 +125,8 @@ const POLICY: Policy = Policy {
     // §19.5: Prowlarr shards per indexer.
     distribution: Distribution::ShardedUnit,
     schedule: Schedule::ALWAYS,
+    // One agent: the setting can't be changed (SRC-14a).
+    max_agents: 1,
 };
 
 /// Which indexer manager is at the address.
