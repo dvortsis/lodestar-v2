@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T00:52:00Z",
+  "updated_at": "2026-11-02T01:09:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2273,19 +2273,26 @@
       "merge": "9fa8b010"
     },
     "SRC-6": {
-      "status": "ci",
+      "status": "merged",
       "model": "opus",
-      "session": "session_01MMjhnD7opuLZGiYgUPxKba",
+      "session": "session_01MMjhnD7opuLZGiYgUPxKba (archived)",
       "launched": "2026-11-01T23:35Z",
       "pr": 363,
       "head": "fca45e1d",
-      "note": "review fixes verified; MERGE on green"
+      "note": "review fixes verified; MERGE on green",
+      "merge": "edc27a2e"
     },
     "CR-4": {
       "status": "building",
       "model": "opus",
       "session": "session_01MMjhnBobRgzjNcSJb43XQD",
       "launched": "2026-11-02T00:45Z"
+    },
+    "SRC-8": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnD96xvuDMzkdMWBKDN",
+      "launched": "2026-11-02T01:08Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3955,5 +3962,5 @@
     "gluetun": "NOT approved; owner decides after baseline ends",
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
-  "queue_note": "Next as slots free: CR-4 (Opus; wire the merged uTP crate #51 into the fetch pool + DHT socket demux, IPv6 route backoff on route-level evidence, behind a switch; fixes S04), openapi-example-size (after B-subscriptions-api merges; both regenerate openapi), F-filter-standin-undo (Opus+SR), S-blocklists (after B-subscriptions-api), SRC-7/8 (after SRC-6), i9-stage2 (one release later). Seven-day usage warning active: prefer Sonnet slices where they fit."
+  "queue_note": "Next as slots free: openapi-example-size (Sonnet, after #362), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR; touches integrations/net.rs, after #362), S-blocklists (Sonnet, after #362), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2, Q15), SRC-10e (Q7), SRC-13 (Q3), SRC-15b (Q1). Blocked on release cut: SRC-1 (migration). Seven-day usage warning active."
 }
