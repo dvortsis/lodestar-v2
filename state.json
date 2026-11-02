@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T13:49:31Z",
+  "updated_at": "2026-11-02T13:51:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2567,11 +2567,13 @@
       "merge": "77c9308d"
     },
     "SRC-7": {
-      "status": "running",
+      "status": "in review (Opus review running)",
       "brief": "briefs/SRC-7.md",
       "model": "opus",
       "session": "session_01MMjhnAf3hHtxzAQnAz9XCo",
-      "launched": "2026-11-02T12:24Z"
+      "launched": "2026-11-02T12:24Z",
+      "pr": 395,
+      "head": "7671b501"
     },
     "X-polish-carry-1102": {
       "status": "runner-reviewed; merge on green",
@@ -3865,6 +3867,16 @@
       "id": "runner-docs-src14-split",
       "added": "2026-11-02T13:49:31Z",
       "text": "Runner docs PR: add SRC-14a/SRC-14b entries to runner/slices.yaml and runner/dashboard.yaml."
+    },
+    {
+      "id": "SRC-7-wiring",
+      "added": "2026-11-02T13:51:04Z",
+      "text": "After #394 (SRC-14a) merges: wire Prowlarr registration in services.rs/pipeline lib.rs per docs/decisions/2026-11-02-SRC-7.md (Prowlarr::new(Config::from_json(..), SourceCredentials) + EgressFactory::build kit). Fold into SRC-14b or a small slice."
+    },
+    {
+      "id": "X-http-scoped-backoff",
+      "added": "2026-11-02T13:51:04Z",
+      "text": "crates/sources/src/http.rs: 429 Retry-After or repeated 5xx from one Prowlarr indexer blocks/backs off the whole manager host for up to 24h. Scope blocks and back-off to the poll unit. Must land before users can enable the Prowlarr plugin. After #394 merges (http.rs owner)."
     }
   ],
   "main_health": [
