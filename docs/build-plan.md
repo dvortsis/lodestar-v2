@@ -15,9 +15,9 @@ Status as of `main` at `7f167278` (2026-11-02 02:23Z). Live per-slice state is o
 | **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **Unraid 24 h soak, attempt r3** on rc.2, fresh data directory: baseline 2026-11-01 22:16Z → 2026-11-02 22:16Z. r1 (upgraded the Oct 22 volume V3 → V12 cleanly) tripped the old working-set stop rule at 19.6 h, so it isn't gate evidence; r2 was stopped by the CA Docker Auto Update plugin at 11-01 11:00Z | Verdict; the owner runs the gluetun leg after the baseline; the owner tags `v0.5.1` (§0.4) |
 | **Crawler** | CR-0 accepted (24 h final: **740.6 stored/h ≈ 12.3/min**). Merged, each behind its own switch, all **off by default**: CR-SIM, CR-gate-metrics, CR-ADM (`dht.coordinated_admission`), CR-1a-H (`dht.responder_hints`), CR-1a-S (`dht.streaming_peers`), CR-1b (`dht.target_prefixes`), CR-0d (`dht.safe_restart`), CR-0f, CR-COL | **CR-4** (#365): uTP in the fetch path and IPv6 route backoff, switches `dht.utp` and `dht.route_backoff`; review fixes verified, merging on green | Live A/B runs (none run yet), CR-1c, CR-5 (§0.5) |
 | **Imports** | IMP-0..5 merged: PostgreSQL restore runbook, V13 job tables, Magnetico and Bitmagnet adapters, merge/dedupe CLI, imported cohorts kept out of crawl-yield Insights, refile, server-side import part 1 | — | Pilots on real data (§0.6); none run. Only a synthetic figure exists: 100k at ~13,900/s |
-| **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 (V14) once migrations may land on `main` (owner hold); SRC-7 blocked on owner Q2/Q15 |
+| **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 (V14) now that migrations may land on `main` (owner-decisions §2.28); SRC-7 after SRC-2, SRC-4 and SRC-5 |
 | **Blocklist subscriptions** | B-subscriptions-api (#362) merged | S-blocklists (Sonnet) | — |
-| **Filters** | F-auth, F-filters (+packs, neutral-perf, xcpu), F-metainfo, F-updater, F-status, F-filter-load-fail-closed (#357) | F-filter-standin-undo (#367), with an owner question on releasing adult stand-in holds | — |
+| **Filters** | F-auth, F-filters (+packs, neutral-perf, xcpu), F-metainfo, F-updater, F-status, F-filter-load-fail-closed (#357) | F-filter-standin-undo (#367); adult stand-in holds stay held (owner-decisions §2.28) | — |
 | **Update engine** | B-update-1..6 (signed manifest, install, rollback, fail-closed checks). Ships **disabled** in v0.5.1 | — | Owner: nightly signing key |
 | **Remote workers** | `crates/cluster` library: cluster CA, mTLS 1.3, join tokens, postcard-over-WebSocket protocol, leases and fencing (~104 tests) | — | Epic **held** until the soak verdict. **Nothing wires it**: there is no `lodestar worker` command, though `packaging/unraid/lodestar-worker.xml` calls one |
 | **Companions** | — | — | Epic held until the soak verdict. No code |
@@ -121,21 +121,19 @@ Any worker table goes through the migration queue (§0.7). Interface changes fro
 - a polish slice for `carry_forward` (118 items, over the 15 threshold in `runner/README.md` step 9).
 
 ### 0.3 Owner queue
-Ordered by what each answer unblocks. The runner keeps working on everything else meanwhile.
+On 2026-11-02 the owner told the runner to take its recommendation on every question that was waiting (`docs/owner-decisions.md` §2.28). The answers are recorded there; the owner can veto any of them. What's left needs the owner's hands, ordered by what each unblocks. The runner keeps working on everything else meanwhile.
 
-| # | Decision or action | Unblocks |
+| # | Action | Unblocks |
 |---|---|---|
-| 1 | Hand back the r3 soak evidence; run the gluetun leg after the baseline; decide whether r1's clean V3 → V12 upgrade counts as the upgrade test or rc.2 gets an upgrade smoke; **decide whether v0.5.1 ships without F-filter-load-fail-closed (#357)**, a content-safety fix merged after the cut (the runner recommends an rc.3 with #357 cherry-picked if the soak must be re-run anyway, otherwise shipping rc.2 and putting #357 in v0.5.2 within days, since on a first release with no older version to roll back to, an unreadable stored rule needs a corrupted row or a parser regression to matter; `docs/decisions/2026-11-01-F-filter-load-fail-closed.md`); tag `v0.5.1` and approve the release environment. **Also:** may SRC-1's V14 migration land on `main` before the tag (your 11-01 hold says no migrations before the release cut)? | v0.5.1; the three held epics; SRC-1 → the Sources critical path |
-| 2 | **Q2** (ToS/robots position per source) and **Q15** (how `private_source` items get metadata), plan `2026-11-01-v06-sources.md` §5 | SRC-7 and the whole Sources critical path |
-| 3 | Name the **experiment host** for crawler A/B runs, and when it's free | Track C's live work (C2–C8) and the v0.6 tag |
-| 4 | **Q1** (consent wording), **Q3** (which torrent caches), **Q7** (Sukebei feed) | SRC-15b, SRC-13, SRC-10e |
-| 4b | Accept #362's egress trade-off: blocklist list fetches go through the SSRF guard and ignore `HTTPS_PROXY`, though §20.13 said they use the proxy egress; a whole-container VPN still applies. The runner recommends accepting it for v0.6 (`docs/decisions/2026-11-01-B-subscriptions-api.md`) | the §20.13 wording; the user guide |
-| 5 | Release adult stand-in holds automatically? (#367; needs a stored-format change) | F-filter-standin-undo's follow-up |
-| 6 | Create the **nightly signing key** and its environment | update checks on the Nightly channel |
-| 7 | Make `Web / web` and `E2E / run` required checks (the runner recommends yes) | safer merges |
-| 8 | B-import-server-2's new API surface; the `.torrent` upload middleware exception | server-side imports; M7 upload |
-| 9 | The Unraid Community Apps submission | M6 |
-| Later | **Checkpoint 1** decision (§0.5); the 50M numbers (§0.6) | the v0.6 tag; the full-corpus import |
+| 1 | Hand back the r3 soak evidence; run the gluetun leg after the baseline; tag `v0.5.1` and approve the release environment. (#357 goes into an rc.3 only if the soak must be re-run anyway, otherwise into v0.5.2; r1's upgrade counts if rc.2's migration code matches, per §2.28.) | v0.5.1; the three held epics |
+| 2 | Name the **experiment host** for crawler A/B runs, and when it's free | Track C's live work (C2–C8) and the v0.6 tag |
+| 3 | Create the **nightly signing key** and its environment | update checks on the Nightly channel |
+| 4 | Make `Web / web` and `E2E / run` required checks in the ruleset (§2.28) | safer merges |
+| 5 | The Unraid Community Apps submission | M6 |
+| 6 | Approve the Q1 consent texts once SRC-4 drafts them | SRC-15b |
+| Later | **Checkpoint 1** decision (§0.5); the 50M numbers (§0.6); B-import-server-2's API surface and the `.torrent` upload middleware exception (the runner brings a recommendation when they're planned) | the v0.6 tag; the full-corpus import; server-side imports and M7 upload |
+
+Answered by §2.28: Q2, Q3, Q7 and Q15 (Q1 keeps the owner's approval of the drafted texts) (plan `2026-11-01-v06-sources.md` §5), migrations on `main` before the tag (allowed, so SRC-1 may land), #362's egress trade-off (accepted for v0.6), and adult stand-in holds (not released automatically).
 
 `docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
 
@@ -146,7 +144,7 @@ Ordered by what each answer unblocks. The runner keeps working on everything els
 - ✔ L1–L7 and F-* merged; the CR-0 soak accepted (`docs/decisions/2026-10-30-CR-0-acceptance.md`).
 - ✔ Every workflow green on rc.2, no regenerated baselines.
 - ✔ Windows ≥ 6 h service-mode run of the rc MSI, plus a portable smoke test.
-- ☐ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). Attempt r3 is running on a fresh data directory. **The upgrade test** (the Oct 22 volume, V3 → V12) passed only at r1's start, and r1 itself isn't gate evidence (it stopped at 19.6 h on the old working-set rule; partial slope 1.85 MiB/h, CI [0.92, 2.77]). The owner decides whether r1's clean upgrade counts or rc.2 gets a separate upgrade smoke (owner queue #1). Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
+- ☐ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). Attempt r3 is running on a fresh data directory. **The upgrade test** (the Oct 22 volume, V3 → V12) passed only at r1's start, and r1 itself isn't gate evidence (it stopped at 19.6 h on the old working-set rule; partial slope 1.85 MiB/h, CI [0.92, 2.77]). Per owner-decisions §2.28, r1's clean upgrade counts if rc.2's migration code matches r1's build (the runner checks); otherwise rc.2 gets a short upgrade smoke. Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
 - ☐ ≥ 2 h gluetun leg.
 - ✔ Updates ship off (no nightly key yet; the release key exists).
 - ☐ The owner tags, approves the release environment and publishes.
