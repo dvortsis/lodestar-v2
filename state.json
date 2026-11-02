@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T05:58:31Z",
+  "updated_at": "2026-11-02T06:15:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2406,13 +2406,19 @@
       "notes": "owner-requested via dashboard session. Runner owns notes/owner_queue/conditions in runner/dashboard.yaml; set met: true in the same PR as recording an owner answer. Runner §2.19 calls: check not required (owner ruleset call); build plan stays hand-written."
     },
     "SRC-5": {
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "session": "session_01MMjhnD4a7x1Xa5Vz9BC3AS",
-      "launched": "2026-11-02T05:15:30Z"
+      "launched": "2026-11-02T05:15:30Z",
+      "pr": 380,
+      "head": "c47f6b1a",
+      "review": "Opus MERGE; small push requested (bind-address refused on all non-Windows, operstate probe, DNS-leak status text and decisions)"
     },
     "SRC-2": {
       "brief_must": "claim hits on the floor or a CS pattern always carry a hold (from #379 review); watermarks for promoted ids; Insights promotion counting (handed from SRC-1)"
+    },
+    "SRC-14": {
+      "brief_must": "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3531,6 +3537,18 @@
       "state": "to-send",
       "added": "2026-11-02T05:45:57Z",
       "text": "CR-COL-3 (#378): 17 stricter readings of CR-SPEC (docs/decisions/2026-11-02-CR-COL-3.md); collector logs in with an admin password file (refused unless mode 0600-ish and loopback/private URL), since API keys cannot reach settings/Insights; later option: export preset/pause state in /metrics so no login is needed; proposed dht_switch gauge. Rehearsal in the cloud cannot be valid (no NTP/UDP); the first experiment-host rehearsal must show the healthy CR-ADM permit-identity check."
+    },
+    {
+      "id": "q-egress-dns-leak",
+      "state": "to-send",
+      "added": "2026-11-02T06:15:51Z",
+      "text": "SRC-5 (#380) per-plugin egress: on the \"network interface\" route, DNS lookups use the system resolver outside the interface (connections never do), so an ISP could see which indexer names a plugin looks up. Recommendation: keep the interface route hidden in the UI until a bound resolver lands (follow-up slice); meanwhile recommend a whole-container VPN (gluetun) or SOCKS5 with proxy DNS. Accept, or ask for the resolver first?"
+    },
+    {
+      "id": "flag-src5",
+      "state": "to-send",
+      "added": "2026-11-02T06:15:51Z",
+      "text": "SRC-5 runner calls (§2.19): plugins ignore HTTPS_PROXY (per-plugin SOCKS5 is the supported proxy; SRC-14 warns if HTTPS_PROXY is set with Direct egress); kill switch always on for non-direct routes (refines \"optional\"); bind-address route refused on non-Windows (weak host model leak); socks5h caveat: a public name resolving to the proxy LAN reaches it (documented, SRC-14 help text)."
     }
   ],
   "external_gates": {
@@ -3585,6 +3603,11 @@
       "id": "X-cf-dedupe",
       "added": "2026-11-02T04:09:02Z",
       "text": "Hand-written invisible/Cf sets remain: crates/api/src/filters/subscriptions.rs is_format (unless #373 reuses display.rs), crates/lodestar/src/settings/preferences.rs:176, crates/filter/src/normalize.rs (F-normalize-invisible). Reuse metainfo display.rs. Also crates/api/src/export.rs:920 csv_cell escapes only the old bidi set (escapes, not strips; lower risk). #373 already reuses format_char in subscriptions.rs."
+    },
+    {
+      "id": "X-egress-bound-resolver",
+      "added": "2026-11-02T06:15:51Z",
+      "text": "Interface egress route resolves DNS through the system resolver outside the route (#380). Add a resolver bound to the interface (new dep or hand-written client = untrusted parser, fuzzed) before the interface route is user-visible. Owner question q-egress-dns-leak."
     }
   ],
   "main_health": [
