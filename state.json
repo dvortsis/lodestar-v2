@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:02:08Z",
+  "updated_at": "2026-11-02T14:02:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2595,9 +2595,11 @@
       "merge": "b39912f7"
     },
     "G-import-smoke": {
-      "status": "launching",
+      "status": "running",
       "brief": "briefs/G-import-smoke.md",
-      "model": "opus"
+      "model": "opus",
+      "session": "session_01MMjhn9hrbtdGJ9R8ApgDt9",
+      "launched": "2026-11-02T14:02Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
