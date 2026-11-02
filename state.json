@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T14:23:11Z",
+  "updated_at": "2026-11-02T14:31:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2600,6 +2600,11 @@
       "model": "opus",
       "session": "session_01MMjhn9hrbtdGJ9R8ApgDt9",
       "launched": "2026-11-02T14:02Z"
+    },
+    "R-mem-triage": {
+      "status": "queued (next free slot, ladder #1)",
+      "brief": "briefs/R-mem-triage.md",
+      "model": "opus"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3806,6 +3811,12 @@
       "state": "to-send",
       "added": "2026-11-02T14:20:37Z",
       "text": "Runner changed its #380 ruling (§2.19, privacy vs SSRF): SOCKS5 \"auto\" DNS now resolves through the proxy (socks5h) for plugins with fixed manifest endpoints, whatever the proxy address. The old rule (local DNS whenever the proxy is on a LAN/private address) leaked every indexer lookup outside the tunnel for gluetun (172.x), Mullvad (10.64.0.1) and Tor/VPN-client (127.0.0.1) users. Plugins with user-entered endpoints (Prowlarr) keep local DNS by default; the Sources screen will make it an explicit choice there. Veto to keep local DNS everywhere."
+    },
+    {
+      "id": "backups-share-full",
+      "state": "to-send",
+      "added": "2026-11-02T14:31:07Z",
+      "text": "Unraid Backups share is full: the 11:00Z appdata backup failed (\"No space left on device\") but its retention clean-up still deleted ab_20261003_040001. After the soak: free space, re-run one backup and confirm the soak containers are excluded."
     }
   ],
   "external_gates": {
@@ -4512,6 +4523,7 @@
       "at": "2026-11-02T05:07:22Z",
       "text": "Owner relay ~05:00Z: seq 746, elapsed 44,800 s (~5.9 h into baseline), health 200, 0 restarts, 4,539 stored, private 329.95 MiB, WS 463.39 MiB, running. Nothing to act on."
     },
-    "2026-11-02T14:23:11Z owner relay seq 1286: 21.45 h elapsed (baseline h14.95), health 200, restarts 0, stored 10,711, private 413.73 MiB, WS 553.85 MiB. Avg +9.3 MiB/h over h6-15 (~13.9 KiB/stored) vs 2.0 MiB/h gate (h12-24 fit not yet run). Asked owner/Antigravity for a preliminary analyze_cr0 memory section and container StartedAt after the 11:00Z backup."
+    "2026-11-02T14:23:11Z owner relay seq 1286: 21.45 h elapsed (baseline h14.95), health 200, restarts 0, stored 10,711, private 413.73 MiB, WS 553.85 MiB. Avg +9.3 MiB/h over h6-15 (~13.9 KiB/stored) vs 2.0 MiB/h gate (h12-24 fit not yet run). Asked owner/Antigravity for a preliminary analyze_cr0 memory section and container StartedAt after the 11:00Z backup.",
+    "2026-11-02T14:31:07Z preliminary fit (owner/Antigravity, read-only copy, main analyze_cr0.py): private_bytes h12-~16, 247 samples, slope 6.66 MiB/h CI [4.62, 8.70], not judged (incomplete); peak 441.35 MiB; last seq 1356 14:23:29Z. Containers StartedAt unchanged. 11:00Z appdata backup failed (Backups share full), soak untouched; exclusions not exercised. Likely memory-gate FAIL; R-mem-triage briefed, launches on next free slot."
   ]
 }
