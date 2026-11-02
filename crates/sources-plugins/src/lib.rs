@@ -19,6 +19,7 @@ use lodestar_sources::BoxFuture;
 use lodestar_sources::consent::SourceCredentials;
 use lodestar_sources::egress::CredentialError;
 
+pub mod nyaa;
 pub mod prowlarr;
 
 /// Where a plugin reads its stored credentials (SRC-4's per-source

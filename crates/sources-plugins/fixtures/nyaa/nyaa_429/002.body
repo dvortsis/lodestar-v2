@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:nyaa="https://nyaa.si/xmlns/nyaa" version="2.0">
+	<channel>
+		<title>Nyaa - Home - Torrent File RSS</title>
+		<description>RSS Feed for Home</description>
+		<link>https://nyaa.si/</link>
+		<atom:link href="https://nyaa.si/?page=rss" rel="self" type="application/rss+xml" />
+		<item>
+			<title>Big Buck Bunny (2008) [1080p]</title>
+			<link>https://nyaa.si/download/2000001.torrent</link>
+			<guid isPermaLink="true">https://nyaa.si/view/2000001</guid>
+			<pubDate>Mon, 02 Nov 2026 10:00:00 -0000</pubDate>
+			<nyaa:seeders>12</nyaa:seeders>
+			<nyaa:leechers>3</nyaa:leechers>
+			<nyaa:downloads>40</nyaa:downloads>
+			<nyaa:infoHash>1f2e3d4c5b6a79880123456789abcdeffedcba98</nyaa:infoHash>
+			<nyaa:categoryId>1_2</nyaa:categoryId>
+			<nyaa:category>Category</nyaa:category>
+			<nyaa:size>1.4 GiB</nyaa:size>
+			<nyaa:comments>0</nyaa:comments>
+			<nyaa:trusted>Yes</nyaa:trusted>
+			<nyaa:remake>No</nyaa:remake>
+			<description><![CDATA[#2000001 | Big Buck Bunny (2008) [1080p]]]></description>
+		</item>
+	</channel>
+</rss>
