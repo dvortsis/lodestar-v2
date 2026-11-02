@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T04:09:02Z",
+  "updated_at": "2026-11-02T04:26:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -712,16 +712,17 @@
       "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45 | 17:10 r1 FIX: BaseQuery returns visibility conjuncts separately; merge main; §16 qualifiers; utoipa responses. 17:48 merged main (557121f), no code change since 3e4d7b6. 18:45 R2 MERGE at 557121f (no blockers). Waiting on CI: drift in progress, filter budget red -> 1 rerun. Merged 4296f94 19:17."
     },
     "S-blocklists": {
-      "status": "building",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01MMjhn8SxsCtQL3Q8fpuKKg",
-      "pr": null,
+      "pr": 370,
       "attempt": 0,
       "review_rounds": 0,
       "notes": "blocked on B-subscriptions-api (no connect/remove/accept API yet)",
       "launched": "2026-11-02T02:00Z",
       "head": "53897d5",
-      "notes_runner": "runner verified round-1 fixes and the early-Continue fix; merge on green (Web+E2E)."
+      "notes_runner": "runner verified round-1 fixes and the early-Continue fix; merge on green (Web+E2E).",
+      "merge_sha": "fa831186"
     },
     "F1": {
       "status": "merged",
@@ -2356,6 +2357,13 @@
       "pr": 374,
       "merge_sha": "55241398",
       "notes": "owner-requested via dashboard session; not a runner slice. Runner §2.19 calls: authless connector with path secret accepted (claude.ai offers OAuth or nothing) with constant-time check and >=32-char secret; lockfile size accepted."
+    },
+    "CR-SPEC": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhnBRarxofLxtc79e3pW",
+      "launched": "2026-11-02T04:26:14Z",
+      "notes": "ladder rung 2; owner confirms (ext:owner-cr-spec) before CR-AB-COMP"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
