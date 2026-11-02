@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T02:24:00Z",
+  "updated_at": "2026-11-02T02:53:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2201,11 +2201,14 @@
       "session": "session_01MMjhnA8E463RsbggYDbphq (archived)"
     },
     "openapi-example-size": {
-      "status": "building",
+      "status": "ci",
       "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)",
       "model": "sonnet",
       "session": "session_01MMjhn9wh3LAkmzbRpcaekT",
-      "launched": "2026-11-02T02:23Z"
+      "launched": "2026-11-02T02:23Z",
+      "pr": 368,
+      "head": "d42fc279",
+      "note": "runner reviewed (5 lines) MERGE on green"
     },
     "B-subscriptions-api": {
       "status": "merged",
@@ -2251,13 +2254,13 @@
       "merge": "d79ce25b"
     },
     "F-filter-standin-undo": {
-      "status": "changes",
+      "status": "ci",
       "model": "opus",
-      "note": "Opus review MERGE + runner round: unless stand-in tombstones counted, exact distinct review count, background undo task, polish",
+      "note": "round 3 verified; MERGE on green incl. filter budget",
       "session": "session_01MMjhnAK5fBCVsHf7ALi2RM",
       "launched": "2026-11-02T00:51Z",
       "pr": 367,
-      "head": "697eb24"
+      "head": "e10d067"
     },
     "SRC-16": {
       "status": "merged",
@@ -2290,13 +2293,14 @@
       "merge": "edc27a2e"
     },
     "CR-4": {
-      "status": "ci",
+      "status": "merged",
       "model": "opus",
-      "session": "session_01MMjhnBobRgzjNcSJb43XQD",
+      "session": "session_01MMjhnBobRgzjNcSJb43XQD (archived)",
       "launched": "2026-11-02T00:45Z",
       "pr": 365,
       "head": "90efaa0",
-      "note": "review fixes verified; MERGE on green"
+      "note": "review fixes verified; MERGE on green",
+      "merge": "bcb9d4fa"
     },
     "SRC-8": {
       "status": "merged",
@@ -2309,9 +2313,16 @@
       "merge": "7f167278"
     },
     "X-strip-format-chars": {
-      "status": "queued",
+      "status": "building",
       "model": "opus",
-      "note": "From #366 review: common.rs unsafe_char and api/digest.rs strip bidi but not other Cf (U+200B-200D, U+2060-2064, U+FEFF, U+00AD, U+2028/2029, tag chars). One small PR covering both, with tests."
+      "note": "From #366 review: common.rs unsafe_char and api/digest.rs strip bidi but not other Cf (U+200B-200D, U+2060-2064, U+FEFF, U+00AD, U+2028/2029, tag chars). One small PR covering both, with tests.",
+      "session": "session_01MMjhnCTS1gioZcMs1q3TuW",
+      "launched": "2026-11-02T02:52Z"
+    },
+    "P-master-plan-r2": {
+      "status": "changes",
+      "pr": 369,
+      "note": "owner planning session PR (session_01MMjhnBhSbT15hSFhsbEfoq); Opus review CHANGES: SRC-1 V14 lifts owner migration hold w/o explicit owner confirmation (blocking), proxy q missing, v0.5.2 upgrade gate, owner answers to owner-decisions §2.27, SR notes"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
