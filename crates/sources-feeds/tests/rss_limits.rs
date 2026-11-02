@@ -220,3 +220,49 @@ fn hashes_and_titles() {
         Some("https://t.example/dl?id=1")
     );
 }
+
+#[test]
+fn namespace_scope_and_undeclaring() {
+    // A binding on an empty element ends with it.
+    let body = feed(&format!(
+        r#"<item><x xmlns:nyaa="urn:o"/><nyaa:infoHash>{HASH}</nyaa:infoHash></item>"#
+    ));
+    assert_eq!(parse(body.as_bytes()).summary.kept, 1);
+    // `xmlns=""` brings elements back into no namespace.
+    let body = format!(
+        r#"<rss xmlns="urn:x" {NYAA}><channel xmlns="">{}</channel></rss>"#,
+        item("a")
+    );
+    assert_eq!(parse(body.as_bytes()).summary.kept, 1);
+    // `xmlns:=` and `xmlns:p=""` aren't valid declarations.
+    for decl in [r#"xmlns:="urn:x""#, r#"xmlns:p="""#] {
+        let body = format!("<rss {NYAA} {decl}><channel>{}</channel></rss>", item("a"));
+        assert_eq!(
+            parse(body.as_bytes()).summary.stop,
+            Some(Stop::Malformed),
+            "{decl}"
+        );
+    }
+}
+
+#[test]
+fn empty_infohash_is_bad_and_magnets_are_searched_in_order() {
+    let body = feed(&format!(
+        "<item><nyaa:infoHash> </nyaa:infoHash><link>magnet:?xt=urn:btih:{HASH}</link></item>"
+    ));
+    assert_eq!(parse(body.as_bytes()).summary.skipped.bad_hash, 1);
+    // The Atom link's magnet comes before the RSS link's, then the
+    // enclosure's, then the guid's.
+    let other = "1123456789abcdef0123456789abcdef01234567";
+    let body = format!(
+        r#"<rss xmlns:a="http://www.w3.org/2005/Atom"><channel><item>
+<guid>magnet:?xt=urn:btih:{other}</guid><enclosure url="magnet:?xt=urn:btih:{other}"/>
+<link>magnet:?xt=urn:btih:{other}</link><a:link href="magnet:?xt=urn:btih:{HASH}"/>
+</item><item><guid>magnet:?xt=urn:btih:{other}</guid><enclosure url="magnet:?xt=urn:btih:{HASH}"/></item>
+</channel></rss>"#
+    );
+    let f = parse(body.as_bytes());
+    let want = Some(HASH.parse().unwrap());
+    assert_eq!(f.items.len(), 2);
+    assert!(f.items.iter().all(|i| i.hashes.v1 == want));
+}

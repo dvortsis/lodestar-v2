@@ -243,6 +243,9 @@ impl Parser<'_> {
             let key = a.key.as_ref();
             let prefix = match key.strip_prefix("xmlns") {
                 Some("") => "",
+                // `xmlns:` needs a name, and a prefix can't be undeclared
+                // (Namespaces in XML 1.0, §3 and §5).
+                Some(":") => return Err(Stop::Malformed),
                 Some(p) => match p.strip_prefix(':') {
                     Some(p) => p,
                     None => continue,
@@ -256,6 +259,9 @@ impl Parser<'_> {
                 let v = a
                     .normalized_value_with(XmlVersion::Implicit1_0, 1, resolve_xml_entity)
                     .map_err(|_| Stop::Malformed)?;
+                if v.is_empty() && !prefix.is_empty() {
+                    return Err(Stop::Malformed);
+                }
                 Ns::of(&v)
             };
             let shadows = self.ns.iter().any(|b| *b.prefix == *prefix);
@@ -464,7 +470,14 @@ impl Draft {
     fn commit(&mut self, f: Field) {
         let s = std::mem::take(&mut self.buf);
         let t = s.trim();
-        if t.is_empty() || !self.empty(f) {
+        if !self.empty(f) {
+            return;
+        }
+        if t.is_empty() {
+            // An empty `infoHash` is present but invalid, as in `torznab`.
+            if f == Field::InfoHash {
+                self.infohash = Some(None);
+            }
             return;
         }
         let it = &mut self.it;

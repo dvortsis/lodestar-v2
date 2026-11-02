@@ -26,6 +26,7 @@ fuzz_target!(|data: &[u8]| {
             assert!(it.category.as_ref().is_none_or(|c| c.len() <= MAX_CATEGORY));
             for r in [&it.guid, &it.link].into_iter().flatten() {
                 assert!(r.len() <= MAX_REF);
+                assert!(!r.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("magnet:")));
             }
         });
         assert_eq!(summary.kept as usize, kept);
