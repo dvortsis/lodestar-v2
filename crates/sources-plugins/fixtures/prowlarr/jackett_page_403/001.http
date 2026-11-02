@@ -1,0 +1,4 @@
+GET http://jackett.example:9117/api/v2.0/indexers/all/results/torznab/api?apikey=REDACTED&t=indexers&configured=true
+
+HTTP 200
+Content-Type: application/rss+xml; charset=utf-8

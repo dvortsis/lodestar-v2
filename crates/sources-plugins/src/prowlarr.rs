@@ -276,6 +276,8 @@ fn fail(msg: &str) -> PluginError {
 /// than knocking every 15 minutes.
 const REFUSED: &str = "the indexer manager refused the API key";
 const REDIRECTED: &str = "needs setup: the indexer manager redirected the request; check the address (http or https, and any base path)";
+const NOT_FOUND: &str = "needs setup: the address has no indexer list; check the address, any base path, and whether it's Prowlarr or Jackett";
+const NOT_A_LIST: &str = "needs setup: the address didn't answer with an indexer list; check the address and whether it's Prowlarr or Jackett";
 
 impl Prowlarr {
     async fn run_inner(&self, ctx: SourceCtx) -> Result<(), PluginError> {
@@ -313,7 +315,7 @@ impl Prowlarr {
             let indexers = match listed {
                 Ok(list) => list,
                 Err(Failure::Refused) => return Err(fail(REFUSED)),
-                Err(Failure::Redirected) => return Err(fail(REDIRECTED)),
+                Err(Failure::Setup(why)) => return Err(fail(why)),
                 // The next list waits for the poll gate.
                 Err(Failure::Other) => continue,
                 Err(Failure::Closed) => return Ok(()),
@@ -323,8 +325,9 @@ impl Prowlarr {
                 r = poll_all(&job, indexers) => r,
             };
             match polled {
-                Ok(()) | Err(Failure::Other | Failure::Redirected) => {}
+                Ok(()) | Err(Failure::Other) => {}
                 Err(Failure::Refused) => return Err(fail(REFUSED)),
+                Err(Failure::Setup(why)) => return Err(fail(why)),
                 Err(Failure::Closed) => return Ok(()),
             }
         }
@@ -348,10 +351,10 @@ enum Failure {
     Other,
     /// The pipeline shut down.
     Closed,
-    /// The list answered with a redirect, which is never followed: the
-    /// address needs correcting (often `http` for `https`, or a missing
-    /// base path).
-    Redirected,
+    /// The list's answer shows the address or the manager type is wrong:
+    /// a redirect (never followed), a 404, or a 200 that isn't an indexer
+    /// list. Retrying every 15 minutes would only hide it.
+    Setup(&'static str),
 }
 
 /// One indexer, as the manager listed it.
@@ -400,13 +403,17 @@ impl Job {
 
     async fn list(&self) -> Result<Vec<Indexer>, Failure> {
         let res = self.http.poll("indexers", &self.list_request()).await;
-        if matches!(&res, Ok(r) if (300..400).contains(&r.status)) {
-            return Err(Failure::Redirected);
+        match &res {
+            Ok(r) if (300..400).contains(&r.status) => return Err(Failure::Setup(REDIRECTED)),
+            Ok(r) if r.status == 404 => return Err(Failure::Setup(NOT_FOUND)),
+            _ => {}
         }
         let res = answer(res)?;
         parse_indexers(self.config.manager, &res).map_err(|e| match e {
             ListError::Refused => Failure::Refused,
-            _ => Failure::Other,
+            // Over the size cap is a real (if huge) list: not a setup error.
+            ListError::TooBig => Failure::Other,
+            _ => Failure::Setup(NOT_A_LIST),
         })
     }
 
@@ -478,7 +485,10 @@ fn unix_now() -> i64 {
 ///   reference (a private tracker's URLs can hold passkeys in the path).
 /// - The item's `link` (the manager's own download URL) is never kept.
 ///   Its `guid` is the reference for a public find, unless it points at
-///   the manager itself (`manager_host`).
+///   the manager itself (`manager_host`), equals the link, or has the
+///   shape of a manager's download URL on any host (see
+///   [`is_manager_download`]): the manager's links can name another host
+///   than the one configured (a reverse proxy, a Docker service name).
 pub fn to_found(item: Item, private: bool, manager_host: &str, now: i64) -> Option<Found> {
     let torznab::Kind::Torrent(hashes) = item.kind else {
         return None;
@@ -502,8 +512,11 @@ pub fn to_found(item: Item, private: bool, manager_host: &str, now: i64) -> Opti
         None
     } else {
         let link = item.link;
-        item.guid
-            .filter(|g| Some(g) != link.as_ref() && host_key(g).is_none_or(|h| h != manager_host))
+        item.guid.filter(|g| {
+            Some(g) != link.as_ref()
+                && host_key(g).is_none_or(|h| h != manager_host)
+                && !is_manager_download(g)
+        })
     };
     let published_at = item
         .published
@@ -517,6 +530,27 @@ pub fn to_found(item: Item, private: bool, manager_host: &str, now: i64) -> Opti
         });
     found.private_source = private;
     Some(found)
+}
+
+/// Whether `url` has the shape of a manager's proxied download link:
+/// Prowlarr's `…/<indexer id>/download` or Jackett's `…/dl/<indexer>/…`,
+/// on any host. The link points into the user's own manager, so it's
+/// never kept as a reference. Matching is on path segments, ignoring
+/// case; a URL that doesn't parse isn't a link.
+pub fn is_manager_download(url: &str) -> bool {
+    let Ok(u) = url::Url::parse(url) else {
+        return false;
+    };
+    let Some(segs) = u.path_segments() else {
+        return false;
+    };
+    let segs: Vec<&str> = segs.collect();
+    segs.windows(2).any(|w| {
+        (w[1].eq_ignore_ascii_case("download")
+            && !w[0].is_empty()
+            && w[0].bytes().all(|b| b.is_ascii_digit()))
+            || (w[0].eq_ignore_ascii_case("dl") && !w[1].is_empty())
+    })
 }
 
 /// Why an indexer list was refused.
@@ -620,10 +654,15 @@ fn prowlarr_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
                 if raw.protocol.as_deref() != Some("torrent") || raw.supports_rss == Some(false) {
                     continue;
                 }
-                out.push(Indexer {
-                    id: id.to_string(),
-                    private: raw.privacy.as_deref() != Some("public"),
-                });
+                let id = id.to_string();
+                // Deduplicated before the cap, so repeats can't crowd
+                // out real indexers.
+                if out.iter().all(|i: &Indexer| i.id != id) {
+                    out.push(Indexer {
+                        id,
+                        private: raw.privacy.as_deref() != Some("public"),
+                    });
+                }
             }
             // The rest is read, unkept, so the document is still checked.
             while seq.next_element::<IgnoredAny>()?.is_some() {}
@@ -685,6 +724,7 @@ fn jackett_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
     fn close(d: Draft, out: &mut Vec<Indexer>) {
         if let (Some(id), true) = (d.id, d.configured)
             && out.len() < MAX_INDEXERS
+            && out.iter().all(|i| i.id != id)
         {
             out.push(Indexer {
                 id,

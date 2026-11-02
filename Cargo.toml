@@ -28,6 +28,7 @@ lodestar-cluster = { path = "crates/cluster" }
 lodestar-api = { path = "crates/api" }
 lodestar-tracker-scrape = { path = "crates/tracker-scrape" }
 lodestar-sources-importers = { path = "crates/sources-importers" }
+lodestar-sources-feeds = { path = "crates/sources-feeds" }
 lodestar-sources-plugins = { path = "crates/sources-plugins" }
 lodestar-integrations = { path = "crates/integrations" }
 lodestar-log = { path = "crates/log" }

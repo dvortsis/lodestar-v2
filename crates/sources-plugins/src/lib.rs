@@ -49,7 +49,9 @@ impl Credentials for SourceCredentials {
     }
 }
 
-/// Fixed credentials, by name, for every plugin (tests and fixtures).
+/// Fixed credentials, by name, for every plugin. For tests and fixtures
+/// only: never wire it into the running app.
+#[doc(hidden)]
 #[derive(Clone, Default)]
 pub struct StaticCredentials(Arc<Vec<(String, Secret)>>);
 

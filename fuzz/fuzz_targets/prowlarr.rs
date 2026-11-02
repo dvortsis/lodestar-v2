@@ -8,7 +8,7 @@ use libfuzzer_sys::fuzz_target;
 use lodestar_sources_feeds::torznab;
 use lodestar_sources_plugins::prowlarr::{
     MAX_FUTURE, MAX_ID, MAX_INDEXERS, MAX_SIZE, MIN_PUBLISHED, Manager, PAGE_LIMITS,
-    parse_indexers, to_found,
+    is_manager_download, parse_indexers, to_found,
 };
 
 const NOW: i64 = 1_800_000_000;
@@ -46,7 +46,7 @@ fuzz_target!(|data: &[u8]| {
         let dates = MIN_PUBLISHED..=NOW + MAX_FUTURE;
         assert!(p.published_at.is_none_or(|t| dates.contains(&t)));
         if let Some(r) = &p.external_ref {
-            assert!(!private && Some(r) != link.as_ref());
+            assert!(!private && Some(r) != link.as_ref() && !is_manager_download(r));
         }
     });
 });

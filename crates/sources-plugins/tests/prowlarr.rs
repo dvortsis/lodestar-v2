@@ -15,7 +15,7 @@ use lodestar_sources::{
 use lodestar_sources_feeds::torznab::{Hashes, Item, Kind};
 use lodestar_sources_plugins::prowlarr::{
     self, Config, ConfigError, ListError, MAX_INDEXERS, MAX_SIZE, Manager, Prowlarr,
-    parse_indexers, to_found,
+    is_manager_download, parse_indexers, to_found,
 };
 use lodestar_sources_plugins::{Credentials, StaticCredentials};
 use lodestar_store::SourceId;
@@ -219,6 +219,17 @@ async fn a_refused_key_stops_the_plugin() {
             Manager::Jackett,
             "jackett_refused",
         ),
+        // On an indexer page too: Torznab error 101, and a plain 403.
+        (
+            "http://prowlarr.example:9696",
+            Manager::Prowlarr,
+            "prowlarr_page_refused",
+        ),
+        (
+            "http://jackett.example:9117",
+            Manager::Jackett,
+            "jackett_page_403",
+        ),
     ] {
         let e = ends_with_error(plugin(url, manager), Some(case)).await;
         assert!(e.contains("refused the API key"), "{e}");
@@ -227,13 +238,21 @@ async fn a_refused_key_stops_the_plugin() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_redirect_asks_for_the_address_to_be_fixed() {
-    let p = plugin("http://prowlarr.example:9696", Manager::Prowlarr);
-    let e = ends_with_error(p, Some("prowlarr_redirect")).await;
-    assert!(
-        e.starts_with("needs setup") && !e.contains("https://"),
-        "{e}"
-    );
+async fn a_wrong_address_or_manager_asks_for_setup() {
+    // A redirect, a 404, and an HTML page where the list should be (a
+    // Jackett address with Prowlarr chosen) each stop the plugin at once.
+    for case in [
+        "prowlarr_redirect",
+        "prowlarr_not_found",
+        "prowlarr_not_a_list",
+    ] {
+        let p = plugin("http://prowlarr.example:9696", Manager::Prowlarr);
+        let e = ends_with_error(p, Some(case)).await;
+        assert!(
+            e.starts_with("needs setup") && !e.contains("https://") && !e.contains("html"),
+            "{case}: {e}"
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -488,6 +507,59 @@ fn item(kind: Kind) -> Item {
 const NOW: i64 = 1_800_000_000;
 
 #[test]
+fn manager_download_links_are_never_references() {
+    // The manager's links can name another host than the configured one
+    // (a reverse proxy's address, a Docker service name).
+    for guid in [
+        "https://prowlarr.mydomain.net/1/download?link=YmFyYmF6&file=X",
+        "http://prowlarr:9696/prowlarr/12/download?link=x",
+        "http://jackett.mydomain.net/dl/example-semi/?path=abc&file=Tears",
+        "http://10.0.0.2:9117/jackett/DL/x/",
+    ] {
+        assert!(is_manager_download(guid), "{guid}");
+        let mut it = item(Kind::Torrent(Hashes {
+            v1: Some(InfoHash([7; 20])),
+            v2: None,
+        }));
+        it.guid = Some(guid.into());
+        let f = to_found(it, false, "192.168.1.5", NOW).unwrap();
+        assert_eq!(
+            f.provenance.as_deref().unwrap().external_ref,
+            None,
+            "{guid}"
+        );
+    }
+    for keep in [
+        "https://public.example/torrent/1234",
+        "https://public.example/download.php?id=3",
+        "https://public.example/downloads/abc",
+        "urn:example:1",
+    ] {
+        assert!(!is_manager_download(keep), "{keep}");
+    }
+}
+
+#[test]
+fn duplicates_never_crowd_out_the_cap() {
+    let dupes = r#"<indexer id="d" configured="true"/>"#.repeat(MAX_INDEXERS + 5);
+    let body = format!(r#"<indexers>{dupes}<indexer id="late" configured="true"/></indexers>"#);
+    let ids: Vec<_> = parse_indexers(Manager::Jackett, body.as_bytes())
+        .unwrap()
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(ids, ["d", "late"]);
+    let dupes = vec![r#"{"id":1,"enable":true,"protocol":"torrent"}"#; MAX_INDEXERS + 5].join(",");
+    let body = format!(r#"[{dupes},{{"id":2,"enable":true,"protocol":"torrent"}}]"#);
+    let ids: Vec<_> = parse_indexers(Manager::Prowlarr, body.as_bytes())
+        .unwrap()
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(ids, ["1", "2"]);
+}
+
+#[test]
 fn usenet_items_are_not_torrents() {
     assert!(to_found(item(Kind::Usenet), false, "m.example", NOW).is_none());
 }
@@ -497,7 +569,9 @@ prop_compose! {
         v1 in proptest::option::of(any::<[u8; 20]>()),
         size in any::<Option<u64>>(),
         published in any::<Option<i64>>(),
-        guid in proptest::option::of("(https?://(m|t)\\.example/[a-z0-9.]{0,8}|urn:x:[a-z]{0,4})"),
+        guid in proptest::option::of(
+            "(https?://(m|t|proxy)\\.example/[a-z0-9.]{0,8}|https?://[a-z]{1,6}\\.example(/[a-z]{1,4})?/([0-9]{1,3}/download|dl/[a-z]{1,6}/)(\\?link=[a-z]{1,6})?|urn:x:[a-z]{0,4})"
+        ),
         same in any::<bool>(),
     ) -> Item {
         let mut it = item(Kind::Torrent(Hashes { v1: v1.map(InfoHash), v2: None }));
@@ -528,6 +602,7 @@ proptest! {
                 prop_assert!(p.published_at.is_none_or(|t| dates.contains(&t)));
                 if let Some(r) = &p.external_ref {
                     prop_assert!(!private);
+                    prop_assert!(!is_manager_download(r), "{r}");
                     prop_assert!(!r.contains("m.example"));
                     prop_assert!(Some(r) != link.as_ref());
                 }
