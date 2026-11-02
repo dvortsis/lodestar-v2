@@ -487,14 +487,18 @@ async fn blocked_by_source_stops_requests_and_still_cancels() {
     let mut fake = FakeCtx::with_fetch(plugin.as_ref(), src(), replayer.clone());
     let running = fake.start(plugin);
     wait_for("condition", || replayer.requests().len() == 1).await;
-    let host = "feed.example";
+    // A rate limit blocks the polled unit, not the whole host (SRC-14b).
     wait_for("condition", || {
         matches!(
-            fake.limiter.state(host, Instant::now()),
+            fake.limiter.unit_state(URL, Instant::now()),
             lodestar_sources::HostState::Blocked { .. }
         )
     })
     .await;
+    assert_eq!(
+        fake.limiter.state("feed.example", Instant::now()),
+        lodestar_sources::HostState::Ready
+    );
     // Nothing more reaches the source while it's blocked. The clock is
     // paused, so this advances virtual time to just short of the block's
     // end rather than waiting.

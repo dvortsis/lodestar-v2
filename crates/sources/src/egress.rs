@@ -27,7 +27,7 @@
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -99,8 +99,14 @@ pub fn on_lan(ip: IpAddr) -> bool {
 }
 
 /// Whether a proxy can be at `ip`: not the unspecified address (which
-/// connects to this machine), multicast or broadcast.
+/// connects to this machine), multicast or broadcast. An IPv4-mapped IPv6
+/// address (`::ffff:0.0.0.0`) is judged as the IPv4 address it carries,
+/// which is where a connection to it goes.
 pub fn usable_proxy(ip: IpAddr) -> bool {
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        IpAddr::V4(_) => ip,
+    };
     !ip.is_unspecified() && !ip.is_multicast() && ip != IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
 }
 
@@ -363,6 +369,21 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SOCKS_PROBE_TTL: Duration = Duration::from_secs(10);
 /// How many redirects [`send_following`] follows.
 pub const MAX_REDIRECTS: usize = 5;
+/// While the route is down, the first refusal before sending comes back
+/// after this long, and each refusal in a row doubles it, up to
+/// [`DOWN_DELAY_MAX`]. A refusal comes back sooner when the route comes
+/// up. This paces a plugin's retry loop while the kill switch is down
+/// (SRC-14b), which a host's back-off can't: the host isn't at fault.
+pub const DOWN_DELAY_MIN: Duration = Duration::from_secs(1);
+/// The longest a refusal waits before it comes back.
+pub const DOWN_DELAY_MAX: Duration = Duration::from_secs(30);
+
+/// How long the refusal that follows `streak` refusals in a row waits.
+pub fn down_delay(streak: u32) -> Duration {
+    DOWN_DELAY_MIN
+        .saturating_mul(1u32 << streak.min(16))
+        .min(DOWN_DELAY_MAX)
+}
 
 /// Builds every plugin's HTTP client.
 #[derive(Clone)]
@@ -641,6 +662,9 @@ pub struct PluginEgress {
     probing: tokio::sync::Mutex<()>,
     notice: Option<&'static str>,
     counters: Counters,
+    /// Refusals before sending since the route last let a request
+    /// through, for [`down_delay`].
+    down_streak: AtomicU32,
 }
 
 impl fmt::Debug for PluginEgress {
@@ -672,6 +696,7 @@ impl PluginEgress {
             probing: tokio::sync::Mutex::new(()),
             notice: None,
             counters: Counters::default(),
+            down_streak: Default::default(),
         };
         match egress.client {
             Err(reason) => egress.publish(RouteState::Down(reason)),
@@ -770,9 +795,28 @@ impl PluginEgress {
             return Err(refused(&e));
         }
         let client = match self.gate().await {
-            Ok(c) => c,
+            Ok(c) => {
+                self.down_streak.store(0, Ordering::Relaxed);
+                c
+            }
             Err(reason) => {
                 Counters::bump(&self.counters.kill_switch_refusals);
+                // Paced, so a plugin that retries at once can't spin
+                // while the route is down; cut short when it comes up.
+                // Shutdown relies on the plugin dropping this future (its
+                // `select!` on the shutdown signal): one that doesn't waits
+                // up to `DOWN_DELAY_MAX` (30 s) here and is aborted at the
+                // plugin stop timeout (15 s) instead.
+                // Saturating, and a lost update between concurrent
+                // refusals only shortens one wait.
+                let streak = self.down_streak.load(Ordering::Relaxed);
+                self.down_streak
+                    .store(streak.saturating_add(1), Ordering::Relaxed);
+                let mut up = self.state.subscribe();
+                tokio::select! {
+                    () = tokio::time::sleep(down_delay(streak)) => {}
+                    _ = up.wait_for(|s| *s == RouteState::Up) => {}
+                }
                 return Err(HttpError::EgressDown(reason.to_string()));
             }
         };
