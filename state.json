@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T00:20:00Z",
+  "updated_at": "2026-11-02T00:31:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2266,10 +2266,13 @@
       "launched": "2026-11-02T00:05Z"
     },
     "SRC-6": {
-      "status": "building",
+      "status": "changes",
       "model": "opus",
       "session": "session_01MMjhnD7opuLZGiYgUPxKba",
-      "launched": "2026-11-01T23:35Z"
+      "launched": "2026-11-01T23:35Z",
+      "pr": 363,
+      "head": "ff1438f3",
+      "note": "Opus review MERGE + required fix: external_ref credential/host parsing; polish (param values, bidi, \\r copy, dup field, zero hash)"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3301,6 +3304,11 @@
       "id": "note-subscriptions-ssrf",
       "status": "to-send",
       "text": "Security note: the blocklist-subscription fetcher (crates/lodestar/src/subscriptions.rs) used a plain HTTP client that bypassed the §16 SSRF guard (private/metadata hosts, redirect hops). No API could add a subscription before, so it wasn't reachable; #362 (B-subscriptions-api) adds the subscribe route, and the runner required routing fetches through the guard before merge. Also: a password-gated \"accept narrowed version\" is now bound to both the applied and held versions."
+    },
+    {
+      "id": "flag-src6-brief",
+      "status": "to-send",
+      "text": "§2.19 from SRC-6 (#363, Torznab/Newznab parser): golden fixtures are hand-written in real Prowlarr/Jackett/Newznab shapes (nothing recorded); Newznab poster (uploader) is not kept; non-http references kept only as opaque ids; credentials in feed links are stripped before anything is stored."
     }
   ],
   "external_gates": {
