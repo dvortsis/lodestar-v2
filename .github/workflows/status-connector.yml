@@ -36,19 +36,26 @@ jobs:
     needs: test
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # A named environment lets the owner require approval before a deploy (Settings, Environments).
+    environment: status-connector-deploy
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Only whether the secrets exist is visible to every step. The token values are given to the deploy step alone.
+      HAVE_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
     defaults:
       run:
         working-directory: tools/status-connector
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Skip when the Cloudflare secrets are not set
-        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
+        if: env.HAVE_CLOUDFLARE != 'true'
         run: echo "CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is not set; skipping the deploy."
+      # Install runs package scripts, so it runs before any Cloudflare credential is in the environment.
+      - name: Install
+        if: env.HAVE_CLOUDFLARE == 'true'
+        run: npm ci
       - name: Deploy
-        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
-        run: |
-          npm ci
-          npx wrangler deploy
+        if: env.HAVE_CLOUDFLARE == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy

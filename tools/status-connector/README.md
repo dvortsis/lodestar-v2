@@ -26,7 +26,7 @@ It doesn't ask agents to report progress. It reads the trace every agent leaves:
 | `CLOUDFLARE_API_TOKEN` | A Cloudflare API token from the "Edit Cloudflare Workers" template |
 | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account id (Workers & Pages, right-hand side) |
 
-Without those secrets the workflow still runs the tests and skips the deploy. The Worker's own two secrets (below) are kept in Cloudflare and survive redeploys.
+The deploy runs in a GitHub environment named `status-connector-deploy`. GitHub creates it on the first deploy; you can add required reviewers to it under Settings, Environments. Without the two secrets the workflow still runs the tests and skips the deploy. The Worker's own two secrets (below) are kept in Cloudflare and survive redeploys.
 
 ## Deploy from a terminal
 You need Node 20 or newer and a free Cloudflare account. From this folder:
@@ -46,7 +46,7 @@ npx wrangler secret put PATH_SECRET
 npx wrangler deploy
 ```
 - `GITHUB_TOKEN`: a fine-grained token for this repository only, with Contents (read-only) and Pull requests (read-only).
-- `PATH_SECRET`: a long random string, for example the output of `openssl rand -hex 24`. It is the last part of the connector URL and works as its password.
+- `PATH_SECRET`: a long random string of at least 32 characters, for example the output of `openssl rand -hex 24`. It is the last part of the connector URL and works as its password. The Worker serves nothing while it is unset or shorter than 32 characters.
 
 ## Add it to claude.ai
 Settings, Connectors, Add custom connector.
@@ -55,7 +55,7 @@ Settings, Connectors, Add custom connector.
 
 ## Limits
 - Read-only. The token can't write and the server never calls a write endpoint.
-- Answers are cached for 60 seconds, about 9 GitHub calls per refresh at most.
+- Answers are cached in Cloudflare for 60 seconds (older pages of closed pull requests for ten minutes), and a GitHub error is remembered for 30 seconds. See `docs/decisions/2026-11-02-status-connector.md` for the quota limits and how to rotate the secret and token.
 - Anyone with the URL can read slice names and pull request titles. Keep it private. To stop it, delete the connector in claude.ai and the Worker in Cloudflare, and revoke the token.
 - Tools: `plan_nodes`, `plan_road`, `plan_activity`, `plan_recent`, `plan_meta`. None takes arguments.
 

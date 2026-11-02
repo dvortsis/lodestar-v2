@@ -8,6 +8,7 @@ export interface Inputs {
   external: Record<string, { check?: string }>;
   runnerState: any | null;       // runner-state/state.json (optional; Claude runner only)
   mergedPRs: PR[];
+  closedPRs?: PR[];              // closed without merging
   openPRs: PR[];
   branches: string[];            // ids from refs/heads/slice/<id>
   mainSha: string;
@@ -55,9 +56,11 @@ export function place(id: string): string {
 const DONE = new Set(['merged', 'done_elsewhere', 'merged_elsewhere', 'passed', 'accepted', 'closed', 'merged-into-L5', 'ready-for-rc', 'done']);
 const ACTIVE_PFX = ['building', 'review', 'ci', 'launched', 'changes', 'planning', 'pr-review'];
 const STATES = ['done', 'closed', 'active', 'ready', 'waiting', 'you', 'held', 'planned', 'pending'];
-const sliceIdOf = (pr: PR): string | null => {
-  const m = /^([\w.-]+):/.exec(pr.title.trim()); if (m) return m[1];
-  const b = /^slice\/(.+)$/.exec(pr.head_ref || ''); return b ? b[1] : null;
+// "SRC-4: x", "SRC-4/SRC-5: x" and "SRC-4, SRC-5: x" all name slices; so does a head branch slice/<id>.
+const sliceIdsOf = (pr: PR): string[] => {
+  const m = /^([\w.,\/+ -]+?):/.exec(pr.title.trim());
+  if (m) { const ids = m[1].split(/[\/,+\s]+/).filter((x) => /^[\w.-]+$/.test(x)); if (ids.length) return ids; }
+  const b = /^slice\/(.+)$/.exec(pr.head_ref || ''); return b ? [b[1]] : [];
 };
 const agentOf = (pr: PR) => (/claude\.ai\/code|Generated with \[Claude Code\]/.test(pr.body || '') || /^claude\//.test(pr.head_ref || '') ? 'claude' : 'other');
 
@@ -68,10 +71,12 @@ export function buildPlan(inp: Inputs) {
   const HELD = new Set(meta.held);
   const mergedById: Record<string, { pr: number; agent: string }> = {};
   const mergedNums = new Set<number>();
-  for (const p of inp.mergedPRs) { mergedNums.add(p.number); const id = sliceIdOf(p); if (id) mergedById[id] = { pr: p.number, agent: agentOf(p) }; }
+  for (const p of inp.mergedPRs) { mergedNums.add(p.number); for (const id of sliceIdsOf(p)) mergedById[id] = { pr: p.number, agent: agentOf(p) }; }
   const openById: Record<string, number> = {};
-  for (const p of inp.openPRs) { const id = sliceIdOf(p); if (id) openById[id] = p.number; }
-  const started = new Set(inp.branches);
+  for (const p of inp.openPRs) for (const id of sliceIdsOf(p)) openById[id] = p.number;
+  // a branch that only has closed, unmerged PRs is abandoned work, not work in progress
+  const abandoned = new Set<string>(); for (const p of inp.closedPRs || []) for (const id of sliceIdsOf(p)) abandoned.add(id);
+  const started = new Set(inp.branches.filter((b) => !abandoned.has(b)));
   const ids = new Set<string>([...SL.map((s) => s.id), ...Object.keys(S)]);
 
   const cls = (i: string): string => {
