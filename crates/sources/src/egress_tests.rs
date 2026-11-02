@@ -917,6 +917,62 @@ async fn the_kill_switch_abandons_a_request_in_flight_and_refuses_until_up() {
     monitor.abort();
 }
 
+/// While the route is down, refusals come back paced: 1 s, doubling to
+/// 30 s, cut short when the route comes up, and starting over once a
+/// request goes through (SRC-14b).
+#[tokio::test(start_paused = true)]
+async fn refusals_while_down_are_paced_and_bounded() {
+    assert_eq!(down_delay(0), DOWN_DELAY_MIN);
+    assert_eq!(down_delay(u32::MAX), DOWN_DELAY_MAX);
+    let switch = Arc::new(Switch(AtomicBool::new(false)));
+    let client = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        DEADLINE,
+        Scripted::new(&[]),
+        &Route::Direct,
+    )
+    .unwrap();
+    let egress = Arc::new(PluginEgress::new(
+        "p",
+        RouteKind::Interface,
+        Ok(client),
+        Arc::clone(&switch) as Arc<dyn RouteProbe>,
+        lan(),
+    ));
+    let url = format!("http://{}/", unused_port_addr());
+    let timed = |egress: Arc<PluginEgress>, url: String| async move {
+        let t = Instant::now();
+        let r = egress.fetch(&Request::get(url)).await;
+        (r, t.elapsed())
+    };
+    let mut waits = Vec::new();
+    for _ in 0..7 {
+        let (r, took) = timed(Arc::clone(&egress), url.clone()).await;
+        egress_down(r);
+        waits.push(took.as_secs());
+    }
+    assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30]);
+    assert_eq!(egress.status().counters.kill_switch_refusals, 7);
+
+    // The route coming up ends the wait early.
+    let pending = tokio::spawn(timed(Arc::clone(&egress), url.clone()));
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    switch.0.store(true, Ordering::SeqCst);
+    egress.check_now().await;
+    let (r, took) = pending.await.unwrap();
+    egress_down(r);
+    assert_eq!(took.as_secs(), 5);
+
+    // A request that goes through (here to a closed port) starts the
+    // pacing over.
+    let (r, _) = timed(Arc::clone(&egress), url.clone()).await;
+    transport(r);
+    switch.0.store(false, Ordering::SeqCst);
+    let (r, took) = timed(Arc::clone(&egress), url).await;
+    egress_down(r);
+    assert_eq!(took, DOWN_DELAY_MIN);
+}
+
 // ---------------------------------------------------------------- policy
 
 #[tokio::test]
@@ -1208,11 +1264,15 @@ async fn auto_dns_follows_the_endpoints_not_the_proxys_address() {
     }
 }
 
-#[tokio::test]
+// Paused: each refusal waits `DOWN_DELAY_MIN` before it comes back.
+#[tokio::test(start_paused = true)]
 async fn a_proxy_by_name_resolves_once_and_an_unusable_one_stays_down() {
     let resolver = Scripted::new(&[
         ("gluetun", &[&["172.18.0.5"]]),
-        ("nowhere", &[&["0.0.0.0", "224.0.0.1"]]),
+        (
+            "nowhere",
+            &[&["0.0.0.0", "224.0.0.1", "::ffff:0.0.0.0", "::ffff:224.0.0.1"]],
+        ),
         ("mixed", &[&["0.0.0.0", "172.18.0.9"]]),
     ]);
     let f = factory(resolver.clone());
@@ -1256,6 +1316,10 @@ async fn a_proxy_by_name_resolves_once_and_an_unusable_one_stays_down() {
         "::",
         "239.1.1.1",
         "255.255.255.255",
+        // IPv4-mapped: judged as the IPv4 address they carry.
+        "::ffff:0.0.0.0",
+        "::ffff:224.0.0.1",
+        "::ffff:255.255.255.255",
     ] {
         let (e, route) = f.build_socks5("p", &spec(host, None), lan()).await;
         assert_eq!(route, None, "{host}");

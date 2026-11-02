@@ -1433,6 +1433,8 @@ mod tests {
             "socks5 0.0.0.0 1080 auto",
             "socks5 :: 1080 auto",
             "socks5 239.1.1.1 1080 auto",
+            "socks5 ::ffff:0.0.0.0 1080 auto",
+            "socks5 ::ffff:224.0.0.1 1080 auto",
             "interface wg0",
         ] {
             assert_eq!(EgressSetting::decode(bad), None, "{bad}");

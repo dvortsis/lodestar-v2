@@ -485,7 +485,14 @@ pub fn parse_proxy(text: &str) -> Option<(String, u16)> {
     }
     let port: u16 = port.parse().ok().filter(|p| *p != 0)?;
     // Not the unspecified address (this machine), multicast or broadcast.
+    // An IPv4-mapped address is judged as the IPv4 address it carries
+    // (`[::ffff:0.0.0.0]` connects to this machine too), as
+    // `lodestar_sources::egress::usable_proxy` judges it.
     let usable = |ip: std::net::IpAddr| {
+        let ip = match ip {
+            std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, std::net::IpAddr::V4),
+            std::net::IpAddr::V4(_) => ip,
+        };
         !ip.is_unspecified()
             && !ip.is_multicast()
             && ip != std::net::IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
@@ -900,6 +907,9 @@ mod tests {
             "224.0.0.1:1080",
             "[ff02::1]:1080",
             "255.255.255.255:1080",
+            "[::ffff:0.0.0.0]:1080",
+            "[::ffff:224.0.0.1]:1080",
+            "[::ffff:255.255.255.255]:1080",
             "999.1.1.1:80",
             ":80",
         ] {
