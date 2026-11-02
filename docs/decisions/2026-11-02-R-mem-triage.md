@@ -1,4 +1,4 @@
-# R-mem-triage decisions (triage of rc.2's anonymous-memory slope)
+# R-mem-triage decisions (#402)
 
 Runner brief R-mem-triage, 2026-11-02, Track R. rc.2 is `release/v0.5.1` at 6be95525. The Linux Docker soak r3 measured its `private_bytes` slope (the cgroup's `anon`) at 6.66 MiB/h, 95% CI [4.62, 8.70], over baseline hours 12–16, about 10–14 KiB per stored torrent. This file records what was measured, what was ruled out and what is still open, plus one small leak fix. **It does not explain or fix r3's slope.**
 
@@ -76,8 +76,12 @@ Everything below is bounded, except where marked.
   - Intake grants the sighting a new lease. The pool drops it as a recent duplicate, and nothing ended the lease, so `LeaseTable` and `WorkerLeases` grew by about 200 B per such sighting. CR-0 saw about 2 an hour, so this isn't the slope.
   - **The fix:** the pool now calls a new `Funnel::duplicate` hook when it turns away a non-reply sighting as recent (`crates/sources/src/pool.rs`, `Pool::on_discovery`).
   - **The default hook does nothing.** Pool-only users such as `crawler-sim` see a stored key again with no have-filter in front of it, so its goldens are unchanged.
-  - **The worker's funnel ends the lease as `Loss::Invalid`** (`crates/pipeline/src/worker.rs`, `WorkerFunnel::duplicate`). Inside the pipeline that is the only way such a sighting gets a new lease: stored keys stop at the have-filter, blocked ones are refused at intake, and a key still in flight is held, which makes its sighting a reply.
-  - **The funnel effect:** the sighting was already counted as a harvest at grant, so the loss balances it. Insights' funnel gains one `Invalid` loss per such sighting, where before that harvest never had an outcome.
+  - **The worker's funnel ends the lease as `Loss::Invalid`** (`crates/pipeline/src/worker.rs`, `WorkerFunnel::duplicate`), **whatever the first fetch's outcome was.** Prepare rejecting the dictionary is the common case, but not the only one. A key also sits in the pool's recent set with its lease ended, outside the have-filter and not refused at intake, after:
+    - the writer refused it for a stopped source (ended as `Evicted`, `writer.rs`'s `outcome.refused`);
+    - a Drop filter rule at commit (ended as `Blocked`, but put in neither the held set nor the blocklist);
+    - the writer's retry channel, which skips the have-filter for a key committed in the meantime.
+  - **So Insights' loss-reason share slightly overcounts `invalid`.** That's accepted (runner, on review): the lease must end, prepare rejection is the common case, and a new `Loss` variant or tracking the first loss would widen the release delta.
+  - **The funnel effect:** the sighting was already counted as a harvest at grant, so the loss balances it. Each non-reply sighting within the pool's recent window is its own harvest-and-loss pair, possibly more than once per key, where before its leaked lease made later sightings `Held` and uncounted.
 - **A saved queue larger than the pool's cap kept the leases of the keys it dropped.**
   - `Pool::restore` now ends each dropped key's restored lease as `Loss::Evicted` ("dropped from the full queue"). This happens at most once per start.
 - **Left as designed:** the writer's `STORE_WRITE_FAILED` path keeps the failed batch's leases on purpose, so its keys aren't fetched again in that run (`crates/pipeline/src/writer.rs`). It is bounded by store failures.

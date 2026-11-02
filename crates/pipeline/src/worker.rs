@@ -100,11 +100,21 @@ impl Funnel for WorkerFunnel {
     }
 
     /// Intake granted the sighting a new lease (a reply would have been
-    /// held), and the pool fetched the key lately. It isn't stored (stored
-    /// keys stop at the have-filter) or blocked (refused at intake), so
-    /// prepare found its dictionary invalid: the new lease ends as that
-    /// loss did. Without this nothing ends it, and the lease tables grow
-    /// by one entry per such sighting (R-mem-triage).
+    /// held), and the pool fetched the key lately but didn't store it.
+    /// Without this nothing ends the lease, and the lease tables grow by
+    /// one entry per such sighting (R-mem-triage).
+    ///
+    /// The lease ends as `Invalid` whatever the first fetch's outcome was.
+    /// Prepare rejecting the dictionary is the common case, but a key also
+    /// gets here after the writer refused it for a stopped source
+    /// (`Evicted`), after a Drop rule at commit (`Blocked`, which puts it
+    /// in neither the held set nor the blocklist), or through the writer's
+    /// retry channel, which skips the have-filter for a key committed in
+    /// the meantime. Insights' loss-reason share therefore overcounts
+    /// `invalid` slightly; that's accepted, since the lease has to end and
+    /// tracking the first loss isn't worth it. Each such sighting within
+    /// the pool's recent window is its own harvest and loss, possibly more
+    /// than once per key.
     fn duplicate(&self, key: &InfoHash, _cohort: i64, _source: SourceId) {
         if let Some(token) = self.leases.take(key) {
             self.coordinator.lost(key, token, Loss::Invalid);
