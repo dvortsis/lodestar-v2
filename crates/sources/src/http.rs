@@ -106,6 +106,18 @@ pub enum HttpError {
     Unrecorded(String),
     /// No HTTP client is configured for this plugin (SRC-5 supplies one).
     NoEgress,
+    /// The plugin's egress route is down, so its kill switch refused the
+    /// request or abandoned it in flight. The host isn't at fault, so this
+    /// doesn't back it off: the route coming back is what matters.
+    ///
+    /// **Plugin contract:** while the route is down the host isn't backed
+    /// off, so a plugin must not retry in a loop: it waits at least its
+    /// poll interval before trying again. The plugin's egress paces it
+    /// too, so the contract doesn't rest on the plugin alone: a refusal
+    /// before sending comes back only after a delay that grows with each
+    /// refusal in a row, up to `egress::DOWN_DELAY_MAX`, or sooner when
+    /// the route comes back (SRC-14b).
+    EgressDown(String),
 }
 
 impl std::fmt::Display for HttpError {
@@ -116,6 +128,7 @@ impl std::fmt::Display for HttpError {
             HttpError::Transport(e) => write!(f, "transport: {e}"),
             HttpError::Unrecorded(e) => write!(f, "no recorded exchange: {e}"),
             HttpError::NoEgress => f.write_str("no HTTP egress configured for this plugin"),
+            HttpError::EgressDown(e) => write!(f, "egress down: {e}"),
         }
     }
 }
@@ -304,6 +317,11 @@ struct Host {
     blocked_until: Option<Instant>,
     /// Full-scrape grants in the last 24 h, oldest first.
     scrapes: VecDeque<Instant>,
+    /// The poll unit whose failure was this host's last answer
+    /// ([`HostLimiter::record_poll`]): a different unit failing next
+    /// means the host itself is failing. With it, the time its
+    /// `Retry-After` asked for, if it gave one.
+    unit_failed: Option<(String, Option<Instant>)>,
 }
 
 impl Host {
@@ -314,6 +332,7 @@ impl Host {
             retry_at: None,
             blocked_until: None,
             scrapes: VecDeque::new(),
+            unit_failed: None,
         }
     }
 
@@ -366,7 +385,9 @@ impl Hosts {
     /// host that answered held a token a moment ago, so its outcome is
     /// never dropped for want of room. The map can pass [`MAX_HOSTS`]
     /// only by hosts with requests in flight, and shrinks back as they go
-    /// idle.
+    /// idle. A poll unit's entry is made through the capped
+    /// [`entry`](Self::entry) first ([`HostLimiter::record_poll`]), so
+    /// units never pass it.
     fn entry_for_answer(&mut self, host: &str, now: Instant) -> &mut Host {
         self.map
             .entry(host.to_owned())
@@ -542,8 +563,18 @@ impl HostLimiter {
     }
 
     pub fn state(&self, host: &str, now: Instant) -> HostState {
+        self.state_of(host, now)
+    }
+
+    /// A polled unit's own state: what its answers earned it
+    /// ([`record_poll`](Self::record_poll)), apart from its host's.
+    pub fn unit_state(&self, unit: &str, now: Instant) -> HostState {
+        self.state_of(&unit_key(unit), now)
+    }
+
+    fn state_of(&self, key: &str, now: Instant) -> HostState {
         let hosts = self.lock();
-        let Some(h) = hosts.map.get(host) else {
+        let Some(h) = hosts.map.get(key) else {
             return HostState::Ready;
         };
         match h.hold(now) {
@@ -556,6 +587,92 @@ impl HostLimiter {
                 failures: h.failures,
             },
             None => HostState::Ready,
+        }
+    }
+
+    /// The hold on polled `unit`'s own pacing: a block or back-off its
+    /// answers earned ([`record_poll`](Self::record_poll)).
+    fn unit_hold(&self, unit: &str, now: Instant) -> Option<Wait> {
+        self.lock().map.get(&unit_key(unit))?.hold(now)
+    }
+
+    /// Feeds the answer to a poll of `unit` on `host` into the pacing.
+    /// What only that unit earned stays on it (SRC-14b): a 429 or a 503
+    /// with `Retry-After` blocks the unit, and a 5xx or a 429 without one
+    /// backs it off, so one indexer behind a manager that rate-limits us
+    /// doesn't stop the manager's others. What says the host itself is
+    /// failing stays on the host: a transport failure (connect, reset,
+    /// timeout) and a 401 or 403 (a key the whole host refuses), as in
+    /// [`record`](Self::record). A normal answer resets both.
+    ///
+    /// **Two different units failing in a row** (a 5xx or a rate limit,
+    /// with no normal answer between) is the host failing, not one unit:
+    /// the host backs off too, so a manager that's down behind a reverse
+    /// proxy isn't asked once per unit per back-off step. And when the
+    /// table has no room for the unit ([`MAX_HOSTS`]), the answer goes
+    /// on the host, the safer side.
+    pub fn record_poll(
+        &self,
+        host: &str,
+        unit: &str,
+        result: &Result<Response, HttpError>,
+        now: Instant,
+    ) {
+        let res = match result {
+            Ok(res) if !matches!(res.status, 401 | 403) => res,
+            _ => return self.record(host, result, now),
+        };
+        let key = unit_key(unit);
+        let verdict = classify(res);
+        // The unit's entry, made within the cap (or the host takes it).
+        if self.lock().entry(&key, now, &self.limits).is_err() {
+            return self.record(host, result, now);
+        }
+        // What this answer's `Retry-After` asked for, if anything.
+        let asked = match verdict {
+            Verdict::Blocked(Some(d)) => Some(later(now, d)),
+            _ => None,
+        };
+        // `Some(previous unit's Retry-After)` when a different unit failed
+        // just before this one: the host is failing.
+        let host_failing = {
+            let mut hosts = self.lock();
+            let h = hosts.entry_for_answer(host, now);
+            if verdict == Verdict::Ok {
+                h.unit_failed = None;
+                None
+            } else {
+                let other = h
+                    .unit_failed
+                    .take()
+                    .filter(|(u, _)| u != unit)
+                    .map(|(_, until)| until);
+                h.unit_failed = Some((unit.to_owned(), asked));
+                other
+            }
+        };
+        match verdict {
+            Verdict::Ok => {
+                self.success(host);
+                self.success(&key);
+            }
+            Verdict::Retry => {
+                self.failure(&key, now);
+            }
+            Verdict::Blocked(d) => {
+                let backoff = self.failure(&key, now);
+                let wait = d.map_or(self.limits.backoff.max, |d| d.max(backoff));
+                self.block(&key, later(now, wait), now);
+            }
+        }
+        if let Some(previous) = host_failing {
+            self.failure(host, now);
+            // Both asked to wait: the host is rate-limiting us as a whole.
+            // Honour it on the host, to the earlier of the two times, so
+            // one unit's long `Retry-After` can't stretch the host's.
+            if let (Some(a), Some(b)) = (previous, asked) {
+                self.block(host, a.min(b), now);
+            }
         }
     }
 
@@ -576,9 +693,19 @@ impl HostLimiter {
             Err(HttpError::Transport(_)) => {
                 self.failure(host, now);
             }
+            // Not the host's fault (a kill switch, a missing client, a
+            // block already recorded).
             Err(_) => {}
         }
     }
+}
+
+/// Where a polled unit's own back-off and blocks are kept in the
+/// limiter's host table: a host key never holds a space, so the two
+/// never meet. Units count toward [`MAX_HOSTS`] and are forgotten when
+/// idle, as hosts are.
+fn unit_key(unit: &str) -> String {
+    format!("unit {unit}")
 }
 
 /// A [`Fetch`] behind a [`HostLimiter`]: the only way a plugin sends HTTP.
@@ -605,20 +732,43 @@ impl<F: Fetch> Client<F> {
         &self.limiter
     }
 
-    /// One poll of `unit` (a feed URL, an indexer id): waits for the poll
-    /// gate ([`HostLimiter::try_poll`]), then sends as [`send`](Self::send).
+    /// One poll of `unit` (a feed URL, an indexer id): waits out the
+    /// unit's own back-off and the poll gate ([`HostLimiter::try_poll`]),
+    /// then sends as [`send`](Self::send) does, but records the answer
+    /// with [`HostLimiter::record_poll`]: a rate limit or a 5xx backs off
+    /// the unit, not its whole host. A blocked unit's poll is taken, then
+    /// fails with [`HttpError::Blocked`], as a blocked host's does, so a
+    /// plugin that retries at once is still paced by its poll interval.
+    ///
     /// This is how a plugin polls. Each plugin's contract test checks the
     /// spacing of its polls from the replayer's timestamps (SRC-7's
     /// pattern), so a plugin that polls through `send` instead is caught.
     /// Cancel safe until the gate opens; after that the poll counts.
     pub async fn poll(&self, unit: &str, req: &Request) -> Result<Response, HttpError> {
+        let host = req.host().ok_or(HttpError::BadUrl)?;
         loop {
             match self.limiter.try_poll(unit, Instant::now()) {
                 Ok(()) => break,
                 Err(w) => sleep_until(w.until).await,
             }
         }
-        self.send(req).await
+        // After the poll is taken, so the poll interval paces a plugin
+        // that retries a blocked unit at once.
+        loop {
+            match self.limiter.unit_hold(unit, Instant::now()) {
+                None => break,
+                Some(Wait {
+                    until,
+                    reason: WaitReason::Blocked,
+                }) => return Err(HttpError::Blocked { until }),
+                Some(w) => sleep_until(w.until).await,
+            }
+        }
+        self.limiter.acquire(&host).await?;
+        let result = self.fetch.fetch(req).await;
+        self.limiter
+            .record_poll(&host, unit, &result, Instant::now());
+        result
     }
 
     /// Waits for the host's token, sends, and records the answer. A
@@ -863,5 +1013,220 @@ mod tests {
         }
         // The ceiling (60 s) is reached and kept.
         assert!(last >= Duration::from_secs(30));
+    }
+
+    /// Answers by URL path: `/<status>`, `/<status>/<retry-after>`, or
+    /// `/down` for a connection that failed.
+    struct ByPath(std::sync::atomic::AtomicUsize);
+
+    impl Fetch for ByPath {
+        fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = req.url.rsplit_once(".test/").map_or("", |(_, p)| p);
+            let mut parts = path.split('/');
+            let result = match parts.next() {
+                Some("down") => Err(HttpError::Transport("connect".into())),
+                Some(code) => Ok(Response {
+                    status: code.parse().unwrap_or(200),
+                    headers: parts
+                        .next()
+                        .map(|v| vec![("Retry-After".to_owned(), v.to_owned())])
+                        .unwrap_or_default(),
+                    body: vec![],
+                }),
+                None => unreachable!(),
+            };
+            Box::pin(async move { result })
+        }
+    }
+
+    fn client() -> Client<ByPath> {
+        Client::new(
+            ByPath(Default::default()),
+            HostLimiter::with_seed(limits(0, 1), 7),
+        )
+    }
+
+    fn sent(c: &Client<ByPath>) -> usize {
+        c.fetch.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// One indexer behind a manager that rate-limits us (or fails) stops
+    /// only that indexer, not the manager's others (SRC-14b).
+    #[tokio::test(start_paused = true)]
+    async fn a_poll_units_rate_limit_and_5xx_stay_on_the_unit() {
+        let c = client();
+        let t0 = Instant::now();
+        let res = c
+            .poll("indexer-1", &Request::get("http://m.test/429/3600"))
+            .await;
+        assert_eq!(res.unwrap().status, 429);
+        // The unit is blocked for the hour; its next poll isn't sent.
+        let err = c
+            .poll("indexer-1", &Request::get("http://m.test/200"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, HttpError::Blocked { until } if until >= t0 + Duration::from_secs(3600))
+        );
+        assert_eq!(sent(&c), 1);
+        // The host and the manager's other indexers go on.
+        assert_eq!(
+            c.limiter().state("m.test", Instant::now()),
+            HostState::Ready
+        );
+        let res = c
+            .poll("indexer-2", &Request::get("http://m.test/200"))
+            .await;
+        assert_eq!(res.unwrap().status, 200);
+        // A 5xx backs off its own unit only.
+        c.poll("indexer-3", &Request::get("http://m.test/502"))
+            .await
+            .unwrap();
+        assert_eq!(
+            c.limiter()
+                .unit_hold("indexer-3", Instant::now())
+                .map(|w| w.reason),
+            Some(WaitReason::Backoff)
+        );
+        assert_eq!(
+            c.limiter().state("m.test", Instant::now()),
+            HostState::Ready
+        );
+        let before = sent(&c);
+        c.poll("indexer-2", &Request::get("http://m.test/200"))
+            .await
+            .unwrap();
+        assert_eq!(sent(&c), before + 1);
+    }
+
+    /// Two different units failing in a row is the host failing: it backs
+    /// off too. A normal answer between them keeps it on the units.
+    #[tokio::test(start_paused = true)]
+    async fn different_units_failing_in_a_row_back_the_host_off() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let now = Instant::now();
+        let answer = |status: u16| {
+            Ok(Response {
+                status,
+                headers: vec![],
+                body: vec![],
+            })
+        };
+        l.record_poll("m", "a", &answer(502), now);
+        // The same unit again is still that unit.
+        l.record_poll("m", "a", &answer(502), now);
+        l.record_poll("m", "b", &answer(200), now);
+        l.record_poll("m", "c", &answer(503), now);
+        assert_eq!(l.state("m", now), HostState::Ready);
+        l.record_poll("m", "d", &answer(500), now);
+        assert!(matches!(l.state("m", now), HostState::BackingOff { .. }));
+    }
+
+    /// A host that rate-limits every unit with `Retry-After` is blocked
+    /// as a whole, until the earlier of the two times (runner, #399 B1).
+    #[tokio::test(start_paused = true)]
+    async fn a_host_wide_retry_after_blocks_the_host() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let now = Instant::now();
+        let limited = |secs: &str| {
+            Ok(Response {
+                status: 429,
+                headers: vec![("Retry-After".into(), secs.into())],
+                body: vec![],
+            })
+        };
+        l.record_poll("m", "a", &limited("3600"), now);
+        assert_eq!(l.state("m", now), HostState::Ready);
+        l.record_poll("m", "b", &limited("86400"), now);
+        assert_eq!(
+            l.state("m", now),
+            HostState::Blocked {
+                until: now + Duration::from_secs(3600)
+            }
+        );
+        // A 5xx after a 429 backs the host off, but doesn't block it.
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        l.record_poll("m", "a", &limited("3600"), now);
+        let failing = Ok(Response {
+            status: 502,
+            headers: vec![],
+            body: vec![],
+        });
+        l.record_poll("m", "b", &failing, now);
+        assert!(matches!(l.state("m", now), HostState::BackingOff { .. }));
+    }
+
+    /// Units never grow the table past [`MAX_HOSTS`]: without room, the
+    /// answer goes on the host.
+    #[tokio::test(start_paused = true)]
+    async fn units_stay_within_the_table() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let now = Instant::now();
+        let limited = Ok(Response {
+            status: 429,
+            headers: vec![("Retry-After".into(), "3600".into())],
+            body: vec![],
+        });
+        for i in 0..MAX_HOSTS + 10 {
+            l.record_poll("m", &format!("ix-{i}"), &limited, now);
+        }
+        assert!(
+            l.lock().map.len() <= MAX_HOSTS + 1,
+            "{}",
+            l.lock().map.len()
+        );
+        assert!(matches!(l.state("m", now), HostState::Blocked { .. }));
+    }
+
+    /// What says the host is failing (a connection that fails, a key it
+    /// refuses) still backs off or blocks the whole host.
+    #[tokio::test(start_paused = true)]
+    async fn host_wide_failures_in_a_poll_stay_on_the_host() {
+        let c = client();
+        let res = c
+            .poll("indexer-1", &Request::get("http://m.test/down"))
+            .await;
+        assert!(matches!(res, Err(HttpError::Transport(_))));
+        let now = Instant::now();
+        assert!(matches!(
+            c.limiter().state("m.test", now),
+            HostState::BackingOff { failures: 1, .. }
+        ));
+        assert_eq!(c.limiter().unit_hold("indexer-1", now), None);
+        // Another unit waits out the host's back-off before it's sent.
+        let HostState::BackingOff { until, .. } = c.limiter().state("m.test", now) else {
+            unreachable!()
+        };
+        c.poll("indexer-2", &Request::get("http://m.test/200"))
+            .await
+            .unwrap();
+        assert!(Instant::now() >= until);
+        // A 401 blocks the host for every unit.
+        c.poll("indexer-3", &Request::get("http://m.test/401"))
+            .await
+            .unwrap();
+        let err = c
+            .poll("indexer-4", &Request::get("http://m.test/200"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HttpError::Blocked { .. }));
+        assert!(matches!(
+            c.limiter().state("m.test", Instant::now()),
+            HostState::Blocked { .. }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_kill_switch_refusal_doesnt_back_the_host_off() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let now = Instant::now();
+        for _ in 0..5 {
+            l.record("h", &Err(HttpError::EgressDown("vpn".into())), now);
+        }
+        assert_eq!(l.state("h", now), HostState::Ready);
+        // A transport failure does.
+        l.record("h", &Err(HttpError::Transport("reset".into())), now);
+        assert!(matches!(l.state("h", now), HostState::BackingOff { .. }));
     }
 }

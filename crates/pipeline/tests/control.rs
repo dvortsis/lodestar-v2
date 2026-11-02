@@ -683,3 +683,400 @@ async fn resume_reaches_a_running_dht(coordinated: bool) {
     }
     pipeline.shutdown().await.unwrap();
 }
+
+/// Fetches its one endpoint through its kit once, and records the result.
+struct Fetches {
+    manifest: Manifest,
+    result: Arc<Mutex<Option<Result<u16, lodestar_sources::HttpError>>>>,
+}
+
+impl SourcePlugin for Fetches {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        Box::pin(async move {
+            let r = ctx
+                .kit
+                .http
+                .send(&lodestar_sources::Request::get("https://feed.example/rss"))
+                .await
+                .map(|r| r.status);
+            *self.result.lock().unwrap() = Some(r);
+            ctx.shutdown.requested().await;
+            Ok(())
+        })
+    }
+}
+
+/// A source's saved SOCKS5 route is what its plugin's requests take: with
+/// the proxy down, the kill switch refuses them (as its own error, so the
+/// host isn't backed off), and the Sources view and its counters say so.
+/// Changing the route needs the password; agents and the schedule are
+/// checked against the plugin and saved.
+#[tokio::test]
+async fn a_source_runs_on_its_saved_egress_and_its_settings_are_checked() {
+    use lodestar_pipeline::control::{EgressSetting, egress_warnings};
+    use lodestar_sources::{
+        DownReason, Egress, EgressFactory, Endpoint, ProxySpec, RouteState, SocksDns, Window,
+    };
+    use lodestar_store::SourceSetting;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    // A port nothing listens on: the stand-in for a VPN proxy that's down.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let saved = EgressSetting::Socks5(ProxySpec {
+        host: "127.0.0.1".into(),
+        port: dead.port(),
+        dns: None,
+    });
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let id = store
+        .register_source_as("feed", "1", SourceState::Enabled, 0)
+        .unwrap();
+    store
+        .set_source_settings(id, &[(SourceSetting::Egress, Some(&saved.encode()))])
+        .unwrap();
+    drop(store);
+
+    let result = Arc::new(Mutex::new(None));
+    let plugin = Arc::new(Fetches {
+        manifest: Manifest {
+            id: "feed",
+            name: "Feed",
+            version: "1",
+            kinds: &[Kind::Discovery],
+            networks: &[Network::Bt],
+            endpoints: &[Endpoint {
+                protocol: "https",
+                host: "feed.example",
+            }],
+            risk: Risk::Low,
+            consent: Consent::None,
+            default_priority: Priority::Normal,
+            enabled_by_default: true,
+        },
+        result: result.clone(),
+    });
+    let config = PipelineConfig {
+        egress: Some(EgressFactory::new(Arc::new(
+            lodestar_sources::egress::NoCredentials,
+        ))),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline::start_with(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![plugin],
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    until("the plugin's request", || result.lock().unwrap().is_some()).await;
+    let got = result.lock().unwrap().take().unwrap();
+    assert!(
+        matches!(got, Err(lodestar_sources::HttpError::EgressDown(_))),
+        "{got:?}"
+    );
+    let status = pipeline.sources().into_iter().next().unwrap();
+    let live = status.egress.clone().unwrap();
+    assert_eq!(
+        live.status.state,
+        RouteState::Down(DownReason::ProxyUnreachable)
+    );
+    assert_eq!(live.status.counters.kill_switch_refusals, 1);
+    assert_eq!(live.status.counters.answered, 0);
+    // Left on `auto`, a plugin pinned to its manifest's hosts lets the
+    // proxy resolve names, wherever the proxy is (runner, #394).
+    assert_eq!(
+        live.route,
+        Some(Egress::Socks5 {
+            proxy: dead,
+            dns: SocksDns::Proxy
+        })
+    );
+    assert_eq!(live.setting, Ok(saved.clone()));
+    // Proxy DNS on a proxy on this machine: the trade is named.
+    assert_eq!(
+        egress_warnings(&Ok(saved.clone()), Some(&live), false, SocksDns::Proxy),
+        [lodestar_pipeline::control::WARN_LAN_PROXY_DNS]
+    );
+
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        )),
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    let view = control.sources().unwrap().into_iter().next().unwrap();
+    assert_eq!(view.settings.egress, Ok(saved));
+    let direct = SourceChange {
+        egress: Some(EgressSetting::Direct),
+        ..SourceChange::default()
+    };
+    assert!(matches!(
+        control.update_source(id, direct.clone()).await,
+        Err(SourceError::PasswordRequired)
+    ));
+    let view = control
+        .update_source(
+            id,
+            SourceChange {
+                password_confirmed: true,
+                ..direct
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(view.settings.egress, Ok(EgressSetting::Direct));
+    // The plugin declares one agent at most (the strict default).
+    assert!(matches!(
+        control
+            .update_source(
+                id,
+                SourceChange {
+                    agents: Some(2),
+                    ..SourceChange::default()
+                },
+            )
+            .await,
+        Err(SourceError::Invalid {
+            field: "agents",
+            ..
+        })
+    ));
+    let view = control
+        .update_source(
+            id,
+            SourceChange {
+                schedule: Some(vec![Window::new(60, 420)]),
+                agents: Some(1),
+                ..SourceChange::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(view.settings.schedule, Some(vec![Window::new(60, 420)]));
+    assert_eq!(view.settings.agents, Some(1));
+    pipeline.shutdown().await.unwrap();
+}
+
+/// An egress setting this build can't read fails closed (runner, #394):
+/// the plugin runs with its route down for good, every request is refused,
+/// and the view says the setting is unreadable instead of direct. A
+/// schedule that can't be read falls back to its default.
+#[tokio::test]
+async fn an_unreadable_egress_setting_refuses_every_request() {
+    use lodestar_pipeline::control::{Unreadable, WARN_SETTING_UNREADABLE, egress_warnings};
+    use lodestar_sources::{DownReason, EgressFactory, Endpoint, RouteState, SocksDns};
+    use lodestar_store::SourceSetting;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    // A route a later build might add, and a damaged SOCKS5 value.
+    let rows = [
+        ("newer", "interface wg0"),
+        ("damaged", "socks5 10.8.0.1 1080"),
+    ];
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    for (plugin, text) in rows {
+        let id = store
+            .register_source_as(plugin, "1", SourceState::Enabled, 0)
+            .unwrap();
+        store
+            .set_source_settings(
+                id,
+                &[
+                    (SourceSetting::Egress, Some(text)),
+                    (SourceSetting::Schedule, Some("not a schedule")),
+                ],
+            )
+            .unwrap();
+    }
+    drop(store);
+    let results: Vec<_> = rows.iter().map(|_| Arc::new(Mutex::new(None))).collect();
+    let plugins: Vec<Arc<dyn SourcePlugin>> = rows
+        .iter()
+        .zip(&results)
+        .map(|((id, _), result)| {
+            Arc::new(Fetches {
+                manifest: Manifest {
+                    id,
+                    name: id,
+                    version: "1",
+                    kinds: &[Kind::Discovery],
+                    networks: &[Network::Bt],
+                    endpoints: &[Endpoint {
+                        protocol: "https",
+                        host: "feed.example",
+                    }],
+                    risk: Risk::Low,
+                    consent: Consent::None,
+                    default_priority: Priority::Normal,
+                    enabled_by_default: true,
+                },
+                result: result.clone(),
+            }) as Arc<dyn SourcePlugin>
+        })
+        .collect();
+    let config = PipelineConfig {
+        egress: Some(EgressFactory::new(Arc::new(
+            lodestar_sources::egress::NoCredentials,
+        ))),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline::start_with(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        plugins,
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    for result in &results {
+        until("the plugin's request", || result.lock().unwrap().is_some()).await;
+        let got = result.lock().unwrap().take().unwrap();
+        assert!(
+            matches!(&got, Err(lodestar_sources::HttpError::EgressDown(e)) if e.contains("couldn't be read")),
+            "{got:?}"
+        );
+    }
+    for status in pipeline.sources() {
+        let live = status.egress.clone().unwrap();
+        assert_eq!(
+            live.status.state,
+            RouteState::Down(DownReason::SettingUnreadable),
+            "{}",
+            status.plugin
+        );
+        assert_eq!(live.route, None);
+        assert_eq!(live.setting, Err(Unreadable));
+        assert_eq!(live.status.counters.kill_switch_refusals, 1);
+    }
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        )),
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    for view in control.sources().unwrap() {
+        assert_eq!(view.settings.egress, Err(Unreadable));
+        assert_eq!(view.settings.schedule, None, "its default applies");
+        assert_eq!(view.egress_warnings, [WARN_SETTING_UNREADABLE]);
+    }
+    assert_eq!(
+        egress_warnings(&Err(Unreadable), None, true, SocksDns::Proxy),
+        [WARN_SETTING_UNREADABLE]
+    );
+    pipeline.shutdown().await.unwrap();
+}
+
+/// A purge stops its source's plugin at once, survives a crash partway
+/// (the source stays off, what was done stays done, and enabling waits
+/// for the purge), and finishes when it's run again (SRC-14b).
+#[tokio::test]
+async fn a_purge_stops_the_source_survives_a_crash_and_finishes_when_run_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let start = |store| async {
+        let (p, ran) = probe_with("nyaa", Consent::None, true);
+        let pipeline = Pipeline::start_with(
+            PipelineConfig::default(),
+            store,
+            vec![p as Arc<dyn SourcePlugin>],
+            Arc::new(NoFetch),
+        )
+        .await
+        .unwrap();
+        let control = Control::start(
+            pipeline.monitor(),
+            None,
+            Arc::new(Mutex::new(
+                Store::open(&db, StoreConfig::default()).unwrap(),
+            )),
+            false,
+            Intensity::Balanced,
+        )
+        .await
+        .unwrap();
+        (pipeline, control, ran)
+    };
+    let (pipeline, control, ran) = start(Store::open(&db, StoreConfig::default()).unwrap()).await;
+    until("the source runs", || ran.load(Ordering::SeqCst)).await;
+    let id = pipeline.sources()[0].id;
+    {
+        let store = control.store();
+        let mut store = store.lock().unwrap();
+        store
+            .update_source_secrets(id, &[("api_key", b"sealed")], &[], None)
+            .unwrap();
+    }
+    // Only with the password.
+    assert!(matches!(
+        control.begin_purge(id, false).await,
+        Err(SourceError::PasswordRequired)
+    ));
+    assert!(pipeline.sources()[0].running);
+    control.begin_purge(id, true).await.unwrap();
+    // Its plugin stopped at once, not at the next restart.
+    assert!(!pipeline.sources()[0].running);
+    // The "crash": nothing more of the purge runs.
+    drop(control);
+    drop(pipeline.shutdown().await.unwrap());
+
+    let check = Store::open(&db, StoreConfig::default()).unwrap();
+    assert_eq!(stored(&db, "nyaa"), SourceState::Disabled);
+    assert!(check.source_purge_started("nyaa").unwrap().is_some());
+    assert_eq!(
+        check.source_secret_names("nyaa").unwrap(),
+        ["api_key"],
+        "not finished"
+    );
+    drop(check);
+
+    // After a restart it stays off, says so, and can't be enabled yet.
+    let (pipeline, control, ran) = start(Store::open(&db, StoreConfig::default()).unwrap()).await;
+    assert!(!ran.load(Ordering::SeqCst));
+    assert!(control.sources().unwrap()[0].purge_pending);
+    let enable = SourceChange {
+        enabled: Some(true),
+        ..SourceChange::default()
+    };
+    assert!(matches!(
+        control.update_source(id, enable.clone()).await,
+        Err(SourceError::Invalid {
+            field: "enabled",
+            ..
+        })
+    ));
+    // Run again, it finishes: everything of the source's is gone.
+    control.begin_purge(id, true).await.unwrap();
+    let mut cursor = Some(lodestar_store::unverified::PurgeCursor::START);
+    while let Some(from) = cursor {
+        cursor = control.purge_step(id, from).await.unwrap().next;
+    }
+    control.finish_purge(id).await.unwrap();
+    let view = &control.sources().unwrap()[0];
+    assert!(!view.purge_pending);
+    assert_eq!(view.state, SourceState::Purged);
+    assert!(view.credentials.is_empty());
+    // Purged is a fresh, disabled source: it can be enabled again.
+    control.update_source(id, enable).await.unwrap();
+    drop(control);
+    pipeline.shutdown().await.unwrap();
+}

@@ -1389,3 +1389,97 @@ fn purge_drops_the_sources_queued_keys() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].source, dht);
 }
+
+/// A promotion adds no stopped source's bit or claims, takes a live
+/// finder as `first_source`, and with no live finder left leaves the
+/// torrent to the usual insert, which refuses it (SRC-14b).
+#[test]
+fn a_promotion_writes_nothing_of_a_stopped_source() {
+    let mut store = mem();
+    let (dht, nyaa, prowlarr) = sources(&mut store);
+    let p = prepared(&store, "eta");
+    let c = named("Eta");
+    let Put::New(id) = store
+        .put_unverified(&[item(&p.info_hash.0, nyaa, Some(&c))])
+        .unwrap()[0]
+    else {
+        panic!()
+    };
+    store
+        .put_unverified(&[item(&p.info_hash.0, prowlarr, None)])
+        .unwrap();
+    // The item's finder (and claims' owner) is purged; the fetching
+    // source too.
+    store.set_source_state(nyaa, SourceState::Purged).unwrap();
+    store.set_source_state(dht, SourceState::Disabled).unwrap();
+    assert_eq!(
+        store.promote(id, &pt(&p, dht), CODES, T).unwrap(),
+        lodestar_store::unverified::Promoted::Kept(id)
+    );
+    let row: (i64, i64) = store
+        .connection()
+        .query_row(
+            "SELECT sources, first_source FROM torrents WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row, (1 << prowlarr.get(), i64::from(prowlarr.get())));
+    assert!(
+        claims_of(&store, id).is_empty(),
+        "the purged source's claims stay out"
+    );
+
+    // Only stopped finders: not promoted, and the insert refuses it.
+    let q = prepared(&store, "theta");
+    let Put::New(id) = store
+        .put_unverified(&[item(&q.info_hash.0, prowlarr, Some(&c))])
+        .unwrap()[0]
+    else {
+        panic!()
+    };
+    store
+        .set_source_state(prowlarr, SourceState::Disabled)
+        .unwrap();
+    assert_eq!(
+        store.promote(id, &pt(&q, dht), CODES, T).unwrap(),
+        lodestar_store::unverified::Promoted::Gone
+    );
+    let w = store
+        .write(&WriteBatch {
+            prepared: &[pt(&q, dht)],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert_eq!(w.prepared, [lodestar_store::Inserted::Refused]);
+}
+
+/// An item whose public sighting may be a stopped finder's is promoted
+/// private: only a live public sighting makes it public (SRC-14b).
+#[test]
+fn a_promotion_ignores_a_stopped_finders_public_mark() {
+    let mut store = mem();
+    let (dht, nyaa, prowlarr) = sources(&mut store);
+    let p = prepared(&store, "iota");
+    let c = named("Iota");
+    let Put::New(id) = store
+        .put_unverified(&[item(&p.info_hash.0, nyaa, Some(&c))])
+        .unwrap()[0]
+    else {
+        panic!()
+    };
+    let private = NewUnverified {
+        private_source: true,
+        ..item(&p.info_hash.0, prowlarr, None)
+    };
+    store.put_unverified(&[private]).unwrap();
+    store.set_source_state(nyaa, SourceState::Purged).unwrap();
+    // A private fetch by a live source.
+    let fetch = PreparedTorrent {
+        extra_flags: flags::PRIVATE_SOURCE,
+        ..pt(&p, dht)
+    };
+    store.promote(id, &fetch, CODES, T).unwrap();
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_ne!(row.flags & flags::PRIVATE_SOURCE, 0, "stored private");
+}

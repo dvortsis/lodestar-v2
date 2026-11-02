@@ -1412,3 +1412,48 @@ async fn rollups_equal_the_metrics_counters_within_a_flush() {
     );
     pipeline.shutdown().await.unwrap();
 }
+
+/// A fetch for a source that's been turned off (a purge's first step)
+/// isn't stored, and is never counted as filtered: it's excluded as
+/// `source_stopped`, its lease ends, and it's left out of the have-filter
+/// as a key never stored (SRC-14b).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_sources_fetch_is_refused_not_filtered() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let seed = Seed::v1(info_dict("Fetched.After.Disable"));
+    let key = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let (feed, feed_tx) = scripted("feed");
+    let pipeline = Pipeline::start(
+        config(),
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![feed],
+    )
+    .await
+    .unwrap();
+    let monitor = pipeline.monitor();
+    let gate = monitor.gate().clone();
+    gate.follow();
+    // Turned off in the store while its plugin still runs (it stops at
+    // the next start), as a purge's first write does.
+    let id = pipeline.sources()[0].id;
+    Store::open(&db, StoreConfig::default())
+        .unwrap()
+        .set_source_state(id, lodestar_store::SourceState::Disabled)
+        .unwrap();
+    feed_tx
+        .send(Found::key(key, 0).with_peers(vec![peer.addr()]))
+        .await
+        .unwrap();
+    until("refused", || gate.excluded(Excluded::SourceStopped) == 1).await;
+    assert_eq!(gate.excluded(Excluded::Filtered), 0);
+    assert_eq!(gate.new_verified(GateOrigin::Network), 0);
+    assert!(!monitor.have().contains(&key), "never stored");
+    until("its lease ended", || {
+        monitor.lease_stats().outstanding.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    assert_eq!(store.find(&key).unwrap(), None);
+}

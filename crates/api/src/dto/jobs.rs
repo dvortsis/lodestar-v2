@@ -9,12 +9,14 @@ use super::error::ErrorBody;
 use super::export::ExportFormat;
 
 /// What a job does. `import` is reserved for the importer framework
-/// (§18.8): nothing starts one yet, but the Jobs view can render both.
+/// (§18.8): nothing starts one yet, but the Jobs view can render it.
+/// `purge` removes a source's data (`POST /sources/{id}/purge`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BackgroundJobKind {
     Export,
     Import,
+    Purge,
 }
 
 /// Where a job is. `running` and `paused` hold one of the running
@@ -51,6 +53,10 @@ pub struct BackgroundJob {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub export: Option<ExportJob>,
+    /// A purge's own details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub purge: Option<PurgeJob>,
     /// Unix seconds; null while it runs.
     #[schema(required = true)]
     pub finished_at: Option<i64>,
@@ -83,6 +89,57 @@ pub struct ExportJob {
     /// The export stopped at `cap` with more rows left: the file holds
     /// the first `cap`.
     pub truncated: bool,
+}
+
+/// Where a purge is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PurgeStage {
+    /// Turning the source off and stopping its plugin.
+    Stopping,
+    /// Deleting what it found, in steps.
+    Removing,
+    /// Dropping its credentials, consent and settings, then scrubbing
+    /// the store's snapshots.
+    Finishing,
+    /// Finished: the source is purged.
+    Purged,
+}
+
+/// What a purge job reports besides its progress. Every count is of
+/// changes already saved: a purge that stopped (cancelled, failed, or cut
+/// short by a restart) did exactly this much, and the source stays off
+/// until a purge run again finishes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PurgeJob {
+    /// Torrents others found too, kept without this source.
+    pub kept: u64,
+    /// Keys waiting to be fetched that were dropped.
+    pub keys_dropped: u64,
+    pub plugin: String,
+    /// Warnings the snapshot pass raised: every problem it met (a
+    /// snapshot it couldn't read or write now, one of a schema it doesn't
+    /// know, a file it couldn't delete), so this counts problems, not only
+    /// snapshots left unscrubbed. The hourly pass tries again, and a
+    /// rollback scrubs a snapshot before restoring it.
+    pub snapshots_left: u64,
+    /// Snapshots the pass changed: its credentials and consent removed,
+    /// with anything else the pass was due to remove.
+    pub snapshots_scrubbed: u64,
+    pub source_id: u8,
+    pub stage: PurgeStage,
+    /// Torrents only this source found, deleted.
+    pub torrents_deleted: u64,
+    /// Items without metadata only this source found, deleted.
+    pub unverified_deleted: u64,
+}
+
+/// `POST /sources/{id}/purge`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PurgeRequest {
+    /// The admin password, checked fresh: a purge can't be undone.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 /// `GET /jobs`: every job kept, newest first.

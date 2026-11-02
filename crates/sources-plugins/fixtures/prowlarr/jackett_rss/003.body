@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+<channel>
+<title>Example Semi</title>
+<item>
+<title>Tears of Steel 2012 1080p</title>
+<guid>https://semi.example/torrents/9001</guid>
+<jackettindexer id="example-semi">Example Semi</jackettindexer>
+<type>semi-private</type>
+<pubDate>Sat, 31 Oct 2026 10:00:00 +0000</pubDate>
+<size>1073741824</size>
+<link>http://jackett.example:9117/dl/example-semi/?jackett_apikey=REDACTED&amp;path=abc&amp;file=Tears</link>
+<torznab:attr name="infohash" value="99887766554433221100ffeeddccbbaa99887766" />
+</item>
+</channel>
+</rss>

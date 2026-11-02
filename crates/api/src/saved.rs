@@ -66,23 +66,17 @@ fn watermark(s: &ApiState, store: &Store) -> ApiResult<i64> {
 /// Alerts).
 fn visible_alerts(store: &Store, id: i64, adult: bool) -> ApiResult<(u64, u64, Option<i64>)> {
     let (mut all, mut unread, mut newest) = (0, 0, None);
-    let mut before = None;
-    loop {
-        let page = store.alerts(id, before, 200).map_err(internal)?;
-        let end = page.len() < 200;
-        before = page.last().map(|a| a.torrent_id);
-        for a in page {
-            if shown_row(store, a.torrent_id, false, adult)?.is_none() {
-                continue;
-            }
-            all += 1;
-            unread += u64::from(a.read_at.is_none());
-            newest = newest.max(Some(a.created_at));
+    // One read, so one sort: no index orders a search's alerts by id, and
+    // paging would sort them all again for every page (SRC-2b).
+    for a in store.alerts(id, None, usize::MAX).map_err(internal)? {
+        if shown_row(store, a.torrent_id, false, adult)?.is_none() {
+            continue;
         }
-        if end {
-            return Ok((all, unread, newest));
-        }
+        all += 1;
+        unread += u64::from(a.read_at.is_none());
+        newest = newest.max(Some(a.created_at));
     }
+    Ok((all, unread, newest))
 }
 
 fn view(store: &Store, adult: bool, s: SavedSearchSummary) -> ApiResult<SavedSearchView> {

@@ -262,6 +262,9 @@ pub struct Policy {
     pub distribution: Distribution,
     /// When the plugin runs unless the user sets other windows.
     pub schedule: Schedule,
+    /// The most agents (§18.4: the plugin's concurrency unit) the user may
+    /// set. 1, the strict default, means the setting can't be changed.
+    pub max_agents: u32,
 }
 
 impl Policy {
@@ -271,6 +274,7 @@ impl Policy {
         config_schema: EMPTY_SCHEMA,
         distribution: Distribution::Coordinator,
         schedule: Schedule::ALWAYS,
+        max_agents: 1,
     };
 
     /// The limits that apply once the user's settings meet the hard caps.

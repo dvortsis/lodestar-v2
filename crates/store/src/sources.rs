@@ -98,6 +98,23 @@ pub(crate) fn next_id(conn: &Connection) -> Result<i64> {
         .query_row([], |r| r.get(0))?)
 }
 
+/// The bits of every source that's disabled or purged: what [`Store::write`]
+/// and [`Store::promote`] never write (SRC-14b). One query over at most 64
+/// rows; call it inside the write's transaction, so a purge (which
+/// disables first) and the write can't interleave.
+pub(crate) fn stopped_mask(conn: &Connection) -> Result<u64> {
+    let mut stmt = conn.prepare_cached("SELECT id FROM sources WHERE state IN (?1, ?2)")?;
+    let ids = stmt.query_map(
+        params![SourceState::Disabled as i64, SourceState::Purged as i64],
+        |r| r.get::<_, i64>(0),
+    )?;
+    let mut mask = 0u64;
+    for id in ids {
+        mask |= SourceId::from_sql(id?)?.bit() as u64;
+    }
+    Ok(mask)
+}
+
 /// Where a source's consent record lives in `settings`: this, then the
 /// plugin's manifest id. Its text is the sources crate's to encode.
 const CONSENT_KEY: &str = "sources.consent.";
@@ -106,7 +123,51 @@ const CONSENT_KEY: &str = "sources.consent.";
 /// sealed blob; the key file that opens it is outside the database.
 const SECRET_KEY: &str = "sources.secret.";
 
-fn secret_prefix(plugin: &str) -> String {
+/// A source's own settings beyond its state and priority (§18.4), each
+/// kept in `settings` under its prefix, then the plugin's manifest id.
+/// Their text is the pipeline's to encode. A purge drops them with the
+/// consent record and credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceSetting {
+    /// How its traffic leaves (direct, or a SOCKS5 proxy).
+    Egress,
+    /// The daily windows it may run in.
+    Schedule,
+    /// Its concurrency, in the plugin's own unit.
+    Agents,
+}
+
+impl SourceSetting {
+    pub const ALL: [SourceSetting; 3] = [
+        SourceSetting::Egress,
+        SourceSetting::Schedule,
+        SourceSetting::Agents,
+    ];
+
+    fn key(self, plugin: &str) -> String {
+        let prefix = match self {
+            SourceSetting::Egress => "sources.egress.",
+            SourceSetting::Schedule => "sources.schedule.",
+            SourceSetting::Agents => "sources.agents.",
+        };
+        format!("{prefix}{plugin}")
+    }
+}
+
+/// A purge that started and hasn't finished (SRC-14b): this, then the
+/// plugin's manifest id; the value is when it started (Unix seconds). The
+/// source stays disabled until [`Store::finish_source_purge`] removes it,
+/// and a purge run again goes over everything from the start.
+const PURGING_KEY: &str = "sources.purging.";
+/// When a source was last purged (Unix seconds): this, then the plugin's
+/// manifest id. The snapshot purge drops the source's records (consent,
+/// credentials, settings) from every snapshot taken before it, so a
+/// rollback can't bring them back (`snapshots.rs`). Kept until no
+/// snapshot it could match is left (`JOURNAL_SECS`), and through a
+/// rollback, which carries it into the restored store.
+pub(crate) const PURGED_KEY: &str = "sources.purged.";
+
+pub(crate) fn secret_prefix(plugin: &str) -> String {
     format!("{SECRET_KEY}{plugin}/")
 }
 
@@ -118,12 +179,21 @@ fn plugin_of(conn: &Connection, id: SourceId) -> Result<String> {
     .ok_or(Error::NotFound("source"))
 }
 
-/// Removes a source's consent record and credentials (on purge).
-fn drop_records(conn: &Connection, plugin: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM settings WHERE key = ?1",
-        [format!("{CONSENT_KEY}{plugin}")],
-    )?;
+/// The `settings` keys of a source's consent record and own settings: what
+/// a purge drops besides its credentials (under [`secret_prefix`]).
+pub(crate) fn record_keys(plugin: &str) -> Vec<String> {
+    std::iter::once(format!("{CONSENT_KEY}{plugin}"))
+        .chain(SourceSetting::ALL.iter().map(|s| s.key(plugin)))
+        .collect()
+}
+
+/// Removes a source's consent record, credentials and own settings (on
+/// purge, and from a snapshot taken before one). Generic over the
+/// connection, so the snapshot purge applies it to a snapshot.
+pub(crate) fn drop_records(conn: &Connection, plugin: &str) -> rusqlite::Result<()> {
+    for key in record_keys(plugin) {
+        conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+    }
     let prefix = secret_prefix(plugin);
     conn.execute(
         "DELETE FROM settings WHERE substr(key, 1, ?2) = ?1",
@@ -212,11 +282,88 @@ impl Store {
         Ok(())
     }
 
+    /// Starts purging source `id` (SRC-14b): disables it, unless it's
+    /// already purged, and records that a purge is under way, in one
+    /// transaction. From here nothing it finds is written
+    /// ([`Store::write`] refuses its fetches), and [`Store::purge_source`]
+    /// may run. Starting again, after a crash or a cancel, is the same.
+    pub fn begin_source_purge(&mut self, id: SourceId, now: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let plugin = plugin_of(&tx, id)?;
+        tx.execute(
+            "UPDATE sources SET state = ?2 WHERE id = ?1 AND state != ?3",
+            params![
+                id.0,
+                SourceState::Disabled as i64,
+                SourceState::Purged as i64
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO NOTHING",
+            params![format!("{PURGING_KEY}{plugin}"), now],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Ends a purge that [`Store::purge_source`] has finished: sets the
+    /// source Purged, drops its consent record, credentials and own
+    /// settings, clears the purge under way and records when it ended,
+    /// all in one transaction. A credential or setting written while the
+    /// purge ran goes with them.
+    pub fn finish_source_purge(&mut self, id: SourceId, now: i64) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let plugin = plugin_of(&tx, id)?;
+        tx.execute(
+            "UPDATE sources SET state = ?2 WHERE id = ?1",
+            params![id.0, SourceState::Purged as i64],
+        )?;
+        drop_records(&tx, &plugin)?;
+        tx.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            [format!("{PURGING_KEY}{plugin}")],
+        )?;
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![format!("{PURGED_KEY}{plugin}"), now],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// When `plugin`'s unfinished purge started, if one is under way.
+    pub fn source_purge_started(&self, plugin: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [format!("{PURGING_KEY}{plugin}")],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?)
+    }
+
     /// Enables a source and, when given, stores its new consent record,
     /// in one transaction: the record and the state agree after a crash.
+    ///
+    /// Refused (`Error::Invalid`) while a purge is under way
+    /// ([`Store::begin_source_purge`]): the purge finishes first.
     pub fn enable_source(&mut self, id: SourceId, consent: Option<&str>) -> Result<()> {
         let tx = crate::begin_write(&mut self.conn)?;
         let plugin = plugin_of(&tx, id)?;
+        let purging = tx
+            .query_row(
+                "SELECT 1 FROM settings WHERE key = ?1",
+                [format!("{PURGING_KEY}{plugin}")],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if purging {
+            return Err(Error::Invalid("a purge of this source is under way"));
+        }
         if let Some(record) = consent {
             tx.execute(
                 "INSERT INTO settings (key, value) VALUES (?1, ?2)
@@ -304,6 +451,38 @@ impl Store {
         Ok(())
     }
 
+    /// One of `plugin`'s own settings, as [`Store::set_source_settings`]
+    /// stored it; `None` when it keeps the plugin's default.
+    pub fn source_setting(&self, plugin: &str, setting: SourceSetting) -> Result<Option<String>> {
+        self.setting_text(&setting.key(plugin))
+    }
+
+    /// Sets (`Some`) or resets to the plugin's default (`None`) each of a
+    /// source's settings in `changes`, in one transaction.
+    pub fn set_source_settings(
+        &mut self,
+        id: SourceId,
+        changes: &[(SourceSetting, Option<&str>)],
+    ) -> Result<()> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let plugin = plugin_of(&tx, id)?;
+        for (setting, value) in changes {
+            match value {
+                Some(v) => tx.execute(
+                    "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    params![setting.key(&plugin), v],
+                )?,
+                None => tx.execute(
+                    "DELETE FROM settings WHERE key = ?1",
+                    [setting.key(&plugin)],
+                )?,
+            };
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn sources(&self) -> Result<Vec<SourceRow>> {
         let mut stmt = self
             .conn
@@ -331,10 +510,15 @@ impl Store {
     }
 
     /// Replaces the persisted fetch queue (called on shutdown and
-    /// periodically, so a crash loses little).
+    /// periodically, so a crash loses little). Keys of a disabled or
+    /// purged source are left out: the writer would refuse their fetches.
     pub fn save_fetch_queue(&mut self, keys: &[QueuedKey]) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM fetch_queue", [])?;
+        // A disabled or purged source's keys aren't saved (SRC-14b): a
+        // pool snapshot taken before its purge dropped them, or a key
+        // still on its way to the pool then, mustn't outlive the purge.
+        let stopped = stopped_mask(&tx)?;
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO fetch_queue
@@ -342,7 +526,7 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT (info_hash) DO NOTHING",
             )?;
-            for k in keys {
+            for k in keys.iter().filter(|k| stopped & k.source.bit() as u64 == 0) {
                 let flags = if k.private_source { QUEUE_PRIVATE } else { 0 };
                 stmt.execute(params![
                     &k.info_hash.0[..],
@@ -391,5 +575,63 @@ impl Store {
             })
         })
         .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StoreConfig;
+
+    #[test]
+    fn source_settings_set_reset_and_purge() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let a = s
+            .register_source_as("feed", "1", SourceState::Disabled, 0)
+            .unwrap();
+        let b = s
+            .register_source_as("feed2", "1", SourceState::Disabled, 0)
+            .unwrap();
+        s.set_source_settings(
+            a,
+            &[
+                (SourceSetting::Egress, Some("e")),
+                (SourceSetting::Schedule, Some("s")),
+                (SourceSetting::Agents, Some("2")),
+            ],
+        )
+        .unwrap();
+        s.set_source_settings(b, &[(SourceSetting::Egress, Some("other"))])
+            .unwrap();
+        assert_eq!(
+            s.source_setting("feed", SourceSetting::Egress).unwrap(),
+            Some("e".into())
+        );
+        // `feed2` doesn't share `feed`'s key, though one id prefixes the other.
+        assert_eq!(
+            s.source_setting("feed2", SourceSetting::Egress).unwrap(),
+            Some("other".into())
+        );
+        s.set_source_settings(a, &[(SourceSetting::Agents, None)])
+            .unwrap();
+        assert_eq!(
+            s.source_setting("feed", SourceSetting::Agents).unwrap(),
+            None
+        );
+        // A purge drops them, and only the purged source's.
+        s.set_source_state(a, SourceState::Purged).unwrap();
+        for setting in SourceSetting::ALL {
+            assert_eq!(s.source_setting("feed", setting).unwrap(), None);
+        }
+        assert!(
+            s.source_setting("feed2", SourceSetting::Egress)
+                .unwrap()
+                .is_some()
+        );
+        let unknown = SourceId::new(9).unwrap();
+        assert!(matches!(
+            s.set_source_settings(unknown, &[(SourceSetting::Egress, Some("e"))]),
+            Err(Error::NotFound(_))
+        ));
     }
 }

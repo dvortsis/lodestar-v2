@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+<channel>
+<atom:link href="http://jackett.example:9117/api/v2.0/indexers/examplepublic/results/torznab/" rel="self" type="application/rss+xml" />
+<title>Example Public</title>
+<description>Example Public is a public tracker.</description>
+<link>https://public.example/</link>
+<language>en-US</language>
+<category>search</category>
+<item>
+<title>Spring 2019 1080p WEB-DL</title>
+<guid>https://public.example/details/55?jackett_apikey=REDACTED</guid>
+<jackettindexer id="examplepublic">Example Public</jackettindexer>
+<type>public</type>
+<comments>https://public.example/details/55</comments>
+<pubDate>Fri, 30 Oct 2026 09:00:00 -0400</pubDate>
+<size>2147483648</size>
+<grabs>10</grabs>
+<description />
+<link>magnet:?xt=urn:btih:aabbccddeeff00112233445566778899aabbccdd&amp;dn=Spring</link>
+<category>2040</category>
+<enclosure url="magnet:?xt=urn:btih:aabbccddeeff00112233445566778899aabbccdd&amp;dn=Spring" length="2147483648" type="application/x-bittorrent" />
+<torznab:attr name="category" value="2040" />
+<torznab:attr name="seeders" value="7" />
+<torznab:attr name="peers" value="9" />
+<torznab:attr name="infohash" value="aabbccddeeff00112233445566778899aabbccdd" />
+<torznab:attr name="magneturl" value="magnet:?xt=urn:btih:aabbccddeeff00112233445566778899aabbccdd&amp;dn=Spring" />
+<torznab:attr name="downloadvolumefactor" value="1" />
+<torznab:attr name="uploadvolumefactor" value="1" />
+</item>
+</channel>
+</rss>

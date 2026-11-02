@@ -19,8 +19,8 @@ pub mod testing;
 
 pub use claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
 pub use egress::{
-    Egress, EgressCounters, EgressCredentials, EgressFactory, EgressStatus, Endpoints,
-    PluginEgress, RouteState,
+    DownReason, Egress, EgressCounters, EgressCredentials, EgressFactory, EgressStatus, Endpoints,
+    PluginEgress, ProxySpec, RouteKind, RouteState, SocksDns,
 };
 pub use funnel::{Funnel, FunnelCounts, Loss, Stage};
 pub use http::{Client, Fetch, HostLimiter, HostState, HttpError, NoEgress, Request, Response};

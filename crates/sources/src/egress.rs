@@ -27,13 +27,14 @@
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub use lodestar_integrations::net::SocksDns;
 use lodestar_integrations::net::{
-    self, Exchange, GuardedClient, NetError, NetPolicy, Resolve, Route, Socks5Route, SocksAuth,
-    SocksDns, SystemResolver,
+    self, AddrClass, Exchange, GuardedClient, NetError, NetPolicy, Resolve, Route, Socks5Route,
+    SocksAuth, SystemResolver,
 };
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -75,6 +76,53 @@ pub enum RouteKind {
     BindAddress,
     Interface,
     Socks5,
+}
+
+/// A SOCKS5 proxy as the user named it: a host (a DNS name, or an IP
+/// literal without brackets) and a port, and who resolves names (`None`:
+/// [`default_dns`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxySpec {
+    pub host: String,
+    pub port: u16,
+    pub dns: Option<SocksDns>,
+}
+
+/// Whether `ip` is on the user's own network: a private or loopback
+/// address (link-local too). A proxy there is the user's own
+/// infrastructure.
+pub fn on_lan(ip: IpAddr) -> bool {
+    matches!(
+        net::classify(ip),
+        AddrClass::Private | AddrClass::Loopback | AddrClass::LinkLocal
+    )
+}
+
+/// Whether a proxy can be at `ip`: not the unspecified address (which
+/// connects to this machine), multicast or broadcast. An IPv4-mapped IPv6
+/// address (`::ffff:0.0.0.0`) is judged as the IPv4 address it carries,
+/// which is where a connection to it goes.
+pub fn usable_proxy(ip: IpAddr) -> bool {
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        IpAddr::V4(_) => ip,
+    };
+    !ip.is_unspecified() && !ip.is_multicast() && ip != IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
+}
+
+/// Who resolves names when the user didn't say (runner, #394 review,
+/// replacing the #380 ruling): the proxy (`socks5h`, so no lookup leaves
+/// outside the tunnel) for a plugin pinned to its manifest's hosts, where
+/// a name can't steer a request anywhere else, whatever the proxy's
+/// address. Lodestar (`socks5`, through its address checks) for a plugin
+/// whose endpoints the user enters, where a public name that the proxy
+/// resolves to its own network would otherwise reach that network.
+pub fn default_dns(endpoints: &Endpoints) -> SocksDns {
+    if endpoints.pinned {
+        SocksDns::Proxy
+    } else {
+        SocksDns::Local
+    }
 }
 
 /// The per-source credential store's interface for egress (SRC-4 builds
@@ -121,6 +169,9 @@ pub struct Endpoints {
     /// The hosts ([`host_key`]) the plugin may reach, each with the one
     /// scheme it may use (`None`: http or https); `None` for any host.
     hosts: Option<Vec<(Option<&'static str>, String)>>,
+    /// The hosts are the manifest's own ([`Endpoints::manifest`]), not ones
+    /// the user entered.
+    pinned: bool,
 }
 
 impl Endpoints {
@@ -140,6 +191,7 @@ impl Endpoints {
         Endpoints {
             policy: NetPolicy::notification(false),
             hosts: Some(hosts),
+            pinned: true,
         }
     }
 
@@ -149,6 +201,7 @@ impl Endpoints {
         Endpoints {
             policy,
             hosts: None,
+            pinned: false,
         }
     }
 
@@ -165,6 +218,11 @@ impl Endpoints {
 
     pub fn policy(&self) -> NetPolicy {
         self.policy
+    }
+
+    /// The hosts are the manifest's own, not ones the user entered.
+    pub fn pinned(&self) -> bool {
+        self.pinned
     }
 
     /// Checks a request's URL before anything is resolved or connected:
@@ -208,6 +266,13 @@ pub enum DownReason {
     ClientUnavailable,
     /// A bind address off Windows, where it doesn't pin the interface.
     BindAddressUnsupported,
+    /// The SOCKS5 proxy's name didn't resolve (to a usable address:
+    /// [`usable_proxy`]) when the plugin started.
+    ProxyUnresolved,
+    /// The source's saved egress setting couldn't be read (a rollback, a
+    /// newer route, a damaged row): it's refused rather than read as
+    /// direct, which would leave the VPN.
+    SettingUnreadable,
 }
 
 impl fmt::Display for DownReason {
@@ -221,6 +286,12 @@ impl fmt::Display for DownReason {
             DownReason::ProxyUnreachable => "the SOCKS5 proxy isn't reachable",
             DownReason::CredentialsUnavailable => "the proxy's credentials couldn't be read",
             DownReason::ClientUnavailable => "the HTTP client couldn't be built",
+            DownReason::SettingUnreadable => {
+                "the source's saved network setting couldn't be read; set its network route again"
+            }
+            DownReason::ProxyUnresolved => {
+                "the SOCKS5 proxy's name didn't resolve to a usable address when the source started; restart Lodestar once it does"
+            }
             DownReason::BindAddressUnsupported => {
                 "a bind address keeps traffic on the VPN only on Windows; choose the interface by name"
             }
@@ -298,6 +369,21 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SOCKS_PROBE_TTL: Duration = Duration::from_secs(10);
 /// How many redirects [`send_following`] follows.
 pub const MAX_REDIRECTS: usize = 5;
+/// While the route is down, the first refusal before sending comes back
+/// after this long, and each refusal in a row doubles it, up to
+/// [`DOWN_DELAY_MAX`]. A refusal comes back sooner when the route comes
+/// up. This paces a plugin's retry loop while the kill switch is down
+/// (SRC-14b), which a host's back-off can't: the host isn't at fault.
+pub const DOWN_DELAY_MIN: Duration = Duration::from_secs(1);
+/// The longest a refusal waits before it comes back.
+pub const DOWN_DELAY_MAX: Duration = Duration::from_secs(30);
+
+/// How long the refusal that follows `streak` refusals in a row waits.
+pub fn down_delay(streak: u32) -> Duration {
+    DOWN_DELAY_MIN
+        .saturating_mul(1u32 << streak.min(16))
+        .min(DOWN_DELAY_MAX)
+}
 
 /// Builds every plugin's HTTP client.
 #[derive(Clone)]
@@ -353,6 +439,60 @@ impl EgressFactory {
             PluginEgress::new(plugin, egress.kind(), client, Arc::new(probe), endpoints);
         built.notice = notice(egress);
         built
+    }
+
+    /// The client for `plugin` through the SOCKS5 proxy `spec` names. A
+    /// name is resolved once, now, through the factory's resolver (the
+    /// first answer); when it doesn't resolve, the client is down for good
+    /// with [`DownReason::ProxyUnresolved`]. Also returns the route it
+    /// built, for the plugin's status.
+    pub async fn build_socks5(
+        &self,
+        plugin: &str,
+        spec: &ProxySpec,
+        endpoints: Endpoints,
+    ) -> (PluginEgress, Option<Egress>) {
+        let ip = match spec.host.parse::<IpAddr>() {
+            Ok(ip) => Some(ip).filter(|ip| usable_proxy(*ip)),
+            Err(_) => tokio::time::timeout(PROBE_TIMEOUT, self.resolver.resolve(&spec.host))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .and_then(|ips| ips.into_iter().find(|ip| usable_proxy(*ip))),
+        };
+        let Some(ip) = ip else {
+            let down = self.unavailable(
+                plugin,
+                RouteKind::Socks5,
+                DownReason::ProxyUnresolved,
+                endpoints,
+            );
+            return (down, None);
+        };
+        let egress = Egress::Socks5 {
+            proxy: SocketAddr::new(ip, spec.port),
+            dns: spec.dns.unwrap_or_else(|| default_dns(&endpoints)),
+        };
+        (self.build(plugin, &egress, endpoints).await, Some(egress))
+    }
+
+    /// A client for `plugin` whose route couldn't even be described (a
+    /// proxy name that didn't resolve): its kill switch is down for good
+    /// with `reason`, so every request is refused.
+    pub fn unavailable(
+        &self,
+        plugin: &str,
+        route: RouteKind,
+        reason: DownReason,
+        endpoints: Endpoints,
+    ) -> PluginEgress {
+        PluginEgress::new(
+            plugin,
+            route,
+            Err(reason),
+            Arc::new(Probe::Direct),
+            endpoints,
+        )
     }
 
     async fn client(
@@ -522,6 +662,9 @@ pub struct PluginEgress {
     probing: tokio::sync::Mutex<()>,
     notice: Option<&'static str>,
     counters: Counters,
+    /// Refusals before sending since the route last let a request
+    /// through, for [`down_delay`].
+    down_streak: AtomicU32,
 }
 
 impl fmt::Debug for PluginEgress {
@@ -553,6 +696,7 @@ impl PluginEgress {
             probing: tokio::sync::Mutex::new(()),
             notice: None,
             counters: Counters::default(),
+            down_streak: Default::default(),
         };
         match egress.client {
             Err(reason) => egress.publish(RouteState::Down(reason)),
@@ -651,10 +795,29 @@ impl PluginEgress {
             return Err(refused(&e));
         }
         let client = match self.gate().await {
-            Ok(c) => c,
+            Ok(c) => {
+                self.down_streak.store(0, Ordering::Relaxed);
+                c
+            }
             Err(reason) => {
                 Counters::bump(&self.counters.kill_switch_refusals);
-                return Err(HttpError::Transport(format!("egress down: {reason}")));
+                // Paced, so a plugin that retries at once can't spin
+                // while the route is down; cut short when it comes up.
+                // Shutdown relies on the plugin dropping this future (its
+                // `select!` on the shutdown signal): one that doesn't waits
+                // up to `DOWN_DELAY_MAX` (30 s) here and is aborted at the
+                // plugin stop timeout (15 s) instead.
+                // Saturating, and a lost update between concurrent
+                // refusals only shortens one wait.
+                let streak = self.down_streak.load(Ordering::Relaxed);
+                self.down_streak
+                    .store(streak.saturating_add(1), Ordering::Relaxed);
+                let mut up = self.state.subscribe();
+                tokio::select! {
+                    () = tokio::time::sleep(down_delay(streak)) => {}
+                    _ = up.wait_for(|s| *s == RouteState::Up) => {}
+                }
+                return Err(HttpError::EgressDown(reason.to_string()));
             }
         };
         let mut down = self.state.subscribe();
@@ -673,7 +836,7 @@ impl PluginEgress {
                     _ => DownReason::ClientUnavailable,
                 };
                 Counters::bump(&self.counters.kill_switch_aborts);
-                return Err(HttpError::Transport(format!("egress went down: {reason}")));
+                return Err(HttpError::EgressDown(format!("went down in flight: {reason}")));
             }
         };
         match result {
@@ -694,13 +857,20 @@ impl PluginEgress {
                 Err(refused(&e))
             }
             Err(e) => {
-                Counters::bump(&self.counters.transport_failures);
-                // A failed connection may mean the route just went down;
-                // re-probe so the status says so.
-                if matches!(e, NetError::Connect | NetError::Timeout) && self.probe.ttl().is_some()
+                // A failed connection may mean the route just went down:
+                // re-probe, so the status says so, and so a route outage
+                // is the kill switch's error, not the host's (which would
+                // back it off).
+                if matches!(e, NetError::Connect | NetError::Timeout)
+                    && self.probe.ttl().is_some()
+                    && let RouteState::Down(reason) = self.check_now().await
                 {
-                    self.check_now().await;
+                    Counters::bump(&self.counters.kill_switch_aborts);
+                    return Err(HttpError::EgressDown(format!(
+                        "went down in flight: {reason}"
+                    )));
                 }
+                Counters::bump(&self.counters.transport_failures);
                 Err(HttpError::Transport(e.to_string()))
             }
         }

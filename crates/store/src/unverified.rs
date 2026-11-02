@@ -588,7 +588,9 @@ impl Store {
     /// transaction (see [`Promoted`]). The torrent keeps the item's id and
     /// gains its sources and claims; `t.source` is added too. It stays
     /// private-source if the item was and `t` says so. The id goes into
-    /// `reindex_log`: it's below the search index's id watermark.
+    /// `reindex_log`: it's below the search index's id watermark. A kept
+    /// id is also queued for the percolator (SRC-2b,
+    /// [`Store::promoted_due`]).
     ///
     /// `Error::Invalid` when `t`'s hashes don't include the item's key, or
     /// `t` isn't verified metadata (§18.5: only that promotes).
@@ -634,8 +636,26 @@ impl Store {
             return Ok(Promoted::Held);
         }
         let item_source = SourceId::from_sql(row.source)?;
-        let bits = (row.sources as u64) | t.source.bit() as u64;
-        let public = row.flags & PRIVATE == 0 || t.extra_flags & flags::PRIVATE_SOURCE == 0;
+        // A disabled or purged source adds nothing (SRC-14b). With no live
+        // finder left the item is the purge's: the torrent goes through
+        // the usual insert, which refuses it the same way.
+        let stopped = crate::sources::stopped_mask(&tx)?;
+        let bits = ((row.sources as u64) | t.source.bit() as u64) & !stopped;
+        if bits == 0 {
+            return Ok(Promoted::Gone);
+        }
+        // The item's claims are a stopped source's: they're not carried.
+        let row_claims = row
+            .claims
+            .as_ref()
+            .filter(|_| stopped & item_source.bit() as u64 == 0);
+        // The item's public mark may be a stopped finder's sighting: then
+        // it's treated as private, so only a live public sighting (this
+        // fetch, or a later one) makes it public (SRC-14b).
+        let item_public = row.flags & PRIVATE == 0
+            && (row.sources as u64) & stopped == 0
+            && stopped & item_source.bit() as u64 == 0;
+        let public = item_public || t.extra_flags & flags::PRIVATE_SOURCE == 0;
         let claims_private = i64::from(row.flags & CLAIMS_PRIVATE != 0);
         let out = if let Some(existing) = crate::find_any(&tx, p.swarm_hashes())? {
             crate::add_sources(&tx, existing, bits)?;
@@ -647,7 +667,7 @@ impl Store {
             if t.extra_flags & flags::FILES_PARTIAL == 0 {
                 crate::upgrade_partial(&tx, existing, t)?;
             }
-            if let Some(blob) = &row.claims {
+            if let Some(blob) = row_claims {
                 tx.prepare_cached(
                     "INSERT INTO torrent_claims (torrent_id, source_id, flags, data)
                      VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",
@@ -676,17 +696,24 @@ impl Store {
                 return Err(Error::Corrupt("unverified id outside the issued sequence"));
             }
             tx.execute("UPDATE id_seq SET next = ?1", [id])?;
-            let got = crate::insert_new(&tx, p, fl, discovered, t.metadata_at, item_source)?;
+            // The first finder, or the lowest live one when it's stopped.
+            let first = if stopped & item_source.bit() as u64 == 0 {
+                item_source
+            } else {
+                SourceId::new(bits.trailing_zeros() as u8).expect("bit under 64")
+            };
+            let got = crate::insert_new(&tx, p, fl, discovered, t.metadata_at, first)?;
             tx.execute("UPDATE id_seq SET next = ?1", [next])?;
             if got != id {
                 return Err(Error::Corrupt("promotion took another id"));
             }
             crate::add_sources(&tx, id, bits)?;
-            if let Some(blob) = &row.claims {
+            if let Some(blob) = row_claims {
                 write_claims(&tx, id, item_source, blob, claims_private != 0)?;
             }
             tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
                 .execute([id])?;
+            crate::saved::queue_promoted(&tx, tx.last_insert_rowid())?;
             crate::insights::count_promoted(&tx, id, at, codes)?;
             Promoted::Kept(id)
         };

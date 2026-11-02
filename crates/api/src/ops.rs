@@ -39,17 +39,22 @@ use axum::{Json, Router};
 use serde_json::{Map, Value};
 use utoipa::OpenApi;
 
+use lodestar_store::unverified::{PurgeCursor, PurgeStep};
+
 use crate::ApiState;
 use crate::auth;
+use crate::dto::jobs::{BackgroundJob, PurgeJob, PurgeRequest, PurgeStage};
 pub use crate::dto::ops::{
     ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialsPatch,
-    DhtStatus, ExternalAddress, FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel,
-    SamplingBlocked, Source, SourceHealth, SourceKind, SourceList, SourceNeed, SourcePatch,
-    SourcePriority, SourceState, StatsResponse,
+    DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress,
+    FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel, SamplingBlocked, SocksDns,
+    Source, SourceAgents, SourceEgress, SourceHealth, SourceKind, SourceList, SourceNeed,
+    SourcePatch, SourcePriority, SourceSchedule, SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;
 use crate::extract::{ClientIp, Json as JsonBody, Path, same_origin_json};
+use crate::jobs::{Finisher, Job, Jobs, Stop};
 use crate::settings::{SettingsApi, SettingsBatch, SettingsPatch, save_and_announce};
 pub use lodestar_integrations::Secret;
 
@@ -65,8 +70,10 @@ type Hub = Option<Extension<Arc<EventHub>>>;
     pause,
     resume,
     sources,
+    source,
     patch_source,
     patch_source_credentials,
+    purge_source,
     network,
     restart_network
 ))]
@@ -93,10 +100,12 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
     fn sync_crawler(&self) -> BoxFuture<'_, ()>;
     fn stats(&self) -> BoxFuture<'_, StatsResponse>;
     fn sources(&self) -> BoxFuture<'_, Result<Vec<Source>, OpsError>>;
-    /// Applies `patch` (its not-yet-editable fields already refused).
+    /// Applies `patch` (its not-yet-editable fields already refused, its
+    /// egress and schedule already checked, its schedule canonical).
     /// `password_confirmed` says the route checked `patch.password`; the
-    /// implementation refuses to enable a Restricted or Overlay source
-    /// without it ([`OpsError::PasswordRequired`]).
+    /// implementation refuses to enable a Restricted or Overlay source,
+    /// or to change any source's egress, without it
+    /// ([`OpsError::PasswordRequired`]).
     fn patch_source(
         &self,
         id: u8,
@@ -110,6 +119,32 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
         id: u8,
         changes: Vec<(String, Option<Secret>)>,
     ) -> BoxFuture<'_, Result<Source, OpsError>>;
+    /// Starts purging the source (SRC-14b), or starts an unfinished
+    /// purge over: turns it off, records the purge, stops its plugin and
+    /// drops its queued keys. Returns its manifest id and the keys
+    /// dropped. Refused without `password_confirmed`. A process without
+    /// sources (the default) knows none.
+    fn begin_purge(
+        &self,
+        _id: u8,
+        _password_confirmed: bool,
+    ) -> BoxFuture<'_, Result<(String, u64), OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
+    /// One step of the purge, in one transaction.
+    fn purge_step(
+        &self,
+        _id: u8,
+        _from: PurgeCursor,
+    ) -> BoxFuture<'_, Result<PurgeStep, OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
+    /// Ends it: the source Purged with its credentials, consent and
+    /// settings dropped, then the snapshots scrubbed. Returns the
+    /// snapshots scrubbed and those left for later.
+    fn finish_purge(&self, _id: u8) -> BoxFuture<'_, Result<(u64, u64), OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
     fn network(&self) -> NetworkCheck;
     fn restart_network_check(&self) -> Result<NetworkCheck, OpsError>;
 }
@@ -131,6 +166,15 @@ pub enum OpsError {
     /// A credential change was refused; the reason names a rule, never a
     /// value.
     BadCredential(String),
+    /// A setting was refused: `code` and `field` name it, `message`
+    /// says why (never quoting a secret).
+    Invalid {
+        code: &'static str,
+        field: &'static str,
+        message: String,
+    },
+    /// The interface or bind-address route, which isn't offered.
+    RouteUnavailable,
     /// The network check was restarted too recently.
     RateLimited {
         retry_after_secs: u64,
@@ -179,6 +223,12 @@ impl From<OpsError> for ApiError {
                 format!("The credentials weren't saved: {reason}."),
             )
             .field("credentials"),
+            OpsError::Invalid {
+                code,
+                field,
+                message,
+            } => ApiError::bad_request(code, message).field(field),
+            OpsError::RouteUnavailable => route_unavailable(),
             OpsError::RateLimited { retry_after_secs } => ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
@@ -206,7 +256,7 @@ pub fn routes() -> Router<ApiState> {
             .route("/crawler/pause", post(pause))
             .route("/crawler/resume", post(resume))
             .route("/sources", get(sources))
-            .route("/sources/{id}", axum::routing::patch(patch_source))
+            .route("/sources/{id}", get(source).patch(patch_source))
             .route(
                 "/sources/{id}/credentials",
                 axum::routing::patch(patch_source_credentials),
@@ -404,6 +454,188 @@ pub(crate) async fn sources(State(s): State<ApiState>) -> ApiResult<Json<SourceL
     Ok(Json(SourceList { sources }))
 }
 
+/// One source, as `GET /sources` lists it.
+#[utoipa::path(
+    operation_id = "getSource",
+    get,
+    path = "/sources/{id}",
+    tag = "crawler",
+    params(("id" = u8, Path, description = "The source's id, as `GET /sources` lists it.")),
+    responses((status = 200, body = Source))
+)]
+pub(crate) async fn source(
+    State(s): State<ApiState>,
+    Path(id): Path<u8>,
+) -> ApiResult<Json<Source>> {
+    ops(&s)?
+        .sources()
+        .await?
+        .into_iter()
+        .find(|s| s.id == id)
+        .map(Json)
+        .ok_or_else(unknown_source)
+}
+
+/// Most windows a source's schedule holds.
+pub const MAX_WINDOWS: usize = 8;
+
+/// A schedule window, `HH:MM-HH:MM`, as minutes since local midnight
+/// (`start`, `end`); `24:00` isn't a time, so `00:00` ends a day.
+pub fn parse_window(text: &str) -> Option<(u16, u16)> {
+    fn minute(t: &str) -> Option<u16> {
+        let (h, m) = t.split_once(':')?;
+        if h.len() != 2 || m.len() != 2 || !(h.bytes().chain(m.bytes())).all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let (h, m): (u16, u16) = (h.parse().ok()?, m.parse().ok()?);
+        (h < 24 && m < 60).then_some(h * 60 + m)
+    }
+    let (a, b) = text.split_once('-')?;
+    Some((minute(a)?, minute(b)?))
+}
+
+/// The text of a window [`parse_window`] reads.
+pub fn window_text(start: u16, end: u16) -> String {
+    format!(
+        "{:02}:{:02}-{:02}:{:02}",
+        start / 60,
+        start % 60,
+        end / 60,
+        end % 60
+    )
+}
+
+/// A SOCKS5 proxy's `host:port`: a DNS name, an IPv4 literal or a
+/// bracketed IPv6 literal, and a port from 1. The host comes back without
+/// brackets.
+pub fn parse_proxy(text: &str) -> Option<(String, u16)> {
+    let (host, port) = text.rsplit_once(':')?;
+    if port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let port: u16 = port.parse().ok().filter(|p| *p != 0)?;
+    // Not the unspecified address (this machine), multicast or broadcast.
+    // An IPv4-mapped address is judged as the IPv4 address it carries
+    // (`[::ffff:0.0.0.0]` connects to this machine too), as
+    // `lodestar_sources::egress::usable_proxy` judges it.
+    let usable = |ip: std::net::IpAddr| {
+        let ip = match ip {
+            std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, std::net::IpAddr::V4),
+            std::net::IpAddr::V4(_) => ip,
+        };
+        !ip.is_unspecified()
+            && !ip.is_multicast()
+            && ip != std::net::IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
+    };
+    if let Some(v6) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return v6
+            .parse::<std::net::Ipv6Addr>()
+            .ok()
+            .filter(|a| usable((*a).into()))
+            .map(|a| (a.to_string(), port));
+    }
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        return usable(v4.into()).then(|| (host.to_string(), port));
+    }
+    // A DNS name: labels of 1–63 letters, digits and hyphens (not at
+    // either end), 253 bytes in all, not all digits.
+    let name = host.strip_suffix('.').unwrap_or(host);
+    let ok = !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        // Not a number in disguise: an all-digit or `0x` last label is
+        // an address to `getaddrinfo` (`127.1`, `0x7f000001`).
+        && !name.split('.').next_back().is_some_and(|l| {
+            l.bytes().all(|b| b.is_ascii_digit()) || l.to_ascii_lowercase().starts_with("0x")
+        });
+    ok.then(|| (name.to_ascii_lowercase(), port))
+}
+
+/// `409 route_unavailable`: the interface and bind-address routes.
+fn route_unavailable() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "route_unavailable",
+        "Choosing a network interface or a local address isn't offered yet: DNS lookups \
+         would still leave outside it. Run Lodestar's whole container through your VPN, or \
+         use the VPN's SOCKS5 proxy.",
+    )
+    .field("egress.route")
+}
+
+fn invalid(code: &'static str, field: &'static str, message: &'static str) -> ApiError {
+    ApiError::bad_request(code, message).field(field)
+}
+
+/// Checks the settings part of `body` and puts its schedule in canonical
+/// form, so the implementation stores what it was given only once it's
+/// valid.
+fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
+    if let Some(e) = &body.egress {
+        match e.route {
+            EgressRoute::Interface | EgressRoute::BindAddress => {
+                return Err(route_unavailable());
+            }
+            EgressRoute::Direct if e.proxy.is_some() || e.dns.is_some() => {
+                return Err(invalid(
+                    "invalid_egress",
+                    if e.proxy.is_some() {
+                        "egress.proxy"
+                    } else {
+                        "egress.dns"
+                    },
+                    "A direct route takes no proxy or DNS choice.",
+                ));
+            }
+            EgressRoute::Direct => {}
+            EgressRoute::Socks5 => {
+                if e.proxy.as_deref().and_then(parse_proxy).is_none() {
+                    return Err(invalid(
+                        "invalid_egress",
+                        "egress.proxy",
+                        "Give the SOCKS5 proxy as host:port, such as 10.8.0.1:1080 or \
+                         gluetun:1080.",
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(windows) = &mut body.schedule {
+        if windows.len() > MAX_WINDOWS {
+            return Err(invalid(
+                "invalid_schedule",
+                "schedule",
+                "A schedule holds at most 8 windows.",
+            ));
+        }
+        for w in windows.iter_mut() {
+            let Some((start, end)) = parse_window(w.trim()) else {
+                return Err(invalid(
+                    "invalid_schedule",
+                    "schedule",
+                    "Give each window as HH:MM-HH:MM, such as 01:00-07:00.",
+                ));
+            };
+            *w = window_text(start, end);
+        }
+    }
+    if body.agents == Some(0) {
+        return Err(invalid(
+            "invalid_agents",
+            "agents",
+            "A source needs at least one agent; disable it to stop it.",
+        ));
+    }
+    Ok(())
+}
+
 /// Enables or disables a source, or sets its priority. A priority
 /// applies at once; enabling or disabling at the next start. Enabling
 /// checks the source's class (§18.7, its `needs`): an `external`,
@@ -412,8 +644,11 @@ pub(crate) async fn sources(State(s): State<ApiState>) -> ApiResult<Json<SourceL
 /// version is acknowledged; enabling a `restricted` or `overlay` source
 /// also needs the admin `"password"`, every time (`428 confirm_required`); an
 /// `account` source needs its credentials stored
-/// (`409 credentials_required`). Agents, egress, purge and the schedule
-/// arrive in v0.6 (`409 not_editable`).
+/// (`409 credentials_required`). Agents, egress and the schedule apply
+/// at the next start; changing egress needs the admin `"password"`
+/// (`428 confirm_required`), and the `interface` and `bind_address`
+/// routes are refused (`409 route_unavailable`). A purge isn't a field:
+/// it's `POST /sources/{id}/purge` (`409 not_editable` here).
 #[utoipa::path(
     operation_id = "patchSource",
     patch,
@@ -436,21 +671,23 @@ pub(crate) async fn patch_source(
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "not_editable",
-            "This can't be changed yet; it arrives with the sources settings in v0.6.",
+            "Purge a source with POST /sources/{id}/purge, which runs as a job.",
         )
         .field(field));
     }
-    // The password, when sent with an enable, is checked before anything
-    // is read or written. Whether the source needs it (Restricted and
-    // Overlay, every time) is the implementation's to decide.
+    check_settings(&mut body)?;
+    // The password is checked before anything is read or written. A
+    // route change always needs it: the route is what keeps a source's
+    // traffic on the VPN. With an enable, whether the source needs it
+    // (Restricted and Overlay, every time) is the implementation's to
+    // decide.
     let password = body.password.take();
-    let confirmed =
-        if body.enabled == Some(true) && password.as_deref().is_some_and(|p| !p.is_empty()) {
-            auth::confirm_fresh_password(&s.auth, ip, password).await?;
-            true
-        } else {
-            false
-        };
+    let needs_check = body.egress.is_some()
+        || (body.enabled == Some(true) && password.as_deref().is_some_and(|p| !p.is_empty()));
+    if needs_check {
+        auth::confirm_fresh_password(&s.auth, ip, password).await?;
+    }
+    let confirmed = needs_check;
     Ok(Json(ops.patch_source(id, body, confirmed).await?))
 }
 
@@ -506,6 +743,121 @@ fn credential_changes(body: Value) -> ApiResult<Vec<(String, Option<Secret>)>> {
             _ => Err(shape()),
         })
         .collect()
+}
+
+/// `POST /sources/{id}/purge`, beside `/jobs`, whose registry it shares.
+pub(crate) fn purge_routes() -> Router<ApiState> {
+    Router::new().route("/sources/{id}/purge", post(purge_source))
+}
+
+/// How long a paused purge waits to be resumed before it fails.
+const PURGE_PAUSE_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Purges a source: removes what only it found, its claims and plugin
+/// state, its credentials, consent record and settings, and their copies
+/// in the store's snapshots (§18.1, §18.7). It runs as a job (`/jobs`),
+/// with progress, pause and cancel. It needs the admin `"password"`
+/// every time (`428 confirm_required`, `401`): it can't be undone.
+///
+/// The source is turned off first. A purge that stops partway (cancelled,
+/// failed, or cut short by a restart) keeps what it did and the source
+/// off (`purge_pending` in `GET /sources`); purging again finishes it.
+/// `409 purge_running` while one runs for this source.
+#[utoipa::path(
+    operation_id = "purgeSource",
+    post,
+    path = "/sources/{id}/purge",
+    tag = "crawler",
+    params(("id" = u8, Path, description = "The source's id, as `GET /sources` lists it.")),
+    request_body = PurgeRequest,
+    responses((status = 202, body = BackgroundJob))
+)]
+pub(crate) async fn purge_source(
+    State(s): State<ApiState>,
+    Extension(jobs): Extension<Arc<Jobs>>,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+    Path(id): Path<u8>,
+    JsonBody(body): JsonBody<PurgeRequest>,
+) -> ApiResult<(StatusCode, Json<BackgroundJob>)> {
+    same_origin_json(&headers)?;
+    let ops = ops(&s)?;
+    auth::confirm_fresh_password(&s.auth, ip, body.password).await?;
+    let plugin = ops
+        .sources()
+        .await?
+        .into_iter()
+        .find(|src| src.id == id)
+        .ok_or_else(unknown_source)?
+        .plugin;
+    let job = jobs.start_purge(PurgeJob {
+        kept: 0,
+        keys_dropped: 0,
+        plugin,
+        snapshots_left: 0,
+        snapshots_scrubbed: 0,
+        source_id: id,
+        stage: PurgeStage::Stopping,
+        torrents_deleted: 0,
+        unverified_deleted: 0,
+    })?;
+    let status = job.status();
+    tokio::spawn(run_purge(ops, job, id));
+    Ok((StatusCode::ACCEPTED, Json(status)))
+}
+
+/// The purge job's worker. Every count it reports was committed.
+async fn run_purge(ops: Arc<dyn OpsApi>, job: Arc<Job>, id: u8) {
+    let _finisher = Finisher(job.clone());
+    let stage = |job: &Job, stage| job.update_purge(|p| p.iter_mut().for_each(|p| p.stage = stage));
+    let result = async {
+        let (_, keys) = ops.begin_purge(id, true).await?;
+        job.update_purge(|p| p.iter_mut().for_each(|p| p.keys_dropped = keys));
+        stage(&job, PurgeStage::Removing);
+        let mut cursor = Some(PurgeCursor::START);
+        while let Some(from) = cursor {
+            match job.checkpoint(PURGE_PAUSE_LIMIT).await {
+                Ok(()) => {}
+                Err(Stop::Cancelled) => return Ok(false),
+                Err(Stop::PauseExpired) => {
+                    return Err(OpsError::Internal("the purge was paused too long".into()));
+                }
+            }
+            let step = ops.purge_step(id, from).await?;
+            cursor = step.next;
+            let rows = step.unverified_deleted
+                + step.unverified_kept
+                + step.claims_deleted
+                + step.torrents_deleted.len()
+                + step.torrents_kept
+                + step.state_deleted
+                + step.queue_deleted;
+            job.add(rows as u64, 0);
+            job.update_purge(|p| {
+                if let Some(p) = p {
+                    p.torrents_deleted += step.torrents_deleted.len() as u64;
+                    p.kept += step.torrents_kept as u64;
+                    p.unverified_deleted += step.unverified_deleted as u64;
+                }
+            });
+        }
+        stage(&job, PurgeStage::Finishing);
+        let (scrubbed, left) = ops.finish_purge(id).await?;
+        job.update_purge(|p| {
+            if let Some(p) = p {
+                p.snapshots_scrubbed = scrubbed;
+                p.snapshots_left = left;
+                p.stage = PurgeStage::Purged;
+            }
+        });
+        Ok::<_, OpsError>(true)
+    }
+    .await;
+    match result {
+        Ok(true) => job.finish_done(),
+        Ok(false) => job.finish_cancelled(),
+        Err(e) => job.finish_failed(e.into()),
+    }
 }
 
 /// The network check: our address as other DHT nodes see it, and
@@ -626,9 +978,133 @@ mod tests {
         let p: SourcePatch = serde_json::from_value(json!({ "enabled": true })).unwrap();
         assert_eq!(p.not_yet_editable(), None);
         let p: SourcePatch =
-            serde_json::from_value(json!({ "priority": "low", "schedule": "01:00-07:00" }))
-                .unwrap();
-        assert_eq!(p.not_yet_editable(), Some("schedule"));
+            serde_json::from_value(json!({ "priority": "low", "purge": true })).unwrap();
+        assert_eq!(p.not_yet_editable(), Some("purge"));
         assert!(serde_json::from_value::<SourcePatch>(json!({ "weight": 3 })).is_err());
+        // Nothing turns verification on (it waits for a per-source cap).
+        assert!(
+            serde_json::from_value::<SourcePatch>(json!({ "verify_unverified": true })).is_err()
+        );
+        // A schedule is a list of windows, not one string.
+        assert!(
+            serde_json::from_value::<SourcePatch>(json!({ "schedule": "01:00-07:00" })).is_err()
+        );
+    }
+
+    #[test]
+    fn windows_parse_and_print() {
+        assert_eq!(parse_window("01:00-07:00"), Some((60, 420)));
+        assert_eq!(parse_window("22:30-00:00"), Some((1350, 0)));
+        assert_eq!(parse_window("23:59-00:01"), Some((1439, 1)));
+        for bad in [
+            "",
+            "1:00-07:00",
+            "24:00-01:00",
+            "01:60-02:00",
+            "01:00",
+            "01:00-",
+            "+1:00-02:00",
+            "01:00-02:00-03:00",
+            "０1:00-02:00",
+            "01:00 - 02:00",
+        ] {
+            assert_eq!(parse_window(bad), None, "{bad}");
+        }
+        assert_eq!(window_text(1350, 0), "22:30-00:00");
+        for m in [0u16, 59, 60, 1439] {
+            assert_eq!(parse_window(&window_text(m, m)), Some((m, m)));
+        }
+    }
+
+    #[test]
+    fn proxies_parse() {
+        assert_eq!(
+            parse_proxy("10.8.0.1:1080"),
+            Some(("10.8.0.1".into(), 1080))
+        );
+        assert_eq!(
+            parse_proxy("[fd00::1]:1080"),
+            Some(("fd00::1".into(), 1080))
+        );
+        assert_eq!(parse_proxy("Gluetun:1080"), Some(("gluetun".into(), 1080)));
+        // Mapped forms of usable addresses stay usable.
+        for ok in ["[::ffff:127.0.0.1]:1080", "[::ffff:192.168.1.10]:1080"] {
+            assert!(parse_proxy(ok).is_some(), "{ok}");
+        }
+        assert_eq!(
+            parse_proxy("proxy.example.net.:443"),
+            Some(("proxy.example.net".into(), 443))
+        );
+        for bad in [
+            "",
+            "10.8.0.1",
+            "10.8.0.1:0",
+            "10.8.0.1:65536",
+            "10.8.0.1:+80",
+            "fd00::1:1080",
+            "[fd00::1]",
+            "[10.0.0.1]:80",
+            "-a:80",
+            "a_b:80",
+            "a b:80",
+            "user@host:80",
+            "host/x:80",
+            "1.2.3:80",
+            "127.1:80",
+            "0x7f000001:80",
+            "0.0.0.0:1080",
+            "[::]:1080",
+            "224.0.0.1:1080",
+            "[ff02::1]:1080",
+            "255.255.255.255:1080",
+            "[::ffff:0.0.0.0]:1080",
+            "[::ffff:224.0.0.1]:1080",
+            "[::ffff:255.255.255.255]:1080",
+            "999.1.1.1:80",
+            ":80",
+        ] {
+            assert_eq!(parse_proxy(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn settings_are_checked_and_canonical() {
+        let patch = |v: Value| serde_json::from_value::<SourcePatch>(v).unwrap();
+        let code = |v: Value| check_settings(&mut patch(v)).unwrap_err().code();
+        assert_eq!(
+            code(json!({ "egress": { "route": "interface" } })),
+            "route_unavailable"
+        );
+        assert_eq!(
+            code(json!({ "egress": { "route": "bind_address" } })),
+            "route_unavailable"
+        );
+        assert_eq!(
+            code(json!({ "egress": { "route": "socks5" } })),
+            "invalid_egress"
+        );
+        assert_eq!(
+            code(json!({ "egress": { "route": "direct", "dns": "local" } })),
+            "invalid_egress"
+        );
+        assert_eq!(code(json!({ "schedule": ["1-2"] })), "invalid_schedule");
+        assert_eq!(
+            code(json!({ "schedule": vec!["01:00-02:00"; 9] })),
+            "invalid_schedule"
+        );
+        assert_eq!(code(json!({ "agents": 0 })), "invalid_agents");
+        // An unknown key inside egress is refused, not ignored.
+        assert!(
+            serde_json::from_value::<SourcePatch>(
+                json!({ "egress": { "route": "direct", "via": "x" } })
+            )
+            .is_err()
+        );
+        let mut p = patch(json!({
+            "schedule": [" 01:00-07:00 "],
+            "egress": { "route": "socks5", "proxy": "gluetun:1080" }
+        }));
+        check_settings(&mut p).unwrap();
+        assert_eq!(p.schedule.unwrap(), ["01:00-07:00"]);
     }
 }

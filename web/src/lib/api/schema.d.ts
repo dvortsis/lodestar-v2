@@ -1741,7 +1741,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** One source, as `GET /sources` lists it. */
+        get: operations["getSource"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1756,8 +1757,11 @@ export interface paths {
          *     version is acknowledged; enabling a `restricted` or `overlay` source
          *     also needs the admin `"password"`, every time (`428 confirm_required`); an
          *     `account` source needs its credentials stored
-         *     (`409 credentials_required`). Agents, egress, purge and the schedule
-         *     arrive in v0.6 (`409 not_editable`).
+         *     (`409 credentials_required`). Agents, egress and the schedule apply
+         *     at the next start; changing egress needs the admin `"password"`
+         *     (`428 confirm_required`), and the `interface` and `bind_address`
+         *     routes are refused (`409 route_unavailable`). A purge isn't a field:
+         *     it's `POST /sources/{id}/purge` (`409 not_editable` here).
          */
         patch: operations["patchSource"];
         trace?: never;
@@ -1783,6 +1787,33 @@ export interface paths {
          *     invalid_credentials` names the rule a change broke, never a value.
          */
         patch: operations["patchSourceCredentials"];
+        trace?: never;
+    };
+    "/sources/{id}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purges a source: removes what only it found, its claims and plugin
+         *     state, its credentials, consent record and settings, and their copies
+         *     in the store's snapshots (§18.1, §18.7). It runs as a job (`/jobs`),
+         *     with progress, pause and cancel. It needs the admin `"password"`
+         *     every time (`428 confirm_required`, `401`): it can't be undone.
+         * @description The source is turned off first. A purge that stops partway (cancelled,
+         *     failed, or cut short by a restart) keeps what it did and the source
+         *     off (`purge_pending` in `GET /sources`); purging again finishes it.
+         *     `409 purge_running` while one runs for this source.
+         */
+        post: operations["purgeSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/stats": {
@@ -2593,6 +2624,8 @@ export interface components {
             /** Format: int64 */
             id: number;
             kind: components["schemas"]["BackgroundJobKind"];
+            /** @description A purge's own details. */
+            purge?: components["schemas"]["PurgeJob"];
             /**
              * Format: double
              * @description Items read per second (`done` and `skipped`), paused time left
@@ -2622,10 +2655,11 @@ export interface components {
         };
         /**
          * @description What a job does. `import` is reserved for the importer framework
-         *     (§18.8): nothing starts one yet, but the Jobs view can render both.
+         *     (§18.8): nothing starts one yet, but the Jobs view can render it.
+         *     `purge` removes a source's data (`POST /sources/{id}/purge`).
          * @enum {string}
          */
-        BackgroundJobKind: "export" | "import";
+        BackgroundJobKind: "export" | "import" | "purge";
         /**
          * @description Where a job is. `running` and `paused` hold one of the running
          *     slots; the rest are finished and kept for 10 minutes.
@@ -6057,6 +6091,63 @@ export interface components {
             /** @description IP addresses or CIDR ranges, at most 64. Required to turn it on. */
             trusted?: string[];
         };
+        /**
+         * @description What a purge job reports besides its progress. Every count is of
+         *     changes already saved: a purge that stopped (cancelled, failed, or cut
+         *     short by a restart) did exactly this much, and the source stays off
+         *     until a purge run again finishes it.
+         */
+        PurgeJob: {
+            /**
+             * Format: int64
+             * @description Torrents others found too, kept without this source.
+             */
+            kept: number;
+            /**
+             * Format: int64
+             * @description Keys waiting to be fetched that were dropped.
+             */
+            keys_dropped: number;
+            plugin: string;
+            /**
+             * Format: int64
+             * @description Warnings the snapshot pass raised: every problem it met (a
+             *     snapshot it couldn't read or write now, one of a schema it doesn't
+             *     know, a file it couldn't delete), so this counts problems, not only
+             *     snapshots left unscrubbed. The hourly pass tries again, and a
+             *     rollback scrubs a snapshot before restoring it.
+             */
+            snapshots_left: number;
+            /**
+             * Format: int64
+             * @description Snapshots the pass changed: its credentials and consent removed,
+             *     with anything else the pass was due to remove.
+             */
+            snapshots_scrubbed: number;
+            /** Format: int32 */
+            source_id: number;
+            stage: components["schemas"]["PurgeStage"];
+            /**
+             * Format: int64
+             * @description Torrents only this source found, deleted.
+             */
+            torrents_deleted: number;
+            /**
+             * Format: int64
+             * @description Items without metadata only this source found, deleted.
+             */
+            unverified_deleted: number;
+        };
+        /** @description `POST /sources/{id}/purge`. */
+        PurgeRequest: {
+            /** @description The admin password, checked fresh: a purge can't be undone. */
+            password?: string | null;
+        };
+        /**
+         * @description Where a purge is.
+         * @enum {string}
+         */
+        PurgeStage: "stopping" | "removing" | "finishing" | "purged";
         QuarantineEntry: {
             /**
              * @description Held only because you relabelled it adult (a correction or a
@@ -7360,6 +7451,22 @@ export interface components {
         };
         /** @description One source plugin of this build. */
         Source: {
+            /** @description A source's concurrency, in the plugin's own unit (§18.4). */
+            agents: {
+                /** Format: int32 */
+                count: number;
+                /**
+                 * @description Whether the running source follows `count`. Always false in this
+                 *     version: it's saved and shown, and the scheduler applies it in a
+                 *     later version. Label it "not active yet".
+                 */
+                enforced: boolean;
+                /**
+                 * Format: int32
+                 * @description The most the plugin allows; 1 means it can't be changed.
+                 */
+                max: number;
+            };
             /**
              * @description What enabling a source requires (§18.7).
              * @enum {string}
@@ -7385,6 +7492,97 @@ export interface components {
             credentials: string[];
             /** @description Fields `PATCH /sources/{id}` changes now. */
             editable: string[];
+            /**
+             * @description A source's egress: what's set, how the running source's route is
+             *     doing, and warnings.
+             */
+            egress: {
+                /**
+                 * @description The running source's route; null when it isn't running (a change
+                 *     applies at the next start).
+                 */
+                live: null | {
+                    /**
+                     * @description Counts since the source started (`source_egress_*` in
+                     *     `docs/metrics.md`).
+                     */
+                    counts: {
+                        /**
+                         * Format: int64
+                         * @description Requests that got an HTTP answer.
+                         */
+                        answered: number;
+                        /**
+                         * Format: int64
+                         * @description Requests abandoned in flight because the route went down.
+                         */
+                        kill_switch_aborts: number;
+                        /**
+                         * Format: int64
+                         * @description Requests refused before sending because the route was down.
+                         */
+                        kill_switch_refusals: number;
+                        /**
+                         * Format: int64
+                         * @description Requests refused by the address checks or the host list.
+                         */
+                        policy_refusals: number;
+                        /**
+                         * Format: int64
+                         * @description Requests that failed to connect, timed out or were too large.
+                         */
+                        transport_failures: number;
+                        /**
+                         * Format: int64
+                         * @description Times the route went down.
+                         */
+                        trips: number;
+                    };
+                    /**
+                     * @description What you should know about this route's privacy; null when
+                     *     nothing.
+                     */
+                    notice: string | null;
+                    /** @description Why it's down; null when it isn't. */
+                    reason: string | null;
+                    /**
+                     * @description The live state of a source's route.
+                     * @enum {string}
+                     */
+                    state: "direct" | "unchecked" | "up" | "down";
+                };
+                /**
+                 * @description What's saved; null when it can't be read (saved by a newer
+                 *     version, or damaged). An unreadable setting is never taken as
+                 *     direct: the source's requests are refused until you set its route
+                 *     again.
+                 */
+                setting: null | {
+                    /**
+                     * @description For `socks5`: who resolves names. Left out, it's `proxy` for a
+                     *     source that only reaches its built-in sites, so lookups stay inside
+                     *     the tunnel, and `local` for a source whose sites you enter, so a
+                     *     public name can't reach devices on the proxy's network.
+                     */
+                    dns?: "proxy" | "local";
+                    /**
+                     * @description For `socks5`: the proxy as `host:port` (a name, an IPv4 address or
+                     *     a bracketed IPv6 address). A name is resolved when the source
+                     *     starts.
+                     */
+                    proxy?: string;
+                    /**
+                     * @description How a source's traffic leaves (§18.4, §18.7).
+                     * @enum {string}
+                     */
+                    route: "direct" | "socks5" | "interface" | "bind_address";
+                };
+                /**
+                 * @description Things to fix or know, such as `HTTPS_PROXY` being set while the
+                 *     source connects directly (source plugins never use it).
+                 */
+                warnings: string[];
+            };
             /** @description Its stored state is `enabled`. */
             enabled: boolean;
             /**
@@ -7400,8 +7598,13 @@ export interface components {
             /** @description What enabling it still needs; null when enabling is a toggle. */
             needs: null | ("endpoints_ack" | "credentials" | "consent");
             /**
-             * @description Fields planned for the v0.6 sources epic (agents, egress, purge,
-             *     schedule): listed so the UI can show them, refused by `PATCH`.
+             * @description The networks it reaches, such as `bt`, `bt_i2p`, `ed2k`,
+             *     `ipfs` or `usenet` (§18.6).
+             */
+            networks: string[];
+            /**
+             * @description Fields `PATCH` refuses: `purge`, which runs as a job through
+             *     `POST /sources/{id}/purge`.
              */
             not_yet_editable: string[];
             /**
@@ -7417,12 +7620,34 @@ export interface components {
              */
             priority: "low" | "normal" | "high" | "max";
             /**
+             * @description A purge started and didn't finish (cancelled, failed, or cut short
+             *     by a restart): what it removed stays removed, and the source stays
+             *     off until a purge run again finishes it.
+             */
+            purge_pending: boolean;
+            /**
              * @description Its stored state differs from what's running: it starts or stops
              *     at the next restart.
              */
             restart_required: boolean;
             /** @enum {string} */
             risk: "low" | "medium" | "high";
+            /** @description When a source may run (§18.4). */
+            schedule: {
+                /** @description The plugin's own windows, which apply when you haven't set any. */
+                default: string[];
+                /**
+                 * @description Whether the running source keeps to `windows`. Always false in
+                 *     this version: they're saved and shown, and the scheduler applies
+                 *     them in a later version. Label them "not active yet".
+                 */
+                enforced: boolean;
+                /**
+                 * @description The daily windows, as `HH:MM-HH:MM` in the server's local time (an
+                 *     end at or before the start wraps past midnight). Empty: any time.
+                 */
+                windows: string[];
+            };
             /**
              * @description A source's stored lifecycle state (§18.1).
              * @enum {string}
@@ -7459,14 +7684,41 @@ export interface components {
          * @example {
          *       "sources": [
          *         {
+         *           "agents": {
+         *             "count": 1,
+         *             "enforced": false,
+         *             "max": 1
+         *           },
          *           "consent": "none",
          *           "consent_required": false,
          *           "consent_version": "",
          *           "credentials": [],
          *           "editable": [
+         *             "agents",
+         *             "egress",
          *             "enabled",
-         *             "priority"
+         *             "priority",
+         *             "schedule"
          *           ],
+         *           "egress": {
+         *             "live": {
+         *               "counts": {
+         *                 "answered": 0,
+         *                 "kill_switch_aborts": 0,
+         *                 "kill_switch_refusals": 0,
+         *                 "policy_refusals": 0,
+         *                 "transport_failures": 0,
+         *                 "trips": 0
+         *               },
+         *               "notice": null,
+         *               "reason": null,
+         *               "state": "direct"
+         *             },
+         *             "setting": {
+         *               "route": "direct"
+         *             },
+         *             "warnings": []
+         *           },
          *           "enabled": true,
          *           "endpoints": [],
          *           "health": {
@@ -7483,17 +7735,23 @@ export interface components {
          *           ],
          *           "name": "Mainline DHT",
          *           "needs": null,
+         *           "networks": [
+         *             "bt"
+         *           ],
          *           "not_yet_editable": [
-         *             "agents",
-         *             "egress",
-         *             "purge",
-         *             "schedule"
+         *             "purge"
          *           ],
          *           "password_required": false,
          *           "plugin": "dht",
          *           "priority": "normal",
+         *           "purge_pending": false,
          *           "restart_required": false,
          *           "risk": "low",
+         *           "schedule": {
+         *             "default": [],
+         *             "enforced": false,
+         *             "windows": []
+         *           },
          *           "state": "enabled",
          *           "version": "0.0.0"
          *         }
@@ -7513,8 +7771,11 @@ export interface components {
          *     }
          */
         SourcePatch: {
-            /** @description Not editable before v0.6: refused with `409 not_editable`. */
-            agents?: unknown;
+            /**
+             * Format: int32
+             * @description Its concurrency, 1 to its `agents.max`. Applies at the next start.
+             */
+            agents?: number;
             /**
              * @description The consent class you acknowledge; needed to enable a source whose
              *     `needs` is `endpoints_ack` or `consent`, and must be its class.
@@ -7522,18 +7783,45 @@ export interface components {
             consent?: "none" | "external" | "account" | "restricted" | "overlay";
             /** @description The `consent_version` you were shown, with `consent`. */
             consent_version?: string;
-            /** @description Not editable before v0.6: refused with `409 not_editable`. */
-            egress?: unknown;
+            /**
+             * @description How its traffic leaves. Applies at the next start. Changing it
+             *     needs the admin `password` (`428 confirm_required`): a route is
+             *     what keeps a source's traffic on your VPN. `interface` and
+             *     `bind_address` are refused (`409 route_unavailable`).
+             */
+            egress?: {
+                /**
+                 * @description For `socks5`: who resolves names. Left out, it's `proxy` for a
+                 *     source that only reaches its built-in sites, so lookups stay inside
+                 *     the tunnel, and `local` for a source whose sites you enter, so a
+                 *     public name can't reach devices on the proxy's network.
+                 */
+                dns?: "proxy" | "local";
+                /**
+                 * @description For `socks5`: the proxy as `host:port` (a name, an IPv4 address or
+                 *     a bracketed IPv6 address). A name is resolved when the source
+                 *     starts.
+                 */
+                proxy?: string;
+                /**
+                 * @description How a source's traffic leaves (§18.4, §18.7).
+                 * @enum {string}
+                 */
+                route: "direct" | "socks5" | "interface" | "bind_address";
+            };
             enabled?: boolean;
             /**
              * @description A source's share of the fetch pool (§18.4: weights 1 / 3 / 6 / 10).
              * @enum {string}
              */
             priority?: "low" | "normal" | "high" | "max";
-            /** @description Not editable before v0.6: refused with `409 not_editable`. */
+            /** @description Not editable yet: refused with `409 not_editable`. */
             purge?: unknown;
-            /** @description Not editable before v0.6: refused with `409 not_editable`. */
-            schedule?: unknown;
+            /**
+             * @description Daily windows as `HH:MM-HH:MM`, at most 8; `[]` runs it any time.
+             *     Applies at the next start.
+             */
+            schedule?: string[];
         };
         /** @description The stage strip (§10.9.1, `docs/metrics.md` §6.1). */
         Stages: {
@@ -12134,6 +12422,29 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's id, as `GET /sources` lists it. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     patchSource: {
         parameters: {
             query?: never;
@@ -12183,6 +12494,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Source"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    purgeSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's id, as `GET /sources` lists it. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PurgeRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
                 };
             };
             default: components["responses"]["Error"];

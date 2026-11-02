@@ -1,2 +1,2 @@
 409
-{"error":{"code":"not_editable","field":"egress","message":"This can't be changed yet; it arrives with the sources settings in v0.6."}}
+{"error":{"code":"not_editable","field":"purge","message":"Purge a source with POST /sources/{id}/purge, which runs as a job."}}

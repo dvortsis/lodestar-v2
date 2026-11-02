@@ -1,0 +1,2 @@
+400
+{"error":{"code":"invalid_schedule","field":"schedule","message":"Give each window as HH:MM-HH:MM, such as 01:00-07:00."}}

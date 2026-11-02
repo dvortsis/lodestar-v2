@@ -38,6 +38,7 @@ pub mod unverified;
 mod user_data;
 mod user_items;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -69,9 +70,11 @@ pub use insights_days::{
 pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
 pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
-pub use saved::{Alert, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits};
+pub use saved::{
+    Alert, PromotedDue, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits,
+};
 pub use schema::latest_schema_version;
-pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
+pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceSetting, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
 pub use swarm::{
     SwarmRow, SwarmUpdate, TrackerCounts, TrackerRow, TrackerSample, swarm_flags, tracker_state,
@@ -367,12 +370,34 @@ pub enum Inserted {
     New(i64),
     /// Already stored under one of its swarm hashes.
     Existing(i64),
+    /// Not written: every source that found it is disabled or purged
+    /// (SRC-14b). A fetch that was on its way when its source stopped
+    /// mustn't put back what a purge removes. Nothing about it is
+    /// stored, so a live source finding it later stores it as new (once
+    /// the fetch pool's memory of recent fetches has let it go).
+    ///
+    /// Only [`WriteBatch::prepared`], the pipeline's fetches, is checked
+    /// this way; [`Store::insert`] and `WriteBatch::torrents` (imports)
+    /// never return it.
+    Refused,
 }
 
 impl Inserted {
+    /// The torrent's id.
+    ///
+    /// # Panics
+    /// On [`Inserted::Refused`], which only `WriteBatch::prepared`
+    /// returns: read those with [`stored`](Self::stored).
     pub fn id(self) -> i64 {
+        self.stored()
+            .expect("only WriteBatch::prepared is refused; read it with stored()")
+    }
+
+    /// The torrent's id; `None` when it was [`Refused`](Inserted::Refused).
+    pub fn stored(self) -> Option<i64> {
         match self {
-            Inserted::New(id) | Inserted::Existing(id) => id,
+            Inserted::New(id) | Inserted::Existing(id) => Some(id),
+            Inserted::Refused => None,
         }
     }
 }
@@ -422,6 +447,12 @@ pub struct Store {
 }
 
 impl Store {
+    /// The database file and the config this store was opened with, to
+    /// open another connection to it; `None` in memory.
+    pub fn reopen_args(&self) -> Option<(PathBuf, StoreConfig)> {
+        self.path.clone().map(|p| (p, self.config.clone()))
+    }
+
     pub fn open(path: impl AsRef<Path>, config: StoreConfig) -> Result<Store> {
         let path = path.as_ref();
         let conn = Connection::open(path)?;
@@ -533,6 +564,11 @@ impl Store {
             .map(|t| prepare(codec, config.archive_raw, t.info, t.raw_info))
             .collect::<Result<_>>()?;
         let tx = begin_write(conn)?;
+        // Disabled and purged sources' bits are never written (SRC-14b):
+        // read once, in the write's transaction, so a purge (which
+        // disables first) and this batch can't interleave.
+        let stopped = sources::stopped_mask(&tx)?;
+        let finders = finders_in(batch.touches, stopped);
         let mut out = Vec::with_capacity(batch.torrents.len());
         for (t, p) in batch.torrents.iter().zip(&own) {
             let pt = PreparedTorrent {
@@ -547,18 +583,22 @@ impl Store {
         }
         let mut prepared = Vec::with_capacity(batch.prepared.len());
         for pt in batch.prepared {
-            prepared.push(commit_one(&tx, codec, pt)?);
+            prepared.push(commit_live(&tx, codec, pt, stopped, &finders)?);
         }
         let mut touched = Vec::with_capacity(batch.touches.len());
         for t in batch.touches {
             let id = find_any(&tx, std::iter::once(t.hash))?;
-            if let Some(id) = id {
-                add_sources(&tx, id, t.sources)?;
+            // Only stopped sources saw it: it's still stored, but they
+            // add nothing to it.
+            if let Some(id) = id.filter(|_| t.sources & !stopped != 0) {
+                add_sources(&tx, id, t.sources & !stopped)?;
                 tx.prepare_cached(
                     "UPDATE torrents SET last_seen_at = ?2 WHERE id = ?1 AND last_seen_at <= ?3",
                 )?
                 .execute(params![id, t.at, t.at - LAST_SEEN_WRITE_EVERY])?;
-                if t.public {
+                // A sighting that a stopped source's is merged into can't
+                // make it public: which finder was public isn't known.
+                if t.public && t.sources & stopped == 0 {
                     make_public(&tx, id)?;
                 }
             }
@@ -1042,6 +1082,57 @@ fn prepare(
         raw,
         enrichment: None,
     })
+}
+
+/// The live sources each touched hash was reported by in a batch: the
+/// other finders of a torrent fetched in it ([`Store::write`]). Empty
+/// when no source is stopped, which is the usual case.
+fn finders_in(touches: &[Touch], stopped: u64) -> HashMap<InfoHash, u64> {
+    let mut finders = HashMap::new();
+    if stopped != 0 {
+        for t in touches {
+            *finders.entry(t.hash).or_insert(0) |= t.sources & !stopped;
+        }
+    }
+    finders
+}
+
+/// [`commit_one`] under a live source: `t`'s own when it's running, else
+/// the lowest live one that also found it in this batch. With none left,
+/// nothing is written ([`Inserted::Refused`]).
+fn commit_live(
+    tx: &Connection,
+    codec: &BlobCodec,
+    t: &PreparedTorrent<'_>,
+    stopped: u64,
+    finders: &HashMap<InfoHash, u64>,
+) -> Result<Inserted> {
+    if stopped & t.source.bit() as u64 == 0 {
+        return commit_one(tx, codec, t);
+    }
+    let live = t
+        .torrent
+        .swarm_hashes()
+        .filter_map(|h| finders.get(&h))
+        .fold(0u64, |a, b| a | b);
+    if live == 0 {
+        return Ok(Inserted::Refused);
+    }
+    let source = SourceId::new(live.trailing_zeros() as u8).expect("bit under 64");
+    // Stored private: whether it's public came from every finder's
+    // sightings, the stopped one's included, and which of the live ones
+    // were private isn't known here. A live public sighting makes it
+    // public again (`make_public`), as for any private-source torrent.
+    let extra_flags = t.extra_flags | flags::PRIVATE_SOURCE;
+    commit_one(
+        tx,
+        codec,
+        &PreparedTorrent {
+            source,
+            extra_flags,
+            ..*t
+        },
+    )
 }
 
 /// Inserts one prepared torrent, or adds its source to the stored one.

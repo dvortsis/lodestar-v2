@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<indexers>
+  <indexer id="examplepublic" configured="true">
+    <title>Example Public</title>
+    <type>public</type>
+  </indexer>
+</indexers>

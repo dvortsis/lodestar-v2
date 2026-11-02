@@ -1,0 +1,5 @@
+GET http://prowlarr.example:9696/api/v1/indexer
+X-Api-Key: REDACTED
+
+HTTP 200
+Content-Type: text/html; charset=utf-8

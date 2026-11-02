@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <title>Example Up</title>
+    <item>
+      <title>Caminandes 3 Llamigos (2016)</title>
+      <guid>https://up.example/torrent/3</guid>
+      <torznab:attr name="infohash" value="0a0b0c0d0e0f101112131415161718191a1b1c1d" />
+    </item>
+  </channel>
+</rss>

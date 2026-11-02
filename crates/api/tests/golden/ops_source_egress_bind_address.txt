@@ -1,0 +1,2 @@
+409
+{"error":{"code":"route_unavailable","field":"egress.route","message":"Choosing a network interface or a local address isn't offered yet: DNS lookups would still leave outside it. Run Lodestar's whole container through your VPN, or use the VPN's SOCKS5 proxy."}}

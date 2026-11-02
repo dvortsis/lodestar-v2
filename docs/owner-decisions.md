@@ -384,6 +384,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **rc.3 = rc.2 + #357,** cherry-picked onto `release/v0.5.1`. The runner checks it applies without pulling in other post-cut changes and maps the delta to targeted tests.
     - **#357 changes filter loading and its reporting,** not the crawler lifecycle, the sampler or the endpoint policy, so under the delta rule (build plan §0.4) r3's soak evidence carries over. A short Unraid smoke of the rc.3 image confirms it starts, upgrades and serves. If the cherry-pick pulls in a class of change the delta rule names, the rule decides instead.
 
+30. **Two worker slots, and a launch pause until the soak verdict** (owner, 2026-11-02, build-runner session, approaching the weekly usage limit). "Once tasks complete, bring the number of worker slots down to two" (about 15:05Z), then "Once all active sessions are pushed, pause start of further sessions. I want to wait until we get the soak results" (about 20:40Z).
+    - **At most two slice sessions at once,** replacing the four of §2.25. `runner/slices.yaml` records it as `limits.phase_total: 2`.
+    - **No new slice sessions start until the soak r3 results are in.** The runner then reports the verdict and resumes launches only on the owner's word. Sessions already running may still push, and their PRs may merge.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

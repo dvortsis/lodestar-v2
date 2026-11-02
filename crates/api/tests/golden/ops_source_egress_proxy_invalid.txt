@@ -1,0 +1,2 @@
+400
+{"error":{"code":"invalid_egress","field":"egress.proxy","message":"Give the SOCKS5 proxy as host:port, such as 10.8.0.1:1080 or gluetun:1080."}}

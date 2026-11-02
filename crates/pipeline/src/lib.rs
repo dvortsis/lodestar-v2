@@ -21,6 +21,7 @@
 pub mod control;
 mod coordinator;
 mod dht;
+mod egress;
 pub mod enrich;
 pub mod gate;
 mod have;
@@ -144,7 +145,15 @@ pub struct PipelineConfig {
     /// items' metadata through the shared pool so they can be promoted.
     /// Off by default until the crawler acceptance soak closes.
     pub verify_unverified: bool,
+    /// Builds each enabled plugin's HTTP client on its egress setting
+    /// (§18.4, §18.7). `None` (tests): plugins get no egress at all
+    /// ([`lodestar_sources::NoEgress`]), so nothing leaves the machine.
+    pub egress: Option<lodestar_sources::EgressFactory>,
 }
+
+/// How often a running plugin's non-direct route is probed, so a route
+/// that goes down abandons the requests in flight (SRC-5's kill switch).
+pub const EGRESS_PROBE_EVERY: Duration = Duration::from_secs(15);
 
 /// What the scrape scheduler needs besides its settings.
 #[derive(Debug, Clone)]
@@ -180,6 +189,7 @@ impl Default for PipelineConfig {
             health: None,
             gate_follows_index: false,
             verify_unverified: false,
+            egress: None,
         }
     }
 }
@@ -310,6 +320,22 @@ pub struct SourceStatus {
     pub priority: Priority,
     /// Why it stopped, if it stopped with an error.
     pub last_error: Option<String>,
+    /// Its politeness, config and placement (`SourcePlugin::policy`).
+    pub policy: lodestar_sources::Policy,
+    /// Its egress as it runs: `None` when it isn't running or has no
+    /// egress configured.
+    pub egress: Option<EgressLive>,
+}
+
+/// A running plugin's egress: its kill switch's view, the route it was
+/// built with (`None` when it couldn't be: a proxy name that didn't
+/// resolve, an unreadable setting), and the saved setting it was built
+/// from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EgressLive {
+    pub status: lodestar_sources::EgressStatus,
+    pub route: Option<lodestar_sources::Egress>,
+    pub setting: control::SavedEgress,
 }
 
 struct SourceEntry {
@@ -320,6 +346,12 @@ struct SourceEntry {
     enabled: bool,
     priority: Priority,
     error: Arc<Mutex<Option<String>>>,
+    egress: Option<egress::Built>,
+    /// Stops this plugin alone ([`Monitor::stop_source`]); `None` for one
+    /// that never started. The pipeline's own shutdown sets it too.
+    stop: Option<Arc<watch::Sender<bool>>>,
+    /// The plugin's task, to abort one that ignores its stop.
+    task: Option<tokio::task::AbortHandle>,
 }
 
 /// A cheap, cloneable view of a running pipeline's counters, for metrics
@@ -351,6 +383,38 @@ impl std::fmt::Debug for Monitor {
 impl Monitor {
     pub fn pool(&self) -> &PoolHandle {
         &self.pool
+    }
+
+    /// Stops source `id`'s plugin alone, for a purge (SRC-14b): signals
+    /// its stop, waits up to the plugin stop timeout for it to end, then
+    /// aborts it, and drops every key it queued in the pool (a key others
+    /// found too keeps them). Returns the number of keys dropped. A
+    /// source that isn't running only has its keys dropped. Its egress
+    /// monitor ends with it.
+    pub async fn stop_source(&self, id: SourceId) -> usize {
+        if let Some(s) = self.sources.iter().find(|s| s.id == id) {
+            if let Some(stop) = &s.stop {
+                let _ = stop.send(true);
+            }
+            let running = Arc::clone(&s.running);
+            let ended = tokio::time::timeout(PLUGIN_STOP_TIMEOUT, async {
+                while running.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            if ended.is_err() {
+                lodestar_log::log_event!(
+                    log_events::SOURCE_STOP_TIMEOUT,
+                    plugin = s.plugin.manifest().id
+                );
+                if let Some(task) = &s.task {
+                    task.abort();
+                }
+                s.running.store(false, Ordering::Relaxed);
+            }
+        }
+        self.pool.drop_source(id).await
     }
 
     pub fn pool_stats(&self) -> &PoolStats {
@@ -418,6 +482,17 @@ impl Monitor {
                 manifest: s.plugin.manifest().clone(),
                 priority: s.priority,
                 last_error: s.error.lock().expect("source error lock").clone(),
+                policy: *s.plugin.policy(),
+                // A plugin that stopped has no live route.
+                egress: s
+                    .egress
+                    .as_ref()
+                    .filter(|_| s.running.load(Ordering::Relaxed))
+                    .map(|b| EgressLive {
+                        status: b.egress.status(),
+                        route: b.route.clone(),
+                        setting: b.setting.clone(),
+                    }),
             })
             .collect()
     }
@@ -426,6 +501,8 @@ impl Monitor {
 pub struct Pipeline {
     monitor: Monitor,
     tasks: Vec<JoinHandle<Result<(), PluginError>>>,
+    /// The egress monitors (`egress::watch`).
+    egress_tasks: Vec<JoinHandle<()>>,
     stop_plugins: watch::Sender<bool>,
     stop_intake: watch::Sender<bool>,
     stop_pool: watch::Sender<bool>,
@@ -562,7 +639,33 @@ impl Pipeline {
         let mut weights = HashMap::new();
         let mut sources = Vec::new();
         let mut tasks = Vec::new();
-        for (plugin, (id, state, saved)) in plugins.into_iter().zip(registered) {
+        // Each non-direct route's monitor; they end at the plugins'
+        // shutdown.
+        let mut egress_tasks = Vec::new();
+        // Every enabled plugin's client, built at once: a proxy's name may
+        // take a few seconds to resolve, or to fail to.
+        let mut built = HashMap::new();
+        if let Some(factory) = &config.egress {
+            let mut set = tokio::task::JoinSet::new();
+            for (plugin, (id, state, _, setting)) in plugins.iter().zip(&registered) {
+                if *state != SourceState::Enabled {
+                    continue;
+                }
+                let (factory, plugin, setting, id) =
+                    (factory.clone(), plugin.clone(), setting.clone(), *id);
+                set.spawn(async move {
+                    (
+                        id,
+                        egress::build(&factory, plugin.manifest(), &setting).await,
+                    )
+                });
+            }
+            while let Some(done) = set.join_next().await {
+                let (id, b) = done.map_err(Error::Join)?;
+                built.insert(id, b);
+            }
+        }
+        for (plugin, (id, state, saved, _)) in plugins.into_iter().zip(registered) {
             let m = plugin.manifest();
             let priority = saved
                 .or_else(|| config.priorities.get(m.id).copied())
@@ -588,9 +691,43 @@ impl Pipeline {
                     enabled,
                     priority,
                     error,
+                    egress: None,
+                    stop: None,
+                    task: None,
                 });
                 continue;
             }
+            // Its own stop, which the pipeline's plugin shutdown also
+            // sets, so one plugin can be stopped alone (a purge).
+            let (stop, own_shutdown) = Shutdown::new();
+            let stop = Arc::new(stop);
+            {
+                let (stop, mut all) = (Arc::clone(&stop), plugin_shutdown.clone());
+                // Ends with the pipeline's plugin shutdown; holds `stop`
+                // so the plugin's receiver never sees it dropped early.
+                egress_tasks.push(tokio::spawn(async move {
+                    all.requested().await;
+                    let _ = stop.send(true);
+                }));
+            }
+            let egress = built.remove(&id);
+            if let Some(b) = &egress {
+                egress_tasks.extend(egress::watch(
+                    m.id,
+                    Arc::clone(&b.egress),
+                    EGRESS_PROBE_EVERY,
+                    own_shutdown.clone(),
+                ));
+            }
+            let kit = match &egress {
+                Some(b) => lodestar_sources::Kit::for_plugin(
+                    &*plugin,
+                    Arc::new(lodestar_sources::MemoryState::new()),
+                    Arc::clone(&b.egress) as Arc<dyn lodestar_sources::Fetch>,
+                    &lodestar_sources::UserLimits::default(),
+                ),
+                None => lodestar_sources::Kit::default(),
+            };
             let peer_requests = m.is(Kind::PeerFinder).then(|| {
                 let (tx, rx) = mpsc::channel(1024);
                 finders.push(tx);
@@ -604,14 +741,14 @@ impl Pipeline {
                 emitter: emitter.clone(),
                 peer_requests,
                 peer_replies,
-                shutdown: plugin_shutdown.clone(),
-                kit: lodestar_sources::Kit::default(),
+                shutdown: own_shutdown,
+                kit,
             };
             let p = plugin.clone();
             let running = Arc::new(AtomicBool::new(true));
             let flag = running.clone();
             let last_error = Arc::clone(&error);
-            tasks.push(tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 let result = p.run(ctx).await;
                 flag.store(false, Ordering::Relaxed);
                 if let Err(e) = &result {
@@ -623,7 +760,9 @@ impl Pipeline {
                     *last_error.lock().expect("source error lock") = Some(e.to_string());
                 }
                 result
-            }));
+            });
+            let abort = task.abort_handle();
+            tasks.push(task);
             sources.push(SourceEntry {
                 id,
                 plugin,
@@ -632,9 +771,13 @@ impl Pipeline {
                 enabled,
                 priority,
                 error,
+                egress,
+                stop: Some(stop),
+                task: Some(abort),
             });
         }
         drop(emit_tx);
+        egress::warn_proxy_env(&sources_egress_routes(&sources));
 
         let (pool, pool_task) = pool::spawn(
             config.pool.clone(),
@@ -824,6 +967,7 @@ impl Pipeline {
                 gate,
             },
             tasks,
+            egress_tasks,
             stop_plugins,
             stop_intake,
             stop_pool,
@@ -892,6 +1036,15 @@ impl Pipeline {
                 }
             }
         }
+        // The egress monitors end at the same signal.
+        for mut task in self.egress_tasks {
+            if tokio::time::timeout(PLUGIN_STOP_TIMEOUT, &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+            }
+        }
         let _ = self.stop_intake.send(true);
         self.intake.await.map_err(Error::Join)?;
         let _ = self.stop_pool.send(true);
@@ -910,6 +1063,19 @@ impl Pipeline {
 /// `REFETCH_COHORT`, or from a peer finder (queues saved before the cohort).
 fn saved_refetch(q: &QueuedKey, finders: &std::collections::HashSet<SourceId>) -> bool {
     q.strategy == strategy::REFETCH && (q.cohort == REFETCH_COHORT || finders.contains(&q.source))
+}
+
+/// The plugins that run and connect directly, for the proxy warning.
+fn sources_egress_routes(sources: &[SourceEntry]) -> Vec<&'static str> {
+    sources
+        .iter()
+        .filter(|s| {
+            s.egress
+                .as_ref()
+                .is_some_and(|b| b.route == Some(lodestar_sources::Egress::Direct))
+        })
+        .map(|s| s.plugin.manifest().id)
+        .collect()
 }
 
 /// What [`prepare`] needs of a plugin's manifest.
@@ -940,7 +1106,12 @@ fn prepare(
 ) -> Result<
     (
         Store,
-        Vec<(SourceId, SourceState, Option<Priority>)>,
+        Vec<(
+            SourceId,
+            SourceState,
+            Option<Priority>,
+            control::SavedEgress,
+        )>,
         Vec<QueuedKey>,
         Have,
         i64,
@@ -1046,6 +1217,7 @@ fn prepare(
             *id,
             state(id),
             control::saved_priority(&store, m.manifest.id)?,
+            control::saved_settings(&store, m.manifest.id, true)?.egress,
         ));
     }
     Ok((
