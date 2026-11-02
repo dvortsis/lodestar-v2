@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T16:22:33Z",
+  "updated_at": "2026-11-02T17:14:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3985,7 +3985,8 @@
     "2026-10-30T07:46Z main 42779e4a CI: ubuntu shutdown.rs stall race (fix/shutdown-stall), macOS toolchain download infra failure; a84c3681 macOS log_canary run_4 (fix in #187); filter budget props::budget (F-filters-neutral-perf scope?)",
     "2026-10-30T07:47Z filter budget red on main = cross-CPU calibration variance (Intel 8573C), not a code regression (diff empty b4d80387..a84c3681 in filter/search/classify/release-parser) -> F-filters-xcpu",
     "2026-10-30T08:19Z main fafe2f89: #187 (macOS canary) + #191 (shutdown race) in; filter budget variance -> F-filters-xcpu; percolator -> #193",
-    "2026-10-30T09:03Z main macOS red: aria2 refused_addr hang (#181 regression). Lesson: PRs touching cross-platform test helpers get full-ci."
+    "2026-10-30T09:03Z main macOS red: aria2 refused_addr hang (#181 regression). Lesson: PRs touching cross-platform test helpers get full-ci.",
+    "2026-11-02T17:14:49Z main red 7d4724c9 -> a5e7074e: #394 added Policy::max_agents, #397 merged after with a Policy literal lacking it (E0063); fixed by runner PR #398 (Opus review MERGE). Lesson: two PRs touching a shared struct and its users need the second to bring main in before merge."
   ],
   "ops": [
     "2026-10-30T08:00Z Local disk filled twice from shared runner-target (23 GB, bisect builds). Wiped. Policy: Rust review builds go to cloud review sessions, not local agents.",
