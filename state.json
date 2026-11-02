@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T02:01:00Z",
+  "updated_at": "2026-11-02T02:03:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2246,11 +2246,13 @@
       "merge": "d79ce25b"
     },
     "F-filter-standin-undo": {
-      "status": "building",
+      "status": "in-review",
       "model": "opus",
       "note": "no schema change; re-judge only; stop at proposal if attribution needs a migration",
       "session": "session_01MMjhnAK5fBCVsHf7ALi2RM",
-      "launched": "2026-11-02T00:51Z"
+      "launched": "2026-11-02T00:51Z",
+      "pr": 367,
+      "head": "697eb24"
     },
     "SRC-16": {
       "status": "merged",
@@ -3356,6 +3358,11 @@
       "id": "flag-cr4",
       "status": "to-send",
       "text": "§2.19 from CR-4 (#365): two independent switches (dht.utp, dht.route_backoff), both off by default; the Settings \"transport\" option stays labelled \"not active yet\" rather than wired, so a saved setting can't silently pick an A/B arm; IPv6 route evidence = a local \"network unreachable\" confirmed by a local UDP route probe (never a remote packet); per-family metric series added alongside #51's names. CR-SIM can't model transports, so measurement is a live ABBA per switch."
+    },
+    {
+      "id": "q-adult-standin-release",
+      "status": "to-send",
+      "text": "Owner question (content safety, from #367 F-filter-standin-undo): when an unreadable \"Is adult\" classification rule becomes readable again, the adult holds its stand-in made are NOT released automatically, because storage can't tell them apart from a user's own per-torrent adult correction (releasing could undo a user's child-safety choice permanently). They are counted in an Insights notice and all torrents are re-queued for classification. Automatic release would need a change to the stored rule-id format recording what made a hold adult (e.g. \"CS-5a~C-2+adult\"), plus writer and reclassify changes. Proposal in docs/decisions (F-filter-standin-undo). Recommendation: keep them held for v0.6; build the format change only if you want automatic release."
     }
   ],
   "external_gates": {
