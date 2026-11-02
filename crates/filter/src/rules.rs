@@ -176,7 +176,7 @@ impl Override {
             // as two the way torrents were read before, so it would match
             // neither as written.
             (Match::Keyword(k), _) if keyword_tokens(k) != keyword_tokens_split(k) => Err(Invalid(
-                "the keyword has an invisible or format character inside a word; type it without one",
+                "the keyword has an invisible character, format mark or line break inside a word; type it without one",
             )),
             (Match::Keyword(k), Strength::Neutralize) if keyword_tokens(k).len() > 1 => {
                 Err(Invalid("Neutralize term takes one word"))
@@ -513,7 +513,7 @@ mod tests {
         /// both readings.
         #[test]
         fn a_neutral_word_reads_the_same(
-            k in "([a-c]{1,3}|[0-9]{1,2}|[@$]|é|\u{200B}|\u{2065}|\u{E0001}|\u{1D173}| ){1,6}",
+            k in "([a-c]{1,3}|[0-9]{1,2}|[@$]|é|\u{200B}|\u{2065}|\u{E0001}|\u{1D173}|\u{0605}|\u{08E2}|\u{FFF9}|\u{13430}|\u{2028}| ){1,6}",
         ) {
             let split = keyword_tokens_split(&k);
             if split.len() == 1 {
