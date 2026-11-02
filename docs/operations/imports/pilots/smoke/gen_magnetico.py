@@ -19,6 +19,11 @@ Distributions (chosen to resemble a DHT crawl, not taken from one):
 - discovered_on: uniform over 2019-01-01 .. 2026-10-01; 30 % carry
   swarm counts (`updated_on`, `n_seeders`, `n_leechers`).
 
+The file is left in DELETE journal mode (magneticod leaves WAL), so the
+adapter's WAL checks aren't exercised. Byte-identical output for the same
+arguments was checked with Python 3.13.18's SQLite 3.53.1; another SQLite
+version may lay the file out differently, with the same rows.
+
 Usage: gen_magnetico.py OUT.sqlite3 COUNT [SEED] [FIRST]
 
 FIRST (default 0) is the index of the first infohash, so a second source
@@ -119,7 +124,7 @@ def title(rng, lex):
     return [w.capitalize() for w in ws]
 
 
-def name_for(rng, lex, multi):
+def name_for(rng, lex):
     t = title(rng, lex)
     r = rng.random()
     if r < 0.45:  # video release
@@ -165,7 +170,7 @@ def main():
         for i in range(first, first + count):
             ih = hashlib.sha1(b"lodestar-smoke:%d:%d" % (seed, i)).digest()
             n = file_count(rng)
-            name, ext = name_for(rng, lex, n > 1)
+            name, ext = name_for(rng, lex)
             if n == 1:
                 files = [(name + "." + ext, size(rng, 40 << 20))]
             else:
