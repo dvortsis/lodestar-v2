@@ -479,7 +479,8 @@ def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatm
     digest = run.get("image_digest") or run.get("sha256")
     spec_commit = (run.get("settings") or {}).get("spec_commit")
     have = bool(config) and switch_ok and api.get("intensity") in collect.PRESETS and bool(digest) \
-        and bool(run.get("commit")) and bool(spec_commit) and config.get("env_preset") is not None
+        and bool(run.get("commit")) and bool(spec_commit) and config.get("env_preset") is not None \
+        and config.get("config_file") == "absent"
     checks.add("6.6", "configuration_identity_recorded", have, "missing")
     if not have:
         return
@@ -535,7 +536,8 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run):
         for k, (a, b) in enumerate(zip(bounds, bounds[1:])):
             minutes = (b["e"] - a["e"]) / 60
             gain = b["values"]["comparator_torrents"] - a["values"]["comparator_torrents"]
-            hourly.append({"hour": k, "minutes": round(minutes, 3), "stored": gain, "rate_per_min": gain / minutes})
+            hourly.append({"hour": k, "minutes": round(minutes, 3), "stored": gain, "rate_per_min": gain / minutes,
+                       "resources": resources([r for r in window if a["e"] <= r["e"] <= b["e"]])})
         minutes = (end["e"] - t_s["e"]) / 60
         gain = end["values"]["comparator_torrents"] - t_s["values"]["comparator_torrents"]
         out["numerator"] = {"source": "comparator_count", "query": (run.get("comparator") or {}).get("query"),
@@ -564,7 +566,9 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run):
                        "latency_coverage": lat["coverage"], "latency_bucket_deltas": lat["bucket_deltas"],
                        "dropped_delta": lat["dropped_delta"],
                        "breakdowns": {n: breakdown(a, b, n) for n in BREAKDOWNS},
-                       "guardrails": guardrails(a, b)})
+                       "guardrails": guardrails(a, b), "mechanism": mechanism_deltas(a, b),
+                       "connects_per_second": delta(a, b, "fetch_attempts_total") / (b["e"] - a["e"]),
+                       "resources": resources([r for r in window if a["e"] <= r["e"] <= b["e"]])})
     minutes = (end["e"] - t_s["e"]) / 60
     gross = delta(t_s, end, "searchable_new_total", origin="network")
     bound = sum(bound_by_hour)
@@ -612,6 +616,19 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run):
     }
     out["already_stored_and_rediscovered"] = {
         r: delta(t_s, end, "metadata_excluded_total", reason=r) for r in ("already_stored", "rediscovered")}
+    return out
+
+
+def mechanism_deltas(a, b):
+    """Rule 5's series over one hour (rule 7.1 publishes them per hour too)."""
+    out = {}
+    for name, labels in (("fetch_admission_grants_total", {}), ("fetch_admission_refusals_total", {}),
+                         ("dht_peer_rejection_reasons_total", {"reason": "capacity"}), ("dht_utp_in_total", {}),
+                         ("fetch_attempts_total", {"transport": "utp"}), ("fetch_route_skipped_total", {}),
+                         ("fetch_route_probe_down_total", {}), ("fetch_no_route_total", {"family": "ipv6"})):
+        if get(a["snap"], name, **labels) is not None and get(b["snap"], name, **labels) is not None:
+            out[name + ("{" + ",".join(f'{k}="{v}"' for k, v in labels.items()) + "}" if labels else "")] = \
+                delta(a, b, name, **labels)
     return out
 
 
@@ -988,15 +1005,15 @@ def analyze_effect(treatment, block_reports):
                                for b in valid for s, a in zip(b["segments"], b["order"]) if a == "A" and s["verdict"] == "valid"]
     out["treatment_segments"] = [{"net": s["net"], "p95": s["p95"], "p95_measured": s["p95_measured"]}
                                  for b in valid for s, a in zip(b["segments"], b["order"]) if a == "B" and s["verdict"] == "valid"]
-    if treatment == "route":
-        on = [s for b in valid for s, arm in zip(b["segments"], b["order"]) if arm == "B"]
-        if on and all(s["verdict"] == "void" for s in on):
-            out.update(outcome="no_opportunity", decided=True)
-            return out
     if not paired:
         out.update(outcome="not_decidable", decided=False,
                    reason="needs 2 or 4 valid blocks, ABBA then BAAB in pairs (rules 6.1, 6.3)")
         return out
+    if treatment == "route":  # rule 5.3, decided over the same paired blocks as any outcome
+        on = [s for b in valid for s, arm in zip(b["segments"], b["order"]) if arm == "B"]
+        if on and all(s["verdict"] == "void" for s in on):
+            out.update(outcome="no_opportunity", decided=True)
+            return out
     if any(b["loss_without_fit"] for b in valid):
         out.update(outcome="loss", decided=True, reason="a treatment segment's net mean is 0 (rule 6.2)")
         return out
@@ -1114,15 +1131,29 @@ def cr0_worst_ratio(report):
     return worst / mean if mean > 0 else None
 
 
+FINAL_OUTCOMES = ("win", "no_effect", "loss", "inconclusive_switch_stays_off", "no_opportunity")
+
+
 def checkpoint1(utp, others, comparator, cr0):
     """Rule 6.9's projection, with both models and their intervals."""
     out = {"schema": 1, "spec": SPEC, "kind": "projection_not_measurement"}
     if any(e.get("rehearsal") for e in [utp] + list(others)) or (comparator or {}).get("rehearsal"):
         out["error"] = "rehearsal evidence: not projected"
         return out
-    if comparator is not None and comparator.get("verdict") != "valid":
-        out["comparator_not_used"] = f"comparator verdict {comparator.get('verdict')}"
-        comparator = None
+    if utp.get("treatment") != "utp" or any(e.get("treatment") not in ("adm", "route") for e in others):
+        out["error"] = "the --utp report isn't uTP's, or another report isn't an A/B effect"
+        return out
+    pending = [e.get("treatment") for e in [utp] + list(others) if e.get("outcome") not in FINAL_OUTCOMES]
+    if pending:  # rule 6.9 follows the outcomes
+        out["error"] = "outcomes not final: " + ", ".join(pending)
+        return out
+    if comparator is not None:
+        spaced = spacing(comparator, [t for e in [utp] + list(others) for t in timelines(e)])
+        out["comparator_spacing_problems"] = spaced
+        if comparator.get("verdict") != "valid" or spaced:  # rules 2.2, 5.4, D7
+            out["comparator_not_used"] = (f"comparator verdict {comparator.get('verdict')}"
+                                          if comparator.get("verdict") != "valid" else "rule 2.2 spacing")
+            comparator = None
     base = [s["net"] for s in utp.get("control_segments") or [] if s["net"] is not None]
     if len(base) < 2:
         out["error"] = "the uTP experiment has fewer than two valid control segments"
@@ -1170,9 +1201,6 @@ def checkpoint1(utp, others, comparator, cr0):
                 and p95 not in ("not_projected", "+Inf") and p95 <= P95_SECONDS)
     out["on_track"] = on_track
     out["range_below_100"] = out["range"][0] < GATE_MEAN
-    if comparator is not None:
-        out["comparator_spacing_problems"] = spacing(
-            comparator, [t for e in [utp] + list(others) for t in timelines(e)])
     return out
 
 
@@ -1230,7 +1258,10 @@ def main(argv=None):
         elif args.command == "gate":
             write(gate(load_report(args.comb), load_report(args.comparator) if args.comparator else None), None)
         else:
-            write(checkpoint1(load_report(args.utp), [load_report(args.adm)] + [load_report(p) for p in args.other],
+            adm = load_report(args.adm)
+            if adm.get("treatment") != "adm":
+                raise ValueError("--adm must be the CR-ADM effect report")
+            write(checkpoint1(load_report(args.utp), [adm] + [load_report(p) for p in args.other],
                               load_report(args.comparator), load_report(args.cr0_report)), None)
     except (OSError, ValueError, KeyError) as error:
         print(f"Cannot analyze evidence: {error}", file=sys.stderr)

@@ -53,6 +53,7 @@ class Sim:
         self.api = {"intensity": "balanced", "paused": False}
         self.imports = {"import_started": 0, "import_finished": 0, "intensity_changes": 0, "paused": 0}
         self.config_extra = {}
+        self.env_preset, self.config_file = "unset", "absent"
         self.checklist = {"auto_update": {"state": "excluded", "next_run_utc": "2026-11-10T03:00:00Z"},
                           "backup": {"state": "excluded", "next_run_utc": "2026-11-09T03:00:00Z"}}
         self.witness = {"configured": True, "host_mounted": True, "outside_data_dir": True}
@@ -209,7 +210,8 @@ class Sim:
             run["process_started_utc"] = datetime.fromtimestamp(START, timezone.utc).isoformat().replace("+00:00", "Z")
             run["comparator"] = {"query": collect.COMPARATOR_QUERY}
         else:
-            run["config"] = {"switches": dict(self.switches), "env_preset": "unset", "witness": self.witness,
+            run["config"] = {"switches": dict(self.switches), "env_preset": self.env_preset, "witness": self.witness,
+                             "config_file": self.config_file,
                              "settings_api": dict(self.api, intensity_source="default"), **self.config_extra}
         (root / "run.json").write_text(json.dumps(run))
         if self.result is not None:
@@ -431,6 +433,40 @@ class EvidenceTests(Base):
         sim = Sim()
         sim.api = {"intensity": None, "paused": False}
         self.assertIn("configuration_identity_recorded", self.failed(self.run_sim(sim)))
+
+    def test_env_preset_must_agree_with_the_settings_api(self):
+        sim = Sim()
+        sim.env_preset = "aggressive"
+        self.assertIn("env_and_settings_preset_agree", self.failed(self.run_sim(sim)))
+
+    def test_a_config_file_is_missing_identity(self):
+        sim = Sim()
+        sim.config_file = "unknown"
+        self.assertIn("configuration_identity_recorded", self.failed(self.run_sim(sim)))
+
+    def test_settings_must_be_checked_at_every_boundary(self):
+        sim = Sim()
+        sim.edits.append((lambda e, i: e == 1205.0,  # boundary 1's scrape
+                          lambda row, lines: row.update(api={"error": "unavailable"})))
+        self.assertIn("settings_checked_each_boundary", self.failed(self.run_sim(sim)))
+
+    def test_an_exit_before_the_window_ends_is_an_interruption(self):
+        sim = Sim()
+        sim.result = dict(sim.result, reason="process_exited_1")
+        sim.drop = lambda e: e > 1500  # the run ends inside hour 1
+        failed = self.failed(self.run_sim(sim))
+        self.assertIn("no_interruption", failed)
+        self.assertIn("window_complete", failed)
+        sim = Sim()
+        sim.result = dict(sim.result, identity_change={"expected": "x"})
+        self.assertIn("no_interruption", self.failed(self.run_sim(sim)))
+
+    def test_rule_7_1_series_are_published_per_hour(self):
+        hour = self.run_sim(Sim(switches={"utp": True}))["numerator"]["hourly"][1]
+        self.assertIn("dht_utp_in_total", hour["mechanism"])
+        self.assertGreater(hour["connects_per_second"], 0)
+        self.assertGreater(hour["resources"]["net"]["packets_per_second"], 0)
+        self.assertIsNotNone(hour["resources"]["peak_private_bytes"])
 
     def test_snapshot_cap(self):
         sim = Sim()
@@ -700,6 +736,7 @@ class EffectTests(unittest.TestCase):
                                   for i, a in enumerate(order)]
         out = self.effect([b("ABBA", 0), b("BAAB", 12)], treatment="route")
         self.assertEqual(out["outcome"], "no_opportunity")
+        self.assertEqual(self.effect([b("ABBA", 0)], treatment="route")["outcome"], "not_decidable")
 
     def test_route_baseline(self):
         valid = {"verdict": "valid", "kind": "ab", "identity": {"switches": {"utp": False, "route_backoff": False}},
@@ -756,6 +793,26 @@ class CheckpointTests(unittest.TestCase):
         self.assertTrue(out["on_track"])  # 104/min, worst hour 83.2/min, p95 600 s
         self.assertTrue(out["range_below_100"])  # on track, but the runner must say the range dips below 100
         self.assertAlmostEqual(out["fraction_of_comparator"], 104 / 150)
+
+    def test_inputs_must_be_final_and_the_right_treatments(self):
+        controls = [{"net": 100, "p95": 30, "p95_measured": True}] * 4
+        utp = {"treatment": "utp", "outcome": "inconclusive_run_blocks_3_and_4", "control_segments": controls}
+        self.assertIn("not final", analyze_cr.checkpoint1(utp, [], None, None)["error"])
+        utp["outcome"] = "not_decidable"
+        self.assertIn("not final", analyze_cr.checkpoint1(utp, [], None, None)["error"])
+        wrong = dict(utp, treatment="adm", outcome="no_effect")
+        self.assertIn("isn't uTP's", analyze_cr.checkpoint1(wrong, [], None, None)["error"])
+
+    def test_a_comparator_breaking_rule_2_2_is_not_used(self):
+        stamp = lambda h: (T0 + timedelta(hours=h)).isoformat().replace("+00:00", "Z")
+        seg_t = {"process_start": stamp(-6), "start": stamp(-5), "end": stamp(1), "last_scrape": stamp(1)}
+        utp = {"treatment": "utp", "outcome": "no_effect", "blocks": [{"segments": [seg_t]}],
+               "control_segments": [{"net": 100, "p95": 30, "p95_measured": True}] * 4}
+        comp = {"verdict": "valid", "numerator": {"window": {"mean_per_min": 150.0}, "worst_hour_per_min": 120.0},
+                "timeline": {"process_start_utc": stamp(5), "window_end_utc": stamp(30)}}
+        out = analyze_cr.checkpoint1(utp, [], comp, None)
+        self.assertEqual(out["comparator_not_used"], "rule 2.2 spacing")
+        self.assertIsNone(out["comparator_mean_per_min"])
 
     def test_rehearsal_and_invalid_inputs_are_not_projected(self):
         utp = {"treatment": "utp", "outcome": "no_effect", "rehearsal": True,

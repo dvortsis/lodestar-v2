@@ -39,6 +39,12 @@ class SpecDocker(FakeDocker):
             {"Destination": "/witness", "Type": "bind", "Source": "/mnt/user/appdata/witness"}]
         self.count, self.execs = count, []
 
+    config_status = 404  # HEAD /containers/{id}/archive: no config.toml
+
+    def request(self, method, path, timeout=None, body=None, raw=False):
+        self.calls.append((method, path))
+        return self.config_status, None
+
     def get(self, path):
         if path.startswith("/exec/"):
             return 200, {"ExitCode": 0 if self.count() is not None else 1}
@@ -116,6 +122,7 @@ class SpecBase(Base):
     def spec_args(self, kind="ab", *extra, **kw):
         password = self.tmp / "password"
         password.write_text(PASSWORD + "\n")
+        password.chmod(0o600)
         argv = ["--run-kind", kind, "--warmup-minutes", "2", "--baseline-hours", "2", "--hour-seconds", "300",
                 "--password-file", str(password), "--spec-commit", COMMIT, "--ip-echo-url", "http://127.0.0.1:9/",
                 "--checklist", "auto_update=excluded", "--next-run", "auto_update=2026-11-10T03:00:00Z",
@@ -318,6 +325,35 @@ class SpecLaunchTests(SpecBase):
         self.assertIn("comparator", self.refused("comparator"))
         self.assertIn("https", self.refused("ab", "--ip-echo-url", "ftp://example.test/"))
 
+    def test_credentials_are_guarded(self):
+        self.root = self.tmp / "public"
+        self.assertIn("private", self.refused("ab", "--url", "http://8.8.8.8:8484"))
+        self.root = self.tmp / "loose"
+        write_cgroup(self.cgroup)
+        args = args_for(self.root, "--url", self.lodestar.url, *self.spec_args("ab"))
+        (self.tmp / "password").chmod(0o644)
+        c = collect.Collector(args, collect.DockerInstance(SpecDocker(), "lodestar", self.cgroup),
+                              volumes=fixed_volumes())
+        with self.assertRaises(SystemExit) as caught:
+            c.prepare()
+        self.assertIn("chmod 600", str(caught.exception))
+
+    def test_a_config_file_is_refused(self):
+        docker = SpecDocker()
+        docker.config_status = 200
+        write_cgroup(self.cgroup)
+        args = args_for(self.root, "--url", self.lodestar.url, *self.spec_args("ab"))
+        c = collect.Collector(args, collect.DockerInstance(docker, "lodestar", self.cgroup), volumes=fixed_volumes())
+        with self.assertRaises(SystemExit) as caught:
+            c.prepare()
+        self.assertIn("config.toml", str(caught.exception))
+        self.assertIn(("HEAD", f"/containers/{CONTAINER_ID}/archive?path=%2Fdata%2Fconfig.toml"), docker.calls)
+        docker = SpecDocker()
+        docker.container["Config"]["Cmd"] = ["serve", "--config", "/etc/lodestar.toml"]
+        instance = collect.DockerInstance(docker, "lodestar", self.cgroup)
+        instance.attach()
+        self.assertEqual(instance.config_file(), "present")
+
     def test_real_windows_are_fixed_outside_rehearsals(self):
         args = collect.resolve_defaults(collect.build_parser().parse_args(
             ["--mode", "docker", "--root", str(self.root), "--commit", COMMIT, "--run-kind", "ab"]))
@@ -390,6 +426,14 @@ class SpecUnitTests(unittest.TestCase):
         self.assertIn(only_sync["source"], ("kernel", "timedatectl"))  # ntpd: the kernel's estimate if it has one
         fallback = collect.ntp_status(lambda argv: None)
         self.assertIn(fallback["source"], ("kernel", "unavailable"))
+
+    def test_kernel_offset_is_the_larger_of_pll_offset_and_estimated_error(self):
+        status = collect.kernel_ntp_status()
+        self.assertIn(status["source"], ("kernel", "unavailable"))
+        if status["synchronized"]:
+            self.assertIsNotNone(status["offset_seconds"])
+        else:
+            self.assertIsNone(status["offset_seconds"])  # unsynchronised: no offset to trust
 
     def test_net_counters_absent_when_unreadable(self):
         self.assertIsNone(collect.net_counters("/nonexistent", 1))

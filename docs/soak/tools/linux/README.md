@@ -247,7 +247,21 @@ python3 collect.py --mode docker --container lodestar --cgroup-root /host/cgroup
 - `--stop` on every A/B segment: an arm switch must be a clean stop.
 - The comparator: `--run-kind comparator --container bitmagnet
   --postgres-container bitmagnet-postgres`. It counts `SELECT count(*) FROM
-  torrents` in a read-only session at every scrape.
+  torrents` in a read-only session at every scrape. **Order matters** for the
+  "store empty at start" check (rule 5.4):
+  1. Create a fresh Postgres database and volume, and start Postgres.
+  2. Start the bitmagnet container.
+  3. Start the collector at once, in the same command line if you can. Its first count comes 5 s
+     after it attaches, before bitmagnet has stored anything, and it must come within 180 s of
+     bitmagnet's start (rule 6.6).
+
+  The collector can't attach before bitmagnet starts, because it verifies the running
+  container's identity. A first count above 0 voids the run.
+- Set crawler switches **by environment only**. The collector refuses to start
+  if Lodestar was given `--config` or its data directory has a `config.toml`,
+  because switches set there would be invisible to it.
+- The password file must be `chmod 600`, and `--url` must be a loopback or
+  private address: the login goes over plain http.
 - **Host activity:** write each event when it happens, with
   `python3 collect.py note --root <run> --category <category>`. Categories:
   `import`, `other_crawler`, `array_operation`, `host_reboot`,

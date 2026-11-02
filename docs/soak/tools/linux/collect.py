@@ -424,6 +424,21 @@ class DockerInstance:
                   for m in self.doc.get("Mounts") or [] if isinstance(m, dict)]
         return env, mounts
 
+    def config_file(self):
+        """`absent`, `present` or `unknown`: a --config flag or a config.toml in the data dir."""
+        config = self.doc.get("Config") or {}
+        args = [str(x) for x in (config.get("Cmd") or []) + (self.doc.get("Args") or [])]
+        if any(x == "--config" or x.startswith("--config=") for x in args):
+            return "present"
+        env, _ = self.environment()
+        data = env.get("LODESTAR_DATA_DIR") or str(Path(config.get("WorkingDir") or "/") / "data")
+        path = urllib.parse.quote(str(Path(data) / "config.toml"), safe="")
+        try:
+            status, _ = self.api.request("HEAD", f"/containers/{self.id}/archive?path={path}")
+        except OSError:
+            return "unknown"
+        return {200: "present", 404: "absent"}.get(status, "unknown")
+
     def started_utc(self):
         try:
             text = re.sub(r"\.(\d{6})\d*", r".\1", str(self.started_at)).replace("Z", "+00:00")
@@ -622,6 +637,25 @@ class NativeInstance:
 
     def row_extra(self):
         return {}
+
+    def config_file(self):
+        """`absent`, `present` or `unknown`, read through /proc/<pid>/{cmdline,cwd,root}."""
+        base = self.proc / str(self.pid)
+        try:
+            args = (base / "cmdline").read_bytes().split(b"\0")
+            cwd = os.readlink(base / "cwd")
+        except OSError:
+            return "unknown"
+        if any(x == b"--config" or x.startswith(b"--config=") for x in args):
+            return "present"
+        env, _ = self.environment()
+        if env is None:
+            return "unknown"
+        data = Path(cwd) / (env.get("LODESTAR_DATA_DIR") or "data")
+        root = base / "root"
+        if not os.access(root, os.R_OK | os.X_OK):
+            return "unknown"
+        return "present" if (root / str(data / "config.toml").lstrip("/")).exists() else "absent"
 
     def environment(self):
         """/proc/<pid>/environ (needs the same user or root); None if unreadable."""
@@ -917,8 +951,11 @@ def kernel_ntp_status():
     if state < 0:
         return {"source": "unavailable", "synchronized": None, "offset_seconds": None}
     unsync = bool(timex.status & 0x0040) or state == 5  # STA_UNSYNC, TIME_ERROR
+    # The PLL's offset (ns with STA_NANO, else µs), or the estimated error if that's larger:
+    # ntpd puts jitter in esterror and timesyncd leaves it 0, so the offset alone could pass unmeasured.
+    offset = abs(timex.offset) / (1e9 if timex.status & 0x2000 else 1e6)
     return {"source": "kernel", "synchronized": not unsync,
-            "offset_seconds": None if unsync else max(timex.esterror, 0) / 1e6}
+            "offset_seconds": None if unsync else max(offset, max(timex.esterror, 0) / 1e6)}
 
 
 def subprocess_output(argv, timeout=5):
@@ -1234,6 +1271,11 @@ class Collector:
             raise SystemExit(f"Cannot attach to the instance ({type(error).__name__}).") from None
         if a.stop and self.instance.kind == "native" and not self.instance.can_signal():
             raise SystemExit("--stop needs pidfd support (Linux 5.3+ with Python 3.9+) on the target process.")
+        if self.spec and a.run_kind != "comparator":
+            self.config_file = self.instance.config_file()
+            if self.config_file != "absent":
+                raise SystemExit("Lodestar reads a config.toml (or can't be checked for one): switches set there "
+                                 "are invisible to the collector. Set them by environment (CR-COL-3).")
         if a.require_gluetun and not self.instance.network()["gluetun_network_parent"]:
             raise SystemExit("--require-gluetun: the instance's network parent is not a gluetun container.")
         self.root.mkdir(parents=True, exist_ok=True)
@@ -1261,8 +1303,14 @@ class Collector:
         if a.run_kind == "comparator":
             if self.instance.kind != "docker" or not a.postgres_container:
                 raise SystemExit("--run-kind comparator needs --mode docker and --postgres-container.")
-        elif not a.password_file or not Path(a.password_file).is_file():
-            raise SystemExit("--password-file is required: the settings and Insights checks need a login.")
+        else:
+            if not a.password_file or not Path(a.password_file).is_file():
+                raise SystemExit("--password-file is required: the settings and Insights checks need a login.")
+            if host_class(urllib.parse.urlsplit(a.url).hostname) not in ("loopback", "private"):
+                raise SystemExit("--password-file sends the admin password over plain http: "
+                                 "use a loopback or private --url.")
+            if os.stat(a.password_file).st_mode & 0o077:
+                raise SystemExit("--password-file must be readable by its owner only (chmod 600).")
         if not a.spec_commit or not COMMIT.fullmatch(a.spec_commit):
             raise SystemExit("--spec-commit must name the commit whose CR-SPEC governs this run (rule 7.2).")
         self.checklist = parse_checklist(a.checklist, a.next_run)
@@ -1325,6 +1373,8 @@ class Collector:
                             http.client.HTTPException):
                         identity["settings_api"] = None
                         self.note("settings API unavailable at start")
+                if identity is not None:
+                    identity["config_file"] = self.config_file
                 run["config"] = identity
         self.run = {k: v for k, v in run.items() if v is not None}
         self.save(self.run, self.root / "run.json")
