@@ -382,7 +382,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 
 29. **#357 ships in v0.5.1** (owner, 2026-11-02, master-plan review session). An external review of the master plan recommended that the first public release include F-filter-load-fail-closed (#357), the content-safety fix merged after the v0.5.1 cut. Asked to choose between that and §2.28's "rc.3 only if the soak must be re-run anyway", the owner chose "Include in v0.5.1". This replaces that item of §2.28.
     - **rc.3 = rc.2 + #357,** cherry-picked onto `release/v0.5.1`. The runner checks it applies without pulling in other post-cut changes and maps the delta to targeted tests.
-    - **#357 changes filter loading only,** not the crawler lifecycle, the sampler or the endpoint policy, so under the delta rule (build plan §0.4) r3's soak evidence carries over. A short Unraid smoke of the rc.3 image confirms it starts, upgrades and serves. If the cherry-pick pulls in a class of change the delta rule names, the rule decides instead.
+    - **#357 changes filter loading and its reporting,** not the crawler lifecycle, the sampler or the endpoint policy, so under the delta rule (build plan §0.4) r3's soak evidence carries over. A short Unraid smoke of the rc.3 image confirms it starts, upgrades and serves. If the cherry-pick pulls in a class of change the delta rule names, the rule decides instead.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.

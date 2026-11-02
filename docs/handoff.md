@@ -44,6 +44,7 @@ Then list open pull requests: the GitHub UI, the GitHub MCP `list_pull_requests`
 
 ## 4. Path A: a Claude runner
 If Claude is available again and the runner has stopped:
+- If `HANDOVER.md` exists on `runner-state`, a Path B agent holds the build: the runner adopts its claims and waits for the owner before resuming (`runner/README.md` step 1; §5 below).
 - Start a new Opus session in **Auto** mode (never Plan) with the prompt *"Act as the Lodestar build runner: follow runner/README.md."*
 - [`runner/README.md`](../runner/README.md) has the rest: the marker file `~/.lodestar-runner`, taking over `runner_session` in `state.json`, the hourly task and the watchdog, launching slices with `create_session`, the fresh-Opus review, the freshness rule and the landing lane.
 - Slice sessions follow [`.claude/skills/steward/SKILL.md`](../.claude/skills/steward/SKILL.md).
@@ -55,7 +56,8 @@ Use this path for any agent without Claude's cloud sessions, `send_message` or t
 **Path B starts only with an explicit handover.** A stale timestamp proves nothing: `updated_at` can be old because a state push failed, and the watchdog starts a new runner after 4 hours on its own. So:
 1. **The owner hands over.** The owner disables the scheduled tasks "Lodestar runner watchdog" and the runner's hourly task (claude.ai → scheduled tasks), and tells the runner to stop if it's still reachable.
 2. **The handover is recorded** in `HANDOVER.md` at the root of the `runner-state` branch, by the owner or by you on the owner's explicit instruction. It names who holds the build, since when, that the runner and watchdog are stopped, and the open claims (below).
-3. **Claims.** Before you start a slice, add a line for it to `HANDOVER.md` (`<slice id> · <your agent name> · <branch> · <owned paths> · <date>`) and push. Then branch, and open a **draft PR** as soon as the branch has its first real commit (the decisions-file stub is enough; never an empty commit). Remove the line when the PR is ready for review.
+3. **Claims.** Before you start a slice, add a line for it to `HANDOVER.md` (`<slice id> · <your agent name> · <branch> · <owned paths> · <date> · <state>`) and push. Then branch, and open a **draft PR** as soon as the branch has its first real commit (the decisions-file stub is enough; never an empty commit). Update the state (`building`, `in review`) as it changes, and keep the line until the PR merges.
+   - **Slices the runner launched that were still running at the handover** are listed in `HANDOVER.md` as not to touch. The owner archives their sessions or leaves them to finish; you never push to their branches.
 4. **Check before every start and every push:** `git fetch origin runner-state` and read `HANDOVER.md`. If it no longer names you, or a runner has taken the build back, stop and leave your branch as it is.
 5. **A returning runner** reads `HANDOVER.md` first, adopts each claimed branch and draft PR as a registered slice (`runner/README.md`, "Other sessions the runner watches"), and deletes `HANDOVER.md` only after the owner confirms, then re-enables its tasks.
 

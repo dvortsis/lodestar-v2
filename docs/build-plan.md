@@ -7,7 +7,7 @@
 ## 0. Status and plan from 2026-11-02
 
 ### 0.1 Where things stand
-Status as of `main` at `7f167278` (2026-11-02 02:23Z). Live per-slice state is on the `runner-state` branch (`state.json`); reconcile it against `main`'s merges before acting on it ([handoff §2](handoff.md#2-where-the-truth-lives)).
+Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`). Live per-slice state is on the `runner-state` branch (`state.json`); reconcile it against `main`'s merges before acting on it ([handoff §2](handoff.md#2-where-the-truth-lives)).
 
 | Area | Done | In flight | Next |
 |---|---|---|---|
@@ -32,9 +32,9 @@ Status as of `main` at `7f167278` (2026-11-02 02:23Z). Live per-slice state is o
 **Concurrency:** at most **four slices at a time in total** in this phase: Opus, helper and docs slices alike, as the runner has applied §2.25 since 10-30 (the owner: "keep 4 slots full"). The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). A seven-day usage warning is active: prefer Sonnet where the delegation policy allows it. **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
 
 **The ladder** (fill free slots in this order; the owner can reorder it in one line):
-1. **Close v0.5.1** (Track R): the soak verdict, the gluetun leg, the tag.
-2. **The crawler's live evidence** (Track C): land CR-4, then the comparator and the A/B runs on the owner's experiment host, up to Checkpoint 1.
-3. **The Sources critical path** (Track S): SRC-1 → SRC-2 → SRC-7, with the owner's Q2/Q15.
+1. **Close v0.5.1** (Track R): the soak verdict, the gluetun leg, rc.3 with #357, the tag.
+2. **The crawler's live evidence** (Track C): CR-SPEC, then CR-COL-3 (no host needed, so they start now), then the comparator and the A/B runs on the owner's experiment host, up to Checkpoint 1.
+3. **The Sources critical path** (Track S): SRC-1 → SRC-2 → SRC-7 (Q2/Q15 answered by §2.28).
 4. **Unhold the epics** once the soak verdict is in: expand E-M6 (gap audit), E-v06-workers, E-v06-companions.
 5. **Expand E-M7**, starting with the schema-bump convergence slice SB-6.
 6. **Import pilots** (Track I), on the owner's import host, never alongside an A/B run.
@@ -47,8 +47,8 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 | Step | Who | Waits on | Exit |
 |---|---|---|---|
 | R1 Unraid soak r3 verdict | runner (analysis), owner (evidence hand-back) | the baseline end, 11-02 22:16Z | `analyze` report: no stall, no interruption, ≥ 24 h covered, memory slope upper 95 % CI ≤ 2 MiB/h on `anon` private memory over hours 12–24, peak reported |
-| R2 gluetun leg (≥ 2 h measured, part of the v0.5.1 gate) | owner runs it after the baseline; runner analyses | R1 | collector run with `--leg gluetun --require-gluetun` |
-| R3 **rc.3 = rc.2 + #357** (F-filter-load-fail-closed), owner's decision 2026-11-02 (§2.29). The runner cherry-picks #357 onto `release/v0.5.1`, checks it applies without pulling other post-cut changes, maps the delta to targeted tests (filter load, stand-ins, the §20.8 budget) and runs CI on the rc.3 SHA. #357 touches filter loading only, not the crawler lifecycle, sampler or endpoint policy, so r3's soak evidence carries over under the delta rule; a short Unraid smoke of the rc.3 image confirms it starts, upgrades and serves | runner; owner tags rc.3 | R1 | rc.3 artifacts signed and hashed; delta report |
+| R2 gluetun leg (≥ 2 h measured, part of the v0.5.1 gate) | owner runs it on rc.2 after the baseline (its evidence carries to rc.3 under the delta rule, like the soak's); runner analyses | R1 | collector run with `--leg gluetun --require-gluetun` |
+| R3 **rc.3 = rc.2 + #357** (F-filter-load-fail-closed), owner's decision 2026-11-02 (§2.29). The runner cherry-picks #357 onto `release/v0.5.1`, checks it applies without pulling other post-cut changes, maps the delta to targeted tests (filter load, stand-ins, the §20.8 budget) and runs CI on the rc.3 SHA. #357 changes filter loading and its reporting (Insights, `/metrics`, the web Insights view), not the crawler lifecycle, sampler or endpoint policy, so r3's soak evidence carries over under the delta rule; a short Unraid smoke of the rc.3 image confirms it starts, upgrades and serves. **#367 rides along (runner's recommendation, flagged):** without it, nothing undoes what #357's stand-ins hold, and rc.3 wouldn't write the `filter.stand_ins` record a later upgrade needs to re-judge them, so v0.5.1's holds would never be undone. If #367 has merged when rc.3 is cut, it's cherry-picked with #357 and mapped the same way; the delta report states the gap either way | runner; owner tags rc.3 | R1 | rc.3 artifacts signed and hashed; delta report |
 | R3b Tag `v0.5.1` from rc.3, approve the release environment, publish | **owner** | R2, R3 | GitHub release published; `:latest` moves |
 | R4 Bring `docs/releases/v0.5.1.md` to `main`, mark `docs/releases/v0.5.0.md` as never released, update the README's release status | docs slice | R3b | — |
 | R5 **v0.5.2 cut from `main`** (recommended, §0.4) | runner | R3b | G-v052 |
@@ -111,7 +111,7 @@ Any worker table goes through the migration queue (§0.7). Interface changes fro
 
 **Track M7 (E-M7, ready to expand).** Already merged: the integrations crate and adapters, notifiers, Send UI. To expand:
 - **SB-6, the schema-bump convergence slice (Opus, first).** Search allows one `SCHEMA_VERSION` bump per milestone (§1.3). SB-6 is the bump 5 → 6. It fixes, in one change: SRC-3's `verified:`/`source:`/`network:` fields; `payload_sig` and the grouping fields; the regex trigram field; file category and `pieces_root`; and `size` in the file index, which X-search-files-3 needs. It waits only on SRC-2 (so the unverified data model is settled), not on E-M7's expansion. Later M7 slices fill these fields; they don't bump again. It lands before the 10M import pilot.
-  - **Population contract (r3).** A new field is empty on every record indexed before its producer ships: `crates/search/src/rebuild.rs` opens an existing current-version index without rebuilding, and the live indexer visits only new ids and `reindex_log` entries. So SB-6 also defines, and every producer slice (SRC-3, grouping, `payload_sig`, trigram, file category) ships: a per-field **population generation** recorded durably; a **resumable backfill** that walks existing records through `reindex_log` in bounded batches and survives restarts, deletions and filter changes made while it runs; completion criteria; and **truthful availability** while it runs (a query on a partly populated field says so, and a prefilter never treats an unpopulated field as "no match"). Each producer's acceptance tests SB-6 → import → producer on an existing database, including a restart mid-backfill.
+  - **Population contract (r3).** A new field is empty on every record indexed before its producer ships: `crates/search/src/rebuild.rs` opens an existing current-version index without rebuilding, and the live indexer visits only new ids and `reindex_log` entries. So SB-6 also defines, and every producer slice (SRC-3, grouping, `payload_sig`, trigram, file category) ships: a per-field **population generation** recorded durably; a **resumable backfill** that walks existing records through `reindex_log` in bounded batches and survives restarts, deletions and filter changes made while it runs; completion criteria; and **truthful availability** while it runs (a query on a partly populated field says so, and a prefilter never treats an unpopulated field as "no match"), built on the existing `missing_fields()` / `unavailable` reporting in `rebuild.rs`. Fields SB-6 can compute from the store (file `size`, `pieces_root`, file category) are filled by SB-6's own blue/green rebuild, which X-search-files-3 relies on. Each producer's acceptance tests SB-6 → import → producer on an existing database, including a restart mid-backfill.
   - **Cost.** Producers that land after the 50M import rewrite the corpus once each. Either they land before the 50M import, or their backfill time, disk and RSS are measured at 10M and budgeted for 50M. The 50M approval names which fields were populated; a later producer re-checks the affected budgets when its backfill runs.
 - The Torznab server; `.torrent` upload and folder watch (upload needs an **owner** exception to the JSON-only middleware); grouping (MinHash, collapse-by-group, "same file"); the regex prefilter and time-budgeted verify; the enrichment harness and plugins; the usenet tier and IRC announces; the Stremio addon and bitmagnet export.
 
@@ -176,8 +176,8 @@ Answered by §2.28 (and #357's release by §2.29): Q2, Q3, Q7 and Q15 (Q1 keeps 
 
 **Before any live run** (r3):
 - **CR-COL-3 (tooling).** The Linux collector and analyzer must keep and judge the gate's own evidence (Track C step C0a). Without it a completed run permanently lacks its primary outcome and the checks that prove a treatment was active.
-- **CR-SPEC (measurement specification).** A decisions file, frozen before collection and not changed after any data is seen. It fixes:
-  - **the measured window:** it starts at a stated boundary after suppression ends plus a stated warmup, for every run including the 24 h acceptance soak on a fresh directory (whose 6 h first-start suppression is otherwise inside or outside the mean by accident); hours are fixed clock hours from that start, not rolling;
+- **CR-SPEC (measurement specification).** A decisions file, frozen before collection and not changed after any data is seen. §2.25 makes the exact measurement rules refinements **the owner confirms before the first acceptance analysis**, so CR-SPEC is flagged to the owner and CR-COMB depends on `ext:owner-cr-spec`. CR-COL-3 implements its rules, so it follows CR-SPEC. It fixes:
+  - **the measured window:** it starts at a stated boundary after suppression ends plus a stated warmup, for every run including the 24 h acceptance soak on a fresh directory (whose 6 h first-start suppression is otherwise inside or outside the mean by accident); hours are consecutive 60-minute intervals counted from that start (not wall-clock aligned, not rolling);
   - **carry-over between arms:** a fresh data directory per arm, or a stated wash-out, and how CR-0d's `dht.safe_restart` is set across arm switches;
   - **the cohort:** which events count towards an arm (by first sighting inside the window), and how latency samples that straddle a window edge are treated;
   - **latency coverage:** the maximum share of dropped latency samples (`discovery_to_searchable_dropped_total`) for which a p95 is reported at all; below that coverage the p95 is "not measured", never a pass. Dropped samples are counted as above the threshold when bounding the p95. Unfinished work at the window's end is reported, not dropped;
@@ -211,7 +211,7 @@ Answered by §2.28 (and #357's release by §2.29): Q2, Q3, Q7 and Q15 (Q1 keeps 
 - **Where:** one node, one public IP, a fresh data directory with no imports, the Balanced preset.
 - **Target:** ≥ 100 per minute sustained, comparable to a pinned bitmagnet run. The stretch target is 1,000/min, which remote workers serve.
 - **Thresholds** (decided 2026-10-31 under `docs/owner-decisions.md` §2.26): 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min. That figure runs from the first sighting of the infohash and includes the metadata fetch; it doesn't replace §1.6's "new torrent → searchable < 5 s", which starts once the metadata is stored.
-- **How it's measured:** per CR-SPEC (§0.5), frozen before collection: the window's start boundary, fixed clock hours for the worst hour, the cohort, and the latency-coverage rule under which a p95 counts.
+- **How it's measured:** per CR-SPEC (§0.5), frozen before collection and confirmed by the owner: the window's start boundary, 60-minute intervals from that start for the worst hour, the cohort, and the latency-coverage rule under which a p95 counts.
 - Politeness and network guardrails are never relaxed to reach it. Checkpoint 1 (§0.5) is where a shortfall goes to the owner.
 
 **Import scale:**
@@ -249,11 +249,11 @@ flowchart LR
   CP1 -->|on track| AB2[A/B: CR-1a, CR-1b; CR-1c; CR-5] --> COMB[CR-COMB 24 h] --> G6C[G-v06-crawler]
   CP1 -->|short| OWN[(owner re-decides)]
   SRC1[SRC-1 V14] --> SRC2[SRC-2] --> SRC7[SRC-7]
-  Q[(owner Q2, Q15)] --> SRC7
   SRC7 --> SRC10[SRC-10a..d, 11, 12, 13] --> SRCG[SRC-G]
   SRC2 --> SB6[SB-6 schema bump] --> SRC3[SRC-3] --> SRCG
   SB6 --> I10[G-import-10M]
   SB6 --> RB10[G-rebuild-10M v5 to v6]
+  I1 --> RB10
   RB10 --> I50
   I1[G-import-1M] --> I10 --> I50[G-import-50M] --> CR3[CR-3, wizard, import families]
   EP --> W[Workers 1-6] -.ships in.-> V06
@@ -263,7 +263,7 @@ flowchart LR
 ```
 
 **Things that run one at a time:**
-- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: **V14 → SRC-1** (assigned by this update; merges once `ext:owner-migrations-on-main` holds), then whichever of CR-3 (after the 50M gate) and any worker or companion table reaches the slot first. The runner records the queue in `runner-state` `migration_order` (today stale at V11).
+- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: V12 → V13 (merged) → **V14 SRC-1** (§2.28 lifted the migration hold) → **V15 CR-3** (after the 50M gate), with any worker or companion table taking the next number when it reaches the slot. The runner records the queue in `runner-state` `migration_order`.
 - **Search schema:** exactly one `SCHEMA_VERSION` bump per milestone. M7's is SB-6. A slice that needs a new indexed field asks SB-6 to carry it instead of bumping.
 - **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks. **Bookings are exclusive and per run:** `ext:experiment-host` and `ext:import-host` hold for one booked run, not once for all, so two gates can't share the host because their `owns` happen to be disjoint.
 - **The experiment calendar** (the four-slice cap can't shorten this serial path):
@@ -310,8 +310,8 @@ flowchart LR
 ### 0.9 Next actions
 In order, as slots allow (four slices in total; no two with overlapping `owns`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
 1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z).
-2. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free, critical path first.
-3. Launch **CR-COL-3** and **CR-SPEC** early: they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars is already running.
+2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars is already running (a recorded exception: it shares `crates/api/src/digest.rs` with #367, which merges first).
+3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first.
 4. After 11-02 22:16Z: analyse the r3 soak; cut rc.3 with #357 (§2.29); ask the owner for the gluetun leg, the rc.3 smoke and the tag (owner queue #1), and in the same message for the experiment host and its calendar (#2).
 5. On the soak verdict: expand E-M6 (gap audit first), E-v06-workers, E-v06-companions.
 6. Launch SB-6 when SRC-2 merges; expand the rest of E-M7; launch P-v06-rulepacks.
@@ -396,7 +396,7 @@ P0 seams ─► P1 v0.5 MVP ─► P2 M5 ─────────────
                                                      ├─► P4 v0.6: Sources ∥ workers ∥ companions ∥ crawler gate
                                                      └─► P5 M7/v0.7 (SB-6 first) ─► P6 v0.8 ─► P7 M8 → 1.0
 ```
-- **Critical path to v0.6:** the crawler gate (§0.5), which needs the owner's experiment host and may need the owner's re-decision at Checkpoint 1; in parallel, the Sources path SRC-1 → SRC-2 → SRC-7 (needs Q2/Q15) → SRC-10* → SRC-G.
+- **Critical path to v0.6:** the crawler gate (§0.5), which needs the owner's experiment host and may need the owner's re-decision at Checkpoint 1; in parallel, the Sources path SRC-1 → SRC-2 → SRC-7 → SRC-10* → SRC-G.
 - **Critical path to 1.0:** M7's SB-6 and the import scale gates feed P7's 10M/50M performance gates.
 
 ---
