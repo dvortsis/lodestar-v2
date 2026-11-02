@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T10:43:57Z",
+  "updated_at": "2026-11-02T10:46:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2433,7 +2433,10 @@
       "merge_sha": "9911f4d8"
     },
     "SRC-14": {
-      "brief_must": "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source)."
+      "brief_must": [
+        "render source_egress_* metrics/status and spawn PluginEgress::monitor; HttpError variant so kill-switch refusals do not back off the host; warn when HTTPS_PROXY/ALL_PROXY is set while a plugin egress is Direct; do NOT expose the interface route until a bound resolver exists or the owner accepts the DNS leak; help text names the socks5h LAN caveat and defaults to SocksDns::Local when the proxy is on the LAN Before turning the verification switch on: per-source pending cap or a Low priority class (dead swarms can hold ~30k of the 200k pool; evict_one ignores source).",
+        "Purge must also scrub pre-migration snapshots (crates/store/src/snapshots.rs, VACUUM INTO, kept 90 days): drop sources.secret.<plugin>.* and sources.consent.<plugin> from each snapshot, or refuse rollback past a purge; secrets.key stays in the data dir, so lodestar rollback would otherwise restore a purged source's sealed credentials and ack (#388 Opus review finding 1)."
+      ]
     },
     "SRC-2b": {
       "status": "queued",
@@ -2460,7 +2463,7 @@
     "SRC-4": {
       "notes_runner": "launch after SRC-2 merges (both touch crates/pipeline/src/lib.rs)",
       "notes_runner2": "expect conflicts in crates/pipeline/src/lib.rs (SRC-2 added intake routing, config, stats)",
-      "status": "in review",
+      "status": "review MERGE; nits pending push",
       "model": "opus",
       "session": "session_01MMjhnBnrYC2SRCP6LYaee6",
       "launched": "2026-11-02T09:17:46Z",
@@ -3671,7 +3674,7 @@
       "id": "flag-src4",
       "state": "to-send",
       "added": "2026-11-02T10:32:07Z",
-      "text": "SRC-4 refinements (all tighten): Restricted/Overlay ask for the password on every enable, not only first consent; consent-text version is per class with the endpoint digest folded in (an endpoint change asks again); External needs its endpoint list acknowledged; SOCKS5 credentials capped at 255 bytes."
+      "text": "SRC-4 refinements (all tighten): Restricted/Overlay ask for the password on every enable, not only first consent; consent-text version is per class with the endpoint digest folded in (an endpoint change asks again); External needs its endpoint list acknowledged; SOCKS5 credentials capped at 255 bytes. Also: the consent ack is bound to the class's consent-text version plus the endpoint digest, not to the plugin manifest's own version (a plugin update that keeps its endpoints doesn't ask again)."
     }
   ],
   "external_gates": {
