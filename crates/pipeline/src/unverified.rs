@@ -100,6 +100,36 @@ pub fn claims_kib(d: &Discovery) -> u32 {
         .min(CLAIMS_STEP_KIB)
 }
 
+/// Where the writer publishes the ids it promoted under their own id,
+/// after each commit (SRC-2b's percolator pickup hooks in here). The sink
+/// runs on the writer's task and must not block: hand the ids off and
+/// return. Nothing is published while no sink is set.
+#[derive(Default)]
+pub struct PromotedHook(std::sync::RwLock<Option<Box<dyn Fn(&[i64]) + Send + Sync>>>);
+
+impl std::fmt::Debug for PromotedHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let set = self.0.read().map(|s| s.is_some()).unwrap_or(false);
+        f.debug_struct("PromotedHook").field("set", &set).finish()
+    }
+}
+
+impl PromotedHook {
+    /// Sets the sink, replacing any earlier one.
+    pub fn set(&self, sink: impl Fn(&[i64]) + Send + Sync + 'static) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(sink));
+    }
+
+    pub(crate) fn publish(&self, ids: &[i64]) {
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(sink) = self.0.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            sink(ids);
+        }
+    }
+}
+
 /// Counters for metrics and the status page.
 #[derive(Debug, Default)]
 pub struct UnverifiedStats {
@@ -135,6 +165,8 @@ pub struct UnverifiedStats {
     pub sweeps: AtomicU64,
     /// Keys the verification cursor handed to intake.
     pub verify_sent: AtomicU64,
+    /// The promoted ids, published after each commit.
+    pub promoted_hook: PromotedHook,
 }
 
 impl UnverifiedStats {

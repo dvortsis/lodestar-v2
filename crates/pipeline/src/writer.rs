@@ -635,6 +635,20 @@ impl Writer {
                 self.have.insert(h);
             }
         }
+        // Promoted under their own ids, below every watermark: published
+        // for whatever follows them (SRC-2b's percolator pickup).
+        let kept: Vec<i64> = outcome
+            .promoted_as
+            .iter()
+            .filter_map(|&(i, _, _)| {
+                outcome
+                    .stored
+                    .iter()
+                    .find(|(j, _, new, _)| *j == i && *new)
+                    .map(|&(_, id, _, _)| id)
+            })
+            .collect();
+        self.stats.unverified.promoted_hook.publish(&kept);
         let committed_at = unix_now();
         for (i, id, new, _) in outcome.stored {
             let c = &committing[i];
@@ -2584,6 +2598,12 @@ mod tests {
             let hot = Arc::new(HotColumns::new());
             let mut w = writer(store, coordinator.clone(), gate.clone());
             w.hot = Some(hot.clone());
+            let published = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink = published.clone();
+            w.stats
+                .unverified
+                .promoted_hook
+                .set(move |ids| sink.lock().unwrap().extend_from_slice(ids));
             let (retry, _rx) = mpsc::channel(4);
             w.commit(
                 vec![leased(&coordinator, r)],
@@ -2602,6 +2622,7 @@ mod tests {
             assert_ne!(hot.get(Col::LastSeen, id as u64), lodestar_store::NEVER);
             let store = w.store.as_mut().unwrap();
             assert_eq!(store.find(&key).unwrap(), Some(id), "the item's id");
+            assert_eq!(*published.lock().unwrap(), vec![id], "published");
             assert!(store.unverified(Network::Bt, &key.0).unwrap().is_none());
             assert_eq!(store.torrent_claims(id).unwrap().len(), 1);
             // Verified metadata stands; the mismatch is a junk reason.
