@@ -13031,7 +13031,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "`index_lag` (the index more than 30 s behind), `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`\n(stored filter rows that no longer read; filtering fails closed\nfor them until they're fixed in Filters & Safety), or\n`filter_stand_ins_rejudged` (for a week after such rows read\nagain: `value` torrents their stand-ins held were released, and\n`rows` holds the one number the rules as they are still hold)."
+            "description": "`index_lag` (the index more than 30 s behind), `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`\n(stored filter rows that no longer read; filtering fails closed\nfor them until they're fixed in Filters & Safety), or\n`filter_stand_ins_rejudged` (for a week after such rows read\nagain: `value` torrents their stand-ins held were released, and\n`rows` holds two numbers, how many the rules as they are still\nhold and how many adult holds are left for the review queue)."
           },
           "rows": {
             "type": "array",

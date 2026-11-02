@@ -4745,7 +4745,8 @@ export interface components {
              *     for them until they're fixed in Filters & Safety), or
              *     `filter_stand_ins_rejudged` (for a week after such rows read
              *     again: `value` torrents their stand-ins held were released, and
-             *     `rows` holds the one number the rules as they are still hold).
+             *     `rows` holds two numbers, how many the rules as they are still
+             *     hold and how many adult holds are left for the review queue).
              */
             kind: string;
             /**
