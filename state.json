@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T13:51:04Z",
+  "updated_at": "2026-11-02T14:02:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2576,7 +2576,7 @@
       "head": "7671b501"
     },
     "X-polish-carry-1102": {
-      "status": "runner-reviewed; merge on green",
+      "status": "merged",
       "brief": "briefs/X-polish-carry-1102.md",
       "model": "sonnet",
       "items": [
@@ -2591,7 +2591,13 @@
       "session": "session_01MMjhn9GYqGmRTHrEgZpJmP",
       "launched": "2026-11-02T12:37Z",
       "pr": 393,
-      "head": "4f0cd651"
+      "head": "4f0cd651",
+      "merge": "b39912f7"
+    },
+    "G-import-smoke": {
+      "status": "launching",
+      "brief": "briefs/G-import-smoke.md",
+      "model": "opus"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
