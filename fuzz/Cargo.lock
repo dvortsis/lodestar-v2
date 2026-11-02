@@ -1261,6 +1261,7 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-release-parser",
  "lodestar-search",
+ "lodestar-sources-feeds",
  "lodestar-sources-importers",
  "lodestar-store",
  "lodestar-tracker-scrape",
@@ -1331,16 +1332,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "lodestar-sources-importers"
+name = "lodestar-sources-feeds"
 version = "0.5.0"
 dependencies = [
  "lodestar-metainfo",
+ "quick-xml",
+]
+
+[[package]]
+name = "lodestar-sources-importers"
+version = "0.5.0"
+dependencies = [
+ "lodestar-classify",
+ "lodestar-filter",
+ "lodestar-metainfo",
  "lodestar-store",
  "rusqlite",
+ "rustls",
+ "rustls-platform-verifier",
  "sha2",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
