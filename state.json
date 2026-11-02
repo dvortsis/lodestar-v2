@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T01:09:00Z",
+  "updated_at": "2026-11-02T01:58:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2283,16 +2283,26 @@
       "merge": "edc27a2e"
     },
     "CR-4": {
-      "status": "building",
+      "status": "in-review",
       "model": "opus",
       "session": "session_01MMjhnBobRgzjNcSJb43XQD",
-      "launched": "2026-11-02T00:45Z"
+      "launched": "2026-11-02T00:45Z",
+      "pr": 365,
+      "head": "e983d35"
     },
     "SRC-8": {
-      "status": "building",
+      "status": "ci",
       "model": "opus",
       "session": "session_01MMjhnD96xvuDMzkdMWBKDN",
-      "launched": "2026-11-02T01:08Z"
+      "launched": "2026-11-02T01:08Z",
+      "pr": 366,
+      "head": "18fe7a08",
+      "note": "Opus review MERGE (polish only); merge on green"
+    },
+    "X-strip-format-chars": {
+      "status": "queued",
+      "model": "opus",
+      "note": "From #366 review: common.rs unsafe_char and api/digest.rs strip bidi but not other Cf (U+200B-200D, U+2060-2064, U+FEFF, U+00AD, U+2028/2029, tag chars). One small PR covering both, with tests."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3335,6 +3345,11 @@
       "id": "q-subscriptions-proxy",
       "status": "to-send",
       "text": "Owner question (privacy trade-off, from #362): blocklist list fetches now go through the SSRF guard, which by §16 ignores system proxies (HTTPS_PROXY), because a proxy resolves names itself and would bypass the private-address check. §20.13 had said list fetches use the proxy egress. Effect: a user who relies on HTTPS_PROXY (not a whole-container VPN such as gluetun, which still applies) would fetch blocklists from their own IP. Lists on the local network, including config lists, are now refused. Recommendation: accept for v0.6 (gluetun is the documented setup); a follow-up could add a guarded proxy mode. main is not shipped, so this can be changed before the v0.6 cut."
+    },
+    {
+      "id": "flag-src8",
+      "status": "to-send",
+      "text": "§2.19 from SRC-8 (#366, RSS/Atom parser): only Nyaa's exact namespace URI is read (a Sukebei variant waits on Q7; adding it later is one line); an enclosure length is not used as the content size; a malformed attribute anywhere stops the parse of that feed."
     }
   ],
   "external_gates": {
