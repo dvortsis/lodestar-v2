@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T03:22:00Z",
+  "updated_at": "2026-11-02T03:40:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2329,6 +2329,18 @@
       "status": "queued",
       "model": "opus",
       "note": "After X-strip-format-chars merges: crates/filter/src/normalize.rs invisible() misses U+2028/2029, tag chars U+E0000-E007F, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+FFF9-FFFB, U+110BD/13430/1BCA0/1D173 ranges; use lodestar_metainfo::hidden_char. Tightening; /security-review; §20.8 budget."
+    },
+    "P-master-plan-r3": {
+      "status": "merged",
+      "pr": 372,
+      "merge_sha": "5edd2504",
+      "notes": "owner planning session; §2.29 (#357 in v0.5.1 as rc.3 = rc.2 + #357 exactly; runner ruling: #367 only on owner yes). phase_total 4 in slices.yaml; HANDOVER.md protocol; watchdog prompt updated 03:39Z."
+    },
+    "R-rc3-backport": {
+      "status": "queued",
+      "model": "opus",
+      "brief": "briefs/R-rc3-backport.md",
+      "notes": "ladder rung 1. Trial cherry-pick of 736a3028 onto release/v0.5.1 conflicts in api/filters.rs, metrics.md, .size-limit.mjs, insights messages en/zh. PR against release/v0.5.1, full-ci, /security-review; runner merges after R1 verdict. Launch on the first free slot."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3411,6 +3423,18 @@
       "id": "note-upgrade-test",
       "status": "to-send",
       "text": "Upgrade test settled under §2.28: r1's clean V3->V12 upgrade of the Oct 22 volume counts, because crates/store (all migrations) is byte-identical between rc.1 and rc.2. No extra upgrade smoke needed for rc.2."
+    },
+    {
+      "id": "q-367-in-rc3",
+      "state": "to-send",
+      "text": "rc.3 is exactly rc.2 + #357 (§2.29). #357 alone holds what an unreadable rule stand-in matches and nothing in rc.3 undoes those holds or writes the filter.stand_ins record. Recommendation (planning session and runner): also cherry-pick F-filter-standin-undo (#367) into rc.3 if merged by the cut. Yes/no?",
+      "added": "2026-11-02T03:40:03Z"
+    },
+    {
+      "id": "flag-plan-r3",
+      "state": "to-send",
+      "text": "Master plan r3 (#372) merged: CR-SPEC and CR-COL-3 before any live crawler run; ext:owner-cr-spec (you confirm the measurement spec before the comparator run); X-required-web-checks before your ruleset change (the §2.28 check names do not exist); HANDOVER.md protocol. Decisions in docs/decisions/2026-11-02-master-plan-r3.md for veto.",
+      "added": "2026-11-02T03:40:03Z"
     }
   ],
   "external_gates": {
