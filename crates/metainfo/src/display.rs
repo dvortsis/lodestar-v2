@@ -1,7 +1,8 @@
 //! The characters stripped from untrusted text before it's shown or kept as
 //! a display name (feed titles and tags, digest fields).
 
-/// Unicode general category Cf (format), as of Unicode 15.1. These are
+/// Unicode general category Cf (format), as of Unicode 17.0 (the same set
+/// since 15.1). These are
 /// invisible, and some reorder text (the bidi controls), so a name that
 /// carries them can look like a different name or split a filter word.
 /// Sorted and disjoint; checked against `unicode-properties` in the tests.

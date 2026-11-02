@@ -184,6 +184,16 @@ fn small_fields_are_capped_without_skipping() {
     assert_eq!(it.guid, None, "an over-long reference is dropped, not cut");
 }
 
+/// A tag with a hidden character is dropped whole, not stripped: it
+/// would otherwise show as a different tag.
+#[test]
+fn tags_with_hidden_characters_are_dropped() {
+    let body = feed(&format!(
+        r#"<item><torznab:attr name="tag" value="free&#x200B;leech"/><torznab:attr name="tag" value="in&#xAD;ternal"/><torznab:attr name="tag" value="ok"/><torznab:attr name="infohash" value="{HASH}"/></item>"#
+    ));
+    assert_eq!(parse(body.as_bytes()).items[0].tags, ["ok"]);
+}
+
 #[test]
 fn doctypes_are_refused() {
     let laughs = r#"<?xml version="1.0"?>

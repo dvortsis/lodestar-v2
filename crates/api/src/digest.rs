@@ -1103,7 +1103,7 @@ mod tests {
         }
 
         #[test]
-        fn clean_is_short_and_printable(s in "(.|[\u{200B}-\u{200F}\u{2028}\u{FEFF}\u{E0000}-\u{E007F}]){0,300}") {
+        fn clean_is_short_and_printable(s in "(.|[\u{AD}\u{200B}-\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2060}-\u{2064}\u{FEFF}\u{E0000}-\u{E007F}]){0,300}") {
             let c = clean(&s);
             prop_assert_eq!(clean(&c), c.clone());
             prop_assert!(c.chars().count() <= MAX_FIELD_CHARS);

@@ -187,10 +187,8 @@ pub(crate) fn clean_title(s: &str) -> String {
     out
 }
 
-/// Controls, format characters (Cf, including the bidi controls and
-/// zero-width characters), line separators and tags: the characters that
-/// hide or reorder text ([`lodestar_metainfo::hidden_char`], the set
-/// `crates/api/src/digest.rs` strips too).
+/// [`lodestar_metainfo::hidden_char`], the set `crates/api/src/digest.rs`
+/// strips too.
 pub(crate) fn unsafe_char(c: char) -> bool {
     lodestar_metainfo::hidden_char(c)
 }
@@ -705,7 +703,7 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn clean_title_strips_and_is_idempotent(
-            s in "(.|[\u{AD}\u{200B}-\u{200F}\u{2028}\u{FEFF}\u{E0000}-\u{E007F}]){0,300}"
+            s in "(.|[\u{AD}\u{200B}-\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2060}-\u{2064}\u{FEFF}\u{E0000}-\u{E007F}]){0,300}"
         ) {
             let t = clean_title(&s);
             proptest::prop_assert!(!t.chars().any(unsafe_char));
