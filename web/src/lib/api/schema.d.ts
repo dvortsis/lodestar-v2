@@ -2389,6 +2389,11 @@ export interface components {
              *     confirm the removal with the password.
              */
             floor_entries?: string[];
+            /**
+             * @description For `resolve_held`: the held version's fingerprint (64 hex
+             *     digits). Send it back as `held` to accept with the password.
+             */
+            held_version?: string;
             neutralize: null | components["schemas"]["Preview"];
             preview: components["schemas"]["Preview"];
             /**
@@ -2397,6 +2402,12 @@ export interface components {
              *     a list adds; unsubscribing or pausing shows what's left.
              */
             strictness?: components["schemas"]["Strictness"];
+            /**
+             * @description For `resolve_held` accepted: entries the applied version blocks
+             *     that the held one doesn't (hashes for a content list, ranges for
+             *     an IP list).
+             */
+            unblocked?: number;
             /** @description The plain-language effect warning; null for a strengthening change. */
             warning: string | null;
             weakening: boolean;
@@ -2794,6 +2805,8 @@ export interface components {
             op: "pause_subscription";
         } | {
             accept: boolean;
+            /** @description The previewed `held_version`. */
+            held?: string | null;
             /** Format: int64 */
             id: number;
             /** @enum {string} */

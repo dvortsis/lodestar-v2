@@ -453,14 +453,24 @@ impl IpSet {
     /// Whether every address in `other` is in this set too, so swapping
     /// `other` for this set unblocks nothing.
     pub fn covers(&self, other: &IpSet) -> bool {
-        fn all<T: Ord + Copy>(have: &[(T, T)], want: &[(T, T)]) -> bool {
+        self.uncovered(other) == 0
+    }
+
+    /// How many of `other`'s ranges aren't wholly in this set: what
+    /// swapping `other` for this set unblocks, by range.
+    pub fn uncovered(&self, other: &IpSet) -> usize {
+        fn missing<T: Ord + Copy>(have: &[(T, T)], want: &[(T, T)]) -> usize {
             // Both are merged, so a covered range lies in one of `have`'s.
-            want.iter().all(|&(a, b)| {
-                let i = have.partition_point(|&(lo, _)| lo <= a);
-                i > 0 && have[i - 1].1 >= b
-            })
+            // A decoded inverted range (`a > b`) is empty in `contains`;
+            // it only ever counts as missing here, never as covering.
+            want.iter()
+                .filter(|&&(a, b)| {
+                    let i = have.partition_point(|&(lo, _)| lo <= a);
+                    !(i > 0 && have[i - 1].0 <= have[i - 1].1 && have[i - 1].1 >= b)
+                })
+                .count()
         }
-        all(&self.v4, &other.v4) && all(&self.v6, &other.v6)
+        missing(&self.v4, &other.v4) + missing(&self.v6, &other.v6)
     }
 
     pub fn v4_ranges(&self) -> usize {
@@ -754,6 +764,8 @@ mod tests {
         }
         let gap = IpSet::new([v4(10, 14), v4(16, 20)]);
         assert!(!gap.covers(&IpSet::new([v4(12, 18)])));
+        assert_eq!(gap.uncovered(&wide), 2, "both of wide's ranges");
+        assert_eq!(wide.uncovered(&gap), 0);
     }
 
     #[test]

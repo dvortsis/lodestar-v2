@@ -9,6 +9,8 @@
 
 use std::collections::HashSet;
 
+use sha2::Digest as _;
+
 use axum::Json;
 use axum::extract::State;
 use lodestar_filter::lists::{Format, IpSet, KIND_IP};
@@ -138,8 +140,13 @@ pub(super) fn subscription(store: &Store, id: i64) -> ApiResult<Subscription> {
 
 /// What accepting a list's held version would unblock.
 pub(super) struct HeldEffect {
+    /// The held version's fingerprint: SHA-256 of its data, in hex.
+    pub version: String,
     /// It unblocks something the applied version blocks.
     pub loosens: bool,
+    /// How many entries stop being blocked: hashes for a content list,
+    /// applied ranges not wholly covered for an IP list.
+    pub unblocked: usize,
     /// For a content list: the hashes the applied version lists and the
     /// held one doesn't.
     pub dropped: HashSet<[u8; 20]>,
@@ -153,8 +160,11 @@ pub(super) fn held_effect(store: &Store, sub: &Subscription) -> ApiResult<Option
         return Ok(None);
     };
     let applied = store.subscription_data(sub.id, false).map_err(internal)?;
+    let digest = sha2::Sha256::digest(&held);
     let mut effect = HeldEffect {
+        version: digest.iter().map(|b| format!("{b:02x}")).collect(),
         loosens: false,
+        unblocked: 0,
         dropped: HashSet::new(),
     };
     let Some(applied) = applied else {
@@ -163,14 +173,18 @@ pub(super) fn held_effect(store: &Store, sub: &Subscription) -> ApiResult<Option
     if sub.kind == KIND_IP {
         // What doesn't decode blocks nothing, in the engine as here.
         let new = IpSet::decode(&held).unwrap_or_default();
-        effect.loosens = IpSet::decode(&applied).is_some_and(|old| !new.covers(&old));
+        if let Some(old) = IpSet::decode(&applied) {
+            effect.unblocked = new.uncovered(&old);
+        }
+        effect.loosens = effect.unblocked > 0;
     } else {
         let new = hashes(&held);
         effect.dropped = hashes(&applied)
             .into_iter()
             .filter(|h| !new.contains(h))
             .collect();
-        effect.loosens = !effect.dropped.is_empty();
+        effect.unblocked = effect.dropped.len();
+        effect.loosens = effect.unblocked > 0;
     }
     Ok(Some(effect))
 }
@@ -221,7 +235,14 @@ pub(super) fn floor_leaving(
 }
 
 /// The effect warning for a subscription change that weakens filtering.
-pub(super) fn warning(change: &Change, sub: &Subscription, p: &Preview, n: &str) -> String {
+/// `unblocked`: for `resolve_held`, the entries that stop being blocked.
+pub(super) fn warning(
+    change: &Change,
+    sub: &Subscription,
+    p: &Preview,
+    unblocked: usize,
+    n: &str,
+) -> String {
     let what = if sub.kind == KIND_IP {
         "The crawler will contact the peers and nodes it blocks again."
     } else {
@@ -229,8 +250,9 @@ pub(super) fn warning(change: &Change, sub: &Subscription, p: &Preview, n: &str)
     };
     let floor = if p.removed_from_floor > 0 {
         format!(
-            " It's part of the locked floor: {} entries leave the floor, so nothing else \
-             blocks those torrents. Only do this if you know the list is wrong.",
+            " It's part of the locked floor: {} entries leave the floor and are blocked only \
+             if another list or rule still catches them. Only do this if you know the list \
+             is wrong.",
             p.removed_from_floor
         )
     } else {
@@ -238,10 +260,15 @@ pub(super) fn warning(change: &Change, sub: &Subscription, p: &Preview, n: &str)
     };
     match change {
         Change::ResolveHeld { .. } => format!(
-            "This applies the version of {} the sanity gates held back. Entries it no longer \
-             has stop being blocked. {what} {n} Safer: keep the previous version until the \
-             publisher's next update.",
-            sub.name
+            "This applies the version of {} the sanity gates held back. {unblocked} {} it \
+             no longer has stop being blocked. {what} {n} Safer: keep the previous version \
+             until the publisher's next update.",
+            sub.name,
+            if sub.kind == KIND_IP {
+                "address ranges"
+            } else {
+                "entries"
+            }
         ),
         Change::PauseSubscription { .. } => format!(
             "Pausing {} stops applying it until you resume it. {what}{floor} {n}",
@@ -399,7 +426,7 @@ pub(super) fn strictness_after(store: &Store, change: &Change) -> ApiResult<Opti
             id, enabled: false, ..
         } => skip = Some(*id),
         Change::PauseSubscription { id, .. } => resume = Some(*id),
-        Change::ResolveHeld { id, accept } => pending = accept.then_some(*id),
+        Change::ResolveHeld { id, accept, .. } => pending = accept.then_some(*id),
         _ => return Ok(None),
     }
     let mut candidates = Vec::new();
@@ -426,7 +453,12 @@ impl FiltersApi {
             }
             connected.push(ConnectedList {
                 figures: one(c),
-                held: s.status == "held",
+                // Not the status: a failed fetch after a held one keeps
+                // the held version waiting.
+                held: store
+                    .subscription_data(s.id, true)
+                    .map_err(internal)?
+                    .is_some(),
                 subscription: entry(s),
             });
         }

@@ -150,8 +150,6 @@ fn conflict(code: &'static str, message: impl Into<String>) -> ApiError {
     ApiError::new(StatusCode::CONFLICT, code, message.into())
 }
 
-/// The state changed since the preview so that this change now weakens
-/// filtering: it must be previewed (and confirmed) again.
 fn nothing_held() -> ApiError {
     conflict("nothing_held", "No version of that list is held.")
 }
@@ -160,6 +158,9 @@ fn internal_none() -> ApiError {
     internal("a subscribe change without a list")
 }
 
+/// The state changed since the preview so that this change now weakens
+/// filtering (or weakens it differently): it must be previewed and
+/// confirmed again.
 fn changed_since_preview() -> ApiError {
     conflict(
         "changed_since_preview",
@@ -1048,10 +1049,11 @@ impl FiltersApi {
             Change::PauseSubscription { id, .. } => {
                 subscriptions::subscription(&self.store(), *id)?;
             }
-            Change::ResolveHeld { id, accept } => {
+            Change::ResolveHeld { id, accept, .. } => {
                 let store = self.store();
                 let sub = subscriptions::subscription(&store, *id)?;
                 let effect = subscriptions::held_effect(&store, &sub)?.ok_or_else(nothing_held)?;
+                a.held_version = Some(effect.version.clone());
                 // Any entry the held version drops stops being blocked,
                 // whether it shrank or grew. A floor-marked list's removals
                 // wait for a decision of their own (§2.7), so accepting one
@@ -1060,6 +1062,7 @@ impl FiltersApi {
                     let (quarantine, tombstones, _) =
                         subscriptions::dropped_holds(&store, *id, &effect.dropped)?;
                     a.weakening = true;
+                    a.unblocked = Some(effect.unblocked);
                     a.preview = Preview {
                         quarantine,
                         tombstones,
@@ -1138,7 +1141,10 @@ impl FiltersApi {
         {
             let sub = subscriptions::subscription(&self.store(), *id)?;
             let n = count_line(&a.preview);
-            a.warning = Some(subscriptions::warning(change, &sub, &a.preview, &n));
+            let unblocked = a.unblocked.unwrap_or_default();
+            a.warning = Some(subscriptions::warning(
+                change, &sub, &a.preview, unblocked, &n,
+            ));
         }
         a.strictness = subscriptions::strictness_after(&self.store(), change)?;
         progress.begin(DONE, 0);
@@ -1660,25 +1666,24 @@ impl FiltersApi {
                     out.released = Some(self.release_list(store, *id)?);
                 }
             }
-            Change::ResolveHeld { id, accept } => {
-                // Read again under the lock: a refresh since the
-                // assessment may have held another version.
+            Change::ResolveHeld { id, accept, held } => {
+                // Read again under the lock: a refresh since the preview
+                // may have held another version. The password confirmed
+                // the version the client names, so a loosening accept
+                // applies only that one.
                 let sub = subscriptions::subscription(store, *id)?;
                 let effect = subscriptions::held_effect(store, &sub)?.ok_or_else(nothing_held)?;
                 let loosens = *accept && effect.loosens && !sub.floor;
-                let (quarantine, tombstones, holds) = if loosens {
-                    subscriptions::dropped_holds(store, *id, &effect.dropped)?
-                } else {
-                    (0, 0, Vec::new())
-                };
-                let counted = &out.assessment.preview;
                 if loosens
-                    && (!out.assessment.confirm
-                        || counted.quarantine != quarantine
-                        || counted.tombstones != tombstones)
+                    && (!out.assessment.confirm || held.as_deref() != Some(effect.version.as_str()))
                 {
                     return Err(changed_since_preview());
                 }
+                let holds = if loosens {
+                    subscriptions::dropped_holds(store, *id, &effect.dropped)?.2
+                } else {
+                    Vec::new()
+                };
                 if !store.resolve_held(*id, *accept, now).map_err(internal)? {
                     return Err(nothing_held());
                 }
@@ -3039,6 +3044,19 @@ fn apply_change(
                         "Name the entries to remove: send back the floor_entries the warning listed as hashes.",
                     )
                     .field("hashes"));
+                }
+                // Likewise a held version: the one the warning described.
+                if let Change::ResolveHeld {
+                    accept: true,
+                    held: None,
+                    ..
+                } = &body.change
+                {
+                    return Err(bad(
+                        "held_needs_version",
+                        "Name the version to accept: send back the held_version the warning described as held.",
+                    )
+                    .field("held"));
                 }
                 auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?
             }

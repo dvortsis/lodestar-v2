@@ -125,9 +125,17 @@ pub enum Change {
         enabled: bool,
     },
     /// Accepts or discards a version the sanity gates held back.
+    ///
+    /// Accepting one that drops entries is weakening, so it's confirmed
+    /// with the password for the version the warning described: send back
+    /// the assessment's [`Assessment::held_version`] as `held`. A refresh
+    /// that holds another version in between makes apply refuse with 409
+    /// `changed_since_preview`.
     ResolveHeld {
         id: i64,
         accept: bool,
+        /// The previewed `held_version`.
+        held: Option<String>,
     },
     /// Settles floor entries a config file or a floor-marked list dropped
     /// (owner's decision §2.7). They stay blocked until this: `remove`
@@ -220,6 +228,17 @@ pub struct Assessment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub strictness: Option<Strictness>,
+    /// For `resolve_held`: the held version's fingerprint (64 hex
+    /// digits). Send it back as `held` to accept with the password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub held_version: Option<String>,
+    /// For `resolve_held` accepted: entries the applied version blocks
+    /// that the held one doesn't (hashes for a content list, ranges for
+    /// an IP list).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub unblocked: Option<usize>,
     /// All of them, for applying.
     #[serde(skip)]
     pub(crate) settles: Option<Vec<[u8; 20]>>,

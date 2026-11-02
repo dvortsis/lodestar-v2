@@ -352,6 +352,12 @@ async fn pausing_and_removing_need_the_password_and_release_what_they_counted() 
     assert!(a["warning"].as_str().unwrap().starts_with("Removing"));
     let (status, body) = apply_from(&f, &c, 3, remove.clone(), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+    let (status, _) = apply_from(&f, &c, 3, remove.clone(), Some("wrong password")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(
+        blocked(&f, h2) && held(&f, h2),
+        "a wrong password changes nothing"
+    );
     let (status, body) = apply_from(&f, &c, 3, remove.clone(), Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["released"], 1);
@@ -388,9 +394,18 @@ async fn accepting_a_version_that_drops_entries_needs_the_password() {
     );
     assert!(a["warning"].as_str().unwrap().contains("held back"));
     assert_eq!(a["strictness"]["hashes"], 3);
+    assert_eq!(a["unblocked"], 1, "{a}");
+    assert!(a["warning"].as_str().unwrap().contains("1 entries"));
     let (status, body) = apply_from(&f, &c, 4, accept.clone(), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+    // The password confirms the version the warning described, so it's
+    // named, before the password is read.
     let (status, body) = apply_from(&f, &c, 4, accept.clone(), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(code(&body), "held_needs_version");
+    let mut named = accept.clone();
+    named["held"] = a["held_version"].clone();
+    let (status, body) = apply_from(&f, &c, 4, named, Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["released"], 1, "only the dropped entry's hold");
     assert!(!held(&f, h[0]) && !blocked(&f, h[0]));
@@ -407,6 +422,38 @@ async fn accepting_a_version_that_drops_entries_needs_the_password() {
     let (status, body) = apply(&f, &c, accept, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(blocked(&f, h[4]));
+}
+
+/// The password confirms the held version the warning described: one a
+/// refresh held after the preview is refused, and nothing is released.
+#[tokio::test]
+async fn a_version_held_after_the_preview_is_refused() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    let h: Vec<[u8; 20]> = (0..4u8).map(|i| [0x50 + i; 20]).collect();
+    let id = add_list(&f, "https://lists.example/swap", false, false);
+    version(&f, id, &[h[0], h[1], h[2]].concat(), false);
+    version(&f, id, &[h[0], h[1], h[3]].concat(), true);
+    for x in &h[..3] {
+        hold(&f, *x, &format!("L-{id}"), Held::Quarantine, now);
+    }
+    let accept = json!({ "op": "resolve_held", "id": id, "accept": true });
+    let (_, a) = preview(&f, &c, accept.clone()).await;
+    assert_eq!(a["unblocked"], 1, "{a}");
+    // While the dialog is open, the refresh holds a version that drops
+    // more, with other holds.
+    version(&f, id, &h[3], true);
+    let mut named = accept.clone();
+    named["held"] = a["held_version"].clone();
+    let (status, body) = apply_from(&f, &c, 7, named, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(code(&body), "changed_since_preview");
+    assert!(h[..3].iter().all(|x| held(&f, *x) && blocked(&f, *x)));
+    // Previewed again, it names the new version.
+    let (_, b) = preview(&f, &c, accept).await;
+    assert_eq!(b["unblocked"], 3);
+    assert_ne!(b["held_version"], a["held_version"]);
 }
 
 #[tokio::test]
@@ -429,11 +476,29 @@ async fn an_ip_list_that_narrows_needs_the_password() {
             .contains("contact")
     );
     assert!(f.api.ips.contains(inside), "nothing changed");
+    // A held version that doesn't decode would block nothing: weakening.
+    version(&f, id, b"not an ip set", true);
+    let (status, _) = apply(&f, &c, accept.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
     // A wider version keeps everything blocked.
     version(&f, id, &ips(&[(base - 256, base + 511)]), true);
-    let (status, body) = apply(&f, &c, accept, None).await;
+    let (status, body) = apply(&f, &c, accept.clone(), None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(f.api.ips.contains(inside));
+    // Narrowing with the password unblocks what it dropped, and only that.
+    version(&f, id, &ips(&[(base, base + 127)]), true);
+    let (_, a) = preview(&f, &c, accept.clone()).await;
+    assert_eq!(a["unblocked"], 1, "{a}");
+    let mut named = accept;
+    named["held"] = a["held_version"].clone();
+    let (status, body) = apply_from(&f, &c, 6, named, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!f.api.ips.contains(inside));
+    assert!(
+        f.api
+            .ips
+            .contains(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 100)))
+    );
     let (_, a) = preview(&f, &c, json!({ "op": "unsubscribe", "id": id })).await;
     assert_eq!(a["confirm"], true);
     assert!(a["warning"].as_str().unwrap().contains("contact"));

@@ -90,10 +90,10 @@ pub const FLOOR_RULES: [&str; 3] = ["CS-1a", "CS-1b", "CS-8a"];
 /// strip it, so callers see plain rule ids.
 const ADULT_HOLD: &str = "+adult";
 
-/// The stored rule id of a held hash.
 /// The hashes one rule holds: quarantined, then tombstoned.
 pub type RuleHolds = (Vec<[u8; 20]>, Vec<[u8; 20]>);
 
+/// The stored rule id of a held hash.
 fn held_rule(rule: &str, adult_hold: bool) -> String {
     if adult_hold {
         format!("{rule}{ADULT_HOLD}")

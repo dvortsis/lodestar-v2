@@ -7404,6 +7404,10 @@
             },
             "description": "For a floor removal: the entries the warning counts, 40 hex digits\neach. A removal settles at most 10,000 at a time, so a longer\npending list goes in batches. Send these back as `hashes` to\nconfirm the removal with the password."
           },
+          "held_version": {
+            "type": "string",
+            "description": "For `resolve_held`: the held version's fingerprint (64 hex\ndigits). Send it back as `held` to accept with the password."
+          },
           "neutralize": {
             "oneOf": [
               {
@@ -7421,6 +7425,11 @@
           "strictness": {
             "$ref": "#/components/schemas/Strictness",
             "description": "For a subscription change: how strict your lists would be after\nit, as the enabled lists together (§2.9). Subscribing shows what\na list adds; unsubscribing or pausing shows what's left."
+          },
+          "unblocked": {
+            "type": "integer",
+            "description": "For `resolve_held` accepted: entries the applied version blocks\nthat the held one doesn't (hashes for a content list, ranges for\nan IP list).",
+            "minimum": 0
           },
           "warning": {
             "type": [
@@ -8803,7 +8812,7 @@
           },
           {
             "type": "object",
-            "description": "Accepts or discards a version the sanity gates held back.",
+            "description": "Accepts or discards a version the sanity gates held back.\n\nAccepting one that drops entries is weakening, so it's confirmed\nwith the password for the version the warning described: send back\nthe assessment's [`Assessment::held_version`] as `held`. A refresh\nthat holds another version in between makes apply refuse with 409\n`changed_since_preview`.",
             "required": [
               "id",
               "accept",
@@ -8812,6 +8821,13 @@
             "properties": {
               "accept": {
                 "type": "boolean"
+              },
+              "held": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The previewed `held_version`."
               },
               "id": {
                 "type": "integer",
