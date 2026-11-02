@@ -1,6 +1,8 @@
 //! A text that holds a character the matching once read as a word break
 //! is judged in both readings, and the stricter verdict stands
-//! (docs/decisions/2026-11-02-F-normalize-invisible.md): nothing is
+//! (docs/decisions/2026-11-02-F-normalize-invisible.md, and for the
+//! format characters that show,
+//! docs/decisions/2026-11-02-F-visible-format-two-readings.md): nothing is
 //! decided more weakly than it was. The text with each such character a
 //! space reads exactly as the matching before did (the normalize unit
 //! tests check that), so it stands in for the earlier matching here.
@@ -17,8 +19,8 @@ use lodestar_filter::{
 use lodestar_search::parse;
 use proptest::prelude::*;
 
-/// The characters the matching once read as word breaks and now ignores,
-/// at the ends of each range.
+/// The invisible characters the matching once read as word breaks and
+/// now ignores, at the ends of each range.
 const NEWLY: [char; 12] = [
     '\u{2065}',
     '\u{FFF0}',
@@ -34,9 +36,40 @@ const NEWLY: [char; 12] = [
     '\u{E0FFF}',
 ];
 
+/// The format characters that show, and the line and paragraph
+/// separators, at the ends of each range: word breaks before, and still
+/// in the earlier reading; ignored in the joined one.
+const VISIBLE: [char; 15] = [
+    '\u{0600}',
+    '\u{0605}',
+    '\u{06DD}',
+    '\u{070F}',
+    '\u{0890}',
+    '\u{0891}',
+    '\u{08E2}',
+    '\u{110BD}',
+    '\u{110CD}',
+    '\u{FFF9}',
+    '\u{FFFB}',
+    '\u{13430}',
+    '\u{1343F}',
+    '\u{2028}',
+    '\u{2029}',
+];
+
+/// Every mark: a character read as a word break before and as nothing
+/// joined.
+fn marks() -> Vec<char> {
+    NEWLY.into_iter().chain(VISIBLE).collect()
+}
+
 fn engine(overrides: Vec<Override>) -> Engine {
+    engine_with(&["lexa", "alexa"], overrides)
+}
+
+fn engine_with(sexual: &[&str], overrides: Vec<Override>) -> Engine {
     let lists = Lists {
-        sexual: TermSet::of(&["lexa", "alexa"]),
+        sexual: TermSet::of(sexual),
         child_roles: TermSet::of(&["rolea"]),
         codes: TermSet::of(&["codex"]),
     };
@@ -95,14 +128,20 @@ fn action(e: &Engine, name: &str, path: &str) -> Option<Action> {
 
 fn spaced(s: &str) -> String {
     s.chars()
-        .map(|c| if NEWLY.contains(&c) { ' ' } else { c })
+        .map(|c| {
+            if NEWLY.contains(&c) || VISIBLE.contains(&c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
 #[test]
 fn a_term_split_off_still_hits() {
     let e = engine(Vec::new());
-    for c in NEWLY {
+    for c in marks() {
         // `a<c>lexa`: `alexa` read whole, `lexa` read apart; both hit.
         let name = format!("Title rolea a{c}lexa");
         assert!(action(&e, &name, "a.mkv").is_some(), "U+{:04X}", c as u32);
@@ -115,9 +154,45 @@ fn a_term_split_off_still_hits() {
     }
 }
 
+/// Golden cases for the format characters that show: a term split by one
+/// still hits, and so does a term the mark only separates from the word
+/// before it.
+#[test]
+fn a_visible_mark_hits_both_ways() {
+    for c in VISIBLE {
+        let at = c as u32;
+        // Joined, `bad`: the term the mark hid inside the word.
+        let e = engine_with(&["bad"], Vec::new());
+        let name = format!("Title rolea ba{c}d");
+        assert!(action(&e, &name, "a.mkv").is_some(), "U+{at:04X}");
+        assert!(action(&e, "Title rolea ba d", "a.mkv").is_none());
+        // In a path too.
+        let path = format!("x/rolea.ba{c}d.mkv");
+        assert!(action(&e, "Title", &path).is_some(), "U+{at:04X}");
+        assert!(action(&e, "Title", "x/rolea.ba.d.mkv").is_none());
+        // Earlier, `alpha beta`: `beta` hits as it did, though joined it
+        // reads `alphabeta`.
+        let e = engine_with(&["beta"], Vec::new());
+        let name = format!("Title rolea alpha{c}beta");
+        assert!(action(&e, &name, "a.mkv").is_some(), "U+{at:04X}");
+        assert!(action(&e, "Title rolea alphabeta", "a.mkv").is_none());
+        // And the joined word is a term of its own.
+        let e = engine_with(&["alphabeta"], Vec::new());
+        assert!(action(&e, &name, "a.mkv").is_some(), "U+{at:04X}");
+        // An override for the joined word covers only the joined reading:
+        // the earlier reading's `beta` hit stands.
+        let e = engine_with(&["beta"], vec![keyword("alphabeta", Strength::Override)]);
+        assert!(action(&e, &name, "a.mkv").is_some(), "U+{at:04X}");
+        // Neutralizing `bad` takes the only hit away, in the only reading
+        // it is in.
+        let e = engine_with(&["bad"], vec![keyword("bad", Strength::Neutralize)]);
+        assert_eq!(action(&e, &format!("Title rolea ba{c}d"), "a.mkv"), None);
+    }
+}
+
 #[test]
 fn a_release_applies_in_its_own_reading() {
-    for c in NEWLY {
+    for c in marks() {
         let at = c as u32;
         let name = format!("Title rolea zz{c}lexa");
         // `zzlexa` matches only the joined reading, where nothing hits:
@@ -153,7 +228,7 @@ fn a_release_applies_in_its_own_reading() {
 
 #[test]
 fn a_keyword_exception_applies_in_its_own_reading() {
-    for c in NEWLY {
+    for c in marks() {
         let at = c as u32;
         // `alexa` joined, `lexa` read apart: both hit Cs4a. An exception
         // for `alexa` matches only the joined reading, so the earlier
@@ -172,7 +247,7 @@ fn a_keyword_exception_applies_in_its_own_reading() {
 
 #[test]
 fn a_hit_only_joined_never_pre_empts_a_stronger_layer() {
-    for c in NEWLY {
+    for c in marks() {
         let at = c as u32;
         // `le<c>xa` hits Cs4a only joined. A list that drops the torrent
         // decided it before, and still does.
@@ -204,7 +279,7 @@ fn a_shadow_override_is_logged_once() {
         ..keyword("title", Strength::Override)
     }]);
     e.packs = PackSwitches::default();
-    for c in NEWLY {
+    for c in marks() {
         let name = format!("Title rolea a{c}lexa");
         let files = [FileInfo::new(vec!["a.mkv".into()], 1 << 30)];
         let item = Item {
@@ -222,7 +297,7 @@ fn a_shadow_override_is_logged_once() {
 
 #[test]
 fn a_marked_keyword_is_refused() {
-    for c in NEWLY {
+    for c in marks() {
         for strength in [Strength::Override, Strength::Neutralize] {
             let at = c as u32;
             let inside = keyword(&format!("le{c}xa"), strength);
@@ -260,7 +335,7 @@ fn entry() -> impl Strategy<Value = Option<Override>> {
         "a",
         "titlerolea",
     ]);
-    let mark = prop::option::weighted(0.3, (prop::sample::select(NEWLY.to_vec()), 0usize..8));
+    let mark = prop::option::weighted(0.3, (prop::sample::select(marks()), 0usize..8));
     let strength = prop::sample::select(vec![Strength::Override, Strength::Neutralize]);
     prop::option::of((words, mark, strength).prop_map(|(w, m, s)| {
         let mut w = w.to_owned();
@@ -299,7 +374,7 @@ fn piece() -> impl Strategy<Value = &'static str> {
 /// Pieces with separators and, now and then, marks.
 fn run() -> impl Strategy<Value = String> {
     let sep = prop::sample::select(vec![" ", ".", "", "/"]);
-    let mark = prop::option::weighted(0.3, prop::sample::select(NEWLY.to_vec()));
+    let mark = prop::option::weighted(0.3, prop::sample::select(marks()));
     prop::collection::vec((piece(), sep, mark), 0..4).prop_map(|v| {
         v.into_iter()
             .map(|(p, s, m)| format!("{p}{}{s}", m.map(String::from).unwrap_or_default()))
@@ -310,7 +385,7 @@ fn run() -> impl Strategy<Value = String> {
 /// [`run`]s around a pair of pieces, usually joined by a mark, so a word
 /// is read both ways.
 fn text() -> impl Strategy<Value = String> {
-    let mark = prop::option::weighted(0.7, prop::sample::select(NEWLY.to_vec()));
+    let mark = prop::option::weighted(0.7, prop::sample::select(marks()));
     let joined = (piece(), mark, piece());
     (run(), joined, run()).prop_map(|(a, (p, m, q), b)| {
         format!("{a} {p}{}{q} {b}", m.map(String::from).unwrap_or_default())
@@ -332,7 +407,7 @@ fn maybe_marked() -> impl Strategy<Value = String> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2048))]
 
-    /// Inserting newly ignored characters never makes the decision
+    /// Inserting marks, invisible or visible, never makes the decision
     /// weaker than the earlier matching's: a core term that hit still
     /// hits, an override or neutralize entry (its keyword marked or not)
     /// applies no more, and a core

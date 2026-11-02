@@ -255,7 +255,8 @@ impl Engine {
     /// in the two readings, the torrent is judged in both readings
     /// ([`Reading`]), each from the top, and the stricter verdict stands
     /// (the earlier reading's on a tie): no torrent is decided more weakly
-    /// than it was (docs/decisions/2026-11-02-F-normalize-invisible.md).
+    /// than it was (docs/decisions/2026-11-02-F-normalize-invisible.md,
+    /// docs/decisions/2026-11-02-F-visible-format-two-readings.md).
     /// Elsewhere the two judgments are the same, so one is made.
     fn judge_doc(&self, item: &Item, facts: Option<&Facts>, doc: &Doc, now: i64) -> Verdict {
         let (mut v, mut released) = self.judge_reading(item, facts, doc, now, Reading::Joined);

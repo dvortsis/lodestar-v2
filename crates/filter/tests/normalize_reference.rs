@@ -81,9 +81,10 @@ mod reference {
         }
     }
 
-    /// Invisible characters that would otherwise split or disguise a word:
-    /// Unicode's default-ignorable characters
-    /// (docs/decisions/2026-11-02-F-normalize-invisible.md). Written out
+    /// Characters the joined reading ignores, so they can't split or
+    /// disguise a word: Unicode's default-ignorable characters
+    /// (docs/decisions/2026-11-02-F-normalize-invisible.md) and the visible
+    /// format marks. Written out
     /// on their own, so the reference doesn't share the tokenizer's table.
     fn invisible(c: char) -> bool {
         matches!(
@@ -107,6 +108,19 @@ mod reference {
                 | '\u{1BCA0}'..='\u{1BCA3}'
                 | '\u{1D173}'..='\u{1D17A}'
                 | '\u{E0000}'..='\u{E0FFF}'
+                // The format characters that show and the line and
+                // paragraph separators, which the joined reading ignores too
+                // (docs/decisions/2026-11-02-F-visible-format-two-readings.md).
+                | '\u{0600}'..='\u{0605}'
+                | '\u{06DD}'
+                | '\u{070F}'
+                | '\u{0890}'..='\u{0891}'
+                | '\u{08E2}'
+                | '\u{110BD}'
+                | '\u{110CD}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{13430}'..='\u{1343F}'
+                | '\u{2028}'..='\u{2029}'
         )
     }
 

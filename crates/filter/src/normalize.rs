@@ -6,7 +6,9 @@
 //!   `o`): the common confusables, not the whole UTS #39 table.
 //! - Characters that render as nothing (zero-width and other invisible
 //!   format characters, tag characters, blank fillers) removed, so they
-//!   can't split a word.
+//!   can't split a word. The format characters that show, and the line and
+//!   paragraph separators, are removed too; the earlier reading
+//!   ([`Tokenizer::splitting`]) keeps them as word breaks.
 //! - Words split at letter/digit boundaries (`16yo` → `16 yo`), with the
 //!   whole word kept at the first part's position.
 //! - Letter-for-number swaps undone as an alternative form (`h3ll0` also
@@ -104,7 +106,7 @@ fn confusable(c: char) -> char {
 /// those that render as nothing (Unicode's Default_Ignorable_Code_Point,
 /// which browsers and HarfBuzz hide). That is every format character
 /// (category Cf, [`lodestar_metainfo::format_char`]) except the
-/// [`visible_format`] ones; U+2065, U+FFF0–FFF8 and U+E0000–E0FFF (the
+/// [`visible_mark`] ones; U+2065, U+FFF0–FFF8 and U+E0000–E0FFF (the
 /// tags and plane 14's unassigned code points); and fillers that show as
 /// nothing (Hangul fillers, Khmer inherent vowels, variation selectors,
 /// the combining grapheme joiner).
@@ -127,16 +129,30 @@ fn invisible(c: char) -> bool {
             | '\u{FFA0}'
             | '\u{FFF0}'..='\u{FFF8}'
             | '\u{E0000}'..='\u{E0FFF}'
-    ) || (lodestar_metainfo::format_char(c) && !visible_format(c))
+    ) || (lodestar_metainfo::format_char(c) && !visible_mark(c))
 }
 
-/// The characters [`invisible`] ignores that the matching before
-/// F-normalize-invisible read as word breaks. A text holding one is read
-/// both ways (`docs/decisions/2026-11-02-F-normalize-invisible.md`): a
-/// term hits if it hits in either reading, and an entry that releases
-/// applies only if it matches in both, so no text matches less than it
-/// did. Variation selectors (U+E0100–E01EF) are combining marks, dropped
-/// either way.
+/// What the joined reading drops: the [`invisible`] characters and the
+/// [`visible_mark`]s.
+#[inline]
+fn ignored(c: char) -> bool {
+    invisible(c) || visible_mark(c)
+}
+
+/// The characters the joined reading ignores that the matching before
+/// read as word breaks: the [`newly_ignored`] ones and the
+/// [`visible_mark`]s. A text holding one is read both ways
+/// (`docs/decisions/2026-11-02-F-normalize-invisible.md`,
+/// `docs/decisions/2026-11-02-F-visible-format-two-readings.md`), and the
+/// stricter verdict stands, so no text matches less than it did.
+#[inline]
+fn mark(c: char) -> bool {
+    newly_ignored(c) || visible_mark(c)
+}
+
+/// The [`invisible`] characters that the matching before
+/// F-normalize-invisible read as word breaks. Variation selectors
+/// (U+E0100–E01EF) are combining marks, dropped either way.
 fn newly_ignored(c: char) -> bool {
     matches!(
         c,
@@ -148,22 +164,28 @@ fn newly_ignored(c: char) -> bool {
     )
 }
 
-/// Whether some text reads differently with [`newly_ignored`] characters
-/// as word breaks: only non-ASCII text that holds one.
+/// Whether some text may read differently with [`mark`]s as word breaks:
+/// only non-ASCII text that holds one.
 pub(crate) fn splits<'t>(texts: impl IntoIterator<Item = &'t str>) -> bool {
     texts
         .into_iter()
-        .any(|t| !t.is_ascii() && t.chars().any(newly_ignored))
+        .any(|t| !t.is_ascii() && t.chars().any(mark))
 }
 
-/// Format characters that show: the prepended concatenation marks (Arabic
-/// number signs, Syriac abbreviation, Kaithi number signs), the
-/// interlinear annotation marks and the Egyptian hieroglyph controls.
-/// None is default-ignorable, so they render as a glyph or a box and
-/// split a word visibly, like punctuation: they stay word breaks. Ignoring
-/// one would join two words a reader sees apart, so a rule for the second
-/// would miss.
-fn visible_format(c: char) -> bool {
+/// Format characters that show, and the line and paragraph separators:
+/// the prepended concatenation marks (Arabic number signs, Syriac
+/// abbreviation, Kaithi number signs), the interlinear annotation marks,
+/// the Egyptian hieroglyph controls, U+2028 and U+2029. None is
+/// default-ignorable: they render as a glyph, a box or a line break.
+///
+/// Read only as word breaks, one inside a word splits it past a term
+/// (U+0605 and U+08E2 sit above the following letters, so the split hardly
+/// shows); read only as nothing, one would join two words a reader sees
+/// apart, so a rule for the second would miss. So the joined reading
+/// ignores them, the earlier reading keeps them as breaks, and the
+/// stricter verdict stands
+/// (`docs/decisions/2026-11-02-F-visible-format-two-readings.md`).
+fn visible_mark(c: char) -> bool {
     matches!(
         c,
         '\u{0600}'..='\u{0605}'
@@ -175,6 +197,8 @@ fn visible_format(c: char) -> bool {
             | '\u{110CD}'
             | '\u{FFF9}'..='\u{FFFB}'
             | '\u{13430}'..='\u{1343F}'
+            | '\u{2028}'
+            | '\u{2029}'
     )
 }
 
@@ -249,14 +273,14 @@ pub struct Tokenizer {
     /// [`paths_apart`]'s folders, kept so their buffers carry over
     /// between torrents.
     folders: [Paused; FOLDERS],
-    /// Reads [`newly_ignored`] characters as word breaks, as the matching
-    /// before them did ([`Tokenizer::splitting`]).
+    /// Reads [`mark`]s as word breaks, as the matching before did
+    /// ([`Tokenizer::splitting`]).
     split: bool,
 }
 
 impl Tokenizer {
-    /// A tokenizer that reads [`newly_ignored`] characters as word breaks:
-    /// the earlier reading, kept for texts that hold one ([`splits`]).
+    /// A tokenizer that reads [`mark`]s as word breaks: the earlier
+    /// reading, kept for texts that hold one ([`splits`]).
     pub(crate) fn splitting() -> Tokenizer {
         Tokenizer {
             split: true,
@@ -337,8 +361,8 @@ impl Tokenizer {
                 if is_combining_mark(c) {
                     continue;
                 }
-                if invisible(c) {
-                    if self.split && newly_ignored(c) {
+                if ignored(c) {
+                    if self.split && mark(c) {
                         self.end_word(out);
                     }
                     continue;
@@ -789,30 +813,40 @@ mod tests {
         assert_eq!(toks(&huge).len(), 1);
     }
 
-    /// Every character [`invisible`] ignores.
-    fn all_invisible() -> Vec<char> {
+    /// Every character the joined reading ignores ([`ignored`]).
+    fn all_ignored() -> Vec<char> {
         (0..=0x10FFFF)
             .filter_map(char::from_u32)
-            .filter(|&c| invisible(c))
+            .filter(|&c| ignored(c))
             .collect()
     }
 
-    /// The format characters that show, which stay word breaks.
-    const VISIBLE: [char; 8] = [
+    /// The format characters that show and the line and paragraph
+    /// separators, at the ends of each range: word breaks in the earlier
+    /// reading, nothing in the joined one.
+    const VISIBLE: [char; 15] = [
         '\u{0600}',
         '\u{0605}',
         '\u{06DD}',
         '\u{070F}',
         '\u{0890}',
+        '\u{0891}',
         '\u{08E2}',
         '\u{110BD}',
         '\u{110CD}',
+        '\u{FFF9}',
+        '\u{FFFB}',
+        '\u{13430}',
+        '\u{1343F}',
+        '\u{2028}',
+        '\u{2029}',
     ];
 
     /// `invisible` is exactly Unicode's default-ignorable characters,
     /// written out here on their own; every Cf character is either ignored
-    /// or a known visible one; and [`newly_ignored`] is exactly what it
-    /// ignores that the matching before didn't.
+    /// or a known visible one; [`newly_ignored`] is exactly what it
+    /// ignores that the matching before didn't; and [`mark`] is exactly
+    /// what the joined reading ignores that the matching before didn't.
     #[test]
     fn invisible_is_exactly_the_default_ignorables() {
         let expected = |c: char| {
@@ -867,13 +901,29 @@ mod tests {
             if !is_combining_mark(c) {
                 let newly = invisible(c) && !before(c);
                 assert_eq!(newly_ignored(c), newly, "U+{at:04X}");
+                assert_eq!(mark(c), ignored(c) && !before(c), "U+{at:04X}");
             }
             if lodestar_metainfo::format_char(c) {
-                assert!(invisible(c) || visible_format(c), "U+{at:04X} is Cf");
+                assert!(invisible(c) || visible_mark(c), "U+{at:04X} is Cf");
             }
+            let visible = matches!(
+                c,
+                '\u{0600}'..='\u{0605}'
+                    | '\u{06DD}'
+                    | '\u{070F}'
+                    | '\u{0890}'..='\u{0891}'
+                    | '\u{08E2}'
+                    | '\u{110BD}'
+                    | '\u{110CD}'
+                    | '\u{FFF9}'..='\u{FFFB}'
+                    | '\u{13430}'..='\u{1343F}'
+                    | '\u{2028}'..='\u{2029}'
+            );
+            assert_eq!(visible_mark(c), visible, "U+{at:04X}");
+            assert!(!(visible && invisible(c)), "U+{at:04X}");
         }
         let hello = toks("hello");
-        for c in all_invisible() {
+        for c in all_ignored() {
             assert_eq!(toks(&format!("hel{c}lo")), hello, "U+{:04X}", c as u32);
         }
     }
@@ -914,20 +964,25 @@ mod tests {
     }
 
     /// Golden cases: the format characters that show, and the line and
-    /// paragraph separators, still break words, as they did.
+    /// paragraph separators, join a word in the joined reading and break
+    /// it in the earlier one, as they did
+    /// (docs/decisions/2026-11-02-F-visible-format-two-readings.md).
     #[test]
-    fn visible_breaks_still_split() {
-        for c in VISIBLE
-            .into_iter()
-            .chain(['\u{0891}', '\u{FFF9}', '\u{FFFB}', '\u{13430}', '\u{1343F}'])
-            .chain(['\u{2028}', '\u{2029}'])
-        {
+    fn visible_marks_read_both_ways() {
+        let split = |text: &str| {
+            let mut out = Vec::new();
+            Tokenizer::splitting().text(text, &mut out);
+            out
+        };
+        for c in VISIBLE {
             let at = c as u32;
             let text = format!("alpha{c}beta");
-            assert!(has(&text, "alpha", 0), "U+{at:04X}");
-            assert!(has(&text, "beta", 1), "U+{at:04X}");
-            assert!(!has(&text, "alphabeta", 0), "U+{at:04X}");
-            assert_eq!(toks(&text), toks("alpha beta"), "U+{at:04X}");
+            assert!(splits([text.as_str()]), "U+{at:04X}");
+            assert_eq!(toks(&text), toks("alphabeta"), "U+{at:04X}");
+            assert_eq!(split(&text), toks("alpha beta"), "U+{at:04X}");
+            let bad = format!("ba{c}d");
+            assert_eq!(toks(&bad), toks("bad"), "U+{at:04X}");
+            assert_eq!(split(&bad), toks("ba d"), "U+{at:04X}");
         }
     }
 
@@ -956,7 +1011,7 @@ mod tests {
     }
 
     proptest::proptest! {
-        /// Inserting any character `invisible` ignores, anywhere in a
+        /// Inserting any character the joined reading ignores, anywhere in a
         /// text, never changes its tokens, so never whether a term rule
         /// that reads them matches (a core or pack term, a keyword, the
         /// core's windows).
@@ -964,7 +1019,7 @@ mod tests {
         fn an_invisible_character_never_changes_a_match(
             text in "([a-e]|[a-e]{3,6}|[0-9]{1,3}|[@$]|é|ｂ|\u{0435}|e\u{301}|[ ./_-]){0,12}",
             rule in "[a-e]{1,6}( [a-e]{1,6}){0,2}",
-            inserts in proptest::collection::vec((proptest::sample::select(all_invisible()), 0usize..64), 1..4),
+            inserts in proptest::collection::vec((proptest::sample::select(all_ignored()), 0usize..64), 1..4),
         ) {
             let mut spliced: Vec<char> = text.chars().collect();
             for (c, at) in &inserts {
@@ -981,16 +1036,16 @@ mod tests {
         }
 
         /// The splitting reader gives exactly the tokens of the text with
-        /// each newly ignored character a space: the matching before.
+        /// each mark a space: the matching before.
         #[test]
         fn the_splitting_reader_reads_as_before(
-            text in "([a-e]|[a-e]{3,6}|[0-9]{1,3}|[@$]|é|ｂ|e\u{301}|[ ./_-]|\u{200B}|\u{2065}|\u{FFF0}|\u{1BCA0}|\u{1D173}|\u{E0001}|\u{E0041}|\u{E0FFF}){0,16}",
+            text in "([a-e]|[a-e]{3,6}|[0-9]{1,3}|[@$]|é|ｂ|e\u{301}|[ ./_-]|\u{200B}|\u{2065}|\u{FFF0}|\u{1BCA0}|\u{1D173}|\u{E0001}|\u{E0041}|\u{E0FFF}|\u{0600}|\u{0605}|\u{08E2}|\u{110BD}|\u{FFF9}|\u{13430}|\u{2028}|\u{2029}){0,16}",
         ) {
             let mut split = Vec::new();
             Tokenizer::splitting().text(&text, &mut split);
             let spaced: String = text
                 .chars()
-                .map(|c| if newly_ignored(c) { ' ' } else { c })
+                .map(|c| if mark(c) { ' ' } else { c })
                 .collect();
             proptest::prop_assert_eq!(split, toks(&spaced));
             proptest::prop_assert_eq!(splits([text.as_str()]), text != spaced);

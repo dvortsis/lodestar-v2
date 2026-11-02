@@ -605,8 +605,10 @@ impl Tri {
 
 /// Which reading of the name and paths a pass judges, where they hold a
 /// character the matching once read as a word break
-/// ([`crate::normalize::Tokenizer::splitting`]). Elsewhere both are the
-/// same.
+/// ([`crate::normalize::Tokenizer::splitting`]): the invisible characters
+/// #381 newly ignores and the visible format marks
+/// (docs/decisions/2026-11-02-F-visible-format-two-readings.md).
+/// Elsewhere both are the same.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Reading {
     /// The characters ignored: how text reads now.
