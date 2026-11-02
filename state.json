@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T03:40:38Z",
+  "updated_at": "2026-11-02T03:52:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2201,14 +2201,15 @@
       "session": "session_01MMjhnA8E463RsbggYDbphq (archived)"
     },
     "openapi-example-size": {
-      "status": "ci",
+      "status": "merged",
       "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)",
       "model": "sonnet",
       "session": "session_01MMjhn9wh3LAkmzbRpcaekT",
       "launched": "2026-11-02T02:23Z",
       "pr": 368,
       "head": "d42fc279",
-      "note": "runner reviewed (5 lines) MERGE on green"
+      "note": "runner reviewed (5 lines) MERGE on green",
+      "merge_sha": "3589983e"
     },
     "B-subscriptions-api": {
       "status": "merged",
@@ -2260,7 +2261,8 @@
       "session": "session_01MMjhnAK5fBCVsHf7ALi2RM",
       "launched": "2026-11-02T00:51Z",
       "pr": 367,
-      "head": "e10d067"
+      "head": "e10d067",
+      "notes_runner": "03:50Z MSI smoke hung ~46 min (normal 80-110 s) then runner lost; sent back as a likely startup/shutdown hang from the round-3 background undo task; must merge main (openapi regen after #368)."
     },
     "SRC-16": {
       "status": "merged",
@@ -2313,11 +2315,13 @@
       "merge": "7f167278"
     },
     "X-strip-format-chars": {
-      "status": "building",
+      "status": "in review",
       "model": "opus",
       "note": "From #366 review: common.rs unsafe_char and api/digest.rs strip bidi but not other Cf (U+200B-200D, U+2060-2064, U+FEFF, U+00AD, U+2028/2029, tag chars). One small PR covering both, with tests.",
       "session": "session_01MMjhnCTS1gioZcMs1q3TuW",
-      "launched": "2026-11-02T02:52Z"
+      "launched": "2026-11-02T02:52Z",
+      "pr": 373,
+      "head": "332a3c43"
     },
     "P-master-plan-r2": {
       "status": "merged",
@@ -2337,10 +2341,12 @@
       "notes": "owner planning session; §2.29 (#357 in v0.5.1 as rc.3 = rc.2 + #357 exactly; runner ruling: #367 only on owner yes). phase_total 4 in slices.yaml; HANDOVER.md protocol; watchdog prompt updated 03:39Z."
     },
     "R-rc3-backport": {
-      "status": "queued",
+      "status": "running",
       "model": "opus",
       "brief": "briefs/R-rc3-backport.md",
-      "notes": "ladder rung 1. Trial cherry-pick of 736a3028 onto release/v0.5.1 conflicts in api/filters.rs, metrics.md, .size-limit.mjs, insights messages en/zh. PR against release/v0.5.1, full-ci, /security-review; runner merges after R1 verdict. Launch on the first free slot."
+      "notes": "ladder rung 1. Trial cherry-pick of 736a3028 onto release/v0.5.1 conflicts in api/filters.rs, metrics.md, .size-limit.mjs, insights messages en/zh. PR against release/v0.5.1, full-ci, /security-review; runner merges after R1 verdict. Launch on the first free slot.",
+      "session": "session_01MMjhn8jpt1tX7E6SGauJH8",
+      "launched": "2026-11-02T03:52:04Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4072,6 +4078,11 @@
       "id": "flake-restart-wire-windows",
       "at": "2026-11-02T03:20Z",
       "text": "lodestar-dht node::actor::restart_wire::no_restored_peer_is_sampled_before_its_deadline failed on windows-latest in #368 (docs-only) at the first assertion: a sample_infohashes reached a peer during first-start suppression. Passed on #365 (CR-4) CI and on main 7f167278. Re-ran once (run 41379221375). If it fails again or shows on main 0c1931ae: treat as real politeness bug, launch an Opus fix slice (suspect CR-4 #365 receive-loop change or a Windows timing race in the test)."
+    },
+    {
+      "id": "fuzz-lock-stale",
+      "note": "fuzz/Cargo.lock stale on main since #365 (peer-wire -> lodestar-utp); any cargo-fuzz build rewrites it. Fold into a small slice.",
+      "added": "2026-11-02T03:52:04Z"
     }
   ]
 }
