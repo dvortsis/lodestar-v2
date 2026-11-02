@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T03:52:04Z",
+  "updated_at": "2026-11-02T04:09:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -719,7 +719,9 @@
       "attempt": 0,
       "review_rounds": 0,
       "notes": "blocked on B-subscriptions-api (no connect/remove/accept API yet)",
-      "launched": "2026-11-02T02:00Z"
+      "launched": "2026-11-02T02:00Z",
+      "head": "53897d5",
+      "notes_runner": "runner verified round-1 fixes and the early-Continue fix; merge on green (Web+E2E)."
     },
     "F1": {
       "status": "merged",
@@ -2321,7 +2323,8 @@
       "session": "session_01MMjhnCTS1gioZcMs1q3TuW",
       "launched": "2026-11-02T02:52Z",
       "pr": 373,
-      "head": "332a3c43"
+      "head": "332a3c43",
+      "review": "Opus MERGE at 332a3c43; final push after #367 merges (merge main + decisions note on tokenizer divergence)"
     },
     "P-master-plan-r2": {
       "status": "merged",
@@ -2347,6 +2350,12 @@
       "notes": "ladder rung 1. Trial cherry-pick of 736a3028 onto release/v0.5.1 conflicts in api/filters.rs, metrics.md, .size-limit.mjs, insights messages en/zh. PR against release/v0.5.1, full-ci, /security-review; runner merges after R1 verdict. Launch on the first free slot.",
       "session": "session_01MMjhn8jpt1tX7E6SGauJH8",
       "launched": "2026-11-02T03:52:04Z"
+    },
+    "status-connector": {
+      "status": "merged",
+      "pr": 374,
+      "merge_sha": "55241398",
+      "notes": "owner-requested via dashboard session; not a runner slice. Runner §2.19 calls: authless connector with path secret accepted (claude.ai offers OAuth or nothing) with constant-time check and >=32-char secret; lockfile size accepted."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3441,6 +3450,12 @@
       "state": "to-send",
       "text": "Master plan r3 (#372) merged: CR-SPEC and CR-COL-3 before any live crawler run; ext:owner-cr-spec (you confirm the measurement spec before the comparator run); X-required-web-checks before your ruleset change (the §2.28 check names do not exist); HANDOVER.md protocol. Decisions in docs/decisions/2026-11-02-master-plan-r3.md for veto.",
       "added": "2026-11-02T03:40:03Z"
+    },
+    {
+      "id": "flag-status-connector",
+      "state": "to-send",
+      "added": "2026-11-02T04:09:02Z",
+      "text": "#374 status-connector merged. Runner calls (§2.19): authless connector with secret in URL path accepted (claude.ai offers OAuth or nothing), hardened (>=32-char secret, constant-time check, shared cache, error caching); ~2,100-line lockfile accepted. Rotation steps in docs/decisions/2026-11-02-status-connector.md."
     }
   ],
   "external_gates": {
@@ -3485,7 +3500,17 @@
     "S-updates-5 (web, after B-update-6): use rollback.restores_store in the Roll back dialog to state the data restore exactly",
     "Detail (#327): results reload after Block keeps scroll position instead of reloading from the top (the `s`-on-/t gate, neutral door-failure string and Search results headroom went to X-search-headroom-2)",
     "Web (after B-search-meta): show ≈ on approximate suggestion counts; Builder field list from GET /search/fields instead of schema enums",
-    "Privacy-logging banner (§10.10.7/§10.10.12): add a server-side flag (privacy logging on + which kinds) to the existing status/SSE event (crates, Opus), then a shell banner loaded on demand when it is set (web, Sonnet). No extra first-paint request (#331 found no existing signal)."
+    "Privacy-logging banner (§10.10.7/§10.10.12): add a server-side flag (privacy logging on + which kinds) to the existing status/SSE event (crates, Opus), then a shell banner loaded on demand when it is set (web, Sonnet). No extra first-paint request (#331 found no existing signal).",
+    {
+      "id": "X-tokenizer-cf",
+      "added": "2026-11-02T04:09:02Z",
+      "text": "crates/search/src/tokenizer.rs:90 classify splits on ZWNJ/ZWJ; cleaned feed titles (X-strip-format-chars) keep words joined, so search diverges once feed titles are indexed. Drop Cf before classifying (Opus, search core). From #373 review."
+    },
+    {
+      "id": "X-cf-dedupe",
+      "added": "2026-11-02T04:09:02Z",
+      "text": "Hand-written invisible/Cf sets remain: crates/api/src/filters/subscriptions.rs is_format (unless #373 reuses display.rs), crates/lodestar/src/settings/preferences.rs:176, crates/filter/src/normalize.rs (F-normalize-invisible). Reuse metainfo display.rs."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
