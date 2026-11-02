@@ -29,6 +29,7 @@
 	"blocklists_remove_title": "Remove {name}",
 	"blocklists_catalog_heading": "Available lists",
 	"blocklists_catalog_help": "Connecting shows how strict your lists would become before anything is applied.",
+	"blocklists_catalog_egress": "Lists are downloaded directly, not through an HTTPS_PROXY. A VPN that covers the whole container still applies.",
 	"blocklists_kind_ip": "Addresses",
 	"blocklists_kind_content": "Torrents",
 	"blocklists_connected": "Connected",

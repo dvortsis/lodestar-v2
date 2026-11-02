@@ -40,7 +40,7 @@ The setup token is a one-time key to a fresh instance. It appears in the log unt
 If someone could have read the token before you used it, create the password now. Once an admin exists, the token stops working and can't be used to claim the instance.
 
 ## 3.3 Decide about the DHT port and a VPN
-<!-- index: DHT port; gluetun; VPN; connection tracking -->
+<!-- index: DHT port; gluetun; VPN; connection tracking; HTTPS_PROXY; proxy; blocklist downloads -->
 
 Lodestar works without any router change. It reaches fewer nodes, but it still finds and fetches torrents. You have three ways to run it.
 
@@ -84,6 +84,12 @@ A VPN hides your home IP from peers. It doesn't hide your activity from the VPN 
 The crawler opens hundreds of short outbound connections at once: about 400 at `balanced`, about 1000 at `aggressive`. Consumer routers track every connection in a small table. When it fills, the whole household slows or drops. Start at `low`, raise the intensity step by step and watch the router's connection count. The VPN variant avoids this because the tunnel carries the load.
 
 </details>
+
+### Blocklist downloads and HTTPS_PROXY
+
+`HTTPS_PROXY` is a setting some networks use to send a program's web requests through a middleman server, called a proxy. Lodestar downloads blocklists (public lists of torrents and addresses to block) directly. It ignores `HTTPS_PROXY` for these downloads and uses the container's own network route.
+
+A VPN that covers the whole container still applies, because it works below the program. If you want blocklist downloads to go through a VPN, run Lodestar through a whole-container VPN such as gluetun, as above. Setting `HTTPS_PROXY` won't do it.
 
 ## 3.4 Keep logs private
 <!-- index: logs; diagnostics; torrent details -->
