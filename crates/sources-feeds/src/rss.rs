@@ -40,7 +40,8 @@ pub const MAX_CATEGORY: usize = 16;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub hashes: Hashes,
-    /// At most [`MAX_TITLE`] bytes, control, bidi and format characters removed.
+    /// At most [`MAX_TITLE`] bytes, with control characters and the bidi
+    /// controls `torznab` strips removed (U+202A–202E, U+2066–2069, U+200E/F, U+061C).
     pub title: Option<String>,
     /// Content bytes (`nyaa:size`, `1.2 GiB`). An enclosure's `length` is
     /// the size of the linked file, so it isn't used.
