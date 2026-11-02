@@ -881,6 +881,10 @@ mod tests {
             Some(("fd00::1".into(), 1080))
         );
         assert_eq!(parse_proxy("Gluetun:1080"), Some(("gluetun".into(), 1080)));
+        // Mapped forms of usable addresses stay usable.
+        for ok in ["[::ffff:127.0.0.1]:1080", "[::ffff:192.168.1.10]:1080"] {
+            assert!(parse_proxy(ok).is_some(), "{ok}");
+        }
         assert_eq!(
             parse_proxy("proxy.example.net.:443"),
             Some(("proxy.example.net".into(), 443))

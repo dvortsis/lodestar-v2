@@ -1414,6 +1414,9 @@ mod tests {
             socks("10.8.0.1", None),
             socks("fd00::1", Some(SocksDns::Proxy)),
             socks("gluetun", Some(SocksDns::Local)),
+            // Mapped forms of usable addresses stay usable.
+            socks("::ffff:127.0.0.1", None),
+            socks("::ffff:192.168.1.10", None),
         ] {
             assert_eq!(EgressSetting::decode(&e.encode()), Some(e));
         }

@@ -803,6 +803,10 @@ impl PluginEgress {
                 Counters::bump(&self.counters.kill_switch_refusals);
                 // Paced, so a plugin that retries at once can't spin
                 // while the route is down; cut short when it comes up.
+                // Shutdown relies on the plugin dropping this future (its
+                // `select!` on the shutdown signal): one that doesn't waits
+                // up to `DOWN_DELAY_MAX` (30 s) here and is aborted at the
+                // plugin stop timeout (15 s) instead.
                 // Saturating, and a lost update between concurrent
                 // refusals only shortens one wait.
                 let streak = self.down_streak.load(Ordering::Relaxed);

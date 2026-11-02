@@ -1294,6 +1294,11 @@ async fn a_proxy_by_name_resolves_once_and_an_unusable_one_stays_down() {
     assert!(
         matches!(route, Some(Egress::Socks5 { proxy, .. }) if proxy.ip().to_string() == "172.18.0.9")
     );
+    // Mapped forms of usable addresses are still usable.
+    for host in ["::ffff:127.0.0.1", "::ffff:192.168.1.10"] {
+        let (_, route) = f.build_socks5("p", &spec(host, None), lan()).await;
+        assert!(route.is_some(), "{host}");
+    }
     // A literal isn't looked up, and an explicit choice wins.
     let before = resolver.lookups();
     let (_, route) = f

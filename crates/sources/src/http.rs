@@ -319,8 +319,9 @@ struct Host {
     scrapes: VecDeque<Instant>,
     /// The poll unit whose failure was this host's last answer
     /// ([`HostLimiter::record_poll`]): a different unit failing next
-    /// means the host itself is failing.
-    unit_failed: Option<String>,
+    /// means the host itself is failing. With it, the time its
+    /// `Retry-After` asked for, if it gave one.
+    unit_failed: Option<(String, Option<Instant>)>,
 }
 
 impl Host {
@@ -627,15 +628,26 @@ impl HostLimiter {
         if self.lock().entry(&key, now, &self.limits).is_err() {
             return self.record(host, result, now);
         }
+        // What this answer's `Retry-After` asked for, if anything.
+        let asked = match verdict {
+            Verdict::Blocked(Some(d)) => Some(later(now, d)),
+            _ => None,
+        };
+        // `Some(previous unit's Retry-After)` when a different unit failed
+        // just before this one: the host is failing.
         let host_failing = {
             let mut hosts = self.lock();
             let h = hosts.entry_for_answer(host, now);
             if verdict == Verdict::Ok {
                 h.unit_failed = None;
-                false
+                None
             } else {
-                let other = h.unit_failed.as_deref().is_some_and(|u| u != unit);
-                h.unit_failed = Some(unit.to_owned());
+                let other = h
+                    .unit_failed
+                    .take()
+                    .filter(|(u, _)| u != unit)
+                    .map(|(_, until)| until);
+                h.unit_failed = Some((unit.to_owned(), asked));
                 other
             }
         };
@@ -653,8 +665,14 @@ impl HostLimiter {
                 self.block(&key, later(now, wait), now);
             }
         }
-        if host_failing {
+        if let Some(previous) = host_failing {
             self.failure(host, now);
+            // Both asked to wait: the host is rate-limiting us as a whole.
+            // Honour it on the host, to the earlier of the two times, so
+            // one unit's long `Retry-After` can't stretch the host's.
+            if let (Some(a), Some(b)) = (previous, asked) {
+                self.block(host, a.min(b), now);
+            }
         }
     }
 
@@ -1102,6 +1120,40 @@ mod tests {
         l.record_poll("m", "c", &answer(503), now);
         assert_eq!(l.state("m", now), HostState::Ready);
         l.record_poll("m", "d", &answer(500), now);
+        assert!(matches!(l.state("m", now), HostState::BackingOff { .. }));
+    }
+
+    /// A host that rate-limits every unit with `Retry-After` is blocked
+    /// as a whole, until the earlier of the two times (runner, #399 B1).
+    #[tokio::test(start_paused = true)]
+    async fn a_host_wide_retry_after_blocks_the_host() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let now = Instant::now();
+        let limited = |secs: &str| {
+            Ok(Response {
+                status: 429,
+                headers: vec![("Retry-After".into(), secs.into())],
+                body: vec![],
+            })
+        };
+        l.record_poll("m", "a", &limited("3600"), now);
+        assert_eq!(l.state("m", now), HostState::Ready);
+        l.record_poll("m", "b", &limited("86400"), now);
+        assert_eq!(
+            l.state("m", now),
+            HostState::Blocked {
+                until: now + Duration::from_secs(3600)
+            }
+        );
+        // A 5xx after a 429 backs the host off, but doesn't block it.
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        l.record_poll("m", "a", &limited("3600"), now);
+        let failing = Ok(Response {
+            status: 502,
+            headers: vec![],
+            body: vec![],
+        });
+        l.record_poll("m", "b", &failing, now);
         assert!(matches!(l.state("m", now), HostState::BackingOff { .. }));
     }
 
