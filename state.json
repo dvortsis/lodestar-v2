@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T17:30:31Z",
+  "updated_at": "2026-11-02T17:33:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2613,7 +2613,7 @@
       "merge": "f8ff9bab"
     },
     "R-mem-triage": {
-      "status": "interim findings in; fixing",
+      "status": "update 2: ingest path and capped structures ruled out (musl+mimalloc ~1.3 KiB/torrent, live heap ~150 B, pool 200k plateau ~150 MiB); ~5 of 6.66 MiB/h from live-network-only paths. Asked owner for sanitized r3 .prom snapshots (h6/12/16/latest) + private_bytes series. PR held; code-reading live-network maps meanwhile. Lease leak fix (~2/h) held for the bundled PR.",
       "brief": "briefs/R-mem-triage.md",
       "model": "opus",
       "session": "session_01MMjhnD9Jd88Vzmq6W9Bxro",
@@ -3991,6 +3991,11 @@
       "id": "SRC-7-indexers-poll-send",
       "added": "2026-11-02T17:30:31Z",
       "text": "Prowlarr indexer-list poll should go through Client::send so a rate limit on it is host-scoped (SRC-14b-1 handoff; docs/decisions/2026-11-02-SRC-14b*.md)."
+    },
+    {
+      "id": "glibc-zstd-arena",
+      "added": "2026-11-02T17:33:03Z",
+      "text": "gnu/Windows builds: glibc per-thread arenas keep the file index level-19 zstd contexts (~17 MB each) -> 3-4 KiB/torrent anon growth. Not the musl soak cause. Consider a shared/pooled zstd context or lower level for gnu/Windows (R-mem-triage update 2)."
     }
   ],
   "main_health": [
