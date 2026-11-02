@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T02:03:00Z",
+  "updated_at": "2026-11-02T02:01:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -712,13 +712,14 @@
       "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45 | 17:10 r1 FIX: BaseQuery returns visibility conjuncts separately; merge main; §16 qualifiers; utoipa responses. 17:48 merged main (557121f), no code change since 3e4d7b6. 18:45 R2 MERGE at 557121f (no blockers). Waiting on CI: drift in progress, filter budget red -> 1 rerun. Merged 4296f94 19:17."
     },
     "S-blocklists": {
-      "status": "pending",
+      "status": "building",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhn8SxsCtQL3Q8fpuKKg",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "blocked on B-subscriptions-api (no connect/remove/accept API yet)"
+      "notes": "blocked on B-subscriptions-api (no connect/remove/accept API yet)",
+      "launched": "2026-11-02T02:00Z"
     },
     "F1": {
       "status": "merged",
@@ -2204,14 +2205,15 @@
       "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)"
     },
     "B-subscriptions-api": {
-      "status": "fixing",
+      "status": "merged",
       "notes": "queued: Opus + /security-review; prerequisite of S-blocklists; waits for F-filter-load-fail-closed (crates/api/src/filters.rs)",
       "model": "opus",
-      "session": "session_01MMjhn8f4Pt2y2Vtwi6Wo7L",
+      "session": "session_01MMjhn8f4Pt2y2Vtwi6Wo7L (archived)",
       "launched": "2026-11-01T22:58Z",
       "note": "delta re-review MERGE; last push: whole-fetch timeout, store normalised URL, redirect error text, name Cf chars",
       "pr": 362,
-      "head": "12b3d60a"
+      "head": "12b3d60a",
+      "merge": "c9136c80"
     },
     "i9-stage2": {
       "status": "queued",
@@ -3990,5 +3992,5 @@
     "gluetun": "NOT approved; owner decides after baseline ends",
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
-  "queue_note": "Next as slots free: openapi-example-size (Sonnet, after #362), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR; touches integrations/net.rs, after #362), S-blocklists (Sonnet, after #362), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2, Q15), SRC-10e (Q7), SRC-13 (Q3), SRC-15b (Q1). Blocked on release cut: SRC-1 (migration). Seven-day usage warning active."
+  "queue_note": "Next as slots free: openapi-example-size (Sonnet, now unblocked), X-strip-format-chars (Opus, small), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2,Q15), SRC-10e (Q7), SRC-13 (Q3), SRC-15b (Q1), adult stand-in release (q-adult-standin-release). Blocked on release cut: SRC-1. Seven-day usage warning active."
 }
