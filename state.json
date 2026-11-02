@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T06:15:51Z",
+  "updated_at": "2026-11-02T06:29:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2337,13 +2337,16 @@
       "merge": "e528c369"
     },
     "F-normalize-invisible": {
-      "status": "running",
+      "status": "in review",
       "model": "opus",
       "note": "After X-strip-format-chars merges: crates/filter/src/normalize.rs invisible() misses U+2028/2029, tag chars U+E0000-E007F, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+FFF9-FFFB, U+110BD/13430/1BCA0/1D173 ranges; use lodestar_metainfo::hidden_char. Tightening; /security-review; §20.8 budget.",
       "brief": "briefs/F-normalize-invisible.md",
       "notes": "next free slot",
       "session": "session_01MMjhnBREHKxLcJVVxu1dip",
-      "launched": "2026-11-02T05:26:20Z"
+      "launched": "2026-11-02T05:26:20Z",
+      "pr": 381,
+      "head": "9824c2c1",
+      "review": "Opus CHANGES: incomplete default-ignorable set; loosens same input vs main (a<E0001>girl) -> required stricter-of-two-readings design (scope widened to engine/matcher/rules)"
     },
     "P-master-plan-r3": {
       "status": "merged",
@@ -3549,6 +3552,12 @@
       "state": "to-send",
       "added": "2026-11-02T06:15:51Z",
       "text": "SRC-5 runner calls (§2.19): plugins ignore HTTPS_PROXY (per-plugin SOCKS5 is the supported proxy; SRC-14 warns if HTTPS_PROXY is set with Direct egress); kill switch always on for non-direct routes (refines \"optional\"); bind-address route refused on non-Windows (weak host model leak); socks5h caveat: a public name resolving to the proxy LAN reaches it (documented, SRC-14 help text)."
+    },
+    {
+      "id": "flag-f-normalize",
+      "state": "to-send",
+      "added": "2026-11-02T06:29:50Z",
+      "text": "F-normalize-invisible (#381): the filter now ignores characters that render as nothing inside words, using a stricter-of-two-readings rule so it never matches less than before. Deviation from the brief: visible format characters (line separator, Arabic number marks etc.) stay word breaks; a follow-up extends the two-reading rule to them."
     }
   ],
   "external_gates": {
@@ -3608,6 +3617,11 @@
       "id": "X-egress-bound-resolver",
       "added": "2026-11-02T06:15:51Z",
       "text": "Interface egress route resolves DNS through the system resolver outside the route (#380). Add a resolver bound to the interface (new dep or hand-written client = untrusted parser, fuzzed) before the interface route is user-visible. Owner question q-egress-dns-leak."
+    },
+    {
+      "id": "F-visible-format-two-readings",
+      "added": "2026-11-02T06:29:50Z",
+      "text": "Extend the two-reading rule to visible Cf format chars (U+2028/9, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD/CD, U+FFF9-FFFB, U+13430-1343F); U+0605 and U+08E2 strongest case. After #381."
     }
   ],
   "main_health": [
