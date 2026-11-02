@@ -61,9 +61,27 @@ test.describe('navigation', () => {
 		await interact(page); // the full bar loads on the first interaction
 		await page.getByTestId('more-button').click();
 		const menu = page.getByRole('menu', { name: 'More' });
-		await expect(menu.getByRole('menuitem')).toHaveText(['Import', 'Backup', 'About']);
+		await expect(menu.getByRole('menuitem')).toHaveText(['Logs', 'About']);
 		await menu.getByRole('menuitem', { name: 'About' }).click();
 		await expect(page).toHaveURL(/\/settings\/about/);
+	});
+
+	test('the overflow menu opens Logs on a real screen', async ({ page, go, mock }) => {
+		mock.on('getLogStream', {
+			status: 503,
+			body: { error: { code: 'unavailable', message: 'No stream.' } }
+		});
+		mock.on('getLogHistory', { lines: [], more: false, next_cursor: null, unreadable: 0 });
+		mock.on('getLogCatalog', {
+			status: 403,
+			body: { error: { code: 'forbidden', message: 'no' } }
+		});
+		await go('/search');
+		await interact(page);
+		await page.getByTestId('more-button').click();
+		await page.getByRole('menu', { name: 'More' }).getByRole('menuitem', { name: 'Logs' }).click();
+		await expect(page).toHaveURL(/\/logs/);
+		await expect(page.getByText('Page not found')).toBeHidden();
 	});
 });
 

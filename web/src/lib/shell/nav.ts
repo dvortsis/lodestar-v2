@@ -28,11 +28,12 @@ export interface MoreItem {
 	label: () => string;
 }
 
-// Shared by navigation and the palette. Only existing routes are offered;
-// unfinished Settings sections explain their availability and provide a return path.
+// Shared by navigation and the palette. Only existing routes are offered (§10.3), and
+// nav.test.ts fails when an href names neither a route nor a registered Settings screen.
+// Import and Backup return when their Settings screens register; the Syntax guide, when
+// /help/syntax exists.
 export const MORE: readonly MoreItem[] = [
-	{ id: 'import', href: '/settings/import', label: () => m.shell_more_import() },
-	{ id: 'backup', href: '/settings/backup', label: () => m.shell_more_backup() },
+	{ id: 'logs', href: '/logs', label: () => m.shell_more_logs() },
 	{ id: 'about', href: '/settings/about', label: () => m.shell_more_about() }
 ];
 
