@@ -29,6 +29,19 @@ tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "matched-path"] }
 lodestar-api.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
+# `examples/mem-ingest.rs` and `examples/mem-churn.rs` (R-mem-triage): the
+# real ingest path and the fetch pool's eviction path, measured with the
+# allocator `serve` uses, the system allocator, or dhat's heap profiler.
+dhat = "0.3"
+lodestar-peer-wire.workspace = true
+lodestar-sources.workspace = true
+mimalloc = { version = "0.1", default-features = false }
+
+[features]
+# `mem-ingest` under dhat's heap profiler (writes dhat-heap.json).
+dhat-heap = []
+# `mem-ingest` with the system allocator, for comparison.
+system-alloc = []
 
 [lints]
 workspace = true

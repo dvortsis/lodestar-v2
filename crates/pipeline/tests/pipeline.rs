@@ -1457,3 +1457,80 @@ async fn a_stopped_sources_fetch_is_refused_not_filtered() {
     let store = pipeline.shutdown().await.unwrap();
     assert_eq!(store.find(&key).unwrap(), None);
 }
+
+/// A key whose dictionary prepare rejects stays in the pool's recent set.
+/// Seen again, intake grants it a fresh lease and the pool drops it as a
+/// duplicate: the lease must end there, or it's held for the life of the
+/// process (R-mem-triage).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rejected_key_seen_again_ends_its_new_lease() {
+    // Hashes to its key, but isn't usable metainfo (no pieces).
+    let bad = Seed::v1(b"d4:name3:Bade".to_vec());
+    let key = InfoHash(bad.info_hash);
+    let peer = FakePeer::spawn(vec![bad], Accept::Both, Behavior::Honest, vec![]).await;
+    let (feed, feed_tx) = scripted("feed");
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
+    let monitor = pipeline.monitor();
+    let outstanding = || monitor.lease_stats().outstanding.load(Ordering::Relaxed);
+
+    feed_tx
+        .send(Found::key(key, 0).with_peers(vec![peer.addr()]))
+        .await
+        .unwrap();
+    until("the first lease lost as invalid", || {
+        pipeline.pool_stats().fetched.load(Ordering::Relaxed) == 1 && outstanding() == 0
+    })
+    .await;
+
+    feed_tx
+        .send(Found::key(key, 0).with_peers(vec![peer.addr()]))
+        .await
+        .unwrap();
+    until("the sighting dropped as a recent duplicate", || {
+        pipeline.intake_stats().to_pool.load(Ordering::Relaxed) == 2
+            && pipeline.pool_stats().duplicates.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    until("its new lease ended", || outstanding() == 0).await;
+    assert_eq!(pipeline.pool_stats().fetched.load(Ordering::Relaxed), 1);
+    let store = pipeline.shutdown().await.unwrap();
+    assert_eq!(store.find(&key).unwrap(), None);
+}
+
+/// A saved queue larger than the pool's cap: the keys the pool can't take
+/// lose their restored leases as evicted instead of keeping them for the
+/// life of the process (R-mem-triage).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restored_queue_past_the_cap_ends_the_leases_it_drops() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let source = store.register_source("feed", "1", 0).unwrap();
+    let queued: Vec<lodestar_store::QueuedKey> = [0xa1u8, 0xa2, 0xa3]
+        .iter()
+        .map(|&b| lodestar_store::QueuedKey {
+            info_hash: InfoHash([b; 20]),
+            source,
+            cohort: 0,
+            strategy: 0,
+            priority: 0,
+            attempts: 0,
+            private_source: false,
+        })
+        .collect();
+    store.save_fetch_queue(&queued).unwrap();
+    let (feed, _feed_tx) = scripted("feed");
+    let mut cfg = config();
+    cfg.pool.max_pending = 1;
+    // Nobody finds peers: the one key the pool takes stays queued.
+    cfg.pool.lookup_wait = Duration::from_secs(600);
+    cfg.pool.retry_backoff = Duration::from_secs(600);
+    let pipeline = Pipeline::start(cfg, store, vec![feed]).await.unwrap();
+    let monitor = pipeline.monitor();
+    until("one key queued, two leases ended", || {
+        pipeline.pool_stats().pending.load(Ordering::Relaxed) == 1
+            && monitor.lease_stats().outstanding.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    assert_eq!(pipeline.pool_stats().lost_count(Loss::Evicted), 2);
+    pipeline.shutdown().await.unwrap();
+}
