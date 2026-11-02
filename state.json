@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T08:25:29Z",
+  "updated_at": "2026-11-02T08:26:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2337,7 +2337,7 @@
       "merge": "e528c369"
     },
     "F-normalize-invisible": {
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "note": "After X-strip-format-chars merges: crates/filter/src/normalize.rs invisible() misses U+2028/2029, tag chars U+E0000-E007F, U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+FFF9-FFFB, U+110BD/13430/1BCA0/1D173 ranges; use lodestar_metainfo::hidden_char. Tightening; /security-review; §20.8 budget.",
       "brief": "briefs/F-normalize-invisible.md",
@@ -2346,7 +2346,8 @@
       "launched": "2026-11-02T05:26:20Z",
       "pr": 381,
       "head": "a74d356a",
-      "review": "round-3 MERGE + final round verified; merge on green"
+      "review": "round-3 MERGE + final round verified; merge on green",
+      "merge_sha": "6aa0f9f0"
     },
     "P-master-plan-r3": {
       "status": "merged",
@@ -2457,6 +2458,12 @@
     "SRC-4": {
       "notes_runner": "launch after SRC-2 merges (both touch crates/pipeline/src/lib.rs)",
       "notes_runner2": "expect conflicts in crates/pipeline/src/lib.rs (SRC-2 added intake routing, config, stats)"
+    },
+    "X-required-web-checks": {
+      "status": "running",
+      "model": "sonnet",
+      "session": "session_01MMjhnC8MJRspRwT6jwCv1W",
+      "launched": "2026-11-02T08:26:41Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
