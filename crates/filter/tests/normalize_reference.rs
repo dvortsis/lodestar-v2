@@ -81,7 +81,10 @@ mod reference {
         }
     }
 
-    /// Invisible characters that would otherwise split or disguise a word.
+    /// Invisible characters that would otherwise split or disguise a word:
+    /// Unicode's default-ignorable characters
+    /// (docs/decisions/2026-11-02-F-normalize-invisible.md). Written out
+    /// on their own, so the reference doesn't share the tokenizer's table.
     fn invisible(c: char) -> bool {
         matches!(
             c,
@@ -95,12 +98,15 @@ mod reference {
                 | '\u{180E}'
                 | '\u{200B}'..='\u{200F}'
                 | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{206F}'
+                | '\u{2060}'..='\u{206F}'
                 | '\u{3164}'
                 | '\u{FE00}'..='\u{FE0F}'
                 | '\u{FEFF}'
                 | '\u{FFA0}'
+                | '\u{FFF0}'..='\u{FFF8}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0000}'..='\u{E0FFF}'
         )
     }
 
@@ -326,6 +332,7 @@ fn texty() -> impl Strategy<Value = String> {
         "[a-z]{30,40}",
         "\\PC{1,4}",
         "\u{0435}|\u{043E}|\u{200B}|\u{00AD}|ｈｅｌｌｏ|é|ß",
+        "\u{0600}|\u{2028}|\u{FFF9}|\u{E0001}|\u{E0041}|\u{1D173}|\u{110BD}",
     ];
     let sep = prop::sample::select(vec![" ", ".", "-", "_", "", "/", "+", "  "]);
     prop::collection::vec((piece, sep), 0..80).prop_map(|v| {

@@ -8,7 +8,7 @@ use lodestar_search::Node;
 use crate::core::{Action, Item};
 use crate::engine::RuleRef;
 use crate::hash::TermSet;
-use crate::matcher::Doc;
+use crate::matcher::{Doc, Reading};
 use crate::normalize::{self, Token};
 use crate::payload::payload_sig;
 use crate::prefilter::RuleList;
@@ -171,6 +171,12 @@ impl Override {
             (Match::Keyword(k), _) if keyword_tokens(k).is_empty() => {
                 Err(Invalid("the keyword is empty"))
             }
+            // A character that shows as nothing inside a word: the keyword
+            // reads one way now and another the way torrents were read
+            // before, so it would match neither as written.
+            (Match::Keyword(k), _) if keyword_tokens(k) != keyword_tokens_split(k) => Err(Invalid(
+                "the keyword has an invisible character inside a word; type it without one",
+            )),
             (Match::Keyword(k), Strength::Neutralize) if keyword_tokens(k).len() > 1 => {
                 Err(Invalid("Neutralize term takes one word"))
             }
@@ -185,17 +191,33 @@ impl Override {
     /// torrent: a keyword's tokens, and the neutralized word, its hash for
     /// the core and its key for queries ([`crate::matcher::neutral_key`]).
     fn prepare(&self) -> Prepared {
-        let keyword = match &self.what {
-            Match::Keyword(k) => keyword_tokens(k),
-            _ => Vec::new(),
+        let (keyword, keyword_split) = match &self.what {
+            Match::Keyword(k) => {
+                let (joined, split) = (keyword_tokens(k), keyword_tokens_split(k));
+                let split = (split != joined).then_some(split);
+                (joined, split)
+            }
+            _ => (Vec::new(), None),
         };
+        // A Neutralize keyword is one word. One that reads as more in the
+        // earlier reading couldn't have been saved then, so it doesn't
+        // apply ([`override_matches`]). One that reads as one word there
+        // reads as the same word joined (`a_neutral_word_reads_the_same`),
+        // so one neutral set serves both readings.
+        let never = self.strength == Strength::Neutralize
+            && keyword_split.as_ref().is_some_and(|s| s.len() > 1);
         let neutral = match (&self.what, self.strength) {
             (Match::Keyword(k), Strength::Neutralize) => keyword
                 .first()
                 .map(|t| (t.hash, crate::matcher::neutral_key(k))),
             _ => None,
         };
-        Prepared { keyword, neutral }
+        Prepared {
+            keyword,
+            keyword_split,
+            never,
+            neutral,
+        }
     }
 }
 
@@ -205,6 +227,12 @@ impl Override {
 pub(crate) struct Prepared {
     /// A keyword entry's tokens ([`keyword_tokens`]).
     keyword: Vec<Token>,
+    /// Its tokens in the earlier reading ([`keyword_tokens_split`]), if
+    /// they differ.
+    keyword_split: Option<Vec<Token>>,
+    /// A Neutralize entry that is more than one word in the earlier
+    /// reading: it never applies.
+    never: bool,
     pub(crate) neutral: Option<(u64, String)>,
 }
 
@@ -215,16 +243,40 @@ pub(crate) struct Prepared {
 #[derive(Debug, Clone, Default)]
 pub struct OverrideList {
     list: Vec<Override>,
-    prepared: std::sync::OnceLock<Box<[Prepared]>>,
+    prepared: std::sync::OnceLock<PreparedList>,
+}
+
+/// [`OverrideList`]'s entries worked out, and which are marked
+/// ([`OverrideList::marked`]).
+#[derive(Debug, Clone)]
+struct PreparedList {
+    entries: Box<[Prepared]>,
+    marked: Box<[usize]>,
 }
 
 impl OverrideList {
+    /// The entries whose keyword reads differently in the two readings
+    /// (`crate::matcher::Reading`): saved before such keywords were
+    /// refused, and usually none. Found once per entry list.
+    pub(crate) fn marked(&self) -> impl Iterator<Item = (&Override, &Prepared)> {
+        let p = self.prepared_list();
+        p.marked.iter().map(|&i| (&self.list[i], &p.entries[i]))
+    }
+
     /// Each entry with what judging needs of it.
     pub(crate) fn prepared(&self) -> impl Iterator<Item = (&Override, &Prepared)> {
-        let prepared = self
-            .prepared
-            .get_or_init(|| self.list.iter().map(Override::prepare).collect());
-        self.list.iter().zip(prepared.iter())
+        self.list.iter().zip(self.prepared_list().entries.iter())
+    }
+
+    fn prepared_list(&self) -> &PreparedList {
+        self.prepared.get_or_init(|| {
+            let entries: Box<[Prepared]> = self.list.iter().map(Override::prepare).collect();
+            let marked = (entries.iter().enumerate())
+                .filter(|(_, p)| p.keyword_split.is_some())
+                .map(|(i, _)| i)
+                .collect();
+            PreparedList { entries, marked }
+        })
     }
 }
 
@@ -287,6 +339,20 @@ pub(crate) fn keyword_tokens(k: &str) -> Vec<Token> {
     out
 }
 
+/// [`keyword_tokens`] in the earlier reading, with the characters
+/// [`normalize::Tokenizer::splitting`] names as word breaks.
+fn keyword_tokens_split(k: &str) -> Vec<Token> {
+    let mut all = Vec::new();
+    normalize::Tokenizer::splitting().text(k, &mut all);
+    let mut out: Vec<Token> = Vec::new();
+    for t in all {
+        if out.iter().all(|o| o.pos != t.pos) {
+            out.push(t);
+        }
+    }
+    out
+}
+
 /// Whether the keyword's words appear in a row in the text.
 #[cfg(test)]
 fn has_keyword(words: &[Token], text: &str) -> bool {
@@ -309,31 +375,63 @@ pub(crate) fn in_a_row(words: &[Token], tokens: &[Token]) -> bool {
     })
 }
 
-/// Whether a [`Match`] covers the torrent.
-pub(crate) fn matches(what: &Match, item: &Item, doc: &Doc) -> bool {
+/// Whether a [`Match`] covers the torrent in one [`Reading`].
+pub(crate) fn matches(what: &Match, item: &Item, doc: &Doc, reading: Reading) -> bool {
     match what {
-        Match::Keyword(k) => keyword_in(&keyword_tokens(k), doc),
-        _ => matches_prepared(what, &[], item, doc),
+        Match::Keyword(k) => {
+            let split = (reading == Reading::Before).then(|| keyword_tokens_split(k));
+            keyword_in(&keyword_tokens(k), split.as_deref(), doc, reading)
+        }
+        _ => matches_prepared(what, &[], None, item, doc, reading),
     }
 }
 
 /// [`matches`] for an entry whose keyword tokens are worked out.
-pub(crate) fn override_matches(o: &Override, p: &Prepared, item: &Item, doc: &Doc) -> bool {
-    matches_prepared(&o.what, &p.keyword, item, doc)
+pub(crate) fn override_matches(
+    o: &Override,
+    p: &Prepared,
+    item: &Item,
+    doc: &Doc,
+    reading: Reading,
+) -> bool {
+    if reading == Reading::Before && p.never {
+        return false;
+    }
+    let split = p.keyword_split.as_deref();
+    matches_prepared(&o.what, &p.keyword, split, item, doc, reading)
 }
 
-fn matches_prepared(what: &Match, keyword: &[Token], item: &Item, doc: &Doc) -> bool {
+fn matches_prepared(
+    what: &Match,
+    keyword: &[Token],
+    keyword_split: Option<&[Token]>,
+    item: &Item,
+    doc: &Doc,
+    reading: Reading,
+) -> bool {
     match what {
         Match::Hashes(hs) => item.hashes.iter().any(|h| hs.contains(h)),
         Match::Payload(sig) => payload_sig(item.files).is_some_and(|p| p.sig == *sig),
-        Match::Keyword(_) => keyword_in(keyword, doc),
+        Match::Keyword(_) => keyword_in(keyword, keyword_split, doc, reading),
         Match::Query(q) => doc.matches(q, &[]),
     }
 }
 
-/// Whether a keyword's words are in a row in the name or a path.
-fn keyword_in(words: &[Token], doc: &Doc) -> bool {
-    doc.normalized().any(|t| in_a_row(words, t))
+/// Whether a keyword's words are in a row in the name or a path, in one
+/// [`Reading`]: the keyword and the text read the same way. `split` is the
+/// keyword in the earlier reading, if it differs.
+fn keyword_in(words: &[Token], split: Option<&[Token]>, doc: &Doc, reading: Reading) -> bool {
+    match (reading, doc.normalized_split()) {
+        (Reading::Before, Some(mut texts)) => {
+            let words = split.unwrap_or(words);
+            texts.any(|t| in_a_row(words, t))
+        }
+        (Reading::Before, None) => {
+            let words = split.unwrap_or(words);
+            doc.normalized().any(|t| in_a_row(words, t))
+        }
+        (Reading::Joined, _) => doc.normalized().any(|t| in_a_row(words, t)),
+    }
 }
 
 /// The neutral sets of the active Neutralize entries.
@@ -406,5 +504,21 @@ mod tests {
         assert!(has_keyword(&w, "the al\u{200B}pha b3ta"));
         assert!(!has_keyword(&w, "beta alpha"));
         assert!(!has_keyword(&w, "alphabet"));
+    }
+
+    proptest::proptest! {
+        /// A keyword of one word in the earlier reading has the same first
+        /// word joined, so a Neutralize entry neutralizes the same word in
+        /// both readings.
+        #[test]
+        fn a_neutral_word_reads_the_same(
+            k in "([a-c]{1,3}|[0-9]{1,2}|[@$]|é|\u{200B}|\u{2065}|\u{E0001}|\u{1D173}| ){1,6}",
+        ) {
+            let split = keyword_tokens_split(&k);
+            if split.len() == 1 {
+                let joined = keyword_tokens(&k);
+                proptest::prop_assert_eq!(joined.first().map(|t| t.hash), Some(split[0].hash), "{:?}", k);
+            }
+        }
     }
 }

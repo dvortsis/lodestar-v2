@@ -1,0 +1,57 @@
+# F-normalize-invisible decisions (#381)
+
+A content-safety follow-up to `2026-11-02-X-strip-format-chars.md` (#373), which listed format characters the filter's normalization (§20.4) didn't ignore. A character that renders as nothing can sit inside a word in a name that reaches the filter without the feed cleaning (DHT names, imports). There it splits the word past a term rule while the word still looks whole.
+
+- **`invisible()` in `crates/filter/src/normalize.rs` now ignores every character that renders as nothing.**
+  - That is Unicode's Default_Ignorable_Code_Point, the set browsers and HarfBuzz hide. The old hand-picked list was already that set, minus a few ranges.
+  - It reuses `lodestar_metainfo::format_char` (the Unicode 17.0 Cf table from #373) and excludes the Cf characters that show.
+  - **Newly ignored** (`newly_ignored()`):
+    - U+2065 and U+FFF0–FFF8 (unassigned, default-ignorable);
+    - U+1BCA0–1BCA3 (shorthand format controls) and U+1D173–1D17A (musical format controls);
+    - U+E0000–E0FFF, the tags and the rest of plane 14 outside the variation selectors. The variation selectors are combining marks, which were already dropped.
+  - **Kept:** everything it ignored before, including the non-Cf fillers U+034F, U+115F, U+1160, U+17B4, U+17B5, U+3164, U+FE00–FE0F and U+FFA0.
+  - `lodestar-metainfo` was already in the filter's dependency graph (through the store and search crates), so the new direct dependency adds no crate.
+- **Never looser than before, by a two-reading rule** (the runner's design, from its review).
+  - Ignoring a character that used to be a word break also joins two words. On `main`, `a<U+E0001>girl` read as `a` `girl`, so a term `girl` hit. Ignored, it reads as `agirl`, and `girl` would miss. Someone writing a name gains nothing from that, but the same bytes must never match less than they did.
+  - **So the torrent is judged twice, each time from the top, and the stricter verdict stands** (`Engine::judge_doc`). This happens when the name or a path holds a newly ignored character, or when a keyword entry that holds one (`OverrideList::marked`, and keyword exceptions) matches this torrent differently in the two readings. Elsewhere the two judgments are the same, so one is made.
+    - **The joined reading** ignores the characters, in the text and the keywords alike.
+    - **The earlier reading** reads them as word breaks (`Tokenizer::splitting`), exactly as `main` did.
+    - Each reading is a full judgment: core hits, exceptions, override and neutralize entries, allow entries, your rules, packs and lists, each matched in that reading (`matcher::Reading`).
+    - `stricter` keeps the stronger decision, and the earlier reading's on a tie, so its rule and evidence stay as they were. `Core::verdict` does the same, and `Core::pattern_hits` lists the earlier reading's hits first.
+    - A core hit that only the joined reading has can't pre-empt a layer that decided more on `main`: the earlier reading reaches that layer as `main` did, and the stricter verdict is never weaker than the earlier reading's.
+  - **New keywords with such a character inside a word are refused** (`Override::validate`: "the keyword has an invisible character inside a word"). A keyword like that reads one way joined and another in the earlier reading, so it would match neither as written. At the edge of a word it reads the same both ways and is accepted. Keywords stored before this change keep working through the two judgments.
+  - **Shadow override entries are logged once,** at the decision that stands, even when they match in both readings.
+  - **Keywords stored with such a character.**
+    - An override keyword saved before with one inside a word read as two words. Joined, it reads as one word and can cover texts it didn't, but the earlier reading still matches it as two, so it never covers more than it did.
+    - A Neutralize keyword is one word. One that is two words in the earlier reading couldn't have been saved before, so it never applies in that reading (`Prepared::never`). If it did, it would neutralize its joined word there. A Neutralize keyword of one word in the earlier reading has the same first word joined (`a_neutral_word_reads_the_same`), so one neutral set serves both readings.
+    - Keyword exceptions are refused when saved, but match per reading like the rest.
+  - **What doesn't change.** User query rules and their `unless`, allow entries and packs read through the search tokenizer (`fasttok`), which is the same in both readings.
+  - **Cost.** A torrent is judged once, as before, unless its name or a path holds a newly ignored character, or a marked keyword entry matches it differently in the two readings. A marked entry costs one keyword check per torrent in each reading. The marked entries are found once per entry list, and the earlier reading has a tokenizer of its own.
+  - **Tests:**
+    - The normalize unit tests check that the splitting reader gives exactly the tokens of the text with each newly ignored character a space, which is how `main` read it.
+    - A walk over every code point checks that `newly_ignored()` is exactly what `invisible()` ignores that the old list didn't.
+    - `tests/two_readings.rs` checks that, for names and paths with marks, the decision is never weaker than that of an engine with the marks spaced in the text and the keywords. The mix includes override and neutralize entries (some marked), drop and hide lists, a user Drop rule and packs.
+    - Golden cases cover a term split off, a release entry and a keyword exception that match only one reading, a two-word Neutralize keyword, and a list or user rule below a joined-only core hit.
+    - Each of five mutations makes a test fail: no second judgment, a second judgment triggered by the text only, exceptions read joined, the earlier reading's core read joined, and the `never` flag ignored.
+- **Deviation from the brief, for the owner: the Cf characters that show stay word breaks.**
+  - The brief listed these from #373: U+0600–0605, U+06DD, U+070F, U+0890–0891, U+08E2, U+110BD and U+110CD (prepended concatenation marks), U+FFF9–FFFB (interlinear annotation), U+13430–1343F (Egyptian hieroglyph controls) and U+2028/2029 (line and paragraph separators, not Cf).
+  - None of them is default-ignorable. They render as a glyph, a box or a line break, so they split a word visibly, like punctuation.
+  - Ignoring them alone would join words a reader sees apart, which loosens matching. The fresh review found this in the first version, and the runner agreed to keep them as breaks.
+  - Tests pin `alpha<c>beta` to read as `alpha beta` for each of them.
+  - **Follow-up for the runner:** extend the two-reading rule to these characters as well, so a word they split also reads joined. U+0605 and U+08E2 are the strongest case: they are marks placed above the following characters, so the split hardly shows.
+- **No stored artefact that decides a verdict holds the normalized form.**
+  - User rules, keywords, overrides, exceptions and allow entries are stored as text (`filter_rules`, `override_list`, `filter_exceptions`) and normalized on each load, the same way torrent text is.
+  - Every rule that parsed before still parses. Query parsing doesn't go through `invisible()`. A keyword's validation counts its words in the joined reading, and joining never adds words.
+  - `filter_fixtures` keeps a core rule's hashed examples as normalized tokens (`core::Fixture::encode`), because the name itself isn't kept. An example saved from a name with a newly ignored character keeps the earlier reading's tokens.
+    - Fixtures only feed the passing and failing counts on the fixtures page (`FiltersApi::fixtures`), never a verdict.
+    - They can't be worked out again without the name, so they're left as they are.
+  - `filter.stand_ins` and the unreadable-row list are keyed by rule id, and the engine's version is a counter. Neither depends on tokens.
+  - The shipped core and pack term lists are hashes of tokens (`examples/hash_terms.rs`), made in the joined reading.
+    - A source term with a newly ignored character would hash differently now. The earlier reading still sees the split words as text, but the list holds only the new hashes.
+    - The plain lists are kept out of the repository, so this slice can't check them.
+    - The runner should have the list keeper confirm that no source term holds a format or tag character.
+- **The reference tokenizer test** (`tests/normalize_reference.rs`) writes the ignored set out on its own, so it doesn't share the table of the code under test. Its generator includes newly ignored and visible characters.
+  - `format_char` is checked against `unicode-properties`. A Cf character added in a newer Unicode only shows up once that dev-dependency is bumped, and the walk over every code point then names it.
+- **Out of scope: the search tokenizer.** `crates/search/src/tokenizer.rs` treats every Cf character as a word break, U+200B and U+00AD included.
+  - User query rules read through it, so their words, phrases and NEAR windows still split on all of them.
+  - Changing it is the separate follow-up X-tokenizer-cf, which may need an index rebuild. That follow-up should drop only the default-ignorable characters, as this one does.

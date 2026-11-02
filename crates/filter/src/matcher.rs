@@ -603,6 +603,18 @@ impl Tri {
     }
 }
 
+/// Which reading of the name and paths a pass judges, where they hold a
+/// character the matching once read as a word break
+/// ([`crate::normalize::Tokenizer::splitting`]). Elsewhere both are the
+/// same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reading {
+    /// The characters ignored: how text reads now.
+    Joined,
+    /// The characters as word breaks: how text read before.
+    Before,
+}
+
 /// A torrent prepared for many rule evaluations: tokens and enrichment
 /// are computed once, on first use.
 pub struct Doc<'a> {
@@ -618,6 +630,10 @@ pub struct Doc<'a> {
     /// all in one buffer, with where each text ends, and whether each
     /// path reads the same with its segments apart.
     normalized: OnceCell<(Vec<crate::normalize::Token>, Vec<usize>, Vec<bool>)>,
+    /// The same in the earlier reading, where characters once read as
+    /// word breaks are ([`crate::normalize::Tokenizer::splitting`]), if
+    /// it differs.
+    normalized_split: OnceCell<Option<(Vec<crate::normalize::Token>, Vec<usize>)>>,
     enrichment: OnceCell<Option<DocEnrichment>>,
     keys: OnceCell<DocKeys>,
     /// The rule set's NEAR terms, whose nearness the keys record.
@@ -655,6 +671,7 @@ impl<'a> Doc<'a> {
             file_names: OnceCell::new(),
             titles: OnceCell::new(),
             normalized: OnceCell::new(),
+            normalized_split: OnceCell::new(),
             enrichment: OnceCell::new(),
             keys: OnceCell::new(),
             near: None,
@@ -810,6 +827,44 @@ impl<'a> Doc<'a> {
             .chain(ends.iter().copied())
             .zip(ends)
             .map(|(from, to)| &tokens[from..*to])
+    }
+
+    /// Whether the name or a path reads differently in the two
+    /// [`Reading`]s.
+    pub(crate) fn reads_twice(&self) -> bool {
+        self.normalized_split().is_some()
+    }
+
+    /// [`Doc::normalized`] in the earlier reading, if the name or a path
+    /// reads differently there; `None` when both readings are the same.
+    pub(crate) fn normalized_split(
+        &self,
+    ) -> Option<impl Iterator<Item = &[crate::normalize::Token]>> {
+        let (tokens, ends) = self
+            .normalized_split
+            .get_or_init(|| {
+                let files = || self.item.files.iter().take(crate::MAX_FILES);
+                let segments = files().flat_map(|f| f.path.iter().map(String::as_str));
+                if !crate::normalize::splits(std::iter::once(self.item.name).chain(segments)) {
+                    return None;
+                }
+                let mut tok = crate::normalize::Tokenizer::splitting();
+                let mut tokens = Vec::new();
+                tok.text(self.item.name, &mut tokens);
+                let mut ends = vec![tokens.len()];
+                for f in files() {
+                    tok.text(&f.path.join("/"), &mut tokens);
+                    ends.push(tokens.len());
+                }
+                Some((tokens, ends))
+            })
+            .as_ref()?;
+        Some(
+            std::iter::once(0)
+                .chain(ends.iter().copied())
+                .zip(ends)
+                .map(|(from, to)| &tokens[from..*to]),
+        )
     }
 
     /// The name and paths in the core's tokens, if keyword entries have

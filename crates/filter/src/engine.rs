@@ -22,7 +22,7 @@ use lodestar_classify::ContentType;
 
 use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
 use crate::hash::TermSet;
-use crate::matcher::{Doc, Facts};
+use crate::matcher::{Doc, Facts, Reading};
 use crate::packs::{self, PackRule, PackSwitches};
 use crate::prefilter::RuleList;
 use crate::rules::{self, Allow, ClassRules, Exception, Match, OverrideList, Strength};
@@ -227,11 +227,11 @@ impl Engine {
     /// The override and neutralize entries that apply to a torrent:
     /// whether an Override entry releases it, the Neutralize entries, and
     /// the entries in shadow mode.
-    fn released(&self, item: &Item, doc: &Doc, now: i64) -> Released<'_> {
+    fn released(&self, item: &Item, doc: &Doc, now: i64, reading: Reading) -> Released<'_> {
         let mut r = Released::default();
         for (o, p) in self.overrides.prepared() {
             if o.expires_at.is_some_and(|t| t <= now)
-                || !rules::override_matches(o, p, item, doc)
+                || !rules::override_matches(o, p, item, doc, reading)
                 || o.scope.as_ref().is_some_and(|q| !doc.matches(q, &[]))
             {
                 continue;
@@ -249,13 +249,71 @@ impl Engine {
     }
 
     /// [`Engine::judge`] past the floor, on a prepared torrent.
+    ///
+    /// Where a name or a path holds a character the matching once read as
+    /// a word break, or a keyword entry that holds one matches differently
+    /// in the two readings, the torrent is judged in both readings
+    /// ([`Reading`]), each from the top, and the stricter verdict stands
+    /// (the earlier reading's on a tie): no torrent is decided more weakly
+    /// than it was (docs/decisions/2026-11-02-F-normalize-invisible.md).
+    /// Elsewhere the two judgments are the same, so one is made.
     fn judge_doc(&self, item: &Item, facts: Option<&Facts>, doc: &Doc, now: i64) -> Verdict {
+        let (mut v, mut released) = self.judge_reading(item, facts, doc, now, Reading::Joined);
+        if doc.reads_twice() || self.keywords_differ(item, doc) {
+            let (before, also) = self.judge_reading(item, facts, doc, now, Reading::Before);
+            v = stricter(before, v);
+            for id in also {
+                if !released.contains(&id) {
+                    released.push(id);
+                }
+            }
+        }
+        // Shadow override entries are logged once, at the decision that
+        // stands.
+        if let Some(d) = &v.decision {
+            for id in released {
+                v.shadow.push(Decision {
+                    rule: RuleRef::Override(id),
+                    action: d.action,
+                    evidence: vec![Evidence::Released],
+                });
+            }
+        }
+        v
+    }
+
+    /// Whether a keyword entry matches this torrent differently in the two
+    /// readings: only entries whose keyword reads differently are checked
+    /// (`OverrideList::marked`, and keyword exceptions, which are refused
+    /// when saved). Where none does, and the text reads the same both
+    /// ways, the two judgments are the same.
+    fn keywords_differ(&self, item: &Item, doc: &Doc) -> bool {
+        let both = |f: &dyn Fn(Reading) -> bool| f(Reading::Joined) != f(Reading::Before);
+        self.overrides
+            .marked()
+            .any(|(o, p)| both(&|r| rules::override_matches(o, p, item, doc, r)))
+            || self.exceptions.iter().any(|e| {
+                matches!(&e.what, Match::Keyword(k) if crate::normalize::splits([k.as_str()]))
+                    && both(&|r| rules::matches(&e.what, item, doc, r))
+            })
+    }
+
+    /// [`Engine::judge_doc`] in one reading: the verdict, and the shadow
+    /// override entries that matched.
+    fn judge_reading(
+        &self,
+        item: &Item,
+        facts: Option<&Facts>,
+        doc: &Doc,
+        now: i64,
+        reading: Reading,
+    ) -> (Verdict, Vec<u32>) {
         let mut v = Verdict::default();
         let Released {
             overridden,
             neutral,
             shadow: shadow_overrides,
-        } = self.released(item, doc, now);
+        } = self.released(item, doc, now, reading);
         let (neutral_set, neutral_words) = rules::neutral_sets(&neutral);
         if !overridden {
             v.decision = self.below_overrides(
@@ -265,19 +323,11 @@ impl Engine {
                 &neutral_set,
                 &neutral_words,
                 now,
+                reading,
                 &mut v.shadow,
             );
         }
-        if let Some(d) = &v.decision {
-            for id in shadow_overrides {
-                v.shadow.push(Decision {
-                    rule: RuleRef::Override(id),
-                    action: d.action,
-                    evidence: vec![Evidence::Released],
-                });
-            }
-        }
-        v
+        (v, shadow_overrides)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -289,10 +339,16 @@ impl Engine {
         neutral: &TermSet,
         neutral_words: &[String],
         now: i64,
+        reading: Reading,
         shadow: &mut Vec<Decision>,
     ) -> Option<Decision> {
-        for hit in self.core.pattern_hits_read(item, neutral, doc.read()) {
-            if hit.on && !self.excepted(RuleRef::Core(hit.rule), item, doc) {
+        let hits = match reading {
+            Reading::Before => self.core.pattern_hits_split(item, neutral),
+            Reading::Joined => None,
+        };
+        let hits = hits.unwrap_or_else(|| self.core.pattern_hits_read(item, neutral, doc.read()));
+        for hit in hits {
+            if hit.on && !self.excepted(RuleRef::Core(hit.rule), item, doc, reading) {
                 return Some(hit.into());
             }
         }
@@ -315,7 +371,7 @@ impl Engine {
                 continue;
             }
             let r = &self.rules[i as usize];
-            if self.excepted(RuleRef::User(r.id), item, doc) {
+            if self.excepted(RuleRef::User(r.id), item, doc, reading) {
                 continue;
             }
             let d = Decision {
@@ -351,7 +407,7 @@ impl Engine {
         // never lifts another that also has the torrent.
         let rest = packs
             .chain(self.listed(item.hashes))
-            .filter(|d| !self.excepted(d.rule, item, doc))
+            .filter(|d| !self.excepted(d.rule, item, doc, reading))
             .max_by_key(|d| d.action);
         stronger_of(held, rest)
     }
@@ -370,10 +426,10 @@ impl Engine {
         (candidates.len(), full)
     }
 
-    fn excepted(&self, rule: RuleRef, item: &Item, doc: &Doc) -> bool {
+    fn excepted(&self, rule: RuleRef, item: &Item, doc: &Doc, reading: Reading) -> bool {
         self.exceptions
             .iter()
-            .any(|e| e.rule == rule && rules::matches(&e.what, item, doc))
+            .any(|e| e.rule == rule && rules::matches(&e.what, item, doc, reading))
     }
 
     /// The decision on bare hashes, before anything is fetched: the floor,
@@ -768,7 +824,7 @@ mod tests {
             e.overrides = list.into();
             for round in 0..2 {
                 let doc = Doc::new(&it, None);
-                let r = e.released(&it, &doc, now);
+                let r = e.released(&it, &doc, now, Reading::Joined);
                 let neutral: Vec<(u64, String)> =
                     r.neutral.iter().map(|p| p.neutral.clone().unwrap()).collect();
                 prop_assert_eq!(
