@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T21:11:37Z",
+  "updated_at": "2026-11-02T21:16:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3946,11 +3946,6 @@
       "text": "GET /settings JSON Schema carries no default values, so Settings Overview (#391) shows a changed setting's source, not its default. Add `default` to the settings schema (api, generated types) so the Overview and the field modified marker can show the default. Sonnet-able after SRC-14a frees the api files."
     },
     {
-      "id": "runner-docs-src14-split",
-      "added": "2026-11-02T13:49:31Z",
-      "text": "Runner docs PR: add SRC-14a/SRC-14b entries to runner/slices.yaml and runner/dashboard.yaml."
-    },
-    {
       "id": "SRC-7-wiring",
       "added": "2026-11-02T13:51:04Z",
       "text": "After #394 (SRC-14a) merges: wire Prowlarr registration in services.rs/pipeline lib.rs per docs/decisions/2026-11-02-SRC-7.md (Prowlarr::new(Config::from_json(..), SourceCredentials) + EgressFactory::build kit). Fold into SRC-14b or a small slice."
@@ -3981,19 +3976,9 @@
       "text": "RSS stays near peak after a large import drain (290 MB at 100k vs 191 MB after restart). Measure at 10M against the 1 GB budget; consider allocator trimming. Relate to R-mem-triage findings."
     },
     {
-      "id": "build-plan-1.6-cite",
-      "added": "2026-11-02T14:54:52Z",
-      "text": "build-plan §0.6 cites \"§1.6 budgets\", which does not exist; fix the reference in the next runner plan edit."
-    },
-    {
       "id": "SRC-15b-lan-dns-info",
       "added": "2026-11-02T15:05:44Z",
       "text": "SRC-15b: present WARN_LAN_PROXY_DNS as information (it now shows for the recommended gluetun-style setup with auto DNS), not as something to fix."
-    },
-    {
-      "id": "record-2-slot-limit",
-      "added": "2026-11-02T15:06:47Z",
-      "text": "Next runner docs PR: record the owner's 2-slot instruction in docs/owner-decisions.md and set runner/slices.yaml limits.phase_total: 2 (with SRC-14a/14b entries)."
     },
     {
       "id": "SRC-7-indexers-poll-send",
@@ -4176,6 +4161,10 @@
     {
       "t": "2026-11-01T21:12Z",
       "event": "Owner: keep 4 slots full. Launched CR-1b (Opus) + X-web-followups-1101f (Sonnet). 4/4: F-filter-load-fail-closed, P-v06-sources-plan, CR-1b, X-web-followups-1101f. Next when a slot frees: B-subscriptions-api (after fail-closed), openapi-example-size, CR-4 (uTP wiring + IPv6, behind switch)."
+    },
+    {
+      "t": "2026-11-02T21:16:40Z",
+      "event": "merged #401 runner docs: owner-decisions §2.30 (2 slots + launch pause until soak verdict), slices.yaml phase_total 2, SRC-14a/14b placed, build-plan §1.6 cite"
     }
   ],
   "reviews": {
