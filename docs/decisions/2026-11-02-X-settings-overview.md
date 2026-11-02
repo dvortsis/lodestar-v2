@@ -5,3 +5,6 @@
 - **Needs attention uses only what `/system` and `GET /network/check` already report:** a failed or running index rebuild, an address change awaiting confirmation, a filesystem warning, an unreachable DHT port, changes waiting for a restart, and recent errors. Updates, backups, integrations and sources aren't shown until their data is on those endpoints. A failed `/system` or network check leaves "Health information couldn't be loaded", not a blank page.
 - **Rows link to `/settings/<screen>`, and to `#section.field` for changed settings.** They don't turn on Show changed only, because the screens have no URL parameter for it yet.
 - **The Overview loads on demand** (`overview/OverviewScreen.svelte`), so no other Settings page carries it.
+- **Two rows have no fixing screen yet.** An address change awaiting confirmation links to Network & VPN, which has no keep-or-revert action until one is built; the row still tells the user it is waiting. Errors open `/logs` (§10.10.3), without a filter, because `/logs` has no error filter parameter in this build. A filesystem warning opens About, the only screen that shows it.
+- **`/stats` isn't used:** it carries no health signal that `/system` and the network check don't, so the Overview doesn't call it.
+- **Sections no screen lists** (`content`, `preferences`) are shown under Appearance.

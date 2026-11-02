@@ -94,6 +94,13 @@ test.describe('keyboard: Settings → Overview', () => {
 		await expect(page.getByTestId('changed-empty')).toHaveText('Every setting is at its default.');
 	});
 
+	test('a failed health read still shows the changed settings', async ({ page, go }) => {
+		systemFails = 99;
+		await go('/settings');
+		await expect(page.getByText("Health information couldn't be loaded.")).toBeVisible();
+		await expect(page.getByTestId('changed-row').first()).toBeVisible();
+	});
+
 	test('a failed load offers Retry', async ({ page, go, mock }) => {
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
 		let fail = true;
@@ -101,10 +108,12 @@ test.describe('keyboard: Settings → Overview', () => {
 			fail ? { status: 500, body: { code: 'internal', message: 'boom' } } : undefined
 		);
 		await go('/settings');
-		await expect(page.getByText("The overview couldn't be loaded.")).toBeVisible();
+		await expect(page.getByText("The changed settings couldn't be loaded.")).toBeVisible();
+		await expect(page.getByTestId('attention-empty')).toBeVisible();
 		fail = false;
 		new SettingsBackend(FIXTURE_INDEX, fixtureValues()).attach(mock as unknown as MockLike);
-		await page.getByRole('button', { name: 'Retry' }).click();
+		await page.getByRole('button', { name: 'Retry' }).focus();
+		await page.keyboard.press('Enter');
 		await expect(page.getByRole('heading', { name: 'Changed from default' })).toBeVisible();
 	});
 });

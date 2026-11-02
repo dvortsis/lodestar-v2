@@ -65,14 +65,20 @@ export type AttentionKind =
 export interface Attention {
 	kind: AttentionKind;
 	severity: 'error' | 'warning' | 'info';
-	/** The screen that fixes it. */
+	/** The Settings screen that fixes it (`/settings/<screen>`), unless `href` says otherwise. */
 	screen: string;
+	/** A page outside Settings (the logs). */
+	href?: string;
 	count?: number;
 	detail?: string;
 }
 
 /** One row per problem the API already reports, most severe first. */
-export function needsAttention(system: System, network?: NetworkCheck): Attention[] {
+export function needsAttention(
+	system: System,
+	network?: NetworkCheck,
+	screenOf: (section: string) => string | undefined = () => undefined
+): Attention[] {
 	const out: Attention[] = [];
 	const rebuild = system.data_formats.rebuild;
 	if (rebuild?.phase === 'failed')
@@ -83,7 +89,7 @@ export function needsAttention(system: System, network?: NetworkCheck): Attentio
 		out.push({
 			kind: 'filesystem',
 			severity: 'warning',
-			screen: 'storage',
+			screen: 'about',
 			detail: system.data.filesystem_warning
 		});
 	if (network?.reachable === false)
@@ -92,13 +98,23 @@ export function needsAttention(system: System, network?: NetworkCheck): Attentio
 		out.push({
 			kind: 'restart',
 			severity: 'warning',
-			screen: 'general',
+			// Where the "apply after a restart" line shows: the first changed setting's screen.
+			screen: screenOf(system.restart_required[0]!.split('.')[0]!) ?? 'general',
 			count: system.restart_required.length
 		});
 	const errors = system.diagnostics.recent_errors;
 	if (errors !== null && errors > 0)
-		out.push({ kind: 'errors', severity: 'warning', screen: 'logging', count: errors });
-	if (rebuild && (rebuild.phase === 'building' || rebuild.phase === 'finishing'))
+		out.push({
+			kind: 'errors',
+			severity: 'warning',
+			screen: 'logging',
+			href: '/logs',
+			count: errors
+		});
+	if (
+		rebuild &&
+		(rebuild.phase === 'building' || rebuild.phase === 'finishing' || rebuild.phase === 'swapping')
+	)
 		out.push({ kind: 'rebuilding', severity: 'info', screen: 'about' });
 	const rank = { error: 0, warning: 1, info: 2 } as const;
 	return out.sort((a, b) => rank[a.severity] - rank[b.severity]);

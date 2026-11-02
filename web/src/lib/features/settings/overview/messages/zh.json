@@ -20,5 +20,8 @@
 	"settings_overview_source_db": "已在应用中保存",
 	"settings_overview_source_file": "来自 config.toml",
 	"settings_overview_source_env": "由 {env} 设置",
-	"settings_overview_source_env_unnamed": "由环境设置"
+	"settings_overview_source_env_unnamed": "由环境设置",
+	"settings_overview_go_logs": "打开日志",
+	"settings_overview_retry_reload": "重新加载",
+	"settings_overview_changed_unavailable": "无法加载已更改的设置。"
 }

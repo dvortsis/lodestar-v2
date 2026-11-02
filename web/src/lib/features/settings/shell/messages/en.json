@@ -26,6 +26,7 @@
 	"settings_shell_guarded_readonly": "Settings that need a separate confirmation flow are read-only in this screen.",
 	"settings_shell_overview": "Settings overview",
 	"settings_shell_overview_purpose": "Choose a section to review its current values and save changes together.",
+	"settings_shell_overview_unknown": "Installation health and restart status are not available in this overview yet.",
 	"settings_shell_portability": "Backup & portability",
 	"settings_shell_export_description": "Download the settings saved in Lodestar as a TOML export file. Unsaved edits are not included. This file uses the settings export format, not the config.toml layout.",
 	"settings_shell_export_exclusions": "Secrets, environment-controlled values, read-only values, and filter, floor, pack or subscription state are excluded. This is a settings export, not a backup of your library.",

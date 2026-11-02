@@ -117,6 +117,15 @@ describe('needsAttention', () => {
 		]);
 	});
 
+	it('links a restart to the screen of the first changed setting', () => {
+		const [row] = needsAttention(
+			system({ restart_required: ['network.http_bind'] }),
+			undefined,
+			(section) => (section === 'network' ? 'network' : undefined)
+		);
+		expect(row).toMatchObject({ kind: 'restart', screen: 'network' });
+	});
+
 	it('reports a running rebuild as information only', () => {
 		const [row] = needsAttention(system({ data_formats: { rebuild: { phase: 'building' } } }));
 		expect(row).toMatchObject({ kind: 'rebuilding', severity: 'info' });
