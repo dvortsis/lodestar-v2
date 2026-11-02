@@ -1,0 +1,3 @@
+# openapi-example-size: canonical IEC sizes in API examples
+
+Since I9 stage 1 (#350) the query printer writes sizes in IEC units, so the OpenAPI example for the parsed-query `canonical` field now shows `size:>=10GiB` instead of `size:>=10GB`. The doc strings for the size and file clause kinds in `crates/api/src/dto/suggest.rs` use `GiB` and `MiB` too. Query inputs in tests and examples still use `GB`/`MB`, which the parser accepts as aliases, and no parsing or printing code changed. `openapi.json` and `schema.d.ts` were regenerated with the repo tooling. This is a docs-accuracy fix, not a change to any owner decision.

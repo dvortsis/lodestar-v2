@@ -39,7 +39,7 @@ pub struct ParseResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "ast": { "op": "and", "of": [] },
-    "canonical": "res:2160p type:movie year:2020 size:>=10GB",
+    "canonical": "res:2160p type:movie year:2020 size:>=10GiB",
     "chips": [
         { "from": { "end": 2, "start": 0 }, "text": "res:2160p" },
         { "from": { "end": 9, "start": 3 }, "text": "type:movie" }

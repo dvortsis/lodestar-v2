@@ -5485,7 +5485,7 @@ export interface components {
          *         "of": [],
          *         "op": "and"
          *       },
-         *       "canonical": "res:2160p type:movie year:2020 size:>=10GB",
+         *       "canonical": "res:2160p type:movie year:2020 size:>=10GiB",
          *       "chips": [
          *         {
          *           "from": {
