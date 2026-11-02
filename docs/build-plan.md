@@ -1,7 +1,7 @@
 # Lodestar v2 build plan: v0.5.1 → 1.0, with helper-agent orchestration
 
 > First written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
-> **§0 (2026-11-02) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25 and §2.26 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md` and `docs/decisions/2026-11-02-master-plan-r2.md`.
+> **§0 (2026-11-02) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.27 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md` and `docs/decisions/2026-11-02-master-plan-r2.md`.
 > **Picking this up from another session or agent?** Start at [`docs/handoff.md`](handoff.md).
 
 ## 0. Status and plan from 2026-11-02
@@ -12,10 +12,10 @@ Status as of `main` at `7f167278` (2026-11-02 02:23Z). Live per-slice state is o
 | Area | Done | In flight | Next |
 |---|---|---|---|
 | **M0–M5** | All merged. G-v05 passed 10-24. **G-m5 passed 11-01** (#352): analytics-validation matrix, reporting overhead 0.08–0.09 % of a 1 % gate, design review with all 7 blocking findings fixed (#340 and FX-1..4; important and polish in FX-5..6) | — | Backlog only (Track B) |
-| **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **Unraid 24 h soak, attempt r3** on rc.2, fresh data directory: baseline 2026-11-01 22:16Z → 2026-11-02 22:16Z. r1 (upgraded the Oct 22 volume V3 → V12 cleanly) tripped the old working-set stop rule at 19.6 h, so it isn't gate evidence; r2 was stopped by the CA Docker Auto Update plugin at 11-01 11:00Z | Verdict, gluetun leg (owner decides after the baseline), owner tags `v0.5.1` (§0.4) |
+| **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **Unraid 24 h soak, attempt r3** on rc.2, fresh data directory: baseline 2026-11-01 22:16Z → 2026-11-02 22:16Z. r1 (upgraded the Oct 22 volume V3 → V12 cleanly) tripped the old working-set stop rule at 19.6 h, so it isn't gate evidence; r2 was stopped by the CA Docker Auto Update plugin at 11-01 11:00Z | Verdict; the owner runs the gluetun leg after the baseline; the owner tags `v0.5.1` (§0.4) |
 | **Crawler** | CR-0 accepted (24 h final: **740.6 stored/h ≈ 12.3/min**). Merged, each behind its own switch, all **off by default**: CR-SIM, CR-gate-metrics, CR-ADM (`dht.coordinated_admission`), CR-1a-H (`dht.responder_hints`), CR-1a-S (`dht.streaming_peers`), CR-1b (`dht.target_prefixes`), CR-0d (`dht.safe_restart`), CR-0f, CR-COL | **CR-4** (#365): uTP in the fetch path and IPv6 route backoff, switches `dht.utp` and `dht.route_backoff`; review fixes verified, merging on green | Live A/B runs (none run yet), CR-1c, CR-5 (§0.5) |
 | **Imports** | IMP-0..5 merged: PostgreSQL restore runbook, V13 job tables, Magnetico and Bitmagnet adapters, merge/dedupe CLI, imported cohorts kept out of crawl-yield Insights, refile, server-side import part 1 | — | Pilots on real data (§0.6); none run. Only a synthetic figure exists: 100k at ~13,900/s |
-| **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 when the migration slot is assigned; SRC-7 blocked on owner Q2/Q15 |
+| **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 (V14) once migrations may land on `main` (owner hold); SRC-7 blocked on owner Q2/Q15 |
 | **Blocklist subscriptions** | B-subscriptions-api (#362) merged | S-blocklists (Sonnet) | — |
 | **Filters** | F-auth, F-filters (+packs, neutral-perf, xcpu), F-metainfo, F-updater, F-status, F-filter-load-fail-closed (#357) | F-filter-standin-undo (#367), with an owner question on releasing adult stand-in holds | — |
 | **Update engine** | B-update-1..6 (signed manifest, install, rollback, fail-closed checks). Ships **disabled** in v0.5.1 | — | Owner: nightly signing key |
@@ -47,7 +47,7 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 | Step | Who | Waits on | Exit |
 |---|---|---|---|
 | R1 Unraid soak r3 verdict | runner (analysis), owner (evidence hand-back) | the baseline end, 11-02 22:16Z | `analyze` report: no stall, no interruption, ≥ 24 h covered, memory slope upper 95 % CI ≤ 2 MiB/h on `anon` private memory over hours 12–24, peak reported |
-| R2 gluetun leg (≥ 2 h measured) | owner approves and runs; runner analyses | R1 | collector run with `--leg gluetun --require-gluetun` |
+| R2 gluetun leg (≥ 2 h measured, part of the v0.5.1 gate) | owner runs it after the baseline; runner analyses | R1 | collector run with `--leg gluetun --require-gluetun` |
 | R3 Tag `v0.5.1` from rc.2, approve the release environment, publish | **owner** | R1, R2 | GitHub release published; `:latest` moves |
 | R4 Bring `docs/releases/v0.5.1.md` to `main`, mark `docs/releases/v0.5.0.md` as never released, update the README's release status | docs slice | R3 | — |
 | R5 **v0.5.2 cut from `main`** (recommended, §0.4) | runner | R3 | G-v052 |
@@ -80,7 +80,7 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 
 **Track S: v0.6 Sources.** The plan is `docs/plan/2026-11-01-v06-sources.md` §6. Its critical path is SRC-0 ✔ → **SRC-1** → SRC-2 → **SRC-7** → SRC-10* → SRC-G.
 - **Now:** SRC-4 (consent framework), SRC-5 (egress and kill-switch), SRC-9 (Internet Archive JSON parser). All are Opus with `/security-review`.
-- **SRC-1:** `ext:release-branch-cut` is satisfied (the branch exists). It waits only on `ext:migration-slot`. **This update assigns it V14** (`docs/decisions/2026-11-02-master-plan-r2.md`); the runner records it in `migration_order`. CR-3, which once reserved V14, takes the next free number after the 50M gate.
+- **SRC-1:** **this update assigns it V14** (`docs/decisions/2026-11-02-master-plan-r2.md`); the runner records it in `migration_order`. It still waits on the owner's hold, restated on 11-01: **no migrations on `main` before the release cut** (`ext:owner-migrations-on-main`: v0.5.1 tagged, or the owner lifts the hold sooner; owner queue #1). Until then SRC-1 can be built and reviewed but not merged; SRC-4, SRC-5 and SRC-9 fill the slots. CR-3, which once reserved V14, takes the next free number after the 50M gate.
 - **SRC-7 needs owner Q2 and Q15.** It's on the critical path, so they head the owner queue (§0.3). Until they're answered, everything from SRC-10 onward waits.
 - **SRC-3 depends on SB-6** (Track M7) instead of the old `ext:m7-schema-bump`.
 - **P-v06-rulepacks:** plan the other half of E-v06-sources (curated rule packs, ThePornDB/StashDB enrichment) the same way P-v06-sources-plan did.
@@ -111,7 +111,7 @@ Any worker table goes through the migration queue (§0.7). Interface changes fro
 **Track B: backlog** (fills spare slots; each is small):
 - S-blocklists (running);
 - F-filter-standin-undo (#367);
-- openapi-example-size (running);
+- openapi-example-size (#368, in review);
 - X-strip-format-chars (strip every Unicode Cf character in feed titles and digests, from #366's review), after #367 (both touch `crates/api/src/digest.rs`);
 - i9-stage2 (print the `a..<b` range form), which waits until the release after the one that ships its parser;
 - X-settings-overview: replace the placeholder Settings Overview with needs-attention and changed-from-default (§10.10.8);
@@ -125,10 +125,11 @@ Ordered by what each answer unblocks. The runner keeps working on everything els
 
 | # | Decision or action | Unblocks |
 |---|---|---|
-| 1 | Hand back the r3 soak evidence; approve and run the gluetun leg; decide whether r1's clean V3 → V12 upgrade counts as the upgrade test or rc.2 gets an upgrade smoke; **decide whether v0.5.1 ships without F-filter-load-fail-closed (#357)**, a content-safety fix merged after the cut (the runner recommends an rc.3 with #357 cherry-picked if the soak must be re-run anyway, otherwise shipping rc.2 and putting #357 in v0.5.2 within days, since on a first release with no older version to roll back to, an unreadable stored rule needs a corrupted row or a parser regression to matter; `docs/decisions/2026-11-01-F-filter-load-fail-closed.md`); tag `v0.5.1` and approve the release environment | v0.5.1; the three held epics |
+| 1 | Hand back the r3 soak evidence; run the gluetun leg after the baseline; decide whether r1's clean V3 → V12 upgrade counts as the upgrade test or rc.2 gets an upgrade smoke; **decide whether v0.5.1 ships without F-filter-load-fail-closed (#357)**, a content-safety fix merged after the cut (the runner recommends an rc.3 with #357 cherry-picked if the soak must be re-run anyway, otherwise shipping rc.2 and putting #357 in v0.5.2 within days, since on a first release with no older version to roll back to, an unreadable stored rule needs a corrupted row or a parser regression to matter; `docs/decisions/2026-11-01-F-filter-load-fail-closed.md`); tag `v0.5.1` and approve the release environment. **Also:** may SRC-1's V14 migration land on `main` before the tag (your 11-01 hold says no migrations before the release cut)? | v0.5.1; the three held epics; SRC-1 → the Sources critical path |
 | 2 | **Q2** (ToS/robots position per source) and **Q15** (how `private_source` items get metadata), plan `2026-11-01-v06-sources.md` §5 | SRC-7 and the whole Sources critical path |
 | 3 | Name the **experiment host** for crawler A/B runs, and when it's free | Track C's live work (C2–C8) and the v0.6 tag |
 | 4 | **Q1** (consent wording), **Q3** (which torrent caches), **Q7** (Sukebei feed) | SRC-15b, SRC-13, SRC-10e |
+| 4b | Accept #362's egress trade-off: blocklist list fetches go through the SSRF guard and ignore `HTTPS_PROXY`, though §20.13 said they use the proxy egress; a whole-container VPN still applies. The runner recommends accepting it for v0.6 (`docs/decisions/2026-11-01-B-subscriptions-api.md`) | the §20.13 wording; the user guide |
 | 5 | Release adult stand-in holds automatically? (#367; needs a stored-format change) | F-filter-standin-undo's follow-up |
 | 6 | Create the **nightly signing key** and its environment | update checks on the Nightly channel |
 | 7 | Make `Web / web` and `E2E / run` required checks (the runner recommends yes) | safer merges |
@@ -150,7 +151,7 @@ Ordered by what each answer unblocks. The runner keeps working on everything els
 - ✔ Updates ship off (no nightly key yet; the release key exists).
 - ☐ The owner tags, approves the release environment and publishes.
 
-**v0.5.2 (recommended, runner, flagged in the r2 decisions file).** `main` already carries fixes v0.5.1 lacks (B-update-5..6, filter fail-closed, the M5 exit fixes) and diverges fast. Cut `release/v0.5.2` from `main` soon after v0.5.1 ships rather than cherry-picking long chains. The gate is v0.5.1's: the 24 h Linux Docker soak stays the binding memory gate, plus a ≥ 6 h Windows service run, and the delta rule adds re-soaks for crawler lifecycle, sampler or endpoint-policy changes. Crawler switches stay off in v0.5.2 unless they've passed C8.
+**v0.5.2 (recommended, runner, flagged in the r2 decisions file).** `main` already carries fixes v0.5.1 lacks (B-update-5..6, filter fail-closed, the M5 exit fixes) and diverges fast. Cut `release/v0.5.2` from `main` soon after v0.5.1 ships rather than cherry-picking long chains. The gate is v0.5.1's: the 24 h Linux Docker soak stays the binding memory gate, plus a ≥ 6 h Windows service run, and the delta rule adds re-soaks for crawler lifecycle, sampler or endpoint-policy changes. **A cut from `main` ships one-way migrations** (V13, and V14 if SRC-1 has merged), so the gate adds a V12 → V13+ upgrade smoke on a copy of a v0.5.1 data folder and a rollback-to-snapshot check (`lodestar rollback` to the `pre-vN` snapshot, then v0.5.1 starts on it). Crawler switches stay off in v0.5.2 unless they've passed C8.
 
 ### 0.5 Crawler program
 **Evidence so far.**
@@ -237,7 +238,7 @@ flowchart LR
 ```
 
 **Things that run one at a time:**
-- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: **V14 → SRC-1** (assigned by this update), then whichever of CR-3 (after the 50M gate) and any worker or companion table reaches the slot first. The runner records the queue in `runner-state` `migration_order` (today stale at V11).
+- **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: **V14 → SRC-1** (assigned by this update; merges once `ext:owner-migrations-on-main` holds), then whichever of CR-3 (after the 50M gate) and any worker or companion table reaches the slot first. The runner records the queue in `runner-state` `migration_order` (today stale at V11).
 - **Search schema:** exactly one `SCHEMA_VERSION` bump per milestone. M7's is SB-6. A slice that needs a new indexed field asks SB-6 to carry it instead of bumping.
 - **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks.
 - **CI capacity:** each push starts about 37 jobs that every PR queues behind. One push per round of fixes.
@@ -267,9 +268,9 @@ flowchart LR
 
 ### 0.9 Next actions
 In order, as slots allow (four slices in total; no two with overlapping `owns`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
-1. Finish the in-flight work: CR-4 (#365), F-filter-standin-undo (#367), S-blocklists, openapi-example-size (4 of 4 slots on 2026-11-02 02:23Z).
+1. Finish the in-flight work: CR-4 (#365), F-filter-standin-undo (#367), S-blocklists, openapi-example-size (#368) (4 of 4 slots on 2026-11-02 02:50Z).
 2. Launch SRC-4, SRC-5 and SRC-9; then X-strip-format-chars after #367.
-3. Launch SRC-1 with V14 (assigned by this update; the runner records it in `migration_order`).
+3. Launch SRC-1 with V14 when the owner's migration hold lifts (v0.5.1 tagged, or the owner says so sooner; owner queue #1). The runner records V14 in `migration_order` now.
 4. After 11-02 22:16Z: analyse the r3 soak; ask the owner for the gluetun leg and the tag (owner queue #1), and in the same message for Q2/Q15 and the experiment host (#2, #3).
 5. On the soak verdict: expand E-M6 (gap audit first), E-v06-workers, E-v06-companions.
 6. Launch SB-6 when SRC-2 merges; expand the rest of E-M7; launch P-v06-rulepacks.

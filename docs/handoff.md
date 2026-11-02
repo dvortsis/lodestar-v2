@@ -103,15 +103,15 @@ Each comes from `CLAUDE.md`, the owner's decisions or the runner's standards.
 The owner's open decisions are in [build-plan §0.3](build-plan.md#03-owner-queue), ordered by what they unblock. The gates (v0.5.1, the crawler's v0.6 gate, import scale, SRC-G, 1.0) are in [§0.4](build-plan.md#04-v051-gate-and-v052) and [§0.6](build-plan.md#06-gates-added-by-this-plan). When you need an owner answer, ask once with your recommendation and keep working on everything else.
 
 ## 8. In flight on 2026-11-02
-Superseded by live state as soon as anything moves; check §2 first. Slots at 02:23Z: **4 of 4** (CR-4, F-filter-standin-undo, S-blocklists, openapi-example-size).
+Superseded by live state as soon as anything moves; check §2 first. Slots at 02:50Z: **4 of 4** (CR-4, F-filter-standin-undo, S-blocklists, openapi-example-size).
 
 | Item | State | Waits on |
 |---|---|---|
 | CR-4 uTP and IPv6 route backoff (#365) | review fixes verified; merge on green | CI |
 | F-filter-standin-undo (#367) | changes requested by the runner's review | its session's push; owner question on adult holds |
 | S-blocklists | building | — |
-| openapi-example-size | building (launched 02:23Z) | — |
+| openapi-example-size (#368) | in review | runner review |
 | Unraid soak r3 on rc.2 | baseline ends 2026-11-02 22:16Z | analysis, then the owner's gluetun leg and tag |
 | Held epics: E-M6, E-v06-workers, E-v06-companions | held | the soak verdict |
-| SRC-1 | not launched; V14 assigned by `docs/decisions/2026-11-02-master-plan-r2.md` | a free slot and no other open migration PR |
+| SRC-1 | not launched; V14 assigned by `docs/decisions/2026-11-02-master-plan-r2.md` | the owner's hold: no migrations on `main` before the v0.5.1 release (`ext:owner-migrations-on-main`) |
 | SRC-7 and everything after it | blocked | owner Q2, Q15 |
