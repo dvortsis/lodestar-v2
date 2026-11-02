@@ -293,9 +293,10 @@ fn run_promoted(
     let applied = index.reindex_watermark()?;
     let rows = store.promoted_due(applied, PROMOTED_BATCH)?;
     // An index rebuilt from empty commits the log's head before its ids
-    // reach a promoted one: the row waits until they do, or it would be
-    // matched against nothing and lost.
-    let indexed = index.watermark()?;
+    // reach a promoted one: the row waits until both indexes' ids do, or
+    // it would be matched without its document (or its files, for a
+    // `file:(…)` clause) and lost.
+    let indexed = index.watermark()?.min(index.files_watermark()?);
     let Some(last) = rows.last().map(|r| r.seq) else {
         return Ok(());
     };
@@ -1279,6 +1280,40 @@ mod tests {
         w.commit().unwrap();
         let r = run(&mut s, 2);
         assert_eq!((r.promoted, r.more), (1, false));
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+    }
+
+    /// The file index lost its documents (a crash between the two
+    /// commits): it takes the log's head at once but its ids start again,
+    /// so a promoted id it hasn't reached waits, then alerts once.
+    #[test]
+    fn a_row_the_file_index_has_not_reached_waits() {
+        let mut s = setup(0);
+        add(&mut s.store, &names(0, 5));
+        let item = unverified(&mut s.store, "Promo.Even");
+        add(&mut s.store, &names(5, 20));
+        let promo = save(&mut s.store, "promo", "Promo", 21);
+        let path = s._dir.path().join("index");
+        {
+            let index = SearchIndex::open(&path).unwrap();
+            index_all(&index, &mut s.store);
+        }
+        promote(&mut s.store, item, "Promo.Even", 0);
+        std::fs::remove_dir_all(path.join("files")).unwrap();
+        s.index = SearchIndex::open(&path).unwrap();
+        let mut w = s.index.writer(15 << 20).unwrap();
+        w.catch_up(&mut s.store, 2).unwrap();
+        w.commit().unwrap();
+        let seq = s.store.promoted_due(i64::MAX, 1).unwrap()[0].seq;
+        assert!(s.index.reindex_watermark().unwrap() >= seq, "applied");
+        assert!(s.index.watermark().unwrap() >= item);
+        assert!(s.index.files_watermark().unwrap() < item);
+        let r = run(&mut s, 2);
+        assert_eq!((r.promoted, r.more), (0, false), "it waits for the files");
+        while w.catch_up(&mut s.store, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        let r = run(&mut s, 2);
+        assert_eq!(r.promoted, 1);
         assert_eq!(alert_ids(&s.store, promo), vec![item]);
     }
 
