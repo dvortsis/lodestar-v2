@@ -1,4 +1,4 @@
-# F-normalize-invisible decisions (#PR)
+# F-normalize-invisible decisions (#381)
 
 A content-safety follow-up to `2026-11-02-X-strip-format-chars.md` (#373), which listed format characters the filter's normalization (§20.4) didn't ignore. A character that renders as nothing inside a word, in a name that reaches the filter without the feed cleaning (DHT names, imports), splits that word past a term rule while it still looks whole.
 
