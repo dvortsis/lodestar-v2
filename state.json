@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T10:46:15Z",
+  "updated_at": "2026-11-02T11:38:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2439,7 +2439,7 @@
       ]
     },
     "SRC-2b": {
-      "status": "queued",
+      "status": "running",
       "model": "opus",
       "deps": [
         "SRC-2"
@@ -2448,7 +2448,10 @@
         "crates/lodestar/src/percolator.rs",
         "crates/store/src/saved.rs"
       ],
-      "notes": "percolate promoted ids (below each search watermark); candidate design: consume reindex_log entries, dedupe by (search, torrent), no new table. Gap until then: promoted torrents miss saved-search alerts."
+      "notes": "percolate promoted ids (below each search watermark); candidate design: consume reindex_log entries, dedupe by (search, torrent), no new table. Gap until then: promoted torrents miss saved-search alerts.",
+      "session": "session_01MMjhnAD4GBG8DT8wk4sqMq",
+      "brief": "briefs/SRC-2b.md",
+      "launched": "2026-11-02T11:38Z"
     },
     "SRC-9": {
       "status": "merged",
@@ -2497,12 +2500,13 @@
       "merge_sha": "73024354"
     },
     "F-visible-format-two-readings": {
-      "status": "in review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBEaKCUgMGXvtAec3d",
       "launched": "2026-11-02T09:03:02Z",
       "pr": 387,
-      "head": "b22b4deb"
+      "head": "b22b4deb",
+      "merge": "1f97c4ee"
     },
     "F-hits-two-readings": {
       "status": "merged",
