@@ -185,7 +185,7 @@ fn a_rules_stand_in_holds_are_judged_again_when_it_reads() {
         )
     };
     load(&f.api);
-    assert_eq!(f.api.undo_stand_ins(now()).unwrap(), None);
+    assert_eq!(f.api.undo_stand_ins(now(), false).unwrap(), None);
     let u = format!("U-{rule}");
     let at = since(&f.api, &u);
     hold(&f.api, (1, &u, Q, at, false, "cam rip 2025"));
@@ -220,8 +220,8 @@ fn a_rules_stand_in_holds_are_judged_again_when_it_reads() {
         };
         e.set_list(Some(layer), 1);
     });
-    let done = api.undo_stand_ins(now()).unwrap().unwrap();
-    assert_eq!((done.released, done.kept, done.review), (1, 5, 0));
+    let done = api.undo_stand_ins(now(), false).unwrap().unwrap();
+    assert_eq!((done.released, done.kept, done.adult), (1, 5, 0));
     assert!(held(&api, 1), "the real rule holds it");
     assert!(!held(&api, 2), "only the stand-in held it");
     assert!(held(&api, 3), "before the stand-in: the real rule's");
@@ -233,41 +233,73 @@ fn a_rules_stand_in_holds_are_judged_again_when_it_reads() {
     let notice = lodestar_api::filters::stand_in_notice(&api.store.lock().unwrap(), now());
     assert_eq!(notice, Some(done));
     // Nothing more to do on the next run.
-    assert_eq!(api.undo_stand_ins(now()).unwrap(), None);
+    assert_eq!(api.undo_stand_ins(now(), false).unwrap(), None);
 }
 
 /// An unreadable `unless` makes its rule a stand-in that applies without
-/// it, and an unknown action code one that quarantines within its query;
-/// once they read, what the real rules let through is released.
+/// it, with the rule's own action, and an unknown action code one that
+/// quarantines within its query. Once they read, the quarantine the real
+/// rules let through is released; what a drop or hide rule did without
+/// its `unless` is counted for review and left as it is.
 #[test]
 fn unless_and_action_stand_ins_are_judged_again_when_they_read() {
     let f = fixture();
-    let (spam, cam) = {
+    let (spam, cam, warez, junk) = {
         let mut s = f.api.store.lock().unwrap();
+        let q = Action::Quarantine.code();
         (
-            s.add_rule("spam", Action::Drop.code(), None, Some("size:>>"))
-                .unwrap(),
+            s.add_rule("spam", q, None, Some("size:>>")).unwrap(),
             s.add_rule("cam", 99, None, None).unwrap(),
+            s.add_rule("warez", Action::Drop.code(), None, Some("size:>>"))
+                .unwrap(),
+            s.add_rule("junk", Action::Hide.code(), None, Some("size:>>"))
+                .unwrap(),
         )
     };
     load(&f.api);
-    f.api.undo_stand_ins(now()).unwrap();
-    let (u, c) = (format!("U-{spam}"), format!("U-{cam}"));
+    f.api.undo_stand_ins(now(), false).unwrap();
+    let [u, c, w, j] = [spam, cam, warez, junk].map(|id| format!("U-{id}"));
     let at = since(&f.api, &u);
     hold(&f.api, (1, &u, Q, at, false, "spam goodgroup"));
     hold(&f.api, (2, &u, Q, at, false, "spam badgroup"));
     hold(&f.api, (3, &c, Q, at, false, "cam rip"));
-    fix_rule(&f.api, spam, "spam", Action::Drop, Some("goodgroup"));
+    hold(&f.api, (4, &w, T, at, false, ""));
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .connection()
+        .execute(
+            "INSERT INTO filter_hits (hash, rule, action, at, evidence) VALUES (?1, ?2, 2, ?3, x'')",
+            (&[5u8; 20][..], j.as_str(), at),
+        )
+        .unwrap();
+    fix_rule(&f.api, spam, "spam", Action::Quarantine, Some("goodgroup"));
     fix_rule(&f.api, cam, "cam", Action::Hide, None);
+    for (id, q, a) in [(warez, "warez", Action::Drop), (junk, "junk", Action::Hide)] {
+        fix_rule(&f.api, id, q, a, Some("goodgroup"));
+    }
     load(&f.api);
-    let done = f.api.undo_stand_ins(now()).unwrap().unwrap();
-    assert_eq!((done.released, done.kept), (2, 1));
+    // A run a stop cut short released 5: this one adds to that.
+    let partial = format!("{} 5 9 9 9 9 1", now() - 10);
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .set_settings_text(&[("filter.stand_in_undo", &partial)])
+        .unwrap();
+    let done = f.api.undo_stand_ins(now(), false).unwrap().unwrap();
+    assert_eq!(
+        (done.released, done.kept, done.dropped, done.hidden),
+        (2 + 5, 1, 1, 1)
+    );
     assert!(!held(&f.api, 1), "its unless lets it through");
     assert!(held(&f.api, 2));
     assert!(
         !held(&f.api, 3),
         "hide doesn't hold back: stored hidden on its refetch"
     );
+    assert!(held(&f.api, 4), "a drop's tombstone stays, for review");
 }
 
 /// An unreadable Is adult classification rule marks everything adult.
@@ -285,7 +317,7 @@ fn an_is_adult_stand_ins_adult_holds_stay_for_review() {
         .add_class_rule("size:>>", true)
         .unwrap();
     load(&f.api);
-    f.api.undo_stand_ins(now()).unwrap();
+    f.api.undo_stand_ins(now(), false).unwrap();
     let at = since(&f.api, &format!("C-{class}"));
     hold(&f.api, (1, "CS-5a", Q, at, true, "some name"));
     hold(&f.api, (2, "CS-5a", T, at, true, ""));
@@ -300,8 +332,8 @@ fn an_is_adult_stand_ins_adult_holds_stay_for_review() {
         .unwrap();
     load(&f.api);
     assert!(f.api.engine.current().unreadable.is_empty());
-    let done = f.api.undo_stand_ins(now()).unwrap().unwrap();
-    assert_eq!((done.released, done.kept, done.review), (0, 0, 2));
+    let done = f.api.undo_stand_ins(now(), false).unwrap().unwrap();
+    assert_eq!((done.released, done.kept, done.adult), (0, 0, 2));
     for h in 1..=4 {
         assert!(held(&f.api, h), "{h} stays held");
     }
@@ -333,13 +365,15 @@ fn removing_an_unreadable_is_adult_rule_counts_its_adult_holds() {
         .add_class_rule("size:>>", true)
         .unwrap();
     load(&f.api);
-    f.api.undo_stand_ins(now()).unwrap();
+    f.api.undo_stand_ins(now(), false).unwrap();
     let at = since(&f.api, &format!("C-{class}"));
     hold(&f.api, (1, "CS-5a", T, at, true, ""));
     f.api.remove_class_rule(class, now()).unwrap();
+    // The request's background re-judge, told the removal re-queued all.
+    f.api.undo_stand_ins(now(), true).unwrap();
     assert!(held(&f.api, 1));
     let notice = lodestar_api::filters::stand_in_notice(&f.api.store.lock().unwrap(), now());
-    assert_eq!(notice.map(|n| n.review), Some(1));
+    assert_eq!(notice.map(|n| n.adult), Some(1));
     assert_eq!(record(&f.api), None);
 }
 
@@ -358,29 +392,32 @@ fn a_row_still_unreadable_keeps_its_holds_and_a_stop_redoes_it() {
         .add_rule("size:>>", Action::Hide.code(), None, None)
         .unwrap();
     load(&f.api);
-    f.api.undo_stand_ins(now()).unwrap();
+    f.api.undo_stand_ins(now(), false).unwrap();
     let first = record(&f.api).unwrap();
     let u = format!("U-{rule}");
     let at = since(&f.api, &u);
     hold(&f.api, (1, &u, Q, at, false, "a"));
     let api = restart(&f);
-    assert_eq!(api.undo_stand_ins(now() + 10).unwrap(), None);
+    assert_eq!(api.undo_stand_ins(now() + 10, false).unwrap(), None);
     assert_eq!(record(&api).unwrap(), first, "its first time is kept");
     // An engine without the rules loaded lists nothing unreadable.
     api.engine.update_engine(|e| e.unreadable.clear());
-    assert_eq!(api.undo_stand_ins(now()).unwrap(), None);
+    assert_eq!(api.undo_stand_ins(now(), false).unwrap(), None);
     assert_eq!(record(&api).unwrap(), first, "the row doesn't read");
     assert!(held(&api, 1));
     fix_rule(&api, rule, "keepword", Action::Quarantine, None);
     load(&api);
     api.shutdown.cancel();
-    assert!(api.undo_stand_ins(now()).is_err(), "the shutdown stops it");
+    assert!(
+        api.undo_stand_ins(now(), false).is_err(),
+        "the shutdown stops it"
+    );
     assert!(record(&api).unwrap().starts_with(&format!("{first}~")));
     assert!(held(&api, 1));
     // The real rule quarantines after it read again.
     hold(&api, (2, &u, Q, now() + 100, false, "real one"));
     let api = restart(&f);
-    let done = api.undo_stand_ins(now()).unwrap().unwrap();
+    let done = api.undo_stand_ins(now(), false).unwrap().unwrap();
     assert_eq!((done.released, done.kept), (1, 0));
     assert!(!held(&api, 1));
     assert!(held(&api, 2), "outside the stand-in's window");
@@ -399,7 +436,7 @@ fn a_rejudge_runs_beside_apply() {
         .add_rule("size:>>", Action::Quarantine.code(), None, None)
         .unwrap();
     load(&f.api);
-    f.api.undo_stand_ins(now()).unwrap();
+    f.api.undo_stand_ins(now(), false).unwrap();
     let u = format!("U-{rule}");
     let at = since(&f.api, &u);
     for i in 0..2_000u32 {
@@ -433,7 +470,7 @@ fn a_rejudge_runs_beside_apply() {
     let judge = {
         let api = api.clone();
         std::thread::spawn(move || {
-            let _ = api.undo_stand_ins(now()).unwrap();
+            let _ = api.undo_stand_ins(now(), false).unwrap();
             tx.send(()).unwrap();
         })
     };

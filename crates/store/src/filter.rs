@@ -622,7 +622,7 @@ impl Store {
     /// `rule`'s quarantine made in `since..=until`, oldest first, after the
     /// `(at, hash)` cursor `after`: what a rule's stand-in made while its
     /// row couldn't be read (docs/decisions/2026-11-02-F-filter-standin-undo.md).
-    /// A stand-in only quarantines, and never as an adult hold.
+    /// A stand-in never holds as an adult hold.
     pub fn quarantine_between(
         &self,
         rule: &str,
@@ -659,15 +659,43 @@ impl Store {
         Ok(out)
     }
 
-    /// How many hashes adult holds made in `since..=until` hold, in
-    /// quarantine or as tombstones.
-    pub fn adult_holds_between(&self, (since, until): (i64, i64)) -> Result<usize> {
-        let n: i64 = self.conn.query_row(
-            "SELECT count(DISTINCT hash) FROM (
+    /// The hashes adult holds made in `since..=until` hold, in quarantine
+    /// or as tombstones.
+    pub fn adult_holds_between(&self, (since, until): (i64, i64)) -> Result<Vec<[u8; 20]>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT hash FROM (
                  SELECT hash, rule, at FROM quarantine
                  UNION ALL SELECT hash, rule, at FROM tombstones
              ) WHERE at >= ?1 AND at <= ?2 AND substr(rule, -length(?3)) = ?3",
-            params![since, until, ADULT_HOLD],
+        )?;
+        let rows = stmt.query_map(params![since, until, ADULT_HOLD], |r| {
+            r.get::<_, Vec<u8>>(0)
+        })?;
+        rows.map(|h| hash20(h?)).collect()
+    }
+
+    /// How many of `rule`'s tombstones were made in `since..=until`.
+    pub fn tombstones_between(&self, rule: &str, (since, until): (i64, i64)) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(*) FROM tombstones WHERE rule = ?1 AND at >= ?2 AND at <= ?3",
+            params![rule, since, until],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
+    /// How many torrents `rule` applied `action` to (not in shadow mode)
+    /// in `since..=until`, as `filter_hits` still records them.
+    pub fn hits_between(
+        &self,
+        rule: &str,
+        action: u8,
+        (since, until): (i64, i64),
+    ) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(DISTINCT hash) FROM filter_hits
+             WHERE rule = ?1 AND action = ?2 AND at >= ?3 AND at <= ?4",
+            params![rule, action, since, until],
             |r| r.get(0),
         )?;
         Ok(n as usize)
@@ -1188,7 +1216,21 @@ mod tests {
             .quarantine_between("U-3", (10, 30), Some((20, [2; 20])), 10)
             .unwrap();
         assert_eq!(hashes(&page), [3]);
-        assert_eq!(s.adult_holds_between((10, 30)).unwrap(), 2);
+        assert_eq!(s.adult_holds_between((10, 30)).unwrap().len(), 2);
+        assert_eq!(s.tombstones_between("U-4", (10, 30)).unwrap(), 1);
+        assert_eq!(s.tombstones_between("U-4", (25, 30)).unwrap(), 0);
+        s.conn
+            .execute(
+                "INSERT INTO filter_hits (hash, rule, action, at, evidence)
+                 VALUES (?1, 'U-3', 2, 21, x''), (?1, 'U-3', 2, 22, x''), (?2, 'U-3', 130, 21, x'')",
+                params![&[8u8; 20][..], &[9u8; 20][..]],
+            )
+            .unwrap();
+        assert_eq!(
+            s.hits_between("U-3", 2, (10, 30)).unwrap(),
+            1,
+            "once, not in shadow"
+        );
         // A writer holds 2 again meanwhile: its row isn't the one read.
         s.conn
             .execute(

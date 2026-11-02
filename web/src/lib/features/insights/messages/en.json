@@ -107,7 +107,7 @@
 	"insights_overview_exc_since": "Since",
 	"insights_overview_exc_index_lag": "The search index is {lag} behind new torrents.",
 	"insights_overview_exc_cohort_stalled": "{count} keys are waiting, but nothing has been stored for a while.",
-	"insights_overview_exc_filter_stand_ins_rejudged": "Saved filter rows that couldn't be read work again. What filtering held back in their place was checked again with your rules: {released} released, {kept} still held. Adult holds to review in Filters & Safety: {review}.",
+	"insights_overview_exc_filter_stand_ins_rejudged": "Saved filter rows that couldn't be read work again. What filtering held back in their place was checked again with your rules: {released} released, {kept} still held. Made while they couldn't be read, for you to review in Settings → Filters & Safety: {adult} adult holds (some may come from other rules or your corrections), {dropped} dropped, {hidden} hidden.",
 	"insights_overview_exc_filter_rows_unreadable": "Saved filter rows that can't be read: {count} ({rows}). Filtering holds back more until you fix or remove them in Settings → Filters & Safety.",
 	"insights_overview_exc_unknown": "Needs attention: {kind}",
 	"insights_overview_exc_fix": "See details",

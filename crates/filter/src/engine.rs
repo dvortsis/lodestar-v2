@@ -410,24 +410,26 @@ impl Engine {
 
     /// Whether this engine would hold back (quarantine or drop) a held
     /// torrent, judged from what's kept of it: its hash, and the name its
-    /// quarantine sealed. The floor, lists, *Always allow*, CSX-5, your
-    /// rules with their exceptions and your classification rules judge
-    /// it; packs and anything that reads files, sizes or classification
-    /// can't, without the torrent. Re-judging a stand-in's quarantine keeps
+    /// quarantine sealed, classified from that name as an import candidate
+    /// is (`reclassify::judge_candidate`). The floor, lists, *Always
+    /// allow*, CSX-5, packs, your rules with their exceptions and your
+    /// classification rules judge it; what reads files or sizes can't,
+    /// without the torrent. Re-judging a stand-in's quarantine keeps
     /// what it says yes to; one it releases is judged in full, files
     /// included, when it's fetched again, before anything is stored
     /// (docs/decisions/2026-11-02-F-filter-standin-undo.md).
     pub fn holds(&self, hash: &[u8; 20], name: &str, now: i64) -> bool {
-        let hashes = [*hash];
-        let item = Item {
-            hashes: &hashes,
+        let c = crate::reclassify::Candidate {
+            hash: *hash,
+            hash_v2: None,
             name,
-            files: &[],
-            content_type: ContentType::Other,
+            size: None,
+            source_at: None,
         };
-        let withholds = |d: Option<Decision>| d.is_some_and(|d| d.action >= Action::Quarantine);
-        withholds(self.blocked_hash(&hashes))
-            || withholds(self.judge_classified(&item, None, now).0.decision)
+        crate::reclassify::judge_candidate(self, c, now)
+            .verdict
+            .decision
+            .is_some_and(|d| d.action >= Action::Quarantine)
     }
 
     /// Every subscribed list that has one of these hashes, in order.

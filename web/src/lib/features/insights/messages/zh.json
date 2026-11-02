@@ -237,7 +237,7 @@
 	"insights_overview_exc_since": "起始于",
 	"insights_overview_exc_index_lag": "搜索索引落后于新种子 {lag}。",
 	"insights_overview_exc_cohort_stalled": "有 {count} 个键在等待，但已有一段时间没有存储任何内容。",
-	"insights_overview_exc_filter_stand_ins_rejudged": "之前无法读取的已保存过滤条目已恢复正常。过滤在它们缺失期间代为拦截的内容已按你的规则重新检查：放行 {released} 个，仍拦截 {kept} 个。待你在“过滤与安全”中复核的成人内容拦截：{review} 个。",
+	"insights_overview_exc_filter_stand_ins_rejudged": "之前无法读取的已保存过滤条目已恢复正常。过滤在它们缺失期间代为拦截的内容已按你的规则重新检查：放行 {released} 个，仍拦截 {kept} 个。在它们无法读取期间产生、待你在“设置”→“过滤与安全”中复核的：成人内容拦截 {adult} 个（部分可能来自其他规则或你的更正），丢弃 {dropped} 个，隐藏 {hidden} 个。",
 	"insights_overview_exc_filter_rows_unreadable": "有 {count} 条已保存的过滤条目无法读取（{rows}）。在“设置”→“过滤与安全”中修复或删除它们之前，过滤会拦截更多内容。",
 	"insights_overview_exc_unknown": "需要处理：{kind}",
 	"insights_overview_exc_fix": "查看详情",

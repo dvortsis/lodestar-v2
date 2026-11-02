@@ -1771,11 +1771,6 @@ impl FiltersApi {
             change = lodestar_log::Detail(&crate::log_events::change_detail(change)),
             version = version
         );
-        drop(guard);
-        // With the engine reloaded, a row that reads again has its
-        // stand-in's holds re-judged. A failure leaves them recorded for
-        // the next change or start.
-        let _ = self.undo_stand_ins(now);
         Ok(out)
     }
 
@@ -2533,8 +2528,6 @@ impl FiltersApi {
         self.rules_changed(&mut store)?;
         drop(store);
         let (queued, truncated) = self.requeue_text(&q, now)?;
-        // An unreadable Is adult rule's adult holds are judged again.
-        let _ = self.undo_stand_ins(now);
         Ok(ClassRuleRemoved { queued, truncated })
     }
 
@@ -2701,7 +2694,7 @@ impl FiltersApi {
         // First what stand-ins of rows that read again did: it may add a
         // full re-mark. Its failure is logged where it happens and leaves
         // them recorded.
-        let _ = self.undo_stand_ins(now);
+        let _ = self.undo_stand_ins(now, false);
         // Read under its own statement: the store guard mustn't live on
         // into the re-queue, which takes the lock itself.
         let pending = pending_requeues(&self.store())?;
@@ -2982,9 +2975,24 @@ pub(crate) async fn remove_class_rule(
 ) -> ApiResult<Json<ClassRuleRemoved>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
-    tokio::task::spawn_blocking(move || f.remove_class_rule(body.id, crate::unix_now()).map(Json))
-        .await
-        .map_err(internal)?
+    let api = f.clone();
+    let (removed, requeued_all) = tokio::task::spawn_blocking(move || {
+        // An unreadable rule's removal re-queues every stored torrent.
+        let unreadable = f
+            .store()
+            .class_rules()
+            .map_err(internal)?
+            .iter()
+            .any(|r| r.0 == body.id && parse(&r.1).is_err());
+        f.remove_class_rule(body.id, crate::unix_now())
+            .map(|r| (r, unreadable))
+    })
+    .await
+    .map_err(internal)??;
+    // The engine is reloaded: what stand-ins of rows that read again did
+    // is judged again, after this request.
+    api.undo_in_background(requeued_all);
+    Ok(Json(removed))
 }
 
 /// Starts a preview in the background; poll it by its id.
@@ -3091,9 +3099,14 @@ pub(crate) async fn apply(
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     let auth = s.auth.clone();
-    tokio::task::spawn_blocking(move || apply_change(&f, &auth, ip, body))
+    let api = f.clone();
+    let out = tokio::task::spawn_blocking(move || apply_change(&f, &auth, ip, body))
         .await
-        .map_err(internal)?
+        .map_err(internal)??;
+    // The engine is reloaded: what stand-ins of rows that read again did
+    // is judged again, after this request.
+    api.undo_in_background(false);
+    Ok(out)
 }
 
 fn apply_change(

@@ -31,8 +31,10 @@
 		if (e.kind === 'filter_stand_ins_rejudged')
 			return m.insights_overview_exc_filter_stand_ins_rejudged({
 				released: formatCount(e.value, locale),
-				kept: formatCount(Number(e.rows?.[0] ?? 0), locale),
-				review: formatCount(Number(e.rows?.[1] ?? 0), locale)
+				kept: formatCount(e.counts?.kept ?? null, locale),
+				adult: formatCount(e.counts?.adult ?? null, locale),
+				dropped: formatCount(e.counts?.dropped ?? null, locale),
+				hidden: formatCount(e.counts?.hidden ?? null, locale)
 			});
 		return m.insights_overview_exc_unknown({ kind: e.kind });
 	}

@@ -228,14 +228,15 @@ describe('Exceptions', () => {
 					since: 1,
 					unit: 'torrents',
 					value: 12,
-					rows: ['3', '4'],
+					counts: { kept: 3, adult: 4, dropped: 1, hidden: 2 },
 					fix: { kind: 'settings', target: 'filters' }
 				}
 			]
 		});
 		const row = screen.getByTestId('insights-exception-filter_stand_ins_rejudged');
 		expect(row.textContent).toContain('12 released, 3 still held');
-		expect(row.textContent).toContain('Filters & Safety: 4');
+		expect(row.textContent).toContain('4 adult holds');
+		expect(row.textContent).toContain('1 dropped, 2 hidden');
 	});
 
 	it('says so when nothing needs attention', () => {
