@@ -571,6 +571,98 @@ mod tests {
         seen.lock().unwrap().clone()
     }
 
+    /// Segment files (not meta.json, locks or the managed list) in `dir`.
+    fn segment_files(dir: &std::path::Path) -> u64 {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                e.file_type().unwrap().is_file()
+                    && !n.starts_with('.')
+                    && !n.ends_with(".json")
+                    && !n.ends_with(".lock")
+            })
+            .count() as u64
+    }
+
+    /// X-mmap-cache-prune: the prune after each commit keeps only live
+    /// mappings. One-document commits make (and merge away) far more
+    /// segment files than stay live; after one more commit, which prunes,
+    /// the gauge holds about the live files, not every file ever mapped.
+    #[test]
+    fn the_mmap_caches_keep_only_live_files_across_commits_and_merges() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, dir) = (tmp.path().join("s.db"), tmp.path().join("index"));
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        let index = SearchIndex::open(&dir).unwrap();
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let config = LiveConfig {
+            batch: 1,
+            commit_docs: 1,
+            ..quick()
+        };
+        let live = LiveIndexer::spawn(index.clone(), reader, config).unwrap();
+        let (stats, thread) = (live.stats(), live.thread.as_ref());
+        for i in 0..40 {
+            add(&mut writer, &format!("Drip.{i}"));
+            let want = i + 1;
+            eventually(&stats, thread, 0, "each torrent committed", || {
+                stats.indexed.load(Ordering::Relaxed) >= want
+            });
+        }
+        let commits = stats.commits.load(Ordering::Relaxed);
+        assert!(commits >= 40, "{commits} commits");
+        // One more commit after the merges so far: its prune sets the gauge.
+        add(&mut writer, "Drip.last");
+        eventually(&stats, thread, 0, "the last commit", || {
+            stats.indexed.load(Ordering::Relaxed) >= 41
+        });
+        let [main, files] = index.mmap_cache_entries().unwrap();
+        let live_files = [segment_files(&dir), segment_files(&dir.join("files"))];
+        // A merge still running (or its files awaiting deletion) can sit
+        // between the prune and the count: a few segments of slack.
+        for (entries, on_disk) in [main, files].into_iter().zip(live_files) {
+            assert!(entries > 0, "the prune ran");
+            assert!(
+                entries <= on_disk + 18,
+                "{entries} entries, {on_disk} live files"
+            );
+        }
+        // Every commit wrote a segment of several files in each index: the
+        // caches kept a small part of what they mapped.
+        assert!(
+            main + files < commits * 4,
+            "{main} + {files} after {commits} commits"
+        );
+        live.stop().unwrap();
+    }
+
+    /// Opening an existing index maps its live segments and prunes: the
+    /// gauge starts at exactly the live files.
+    #[test]
+    fn opening_an_index_starts_its_mmap_caches_at_the_live_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, dir) = (tmp.path().join("s.db"), tmp.path().join("index"));
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        for i in 0..5 {
+            add(&mut writer, &format!("Reopen.{i}"));
+        }
+        let index = SearchIndex::open(&dir).unwrap();
+        let mut indexer = index.writer(HEAP).unwrap();
+        let mut reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        indexer.catch_up(&mut reader, 100).unwrap();
+        indexer.commit().unwrap();
+        indexer.finish().unwrap();
+        drop(index);
+        let reopened = SearchIndex::open(&dir).unwrap();
+        let [main, files] = reopened.mmap_cache_entries().unwrap();
+        assert!(main > 0 && files > 0);
+        assert!(main <= segment_files(&dir), "{main}");
+        assert!(files <= segment_files(&dir.join("files")), "{files}");
+        assert_eq!(SearchIndex::in_memory().unwrap().mmap_cache_entries(), None);
+    }
+
     #[test]
     fn each_commit_reports_once_with_its_count_and_watermark() {
         let tmp = tempfile::tempdir().unwrap();
@@ -700,6 +792,15 @@ mod tests {
             "corrupt index: test: the commit failed"
         };
         assert_eq!(error.as_deref(), Some(want));
+        // X-mmap-cache-prune: a commit that failed before reaching the disk
+        // skipped its prune, and one that failed after had already pruned;
+        // either way the recovering writer's commit pruned again, without
+        // a panic, and the caches hold no more than the live files.
+        let dir = tmp.path().join("index");
+        let [main, files] = index.mmap_cache_entries().unwrap();
+        assert!(main > 0 && files > 0, "pruned after the recovery");
+        assert!(main <= segment_files(&dir), "{main}");
+        assert!(files <= segment_files(&dir.join("files")), "{files}");
         live.stop().unwrap();
     }
 
