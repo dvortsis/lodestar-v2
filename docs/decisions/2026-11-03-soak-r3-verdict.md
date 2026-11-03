@@ -60,3 +60,6 @@ Taken from r3 at baseline hour 24 (end), compared with hour 12. It feeds Track C
 | `collector_window_complete_review_required` | The acceptance review above, and again in r4's record when it passes. |
 | `writer.rs` `expect` (import smoke finding 2) | Check whether SRC-14a fixed it. If not, X-writer-join-error (small, Opus) after Track R. |
 | RSS after drain, glibc zstd arena | Stay in the import-pilot and gnu-build notes. Not on the release path. |
+
+## The working plan
+`docs/plan/2026-11-03-soak-r3-memory-fix.md` has the full plan, including the authoritative M1 decision sequence (frozen 2026-11-03 03:49Z), which replaces the M1-exp summary above.
