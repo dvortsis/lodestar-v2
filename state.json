@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-02T23:40:00Z",
+  "updated_at": "2026-11-03T00:45:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2356,7 +2356,7 @@
       "notes": "owner planning session; \u00a72.29 (#357 in v0.5.1 as rc.3 = rc.2 + #357 exactly; runner ruling: #367 only on owner yes). phase_total 4 in slices.yaml; HANDOVER.md protocol; watchdog prompt updated 03:39Z."
     },
     "R-rc3-backport": {
-      "status": "awaiting-R1",
+      "status": "merged",
       "model": "opus",
       "brief": "briefs/R-rc3-backport.md",
       "notes": "ladder rung 1. Trial cherry-pick of 736a3028 onto release/v0.5.1 conflicts in api/filters.rs, metrics.md, .size-limit.mjs, insights messages en/zh. PR against release/v0.5.1, full-ci, /security-review; runner merges after R1 verdict. Launch on the first free slot.",
@@ -2367,7 +2367,8 @@
       "review": "Opus MERGE at dd72d579 (one docs nit sent); merge after R1 soak verdict; archive session once nit head is green",
       "session_archived": "2026-11-02T05:26:20Z",
       "notes_runner2": "runner watches #377 CI (docs-only last commit; re-run once on flake) and merges after R1 verdict",
-      "ci": "green at 84821101, mergeable clean; merge after R1"
+      "ci": "green at 84821101, mergeable clean; merge after R1",
+      "merged": "0acc5a37 (2026-11-03, #377 onto release/v0.5.1; owner \u00a72.31)"
     },
     "status-connector": {
       "status": "merged",
@@ -2613,7 +2614,7 @@
       "merge": "f8ff9bab"
     },
     "R-mem-triage": {
-      "status": "#402 merged e9e18714 (lease leak fix + dev-only memory harnesses + findings). Not the r3 slope fix. Release backport: drop trailing None in Pool::restore lose_untracked (rc.2 signature). Session kept for r3 data; archive after soak work concludes.",
+      "status": "#402 merged; continues as X-mmap-cache-prune (M1-exp).",
       "brief": "briefs/R-mem-triage.md",
       "model": "opus",
       "session": "session_01MMjhnD9Jd88Vzmq6W9Bxro",
@@ -2645,6 +2646,21 @@
       "head": "a14422e7",
       "pr2": 400,
       "head2": "320db23c"
+    },
+    "X-mmap-cache-prune": {
+      "status": "M1-exp",
+      "model": "opus",
+      "brief": "briefs/X-mmap-cache-prune.md",
+      "session": "session_01MMjhnD9Jd88Vzmq6W9Bxro",
+      "notes": "R-mem-triage carries it (existing session). M1-exp Part 1 (accelerated, A vs B, 3 runs) + Part 2 (production cadence, >=6h x2) before PR; report numbers first."
+    },
+    "R-rc3-cut": {
+      "status": "waiting X-mmap-cache-prune",
+      "notes": "#402 patch (patches/rc3-402-on-rc2.patch, made on 6be95525; recheck on 0acc5a37) + M1 (+M2 if shipped) onto release/v0.5.1. Session R-rc3-backport is archived; unarchive it (existing) rather than launch."
+    },
+    "CR-COL-4": {
+      "status": "waiting",
+      "notes": "collector KEEP + analyzer parse search_commits_total and mmap gauge; provisional interim fits; e2e test; merges before r4. R-mem-triage or a helper."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3878,10 +3894,11 @@
     },
     {
       "id": "rc-next-include-402",
-      "status": "to-send-now",
+      "status": "answered",
       "ask": "Release backport of #402 (lease leak fix, e9e18714) needs the owner's yes: \u00a72.29 fixed rc.3 = rc.2 + #357 exactly. On r3 FAIL the runner recommends rc.3 = rc.2 + #357 + #402 (one-line adjustment on release), with a fresh frozen soak. On PASS: ship rc.3 as rc.2 + #357 and take #402 in the next release.",
       "unblocks": "release backport PR of #402; next rc cut",
-      "prepared": "patches/rc3-402-on-rc2.patch on runner-state: #402 code + its 2 tests on release/v0.5.1 (6be95525), trailing None dropped; fmt ok, clippy -D warnings ok, pipeline 17/17 and sources tests pass. Apply only on owner yes, on top of #377."
+      "prepared": "patches/rc3-402-on-rc2.patch on runner-state: #402 code + its 2 tests on release/v0.5.1 (6be95525), trailing None dropped; fmt ok, clippy -D warnings ok, pipeline 17/17 and sources tests pass. Apply only on owner yes, on top of #377.",
+      "answer": "2026-11-02 owner: \"Go with your recommendation but the memory fix is the priority.\" rc.3 = rc.2 + #357 + #402 + memory fix; fresh frozen soak r4."
     }
   ],
   "external_gates": {
@@ -4022,7 +4039,10 @@
       "id": "insights-purged-source-credit",
       "added": "2026-11-02T19:58:55Z",
       "text": "Insights credit Stage::Stored to a purged source after lease reassignment (writer.rs:698); stopped-only touches count as rediscoveries. Noise only (SRC-14b-2 review)."
-    }
+    },
+    "tantivy upstream issue draft: MmapDirectory::delete doc says it removes the cache entry; it does not (owner files)",
+    "writer.rs:592 expect: check whether SRC-14a fixed it; else X-writer-join-error after Track R",
+    "E-v06-workers: size worker fetch-pool cap for the 256 MB worker budget (r3: 200k cap ~150-185 MiB)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -4642,7 +4662,8 @@
     "2026-11-02T14:31:07Z preliminary fit (owner/Antigravity, read-only copy, main analyze_cr0.py): private_bytes h12-~16, 247 samples, slope 6.66 MiB/h CI [4.62, 8.70], not judged (incomplete); peak 441.35 MiB; last seq 1356 14:23:29Z. Containers StartedAt unchanged. 11:00Z appdata backup failed (Backups share full), soak untouched; exclusions not exercised. Likely memory-gate FAIL; R-mem-triage briefed, launches on next free slot.",
     "22:26Z r3 baseline ended 22:16:16Z; asked dashboard session for the owner-run read-only analyze_cr0 fit on a copy (memory slope h12-24 vs 2.0 MiB/h, stalls/interruptions/coverage, peak). Verdict pending. #402 (R-mem-triage lease fix, head aa30a033) review CHANGES fixed (docs only); waiting ci-ok.",
     "23:10Z r3 data (owner-run, sanitized snapshot brief; analyze_cr0 report NOT yet run): runner OLS on every-10th private_bytes sample over baseline h12-24 (n=73) = 2.53 MiB/h, naive 95% CI [1.15, 3.90] vs bar upper<=2.0 -> provisional FAIL (point estimate itself > bar). Peak 481 MiB (seq 1690). Preliminary 6.66 (h12-16) was inflated by the short window. Coverage: seq 0-1829 continuous at ~600 s per 10 samples, last at baseline 24.01 h; writer_errors 0, search_errors 0. Stored 16,719 at h24 (665/h over h12-24). Lead: anon slope 2.53 MiB/h ~ search_index_bytes growth 2.09 MiB/h (3.9 KiB anon vs 3.2 KB index per torrent); db 1.0 MiB/h. Step jump 98->283 MiB at seq 370 (~6.2 h, warmup) = pool filling to 200k cap.",
-    "23:40Z OFFICIAL r3 verdict (analyze_cr0 @ main e528c369, owner-run on copy): memory gate MISSES the bar: private_bytes h12-24 OLS 1.88 MiB/h, 95% CI [1.43, 2.33] (719 samples, window complete); bar upper<=2.0. Peak 480.74 MiB. Coverage 24.00 h valid (100.01%), stop baseline_window_complete, clean shutdown yes, no evidence issues, gate evidence yes. Run: stopped; Baseline: collector_window_complete_review_required. lodestar container exited 0 at 22:16:53Z (no live /proc data; not restarting). Index: 129 files, main segment .term 12.0 MB/.idx 7.4 MB plus files/ segments. => rc.2 memory FAIL (narrow). FAIL path: rc.3 = rc.2 + #357 + #402 + memory fix, fresh frozen soak (needs owner yes on #402 and the fix). #377 not merged."
+    "23:40Z OFFICIAL r3 verdict (analyze_cr0 @ main e528c369, owner-run on copy): memory gate MISSES the bar: private_bytes h12-24 OLS 1.88 MiB/h, 95% CI [1.43, 2.33] (719 samples, window complete); bar upper<=2.0. Peak 480.74 MiB. Coverage 24.00 h valid (100.01%), stop baseline_window_complete, clean shutdown yes, no evidence issues, gate evidence yes. Run: stopped; Baseline: collector_window_complete_review_required. lodestar container exited 0 at 22:16:53Z (no live /proc data; not restarting). Index: 129 files, main segment .term 12.0 MB/.idx 7.4 MB plus files/ segments. => rc.2 memory FAIL (narrow). FAIL path: rc.3 = rc.2 + #357 + #402 + memory fix, fresh frozen soak (needs owner yes on #402 and the fix). #377 not merged.",
+    "2026-11-03T00:45Z plan approved (reviewed by Gemini and Codex): M1-exp then X-mmap-cache-prune; #377 merged 0acc5a37; runner docs PR in progress (owner-decisions \u00a72.31, soak-r3-verdict decisions file, Track R table, slices/dashboard)."
   ],
   "limits": {
     "phase_total": 2,
