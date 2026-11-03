@@ -100,7 +100,13 @@ async fn page() -> Response {
 async fn prometheus(State(s): State<AppState>) -> Response {
     let mut body = metrics::render(&s.monitor, s.dht().as_ref(), &s.fetch);
     if let Some(search) = &s.search {
-        metrics::render_search(&mut body, search.index.index().num_docs(), &search.stats);
+        let index = search.index.index();
+        metrics::render_search(
+            &mut body,
+            index.num_docs(),
+            &search.stats,
+            index.mmap_cache_entries(),
+        );
         metrics::render_caches(
             &mut body,
             &search.index.index().cache_usage(),
