@@ -94,7 +94,7 @@ Runner, 2026-11-03. Owner-approved (`docs/owner-decisions.md` §2.31) after exte
 **On another FAIL:** the same loop (fix on `main`, cherry-pick, new rc, fresh frozen soak), never stitched.
 
 ### M1 decision sequence (authoritative; replaces every earlier M1-exp rule, amendment and threshold)
-Revised after external reviews by Gemini and then Codex (2026-11-03, twice). Every number and rule in this section was set before the remaining results arrived. The first Part 1 batch was seen before revision 2; that is stated in the decisions file.
+Revised after external reviews by Gemini and then Codex (2026-11-03, twice). Every number and rule in this section was set before the remaining results arrived. The first Part 1 batch was seen before revision 2; the fix PR's decisions file (`docs/decisions/2026-11-03-X-mmap-cache-prune.md`) states that.
 
 **Run configurations.** Each run records its full configuration and what it achieved: documents per commit, commits/s, input backlog, and resource limits. A commit fires when `pending ≥ commit_docs` OR (`pending > 0` and `commit_every` has elapsed) (`live.rs:309`), after a catch-up of up to `batch` documents. So each config is chosen to give its intended batching, and the achieved batching is checked.
 
@@ -115,7 +115,7 @@ Revised after external reviews by Gemini and then Codex (2026-11-03, twice). Eve
 - The estimator: OLS of dhat `curr_bytes` against the commit count, over commits 2,000 to the end, per run. The arm estimate is the mean of 3 run slopes with a df = 2 t-interval. Per-run slopes and their spread are always reported.
 - **Control check:** if A's mean is not within 1–3.5 KB/commit, the result is **inconclusive**. Stop, diagnose and report; don't change code.
 - **Pass:** the two arms' intervals don't overlap (B's upper bound is below A's lower bound), **and** the dhat sites under `MmapCache::get_mmap` stop accumulating in B. The site evidence is kept alongside the interval test.
-  - This rule was **chosen after seeing the first batch.** It is labelled that way in the decisions file. It is **frozen now, at 03:5xZ, with the endpoint (commits 2,000 to the end of each 1 h run), before the confirmation batch relaunched at 03:13Z reports.** That batch is the confirmation; the first batch is exploratory.
+  - This rule was **chosen after seeing the first batch.** It is labelled that way in `docs/decisions/2026-11-03-X-mmap-cache-prune.md`, the fix PR's decisions file. It is **frozen now, at 03:49Z, with the endpoint (commits 2,000 to the end of each 1 h run), before the confirmation batch relaunched at 03:13Z reports.** That batch is the confirmation; the first batch is exploratory.
   - A pass shows the prune removes the leak. It says nothing about the residual (Step 2) or about total growth (Step 3).
 - **The old ≤ 10% rule is withdrawn.** It compared B to zero, but every commit adds a torrent, so it wasn't a valid test of the prune. That's recorded as made after seeing the results.
 
@@ -225,7 +225,7 @@ Revised after external reviews by Gemini and then Codex (2026-11-03, twice). Eve
 
 ### CR-COL-4: collector and analyzer, end to end (same session or a helper; not in the release)
 - **Collector:**
-  - Add `search_commits_total` and `search_mmap_cache_entries` (with its `index` label, which the `SAFE_LABELS` pattern must accept) to `KEEP` in `docs/soak/tools/linux/collect.py` and the shared sanitizer.
+  - Add `search_commits_total` and `search_mmap_cache_entries` (with its `index` label, which the `SAFE_LABELS` pattern must accept) to the `STORAGE` tuple (which feeds `KEEP`) in `docs/soak/tools/linux/collect.py` and the shared sanitizer.
 - **Analyzer:**
   - Parse both in `analyze_cr0.py`: today it reads only recognized counters.
   - Report the labelled gauge per index.
