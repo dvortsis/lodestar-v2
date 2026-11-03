@@ -957,6 +957,61 @@ async fn classification_rules_requeue_matching_torrents_and_corrections_are_fixt
     assert_eq!(body["error"]["code"], json!("class_rule_not_found"));
 }
 
+/// F-filter-load-fail-closed (rc.3 backport): removing a stored
+/// classification rule whose query no longer parses re-queues every stored
+/// torrent if it was an Is adult rule (it matched everything while it was
+/// loaded) and nothing if it was a Not adult rule (it was skipped).
+#[tokio::test]
+async fn removing_an_unreadable_class_rule_requeues_by_kind() {
+    let f = fixture_with(Some(SearchIndex::in_memory().unwrap()));
+    let c = logged_in(&f).await;
+    store_torrent(&f, "Holiday.Clips.2023.Lexb.mp4", 900 << 20);
+    store_torrent(&f, "The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", 8 << 30);
+    let (adult, not_adult) = {
+        let mut store = f.api.store.lock().unwrap();
+        enrich_all(&mut store);
+        let index = f.api.index.as_ref().unwrap().index();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+        (
+            store.add_class_rule("size:>>", true).unwrap(),
+            store.add_class_rule("size:>>", false).unwrap(),
+        )
+    };
+    let remove = |id: i64| {
+        post(
+            "/api/v1/classify/rules/remove",
+            Some(&c),
+            json!({ "id": id }),
+        )
+    };
+    let (status, _, body) = call(&f.app, remove(not_adult)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], Value::Null, "a skipped rule marked nothing");
+    {
+        let store = f.api.store.lock().unwrap();
+        assert!(
+            store
+                .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+                .unwrap()
+                .is_empty(),
+            "nothing marked"
+        );
+    }
+    let (status, _, body) = call(&f.app, remove(adult)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], json!(2), "everything is classified again");
+    let store = f.api.store.lock().unwrap();
+    assert_eq!(
+        store
+            .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
 /// Enriches every stored torrent, as the pipeline's background pass does.
 fn enrich_all(store: &mut Store) {
     let ids = store
@@ -2192,4 +2247,187 @@ async fn a_core_switch_off_is_judged_by_the_stored_switch() {
     assert_eq!(err.code(), "changed_since_preview");
     assert!(f.api.held.contains(&[0x61; 20]));
     assert!(f.api.store.lock().unwrap().core_switch("CS-3a").unwrap());
+}
+
+/// F-filter-load-fail-closed: stored rows that no longer parse are read
+/// on apply as failing closed or skipped, listed for the health
+/// exception, and cleared once they're fixed or removed. Fixing the rule
+/// releases what its stand-in held, to be judged again as fixed.
+#[tokio::test]
+async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let (rule, unless, class, allow, over, exc) = {
+        let mut s = f.api.store.lock().unwrap();
+        (
+            s.add_rule("cam size:>>", Action::Hide.code(), None, None)
+                .unwrap(),
+            s.add_rule("spam", Action::Drop.code(), None, Some("size:>>"))
+                .unwrap(),
+            s.add_class_rule("size:>>", true).unwrap(),
+            s.add_allow("size:>>").unwrap(),
+            s.add_override(1, b"alpha", 0, Some("size:>>"), 0, None, None)
+                .unwrap(),
+            s.add_exception("Z-1", 1, b"alpha").unwrap(),
+        )
+    };
+    let held = [0x4e; 20];
+    hold(&f, held, &format!("U-{rule}"), Held::Quarantine, 1);
+    // Any applied change reloads the layers from the store.
+    let (status, _) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "add_rule", "query": "spamword", "action": "flag" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let labels = |f: &Fixture| {
+        let mut l: Vec<String> = f
+            .api
+            .engine
+            .current()
+            .unreadable
+            .iter()
+            .map(|u| u.label())
+            .collect();
+        l.sort();
+        l
+    };
+    let mut want = vec![
+        format!("A-{allow}"),
+        format!("C-{class}"),
+        format!("E-{exc}"),
+        format!("O-{over}"),
+        format!("U-{rule}"),
+        format!("U-{unless}"),
+    ];
+    want.sort();
+    assert_eq!(labels(&f), want);
+    let e = f.api.engine.current();
+    let strict = e.rules.iter().find(|r| i64::from(r.id) == unless).unwrap();
+    assert!(strict.unless.is_none(), "applies without its unless");
+    assert!(e.overrides.is_empty() && e.exceptions.is_empty() && e.allow.is_empty());
+    drop(e);
+    let e = f.api.engine.current();
+    let stand_in = e.rules.iter().find(|r| i64::from(r.id) == rule).unwrap();
+    assert_eq!(stand_in.action, Action::Quarantine);
+    assert_eq!(stand_in.query, lodestar_search::Node::All);
+    drop(e);
+
+    // Enabling needs no password, so it never releases what it held.
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "update_rule", "id": rule, "enabled": true }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["released"].is_null(), "{body}");
+    assert!(f.api.held.contains(&held), "still held");
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "update_rule", "id": rule, "query": "cam" }),
+        Some(PASSWORD),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], 1, "released what it held: {body}");
+    assert!(!f.api.held.contains(&held));
+    for change in [
+        json!({ "op": "update_rule", "id": unless, "unless": "" }),
+        json!({ "op": "remove_override", "id": over }),
+        json!({ "op": "remove_exception", "id": exc }),
+    ] {
+        let (status, body) = apply(&f, &cookie, change, Some(PASSWORD)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "remove_allow", "id": allow }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(labels(&f), [format!("C-{class}")]);
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/rules/remove",
+            Some(&cookie),
+            json!({ "id": class }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(labels(&f).is_empty());
+    let e = f.api.engine.current();
+    let fixed = e.rules.iter().find(|r| i64::from(r.id) == rule).unwrap();
+    assert_eq!(
+        (fixed.action, fixed.query.to_query()),
+        (Action::Hide, "cam".into())
+    );
+}
+
+/// An unreadable rule stored disabled has no stand-in; enabling it, which
+/// needs no password, makes one at the reload and releases nothing.
+#[tokio::test]
+async fn enabling_an_unreadable_rule_makes_its_stand_in() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let rule = {
+        let mut s = f.api.store.lock().unwrap();
+        let id = s
+            .add_rule("size:>>", Action::Drop.code(), None, None)
+            .unwrap();
+        s.update_rule(&lodestar_store::RuleRow {
+            id,
+            query: "size:>>".into(),
+            action: Action::Drop.code(),
+            enabled: false,
+            shadow_until: None,
+            unless_query: None,
+        })
+        .unwrap();
+        id
+    };
+    let stand_in = |f: &Fixture| {
+        f.api
+            .engine
+            .current()
+            .rules
+            .iter()
+            .find(|r| i64::from(r.id) == rule)
+            .map(|r| (r.action, r.query.clone()))
+    };
+    let (status, _) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "add_rule", "query": "spamword", "action": "flag" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stand_in(&f), None, "disabled: nothing to stand in for");
+    let e = f.api.engine.current();
+    assert_eq!(e.unreadable.len(), 1);
+    assert!(!e.unreadable[0].fails_closed);
+    drop(e);
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "update_rule", "id": rule, "enabled": true }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["released"].is_null(), "{body}");
+    assert_eq!(
+        stand_in(&f),
+        Some((Action::Quarantine, lodestar_search::Node::All))
+    );
+    assert!(f.api.engine.current().unreadable[0].fails_closed);
 }

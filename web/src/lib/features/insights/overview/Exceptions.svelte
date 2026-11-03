@@ -23,6 +23,11 @@
 			return m.insights_overview_exc_index_lag({ lag: formatSpan(e.value, locale) });
 		if (e.kind === 'cohort_stalled')
 			return m.insights_overview_exc_cohort_stalled({ count: formatCount(e.value, locale) });
+		if (e.kind === 'filter_rows_unreadable')
+			return m.insights_overview_exc_filter_rows_unreadable({
+				count: formatCount(e.value, locale),
+				rows: (e.rows ?? []).join(', ')
+			});
 		return m.insights_overview_exc_unknown({ kind: e.kind });
 	}
 	function fixText(e: Exception): string {

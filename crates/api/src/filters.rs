@@ -1391,6 +1391,15 @@ impl FiltersApi {
                     .into_iter()
                     .find(|r| r.id == *id)
                     .ok_or_else(gone)?;
+                // It failed closed while unreadable (lodestar_filter::load):
+                // what it held then is released below, to be judged again
+                // as fixed, never by the stand-in.
+                let was_unreadable = parse(&row.query).is_err()
+                    || Action::from_code(row.action).is_none()
+                    || row
+                        .unless_query
+                        .as_deref()
+                        .is_some_and(|u| parse(u).is_err());
                 if let Some(q) = q {
                     row.query = query(q)?.to_query();
                 }
@@ -1411,6 +1420,12 @@ impl FiltersApi {
                     row.shadow_until = days(*shadow_days, now);
                 }
                 store.update_rule(&row).map_err(internal)?;
+                // Only a change that can fix it, which `assess` already
+                // counts as weakening: an enable-only update needs no
+                // password, so it never releases.
+                if was_unreadable && (q.is_some() || act.is_some() || unless.is_some()) {
+                    out.released = Some(self.release_rules(store, &[format!("U-{id}")])?);
+                }
             }
             Change::RemoveRule { id } => {
                 if !store.remove_rule(*id).map_err(internal)? {
@@ -2353,6 +2368,14 @@ impl FiltersApi {
     /// classified again without it.
     pub fn remove_class_rule(&self, id: i64, now: i64) -> ApiResult<ClassRuleRemoved> {
         let mut store = self.store();
+        // Its kind before the removal: an unreadable Is adult rule matched
+        // everything while it was loaded (lodestar_filter::load).
+        let adult = store
+            .class_rules()
+            .map_err(internal)?
+            .into_iter()
+            .find(|r| r.0 == id)
+            .is_some_and(|r| r.2);
         let q = store
             .remove_class_rule(id)
             .map_err(internal)?
@@ -2364,10 +2387,7 @@ impl FiltersApi {
             })?;
         self.rules_changed(&mut store)?;
         drop(store);
-        let (queued, truncated) = match parse(&q) {
-            Ok(node) => self.requeue(&node, now)?,
-            Err(_) => (None, false),
-        };
+        let (queued, truncated) = self.requeue_text(&q, adult, now)?;
         Ok(ClassRuleRemoved { queued, truncated })
     }
 
@@ -2382,6 +2402,19 @@ impl FiltersApi {
         // left marked are picked up.
         self.reenrich.store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// [`FiltersApi::requeue`] for a removed classification rule's stored
+    /// query text. One that no longer parses re-queues everything if it was
+    /// an Is adult rule, which matched everything while it was loaded
+    /// (lodestar_filter::load), and nothing if it was a Not adult rule,
+    /// which was skipped.
+    fn requeue_text(&self, text: &str, adult: bool, now: i64) -> ApiResult<(Option<usize>, bool)> {
+        match parse(text) {
+            Ok(node) => self.requeue(&node, now),
+            Err(_) if adult => self.requeue(&Node::All, now),
+            Err(_) => Ok((None, false)),
+        }
     }
 
     /// Marks the stored torrents `node` matches for background enrichment,

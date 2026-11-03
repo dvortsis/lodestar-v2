@@ -51,5 +51,6 @@
 	"insights_group_other": "其他",
 	"insights_group_unclassified": "未分类",
 	"insights_overview_stalled_title": "爬虫似乎已停滞",
-	"insights_overview_stalled_body": "爬虫正在运行，但没有新内容被存储。下方的阶段条会显示卡在哪里。"
+	"insights_overview_stalled_body": "爬虫正在运行，但没有新内容被存储。下方的阶段条会显示卡在哪里。",
+	"insights_overview_exc_filter_rows_unreadable": "有 {count} 条已保存的过滤条目无法读取（{rows}）。在“设置”→“过滤与安全”中修复或删除它们之前，过滤会拦截更多内容。"
 }
