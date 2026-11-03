@@ -115,6 +115,32 @@ def parse_prom(text):
     return counters
 
 
+SEARCH_SERIES = re.compile(
+    r'^lodestar_(search_commits_total|search_mmap_cache_entries)(?:\{index="([a-z_0-9]{1,24})"\})? ('
+    + r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?" + r")\r?$")
+
+
+def parse_search(text):
+    """CR-COL-4: the commit counter and the per-index mmap-cache gauge, if present.
+
+    Returns {} when the snapshot has neither (older binaries, such as r3's).
+    """
+    out = {}
+    for line in text.splitlines():
+        match = SEARCH_SERIES.fullmatch(line)
+        if not match:
+            continue
+        name, index, raw = match.groups()
+        value = float(raw)
+        if not number(value):
+            continue
+        if name == "search_commits_total" and index is None:
+            out.setdefault("commits", value)
+        elif name == "search_mmap_cache_entries" and index is not None:
+            out.setdefault("mmap_cache", {}).setdefault(index, value)
+    return out
+
+
 def load_rows(root, issues):
     # One read captures a bounded snapshot even while the collector appends.
     lines = (root / "samples.jsonl").read_bytes().decode("utf-8-sig").splitlines(True)
@@ -149,6 +175,7 @@ def load_rows(root, issues):
                         if row["counters"][name] != extra[name]:
                             raise ValueError("Snapshot mismatch")
                     row["counters"].update(extra)
+                    row["search"] = parse_search(prom.read_text(encoding="utf-8-sig"))
                 except (ValueError, OSError):
                     issues["invalid_prom_snapshots"] += 1
                     # Keep the collector's JSON values, not partial Prom data.
@@ -358,7 +385,54 @@ def memory_fit(rows):
     fit.update(slope_mib_per_hour=slope, standard_error=se, ci95_mib_per_hour=ci)
     if fit["window_complete"]:
         fit["meets_bar"] = ci[1] <= f["bar_mib_per_hour"]
+    else:
+        fit["provisional"] = True  # a fit over an incomplete window is never a verdict
     return fit
+
+
+def commit_slope(window):
+    """OLS slope of private MiB per 1,000 search commits over a memory window.
+
+    `window` is [(hours, row)]. Informational. Rows from snapshots without the
+    commit counter (older binaries) are skipped; with none, the reason is "absent".
+    """
+    field = MEMORY_FIT["field"]
+    pts = [(r["search"]["commits"] / 1000, r[field] / 2**20) for _, r in window
+           if number(r.get(field)) and "commits" in r.get("search", {})]
+    out = {"commit_samples": len(pts), "commits_reason": None,
+           "mib_per_1000_commits": None, "mib_per_1000_commits_ci95": None}
+    if not pts:
+        out["commits_reason"] = "absent"
+    elif any(b[0] < a[0] for a, b in zip(pts, pts[1:])):
+        out["commits_reason"] = "counter_reset"
+    elif len(pts) < MEMORY_FIT["min_samples"]:
+        out["commits_reason"] = "too_few_samples"
+    else:
+        n = len(pts)
+        mx, my = sum(x for x, _ in pts) / n, sum(y for _, y in pts) / n
+        sxx = sum((x - mx) ** 2 for x, _ in pts)
+        if sxx == 0:
+            out["commits_reason"] = "no_spread"
+            return out
+        c = sum((x - mx) * (y - my) for x, y in pts) / sxx
+        se = math.sqrt(sum((y - my - c * (x - mx)) ** 2 for x, y in pts) / (n - 2) / sxx)
+        out.update(mib_per_1000_commits=c, mib_per_1000_commits_ci95=[c - 1.96 * se, c + 1.96 * se])
+    return out
+
+
+def search_summary(rows):
+    """Baseline commits and the mmap-cache gauge per index (first, last, max), or None per part."""
+    seen = [r["search"] for r in rows if r["phase"] == "baseline" and usable(r) and r.get("search")]
+    commits = [s["commits"] for s in seen if "commits" in s]
+    gauge = {}
+    for s in seen:
+        for index, value in s.get("mmap_cache", {}).items():
+            gauge.setdefault(index, []).append(value)
+    return {
+        "commits": {"first": commits[0], "last": commits[-1]} if commits else None,
+        "mmap_cache_entries": {i: {"first": v[0], "last": v[-1], "max": max(v), "samples": len(v)}
+                               for i, v in sorted(gauge.items())} or None,
+    }
 
 
 def memory_context(rows):
@@ -374,7 +448,9 @@ def memory_context(rows):
            "mib_per_1000_stored": None, "mib_per_1000_stored_ci95": None,
            "stored_per_hour": None, "explained_slope_mib_per_hour": None,
            "time_only_slope_mib_per_hour": None, "time_only_ci95_mib_per_hour": None,
-           "stored_coefficient_mib_per_1000": None, "two_variable_reason": None}
+           "stored_coefficient_mib_per_1000": None, "two_variable_reason": None,
+           "mib_per_1000_commits": None, "mib_per_1000_commits_ci95": None,
+           "commit_samples": 0, "commits_reason": "absent"}
     baseline = [r for r in rows if r["phase"] == "baseline"]
     if not baseline:
         out["reason"] = "no_baseline"
@@ -388,6 +464,7 @@ def memory_context(rows):
             or len({identity(r)[1] for _, r in window if usable(r)}) > 1):
         out["reason"] = "identity_change"
         return out
+    out.update(commit_slope(window))
     pts = [(h, r["values"]["writer_stored_total"] / 1000, r[f["field"]] / 2**20)
            for h, r in window if number(r.get(f["field"])) and number(r["values"].get("writer_stored_total"))]
     out["samples"] = n = len(pts)
@@ -630,6 +707,7 @@ def analyze(root, max_gap=90, now=None, intensity=None):
         "baseline_status": status, "baseline_required_hours": hours,
         "memory_fit": fit,
         "memory_context": memory_context(rows),
+        "search": search_summary(rows),
         "collector_completed_window": bool(result and result.get("reason") == "baseline_window_complete"),
         "stop_reason": reason,
         "clean_shutdown": clean_shutdown(result),
@@ -683,6 +761,8 @@ def markdown(report):
                    f"{fmt(p['rss_change_mib_per_hour'])} |")
     fit = report["memory_fit"]
     verdict = {None: "not judged", True: "meets the bar", False: "misses the bar"}[fit["meets_bar"]]
+    if fit.get("provisional"):  # no pass or fail wording over an incomplete window
+        verdict = "provisional (window incomplete)"
     ci = fit["ci95_mib_per_hour"]
     out += ["", "## Memory gate", "",
             f"- Series: `{fit['series']}`, baseline hours {fit['from_hour']:g}-{fit['to_hour']:g} "
@@ -709,6 +789,20 @@ def markdown(report):
                 if ctx["time_only_slope_mib_per_hour"] is not None else
                 f"- Two-variable fit not shown: {ctx['two_variable_reason']}",
                 "- A hint, not a test: samples are not independent and hours and stored torrents are correlated."]
+    if ctx.get("mib_per_1000_commits") is not None:
+        lo, hi = ctx["mib_per_1000_commits_ci95"]
+        out.append(f"- Private memory per 1,000 search commits: {ctx['mib_per_1000_commits']:,.3f} MiB, 95% CI "
+                   f"[{lo:,.3f}, {hi:,.3f}] ({ctx['commit_samples']} samples)")
+    else:
+        out.append(f"- Private memory per 1,000 search commits: not shown ({ctx.get('commits_reason', 'absent')})")
+    search = report.get("search") or {}
+    if search.get("mmap_cache_entries"):
+        out += ["", "Search mmap-cache entries (live mappings kept after the latest prune):", "",
+                "| Index | First | Last | Max |", "| --- | ---: | ---: | ---: |"]
+        out += [f"| {i} | {g['first']:g} | {g['last']:g} | {g['max']:g} |"
+                for i, g in search["mmap_cache_entries"].items()]
+    else:
+        out += ["", "Search mmap-cache entries: absent (the binary does not expose the gauge)."]
     out += ["", f"Observation freshness: {report['observation_state']}.",
             f"Baseline valid coverage: {report['baseline_coverage_fraction']:.2%}.",
             f"Disk summary: {json.dumps(report['disk'])}", "", "## Evidence issues", ""]

@@ -316,7 +316,7 @@ flowchart LR
 ### 0.9 Next actions
 In order, as slots allow (two slices in total, once the owner resumes launches; no two with overlapping `owns`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
 1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z; all merged since, and the limit is now two, §2.30).
-2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars is already running (a recorded exception: it shares `crates/api/src/digest.rs` with #367, which merges first).
+2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars has merged as #373 (it was a recorded exception: it shared `crates/api/src/digest.rs` with #367, which merged first).
 3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first.
 4. r3 failed (memory). Now: R1-fix (X-mmap-cache-prune, M1-exp first), then R3′ (rc.3 = rc.2 + #357 + #402 + the fix, §2.31), then R1′ (soak r4 on rc.3), then the gluetun leg, the Windows smoke and the tag (owner queue #1). Ask for the experiment host and its calendar (#2) in the same message.
 5. On the soak verdict: expand E-M6 (gap audit first), E-v06-workers, E-v06-companions.

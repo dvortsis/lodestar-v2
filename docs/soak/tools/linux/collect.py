@@ -75,6 +75,9 @@ STORAGE = (
     "search_browse_cache_entries", "search_browse_cache_bytes", "search_result_cache_entries",
     "search_result_cache_bytes",
     "have_bytes", "hot_columns_bytes",
+    # CR-COL-4: memory against commits. The gauge ({index="main"|"files"}, live mappings
+    # kept after the latest prune) is absent from binaries that predate it.
+    "search_commits_total", "search_mmap_cache_entries",
 )
 # CR-COL-3: the crawler gate's evidence (docs/decisions/2026-11-02-CR-SPEC.md rules
 # 3, 4, 5 and 6.10). Each labelled series lists its label keys, in rendered order,
