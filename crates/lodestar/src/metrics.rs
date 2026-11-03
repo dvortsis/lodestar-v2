@@ -739,8 +739,15 @@ fn render_gate(o: &mut Out, g: &GateStats) {
     );
 }
 
-/// The search index's counters (§8).
-pub fn render_search(out: &mut String, docs: u64, stats: &lodestar_search::IndexStats) {
+/// The search index's counters (§8). `mmap` is
+/// [`lodestar_search::SearchIndex::mmap_cache_entries`] (torrent index,
+/// file index); `None` (a RAM index) leaves its gauge out.
+pub fn render_search(
+    out: &mut String,
+    docs: u64,
+    stats: &lodestar_search::IndexStats,
+    mmap: Option<[u64; 2]>,
+) {
     let mut o = Out(std::mem::take(out));
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     o.one(
@@ -779,6 +786,16 @@ pub fn render_search(out: &mut String, docs: u64, stats: &lodestar_search::Index
         "Unix time of the last index commit.",
         get(&stats.last_commit),
     );
+    if let Some([main, files]) = mmap {
+        let name = "search_mmap_cache_entries";
+        o.family(
+            name,
+            "gauge",
+            "Live mappings each index's mmap cache kept at its latest prune (after each commit).",
+        );
+        o.value(name, "index=\"main\"", main);
+        o.value(name, "index=\"files\"", files);
+    }
     *out = o.0;
 }
 
@@ -1409,6 +1426,28 @@ pub fn render_caches(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_mmap_cache_gauge_is_labelled_by_index_and_absent_for_a_ram_index() {
+        let stats = lodestar_search::IndexStats::default();
+        let mut out = String::new();
+        super::render_search(&mut out, 0, &stats, Some([12, 30]));
+        assert!(
+            out.contains("# TYPE lodestar_search_mmap_cache_entries gauge\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("lodestar_search_mmap_cache_entries{index=\"main\"} 12\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("lodestar_search_mmap_cache_entries{index=\"files\"} 30\n"),
+            "{out}"
+        );
+        let mut ram = String::new();
+        super::render_search(&mut ram, 0, &stats, None);
+        assert!(!ram.contains("mmap_cache"), "{ram}");
+    }
+
     use super::*;
     use lodestar_pipeline::gate::{Excluded, Origin};
 

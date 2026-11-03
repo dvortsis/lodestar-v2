@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use lodestar_classify::{Composition, Record};
 use lodestar_metainfo::InfoHash;
@@ -154,6 +155,46 @@ pub struct SearchIndex {
     holders: Arc<()>,
     /// The title FST beside this index (B7, `suggest::titles`).
     titles: Arc<crate::suggest::Titles>,
+    /// The two indexes' mmap caches, pruned after each commit.
+    mmaps: MmapCaches,
+}
+
+/// Tantivy's `MmapDirectory` (0.27) caches a weak entry for every file it
+/// has ever mapped, keyed by path. Deleting a file leaves its entry, and
+/// only `get_cache_info()` drops the dead ones, so without a prune every
+/// commit's new segment files (and every merge's) stay in the map for the
+/// life of the process: about 2 MiB/h at a live crawl's commit rate
+/// (X-mmap-cache-prune). The directories are `Arc`s inside, so these
+/// clones share the caches the indexes use.
+#[derive(Clone)]
+struct MmapCaches {
+    /// The torrent and file indexes' directories; none for a RAM index.
+    dirs: Arc<[MmapDirectory]>,
+    /// Live mappings each cache kept at its latest prune.
+    entries: Arc<[AtomicU64; 2]>,
+    /// Off only for the regression test's and M1-exp's control.
+    on: Arc<AtomicBool>,
+}
+
+impl MmapCaches {
+    fn new(dirs: Vec<MmapDirectory>) -> MmapCaches {
+        MmapCaches {
+            dirs: dirs.into(),
+            entries: Arc::default(),
+            on: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Drops the entries of files no longer mapped. It takes each cache's
+    /// write lock for a scan of its entries (a few hundred live files).
+    fn prune(&self) {
+        if !self.on.load(Ordering::Relaxed) {
+            return;
+        }
+        for (dir, n) in self.dirs.iter().zip(self.entries.iter()) {
+            n.store(dir.get_cache_info().mmapped.len() as u64, Ordering::Relaxed);
+        }
+    }
 }
 
 /// A per-torrent ranking multiplier in `0..=1`, by torrent id: the hook
@@ -585,13 +626,14 @@ impl SearchIndex {
         let files_dir = dir.join("files");
         std::fs::create_dir_all(&files_dir).map_err(Error::Io)?;
         let (schema, fields) = schema::build();
-        let index = Index::open_or_create(Retrying::new(MmapDirectory::open(dir)?), schema)?;
+        let (main, file) = (MmapDirectory::open(dir)?, MmapDirectory::open(&files_dir)?);
+        let index = Index::open_or_create(Retrying::new(main.clone()), schema)?;
         let (file_schema, file_fields) = files::schema();
         let file_index = Index::builder()
             .schema(file_schema)
             .settings(files::settings())
-            .open_or_create(Retrying::new(MmapDirectory::open(&files_dir)?))?;
-        SearchIndex::wrap(index, fields, file_index, file_fields)
+            .open_or_create(Retrying::new(file.clone()))?;
+        SearchIndex::wrap(index, fields, file_index, file_fields, vec![main, file])
     }
 
     /// Opens the existing index in `dir` with the schema it was built
@@ -601,8 +643,10 @@ impl SearchIndex {
     /// `None` when it lacks a field no search works without, which is a
     /// schema mismatch; an error opening it is just an error.
     pub(crate) fn open_existing(dir: &Path) -> Result<Option<(SearchIndex, Compat)>> {
-        let index = Index::open(Retrying::new(MmapDirectory::open(dir)?))?;
-        let file_index = Index::open(Retrying::new(MmapDirectory::open(dir.join("files"))?))?;
+        let main = MmapDirectory::open(dir)?;
+        let file = MmapDirectory::open(dir.join("files"))?;
+        let index = Index::open(Retrying::new(main.clone()))?;
+        let file_index = Index::open(Retrying::new(file.clone()))?;
         let (schema, fields) = schema::build();
         let (file_schema, file_fields) = files::schema();
         let compat = if index.schema() == schema && file_index.schema() == file_schema {
@@ -632,7 +676,7 @@ impl SearchIndex {
         {
             return Ok(None);
         }
-        let mut s = SearchIndex::wrap(index, fields, file_index, file_fields)?;
+        let mut s = SearchIndex::wrap(index, fields, file_index, file_fields, vec![main, file])?;
         s.read_only = compat == Compat::ReadOnly;
         s.missing = absent
             .into_iter()
@@ -673,6 +717,7 @@ impl SearchIndex {
                 .settings(files::settings())
                 .create_in_ram()?,
             file_fields,
+            Vec::new(),
         )
     }
 
@@ -681,9 +726,13 @@ impl SearchIndex {
         fields: Fields,
         mut file_index: Index,
         file_fields: FileFields,
+        mmaps: Vec<MmapDirectory>,
     ) -> Result<SearchIndex> {
         let reader = prepare(&mut index)?;
         let file_reader = prepare(&mut file_index)?;
+        let mmaps = MmapCaches::new(mmaps);
+        // Opening read every live segment's files: start from them.
+        mmaps.prune();
         Ok(SearchIndex {
             index,
             reader,
@@ -703,7 +752,26 @@ impl SearchIndex {
             missing: Arc::new([]),
             holders: Arc::default(),
             titles: Arc::default(),
+            mmaps,
         })
+    }
+
+    /// Live mappings each mmap cache (torrent index, file index) kept at
+    /// its latest prune; `None` for a RAM index. It can't count dead
+    /// entries: a prune drops them. Compare it with the live segment files.
+    pub fn mmap_cache_entries(&self) -> Option<[u64; 2]> {
+        (!self.mmaps.dirs.is_empty()).then(|| {
+            let [a, b] = &*self.mmaps.entries;
+            [a.load(Ordering::Relaxed), b.load(Ordering::Relaxed)]
+        })
+    }
+
+    /// Turns the prune after each commit off (or back on), for every clone
+    /// of this index. Only the regression test and M1-exp's control arm
+    /// turn it off.
+    #[doc(hidden)]
+    pub fn set_mmap_cache_pruning(&self, on: bool) {
+        self.mmaps.on.store(on, Ordering::Relaxed);
     }
 
     /// Searches with these hot columns (§7). Set it before cloning the
@@ -1591,6 +1659,9 @@ impl Indexer {
         self.files.commit(&self.index.files.reader)?;
         self.torrents.commit(&self.index.reader)?;
         self.pending = 0;
+        // After both reloads, so the files they replaced are unmapped
+        // unless a searcher still holds them.
+        self.index.mmaps.prune();
         Ok(())
     }
 
