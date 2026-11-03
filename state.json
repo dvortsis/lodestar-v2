@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-03T04:05:00Z",
+  "updated_at": "2026-11-03T04:35:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2659,7 +2659,7 @@
       "notes": "#402 patch (patches/rc3-402-on-rc2.patch, made on 6be95525; recheck on 0acc5a37) + M1 (+M2 if shipped) onto release/v0.5.1. Session R-rc3-backport is archived; unarchive it (existing) rather than launch."
     },
     "CR-COL-4": {
-      "status": "helper running (Sonnet, worktree), PR pending",
+      "status": "merged 94457d83 (#405), Opus MERGE",
       "notes": "collector KEEP + analyzer parse search_commits_total and mmap gauge; provisional interim fits; e2e test; merges before r4. R-mem-triage or a helper."
     }
   },
@@ -4042,7 +4042,8 @@
     },
     "tantivy upstream issue draft: MmapDirectory::delete doc says it removes the cache entry; it does not (owner files)",
     "writer.rs:592 expect: check whether SRC-14a fixed it; else X-writer-join-error after Track R",
-    "E-v06-workers: size worker fetch-pool cap for the 256 MB worker budget (r3: 200k cap ~150-185 MiB)"
+    "E-v06-workers: size worker fetch-pool cap for the 256 MB worker budget (r3: 200k cap ~150-185 MiB)",
+    "X-analyze-followups (small, helper): analyze_cr0 read each .prom once for counters+search (OSError ordering, analyze_cr0.py:178); commits_reason mirrors no_baseline/identity_change (:451-466); stored-torrent view reads r[\"counters\"][\"writer_stored_total\"][\"\"] (pre-existing: real evidence never had values.writer_stored_total, so that view always skipped). Not needed for r4 gate."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
