@@ -73,6 +73,12 @@ pub trait Funnel: Send + Sync {
     fn lost(&self, _key: &InfoHash, cohort: i64, source: SourceId, loss: Loss) {
         self.record(cohort, source, Stage::Lost, Some(loss));
     }
+
+    /// The pool turned a sighting away, outside a reply, because it
+    /// fetched the key lately. Nothing to count: the key was harvested
+    /// once already. A worker overrides this to end the lease its intake
+    /// granted for the sighting.
+    fn duplicate(&self, _key: &InfoHash, _cohort: i64, _source: SourceId) {}
 }
 
 /// In-memory per-key accumulators, drained at each flush. A few hundred

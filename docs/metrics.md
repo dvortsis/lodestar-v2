@@ -692,6 +692,7 @@ Added for the v0.5.1 Linux soak, so a memory or disk ramp can be explained (owne
 | `search_file_cache_entries`, `search_file_cache_bytes` | gauge | `file:(…)` id sets the serving index caches, and the bytes they retain as the 8 MiB budget charges them. |
 | `search_browse_cache_entries`, `search_browse_cache_bytes` | gauge | Per-segment sorted tops the serving index caches (bounded at 4,096 entries), and their estimated bytes. |
 | `search_result_cache_entries{kind}`, `search_result_cache_bytes{kind}` | gauge | The result cache by `kind` (`search`, `facets`): entries and estimated bytes. |
+| `search_mmap_cache_entries{index}` | gauge | Live mappings each index's mmap cache kept at its latest prune, which runs after every commit: `index` is `main` (torrents) or `files`. It can't count the dead entries a prune drops, so judge it against the live segment files, not against flatness: it grows with legitimate segments. Absent with search off. X-mmap-cache-prune (#406; its decision is on `main`, `docs/decisions/2026-11-03-X-mmap-cache-prune.md`). |
 
 The cache series render only with search on. There is no server-side detail cache: the detail caches are in the browser. SQLite's page cache isn't reported (see the decision).
 
