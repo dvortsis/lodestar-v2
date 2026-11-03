@@ -388,6 +388,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **At most two slice sessions at once,** replacing the four of §2.25. `runner/slices.yaml` records it as `limits.phase_total: 2`.
     - **No new slice sessions start until the soak r3 results are in.** The runner then reports the verdict and resumes launches only on the owner's word. Sessions already running may still push, and their PRs may merge.
 
+31. **rc.3 contents after soak r3, memory fix first** (owner, 2026-11-03, build-runner session). Soak r3 missed the memory bar (`docs/decisions/2026-11-03-soak-r3-verdict.md`). Asked to confirm the runner's recommended plan, the owner answered: "Go with your recommendation but the memory fix is the priority."
+    - **rc.3 = rc.2 + #357 + #402 + the memory fix,** then one fresh frozen soak (r4) on rc.3. This replaces §2.29's "rc.3 = rc.2 + #357". The memory fix is the first thing built.
+    - **Launches stay paused (§2.30),** except work by the sessions that already exist. The soak containers are stopped at the owner's convenience.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
