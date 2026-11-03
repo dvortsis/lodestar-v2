@@ -43,5 +43,11 @@ dhat-heap = []
 # `mem-ingest` with the system allocator, for comparison.
 system-alloc = []
 
+# The mmap-cache retention test (X-mmap-cache-prune) runs in release in its
+# own CI job; the feature keeps the workspace run from building it.
+[[test]]
+name = "mmap_retention"
+required-features = ["dhat-heap"]
+
 [lints]
 workspace = true

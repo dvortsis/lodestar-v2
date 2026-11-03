@@ -48,6 +48,7 @@ jobs:
       filter: ${{ steps.c.outputs.filter }}
       importer: ${{ steps.c.outputs.importer }}
       log_bench: ${{ steps.c.outputs.log_bench }}
+      mmap_retention: ${{ steps.c.outputs.mmap_retention }}
       fuzz: ${{ steps.c.outputs.fuzz }}
       soak_tools: ${{ steps.c.outputs.soak_tools }}
     steps:
@@ -270,6 +271,21 @@ jobs:
           LODESTAR_LOG_BENCH_GATE: "1"
         run: cargo test --release -p lodestar --bin lodestar logging::bench -- --ignored --nocapture --test-threads=1
 
+  mmap-retention:
+    name: mmap cache retention (X-mmap-cache-prune)
+    needs: changes
+    if: needs.changes.outputs.mmap_retention == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # One-document commits must not grow the live heap: tantivy's mmap
+      # caches are pruned after each commit. dhat's testing mode, alone in
+      # its binary, about 3 min in release; `dhat-heap` keeps it out of the
+      # workspace run, which would build it in debug.
+      - run: cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1
+
   importer:
     name: bitmagnet importer (PostgreSQL)
     needs: changes
@@ -363,7 +379,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench, soak-tools, soak-collector-windows]
+    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench, mmap-retention, soak-tools, soak-collector-windows]
     if: always()
     runs-on: ubuntu-latest
     steps:

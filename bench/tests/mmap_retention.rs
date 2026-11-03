@@ -9,11 +9,12 @@
 //! in flight at one moment doesn't count. Without the prune the dead
 //! entries cost about 1–3 KB a commit.
 //!
-//! Run alone, as CI does (dhat and parallel tests interfere):
+//! Run alone, as CI's own job does (dhat and parallel tests interfere),
+//! about 3 min in release with pruning on:
 //!
 //! ```sh
-//! cargo test --release -p lodestar-bench --test mmap_retention -- --test-threads=1
-//! MMAP_RETENTION_PRUNE=off cargo test --release -p lodestar-bench --test mmap_retention -- --test-threads=1  # fails
+//! cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1
+//! MMAP_RETENTION_PRUNE=off cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1  # fails
 //! ```
 //!
 //! The assertion never calls the pruning API: only the indexer's own commit

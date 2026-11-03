@@ -31,7 +31,8 @@ Runner brief X-mmap-cache-prune, 2026-11-03 (owner: "the memory fix is the prior
 - **Commit rate.** The machine has 4 cores shared by up to 12 runs, so Part 1 reached about 2.5–2.7 commits/s under dhat (about 9,400–9,700 commits a run) and the full 10/s on the musl build. The brief asked for 10/s.
 - **One prune in arm A.** It prunes once at open, before the drip starts.
 - **Shorter Part 2.** The cloud container is reclaimed a few minutes after a turn ends, so Part 2 ran for 2 h, not the brief's ≥ 6 h.
-- **A second measure.** Point samples of the heap catch merges and the writer's arena in flight, MBs at a time. So each row also records the least value in its 100-commit window, and both measures are reported.
+- **A second measure, chosen after the decision sequence was frozen.** Point samples of the heap catch merges and the writer's arena in flight, MBs at a time (the dhat site diff below shows this). So each row also records the least value in its 100-commit window, and both measures are reported. The regression test already sampled least-of-100 before the freeze.
+- **Two batches.** The first Part 1 batch counts as exploratory; the frozen sequence's Step 1 rule was set after it, and the batch started at 03:39Z is the confirmation.
 
 **Part 1: the mechanism.** Bytes retained per commit, over commit 2,000 to the end. Each run's OLS slope is given; the arm's figure is the mean of its runs with a t-interval (df = 2).
 
@@ -42,26 +43,37 @@ Runner brief X-mmap-cache-prune, 2026-11-03 (owner: "the memory fix is the prior
 | dhat, fixture pair (least per 100) | 2,331 | 1.2 |
 | musl anon (as shipped), least per 100; about 36,000 commits a run at 10/s | 3,215 / 2,808 / 2,846; mean **2,956** [2,398, 3,515] | 736 / 575 / 1,498; mean **936** [−288, 2,160] |
 
-- **The control reproduces the expected 1–3 KB per commit.**
-- **B passes on the windowed minimum:** each run is at most 0.3% of A's mean, against the ≤ 10% bar.
-- **On point samples B's runs are too noisy to judge.** Two dhat snapshots of a live arm-B index, at 1,500 and 4,500 commits, put that difference in two or three large writer and merge blocks, with nothing under `MmapCache` accumulating.
-- **Anonymous memory (musl, mimalloc) on its own measure:** B cuts the growth by about 68% but doesn't reach 10% of A. Its runs are 25%, 19% and 51% of A's mean.
+- **The control reproduces:** A's mean is within the frozen 1–3.5 KB/commit on both measures.
+- **Step 1 under the frozen rule is inconclusive.** On the frozen estimator (point samples) the arms' intervals overlap: A [1,634, 3,032], B [−1,831, 1,932]. The site criterion is met: nothing under `MmapCache::get_mmap` accumulates in B.
+- **On the windowed minimum (the post-freeze deviation)** the intervals are far apart: A 2,305 [2,261, 2,349], B 4.6 [0.3, 8.9]; the fixture pair gives 2,331 against 1.2.
+- **Runner's ruling (§2.26), in substance:** Step 1 is inconclusive under the frozen rule; the runner accepts the mechanism as shown on the windowed minimum, disclosed as a deviation chosen after the freeze, together with the site criterion, the musl anon Part 1 and Step 3 showing no adverse result. B ships as M1, alone; M2 isn't triggered.
+- **Why point samples are noisy.** Two dhat snapshots of a live arm-B index, at 1,500 and 4,500 commits, put that difference in two or three large writer and merge blocks, with nothing under `MmapCache` accumulating.
+- **Anonymous memory (musl, mimalloc), as measured:** B cuts the growth by about 68%: A 2,956 [2,398, 3,515], B 936 [−288, 2,160] B/commit.
   - From commit 12,000 on, two of the three B runs are flat (308 and −113 B/commit). The third still grows about 790 B/commit. A stays at 2.3–3.9 KB/commit.
   - The live heap (dhat) is flat in B, so the remainder is the allocator keeping memory, not data.
   - At r3's ~665 commits an hour, A's 2,956 B/commit projects to about 1.9 MiB/h, which matches r3's 1.88. B's 936 projects to about 0.6 MiB/h (about 0.2 MiB/h from commit 12,000 on). This is a projection, not a measurement; the soak is the gate.
 - **The fixture** is a frozen copy of a 9,900-torrent index whose segments sit near `LogMergePolicy`'s thresholds: main [8,000, 1,000, 900] documents; files [220,643, 33,003, 29,845].
 
-**Part 2: production cadence.** `serve`'s own `LiveConfig`, about 665 torrents an hour, on the musl build. The figure is total anonymous MiB/h, after the first 30 min.
+**Part 2 (Step 3): production cadence, shortened.** `serve`'s own `LiveConfig`, about 665 torrents an hour, on the musl build, `RssAnon`-equivalent per process (`Anonymous` from smaps_rollup). Each run's slope is `analyze_cr0`'s `memory_fit` (OLS ± 1.96·SE) of anonymous MiB/h after the first 30 min. Shortened to 2 h per run (the frozen sequence allows ≥ 2 h) because the container is reclaimed a few minutes after each turn.
 
-- **Each run:** about 1,300 commits in 2 h, at 665 an hour with 1.00 document per commit.
-- **Slopes:** A −3.6 and −9.9 MiB/h; B +1.3 and −0.4 MiB/h.
-- **Inconclusive.** Two hours give only ten samples after the first 30 min, and ±10 MiB of anonymous-memory noise swamps the expected 1–2 MiB/h. It shows nothing either way; a 6 h run needs a host that stays up.
+| Run | Slope, MiB/h [95% CI] |
+|---|---|
+| A1 | −3.56 [−8.97, +1.86] |
+| A2 | −9.87 [−18.29, −1.45] |
+| B1 | +1.32 [−5.82, +8.47] |
+| B2 | −0.41 [−8.30, +7.48] |
 
-**The regression test** (`bench/tests/mmap_retention.rs`; `cargo test --release -p lodestar-bench --test mmap_retention -- --test-threads=1`):
+- **Each run:** about 1,300 commits in 2 h, at 665 an hour with 1.00 document per commit; ten samples after the first 30 min.
+- **The frozen branch: A flat and B flat, inconclusive.** M1 goes ahead on Step 1's proof; r4 decides. B's intervals all include 0 and overlap A's; B isn't "clearly below" A (its upper bounds exceed A's points, and its mean sits above A's only because both A runs came out negative), and nothing shows B growing.
+- **M2 isn't triggered:** Part 2 is inconclusive, and the projected remainder (about 0.6 MiB/h) is under the 1.0 screen. r4 decides whether the allocator retention needs it.
+
+**The regression test** (`bench/tests/mmap_retention.rs`; `cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1`):
 - It drives the `Indexer` one document per commit, with merges on.
 - It samples dhat's current bytes at commits 500 and 2,500, each sample being the least over its 100 commits, with the index alive.
-- With pruning off it retains **2,501 B per commit** and fails. With pruning on it passes, under the 300 B bound.
+- With pruning off it retains **2,501 B per commit** and fails. With pruning on it retains **34 B per commit** and passes, under the 300 B bound.
 - It never calls the pruning API.
+- **Its own CI job, `mmap-retention`**, path-filtered to `crates/search/**` and `bench/**` and required by `ci-ok`: it takes **193 s** on a quiet 4-core machine. `required-features = ["dhat-heap"]` keeps `cargo test --workspace` from building it in debug; that's the one change to the brief's exact command.
+- **Why it retained < 300 B/commit while B's first-batch runs showed 498–941:** those were point-sample slopes, which include the transient writer and merge blocks; on the test's own least-of-100 estimator, the experiment's B is 4.6 B/commit. No second retainer: the snapshot diff found none.
 
 ## Lifecycle and performance
 - **Lifecycle tests:**

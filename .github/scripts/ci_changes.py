@@ -144,6 +144,7 @@ def main() -> None:
             filter="true",
             importer="true",
             log_bench="true",
+            mmap_retention="true",
             soak_tools="true",
             web="true",
             e2e="true",
@@ -192,6 +193,11 @@ def main() -> None:
         )
     ).lower()
     out["soak_tools"] = str(everything or any(f.startswith("docs/soak/tools/") for f in changed)).lower()
+    # The mmap-cache retention test (X-mmap-cache-prune): the search crate or
+    # the bench crate that holds it.
+    out["mmap_retention"] = str(
+        everything or any(f.startswith(("crates/search/", "bench/")) for f in changed)
+    ).lower()
     # A change under fuzz/ (a target, the harness, its lockfile) runs them all.
     fuzz_all = "lodestar-fuzz" in touched
     out["fuzz"] = json.dumps([t for t in FUZZ if fuzz_all or needs(fuzz_roots(t))])
