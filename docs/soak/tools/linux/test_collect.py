@@ -1135,6 +1135,39 @@ class PublicationTests(Base):
         block = next(b for b in re.findall(r"foreach \(\$name in @\((.*?)\)\) \{", source, re.S) if "start_time_seconds" in b)
         self.assertEqual(set(re.findall(r"'([a-z_]+)'", block)), set(collect.REQUIRED))
 
+    def test_search_commits_and_mmap_gauge_flow_from_metrics_to_the_report(self):
+        # Emitted text -> collector's sanitizer -> metrics/NNNNN.prom -> analyzer output.
+        root = self.tmp / "cr-col-4"
+        (root / "metrics").mkdir(parents=True)
+        (root / "run.json").write_text(json.dumps(
+            {"commit": COMMIT, "settings": {"baseline_hours": 24, "intensity": "balanced"}}))
+        rows = []
+        for i in range(int(24.5 * 60) + 1):
+            t, commits = i * 60, i * 30  # 30 commits a minute; private memory 0.002 MiB per commit
+            extra = (f"lodestar_search_commits_total {commits}\n"
+                     f'lodestar_search_mmap_cache_entries{{index="main"}} {min(i, 40)}\n'
+                     f'lodestar_search_mmap_cache_entries{{index="files"}} {i % 7}\n'
+                     'lodestar_search_mmap_cache_entries{index="Bad Name"} 9\n')
+            clean = collect.sanitize_snapshot(metrics_text(t, suppression_until=0, extra=extra))
+            self.assertIn('lodestar_search_mmap_cache_entries{index="main"} ', clean)
+            self.assertNotIn("Bad Name", clean)
+            (root / "metrics" / f"{i:05d}.prom").write_text(clean)
+            rows.append({"elapsed_seconds": t, "phase": "baseline", "process_id": 1, "health": 200,
+                         "metrics_ok": True, "working_set_bytes": 600 * 2**20,
+                         "private_bytes": (600 + 0.002 * commits + (0.5 if i % 2 else -0.5)) * 2**20,
+                         "values": {"start_time_seconds": 1000}})
+        (root / "samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        report = analyze_cr0.analyze(root)
+        ctx = report["memory_context"]
+        self.assertAlmostEqual(ctx["mib_per_1000_commits"], 2.0, places=2)
+        self.assertEqual(report["search"]["commits"], {"first": 0, "last": 1470 * 30})
+        self.assertEqual(report["search"]["mmap_cache_entries"]["main"],
+                         {"first": 0, "last": 40, "max": 40, "samples": 1471})
+        self.assertEqual(report["search"]["mmap_cache_entries"]["files"]["max"], 6)
+        text = analyze_cr0.markdown(report)
+        self.assertIn("Private memory per 1,000 search commits: 2.000 MiB", text)
+        self.assertIn("| main | 0 | 40 | 40 |", text)
+
     def test_analyzer_cli_reads_the_output_end_to_end(self):
         self.run_docker("--stop")
         done = subprocess.run([sys.executable, "-I", str(HERE.parent / "analyze_cr0.py"), str(self.root),

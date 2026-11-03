@@ -214,6 +214,17 @@ python3 docs/soak/tools/analyze_cr0.py <run> --format json --output <new-report.
 
 A report is not a pass. Review `issues`, coverage and the stop reason.
 
+**Search commits and the mmap-cache gauge (CR-COL-4).** Snapshots also keep
+`lodestar_search_commits_total` and `lodestar_search_mmap_cache_entries{index="main"|"files"}`
+(live mappings retained after the latest prune; binaries without the prune don't expose it).
+The report's `memory_context` adds `mib_per_1000_commits` (private MiB per 1,000 search
+commits, over the gate's hours 12-24), and its `search` section gives the commit counter and,
+per index, the gauge's first, last and max. Evidence without these metrics (r3 and older)
+analyzes as before, with the fields absent. A memory fit over a window that isn't fully
+covered prints as `provisional (window incomplete)`, with no pass or fail wording. The bar
+itself is unchanged. Soak r4's record pins the collector and analyzer git revision next to
+the rc.3 image digest.
+
 **Memory gate (v0.5.1).** The report's `memory_fit` section (in Markdown, "Memory
 gate") fits the OLS slope of `private_bytes` (cgroup `anon`, or `RssAnon` on a
 native run) over baseline hours 12–24, with its 95% CI and the run's peak. The
