@@ -29,7 +29,7 @@ Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`)
 **All findings the 2026-10-30 plan listed as open are fixed** (A1-1..4, A2-1, A3-1..3, DUR-26), except S04 (uTP), which CR-4 addresses, and S03 (admission), which CR-ADM addresses behind its switch.
 
 ### 0.2 Order of work and tracks
-**Concurrency:** at most **four slices at a time in total** in this phase: Opus, helper and docs slices alike, as the runner has applied §2.25 since 10-30 (the owner: "keep 4 slots full"). The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). A seven-day usage warning is active: prefer Sonnet where the delegation policy allows it. **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
+**Concurrency:** at most **two slices at a time in total** in this phase: Opus, helper and docs slices alike (owner, §2.30, replacing the four of §2.25). New launches are paused until the owner says otherwise; existing sessions carry the memory fix and rc.3 (§2.30, §2.31). The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). A seven-day usage warning is active: prefer Sonnet where the delegation policy allows it. **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
 
 **The ladder** (fill free slots in this order; the owner can reorder it in one line):
 1. **Close v0.5.1** (Track R): the soak verdict, the gluetun leg, rc.3 with #357, the tag.
@@ -53,12 +53,12 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 | R3′ **R-rc3-cut**: #402 and the memory fix onto `release/v0.5.1` after #377 (merged `0acc5a37`) | R-rc3-backport session (existing) | R1-fix | release PR green, fresh Opus review, merged; the owner tags `v0.5.1-rc.3` |
 | R1′ Soak r4 on rc.3: Linux main leg, frozen image, 6 h suppression + 30 min warm-up + 24 h baseline | owner | R3′ | `analyze` report with gate evidence yes and memory slope upper 95 % CI ≤ 2 MiB/h over hours 12–24 |
 | R-win Short Windows MSI service smoke on rc.3 (≥ 1 h: start, stop, clean restart, non-zero stored rate). #402 and the memory fix are platform-independent, so a full re-soak isn't needed | owner | R3′ | pass |
-| R3b Tag `v0.5.1` from rc.3, approve the release environment, publish | **owner** | R2, R3 | GitHub release published; `:latest` moves |
+| R3b Tag `v0.5.1` from rc.3, approve the release environment, publish | **owner** | R1′, R2, R-win | GitHub release published; `:latest` moves |
 | R4 Bring `docs/releases/v0.5.1.md` to `main`, mark `docs/releases/v0.5.0.md` as never released, update the README's release status | docs slice | R3b | — |
 | R5 **v0.5.2 cut from `main`** (recommended, §0.4) | runner | R3b | G-v052 |
 | On failure at R1/R2 | fix PR on `main`, cherry-picked to `release/v0.5.1` together with #357, the next rc, a fresh frozen soak. Runs are never stitched | — | — |
 
-**The stand-in gap in rc.3.** rc.3 is exactly rc.2 + #357 (§2.29, as the runner rules it). #357 alone holds what an unreadable rule's stand-in matches, and nothing in rc.3 undoes those holds: F-filter-standin-undo (#367) re-judges them, and rc.3 doesn't write the `filter.stand_ins` record a later upgrade needs to find them. The delta report states this gap. The runner recommends adding #367 to rc.3 if it has merged by the cut; that goes to the owner in the daily summary, and #367 rides along only on the owner's yes.
+**The stand-in gap in rc.3.** rc.3 is rc.2 + #357 + #402 + the memory fix (§2.31), with nothing else from `main`. #357 alone holds what an unreadable rule's stand-in matches, and nothing in rc.3 undoes those holds: F-filter-standin-undo (#367) re-judges them, and rc.3 doesn't write the `filter.stand_ins` record a later upgrade needs to find them. The delta report states this gap. The runner recommends adding #367 to rc.3 if it has merged by the cut; that goes to the owner in the daily summary, and #367 rides along only on the owner's yes.
 
 **Track C: crawler to the v0.6 gate.** Details, evidence and the checkpoint are in §0.5.
 
@@ -161,7 +161,7 @@ Answered by §2.28 (and #357's release by §2.29): Q2, Q3, Q7 and Q15 (Q1 keeps 
 - ✔ Windows ≥ 6 h service-mode run of the rc MSI, plus a portable smoke test.
 - ☐ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). Attempt r3 is running on a fresh data directory. **The upgrade test** (the Oct 22 volume, V3 → V12) passed only at r1's start, and r1 itself isn't gate evidence (it stopped at 19.6 h on the old working-set rule; partial slope 1.85 MiB/h, CI [0.92, 2.77]). Per owner-decisions §2.28, r1's clean upgrade counts if rc.2's migration code matches r1's build (the runner checks); otherwise rc.2 gets a short upgrade smoke. Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
 - ☐ ≥ 2 h gluetun leg.
-- ☐ rc.3 = rc.2 + #357 (§2.29), with its delta mapped and a short Unraid smoke (Track R step R3).
+- ☐ rc.3 = rc.2 + #357 + #402 + the memory fix (§2.31), with its delta mapped (Track R steps R3 and R3′), then soak r4 on rc.3 (R1′) and a short Windows MSI smoke (R-win).
 - ✔ Updates ship off (no nightly key yet; the release key exists).
 - ☐ The owner tags, approves the release environment and publishes.
 
@@ -314,7 +314,7 @@ flowchart LR
 | Owner answers arrive late | Owner actions (host, keys, tags) gate whole tracks | §2.28 delegates decisions to the runner's recommendation; ask once for actions, and fill the slots with Sources, Track B and the epics meanwhile |
 
 ### 0.9 Next actions
-In order, as slots allow (four slices in total; no two with overlapping `owns`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
+In order, as slots allow (two slices in total, once the owner resumes launches; no two with overlapping `owns`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
 1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z).
 2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars is already running (a recorded exception: it shares `crates/api/src/digest.rs` with #367, which merges first).
 3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first.
