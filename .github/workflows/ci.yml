@@ -284,6 +284,8 @@ jobs:
       # caches are pruned after each commit. dhat's testing mode, alone in
       # its binary, about 3 min in release; `dhat-heap` keeps it out of the
       # workspace run, which would build it in debug.
+      # The workspace lint never builds it (it needs the feature).
+      - run: cargo clippy --release -p lodestar-bench --features dhat-heap --test mmap_retention -- -D warnings
       - run: cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1
 
   importer:

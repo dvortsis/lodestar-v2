@@ -1426,11 +1426,14 @@ pub fn render_caches(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use lodestar_pipeline::gate::{Excluded, Origin};
+
     #[test]
     fn the_mmap_cache_gauge_is_labelled_by_index_and_absent_for_a_ram_index() {
         let stats = lodestar_search::IndexStats::default();
         let mut out = String::new();
-        super::render_search(&mut out, 0, &stats, Some([12, 30]));
+        render_search(&mut out, 0, &stats, Some([12, 30]));
         assert!(
             out.contains("# TYPE lodestar_search_mmap_cache_entries gauge\n"),
             "{out}"
@@ -1444,12 +1447,9 @@ mod tests {
             "{out}"
         );
         let mut ram = String::new();
-        super::render_search(&mut ram, 0, &stats, None);
+        render_search(&mut ram, 0, &stats, None);
         assert!(!ram.contains("mmap_cache"), "{ram}");
     }
-
-    use super::*;
-    use lodestar_pipeline::gate::{Excluded, Origin};
 
     /// Every slot of the pool's failure array has a label, in index order,
     /// so a new `FailureKind` can't be left out of `/metrics` and

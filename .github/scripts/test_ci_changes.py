@@ -80,6 +80,7 @@ class EndToEnd(unittest.TestCase):
                              check=True, capture_output=True, text=True).stdout
         self.assertIn("web=true", out)
         self.assertIn("e2e=true", out)
+        self.assertIn("mmap_retention=true", out)
 
 
 if __name__ == "__main__":

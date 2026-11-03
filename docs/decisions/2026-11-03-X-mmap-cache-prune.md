@@ -32,7 +32,8 @@ Runner brief X-mmap-cache-prune, 2026-11-03 (owner: "the memory fix is the prior
 - **One prune in arm A.** It prunes once at open, before the drip starts.
 - **Shorter Part 2.** The cloud container is reclaimed a few minutes after a turn ends, so Part 2 ran for 2 h, not the brief's ≥ 6 h.
 - **A second measure, chosen after the decision sequence was frozen.** Point samples of the heap catch merges and the writer's arena in flight, MBs at a time (the dhat site diff below shows this). So each row also records the least value in its 100-commit window, and both measures are reported. The regression test already sampled least-of-100 before the freeze.
-- **Two batches.** The first Part 1 batch counts as exploratory; the frozen sequence's Step 1 rule was set after it, and the batch started at 03:39Z is the confirmation.
+- **Two batches.** The first Part 1 batch (00:54Z) counts as exploratory; the frozen sequence's Step 1 rule was set after it (03:49Z). The confirmation batch was launched at 03:13Z, killed when the container was reclaimed at about 03:35Z, and relaunched unchanged at 03:39Z; the 03:39Z runs are the ones reported.
+- **Arm L (Step 2's supporting evidence) wasn't run.** The runner made it optional (04:10Z: "diagnostic: report if finished, don't wait"); Step 2's attribution rests on the dhat site diff alone.
 
 **Part 1: the mechanism.** Bytes retained per commit, over commit 2,000 to the end. Each run's OLS slope is given; the arm's figure is the mean of its runs with a t-interval (df = 2).
 
@@ -46,12 +47,11 @@ Runner brief X-mmap-cache-prune, 2026-11-03 (owner: "the memory fix is the prior
 - **The control reproduces:** A's mean is within the frozen 1–3.5 KB/commit on both measures.
 - **Step 1 under the frozen rule is inconclusive.** On the frozen estimator (point samples) the arms' intervals overlap: A [1,634, 3,032], B [−1,831, 1,932]. The site criterion is met: nothing under `MmapCache::get_mmap` accumulates in B.
 - **On the windowed minimum (the post-freeze deviation)** the intervals are far apart: A 2,305 [2,261, 2,349], B 4.6 [0.3, 8.9]; the fixture pair gives 2,331 against 1.2.
-- **Runner's ruling (§2.26), in substance:** Step 1 is inconclusive under the frozen rule; the runner accepts the mechanism as shown on the windowed minimum, disclosed as a deviation chosen after the freeze, together with the site criterion, the musl anon Part 1 and Step 3 showing no adverse result. B ships as M1, alone; M2 isn't triggered.
+- **The runner's ruling (§2.26, 2026-11-03 05:00Z and 05:50Z; the runner flags it to the owner under §2.19):** "Under the frozen Step 1 rule and estimator, Step 1 is inconclusive, not passed. The windowed-minimum estimator is a deviation chosen after the freeze. On that basis the runner accepts the mechanism as shown," conditional on the musl anon Part 1 and the shortened Part 2 showing no adverse result under the frozen Step 3 rules. Then: "go. Ship B as M1, alone, without M2." The withdrawn ≤ 10% rule isn't used anywhere.
 - **Why point samples are noisy.** Two dhat snapshots of a live arm-B index, at 1,500 and 4,500 commits, put that difference in two or three large writer and merge blocks, with nothing under `MmapCache` accumulating.
-- **Anonymous memory (musl, mimalloc), as measured:** B cuts the growth by about 68%: A 2,956 [2,398, 3,515], B 936 [−288, 2,160] B/commit.
+- **Anonymous memory (musl, mimalloc), as measured:** A 2,956 [2,398, 3,515], B 936 [−288, 2,160] B/commit. As point estimates that's about a 68% cut; B's interval includes 0.
   - From commit 12,000 on, two of the three B runs are flat (308 and −113 B/commit). The third still grows about 790 B/commit. A stays at 2.3–3.9 KB/commit.
   - The live heap (dhat) is flat in B, so the remainder is the allocator keeping memory, not data.
-  - At r3's ~665 commits an hour, A's 2,956 B/commit projects to about 1.9 MiB/h, which matches r3's 1.88. B's 936 projects to about 0.6 MiB/h (about 0.2 MiB/h from commit 12,000 on). This is a projection, not a measurement; the soak is the gate.
 - **The fixture** is a frozen copy of a 9,900-torrent index whose segments sit near `LogMergePolicy`'s thresholds: main [8,000, 1,000, 900] documents; files [220,643, 33,003, 29,845].
 
 **Part 2 (Step 3): production cadence, shortened.** `serve`'s own `LiveConfig`, about 665 torrents an hour, on the musl build, `RssAnon`-equivalent per process (`Anonymous` from smaps_rollup). Each run's slope is `analyze_cr0`'s `memory_fit` (OLS ± 1.96·SE) of anonymous MiB/h after the first 30 min. Shortened to 2 h per run (the frozen sequence allows ≥ 2 h) because the container is reclaimed a few minutes after each turn.
@@ -64,8 +64,8 @@ Runner brief X-mmap-cache-prune, 2026-11-03 (owner: "the memory fix is the prior
 | B2 | −0.41 [−8.30, +7.48] |
 
 - **Each run:** about 1,300 commits in 2 h, at 665 an hour with 1.00 document per commit; ten samples after the first 30 min.
-- **The frozen branch: A flat and B flat, inconclusive.** M1 goes ahead on Step 1's proof; r4 decides. B's intervals all include 0 and overlap A's; B isn't "clearly below" A (its upper bounds exceed A's points, and its mean sits above A's only because both A runs came out negative), and nothing shows B growing.
-- **M2 isn't triggered:** Part 2 is inconclusive, and the projected remainder (about 0.6 MiB/h) is under the 1.0 screen. r4 decides whether the allocator retention needs it.
+- **The frozen branch: A flat and B flat, inconclusive.** M1 goes ahead on Step 1's proof; r4 decides. Neither arm shows growth: B's intervals include 0, A1's includes 0 and A2's is entirely negative. B isn't "clearly below" A: its upper bounds exceed A's points, and its mean sits above A's only because both A runs came out negative.
+- **M2 isn't triggered.** Under the inconclusive branch it doesn't arise; r4 decides whether the allocator retention needs it. Nothing from Part 1 is extrapolated to MiB/h.
 
 **The regression test** (`bench/tests/mmap_retention.rs`; `cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1`):
 - It drives the `Indexer` one document per commit, with merges on.
@@ -76,10 +76,13 @@ Runner brief X-mmap-cache-prune, 2026-11-03 (owner: "the memory fix is the prior
 - **Why it retained < 300 B/commit while B's first-batch runs showed 498–941:** those were point-sample slopes, which include the transient writer and merge blocks; on the test's own least-of-100 estimator, the experiment's B is 4.6 B/commit. No second retainer: the snapshot diff found none.
 
 ## Lifecycle and performance
-- **Lifecycle tests:**
-  - one-document commits through the live indexer leave the gauge within a small slack of the live segment files, across merges;
-  - opening an index starts the gauge at exactly its live files;
+- **Lifecycle tests (`crates/search/src/live.rs`):**
+  - one-document commits through the live indexer, merges and their garbage collection included, leave the gauge within a small slack of the live segment files;
+  - a failed commit, before or after it reaches the disk: the indexer recovers without a panic, and the next commit's prune leaves the caches within the live files;
+  - opening an index starts the gauge at no more than its live files;
   - a RAM index reports none.
+- **Not tested separately:** a rebuild's swap. The new index is opened through `SearchIndex::open`, which prunes, and the old index's directories go when its last clone (and lease) does, so there's nothing left to prune.
+- **No prune counter:** the prune runs synchronously inside each commit, unthrottled, so the smoke test can read the gauge right after the final commit. A throttled prune would need one.
 - **Latency:** 3,000 one-document commits through the `Indexer`, with title and file searches running continuously on another thread:
 
 | | Commit p50 / p99 | Search p50 / p99 (~600k searches) |

@@ -792,6 +792,15 @@ mod tests {
             "corrupt index: test: the commit failed"
         };
         assert_eq!(error.as_deref(), Some(want));
+        // X-mmap-cache-prune: a commit that failed before reaching the disk
+        // skipped its prune, and one that failed after had already pruned;
+        // either way the recovering writer's commit pruned again, without
+        // a panic, and the caches hold no more than the live files.
+        let dir = tmp.path().join("index");
+        let [main, files] = index.mmap_cache_entries().unwrap();
+        assert!(main > 0 && files > 0, "pruned after the recovery");
+        assert!(main <= segment_files(&dir), "{main}");
+        assert!(files <= segment_files(&dir.join("files")), "{files}");
         live.stop().unwrap();
     }
 
