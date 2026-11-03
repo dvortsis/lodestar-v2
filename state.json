@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-03T06:38:44Z",
+  "updated_at": "2026-11-03T14:52:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3050,7 +3050,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-03T06:38:44Z",
+  "last_heartbeat": "2026-11-03T14:52:43Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -3058,7 +3058,8 @@
   "notes": [
     "22:08 #81 r4 FIX (IMMEDIATE txn in Store::write, tests, doc placement); fix agent running. X-flakes c243217 delta reviewed OK by runner; asked to add live.rs stall-wait fix. filter budget red on main c5f9b74 too (66us) - base failure; F-perf is the fix. Re-ran filter budget on #82 run 39849416788 and #78 run 39852640547.",
     "22:07 next sweep trig_01DUR7GNqzGb2kyFrBFJMsQh at 22:32",
-    "2026-11-03T06:38:44Z rc3-cut: release/rc3-cut at 8c226540 (0acc5a37 + #402 via patch, 4 files +117/-1; fmt/clippy/test green, pipeline 17/17). No PR yet; awaits X-mmap-cache-prune merge SHA. X-mmap-cache-prune: branch ea0086c9, PR not open yet (pre-push checks); ruling ship B as M1 alone."
+    "2026-11-03T06:38:44Z rc3-cut: release/rc3-cut at 8c226540 (0acc5a37 + #402 via patch, 4 files +117/-1; fmt/clippy/test green, pipeline 17/17). No PR yet; awaits X-mmap-cache-prune merge SHA. X-mmap-cache-prune: branch ea0086c9, PR not open yet (pre-push checks); ruling ship B as M1 alone.",
+    "2026-11-03T14:52:43Z #406 X-mmap-cache-prune MERGED to main at 508d23b7 (fresh Opus MERGE, ci-ok green). Follow-up nit: live.rs ~801-803 asserts lack slack (possible flake). R-rc3-backport sent merge SHA: fix files onto release/rc3-cut, then release PR into release/v0.5.1. Next: review, dispatch workflows, merge, tell owner rc.3 ready."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
