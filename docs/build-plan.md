@@ -1,7 +1,7 @@
 # Lodestar v2 build plan: v0.5.1 → 1.0, with helper-agent orchestration
 
 > First written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
-> **§0 (2026-11-02, r3) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.29 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md` (an external review's findings).
+> **§0 (2026-11-02, r3) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.31 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md` (an external review's findings).
 > **Picking this up from another session or agent?** Start at [`docs/handoff.md`](handoff.md).
 
 ## 0. Status and plan from 2026-11-02
@@ -12,7 +12,7 @@ Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`)
 | Area | Done | In flight | Next |
 |---|---|---|---|
 | **M0–M5** | All merged. G-v05 passed 10-24. **G-m5 passed 11-01** (#352): analytics-validation matrix, reporting overhead 0.08–0.09 % of a 1 % gate, design review with all 7 blocking findings fixed (#340 and FX-1..4; important and polish in FX-5..6) | — | Backlog only (Track B) |
-| **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **Unraid 24 h soak, attempt r3** on rc.2, fresh data directory: baseline 2026-11-01 22:16Z → 2026-11-02 22:16Z. r1 (upgraded the Oct 22 volume V3 → V12 cleanly) tripped the old working-set stop rule at 19.6 h, so it isn't gate evidence; r2 was stopped by the CA Docker Auto Update plugin at 11-01 11:00Z | Verdict; rc.3 with #357 (§2.29); the owner runs the gluetun leg after the baseline; the owner tags `v0.5.1` (§0.4) |
+| **v0.5.1 release** | Release branch `release/v0.5.1` cut at `c3f6341a`. rc.1 rejected by the owner. **rc.2 = `6be95525`**, artifacts signed and verified. Delta mapped (CR-0f the only class-A change). Windows MSI service mode 7 h 10 m **PASS** (17.0 stored/min), portable **PASS**, MSI options **PASS** | **The memory fix** (X-mmap-cache-prune, M1-exp first). Soak r3 on rc.2 **failed the memory gate**: 1.88 MiB/h, 95 % CI [1.43, 2.33] (`docs/decisions/2026-11-03-soak-r3-verdict.md`). #357 is on `release/v0.5.1` as #377 (`0acc5a37`) | rc.3 = rc.2 + #357 + #402 + the memory fix (§2.31); soak r4 on rc.3; the gluetun leg and a short Windows smoke on rc.3; the owner tags `v0.5.1` (§0.4) |
 | **Crawler** | CR-0 accepted (24 h final: **740.6 stored/h ≈ 12.3/min**). Merged, each behind its own switch, all **off by default**: CR-SIM, CR-gate-metrics, CR-ADM (`dht.coordinated_admission`), CR-1a-H (`dht.responder_hints`), CR-1a-S (`dht.streaming_peers`), CR-1b (`dht.target_prefixes`), CR-0d (`dht.safe_restart`), CR-0f, CR-COL, **CR-4** (#365: uTP in the fetch path and IPv6 route backoff, `dht.utp` and `dht.route_backoff`) | — | CR-COL-3 and CR-SPEC, then live A/B runs (none run yet), CR-1c, CR-5 (§0.5) |
 | **Imports** | IMP-0..5 merged: PostgreSQL restore runbook, V13 job tables, Magnetico and Bitmagnet adapters, merge/dedupe CLI, imported cohorts kept out of crawl-yield Insights, refile, server-side import part 1 | — | Pilots on real data (§0.6); none run. Only a synthetic figure exists: 100k at ~13,900/s |
 | **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 (V14) now that migrations may land on `main` (owner-decisions §2.28); SRC-7 after SRC-2, SRC-4 and SRC-5 |
@@ -29,10 +29,10 @@ Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`)
 **All findings the 2026-10-30 plan listed as open are fixed** (A1-1..4, A2-1, A3-1..3, DUR-26), except S04 (uTP), which CR-4 addresses, and S03 (admission), which CR-ADM addresses behind its switch.
 
 ### 0.2 Order of work and tracks
-**Concurrency:** at most **four slices at a time in total** in this phase: Opus, helper and docs slices alike, as the runner has applied §2.25 since 10-30 (the owner: "keep 4 slots full"). The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). A seven-day usage warning is active: prefer Sonnet where the delegation policy allows it. **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
+**Concurrency:** at most **two slices at a time in total** in this phase: Opus, helper and docs slices alike (owner, §2.30, replacing the four of §2.25). New launches are paused until the owner says otherwise; existing sessions carry the memory fix and rc.3 (§2.30, §2.31). The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). A seven-day usage warning is active: prefer Sonnet where the delegation policy allows it. **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
 
 **The ladder** (fill free slots in this order; the owner can reorder it in one line):
-1. **Close v0.5.1** (Track R): the soak verdict, the gluetun leg, rc.3 with #357, the tag.
+1. **Close v0.5.1** (Track R): the memory fix, rc.3 (§2.31), soak r4, the gluetun leg, the Windows smoke, the tag.
 2. **The crawler's live evidence** (Track C): CR-SPEC, then CR-COL-3 (no host needed, so they start now), then the comparator and the A/B runs on the owner's experiment host, up to Checkpoint 1.
 3. **The Sources critical path** (Track S): SRC-1 → SRC-2 → SRC-7 (Q2/Q15 answered by §2.28).
 4. **Unhold the epics** once the soak verdict is in: expand E-M6 (gap audit), E-v06-workers, E-v06-companions.
@@ -46,15 +46,19 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 
 | Step | Who | Waits on | Exit |
 |---|---|---|---|
-| R1 Unraid soak r3 verdict | runner (analysis), owner (evidence hand-back) | the baseline end, 11-02 22:16Z | `analyze` report: no stall, no interruption, ≥ 24 h covered, memory slope upper 95 % CI ≤ 2 MiB/h on `anon` private memory over hours 12–24, peak reported |
-| R2 gluetun leg (≥ 2 h measured, part of the v0.5.1 gate) | owner runs it on rc.2 after the baseline (its evidence carries to rc.3 under the delta rule, like the soak's); runner analyses | R1 | collector run with `--leg gluetun --require-gluetun` |
-| R3 **rc.3 = rc.2 + #357** (F-filter-load-fail-closed), owner's decision 2026-11-02 (§2.29). The runner cherry-picks #357 onto `release/v0.5.1`, checks it applies without pulling other post-cut changes, maps the delta to targeted tests (filter load, stand-ins, the §20.8 budget) and runs CI on the rc.3 SHA. #357 changes filter loading and its reporting (Insights, `/metrics`, the web Insights view), not the crawler lifecycle, sampler or endpoint policy, so r3's soak evidence carries over under the delta rule; a short Unraid smoke of the rc.3 image confirms it starts, upgrades and serves. The delta report states the stand-in gap (below) | runner; owner tags rc.3 | R1 | rc.3 artifacts signed and hashed; delta report |
-| R3b Tag `v0.5.1` from rc.3, approve the release environment, publish | **owner** | R2, R3 | GitHub release published; `:latest` moves |
+| R1 Unraid soak r3 verdict: **FAIL (memory)**, 1.88 MiB/h, 95 % CI [1.43, 2.33] over hours 12–24, so the upper bound misses the ≤ 2 bar. Coverage, shutdown and evidence were clean (`docs/decisions/2026-11-03-soak-r3-verdict.md`) | runner (analysis), owner (evidence hand-back) | the baseline end, 11-02 22:16Z | `analyze` report: no stall, no interruption, ≥ 24 h covered, memory slope upper 95 % CI ≤ 2 MiB/h on `anon` private memory over hours 12–24, peak reported |
+| R1-fix Memory fix **X-mmap-cache-prune**: M1-exp (prune versus default) first, then prune tantivy's mmap cache after each commit. M2 (commit cadence) only if M1-exp leaves growth | R-mem-triage session (existing) | R1 | M1-exp passes, then a fresh Opus review, green CI and merged to `main` |
+| R2 gluetun leg (≥ 2 h measured, part of the v0.5.1 gate) | owner runs it on rc.3 after R1′; runner analyses | R1′ | collector run with `--leg gluetun --require-gluetun` |
+| R3 **rc.3 = rc.2 + #357 + #402 + the memory fix**, owner's decision 2026-11-03 (§2.31, replacing §2.29's rc.3 = rc.2 + #357). #357 (F-filter-load-fail-closed) is on `release/v0.5.1` as #377 (merged `0acc5a37`). Cherry-pick checks and delta mapping as in §2.29: filter load, stand-ins, the §20.8 budget. #402 requires a re-soak, so r3's evidence no longer covers rc.3 and R1′ runs a fresh one. None of #357, #402 or the fix touches `crates/store`, so r1's upgrade evidence still counts under §2.28 (the fix must keep it so) | runner; owner tags rc.3 | R1-fix | rc.3 artifacts signed and hashed; delta report |
+| R3′ **R-rc3-cut**: #402 and the memory fix onto `release/v0.5.1` after #377 (merged `0acc5a37`) | R-rc3-backport session (existing) | R1-fix | release PR green, fresh Opus review, merged; the owner tags `v0.5.1-rc.3` |
+| R1′ Soak r4 on rc.3: Linux main leg, frozen image, 6 h suppression + 30 min warm-up + 24 h baseline | owner | R3′ | `analyze` report with gate evidence yes and memory slope upper 95 % CI ≤ 2 MiB/h over hours 12–24 |
+| R-win Short Windows MSI service smoke on rc.3 (≥ 1 h: start, stop, clean restart, non-zero stored rate). #402 and the memory fix are platform-independent, so a full re-soak isn't needed | owner | R3′ | pass |
+| R3b Tag `v0.5.1` from rc.3, approve the release environment, publish | **owner** | R1′, R2, R-win | GitHub release published; `:latest` moves |
 | R4 Bring `docs/releases/v0.5.1.md` to `main`, mark `docs/releases/v0.5.0.md` as never released, update the README's release status | docs slice | R3b | — |
 | R5 **v0.5.2 cut from `main`** (recommended, §0.4) | runner | R3b | G-v052 |
-| On failure at R1/R2 | fix PR on `main`, cherry-picked to `release/v0.5.1` together with #357, the next rc, a fresh frozen soak. Runs are never stitched | — | — |
+| On failure at R1/R2 | fix PR on `main`, cherry-picked to `release/v0.5.1`, the next rc, a fresh frozen soak. Runs are never stitched | — | — |
 
-**The stand-in gap in rc.3.** rc.3 is exactly rc.2 + #357 (§2.29, as the runner rules it). #357 alone holds what an unreadable rule's stand-in matches, and nothing in rc.3 undoes those holds: F-filter-standin-undo (#367) re-judges them, and rc.3 doesn't write the `filter.stand_ins` record a later upgrade needs to find them. The delta report states this gap. The runner recommends adding #367 to rc.3 if it has merged by the cut; that goes to the owner in the daily summary, and #367 rides along only on the owner's yes.
+**The stand-in gap in rc.3.** rc.3 is rc.2 + #357 + #402 + the memory fix (§2.31), with nothing else from `main`. #357 alone holds what an unreadable rule's stand-in matches, and nothing in rc.3 undoes those holds: F-filter-standin-undo (#367) re-judges them, and rc.3 doesn't write the `filter.stand_ins` record a later upgrade needs to find them. The delta report states this gap. The runner recommends adding #367 to rc.3 if it has merged by the cut; that goes to the owner in the daily summary, and #367 rides along only on the owner's yes.
 
 **Track C: crawler to the v0.6 gate.** Details, evidence and the checkpoint are in §0.5.
 
@@ -136,7 +140,7 @@ On 2026-11-02 the owner told the runner to take its recommendation on every ques
 
 | # | Action | Unblocks |
 |---|---|---|
-| 1 | Hand back the r3 soak evidence; run the gluetun leg after the baseline; tag rc.3 (rc.2 + #357, §2.29) and then `v0.5.1`, and approve the release environment. (r1's upgrade counts if rc.2's migration code matches, per §2.28.) | v0.5.1; the three held epics |
+| 1 | After the memory fix: tag rc.3 (rc.2 + #357 + #402 + the fix, §2.31), run soak r4 on it, then the gluetun leg and a short Windows MSI smoke on rc.3; tag `v0.5.1` and approve the release environment. (r1's upgrade still counts per §2.28: rc.3 changes no migration code.) | v0.5.1; the three held epics |
 | 2 | Name the **experiment host** for crawler A/B runs and book its calendar (about three weeks of exclusive use, §0.7) | Track C's live work (C2–C8) and the v0.6 tag |
 | 3 | Create the **nightly signing key** and its environment | update checks on the Nightly channel |
 | 4 | Make the web and E2E aggregate checks required in the ruleset (§2.28), **after** X-required-web-checks lands and names them | safer merges |
@@ -155,9 +159,9 @@ Answered by §2.28 (and #357's release by §2.29): Q2, Q3, Q7 and Q15 (Q1 keeps 
 - ✔ L1–L7 and F-* merged; the CR-0 soak accepted (`docs/decisions/2026-10-30-CR-0-acceptance.md`).
 - ✔ Every workflow green on rc.2, no regenerated baselines.
 - ✔ Windows ≥ 6 h service-mode run of the rc MSI, plus a portable smoke test.
-- ☐ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). Attempt r3 is running on a fresh data directory. **The upgrade test** (the Oct 22 volume, V3 → V12) passed only at r1's start, and r1 itself isn't gate evidence (it stopped at 19.6 h on the old working-set rule; partial slope 1.85 MiB/h, CI [0.92, 2.77]). Per owner-decisions §2.28, r1's clean upgrade counts if rc.2's migration code matches r1's build (the runner checks); otherwise rc.2 gets a short upgrade smoke. Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
+- ☐ **24 h Linux Docker soak on the owner's Unraid box** with CR-COL: the binding memory gate (upper 95 % CI of the `anon` private-memory slope over hours 12–24 ≤ 2 MiB/h; report the slope with its CI and the peak). Attempt r3 on rc.2 failed the memory gate (1.88 MiB/h, CI [1.43, 2.33]); attempt r4 runs on rc.3 after the memory fix. **The upgrade test** (the Oct 22 volume, V3 → V12) passed only at r1's start, and r1 itself isn't gate evidence (it stopped at 19.6 h on the old working-set rule; partial slope 1.85 MiB/h, CI [0.92, 2.77]). Per owner-decisions §2.28, r1's clean upgrade counts if rc.2's migration code matches r1's build (the runner checks); otherwise rc.2 gets a short upgrade smoke. Its stop rule is the old working-set rule, which `docs/decisions/2026-10-31-X-soak-docker-memrule.md` showed could stop a healthy run; a stop on that rule alone is reviewed against `anon` before it counts as a failure.
 - ☐ ≥ 2 h gluetun leg.
-- ☐ rc.3 = rc.2 + #357 (§2.29), with its delta mapped and a short Unraid smoke (Track R step R3).
+- ☐ rc.3 = rc.2 + #357 + #402 + the memory fix (§2.31), with its delta mapped (Track R steps R3 and R3′), then soak r4 on rc.3 (R1′) and a short Windows MSI smoke (R-win).
 - ✔ Updates ship off (no nightly key yet; the release key exists).
 - ☐ The owner tags, approves the release environment and publishes.
 
@@ -310,11 +314,11 @@ flowchart LR
 | Owner answers arrive late | Owner actions (host, keys, tags) gate whole tracks | §2.28 delegates decisions to the runner's recommendation; ask once for actions, and fill the slots with Sources, Track B and the epics meanwhile |
 
 ### 0.9 Next actions
-In order, as slots allow (four slices in total; no two with overlapping `owns`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
-1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z).
-2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars is already running (a recorded exception: it shares `crates/api/src/digest.rs` with #367, which merges first).
+In order, as slots allow (two slices in total, once the owner resumes launches; no two with overlapping `owns`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
+1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z; all merged since, and the limit is now two, §2.30).
+2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars has merged as #373 (it was a recorded exception: it shared `crates/api/src/digest.rs` with #367, which merged first).
 3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first.
-4. After 11-02 22:16Z: analyse the r3 soak; cut rc.3 with #357 (§2.29); ask the owner for the gluetun leg, the rc.3 smoke and the tag (owner queue #1), and in the same message for the experiment host and its calendar (#2).
+4. r3 failed (memory). Now: R1-fix (X-mmap-cache-prune, M1-exp first), then R3′ (rc.3 = rc.2 + #357 + #402 + the fix, §2.31), then R1′ (soak r4 on rc.3), then the gluetun leg, the Windows smoke and the tag (owner queue #1). Ask for the experiment host and its calendar (#2) in the same message.
 5. On the soak verdict: expand E-M6 (gap audit first), E-v06-workers, E-v06-companions.
 6. Launch SB-6 when SRC-2 merges; expand the rest of E-M7; launch P-v06-rulepacks.
 7. Launch the 10k/100k import smoke stages; X-search-files-3 after SB-6; G-rebuild-10M's v5 corpus is built with a pinned pre-SB-6 binary, so it can be prepared whenever the import host is free.

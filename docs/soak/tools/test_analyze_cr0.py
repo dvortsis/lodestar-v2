@@ -598,6 +598,39 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIsNone(ctx["time_only_slope_mib_per_hour"])
         self.assertIn("Two-variable fit not shown: regressors_collinear", markdown(analyze(self.root)))
 
+    def test_snapshots_without_the_search_metrics_still_analyze(self):
+        # An r3-style run: no commit counter and no gauge in any snapshot.
+        rows = self.context_rows(per_1000=2.8, per_hour=0.0)
+        for i in range(len(rows)):
+            rows[i]["metrics_ok"] = True
+            (self.root / "metrics" / f"{i:05d}.prom").write_text("lodestar_torrents 5\n")
+        self.rows(rows)
+        report = analyze(self.root)
+        ctx = report["memory_context"]
+        self.assertTrue(ctx["available"])  # the stored-torrent view is unchanged
+        self.assertIsNone(ctx["mib_per_1000_commits"])
+        self.assertEqual(ctx["commits_reason"], "absent")
+        self.assertEqual(report["search"], {"commits": None, "mmap_cache_entries": None})
+        text = markdown(report)
+        self.assertIn("search commits: not shown (absent)", text)
+        self.assertIn("Search mmap-cache entries: absent", text)
+
+    def test_memory_fit_over_an_incomplete_window_is_provisional(self):
+        self.rows(self.memory_rows(3.0, noise_mib=1.0, hours=20))
+        report = analyze(self.root)
+        fit = report["memory_fit"]
+        self.assertTrue(fit["provisional"])
+        self.assertIsNone(fit["meets_bar"])
+        text = markdown(report)
+        gate = text[text.index("## Memory gate"):text.index("## Memory context")]
+        self.assertIn("Bar: upper 95% bound <= 2 MiB/h: provisional (window incomplete)", gate)
+        for wording in ("meets the bar", "misses the bar", "not judged"):
+            self.assertNotIn(wording, gate)
+
+    def test_complete_window_is_not_provisional(self):
+        self.rows(self.memory_rows(3.0, noise_mib=1.0))
+        self.assertNotIn("provisional", analyze(self.root)["memory_fit"])
+
     def test_memory_gate_is_unchanged_by_the_context_view(self):
         # Pinned from the analyzer before the context view existed.
         plain = analyze_with(self, self.memory_rows(3.0, noise_mib=1.0))

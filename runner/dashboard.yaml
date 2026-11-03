@@ -260,9 +260,12 @@ placement:
 - ws: ws-cut
   match:
   - CR-COL
+  - CR-COL-4
   - CR-0d
   - CR-0f
   - D-v051
+  - X-mmap-cache-prune
+  - R-rc3-cut
   - G-v051
   - D-v051-main
   - P-v052-cut
@@ -477,8 +480,8 @@ conditions:
 roadmap:
   steps:
   - id: soak
-    label: Unraid memory test (r3)
-    plain: The 24-hour test of release candidate 2 is running. It ends 22:16 UTC on Nov 2.
+    label: Unraid memory test (r3 failed, r4 next)
+    plain: The 24-hour test of release candidate 2 failed on memory growth (1.88 MiB an hour, upper bound 2.33, bar 2.0). A fix comes first, then a fresh test (r4) on release candidate 3.
     col: 0
     row: 2
     members: []
@@ -752,10 +755,9 @@ roadmap:
 owner_queue:
 - n: 1
   type: action
-  action: Hand back the r3 soak evidence, approve and run the 2-hour gluetun leg, then tag v0.5.1 and approve the
-    release environment
+  action: Run soak r4 on rc.3 (after the memory fix), then the gluetun leg and the tag
   unblocks: v0.5.1 release; the three held epics
-  when: After 22:16 UTC Nov 2
+  when: After the memory fix is merged and rc.3 is built
 - n: 2
   type: decision
   action: Confirm CR-SPEC, the frozen crawler measurement specification, including its open question O1
@@ -901,13 +903,15 @@ soak:
   label: Hour 12 begins; the daily backup runs at 11:00 UTC inside it
   start: '2026-11-02T10:16:16Z'
   end: '2026-11-02T11:00:00Z'
+- stage: Verdict
+  label: 'r3 failed the memory gate: 1.88 MiB/h, 95% CI [1.43, 2.33] over hours 12-24 (bar: upper bound at most 2.0); r4 on rc.3 is next'
+  start: '2026-11-02T22:16:16Z'
+  end: '2026-11-02T22:16:16Z'
 notes:
-  updated: '2026-11-02'
+  updated: '2026-11-03'
   now:
-  - label: The release is waiting on one test
-    text: Release candidate 2 of v0.5.1 is built and signed. The 24-hour memory test on your Unraid box (attempt
-      3) ends at 22:16 UTC on Nov 2. If memory growth stays under 2 MiB an hour over hours 12 to 24, the test passes.
-      Release candidate 3 will be rc.2 plus the filter fail-closed fix (#357), ported as #377 against the release branch and merged after the verdict.
+  - label: The release is waiting on a memory fix
+    text: The 24-hour memory test of release candidate 2 grew 1.88 MiB an hour (upper bound 2.33, bar 2.0), so it failed narrowly. The cause is a cache in the search library that never forgets deleted files. Release candidate 3 will be rc.2 plus the filter fail-closed fix (#357, merged on the release branch as #377), the crawler lease fix (#402) and the memory fix, as you decided. Then one fresh 24-hour test (r4) runs on it.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
       The live tests wait for an experiment host you name.
@@ -915,12 +919,11 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Four slots, kept busy
-    text: By your instruction the runner launches the next ready piece of work whenever a slot frees. Workers, companions
-      and packaging stay held until the memory test gives its verdict.
+  - label: Two slots, launches paused
+    text: By your instruction there are at most two worker slots, and no new work starts until you say so. Sessions that already exist may finish and their pull requests may merge (owner-decisions §2.30, §2.31). Workers, companions and packaging stay held.
   you:
-  - label: After 22:16 UTC on Nov 2
-    text: Approve the 2-hour VPN (gluetun) leg, hand back the soak evidence, then tag v0.5.1.
+  - label: After the memory fix
+    text: Run soak r4 on rc.3, then the 2-hour VPN (gluetun) leg and a short Windows smoke, then tag v0.5.1. You can stop the r3 soak containers whenever it suits you.
   - label: Confirm the crawler measurement specification
     text: CR-SPEC freezes how every crawler run is measured. It needs your confirmation, including its open question O1, before the first acceptance analysis.
   - label: Say whether #367 joins rc.3
