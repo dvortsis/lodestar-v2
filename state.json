@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-03T04:35:00Z",
+  "updated_at": "2026-11-03T06:38:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2761,7 +2761,7 @@
     "48": "00:36 owner asked to speed M4. Head 2960a2b green exc filter budget; session re-merging main (B13). Plan: on next head, 2 parallel reviewers (scrape/scheduler; search/hot/API); MERGE FREEZE on other crates/api|search|lodestar PRs until #48 lands.",
     "52": "MERGED by the filter session (self-merge again), conflicts with B0"
   },
-  "heartbeats": 4,
+  "heartbeats": 5,
   "reviews_in_flight": [
     "88",
     98,
@@ -3050,14 +3050,15 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-03T00:41:00Z",
+  "last_heartbeat": "2026-11-03T06:38:44Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
   "pull_forward": "After #90 merges: M6 packaging (WiX MSI, tarball, systemd, release matrix; sonnet). After B6: B5c, B7, tantivy delete force-merge. After F-near: F-perf. Relevance set (M8) any time. Install guide (docs/user) after UI unless owner wants earlier.",
   "notes": [
     "22:08 #81 r4 FIX (IMMEDIATE txn in Store::write, tests, doc placement); fix agent running. X-flakes c243217 delta reviewed OK by runner; asked to add live.rs stall-wait fix. filter budget red on main c5f9b74 too (66us) - base failure; F-perf is the fix. Re-ran filter budget on #82 run 39849416788 and #78 run 39852640547.",
-    "22:07 next sweep trig_01DUR7GNqzGb2kyFrBFJMsQh at 22:32"
+    "22:07 next sweep trig_01DUR7GNqzGb2kyFrBFJMsQh at 22:32",
+    "2026-11-03T06:38:44Z rc3-cut: release/rc3-cut at 8c226540 (0acc5a37 + #402 via patch, 4 files +117/-1; fmt/clippy/test green, pipeline 17/17). No PR yet; awaits X-mmap-cache-prune merge SHA. X-mmap-cache-prune: branch ea0086c9, PR not open yet (pre-push checks); ruling ship B as M1 alone."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
