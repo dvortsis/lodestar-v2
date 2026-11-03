@@ -489,6 +489,11 @@ impl Pool {
         }
         if self.recent.contains(&key) {
             self.stats.duplicates.fetch_add(1, Ordering::Relaxed);
+            // Not a reply: a sighting of its own, which a worker may hold a
+            // new lease for; the funnel ends it (R-mem-triage).
+            if !d.reply {
+                self.funnel.duplicate(&key, d.at.div_euclid(3600), d.source);
+            }
             return;
         }
         if self.entries.contains_key(&key) {
@@ -554,7 +559,13 @@ impl Pool {
     }
 
     fn restore(&mut self, q: QueuedKey) {
-        if self.entries.contains_key(&q.info_hash) || self.entries.len() >= self.cfg.max_pending {
+        if self.entries.contains_key(&q.info_hash) {
+            return;
+        }
+        // A saved queue larger than the cap: the key's restored lease ends
+        // as an eviction, or nothing ever ends it (R-mem-triage).
+        if self.entries.len() >= self.cfg.max_pending {
+            self.lose_untracked(&q.info_hash, q.cohort, q.source, Loss::Evicted);
             return;
         }
         self.entries.insert(
