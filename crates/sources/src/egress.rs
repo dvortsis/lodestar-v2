@@ -799,8 +799,14 @@ impl PluginEgress {
 
     /// The endpoint policy and the kill switch, before anything is sent:
     /// the client to send with, or the refusal (paced while the route is
-    /// down).
-    async fn admit(&self, req: &Request) -> Result<&GuardedClient, HttpError> {
+    /// down). `pace_by` ends the pacing early: a streamed request's
+    /// refusal comes back within its plugin's timeout, as the kill
+    /// switch's answer, before the kit's own deadline would fire.
+    async fn admit(
+        &self,
+        req: &Request,
+        pace_by: Option<Instant>,
+    ) -> Result<&GuardedClient, HttpError> {
         if let Err(e) = self.endpoints.check(&req.url) {
             Counters::bump(&self.counters.policy_refusals);
             return Err(refused(&e));
@@ -824,8 +830,10 @@ impl PluginEgress {
                 self.down_streak
                     .store(streak.saturating_add(1), Ordering::Relaxed);
                 let mut up = self.state.subscribe();
+                let paced = Instant::now() + down_delay(streak);
+                let until = pace_by.map_or(paced, |by| by.min(paced));
                 tokio::select! {
-                    () = tokio::time::sleep(down_delay(streak)) => {}
+                    () = tokio::time::sleep_until(until) => {}
                     _ = up.wait_for(|s| *s == RouteState::Up) => {}
                 }
                 Err(HttpError::EgressDown(reason.to_string()))
@@ -834,7 +842,7 @@ impl PluginEgress {
     }
 
     async fn send(&self, req: &Request) -> Result<Response, HttpError> {
-        let client = self.admit(req).await?;
+        let client = self.admit(req, None).await?;
         let mut down = self.state.subscribe();
         let exchange = client.exchange(
             req.method.as_str(),
@@ -906,7 +914,10 @@ impl PluginEgress {
         limits: StreamLimits,
     ) -> Result<StreamResponse, HttpError> {
         let limits = limits.clamped();
-        let client = self.admit(req).await?;
+        // Half the timeout: well inside the kit's deadline, which starts
+        // a moment earlier.
+        let pace_by = Instant::now() + limits.timeout / 2;
+        let client = self.admit(req, Some(pace_by)).await?;
         let mut down = self.state.subscribe();
         let exchange = client.exchange_stream(
             req.method.as_str(),
@@ -975,7 +986,9 @@ pub const BODY_REPROBE: Duration = Duration::from_secs(2);
 /// monitor, or the plugin's next request, does.) Fused: after the end,
 /// an error or an abort it never reads again.
 struct EgressBody {
-    body: net::StreamBody,
+    /// Dropped the moment the body ends, fails or is aborted, so the
+    /// connection on a route that went down closes at once.
+    body: Option<net::StreamBody>,
     down: watch::Receiver<RouteState>,
     probe: Arc<dyn RouteProbe>,
     counters: Arc<Counters>,
@@ -993,7 +1006,7 @@ impl EgressBody {
     ) -> EgressBody {
         EgressBody {
             next_probe: Instant::now() + reprobe_every(&*probe),
-            body,
+            body: Some(body),
             down,
             probe,
             counters,
@@ -1008,6 +1021,9 @@ impl EgressBody {
             None => {}
         }
         let r = self.read().await;
+        if !matches!(r, Ok(Some(_))) {
+            self.body = None;
+        }
         match &r {
             Ok(Some(_)) => {}
             Ok(None) => self.done = Some(None),
@@ -1027,12 +1043,15 @@ impl EgressBody {
             next_probe,
             ..
         } = self;
+        let Some(body) = body.as_mut() else {
+            return Ok(None);
+        };
         let chunk = body.chunk();
         tokio::pin!(chunk);
         let read = loop {
             let step = tokio::select! {
                 biased;
-                Some(reason) = went_down(down) => Step::Down(reason),
+                reason = went_down(down) => Step::Down(reason),
                 () = tokio::time::sleep_until(*next_probe), if checked => Step::Probe,
                 r = &mut chunk => Step::Read(r),
             };
@@ -1081,16 +1100,17 @@ enum Step {
     Read(Result<Option<Vec<u8>>, NetError>),
 }
 
-/// Resolves when the route is published as down, with why; `None` if the
-/// state can no longer change (the egress is gone).
-async fn went_down(rx: &mut watch::Receiver<RouteState>) -> Option<DownReason> {
-    let state = *rx
-        .wait_for(|s| matches!(s, RouteState::Down(_)))
-        .await
-        .ok()?;
-    match state {
-        RouteState::Down(r) => Some(r),
-        _ => Some(DownReason::ClientUnavailable),
+/// Resolves when the route is published as down, with why. If the state
+/// can no longer change (the egress is gone, so nothing watches the route
+/// any more), that counts as down too: it fails closed rather than
+/// leaving the body without its abort.
+async fn went_down(rx: &mut watch::Receiver<RouteState>) -> DownReason {
+    match rx.wait_for(|s| matches!(s, RouteState::Down(_))).await {
+        Ok(state) => match *state {
+            RouteState::Down(r) => r,
+            _ => DownReason::ClientUnavailable,
+        },
+        Err(_) => DownReason::ClientUnavailable,
     }
 }
 

@@ -796,7 +796,7 @@ impl GuardedClient {
         timeout: Duration,
     ) -> Result<StreamExchange, NetError> {
         let mut req = build_request(method, url, headers, body)?;
-        *req.timeout_mut() = Some(timeout.min(STREAM_CEILING_TIMEOUT));
+        *req.timeout_mut() = Some(stream_timeout(timeout));
         let limit = limit.min(STREAM_CEILING_BYTES);
         let resp = self.send(req).await?;
         if resp.content_length().is_some_and(|n| n > limit) {
@@ -853,6 +853,11 @@ impl GuardedClient {
 pub const STREAM_CEILING_BYTES: u64 = 1024 * 1024 * 1024;
 /// The longest a streamed exchange may take, whatever its caller asks.
 pub const STREAM_CEILING_TIMEOUT: Duration = Duration::from_secs(3600);
+
+/// A streamed exchange's timeout: the caller's, held to the ceiling.
+fn stream_timeout(asked: Duration) -> Duration {
+    asked.min(STREAM_CEILING_TIMEOUT)
+}
 
 /// One HTTP answer whose body is read a chunk at a time
 /// ([`GuardedClient::exchange_stream`]). Its `Debug` shows header names
@@ -1418,6 +1423,86 @@ pub(crate) mod tests {
         );
         assert_eq!(hits.load(Ordering::SeqCst), 0);
         assert_eq!(r.lookups.load(Ordering::SeqCst), 1);
+    }
+
+    /// A streamed exchange takes the same address checks as any other:
+    /// a name resolving to loopback and a loopback literal are refused
+    /// before a connection.
+    #[tokio::test]
+    async fn exchange_stream_refuses_private_addresses() {
+        let (addr, hits) = serve(|_| axum::response::Response::new("ok".into())).await;
+        let r = ScriptedResolver::new(&[
+            ("hook.example", &[&["127.0.0.1"]]),
+            ("lan.example", &[&["192.168.1.10"]]),
+        ]);
+        let client =
+            GuardedClient::with_resolver(NetPolicy::notification(false), Duration::from_secs(5), r)
+                .unwrap();
+        for (url, class) in [
+            (
+                format!("http://hook.example:{}/x", addr.port()),
+                AddrClass::Loopback,
+            ),
+            (
+                format!("http://127.0.0.1:{}/x", addr.port()),
+                AddrClass::Loopback,
+            ),
+            (
+                format!("http://lan.example:{}/x", addr.port()),
+                AddrClass::Private,
+            ),
+            ("http://10.0.0.1/x".to_owned(), AddrClass::Private),
+        ] {
+            let e = client
+                .exchange_stream(
+                    "GET",
+                    &url,
+                    &[],
+                    Vec::new(),
+                    1 << 20,
+                    Duration::from_secs(5),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(e, NetError::Blocked(class), "{url}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// The caller's timeout replaces the client's for a streamed exchange,
+    /// held to [`STREAM_CEILING_TIMEOUT`]: no request can ask for more.
+    #[tokio::test]
+    async fn exchange_stream_holds_its_time_ceiling() {
+        assert_eq!(stream_timeout(Duration::MAX), STREAM_CEILING_TIMEOUT);
+        assert_eq!(
+            stream_timeout(STREAM_CEILING_TIMEOUT + Duration::from_secs(1)),
+            STREAM_CEILING_TIMEOUT
+        );
+        assert_eq!(
+            stream_timeout(Duration::from_secs(5)),
+            Duration::from_secs(5)
+        );
+        let (addr, _) = serve(|_| axum::response::Response::new("ok".into())).await;
+        let r = ScriptedResolver::new(&[("local.example", &[&["127.0.0.1"]])]);
+        // A client whose own timeout is a second: a streamed exchange
+        // asking for any length, even the largest, gets the ceiling and
+        // still works.
+        let client = GuardedClient::with_resolver(
+            NetPolicy::loopback_for_tests(),
+            Duration::from_secs(1),
+            r,
+        )
+        .unwrap();
+        let url = format!("http://local.example:{}/", addr.port());
+        let mut ex = client
+            .exchange_stream("GET", &url, &[], Vec::new(), u64::MAX, Duration::MAX)
+            .await
+            .unwrap();
+        let mut body = Vec::new();
+        while let Some(c) = ex.body.chunk().await.unwrap() {
+            body.extend_from_slice(&c);
+        }
+        assert_eq!(body, b"ok");
     }
 
     #[tokio::test]

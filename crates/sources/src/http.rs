@@ -435,7 +435,9 @@ impl StreamResponse {
 /// body fails part way. Fused: once it has failed it keeps failing, and
 /// once it has ended it keeps ending, without polling the inner stream.
 struct Guarded {
-    inner: Box<dyn BodyStream>,
+    /// Dropped as soon as the stream ends or fails (the cap, the
+    /// deadline, a kill-switch abort), so its connection closes then.
+    inner: Option<Box<dyn BodyStream>>,
     deadline: Instant,
     idle: Duration,
     remaining: u64,
@@ -452,6 +454,9 @@ impl Guarded {
             Ok(false) => {}
         }
         let r = self.read().await;
+        if !matches!(r, Ok(Some(_))) {
+            self.inner = None;
+        }
         match &r {
             Ok(None) => self.state = Ok(true),
             Ok(Some(_)) => {}
@@ -475,7 +480,10 @@ impl Guarded {
             return Err(HttpError::Transport(TOO_SLOW.into()));
         }
         let wait = later(now, self.idle).min(self.deadline);
-        let chunk = match timeout_at(wait, self.inner.next_chunk()).await {
+        let Some(inner) = self.inner.as_mut() else {
+            return Ok(None);
+        };
+        let chunk = match timeout_at(wait, inner.next_chunk()).await {
             Ok(r) => r?,
             Err(_) if wait == self.deadline => {
                 return Err(HttpError::Transport(TOO_SLOW.into()));
@@ -1136,7 +1144,16 @@ impl<F: Fetch> Client<F> {
         // that backs the host off.
         let result = match timeout_at(deadline, self.fetch.fetch_stream(req, limits)).await {
             Ok(r) => r,
-            Err(_) => Err(HttpError::Transport(TOO_SLOW.into())),
+            // A backstop. `PluginEgress` answers well before it: its own
+            // stall wait after admission, or a kill-switch refusal within
+            // half the timeout. So reaching it says nothing about the
+            // host, which isn't backed off; and a `Fetch` still admitting
+            // may be the kill switch pacing it, so it reads as that.
+            Err(_) => {
+                return Err(HttpError::EgressDown(
+                    "no answer within the plugin's timeout".into(),
+                ));
+            }
         };
         let res = match result {
             Ok(res) => res,
@@ -1166,7 +1183,7 @@ impl<F: Fetch> Client<F> {
             status,
             headers,
             body: Box::new(Guarded {
-                inner: body,
+                inner: Some(body),
                 deadline,
                 idle: limits.idle,
                 remaining: limits.max_bytes,
@@ -1855,6 +1872,65 @@ mod tests {
         ));
     }
 
+    /// The inner stream (the connection) is dropped the moment the stream
+    /// fails, not when the caller drops the response.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_stream_drops_its_connection_at_once() {
+        struct Tracked(Arc<AtomicU64>);
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, AtomicOrdering::SeqCst);
+            }
+        }
+        /// Holds the connection (`Tracked`) for as long as it lives.
+        struct Endless {
+            _conn: Tracked,
+        }
+        impl BodyStream for Endless {
+            fn next_chunk(&mut self) -> BoxFuture<'_, Result<Option<Vec<u8>>, HttpError>> {
+                Box::pin(async { Ok(Some(vec![0; 1000])) })
+            }
+        }
+        struct Source(Arc<AtomicU64>);
+        impl Fetch for Source {
+            fn fetch<'a>(&'a self, _: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
+                unreachable!()
+            }
+            fn fetch_stream<'a>(
+                &'a self,
+                _: &'a Request,
+                _: StreamLimits,
+            ) -> BoxFuture<'a, Result<StreamResponse, HttpError>> {
+                let body = Box::new(Endless {
+                    _conn: Tracked(self.0.clone()),
+                });
+                Box::pin(async move {
+                    Ok(StreamResponse {
+                        status: 200,
+                        headers: vec![],
+                        body,
+                    })
+                })
+            }
+        }
+        let dropped = Arc::new(AtomicU64::new(0));
+        let c = Client::new(
+            Source(dropped.clone()),
+            HostLimiter::with_seed(limits(0, 1), 7),
+        );
+        let mut res = c
+            .poll_stream(
+                "t",
+                &Request::get("http://t.test/x"),
+                stream_limits(2500, 60, 60),
+            )
+            .await
+            .unwrap();
+        let (read, e) = drain(&mut res).await.unwrap_err();
+        assert_eq!((read, e), (2000, HttpError::Transport(TOO_LARGE.into())));
+        assert_eq!(dropped.load(AtomicOrdering::SeqCst), 1, "still held");
+    }
+
     /// A gap over the idle limit fails then, not at the timeout's end.
     #[tokio::test(start_paused = true)]
     async fn a_stalled_stream_fails_at_its_idle_limit() {
@@ -1878,7 +1954,7 @@ mod tests {
     /// wait for them is the egress's, after admission: see
     /// `egress_tests`.)
     #[tokio::test(start_paused = true)]
-    async fn headers_that_never_come_fail_at_the_deadline() {
+    async fn headers_that_never_come_fail_closed_at_the_deadline() {
         struct Silent;
         impl Fetch for Silent {
             fn fetch<'a>(&'a self, _: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
@@ -1895,12 +1971,13 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(e, HttpError::Transport(TOO_SLOW.into()));
+        assert!(matches!(e, HttpError::EgressDown(_)), "{e:?}");
         assert_eq!(Instant::now() - t0, Duration::from_secs(600));
-        assert!(matches!(
+        // Not the host's fault for all the kit can tell: no back-off.
+        assert_eq!(
             c.limiter().state("t.test", Instant::now()),
-            HostState::BackingOff { .. }
-        ));
+            HostState::Ready
+        );
     }
 
     /// A body that grows past the cap fails at the chunk that crosses it,

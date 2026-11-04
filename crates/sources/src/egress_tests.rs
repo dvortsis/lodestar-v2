@@ -1852,3 +1852,54 @@ async fn headers_past_the_idle_wait_are_a_stall() {
     );
     assert_eq!(egress.status().counters.transport_failures, 1);
 }
+
+/// A refusal paced longer than the plugin's whole timeout still comes
+/// back as the kill switch's answer, within half of it, so the kit's
+/// deadline never fires first and the host is never backed off.
+#[tokio::test(start_paused = true)]
+async fn a_refusal_comes_back_within_the_streams_timeout() {
+    let switch = Arc::new(Switch(AtomicBool::new(false)));
+    let client = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        DEADLINE,
+        Scripted::new(&[]),
+        &Route::Direct,
+    )
+    .unwrap();
+    let egress = Arc::new(PluginEgress::new(
+        "p",
+        RouteKind::Interface,
+        Ok(client),
+        Arc::clone(&switch) as Arc<dyn RouteProbe>,
+        lan(),
+    ));
+    // Five refusals in a row: the next is paced 30 s.
+    egress.down_streak.store(5, Ordering::Relaxed);
+    let fetch: Arc<dyn Fetch> = egress;
+    let client = Client::new(fetch, HostLimiter::with_seed(fast_limits(), 1));
+    let url = "http://192.168.7.7/x".to_owned();
+    let t0 = Instant::now();
+    let e = client
+        .poll_stream(
+            "a",
+            &Request::get(url.clone()),
+            StreamLimits {
+                max_bytes: 1 << 20,
+                timeout: Duration::from_secs(4),
+                idle: Duration::from_secs(4),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&e, HttpError::EgressDown(t) if !t.contains("plugin's timeout")),
+        "{e:?}"
+    );
+    assert_eq!(Instant::now() - t0, Duration::from_secs(2));
+    assert_eq!(
+        client
+            .limiter()
+            .state(&host_key(&url).unwrap(), Instant::now()),
+        crate::http::HostState::Ready
+    );
+}
