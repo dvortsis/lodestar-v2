@@ -106,6 +106,7 @@ async fn prometheus(State(s): State<AppState>) -> Response {
             index.num_docs(),
             &search.stats,
             index.mmap_cache_entries(),
+            index.segment_counts(),
         );
         metrics::render_caches(
             &mut body,

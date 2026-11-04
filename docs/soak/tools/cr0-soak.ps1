@@ -91,7 +91,7 @@ $clock = New-SoakClock
 $run = [ordered]@{
     schema_version = 2; commit = $Commit; exe = $Exe; sha256 = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
     version = Get-SoakExecutableVersion $Exe; started = $started.ToString('o')
-    timezone = (Get-TimeZone).Id; user_timezone = 'America/Denver'
+    timezone = (Get-TimeZone).Id; user_timezone = 'UTC'
     os = [Environment]::OSVersion.VersionString; logical_cpus = [Environment]::ProcessorCount
     collector_sha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
     common_sha256 = (Get-FileHash -LiteralPath (Join-Path $Root 'cr0-common.ps1') -Algorithm SHA256).Hash
