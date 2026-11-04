@@ -148,8 +148,8 @@ workstreams:
     plain: Sources in Settings, provenance in the detail view, and the sources gate.
   ws-src-plan:
     phase: ph-sources
-    name: Planning
-    plain: Plans for later source work.
+    name: Rule packs and enrichment
+    plain: Curated filter rule packs and the ThePornDB/StashDB lookups, planned in P-v06-rulepacks.
   ws-imp-tools:
     phase: ph-imports
     name: Import tools
@@ -825,7 +825,7 @@ owner_queue:
   type: decision
   action: 'SRC-12 grey case: a public tracker whose published rules forbid scraping but which still answers a full scrape. Runner recommends skipping such trackers'
   unblocks: Which trackers the full-scrape plug-in contacts
-  when: Before SRC-12 merges
+  when: Before the full-scrape plugin is wired in (before SRC-G)
 - n: 12
   type: info
   action: 'For your veto (§2.19): SB-6 uses a size_bucket (2 buckets per power of two) instead of raw-size postings, to stay within the 800 B/torrent file-index budget; SRC-11 exports .torrent files automatically from your own LAN download client, as claims only and never contacting trackers; SRC-10b (AnimeTosho) is dropped because the site stopped ingesting in May 2026 and its feed is unreachable'
@@ -942,7 +942,7 @@ notes:
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
   - label: Up to eight slots
-    text: 'By your instruction up to eight worker slots run at once, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33). Seven are under way: the search schema bump, download clients as a source, the full tracker scrape, the AnimeTosho, Internet Archive and Academic Torrents plug-ins, and the rule-pack plan. Workers, companions and packaging stay held until soak r4''s verdict.'
+    text: 'By your instruction up to eight worker slots run at once, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33). All eight are in use; the runner keeps the current list in its state file, shown on the slots view.''s verdict.'
   you:
   - label: Finish v0.5.1
     text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.
