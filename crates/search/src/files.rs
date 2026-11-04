@@ -31,7 +31,8 @@ use tantivy::query::{
     FuzzyTermQuery, Occur, Query, RangeQuery, RegexQuery, Scorer, TermQuery, Weight,
 };
 use tantivy::schema::{
-    FAST, Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing, TextOptions,
+    BytesOptions, FAST, Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing,
+    TextOptions,
 };
 use tantivy::store::{Compressor, ZstdCompressor};
 use tantivy::{
@@ -63,8 +64,21 @@ pub struct FileFields {
     /// Its directory names, words only.
     pub dir: Field,
     pub ext: Field,
+    /// Fast, and since v6 (SB-6) also indexed, so a `size:` range can
+    /// read postings instead of every file's column value
+    /// (X-search-files-2).
     pub size: Field,
+    /// v6. The file's category ([`Category::as_str`], keyword), from its
+    /// extension: `video` for `.mkv`, `other` without one.
+    pub category: Field,
+    /// v6. The v2 Merkle root (32 bytes), for "same file" across
+    /// torrents. Only v2 and hybrid torrents have one.
+    pub pieces_root: Field,
 }
+
+/// The fields v6 added to the file index, by name (as
+/// [`crate::schema::V6_FIELDS`]; `size` gained an index, not a name).
+pub const V6_FIELDS: [&str; 2] = ["category", "pieces_root"];
 
 pub fn schema() -> (Schema, FileFields) {
     let mut b = Schema::builder();
@@ -96,8 +110,10 @@ pub fn schema() -> (Schema, FileFields) {
         index: b.add_u64_field("index", FAST),
         name: b.add_text_field("name", text(true)),
         dir: b.add_text_field("dir", text(false)),
-        ext: b.add_text_field("ext", keyword),
-        size: b.add_u64_field("size", NumericOptions::default().set_fast()),
+        ext: b.add_text_field("ext", keyword.clone()),
+        size: b.add_u64_field("size", NumericOptions::default().set_fast().set_indexed()),
+        category: b.add_text_field("category", keyword),
+        pieces_root: b.add_bytes_field("pieces_root", BytesOptions::default().set_indexed()),
     };
     (b.build(), fields)
 }
@@ -124,6 +140,9 @@ pub struct FileDoc {
     pub dirs: Vec<String>,
     pub ext: Option<String>,
     pub size: u64,
+    /// From the extension; [`Category::Other`] without one.
+    pub category: Category,
+    pub pieces_root: Option<[u8; 32]>,
 }
 
 impl FileDoc {
@@ -139,6 +158,10 @@ impl FileDoc {
             d.add_text(f.ext, e);
         }
         d.add_u64(f.size, self.size);
+        d.add_text(f.category, self.category.as_str());
+        if let Some(root) = &self.pieces_root {
+            d.add_bytes(f.pieces_root, root);
+        }
         d
     }
 }
@@ -178,8 +201,10 @@ pub fn file_docs(torrent: u64, tree: &FileTree) -> Vec<FileDoc> {
             index: i as u64,
             name,
             dirs: segments,
+            category: ext.as_deref().map_or(Category::Other, category_of),
             ext,
             size: f.size,
+            pieces_root: f.pieces_root,
         });
     }
     out
@@ -1194,6 +1219,36 @@ mod tests {
         assert_eq!(docs[0].dirs, ["Album"]);
         assert_eq!(docs[0].ext.as_deref(), Some("flac"));
         assert_eq!((docs[1].torrent, docs[1].index), (7, 1));
+    }
+
+    #[test]
+    fn file_docs_carry_category_and_pieces_root() {
+        use tantivy::schema::Value;
+        let mut t = tree(&[
+            ("Show/E01.MKV", 1 << 30, FileAttrs::empty()),
+            ("Show/README", 10, FileAttrs::empty()),
+            ("Show/subs.srt", 10, FileAttrs::empty()),
+        ]);
+        t.files[0].pieces_root = Some([7; 32]);
+        let docs = file_docs(1, &t);
+        let cats: Vec<_> = docs.iter().map(|d| d.category).collect();
+        assert_eq!(cats, [Category::Video, Category::Other, Category::Subtitle]);
+        assert_eq!(docs[0].pieces_root, Some([7; 32]));
+        assert_eq!(docs[1].pieces_root, None);
+
+        // Written as a keyword and 32 bytes; the root only when present.
+        let (_, f) = schema();
+        let d = docs[0].to_document(&f);
+        let text = |field| {
+            d.get_first(field)
+                .and_then(|v| v.as_str().map(str::to_owned))
+        };
+        assert_eq!(text(f.category).as_deref(), Some("video"));
+        assert_eq!(
+            d.get_first(f.pieces_root).and_then(|v| v.as_bytes()),
+            Some(&[7u8; 32][..])
+        );
+        assert!(docs[1].to_document(&f).get_first(f.pieces_root).is_none());
     }
 
     #[test]

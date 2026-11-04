@@ -773,3 +773,298 @@ fn the_adult_count_matches_what_type_adult_finds() {
     assert_eq!((c.added, c.adult_added, c.replayed), (0, 0, 2));
     assert_eq!(names(&index, "type:adult").len(), 3);
 }
+
+// The population contract (SB-6): a tracked field an index was built
+// without is backfilled, resumably, and reported truthfully meanwhile.
+
+mod population {
+    use super::*;
+    use lodestar_search::files::{FileFields, file_docs};
+    use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
+    use lodestar_search::{Availability, Generations};
+    use std::path::Path;
+    use tantivy::TantivyDocument;
+    use tantivy::collector::Count;
+    use tantivy::query::{AllQuery, Query, TermQuery};
+    use tantivy::schema::IndexRecordOption;
+
+    const HEAP: usize = 15 << 20;
+
+    fn movie(i: usize) -> Vec<u8> {
+        torrent(
+            &format!("Backfill.Movie.{i}.2010"),
+            &[&format!("movie{i}.mkv")],
+        )
+    }
+
+    /// A store of `n` single-movie torrents and a complete on-disk index
+    /// of it under `root`.
+    fn indexed(root: &Path, n: usize) -> Store {
+        let mut store = Store::open(root.join("s.db"), StoreConfig::default()).unwrap();
+        add(&mut store, &(0..n).map(movie).collect::<Vec<_>>());
+        let index = SearchIndex::open(&index_dir(root)).unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut store, 1000).unwrap() > 0 {}
+        w.commit().unwrap();
+        w.finish().unwrap();
+        store
+    }
+
+    /// Rewrites the file index under `dir` as a build from before the
+    /// file fields' producer would have left it: no document has
+    /// `category` or `pieces_root`, and its payload's population part is
+    /// `pop` (`None`: no part at all, as before SB-6).
+    fn unpopulate_files(dir: &Path, store: &mut Store, pop: Option<&str>) {
+        let files = dir.join("files");
+        let index = tantivy::Index::open_in_dir(&files).unwrap();
+        index
+            .tokenizers()
+            .register(NAME_TOKENIZER, NameTokenizer::default());
+        let payload = index.load_metas().unwrap().payload.unwrap();
+        let watermarks = payload.split(";pop:").next().unwrap().to_owned();
+        let f: FileFields = lodestar_search::files::schema().1;
+        let mut w = index.writer::<TantivyDocument>(HEAP).unwrap();
+        w.delete_all_documents().unwrap();
+        for id in store.ids_after(0, 100_000).unwrap() {
+            let tree = store.files(id).unwrap().unwrap();
+            for d in file_docs(id as u64, &tree) {
+                let mut stripped = TantivyDocument::new();
+                for (field, v) in d.to_document(&f).field_values() {
+                    if field != f.category && field != f.pieces_root {
+                        stripped.add_field_value(field, v);
+                    }
+                }
+                w.add_document(stripped).unwrap();
+            }
+        }
+        let mut prepared = w.prepare_commit().unwrap();
+        prepared.set_payload(&match pop {
+            Some(p) => format!("{watermarks};pop:{p}"),
+            None => watermarks,
+        });
+        prepared.commit().unwrap();
+    }
+
+    /// File documents on disk under `dir`, in all and with `category:
+    /// video` (every file here is an `.mkv`).
+    fn file_counts(dir: &Path) -> (usize, usize) {
+        let index = tantivy::Index::open_in_dir(dir.join("files")).unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let field = index.schema().get_field("category").unwrap();
+        let video = TermQuery::new(
+            tantivy::Term::from_field_text(field, "video"),
+            IndexRecordOption::Basic,
+        );
+        (
+            searcher.search(&AllQuery, &Count).unwrap(),
+            searcher.search(&video, &Count).unwrap(),
+        )
+    }
+
+    fn backfilling(done: i64, upto: i64) -> Availability {
+        Availability::Backfilling { done, upto }
+    }
+
+    fn query() -> Box<dyn Query> {
+        Box::new(AllQuery)
+    }
+
+    #[test]
+    fn a_fresh_index_reports_fields_without_a_producer_and_nothing_else() {
+        let mut store = store_with(&[movie(0)]);
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+        let un: Vec<(String, Availability)> = index
+            .unpopulated()
+            .into_iter()
+            .map(|f| (f.field, f.availability))
+            .collect();
+        let none = |f: &str| (f.to_owned(), Availability::NoProducer);
+        assert_eq!(
+            un,
+            [
+                none("group_key"),
+                none("group_minhash"),
+                none("name_trigram"),
+                none("network"),
+                none("payload_sig"),
+                none("source"),
+                none("verified"),
+            ]
+        );
+        assert_eq!(index.availability("file.category"), Availability::Ready);
+        assert_eq!(index.availability("file.pieces_root"), Availability::Ready);
+        assert_eq!(index.availability("name"), Availability::Ready);
+        // A prefilter runs only on a complete field.
+        assert!(index.prefilter("file.category", query()).is_some());
+        assert!(index.prefilter("payload_sig", query()).is_none());
+        assert!(index.prefilter("name", query()).is_some());
+    }
+
+    #[test]
+    fn a_backfill_restarted_mid_run_resumes_from_its_last_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = index_dir(tmp.path());
+        let mut store = indexed(tmp.path(), 60);
+        unpopulate_files(
+            &dir,
+            &mut store,
+            Some("file.category=0,file.pieces_root=0,file.size=1"),
+        );
+        assert_eq!(file_counts(&dir), (60, 0));
+
+        // The producer has shipped (generation 1 in this build): the
+        // index holds 60 torrents built without it.
+        let index = SearchIndex::open(&dir).unwrap();
+        assert_eq!(index.availability("file.category"), backfilling(0, 60));
+        assert_eq!(index.availability("file.size"), Availability::Ready);
+        assert!(index.prefilter("file.category", query()).is_none());
+        let mut w = index.writer(HEAP).unwrap();
+        // Nothing new to index, so the step's whole budget backfills.
+        let c = w.catch_up_counted(&mut store, 25).unwrap();
+        assert_eq!((c.added, c.replayed, c.backfilled), (0, 0, 25));
+        w.commit().unwrap();
+        assert_eq!(index.availability("file.category"), backfilling(25, 60));
+        assert_eq!(file_counts(&dir), (60, 25));
+        // More, but a crash before the commit loses it.
+        assert_eq!(w.catch_up_counted(&mut store, 25).unwrap().backfilled, 25);
+        drop(w);
+        drop(index);
+
+        let index = SearchIndex::open(&dir).unwrap();
+        assert_eq!(
+            index.availability("file.category"),
+            backfilling(25, 60),
+            "resumed from the commit"
+        );
+        let mut w = index.writer(HEAP).unwrap();
+        let mut steps = 0;
+        while index.availability("file.category") != Availability::Ready {
+            assert!(steps < 10, "the backfill never finished");
+            w.catch_up(&mut store, 10).unwrap();
+            w.commit().unwrap();
+            steps += 1;
+        }
+        assert_eq!(steps, 4, "35 left in steps of 10");
+        assert_eq!(index.availability("file.pieces_root"), Availability::Ready);
+        assert!(index.prefilter("file.category", query()).is_some());
+        // Every file once, every one with its category.
+        assert_eq!(file_counts(&dir), (60, 60));
+        assert_eq!(index.num_files(), 60);
+        // Nothing left to do, and nothing done twice.
+        assert_eq!(w.catch_up_counted(&mut store, 10).unwrap().backfilled, 0);
+        drop(w);
+        drop(index);
+        let index = SearchIndex::open(&dir).unwrap();
+        assert!(
+            index
+                .unpopulated()
+                .iter()
+                .all(|f| !f.field.starts_with("file."))
+        );
+    }
+
+    #[test]
+    fn deletes_changes_and_new_torrents_during_a_backfill_are_honoured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = index_dir(tmp.path());
+        let mut store = indexed(tmp.path(), 40);
+        unpopulate_files(
+            &dir,
+            &mut store,
+            Some("file.category=0,file.pieces_root=0,file.size=1"),
+        );
+        let index = SearchIndex::open(&dir).unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+        assert_eq!(index.availability("file.category"), backfilling(10, 40));
+
+        // While it runs: one torrent already walked and one not yet are
+        // deleted (as a filter holding them back after storage does),
+        // torrents are enriched (each logged for reindexing), and new
+        // torrents arrive past the walk's end.
+        let hash = |id: i64| store.torrent(id).unwrap().unwrap().info_hash.0;
+        let gone = [hash(5), hash(30)];
+        assert_eq!(store.delete_torrents(&gone).unwrap(), [5, 30]);
+        lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 1000)
+            .unwrap()
+            .unwrap();
+        add(&mut store, &(40..45).map(movie).collect::<Vec<_>>());
+
+        let mut steps = 0;
+        while index.availability("file.category") != Availability::Ready {
+            assert!(steps < 20, "the backfill never finished");
+            w.catch_up(&mut store, 10).unwrap();
+            w.commit().unwrap();
+            steps += 1;
+        }
+        // The walk ends where it started (40); new torrents are indexed
+        // whole, deleted ones are gone from both indexes, and nothing is
+        // there twice.
+        while w.catch_up(&mut store, 10).unwrap() > 0 {}
+        w.commit().unwrap();
+        assert_eq!(index.num_docs(), 43);
+        assert_eq!(file_counts(&dir), (43, 43));
+        for i in [5, 30] {
+            assert!(names(&index, &format!("backfill movie {}", i - 1)).is_empty());
+        }
+        assert_eq!(names(&index, "backfill movie 44").len(), 1);
+        assert_eq!(names(&index, "backfill movie 6").len(), 1);
+        // Enriched while it ran (the 38 left of the first 40), and
+        // replayed from the log.
+        assert_eq!(names(&index, "type:movie").len(), 38);
+    }
+
+    #[test]
+    fn an_index_from_before_population_tracking_backfills_every_produced_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = index_dir(tmp.path());
+        let mut store = indexed(tmp.path(), 12);
+        unpopulate_files(&dir, &mut store, None);
+        let index = SearchIndex::open(&dir).unwrap();
+        for f in ["file.category", "file.pieces_root", "file.size"] {
+            assert_eq!(index.availability(f), backfilling(0, 12), "{f}");
+        }
+        // Fields without a producer have nothing to backfill.
+        assert_eq!(index.availability("verified"), Availability::NoProducer);
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut store, 5).unwrap() > 0 {}
+        w.commit().unwrap();
+        assert_eq!(index.availability("file.size"), Availability::Ready);
+        assert_eq!(file_counts(&dir), (12, 12));
+    }
+
+    #[test]
+    fn a_producer_bump_on_a_complete_index_walks_it_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = index_dir(tmp.path());
+        let mut store = indexed(tmp.path(), 8);
+        let shipped = Generations::current().with("payload_sig", 1);
+        let index = SearchIndex::open(&dir)
+            .unwrap()
+            .with_generations(shipped.clone())
+            .unwrap();
+        assert_eq!(index.availability("payload_sig"), backfilling(0, 8));
+        assert_eq!(index.availability("verified"), Availability::NoProducer);
+        let mut w = index.writer(HEAP).unwrap();
+        let c = w.catch_up_counted(&mut store, 100).unwrap();
+        assert_eq!(c.backfilled, 8);
+        w.commit().unwrap();
+        assert_eq!(index.availability("payload_sig"), Availability::Ready);
+        assert_eq!(index.num_docs(), 8, "replaced, not duplicated");
+        drop(w);
+        drop(index);
+        // Recorded: the same build reopening has nothing to do, and a
+        // build without the producer reports it as such.
+        let index = SearchIndex::open(&dir)
+            .unwrap()
+            .with_generations(shipped)
+            .unwrap();
+        assert_eq!(index.availability("payload_sig"), Availability::Ready);
+        let index = SearchIndex::open(&dir).unwrap();
+        assert_eq!(index.availability("payload_sig"), Availability::NoProducer);
+    }
+}

@@ -18,7 +18,7 @@
 //! An exclusive lock on `.lock` in the root keeps a second instance out.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -457,6 +457,8 @@ struct Shared {
     leases: Arc<Leases>,
     cache: Arc<ResultCache>,
     stop: AtomicBool,
+    /// The most bytes the index root held when a rebuild measured it.
+    disk_high_water: AtomicU64,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -476,6 +478,14 @@ impl Shared {
 
     fn stopping(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Measures the index root (the serving index, the build and any
+    /// leftovers) into the high-water mark. A file that vanishes during
+    /// the walk (a merge) only lowers this one reading.
+    fn note_disk(&self, root: &Path) {
+        self.disk_high_water
+            .fetch_max(dir_bytes(root), Ordering::Relaxed);
     }
 
     /// Sleeps up to `d`, waking early when stopping. Returns whether to
@@ -627,6 +637,7 @@ impl Serving {
             leases: Arc::new(Leases::new(config.leases.clone())),
             cache: Arc::new(ResultCache::new(config.cache.clone())),
             stop: AtomicBool::new(false),
+            disk_high_water: AtomicU64::new(0),
         });
 
         let every = sweep_every(&config.leases);
@@ -699,6 +710,14 @@ impl Serving {
     /// The rebuild under way, or `None` when this build's index serves.
     pub fn progress(&self) -> Option<RebuildProgress> {
         lock(&self.shared.progress).clone()
+    }
+
+    /// The disk high-water mark of the rebuild this handle ran: the most
+    /// bytes the index root held at its commits, at its finish and right
+    /// after its swap, while the old index still existed (G-rebuild-10M
+    /// reports it). 0 when no rebuild ran; kept after the swap.
+    pub fn disk_high_water(&self) -> u64 {
+        self.shared.disk_high_water.load(Ordering::Relaxed)
     }
 
     /// Whether an older index is serving while the new one is built.
@@ -878,6 +897,12 @@ fn rebuild_and_swap(
     if let Some(hold) = &config.hold_before_start {
         while hold.load(Ordering::Relaxed) && shared.pause(Duration::from_millis(5)) {}
     }
+    let root = builder
+        .dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    shared.note_disk(&root);
     let mut wait = config.live.poll;
     while !builder.reached(max_id, reindex_head) {
         if shared.stopping() {
@@ -897,6 +922,7 @@ fn rebuild_and_swap(
                 });
                 if builder.pending() >= config.rebuild_commit_docs {
                     builder.commit()?;
+                    shared.note_disk(&root);
                 }
             }
             Err(e) => {
@@ -921,6 +947,7 @@ fn rebuild_and_swap(
     }
     shared.set_phase(RebuildPhase::Finishing);
     let final_dir = builder.finish()?;
+    shared.note_disk(&root);
     if shared.stopping() {
         // Complete on disk: the next start serves it.
         return Ok(None);
@@ -1000,8 +1027,26 @@ fn rebuild_and_swap(
             at: unix_now(),
         });
     }
+    // The old index is still there, and the new one's catch-up wrote more.
+    shared.note_disk(&root);
     lodestar_log::log_event!(crate::log_events::SWAPPED);
     Ok(Some(old.holders()))
+}
+
+/// Bytes in the files under `dir`, at any depth; what can't be read
+/// counts as nothing.
+fn dir_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_bytes(&e.path()),
+            Ok(_) => e.metadata().map_or(0, |m| m.len()),
+            Err(_) => 0,
+        })
+        .sum()
 }
 
 /// Torrents stored with ids in `(after, upto]`.
@@ -1257,6 +1302,10 @@ mod tests {
             index.tokenizers().register(
                 crate::tokenizer::NAME_TOKENIZER,
                 crate::tokenizer::NameTokenizer::default(),
+            );
+            index.tokenizers().register(
+                crate::schema::TRIGRAM_TOKENIZER,
+                crate::schema::trigram_analyzer(),
             );
             index.writer::<TantivyDocument>(15 << 20).unwrap()
         };
