@@ -120,8 +120,7 @@ SEARCH_SERIES = re.compile(
     r'(?:\{index="([a-z_0-9]{1,24})"\})? ('
     + r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?" + r")\r?$")
 # X-mem-gauges: which heap the anonymous memory is in (docs/metrics.md, "Memory
-# attribution"). Each may be absent: older binaries, the /proc ones off Linux, and
-# the SQLite pair until the binary renders it.
+# attribution"). Each may be absent: older binaries, and the /proc ones off Linux.
 MEMORY_GAUGES = (
     "mem_rss_anon_bytes", "mem_rss_file_bytes", "mem_anon_huge_bytes",
     "mem_mimalloc_committed_bytes", "mem_mimalloc_peak_committed_bytes",

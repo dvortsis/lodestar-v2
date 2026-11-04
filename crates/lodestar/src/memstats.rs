@@ -5,20 +5,24 @@
 //! - **mimalloc**, the Rust global allocator (not `override`): its own
 //!   committed bytes, from `mi_stats_get_json` through the `mimalloc`
 //!   crate's safe `MiMalloc::stats_json` (`extended` feature).
+//! - **SQLite**, which counts its own heap: `sqlite3_memory_used` and its
+//!   high-water mark, through `lodestar_store::memstats`.
 //! - **The kernel's view** (Linux only): `RssAnon` and `RssFile` from
 //!   `/proc/self/status`, and `AnonHugePages` from
 //!   `/proc/self/smaps_rollup`.
 //!
 //! C code (SQLite, zstd) allocates through the C library's `malloc`, which
-//! mimalloc doesn't count; `RssAnon` minus mimalloc's committed bytes
-//! bounds those heaps from above (the analyzer reports it as "other heap").
+//! mimalloc doesn't count; `RssAnon` minus mimalloc's committed bytes and
+//! SQLite's own leaves the rest (zstd, other C code), which the analyzer
+//! reports as "other heap".
 //!
 //! The storage sampler (`storage.rs`) calls [`sample`] every 60 s on a
 //! blocking thread, and `/metrics` reads the last values. Each value is on
 //! its own: one that can't be read (another OS, a field missing or odd, a
 //! failed read) is absent from `/metrics`, never 0 and never a panic.
 //!
-//! **Cost per sample:** mimalloc copies its statistics block and formats
+//! **Cost per sample:** the SQLite reads take its memory-statistics mutex
+//! for one load each. mimalloc copies its statistics block and formats
 //! about 15 KB of JSON (mimalloc-allocated, freed at once), then this
 //! parses it: about 0.2 ms, measured in the decision. The two `/proc` reads
 //! are small text files; `smaps_rollup` walks the process's mappings in
@@ -36,6 +40,8 @@ const ABSENT: u64 = u64::MAX;
 pub struct Gauges {
     mimalloc_committed: AtomicU64,
     mimalloc_peak_committed: AtomicU64,
+    sqlite: AtomicU64,
+    sqlite_highwater: AtomicU64,
     rss_anon: AtomicU64,
     rss_file: AtomicU64,
     anon_huge: AtomicU64,
@@ -46,6 +52,8 @@ impl Default for Gauges {
         Gauges {
             mimalloc_committed: AtomicU64::new(ABSENT),
             mimalloc_peak_committed: AtomicU64::new(ABSENT),
+            sqlite: AtomicU64::new(ABSENT),
+            sqlite_highwater: AtomicU64::new(ABSENT),
             rss_anon: AtomicU64::new(ABSENT),
             rss_file: AtomicU64::new(ABSENT),
             anon_huge: AtomicU64::new(ABSENT),
@@ -58,6 +66,8 @@ impl Default for Gauges {
 pub struct Snapshot {
     pub mimalloc_committed: Option<u64>,
     pub mimalloc_peak_committed: Option<u64>,
+    pub sqlite: Option<u64>,
+    pub sqlite_highwater: Option<u64>,
     pub rss_anon: Option<u64>,
     pub rss_file: Option<u64>,
     pub anon_huge: Option<u64>,
@@ -69,6 +79,8 @@ impl Gauges {
         Snapshot {
             mimalloc_committed: get(&self.mimalloc_committed),
             mimalloc_peak_committed: get(&self.mimalloc_peak_committed),
+            sqlite: get(&self.sqlite),
+            sqlite_highwater: get(&self.sqlite_highwater),
             rss_anon: get(&self.rss_anon),
             rss_file: get(&self.rss_file),
             anon_huge: get(&self.anon_huge),
@@ -81,6 +93,8 @@ impl Gauges {
         for (gauge, v) in [
             (&self.mimalloc_committed, s.mimalloc_committed),
             (&self.mimalloc_peak_committed, s.mimalloc_peak_committed),
+            (&self.sqlite, s.sqlite),
+            (&self.sqlite_highwater, s.sqlite_highwater),
             (&self.rss_anon, s.rss_anon),
             (&self.rss_file, s.rss_file),
             (&self.anon_huge, s.anon_huge),
@@ -103,6 +117,8 @@ fn read() -> Snapshot {
     Snapshot {
         mimalloc_committed,
         mimalloc_peak_committed,
+        sqlite: Some(lodestar_store::memstats::sqlite_memory_used()),
+        sqlite_highwater: Some(lodestar_store::memstats::sqlite_memory_highwater()),
         rss_anon,
         rss_file,
         anon_huge,
@@ -270,6 +286,8 @@ mod tests {
         let full = Snapshot {
             mimalloc_committed: Some(1),
             mimalloc_peak_committed: Some(2),
+            sqlite: Some(5),
+            sqlite_highwater: Some(6),
             rss_anon: Some(3),
             rss_file: Some(0),
             anon_huge: Some(u64::MAX),
@@ -307,6 +325,25 @@ mod tests {
         assert!(s.rss_file.is_some(), "{s:?}");
         // AnonHugePages is 0 without THP, but the field is always there.
         assert!(s.anon_huge.is_some(), "{s:?}");
+    }
+
+    #[test]
+    fn the_sqlite_gauge_rises_after_opening_a_store_and_writing() {
+        let store = lodestar_store::Store::open_in_memory(Default::default()).unwrap();
+        store
+            .connection()
+            .execute_batch(
+                "CREATE TABLE pad(x BLOB);
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
+                 INSERT INTO pad SELECT randomblob(256) FROM n;",
+            )
+            .unwrap();
+        let g = Gauges::default();
+        sample(&g);
+        let s = g.snapshot();
+        // This store alone holds over 500 KB; other tests only add to it.
+        assert!(s.sqlite.is_some_and(|v| v >= 500_000), "{s:?}");
+        assert!(s.sqlite_highwater >= s.sqlite, "{s:?}");
     }
 
     #[cfg(not(target_os = "linux"))]

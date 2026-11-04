@@ -79,8 +79,7 @@ STORAGE = (
     # kept after the latest prune) is absent from binaries that predate it.
     "search_commits_total", "search_mmap_cache_entries",
     # X-mem-gauges: which heap the anonymous memory is in. Each is absent from older
-    # binaries, and the /proc ones off Linux. The SQLite pair is reserved for when the
-    # binary renders it (docs/decisions/2026-11-04-X-mem-gauges.md).
+    # binaries, and the /proc ones off Linux (docs/decisions/2026-11-04-X-mem-gauges.md).
     "mem_mimalloc_committed_bytes", "mem_mimalloc_peak_committed_bytes",
     "mem_rss_anon_bytes", "mem_rss_file_bytes", "mem_anon_huge_bytes",
     "mem_sqlite_bytes", "mem_sqlite_highwater_bytes",

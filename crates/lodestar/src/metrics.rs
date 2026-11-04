@@ -1368,6 +1368,16 @@ fn render_memory(o: &mut Out, m: &crate::memstats::Snapshot) {
             m.mimalloc_peak_committed,
         ),
         (
+            "mem_sqlite_bytes",
+            "Bytes SQLite has allocated and not freed (its own count, outside mimalloc), sampled.",
+            m.sqlite,
+        ),
+        (
+            "mem_sqlite_highwater_bytes",
+            "Most bytes SQLite has had allocated since start, sampled.",
+            m.sqlite_highwater,
+        ),
+        (
             "mem_rss_anon_bytes",
             "Resident anonymous memory (RssAnon), sampled; Linux only.",
             m.rss_anon,
@@ -1521,9 +1531,11 @@ mod tests {
     }
 
     /// The memory families, as the storage sampler's gauges render them.
-    const MEMORY_FAMILIES: [&str; 5] = [
+    const MEMORY_FAMILIES: [&str; 7] = [
         "mem_mimalloc_committed_bytes",
         "mem_mimalloc_peak_committed_bytes",
+        "mem_sqlite_bytes",
+        "mem_sqlite_highwater_bytes",
         "mem_rss_anon_bytes",
         "mem_rss_file_bytes",
         "mem_anon_huge_bytes",
@@ -1538,6 +1550,8 @@ mod tests {
         g.mem.store(crate::memstats::Snapshot {
             mimalloc_committed: Some(41_943_040),
             mimalloc_peak_committed: Some(52_428_800),
+            sqlite: Some(41_000_000),
+            sqlite_highwater: None,
             rss_anon: Some(515_899_392),
             rss_file: Some(0),
             anon_huge: None,
@@ -1546,12 +1560,15 @@ mod tests {
         render_storage(&mut out, &g);
         for family in MEMORY_FAMILIES {
             let ty = format!("# TYPE lodestar_{family} gauge\n");
-            let want = usize::from(family != "mem_anon_huge_bytes");
+            let want = usize::from(
+                family != "mem_anon_huge_bytes" && family != "mem_sqlite_highwater_bytes",
+            );
             assert_eq!(out.matches(&ty).count(), want, "{family}: {out}");
         }
         for line in [
             "lodestar_mem_mimalloc_committed_bytes 41943040\n",
             "lodestar_mem_mimalloc_peak_committed_bytes 52428800\n",
+            "lodestar_mem_sqlite_bytes 41000000\n",
             "lodestar_mem_rss_anon_bytes 515899392\n",
             "lodestar_mem_rss_file_bytes 0\n",
         ] {
