@@ -614,8 +614,10 @@ impl Weight for EdgeBucket {
     }
 
     fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
+        // The scorer starts on its first match: one past `doc` means
+        // `doc` doesn't match, and seeking back isn't allowed.
         let mut s = self.scorer(seg, 1.0)?;
-        if s.seek(doc) == doc {
+        if s.doc() <= doc && s.seek(doc) == doc {
             Ok(Explanation::new("size in an edge bucket", 1.0))
         } else {
             Err(tantivy::TantivyError::InvalidArgument(format!(
@@ -2529,6 +2531,22 @@ mod bucket_props {
             [1]
         );
         assert!(ids(&searcher, nested(Box::new(scan)).as_ref(), PIECE_DOCS).is_empty());
+    }
+
+    /// An edge bucket explains a file before its first match (no seek
+    /// back) and its match: 4,097 and 5,000 bytes share bucket 24, which
+    /// `4500..` only partly covers.
+    #[test]
+    fn an_edge_bucket_explains_without_seeking_back() {
+        let (searcher, f) = index(&[vec![vec![4097], vec![5000]]], &[]);
+        let seg = &searcher.segment_readers()[0];
+        let edge = EdgeBucket {
+            term: Term::from_field_u64(f.size_bucket, size_bucket(4500)),
+            size: f.size,
+            range: 4500..=8191,
+        };
+        assert!(Weight::explain(&edge, seg, 0).is_err());
+        assert!(Weight::explain(&edge, seg, 1).is_ok());
     }
 
     /// The column fallback clamps its bounds to the segment's values: a

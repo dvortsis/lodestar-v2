@@ -911,31 +911,34 @@ fn file_sets_path(
         Ok(started.elapsed())
     };
     println!("\n  broad file clauses: the file-set cache at scale");
-    // Each clause's cold time is the best of three (cache emptied each
-    // time), its cost against the corpus size (X-search-files-3).
+    // Each clause's cold time, three runs with the cache emptied each
+    // time: the best and the median, its cost against the corpus size
+    // (X-search-files-3).
     println!(
-        "  {:<36} {:>10} {:>10} {:>10} {:>10}",
-        "clause", "torrents", "ids×8 MiB", "cached MiB", "cold ms"
+        "  {:<36} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "clause", "torrents", "ids×8 MiB", "cached MiB", "cold best", "cold med"
     );
     for q in broad {
         let ast = parse(q)?;
-        let mut best = Duration::MAX;
+        let mut runs = [Duration::ZERO; 3];
         let mut matched = 0;
-        for _ in 0..3 {
+        for run in &mut runs {
             index.clear_cache();
             let started = Instant::now();
             matched = index.search(&index.query(&ast, now), 1)?.total;
-            best = best.min(started.elapsed());
+            *run = started.elapsed();
         }
+        runs.sort();
         let cached = index.cache_usage().file_set_bytes;
         let mib = |b: f64| format!("{:.2}", b / f64::from(1 << 20));
         println!(
-            "  {:<36} {:>10} {:>10} {:>10} {:>10}",
+            "  {:<36} {:>10} {:>10} {:>10} {:>10} {:>10}",
             q,
             matched,
             mib(matched as f64 * 8.0),
             mib(cached as f64),
-            ms(best)
+            ms(runs[0]),
+            ms(runs[1])
         );
     }
     let mut cold = Vec::with_capacity(a.queries);
