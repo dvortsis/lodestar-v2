@@ -183,10 +183,8 @@ fn no_files_or_padding_only() {
         let c = classify_enriched("x", &files, NONE, matched(MatchKind::Scene));
         assert_eq!(c.content_type, ContentType::Adult);
         assert_eq!(c.adult_kind, Some(AdultKind::Scene));
-        assert_eq!(
-            c,
-            classify_enriched("x", &files, NONE, matched(MatchKind::Scene))
-        );
+        assert_eq!(c.confidence, MATCH_CONFIDENCE);
+        same_apart_from_adult(&c, &classify("x", &files));
     }
 }
 

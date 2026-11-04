@@ -516,10 +516,7 @@ mod tests {
         for name in ["Lantern.Bay.Parody.XXX.1080p", "Some.Movie.2019.1080p"] {
             for base in ContentType::ALL {
                 let r = lodestar_release_parser::parse(name);
-                assert_eq!(
-                    at(name, base, None),
-                    detect_from(&signals(name, None), &r, base)
-                );
+                assert_eq!(at(name, base, None), frozen_detect(name, &r, None, base));
             }
         }
         // A match on a name detection doesn't call adult.
@@ -536,15 +533,20 @@ mod tests {
             at(doc, ContentType::Movie, Some(MatchKind::Movie)),
             Some((AdultKind::Movie, MATCH_CONFIDENCE))
         );
-        // The reported kind replaces detection's.
-        assert_eq!(
-            at(
-                "Brazzers.24.01.15.Title",
-                ContentType::Images,
-                Some(MatchKind::Scene)
-            ),
-            Some((AdultKind::Scene, MATCH_CONFIDENCE))
-        );
+        // The reported kind replaces detection's, non-video kinds too.
+        let name = "Brazzers.24.01.15.Title";
+        for base in [
+            ContentType::Images,
+            ContentType::Comic,
+            ContentType::Game,
+            ContentType::Music,
+        ] {
+            assert_ne!(at(name, base, None).map(|(k, _)| k), Some(AdultKind::Scene));
+            assert_eq!(
+                at(name, base, Some(MatchKind::Scene)),
+                Some((AdultKind::Scene, MATCH_CONFIDENCE))
+            );
+        }
         // VR stays VR.
         let vr = "Lantern.Bay.Parody.XXX.VR180.LR";
         for k in MatchKind::ALL {
