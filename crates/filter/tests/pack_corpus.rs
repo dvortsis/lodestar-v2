@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use lodestar_filter::corpus::{
-    self, Corpus, DirectionCheck, Expect, MAX_BYTES, MAX_FILES, MAX_ITEMS, MAX_LINE, Observed,
-    STATEFUL,
+    self, Corpus, DirectionCheck, Expect, MAX_BYTES, MAX_FILES, MAX_ITEMS, MAX_LINE, MIN_EXAMPLES,
+    Observed, STATEFUL,
 };
 use lodestar_filter::packs::manifest::{Code, Direction, Manifest, RuleEntry, Version};
 use lodestar_filter::packs::{Ctx, Pack, PackRule};
@@ -49,6 +49,20 @@ fn the_stateful_rules_are_exempt_and_refused() {
 }
 
 #[test]
+fn a_rule_without_examples_fails_the_report() {
+    let mut c = builtin().clone();
+    for (_, _, cases) in &mut c.packs {
+        cases.retain(|x| !(x.rule == PackRule::Lu3 && x.expect == Expect::Miss));
+    }
+    let failures = c.run(&Manifest::builtin()).failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains("LU-3 has 0 `miss` examples"),
+        "{failures:?}"
+    );
+}
+
+#[test]
 fn every_stateless_rule_has_three_of_each() {
     let c = builtin();
     for r in stateless() {
@@ -59,8 +73,8 @@ fn every_stateless_rule_has_three_of_each() {
                 .filter(|x| x.rule == r && x.expect == expect)
                 .count();
             assert!(
-                n >= 3,
-                "{} has {n} `{}` examples in {}; it needs at least 3",
+                n >= MIN_EXAMPLES,
+                "{} has {n} `{}` examples in {}; it needs at least {MIN_EXAMPLES}",
                 r.id(),
                 expect.as_str(),
                 corpus::pack_text(r.pack()).0
@@ -74,7 +88,8 @@ fn every_stateless_rule_has_three_of_each() {
 #[test]
 fn the_whole_corpus_passes() {
     let c = builtin();
-    let report = c.run(&Manifest::builtin());
+    let m = Manifest::builtin();
+    let report = c.run(&m);
     let failures = report.failures();
     assert!(
         failures.is_empty(),
@@ -87,7 +102,7 @@ fn the_whole_corpus_passes() {
     let mut items = 0;
     for r in stateless() {
         let rr = report.rule(r).expect("every stateless rule is reported");
-        assert_eq!(rr.version, 1);
+        assert_eq!(rr.version, m.entry(r).current().version);
         assert_eq!(rr.action, r.action());
         assert_eq!(rr.disagreements(), 0);
         assert!(rr.count(Expect::Match) >= 3 && rr.count(Expect::Miss) >= 3);
@@ -99,7 +114,6 @@ fn the_whole_corpus_passes() {
     let parsed: usize = c.packs.iter().map(|(_, _, x)| x.len()).sum();
     assert_eq!(items, parsed, "every example is judged once");
     // One direction check per version of every stateless rule.
-    let m = Manifest::builtin();
     let versions: usize = stateless()
         .iter()
         .map(|r| m.entry(*r).versions().len())
@@ -120,6 +134,97 @@ fn the_precision_corpus_covers_every_guard() {
         assert!(n >= 1, "no precision item exercises {}'s guard", r.id());
     }
     assert!(c.precision.len() >= 20);
+}
+
+/// Each precision item has the evidence its labelled rules read before
+/// their guard, so the guard is what lets it pass: a `guards` label is
+/// checked, not trusted.
+#[test]
+fn precision_items_reach_their_guards() {
+    use lodestar_classify::{Category, JunkReason, classify, ext};
+    const EXE: &[&str] = &[
+        "exe", "scr", "pif", "bat", "cmd", "vbs", "vbe", "js", "jse", "wsf", "hta", "ps1", "msi",
+        "lnk", "jar", "apk",
+    ];
+    const LURE_NAMES: &[&str] = &["codec", "player", "setup", "install", "installer", "unlock"];
+    const HOW_TO: &[&str] = &[
+        "how to open",
+        "how to download",
+        "how to extract",
+        "visit",
+        "download from",
+    ];
+    for p in &builtin().precision {
+        let e = &p.example;
+        let class = classify(&e.name, &e.files);
+        let junk = |r| class.junk.reasons.contains(&r);
+        let ext_of = |f: &lodestar_classify::FileInfo| {
+            ext::extension(f.name())
+                .map(|x| x.as_str().to_owned())
+                .unwrap_or_default()
+        };
+        let exes: Vec<&lodestar_classify::FileInfo> = e
+            .files
+            .iter()
+            .filter(|f| EXE.contains(&ext_of(f).as_str()))
+            .collect();
+        let low = e.name.to_lowercase();
+        let w = words(&e.name);
+        let has_video = class.composition.get(Category::Video).count > 0;
+        let archive = class.composition.get(Category::Archive).count > 0;
+        let hd = ["720p", "1080p", "2160p"].iter().any(|r| low.contains(r));
+        for g in &p.guards {
+            use PackRule::*;
+            let reaches = match g {
+                Mw2 => !exes.is_empty(),
+                Mw3 => exes.iter().any(|f| {
+                    words(f.name())
+                        .iter()
+                        .any(|x| LURE_NAMES.contains(&x.as_str()))
+                }),
+                // The combination only: one half without the other.
+                Mw4 => junk(JunkReason::TinyVideo) != !exes.is_empty(),
+                Mw5 => exes
+                    .iter()
+                    .any(|f| matches!(ext_of(f).as_str(), "scr" | "pif")),
+                Lu1 | Fk5 => archive && hd && !has_video,
+                Lu2 => {
+                    class.composition.pct_bytes(Category::Archive) > 50
+                        && e.files.iter().any(|f| {
+                            let n = f.name().to_lowercase();
+                            HOW_TO.iter().any(|h| n.contains(h))
+                        })
+                }
+                Fk1 => hd && !has_video,
+                Fk2 => {
+                    hd && has_video
+                        && e.files
+                            .iter()
+                            .filter(|f| ext::category_of(&ext_of(f)) == Category::Video)
+                            .all(|f| f.size < 40 << 20)
+                }
+                Sp2 => {
+                    let distinct: std::collections::HashSet<&String> = w.iter().collect();
+                    e.name.chars().count() > 300 && distinct.len() * 3 < w.len()
+                }
+                Sc1 | Sc2 => {
+                    w.iter().any(|x| SCAM_WORDS.contains(&x.as_str()))
+                        && w.iter().any(|x| {
+                            SERVICES.contains(&x.as_str())
+                                || ["robux", "vbucks", "roblox", "fortnite"].contains(&x.as_str())
+                        })
+                }
+                other => panic!("no reach check for {}", other.id()),
+            };
+            assert!(
+                reaches,
+                "precision line {} ({:?}) is labelled {} but has none of the evidence it reads",
+                e.line,
+                e.name,
+                g.id()
+            );
+        }
+    }
 }
 
 /// The guards §20.6 names that aren't built yet: the items they'd pass
@@ -473,6 +578,11 @@ fn the_parser_rejects_malformed_lines() {
             "a second `gap`",
         ),
         ("item X\nguards MW-1 XX-1\n", 2, "no pack rule"),
+        (
+            "item X\nguards MW-1\ngap MW-2\n",
+            1,
+            "isn't one of the item's `guards`",
+        ),
         ("item X\nguards SP-3\n", 2, "depends on state"),
         ("rule MW-1\n", 1, "for pack corpora"),
         ("match X\n", 1, "for pack corpora"),
@@ -488,8 +598,16 @@ fn the_parser_rejects_malformed_lines() {
     let big = "#".repeat(MAX_BYTES + 1);
     assert_eq!(pack_err(&big).0, 0);
     // Errors cut long values short.
-    let (_, m) = pack_err(&format!("{}\n", "y".repeat(1000)));
-    assert!(m.len() < 100, "{m}");
+    for text in [
+        format!("{}\n", "y".repeat(1000)),
+        format!("rule MW-1\nmatch X\ntype {}\n", "t".repeat(1000)),
+        format!("rule MW-1\nmatch X\nfile 1 a//{}\n", "p".repeat(1000)),
+        format!("rule MW-1\nmatch X\nfile {}K a\n", "9".repeat(1000)),
+        format!("rule {}\n", "R".repeat(1000)),
+    ] {
+        let (_, m) = pack_err(&text);
+        assert!(m.len() < 120, "{m}");
+    }
 }
 
 /// One example as the format writes it.

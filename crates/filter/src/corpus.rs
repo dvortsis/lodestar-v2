@@ -33,7 +33,8 @@
 //!   rule may hold.
 //! - **`file <size> <path>`**: one of the example's files. The size is
 //!   bytes, or a number with `K`, `M`, `G` or `T` (powers of 1,024). The
-//!   path is the rest of the line, its folders split at `/`.
+//!   path is the rest of the line, its folders split at `/` and kept as
+//!   they are (spaces around a `/` are part of the names).
 //! - **`pad <size> <path>`**: a BEP 47 padding file.
 //! - **`type <type>`**: the content type to judge it as, instead of the
 //!   classified one, as `POST /filters/test` takes it. Without it the
@@ -88,6 +89,10 @@ pub const MAX_LINE: usize = 4_096;
 pub const MAX_ITEMS: usize = 1_000;
 /// The most files in one example.
 pub const MAX_FILES: usize = 64;
+
+/// The fewest must-match and must-not-match examples a stateless rule
+/// has (§20.8 gate).
+pub const MIN_EXAMPLES: usize = 3;
 
 /// Pack rules that depend on state, exempt from the per-item corpus:
 /// SP-3 (flooding) and SP-4 (clones of hidden spam) are checked by
@@ -243,7 +248,7 @@ impl Corpus {
                         .iter()
                         .filter(|c| c.rule == rule)
                         .map(|c| {
-                            let got = judge.rule(rule, &c.example);
+                            let got = judge.rule(rule, &c.example, &classified(&c.example));
                             let pass = match c.expect {
                                 Expect::Match => got == Some((RuleRef::Pack(rule), current.action)),
                                 Expect::Miss => got.is_none(),
@@ -270,16 +275,19 @@ impl Corpus {
         let precision = self
             .precision
             .iter()
-            .map(|p| PrecisionResult {
-                line: p.example.line,
-                name: p.example.name.clone(),
-                guards: p.guards.clone(),
-                gaps: p.gaps.clone(),
-                held: PackRule::ALL
-                    .into_iter()
-                    .filter(|r| stateless(*r))
-                    .filter_map(|r| judge.rule(r, &p.example).map(|(_, a)| (r, a)))
-                    .collect(),
+            .map(|p| {
+                let class = classified(&p.example);
+                PrecisionResult {
+                    line: p.example.line,
+                    name: p.example.name.clone(),
+                    guards: p.guards.clone(),
+                    gaps: p.gaps.clone(),
+                    held: PackRule::ALL
+                        .into_iter()
+                        .filter(|r| stateless(*r))
+                        .filter_map(|r| judge.rule(r, &p.example, &class).map(|(_, a)| (r, a)))
+                        .collect(),
+                }
             })
             .collect();
         let directions = self.directions(manifest);
@@ -387,9 +395,9 @@ fn item_facts<'a>(e: &'a Example, class: &'a Classification) -> (Item<'a>, Facts
     (item, facts)
 }
 
-/// Engines with one rule on each.
+/// Engines with one rule on each, by [`PackRule::index`].
 struct Judge {
-    base: Engine,
+    engines: Vec<Engine>,
 }
 
 impl Judge {
@@ -402,23 +410,31 @@ impl Judge {
         let mut base = Engine::new(Core::new(lists, CsList::default(), Switches::default()));
         base.manifest = manifest.clone();
         base.pack_versions = current_versions(manifest);
-        Judge { base }
+        let mut engines = vec![base.clone(); PackRule::COUNT];
+        for rule in PackRule::ALL {
+            engines[rule.index()].packs = PackSwitches {
+                on: [rule.pack()].into_iter().collect(),
+                rules_off: PackRule::ALL
+                    .into_iter()
+                    .filter(|r| *r != rule && r.pack() == rule.pack())
+                    .collect(),
+            };
+        }
+        Judge { engines }
     }
 
     /// The decision with only `rule` on: what decided and its action,
     /// if anything did. The core's lists are empty and nothing else is
     /// set, so only that rule should.
-    fn rule(&self, rule: PackRule, e: &Example) -> Option<(RuleRef, Action)> {
-        let mut engine = self.base.clone();
-        engine.packs = PackSwitches {
-            on: [rule.pack()].into_iter().collect(),
-            rules_off: PackRule::ALL
-                .into_iter()
-                .filter(|r| *r != rule && r.pack() == rule.pack())
-                .collect(),
-        };
-        let class = classified(e);
-        let (item, facts) = item_facts(e, &class);
+    /// `class` is the example's [`classified`].
+    fn rule(
+        &self,
+        rule: PackRule,
+        e: &Example,
+        class: &Classification,
+    ) -> Option<(RuleRef, Action)> {
+        let engine = self.engines.get(rule.index())?;
+        let (item, facts) = item_facts(e, class);
         let d = engine.judge(&item, Some(&facts), 0).decision?;
         Some((d.rule, d.action))
     }
@@ -453,11 +469,23 @@ impl Report {
         self.failures().is_empty()
     }
 
-    /// One line per failure, naming the rule, the file line and why.
+    /// One line per failure, naming the rule, the file line and why. A
+    /// rule with fewer than [`MIN_EXAMPLES`] examples of either kind
+    /// fails too.
     pub fn failures(&self) -> Vec<String> {
         let mut out = Vec::new();
         for p in &self.packs {
             for r in &p.rules {
+                for expect in [Expect::Match, Expect::Miss] {
+                    let n = r.count(expect);
+                    if n < MIN_EXAMPLES {
+                        out.push(format!(
+                            "{} has {n} `{}` examples; it needs at least {MIN_EXAMPLES}",
+                            r.rule.id(),
+                            expect.as_str()
+                        ));
+                    }
+                }
                 for i in r.items.iter().filter(|i| !i.pass) {
                     out.push(format!(
                         "{} line {}: {} {:?}: {}",
@@ -715,7 +743,14 @@ fn parse(
                 let guards = o
                     .guards
                     .ok_or_else(|| err(line, "an item needs a `guards` line".to_owned()))?;
-                Event::Precision(o.example, guards, o.gaps.unwrap_or_default())
+                let gaps = o.gaps.unwrap_or_default();
+                if let Some(g) = gaps.iter().find(|g| !guards.contains(g)) {
+                    return Err(err(
+                        line,
+                        format!("the gap {} isn't one of the item's `guards`", g.id()),
+                    ));
+                }
+                Event::Precision(o.example, guards, gaps)
             }
             (Kind::Pack(_), None) => return Err(err(line, "an example needs a kind".to_owned())),
         };
@@ -793,7 +828,7 @@ fn parse(
                             return Err(err(n, "a second `type`".to_owned()));
                         }
                         let t = ContentType::from_name(value)
-                            .ok_or_else(|| err(n, format!("no content type {value:?}")))?;
+                            .ok_or_else(|| err(n, format!("no content type {:?}", short(value))))?;
                         o.example.content_type = Some(t);
                     }
                     _ => {
@@ -823,17 +858,21 @@ fn parse(
                 }
             }
             _ => {
-                let shown: String = key.chars().take(40).collect();
-                return Err(err(n, format!("unknown keyword {shown:?}")));
+                return Err(err(n, format!("unknown keyword {:?}", short(key))));
             }
         }
     }
     close(&mut open, &mut emit)
 }
 
+/// A value cut to 40 characters for an error message.
+fn short(s: &str) -> String {
+    s.chars().take(40).collect()
+}
+
 /// A built stateless rule, in the file's pack for a pack corpus.
 fn pack_rule(id: &str, kind: Kind) -> Result<PackRule, String> {
-    let shown: String = id.chars().take(40).collect();
+    let shown = short(id);
     if STATEFUL.contains(&id) {
         return Err(format!(
             "{shown} depends on state: its cases are sequence fixtures, not items"
@@ -861,14 +900,14 @@ fn file_line(value: &str) -> Result<FileInfo, String> {
     let path = path.trim();
     let parts: Vec<String> = path.split('/').map(str::to_owned).collect();
     if parts.iter().any(String::is_empty) {
-        return Err(format!("an empty folder or file name in {path:?}"));
+        return Err(format!("an empty folder or file name in {:?}", short(path)));
     }
     Ok(FileInfo::new(parts, size))
 }
 
 /// Bytes, or a number with `K`, `M`, `G` or `T`.
 fn parse_size(s: &str) -> Result<u64, String> {
-    let shown: String = s.chars().take(40).collect();
+    let shown = short(s);
     let bad = || format!("{shown:?} isn't a size");
     let (digits, shift) = match s.as_bytes().last() {
         Some(b'K') => (&s[..s.len() - 1], 10),
@@ -965,9 +1004,12 @@ mod tests {
             content_type: None,
         };
         for r in [PackRule::Mw1, PackRule::Mw2, PackRule::Mw5] {
-            assert_eq!(judge.rule(r, &e), Some((RuleRef::Pack(r), Action::Hide)));
+            assert_eq!(
+                judge.rule(r, &e, &classified(&e)),
+                Some((RuleRef::Pack(r), Action::Hide))
+            );
         }
-        assert_eq!(judge.rule(PackRule::Sc1, &e), None);
+        assert_eq!(judge.rule(PackRule::Sc1, &e, &classified(&e)), None);
         assert!(c.run(&Manifest::builtin()).passes());
     }
 }

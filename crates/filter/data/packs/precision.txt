@@ -24,7 +24,7 @@ item Example Synth VST Collection v2.1 x64
   file 40M setup.exe
   file 20M Presets/Bass 01.wav
   file 20M Presets/Lead 01.wav
-  guards MW-2 MW-3
+  guards MW-2
   gap MW-2
 item Example Drum Samples Vol 3 WAV
   file 30M Kicks/Kick 01.wav
@@ -33,16 +33,20 @@ item Example Drum Samples Vol 3 WAV
   guards MW-2
   gap MW-2
 
-# Software that ships a codec or player (MW-2, MW-3: `unless type:software`).
+# Software that ships a codec or player (MW-2, MW-3: `unless type:software`;
+# MW-4: an executable without a tiny HD video isn't enough).
 item Example Video Codec Pack v15.2 x64
   file 40M setup.exe
   file 2M codec.exe
-  guards MW-2 MW-3
+  guards MW-2 MW-3 MW-4
+
+# A game that ships its own screensaver (MW-5: `unless type:software`).
 item Example Game v1.2 REPACK
   file 2M setup.exe
   file 4G data1.bin
   file 4G data2.bin
-  guards MW-2 MW-5
+  file 3M Example Game Screensaver.scr
+  guards MW-5
 
 # Screensavers (MW-5: `unless type:software` with screensaver context).
 item Example Aquarium Screensaver v1.0
@@ -69,16 +73,16 @@ item Example.Movie.2019.1080p.BluRay.ISO
   file 25G Example.Movie.2019.1080p.BluRay.iso
   guards FK-1
 
-# Samples and trailers (FK-2).
+# Samples and trailers (FK-2; MW-4: a tiny HD video without an executable
+# isn't enough).
 item Example.Movie.2019.1080p.BluRay.Sample
   file 20M Example.Movie.2019.1080p.BluRay.Sample.mkv
   guards FK-2 MW-4
 item Example Movie 2019 Official Trailer 1080p
   file 25M Example Movie 2019 Official Trailer 1080p.mp4
-  guards FK-2
+  guards FK-2 MW-4
 item Example.Movie.2019.1080p.WEB
-  file 4G Example.Movie.2019.1080p.WEB.mkv
-  file 30M Sample/example-sample.mkv
+  file 30M Sample/example-preview.mkv
   guards FK-2
 
 # Short-episode packs (FK-2).
@@ -92,16 +96,11 @@ item Example Shorts S01 1080p WEB
   guards FK-2
   gap FK-2
 
-# Low-resolution clips aren't claimed as HD (FK-2, MW-4).
-item Example.Clip.480p
-  file 10M Example.Clip.480p.mp4
-  guards FK-2 MW-4
-
 # Real media beside an archive and a note (LU-2: not when real media is
 # present).
 item Example.Movie.2019.1080p.WEB
-  file 4G Example.Movie.2019.1080p.WEB.mkv
-  file 1M Subs.zip
+  file 4G Example.Movie.2019.1080p.WEB.Extras.zip
+  file 1G Example.Movie.2019.1080p.WEB.mkv
   file 1K How to open.txt
   guards LU-2
 
@@ -114,7 +113,7 @@ item Sample Band - Discography - Sample Band - Album 01 [FLAC] - Sample Band - A
   guards SP-2
 
 # Offline software cracks (SC-1: offline software isn't covered).
-item Example Photo Editor 2024 Premium Activator
+item Deezer Offline Music Player v3.0 Premium Activator
   file 80M setup.exe
   file 1M activator.exe
   guards SC-1
@@ -123,8 +122,8 @@ item Netflix Offline Downloader Premium v2.1
   guards SC-1
 
 # Single-player trainers and mods (SC-2).
-item Example Quest v1.4 Plus 12 Trainer
-  file 1M trainer.exe
+item Fortnite Creative Aim Trainer Map Free
+  file 1M aim-trainer.zip
   guards SC-2
 item Fortnite Replay Mod Free
   file 2M replay-mod.zip
