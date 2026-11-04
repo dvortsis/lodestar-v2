@@ -1168,6 +1168,45 @@ class PublicationTests(Base):
         self.assertIn("Private memory per 1,000 search commits: 2.000 MiB", text)
         self.assertIn("| main | 0 | 40 | 40 |", text)
 
+    def test_memory_gauges_and_segments_flow_from_metrics_to_the_report(self):
+        # X-mem-gauges: emitted text -> sanitizer -> metrics/NNNNN.prom -> memory_attribution.
+        root = self.tmp / "mem-gauges"
+        (root / "metrics").mkdir(parents=True)
+        (root / "run.json").write_text(json.dumps(
+            {"commit": COMMIT, "settings": {"baseline_hours": 24, "intensity": "balanced"}}))
+        rows = []
+        for i in range(int(24.5 * 60) + 1):
+            t, h = i * 60, i / 60
+            extra = ("# HELP lodestar_mem_rss_anon_bytes Resident anonymous memory.\n"
+                     "# TYPE lodestar_mem_rss_anon_bytes gauge\n"
+                     f"lodestar_mem_rss_anon_bytes {int((500 + 2 * h) * 2**20)}\n"
+                     f"lodestar_mem_rss_file_bytes {300 * 2**20}\n"
+                     f"lodestar_mem_anon_huge_bytes {212 * 2**20}\n"
+                     f"lodestar_mem_mimalloc_committed_bytes {int((200 + h) * 2**20)}\n"
+                     f"lodestar_mem_mimalloc_peak_committed_bytes {300 * 2**20}\n"
+                     f'lodestar_search_segments{{index="main"}} {8 + i % 4}\n'
+                     'lodestar_search_segments{index="files"} 3\n'
+                     'lodestar_search_segments{index="Bad Name"} 9\n'
+                     'lodestar_search_segments{index="other"} 9\n')
+            clean = collect.sanitize_snapshot(metrics_text(t, suppression_until=0, extra=extra))
+            self.assertIn("lodestar_mem_anon_huge_bytes ", clean)
+            self.assertIn('lodestar_search_segments{index="files"} 3', clean)
+            for dropped in ("Bad Name", 'index="other"', "# HELP"):
+                self.assertNotIn(dropped, clean)
+            (root / "metrics" / f"{i:05d}.prom").write_text(clean)
+            rows.append({"elapsed_seconds": t, "phase": "baseline", "process_id": 1, "health": 200,
+                         "metrics_ok": True, "working_set_bytes": 800 * 2**20,
+                         "private_bytes": (500 + 2 * h) * 2**20, "values": {"start_time_seconds": 1000}})
+        (root / "samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        attr = analyze_cr0.analyze(root)["memory_attribution"]
+        self.assertAlmostEqual(attr["series"]["mem_rss_anon_bytes"]["slope_per_hour"], 2.0, places=3)
+        self.assertAlmostEqual(attr["series"]["mem_anon_huge_bytes"]["last"], 212.0)
+        self.assertEqual(attr["series"]["mem_sqlite_bytes"], {"status": "absent"})
+        self.assertFalse(attr["other_heap_includes_sqlite"])
+        self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 1.0, places=3)
+        self.assertEqual(attr["segments"]["main"]["max"], 11)
+        self.assertEqual(attr["segments"]["files"]["last"], 3)
+
     def test_analyzer_cli_reads_the_output_end_to_end(self):
         self.run_docker("--stop")
         done = subprocess.run([sys.executable, "-I", str(HERE.parent / "analyze_cr0.py"), str(self.root),

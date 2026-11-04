@@ -116,14 +116,27 @@ def parse_prom(text):
 
 
 SEARCH_SERIES = re.compile(
-    r'^lodestar_(search_commits_total|search_mmap_cache_entries)(?:\{index="([a-z_0-9]{1,24})"\})? ('
+    r'^lodestar_(search_commits_total|search_mmap_cache_entries|search_segments)'
+    r'(?:\{index="([a-z_0-9]{1,24})"\})? ('
     + r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?" + r")\r?$")
+# X-mem-gauges: which heap the anonymous memory is in (docs/metrics.md, "Memory
+# attribution"). Each may be absent: older binaries, the /proc ones off Linux, and
+# the SQLite pair until the binary renders it.
+MEMORY_GAUGES = (
+    "mem_rss_anon_bytes", "mem_rss_file_bytes", "mem_anon_huge_bytes",
+    "mem_mimalloc_committed_bytes", "mem_mimalloc_peak_committed_bytes",
+    "mem_sqlite_bytes", "mem_sqlite_highwater_bytes",
+)
+SEGMENT_INDEXES = ("main", "files")
+MEMORY_SERIES = re.compile(
+    r"^lodestar_(" + "|".join(MEMORY_GAUGES) + r") ([0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\r?$")
 
 
 def parse_search(text):
     """CR-COL-4: the commit counter and the per-index mmap-cache gauge, if present.
 
-    Returns {} when the snapshot has neither (older binaries, such as r3's).
+    X-mem-gauges adds the per-index segment count. Returns {} when the snapshot
+    has none of them (older binaries, such as r3's).
     """
     out = {}
     for line in text.splitlines():
@@ -138,6 +151,18 @@ def parse_search(text):
             out.setdefault("commits", value)
         elif name == "search_mmap_cache_entries" and index is not None:
             out.setdefault("mmap_cache", {}).setdefault(index, value)
+        elif name == "search_segments" and index in SEGMENT_INDEXES:
+            out.setdefault("segments", {}).setdefault(index, value)
+    return out
+
+
+def parse_memory(text):
+    """X-mem-gauges: the memory attribution gauges present in a snapshot, first value kept."""
+    out = {}
+    for line in text.splitlines():
+        match = MEMORY_SERIES.fullmatch(line)
+        if match and number(float(match[2])):
+            out.setdefault(match[1], float(match[2]))
     return out
 
 
@@ -175,7 +200,9 @@ def load_rows(root, issues):
                         if row["counters"][name] != extra[name]:
                             raise ValueError("Snapshot mismatch")
                     row["counters"].update(extra)
-                    row["search"] = parse_search(prom.read_text(encoding="utf-8-sig"))
+                    text = prom.read_text(encoding="utf-8-sig")
+                    row["search"] = parse_search(text)
+                    row["memory"] = parse_memory(text)
                 except (ValueError, OSError):
                     issues["invalid_prom_snapshots"] += 1
                     # Keep the collector's JSON values, not partial Prom data.
@@ -433,6 +460,83 @@ def search_summary(rows):
         "mmap_cache_entries": {i: {"first": v[0], "last": v[-1], "max": max(v), "samples": len(v)}
                                for i, v in sorted(gauge.items())} or None,
     }
+
+
+def level_and_slope(points, present, scale):
+    """A gauge's level and OLS slope per hour over a window of (hours, value) points.
+
+    `present` says whether the gauge appears in any baseline snapshot: if not, it is
+    "absent" (an older binary, or another OS), never a zero. Values are divided by
+    `scale` (2**20 for bytes, so MiB and MiB/h).
+    """
+    if not present:
+        return {"status": "absent"}
+    if not points:
+        return {"status": "no_window_samples"}
+    ys = [v / scale for _, v in points]
+    out = {"status": "ok", "samples": len(points), "first": ys[0], "last": ys[-1], "max": max(ys),
+           "slope_per_hour": None, "slope_reason": None}
+    n = len(points)
+    if n < 3:
+        out["slope_reason"] = "too_few_samples"
+        return out
+    mx, my = sum(h for h, _ in points) / n, sum(ys) / n
+    sxx = sum((h - mx) ** 2 for h, _ in points)
+    if sxx == 0:
+        out["slope_reason"] = "no_time_spread"
+        return out
+    out["slope_per_hour"] = sum((h - mx) * (y - my) for (h, _), y in zip(points, ys)) / sxx
+    return out
+
+
+def memory_attribution(rows):
+    """Informational only, not part of the gate: where the anonymous memory is.
+
+    Over the gate's window (baseline hours 12-24), each X-mem-gauges series as a
+    level (first, last, max) and an OLS slope per hour, the per-index segment
+    count likewise, and "other heap": RssAnon minus mimalloc's committed bytes
+    minus SQLite's own (when the binary reports it), so C allocations other than
+    SQLite's (zstd, musl itself) show up. A restart inside the window refuses the
+    slopes, as the gate does.
+    """
+    f = MEMORY_FIT
+    out = {"informational": True, "from_hour": f["from_hour"], "to_hour": f["to_hour"],
+           "refused": None, "series": {}, "other_heap": {"status": "absent"},
+           "other_heap_includes_sqlite": None, "segments": {}}
+    baseline = [r for r in rows if r["phase"] == "baseline" and usable(r)]
+    mem_seen = {name for r in baseline for name in r.get("memory", {})}
+    seg_seen = {i for r in baseline for i in r.get("search", {}).get("segments", {})}
+    window = []
+    if not baseline:
+        out["refused"] = "no_baseline"
+    else:
+        t0 = [r for r in rows if r["phase"] == "baseline"][0]["elapsed_seconds"]
+        window = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
+        window = [(h, r) for h, r in window if f["from_hour"] <= h <= f["to_hour"]]
+        if len({identity(r) for _, r in window}) > 1:
+            out["refused"] = "identity_change"
+            window = []
+    for name in MEMORY_GAUGES:
+        pts = [(h, r["memory"][name]) for h, r in window if name in r.get("memory", {})]
+        out["series"][name] = level_and_slope(pts, name in mem_seen, 2**20)
+    for index in SEGMENT_INDEXES:
+        pts = [(h, r["search"]["segments"][index]) for h, r in window
+               if index in r.get("search", {}).get("segments", {})]
+        out["segments"][index] = level_and_slope(pts, index in seg_seen, 1)
+    need = ("mem_rss_anon_bytes", "mem_mimalloc_committed_bytes")
+    if all(n in mem_seen for n in need):
+        pts = []
+        with_sqlite = []
+        for h, r in window:
+            m = r.get("memory", {})
+            if all(n in m for n in need):
+                sqlite = m.get("mem_sqlite_bytes")
+                with_sqlite.append(sqlite is not None)
+                pts.append((h, m["mem_rss_anon_bytes"] - m["mem_mimalloc_committed_bytes"] - (sqlite or 0)))
+        out["other_heap"] = level_and_slope(pts, True, 2**20)
+        # Only claimed when every point subtracted SQLite.
+        out["other_heap_includes_sqlite"] = bool(with_sqlite) and all(with_sqlite)
+    return out
 
 
 def memory_context(rows):
@@ -708,6 +812,7 @@ def analyze(root, max_gap=90, now=None, intensity=None):
         "memory_fit": fit,
         "memory_context": memory_context(rows),
         "search": search_summary(rows),
+        "memory_attribution": memory_attribution(rows),
         "collector_completed_window": bool(result and result.get("reason") == "baseline_window_complete"),
         "stop_reason": reason,
         "clean_shutdown": clean_shutdown(result),
@@ -724,6 +829,41 @@ def analyze(root, max_gap=90, now=None, intensity=None):
             "Final shutdown metrics have no monotonic sample timestamp and are excluded from rates.",
         ],
     }
+
+
+ATTRIBUTION_LABELS = {
+    "mem_rss_anon_bytes": "RssAnon", "mem_rss_file_bytes": "RssFile",
+    "mem_anon_huge_bytes": "AnonHugePages", "mem_mimalloc_committed_bytes": "mimalloc committed",
+    "mem_mimalloc_peak_committed_bytes": "mimalloc peak committed",
+    "mem_sqlite_bytes": "SQLite", "mem_sqlite_highwater_bytes": "SQLite high-water",
+}
+
+
+def attribution_markdown(attr):
+    """The memory attribution table (X-mem-gauges); informational."""
+    if not attr:
+        return []
+    out = ["", f"Memory attribution (informational; baseline hours {attr['from_hour']:g}-{attr['to_hour']:g}):", ""]
+    if attr["refused"]:
+        out += [f"Not shown: {attr['refused']}."]
+        return out
+
+    def cell(v):
+        return "unknown" if v is None else f"{v:,.2f}"
+
+    def row(label, g, unit):
+        if g["status"] != "ok":
+            return f"| {label} | {g['status'].replace('_', ' ')} | | | | |"
+        slope = cell(g["slope_per_hour"]) if g["slope_per_hour"] is not None else g["slope_reason"].replace("_", " ")
+        return f"| {label} ({unit}) | {cell(g['first'])} | {cell(g['last'])} | {cell(g['max'])} | {slope} | {g['samples']} |"
+    out += ["| Series | First | Last | Max | Slope per hour | Samples |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |"]
+    out += [row(ATTRIBUTION_LABELS[name], g, "MiB") for name, g in attr["series"].items()]
+    label = ("Other heap: RssAnon - mimalloc - SQLite" if attr["other_heap_includes_sqlite"]
+             else "Other heap: RssAnon - mimalloc (SQLite absent, so included)")
+    out.append(row(label, attr["other_heap"], "MiB"))
+    out += [row(f"Segments, {index}", g, "count") for index, g in attr["segments"].items()]
+    return out
 
 
 def markdown(report):
@@ -803,6 +943,7 @@ def markdown(report):
                 for i, g in search["mmap_cache_entries"].items()]
     else:
         out += ["", "Search mmap-cache entries: absent (the binary does not expose the gauge)."]
+    out += attribution_markdown(report.get("memory_attribution"))
     out += ["", f"Observation freshness: {report['observation_state']}.",
             f"Baseline valid coverage: {report['baseline_coverage_fraction']:.2%}.",
             f"Disk summary: {json.dumps(report['disk'])}", "", "## Evidence issues", ""]
