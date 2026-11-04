@@ -1210,6 +1210,9 @@ fn prepare(
         }],
         ..WriteBatch::default()
     })?;
+    // RP-0: pack versions are seeded once, before the filter is first read.
+    let packs = lodestar_filter::packs::manifest::Manifest::builtin();
+    lodestar_filter::packs::upgrade::ensure_seeded(&mut store, &packs, now)?;
     let filter = StoreFilter::read(&store)?;
     let mut sources = Vec::with_capacity(ids.len());
     for (m, id) in manifests.iter().zip(&ids) {

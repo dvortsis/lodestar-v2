@@ -10,6 +10,7 @@
 #   - a phase, track or roadmap dependency changes (build-plan 0)     -> phases, workstreams, roadmap
 #   - a gate is defined, measured or passed                           -> gates, crawler, soak
 #   - the top-of-page notes are out of date                           -> notes
+#   Worker slots are NOT here: the runner keeps `slots` in runner-state's state.json (no PR); see CLAUDE.md.
 # `cd tools/status-connector && npm test` checks that this file and runner/slices.yaml agree.
 # See docs/handoff.md and CLAUDE.md ("Keeping the dashboard current").
 #
@@ -255,6 +256,7 @@ placement:
   match:
   - F-*
   - X-ci-health
+  - X-log-url-redact
   - L4-followups
   - S-settings-reconcile
 - ws: ws-cut
@@ -266,6 +268,8 @@ placement:
   - D-v051
   - X-mmap-cache-prune
   - X-merge-policy
+  - X-thp-off
+  - X-mem-gauges
   - R-rc3-cut
   - G-v051
   - D-v051-main
@@ -910,25 +914,25 @@ crawler:
   note: 24 h mean, no hour below 70. Stretch goal 1,000 a minute, served by remote workers.
 soak:
 - stage: Settling
-  label: 'First 6 hours: sampling is suppressed'
-  start: '2026-11-01T15:46:16Z'
-  end: '2026-11-01T21:46:16Z'
+  label: 'First 6 hours: sampling is suppressed (soak r4 on release candidate 3)'
+  start: '2026-11-03T18:25:30Z'
+  end: '2026-11-04T00:25:30Z'
 - stage: Warm-up
   label: 30 minutes of warm-up
-  start: '2026-11-01T21:46:16Z'
-  end: '2026-11-01T22:16:16Z'
+  start: '2026-11-04T00:25:30Z'
+  end: '2026-11-04T00:55:30Z'
 - stage: Measured
-  label: 24 hours of measurement
-  start: '2026-11-01T22:16:16Z'
-  end: '2026-11-02T22:16:16Z'
+  label: 24 hours of measurement; hours 12 to 24 decide the memory gate
+  start: '2026-11-04T00:55:30Z'
+  end: '2026-11-05T00:55:30Z'
 - stage: Event
-  label: Hour 12 begins; the daily backup runs at 11:00 UTC inside it
-  start: '2026-11-02T10:16:16Z'
-  end: '2026-11-02T11:00:00Z'
+  label: Hour 12 begins; the deciding window opens (the nightly backup is switched off for this run)
+  start: '2026-11-04T12:55:30Z'
+  end: '2026-11-04T12:55:30Z'
 - stage: Verdict
-  label: 'r3 failed the memory gate: 1.88 MiB/h, 95% CI [1.43, 2.33] over hours 12-24 (bar: upper bound at most 2.0); r4 on rc.3 followed'
-  start: '2026-11-02T22:16:16Z'
-  end: '2026-11-02T22:16:16Z'
+  label: 'Verdict due after the last sample. r3 on rc.2 had failed: 1.88 MiB/h, 95% CI [1.43, 2.33] (bar: upper bound at most 2.0)'
+  start: '2026-11-05T00:55:30Z'
+  end: '2026-11-05T00:55:30Z'
 notes:
   updated: '2026-11-04'
   now:
@@ -941,8 +945,8 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Up to eight slots
-    text: 'By your instruction up to eight worker slots run at once, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33). All eight are in use; the runner keeps the current list in its state file, shown on the slots view.''s verdict.'
+  - label: Up to twelve slots
+    text: 'By your instruction up to twelve worker slots run at once, filled only when ready work fits the plan, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33, §2.36). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: Finish v0.5.1
     text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.

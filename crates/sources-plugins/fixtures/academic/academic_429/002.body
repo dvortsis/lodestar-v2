@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:academictorrents="https://academictorrents.com" version="2.0">
+<channel>
+<title>Academic Torrents</title>
+<description>Recent Torrents</description>
+<link>https://academictorrents.com/</link>
+<item>
+<title>Pl@ntNet-300K: a plant image dataset with high label ambiguity and a long-tailed distribution</title>
+<category>Dataset</category>
+<infohash>447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</infohash>
+<guid>https://academictorrents.com/details/447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</guid>
+<link>https://academictorrents.com/details/447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</link>
+<description>[Description removed from the recording.]</description>
+<size>31670505069</size>
+</item>
+</channel>
+</rss>

@@ -9,7 +9,9 @@
 //! 4. *Always allow*, which skips your rules and the packs;
 //! 5. your rules, in order;
 //! 6. the pack layer: built-in packs and subscribed lists, the strongest
-//!    action winning.
+//!    action winning. Each pack rule applies the version this install
+//!    accepted, and a version pending acceptance runs in shadow beside it
+//!    ([`crate::load::upgrade`], RP-0).
 //!
 //! Prepare stamps its verdict with the version it used; commit trusts a
 //! verdict from the built-in worker at the current version and judges
@@ -23,6 +25,8 @@ use lodestar_classify::ContentType;
 use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
 use crate::hash::TermSet;
 use crate::matcher::{Doc, Facts, Reading};
+use crate::packs::manifest::Manifest;
+use crate::packs::upgrade::{PackShadow, PackVersions};
 use crate::packs::{self, PackRule, PackSwitches};
 use crate::prefilter::RuleList;
 use crate::rules::{self, Allow, ClassRules, Exception, Match, OverrideList, Strength};
@@ -103,6 +107,8 @@ pub struct Verdict {
     /// The decision that applies, if any.
     pub decision: Option<Decision>,
     /// What rules in shadow mode would have done: logged, never applied.
+    /// A pack rule's pending version is among them where it holds; both
+    /// sides of it are [`Engine::judge_shadowed`]'s.
     pub shadow: Vec<Decision>,
 }
 
@@ -127,6 +133,11 @@ pub struct Engine {
     pub core: Core,
     pub lists: Vec<ListLayer>,
     pub packs: PackSwitches,
+    /// The pack rules' versions, compiled in.
+    pub manifest: Arc<Manifest>,
+    /// Which version of each pack rule applies, and which is pending
+    /// ([`crate::load`] resolves it from the stored record).
+    pub pack_versions: PackVersions,
     /// Your rules, indexed so a torrent only meets those that could match.
     pub rules: RuleList,
     pub overrides: OverrideList,
@@ -150,6 +161,8 @@ impl Engine {
             core,
             lists: Vec::new(),
             packs: PackSwitches::default(),
+            manifest: Manifest::builtin(),
+            pack_versions: PackVersions::default(),
             rules: RuleList::default(),
             overrides: OverrideList::default(),
             exceptions: Vec::new(),
@@ -193,7 +206,7 @@ impl Engine {
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
         let correction = self.class_rules.decide(&doc);
-        let v = self.judge_doc(item, facts, &doc, now);
+        let v = self.judge_doc(item, facts, &doc, now).0;
         if correction != Some(true) || item.content_type == ContentType::Adult {
             return (v, correction);
         }
@@ -214,11 +227,25 @@ impl Engine {
     /// and files; `now` resolves shadow periods, expiries and relative
     /// dates.
     pub fn judge(&self, item: &Item, facts: Option<&Facts>, now: i64) -> Verdict {
+        self.judge_shadowed(item, facts, now).0
+    }
+
+    /// [`Engine::judge`], with each pending pack version's result beside
+    /// the applied one's where either holds the torrent ([`PackShadow`]):
+    /// which side holds and whether the shadow action is heavier or
+    /// lighter, for the acceptance preview (RP-3). Nothing in it applies.
+    pub fn judge_shadowed(
+        &self,
+        item: &Item,
+        facts: Option<&Facts>,
+        now: i64,
+    ) -> (Verdict, Vec<PackShadow>) {
         if let Some(hit) = self.core.floor_hit(item) {
-            return Verdict {
+            let v = Verdict {
                 decision: Some(hit.into()),
                 shadow: Vec::new(),
             };
+            return (v, Vec::new());
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
         self.judge_doc(item, facts, &doc, now)
@@ -258,11 +285,31 @@ impl Engine {
     /// than it was (docs/decisions/2026-11-02-F-normalize-invisible.md,
     /// docs/decisions/2026-11-02-F-visible-format-two-readings.md).
     /// Elsewhere the two judgments are the same, so one is made.
-    fn judge_doc(&self, item: &Item, facts: Option<&Facts>, doc: &Doc, now: i64) -> Verdict {
-        let (mut v, mut released) = self.judge_reading(item, facts, doc, now, Reading::Joined);
+    fn judge_doc(
+        &self,
+        item: &Item,
+        facts: Option<&Facts>,
+        doc: &Doc,
+        now: i64,
+    ) -> (Verdict, Vec<PackShadow>) {
+        let mut pack_shadow = Vec::new();
+        let (mut v, mut released) =
+            self.judge_reading(item, facts, doc, now, Reading::Joined, &mut pack_shadow);
         if doc.reads_twice() || self.keywords_differ(item, doc) {
-            let (before, also) = self.judge_reading(item, facts, doc, now, Reading::Before);
+            let mut before_shadow = Vec::new();
+            let (before, also) =
+                self.judge_reading(item, facts, doc, now, Reading::Before, &mut before_shadow);
             v = stricter(before, v);
+            // Each pending rule's stronger side over the two readings.
+            for s in before_shadow {
+                match pack_shadow.iter_mut().find(|p| p.rule == s.rule) {
+                    Some(p) => {
+                        p.applied = p.applied.max(s.applied);
+                        p.shadow = p.shadow.max(s.shadow);
+                    }
+                    None => pack_shadow.push(s),
+                }
+            }
             for id in also {
                 if !released.contains(&id) {
                     released.push(id);
@@ -280,7 +327,7 @@ impl Engine {
                 });
             }
         }
-        v
+        (v, pack_shadow)
     }
 
     /// Whether a keyword entry matches this torrent differently in the two
@@ -308,6 +355,7 @@ impl Engine {
         doc: &Doc,
         now: i64,
         reading: Reading,
+        pack_shadow: &mut Vec<PackShadow>,
     ) -> (Verdict, Vec<u32>) {
         let mut v = Verdict::default();
         let Released {
@@ -326,6 +374,7 @@ impl Engine {
                 now,
                 reading,
                 &mut v.shadow,
+                pack_shadow,
             );
         }
         (v, shadow_overrides)
@@ -342,6 +391,7 @@ impl Engine {
         now: i64,
         reading: Reading,
         shadow: &mut Vec<Decision>,
+        pack_shadow: &mut Vec<PackShadow>,
     ) -> Option<Decision> {
         let hits = match reading {
             Reading::Before => self.core.pattern_hits_split(item, neutral),
@@ -395,18 +445,40 @@ impl Engine {
             return stronger_of(held, Some(d));
         }
         let ctx = facts.map(|f| packs::Ctx::new(item, f, neutral_words));
-        let packs = PackRule::ALL
-            .into_iter()
-            .filter(|r| self.packs.is_on(*r) && ctx.as_ref().is_some_and(|c| c.matches(*r)))
-            .map(|r| Decision {
-                rule: RuleRef::Pack(r),
-                action: r.action(),
-                evidence: vec![Evidence::Pack],
-            });
+        let mut packs = Vec::new();
+        if let Some(ctx) = &ctx {
+            for r in PackRule::ALL.into_iter().filter(|r| self.packs.is_on(*r)) {
+                let pv = &self.pack_versions;
+                let applied = pv.applied_action(&self.manifest, r, ctx);
+                // A pending version runs in shadow where the rule isn't
+                // excepted: nothing it holds is applied.
+                if pv.state(r).pending()
+                    && let Some(s) = pv.shadow(&self.manifest, r, ctx, applied)
+                    && !self.excepted(RuleRef::Pack(r), item, doc, reading)
+                {
+                    if let Some(action) = s.shadow {
+                        shadow.push(Decision {
+                            rule: RuleRef::Pack(r),
+                            action,
+                            evidence: vec![Evidence::Pack],
+                        });
+                    }
+                    pack_shadow.push(s);
+                }
+                if let Some(action) = applied {
+                    packs.push(Decision {
+                        rule: RuleRef::Pack(r),
+                        action,
+                        evidence: vec![Evidence::Pack],
+                    });
+                }
+            }
+        }
         // Each pack and list is excepted on its own (§20.12), before the
         // strongest action left wins (§20.6): an exception to one list
         // never lifts another that also has the torrent.
         let rest = packs
+            .into_iter()
             .chain(self.listed(item.hashes))
             .filter(|d| !self.excepted(d.rule, item, doc, reading))
             .max_by_key(|d| d.action);
