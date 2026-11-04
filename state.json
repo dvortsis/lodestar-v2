@@ -4253,7 +4253,8 @@
     "X-thp-off (#434) review polish 6: packaging/docker/README.md variable table needs a LODESTAR_THP row (outside the slice's owns). One-row docs follow-up.",
     "ENR-1 notes (next runner slices.yaml PR): filtering judges detection's own unmatched result, plus the enriched Adult reading when a match makes an item Adult, stricter kept (#436 review B1); ENR-1's tests include a child-safety-held name staying held with a match, and the MW-3 Lantern.Bay case staying hidden.",
     "Follow-up: settle V8's 'Is adult gives 100' (architecture.md ~3676/3772) vs is_adult on a detection-adult item keeping detection's score (pre-existing on main; #436 review P2).",
-    "build-plan.md:114 Track M6: drop 'or keep it out of the CA submission until Track W step 1 lands' (CA now after 1.0; #435 review polish)."
+    "build-plan.md:114 Track M6: drop 'or keep it out of the CA submission until Track W step 1 lands' (CA now after 1.0; #435 review polish).",
+    "X-thp-off (#434) polish 7: have thp::apply return the prctl error and log one warn once logging is up (needs a registered event in logging/events.rs), so a failure reaches the Logs page. Small, low priority."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
