@@ -4,13 +4,19 @@
 //! filtering: a row that withholds fails closed, a row that releases is
 //! skipped, and either is listed in [`Engine::unreadable`] for the
 //! health exception (docs/decisions/2026-11-01-F-filter-load-fail-closed.md).
+//!
+//! The pack versions this install applied are resolved here too
+//! ([`upgrade::PackVersions::resolve`], RP-0): lost or unreadable version
+//! rows fail closed the same way, and never seed again.
 
 use lodestar_search::{Node, parse};
 use lodestar_store::RuleSet;
 
 use crate::core::Action;
 use crate::engine::{Engine, RuleRef};
+use crate::packs::upgrade::{self, PackVersions, Rows};
 use crate::packs::{Pack, PackRule, PackSwitches};
+
 use crate::rules::{Allow, ClassRule, ClassRules, Exception, Match, Override, Strength, UserRule};
 
 /// `override_list.kind` / `filter_exceptions.kind`.
@@ -240,6 +246,33 @@ impl StandIns {
         (StandIns(current), recovered)
     }
 
+    /// The record with its pack-version entries (`packs.*`,
+    /// [`upgrade::Condition::label`]) replaced by `labels`, the conditions
+    /// as they are now: one still there keeps the time it was first
+    /// found, one that's gone is dropped (they made no holds of their own
+    /// to re-judge). Other entries are kept as they are.
+    pub fn with_packs(&self, labels: &[String], now: i64) -> StandIns {
+        let pack = |l: &str| l.starts_with(upgrade::LABEL_PREFIX);
+        let mut out: Vec<StandIn> = self.0.iter().filter(|e| !pack(&e.label)).cloned().collect();
+        for l in labels {
+            let since = self
+                .0
+                .iter()
+                .filter(|e| &e.label == l)
+                .map(|e| e.since)
+                .min()
+                .unwrap_or(now);
+            if !out.iter().any(|e| &e.label == l) {
+                out.push(StandIn {
+                    label: l.clone(),
+                    since,
+                    until: None,
+                });
+            }
+        }
+        StandIns(out)
+    }
+
     /// The record without one entry, once its holds are re-judged.
     pub fn without(&self, done: &StandIn) -> StandIns {
         StandIns(self.0.iter().filter(|e| *e != done).cloned().collect())
@@ -362,7 +395,15 @@ impl Engine {
         let mut notes = Vec::new();
         let mut found = Vec::new();
         let mut stand_ins = Vec::new();
-        self.packs = pack_switches(&set.pack_switches);
+        self.pack_versions = PackVersions::resolve(&self.manifest, &Rows::of(set));
+        // Never seeded yet: SC-2 starts with SC-1's switch and exceptions,
+        // as seeding will copy them (upgrade::ensure_seeded).
+        let unseeded = self.pack_versions.unseeded;
+        self.packs = if unseeded {
+            pack_switches(&upgrade::copy_sc1_switch(&set.pack_switches))
+        } else {
+            pack_switches(&set.pack_switches)
+        };
         self.rules = set
             .rules
             .iter()
@@ -485,6 +526,24 @@ impl Engine {
                 }
             })
             .collect();
+        if unseeded {
+            let copies: Vec<Exception> = self
+                .exceptions
+                .iter()
+                .filter(|e| e.rule == RuleRef::Pack(PackRule::Sc1))
+                .filter(|e| {
+                    !self
+                        .exceptions
+                        .iter()
+                        .any(|o| o.rule == RuleRef::Pack(PackRule::Sc2) && o.what == e.what)
+                })
+                .map(|e| Exception {
+                    rule: RuleRef::Pack(PackRule::Sc2),
+                    ..e.clone()
+                })
+                .collect();
+            self.exceptions.extend(copies);
+        }
         self.allow = set
             .allow
             .iter()
@@ -578,6 +637,7 @@ mod tests {
                 value: vec![9; 20],
             }],
             allow: vec![(6, "group:goodgroup".into())],
+            ..RuleSet::default()
         };
         let lists = crate::Lists {
             sexual: crate::TermSet::default(),

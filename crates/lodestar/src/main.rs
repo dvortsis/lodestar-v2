@@ -12,6 +12,7 @@ mod fsdetect;
 mod http;
 mod insights;
 mod logging;
+mod memstats;
 mod metrics;
 mod ops;
 mod percolator;

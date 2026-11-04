@@ -25,6 +25,7 @@ pub mod hot;
 pub mod import;
 mod insights;
 mod insights_days;
+pub mod memstats;
 mod reporting;
 mod rules;
 mod saved;
@@ -68,7 +69,10 @@ pub use insights_days::{
     repair_rollups,
 };
 pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
-pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
+pub use rules::{
+    ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, PACKS_APPLIED_KEYS, PACKS_SEEDED_KEY,
+    PackSeed, PackVersionRows, RuleRow, RuleSet, StoredText,
+};
 pub use rusqlite;
 pub use saved::{
     Alert, PromotedDue, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits,

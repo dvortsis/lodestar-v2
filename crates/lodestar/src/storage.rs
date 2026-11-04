@@ -43,10 +43,15 @@ pub struct Gauges {
     pub sampled_at: AtomicU64,
     /// Parts that failed, one per part per sample.
     pub errors: AtomicU64,
+    /// The memory attribution gauges (X-mem-gauges), sampled on the same
+    /// tick. Each is absent on its own when it can't be read; they don't
+    /// count in `errors` or hold back `sampled_at`.
+    pub mem: crate::memstats::Gauges,
 }
 
 /// One sample: each part on its own, so one failure keeps only its value.
 pub fn sample(paths: &Paths, g: &Gauges, max_entries: usize) {
+    crate::memstats::sample(&g.mem);
     let wal = wal_path(&paths.db);
     let parts: [(io::Result<u64>, &AtomicU64); 3] = [
         (file_len(&paths.db, false), &g.db_bytes),

@@ -24,7 +24,7 @@ pub mod load;
 pub mod log_events;
 mod matcher;
 pub mod normalize;
-mod packs;
+pub mod packs;
 mod payload;
 mod prefilter;
 pub mod reclassify;

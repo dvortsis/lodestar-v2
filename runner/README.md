@@ -112,6 +112,7 @@ Use `create_session` with these settings:
 - **title:** `<id>: <title>`
 - **permission mode:** inherited, so the runner must itself run in **Auto**. Never launch in Plan, because a Plan-mode session stops for approvals nobody is watching.
 - **prompt:** the brief, followed by the standing instructions below
+- **then record the slot:** in the same wake, update `slots` in `state.json` on `runner-state` (`updated`, and `items` of `slot`, `slice`, `role`, `agent`, `doing`, optional `since`, and `status: "idle"` for a slot kept but empty: one plain sentence for a non-technical reader). Do the same whenever a session finishes, is archived or changes task. No PR is needed. The number of slots is `limits.phase_total` in `slices.yaml`. The owner reads this on the dashboard as "what each slot is doing"; it warns when `updated` is over 24 hours old, when a slot names a slice that has merged, and when an open slice PR is in no slot.
 
 **Standing instructions for every slice session:**
 > You are building one slice of Lodestar for an automated runner.
