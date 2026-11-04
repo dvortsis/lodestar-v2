@@ -17,6 +17,10 @@
 //!   host list when it has one ([`Endpoints`]). [`Fetch`] never follows
 //!   redirects (SRC-0), so each hop is a new request, checked again;
 //!   [`send_following`] bounds the hops.
+//! - **Streamed bodies** ([`Fetch::fetch_stream`], SRC-12b) take the same
+//!   checks, and the kill switch's in-flight abort goes on covering the
+//!   body after the headers. Their timeout and byte cap are the plugin's,
+//!   held to `net`'s own ceiling.
 //! - **Credentials** for a SOCKS5 proxy come from [`EgressCredentials`]
 //!   (the per-source credential store, SRC-4) and never appear in a log,
 //!   an error or a `Debug` string.
@@ -39,7 +43,10 @@ use lodestar_integrations::net::{
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::http::{Client, Fetch, HttpError, MAX_BODY, Method, Request, Response, host_key};
+use crate::http::{
+    BodyStream, Client, Fetch, HttpError, MAX_BODY, Method, Request, Response, StreamLimits,
+    StreamResponse, host_key,
+};
 use crate::manifest::Endpoint;
 use crate::plugin::BoxFuture;
 
@@ -661,7 +668,8 @@ pub struct PluginEgress {
     probed_up: Mutex<Option<Instant>>,
     probing: tokio::sync::Mutex<()>,
     notice: Option<&'static str>,
-    counters: Counters,
+    /// Shared with the bodies of streamed answers still being read.
+    counters: Arc<Counters>,
     /// Refusals before sending since the route last let a request
     /// through, for [`down_delay`].
     down_streak: AtomicU32,
@@ -695,7 +703,7 @@ impl PluginEgress {
             probed_up: Mutex::new(None),
             probing: tokio::sync::Mutex::new(()),
             notice: None,
-            counters: Counters::default(),
+            counters: Arc::default(),
             down_streak: Default::default(),
         };
         match egress.client {
@@ -789,15 +797,24 @@ impl PluginEgress {
         }
     }
 
-    async fn send(&self, req: &Request) -> Result<Response, HttpError> {
+    /// The endpoint policy and the kill switch, before anything is sent:
+    /// the client to send with, or the refusal (paced while the route is
+    /// down). `pace_by` ends the pacing early: a streamed request's
+    /// refusal comes back within its plugin's timeout, as the kill
+    /// switch's answer, before the kit's own deadline would fire.
+    async fn admit(
+        &self,
+        req: &Request,
+        pace_by: Option<Instant>,
+    ) -> Result<&GuardedClient, HttpError> {
         if let Err(e) = self.endpoints.check(&req.url) {
             Counters::bump(&self.counters.policy_refusals);
             return Err(refused(&e));
         }
-        let client = match self.gate().await {
+        match self.gate().await {
             Ok(c) => {
                 self.down_streak.store(0, Ordering::Relaxed);
-                c
+                Ok(c)
             }
             Err(reason) => {
                 Counters::bump(&self.counters.kill_switch_refusals);
@@ -813,13 +830,19 @@ impl PluginEgress {
                 self.down_streak
                     .store(streak.saturating_add(1), Ordering::Relaxed);
                 let mut up = self.state.subscribe();
+                let paced = Instant::now() + down_delay(streak);
+                let until = pace_by.map_or(paced, |by| by.min(paced));
                 tokio::select! {
-                    () = tokio::time::sleep(down_delay(streak)) => {}
+                    () = tokio::time::sleep_until(until) => {}
                     _ = up.wait_for(|s| *s == RouteState::Up) => {}
                 }
-                return Err(HttpError::EgressDown(reason.to_string()));
+                Err(HttpError::EgressDown(reason.to_string()))
             }
-        };
+        }
+    }
+
+    async fn send(&self, req: &Request) -> Result<Response, HttpError> {
+        let client = self.admit(req, None).await?;
         let mut down = self.state.subscribe();
         let exchange = client.exchange(
             req.method.as_str(),
@@ -852,28 +875,252 @@ impl PluginEgress {
                     body,
                 })
             }
-            Err(e @ (NetError::Blocked(_) | NetError::InvalidUrl(_))) => {
+            Err(e) => Err(self.failed(e).await),
+        }
+    }
+
+    /// What a failed exchange means. A refusal by the policy is the
+    /// policy's; a failed connection may mean the route just went down,
+    /// so it re-probes: the status then says so, and a route outage is
+    /// the kill switch's error, not the host's (which would back it off).
+    async fn failed(&self, e: NetError) -> HttpError {
+        match e {
+            NetError::Blocked(_) | NetError::InvalidUrl(_) => {
                 Counters::bump(&self.counters.policy_refusals);
-                Err(refused(&e))
+                refused(&e)
             }
-            Err(e) => {
-                // A failed connection may mean the route just went down:
-                // re-probe, so the status says so, and so a route outage
-                // is the kill switch's error, not the host's (which would
-                // back it off).
+            e => {
                 if matches!(e, NetError::Connect | NetError::Timeout)
                     && self.probe.ttl().is_some()
                     && let RouteState::Down(reason) = self.check_now().await
                 {
                     Counters::bump(&self.counters.kill_switch_aborts);
+                    return HttpError::EgressDown(format!("went down in flight: {reason}"));
+                }
+                Counters::bump(&self.counters.transport_failures);
+                HttpError::Transport(e.to_string())
+            }
+        }
+    }
+
+    /// As [`send`](Self::send), with the body streamed: the same endpoint
+    /// policy, kill switch and in-flight abort, which goes on covering the
+    /// body after the headers ([`EgressBody`]). The transport is given the
+    /// plugin's timeout and byte cap in place of [`MAX_BODY`] and the
+    /// factory's timeout; `net` holds both to its own ceiling as well.
+    async fn send_stream(
+        &self,
+        req: &Request,
+        limits: StreamLimits,
+    ) -> Result<StreamResponse, HttpError> {
+        let limits = limits.clamped();
+        // Half the timeout: well inside the kit's deadline, which starts
+        // a moment earlier.
+        let pace_by = Instant::now() + limits.timeout / 2;
+        let client = self.admit(req, Some(pace_by)).await?;
+        let mut down = self.state.subscribe();
+        let exchange = client.exchange_stream(
+            req.method.as_str(),
+            &req.url,
+            &req.headers,
+            req.body.clone(),
+            limits.max_bytes,
+            limits.timeout,
+        );
+        // The headers' idle wait starts here, once admitted: a refusal
+        // while the route is down (paced up to `DOWN_DELAY_MAX`) is the
+        // kill switch's answer, never a stall the host is blamed for.
+        let headers_by = Instant::now() + limits.idle;
+        let result = tokio::select! {
+            r = exchange => r,
+            Ok(state) = down.wait_for(|s| matches!(s, RouteState::Down(_))) => {
+                let reason = match *state {
+                    RouteState::Down(r) => r,
+                    _ => DownReason::ClientUnavailable,
+                };
+                Counters::bump(&self.counters.kill_switch_aborts);
+                return Err(HttpError::EgressDown(format!("went down in flight: {reason}")));
+            }
+            () = tokio::time::sleep_until(headers_by) => {
+                Counters::bump(&self.counters.transport_failures);
+                return Err(HttpError::Transport(crate::http::STALLED.into()));
+            }
+        };
+        match result {
+            Ok(net::StreamExchange {
+                status,
+                headers,
+                body,
+            }) => {
+                Counters::bump(&self.counters.answered);
+                Ok(StreamResponse {
+                    status,
+                    headers,
+                    body: Box::new(EgressBody::new(
+                        body,
+                        down,
+                        Arc::clone(&self.probe),
+                        Arc::clone(&self.counters),
+                    )),
+                })
+            }
+            Err(e) => Err(self.failed(e).await),
+        }
+    }
+}
+
+/// How often a streamed body re-probes its route by itself, at the
+/// least: a body can stay open for up to an hour, so it doesn't rely on
+/// [`PluginEgress::monitor`] or another request to notice a route that
+/// went down. A route's own probe TTL is used when that's longer.
+pub const BODY_REPROBE: Duration = Duration::from_secs(2);
+
+/// A streamed answer's body, still under its plugin's kill switch: a
+/// route that goes down while the body is being read abandons it with
+/// [`HttpError::EgressDown`], as it would a buffered body. The body sees
+/// a published outage at once, and on a checked route also probes the
+/// route itself every [`BODY_REPROBE`] (or the probe's TTL) while it
+/// waits for a chunk. A connection that fails part way on a checked
+/// route is re-probed too, so a route outage reads as the kill switch's
+/// and not the host's. (The body's probes don't publish a new state: the
+/// monitor, or the plugin's next request, does.) Fused: after the end,
+/// an error or an abort it never reads again.
+struct EgressBody {
+    /// Dropped the moment the body ends, fails or is aborted, so the
+    /// connection on a route that went down closes at once.
+    body: Option<net::StreamBody>,
+    down: watch::Receiver<RouteState>,
+    probe: Arc<dyn RouteProbe>,
+    counters: Arc<Counters>,
+    next_probe: Instant,
+    /// The error every later read returns, or `Some(None)` once ended.
+    done: Option<Option<HttpError>>,
+}
+
+impl EgressBody {
+    fn new(
+        body: net::StreamBody,
+        down: watch::Receiver<RouteState>,
+        probe: Arc<dyn RouteProbe>,
+        counters: Arc<Counters>,
+    ) -> EgressBody {
+        EgressBody {
+            next_probe: Instant::now() + reprobe_every(&*probe),
+            body: Some(body),
+            down,
+            probe,
+            counters,
+            done: None,
+        }
+    }
+
+    async fn next(&mut self) -> Result<Option<Vec<u8>>, HttpError> {
+        match &self.done {
+            Some(None) => return Ok(None),
+            Some(Some(e)) => return Err(e.clone()),
+            None => {}
+        }
+        let r = self.read().await;
+        if !matches!(r, Ok(Some(_))) {
+            self.body = None;
+        }
+        match &r {
+            Ok(Some(_)) => {}
+            Ok(None) => self.done = Some(None),
+            Err(e) => self.done = Some(Some(e.clone())),
+        }
+        r
+    }
+
+    async fn read(&mut self) -> Result<Option<Vec<u8>>, HttpError> {
+        let checked = self.probe.ttl().is_some();
+        let every = reprobe_every(&*self.probe);
+        let EgressBody {
+            body,
+            down,
+            probe,
+            counters,
+            next_probe,
+            ..
+        } = self;
+        let Some(body) = body.as_mut() else {
+            return Ok(None);
+        };
+        let chunk = body.chunk();
+        tokio::pin!(chunk);
+        let read = loop {
+            let step = tokio::select! {
+                biased;
+                reason = went_down(down) => Step::Down(reason),
+                () = tokio::time::sleep_until(*next_probe), if checked => Step::Probe,
+                r = &mut chunk => Step::Read(r),
+            };
+            match step {
+                Step::Down(reason) => {
+                    Counters::bump(&counters.kill_switch_aborts);
                     return Err(HttpError::EgressDown(format!(
                         "went down in flight: {reason}"
                     )));
                 }
-                Counters::bump(&self.counters.transport_failures);
+                Step::Probe => {
+                    if let Err(reason) = probe.probe().await {
+                        Counters::bump(&counters.kill_switch_aborts);
+                        return Err(HttpError::EgressDown(format!(
+                            "went down in flight: {reason}"
+                        )));
+                    }
+                    *next_probe = Instant::now() + every;
+                }
+                Step::Read(r) => break r,
+            }
+        };
+        match read {
+            Ok(chunk) => Ok(chunk),
+            Err(e) => {
+                if matches!(e, NetError::Connect | NetError::Timeout | NetError::Http)
+                    && checked
+                    && let Err(reason) = probe.probe().await
+                {
+                    Counters::bump(&counters.kill_switch_aborts);
+                    return Err(HttpError::EgressDown(format!(
+                        "went down in flight: {reason}"
+                    )));
+                }
+                Counters::bump(&counters.transport_failures);
                 Err(HttpError::Transport(e.to_string()))
             }
         }
+    }
+}
+
+/// What a streamed body's wait ended on.
+enum Step {
+    Down(DownReason),
+    Probe,
+    Read(Result<Option<Vec<u8>>, NetError>),
+}
+
+/// Resolves when the route is published as down, with why. If the state
+/// can no longer change (the egress is gone, so nothing watches the route
+/// any more), that counts as down too: it fails closed rather than
+/// leaving the body without its abort.
+async fn went_down(rx: &mut watch::Receiver<RouteState>) -> DownReason {
+    match rx.wait_for(|s| matches!(s, RouteState::Down(_))).await {
+        Ok(state) => match *state {
+            RouteState::Down(r) => r,
+            _ => DownReason::ClientUnavailable,
+        },
+        Err(_) => DownReason::ClientUnavailable,
+    }
+}
+
+fn reprobe_every(probe: &dyn RouteProbe) -> Duration {
+    probe.ttl().unwrap_or(BODY_REPROBE).max(BODY_REPROBE)
+}
+
+impl BodyStream for EgressBody {
+    fn next_chunk(&mut self) -> BoxFuture<'_, Result<Option<Vec<u8>>, HttpError>> {
+        Box::pin(self.next())
     }
 }
 
@@ -886,6 +1133,14 @@ fn refused(e: &NetError) -> HttpError {
 impl Fetch for PluginEgress {
     fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
         Box::pin(self.send(req))
+    }
+
+    fn fetch_stream<'a>(
+        &'a self,
+        req: &'a Request,
+        limits: StreamLimits,
+    ) -> BoxFuture<'a, Result<StreamResponse, HttpError>> {
+        Box::pin(self.send_stream(req, limits))
     }
 }
 
