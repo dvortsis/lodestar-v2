@@ -187,6 +187,8 @@ pub(crate) async fn siblings(
     let cancel = CancelToken::new();
     let _guard = cancel.cancel_on_drop();
     tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        tests::hook(&s, tests::At::Started);
         let (row, enrichment) = {
             let store = s.reader.lock().expect("reader lock");
             // The drawer opens torrents a filter hid (`hidden=true`), so
@@ -245,7 +247,7 @@ fn other_versions(
         // reader's lock: the bulk of the work, so checked each time.
         cancel.check().map_err(search::search_error)?;
         #[cfg(test)]
-        tests::ON_CANDIDATE.with(|f| f.borrow_mut().as_mut().map(|f| f()));
+        tests::hook(s, tests::At::Candidate);
         if h.id as i64 == id {
             continue;
         }
@@ -536,12 +538,49 @@ impl FileList {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    thread_local! {
-        /// Called at each sibling candidate, after its cancel check.
-        pub(super) static ON_CANDIDATE: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
-            const { std::cell::RefCell::new(None) };
+    /// Where [`hook`] is called from.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum At {
+        /// The siblings handler's blocking work begins.
+        Started,
+        /// A sibling candidate, after its cancel check.
+        Candidate,
+    }
+
+    type Hook = Box<dyn FnMut(At) + Send>;
+
+    /// Hooks by the address of the state's reader, so tests running at
+    /// once (and the blocking pool's threads) each see only their own.
+    static HOOKS: Mutex<Vec<(usize, Hook)>> = Mutex::new(Vec::new());
+
+    pub(super) fn hook(s: &ApiState, at: At) {
+        let key = Arc::as_ptr(&s.reader) as usize;
+        let mut hooks = HOOKS.lock().unwrap_or_else(|e| e.into_inner());
+        for (_, f) in hooks.iter_mut().filter(|(k, _)| *k == key) {
+            f(at);
+        }
+    }
+
+    /// Sets `s`'s hook until the returned guard drops.
+    fn set_hook(s: &ApiState, f: impl FnMut(At) + Send + 'static) -> impl Drop {
+        let key = Arc::as_ptr(&s.reader) as usize;
+        HOOKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((key, Box::new(f)));
+        struct Unset(usize);
+        impl Drop for Unset {
+            fn drop(&mut self) {
+                HOOKS
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .retain(|(k, _)| *k != self.0);
+            }
+        }
+        Unset(key)
     }
 
     /// One metainfo dict: a single file named after the torrent.
@@ -665,48 +704,62 @@ mod tests {
     fn a_cancel_during_the_candidates_stops_at_the_next() {
         let (s, id, identity, _dir) = versions();
         let cancel = CancelToken::new();
-        let visits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let visits = Arc::new(AtomicUsize::new(0));
         let (token, seen) = (cancel.clone(), visits.clone());
-        ON_CANDIDATE.with(|f| {
-            *f.borrow_mut() = Some(Box::new(move || {
-                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let _hook = set_hook(&s, move |at| {
+            if at == At::Candidate {
+                seen.fetch_add(1, Ordering::Relaxed);
                 token.cancel();
-            }))
+            }
         });
         let r = run(&s, id, &identity, &cancel);
-        ON_CANDIDATE.with(|f| *f.borrow_mut() = None);
         assert!(is_cancelled(&r), "{r:?}");
-        assert_eq!(visits.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(visits.load(Ordering::Relaxed), 1);
     }
 
-    /// The handler's drop guard: a request abandoned while its work waits
-    /// on the shared reader stops instead of reading every candidate.
-    #[test]
-    fn an_abandoned_request_stops() {
-        let (s, id, identity, _dir) = versions();
-        let s = Arc::new(s);
-        let cancel = CancelToken::new();
-        let guard = cancel.cancel_on_drop();
-        let (done_tx, done) = std::sync::mpsc::channel();
-        let held = s.reader.lock().unwrap();
-        let worker = {
-            let (s, identity) = (s.clone(), identity.clone());
-            std::thread::spawn(move || {
-                let _ = done_tx.send(run(&s, id, &identity, &cancel));
-            })
+    /// Through the handler: a request abandoned (its future dropped, as
+    /// axum drops it when the client disconnects) while its blocking work
+    /// waits on the shared reader reads no candidate once it can go on.
+    #[tokio::test]
+    // Holding the reader across the awaits is the point: it keeps the
+    // blocking work waiting until the request is gone. Nothing else in
+    // this runtime takes that lock.
+    #[allow(clippy::await_holding_lock)]
+    async fn an_abandoned_siblings_request_reads_no_candidate() {
+        let (s, id, _, _dir) = versions();
+        let hash = {
+            let store = s.reader.lock().unwrap();
+            torrents::hex(&store.torrent(id).unwrap().unwrap().info_hash.0)
         };
-        // The client goes away; only then can the worker read the store.
-        drop(guard);
-        drop(held);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let r = loop {
-            match done.recv_timeout(Duration::from_millis(50)) {
-                Ok(r) => break r,
-                Err(_) => assert!(Instant::now() < deadline, "the worker never finished"),
+        let (started_tx, mut started) = tokio::sync::mpsc::unbounded_channel();
+        let candidates = Arc::new(AtomicUsize::new(0));
+        let seen = candidates.clone();
+        let _hook = set_hook(&s, move |at| match at {
+            At::Started => {
+                let _ = started_tx.send(());
             }
-        };
-        worker.join().unwrap();
-        assert!(is_cancelled(&r), "{r:?}");
+            At::Candidate => {
+                seen.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let baseline = Arc::strong_count(&s.reader);
+        let held = s.reader.lock().unwrap();
+        let request = tokio::spawn(siblings(State(s.clone()), Path(hash)));
+        // The handler is past its guard and its work is on the blocking
+        // pool, waiting for the reader.
+        tokio::time::timeout(Duration::from_secs(30), started.recv())
+            .await
+            .expect("the siblings work never started");
+        request.abort();
+        let _ = request.await;
+        drop(held);
+        // The work ends (dropping its state) once it stops.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Arc::strong_count(&s.reader) > baseline {
+            assert!(Instant::now() < deadline, "the siblings work never ended");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(candidates.load(Ordering::Relaxed), 0);
     }
 
     fn record(release: &[(&str, &str)]) -> Record {
