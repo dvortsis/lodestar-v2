@@ -46,8 +46,9 @@ pub struct TorrentDoc {
 }
 
 /// The provenance fields of a document (§18.6): `verified`, `network`
-/// and `source`. The default is a stored torrent's (verified, clearnet
-/// BitTorrent) with no sources named.
+/// and `source`. There's no default: each kind of document says what it
+/// is, so one built from claims can't be indexed as verified by
+/// omission (SRC-3b builds those).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocProvenance {
     pub verified: Verified,
@@ -57,8 +58,11 @@ pub struct DocProvenance {
     pub sources: Vec<String>,
 }
 
-impl Default for DocProvenance {
-    fn default() -> Self {
+impl DocProvenance {
+    /// A stored torrent's: verified clearnet BitTorrent metadata
+    /// (`torrents` holds nothing else, §18.5), its sources filled in by
+    /// the indexer.
+    pub fn stored_torrent() -> DocProvenance {
         DocProvenance {
             verified: Verified::Yes,
             network: Network::Bt,
@@ -232,7 +236,7 @@ impl TorrentDoc {
             discovered_at: row.discovered_at,
             metadata_at: row.metadata_at,
             enriched: DocEnrichment::default(),
-            provenance: DocProvenance::default(),
+            provenance: DocProvenance::stored_torrent(),
         }
     }
 
