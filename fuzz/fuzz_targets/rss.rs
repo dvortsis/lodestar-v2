@@ -1,6 +1,8 @@
 //! RSS 2.0/Atom parsing never panics, and never keeps more than the caps
 //! allow. The first byte picks tight caps, so fuzzed documents reach
-//! every cap; the rest is the body.
+//! every cap; the rest is the body. The body is also used as the value of
+//! a bare `<infohash>` (Academic Torrents), which must get the same
+//! verdict as the same value in `nyaa:infoHash`.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -34,4 +36,22 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(summary.kept as usize, kept);
         assert!(kept + summary.skipped.total() as usize <= limits.max_items);
     }
+
+    // The bare element validates exactly as Nyaa's does. Short values
+    // only, so the two documents sit on the same side of every cap.
+    if body.len() > 4096 {
+        return;
+    }
+    let value = String::from_utf8_lossy(body)
+        .replace('&', "&amp;")
+        .replace('<', "&lt;");
+    let verdict = |el: &str| {
+        let doc = format!(
+            r#"<rss xmlns:nyaa="https://nyaa.si/xmlns/nyaa"><channel><item><{el}>{value}</{el}></item></channel></rss>"#
+        );
+        let mut hashes = Vec::new();
+        let s = rss::parse_each(doc.as_bytes(), &LIMITS, |it| hashes.push(it.hashes));
+        (hashes, s.skipped, s.stop)
+    };
+    assert_eq!(verdict("infohash"), verdict("nyaa:infoHash"));
 });
