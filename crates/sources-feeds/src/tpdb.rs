@@ -20,8 +20,10 @@
 //!
 //! **What it keeps is only what the enrichment claims can store** (plan
 //! `docs/plan/2026-11-04-v06-rulepacks.md`, ENR-0): the item's kind, id,
-//! title, studio (`site.name`) and release date, and each performer's id
-//! and name. Everything else is passed over unread: descriptions, images,
+//! title, studio (`site.name`) and release date, and each performer's
+//! name. A performer's id isn't kept (owner §2.37, Q4: no per-performer
+//! pages or cross-item lists), so nothing here can link a person across
+//! items. Everything else is passed over unread: descriptions, images,
 //! tags, hashes, URLs and, above all, every personal field of a person.
 //! A performer's `extra`/`extras`, `bio` and `parent` objects, where the
 //! service puts birthdays, birthplaces, measurements and the like (plan
@@ -101,11 +103,10 @@ pub struct Match {
     pub released: Option<String>,
 }
 
-/// A performer on a match: id and name only.
+/// A performer on a match: the name only. No id, so performers can't be
+/// joined across matches (owner §2.37, plan Q4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Performer {
-    /// As [`Match::id`].
-    pub id: String,
     /// At most [`MAX_NAME`] bytes, hidden characters removed, not empty.
     pub name: String,
 }
@@ -116,7 +117,7 @@ pub struct Performers {
     /// At most [`Limits::max_performers`], in the service's order.
     pub list: Vec<Performer>,
     /// Some were left out: over [`Limits::max_performers`], an entry
-    /// without a usable id and name (a string over [`Limits::max_text`]
+    /// without a usable name (a string over [`Limits::max_text`]
     /// or with a lone surrogate included), or `performers` being neither
     /// a list nor `null`.
     pub truncated: bool,
@@ -403,10 +404,10 @@ impl Parser<'_, '_> {
         Ok(())
     }
 
-    /// One `performers` entry: its `id` and `name` only. The rest
-    /// (`extra`, `bio`, `parent`, images) is passed over undecoded.
+    /// One `performers` entry: its `name` only. The rest (`id`, `extra`,
+    /// `bio`, `parent`, images) is passed over undecoded.
     ///
-    /// A bad string in the `id` or `name` drops only the performer, so
+    /// A bad `name` string drops only the performer, so
     /// whether a match is kept doesn't depend on whether performers are
     /// read ([`Limits::max_performers`], plan Q4). An over-long array
     /// still spoils the item, read or not, as anywhere in it.
@@ -415,20 +416,14 @@ impl Parser<'_, '_> {
             list.truncated = true;
             return self.skip_in(d);
         }
-        let (mut pid, mut name) = (None, None);
+        let mut name = None;
         let mut own = Draft::default();
         // Past the cap, the entry is only read past.
         let keep = list.list.len() < self.l.max_performers;
         self.object(|p, k| {
             match k {
-                // Only a string (or an id's number) is read with `own`;
-                // anything else is skipped against the item as usual.
-                "id" if keep && pid.is_none() => {
-                    pid = Some(match p.j.peek() {
-                        Some(b'"' | b'-' | b'0'..=b'9') => p.id(&mut own)?,
-                        _ => p.skip_in(d).map(|()| None)?,
-                    });
-                }
+                // Only a string is read with `own`; anything else is
+                // skipped against the item as usual.
                 "name" if keep && name.is_none() => {
                     name = Some(match p.j.peek() {
                         Some(b'"') => p.text(&mut own)?.and_then(|s| clean_name(&s)),
@@ -439,9 +434,9 @@ impl Parser<'_, '_> {
             }
             Ok(())
         })?;
-        // `own` holds only the faults of this entry's two strings.
-        match (keep && own.bad.is_none(), pid.flatten(), name.flatten()) {
-            (true, Some(id), Some(name)) => list.list.push(Performer { id, name }),
+        // `own` holds only the faults of this entry's name.
+        match (keep && own.bad.is_none(), name.flatten()) {
+            (true, Some(name)) => list.list.push(Performer { name }),
             _ => list.truncated = true,
         }
         Ok(())

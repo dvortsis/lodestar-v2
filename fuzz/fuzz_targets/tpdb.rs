@@ -38,7 +38,7 @@ fuzz_target!(|data: &[u8]| {
             assert!(m.released.as_deref().is_none_or(|d| d.len() == 10));
             assert!(f.performers.list.len() <= limits.max_performers);
             for p in &f.performers.list {
-                assert!(is_id(&p.id) && clean(&p.name, MAX_NAME));
+                assert!(clean(&p.name, MAX_NAME));
             }
         });
         assert_eq!(page.kept as usize, kept);

@@ -24,11 +24,8 @@ fn with(body: &[u8], limits: &Limits) -> Answer {
     Answer { found, page }
 }
 
-fn performer(id: &str, name: &str) -> Performer {
-    Performer {
-        id: id.into(),
-        name: name.into(),
-    }
+fn performer(name: &str) -> Performer {
+    Performer { name: name.into() }
 }
 
 fn is_id(s: &str) -> bool {
@@ -52,7 +49,7 @@ fn check(a: &Answer, limits: &Limits) {
         assert!(m.released.as_deref().is_none_or(|d| d.len() == 10));
         assert!(f.performers.list.len() <= limits.max_performers);
         for p in &f.performers.list {
-            assert!(is_id(&p.id) && clean(&p.name, MAX_NAME));
+            assert!(clean(&p.name, MAX_NAME));
         }
     }
 }
@@ -85,17 +82,12 @@ fn scene_search() {
             },
             performers: Performers {
                 list: vec![
-                    performer(
-                        "00000000-0000-4000-8000-0000000000a1",
-                        "Example Performer One"
-                    ),
-                    performer(
-                        "00000000-0000-4000-8000-0000000000a2",
-                        "Example Performer Two"
-                    ),
+                    performer("Example Performer One"),
+                    performer("Example Performer Two"),
+                    // Ids aren't read, so a missing one changes nothing.
+                    performer("Example Performer Without Id"),
                 ],
-                // The third has no id.
-                truncated: true,
+                truncated: false,
             },
         }
     );
@@ -130,7 +122,7 @@ fn lookups() {
                 released: Some("2023-11-04".into()),
             },
             performers: Performers {
-                list: vec![performer("2000004", "Example Performer Three")],
+                list: vec![performer("Example Performer Three")],
                 truncated: false,
             },
         }
@@ -164,9 +156,43 @@ fn no_personal_fields() {
             "https://",
             "Synthetic Tag",
             "fedcba9876543210",
+            // Performer ids (owner §2.37, Q4): none is kept.
+            "0000000000a",
+            "2000001",
+            "2000004",
         ] {
             assert!(!out.contains(never), "{name:?} leaked {never}: {out}");
         }
+    }
+}
+
+/// Owner §2.37 (Q4): a performer's id is neither kept nor needed. The
+/// type has no id field; this checks no id text leaks through the name
+/// either, in any id shape the service uses. This slice sends no request;
+/// ENR-4 builds them and checks its own.
+#[test]
+fn no_performer_ids() {
+    let body = br#"{"data":[{"id":"s","performers":[
+        {"id":"perf-uuid-1111","_id":987654321,"slug":"perf-slug-2222","name":"Name One",
+         "parent":{"id":"perf-uuid-3333","_id":123123123,"name":"Parent"}},
+        {"id":444455556,"name":"Name Two"}]}]}"#;
+    let a = parse(body);
+    let names: Vec<&str> = a.found[0]
+        .performers
+        .list
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(names, ["Name One", "Name Two"]);
+    let out = format!("{a:?}");
+    for id in [
+        "perf-uuid",
+        "perf-slug",
+        "987654321",
+        "123123123",
+        "444455556",
+    ] {
+        assert!(!out.contains(id), "{id} leaked: {out}");
     }
 }
 
@@ -332,11 +358,20 @@ fn text_cap() {
         assert_eq!((over.page.stop, ids(&over)), (None, vec!["b"]), "{field}");
         assert_eq!(over.page.skipped.over_cap, 1, "{field}");
     }
-    // A performer's id and name are measured too, but over the cap only
-    // the performer is dropped: the match doesn't depend on whether
+    // A performer's id is never decoded, so its length doesn't matter.
+    let long_id = br#"{"data":{"id":"a","performers":[{"id":"abcdef","name":"N"}]}}"#;
+    let a = with(
+        long_id,
+        &Limits {
+            max_text: 5,
+            ..WIDE
+        },
+    );
+    assert_eq!(a.found[0].performers.list, vec![performer("N")]);
+    // A performer's name is measured, but over the cap only the
+    // performer is dropped: the match doesn't depend on whether
     // performers are read (plan Q4).
     for field in [
-        r#"{"id":"abcdef","name":"N"}"#,
         r#"{"id":"p","name":"abcdef"}"#,
         r#"{"id":"p","name":"\ud800"}"#,
     ] {
@@ -356,7 +391,7 @@ fn text_cap() {
             let want = if max_performers == 0 {
                 vec![]
             } else {
-                vec![performer("q", "Q")]
+                vec![performer("Q")]
             };
             assert_eq!((&p.list, p.truncated), (&want, true), "{field}");
         }
@@ -408,7 +443,7 @@ fn performer_cap() {
     assert_eq!((all.list.len(), all.truncated), (3, false));
     let two = at(2);
     assert_eq!((two.list.len(), two.truncated), (2, true));
-    assert_eq!(two.list[1], performer("p2", "Two"));
+    assert_eq!(two.list[1], performer("Two"));
     // 0 reads none: the way to drop them at the source.
     let none = at(0);
     assert_eq!((none.list.len(), none.truncated), (0, true));
@@ -476,10 +511,7 @@ fn field_rules() {
     // Non-objects and a name of only hidden characters are dropped; the
     // first `name` wins.
     let x = &a.found[1].performers;
-    assert_eq!(
-        (x.list.clone(), x.truncated),
-        (vec![performer("q", "Q")], true)
-    );
+    assert_eq!((x.list.clone(), x.truncated), (vec![performer("Q")], true));
     let y = &a.found[2];
     assert_eq!(
         (y.matched.studio.as_deref(), y.performers.truncated),
@@ -708,7 +740,7 @@ proptest! {
             let want: Vec<Performer> = g
                 .performers
                 .iter()
-                .map(|(id, n)| performer(id, &t(n)))
+                .map(|(_, n)| performer(&t(n)))
                 .collect();
             prop_assert_eq!(&f.performers.list, &want);
             prop_assert!(!f.performers.truncated);
