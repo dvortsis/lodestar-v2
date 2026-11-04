@@ -158,6 +158,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "json"
+path = "fuzz_targets/json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "claims"
 path = "fuzz_targets/claims.rs"
 test = false
