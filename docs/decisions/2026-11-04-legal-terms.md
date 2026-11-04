@@ -14,9 +14,9 @@ The owner asked, while reviewing the consent drafts in `docs/decisions/2026-11-0
 3. **Settings → About gains a "Legal" section:** the Terms (with version), the AGPL-3.0 licence, and the existing third-party licences list.
 4. **The Restricted and Overlay consent screens** keep their own texts and gain a link to the Terms, with the closing lines amended below.
 5. **Outside the app:** one sentence and a link in the README, in the user guide's chapter 1 (§1.2), and in each Unraid template's `Overview`, so the notice is seen before install. These add notice; the in-app checkbox is what forms the contract.
-6. **Owner-set placeholders** in Terms §14 (`[the owner's state]`, `[contact address]`) are filled by the owner before the Terms ship; the first-run step isn't built until they are.
+6. **Terms §14 is filled** (Colorado; the public repository as contact), so the first-run step can be built.
 
-**Slices.** The in-app parts (1–4) are one Sonnet-eligible UI slice plus an Opus-owned API change (`POST /setup`, the login gate), to be scheduled by the runner before SRC-15b, since SRC-15b ships the consent screens. The texts are owner-approved copy once the owner has filled §14, so the slice doesn't rewrite them; en and zh message keys hold the UI labels only, and the Terms body is served as one Markdown document rendered in-app.
+**Slices.** The in-app parts (1–4) are one Sonnet-eligible UI slice plus an Opus-owned API change (`POST /setup`, the login gate), to be scheduled by the runner before SRC-15b, since SRC-15b ships the consent screens. The texts are owner-approved copy, so the slice doesn't rewrite them; en and zh message keys hold the UI labels only, and the Terms body is served as one Markdown document rendered in-app.
 
 ## Amendments to SRC-4's draft consent texts
 These apply to the Restricted and Overlay drafts in `docs/decisions/2026-11-02-SRC-4.md`. Each is a change in substance, so `consent::text_version` for the class is raised when SRC-15b adopts the texts (SRC-4's rule). External and Account are unchanged.
@@ -35,7 +35,7 @@ These apply to the Restricted and Overlay drafts in `docs/decisions/2026-11-02-S
 Nothing the project publishes shows or suggests using Lodestar to find commercial films, music, software or books without permission: not the README, screenshots, release notes, fixtures, plugin descriptions, in-app examples or the Unraid templates. Fixture and screenshot titles stay generic or public-domain. This is the *Grokster* / *Fung* evidence rule: marketing is what turned those cases. It's a refinement, recorded under §2.19 and flagged to the owner.
 
 ## Owner queue (needs the owner, not decided here)
-1. **Fill Terms §14:** the governing-law state and a contact address.
+1. ~~Fill Terms §14.~~ Done 2026-11-04: the owner is in Colorado, so Colorado law governs, and the contact is the public repository. No postal address is included; none is required for free software published by a private individual (review §4), and keeping one out of a public repository is the safer choice.
 2. **Attorney review of `docs/legal/terms-of-use.md` before v0.5.1.** The runner adds this to `owner_queue` in `runner/dashboard.yaml` and to the release gate's conditions.
 3. **Whether the Anna's Archive and LibGen plugins ship at all.** Both sites are under US default judgments and broad injunctions (LibGen, S.D.N.Y. 2024; Anna's Archive, S.D.N.Y. and S.D. Ohio, 2026). Bundling plugins for them is the largest inducement signal a plaintiff could point to, and no disclaimer offsets it. The review recommends dropping them or shipping them unlisted (a user supplies the manifest). This changes scope in `docs/plan/2026-11-01-v06-sources.md`, so it's the owner's call.
 4. **A DMCA agent** ($6, renewed every three years) only if a public demo, hosted index or user-content site ever exists.

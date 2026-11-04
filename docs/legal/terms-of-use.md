@@ -83,8 +83,8 @@ The AGPL governs copying, modifying and distributing Lodestar. It gives you righ
 - **Outside the United States.** Mandatory consumer-protection and data-protection laws of your country apply to you regardless of these terms.
 
 ## 14. Contact, governing law and the rest
-- **Contact.** Questions and complaints about the software or these terms: `[contact address]`.
-- **Governing law.** These terms are governed by the law of `[the owner's state]`, United States, without regard to its conflict-of-laws rules, except where the mandatory law of your place of residence applies instead. The AGPL is not affected.
+- **Contact.** Questions and complaints about the software or these terms go to the Lodestar project through its public repository, https://github.com/dvortsis/lodestar-v2 (open an issue).
+- **Governing law.** These terms are governed by the law of the State of Colorado, United States, without regard to its conflict-of-laws rules, except where the mandatory law of your place of residence applies instead. The AGPL is not affected.
 - **Severability.** If a court finds part of these terms unenforceable, the rest stays in force, and the unenforceable part applies to the greatest extent the law allows.
 - **No waiver.** Not enforcing a term is not a waiver of it.
 - **Whole agreement.** These terms and the AGPL are the whole agreement between you and us about the software.
