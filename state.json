@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-04T18:38:21Z",
+  "updated_at": "2026-11-04T21:38:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3195,7 +3195,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-04T18:38:21Z",
+  "last_heartbeat": "2026-11-04T21:38:30Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -4899,7 +4899,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T20:55Z",
+    "updated": "2026-11-04T21:38Z",
     "items": [
       {
         "slot": 1,
@@ -4914,7 +4914,7 @@
         "slice": "X-log-url-redact",
         "role": "build",
         "agent": "claude",
-        "doing": "Fixing a log-redaction bug: a URL password could survive in logs after stray text.",
+        "doing": "PR #432 round 4: closing the last cases where it shows a secret main hides, and keeping magnet links fully hidden.",
         "since": "2026-11-04T18:46Z"
       },
       {
@@ -4930,7 +4930,7 @@
         "slice": "RP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "Writing example corpora for each filter rule pack, so CI catches any rule that matches the wrong things.",
+        "doing": "PR #437 reviewed (merge); polish checked; waiting for green CI.",
         "since": "2026-11-04T19:28Z"
       },
       {
@@ -4946,7 +4946,7 @@
         "slice": "X-mem-gauges-2",
         "role": "build",
         "agent": "claude",
-        "doing": "Gauges merged (#433). Small follow-up: fixing the soak report table and two gauge edge cases before soak r5.",
+        "doing": "PR #442 (three small gauge fixes) in review.",
         "since": "2026-11-04T20:55Z"
       },
       {
@@ -4962,7 +4962,7 @@
         "slice": "X-merge-policy",
         "role": "build",
         "agent": "claude",
-        "doing": "Measuring a second memory fix (search index merge settings) in case the current memory test fails.",
+        "doing": "PR #441 (harness and findings, no app change) in review.",
         "since": "2026-11-04T15:18:41Z"
       },
       {
@@ -4970,7 +4970,7 @@
         "slice": "ENR-2b",
         "role": "build",
         "agent": "claude",
-        "doing": "Writing a bounded, fuzzed reader for ThePornDB's responses (no personal fields kept).",
+        "doing": "PR #440 in review; aligning with StashDB on bad fields and one shared title rule.",
         "since": "2026-11-04T19:53Z"
       },
       {
@@ -4978,7 +4978,7 @@
         "slice": "ENR-3",
         "role": "build",
         "agent": "claude",
-        "doing": "Writing a bounded, fuzzed reader for StashDB's responses, with fixed queries.",
+        "doing": "PR #438 reviewed (merge); waiting for green CI, then merge.",
         "since": "2026-11-04T19:53Z"
       },
       {
@@ -4986,7 +4986,7 @@
         "slice": "ENR-6",
         "role": "build",
         "agent": "claude",
-        "doing": "Letting an enrichment match sharpen the adult classifier, never weaken it.",
+        "doing": "PR #436 reviewed (merge); a comment fix and main merge after the main test fix lands.",
         "since": "2026-11-04T19:53Z"
       }
     ]
