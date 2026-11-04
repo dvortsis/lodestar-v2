@@ -328,13 +328,13 @@ fn array_cap() {
 #[test]
 fn text_cap() {
     // Every string of the item the parser reads is measured raw: title,
-    // type, date, id and studio. Over the cap the item is skipped.
-    for field in [
-        r#""title":"abcdef""#,
-        r#""type":"Scene\u0020""#,
-        r#""date":"abcdef""#,
-        r#""site":{"name":"abcdef"}"#,
-        r#""id":"abcdef""#,
+    // type, date and id. Over the cap the item is skipped: a title can't
+    // be cut without decoding it, so an over-long one isn't kept cut.
+    for (field, n) in [
+        (r#""title":"abcdef""#, 6),
+        (r#""type":"Scene\u0020""#, 11),
+        (r#""date":"2024-01-01""#, 10),
+        (r#""id":"abcdef""#, 6),
     ] {
         let lead = if field.starts_with(r#""id""#) {
             ""
@@ -352,11 +352,23 @@ fn text_cap() {
             )
         };
         assert_eq!(at(20).page.kept, 2, "{field}");
-        let n = if field.contains("Scene") { 11 } else { 6 };
         assert_eq!(at(n).page.kept, 2, "{field}");
         let over = at(n - 1);
         assert_eq!((over.page.stop, ids(&over)), (None, vec!["b"]), "{field}");
         assert_eq!(over.page.skipped.over_cap, 1, "{field}");
+    }
+    // A studio name over the cap drops only the studio.
+    let studio = br#"{"data":{"id":"a","site":{"name":"abcdef"}}}"#;
+    for (n, want) in [(6, Some("abcdef")), (5, None)] {
+        let a = with(
+            studio,
+            &Limits {
+                max_text: n,
+                ..WIDE
+            },
+        );
+        assert_eq!((a.page.kept, a.page.skipped.total()), (1, 0));
+        assert_eq!(a.found[0].matched.studio.as_deref(), want);
     }
     // A performer's id is never decoded, so its length doesn't matter.
     let long_id = br#"{"data":{"id":"a","performers":[{"id":"abcdef","name":"N"}]}}"#;
@@ -478,21 +490,25 @@ fn a_mid_value_error_stops_the_parse() {
 fn field_rules() {
     let a = parse(
         br#"{"data":[
-        {"id":1234,"title":"  T  ","title":"second","type":"VR","date":"2023-02-29",
+        {"id":1234,"title":"  T  ","title":"second","type":null,"date":null,
          "site":"Example Studio","performers":{"id":"p"}},
         {"id":-1},{"id":1.5},{"id":null},{"id":"a_b"},
         {"id":"lone","title":"\ud800"},
+        {"id":"f1","type":"VR"},{"id":"f2","date":"2023-02-29"},{"id":"f3","date":20240101},
+        {"id":"f4","type":7},{"id":"f5","title":5},{"id":"f6","date":"2024-13-01","type":"VR"},
         {"id":"x","performers":[null,true,{"id":"p","name":"\u202e"},{"id":"q","name":"Q","name":"R"}]},
-        {"id":"y","performers":null,"site":{"name":null,"name":"late"}}
+        {"id":"y","performers":null,"site":{"name":null,"name":"late"}},
+        {"id":"z","site":{"name":5}},{"id":"z2","title":null,"site":{"name":"\ud800","x":1}}
     ],"data":[{"id":"second-data"}],"meta":{"total":"5"}}"#,
     );
     assert_eq!(a.page.stop, None);
-    assert_eq!(ids(&a), vec!["1234", "x", "y"]);
+    assert_eq!(ids(&a), vec!["1234", "x", "y", "z", "z2"]);
+    // A wrong-typed value, an unknown `type` or a bad date skips the item.
     assert_eq!(
         a.page.skipped,
         Skipped {
             bad_id: 4,
-            malformed: 1,
+            malformed: 7,
             ..Skipped::default()
         }
     );
@@ -517,6 +533,13 @@ fn field_rules() {
         (y.matched.studio.as_deref(), y.performers.truncated),
         (None, false)
     );
+    // A fault in the studio's name drops only the studio.
+    for f in &a.found[3..] {
+        assert_eq!(
+            (f.matched.studio.as_deref(), f.matched.title.as_deref()),
+            (None, None)
+        );
+    }
     // Titles are trimmed after hidden characters go, and after the cut.
     let t = |raw: &str| {
         let body = format!(r#"{{"data":{{"id":"a","title":{raw}}}}}"#);
@@ -643,7 +666,8 @@ fn gen_item() -> impl Strategy<Value = Gen> {
         )
 }
 
-const KINDS: [&str; 4] = ["Scene", "Movie", "JAV", "VR"];
+/// The last is `null`: no kind, and no fault.
+const KINDS: [&str; 4] = ["\"Scene\"", "\"Movie\"", "\"JAV\"", "null"];
 /// Caps the generated items fit unless spoiled.
 const GEN: Limits = Limits {
     max_array: 8,
@@ -682,7 +706,7 @@ impl Gen {
         let (kind, tail) = if self.spoil == 1 || self.spoil == 3 {
             (String::new(), tail)
         } else {
-            (format!(r#""type":"{}","#, KINDS[self.kind as usize]), tail)
+            (format!(r#""type":{},"#, KINDS[self.kind as usize]), tail)
         };
         format!(
             r#"{{{kind}"id":"{id}","title":{},"date":{date},"site":{{"name":{}}},"performers":[{}]{tail}}}"#,

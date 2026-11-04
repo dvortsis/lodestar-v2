@@ -118,8 +118,9 @@ pub struct Performers {
     pub list: Vec<Performer>,
     /// Some were left out: over [`Limits::max_performers`], an entry
     /// without a usable name (a string over [`Limits::max_text`]
-    /// or with a lone surrogate included), or `performers` being neither
-    /// a list nor `null`.
+    /// or with a lone surrogate included), `performers` being neither
+    /// a list nor `null`, or a non-empty list read with
+    /// [`Limits::max_performers`] of 0.
     pub truncated: bool,
 }
 
@@ -268,6 +269,31 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// A field that must be a string or `null`: `null` is `None`; any
+    /// other value spoils `d` (malformed) and is skipped.
+    fn strict(&mut self, d: &mut Draft) -> R<Option<String>> {
+        match self.j.peek() {
+            Some(b'"') => self.text(d),
+            Some(b'n') => self.j.skip().map(|_| None),
+            _ => {
+                d.spoil(Bad::Malformed);
+                self.skip_in(d).map(|()| None)
+            }
+        }
+    }
+
+    /// `strict`, then `ok` on the string: one it refuses spoils `d`.
+    fn checked<T>(&mut self, d: &mut Draft, ok: impl Fn(&str) -> Option<T>) -> R<Option<T>> {
+        let Some(s) = self.strict(d)? else {
+            return Ok(None);
+        };
+        let v = ok(&s);
+        if v.is_none() && d.bad.is_none() {
+            d.spoil(Bad::Malformed);
+        }
+        Ok(v)
+    }
+
     /// An id: a valid id string, or a non-negative integer as its digits.
     /// `None` inside when the value is anything else.
     fn id(&mut self, d: &mut Draft) -> R<Option<String>> {
@@ -355,21 +381,28 @@ impl Parser<'_, '_> {
     fn field(&mut self, d: &mut Draft, key: &str) -> R<()> {
         match key {
             "id" if d.id.is_none() => d.id = Some(self.id(d)?),
-            "type" if d.kind.is_none() => d.kind = Some(self.text(d)?.and_then(|s| kind(&s))),
+            // A wrong-typed value, an unknown `type` or a date that isn't
+            // a real `YYYY-MM-DD` skips the item: the answer is not what
+            // the parser understands, so none of it is trusted (runner).
+            "type" if d.kind.is_none() => d.kind = Some(self.checked(d, kind)?),
+            "date" if d.released.is_none() => {
+                d.released = Some(self.checked(d, |s| date(s).then(|| s.to_owned()))?);
+            }
             "title" if d.title.is_none() => {
                 // Clean first: a space can sit behind a hidden character.
-                let t = self.text(d)?.map(|t| clean_title(&t).trim().to_owned());
+                let t = self.strict(d)?.map(|t| clean_title(&t).trim().to_owned());
                 d.title = Some(t.filter(|t| !t.is_empty()));
             }
-            "date" if d.released.is_none() => {
-                d.released = Some(self.text(d)?.filter(|s| date(s)));
-            }
             "site" if d.studio.is_none() => {
+                // A fault in the name drops only the studio; an over-long
+                // array elsewhere in `site` still spoils the item.
                 let mut name = None;
                 if self.j.peek() == Some(b'{') {
                     self.object(|p, k| match k {
                         "name" if name.is_none() => {
-                            name = Some(p.text(d)?.and_then(|s| clean_name(&s)));
+                            let mut own = Draft::default();
+                            let n = p.strict(&mut own)?.and_then(|s| clean_name(&s));
+                            name = Some(n.filter(|_| own.bad.is_none()));
                             Ok(())
                         }
                         _ => p.skip_in(d),
