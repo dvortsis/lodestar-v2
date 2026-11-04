@@ -21,7 +21,9 @@ container variable with key `LODESTAR_LOG` to set how much Lodestar logs on ever
 (`error`, `warn`, `info` or `debug`). While it is set, Logging verbosity in Settings can't be changed.
 **Recommended:** leave it unset; the default is `info`.
 
-Transparent huge pages are a Linux feature that hands out memory in 2 MB pieces. They can make Lodestar's memory use creep up over days, so Lodestar turns them off for itself only. A custom container variable with key `LODESTAR_THP` and value `allow` turns them back on; removing the variable turns them off again.
+Transparent huge pages are a Linux feature that hands out memory in 2 MB pieces. They can make Lodestar's memory use creep up over days, so Lodestar turns them off for itself only.
+
+A custom container variable with key `LODESTAR_THP` and value `allow` turns them back on; removing the variable turns them off again. A change takes effect when the container restarts.
 **Recommended:** leave it unset unless you are asked to set it while tracking down a problem.
 
 Blocklist downloads ignore the `HTTPS_PROXY` variable, a setting that sends web requests through a proxy server. They use the container's own route, so a VPN that covers the whole container still applies. **Recommended:** to send them through a VPN, use the gluetun template ([section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn)), not a proxy variable.

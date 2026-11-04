@@ -10,9 +10,10 @@
 //! 1. **`prctl(PR_SET_THP_DISABLE, 1)`**, first thing in `main`. It marks
 //!    the whole process (its `mm`, not one thread), is inherited across
 //!    `fork` and kept across `execve`, so the supervisor's `--child` and any
-//!    re-exec carry it too. The kernel then gives no huge page to any
-//!    mapping, ones made before the call included, and ignores
-//!    `MADV_HUGEPAGE`. This is the switch that takes effect.
+//!    re-exec carry it too. From then on the kernel gives no new huge page
+//!    to any mapping, old or new (khugepaged included), and ignores
+//!    `MADV_HUGEPAGE`. Huge pages already faulted in before `main` stay
+//!    until they're freed. This is the switch that takes effect.
 //! 2. **`MIMALLOC_ALLOW_THP=0`** in the child's environment. mimalloc
 //!    initialises before `main` (the runtime allocates first), and setting
 //!    the option from Rust needs `unsafe`, which the workspace forbids, so
@@ -58,12 +59,13 @@ pub fn from_env() -> Mode {
     mode(std::env::var(ENV).ok().as_deref()).0
 }
 
-/// The variable to add to the worker's environment for `mode`, if any.
+/// The variable to add to the worker's environment for `mode`, if any:
+/// Linux only, as THP is (the supervisor also runs on macOS).
 #[cfg(unix)]
 pub fn child_env(mode: Mode) -> Option<(&'static str, &'static str)> {
     match mode {
-        Mode::Off => Some((MIMALLOC_ENV, "0")),
-        Mode::Allow => None,
+        Mode::Off if cfg!(target_os = "linux") => Some((MIMALLOC_ENV, "0")),
+        Mode::Off | Mode::Allow => None,
     }
 }
 
@@ -141,7 +143,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_worker_gets_mimallocs_option_only_when_off() {
-        assert_eq!(child_env(Mode::Off), Some(("MIMALLOC_ALLOW_THP", "0")));
+        let off = cfg!(target_os = "linux").then_some(("MIMALLOC_ALLOW_THP", "0"));
+        assert_eq!(child_env(Mode::Off), off);
         assert_eq!(child_env(Mode::Allow), None);
     }
 

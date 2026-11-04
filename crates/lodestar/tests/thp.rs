@@ -170,6 +170,8 @@ fn the_worker_starts_with_thp_disabled() {
     let sup = s.child.id();
     let kid = worker(sup).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(thp_enabled(&sup.to_string()), Some(false), "the supervisor");
+    // The worker reads 0 as soon as it exists, before its own `main` runs:
+    // the flag came across fork and exec from the supervisor.
     assert_eq!(thp_enabled(&kid.to_string()), Some(false), "the worker");
     let env = environ(&kid.to_string()).unwrap();
     assert!(
