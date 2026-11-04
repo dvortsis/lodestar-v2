@@ -110,7 +110,7 @@ Use `create_session` with these settings:
 - **model:** the slice's `model`
 - **tags:** `["lodestar-runner", "slice:<id>"]`
 - **title:** `<id>: <title>`
-- **permission mode:** inherited, so the runner must itself run in **Auto**. Never launch in Plan, because a Plan-mode session stops for approvals nobody is watching.
+- **permission mode:** pass `permission_mode: "auto"` explicitly on every `create_session`, and run the runner itself in **Auto**. Never launch in Plan, because a Plan-mode session stops for approvals nobody is watching.
 - **prompt:** the brief, followed by the standing instructions below
 
 **Standing instructions for every slice session:**
