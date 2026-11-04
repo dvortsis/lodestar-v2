@@ -50,7 +50,15 @@ fn build(r: &mut Reader<'_>, depth: usize) -> R<Value> {
             let n = r.number()?;
             serde_json::from_str(n).unwrap_or(Value::Null)
         }
-        _ => {
+        Some(c) => {
+            r.skip()?;
+            match c {
+                b't' => Value::Bool(true),
+                b'f' => Value::Bool(false),
+                _ => Value::Null,
+            }
+        }
+        None => {
             r.skip()?;
             Value::Null
         }
