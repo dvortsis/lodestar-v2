@@ -3236,7 +3236,8 @@
     "2026-11-04T19:20Z #428 review CHANGES: \u00a72.35 scope narrowed (allocator callbacks not covered), collector UTC default sent to X-mem-gauges; delta at 5a341ea5 under re-review.",
     "2026-11-04T19:28Z #428 merged (16e3460c, owner \u00a72.35). #424 RP-0 merged (75fd512f); session archived. RP-1 launched (Opus, session_01MMjhnBsHgoPQwNTpeSGLmm). #429 X-search-files-3 review running; merge waits for 10M (projection ~177 ms vs 150). SRC-3 cleared for load.rs.",
     "2026-11-04T19:50Z #416 review CHANGES (unbounded slot number crashes buildPlan; plus retry jitter, string coercion, date checks, docs fields, decisions file); relayed to dashboard session.",
-    "2026-11-04T19:49Z Owner: slot limit 12 (\u00a72.36, PR #430, relayed via dashboard session) now; owner then asked to cut to 4 at 2026-11-05 17:00 MST (00:00Z 11/6), letting running sessions finish. Scheduled reminder trig_01RJzwL47gE81BrRv2vR2cx4 will record \u00a72.37 and set phase_total 4. SRC-3 round 2 (24d31e6) in fresh review."
+    "2026-11-04T19:49Z Owner: slot limit 12 (\u00a72.36, PR #430, relayed via dashboard session) now; owner then asked to cut to 4 at 2026-11-05 17:00 MST (00:00Z 11/6), letting running sessions finish. Scheduled reminder trig_01RJzwL47gE81BrRv2vR2cx4 will record \u00a72.37 and set phase_total 4. SRC-3 round 2 (24d31e6) in fresh review.",
+    "2026-11-04T19:53Z #416 merged (c0ce96cb), #430 merged (056b4d78, \u00a72.36 twelve slots). Launched ENR-2b (session_01MMjhnBqhBrL3X41eaSHgxj), ENR-3 (session_01MMjhn8dEWiKCRixMDKF56q), ENR-6 (session_01MMjhn8uYXmxva3B17bFjJW) in slots 9-11; slot 12 empty (nothing ready without overlap)."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4884,7 +4885,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T19:41Z",
+    "updated": "2026-11-04T19:53Z",
     "items": [
       {
         "slot": 1,
@@ -4949,6 +4950,30 @@
         "agent": "claude",
         "doing": "Measuring a second memory fix (search index merge settings) in case the current memory test fails.",
         "since": "2026-11-04T15:18:41Z"
+      },
+      {
+        "slot": 9,
+        "slice": "ENR-2b",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Writing a bounded, fuzzed reader for ThePornDB's responses (no personal fields kept).",
+        "since": "2026-11-04T19:53Z"
+      },
+      {
+        "slot": 10,
+        "slice": "ENR-3",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Writing a bounded, fuzzed reader for StashDB's responses, with fixed queries.",
+        "since": "2026-11-04T19:53Z"
+      },
+      {
+        "slot": 11,
+        "slice": "ENR-6",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Letting an enrichment match sharpen the adult classifier, never weaken it.",
+        "since": "2026-11-04T19:53Z"
       }
     ]
   },
