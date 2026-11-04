@@ -36,7 +36,7 @@ Three more facts hold today:
 - The child-safety core of the content filters is always on.
 
 > [!IMPORTANT]
-> **Lodestar is made for lawful use.** You run your own copy. You decide what it connects to, and anything you do with what it finds is your sole responsibility. The laws on peer-to-peer networks differ by country and by state. Before first use, Lodestar shows the [Legal Notice and Network Risks](../legal/legal-notice.md), which explains what it does on your network and what it finds. Read it before you install.
+> **Lodestar is made for lawful use.** You run your own copy. You decide what it connects to, and anything you do with what it finds is your sole responsibility. The laws on peer-to-peer networks differ by country and by state. Read the [Legal Notice and Network Risks](../legal/legal-notice.md) before you install. It explains what Lodestar does on your network and what it finds. Showing it at first-run setup is **(planned)**.
 
 <details>
 <summary>What the crawler still shares with the network</summary>
@@ -76,7 +76,7 @@ You don't need an account, a licence key or an open port on your router.
 > [!TIP]
 > **Key takeaways**
 > - Lodestar stores torrent descriptions only and never downloads content.
-> - It sends no telemetry. The DHT crawl is its only regular traffic.
+> - It sends no telemetry. Its regular traffic is the DHT crawl and swarm counts from public trackers.
 > - Put the data folder on fast local storage.
 
 <!-- nav:start -->

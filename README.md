@@ -40,12 +40,12 @@ Lodestar is a from-scratch BitTorrent DHT crawler and torrent-metadata search en
 Lodestar listens to the public BitTorrent DHT and fetches each torrent's small description (info-dictionary metadata). It parses release titles and file trees, then indexes them locally in Tantivy and SQLite.
 
 - **Metadata only.** Lodestar never downloads or shares torrent content. It disconnects from each peer as soon as the description arrives.
-- **Local and private.** Your searches, saved alerts and settings stay in your `/data` folder. Lodestar sends no telemetry.
+- **Local and private.** Your searches, saved alerts and settings stay in your `/data` folder. Lodestar sends no telemetry, and your searches go to another site only through a source you turn on **(planned)**.
 - **Safe defaults.** First run prints a one-time setup token to the container log so you can set an admin password. A built-in child-safety filter stays on at all times.
 
 ## Legal
 
-Lodestar is made for lawful use. You run your own copy, you choose what it connects to, and anything you do with what it finds is your sole responsibility under the laws where you are. The software is free, under the AGPL-3.0-or-later licence, with no warranty. Before first use it shows the [Legal Notice and Network Risks](docs/legal/legal-notice.md), which explains what it does on your network and what it finds. If you run an instance other people can reach, read [Running a Lodestar that other people can reach](docs/legal/operator-guidance.md).
+Lodestar is made for lawful use. You run your own copy, you choose what it connects to, and anything you do with what it finds is your sole responsibility under the laws where you are. The software is free, under the AGPL-3.0-or-later licence, with no warranty. Read the [Legal Notice and Network Risks](docs/legal/legal-notice.md) before you install: it explains what Lodestar does on your network and what it finds. Showing it at first-run setup is **(planned)**. If you run an instance other people can reach, read [Running a Lodestar that other people can reach](docs/legal/operator-guidance.md).
 
 ## How it works
 

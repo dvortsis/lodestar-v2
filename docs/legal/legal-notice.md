@@ -2,6 +2,8 @@
 
 **Version 2 · 2026-11-04**
 
+*Status: the in-app step that shows this notice at first-run setup is being built. Until it ships, the notice is published here and linked from the README and the user guide.*
+
 Lodestar shows this notice once, before first use, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
 
 ## 1. Who publishes Lodestar, and under what licence
@@ -12,11 +14,11 @@ The software is free software under the **GNU Affero General Public License, ver
 Sections 7 and 8 summarise the AGPL's disclaimer of warranty and limitation of liability (its sections 15 and 16) in plain words, as its section 7 permits. The licence text controls. The rest of this notice is information and warnings.
 
 ## 2. What Lodestar does on your network
-**By default, Lodestar collects torrent metadata and nothing else.** It takes part in the public BitTorrent DHT, learns which torrents exist, connects to peers, asks each for the torrent's description (the "info dictionary": names, file lists, sizes and hashes) and disconnects. It also asks public trackers and the DHT how many peers a torrent has. **It does not request, store, share or seed the files inside a torrent.** It is not a download client. It can show you a torrent's magnet link and, if you set one up, hand it to a download client of your own; what that client then does happens outside Lodestar and is your decision.
+**By default, Lodestar collects torrent metadata and nothing else.** It takes part in the public BitTorrent DHT, learns which torrents exist, connects to peers, asks each for the torrent's description (the "info dictionary": names, file lists, sizes and hashes) and disconnects. It also asks public trackers and the DHT how many peers a torrent has. **The crawler starts when the program starts, including before first-run setup is finished,** unless you pause it in Settings. **It does not request, store, share or seed the files inside a torrent.** It is not a download client. It can show you a torrent's magnet link and, if you set one up, hand it to a download client of your own; what that client then does happens outside Lodestar and is your decision.
 
 Taking part in the DHT means other nodes and peers can see your public IP address, or your VPN's if you route Lodestar through one, as with any BitTorrent program. Organisations that monitor these networks can see it too. **Lodestar keeps no lasting record of which peer had which torrent.** Like every DHT node it holds a small in-memory table of peers that announced a torrent, which expires within half an hour and is never written to disk. The one exception is the optional **Peer activity** log kind, which writes to your local log file only while you turn it on.
 
-**Optional sources are off until you turn them on,** and each shows its own notice first:
+**This version has the DHT crawler, swarm counts from public trackers, and command-line import tools for bitmagnet and magnetico databases.** The optional sources below are planned for coming versions; none is built into this version. When they ship, **each is off until you turn it on,** and shows its own notice first:
 - **External** sources contact named public websites and send them search terms and info hashes.
 - **Account** sources sign in with credentials you give them. Lodestar encrypts the credentials on your server and never shows them again. What they find through a private indexer or tracker is marked private and stays on your server: it is never served through feeds or integrations, included in shareable exports, or used in public peer lookups.
 - **Restricted** sources announce your IP address to a torrent's other peers, or reach other high-risk services. They ask for your password every time they're turned on.
@@ -42,11 +44,11 @@ Lodestar sends nothing to its makers: no telemetry, no crash reports, no usage d
 
 - the index of torrent metadata and swarm counts;
 - your settings, saved searches and alerts;
-- credentials for Account sources, encrypted with a key kept outside the database;
+- API keys and credentials for integrations you set up (and, when they ship, Account sources), encrypted with a key kept outside the database;
 - logs, which leave out torrent names unless you turn that on;
 - a **query log** of searches, which is **off by default**, and which you can clear.
 
-Credentials are encrypted at rest with a key stored separately from the database; Lodestar decrypts them when it uses them, so access to both the database and the key can expose them. Database backups contain private findings and the encrypted credential values; a full copy of the data folder can also contain the key files and logs. Protect your server and your backups accordingly. Shareable search exports exclude private findings.
+Credentials are encrypted at rest with a key stored separately from the database; Lodestar decrypts them when it uses them, so access to both the database and the key can expose them. **A backup made with `lodestar backup` contains the database, the admin password hash and the key that unlocks stored secrets**, so it can expose them: keep it on private storage, as the user guide says. A full copy of the data folder also contains the logs and every key file. Shareable search exports exclude private findings.
 
 Lodestar contacts the internet for the DHT and peers; for swarm counts from a built-in list of public trackers; for the sources you turn on; for blocklist and rule-pack downloads you choose; for notification channels you set up (ntfy, Discord, email, webhooks); and for update checks if you turn them on (those contact GitHub). The **Diagnostics** panel in Settings → About shows versions, platform and the names of changed settings, with no values, paths or torrent details; you can copy it, and nothing is sent unless you paste it somewhere.
 

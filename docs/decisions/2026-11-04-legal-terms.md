@@ -42,8 +42,20 @@ Nothing the project publishes shows or suggests using Lodestar to find commercia
 4. **Turn on GitHub's private vulnerability reporting** for the repository (Settings → Code security). The notice (section 9) sends security flaws there and nothing else: reports about indexed material go to the reporting authority or the instance's operator, not to the maintainers (owner, 2026-11-04). No `SECURITY.md` contact is needed beyond that.
 5. **A DMCA agent** ($6, renewed every three years) only if a public demo, hosted index or user-content site ever exists.
 
+## Consistency audit (2026-11-04, after the fourth review)
+The repository was checked against the notice and the operator guidance. The code's defaults match the story (metadata only; no peers stored with torrents; query log off; private-source rows excluded from exports and alerts; no telemetry library; locked floor), and no public-facing text invites infringement. These didn't match, and are fixed in this PR:
+- **No source plugin is registered in this build.** `crates/sources-plugins` (Nyaa, Prowlarr, academic lists, clients) exists as library code, and `register_source` is called only by the import CLI and tests; the Settings "sources" screen is a placeholder id. The notice now says which features this version has and marks the source classes as planned.
+- **The crawler starts at program start, before setup finishes** (`Services::start` builds the pipeline with `paused` from settings, default off; nothing waits for the admin password). The notice says so. **Recommendation for the runner (UX, §2.26):** the confirmation slice starts the crawler paused on a fresh data directory until setup completes, so nobody's address joins the DHT before anyone has read the notice. Existing installs are unaffected.
+- **Drop doesn't delete stored records** ("Torrents already stored stay as they are"); Hide applies to stored and future copies but the record stays retrievable by authenticated users; only Report abuse deletes at once, and it adds the hash to the floor. The operator guidance now says so. **Recommendation for the runner:** a **Delete** action for takedowns (Hide plus deleting the stored record, logged in the filter hits, not the floor), as a small filters slice.
+- **`lodestar backup` copies `seal.key`,** the key that unlocks stored secrets, with `auth.json`. The notice says so instead of "the key stays out".
+- **The first-run confirmation isn't built,** so the README, the guide and the templates say to read the notice before installing and mark the in-app step planned; the notice carries a status line until the slice ships.
+- **Privacy claims that outran the notice:** the wizard's "Nothing about your searches leaves this machine" and the guide's "the DHT crawl is its only regular traffic" are qualified (sources, when on; tracker swarm counts).
+- **Owner choices applied (2026-11-04):** the release-parser golden corpus keeps its real release names, with its README stating that they are strings used to test the parser's reading of naming conventions, including cracked software and camcorder rips, so the classifier and filters can recognise them; the Unraid templates move from "Downloaders" to `Network:Web Tools:Utilities`; and the parser's `cracked` flag is to feed the malware pack as a junk reason (a separate filters slice, since packs are versioned and signed and the junk-reason names are stable API values).
+
 ## Shared files touched
 - `README.md`: a "Legal" paragraph under "What Lodestar does and never does".
 - `docs/legal/`: new folder (the notice, the operator guidance, the review).
 - `docs/user/01-before-you-start.md` §1.2, `docs/user/revisions.md` and the regenerated `docs/user/index.md`.
-- `packaging/unraid/*.xml`: one sentence in each `Overview`.
+- `packaging/unraid/*.xml`: one sentence in each `Overview`, and the category.
+- `web/src/lib/features/wizard/messages/{en,zh}.json`: one string.
+- `crates/release-parser/tests/golden/README.md`: a statement of purpose.
