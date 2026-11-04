@@ -2,7 +2,13 @@
 //! *Always allow* (architecture §20.7), as plain rows. Their meaning
 //! belongs to the filter engine; queries are kept as query text and
 //! parsed by it.
+//!
+//! The pack versions this install applied (RP-0) are kept beside them in
+//! `settings` rows ([`PackVersionRows`]): read with the rule set, so every
+//! engine load sees them, but never written by [`Store::replace_rule_set`],
+//! so Undo never changes them.
 
+use rusqlite::types::ValueRef;
 use rusqlite::{OptionalExtension, params};
 
 use crate::{Result, Store};
@@ -41,6 +47,47 @@ pub struct ExceptionRow {
     pub value: Vec<u8>,
 }
 
+/// The two identical `settings` rows recording, per pack rule, the
+/// version this install applied (`lodestar_filter`'s `packs::upgrade`).
+pub const PACKS_APPLIED_KEYS: [&str; 2] = ["filter.packs.applied", "filter.packs.applied.2"];
+/// The durable marker that pack versions were seeded.
+pub const PACKS_SEEDED_KEY: &str = "filter.packs.seeded";
+
+/// A `settings` row as stored: `None` when there's no row, `Ok` with its
+/// text, or `Err` with the raw bytes of a value that doesn't read as text
+/// (a blob, a number, bytes that aren't UTF-8). A row that exists counts
+/// as state, readable or not. Plain types, so the filter engine reads it
+/// without naming this module's types.
+pub type StoredText = Option<std::result::Result<String, Vec<u8>>>;
+
+/// The pack-version rows as stored. Their meaning is the filter engine's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackVersionRows {
+    /// [`PACKS_APPLIED_KEYS`], in that order.
+    pub applied: [StoredText; 2],
+    /// [`PACKS_SEEDED_KEY`].
+    pub seeded: StoredText,
+}
+
+impl PackVersionRows {
+    /// Whether any of the rows exists, readable or not.
+    pub fn any(&self) -> bool {
+        self.applied.iter().any(Option::is_some) || self.seeded.is_some()
+    }
+}
+
+/// What [`Store::seed_pack_versions`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PackSeed {
+    /// The rule set had rows before seeding (an upgraded install, or one
+    /// whose pack-version rows were all lost): reported, never silent.
+    pub rule_set_nonempty: bool,
+    /// The copied rule's switch was copied to the new one.
+    pub switch_copied: bool,
+    /// Exceptions copied from the copied rule to the new one.
+    pub exceptions_copied: usize,
+}
+
 /// Everything the rule layers load.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuleSet {
@@ -51,6 +98,44 @@ pub struct RuleSet {
     pub exceptions: Vec<ExceptionRow>,
     /// `(id, query)`.
     pub allow: Vec<(i64, String)>,
+    /// The pack-version rows. Not part of what Undo restores.
+    pub pack_versions: PackVersionRows,
+}
+
+/// A `settings` row's value ([`StoredText`]).
+fn stored_text(conn: &rusqlite::Connection, key: &str) -> Result<StoredText> {
+    Ok(conn
+        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+            Ok(match r.get_ref(0)? {
+                ValueRef::Text(b) => {
+                    std::str::from_utf8(b).map_or_else(|_| Err(b.to_vec()), |t| Ok(t.to_owned()))
+                }
+                ValueRef::Blob(b) => Err(b.to_vec()),
+                ValueRef::Null => Err(Vec::new()),
+                ValueRef::Integer(n) => Err(n.to_string().into_bytes()),
+                ValueRef::Real(x) => Err(x.to_string().into_bytes()),
+            })
+        })
+        .optional()?)
+}
+
+fn pack_version_rows(conn: &rusqlite::Connection) -> Result<PackVersionRows> {
+    Ok(PackVersionRows {
+        applied: [
+            stored_text(conn, PACKS_APPLIED_KEYS[0])?,
+            stored_text(conn, PACKS_APPLIED_KEYS[1])?,
+        ],
+        seeded: stored_text(conn, PACKS_SEEDED_KEY)?,
+    })
+}
+
+fn upsert_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
 }
 
 impl Store {
@@ -112,7 +197,111 @@ impl Store {
         for r in stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))? {
             set.allow.push(r?);
         }
+        set.pack_versions = pack_version_rows(c)?;
         Ok(set)
+    }
+
+    /// The pack-version rows alone.
+    pub fn pack_version_rows(&self) -> Result<PackVersionRows> {
+        pack_version_rows(&self.conn)
+    }
+
+    /// Seeds the pack versions once, in one transaction, only when none
+    /// of the pack-version rows exists (readable or not): both applied
+    /// rows as `applied`, the marker, a copy of `copy_from`'s stored
+    /// switch as `copy_to`'s (when `copy_from` has one and `copy_to`
+    /// doesn't), and a copy of every exception to `copy_from` for
+    /// `copy_to` (one with the same match already there isn't copied
+    /// again). When the rule set already had rows, `report`'s token is
+    /// appended to the text setting it names, in the same transaction, so
+    /// such a seeding is never silent. Returns `None` when any row exists:
+    /// nothing is written.
+    pub fn seed_pack_versions(
+        &mut self,
+        applied: &str,
+        copy_from: &str,
+        copy_to: &str,
+        report: Option<(&str, &str)>,
+    ) -> Result<Option<PackSeed>> {
+        let tx = self.conn.transaction()?;
+        if pack_version_rows(&tx)?.any() {
+            return Ok(None);
+        }
+        let mut seed = PackSeed::default();
+        for table in [
+            "filter_rules",
+            "pack_switches",
+            "override_list",
+            "filter_exceptions",
+            "filter_allow",
+        ] {
+            let any: bool =
+                tx.query_row(&format!("SELECT EXISTS (SELECT 1 FROM {table})"), [], |r| {
+                    r.get(0)
+                })?;
+            seed.rule_set_nonempty |= any;
+        }
+        for key in PACKS_APPLIED_KEYS {
+            upsert_setting(&tx, key, applied)?;
+        }
+        upsert_setting(&tx, PACKS_SEEDED_KEY, "1")?;
+        let from: Option<bool> = tx
+            .query_row(
+                "SELECT enabled FROM pack_switches WHERE id = ?1",
+                [copy_from],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(on) = from {
+            seed.switch_copied = tx.execute(
+                "INSERT OR IGNORE INTO pack_switches (id, enabled) VALUES (?1, ?2)",
+                params![copy_to, on],
+            )? > 0;
+        }
+        seed.exceptions_copied = tx.execute(
+            "INSERT INTO filter_exceptions (rule, kind, value)
+             SELECT ?2, e.kind, e.value FROM filter_exceptions e
+             WHERE e.rule = ?1 AND NOT EXISTS (
+                 SELECT 1 FROM filter_exceptions f
+                 WHERE f.rule = ?2 AND f.kind = e.kind AND f.value = e.value)
+             ORDER BY e.id",
+            params![copy_from, copy_to],
+        )?;
+        if let Some((key, token)) = report.filter(|_| seed.rule_set_nonempty) {
+            // A value that isn't text is replaced: it couldn't be read.
+            let text = match stored_text(&tx, key)? {
+                Some(Ok(t)) if !t.trim().is_empty() => format!("{t} {token}"),
+                _ => token.to_owned(),
+            };
+            upsert_setting(&tx, key, &text)?;
+        }
+        tx.commit()?;
+        Ok(Some(seed))
+    }
+
+    /// Writes the pack-version rows in one transaction: each applied row
+    /// that's `Some`, the marker, and with `switch` a pack switch too, so
+    /// a pack turned on and the versions it records land together.
+    pub fn write_pack_versions(
+        &mut self,
+        applied: [Option<&str>; 2],
+        switch: Option<(&str, bool)>,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for (key, text) in PACKS_APPLIED_KEYS.iter().zip(applied) {
+            if let Some(text) = text {
+                upsert_setting(&tx, key, text)?;
+            }
+        }
+        upsert_setting(&tx, PACKS_SEEDED_KEY, "1")?;
+        if let Some((id, on)) = switch {
+            tx.execute(
+                "INSERT OR REPLACE INTO pack_switches (id, enabled) VALUES (?1, ?2)",
+                params![id, on],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Adds a rule at the end of the list.
@@ -241,7 +430,10 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Replaces every rule-layer table with `set` (one-step Undo).
+    /// Replaces every rule-layer table with `set` (one-step Undo). The
+    /// pack-version rows are left as they are: Undo restores rule-set
+    /// edits, never versions, so it can't undo an acceptance or accept a
+    /// pending version.
     pub fn replace_rule_set(&mut self, set: &RuleSet) -> Result<()> {
         let tx = self.conn.transaction()?;
         for table in [
@@ -538,4 +730,103 @@ pub(crate) fn class_gen(conn: &rusqlite::Connection) -> Result<i64> {
         )
         .optional()?
         .unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StoreConfig;
+
+    fn store() -> Store {
+        Store::open_in_memory(StoreConfig::default()).unwrap()
+    }
+
+    #[test]
+    fn pack_version_rows_read_text_unreadable_and_absent() {
+        let s = store();
+        assert_eq!(s.pack_version_rows().unwrap(), PackVersionRows::default());
+        assert!(!s.pack_version_rows().unwrap().any());
+        s.conn
+            .execute(
+                "INSERT INTO settings (key, value) VALUES (?1, 'MW-1@1'), (?2, x'ff'), (?3, 7)",
+                params![
+                    PACKS_APPLIED_KEYS[0],
+                    PACKS_APPLIED_KEYS[1],
+                    PACKS_SEEDED_KEY
+                ],
+            )
+            .unwrap();
+        let rows = s.rule_set().unwrap().pack_versions;
+        assert_eq!(rows.applied[0], Some(Ok("MW-1@1".to_owned())));
+        assert_eq!(rows.applied[1], Some(Err(vec![0xff])));
+        assert_eq!(rows.seeded, Some(Err(b"7".to_vec())));
+        assert!(rows.any());
+    }
+
+    #[test]
+    fn seeding_is_one_transaction_and_only_on_a_store_without_rows() {
+        let mut s = store();
+        s.set_pack_switch("SC-1", false).unwrap();
+        s.add_exception("SC-1", 2, b"q").unwrap();
+        s.add_exception("MW-1", 2, b"r").unwrap();
+        s.set_settings_text(&[("report", "U-1@5")]).unwrap();
+        let seed = s
+            .seed_pack_versions("MW-1@1", "SC-1", "SC-2", Some(("report", "seeded@9")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            s.setting_text("report").unwrap().as_deref(),
+            Some("U-1@5 seeded@9")
+        );
+        assert_eq!(
+            seed,
+            PackSeed {
+                rule_set_nonempty: true,
+                switch_copied: true,
+                exceptions_copied: 1,
+            }
+        );
+        let set = s.rule_set().unwrap();
+        assert_eq!(set.pack_versions.applied[0], Some(Ok("MW-1@1".into())));
+        assert_eq!(set.pack_versions.applied[0], set.pack_versions.applied[1]);
+        assert_eq!(set.pack_versions.seeded, Some(Ok("1".into())));
+        assert!(set.pack_switches.contains(&("SC-2".into(), false)));
+        assert_eq!(
+            set.exceptions.iter().filter(|e| e.rule == "SC-2").count(),
+            1
+        );
+        // Never again.
+        assert_eq!(
+            s.seed_pack_versions("MW-1@2", "SC-1", "SC-2", None)
+                .unwrap(),
+            None
+        );
+        assert_eq!(s.rule_set().unwrap().exceptions.len(), 3);
+        // An empty store seeds quietly.
+        let mut s = store();
+        let seed = s
+            .seed_pack_versions("", "SC-1", "SC-2", Some(("report", "seeded@9")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(seed, PackSeed::default());
+        assert_eq!(s.setting_text("report").unwrap(), None, "quiet");
+    }
+
+    #[test]
+    fn version_writes_carry_the_marker_and_the_switch_and_undo_leaves_them() {
+        let mut s = store();
+        s.write_pack_versions([Some("A@1"), None], Some(("malware", true)))
+            .unwrap();
+        let set = s.rule_set().unwrap();
+        assert_eq!(set.pack_versions.applied, [Some(Ok("A@1".into())), None]);
+        assert!(set.pack_versions.seeded.is_some());
+        assert_eq!(set.pack_switches, [("malware".to_owned(), true)]);
+        s.replace_rule_set(&RuleSet::default()).unwrap();
+        let after = s.rule_set().unwrap();
+        assert!(after.pack_switches.is_empty());
+        assert_eq!(
+            after.pack_versions, set.pack_versions,
+            "Undo never restores versions"
+        );
+    }
 }

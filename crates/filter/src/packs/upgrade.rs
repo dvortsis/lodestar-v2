@@ -1,0 +1,886 @@
+//! Which pack-rule version applies on this install (RP-0, §20.6, §20.10,
+//! owner §1.8.7): the applied-version record, seeding, fail-closed
+//! recovery, pending versions in shadow, and acceptance.
+//!
+//! **State.** `filter.packs.applied` holds, per rule, the version this
+//! install applied, one `RULE-ID@version` per line. It's written as two
+//! identical rows ([`APPLIED_KEYS`]) in one transaction, so one row that
+//! won't read never loses it, with a durable marker ([`SEEDED_KEY`]). None
+//! of them is part of `rule_set_prev`: Undo restores rule-set edits, never
+//! versions. An entry for a rule this build doesn't know is kept as it is.
+//!
+//! **Resolution** ([`PackVersions::resolve`]), per known rule:
+//! - no row at all: the store was never seeded, and the rules apply as
+//!   [`seed_record`] would record them ([`ensure_seeded`] writes it once);
+//! - recorded at the current version: it applies;
+//! - recorded at an older version whose code is kept: that version
+//!   applies, and the current one is **pending**, in shadow;
+//! - not recorded (a rule added after RP-0): nothing applies, and it's
+//!   pending;
+//! - recorded at a version whose code is gone (skipped): the **interim
+//!   mode**, the stronger of the oldest retained and the current version;
+//! - recorded newer than this build's (a downgrade): the build's current
+//!   version applies and the row is left as it is;
+//! - one applied row unreadable: the other is used; both read but differ:
+//!   per rule, both recorded versions apply, the stronger winning; neither
+//!   reads: every rule runs the interim mode.
+//!
+//! **Unaccepted versions never drop.** A version no readable record shows
+//! accepted (in the interim mode, or recorded by only one of two differing
+//! rows) holds at most by quarantine: a drop isn't reversible without a
+//! preview (§1.8.7). With both rows lost, only version 1 of a rule that
+//! existed before RP-0 counts as accepted, since seeding recorded it.
+//!
+//! Every condition but the ordinary pending one is reported
+//! ([`Condition`]), in `filter.stand_ins` and as a Filters & Safety notice.
+
+use std::collections::BTreeMap;
+
+use lodestar_store::Store;
+
+use super::manifest::{Code, Direction, Manifest, RuleEntry};
+use super::{Ctx, Pack, PackRule, PackSwitches};
+use crate::core::Action;
+
+/// The two identical applied-version rows, and the durable marker that
+/// seeding happened (the store reads them with the rule set).
+pub use lodestar_store::{
+    PACKS_APPLIED_KEYS as APPLIED_KEYS, PACKS_SEEDED_KEY as SEEDED_KEY, PackSeed as Seeded,
+    StoredText,
+};
+
+/// The stored pack-version rows: the two applied rows, and whether the
+/// marker row exists (readable or not).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Rows {
+    pub applied: [StoredText; 2],
+    pub marker: bool,
+}
+
+impl Rows {
+    /// The rows a rule set was read with.
+    pub fn of(set: &lodestar_store::RuleSet) -> Rows {
+        Rows {
+            applied: set.pack_versions.applied.clone(),
+            marker: set.pack_versions.seeded.is_some(),
+        }
+    }
+
+    fn read(store: &Store) -> lodestar_store::Result<Rows> {
+        let r = store.pack_version_rows()?;
+        Ok(Rows {
+            applied: r.applied,
+            marker: r.seeded.is_some(),
+        })
+    }
+
+    /// Whether any row exists, readable or not: a row that won't read
+    /// counts as state, so it never lets seeding run again.
+    pub fn exist(&self) -> bool {
+        self.marker || self.applied.iter().any(Option::is_some)
+    }
+}
+
+/// The applied-version record: stored rule id to version. Ids this build
+/// doesn't know are kept as they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Applied(pub BTreeMap<String, u32>);
+
+impl Applied {
+    /// `None` when the text isn't a record: a token that isn't
+    /// `ID@version`, or an id twice. Version 0 ([`UNKNOWN`]) means the
+    /// applied version isn't known.
+    pub fn decode(text: &str) -> Option<Applied> {
+        let mut map = BTreeMap::new();
+        for t in text.split_whitespace() {
+            let (id, v) = t.split_once('@')?;
+            let v: u32 = v.parse().ok()?;
+            if id.is_empty() || map.insert(id.to_owned(), v).is_some() {
+                return None;
+            }
+        }
+        Some(Applied(map))
+    }
+
+    /// One `ID@version` per line, sorted by id.
+    pub fn encode(&self) -> String {
+        let lines: Vec<String> = self.0.iter().map(|(id, v)| format!("{id}@{v}")).collect();
+        lines.join("\n")
+    }
+
+    pub fn get(&self, rule: PackRule) -> Option<u32> {
+        self.0.get(rule.id()).copied()
+    }
+
+    /// Records `rule` at `version`, unless the record holds a version
+    /// newer than this build's current one: a downgraded build never
+    /// writes over what a newer one accepted, so the upgrade back finds it.
+    fn record(&mut self, manifest: &Manifest, rule: PackRule, version: u32) {
+        let cur = manifest.entry(rule).current().version;
+        match self.0.get(rule.id()) {
+            Some(&v) if v > cur => {}
+            _ => {
+                self.0.insert(rule.id().to_owned(), version);
+            }
+        }
+    }
+}
+
+/// A recorded version of 0: the applied version isn't known, written by
+/// an acceptance after both rows were lost for the rules it didn't
+/// accept. Such a rule runs the interim mode, as with both rows lost.
+pub const UNKNOWN: u32 = 0;
+
+/// The record seeding writes: every rule that existed before RP-0 at its
+/// baseline version, 1, SC-2 included (it was part of SC-1).
+pub fn seed_record(manifest: &Manifest) -> Applied {
+    let mut a = Applied::default();
+    for r in PackRule::ALL {
+        if manifest.entry(r).baseline {
+            a.0.insert(r.id().to_owned(), 1);
+        }
+    }
+    a
+}
+
+/// A stored row, decoded: absent, a record, or a row that won't read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Row {
+    Absent,
+    Read(Applied),
+    Unreadable,
+}
+
+fn row(stored: &StoredText) -> Row {
+    match stored {
+        None => Row::Absent,
+        Some(Ok(text)) => Applied::decode(text).map_or(Row::Unreadable, Row::Read),
+        Some(Err(_)) => Row::Unreadable,
+    }
+}
+
+/// A reported condition of the version state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Condition {
+    /// One applied row doesn't read; the other is used.
+    RowUnreadable,
+    /// Neither applied row reads (or both are gone with the marker
+    /// there): every rule runs the interim mode.
+    Lost,
+    /// Both rows read but differ: per rule the stronger applies.
+    Differ,
+    /// Applied rows exist without the marker: never seeded over.
+    MarkerMissing,
+    /// The applied version is newer than this build's.
+    Downgrade(PackRule),
+    /// The applied version's code is gone: the interim mode.
+    Skipped(PackRule),
+    /// A skipped step narrowed: accepting is weakening.
+    Narrowed(PackRule),
+    /// A readable record doesn't know what the rule had applied: a rule
+    /// that existed before RP-0 is missing from it (seeding recorded every
+    /// one, so the record was damaged), or it's recorded at [`UNKNOWN`].
+    /// The interim mode, as with both rows lost.
+    Unknown(PackRule),
+}
+
+impl Condition {
+    /// The `filter.stand_ins` label: `packs.lost`, `packs.downgrade.MW-2`.
+    pub fn label(self) -> String {
+        match self {
+            Condition::RowUnreadable => "packs.row".to_owned(),
+            Condition::Lost => "packs.lost".to_owned(),
+            Condition::Differ => "packs.differ".to_owned(),
+            Condition::MarkerMissing => "packs.marker".to_owned(),
+            Condition::Downgrade(r) => format!("packs.downgrade.{}", r.id()),
+            Condition::Skipped(r) => format!("packs.skipped.{}", r.id()),
+            Condition::Narrowed(r) => format!("packs.narrowed.{}", r.id()),
+            Condition::Unknown(r) => format!("packs.unknown.{}", r.id()),
+        }
+    }
+}
+
+/// The `filter.stand_ins` label prefix of [`Condition`]s, and of the
+/// seeding report ([`SEEDED_LABEL`]).
+pub const LABEL_PREFIX: &str = "packs.";
+/// Seeding ran on a store whose rule set wasn't empty.
+pub const SEEDED_LABEL: &str = "packs.seeded";
+
+/// What applies of one rule.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuleState {
+    /// The version a readable record shows applied, if any.
+    pub applied: Option<u32>,
+    /// The versions that apply, combined: a match if any matches, the
+    /// heaviest action winning. Empty: nothing applies (a pending rule
+    /// this install never applied).
+    pub apply: Vec<u32>,
+    /// Of `apply`, the versions no readable record shows accepted: their
+    /// action is held at most at quarantine.
+    pub unaccepted: Vec<u32>,
+    /// The version pending acceptance, run in shadow: a newer version, or
+    /// in the interim mode the current one, which accepting would leave
+    /// applying alone, accepted. So the preview always has the torrents an
+    /// acceptance changes.
+    pub shadow: Option<u32>,
+    /// The direction accepting `shadow` would take, every skipped step
+    /// combined; `None` when there's no record (weakening).
+    pub direction: Option<Direction>,
+    /// Exactly the current version applies, by the code in `Ctx::matches`,
+    /// with nothing in shadow: the engine's fast path.
+    pub plain: bool,
+}
+
+impl RuleState {
+    fn of(entry: &RuleEntry, side: Side3, applied: Option<u32>, downgrade: bool) -> Self {
+        let cur = entry.current().version;
+        let (mut apply, mut unaccepted) = side;
+        apply.sort_unstable();
+        apply.dedup();
+        unaccepted.sort_unstable();
+        unaccepted.dedup();
+        // A downgrade has nothing to accept: the newer record is kept.
+        let shadow = (!downgrade && (apply != [cur] || !unaccepted.is_empty())).then_some(cur);
+        let direction = shadow.and_then(|cur| entry.direction(applied, cur));
+        let plain = apply == [cur]
+            && unaccepted.is_empty()
+            && matches!(entry.current().code, Some(Code::Current));
+        RuleState {
+            applied,
+            apply,
+            unaccepted,
+            shadow,
+            direction,
+            plain,
+        }
+    }
+
+    /// Whether a version is pending acceptance.
+    pub fn pending(&self) -> bool {
+        self.shadow.is_some()
+    }
+}
+
+/// What one pending rule did with one torrent: the applied side and the
+/// shadow side, each the action it would take or `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackShadow {
+    pub rule: PackRule,
+    /// The pending version.
+    pub version: u32,
+    pub applied: Option<Action>,
+    pub shadow: Option<Action>,
+}
+
+/// Which side of a [`PackShadow`] holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    AppliedOnly,
+    ShadowOnly,
+    Both,
+}
+
+impl PackShadow {
+    pub fn side(&self) -> Option<Side> {
+        match (self.applied, self.shadow) {
+            (Some(_), None) => Some(Side::AppliedOnly),
+            (None, Some(_)) => Some(Side::ShadowOnly),
+            (Some(_), Some(_)) => Some(Side::Both),
+            (None, None) => None,
+        }
+    }
+
+    /// The shadow action is heavier than the applied one (both hold).
+    pub fn heavier(&self) -> bool {
+        matches!((self.applied, self.shadow), (Some(a), Some(s)) if s > a)
+    }
+
+    /// The shadow action is lighter than the applied one (both hold).
+    pub fn lighter(&self) -> bool {
+        matches!((self.applied, self.shadow), (Some(a), Some(s)) if s < a)
+    }
+}
+
+/// Whether one torrent's shadow result contradicts the pending version's
+/// recorded direction, so accepting it is weakening whatever the record
+/// says (§20.11: any doubt counts as weakening):
+/// - **`widens`** (matches more, same action): a torrent only the applied
+///   version holds, or one both hold with a different action;
+/// - **`action-heavier`** (matches the same, heavier action): a torrent
+///   only one side holds, or one both hold without a heavier action;
+/// - any other direction is weakening already, so nothing more is checked.
+pub fn disagrees(direction: Direction, s: &PackShadow) -> bool {
+    match (direction, s.side()) {
+        (_, None) => false,
+        (Direction::Widens, Some(Side::AppliedOnly)) => true,
+        (Direction::Widens, Some(Side::Both)) => s.applied != s.shadow,
+        (Direction::Widens, Some(Side::ShadowOnly)) => false,
+        (Direction::ActionHeavier, Some(Side::Both)) => !s.heavier(),
+        (Direction::ActionHeavier, Some(_)) => true,
+        _ => false,
+    }
+}
+
+/// Whether accepting a pending version strengthens filtering, so it needs
+/// no password: its recorded direction is `widens` or `action-heavier`,
+/// the version state has nothing in doubt for it, and no shadow result
+/// disagrees ([`disagrees`]). Anything else is weakening.
+pub fn acceptance_strengthens<'a>(
+    versions: &PackVersions,
+    rule: PackRule,
+    shadows: impl IntoIterator<Item = &'a PackShadow>,
+) -> bool {
+    let st = versions.state(rule);
+    let Some(direction) = st.direction.filter(|d| d.strengthens()) else {
+        return false;
+    };
+    !versions.in_doubt(rule)
+        && shadows
+            .into_iter()
+            .filter(|s| s.rule == rule)
+            .all(|s| !disagrees(direction, s))
+}
+
+/// Every rule's resolved state, and the reported conditions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackVersions {
+    /// By [`PackRule::index`].
+    rules: Vec<RuleState>,
+    pub conditions: Vec<Condition>,
+    /// No row existed: the store isn't seeded yet, and the rules apply as
+    /// [`seed_record`] would record them. Seeding also copies SC-1's
+    /// switch and exceptions to SC-2, which the engine does in memory
+    /// meanwhile ([`crate::load`]).
+    pub unseeded: bool,
+}
+
+impl PackVersions {
+    pub fn state(&self, rule: PackRule) -> &RuleState {
+        &self.rules[rule.index()]
+    }
+
+    /// Every rule with a version pending acceptance.
+    pub fn pending(&self) -> impl Iterator<Item = (PackRule, &RuleState)> {
+        PackRule::ALL
+            .into_iter()
+            .map(|r| (r, self.state(r)))
+            .filter(|(_, s)| s.pending())
+    }
+
+    /// Whether the record can't say for sure what `rule` had applied:
+    /// both rows lost or differing, its version skipped, or newer than
+    /// this build's. Accepting is then weakening.
+    pub fn in_doubt(&self, rule: PackRule) -> bool {
+        self.conditions.iter().any(|c| match c {
+            Condition::Lost | Condition::Differ => true,
+            Condition::Downgrade(r)
+            | Condition::Skipped(r)
+            | Condition::Narrowed(r)
+            | Condition::Unknown(r) => *r == rule,
+            Condition::RowUnreadable | Condition::MarkerMissing => false,
+        })
+    }
+
+    /// The `filter.stand_ins` labels of the conditions.
+    pub fn labels(&self) -> Vec<String> {
+        self.conditions.iter().map(|c| c.label()).collect()
+    }
+
+    /// Resolves the stored rows against `manifest` (the module docs).
+    pub fn resolve(manifest: &Manifest, rows: &Rows) -> PackVersions {
+        let mut conditions = Vec::new();
+        let unseeded = !rows.exist();
+        let records: Vec<Applied> = if unseeded {
+            vec![seed_record(manifest)]
+        } else {
+            if !rows.marker && rows.applied.iter().any(Option::is_some) {
+                conditions.push(Condition::MarkerMissing);
+            }
+            let read: Vec<Row> = rows.applied.iter().map(row).collect();
+            let ok: Vec<Applied> = read
+                .iter()
+                .filter_map(|r| match r {
+                    Row::Read(a) => Some(a.clone()),
+                    _ => None,
+                })
+                .collect();
+            match ok.len() {
+                2 if ok[0] != ok[1] => conditions.push(Condition::Differ),
+                2 => {}
+                // The other row won't read, or is gone with this one
+                // still there: reported, and the next write repairs it.
+                1 => conditions.push(Condition::RowUnreadable),
+                _ => conditions.push(Condition::Lost),
+            }
+            let mut ok = ok;
+            ok.dedup();
+            ok
+        };
+        let rules = PackRule::ALL
+            .into_iter()
+            .map(|r| (r, manifest.entry(r)))
+            .collect::<Vec<_>>();
+        let mut states = vec![RuleState::default(); PackRule::COUNT];
+        for (r, entry) in rules {
+            let st = if records.is_empty() {
+                RuleState::of(entry, interim(entry), None, false)
+            } else {
+                let sides: Vec<(Side3, Option<u32>, bool)> = records
+                    .iter()
+                    .map(|a| one_record(entry, a.get(r), &mut conditions))
+                    .collect();
+                if let [(side, applied, downgrade)] = &sides[..] {
+                    RuleState::of(entry, side.clone(), *applied, *downgrade)
+                } else {
+                    // Two differing rows: both sides apply, the stronger
+                    // winning; what only one side applies isn't accepted.
+                    let ((a, ap_a, dg_a), (b, ap_b, dg_b)) = (&sides[0], &sides[1]);
+                    let mut apply: Vec<u32> = a.0.iter().chain(&b.0).copied().collect();
+                    apply.sort_unstable();
+                    apply.dedup();
+                    let unaccepted = apply
+                        .iter()
+                        .copied()
+                        .filter(|v| {
+                            a.1.contains(v)
+                                || b.1.contains(v)
+                                || !(a.0.contains(v) && b.0.contains(v))
+                        })
+                        .collect();
+                    let applied = if ap_a == ap_b { *ap_a } else { None };
+                    RuleState::of(entry, (apply, unaccepted), applied, *dg_a && *dg_b)
+                }
+            };
+            states[r.index()] = st;
+        }
+        conditions.sort_by_key(|c| c.label());
+        conditions.dedup();
+        PackVersions {
+            rules: states,
+            conditions,
+            unseeded,
+        }
+    }
+
+    /// The action the applied versions take on this torrent, if any.
+    pub(crate) fn applied_action(
+        &self,
+        manifest: &Manifest,
+        rule: PackRule,
+        ctx: &Ctx<'_>,
+    ) -> Option<Action> {
+        let st = self.state(rule);
+        if st.plain {
+            return ctx
+                .matches(rule)
+                .then(|| manifest.entry(rule).current().action);
+        }
+        let entry = manifest.entry(rule);
+        st.apply
+            .iter()
+            .filter_map(|v| entry.retained(*v))
+            .filter(|v| v.matches(rule, ctx) == Some(true))
+            .map(|v| {
+                if st.unaccepted.contains(&v.version) {
+                    v.action.min(Action::Quarantine)
+                } else {
+                    v.action
+                }
+            })
+            .max()
+    }
+
+    /// The pending version's result beside the applied one, when either
+    /// side holds the torrent.
+    pub(crate) fn shadow(
+        &self,
+        manifest: &Manifest,
+        rule: PackRule,
+        ctx: &Ctx<'_>,
+        applied: Option<Action>,
+    ) -> Option<PackShadow> {
+        let version = self.state(rule).shadow?;
+        let v = manifest.entry(rule).retained(version)?;
+        let shadow = (v.matches(rule, ctx) == Some(true)).then_some(v.action);
+        (applied.is_some() || shadow.is_some()).then_some(PackShadow {
+            rule,
+            version,
+            applied,
+            shadow,
+        })
+    }
+}
+
+impl Default for PackVersions {
+    /// The built-in manifest over a store never seeded: every rule as
+    /// seeding records it.
+    fn default() -> PackVersions {
+        PackVersions::resolve(&Manifest::builtin(), &Rows::default())
+    }
+}
+
+/// The versions that apply and, of them, those not accepted.
+type Side3 = (Vec<u32>, Vec<u32>);
+
+/// The interim mode without a record: the stronger of the oldest retained
+/// and the current version, where only version 1 of a rule that existed
+/// before RP-0 is known to be accepted (seeding recorded it).
+fn interim(entry: &RuleEntry) -> Side3 {
+    let both = vec![entry.oldest_retained().version, entry.current().version];
+    let unaccepted = both
+        .iter()
+        .copied()
+        .filter(|v| !(entry.baseline && *v == 1))
+        .collect();
+    (both, unaccepted)
+}
+
+/// One readable record's view of a rule: the versions that apply and
+/// those of them not accepted, the accepted version, and whether it's a
+/// downgrade.
+fn one_record(
+    entry: &RuleEntry,
+    recorded: Option<u32>,
+    conditions: &mut Vec<Condition>,
+) -> (Side3, Option<u32>, bool) {
+    let rule = entry.rule;
+    let cur = entry.current().version;
+    match recorded {
+        // Missing from a readable record: a rule that existed before RP-0
+        // was recorded by seeding, so the record is damaged and the
+        // interim mode applies; a newer rule was never applied, so it's
+        // pending and nothing applies.
+        None if entry.baseline => {
+            conditions.push(Condition::Unknown(rule));
+            (interim(entry), None, false)
+        }
+        None => ((Vec::new(), Vec::new()), None, false),
+        Some(UNKNOWN) => {
+            conditions.push(Condition::Unknown(rule));
+            (interim(entry), None, false)
+        }
+        Some(v) if v == cur => ((vec![cur], Vec::new()), Some(v), false),
+        Some(v) if v > cur => {
+            // The build's own version applies, but no record shows it
+            // accepted on this install: held at most by quarantine.
+            conditions.push(Condition::Downgrade(rule));
+            ((vec![cur], vec![cur]), Some(v), true)
+        }
+        Some(v) if entry.retained(v).is_some() => ((vec![v], Vec::new()), Some(v), false),
+        Some(v) => {
+            // Skipped: its code is gone. Neither retained version was
+            // accepted.
+            conditions.push(Condition::Skipped(rule));
+            let narrowed = entry
+                .versions()
+                .iter()
+                .filter(|x| x.version > v && x.version <= cur)
+                .any(|x| !x.direction.strengthens())
+                || entry.get(v).is_none();
+            if narrowed {
+                conditions.push(Condition::Narrowed(rule));
+            }
+            let both = vec![entry.oldest_retained().version, cur];
+            ((both.clone(), both), Some(v), false)
+        }
+    }
+}
+
+/// The switches with SC-1's copied to SC-2, as seeding copies them
+/// (when SC-1 has a stored row and SC-2 hasn't).
+pub fn copy_sc1_switch(stored: &[(String, bool)]) -> Vec<(String, bool)> {
+    let mut out = stored.to_vec();
+    let has = |id: &str| stored.iter().any(|(i, _)| i == id);
+    if let Some((_, on)) = stored.iter().find(|(i, _)| i == PackRule::Sc1.id())
+        && !has(PackRule::Sc2.id())
+    {
+        out.push((PackRule::Sc2.id().to_owned(), *on));
+    }
+    out
+}
+
+/// Seeds the pack versions once (the module docs): only when no
+/// pack-version row exists at all, in one transaction, [`seed_record`],
+/// SC-1's stored switch and exceptions copied to SC-2, the marker, and,
+/// when the rule set already had rows, the report [`SEEDED_LABEL`] at
+/// `now` in `filter.stand_ins` (kept a week). Run at every start before
+/// the filter is first read (the pipeline's start), and by the filters
+/// API before any change. Returns what it did, or `None` when the store
+/// had state.
+pub fn ensure_seeded(
+    store: &mut Store,
+    manifest: &Manifest,
+    now: i64,
+) -> lodestar_store::Result<Option<Seeded>> {
+    if Rows::read(store)?.exist() {
+        return Ok(None);
+    }
+    let report = format!("{SEEDED_LABEL}@{now}");
+    store.seed_pack_versions(
+        &seed_record(manifest).encode(),
+        PackRule::Sc1.id(),
+        PackRule::Sc2.id(),
+        Some((crate::load::STAND_INS_KEY, &report)),
+    )
+}
+
+/// The rules a pack switch turns on, off → on only, read against the
+/// stored switches: a pack switched on records its rules not switched
+/// off; a rule switched back on records itself while its pack is on.
+/// Anything else (on → on, a rule in a pack that's off, switching off)
+/// records nothing.
+pub fn turned_on(stored: &PackSwitches, id: &str, on: bool) -> Vec<PackRule> {
+    if !on {
+        return Vec::new();
+    }
+    if let Some(p) = Pack::from_name(id) {
+        if stored.on.contains(&p) {
+            return Vec::new();
+        }
+        return PackRule::ALL
+            .into_iter()
+            .filter(|r| r.pack() == p && !stored.rules_off.contains(r))
+            .collect();
+    }
+    match PackRule::from_id(id) {
+        Some(r) if stored.rules_off.contains(&r) && stored.on.contains(&r.pack()) => vec![r],
+        _ => Vec::new(),
+    }
+}
+
+/// Sets a pack switch, recording the current versions of the rules it
+/// turns on ([`turned_on`]) in the same transaction: previewed against
+/// them under §20.10, so they need no second acceptance. Each readable
+/// applied row is merged on its own, per rule, keeping versions newer
+/// than this build's and ids it doesn't know; an unreadable one is
+/// replaced by the readable one's merge. With neither readable, nothing
+/// is recorded: a partial record would leave the other rules pending,
+/// while the interim mode applies them all. Returns the rules recorded.
+pub fn set_pack_switch(
+    store: &mut Store,
+    manifest: &Manifest,
+    id: &str,
+    on: bool,
+    now: i64,
+) -> lodestar_store::Result<Vec<PackRule>> {
+    ensure_seeded(store, manifest, now)?;
+    let stored = crate::load::pack_switches(&store.rule_set()?.pack_switches);
+    let rules = turned_on(&stored, id, on);
+    let rows = Rows::read(store)?;
+    let read: Vec<Row> = rows.applied.iter().map(row).collect();
+    let merged: Vec<Option<Applied>> = read
+        .iter()
+        .map(|r| match r {
+            Row::Read(a) => {
+                let mut a = a.clone();
+                for r in &rules {
+                    a.record(manifest, *r, manifest.entry(*r).current().version);
+                }
+                Some(a)
+            }
+            _ => None,
+        })
+        .collect();
+    let texts: Vec<Option<String>> = match (&merged[0], &merged[1]) {
+        _ if rules.is_empty() => vec![None, None],
+        (Some(a), Some(b)) => vec![Some(a.encode()), Some(b.encode())],
+        (Some(a), None) | (None, Some(a)) => vec![Some(a.encode()), Some(a.encode())],
+        (None, None) => vec![None, None],
+    };
+    if texts[0].is_none() {
+        // Nothing to record: the switch alone, as before RP-0.
+        store.set_pack_switch(id, on)?;
+        return Ok(Vec::new());
+    }
+    store.write_pack_versions([texts[0].as_deref(), texts[1].as_deref()], Some((id, on)))?;
+    Ok(rules)
+}
+
+/// Accepts the pending versions of `rules` (RP-3 wires it to the API):
+/// each accepted rule at its current version, the marker, and nothing
+/// else changed. Versions newer than this build's, and ids it doesn't
+/// know, are kept.
+/// - **One record** (both rows the same, or one readable): written to both
+///   rows, which repairs an unreadable one.
+/// - **Two differing rows:** each row is merged on its own, so a rule
+///   nobody accepted keeps both rows' versions (both still apply, the
+///   stronger winning) rather than one being picked unpreviewed.
+/// - **Neither readable:** a fresh record with the accepted rules at their
+///   current versions and every other known rule at [`UNKNOWN`], which
+///   keeps them in the interim mode as before. Ids this build doesn't
+///   know can't be recovered.
+///
+/// Returns the first row written.
+///
+/// It only switches versions. The caller reloads the engine, so the
+/// writer's sweeps re-judge through the ordinary rule-change path; nothing
+/// is released (Q7): tombstones and stored holds the new version wouldn't
+/// make stay as they are, for review, and only `release` with the warning
+/// and password lets them go. Assessing whether it's weakening
+/// ([`acceptance_strengthens`]) is the caller's, before this.
+pub fn accept(
+    store: &mut Store,
+    manifest: &Manifest,
+    rules: &[PackRule],
+    now: i64,
+) -> lodestar_store::Result<Applied> {
+    ensure_seeded(store, manifest, now)?;
+    let rows = Rows::read(store)?;
+    let accept_into = |a: &Applied| {
+        let mut a = a.clone();
+        for r in rules {
+            a.record(manifest, *r, manifest.entry(*r).current().version);
+        }
+        a
+    };
+    let read: Vec<Option<Applied>> = rows
+        .applied
+        .iter()
+        .map(|r| match row(r) {
+            Row::Read(a) => Some(a),
+            _ => None,
+        })
+        .collect();
+    let (first, second) = match (&read[0], &read[1]) {
+        (Some(a), Some(b)) if a != b => (accept_into(a), accept_into(b)),
+        (Some(a), _) | (None, Some(a)) => {
+            let a = accept_into(a);
+            (a.clone(), a)
+        }
+        (None, None) => {
+            let mut fresh = Applied::default();
+            for r in PackRule::ALL {
+                fresh.0.insert(r.id().to_owned(), UNKNOWN);
+            }
+            let fresh = accept_into(&fresh);
+            (fresh.clone(), fresh)
+        }
+    };
+    let (a, b) = (first.encode(), second.encode());
+    store.write_pack_versions([Some(&a), Some(&b)], None)?;
+    Ok(first)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_record_round_trips_and_refuses_bad_text() {
+        let a = Applied::decode("MW-1@1\nSC-2@3 XX-9@7").unwrap();
+        assert_eq!(a.get(PackRule::Sc2), Some(3));
+        assert_eq!(a.0.get("XX-9"), Some(&7), "unknown ids are kept");
+        assert_eq!(Applied::decode(&a.encode()), Some(a));
+        assert_eq!(Applied::decode(""), Some(Applied::default()));
+        assert_eq!(
+            Applied::decode("MW-1@0").unwrap().get(PackRule::Mw1),
+            Some(UNKNOWN)
+        );
+        for bad in ["MW-1", "MW-1@", "MW-1@x", "@1", "MW-1@1 MW-1@2", "MW-1@-1"] {
+            assert_eq!(Applied::decode(bad), None, "{bad}");
+        }
+    }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// The record's decoder never panics, and what it reads
+            /// encodes back to a text it reads the same.
+            #[test]
+            fn decode_never_panics_and_round_trips(text in "[A-Z0-9@ \n\t.-]{0,80}") {
+                if let Some(a) = Applied::decode(&text) {
+                    prop_assert_eq!(Applied::decode(&a.encode()), Some(a));
+                }
+            }
+
+            #[test]
+            fn records_round_trip(
+                map in prop::collection::btree_map("[A-Z]{1,3}-[0-9]{1,2}", 0..1000u32, 0..20),
+            ) {
+                let a = Applied(map);
+                prop_assert_eq!(Applied::decode(&a.encode()), Some(a));
+            }
+        }
+    }
+
+    #[test]
+    fn the_seed_has_every_baseline_rule_at_one() {
+        let s = seed_record(&Manifest::builtin());
+        assert_eq!(s.0.len(), PackRule::COUNT);
+        assert!(s.0.values().all(|v| *v == 1));
+        assert_eq!(s.get(PackRule::Sc2), Some(1));
+    }
+
+    #[test]
+    fn unseeded_and_seeded_resolve_to_today() {
+        let m = Manifest::builtin();
+        let none = PackVersions::resolve(&m, &Default::default());
+        assert!(none.unseeded && none.conditions.is_empty());
+        let rows = Rows {
+            applied: [
+                Some(Ok(seed_record(&m).encode())),
+                Some(Ok(seed_record(&m).encode())),
+            ],
+            marker: true,
+        };
+        let seeded = PackVersions::resolve(&m, &rows);
+        assert!(!seeded.unseeded && seeded.conditions.is_empty());
+        for r in PackRule::ALL {
+            assert!(none.state(r).plain && seeded.state(r).plain, "{}", r.id());
+        }
+        assert_eq!(seeded.pending().count(), 0);
+    }
+
+    #[test]
+    fn shadow_disagreement() {
+        use Action::*;
+        let s = |applied, shadow| PackShadow {
+            rule: PackRule::Mw2,
+            version: 2,
+            applied,
+            shadow,
+        };
+        let w = Direction::Widens;
+        assert!(!disagrees(w, &s(None, Some(Hide))));
+        assert!(!disagrees(w, &s(Some(Hide), Some(Hide))));
+        assert!(disagrees(w, &s(Some(Hide), None)), "an applied-only hold");
+        assert!(
+            disagrees(w, &s(Some(Hide), Some(Demote))),
+            "a lighter action"
+        );
+        assert!(
+            disagrees(w, &s(Some(Hide), Some(Drop))),
+            "not the same action"
+        );
+        let h = Direction::ActionHeavier;
+        assert!(!disagrees(h, &s(Some(Hide), Some(Drop))));
+        assert!(disagrees(h, &s(Some(Hide), Some(Hide))), "not heavier");
+        assert!(disagrees(h, &s(Some(Hide), Some(Flag))), "lighter");
+        assert!(disagrees(h, &s(Some(Hide), None)), "narrowed");
+        assert!(disagrees(h, &s(None, Some(Drop))), "widened");
+        assert!(!disagrees(w, &s(None, None)) && !disagrees(h, &s(None, None)));
+        assert!(!disagrees(Direction::Narrows, &s(Some(Hide), None)));
+    }
+
+    #[test]
+    fn turning_on_records_off_to_on_only() {
+        let s = |on: &[Pack], off: &[PackRule]| PackSwitches {
+            on: on.iter().copied().collect(),
+            rules_off: off.iter().copied().collect(),
+        };
+        let off = s(&[], &[PackRule::Mw2]);
+        assert_eq!(
+            turned_on(&off, "malware", true),
+            [PackRule::Mw4, PackRule::Mw1, PackRule::Mw3, PackRule::Mw5]
+        );
+        let on = s(&[Pack::Malware], &[PackRule::Mw2]);
+        assert!(turned_on(&on, "malware", true).is_empty(), "on → on");
+        assert!(turned_on(&on, "malware", false).is_empty());
+        assert_eq!(turned_on(&on, "MW-2", true), [PackRule::Mw2]);
+        assert!(turned_on(&on, "MW-1", true).is_empty(), "MW-1 was on");
+        assert!(turned_on(&off, "MW-2", true).is_empty(), "its pack is off");
+        assert!(turned_on(&on, "nope", true).is_empty());
+    }
+}

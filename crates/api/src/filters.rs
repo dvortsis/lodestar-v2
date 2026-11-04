@@ -27,7 +27,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
-use lodestar_filter::load::{KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, encode_match};
+use lodestar_filter::load::{
+    KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, STAND_INS_KEY, StandIns, encode_match,
+};
+use lodestar_filter::packs::upgrade::{self as pack_upgrade, Applied};
 use lodestar_filter::{
     Action, CoreRule, Doc, Engine, Exception, Facts, Fixture, Handle, HeldSet, Item,
     MAX_CLASS_RULES, Match, Origin, Override, Pack, PackRule, RuleRef, Sealer, Strength,
@@ -1157,6 +1160,74 @@ impl FiltersApi {
     }
 
     /// Reloads the rule layers and switches from the store.
+    /// Seeds the pack versions if the store never was (RP-0). A seeding
+    /// on a store that already had rules is reported in the same
+    /// transaction (`packs.seeded` in `filter.stand_ins`, kept a week):
+    /// an upgrade from before RP-0, or an install whose version rows were
+    /// all lost. The pipeline's start seeds first, so this is the
+    /// fallback. Returns whether it seeded.
+    fn seed_packs(&self, store: &mut Store, now: i64) -> ApiResult<bool> {
+        let manifest = self.engine.current().manifest.clone();
+        Ok(pack_upgrade::ensure_seeded(store, &manifest, now)
+            .map_err(internal)?
+            .is_some())
+    }
+
+    /// Records the pack-version conditions in `filter.stand_ins`
+    /// (`packs.*` entries), replacing the ones recorded before: the
+    /// Filters & Safety notice reads them (RP-0). Entries of other kinds
+    /// are left as they are.
+    fn note_pack_conditions(&self, store: &mut Store, now: i64) -> ApiResult<()> {
+        // From the store's rows, as the next load reads them: the engine
+        // can lag the store after an apply that failed part-way.
+        let set = store.rule_set().map_err(internal)?;
+        let manifest = self.engine.current().manifest.clone();
+        let labels =
+            pack_upgrade::PackVersions::resolve(&manifest, &pack_upgrade::Rows::of(&set)).labels();
+        let text = store.setting_text(STAND_INS_KEY).map_err(internal)?;
+        let before = text
+            .as_deref()
+            .and_then(StandIns::decode)
+            .unwrap_or_default();
+        let after = before.with_packs(&labels, now);
+        if after == before {
+            return Ok(());
+        }
+        if after.0.is_empty() {
+            store.update_settings_text(&[], &[STAND_INS_KEY])
+        } else {
+            store.set_settings_text(&[(STAND_INS_KEY, &after.encode())])
+        }
+        .map_err(internal)
+    }
+
+    /// At start: seeding if needed, the engine reloaded when it seeded,
+    /// and the conditions recorded.
+    fn start_packs(&self, now: i64) -> ApiResult<()> {
+        let mut store = self.store();
+        if self.seed_packs(&mut store, now)? {
+            self.reload(&store)?;
+        }
+        self.note_pack_conditions(&mut store, now)
+    }
+
+    /// Accepts the pending versions of `rules` (RP-3 puts it behind
+    /// `POST /filters/preview` and `apply` with the weakening assessment):
+    /// the applied versions switch, the engine reloads, so the writer's
+    /// sweeps re-judge through the ordinary rule-change path, and nothing
+    /// is released (plan Q7). Not part of what Undo restores. Returns the
+    /// record written.
+    pub fn accept_pack_versions(&self, rules: &[PackRule], now: i64) -> ApiResult<Applied> {
+        let mut guard = self.store();
+        let store = &mut *guard;
+        self.seed_packs(store, now)?;
+        let manifest = self.engine.current().manifest.clone();
+        let applied = pack_upgrade::accept(store, &manifest, rules, now).map_err(internal)?;
+        self.reload(store)?;
+        self.note_pack_conditions(store, now)?;
+        Ok(applied)
+    }
+
     fn reload(&self, store: &Store) -> ApiResult<()> {
         let set = store.rule_set().map_err(internal)?;
         let class_rules = store.class_rules().map_err(internal)?;
@@ -1199,6 +1270,8 @@ impl FiltersApi {
             })).collect::<Vec<_>>(),
             "allow": set.allow,
             "core": switches,
+            // Taken after RP-0's seeding: SC-2 has its own rows in it.
+            "packs_seeded": true,
         });
         Ok(data.to_string().into_bytes())
     }
@@ -1216,7 +1289,7 @@ impl FiltersApi {
                 .collect()
         };
         let arr = |k: &str| v[k].as_array().cloned().unwrap_or_default();
-        let set = RuleSet {
+        let mut set = RuleSet {
             rules: arr("rules")
                 .iter()
                 .map(|r| RuleRow {
@@ -1259,7 +1332,29 @@ impl FiltersApi {
                 .iter()
                 .filter_map(|a| Some((a[0].as_i64()?, a[1].as_str()?.to_owned())))
                 .collect(),
+            // Never restored: Undo leaves the applied pack versions.
+            ..RuleSet::default()
         };
+        if v.get("packs_seeded").is_none() {
+            // Taken before RP-0 split SC-2 out of SC-1: SC-2 gets SC-1's
+            // switch and exceptions, as seeding gave it.
+            set.pack_switches = pack_upgrade::copy_sc1_switch(&set.pack_switches);
+            let mut next = set.exceptions.iter().map(|e| e.id).max().unwrap_or(0);
+            let copies: Vec<ExceptionRow> = set
+                .exceptions
+                .iter()
+                .filter(|e| e.rule == PackRule::Sc1.id())
+                .map(|e| {
+                    next += 1;
+                    ExceptionRow {
+                        id: next,
+                        rule: PackRule::Sc2.id().to_owned(),
+                        ..e.clone()
+                    }
+                })
+                .collect();
+            set.exceptions.extend(copies);
+        }
         // The set being replaced becomes the one Undo goes back to.
         let replaced = self.previous_data(store)?;
         store.replace_rule_set(&set).map_err(internal)?;
@@ -1324,6 +1419,10 @@ impl FiltersApi {
     ) -> ApiResult<ApplyResponse> {
         let mut guard = self.store();
         let store = &mut *guard;
+        // Pack versions are seeded before anything writes a switch or an
+        // exception, so the seeding's SC-1 → SC-2 copy sees the set as it
+        // was (RP-0).
+        self.seed_packs(store, now)?;
         let rule_layers = matches!(
             change,
             Change::CoreSwitch { .. }
@@ -1389,7 +1488,10 @@ impl FiltersApi {
             }
             Change::PackSwitch { id, on } => {
                 let rules = pack_rules(id)?;
-                store.set_pack_switch(id, *on).map_err(internal)?;
+                // Off → on records the versions it was previewed against
+                // (RP-0), in the same transaction as the switch.
+                let manifest = self.engine.current().manifest.clone();
+                pack_upgrade::set_pack_switch(store, &manifest, id, *on, now).map_err(internal)?;
                 if !on {
                     out.released = Some(self.release_rules(store, &rules)?);
                 }
@@ -1757,6 +1859,7 @@ impl FiltersApi {
             lodestar_filter::lists::apply(store, &self.engine, &self.ips).map_err(internal)?;
         }
         self.reload(store)?;
+        self.note_pack_conditions(store, now)?;
         out.version = self.engine.current().version;
         let version = lodestar_log::Count(out.version);
         lodestar_log::log_event!(
@@ -2620,6 +2723,11 @@ impl FiltersApi {
     /// A full re-mark is one re-queue; failed, it stays and its error is
     /// returned. Returns how many an index finished.
     pub fn resume_requeues(&self, now: i64) -> ApiResult<usize> {
+        // Pack versions are seeded at the first start that needs it, and
+        // their conditions recorded (RP-0). The engine already applies
+        // what seeding records, so a failure here loosens nothing: it's
+        // logged where it happens and retried by the next change.
+        let _ = self.start_packs(now);
         // First what stand-ins of rows that read again did: it may add a
         // full re-mark. Its failure is logged where it happens and leaves
         // them recorded.
@@ -3167,6 +3275,228 @@ mod tests {
             quarantine_secs: 0,
             shutdown: Default::default(),
         }
+    }
+
+    fn apply_change(api: &FiltersApi, change: Change) {
+        let a = api.assess(&change, 1_000).unwrap();
+        api.apply(&change, a, 1_000).unwrap();
+    }
+
+    fn version_rows(api: &FiltersApi) -> Vec<Option<String>> {
+        let store = api.store();
+        pack_upgrade::APPLIED_KEYS
+            .iter()
+            .chain([&pack_upgrade::SEEDED_KEY])
+            .map(|k| store.setting_text(k).unwrap())
+            .collect()
+    }
+
+    fn pack(id: &str, on: bool) -> Change {
+        Change::PackSwitch { id: id.into(), on }
+    }
+
+    /// RP-0 through the API: seeding before the first change (reported on
+    /// a store with rules), SC-1's switch copied to SC-2, a wizard re-run
+    /// and Undo/redo accepting nothing, and Undo after an acceptance
+    /// leaving the versions.
+    #[test]
+    fn pack_versions_are_seeded_once_and_undo_leaves_them() {
+        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        // As before RP-0: scams on, SC-1 switched off.
+        store.set_pack_switch("scams", true).unwrap();
+        store.set_pack_switch("SC-1", false).unwrap();
+        let api = test_api(store);
+        api.start_packs(500).unwrap();
+        let seeded = version_rows(&api);
+        assert!(seeded.iter().all(Option::is_some), "{seeded:?}");
+        assert!(
+            api.store()
+                .rule_set()
+                .unwrap()
+                .pack_switches
+                .contains(&("SC-2".into(), false))
+        );
+        let record = api.store().setting_text(STAND_INS_KEY).unwrap().unwrap();
+        assert_eq!(record, "packs.seeded@500", "seeding on a store with rules");
+        assert!(!api.engine.current().packs.is_on(PackRule::Sc2));
+        // SC-2 has its own effect warning.
+        assert!(api.assess(&pack("SC-2", false), 1_000).unwrap().weakening);
+        assert!(!api.assess(&pack("SC-2", true), 1_000).unwrap().weakening);
+        // The wizard turns malware on, then runs again: nothing changes.
+        apply_change(&api, pack("malware", true));
+        let on = version_rows(&api);
+        apply_change(&api, pack("malware", true));
+        assert_eq!(version_rows(&api), on);
+        // Switched off, then Undo and redo: restoring "on" records nothing.
+        apply_change(&api, pack("malware", false));
+        let malware = || api.engine.current().packs.on.contains(&Pack::Malware);
+        assert!(!malware());
+        apply_change(&api, Change::Undo);
+        assert!(malware());
+        apply_change(&api, Change::Undo);
+        assert!(!malware());
+        apply_change(&api, Change::Undo);
+        assert!(malware());
+        assert_eq!(version_rows(&api), on);
+        // An acceptance, then Undo: the versions stay.
+        let accepted = api.accept_pack_versions(&[PackRule::Mw2], 2_000).unwrap();
+        let rows = version_rows(&api);
+        assert_eq!(rows[0].as_deref(), Some(accepted.encode().as_str()));
+        apply_change(&api, Change::Undo);
+        assert_eq!(version_rows(&api), rows);
+        // The report stays a week, then goes.
+        let week = lodestar_filter::load::SEEDED_NOTICE_SECS;
+        let mut store = api.store();
+        api.note_pack_conditions(&mut store, 500 + week - 1)
+            .unwrap();
+        assert!(store.setting_text(STAND_INS_KEY).unwrap().is_some());
+        api.note_pack_conditions(&mut store, 500 + week).unwrap();
+        assert_eq!(store.setting_text(STAND_INS_KEY).unwrap(), None);
+    }
+
+    fn widened(c: &lodestar_filter::packs::Ctx<'_>) -> bool {
+        c.matches(PackRule::Mw2) || c.name().contains("WIDEN")
+    }
+
+    fn real_mw2(c: &lodestar_filter::packs::Ctx<'_>) -> bool {
+        c.matches(PackRule::Mw2)
+    }
+
+    /// The built-in manifest with MW-2 widened at version 2.
+    fn bumped() -> Arc<lodestar_filter::packs::manifest::Manifest> {
+        use lodestar_filter::packs::manifest::{Code, Direction, Manifest, RuleEntry, Version};
+        let b = Manifest::builtin();
+        let v = |version, f: fn(&lodestar_filter::packs::Ctx<'_>) -> bool| Version {
+            version,
+            direction: Direction::Widens,
+            action: Action::Hide,
+            code: Some(Code::Fn(f)),
+        };
+        let mut entries: Vec<RuleEntry> = PackRule::ALL
+            .into_iter()
+            .filter(|r| *r != PackRule::Mw2)
+            .map(|r| b.entry(r).clone())
+            .collect();
+        entries.push(RuleEntry::new(
+            PackRule::Mw2,
+            true,
+            vec![v(1, real_mw2), v(2, widened)],
+        ));
+        Arc::new(Manifest::new(entries).unwrap())
+    }
+
+    /// With a version really pending: a wizard re-run, Undo and redo leave
+    /// it pending; acceptance switches it, and neither it nor the
+    /// stand-in re-judge after it releases a hold the new version
+    /// wouldn't make.
+    #[test]
+    fn a_pending_version_stays_pending_until_accepted_and_nothing_is_released() {
+        let store = Store::open_in_memory(Default::default()).unwrap();
+        let api = test_api(store);
+        api.engine.update_engine(|e| e.manifest = bumped());
+        api.start_packs(500).unwrap();
+        let pending = || {
+            api.engine
+                .current()
+                .pack_versions
+                .state(PackRule::Mw2)
+                .pending()
+        };
+        apply_change(&api, pack("malware", true));
+        assert!(!pending(), "off → on records the current version");
+        apply_change(&api, pack("MW-2", false));
+        // Back to before the switch-on, by hand: MW-2 at version 1 again.
+        {
+            let mut store = api.store();
+            let seed = pack_upgrade::seed_record(&api.engine.current().manifest).encode();
+            store
+                .set_settings_text(&[
+                    (pack_upgrade::APPLIED_KEYS[0], &seed),
+                    (pack_upgrade::APPLIED_KEYS[1], &seed),
+                ])
+                .unwrap();
+            api.reload(&store).unwrap();
+        }
+        assert!(pending());
+        // Undo restores MW-2 "on"; redo and Undo again: still pending.
+        for _ in 0..3 {
+            apply_change(&api, Change::Undo);
+        }
+        assert!(api.engine.current().packs.is_on(PackRule::Mw2));
+        assert!(pending(), "Undo accepts nothing");
+        // The wizard runs again with malware on: still pending.
+        apply_change(&api, pack("malware", true));
+        assert!(pending(), "on → on accepts nothing");
+        // Holds made under version 1 that version 2 wouldn't change.
+        {
+            let store = api.store();
+            let c = store.connection();
+            c.execute(
+                "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                 VALUES (?1, 'MW-2', NULL, 1, 9999999999)",
+                [vec![1u8; 20]],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'MW-2', 1)",
+                [vec![2u8; 20]],
+            )
+            .unwrap();
+        }
+        let count = |table: &str| -> i64 {
+            api.store()
+                .connection()
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        api.accept_pack_versions(&[PackRule::Mw2], 2_000).unwrap();
+        assert!(!pending());
+        let _ = api.undo_stand_ins(2_000, true);
+        assert_eq!((count("quarantine"), count("tombstones")), (1, 1));
+        // Undo after the acceptance leaves it accepted.
+        apply_change(&api, Change::Undo);
+        assert!(!pending());
+    }
+
+    /// A version-state condition is recorded in `filter.stand_ins`, and
+    /// cleared when it's gone; other entries are left alone.
+    #[test]
+    fn pack_conditions_are_recorded_beside_stand_ins() {
+        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        store
+            .set_settings_text(&[(STAND_INS_KEY, "U-3@100"), (pack_upgrade::SEEDED_KEY, "1")])
+            .unwrap();
+        let api = test_api(store);
+        api.start_packs(700).unwrap();
+        let record = || api.store().setting_text(STAND_INS_KEY).unwrap();
+        assert_eq!(record().as_deref(), Some("U-3@100 packs.lost@700"));
+        // Still lost at the next change: the first time is kept.
+        apply_change(&api, pack("malware", true));
+        assert_eq!(record().as_deref(), Some("U-3@100 packs.lost@700"));
+        api.accept_pack_versions(&PackRule::ALL, 800).unwrap();
+        assert_eq!(record().as_deref(), Some("U-3@100"));
+    }
+
+    /// An Undo step saved before RP-0 gives SC-2 SC-1's switch and
+    /// exceptions, as seeding did.
+    #[test]
+    fn undo_to_a_set_from_before_rp0_copies_sc1_to_sc2() {
+        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        let old = json!({
+            "rules": [], "overrides": [], "allow": [], "core": [],
+            "packs": [["scams", true], ["SC-1", false]],
+            "exceptions": [{"id": 4, "rule": "SC-1", "kind": 2, "value": hex(b"robux")}],
+        });
+        store.save_previous(old.to_string().as_bytes()).unwrap();
+        let api = test_api(store);
+        apply_change(&api, Change::Undo);
+        let set = api.store().rule_set().unwrap();
+        assert!(set.pack_switches.contains(&("SC-2".into(), false)));
+        let sc2: Vec<_> = set.exceptions.iter().filter(|e| e.rule == "SC-2").collect();
+        assert_eq!(sc2.len(), 1);
+        assert_eq!(sc2[0].value, b"robux");
+        let e = api.engine.current();
+        assert!(!e.packs.is_on(PackRule::Sc2));
     }
 
     /// A full re-mark is cleared only if no shutdown and no rule change
