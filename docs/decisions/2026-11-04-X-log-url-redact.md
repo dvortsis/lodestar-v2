@@ -96,7 +96,9 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 
 ## Known gaps, for X-log-url-redact-2 (the runner is briefing it)
 All of these leak on rc.3 as well.
-- **A raw hard stop with a `/` in a password when nothing marks the userinfo** (`http://u/<secret>"@h/`, no `:` or `@` before it), and one with a later `://` (`http://u:pa ss://@h/x`). The wide look-ahead stops at that `/` and at the next `://`, which keeps the scan linear. The 46 the reviewer's harness still finds (Tests, above) are in this class, unless the runner decides otherwise.
+- **A raw hard stop with a `/` in a password when nothing marks the userinfo** (`http://u/<secret>"@h/`, no `:` or `@` before it), and one with a later `://` (`http://u:pa ss://@h/x`). The wide look-ahead stops at that `/` and at the next `://`, which keeps the scan linear. - **Accepted by the runner (2026-11-04, §2.33; flagged to the owner under §2.19):** the 46 per 1,000,000 the reviewer's harness still finds at seed 2 on round 4 (Tests, above) go to X-log-url-redact-2.
+  - **The shape:** each holds a password that itself contains `://` after the secret (`udp://h/xudp://u:@<secret>"://@h/x`), and most also hold a raw hard stop or a percent-encoded userinfo.
+  - **Why:** `main` hides them only by luck, and closing them would break the bound that keeps the scan linear (the userinfo search stops at the next `://`). Against that, this PR shows about 3.3× fewer secrets overall on the same harness and removes `main`'s panics (48 per 1,000,000 inputs).
 - **A mixed encoding such as `http:%2F%2Fu:p@h`,** which `holds_url` misses. In `scrub` it's a kept query value; in `scrub_text`, URL forms without `://` aren't found at all.
 - **IPv6 hosts in URLs nested in a query or fragment, or after `magnet:`.**
 - **Credential values glued on with `:` or `%3D`.**
