@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T16:22:00Z",
+ "updated_at": "2026-11-04T16:24:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2740,13 +2740,14 @@
    "note": "r4 contingency; phase 1 measurement; index.rs after SB-6 merges"
   },
   "SB-6b": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
-   "session": "session_01MMjhnCswQZZQH5WaWTukzL",
+   "session": "archived",
    "launched": "2026-11-04T15:35:00Z",
    "note": "follow-ups from SB-6 review: swap drain, unknown-field availability fail-closed, shared load, progress",
    "pr": 418,
-   "head": "93a12281"
+   "head": "93a12281",
+   "merge": "9887ab52"
   },
   "SRC-8b": {
    "status": "running",
@@ -2767,7 +2768,15 @@
    "model": "opus",
    "session": "session_01MMjhnAc7bM46Pfez4aWgcX",
    "launched": "2026-11-04T16:22:00Z",
-   "brief": "briefs/SRC-12b.md"
+   "brief": "briefs/SRC-12b.md",
+   "note": "owns widened to sources/egress.rs, egress_tests.rs, integrations/net.rs (exchange_stream)"
+  },
+  "SRC-3": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhnCL7ULfXSSXk51XxGQ",
+   "launched": "2026-11-04T16:24:00Z",
+   "brief": "briefs/SRC-3.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3157,7 +3166,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T16:22:00Z",
+ "last_heartbeat": "2026-11-04T16:24:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3178,7 +3187,8 @@
   "2026-11-04T15:35:00Z #415 SB-6 merged (33088edd). SB-6b follow-up in same session. L4-followups now dependency-ready; waits for a free slot. X-merge-policy told index.rs waits for SB-6b.",
   "2026-11-04T15:38:00Z #412 merged (de00b6cd): 19 rule-pack/enrichment slices to add to slices.yaml (with nits) in next runner PR; owner questions Q1-Q5 to queue. L4-followups launched in slot 7.",
   "2026-11-04T15:47:00Z SRC-10d blocked on parser (bare <infohash>); SRC-8b (Opus) launched in slot 6; SRC-10d relaunches after. #417 and #418 in review.",
-  "2026-11-04T16:22:00Z Merged #417 (8f282e6c: \u00a72.34, 19 rule-pack slices, SRC-10b dropped) and #413 SRC-12 (b3d678dd). Launched RP-0 and SRC-12b. #414 SRC-11 needs a main merge. #418 SB-6b MERGE verdict, CI running."
+  "2026-11-04T16:22:00Z Merged #417 (8f282e6c: \u00a72.34, 19 rule-pack slices, SRC-10b dropped) and #413 SRC-12 (b3d678dd). Launched RP-0 and SRC-12b. #414 SRC-11 needs a main merge. #418 SB-6b MERGE verdict, CI running.",
+  "2026-11-04T16:24:00Z #418 SB-6b merged (9887ab52). SRC-3 launched in slot 1. X-merge-policy cleared for index.rs after its phase-1 report."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4811,15 +4821,15 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-04T16:22:00Z",
+  "updated": "2026-11-04T16:24:00Z",
   "items": [
    {
     "slot": 1,
-    "slice": "SB-6b",
+    "slice": "SRC-3",
     "role": "build",
     "agent": "claude",
-    "doing": "Tidying up the new search index backfill. In review.",
-    "since": "2026-11-04T15:35:00Z"
+    "doing": "Letting search show where a torrent was found and whether it is verified, with unverified results hidden unless you ask.",
+    "since": "2026-11-04T16:24:00Z"
    },
    {
     "slot": 2,
