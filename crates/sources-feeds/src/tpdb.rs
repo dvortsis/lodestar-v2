@@ -32,16 +32,13 @@
 //! drops them in one step ([`Found::without_performers`]), or never reads
 //! them ([`Limits::max_performers`] of 0).
 
-use crate::common::{Bad, clean_title, days_in_month, prepare, small, unsafe_char};
-pub use crate::common::{MAX_TITLE, Stop};
+use crate::common::{Bad, days_in_month, prepare, small, title, unsafe_char};
+pub use crate::common::{MAX_NAME, MAX_TITLE, Stop};
 use crate::json::{self, R, Reader, TextError, Walk};
 
 /// Bytes in a kept id: a scene's, movie's or performer's. The service's
 /// ids are UUIDs (36 bytes) or integers.
 pub const MAX_ID: usize = 64;
-/// Bytes in a kept performer or studio name, after cleaning. A longer one
-/// is dropped, not cut: a cut name may name someone else.
-pub const MAX_NAME: usize = 256;
 
 /// Caps on one parse. The defaults are [`LIMITS`]; why each value:
 /// `docs/decisions/2026-11-04-ENR-2b.md`.
@@ -389,9 +386,7 @@ impl Parser<'_, '_> {
                 d.released = Some(self.checked(d, |s| date(s).then(|| s.to_owned()))?);
             }
             "title" if d.title.is_none() => {
-                // Clean first: a space can sit behind a hidden character.
-                let t = self.strict(d)?.map(|t| clean_title(&t).trim().to_owned());
-                d.title = Some(t.filter(|t| !t.is_empty()));
+                d.title = Some(self.strict(d)?.and_then(|t| title(&t)));
             }
             "site" if d.studio.is_none() => {
                 // A fault in the name drops only the studio; an over-long

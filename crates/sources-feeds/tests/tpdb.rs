@@ -561,6 +561,11 @@ fn field_rules() {
     assert_eq!(t(r#""\u200b \u200b""#), None);
     let cut = format!("\"{} b\"", "a".repeat(MAX_TITLE - 1));
     assert_eq!(t(&cut), Some("a".repeat(MAX_TITLE - 1)));
+    // A multi-byte character across `MAX_TITLE` is dropped whole.
+    let long = "a".repeat(MAX_TITLE - 1);
+    // Escaped and raw: the cut is on the decoded text.
+    assert_eq!(t(&format!("\"{long}\\u00e9…\"")), Some(long.clone()));
+    assert_eq!(t(&format!("\"{long}é…\"")), Some(long));
     // `meta.total` is a number or nothing.
     assert_eq!(a.page.total, None);
     // Not an object at the root: nothing, no stop.

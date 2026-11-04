@@ -9,6 +9,10 @@ use quick_xml::events::{BytesRef, BytesStart};
 
 /// Bytes in a kept title: the claims' name limit.
 pub const MAX_TITLE: usize = 1024;
+/// Bytes in a kept person's or studio's name, after cleaning: the
+/// enrichment parsers' limit (ENR-2b, ENR-3). A longer one is dropped,
+/// not cut, since a cut name may name someone else.
+pub const MAX_NAME: usize = 256;
 /// Bytes in a kept GUID or link: the claims' external-reference limit.
 /// A longer one is dropped, since a cut URL points somewhere else.
 pub const MAX_REF: usize = 2048;
@@ -185,6 +189,16 @@ pub(crate) fn clean_title(s: &str) -> String {
         out.push(c);
     }
     out
+}
+
+/// A kept title: [`unsafe_char`]s removed, cut to [`MAX_TITLE`] by
+/// [`clean_title`], then trimmed, in that order so a space behind a
+/// hidden character or at the cut goes too. `None` when nothing is left.
+/// The one title rule the enrichment parsers share (runner, D4).
+pub(crate) fn title(s: &str) -> Option<String> {
+    let t = clean_title(s);
+    let t = t.trim();
+    (!t.is_empty()).then(|| t.to_owned())
 }
 
 /// [`lodestar_metainfo::hidden_char`], the set `crates/api/src/digest.rs`
@@ -698,6 +712,22 @@ mod tests {
         assert_eq!(external_ref("magnet:?xt=urn:btih:00"), None);
         assert_eq!(external_ref(&"a".repeat(MAX_REF + 1)), None);
         assert_eq!(external_ref("a\u{1}b"), None);
+    }
+
+    #[test]
+    fn titles() {
+        assert_eq!(title(" a \u{200B}").as_deref(), Some("a"));
+        assert_eq!(title("\u{200B} \u{202E}"), None);
+        assert_eq!(title(""), None);
+        // A multi-byte character across the cut isn't split: 1,023 bytes
+        // of `a` and a two-byte `é` don't fit, so the `é` goes.
+        let a = "a".repeat(MAX_TITLE - 1);
+        assert_eq!(title(&format!("{a}é…")), Some(a.clone()));
+        let fits = "a".repeat(MAX_TITLE - 2);
+        assert_eq!(title(&format!("{fits}é…")), Some(format!("{fits}é")));
+        // A space at the cut is trimmed after cutting.
+        let spaced = format!("{} b", "a".repeat(MAX_TITLE - 1));
+        assert_eq!(title(&spaced), Some(a));
     }
 
     proptest::proptest! {
