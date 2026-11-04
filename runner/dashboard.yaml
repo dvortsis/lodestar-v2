@@ -255,6 +255,7 @@ placement:
   match:
   - F-*
   - X-ci-health
+  - X-log-url-redact
   - L4-followups
   - S-settings-reconcile
 - ws: ws-cut

@@ -412,6 +412,14 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **#367 stays out of v0.5.1** and ships in v0.5.2 from `main`, with no rc.4.
     - **Still queued:** the Q1 consent texts wait until SRC-4's drafts can be reviewed, and Checkpoint 1 stays queued.
 
+35. **A narrow `unsafe` exception for SQLite's allocator and memory statistics, and UTC-only records** (owner, 2026-11-04, build-runner session). Asked two questions, the owner answered "Yes" to the first and "Follow your recommendation" to the second.
+    - **The exception.** The workspace keeps `unsafe_code = "forbid"` (§1b.5), except in `lodestar-store` alone, where it is `deny`. There, `#[allow(unsafe_code)]` is permitted only on:
+      - the argument-free reads `sqlite3_memory_used()` and `sqlite3_memory_highwater()`, for the memory attribution gauges (X-mem-gauges);
+      - one `sqlite3_config(SQLITE_CONFIG_MALLOC, …)` call before the first connection opens, which routes SQLite's allocations through mimalloc (X-sqlite-malloc). The memory-routing slice was named in the question.
+
+      Each `allow` sits on the smallest possible block, with a `// SAFETY:` comment. Each PR that adds one runs `/security-review` and records it in its decisions file. Any other `unsafe`, in this crate or elsewhere, still needs the owner.
+    - **Times in records are UTC.** New docs, reviews, soak notes and evidence give times in UTC (`Z`), never a local time zone, offset or place. The ten existing files on `main` that name a local time zone stay as they are, because git history keeps them anyway (runner's recommendation, accepted).
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
