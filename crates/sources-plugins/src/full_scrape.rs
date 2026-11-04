@@ -26,6 +26,13 @@
 //! asks [`PrivateTrackers`] whether any torrent from a private source, or
 //! marked `private`, lists the host. An error there counts as "yes".
 //!
+//! **ToS (Q2, `docs/owner-decisions.md` §2.28).** A full scrape is part of
+//! the tracker protocol (BEP 48), made for automated clients, and a
+//! tracker that doesn't allow it refuses; private trackers are never
+//! scraped. Lodestar ships no tracker list: the user names each public
+//! tracker. A tracker whose published rules forbid scraping is the
+//! owner's call (`docs/decisions/2026-11-04-SRC-12.md`).
+//!
 //! **Egress** goes only through `ctx.kit.http`, which SRC-5's
 //! `EgressFactory` builds for the plugin; [`FullScrape::endpoints`]
 //! narrows it to the configured hosts on public addresses.
@@ -281,7 +288,7 @@ pub trait PrivateTrackers: Send + Sync {
 /// running app, where the lookup must come from the store. It has no
 /// `Default`, so "nothing is private" is always spelled out
 /// ([`StaticPrivateTrackers::none`]).
-#[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Clone)]
 pub struct StaticPrivateTrackers {
     hosts: Vec<String>,
@@ -289,6 +296,7 @@ pub struct StaticPrivateTrackers {
     pub fail: bool,
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl StaticPrivateTrackers {
     pub fn new<S: AsRef<str>>(hosts: &[S]) -> StaticPrivateTrackers {
         StaticPrivateTrackers {
@@ -310,6 +318,7 @@ impl StaticPrivateTrackers {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl PrivateTrackers for StaticPrivateTrackers {
     fn is_private<'a>(&'a self, host: &'a str) -> BoxFuture<'a, Result<bool, LookupError>> {
         let r = if self.fail {
@@ -358,13 +367,14 @@ impl Clock for SystemClock {
 
 /// A clock that starts at `base` and moves with tokio's clock, so a test
 /// on a paused clock moves the wall clock too. For tests only.
-#[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Clone, Copy)]
 pub struct TokioClock {
     base: i64,
     start: tokio::time::Instant,
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl TokioClock {
     pub fn starting_at(base: i64) -> TokioClock {
         TokioClock {
@@ -374,6 +384,7 @@ impl TokioClock {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl Clock for TokioClock {
     fn now(&self) -> i64 {
         self.base + self.start.elapsed().as_secs() as i64
@@ -445,8 +456,10 @@ impl SourcePlugin for FullScrape {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
-    /// Scraped, or not due, or refused: the loop goes on.
+    /// Scraped, or refused: the loop goes on.
     Done,
+    /// Scraped within the last day: due again at this Unix time.
+    DueAt(i64),
     /// The pipeline is gone.
     Closed,
 }
@@ -475,16 +488,25 @@ impl FullScrape {
         loop {
             let minute = self.clock.minute_of_day();
             let wait = if SCHEDULE.is_open(minute) {
+                let mut wait = CHECK_EVERY;
                 for t in &config.trackers {
                     let out = tokio::select! {
                         _ = shutdown.requested() => return Ok(()),
                         o = self.attempt(t, &kit, &emitter) => o,
                     };
-                    if out == Outcome::Closed {
-                        return Ok(());
+                    match out {
+                        Outcome::Closed => return Ok(()),
+                        // Wake a second after it's due, so a tracker keeps
+                        // its slot in the window rather than sliding later
+                        // by up to a tick each day.
+                        Outcome::DueAt(at) => {
+                            let secs = at.saturating_sub(self.clock.now()).max(0) as u64 + 1;
+                            wait = wait.min(Duration::from_secs(secs));
+                        }
+                        Outcome::Done => {}
                     }
                 }
-                CHECK_EVERY
+                wait
             } else {
                 let m = SCHEDULE.minutes_until_open(minute).max(1);
                 Duration::from_secs(u64::from(m) * 60)
@@ -498,6 +520,15 @@ impl FullScrape {
 
     /// One tracker's turn: scrapes it if every guard allows.
     async fn attempt(&self, t: &Tracker, kit: &Kit, emitter: &Emitter) -> Outcome {
+        // Started inside the window or not at all, and abandoned by its
+        // close. Checked before anything is used up, so a tracker reached
+        // in the window's last minute keeps its day. The minute may be
+        // part gone, so the deadline counts only the whole minutes after.
+        let left = minutes_until_close(self.clock.minute_of_day());
+        if left <= 1 {
+            return Outcome::Done;
+        }
+        let deadline = Duration::from_secs(u64::from(left - 1) * 60);
         let now = self.clock.now();
         let key = state_key(&t.host);
         // The persisted cap. An unreadable state stops the scrape: the
@@ -517,7 +548,7 @@ impl FullScrape {
             {
                 // Also not due when the clock has gone back past it.
                 Some(last) if now < last.saturating_add(day) => {
-                    return Outcome::Done;
+                    return Outcome::DueAt(last.saturating_add(day));
                 }
                 Some(_) => {}
                 // Unreadable, or from a wrong clock: the day starts now.
@@ -546,15 +577,7 @@ impl FullScrape {
         {
             return Outcome::Done;
         }
-        // Started inside the window or not at all, and abandoned by its
-        // close. The minute may be part gone, so the deadline counts only
-        // the whole minutes after it.
-        let left = minutes_until_close(self.clock.minute_of_day());
-        if left <= 1 {
-            return Outcome::Done;
-        }
         let req = Request::get(t.scrape.clone());
-        let deadline = Duration::from_secs(u64::from(left - 1) * 60);
         let res = match tokio::time::timeout(deadline, kit.http.poll(&t.announce, &req)).await {
             Ok(Ok(res)) if res.status == 200 => res,
             _ => return Outcome::Done,

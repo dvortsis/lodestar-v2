@@ -143,7 +143,12 @@ impl Run {
 /// Moves the paused clock on by `total`, a minute at a time, letting the
 /// plugin run at each step.
 async fn run_clock(total: Duration) {
-    let step = Duration::from_secs(60);
+    run_clock_by(total, Duration::from_secs(60)).await
+}
+
+/// As [`run_clock`], in steps of `step`: a step is the finest time at
+/// which the test can see the plugin act.
+async fn run_clock_by(total: Duration, step: Duration) {
     let mut left = total;
     while !left.is_zero() {
         let d = left.min(step);
@@ -611,4 +616,63 @@ async fn a_garbled_or_future_state_restarts_the_day() {
         running.stop_within().await.unwrap();
         replayer.finish().unwrap();
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_windows_last_minute_keeps_the_day() {
+    // Reached at 06:59, with under two minutes left: nothing is sent and
+    // nothing is used up, so the next window's 01:00 still scrapes.
+    let replayer = Replayer::new(vec![ok(reply(&[6]))]);
+    let run = start(
+        MIDNIGHT + 6 * HOUR + 59 * 60,
+        replayer,
+        StaticPrivateTrackers::none(),
+    )
+    .await;
+    run_clock(Duration::from_secs(5 * 60)).await;
+    assert!(
+        run.replayer.requests().is_empty(),
+        "scraped in the last minute"
+    );
+    let last = run.ctx.state.get(&format!("last:{HOST}")).await.unwrap();
+    assert!(last.is_none(), "the day was used up without a scrape");
+    run_clock(Duration::from_secs(18 * 3600)).await;
+    wait_for("the next window's scrape", || {
+        run.replayer.requests().len() == 1
+    })
+    .await;
+    let t = run.requests()[0];
+    assert!(in_window(t) && t < MIDNIGHT + 25 * HOUR + 60, "{t}");
+    run.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_late_slot_stays_put() {
+    // First scrape at 06:50. Each later one is due 24 h on and must land
+    // then, not slide past 07:00 and lose a day.
+    let replayer = Replayer::new(vec![ok(reply(&[1])), ok(reply(&[2])), ok(reply(&[3]))]);
+    let run = start(
+        MIDNIGHT + 6 * HOUR + 50 * 60,
+        replayer,
+        StaticPrivateTrackers::none(),
+    )
+    .await;
+    wait_for("day 1's scrape", || run.replayer.requests().len() == 1).await;
+    for day in 2..=3 {
+        // To a minute before it's due, then by the second, so the test
+        // sees the scrape at the second it happens.
+        run_clock(Duration::from_secs(24 * 3600 - 60)).await;
+        run_clock_by(Duration::from_secs(120), Duration::from_secs(1)).await;
+        wait_for("the next day's scrape", || {
+            run.replayer.requests().len() == day
+        })
+        .await;
+    }
+    let times = run.requests();
+    for pair in times.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!((24 * HOUR..=24 * HOUR + 5).contains(&gap), "{times:?}");
+    }
+    assert!(times.iter().all(|t| in_window(*t)), "{times:?}");
+    run.finish().await;
 }

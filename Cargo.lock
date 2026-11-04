@@ -1838,6 +1838,7 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-sources",
  "lodestar-sources-feeds",
+ "lodestar-sources-plugins",
  "lodestar-store",
  "lodestar-tracker-scrape",
  "proptest",
