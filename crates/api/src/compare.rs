@@ -14,7 +14,7 @@ use lodestar_classify::Record;
 use lodestar_metainfo::{FileAttrs, InfoHash, Text};
 use lodestar_search::query::{NumField, TextField};
 use lodestar_search::tokenizer::{TokKind, tokenize};
-use lodestar_search::{Node, Sort};
+use lodestar_search::{CancelToken, Node, Sort};
 use lodestar_store::{Enriched, FileTree, Store, TorrentRow};
 use utoipa::OpenApi;
 
@@ -181,6 +181,11 @@ pub(crate) async fn siblings(
     let hash = torrents::parse_hash(&hash)?;
     // "Show adult content", read once for the whole request.
     let adult = s.adult.shown();
+    // Axum drops this future when the client disconnects (the drawer
+    // closed, or moved to another torrent); the guard then cancels the
+    // candidate search and its lookups on the blocking pool.
+    let cancel = CancelToken::new();
+    let _guard = cancel.cancel_on_drop();
     tokio::task::spawn_blocking(move || {
         let (row, enrichment) = {
             let store = s.reader.lock().expect("reader lock");
@@ -192,7 +197,7 @@ pub(crate) async fn siblings(
         let other_versions = match (&identity, &s.index) {
             (None, _) => HitGroup::unavailable(Unavailable::NoTitle),
             (Some(_), None) => HitGroup::unavailable(Unavailable::SearchDisabled),
-            (Some(id), Some(index)) => other_versions(&s, index, row.id, id, adult)?,
+            (Some(id), Some(index)) => other_versions(&s, index, row.id, id, adult, &cancel)?,
         };
         Ok(Json(SiblingsResponse {
             hash: torrents::hex(&row.info_hash.0),
@@ -208,29 +213,39 @@ pub(crate) async fn siblings(
     .map_err(internal)?
 }
 
+/// The other versions of `identity`, under the request's `cancel`: it's
+/// checked before the search and before each candidate's lookups, so a
+/// request the client gave up on stops there with `search_cancelled`.
 fn other_versions(
     s: &ApiState,
     search: &lodestar_search::SearchHandle,
     id: i64,
     identity: &TitleIdentity,
     adult: bool,
+    cancel: &CancelToken,
 ) -> ApiResult<HitGroup> {
     let index = search.index();
     let node = shown(&candidates_query(identity), adult);
+    // Never a `file:(…)` clause, but compiled under the token all the
+    // same, so a clause added to `candidates_query` later stays stoppable.
+    let compiled = index
+        .query_cancelled(&node, unix_now(), 0, cancel)
+        .map_err(search::search_error)?;
+    cancel.check().map_err(search::search_error)?;
     // Relevance: the title field's BM25 ranks the exact title over
     // longer ones, and the swarm and freshness priors re-rank the first
     // window when hot columns are served (M4).
     let results = index
-        .search_page(
-            &index.query(&node, unix_now()),
-            Sort::Relevance,
-            SIBLING_CANDIDATES,
-            0,
-        )
+        .search_page(&compiled, Sort::Relevance, SIBLING_CANDIDATES, 0)
         .map_err(internal)?;
     let mut hits = Vec::new();
     let mut truncated = false;
     for h in &results.hits {
+        // Up to `SIBLING_CANDIDATES` lookups, each under the shared
+        // reader's lock: the bulk of the work, so checked each time.
+        cancel.check().map_err(search::search_error)?;
+        #[cfg(test)]
+        tests::ON_CANDIDATE.with(|f| f.borrow_mut().as_mut().map(|f| f()));
         if h.id as i64 == id {
             continue;
         }
@@ -520,6 +535,179 @@ impl FileList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    thread_local! {
+        /// Called at each sibling candidate, after its cancel check.
+        pub(super) static ON_CANDIDATE: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// One metainfo dict: a single file named after the torrent.
+    fn metainfo(name: &str) -> Vec<u8> {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let entry = |k: &str, v| (k.as_bytes().to_vec(), v);
+        to_vec(&OwnedValue::Dict(
+            [
+                entry("length", OwnedValue::Int(1 << 30)),
+                entry("name", OwnedValue::Bytes(name.as_bytes().to_vec())),
+                entry("piece length", OwnedValue::Int(1 << 16)),
+                entry("pieces", OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+    }
+
+    /// Five versions of one film, stored, classified and indexed; the
+    /// state, the first one's id and its title identity.
+    fn versions() -> (ApiState, i64, TitleIdentity, tempfile::TempDir) {
+        use lodestar_store::{NewTorrent, SourceId, StoreConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let raws: Vec<Vec<u8>> = [
+            "1080p.BluRay",
+            "720p.WEB-DL",
+            "2160p.WEB",
+            "480p.DVD",
+            "BDRip",
+        ]
+        .iter()
+        .map(|q| metainfo(&format!("The.Dark.Knight.2008.{q}.x264-GRP")))
+        .collect();
+        let infos: Vec<lodestar_metainfo::Info> = raws
+            .iter()
+            .map(|r| lodestar_metainfo::Info::parse(r).unwrap())
+            .collect();
+        let batch: Vec<NewTorrent<'_>> = infos
+            .iter()
+            .zip(&raws)
+            .enumerate()
+            .map(|(i, (info, raw))| NewTorrent {
+                info,
+                raw_info: Some(raw),
+                discovered_at: 1_700_000_000 + i as i64,
+                metadata_at: 1_700_000_001 + i as i64,
+                extra_flags: 0,
+                source: SourceId::new(0).unwrap(),
+            })
+            .collect();
+        let ids: Vec<i64> = store
+            .insert(&batch)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id())
+            .collect();
+        let mut enriched = Vec::new();
+        for id in &ids {
+            let row = store.torrent(*id).unwrap().unwrap();
+            let tree = store.files(*id).unwrap().unwrap();
+            let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+            let (e, _) = lodestar_filter::reclassify::enrich_corrected(
+                &row.name,
+                &files,
+                lodestar_classify::Correction::default(),
+            );
+            enriched.push((*id, e));
+        }
+        store.set_enrichments(&enriched).unwrap();
+        let identity = super::record(store.enrichment(ids[0]).unwrap().as_ref())
+            .as_ref()
+            .and_then(self::identity)
+            .expect("a title identity");
+        let index = lodestar_search::SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 1000).unwrap();
+        w.commit().unwrap();
+        let state = ApiState {
+            auth: Arc::new(crate::Auth::load(&dir.path().join("auth.json"), false).unwrap()),
+            index: Some(index.into()),
+            reader: Arc::new(Mutex::new(
+                Store::open_reader(&db, StoreConfig::default()).unwrap(),
+            )),
+            filters: None,
+            settings: None,
+            ops: None,
+            user_data: None,
+            adult: crate::AdultVisibility::follow(|| false),
+            insights: None,
+            hot: None,
+            events: None,
+        };
+        (state, ids[0], identity, dir)
+    }
+
+    fn run(
+        s: &ApiState,
+        id: i64,
+        identity: &TitleIdentity,
+        cancel: &CancelToken,
+    ) -> ApiResult<HitGroup> {
+        other_versions(s, s.index.as_ref().unwrap(), id, identity, false, cancel)
+    }
+
+    fn is_cancelled(r: &ApiResult<HitGroup>) -> bool {
+        matches!(r, Err(e) if e.status() == StatusCode::SERVICE_UNAVAILABLE && e.code() == "search_cancelled")
+    }
+
+    #[test]
+    fn other_versions_are_found_under_a_live_token() {
+        let (s, id, identity, _dir) = versions();
+        let group = run(&s, id, &identity, &CancelToken::new()).unwrap();
+        assert_eq!(group.hits.len(), 4, "{group:?}");
+    }
+
+    /// A cancel that lands while candidates are read stops at the next
+    /// one, with `search_cancelled`.
+    #[test]
+    fn a_cancel_during_the_candidates_stops_at_the_next() {
+        let (s, id, identity, _dir) = versions();
+        let cancel = CancelToken::new();
+        let visits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (token, seen) = (cancel.clone(), visits.clone());
+        ON_CANDIDATE.with(|f| {
+            *f.borrow_mut() = Some(Box::new(move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                token.cancel();
+            }))
+        });
+        let r = run(&s, id, &identity, &cancel);
+        ON_CANDIDATE.with(|f| *f.borrow_mut() = None);
+        assert!(is_cancelled(&r), "{r:?}");
+        assert_eq!(visits.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    /// The handler's drop guard: a request abandoned while its work waits
+    /// on the shared reader stops instead of reading every candidate.
+    #[test]
+    fn an_abandoned_request_stops() {
+        let (s, id, identity, _dir) = versions();
+        let s = Arc::new(s);
+        let cancel = CancelToken::new();
+        let guard = cancel.cancel_on_drop();
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let held = s.reader.lock().unwrap();
+        let worker = {
+            let (s, identity) = (s.clone(), identity.clone());
+            std::thread::spawn(move || {
+                let _ = done_tx.send(run(&s, id, &identity, &cancel));
+            })
+        };
+        // The client goes away; only then can the worker read the store.
+        drop(guard);
+        drop(held);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let r = loop {
+            match done.recv_timeout(Duration::from_millis(50)) {
+                Ok(r) => break r,
+                Err(_) => assert!(Instant::now() < deadline, "the worker never finished"),
+            }
+        };
+        worker.join().unwrap();
+        assert!(is_cancelled(&r), "{r:?}");
+    }
 
     fn record(release: &[(&str, &str)]) -> Record {
         let mut r = Record::decode(b"e1\ntype\tother").expect("a bare record");
