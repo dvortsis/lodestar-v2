@@ -94,6 +94,26 @@ pub const MAX_FILES: usize = 64;
 /// has (§20.8 gate).
 pub const MIN_EXAMPLES: usize = 3;
 
+/// The rules §20.6 gives a false-positive guard: each needs a precision
+/// item that exercises it (§20.8 gate).
+pub const GUARDED: &[PackRule] = &[
+    PackRule::Mw2,
+    PackRule::Mw3,
+    PackRule::Mw4,
+    PackRule::Mw5,
+    PackRule::Lu1,
+    PackRule::Lu2,
+    PackRule::Fk1,
+    PackRule::Fk2,
+    PackRule::Fk5,
+    PackRule::Sp2,
+    PackRule::Sc1,
+    PackRule::Sc2,
+];
+
+/// The fewest items the precision corpus has (§20.8 gate).
+pub const MIN_PRECISION: usize = 20;
+
 /// Pack rules that depend on state, exempt from the per-item corpus:
 /// SP-3 (flooding) and SP-4 (clones of hidden spam) are checked by
 /// sequence fixtures through their own engine entry point (RP-4, RP-5),
@@ -470,8 +490,9 @@ impl Report {
     }
 
     /// One line per failure, naming the rule, the file line and why. A
-    /// rule with fewer than [`MIN_EXAMPLES`] examples of either kind
-    /// fails too.
+    /// rule with fewer than [`MIN_EXAMPLES`] examples of either kind, a
+    /// precision corpus under [`MIN_PRECISION`] items, and a [`GUARDED`]
+    /// rule no precision item exercises fail too.
     pub fn failures(&self) -> Vec<String> {
         let mut out = Vec::new();
         for p in &self.packs {
@@ -499,6 +520,17 @@ impl Report {
                         }
                     ));
                 }
+            }
+        }
+        if self.precision.len() < MIN_PRECISION {
+            out.push(format!(
+                "the precision corpus has {} items; it needs at least {MIN_PRECISION}",
+                self.precision.len()
+            ));
+        }
+        for g in GUARDED {
+            if !self.precision.iter().any(|p| p.guards.contains(g)) {
+                out.push(format!("no precision item exercises {}'s guard", g.id()));
             }
         }
         for p in &self.precision {
@@ -670,6 +702,20 @@ pub fn parse_pack(pack: Pack, file: &str, text: &str) -> Result<Vec<Case>, Corpu
         }
         Event::Example(expect, example) => {
             let rule = rule.ok_or("an example before any `rule` line")?;
+            // A copy can't pad a rule's minimum.
+            if let Some(c) = out.iter().find(|c| {
+                c.rule == rule
+                    && c.expect == expect
+                    && c.example.name == example.name
+                    && c.example.files == example.files
+                    && c.example.content_type == example.content_type
+            }) {
+                return Err(format!(
+                    "a copy of the {} example on line {}",
+                    rule.id(),
+                    c.example.line
+                ));
+            }
             out.push(Case {
                 rule,
                 expect,
@@ -677,7 +723,7 @@ pub fn parse_pack(pack: Pack, file: &str, text: &str) -> Result<Vec<Case>, Corpu
             });
             Ok(())
         }
-        Event::Precision(..) => Err("`item` is for the precision corpus"),
+        Event::Precision(..) => Err("`item` is for the precision corpus".to_owned()),
     })?;
     Ok(out)
 }
@@ -694,7 +740,7 @@ pub fn parse_precision(file: &str, text: &str) -> Result<Vec<PrecisionItem>, Cor
             });
             Ok(())
         }
-        _ => Err("`rule`, `match` and `miss` are for pack corpora"),
+        _ => Err("`rule`, `match` and `miss` are for pack corpora".to_owned()),
     })?;
     Ok(out)
 }
@@ -711,13 +757,15 @@ struct Open {
     example: Example,
     guards: Option<Vec<PackRule>>,
     gaps: Option<Vec<PackRule>>,
+    /// The `gap` line, for its errors.
+    gap_line: usize,
 }
 
 fn parse(
     file: &str,
     text: &str,
     kind: Kind,
-    mut emit: impl FnMut(Event) -> Result<(), &'static str>,
+    mut emit: impl FnMut(Event) -> Result<(), String>,
 ) -> Result<(), CorpusError> {
     let err = |line: usize, message: String| CorpusError {
         file: file.to_owned(),
@@ -731,7 +779,7 @@ fn parse(
     let mut items = 0usize;
     // Hands the open example over, checked.
     let close = |open: &mut Option<Open>,
-                 emit: &mut dyn FnMut(Event) -> Result<(), &'static str>|
+                 emit: &mut dyn FnMut(Event) -> Result<(), String>|
      -> Result<(), CorpusError> {
         let Some(o) = open.take() else {
             return Ok(());
@@ -746,7 +794,7 @@ fn parse(
                 let gaps = o.gaps.unwrap_or_default();
                 if let Some(g) = gaps.iter().find(|g| !guards.contains(g)) {
                     return Err(err(
-                        line,
+                        o.gap_line,
                         format!("the gap {} isn't one of the item's `guards`", g.id()),
                     ));
                 }
@@ -754,7 +802,7 @@ fn parse(
             }
             (Kind::Pack(_), None) => return Err(err(line, "an example needs a kind".to_owned())),
         };
-        emit(ev).map_err(|m| err(line, m.to_owned()))
+        emit(ev).map_err(|m| err(line, m))
     };
     for (i, raw) in text.split('\n').enumerate() {
         let n = i + 1;
@@ -784,7 +832,7 @@ fn parse(
                 }
                 if key == "rule" {
                     let rule = pack_rule(value, kind).map_err(|m| err(n, m))?;
-                    emit(Event::Rule(rule)).map_err(|m| err(n, m.to_owned()))?;
+                    emit(Event::Rule(rule)).map_err(|m| err(n, m))?;
                     continue;
                 }
                 if value.is_empty() {
@@ -808,6 +856,7 @@ fn parse(
                     },
                     guards: None,
                     gaps: None,
+                    gap_line: 0,
                 });
             }
             "file" | "pad" | "type" | "guards" | "gap" => {
@@ -854,6 +903,9 @@ fn parse(
                             return Err(err(n, format!("`{key}` needs a rule")));
                         }
                         *slot = Some(rules);
+                        if key == "gap" {
+                            o.gap_line = n;
+                        }
                     }
                 }
             }

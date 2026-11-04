@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use lodestar_filter::corpus::{
-    self, Corpus, DirectionCheck, Expect, MAX_BYTES, MAX_FILES, MAX_ITEMS, MAX_LINE, MIN_EXAMPLES,
-    Observed, STATEFUL,
+    self, Corpus, DirectionCheck, Expect, GUARDED, MAX_BYTES, MAX_FILES, MAX_ITEMS, MAX_LINE,
+    MIN_EXAMPLES, MIN_PRECISION, Observed, STATEFUL,
 };
 use lodestar_filter::packs::manifest::{Code, Direction, Manifest, RuleEntry, Version};
 use lodestar_filter::packs::{Ctx, Pack, PackRule};
@@ -126,14 +126,34 @@ fn the_whole_corpus_passes() {
 /// the precision corpus.
 #[test]
 fn the_precision_corpus_covers_every_guard() {
-    use PackRule::*;
-    const GUARDED: &[PackRule] = &[Mw2, Mw3, Mw4, Mw5, Lu1, Lu2, Fk1, Fk2, Fk5, Sp2, Sc1, Sc2];
     let c = builtin();
     for r in GUARDED {
         let n = c.precision.iter().filter(|p| p.guards.contains(r)).count();
         assert!(n >= 1, "no precision item exercises {}'s guard", r.id());
+        assert!(corpus::stateless(*r));
     }
-    assert!(c.precision.len() >= 20);
+    assert!(c.precision.len() >= MIN_PRECISION);
+    // The report fails on its own without them, as RP-3 serves it.
+    let mut thin = c.clone();
+    thin.precision
+        .retain(|p| !p.guards.contains(&PackRule::Lu2));
+    let failures = thin.run(&Manifest::builtin()).failures();
+    assert!(
+        failures
+            .iter()
+            .any(|f| f == "no precision item exercises LU-2's guard"),
+        "{failures:?}"
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.contains("the precision corpus has")),
+        "{failures:?}"
+    );
+    let mut empty = c.clone();
+    empty.precision.clear();
+    let failures = empty.run(&Manifest::builtin()).failures();
+    assert_eq!(failures.len(), 1 + GUARDED.len(), "{failures:?}");
 }
 
 /// Each precision item has the evidence its labelled rules read before
@@ -516,9 +536,21 @@ fn the_parser_reads_the_format() {
 fn the_parser_rejects_malformed_lines() {
     let long = format!("rule MW-1\nmatch {}\n", "x".repeat(MAX_LINE));
     let many_files = format!("rule MW-1\nmatch X\n{}", "file 1 a\n".repeat(MAX_FILES + 1));
-    let many_items = format!("rule MW-1\n{}", "match X\n".repeat(MAX_ITEMS + 1));
+    let many_items: String = std::iter::once("rule MW-1\n".to_owned())
+        .chain((0..=MAX_ITEMS).map(|i| format!("match X{i}\n")))
+        .collect();
     let pack: &[(&str, usize, &str)] = &[
         ("rule MW-1\nmatch X\nbogus 1\n", 3, "unknown keyword"),
+        (
+            "rule MW-1\nmatch X\n file 1 a\nmiss X\n file 1 a\nmatch X\n file 1 a\n",
+            6,
+            "a copy of the MW-1 example on line 2",
+        ),
+        (
+            "rule MW-1\nmatch X\n type movie\nmatch X\n type tv\nmatch X\nmatch X\n",
+            7,
+            "a copy of the MW-1 example on line 6",
+        ),
         ("match X\n", 1, "before any `rule`"),
         ("file 1 a\n", 1, "before any example"),
         ("rule SC-1\n", 1, "in the scams pack, not malware"),
@@ -579,8 +611,8 @@ fn the_parser_rejects_malformed_lines() {
         ),
         ("item X\nguards MW-1 XX-1\n", 2, "no pack rule"),
         (
-            "item X\nguards MW-1\ngap MW-2\n",
-            1,
+            "item X\nguards MW-1\n\ngap MW-2\n",
+            4,
             "isn't one of the item's `guards`",
         ),
         ("item X\nguards SP-3\n", 2, "depends on state"),
