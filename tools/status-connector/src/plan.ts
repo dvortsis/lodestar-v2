@@ -38,12 +38,17 @@ const sliceIdsOf = (pr: PR): string[] => {
   if (m) { const ids = m[1].split(/[\/,+\s]+/).filter((x) => /^[\w.-]+$/.test(x)); if (ids.length) return ids; }
   const b = /^slice\/(.+)$/.exec(pr.head_ref || ''); return b ? [b[1]] : [];
 };
+// an open pull request also counts for the slice its branch is named after: a follow-up on a reused branch keeps its title id
+const openIdsOf = (pr: PR): string[] => { const b = /^slice\/(.+)$/.exec(pr.head_ref || ''); return [...new Set([...sliceIdsOf(pr), ...(b ? [b[1]] : [])])]; };
 const agentOf = (pr: PR) => (/claude\.ai\/code|Generated with \[Claude Code\]/.test(pr.body || '') || /^claude\//.test(pr.head_ref || '') ? 'claude' : 'other');
 
 export function buildPlan(inp: Inputs) {
   const cfg = inp.cfg, SL = inp.slices, S = (inp.runnerState && inp.runnerState.slices) || {};
   const warnings: { label: string; value: string; note: string }[] = [];
   const warn = (label: string, value: string, note: string) => warnings.push({ label, value, note });
+  // a note is a quieter warning: something that is fine for now but should be written down in the plan files; the page lists it apart
+  const notices: { label: string; value: string; note: string }[] = [];
+  const notice = (label: string, value: string, note: string) => notices.push({ label, value, note });
 
   // outside conditions: the file's, then GitHub's answer for `auto:`; ones slices.yaml names but the file doesn't are unmet
   const EXT: Record<string, { met: boolean; who: string; label: string }> = {};
@@ -63,8 +68,8 @@ export function buildPlan(inp: Inputs) {
   const mergedById: Record<string, { pr: number; agent: string }> = {};
   const mergedNums = new Set<number>();
   for (const p of inp.mergedPRs) { mergedNums.add(p.number); for (const id of sliceIdsOf(p)) mergedById[id] = { pr: p.number, agent: agentOf(p) }; }
-  const openById: Record<string, number> = {};
-  for (const p of inp.openPRs) for (const id of sliceIdsOf(p)) openById[id] = p.number;
+  const openById: Record<string, number> = {}, openPR: Record<string, PR> = {};
+  for (const p of inp.openPRs) for (const id of openIdsOf(p)) { openById[id] = p.number; openPR[id] = p; }
   // a branch that only has closed, unmerged PRs is abandoned work, not work in progress
   const abandoned = new Set<string>(); for (const p of inp.closedPRs || []) for (const id of sliceIdsOf(p)) abandoned.add(id);
   const started = new Set(inp.branches.filter((b) => !abandoned.has(b)));
@@ -130,6 +135,13 @@ export function buildPlan(inp: Inputs) {
       pr: (typeof v.pr === 'number' ? v.pr : 0) || mergedById[i]?.pr || openById[i] || 0,
       deps: (s.deps || []).join(','), why: finished ? '' : why(i).join(';'), unlocks: finished ? 0 : open.length, note: first(s.notes),
     });
+  }
+  // an X-* slice that has an open pull request but is not in slices.yaml yet is shown at once in its placement (or the default lane)
+  for (const id of Object.keys(openPR)) {
+    if (byid[id] || mergedById[id] || !/^X-[\w.-]+$/.test(id)) continue;
+    const p = openPR[id], pl = place(cfg, id), ws = wsIds.has(pl.ws) ? pl.ws : 'ws-small';
+    nodes.push({ id, parent: ws, level: 'slice', title: p.title.replace(/^[^:]*:\s*/, '').slice(0, 120) || id, agent: agentOf(p), kind: 'extra', model: '', state: 'active', pr: p.number, deps: '', why: '', unlocks: 0, note: 'Not in runner/slices.yaml yet' });
+    notice('Slice not in plan files yet', id, 'PR #' + p.number + ' is for ' + id + ', which runner/slices.yaml does not list yet; it is shown as active until it does');
   }
   for (const [k, v] of Object.entries(S) as any) {
     if (byid[k]) continue; if (!v || typeof v !== 'object' || k.startsWith('runner-') || k === 'M4' || k === 'CR-0' || v.status == null) continue;
@@ -209,10 +221,17 @@ export function buildPlan(inp: Inputs) {
       if (x.agent !== undefined && !AGENTS.includes(x.agent)) warn('Bad slot value', 'agent ' + text(x.agent), 'slot ' + x.slot + ': agent must be one of ' + AGENTS.join(', '));
       const slice = text(x.slice), doing = text(x.doing), since = text(x.since);
       const node = slice ? byId[slice] : undefined;
-      if (slice && !node) warn('Unknown slice', slice, 'slot ' + x.slot + ' in runner-state slots names a slice that is not in runner/slices.yaml');
-      if (node && ['done', 'closed'].includes(node.state)) warn('Slot lists finished work', slice, 'slot ' + x.slot + ' still shows a slice that has merged or closed; the runner should update slots');
+      // a slice with an open pull request (or a slice/<id> branch) is real work even when slices.yaml does not list it yet: a note, not an error
+      const livePR = slice ? openPR[slice] : undefined, live = !!slice && (!!livePR || started.has(slice));
+      if (slice && !node) {
+        if (live) notice('Slot slice not in plan files yet', slice, 'slot ' + x.slot + ' names ' + slice + ', which runner/slices.yaml does not list, but ' + (livePR ? 'PR #' + livePR.number : 'branch slice/' + slice) + ' exists; add it to the plan files');
+        else warn('Unknown slice', slice, 'slot ' + x.slot + ' in runner-state slots names a slice that is not in runner/slices.yaml, and has no open pull request or slice/ branch');
+      }
+      // a merged slice with a new open pull request (a follow-up on the same branch) is still being worked on
+      const followUp = !!node && ['done', 'closed'].includes(node.state) && !!livePR;
+      if (node && ['done', 'closed'].includes(node.state) && !followUp) warn('Slot lists finished work', slice, 'slot ' + x.slot + ' still shows a slice that has merged or closed; the runner should update slots');
       if (slice) { if (seenSlice.has(slice)) warn('Slice in two slots', slice, 'slots ' + seenSlice.get(slice) + ' and ' + x.slot + ' both list it'); else seenSlice.set(slice, x.slot); }
-      rows[x.slot] = { slot: x.slot, status: x.status === 'idle' ? 'idle' : x.slot > cap ? 'finishing' : 'working', slice, title: node?.title || '', doing, agent: AGENTS.includes(x.agent) ? x.agent : node?.agent || '', model: node?.model || '', role: ROLES.includes(x.role) ? x.role : 'build', since, stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof };
+      rows[x.slot] = { slot: x.slot, status: x.status === 'idle' ? 'idle' : x.slot > cap ? 'finishing' : 'working', slice, title: node?.title || (livePR ? livePR.title.replace(/^[^:]*:\s*/, '').slice(0, 120) : ''), doing, agent: AGENTS.includes(x.agent) ? x.agent : node?.agent || (livePR ? agentOf(livePR) : ''), model: node?.model || '', role: ROLES.includes(x.role) ? x.role : 'build', since, stage: followUp ? 'active' : node?.state || (live ? 'active' : ''), pr: (followUp && livePR ? livePR.number : node?.pr) || livePR?.number || 0, asof: slotAsof };
     }
     for (let n = 1; n <= cap; n++) slots.push(rows[n] || { slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', model: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof });
     // a session still running in a slot above the limit (the limit was lowered while it works) is shown as finishing, not hidden
@@ -222,7 +241,8 @@ export function buildPlan(inp: Inputs) {
     else if (!Number.isFinite(t) || age < -0.1) warn('Slots date invalid', slotAsof.slice(0, 40), 'runner-state slots.updated is not a past UTC time; the runner should set it to the time of its last change');
     else if (age > 24) warn('Slots list is stale', slotAsof, 'runner-state slots.updated is ' + Math.round(age) + ' h old; the runner should refresh it on the wake where a session starts, finishes or changes task');
     const listed = new Set(items.map((x: any) => text(x?.slice)).filter(Boolean));
-    const loose = Object.keys(openById).filter((id) => !listed.has(id));
+    // a pull request is in a slot when the slot names any slice it stands for: its title id or the slice its branch is named after
+    const loose = inp.openPRs.filter((p) => !openIdsOf(p).some((id) => listed.has(id))).map((p) => sliceIdsOf(p)[0] || '#' + p.number);
     if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner-state slots');
   } else if (inp.runnerState) warn('Slots not recorded', 'none', 'runner-state state.json has no slots key, so the dashboard cannot show what each slot is doing');
 
@@ -234,6 +254,7 @@ export function buildPlan(inp: Inputs) {
     { key: 'graph', label: 'Plan files', value: 'main', note: 'runner/slices.yaml and runner/dashboard.yaml' },
     { key: 'built', label: 'Built at', value: inp.now.slice(0, 16).replace('T', ' ') + ' UTC', note: 'live, by the status connector' },
     ...warnings.map((w) => ({ key: 'warning', label: w.label, value: w.value, note: w.note })),
+    ...notices.map((w) => ({ key: 'note', label: w.label, value: w.value, note: w.note })),
   ];
   return { nodes, road, edges, activity, recent, meta: metaRows, gates, owner, ext, notes, crawler, soak, slots };
 }
