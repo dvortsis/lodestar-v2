@@ -1,4 +1,4 @@
-# X-merge-policy decisions
+# X-merge-policy decisions (#441)
 
 Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-approved under owner §2.33). Soak r4 (rc.3, with #406's mmap prune) had a provisional slope over hours 12–14 of 23 MiB/h, 95% CI [15.6, 30.6] (the brief). Its later fit over hours 12–16.7 is 12.88 MiB/h, 95% CI [10.95, 14.81] (runner, 17:43Z); this file compares against that one. The runner's static analysis (`notes/r4-retainer-analysis.md` on runner-state) ranked tantivy's default `LogMergePolicy` as the first suspect. This file records Phase 1, a measurement with no production change.
 
