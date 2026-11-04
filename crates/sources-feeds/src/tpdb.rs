@@ -86,8 +86,9 @@ pub enum Kind {
 /// One item the service matched. Every field is a claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
-    /// `None` when `type` is missing or not one the parser knows. The
-    /// service has no VR type or flag; VR is only a tag, which isn't read.
+    /// `None` when `type` is missing or `null`; any other `type` skips the
+    /// item. The service has no VR type or flag; VR is only a tag, which
+    /// isn't read.
     pub kind: Option<Kind>,
     /// The service's id: 1–[`MAX_ID`] ASCII letters, digits and `-`.
     pub id: String,
@@ -145,7 +146,9 @@ pub struct Skipped {
     /// A string over [`Limits::max_text`] or an array over
     /// [`Limits::max_array`] inside the item.
     pub over_cap: u32,
-    /// An item that isn't an object, or a string with a lone surrogate.
+    /// An item that isn't an object, a string with a lone surrogate, a
+    /// kept field of the wrong type, an unknown `type`, or a `date` that
+    /// isn't a real `YYYY-MM-DD`.
     pub malformed: u32,
 }
 
@@ -389,23 +392,22 @@ impl Parser<'_, '_> {
                 d.title = Some(self.strict(d)?.and_then(|t| title(&t)));
             }
             "site" if d.studio.is_none() => {
-                // A fault in the name drops only the studio; an over-long
-                // array elsewhere in `site` still spoils the item.
-                let mut name = None;
+                // Any fault in `site` (its name, an over-long array or
+                // string anywhere in it, or `site` not being an object)
+                // drops only the studio: the shared degrade rule.
+                let (mut name, mut own) = (None, Draft::default());
                 if self.j.peek() == Some(b'{') {
                     self.object(|p, k| match k {
                         "name" if name.is_none() => {
-                            let mut own = Draft::default();
-                            let n = p.strict(&mut own)?.and_then(|s| clean_name(&s));
-                            name = Some(n.filter(|_| own.bad.is_none()));
+                            name = Some(p.strict(&mut own)?.and_then(|s| clean_name(&s)));
                             Ok(())
                         }
-                        _ => p.skip_in(d),
+                        _ => p.skip_in(&mut own),
                     })?;
                 } else {
-                    self.skip_in(d)?;
+                    self.skip_in(&mut own)?;
                 }
-                d.studio = Some(name.flatten());
+                d.studio = Some(name.flatten().filter(|_| own.bad.is_none()));
             }
             "performers" if d.performers.is_none() => {
                 let mut list = Performers::default();
@@ -414,9 +416,10 @@ impl Parser<'_, '_> {
                     // `max_bytes` bound it, and `max_performers` what's kept.
                     Some(b'[') => self.array(|p, _| p.performer(&mut list))?,
                     Some(b'n') => self.j.skip().map(drop)?,
+                    // Not a list: dropped, the item kept.
                     _ => {
                         list.truncated = true;
-                        self.skip_in(d)?;
+                        self.skip_in(&mut Draft::default())?;
                     }
                 }
                 d.performers = Some(list);
@@ -429,8 +432,9 @@ impl Parser<'_, '_> {
     /// One `performers` entry: its `name` only. The rest (`id`, `extra`,
     /// `bio`, `parent`, images) is passed over undecoded.
     ///
-    /// Any fault in the entry (a bad `name`, an over-long array or string
-    /// anywhere in it, or an entry that isn't an object) drops only that
+    /// Any fault in the entry (a bad `name`, a `name` over `max_text`, an
+    /// over-long array anywhere in it, or an entry that isn't an object;
+    /// other strings in it aren't measured) drops only that
     /// performer and sets `truncated`, so whether a match is kept doesn't
     /// depend on whether performers are read ([`Limits::max_performers`],
     /// plan Q4). The same rule as ENR-3's StashDB parser (runner, D3).

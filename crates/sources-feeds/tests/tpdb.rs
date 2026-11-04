@@ -224,6 +224,70 @@ fn both_parsers_cut_titles_alike() {
     }
 }
 
+/// The two enrichment parsers degrade alike (runner, ENR-2b review): the
+/// performer cap counts kept performers, and a wrong-typed studio or
+/// performers list drops that field and keeps the match.
+#[test]
+fn both_parsers_degrade_alike() {
+    use lodestar_sources_feeds::stashdb;
+    const SID: &str = "00000000-0000-4000-8000-000000000001";
+    let stash = |fields: &str, max_performers| {
+        let body = format!(r#"{{"data":{{"findScene":{{"id":"{SID}",{fields}}}}}}}"#);
+        let mut out = Vec::new();
+        let l = stashdb::Limits {
+            max_performers,
+            ..stashdb::LIMITS
+        };
+        let page = stashdb::parse_each(body.as_bytes(), &l, |s| out.push(s));
+        assert_eq!((page.kept, page.skipped.total()), (1, 0), "{body}");
+        out.remove(0)
+    };
+    let tpdb = |fields: &str, max_performers| {
+        let body = format!(r#"{{"data":{{"id":"a",{fields}}}}}"#);
+        let l = Limits {
+            max_performers,
+            ..LIMITS
+        };
+        let a = with(body.as_bytes(), &l);
+        assert_eq!((a.page.kept, a.page.skipped.total()), (1, 0), "{body}");
+        a.found.into_iter().next().unwrap()
+    };
+    // `[bad, A, B, C]` with a cap of 2 keeps A and B in both.
+    let t = tpdb(
+        r#""performers":[{"name":5},{"name":"A"},{"name":"B"},{"name":"C"}]"#,
+        2,
+    );
+    let s = stash(
+        r#""performers":[{"performer":{"name":5}},{"performer":{"name":"A"}},
+            {"performer":{"name":"B"}},{"performer":{"name":"C"}}]"#,
+        2,
+    );
+    let tn: Vec<String> = t.performers.list.iter().map(|p| p.name.clone()).collect();
+    let sn: Vec<String> = s.performers.iter().map(|p| p.name.clone()).collect();
+    assert_eq!(tn, ["A", "B"]);
+    assert_eq!(sn, tn);
+    assert!(t.performers.truncated && s.performers_truncated);
+    // A wrong-typed studio or performers list: dropped, the match kept.
+    for (tf, sf) in [
+        (r#""site":"Example""#, r#""studio":"Example""#),
+        (r#""site":[1]"#, r#""studio":[1]"#),
+    ] {
+        assert_eq!(tpdb(tf, 64).matched.studio, None);
+        assert_eq!(stash(sf, 64).matched.studio, None);
+    }
+    for f in [r#""performers":{}"#, r#""performers":"x""#] {
+        let (t, s) = (tpdb(f, 64), stash(f, 64));
+        assert!(t.performers.list.is_empty() && t.performers.truncated);
+        assert!(s.performers.is_empty() && s.performers_truncated);
+    }
+    // Leading whitespace doesn't use up the title budget in either.
+    let raw = format!("{}{}", " ".repeat(10), "a".repeat(1100));
+    let f = format!(r#""title":"{raw}""#);
+    let want = "a".repeat(MAX_TITLE);
+    assert_eq!(tpdb(&f, 64).matched.title.as_deref(), Some(want.as_str()));
+    assert_eq!(stash(&f, 64).matched.title.as_deref(), Some(want.as_str()));
+}
+
 fn fixtures() -> Vec<std::path::PathBuf> {
     let mut v: Vec<_> = std::fs::read_dir(DIR)
         .unwrap()
@@ -331,7 +395,7 @@ fn item_cap() {
 
 #[test]
 fn array_cap() {
-    for (key, arr) in [("tags", "[1,2,3]"), ("site", r#"{"x":[1,2,3]}"#)] {
+    for (key, arr) in [("tags", "[1,2,3]"), ("directors", r#"[{"x":[1,2,3]}]"#)] {
         let body = format!(r#"{{"data":[{{"id":"a","{key}":{arr}}},{{"id":"b"}}]}}"#);
         let at = |n| {
             with(
@@ -347,6 +411,19 @@ fn array_cap() {
         let over = at(2);
         assert_eq!((over.page.stop, ids(&over)), (None, vec!["b"]), "{key}");
         assert_eq!(over.page.skipped.over_cap, 1, "{key}");
+    }
+    // In `site`, an over-long array drops only the studio.
+    let body = br#"{"data":{"id":"a","site":{"name":"S","x":[1,2,3]}}}"#;
+    for (n, want) in [(3, Some("S")), (2, None)] {
+        let a = with(
+            body,
+            &Limits {
+                max_array: n,
+                ..WIDE
+            },
+        );
+        assert_eq!((a.page.kept, a.page.skipped.total()), (1, 0));
+        assert_eq!(a.found[0].matched.studio.as_deref(), want);
     }
     // The performers list itself isn't capped by `max_array` (D3):
     // `max_values` and `max_bytes` bound it, `max_performers` what's kept.

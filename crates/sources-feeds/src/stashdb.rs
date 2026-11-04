@@ -494,16 +494,16 @@ impl Parser<'_, '_> {
                     }
                 }
             }
-            F_STUDIO => d.studio = self.studio(d)?,
+            F_STUDIO => d.studio = self.studio()?,
             _ => self.performers(d)?,
         }
         Ok(())
     }
 
     /// `studio`: `null`, or an object with an id and a name. Any other
-    /// type spoils the scene; an object without a valid id and name is
-    /// dropped and the scene kept.
-    fn studio(&mut self, d: &mut Draft) -> R<Option<Studio>> {
+    /// type, or an object without a valid id and name, is dropped and the
+    /// scene kept: the shared degrade rule (runner, ENR-2b review).
+    fn studio(&mut self) -> R<Option<Studio>> {
         match self.j.peek() {
             Some(b'n') => self.j.skip().map(|_| None),
             Some(b'{') => {
@@ -523,23 +523,28 @@ impl Parser<'_, '_> {
                     .filter(|_| ok)
                     .map(|(id, name)| Studio { id, name }))
             }
-            _ => self.wrong(d).map(|()| None),
+            _ => self.skip_in(&mut Draft::default()).map(|()| None),
         }
     }
 
     /// `performers`: `null`, or a list of `{"performer": {"name": …}}`.
-    /// Any other type spoils the scene. An entry past
-    /// [`Limits::max_performers`], or without one usable name, is left
-    /// out and sets `truncated`; nothing is stored past the cap.
+    /// Any other type is dropped and sets `truncated`; the scene is kept.
+    /// An entry without one usable name is left out and sets `truncated`.
+    /// The cap counts kept performers, so a bad entry doesn't use it up;
+    /// once [`Limits::max_performers`] are kept, the rest are only read
+    /// past and set `truncated`.
     fn performers(&mut self, d: &mut Draft) -> R<()> {
         match self.j.peek() {
             Some(b'n') => return self.j.skip().map(drop),
             Some(b'[') => {}
-            _ => return self.wrong(d),
+            _ => {
+                d.truncated = true;
+                return self.skip_in(&mut Draft::default());
+            }
         }
         let max = self.l.max_performers;
-        self.array(|p, n| {
-            if n >= max {
+        self.array(|p, _| {
+            if d.performers.len() >= max {
                 d.truncated = true;
                 return p.j.skip().map(drop);
             }

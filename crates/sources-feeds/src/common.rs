@@ -191,13 +191,16 @@ pub(crate) fn clean_title(s: &str) -> String {
     out
 }
 
-/// A kept title: [`unsafe_char`]s removed, cut to [`MAX_TITLE`] by
-/// [`clean_title`], then trimmed, in that order so a space behind a
-/// hidden character or at the cut goes too. `None` when nothing is left.
-/// The one title rule the enrichment parsers share (runner, D4).
+/// A kept title: [`unsafe_char`]s removed, leading whitespace trimmed,
+/// cut to [`MAX_TITLE`] by [`clean_title`], then trailing whitespace
+/// trimmed. In that order, a space behind a hidden character or at the
+/// cut goes, and leading whitespace never uses up the budget. `None` when
+/// nothing is left. The one title rule the enrichment parsers share
+/// (runner, D4).
 pub(crate) fn title(s: &str) -> Option<String> {
-    let t = clean_title(s);
-    let t = t.trim();
+    let visible: String = s.chars().filter(|&c| !unsafe_char(c)).collect();
+    let t = clean_title(visible.trim_start());
+    let t = t.trim_end();
     (!t.is_empty()).then(|| t.to_owned())
 }
 
@@ -728,6 +731,10 @@ mod tests {
         // A space at the cut is trimmed after cutting.
         let spaced = format!("{} b", "a".repeat(MAX_TITLE - 1));
         assert_eq!(title(&spaced), Some(a));
+        // Leading whitespace, hidden characters included, doesn't use up
+        // the budget.
+        let lead = format!("{}\u{200B} {}", " ".repeat(10), "a".repeat(1100));
+        assert_eq!(title(&lead), Some("a".repeat(MAX_TITLE)));
     }
 
     proptest::proptest! {

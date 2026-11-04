@@ -348,8 +348,6 @@ fn field_faults_skip_or_degrade() {
         s(r#""title":"a\ud800""#),
         s(r#""release_date":"2024-02-30""#),
         s(r#""release_date":20240101"#),
-        s(r#""studio":"Example""#),
-        s(r#""performers":{}"#),
         // A repeated key: which one the server meant is unclear.
         s(r#""title":"a","title":"b""#),
         s(&format!(r#""id":"{}""#, id(1))),
@@ -358,6 +356,20 @@ fn field_faults_skip_or_degrade() {
         r#"{"data":{"findScene":"x"}}"#.to_string(),
         r#"{"data":{"searchScene":[null]}}"#.to_string(),
     ];
+    // A wrong-typed `studio` or `performers` drops that field and keeps
+    // the scene, as ThePornDB's parser does (runner, ENR-2b review).
+    for (body, truncated) in [
+        (s(r#""studio":"Example""#), false),
+        (s(r#""studio":[1]"#), false),
+        (s(r#""performers":{}"#), true),
+        (s(r#""performers":"x""#), true),
+    ] {
+        let f = parse(body.as_bytes());
+        assert_eq!((f.page.kept, f.page.skipped.total()), (1, 0), "{body}");
+        let sc = &f.scenes[0];
+        assert_eq!(sc.matched.studio, None, "{body}");
+        assert_eq!(sc.performers_truncated, truncated, "{body}");
+    }
     for body in &malformed {
         let f = parse(body.as_bytes());
         assert_eq!(
