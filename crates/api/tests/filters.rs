@@ -2685,6 +2685,88 @@ async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
     );
 }
 
+/// SRC-3: rows stored with a provenance clause (`verified:`, `source:`,
+/// `network:`), as a rule saved before they were fields reads now, or as
+/// Undo restores one, are unreadable: the judge can't answer them, and a
+/// negated one would otherwise match everything. Rules and `unless`
+/// fail closed; Always-allow, override scopes, exceptions and Not-adult
+/// class rules are skipped, never applied.
+#[tokio::test]
+async fn stored_provenance_rows_fail_closed_on_load_and_undo() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let (rule, unless, class, allow, over, exc) = {
+        let mut s = f.api.store.lock().unwrap();
+        (
+            s.add_rule("source:x", Action::Hide.code(), None, None)
+                .unwrap(),
+            s.add_rule("spam", Action::Drop.code(), None, Some("-source:x"))
+                .unwrap(),
+            s.add_class_rule("-verified:no", false).unwrap(),
+            s.add_allow("-network:ipfs").unwrap(),
+            s.add_override(1, b"alpha", 0, Some("network:bt"), 0, None, None)
+                .unwrap(),
+            s.add_exception("Z-1", 2, b"-verified:yes").unwrap(),
+        )
+    };
+    let labels = |f: &Fixture| {
+        let mut l: Vec<String> = f
+            .api
+            .engine
+            .current()
+            .unreadable
+            .iter()
+            .map(|u| u.label())
+            .collect();
+        l.sort();
+        l
+    };
+    let mut want = vec![
+        format!("A-{allow}"),
+        format!("C-{class}"),
+        format!("E-{exc}"),
+        format!("O-{over}"),
+        format!("U-{rule}"),
+        format!("U-{unless}"),
+    ];
+    want.sort();
+    let check = |f: &Fixture| {
+        assert_eq!(labels(f), want);
+        let e = f.api.engine.current();
+        let stand_in = e.rules.iter().find(|r| i64::from(r.id) == rule).unwrap();
+        assert_eq!(stand_in.action, Action::Quarantine, "fails closed");
+        assert_eq!(stand_in.query, lodestar_search::Node::All);
+        let strict = e.rules.iter().find(|r| i64::from(r.id) == unless).unwrap();
+        assert!(strict.unless.is_none(), "applies without its unless");
+        assert!(e.allow.is_empty(), "an Always-allow never releases");
+        assert!(e.overrides.is_empty() && e.exceptions.is_empty());
+    };
+    // Any applied change reloads the layers from the store.
+    let (status, _) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "add_rule", "query": "spamword", "action": "flag" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    check(&f);
+    // Undo restores the set from before that change, provenance rows
+    // included, and reads them the same way.
+    let (status, body) = apply(&f, &cookie, json!({ "op": "undo" }), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        f.api
+            .engine
+            .current()
+            .rules
+            .iter()
+            .all(|r| i64::from(r.id) == rule || i64::from(r.id) == unless),
+        "the added rule is undone"
+    );
+    check(&f);
+}
+
 /// An unreadable rule stored disabled has no stand-in; enabling it, which
 /// needs no password, makes one at the reload and releases nothing.
 #[tokio::test]
