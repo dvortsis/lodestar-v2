@@ -49,3 +49,9 @@ Branch `slice/SRC-10d`. Open the PR titled "SRC-10d: Academic Torrents and offic
 - **If the items carry no usable hash, or Q2 is grey,** stop and message the runner with what you found. Write no code.
 - **Scope:** Academic Torrents only. Official distro feeds aren't in this slice unless they're reachable, Q2-clear and carry hashes. Name each one in the decisions file, or leave them for a follow-up.
 - Fixtures are scrubbed recordings of the real feed.
+
+## Findings from the 2026-11-04 session (verified through the proxy)
+- **Feed:** `https://academictorrents.com/rss.xml`. RSS 2.0, about 30 items, about 43 KB.
+- **Q2 is clear.** robots.txt has only `Allow:` lines and no Disallow. The terms (`/terms.php`, 2016) have no clause on automated access, and the site footer links the RSS.
+- **Item shape:** a plain `<infohash>` element with no namespace, plus title, category, size in bytes, description, and guid/link pointing to `/details/<hash>` page URLs. There's no magnet and no enclosure.
+- **SRC-8's parser doesn't read the bare `<infohash>`,** so this slice waits for **SRC-8b** (Opus), which teaches `rss.rs` to read it through the existing `hash()` rules. Build on top of SRC-8b once it's merged. Don't lift the hash from the guid URL in the plugin.
