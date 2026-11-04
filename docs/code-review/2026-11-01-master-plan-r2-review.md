@@ -1,6 +1,6 @@
 # Review of the finalized master plan r2
 
-Reviewed November 1, 2026 (America/Denver), against `e528c369`, the merge of
+Reviewed November 1, 2026 (local time), against `e528c369`, the merge of
 PR #369. The plan files use the UTC date November 2. Scope: `docs/build-plan.md`,
 `docs/handoff.md`, `docs/decisions/2026-11-02-master-plan-r2.md`,
 `runner/slices.yaml`, and the implementation and contracts they rely on.

@@ -27,11 +27,13 @@ collector's `private_bytes` (cgroup `anon`), in MiB, unless stated.
 
 A pool entry (`crates/sources/src/pool.rs`, `struct Entry`) carries
 `peers: Vec<SocketAddr>` with up to `max_peers_per_key = 32` peers at 32 B each,
-while `max_attempts = 4`, so 28 of those peers can never be tried. That is the
-~925 B per key the r3 verdict measured. In r3, 5.5 M keys were evicted against
-about 2.3 k lookups an hour: **about 99 % of discovered keys leave the pool
-untried.** The 200k cap is a one-hour FIFO buffer that costs 185 MiB; lookups,
-not queue depth, bound throughput.
+which is most of the ~925 B per key the r3 verdict measured. (`max_attempts = 4`
+counts lookups per key, not peers; within a lookup every peer is tried before
+the key moves on, so all 32 can be used. An earlier draft of this review said
+otherwise; corrected after the runner's review of #425.) In r3, 5.5 M keys were
+evicted against about 2.3 k lookups an hour: **about 99 % of discovered keys
+leave the pool untried.** The 200k cap is a one-hour FIFO buffer that costs
+185 MiB; lookups, not queue depth, bound throughput.
 
 ## 2. The slope (the gate)
 
@@ -53,12 +55,14 @@ most of the 1.88 the gate measured. The new gauge shows the prune working in r4
    second candidate, now with its mechanism.
 2. **An unmeasured C heap.** The Linux build sets mimalloc as the Rust global
    allocator without the `override` feature (`crates/lodestar/Cargo.toml`), so
-   the bundled SQLite, C zstd (the store codec constructs a `Compressor` or
-   `Decompressor` per call, `crates/store/src/compress.rs`; tantivy's
-   `zstd-compression` feature) and ring allocate through musl's `mallocng`.
-   dhat never saw those allocations during M1-exp, and the `purge_delay = 0`
-   and `mi_collect` experiments could not reach them. This is the blind spot in
-   "the remainder is the allocator keeping memory".
+   the bundled SQLite and C zstd (the store's `BlobCodec`,
+   `crates/store/src/compress.rs`, which reuses one compressor and one
+   decompressor per dictionary per connection; and tantivy's `zstd-compression`
+   feature) allocate through musl's `mallocng`. (Whether ring allocates on the
+   heap is unverified; an earlier draft listed it.) dhat never saw those
+   allocations during M1-exp, and the `purge_delay = 0` and `mi_collect`
+   experiments could not reach them. This is the blind spot in "the remainder
+   is the allocator keeping memory".
 3. mimalloc page fragmentation from the commit churn: 0.3–0.8 KB per commit in
    M1-exp's B runs, at most ~0.5 MiB/h.
 
@@ -94,28 +98,32 @@ the crawler lifecycle, the sampler nor the endpoint policy.
 ### B. Behaviour changes: class A, so they need a frozen soak
 In order of value per line changed.
 
-1. **M2 unconditionally:** `commit_every` 30 s or 5,000 documents. About 15×
-   fewer commits, merges, reader reloads and prunes, and the whole-index-rewrite
-   regime shrinks with them. The guardrail (discovery-to-searchable p95 ≤ 10 min)
-   is met by construction and its histogram already ships. This addresses
+1. **M2 unconditionally:** `commit_every` 2 s → 30 s (`commit_docs` is already
+   5,000, so it is the only value that changes). About 15× fewer commits,
+   merges, reader reloads and prunes, and the whole-index-rewrite regime
+   shrinks with them. The guardrail (discovery-to-searchable p95 ≤ 10 min) is
+   met by construction and its histogram already ships. This addresses
    candidates 1 and 3 together.
-2. **Pool right-sizing:** `max_peers_per_key` 32→8 (twice what four attempts
-   can use) and `max_pending` 200,000→~20,000. Saves 150–175 MiB of level with
-   no throughput cost, and is a plausible throughput gain (fresher peers behind
-   the 4.7 % fetch success), so it suits a CR-SPEC A/B. It also answers the
-   E-v06-workers flag that a 256 MB worker cannot carry a 200k pool.
+2. **Pool right-sizing:** `max_pending` 200,000→~20,000, and `max_peers_per_key`
+   only if measurement supports it. The cap cut saves 150–175 MiB of level with
+   no throughput cost (99 % of keys are evicted untried), and is a plausible
+   throughput gain (fresher peers behind the 4.7 % fetch success), so it suits a
+   CR-SPEC A/B. It also answers the E-v06-workers flag that a 256 MB worker
+   cannot carry a 200k pool. A smaller `max_peers_per_key` needs its own
+   evidence first: how often a key's later peers are the ones that yield the
+   torrent (all 32 can be tried today, see §1).
 3. **Route C allocations through mimalloc.** Either the crate's `override`
    feature (a static musl link hits a duplicate `posix_memalign` against
    `libc.a`; Tweag patched musl, and mimalloc_rust #146 added a `#[used]`
    reference to keep the archive member) or `sqlite3_config(SQLITE_CONFIG_MALLOC)`
    with mimalloc-backed methods before the first connection, which is contained
    and avoids the link fight. Do A.1 first so the effect is measured, not hoped.
-4. **Reuse zstd contexts** in the store codec: a thread-local compressor and
-   decompressor per dictionary instead of one per call. CPU and C-heap churn on
-   every stored torrent.
-5. Merge-policy tuning only if M2 leaves growth, as the verdict already says.
-6. Upstream a tantivy change making `MmapDirectory::delete` drop its cache
+4. Merge-policy tuning only if M2 leaves growth, as the verdict already says.
+5. Upstream a tantivy change making `MmapDirectory::delete` drop its cache
    entry, and retire the local prune once it ships.
+
+(An earlier draft listed "reuse zstd contexts in the store codec" here. The
+codec already does; dropped after the runner's review of #425.)
 
 ### C. Protocol
 Never run a second Lodestar on the soak's public IP while a window is open.

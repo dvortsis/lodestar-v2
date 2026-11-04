@@ -1,6 +1,6 @@
 # Review of Claude's soak-to-release master plan
 
-Reviewed October 29, 2026, America/Denver. Scope: the supplied attachment headed
+Reviewed October 29, 2026 (local time). Scope: the supplied attachment headed
 "Master plan update: from the CR-0 soak to v0.5.1, the crawler program, imports,
 then 1.0". This is a review, not approval to rewrite history, restart automation,
 change the running soak, or implement the proposed program. Owner answers quoted
