@@ -21,6 +21,9 @@ container variable with key `LODESTAR_LOG` to set how much Lodestar logs on ever
 (`error`, `warn`, `info` or `debug`). While it is set, Logging verbosity in Settings can't be changed.
 **Recommended:** leave it unset; the default is `info`.
 
+On Linux, Docker and Unraid, Lodestar turns off transparent huge pages for itself only. They hand out memory in 2 MB pieces and made its memory use creep up over days. A custom container variable with key `LODESTAR_THP` and value `allow` turns them back on.
+**Recommended:** leave it unset unless you are asked to set it while tracking down a problem.
+
 Blocklist downloads ignore the `HTTPS_PROXY` variable, a setting that sends web requests through a proxy server. They use the container's own route, so a VPN that covers the whole container still applies. **Recommended:** to send them through a VPN, use the gluetun template ([section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn)), not a proxy variable.
 
 <!-- nav:start -->
