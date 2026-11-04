@@ -1,0 +1,6 @@
+POST http://transmission.example:9091/transmission/rpc
+Content-Type: application/json
+Authorization: Basic UkVEQUNURUQ6UkVEQUNURUQ=
+
+HTTP 409
+X-Transmission-Session-Id: REDACTED

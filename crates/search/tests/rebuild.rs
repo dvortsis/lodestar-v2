@@ -763,3 +763,60 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
     );
     serving.shutdown().unwrap();
 }
+
+#[test]
+/// Correctness end to end; that the swap leaves the walk to the live
+/// indexer is `rebuild::tests::the_swaps_catch_up_…`'s to show.
+fn a_build_resumed_with_other_generations_still_completes_its_walk() {
+    use lodestar_search::Availability;
+    use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let db = dir.path().join("s.db");
+    let n = 400;
+    let mut writer = store(dir.path(), n);
+    build_complete(&root, OLD, &mut writer);
+
+    // A first build got half way, then stopped.
+    let mut reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let mut b = Rebuild::open(&root, NEW, HEAP).unwrap();
+    for _ in 0..2 {
+        assert_eq!(b.step(&mut reader, 100).unwrap().added, 100);
+    }
+    b.commit().unwrap();
+    drop(b);
+    // Its file index recorded `category` at an older generation, as a
+    // build from before that producer would have.
+    let files = root
+        .join(format!("{}.building", NEW.dir_name()))
+        .join("files");
+    let index = tantivy::Index::open_in_dir(&files).unwrap();
+    index
+        .tokenizers()
+        .register(NAME_TOKENIZER, NameTokenizer::default());
+    let payload = index.load_metas().unwrap().payload.unwrap();
+    let (watermarks, pop) = payload.split_once(";pop:").unwrap();
+    assert!(pop.contains("file.category=1"), "{pop}");
+    let mut w = index.writer::<tantivy::TantivyDocument>(HEAP).unwrap();
+    let mut prepared = w.prepare_commit().unwrap();
+    prepared.set_payload(&format!(
+        "{watermarks};pop:{}",
+        pop.replace("file.category=1", "file.category=0")
+    ));
+    prepared.commit().unwrap();
+    drop((w, index));
+
+    let serving = Serving::open_or_rebuild(&root, &db, config(NEW)).unwrap();
+    finished(&serving);
+    let index = serving.index();
+    assert_eq!(index.num_docs(), n as u64);
+    assert_eq!(total(&index, "common movie"), n);
+    drop(index);
+    // The walk over what the first build wrote ends after the swap, in
+    // the live indexer, and the field then reads as complete.
+    wait("the walk completes", || {
+        serving.index().availability("file.category") == Availability::Ready
+    });
+    assert_eq!(serving.index().num_files(), n as u64);
+    serving.shutdown().unwrap();
+}
