@@ -3247,7 +3247,8 @@
     "2026-11-04T22:27Z r4 read-only readings (relayed, not a verdict): 18:05Z->22:21Z worker Anonymous 445.5->622.8 MiB (+173) while AnonHugePages 204->212 MiB (+8): growth is base-page anon, not THP. mmap gauges bounded (main 12, files 96; commits 13,918). Private ~445 (17:50Z) -> ~618 (22:21Z), ~38 MiB/h, stepped ramp. THP-off cuts the level, not the slope. Asked for per-mapping smaps ([heap] vs unnamed anon) now and ~00:30Z to tell C heap (musl) from mimalloc.",
     "2026-11-04T22:32Z r4 smaps (relayed): no [heap]; one 1 GiB unnamed mapping (mimalloc arena) 317 MiB dirty (210 MiB THP); ~3,180 small unnamed mappings hold ~290 MiB (likely musl mallocng groups = C heap: SQLite/zstd, plus thread stacks). Image d9365b8e (musl per Antigravity). Run 2 ~00:30Z + size histogram + Threads decides which group grows. If the C heap: X-sqlite-malloc (needs owner for callbacks' unsafe or a no-unsafe route) / SQLite cache limits / zstd context reuse; the X-mem-gauges SQLite gauge attributes it in r5.",
     "2026-11-04T22:49Z: #441 X-merge-policy merged (6861f02c), session archived.",
-    "2026-11-04T22:55Z code investigation (read-only): no C object kept per torrent on main 81ee0471. BlobCodec reuses one level-19 zstd Compressor/Decompressor; per-item contexts (claims L19, tantivy files docstore compress_to_buffer, cluster frames) freed on return; ~10 fixed SQLite connections (16 KiB pages, cache_size default, lookaside 1200x100). Leading hypothesis: musl mallocng group retention. Experiment running (glibc harness, mallinfo2 hblks per 1k torrents). Candidate fix if confirmed: mimalloc `override` (one allocator, no unsafe of ours; \u00a72.35 named it as the no-unsafe route) \u2014 flag to owner before rc.4."
+    "2026-11-04T22:55Z code investigation (read-only): no C object kept per torrent on main 81ee0471. BlobCodec reuses one level-19 zstd Compressor/Decompressor; per-item contexts (claims L19, tantivy files docstore compress_to_buffer, cluster frames) freed on return; ~10 fixed SQLite connections (16 KiB pages, cache_size default, lookaside 1200x100). Leading hypothesis: musl mallocng group retention. Experiment running (glibc harness, mallinfo2 hblks per 1k torrents). Candidate fix if confirmed: mimalloc `override` (one allocator, no unsafe of ours; \u00a72.35 named it as the no-unsafe route) \u2014 flag to owner before rc.4.",
+    "2026-11-04T22:57Z: #436 ENR-6 merged (dff68dae), session archived. ENR-1 brief must carry: never the enriched result as the only reading; the two named pipeline tests."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4908,7 +4909,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T22:49Z",
+    "updated": "2026-11-04T22:57Z",
     "items": [
       {
         "slot": 1,
@@ -4972,14 +4973,6 @@
         "role": "build",
         "agent": "claude",
         "doing": "PR #440 in review; aligning with StashDB on bad fields and one shared title rule.",
-        "since": "2026-11-04T19:53Z"
-      },
-      {
-        "slot": 11,
-        "slice": "ENR-6",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #436 reviewed (merge); a comment fix and main merge after the main test fix lands.",
         "since": "2026-11-04T19:53Z"
       }
     ]
