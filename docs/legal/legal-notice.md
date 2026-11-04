@@ -2,7 +2,7 @@
 
 **Version 2 · 2026-11-04**
 
-*Status: the in-app step that shows this notice at first-run setup is being built. Until it ships, the notice is published here and linked from the README and the user guide.*
+*Status: the in-app step that shows this notice at first-run setup, the on-by-default rule packs and the unauthorised-copy pack are being built for the first release. Until they ship, the notice is published here and linked from the README and the user guide.*
 
 Lodestar shows this notice once, before first use, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
 
@@ -29,7 +29,7 @@ A future version may add a verification mode that fetches small fragments of a t
 ## 3. What Lodestar finds
 What is in your index comes from what other people published on public networks, from private sources you connected, or from files you imported. Lodestar records what it was told. It cannot check what any torrent really contains, and these networks carry material that may be infringing, unlawful, offensive, mislabelled or malicious.
 
-**Lodestar includes filters that reduce exposure to unwanted or potentially unlawful metadata.** A child-safety core runs on every source; its locked floor can't be switched off, and its other rules can be adjusted with your password because pattern rules sometimes catch lawful items. Optional rule packs and blocklists filter junk, malware and more. **These filters can miss items and can wrongly classify lawful ones. Whether an item appears, is hidden or is labelled says nothing about whether it is lawful, genuine or safe.** Finding an item in your index gives you no right to download, share or use it.
+**Lodestar includes filters that reduce exposure to unwanted or potentially unlawful metadata.** A child-safety core runs on every source; its locked floor can't be switched off, and its other rules can be adjusted with your password because pattern rules sometimes catch lawful items. Rule packs filter junk, malware, lures, fakes, spam, scams, and names that follow the patterns of unauthorised copies: camcorder rips, cracked software and scene-style rips of films and TV. **The packs are on by default.** Setup shows all of them for you to review, and you can switch any pack or rule off there or in Settings. The unauthorised-copy pack can't know who holds the rights to anything, so it also hides some lawful releases; an Allow rule brings one back. Blocklists you subscribe to are off until you choose them. **These filters can miss items and can wrongly classify lawful ones. Whether an item appears, is hidden or is labelled says nothing about whether it is lawful, genuine or safe.** Finding an item in your index gives you no right to download, share or use it.
 
 ## 4. What is yours to decide, and yours to answer for
 You run this copy of Lodestar on your own hardware. The makers don't run it for you, can't see it and can't change it. That means:

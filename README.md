@@ -41,7 +41,7 @@ Lodestar listens to the public BitTorrent DHT and fetches each torrent's small d
 
 - **Metadata only.** Lodestar never downloads or shares torrent content. It disconnects from each peer as soon as the description arrives.
 - **Local and private.** Your searches, saved alerts and settings stay in your `/data` folder. Lodestar sends no telemetry, and your searches go to another site only through a source you turn on **(planned)**.
-- **Safe defaults.** First run prints a one-time setup token to the container log so you can set an admin password. A built-in child-safety filter stays on at all times.
+- **Safe defaults.** First run prints a one-time setup token to the container log so you can set an admin password. A built-in child-safety filter stays on at all times. Rule packs that hide malware, junk and the patterns of unauthorised copies are on by default, and setup shows them for review **(planned)**.
 
 ## Legal
 
