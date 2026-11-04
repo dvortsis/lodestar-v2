@@ -45,7 +45,7 @@ Lodestar listens to the public BitTorrent DHT and fetches each torrent's small d
 
 ## Legal
 
-Lodestar is for lawful use only. You run your own copy, you choose what it connects to, and you are responsible for how you use it and for anything you do with what it finds, under the laws where you are. The software comes with no warranty, under the AGPL-3.0 licence. Setup asks you to accept the [Terms of Use and Legal Notice](docs/legal/terms-of-use.md), which explain the risks and your responsibilities.
+Lodestar is made for lawful use. You run your own copy, you choose what it connects to, and anything you do with what it finds is your sole responsibility under the laws where you are. The software is free, under the AGPL-3.0-or-later licence, with no warranty. Before first use it shows the [Legal Notice and Network Risks](docs/legal/legal-notice.md), which explains what it does on your network and what it finds. If you run an instance other people can reach, read [Running a Lodestar that other people can reach](docs/legal/operator-guidance.md).
 
 ## How it works
 

@@ -25,7 +25,7 @@ flowchart LR
 The diagram in words: Lodestar discovers torrents on the DHT and fetches their descriptions from peers. It works out what each one contains and adds it to the index. Then it serves the index to your browser.
 
 ## 1.2 Know what Lodestar never does
-<!-- index: metadata only; offline by default; telemetry; lawful use; Terms of Use -->
+<!-- index: metadata only; offline by default; telemetry; lawful use; Legal Notice -->
 
 Lodestar never downloads the content of a torrent. It fetches only the small description a torrent publishes about itself, so no movies, music or software land on your disk.
 
@@ -36,7 +36,7 @@ Three more facts hold today:
 - The child-safety core of the content filters is always on.
 
 > [!IMPORTANT]
-> **Lodestar is for lawful use only.** You run your own copy. You decide what it connects to and what you do with what it finds. Those choices are yours to make lawfully where you live. The laws on peer-to-peer networks differ by country and by state. Setup asks you to accept the [Terms of Use and Legal Notice](../legal/terms-of-use.md), which explain the risks and what you take responsibility for. Read them before you install.
+> **Lodestar is made for lawful use.** You run your own copy. You decide what it connects to, and anything you do with what it finds is your sole responsibility. The laws on peer-to-peer networks differ by country and by state. Before first use, Lodestar shows the [Legal Notice and Network Risks](../legal/legal-notice.md), which explains what it does on your network and what it finds. Read it before you install.
 
 <details>
 <summary>What the crawler still shares with the network</summary>
