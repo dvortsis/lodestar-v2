@@ -18,6 +18,7 @@
 //! rule, §18.7).
 
 mod address;
+pub mod full;
 pub mod http;
 pub mod udp;
 
