@@ -1,4 +1,4 @@
-# X-log-url-redact decisions
+# X-log-url-redact decisions (#432)
 
 A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (architecture §12.1, B12's "For the logging slice"). SRC-3's session found it when the proptest `planted_secrets_never_get_through` failed once on CI. The shrunk input was `://@http://u:a00aa0@host.example/x`, and `scrub_text` let the password through.
 
@@ -37,6 +37,14 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
   - **A scheme run right after `=` stays with the URL before it** (`@passkey=<k>://`), and the next URL has no scheme.
 - **Every existing test passes unchanged.**
 
+- **The runner's review (round 2) found two more leaks this change introduced, and one on `main` too.** All three are fixed:
+  - **A Debug-form value never takes a `://` with it.** When a value holds one (`username: "x username: "http://u:"S3cr3t@h/x`, a raw `"` in a URL's password), the field's rule stops at that URL's scheme. `scheme://` stays and the rest of the value goes, so the URL rules still find the `@` after the quote.
+  - **What was read as userinfo or host is never read again as a scheme.** A nested `://` with no `/` between the userinfo and it is in this URL's authority (`ws://u:?@S3cr3t9://@h:80`), so everything up to it goes.
+  - **Splitting trusts only known schemes:** `http`, `https`, `ws`, `wss`, `udp`, `tcp`, `ftp`, `ftps`, `sftp`, `socks4`, `socks4a`, `socks5`, `socks5h` and `file`. Any other run before a nested `://` may be a password's tail (`u:@/<secret>://@h/`), so it's hidden with what comes before it.
+  - **An `@` anywhere after the authority hides the host and everything after it** (`http://u:@S3cr3t/@h/` shows as `http://[redacted]`). That's on `main` too. It extends the path rule above: `http://a@h/r/https://u:p@h2/x` now shows as `http://[redacted]`, and `http://u:p@h/x?email=a@b` loses its host as well.
+  - **A magnet link ends before a URL glued to it** (`magnet:%3Ahttp://u:]p?@h/`), and that URL gets its own userinfo search.
+- **Over-redaction in a common log shape:** a comma-separated tracker list loses all but its last tracker. `udp://a.example:80/announce,udp://b.example:6969/announce` shows as `udp://[redacted]://b.example:6969/announce`. Each `://` with nothing but URL characters or a soft end before the next one is read as possibly inside a password. That's accepted ("never too little").
+
 ## Tests
 - Deterministic tests, each failing on `main` before the fix:
   - `a_stray_scheme_separator_never_hides_a_later_url`, with the exact shrunk input first;
@@ -51,12 +59,19 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 - **A new property, `scrubbing_never_panics_on_url_tokens`,** builds input from URL and Debug-form tokens, which `\PC` almost never produces.
 - **`scrubbing_never_panics_on_odd_input` gains the IPv6 boundary case,** which panics on `main`.
 - **`crates/log/proptest-regressions/url.txt` is new** (other crates already use these files). Its seed fails both properties on the unfixed code, and `planted_secrets_never_get_through` shrinks it to `before = "://@"`.
-- **1,000,000 cases of each property pass locally** in a release build, and 500,000 on the final code.
-- **A differential fuzz against `main` was run once, locally** (3,000,000 inputs, not committed). Each input put a well-formed credentialed URL, a passkey path or a Debug-form `Url` among random URL and Debug-form tokens. On the final code, `scrub_text` showed the planted secret in none of them, and in none where `main` hid it. `main` panicked on some of them (the IPv6 case).
+- **The runner's inputs are deterministic tests in `a_stray_scheme_separator_never_hides_a_later_url`,** along with the shapes the differential fuzz found (a Debug value holding a URL, an `@` in the query, a URL glued to `magnet:`). The proptest's passwords now carry URL syntax on both sides of the secret.
+- **1,000,000 cases of each property pass locally** in a release build, and 300,000 on the final code.
+- **A differential fuzz against `main` was run once, locally** (3,000,000 inputs, not committed). Each input put a well-formed credentialed URL, a passkey path or a Debug-form `Url` among random URL and Debug-form tokens. After the security-review round, `scrub_text` showed the planted secret in none of them. `main` panicked on some of them (the IPv6 case).
+  - **After the runner's round, a wider run** put URL syntax on both sides of the password and added Debug `username` fields. `scrub_text` showed the planted secret in 13,890 of the 3,000,000 inputs; `main` showed it in more of them.
+  - **418 of those are inputs where `main` happened to hide the secret.** Every one is a password holding both a raw `/` and a hard stop (`http://u:@/<secret>"@h/`), the class left for X-log-url-redact-2 (below). `main` hid them only because a stray Debug field or a URL ahead of them swallowed the span.
 
-## Known gaps, left for a later brief
-- **A password that holds both a hard stop and a later `://`** (`http://u:pa ss://@h/x`) still shows `pa ss`. It does on `main` too: the look-ahead stops at the next `://`, which keeps the scan linear. The proptest's password syntax doesn't combine the two.
-- **In `scrub` (the query is kept), `holds_url` misses a mixed encoding** such as `http:%2F%2Fu:p@h`.
+## Known gaps, for X-log-url-redact-2 (the runner is briefing it)
+All of these leak on rc.3 as well.
+- **A raw hard stop with a `/` in a password** (`http://u:@/<secret>"@h/`, `http://u:pa ss://@h/x`). The wide look-ahead stops at a `/` and at the next `://`, which keeps the scan linear.
+- **A mixed encoding such as `http:%2F%2Fu:p@h`,** which `holds_url` misses. In `scrub` it's a kept query value; in `scrub_text`, URL forms without `://` aren't found at all.
+- **IPv6 hosts in URLs nested in a query or fragment, or after `magnet:`.**
+- **Credential values glued on with `:` or `%3D`.**
+- **URL forms without `://`.**
 
 ## Released builds
 - **v0.5.1-rc.1, rc.2 and rc.3 all carry the bug.** `crates/log/src/url.rs` is byte-identical at all three tags, on `release/v0.5.1` and on `main` before this fix.

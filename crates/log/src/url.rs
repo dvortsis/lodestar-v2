@@ -142,6 +142,14 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
                 out.push_str("://");
                 let (at, end) = userinfo(rest);
                 let (authority, rest) = rest.split_at(end);
+                // An `@` after the authority may end a raw password that
+                // holds `@` and `/` (`http://u:@<secret>/@h/`, `…/<secret>?
+                // @h/`): the host may be part of it, so nothing more is
+                // shown.
+                if rest.contains('@') {
+                    out.push_str(REDACTED);
+                    return out;
+                }
                 let authority = match at {
                     // With a `/`, `?` or `#` before that `@`, what follows
                     // may not be the host (`https://u:pa/ss@host/x`, or
@@ -395,6 +403,15 @@ pub fn scrub_text(text: &str) -> String {
         // next URL starts at the `://` itself. The first scan stops at
         // that `://`, so a line of them stays linear.
         let end = match nested {
+            // A magnet link ends before a URL glued to it (`magnet:?xt=
+            // http://u:p@h/`), which gets its own userinfo search.
+            None if !rest[i..].starts_with("://") => {
+                let end = url_end(scan);
+                match scheme.from(text, pos + i).map(|n| n - pos) {
+                    Some(n) if n < end => scheme_start(rest, i + 7, n).max(i + 7),
+                    _ => end,
+                }
+            }
             None => url_end(scan),
             Some(nested) => match url_end_before(rest, scan, nested) {
                 // Ended by a hard stop, or with userinfo or a query before
@@ -428,8 +445,18 @@ pub fn scrub_text(text: &str) -> String {
                 }
                 // No userinfo before it, and nothing but URL characters or a
                 // soft end (`)`, `]`, `,`, `'`, `}`) up to it: the next `://`
-                // may be inside a raw password (`http://u:pa]://x@h/`).
-                Some(_) | None if from == i => {
+                // may be inside a raw password (`http://u:pa]://x@h/`). So
+                // may it when no `/` lies between the userinfo and it: it's
+                // in this URL's authority (`ws://u:?@<secret>://@h/`), and
+                // what was read as userinfo or host is never read again as
+                // a scheme.
+                // And when what would be the next URL's scheme isn't a known
+                // one: it may be a password's tail (`u:@/<secret>://@h/`).
+                Some(_) | None
+                    if from == i
+                        || !rest[from..nested].contains('/')
+                        || !known_scheme(&rest[scheme_start(rest, scan, nested)..nested]) =>
+                {
                     out.push_str(&lead(rest, start, i));
                     out.push_str("://");
                     out.push_str(REDACTED);
@@ -437,12 +464,7 @@ pub fn scrub_text(text: &str) -> String {
                     continue;
                 }
                 Some(_) | None => {
-                    let scheme_start = rest[..nested]
-                        .char_indices()
-                        .rev()
-                        .take_while(|&(j, c)| j >= scan && scheme_char(c))
-                        .last()
-                        .map_or(nested, |(j, _)| j);
+                    let scheme_start = scheme_start(rest, scan, nested);
                     // After `=` it's a value (`@passkey=<k>://`): it stays
                     // with this URL, whose host and path rules see the
                     // name, and the next URL has no scheme.
@@ -481,6 +503,29 @@ fn lead(rest: &str, start: usize, i: usize) -> String {
         Some(before) if !scheme.is_empty() => format!("{before}{}", redact_runs(scheme)),
         _ => lead,
     }
+}
+
+/// Schemes a URL nested in another's path is split off at; any other
+/// run before a nested `://` may be the tail of a raw password, so it's
+/// hidden with what comes before it.
+const KNOWN_SCHEMES: &[&str] = &[
+    "http", "https", "ws", "wss", "udp", "tcp", "ftp", "ftps", "sftp", "socks4", "socks4a",
+    "socks5", "socks5h", "file",
+];
+
+fn known_scheme(scheme: &str) -> bool {
+    KNOWN_SCHEMES.iter().any(|k| k.eq_ignore_ascii_case(scheme))
+}
+
+/// Where the scheme before the `://` at `nested` starts, backing no
+/// further than `scan`.
+fn scheme_start(rest: &str, scan: usize, nested: usize) -> usize {
+    rest[..nested]
+        .char_indices()
+        .rev()
+        .take_while(|&(j, c)| j >= scan && scheme_char(c))
+        .last()
+        .map_or(nested, |(j, _)| j)
 }
 
 /// A scheme's characters, and `_`: a passkey glued to a scheme
@@ -581,7 +626,22 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
         while to < b.len() && b[to] != b'"' {
             to += if b[to] == b'\\' { 2 } else { 1 };
         }
-        let to = to.min(b.len());
+        let value_end = to.min(b.len());
+        // A replacement never takes a `://` with it (`username: "http://u:
+        // "p@h/`, a raw `"` in a URL's password): the field's rule stops at
+        // that URL's scheme, `scheme://` stays, and the rest of the value
+        // goes, so the URL rules still find the `@` after the quote.
+        let mut to = value_end;
+        let mut url = None;
+        if let Some(c) = text[from..to].find("://") {
+            to = text[from..from + c]
+                .char_indices()
+                .rev()
+                .take_while(|&(_, ch)| scheme_char(ch))
+                .last()
+                .map_or(from + c, |(j, _)| from + j);
+            url = Some(from + c + 3);
+        }
         if from < copied {
             // Inside a value already scrubbed (see below).
             i = from;
@@ -601,6 +661,7 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
         };
         let inner = (from..to).find(|&k| field_at(k));
         match path {
+            _ if to == from => {}
             // An `@` hides the path, as the URL rules do (`finish`).
             true if text[from..to].contains('@') => out.push_str(REDACTED),
             true => {
@@ -615,8 +676,13 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
             }
             false => out.push_str(REDACTED),
         }
-        copied = to;
-        i = inner.unwrap_or(to.max(from));
+        if let Some(sep) = url {
+            out.push_str(&redact_runs(&text[to..sep - 3]));
+            out.push_str("://");
+            out.push_str(REDACTED);
+        }
+        copied = value_end;
+        i = inner.unwrap_or(value_end.max(from));
     }
     out.push_str(&text[copied..]);
     out.into()
@@ -1151,7 +1217,7 @@ mod tests {
         // was never searched.
         let s = scrub_text("://@http://u:a00aa0@host.example/x");
         assert!(!s.contains("a00aa0"), "{s}");
-        assert!(s.ends_with("http://[redacted]@host.example/x"), "{s}");
+        assert_eq!(s, "://[redacted]://[redacted]@host.example/x");
         for (text, secret) in [
             ("x://@http://u:S3cr3t@h/x", "S3cr3t"),
             ("://@://@https://u:S3cr3t@h/x", "S3cr3t"),
@@ -1199,6 +1265,20 @@ mod tests {
             ("x://a@[Zq0123456789abcdef/y", "0123456789"),
             ("http://h/a&Zq0123456789abcdef&b", "0123456789"),
             ("'://?'@passkey=Zq9S3cr3t://&.", "S3cr3t"),
+            // The runner's review: a Debug value never takes a later URL's
+            // `://`; userinfo is never re-read as a scheme; an `@` in the
+            // path hides the host.
+            (r#"username: "x username: "http://u:"S3cr3t@h/x"#, "S3cr3t"),
+            (r#"path: "@)socks5://u:"'>S3cr3t"%<@[::1]/a/b"#, "S3cr3t"),
+            ("ws://u:?@S3cr3t9://@h:80", "S3cr3t"),
+            ("http://u:@S3cr3t/@h/", "S3cr3t"),
+            ("http://u:@/S3cr3t?@@h.example/x", "S3cr3t"),
+            (r#"username: "x http://u:/S3cr3t"@h.example/x"#, "S3cr3t"),
+            (
+                r#"fragment: Some("http://u:@/S3cr3t?@h.example/x"#,
+                "S3cr3t",
+            ),
+            ("magnet:%3Ahttp://u:]S3cr3t?@h.example/x", "S3cr3t"),
         ] {
             let s = scrub_text(text);
             assert!(!s.contains(secret), "{text} -> {s}");
@@ -1206,7 +1286,7 @@ mod tests {
         // Each URL keeps what it would keep alone.
         assert_eq!(
             scrub_text("see http://h/a then://@https://u:p@h2/b"),
-            "see http://h/a then://[redacted]@https://[redacted]@h2/b"
+            "see http://h/a then://[redacted]://[redacted]@h2/b"
         );
         // With no userinfo before it, all up to the next `://` goes: it
         // may be a password holding one.
@@ -1240,13 +1320,15 @@ mod tests {
             ("/r/https://u:S3cr3t@h2/x", Form::Request),
             ("/r/x?a&https://u:S3cr3t@h2/x", Form::Request),
             ("/r/x?https://u:S3cr3t@h2/x", Form::Request),
+            ("http://u:@S3cr3t/@h/", Form::Absolute),
+            ("http://u:@S3cr3t/@h/", Form::Request),
         ] {
             let s = scrub(url, form);
             assert!(!s.contains("S3cr3t"), "{url} {form:?} -> {s}");
         }
         assert_eq!(
             scrub("http://a@h/r/https://u:p@h2/x?n=1", Form::Absolute),
-            "http://[redacted]@h/[redacted]"
+            "http://[redacted]"
         );
         assert_eq!(scrub("/r/https://u:p@h2/x", Form::Request), "/[redacted]");
         assert_eq!(scrub("/x?a&https://h2/", Form::Request), "/x?a&[redacted]");
@@ -1351,6 +1433,7 @@ mod tests {
                 (format!("{before}{scheme}://host.example/dl/{passkey}{scheme}://x{after}"), &passkey),
                 (format!("{before}{scheme}://u:{secret}{syntax}@host.example/x{after}"), &secret),
                 (format!("{before}{scheme}://u:{syntax}{secret}@host.example/x{after}"), &secret),
+                (format!("{before}{scheme}://u:{syntax}{secret}{syntax}@host.example/x{after}"), &secret),
             ] {
                 let s = scrub_text(&text);
                 proptest::prop_assert!(!s.contains(secret.as_str()), "{} -> {}", text, s);
