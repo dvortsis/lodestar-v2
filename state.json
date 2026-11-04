@@ -4250,7 +4250,10 @@
     "X-mem-gauges review polish (#433): analyzer attribution_markdown breaks the table (move the approximation note after the segment rows); memory_attribution identity check uses usable rows only (use all baseline rows or reword); store memstats maps negative counters to 0 (mark absent). Before soak r5.",
     "RP-1 (#437) decisions, for the next runner slices.yaml PR: (a) new slice RP-1b (owns crates/filter/data/packs/**): MW-2@2 music-production guard and FK-2@2 short-episode-pack guard, both `narrows`, changelog entries, acceptance through RP-3; it clears RP-1's `gap` lines; (b) RP-3 notes: report Report::gaps() per rule in GET /filters/fixtures (passes() is true while gaps exist); (c) RP-6 notes: show the gaps; (d) GOLDEN in manifest.rs stays.",
     "ENR-3 (#438): studio and release date kept beyond the brief (runner \u00a72.33, ENR-0's fields); flag to the owner under \u00a72.19. ENR-6 (#436): flag (a) enrichment match ignores name counter-signals (stricter, consistent with \u00a72.37 Q3) and (b) is_adult w/o match keeps detection score vs V8's 100 (pre-existing).",
-    "X-thp-off (#434) review polish 6: packaging/docker/README.md variable table needs a LODESTAR_THP row (outside the slice's owns). One-row docs follow-up."
+    "X-thp-off (#434) review polish 6: packaging/docker/README.md variable table needs a LODESTAR_THP row (outside the slice's owns). One-row docs follow-up.",
+    "ENR-1 notes (next runner slices.yaml PR): filtering judges detection's own unmatched result, plus the enriched Adult reading when a match makes an item Adult, stricter kept (#436 review B1); ENR-1's tests include a child-safety-held name staying held with a match, and the MW-3 Lantern.Bay case staying hidden.",
+    "Follow-up: settle V8's 'Is adult gives 100' (architecture.md ~3676/3772) vs is_adult on a detection-adult item keeping detection's score (pre-existing on main; #436 review P2).",
+    "build-plan.md:114 Track M6: drop 'or keep it out of the CA submission until Track W step 1 lands' (CA now after 1.0; #435 review polish)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
