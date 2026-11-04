@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T05:35:00Z",
+ "updated_at": "2026-11-04T05:42:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2689,6 +2689,27 @@
    "session": "session_01MMjhnBcVh4ZZ3fDSWegH9M",
    "launched": "2026-11-04T05:35:00Z",
    "brief": "briefs/SRC-10b.md"
+  },
+  "SRC-10c": {
+   "status": "running",
+   "model": "sonnet",
+   "session": "session_01MMjhn941mv7MQLX1VrkAxq",
+   "launched": "2026-11-04T05:42:00Z",
+   "brief": "briefs/SRC-10c.md"
+  },
+  "SRC-10d": {
+   "status": "running",
+   "model": "sonnet",
+   "session": "session_01MMjhn8iwJSVtxwkSDZCNMd",
+   "launched": "2026-11-04T05:42:00Z",
+   "brief": "briefs/SRC-10d.md"
+  },
+  "P-v06-rulepacks": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhn9Exqa4XuPhpEn9wLy",
+   "launched": "2026-11-04T05:42:00Z",
+   "brief": "briefs/P-v06-rulepacks.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3078,7 +3099,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T05:35:00Z",
+ "last_heartbeat": "2026-11-04T05:42:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3091,7 +3112,8 @@
   "2026-11-03T17:48:28Z rc.3 READY: release/v0.5.1 = bd9300dd2199 (#407 merged f9292dd6: #402 + #406 fix; #408 docs: delta report + release notes). All 41 checks green on f9292dd6 (macOS re-run, Release dispatch). Owner steps sent: tag v0.5.1-rc.3 at bd9300dd, r4 (stop r3, fresh data dir, rc.3 digest, collector main>=94457d83, new --root), R-win in parallel, gluetun after r4 (~8.5 h), then v0.5.1. R-rc3-backport archived. Follow-ups: live.rs ~801-803 slack nit; tantivy upstream issue draft.",
   "2026-11-03T18:43:16Z heartbeat: v0.5.1-rc.3 TAGGED on bd9300dd (owner). Release run 41690273279: smoke/build/publish amd64+arm64/tarballs/web packages green; MSI+zip job waiting (release-environment approval, owner). Next: owner approves MSI job, starts r4 from the published digest; R-win when MSI lands. No sessions running; launches paused.",
   "2026-11-03T23:36:52Z soak r4 record (owner via dashboard): start 2026-11-03T18:25:30Z; baseline 2026-11-04T00:55:30Z..2026-11-05T00:55:30Z; leg main, balanced, memory_stop_basis anon; image sha256:d9365b8e..cafc9, commit bd9300dd; collector+analyzer from main 508d23b7 (contains 94457d83), hashes match git; --stop set. r3 containers exited 0, evidence intact. Nightly Appdata Backup disabled for r4 (re-enable after baseline). CA auto-update 2026-11-08 is after r4. MSI job still awaiting environment approval. Verdict due ~01:00Z Nov 5.",
-  "2026-11-04T05:35:00Z Owner lifted the pause: four slots. Launched SB-6, SRC-11, SRC-12 (Opus) and SRC-10b (Sonnet). Queue: SRC-10c, SRC-10d, P-v06-rulepacks, L4-followups (after SB-6)."
+  "2026-11-04T05:35:00Z Owner lifted the pause: four slots. Launched SB-6, SRC-11, SRC-12 (Opus) and SRC-10b (Sonnet). Queue: SRC-10c, SRC-10d, P-v06-rulepacks, L4-followups (after SB-6).",
+  "2026-11-04T05:42:00Z Owner: up to 8 slots plus auto-approve of UX/perf best-practice decisions. Launched SRC-10c, SRC-10d (Sonnet) and P-v06-rulepacks (Opus); 7 running. Next: expand E-M7 (runner) for slot 8; L4-followups after SB-6."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4703,11 +4725,11 @@
   "04:05Z owner low on usage: plan pushed as docs/plan/2026-11-03-soak-r3-memory-fix.md in PR #404 (docs only; Opus review batched with CR-COL-4 review). CR-COL-4 helper running (slice/CR-COL-4). Decision sequence sent to X-mmap-cache-prune (briefs/X-mmap-cache-prune-decision-sequence.md). Be frugal: no extra agents beyond reviews."
  ],
  "limits": {
-  "phase_total": 4,
+  "phase_total": 8,
   "phase_total_note": "2026-11-02T15:06:47Z owner (runner session): approaching weekly usage limit; bring worker slots down to two as tasks complete. No new launches until running count < 2. Supersedes the 4-slot rule (\u00a72.24/\u00a72.25 cap) until the owner says otherwise.",
   "launch_paused": true,
   "launch_paused_note": "2026-11-02T20:53:52Z owner: once active sessions are pushed, pause starting further sessions until the soak r3 results are in. Runner reports the verdict and resumes launches only on the owner's word. Existing sessions may still push and be merged (SRC-14b-2 #400; R-mem-triage fix PR after the verdict).",
-  "note": "owner 2026-11-04 in chat: limit reset, full speed, all four slots (\u00a72.32 to record)"
+  "note": "owner 2026-11-04: up to 8 slots, and auto-approve plans and normal decisions that follow UX/performance best practice (to record as \u00a72.33). 7 running; slot 8 fills when E-M7 is expanded or r4 unholds the epics."
  },
  "owner_instructions": [
   {
