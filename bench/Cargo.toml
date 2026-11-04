@@ -35,7 +35,8 @@ tower = { version = "0.5.3", features = ["util"] }
 dhat = "0.3"
 lodestar-peer-wire.workspace = true
 lodestar-sources.workspace = true
-mimalloc = { version = "0.1", default-features = false }
+# `extended`: `stats_json`, for `examples/mem-cheap.rs`'s committed bytes.
+mimalloc = { version = "0.1", default-features = false, features = ["extended"] }
 # `examples/mem-merge.rs` (X-merge-policy) builds the search writers itself
 # to set their merge policy; the same version and features as the search
 # crate, so nothing new is compiled.
@@ -48,6 +49,9 @@ dhat-heap = []
 system-alloc = []
 # mimalloc v2 in place of v3, for X-merge-policy's diagnostic arm.
 mimalloc-v2 = ["mimalloc/v2"]
+# mimalloc also as the C `malloc` (the release build's `override`), for
+# `examples/mem-cheap.rs`'s comparison (X-mimalloc-override).
+mimalloc-override = ["mimalloc/override"]
 
 # The mmap-cache retention test (X-mmap-cache-prune) runs in release in its
 # own CI job; the feature keeps the workspace run from building it.
