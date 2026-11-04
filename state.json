@@ -3226,7 +3226,8 @@
     "2026-11-04T18:17Z #421 SRC-12b merged (d2cc87cf); session archived. X-thp-off launched (Opus) in its slot.",
     "2026-11-04T18:40Z Owner opened #425 (soak memory review, docs); fresh reviewer launched. RP-0 #424 reviewer MERGE with 2 important findings (downgrade caps build version -> MW-4/FK-4 quarantine; deferred txns vs begin_write); runner requires both fixed in-PR, relayed. X-merge-policy told option 1 (harness+decisions PR). X-thp-off told prctl covers musl C heap. Removed 9 finished reviewer worktrees (disk 8->17 GB free).",
     "2026-11-04T18:50Z #425 review CHANGES: two false code claims (pool '28 peers never tried'; zstd per-call contexts). Sent to owner; not pushing to owner's branch.",
-    "2026-11-04T18:43Z #423 SRC-10d merged (79fdafcf); session archived. X-mem-gauges launched (Opus, session_01MMjhnBjytrbRybn1nFqXXp). Runner docs PR owes slices.yaml entries for X-thp-off and X-mem-gauges."
+    "2026-11-04T18:43Z #423 SRC-10d merged (79fdafcf); session archived. X-mem-gauges launched (Opus, session_01MMjhnBjytrbRybn1nFqXXp). Runner docs PR owes slices.yaml entries for X-thp-off and X-mem-gauges.",
+    "2026-11-04T18:46Z #422 ENR-2a merged (73769f62); session archived. X-log-url-redact launched (Opus, session_01MMjhnBBFu383o6smTtgNmw) from SRC-3's proptest find. #426 SRC-3 review launched. #427 review MERGE, awaiting CI. Owner: the Windows rc.3 service was shut down after start-up, so no second crawler during r4."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4223,7 +4224,10 @@
     "From owner soak review #425 (queued, runner): X-mem-gauges (metrics only: sqlite3_memory_used+highwater, mi_process_info current_commit, self-read RssAnon, segment/merge counts per index; collector allowlist) - next free slot, rides rc.4; X-commit-cadence (M2: 30 s / 5,000 docs; X-merge-policy arm C 1.49 vs 2.68 MiB/1k; runner call under 2.26, flag 2.19) - rc.4 candidate; X-sqlite-malloc (SQLITE_CONFIG_MALLOC via mimalloc, after gauges); X-zstd-ctx (thread-local zstd contexts in store codec); CR pool right-sizing (max_peers_per_key 32->8, max_pending 200k->~20k) as a CR-SPEC A/B in Track C; tantivy upstream delete() issue draft",
     "Soak protocol (from #425): never run a second Lodestar on the soak's public IP during a window; record with collect.py note --category other_crawler. Windows MSI rc.3 service came up 04:38Z behind the same router during r4; owner asked whether it is still running.",
     "Correction to #425 plan (fresh review, verified by runner): DROP X-zstd-ctx, because BlobCodec already caches contexts (compress.rs:45-54). The pool A/B case rests on measured yield by peer index: max_attempts counts lookups, and every peer per lookup is tried (pool.rs:98, :1673). M2 changes only commit_every, since commit_docs is already 5,000.",
-    "Runner docs PR: add X-thp-off, X-mem-gauges (and later X-commit-cadence, X-sqlite-malloc) to runner/slices.yaml with owns; SRC-10d category follow-up (rss.rs plain-text category)."
+    "Runner docs PR: add X-thp-off, X-mem-gauges (and later X-commit-cadence, X-sqlite-malloc) to runner/slices.yaml with owns; SRC-10d category follow-up (rss.rs plain-text category).",
+    "SRC-3b scope (runner-accepted): reindex_log writes for unverified items, add_sources row changes and purge bit clears; SRC-17 Source facet waits for SRC-3b",
+    "X-log-url-redact: decide backport to release/v0.5.1 once the cause is known (log-redaction leak, class B)",
+    "Runner docs PR: add X-log-url-redact to slices.yaml and ws placement"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -4866,23 +4870,23 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T18:43Z",
+    "updated": "2026-11-04T18:46Z",
     "items": [
       {
         "slot": 1,
         "slice": "SRC-3",
         "role": "build",
         "agent": "claude",
-        "doing": "Letting search show where a torrent was found and whether it is verified, with unverified results hidden unless you ask.",
+        "doing": "PR #426 in review: verified/source/network search fields, unverified hidden by default.",
         "since": "2026-11-04T16:24:00Z"
       },
       {
         "slot": 2,
-        "slice": "ENR-2a",
+        "slice": "X-log-url-redact",
         "role": "build",
         "agent": "claude",
-        "doing": "Moving the safe JSON reader into a shared place, so the ThePornDB lookup can reuse it.",
-        "since": "2026-11-04T16:59:00Z"
+        "doing": "Fixing a log-redaction bug: a URL password could survive in logs after stray text.",
+        "since": "2026-11-04T18:46Z"
       },
       {
         "slot": 3,
