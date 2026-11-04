@@ -3245,7 +3245,8 @@
     "2026-11-04T21:59Z: launched ENR-0 (session_01MMjhnBwsmF7AFXpDked4B1), brief briefs/ENR-0.md; unblocked by \u00a72.37 Q4.",
     "2026-11-04T22:13Z: #438 ENR-3 merged (81ee0471), session archived.",
     "2026-11-04T22:27Z r4 read-only readings (relayed, not a verdict): 18:05Z->22:21Z worker Anonymous 445.5->622.8 MiB (+173) while AnonHugePages 204->212 MiB (+8): growth is base-page anon, not THP. mmap gauges bounded (main 12, files 96; commits 13,918). Private ~445 (17:50Z) -> ~618 (22:21Z), ~38 MiB/h, stepped ramp. THP-off cuts the level, not the slope. Asked for per-mapping smaps ([heap] vs unnamed anon) now and ~00:30Z to tell C heap (musl) from mimalloc.",
-    "2026-11-04T22:32Z r4 smaps (relayed): no [heap]; one 1 GiB unnamed mapping (mimalloc arena) 317 MiB dirty (210 MiB THP); ~3,180 small unnamed mappings hold ~290 MiB (likely musl mallocng groups = C heap: SQLite/zstd, plus thread stacks). Image d9365b8e (musl per Antigravity). Run 2 ~00:30Z + size histogram + Threads decides which group grows. If the C heap: X-sqlite-malloc (needs owner for callbacks' unsafe or a no-unsafe route) / SQLite cache limits / zstd context reuse; the X-mem-gauges SQLite gauge attributes it in r5."
+    "2026-11-04T22:32Z r4 smaps (relayed): no [heap]; one 1 GiB unnamed mapping (mimalloc arena) 317 MiB dirty (210 MiB THP); ~3,180 small unnamed mappings hold ~290 MiB (likely musl mallocng groups = C heap: SQLite/zstd, plus thread stacks). Image d9365b8e (musl per Antigravity). Run 2 ~00:30Z + size histogram + Threads decides which group grows. If the C heap: X-sqlite-malloc (needs owner for callbacks' unsafe or a no-unsafe route) / SQLite cache limits / zstd context reuse; the X-mem-gauges SQLite gauge attributes it in r5.",
+    "2026-11-04T22:49Z: #441 X-merge-policy merged (6861f02c), session archived."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4906,7 +4907,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T22:13Z",
+    "updated": "2026-11-04T22:49Z",
     "items": [
       {
         "slot": 1,
@@ -4963,14 +4964,6 @@
         "agent": "claude",
         "doing": "PR #429 in review; 10M benchmark running (gate: cold file search p95 <= 150 ms).",
         "since": "2026-11-04T17:43:00Z"
-      },
-      {
-        "slot": 8,
-        "slice": "X-merge-policy",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #441 (harness and findings, no app change) in review.",
-        "since": "2026-11-04T15:18:41Z"
       },
       {
         "slot": 9,
