@@ -25,6 +25,27 @@ pub const KIND_KEYWORD: u8 = 1;
 pub const KIND_QUERY: u8 = 2;
 pub const KIND_PAYLOAD: u8 = 3;
 
+/// A stored rule query, read as the engine may use it: `None` when it
+/// doesn't parse, or names `verified:`, `source:` or `network:` (SRC-3).
+/// The judge can't answer those, so its matcher calls them no match, and
+/// a negated one would match everything (an Always-allow saved as
+/// `-network:foo` would release every torrent). The filters API refuses
+/// them; a row saved before they were fields (when `source:x` read as
+/// the word `source:x`) or restored by Undo is unreadable here instead,
+/// so it fails closed or is skipped like any other unreadable row.
+/// Every reader of a stored rule's query uses this or
+/// [`stored_rule_reads`], so the API and the loader agree on what's
+/// unreadable.
+pub fn rule_query(text: &str) -> Option<Node> {
+    parse(text).ok().filter(|n| !n.mentions_provenance())
+}
+
+/// Whether a stored rule query reads as the engine loads it
+/// ([`rule_query`]).
+pub fn stored_rule_reads(text: &str) -> bool {
+    rule_query(text).is_some()
+}
+
 /// The stored form of a match: its kind and value.
 pub fn encode_match(m: &Match) -> (u8, Vec<u8>) {
     match m {
@@ -45,7 +66,7 @@ pub fn decode_match(kind: u8, value: &[u8]) -> Option<Match> {
                 .collect(),
         ),
         KIND_KEYWORD => Match::Keyword(text()?.to_owned()),
-        KIND_QUERY => Match::Query(parse(text()?).ok()?),
+        KIND_QUERY => Match::Query(rule_query(text()?)?),
         KIND_PAYLOAD => Match::Payload(u64::from_be_bytes(value.try_into().ok()?)),
         _ => return None,
     })
@@ -360,9 +381,9 @@ impl Engine {
         let rules: Vec<ClassRule> = rows
             .iter()
             .filter_map(|(id, q, adult)| {
-                let query = match parse(q) {
-                    Ok(query) => query,
-                    Err(_) => {
+                let query = match rule_query(q) {
+                    Some(query) => query,
+                    None => {
                         found.push((RowKind::ClassRule, *id, *adult));
                         notes.push(format!(
                             "classification rule {id} {}: it no longer parses",
@@ -408,14 +429,14 @@ impl Engine {
             .rules
             .iter()
             .filter_map(|r| {
-                let query = parse(&r.query).ok();
-                let unless = r.unless_query.as_deref().map(parse);
+                let query = rule_query(&r.query);
+                let unless = r.unless_query.as_deref().map(rule_query);
                 let action = Action::from_code(r.action);
-                let unless_lost = matches!(unless, Some(Err(_)));
+                let unless_lost = matches!(unless, Some(None));
                 let unless = match unless {
                     None => None,
-                    Some(Ok(u)) => Some(u),
-                    Some(Err(_)) => {
+                    Some(Some(u)) => Some(u),
+                    Some(None) => {
                         found.push((RowKind::Unless, r.id, r.enabled));
                         notes.push(format!(
                             "rule U-{} {}: its unless no longer parses",
@@ -485,10 +506,10 @@ impl Engine {
                     1 => Some(Strength::Neutralize),
                     _ => None,
                 };
-                let scope = match o.scope.as_deref().map(parse) {
+                let scope = match o.scope.as_deref().map(rule_query) {
                     None => Some(None),
-                    Some(Ok(q)) => Some(Some(q)),
-                    Some(Err(_)) => None,
+                    Some(Some(q)) => Some(Some(q)),
+                    Some(None) => None,
                 };
                 match (what, strength, scope) {
                     (Some(what), Some(strength), Some(scope)) => Some(Override {
@@ -547,12 +568,12 @@ impl Engine {
         self.allow = set
             .allow
             .iter()
-            .filter_map(|(id, q)| match parse(q) {
-                Ok(query) => Some(Allow {
+            .filter_map(|(id, q)| match rule_query(q) {
+                Some(query) => Some(Allow {
                     id: *id as u32,
                     query,
                 }),
-                Err(_) => {
+                None => {
                     found.push((RowKind::Allow, *id, false));
                     notes.push(format!("always-allow {id} skipped: it no longer parses"));
                     None

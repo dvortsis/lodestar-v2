@@ -145,14 +145,17 @@ mod tests {
 
     #[test]
     fn shown_follows_hidden_and_adult() {
-        assert_eq!(shown(&Node::All, false).to_query(), "hidden:no -type:adult");
+        assert_eq!(
+            shown(&Node::All, false).to_query(),
+            "hidden:no verified:yes -type:adult"
+        );
         assert_eq!(
             shown(&parse("knight").unwrap(), false).to_query(),
-            "knight hidden:no -type:adult"
+            "knight hidden:no verified:yes -type:adult"
         );
         assert_eq!(
             shown(&parse("knight").unwrap(), true).to_query(),
-            "knight hidden:no"
+            "knight hidden:no verified:yes"
         );
     }
 

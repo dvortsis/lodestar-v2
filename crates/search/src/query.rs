@@ -13,6 +13,7 @@
 //! private:no  v2:yes  hash:<40 hex>  (or a bare hash or magnet link)
 //! type:movie,tv  res:4k  hdr:dv  codec:x265  audio:atmos  lang:fr
 //! group:ntb  has:nfo  resolved:files  ambiguous:yes
+//! verified:no  verified:yes,no  source:nyaa,dht  network:bt   (§18.6)
 //! year:2019..2021  s:2  e:5  junk:<20  cat:video>=80%  bytes:video>90%
 //! file:(ext:flac size:>50MB)  file:"dark knight"   one file matching all
 //! seeders:>=5  leechers:>0  trackers:>=3  dht:>100  seen:<24h
@@ -25,6 +26,10 @@
 //! (`sig:`, …) parse to a clear "not available yet" error
 //! rather than being ignored.
 //! Input is untrusted: length, clause count and nesting are bounded.
+//!
+//! **Unverified items are hidden by default** (§18.6): a search adds
+//! `verified:yes` unless the query names `verified:` itself
+//! ([`Node::without_unverified`]); `verified:yes,no` shows both.
 
 use std::fmt::{self, Write as _};
 
@@ -134,6 +139,93 @@ impl TagKey {
     }
 }
 
+/// Whether an item has verified metadata (§18.5, §18.6): a stored
+/// torrent is `yes`, an item known only from a source's claims `no`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verified {
+    Yes,
+    No,
+}
+
+impl Verified {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Verified::Yes => "yes",
+            Verified::No => "no",
+        }
+    }
+
+    fn from_name(s: &str) -> Option<Verified> {
+        match s {
+            "yes" | "true" | "1" => Some(Verified::Yes),
+            "no" | "false" | "0" => Some(Verified::No),
+            _ => None,
+        }
+    }
+}
+
+/// A network tier (§18.6). The set is closed: every item is on exactly
+/// one, and the names are the index's terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Network {
+    /// Clearnet BitTorrent: everything the crawler and the v0.6 sources
+    /// store.
+    #[serde(rename = "bt")]
+    Bt,
+    #[serde(rename = "bt-i2p")]
+    BtI2p,
+    #[serde(rename = "ed2k")]
+    Ed2k,
+    #[serde(rename = "ipfs")]
+    Ipfs,
+    #[serde(rename = "usenet")]
+    Usenet,
+}
+
+impl Network {
+    pub const ALL: [Network; 5] = [
+        Network::Bt,
+        Network::BtI2p,
+        Network::Ed2k,
+        Network::Ipfs,
+        Network::Usenet,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Network::Bt => "bt",
+            Network::BtI2p => "bt-i2p",
+            Network::Ed2k => "ed2k",
+            Network::Ipfs => "ipfs",
+            Network::Usenet => "usenet",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Network> {
+        Network::ALL.into_iter().find(|n| n.as_str() == s)
+    }
+}
+
+/// Longest `source:` value: a plugin's manifest id, lowercased.
+pub const MAX_SOURCE_BYTES: usize = 32;
+
+/// A `source:` value as the index holds it: a plugin's manifest id,
+/// lowercased, of ASCII letters, digits, `.`, `_` and `-`, starting with
+/// a letter or digit, at most [`MAX_SOURCE_BYTES`] bytes. `None` when it
+/// can't be one. The indexer writes only names this accepts
+/// ([`crate::doc::source_term`]).
+pub fn source_value(v: &str) -> Option<String> {
+    let lower = v.to_ascii_lowercase();
+    let ok = !lower.is_empty()
+        && lower.len() <= MAX_SOURCE_BYTES
+        && lower.as_bytes()[0].is_ascii_alphanumeric()
+        && lower
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b));
+    ok.then_some(lower)
+}
+
 /// How a `cat:`/`bytes:` share is measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -238,6 +330,19 @@ pub enum Node {
         key: TagKey,
         any: Vec<String>,
     },
+    /// `verified:` (§18.6); matches any of the values.
+    Verified {
+        any: Vec<Verified>,
+    },
+    /// `source:`, by plugin id ([`source_value`]); matches any. An id no
+    /// source has matches nothing.
+    Source {
+        any: Vec<String>,
+    },
+    /// `network:` (§18.6); matches any.
+    Network {
+        any: Vec<Network>,
+    },
     /// Torrents with at least one file matching every clause of `of`
     /// (words, phrases, `name:`, `path:`, `ext:`, `size:`), answered by
     /// the file index.
@@ -297,6 +402,9 @@ pub(crate) enum FieldKind {
     Hash,
     Magnet,
     Tag(TagKey),
+    Verified,
+    Source,
+    Network,
     Share(ShareBy),
     File,
     TimeOfDay,
@@ -352,6 +460,10 @@ pub(crate) const FIELDS: &[(&str, FieldKind)] = &[
     ("dht", FieldKind::Num(NumField::Dht)),
     ("seen", FieldKind::Date(DateField::Seen)),
     ("time", FieldKind::TimeOfDay),
+    // Provenance (§18.6).
+    ("verified", FieldKind::Verified),
+    ("source", FieldKind::Source),
+    ("network", FieldKind::Network),
 ];
 
 pub(crate) fn field(name: &str) -> Option<FieldKind> {
@@ -868,6 +980,38 @@ fn field_value(
             }
             Ok(Node::Tag { key, any })
         }
+        FieldKind::Verified => {
+            let any = any_of(value, Verified::from_name).ok_or_else(|| ParseError {
+                message: format!("{name}: expects yes or no"),
+                start,
+                end,
+            })?;
+            Ok(Node::Verified { any })
+        }
+        FieldKind::Source => {
+            let any = any_of(value, source_value).ok_or_else(|| ParseError {
+                message: format!(
+                    "{name}: expects source ids like nyaa,dht (letters, digits, . _ -; \
+                     at most {MAX_SOURCE_BYTES} bytes each)"
+                ),
+                start,
+                end,
+            })?;
+            Ok(Node::Source { any })
+        }
+        FieldKind::Network => {
+            let any = any_of(value, |v| Network::from_name(&v.to_ascii_lowercase())).ok_or_else(
+                || ParseError {
+                    message: format!(
+                        "{name}: expects one of {}",
+                        Network::ALL.map(Network::as_str).join(", ")
+                    ),
+                    start,
+                    end,
+                },
+            )?;
+            Ok(Node::Network { any })
+        }
         FieldKind::Share(by) => share(by, name, value, start, end),
         FieldKind::File => file(word(TextField::Any, value, start, end)?, start, end),
         FieldKind::TimeOfDay => {
@@ -880,6 +1024,19 @@ fn field_value(
         }
         FieldKind::Later(what) => err(format!("{name}: arrives with {what}"), start, end),
     }
+}
+
+/// A comma-separated list of values, each read by `read`, without
+/// repeats, in first-seen order; `None` when any can't be read.
+fn any_of<T: PartialEq>(value: &str, read: impl Fn(&str) -> Option<T>) -> Option<Vec<T>> {
+    let mut any = Vec::new();
+    for v in value.split(',') {
+        let v = read(v)?;
+        if !any.contains(&v) {
+            any.push(v);
+        }
+    }
+    Some(any)
 }
 
 fn file(of: Node, start: usize, end: usize) -> Result<Node, ParseError> {
@@ -1264,6 +1421,72 @@ impl Node {
         }
     }
 
+    /// Whether any clause tests `verified:`, `source:` or `network:`.
+    pub fn mentions_provenance(&self) -> bool {
+        match self {
+            Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => true,
+            Node::And { of } | Node::Or { of } => of.iter().any(Node::mentions_provenance),
+            Node::Not { of } | Node::File { of } => of.mentions_provenance(),
+            _ => false,
+        }
+    }
+
+    /// Whether any clause tests `verified:`.
+    pub fn mentions_verified(&self) -> bool {
+        match self {
+            Node::Verified { .. } => true,
+            Node::And { of } | Node::Or { of } => of.iter().any(Node::mentions_verified),
+            Node::Not { of } => of.mentions_verified(),
+            _ => false,
+        }
+    }
+
+    /// The query with unverified items left out (§18.6: hidden unless
+    /// asked for), unless it names `verified:` itself. A search applies
+    /// it to the user's query, as [`Node::without_hidden`].
+    pub fn without_unverified(self) -> Node {
+        if self.mentions_verified() {
+            return self;
+        }
+        let verified = Node::Verified {
+            any: vec![Verified::Yes],
+        };
+        match self {
+            Node::All => verified,
+            Node::And { mut of } => {
+                of.push(verified);
+                Node::And { of }
+            }
+            other => Node::And {
+                of: vec![other, verified],
+            },
+        }
+    }
+
+    /// The tracked fields ([`crate::population`]) whose clauses in this
+    /// query match only the documents that carry them, in first-seen
+    /// order: while one is being backfilled, some matches are missing,
+    /// and the search says so. `verified:` and `network:` aren't among
+    /// them: they're complete on a partly backfilled index by
+    /// construction (see `compile.rs`).
+    pub fn population_fields(&self) -> Vec<&'static str> {
+        fn walk(n: &Node, out: &mut Vec<&'static str>) {
+            match n {
+                Node::Source { .. } => {
+                    if !out.contains(&"source") {
+                        out.push("source");
+                    }
+                }
+                Node::And { of } | Node::Or { of } => of.iter().for_each(|n| walk(n, out)),
+                Node::Not { of } => walk(of, out),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(self, &mut out);
+        out
+    }
+
     /// The query with torrents a filter rule hid left out (§20.3), unless
     /// it asks about hidden torrents itself.
     pub fn without_hidden(self) -> Node {
@@ -1465,6 +1688,17 @@ impl Node {
             }
             Node::Tag { key, any } => {
                 let _ = write!(out, "{}:{}", key.as_str(), any.join(","));
+            }
+            Node::Verified { any } => {
+                let any: Vec<&str> = any.iter().map(|v| v.as_str()).collect();
+                let _ = write!(out, "verified:{}", any.join(","));
+            }
+            Node::Source { any } => {
+                let _ = write!(out, "source:{}", any.join(","));
+            }
+            Node::Network { any } => {
+                let any: Vec<&str> = any.iter().map(|n| n.as_str()).collect();
+                let _ = write!(out, "network:{}", any.join(","));
             }
             Node::File { of } => match **of {
                 // A single word keeps the `file:word` form: in brackets,
@@ -2081,6 +2315,116 @@ mod tests {
     }
 
     #[test]
+    fn provenance_fields() {
+        assert_eq!(
+            parse("verified:no").unwrap(),
+            Node::Verified {
+                any: vec![Verified::No]
+            }
+        );
+        assert_eq!(
+            parse("verified:yes,no,1").unwrap(),
+            Node::Verified {
+                any: vec![Verified::Yes, Verified::No]
+            },
+            "repeats dropped, aliases read"
+        );
+        assert_eq!(
+            parse("source:Nyaa,dht,nyaa").unwrap(),
+            Node::Source {
+                any: vec!["nyaa".into(), "dht".into()]
+            }
+        );
+        assert_eq!(
+            parse("network:BT,bt-i2p").unwrap(),
+            Node::Network {
+                any: vec![Network::Bt, Network::BtI2p]
+            }
+        );
+        assert_eq!(
+            parse("source:nyaa network:ipfs").unwrap().to_query(),
+            "source:nyaa network:ipfs"
+        );
+        let too_long = format!("source:{}", "a".repeat(MAX_SOURCE_BYTES + 1));
+        for bad in [
+            "verified:maybe",
+            "verified:",
+            "verified:yes,",
+            "source:",
+            "source:-x",
+            "source:.x",
+            "source:a/b",
+            "source:é",
+            "source:a,,b",
+            too_long.as_str(),
+            "network:tor",
+            "network:",
+            "network:bt,",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        assert!(parse(&format!("source:{}", "a".repeat(MAX_SOURCE_BYTES))).is_ok());
+        let e = parse("network:tor").unwrap_err();
+        assert!(e.message.contains("bt, bt-i2p, ed2k, ipfs, usenet"), "{e}");
+        // JSON is the API's form.
+        let json = serde_json::to_string(&parse("network:bt-i2p verified:no").unwrap()).unwrap();
+        assert_eq!(
+            json,
+            r#"{"op":"and","of":[{"op":"network","any":["bt-i2p"]},{"op":"verified","any":["no"]}]}"#
+        );
+    }
+
+    #[test]
+    fn unverified_items_are_hidden_unless_asked_for() {
+        let yes = || Node::Verified {
+            any: vec![Verified::Yes],
+        };
+        assert_eq!(Node::All.without_unverified(), yes());
+        assert_eq!(
+            parse("dark knight")
+                .unwrap()
+                .without_unverified()
+                .to_query(),
+            "dark knight verified:yes"
+        );
+        assert_eq!(
+            parse("a | b").unwrap().without_unverified().to_query(),
+            "(a | b) verified:yes"
+        );
+        // Named anywhere, even negated or under `|`: left as asked.
+        for asked in [
+            "verified:no",
+            "x -verified:yes",
+            "(x | verified:no) y",
+            "verified:yes,no",
+        ] {
+            let ast = parse(asked).unwrap();
+            assert_eq!(ast.clone().without_unverified(), ast, "{asked}");
+        }
+        // Once only.
+        let once = parse("x").unwrap().without_unverified();
+        assert_eq!(once.clone().without_unverified(), once);
+        // `hidden:` and `verified:` defaults compose.
+        assert_eq!(
+            parse("x")
+                .unwrap()
+                .without_hidden()
+                .without_unverified()
+                .to_query(),
+            "x hidden:no verified:yes"
+        );
+    }
+
+    #[test]
+    fn population_fields_name_only_partial_clauses() {
+        let fields = |q: &str| parse(q).unwrap().population_fields();
+        assert_eq!(fields("x"), Vec::<&str>::new());
+        assert_eq!(fields("verified:no network:bt"), Vec::<&str>::new());
+        assert_eq!(fields("source:nyaa"), ["source"]);
+        assert_eq!(fields("x (y | -source:a) source:b"), ["source"]);
+    }
+
+    #[test]
     fn round_trips() {
         for q in [
             "dark knight",
@@ -2103,6 +2447,8 @@ mod tests {
             "seeders:>=5 leechers:0 trackers:3..20 dht:<=100 -seeders:0",
             "seen:<24h seen:>2w seen:2026-01-01..2026-03-31 seen:2026-02-02",
             "time:22:00..02:00 time:9..17 time:22:30 (x | time:00:00..00:59)",
+            "verified:no verified:yes,no -verified:yes (x | verified:yes)",
+            "source:nyaa,dht -source:a.b_c-9 network:bt network:bt-i2p,ed2k,ipfs,usenet",
             // Found by fuzzing: phrase words that look like syntax, a
             // lone `!` before `)`, and a negated NEAR.
             "\"a\" NEAR \"NEAR $*\" NEAR \"x|y\"",

@@ -62,9 +62,10 @@ const FILE_PREFIX: &str = "file.";
 /// run SB-6 → import → producer on an existing database, including a
 /// restart mid-backfill.
 pub const GENERATIONS: [(&str, u32); 10] = [
-    ("verified", 0),
-    ("source", 0),
-    ("network", 0),
+    // SRC-3 (§18.6): every torrent's provenance.
+    ("verified", 1),
+    ("source", 1),
+    ("network", 1),
     ("payload_sig", 0),
     ("group_key", 0),
     ("group_minhash", 0),
@@ -369,7 +370,11 @@ mod tests {
     #[test]
     fn a_fresh_index_is_complete_at_this_builds_generations() {
         let t = PopState::fresh(&gens(), Side::Torrents);
-        assert_eq!(t.availability("verified"), Some(Availability::NoProducer));
+        assert_eq!(
+            t.availability("payload_sig"),
+            Some(Availability::NoProducer)
+        );
+        assert_eq!(t.availability("verified"), Some(Availability::Ready));
         assert_eq!(t.availability("file.category"), None, "another side");
         assert_eq!(t.pending(), None);
         let f = PopState::fresh(&gens(), Side::Files);
@@ -387,7 +392,7 @@ mod tests {
         s.reconcile(&shipped, Side::Torrents, 500);
         let backfilling = |done| Some(Availability::Backfilling { done, upto: 500 });
         assert_eq!(s.availability("payload_sig"), backfilling(0));
-        assert_eq!(s.availability("verified"), Some(Availability::NoProducer));
+        assert_eq!(s.availability("group_key"), Some(Availability::NoProducer));
         assert_eq!(s.pending(), Some((0, 500)));
         s.advance(200);
         // Reopened (a restart): the walk goes on, whatever the index

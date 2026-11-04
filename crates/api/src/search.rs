@@ -27,6 +27,7 @@ use crate::dto::search::{
     ClauseRemoval, CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights,
     IndexRebuild, NaturalChip, NaturalProposal, ParseQuery, ParseResponse, SearchExplain,
     SearchHit, SearchIndexState, SearchNotice, SearchRecovery, SearchRequest, SearchResponse,
+    UnpopulatedField,
 };
 use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
@@ -121,8 +122,13 @@ impl BaseQuery {
 
 /// The query every count of the index runs (search, totals, exact
 /// counts, cursors and facets): `ast` without the torrents a filter rule
-/// hid unless `v.hidden` (or it asks about them itself), and without
-/// Adult unless `v.adult`.
+/// hid unless `v.hidden` (or it asks about them itself), without
+/// unverified items unless it names `verified:` (§18.6; `verified:yes,no`
+/// shows both), and without Adult unless `v.adult`.
+///
+/// The unverified default goes on the user's part, as the hidden one
+/// does: the Verified facet (SRC-17) strips it with the user's own
+/// `verified:` clauses and counts both values.
 ///
 /// Adult is left out whatever the query asks: `type:adult` or `adult:…`
 /// while it's hidden matches nothing and carries the `adult_hidden`
@@ -138,7 +144,8 @@ pub fn base_query(ast: &Node, v: Visibility) -> BaseQuery {
         ast.clone()
     } else {
         ast.clone().without_hidden()
-    };
+    }
+    .without_unverified();
     let mut visibility = Vec::new();
     let mut notices = Vec::new();
     if !v.adult {
@@ -371,7 +378,7 @@ async fn run_search(
     };
     let base = base_query(&ast, visibility);
     let shown = base.query();
-    let notices = base.notices;
+    let mut notices = base.notices;
     let fingerprint = fingerprint(&shown, visibility, sort);
     let client = client_of(headers);
     let cursor = p
@@ -521,11 +528,17 @@ async fn run_search(
         }
         // Only the hits served: nothing the page left out is explained.
         let explain = explained.map(|e| explanation(&e, &hits));
+        let incomplete_fields =
+            incomplete_fields(&ast, |f| lease.index().availability_in(f, &lease));
+        if !incomplete_fields.is_empty() {
+            notices.push(SearchNotice::FieldsIncomplete);
+        }
         Ok(axum::Json(SearchResponse {
             canonical: ast.to_query(),
             explain,
             hits,
             limit,
+            incomplete_fields,
             next_cursor,
             notices,
             offset: served as usize,
@@ -538,6 +551,29 @@ async fn run_search(
     })
     .await
     .map_err(internal)?
+}
+
+/// The fields `ast`'s clauses name that `index` can't fully answer for
+/// (the population contract, `docs/decisions/2026-11-04-SB-6.md`): only
+/// the user's clauses, since the visibility defaults are complete by
+/// construction ([`lodestar_search::Node::population_fields`]). The
+/// search asks the lease's snapshot ([`SearchIndex::availability_in`]),
+/// so a later page of a lease from mid-backfill stays reported.
+///
+/// [`SearchIndex::availability_in`]: lodestar_search::SearchIndex::availability_in
+fn incomplete_fields(
+    ast: &Node,
+    availability: impl Fn(&str) -> lodestar_search::Availability,
+) -> Vec<UnpopulatedField> {
+    ast.population_fields()
+        .into_iter()
+        .filter_map(|field| {
+            UnpopulatedField::of(&lodestar_search::FieldAvailability {
+                field: field.to_owned(),
+                availability: availability(field),
+            })
+        })
+        .collect()
 }
 
 fn search_disabled() -> ApiError {
@@ -721,6 +757,7 @@ pub(crate) async fn index_state(
             (growth_per_hour, growth_hours),
             search.progress(),
             index.missing_fields(),
+            &index.unpopulated(),
             now,
         )))
     })
@@ -734,6 +771,7 @@ fn state_of(
     (growth_per_hour, growth_hours): (Option<f64>, f64),
     progress: Option<RebuildProgress>,
     missing: &[String],
+    unpopulated: &[lodestar_search::FieldAvailability],
     now: i64,
 ) -> SearchIndexState {
     let rebuild = progress.map(|p| {
@@ -762,6 +800,10 @@ fn state_of(
         rebuild,
         searchable_torrents: searchable,
         unavailable: missing.to_vec(),
+        unpopulated: unpopulated
+            .iter()
+            .filter_map(UnpopulatedField::of)
+            .collect(),
         updated_at: now,
     }
 }
@@ -1347,12 +1389,19 @@ mod tests {
     #[test]
     fn the_query_is_the_users_with_visibility_anded_on() {
         let ast = word("dark");
+        let verified = || Node::Verified {
+            any: vec![lodestar_search::query::Verified::Yes],
+        };
+        // Unverified items are hidden on the user's part (§18.6).
+        let users = Node::And {
+            of: vec![ast.clone(), verified()],
+        };
         let base = base_query(&ast, HIDDEN);
-        assert_eq!(base.node, ast);
+        assert_eq!(base.node, users);
         assert_eq!(
             base.query(),
             Node::And {
-                of: vec![ast.clone(), not(tag(TagKey::Type, ADULT))],
+                of: vec![ast.clone(), verified(), not(tag(TagKey::Type, ADULT))],
             }
         );
         let shown = base_query(
@@ -1363,11 +1412,18 @@ mod tests {
             },
         );
         assert!(shown.visibility.is_empty());
-        assert_eq!(shown.query(), ast);
+        assert_eq!(shown.query(), users);
         assert_eq!(
             base_query(&Node::All, HIDDEN).query(),
-            not(tag(TagKey::Type, ADULT))
+            Node::And {
+                of: vec![verified(), not(tag(TagKey::Type, ADULT))],
+            }
         );
+        // Asked for: left as the user wrote it.
+        let asked = lodestar_search::parse("dark verified:yes,no").unwrap();
+        assert_eq!(base_query(&asked, HIDDEN).node, asked);
+        let asked = lodestar_search::parse("dark -verified:yes").unwrap();
+        assert_eq!(base_query(&asked, HIDDEN).node, asked);
     }
 
     /// `/search` and `/facets` take their leases for `query()`; facets
@@ -1401,9 +1457,38 @@ mod tests {
     }
 
     #[test]
+    fn a_clause_on_a_partial_field_is_reported() {
+        use crate::dto::search::FieldState;
+        let parse = |q: &str| lodestar_search::parse(q).unwrap();
+        let ready = lodestar_search::SearchIndex::in_memory().unwrap();
+        assert!(incomplete_fields(&parse("source:nyaa"), |f| ready.availability(f)).is_empty());
+        let none = lodestar_search::SearchIndex::in_memory()
+            .unwrap()
+            .with_generations(lodestar_search::Generations::current().with("source", 0))
+            .unwrap();
+        let got = incomplete_fields(&parse("x (source:nyaa | -source:dht)"), |f| {
+            none.availability(f)
+        });
+        assert_eq!(
+            got,
+            [UnpopulatedField {
+                field: "source".into(),
+                state: FieldState::NoProducer,
+                done: None,
+                upto: None,
+            }]
+        );
+        // Clauses complete by construction, and the default, aren't.
+        assert!(
+            incomplete_fields(&parse("x verified:no network:bt"), |f| none.availability(f))
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn index_state_flags_and_rebuild() {
         use lodestar_search::{IndexVersion, RebuildPhase as P};
-        let at = |n| state_of(n, (None, 0.0), None, &[], 7);
+        let at = |n| state_of(n, (None, 0.0), None, &[], &[], 7);
         assert!(at(999).cold_start && at(999).growing);
         assert!(!at(1_000).cold_start && at(1_000).growing);
         assert!(!at(1_000_000).growing);
@@ -1425,7 +1510,46 @@ mod tests {
             error: None,
         };
         let missing = ["year".to_string()];
-        let got = state_of(84_210, (Some(2_104.5), 24.0), Some(progress), &missing, 9);
+        let unpopulated = [
+            lodestar_search::FieldAvailability {
+                field: "year".into(),
+                availability: lodestar_search::Availability::Missing,
+            },
+            lodestar_search::FieldAvailability {
+                field: "source".into(),
+                availability: lodestar_search::Availability::Backfilling {
+                    done: 10,
+                    upto: 84_000,
+                },
+            },
+            lodestar_search::FieldAvailability {
+                field: "payload_sig".into(),
+                availability: lodestar_search::Availability::NoProducer,
+            },
+        ];
+        let got = state_of(
+            84_210,
+            (Some(2_104.5), 24.0),
+            Some(progress),
+            &missing,
+            &unpopulated,
+            9,
+        );
+        let field = |field: &str, state, done, upto| UnpopulatedField {
+            field: field.into(),
+            state,
+            done,
+            upto,
+        };
+        use crate::dto::search::FieldState as S;
+        assert_eq!(
+            got.unpopulated,
+            [
+                field("year", S::Missing, None, None),
+                field("source", S::Backfilling, Some(10), Some(84_000)),
+                field("payload_sig", S::NoProducer, None, None),
+            ]
+        );
         assert_eq!(
             got.rebuild,
             Some(IndexRebuild {

@@ -734,7 +734,13 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
         );
     }
     for f in V6_FIELDS {
-        assert_eq!(index.availability(f), Availability::NoProducer, "{f}");
+        let want = if ["verified", "source", "network"].contains(&f) {
+            // SRC-3's: a rebuild writes them for every torrent.
+            Availability::Ready
+        } else {
+            Availability::NoProducer
+        };
+        assert_eq!(index.availability(f), want, "{f}");
     }
     let files =
         tantivy::Index::open_in_dir(root.join(IndexVersion::CURRENT.dir_name()).join("files"))
