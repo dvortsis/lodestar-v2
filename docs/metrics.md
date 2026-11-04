@@ -696,6 +696,23 @@ Added for the v0.5.1 Linux soak, so a memory or disk ramp can be explained (owne
 
 The cache series render only with search on. There is no server-side detail cache: the detail caches are in the browser. SQLite's page cache isn't reported (see the decision).
 
+## Memory attribution (X-mem-gauges, 2026-11-04)
+
+Added so a soak's memory verdict can say which heap holds the memory. See [the decision](decisions/2026-11-04-X-mem-gauges.md). The storage sampler reads these every 60 s with the sizes above; a scrape reads the last sample. They come from the process that holds the corpus: the `--child` worker under the Unix supervisor, which serves `/metrics` itself, or the single process elsewhere. Each series is **absent** while it can't be read (before the first sample, on another OS, a field missing or odd), never 0.
+
+mimalloc is the Rust allocator only. C code (SQLite, zstd) allocates through the C library's `malloc`, which mimalloc doesn't count. SQLite counts its own heap, so `mem_rss_anon_bytes − mem_mimalloc_committed_bytes − mem_sqlite_bytes` approximates the rest: zstd, other C code and allocator overhead. It's neither an upper nor a lower bound. It also holds thread stacks and other anonymous mappings, and transparent huge pages that fill mimalloc's arenas past the slices mimalloc counts (read it with `mem_anon_huge_bytes`). mimalloc counts committed slices whether or not they're resident, which can make it too small.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `mem_mimalloc_committed_bytes` | gauge | Bytes mimalloc has committed from the OS, from its own statistics (`commit_current`). Includes free space it hasn't returned. |
+| `mem_mimalloc_peak_committed_bytes` | gauge | The most `mem_mimalloc_committed_bytes` has been since start (`commit_peak`). |
+| `mem_sqlite_bytes` | gauge | Bytes SQLite has allocated and not freed, process-wide, by its own count (`sqlite3_memory_used`). Every connection and its page cache is included. Outside mimalloc. |
+| `mem_sqlite_highwater_bytes` | gauge | The most `mem_sqlite_bytes` has been since start (`sqlite3_memory_highwater`, never reset). |
+| `mem_rss_anon_bytes` | gauge | `RssAnon` from `/proc/self/status`: resident anonymous memory, every heap included. Linux only. |
+| `mem_rss_file_bytes` | gauge | `RssFile` from `/proc/self/status`: resident file-backed pages, the memory-mapped index included. Linux only. |
+| `mem_anon_huge_bytes` | gauge | `AnonHugePages` from `/proc/self/smaps_rollup`: anonymous memory in transparent huge pages, part of `mem_rss_anon_bytes`. Linux only. |
+| `search_segments{index}` | gauge | Live segments in each index's current searcher, read at scrape: `index` is `main` (torrents) or `files`. Rendered with search on. |
+
 ## Unreadable filter rows (F-filter-load-fail-closed, 2026-11-01)
 
 See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).

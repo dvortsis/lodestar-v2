@@ -773,3 +773,24 @@ fn the_adult_count_matches_what_type_adult_finds() {
     assert_eq!((c.added, c.adult_added, c.replayed), (0, 0, 2));
     assert_eq!(names(&index, "type:adult").len(), 3);
 }
+
+/// X-mem-gauges: `segment_counts` follows each commit in both indexes.
+/// Moved here from `index.rs`'s `population_tests`, which the release
+/// branch doesn't have (R-rc4-cut).
+#[test]
+fn segment_counts_follow_each_commit_in_both_indexes() {
+    let mut store = store_with(&[
+        torrent("One", &["a.mkv"]),
+        torrent("Two", &["b.mkv"]),
+        torrent("Three", &["c.mkv"]),
+        torrent("Four", &["d.mkv"]),
+    ]);
+    let index = SearchIndex::in_memory().unwrap();
+    assert_eq!(index.segment_counts(), [0, 0]);
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 2).unwrap();
+    w.commit().unwrap();
+    let [main, files] = index.segment_counts();
+    assert_eq!(main, index.segments() as u64);
+    assert!(main >= 1 && files >= 1, "{main} {files}");
+}

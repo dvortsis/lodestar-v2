@@ -13,8 +13,17 @@ lodestar-metainfo.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 zstd = "0.14.3"
 
-[lints]
-workspace = true
+# The workspace's lints, except `unsafe_code`: "deny" here instead of
+# "forbid", so `src/memstats.rs` can allow its two SQLite memory-statistics
+# reads and nothing else (owner-decisions §2.35, X-mem-gauges). Keep the
+# rest in step with the root Cargo.toml's [workspace.lints].
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
 
 [dev-dependencies]
 encoding_rs = "0.8.35"
