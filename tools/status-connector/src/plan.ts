@@ -191,11 +191,11 @@ export function buildPlan(inp: Inputs) {
     const it = items.filter((x) => Number(x.slot) === n);
     if (it.length > 1) warn('Slot listed twice', String(n), 'runner/dashboard.yaml slots has more than one entry for slot ' + n);
     const x = it[0];
-    if (!x) { slots.push({ slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof }); continue; }
+    if (!x) { slots.push({ slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', model: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof }); continue; }
     const node = x.slice ? byId[x.slice] : undefined;
     if (x.slice && !node) warn('Unknown slice', String(x.slice), 'slot ' + n + ' in runner/dashboard.yaml slots names a slice that is not in runner/slices.yaml');
     if (node && ['done', 'closed'].includes(node.state)) warn('Slot lists finished work', String(x.slice), 'slot ' + n + ' still shows a slice that has merged or closed; the runner should update slots');
-    slots.push({ slot: n, status: x.status || 'working', slice: x.slice || '', title: node?.title || '', doing: x.doing || '', agent: x.agent || node?.agent || '', role: x.role || 'build', since: x.since || '', stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof });
+    slots.push({ slot: n, status: x.status || 'working', slice: x.slice || '', title: node?.title || '', doing: x.doing || '', agent: x.agent || node?.agent || '', model: node?.model || '', role: x.role || 'build', since: x.since || '', stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof });
   }
   for (const x of items) if (!(Number(x.slot) >= 1 && Number(x.slot) <= cap)) warn('Slot out of range', String(x.slot), 'runner/dashboard.yaml slots has an entry outside 1..capacity (' + cap + ')');
   if (sl.capacity !== undefined) {
