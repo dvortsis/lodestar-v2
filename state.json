@@ -4270,7 +4270,11 @@
     "X-thp-off (#434) polish 7: have thp::apply return the prctl error and log one warn once logging is up (needs a registered event in logging/events.rs), so a failure reaches the Logs page. Small, low priority.",
     "ENR-0 notes (next runner slices.yaml PR): store performer names only, no performer ids (runner call 2026-11-04 under §2.37 Q4); a `truncated` flag for performers; parsers degrade (drop a bad entry, keep the scene) per the ENR-2b/ENR-3 shared rule. Flag both calls to the owner (§2.19).",
     "X-log-url-redact-2 scope (runner call 2026-11-04, restated after #432 round-4 review; flag §2.19): password classes that also leak on main when the URL stands alone and that main hid only by luck: `://` after or before the secret, a raw line break in the password (incl. no userinfo `@` before it: `ssh://u:\\n<s>@h`, `wss://u%3A<s>\\n@h`), `/` plus a hard stop with no userinfo marker; and whitespace or a line break inside a magnet. Magnet soft-end (B-log1) and the IPv6 passkey path are fixed in #432 itself. Also (round-5 review, shared with main): a magnet inside a `://` URL's path/query/fragment ends at the outer URL's soft end (B-log1 gap; naive cut breaks the Next::from cache); percent-encoded magnet%3A%3F in free text; escaped \\\" inside a Debug-form magnet value; malformed IPv6 `[::1]]` in a nested query.",
-    "CI disk (after #443): if Linux jobs hit os error 28 again, set debug = \"line-tables-only\" under [profile.dev] (or CARGO_PROFILE_DEV_DEBUG in ci.yml) rather than deleting more SDKs; importer (ci.yml ~301) and openapi (~119) are next most at risk. Check #443's df -h output on its first green run."
+    "CI disk (after #443): if Linux jobs hit os error 28 again, set debug = \"line-tables-only\" under [profile.dev] (or CARGO_PROFILE_DEV_DEBUG in ci.yml) rather than deleting more SDKs; importer (ci.yml ~301) and openapi (~119) are next most at risk. Check #443's df -h output on its first green run.",
+    "Owner flag (§2.19): owner said \"all filters pre-checked\"; #447 §2.39 leaves blocklist subscriptions off by default. Confirm with the owner.",
+    "LEGAL-2 (crawler paused on a fresh data dir until setup completes): adopted under §2.26, after v0.5.1. Add to slices.yaml in the post-#447 runner PR.",
+    "After X-mimalloc-override and #442 merge: fix crates/lodestar/src/memstats.rs module doc (\"not override\", C allocs not counted); optional musl-only C_MALLOC_IS_MIMALLOC const.",
+    "X-search-files-4: 10M file-query gate (<150 ms, architecture §3) open after #429 (cold p95 263.7 ms). Measure (a) one-atom file clauses from torrent index (semantics change, decide on evidence) and (b) torrent-level size_bucket. (c) cache-with-corpus off (owner memory guarantee). Move G-import-10M dep from X-search-files-3 to X-search-files-4."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -4913,7 +4917,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T23:50Z",
+    "updated": "2026-11-04T23:58Z",
     "items": [
       {
         "slot": 1,
