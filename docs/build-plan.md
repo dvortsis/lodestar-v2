@@ -17,7 +17,7 @@ Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`)
 | **Imports** | IMP-0..5 merged: PostgreSQL restore runbook, V13 job tables, Magnetico and Bitmagnet adapters, merge/dedupe CLI, imported cohorts kept out of crawl-yield Insights, refile, server-side import part 1 | — | Pilots on real data (§0.6); none run. Only a synthetic figure exists: 100k at ~13,900/s |
 | **v0.6 Sources** | Plan sliced into 25 SRC-* slices (#356). SRC-0 (#360), SRC-6 (#363), SRC-8 (#366), SRC-16 (#361) merged | — | SRC-4, SRC-5, SRC-9 now; SRC-1 (V14) now that migrations may land on `main` (owner-decisions §2.28); SRC-7 after SRC-2, SRC-4 and SRC-5 |
 | **Blocklist subscriptions** | B-subscriptions-api (#362) merged | S-blocklists (Sonnet) | — |
-| **Filters** | F-auth, F-filters (+packs, neutral-perf, xcpu), F-metainfo, F-updater, F-status, F-filter-load-fail-closed (#357) | F-filter-standin-undo (#367) merged on `main` (785b282c), not in rc.3; adult stand-in holds stay held (owner-decisions §2.28) | — |
+| **Filters** | F-auth, F-filters (+packs, neutral-perf, xcpu), F-metainfo, F-updater, F-status, F-filter-load-fail-closed (#357), F-filter-standin-undo (#367, 785b282c, not in rc.3) | Adult stand-in holds stay held (owner-decisions §2.28) | — |
 | **Update engine** | B-update-1..6 (signed manifest, install, rollback, fail-closed checks). Ships **disabled** in v0.5.1 | — | Owner: nightly signing key |
 | **Remote workers** | `crates/cluster` library: cluster CA, mTLS 1.3, join tokens, postcard-over-WebSocket protocol, leases and fencing (~104 tests) | — | Epic **held** until the soak verdict. **Nothing wires it**: there is no `lodestar worker` command, though `packaging/unraid/lodestar-worker.xml` calls one |
 | **Companions** | — | — | Epic held until the soak verdict. No code |
@@ -272,7 +272,7 @@ flowchart LR
 - **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: V12 → V13 (merged) → **V14 SRC-1** (§2.28 lifted the migration hold) → **V15 CR-3** (after the 50M gate), with any worker or companion table taking the next number when it reaches the slot. The runner records the queue in `runner-state` `migration_order`.
 - **Search schema:** exactly one `SCHEMA_VERSION` bump per milestone. M7's is SB-6. A slice that needs a new indexed field asks SB-6 to carry it instead of bumping.
 - **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks. **Bookings are exclusive and per run:** `ext:experiment-host` and `ext:import-host` hold for one booked run, not once for all, so two gates can't share the host because their `owns` happen to be disjoint.
-- **The experiment calendar** (the four-slice cap can't shorten this serial path):
+- **The experiment calendar** (the slice cap can't shorten this serial path):
 
   | Run | Measured time |
   |---|---|
@@ -314,7 +314,7 @@ flowchart LR
 | Owner answers arrive late | Owner actions (host, keys, tags) gate whole tracks | §2.28 delegates decisions to the runner's recommendation; ask once for actions, and fill the slots with Sources, Track B and the epics meanwhile |
 
 ### 0.9 Next actions
-In order, as slots allow (eight slices in total, §2.33; no two with overlapping `owns`). **2026-11-04:** SB-6, SRC-11, SRC-12, SRC-10b, SRC-10c, SRC-10d and P-v06-rulepacks launched. The eighth slot goes to the E-M7 expansion's first ready slice, or to L4-followups once SB-6 merges (both own `crates/search/src/files.rs`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
+In order, as slots allow (eight slices in total, §2.33; no two with overlapping `owns`). **2026-11-04:** SB-6, SRC-11, SRC-12, SRC-10b, SRC-10c, SRC-10d and P-v06-rulepacks launched. The eighth slot goes to the E-M7 expansion's first ready slice, or to L4-followups once SB-6 merges (L4-followups and SB-6 both own `crates/search/src/files.rs`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
 1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z; all merged since).
 2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars has merged as #373 (it was a recorded exception: it shared `crates/api/src/digest.rs` with #367, which merged first).
 3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first.
@@ -364,7 +364,7 @@ A non-Claude agent picking up the work maps this to "use your strongest model fo
 ### 1.2 How a helper runs
 - **Launch:** the runner starts each slice in its own cloud session (`runner/README.md`). Inside a session, a helper is an Agent with `isolation: "worktree"`, `run_in_background: true` and the model above, branched from `main`.
 - **Brief:** every slice gets one, using the template in §7. The runner keeps them on the `runner-state` branch under `briefs/`.
-- **Cap:** at most four helper slices at a time in the current phase (owner §2.25). `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
+- **Cap:** at most eight slices in total at a time in the current phase (owner §2.33). `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
 - **Review gate** (for every result):
   - read the whole diff;
   - run `npm run check`, `npx vitest run`, `npx size-limit` and the affected Playwright specs;
