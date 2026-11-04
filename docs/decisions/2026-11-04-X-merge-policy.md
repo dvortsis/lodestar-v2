@@ -93,6 +93,11 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 - **Under the frozen rule, nothing passes.** B and C's means are above A's.
 - **Every arm shows steps of 20–45 MiB.** The tuned policy leaves two to three times the segments and doesn't make the steps smaller.
 - **A's slope at 150k (about 2 MiB/1k) matches its slope at 20k.** There's no sign that the ingest path's growth rises with the corpus.
+- **dhat (gnu), the same 150k seed, then a 10k drip, 1 run each for A and C:**
+  - The live heap is flat: A grows 1.6 KiB/1k [−1.1, 4.4] and ends at 5.1 MiB; C grows 10.1 KiB/1k [4.5, 15.7] and ends at 5.4 MiB.
+  - The high-water is 44.7 MiB in A and 42.9 MiB in C. Above the floor, the median per row is 35.1 / 33.6 MiB and the largest 39.6 / 37.5 MiB.
+  - The same high-water as at 20k: a merge's heap peak doesn't scale with the corpus. Index data is mapped, not heap.
+  - The 20–45 MiB anonymous steps are therefore the allocator keeping the high-water's pages after the arenas are freed, which the policy doesn't change.
 
 ## What it means
 - **At 1 document per commit, the merge policy is not r4's retainer.** All of A's ingest-path growth converts to about 1.3–1.8 MiB/h at 665 torrents/h, about 2–2.7 KiB per torrent, at both 20k and 150k. r4's provisional 23 MiB/h is roughly 35 KiB per torrent at that pace, and its later fit of 12.88 MiB/h is roughly 20 KiB. So even removing the whole ingest-path growth would explain about a tenth of it, unless r4 indexes much faster than 665/h.
