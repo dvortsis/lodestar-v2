@@ -426,6 +426,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Filling them all isn't required.** A slot stays empty when no ready slice fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap or plan. That's the runner's judgment, as under §2.33. Review bandwidth stays the real limit: every slice still gets a fresh Opus review before merge.
     - §2.33's auto-approval and its "still for the owner" list are unchanged.
 
+37. **No Anna's Archive or LibGen plugins, and a legal notice rather than terms of use** (owner, 2026-11-04, legal-notice session). Asked whether plugins for Anna's Archive and LibGen should ship, given the US default judgments and injunctions against both sites (`docs/legal/2026-11-04-liability-review.md` §2.1), the owner answered: "We can skip Anna's Archive and LibGen plugins." In the same session the owner, after a second review found that a terms-of-use conflicts with the AGPL, asked for the model BitTorrent clients use and approved the result: "I would keep this two-document approach."
+    - **Neither plugin is built or listed.** The "Anna's Archive / LibGen importer (restricted consent)" item in `docs/build-plan.md` §0 and the Restricted row of architecture §18.7 are the runner's to update (`docs/decisions/2026-11-04-legal-terms.md`). The Restricted consent class stays for tracker-announce peer finding and any future high-risk source.
+    - **Lodestar ships a Legal Notice** (`docs/legal/legal-notice.md`, confirmed as read at first run) and operator guidance for public instances (`docs/legal/operator-guidance.md`), with no additional licence terms beyond the AGPL. Colorado counsel reviews both before v0.5.1.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
