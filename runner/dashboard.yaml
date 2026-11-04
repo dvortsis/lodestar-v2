@@ -481,7 +481,7 @@ roadmap:
   steps:
   - id: soak
     label: Unraid memory test (r3 failed, r4 running)
-    plain: The 24-hour test of release candidate 2 failed on memory growth (1.88 MiB an hour, upper bound 2.33, bar 2.0). A fix comes first, then a fresh test (r4) on release candidate 3.
+    plain: The 24-hour test of release candidate 2 failed on memory growth (1.88 MiB an hour, upper bound 2.33, bar 2.0). The fix is in release candidate 3, and its fresh test (r4) is running.
     col: 0
     row: 2
     members: []
@@ -775,9 +775,9 @@ owner_queue:
   when: After SRC-4 merges, before SRC-15b
 - n: 5
   type: decision
-  action: Does #367 (the filter stand-in re-judge, merged as 785b282c) join rc.3? Yes or no.
-  unblocks: What rc.3 contains, and so whether the r3 soak evidence still covers it
-  when: Before rc.3 is built
+  action: 'Settled: rc.3 was built without #367 (the filter stand-in re-judge, merged as 785b282c), as §2.31 set its contents. #367 ships in v0.5.2 from main. Say so only if you want it in v0.5.1, which would need an rc.4 and a fresh soak.'
+  unblocks: Nothing now; v0.5.2 carries it
+  when: Only if you want it in v0.5.1
 - n: 6
   type: action
   action: Create the nightly signing key and its environment
@@ -926,8 +926,8 @@ notes:
     text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.
   - label: Confirm the crawler measurement specification
     text: CR-SPEC freezes how every crawler run is measured. It needs your confirmation, including its open question O1, before the first acceptance analysis.
-  - label: Say whether #367 joins rc.3
-    text: The filter stand-in re-judge was merged after the release cut. Yes or no decides what rc.3 contains.
+  - label: '#367 ships in v0.5.2'
+    text: rc.3 was built without the filter stand-in re-judge, as you set its contents. It ships in v0.5.2 from main. Say so only if you want it in v0.5.1; that would mean an rc.4 and a fresh soak.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Optional
