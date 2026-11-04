@@ -3241,7 +3241,8 @@
     "2026-11-04T20:15Z #432 review MERGE but 2 PR-introduced leak regressions (Debug-form swallowing '://', '@<run>://' scheme) + '@secret/@' sent back for one round. #433 X-mem-gauges in review. X-merge-policy told (a) again.",
     "2026-11-04T20:45Z: owner answered the queue (relayed); recorded in PR #435 as \u00a72.37. Slot-cut trigger now records \u00a72.38.",
     "2026-11-04T20:55Z: #433 X-mem-gauges merged (b4fb3f87); #435 owner answers \u00a72.37 merged (f65f208d); main red in test (json_props lone-surrogate key, test bug), fix #439 reviewed MERGE, CI running.",
-    "2026-11-04T21:58Z: #439 main fix merged (b441119c); #434 X-thp-off merged (b926abd5), session archived; rc.4 candidates on main: X-thp-off, X-mem-gauges (+#442 pending), X-log-url-redact (#432 pending)."
+    "2026-11-04T21:58Z: #439 main fix merged (b441119c); #434 X-thp-off merged (b926abd5), session archived; rc.4 candidates on main: X-thp-off, X-mem-gauges (+#442 pending), X-log-url-redact (#432 pending).",
+    "2026-11-04T21:59Z: launched ENR-0 (session_01MMjhnBwsmF7AFXpDked4B1), brief briefs/ENR-0.md; unblocked by \u00a72.37 Q4."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4901,7 +4902,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T21:58Z",
+    "updated": "2026-11-04T21:59Z",
     "items": [
       {
         "slot": 1,
@@ -4918,6 +4919,14 @@
         "agent": "claude",
         "doing": "PR #432 round 4: closing the last cases where it shows a secret main hides, and keeping magnet links fully hidden.",
         "since": "2026-11-04T18:46Z"
+      },
+      {
+        "slot": 3,
+        "slice": "ENR-0",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Adding version 2 of the stored claim format, with an optional adult-enrichment section (names only, no performer ids).",
+        "since": "2026-11-04T21:59Z"
       },
       {
         "slot": 4,
