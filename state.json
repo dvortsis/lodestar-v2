@@ -3231,7 +3231,8 @@
     "2026-11-04T18:48Z X-mem-gauges: unsafe forbid blocks SQLite memory FFI; runner chose (b) ship without, owner asked re narrow exception.",
     "2026-11-04T19:00Z #425 (owner's soak memory review, corrected at 75f7031e) re-review MERGE, merged ce7f1252. Owner asked re scrubbing America/Denver from 10 files on main; runner recommended a UTC-only rule going forward instead.",
     "2026-11-04T19:02Z X-merge-policy round 2 (150k seed, musl): no arm passes; A ~2 MiB/1k torrents = ~1.3 MiB/h at r4's ~683/h vs 12.9 provisional. Indexing path ruled out as r4's main cause. M2 cadence (C) no better at 150k, so M2 is judged on disk/CPU, not memory. Session told to close out with harness+decisions PR.",
-    "2026-11-04T19:08Z Owner: Yes to the narrow store-crate unsafe exception; follow runner's UTC-only recommendation. Recorded as \u00a72.35 in runner PR #428 (review and CI running). X-mem-gauges told to add the SQLite half."
+    "2026-11-04T19:08Z Owner: Yes to the narrow store-crate unsafe exception; follow runner's UTC-only recommendation. Recorded as \u00a72.35 in runner PR #428 (review and CI running). X-mem-gauges told to add the SQLite half.",
+    "2026-11-04T19:12Z #426 SRC-3 review CHANGES: stored filter rows with source:/verified:/network: words fail open on load (load.rs). Runner approved load.rs shared edit after #424 (RP-0 owns load.rs) merges; also percolator without_unverified and explicit DocProvenance.verified."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4233,7 +4234,8 @@
     "X-log-url-redact: decide backport to release/v0.5.1 once the cause is known (log-redaction leak, class B)",
     "Runner docs PR: add X-log-url-redact to slices.yaml and ws placement",
     "X-commit-cadence (M2): memory benefit not shown at 150k (X-merge-policy round 2); justify on disk writes/CPU only; lower priority than X-thp-off and X-mem-gauges for rc.4.",
-    "X-sqlite-malloc: unblocked by owner \u00a72.35 (sqlite3_config(SQLITE_CONFIG_MALLOC) via mimalloc, before first connection, in lodestar-store only). Brief and launch after X-mem-gauges measures the SQLite heap; rc.4 candidate."
+    "X-sqlite-malloc: unblocked by owner \u00a72.35 (sqlite3_config(SQLITE_CONFIG_MALLOC) via mimalloc, before first connection, in lodestar-store only). Brief and launch after X-mem-gauges measures the SQLite heap; rc.4 candidate.",
+    "SRC-3b notes (from #426 review): fields_incomplete notice on /facets and /export if SRC-3 doesn't add it; SB-6 import->producer test; case-only plugin id collisions in source:"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
