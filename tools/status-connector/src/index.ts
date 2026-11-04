@@ -39,13 +39,14 @@ const failures = new Map<string, { at: number; message: string }>();
 const ERROR_SECONDS = 30;
 const cacheStore = (): Cache | null => (typeof caches !== 'undefined' && (caches as any).default ? (caches as any).default : null);
 
-async function ghFetch(env: Env, path: string, raw: boolean): Promise<any> {
+async function ghFetch(env: Env, path: string, raw: boolean, retry = true): Promise<any> {
   const r = await fetch('https://api.github.com' + path, {
     headers: {
       Authorization: 'Bearer ' + env.GITHUB_TOKEN, 'User-Agent': 'lodestar-status-connector', 'X-GitHub-Api-Version': '2022-11-28',
       Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
     },
   });
+  if (r.status >= 500 && retry) return ghFetch(env, path, raw, false); // GitHub's own timeouts (502, 503, 522) usually pass on a second try
   if (!r.ok) throw new Error(`GitHub ${r.status} for ${path}`);
   return raw ? r.text() : r.json();
 }
@@ -70,16 +71,19 @@ async function gh(env: Env, path: string, ttl: number, raw = false): Promise<any
 
 const toPR = (p: any): PR => ({ number: p.number, title: p.title, head_ref: p.head?.ref || '', merged_at: p.merged_at, body: p.body, user: p.user?.login });
 
-async function closedPRs(env: Env, ttl: number): Promise<any[]> {
+async function closedPRs(env: Env, ttl: number): Promise<{ all: any[]; incomplete: boolean }> {
   // newest first; keep going until a page is not full, so no merged slice drops out as the repository grows.
-  // Older pages change rarely, so they are cached ten times longer than the first.
-  const all: any[] = [];
+  // Older pages change rarely, so they are cached ten times longer than the first. The first page is required; if an older
+  // page fails, the plan is built from what GitHub did return and says so, instead of every tool failing on one timeout.
+  const all: any[] = []; let incomplete = false;
   for (let start = 1; start <= MAX_CLOSED_PAGES; start += 4) {
-    const pages = await Promise.all([0, 1, 2, 3].filter((k) => start + k <= MAX_CLOSED_PAGES).map((k) => gh(env, `/repos/${env.GITHUB_REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=${start + k}`, start + k === 1 ? ttl : ttl * 10)));
-    for (const pg of pages) all.push(...pg);
-    if (pages[pages.length - 1].length < 100 || pages.some((pg) => pg.length < 100)) break;
+    const results = await Promise.allSettled([0, 1, 2, 3].filter((k) => start + k <= MAX_CLOSED_PAGES).map((k) => gh(env, `/repos/${env.GITHUB_REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=${start + k}`, start + k === 1 ? ttl : ttl * 10)));
+    if (start === 1 && results[0].status === 'rejected') throw (results[0] as PromiseRejectedResult).reason;
+    let full = true;
+    for (const r of results) { if (r.status === 'fulfilled') { all.push(...r.value); if (r.value.length < 100) full = false; } else { incomplete = true; full = false; } }
+    if (!full) break;
   }
-  return all;
+  return { all, incomplete };
 }
 
 let memo: { at: number; plan: any } | null = null;
@@ -103,7 +107,7 @@ async function load(env: Env) {
   const refs = wantsRefs ? await Promise.all([gh(env, `/repos/${repo}/git/matching-refs/heads/release/`, ttl), gh(env, `/repos/${repo}/git/matching-refs/tags/?per_page=100`, ttl * 5)]).then(([h, t]) => ({ branches: (h as any[]).map((r) => String(r.ref).replace('refs/heads/', '')), tags: (t as any[]).map((r) => String(r.ref).replace('refs/tags/', '')) })).catch(() => undefined) : undefined;
   const plan = buildPlan({
     slices: y.slices, external: y.external || {}, cfg, refs, runnerState: state,
-    mergedPRs: closed.filter((p: any) => p.merged_at).map(toPR), closedPRs: closed.filter((p: any) => !p.merged_at).map(toPR), openPRs: open.map(toPR),
+    mergedPRs: closed.all.filter((p: any) => p.merged_at).map(toPR), closedPRs: closed.all.filter((p: any) => !p.merged_at).map(toPR), historyIncomplete: closed.incomplete, openPRs: open.map(toPR),
     branches: (branches as any[]).map((b) => String(b.ref).replace('refs/heads/slice/', '')),
     mainSha: main.sha, mainDate: main.commit?.committer?.date || '', now: new Date().toISOString(),
   });

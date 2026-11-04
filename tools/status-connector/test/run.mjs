@@ -24,7 +24,7 @@ let github = {
     pr(5, 'SRC-12: Scrape', 'slice/SRC-12', '', false),                                  // closed, never merged
   ],
   open: [pr(3, 'SRC-5: Per-plugin egress', 'agent-x/egress', '', false)],                // open PR
-  tags: [], tagsFail: false,
+  tags: [], tagsFail: false, page2Fail: false,
   refs: [{ ref: 'refs/heads/slice/SRC-9' }, { ref: 'refs/heads/slice/SRC-12' }],            // branch only; SRC-12's PR was closed unmerged
   fail: false,
 };
@@ -37,6 +37,7 @@ globalThis.fetch = async (url) => {
   if (p.includes('/git/matching-refs/heads/release/')) return json([]);
   if (p.endsWith('/contents/state.json')) return new Response('missing', { status: 404 }); // optional
   if (p.endsWith('/pulls') && u.searchParams.get('state') === 'open') return json(github.open);
+  if (p.endsWith('/pulls') && github.page2Fail && u.searchParams.get('page') === '2') return new Response('timeout', { status: 522 });
   if (p.endsWith('/pulls')) return json(u.searchParams.get('page') === '1' ? github.closed : []);
   if (p.includes('/git/matching-refs')) return json(github.refs);
   if (p.endsWith('/commits/main')) return json({ sha: 'abcdef0123456789', commit: { committer: { date: '2026-11-02T00:00:00Z' } } });
@@ -125,6 +126,12 @@ await (await call({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name:
 assert.ok(pagesAsked.includes(2), 'page 2 of closed pull requests is read when page 1 is full');
 globalThis.fetch = realFetch; github.closed = [];
 
+// one timed-out page of older closed pull requests must not take every tool down: the plan is built without it and says so
+github.page2Fail = true;
+const partial = await call({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'plan_meta', arguments: {} } }, '/mcp/' + SECRET, 'POST', { ...env, CACHE_SECONDS: '0', GITHUB_REPO: 'o/r3' });
+const partialRes = (await partial.json()).result; assert.equal(partialRes.isError, false, 'a failed older page is not fatal');
+assert.ok(JSON.parse(partialRes.content[0].text).some((r) => r.key === 'warning' && r.label === 'Merge history incomplete'), 'and it is reported');
+github.page2Fail = false;
 github.fail = true; // a GitHub failure is reported to the caller, not hidden
 const failed = (await (await worker.fetch(new Request('https://x/mcp/' + SECRET + '', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'plan_meta' } }) }), { ...env, CACHE_SECONDS: '0' })).json()).result;
 assert.equal(failed.isError, true); assert.match(failed.content[0].text, /Could not read GitHub/);

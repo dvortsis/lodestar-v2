@@ -8,6 +8,7 @@ export interface Inputs {
   runnerState: any | null;       // runner-state/state.json (optional; Claude runner only)
   mergedPRs: PR[];
   closedPRs?: PR[];              // closed without merging
+  historyIncomplete?: boolean;   // GitHub did not answer for some older pages of closed pull requests
   openPRs: PR[];
   branches: string[];            // ids from refs/heads/slice/<id>
   refs?: { branches: string[]; tags: string[] }; // names GitHub knows, for conditions with `auto:`
@@ -206,6 +207,7 @@ export function buildPlan(inp: Inputs) {
     if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner/dashboard.yaml slots');
   }
 
+  if (inp.historyIncomplete) warn('Merge history incomplete', 'yes', 'GitHub did not answer for some older pages of closed pull requests, so some finished slices may show as not yet merged until it does');
   if (unplaced.length) warn('Slices not placed', String(unplaced.length), 'No placement rule covers: ' + unplaced.slice(0, 12).join(', ') + (unplaced.length > 12 ? ', …' : '') + '. Add them to placement: in runner/dashboard.yaml.');
   const metaRows: any[] = [
     { key: 'main', label: 'Main branch', value: inp.mainSha.slice(0, 8), note: inp.mainDate },
