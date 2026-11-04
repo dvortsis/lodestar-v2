@@ -46,8 +46,7 @@ fn build(r: &mut Reader<'_>, depth: usize) -> R<Value> {
             Err(TextError::Malformed) => Value::Bool(false),
         },
         Some(b'-' | b'0'..=b'9') => {
-            r.value()?;
-            let n = r.number()?;
+            let n = r.num()?;
             serde_json::from_str(n).unwrap_or(Value::Null)
         }
         Some(c) => {

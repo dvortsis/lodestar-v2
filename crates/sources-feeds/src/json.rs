@@ -6,7 +6,7 @@
 //! holds while reading, not after a whole tree is built. A parser walks
 //! the document itself: it opens the objects and arrays it knows with
 //! [`Walk::object`] and [`Walk::array`], reads the values it keeps with
-//! [`Reader::text`] and [`Reader::number`], and passes over the rest with
+//! [`Reader::text`] and [`Reader::num`], and passes over the rest with
 //! [`Reader::skip`], which is iterative and bounded by
 //! [`Limits::max_depth`]. A string is copied only when the parser asks for
 //! it, and its raw length is checked against [`Limits::max_text`] first;
@@ -56,8 +56,9 @@ pub enum TextError {
     Malformed,
 }
 
-/// A cursor over one JSON document.
-#[derive(Debug, Clone)]
+/// A cursor over one JSON document. Not `Clone`: a parser can't back up
+/// and re-read with fresh counters, so the caps bound all its work.
+#[derive(Debug)]
 pub struct Reader<'a> {
     s: &'a str,
     i: usize,
@@ -67,6 +68,7 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
+    /// A reader at the start of `s`, with nothing counted yet.
     pub fn new(s: &'a str, limits: Limits) -> Self {
         Reader {
             s,
@@ -77,6 +79,7 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// The caps this reader holds.
     pub fn limits(&self) -> &Limits {
         &self.l
     }
@@ -91,7 +94,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Takes `c`, which must be next.
-    pub fn eat(&mut self, c: u8) -> R<()> {
+    fn eat(&mut self, c: u8) -> R<()> {
         if self.peek() != Some(c) {
             return Err(Stop::Malformed);
         }
@@ -99,11 +102,9 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    /// Counts one value against [`Limits::max_values`]. [`Walk::object`],
-    /// [`Walk::array`], [`Self::skip`] and [`Self::text`] count their
-    /// own; a parser that reads a [`Self::number`] or [`Self::string`]
-    /// as a value counts it here.
-    pub fn value(&mut self) -> R<()> {
+    /// Counts one value against [`Limits::max_values`]. Every public read
+    /// counts its own, so a parser can't read past the cap.
+    fn value(&mut self) -> R<()> {
         self.values += 1;
         if self.values > self.l.max_values {
             return Err(Stop::Elements);
@@ -127,7 +128,9 @@ impl<'a> Reader<'a> {
             return false;
         }
         self.i += 1;
-        self.depth -= 1;
+        // Always paired with an `open` in the same call; saturating only
+        // so a broken `Walk::json` can't make it panic.
+        self.depth = self.depth.saturating_sub(1);
         true
     }
 
@@ -145,8 +148,8 @@ impl<'a> Reader<'a> {
 
     /// A string that is next, still escaped, without its quotes. Escapes
     /// are checked, not decoded ([`decode`]); the text is valid UTF-8
-    /// already. It isn't counted as a value.
-    pub fn string(&mut self) -> R<&'a str> {
+    /// already. It isn't counted: it also reads keys, which aren't values.
+    fn string(&mut self) -> R<&'a str> {
         self.eat(b'"')?;
         let (s, start) = (self.s, self.i);
         let b = s.as_bytes();
@@ -173,9 +176,8 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// A number that is next, as written (RFC 8259 grammar). It isn't
-    /// counted as a value.
-    pub fn number(&mut self) -> R<&'a str> {
+    /// A number that is next, as written (RFC 8259 grammar), uncounted.
+    fn number(&mut self) -> R<&'a str> {
         let (s, start) = (self.s, self.i);
         let b = s.as_bytes();
         let digits = |i: &mut usize| {
@@ -300,6 +302,13 @@ impl<'a> Reader<'a> {
         Ok(decode(raw).ok_or(TextError::Malformed))
     }
 
+    /// A number value that is next, counted, as written (RFC 8259
+    /// grammar). The parser converts it.
+    pub fn num(&mut self) -> R<&'a str> {
+        self.value()?;
+        self.number()
+    }
+
     /// Nothing but whitespace is left: the end of the document.
     pub fn end(&mut self) -> R<()> {
         match self.peek() {
@@ -312,6 +321,7 @@ impl<'a> Reader<'a> {
 /// Walking objects and arrays, for [`Reader`] and for a parser that holds
 /// one, so each element's callback gets the parser's own state too.
 pub trait Walk<'a>: Sized {
+    /// The parser's one reader. Every call must return the same one.
     fn json(&mut self) -> &mut Reader<'a>;
 
     /// An object that is next, handing each key (still escaped) to `f`,
@@ -502,6 +512,13 @@ mod tests {
             "1 2",
             "[] x",
             "NaN",
+            "}",
+            "]",
+            "True",
+            "\"a\tb\"",
+            "\u{c}1",
+            "\u{b}1",
+            "1\u{a0}",
         ] {
             assert_eq!(skip_all(bad, WIDE), Err(Stop::Malformed), "{bad:?}");
         }
@@ -608,11 +625,18 @@ mod tests {
         let mut n = Reader::new("[-1.5e3]", WIDE);
         let mut num = "";
         n.array(|r, _| {
-            num = r.number()?;
+            num = r.num()?;
             Ok(())
         })
         .unwrap();
         assert_eq!(num, "-1.5e3");
+        // Numbers count as values like everything else.
+        let l = Limits {
+            max_values: 3,
+            ..WIDE
+        };
+        let mut r = Reader::new("[1,2,3]", l);
+        assert_eq!(r.array(|r, _| r.num().map(drop)), Err(Stop::Elements));
     }
 
     #[test]

@@ -297,10 +297,7 @@ impl Parser<'_, '_> {
     /// A count: a number or a string of up to 20 digits, nothing else.
     fn count(&mut self, d: &mut Draft) -> R<Option<u64>> {
         match self.j.peek() {
-            Some(b'-' | b'0'..=b'9') => {
-                self.j.value()?;
-                Ok(digits(self.j.number()?))
-            }
+            Some(b'-' | b'0'..=b'9') => Ok(digits(self.j.num()?)),
             Some(b'"') => Ok(self.text(d)?.as_deref().map(str::trim).and_then(digits)),
             _ => self.skip_in(d).map(|()| None),
         }

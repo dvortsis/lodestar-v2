@@ -102,10 +102,7 @@ fn read(r: &mut Reader<'_>) -> R<V> {
             Err(TextError::OverCap) => V::Str("<over>".into()),
             Err(TextError::Malformed) => V::Str("<bad>".into()),
         },
-        Some(b'-' | b'0'..=b'9') => {
-            r.value()?;
-            V::Num(r.number()?.to_owned())
-        }
+        Some(b'-' | b'0'..=b'9') => V::Num(r.num()?.to_owned()),
         Some(b't') => {
             r.skip()?;
             V::Bool(true)
