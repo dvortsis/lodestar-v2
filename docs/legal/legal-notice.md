@@ -64,9 +64,17 @@ Unless required by applicable law or agreed to in writing, no copyright holder o
 This limitation applies only as far as the law allows. It does not limit liability for fraud, for wilful and wanton conduct, or for anything the law that applies to you says can't be limited, and it doesn't take away rights that consumer-protection law gives you. For New Jersey residents, no part of this notice limits liability for fraud, wilful or grossly negligent conduct, or violation of a statute, and sections 7 and 8 apply only as New Jersey law permits; every other section applies in full. For California residents, nothing here exempts anyone from liability for their own fraud, wilful injury or violation of law (Civil Code section 1668). Mandatory law of your country applies regardless of this notice.
 
 ## 9. Reporting and contact
-- **Bugs, questions and complaints about the software or its documents:** open an issue at https://github.com/dvortsis/lodestar-v2.
-- **Security vulnerabilities and sensitive reports,** including suspected child-exploitation material reaching an index: use the private contact in the repository's `SECURITY.md`, not a public issue. **Don't obtain suspected material to investigate it, and don't attach it to a bug report, an issue or a support message.** In the United States, report child-exploitation material to the NCMEC CyberTipline (https://report.cybertip.org); elsewhere, to your national hotline. If you run a service with statutory reporting or preservation duties, follow its secure reporting procedure (operator guidance, section 4).
-- **Complaints about what a particular copy of Lodestar indexes or serves** go to the person who runs that copy (section 6).
+**Reports about indexed material.** Lodestar's maintainers distribute the software and do not operate independently hosted instances. They cannot remove entries from those instances or determine who originally published the underlying material.
+
+- Report suspected child sexual exploitation directly to the NCMEC CyberTipline (https://report.cybertip.org) in the United States, or to the appropriate reporting authority in your country.
+- Report other suspected crimes to the appropriate law-enforcement agency.
+- Requests to remove entries from a particular instance go to that instance's operator (section 6).
+
+Do not download suspected illegal material to investigate it, send it to Lodestar's maintainers, or attach it to public issues. Follow the reporting authority's instructions. This section directs reports; it cannot waive a reporting or preservation duty that independently applies to you as the operator of a service (operator guidance, section 4).
+
+**Security flaws in Lodestar's code:** use the project's private vulnerability reporting on GitHub (the repository's Security tab), not a public issue.
+
+**Bugs, questions and everything else about the software or its documents:** open an issue at https://github.com/dvortsis/lodestar-v2.
 
 ## 10. Changes to this notice
 The version and date are at the top. When a new version changes this notice in substance, your copy shows it again before you continue. A new version never changes your rights under the AGPL.
