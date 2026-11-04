@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T17:51:00Z",
+ "updated_at": "2026-11-04T18:05:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2740,7 +2740,7 @@
    "session": "session_01MMjhn93kPiUUHUcHmeaEZc",
    "launched": "2026-11-04T15:20:00Z",
    "brief": "briefs/X-merge-policy.md",
-   "note": "r4 contingency; phase 1 measurement; index.rs after SB-6 merges"
+   "note": "Phase 1 NEGATIVE: A 2.68 / B 2.38 / C 1.49 / D1(mimalloc v2) 1.61 MiB per 1k torrents, frozen rule fails all; dhat live heap flat, peak ~40 MiB not corpus-scaled. Ingest path ~2.7 KiB/torrent vs r4 ~19 KiB/torrent. Runner: (a) docs+harness PR only."
   },
   "SB-6b": {
    "status": "merged",
@@ -3192,7 +3192,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T17:51:00Z",
+ "last_heartbeat": "2026-11-04T18:05:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3217,7 +3217,8 @@
   "2026-11-04T16:24:00Z #418 SB-6b merged (9887ab52). SRC-3 launched in slot 1. X-merge-policy cleared for index.rs after its phase-1 report.",
   "2026-11-04T16:58:00Z #414 SRC-11 merged (08e32a13). ENR-2a brief written for slot 2. X-search-files-3 waits for #420 (files.rs). SRC-3b recorded as follow-up.",
   "2026-11-04T17:43:00Z #420 L4-followups merged (fc324666). X-search-files-3 launched in slot 7.",
-  "2026-11-04T17:51:00Z #419 SRC-8b merged (36e61ff2). SRC-10d relaunched on it. r4 likely fail (provisional 12.9 MiB/h); X-merge-policy top priority."
+  "2026-11-04T17:51:00Z #419 SRC-8b merged (36e61ff2). SRC-10d relaunched on it. r4 likely fail (provisional 12.9 MiB/h); X-merge-policy top priority.",
+  "2026-11-04T18:05:00Z X-merge-policy negative: indexing path explains <1/7 of r4 slope. Next lead: real-network fetch/crawler path or allocator/THP; read-only /proc status+smaps requested via dashboard session."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
