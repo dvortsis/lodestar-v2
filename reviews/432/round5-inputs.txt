@@ -1,0 +1,14 @@
+see http://h/x]magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see http://h/x,magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see udp://t.example:80/announce,magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see (http://h/x)magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see http://h/x'magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see http://h/magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see http://h/x?m=magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see http://h/x#magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see https://h:443/a,magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=http://trk.example/a ok
+see https://[::1]/a,magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=http://trk.example/a ok
+see https://u@h/a,magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=http://trk.example/a ok
+see magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see http:magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
+see ://magnet:?xt=urn:btih:abc&dn=SECRETDN&tr=udp://trk.example/a ok
