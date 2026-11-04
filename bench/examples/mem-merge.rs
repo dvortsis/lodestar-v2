@@ -3,12 +3,13 @@
 //!
 //! The production writers (`SearchIndex::writer`) set no merge policy, so
 //! both indexes run tantivy's default `LogMergePolicy`: every segment under
-//! 10,000 documents sits in one level, and a level of eight segments is
-//! merged. At one document per commit that re-merges the whole corpus about
-//! every eight commits until it passes ~17k documents. This harness builds
+//! 10,000 documents sits in one level, and a level holding at least eight
+//! segments not already merging is merged whole. At one document per commit
+//! that re-merges the whole corpus about every seven commits until it passes
+//! ~16.8k documents (10,000 × 2^0.75). This harness builds
 //! the two writers itself, exactly as `Side::new` does (one indexing thread,
-//! the same heap split, the real schemas, tokenizer and file-index
-//! settings, the same commit order and payload, a manual reader reload and
+//! the same heap split, the real schemas, the name and trigram tokenizers and
+//! the file-index settings, the same commit order and payload, a manual reader reload and
 //! #406's mmap-cache prune after every commit), so the policy can be set.
 //!
 //! Arms (one per process):
@@ -97,6 +98,9 @@ impl Half {
         index
             .tokenizers()
             .register(NAME_TOKENIZER, NameTokenizer::default());
+        index
+            .tokenizers()
+            .register(schema::TRIGRAM_TOKENIZER, schema::trigram_analyzer());
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -115,7 +119,9 @@ impl Half {
 
     fn commit(&mut self) {
         let mut prepared = self.writer.prepare_commit().expect("prepare");
-        prepared.set_payload(&format!("lodestar:{};reindex:0", self.last_id));
+        // `Side::commit`'s watermark payload, without the population part,
+        // which `payload_of` treats as optional.
+        prepared.set_payload(&format!("lodestar-watermark:{};reindex:0", self.last_id));
         prepared.commit().expect("commit");
         self.reader.reload().expect("reload");
     }
@@ -331,7 +337,9 @@ fn ingest(tuned: Option<Tuned>, n: usize, docs: usize, seed: usize) {
             last_segs[i] = segs;
         }
         if indexed >= next_row {
-            next_row += 250;
+            while next_row <= indexed {
+                next_row += 250;
+            }
             let ((st, mt), (sf, mf)) = (w.main.segments(), w.files.segments());
             println!(
                 "{indexed},{commits},{},{least},{},{st},{mt},{sf},{mf},{},{},{:.1}",
@@ -348,6 +356,9 @@ fn ingest(tuned: Option<Tuned>, n: usize, docs: usize, seed: usize) {
 
 /// p50 and p95 of `d`, in milliseconds.
 fn percentiles(d: &mut [Duration]) -> (f64, f64) {
+    if d.is_empty() {
+        return (f64::NAN, f64::NAN);
+    }
     d.sort();
     let at = |q: f64| d[((d.len() - 1) as f64 * q) as usize].as_secs_f64() * 1e3;
     (at(0.50), at(0.95))
@@ -366,10 +377,9 @@ fn latency(tuned: Option<Tuned>, n: usize, docs: usize) {
     insert(&mut store, &mut generator, 50);
     w.catch_up(&mut store, 50);
     w.commit();
-    let search = SearchIndex::open(&dir).expect("search index");
     let stop = Arc::new(AtomicBool::new(false));
     let searcher = {
-        let stop = stop.clone();
+        let (stop, dir) = (stop.clone(), dir.clone());
         std::thread::spawn(move || {
             let queries = [
                 "season",
@@ -379,7 +389,10 @@ fn latency(tuned: Option<Tuned>, n: usize, docs: usize) {
             ];
             let mut took = Vec::new();
             while !stop.load(Ordering::Relaxed) {
-                search.refresh().expect("refresh");
+                // Reopened each round: `refresh` reloads only the torrent
+                // reader, and file clauses must see the file index's
+                // current segments too. Only the searches are timed.
+                let search = SearchIndex::open(&dir).expect("search index");
                 for q in queries {
                     let ast = parse(q).expect("query");
                     let t = Instant::now();
@@ -448,6 +461,7 @@ fn fresh(tuned: Option<Tuned>, secs: u64, per_hour: f64, every: f64) {
             std::thread::sleep(poll);
         }
     }
+    assert!(!lat.is_empty(), "no commit in {secs} s: run longer");
     lat.sort();
     let at = |q: f64| lat[((lat.len() - 1) as f64 * q) as usize].as_secs_f64();
     println!(
