@@ -418,7 +418,8 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - one `sqlite3_config(SQLITE_CONFIG_MALLOC, …)` call before the first connection opens, which routes SQLite's allocations through mimalloc (X-sqlite-malloc). The memory-routing slice was named in the question.
 
       Each `allow` sits on the smallest possible block, with a `// SAFETY:` comment. Each PR that adds one runs `/security-review` and records it in its decisions file. Any other `unsafe`, in this crate or elsewhere, still needs the owner.
-    - **Times in records are UTC.** New docs, reviews, soak notes and evidence give times in UTC (`Z`), never a local time zone, offset or place. The ten existing files on `main` that name a local time zone stay as they are, because git history keeps them anyway (runner's recommendation, accepted).
+    - **Not covered: the allocator callbacks.** `SQLITE_CONFIG_MALLOC` takes a `sqlite3_mem_methods` table of `extern "C"` callbacks (xMalloc, xFree, xRealloc, xSize, xRoundup, xInit, xShutdown). Each of those needs `unsafe` of its own and would call mimalloc through a new `libmimalloc-sys` dependency. The runner had described the routing fix as one start-up call, which understated it (corrected by #428's review). So before X-sqlite-malloc launches, the runner brings its full `unsafe` surface to the owner, or a route with no `unsafe` (for example mimalloc's `override` feature or a build-time flag).
+    - **Times in records are UTC.** New docs, reviews, soak notes and evidence give times in UTC (`Z`), never a local time zone, offset or place. The existing files on `main` that name a local time zone stay as they are, because git history keeps them anyway (runner's recommendation, accepted).
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
