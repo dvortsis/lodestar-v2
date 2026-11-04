@@ -1433,27 +1433,39 @@ impl IdsWeight {
     fn matches(&self, reader: &SegmentReader) -> tantivy::Result<BitSet> {
         let column = reader.fast_fields().u64("id")?;
         let mut set = BitSet::with_max_value(reader.max_doc());
-        match self.0.union() {
-            Some(ids) => {
-                let max = ids.max_value();
-                for doc in 0..reader.max_doc() {
-                    if column
-                        .first(doc)
-                        .is_some_and(|id| id < u64::from(max) && ids.contains(id as u32))
-                    {
-                        set.insert(doc);
-                    }
-                }
-            }
+        if self.0.is_empty() {
+            return Ok(set);
+        }
+        let union = self.0.union();
+        let hit = |id: u64| match union {
+            Some(ids) => id < u64::from(ids.max_value()) && ids.contains(id as u32),
             // Ids past 4 billion: slower, but still right.
-            None if !self.0.is_empty() => {
-                for doc in 0..reader.max_doc() {
-                    if column.first(doc).is_some_and(|id| self.0.contains(id)) {
-                        set.insert(doc);
+            None => self.0.contains(id),
+        };
+        // Every torrent has one id, so the column is normally full: read
+        // its values a block at a time rather than one lookup a document
+        // (at 10M, the per-document lookups were most of the join,
+        // X-search-files-3).
+        const JOIN_BLOCK: usize = 1024;
+        if matches!(column.index, tantivy::columnar::ColumnIndex::Full) {
+            let mut vals = [0u64; JOIN_BLOCK];
+            let mut at = 0u32;
+            while at < reader.max_doc() {
+                let n = (reader.max_doc() - at).min(JOIN_BLOCK as u32) as usize;
+                column.values.get_range(u64::from(at), &mut vals[..n]);
+                for (i, id) in vals[..n].iter().enumerate() {
+                    if hit(*id) {
+                        set.insert(at + i as u32);
                     }
                 }
+                at += n as u32;
             }
-            None => {}
+        } else {
+            for doc in 0..reader.max_doc() {
+                if column.first(doc).is_some_and(hit) {
+                    set.insert(doc);
+                }
+            }
         }
         Ok(set)
     }
@@ -2199,6 +2211,44 @@ mod scan_tests {
                 assert_eq!(cut, whole, "{key} in pieces of {piece_docs}");
             }
         }
+    }
+
+    /// The join reads the torrent index's id column a block at a time:
+    /// across block edges, with a partial last block, it marks exactly
+    /// the documents whose id is in the set.
+    #[test]
+    fn the_join_marks_each_document_whose_id_is_in_the_set() {
+        let mut builder = Schema::builder();
+        let id = builder.add_u64_field("id", FAST);
+        let index = tantivy::Index::create_in_ram(builder.build());
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        // 2,500 documents (two full blocks and a partial one), ids out of
+        // order, as a merged segment's runs are.
+        let ids: Vec<u64> = (0..2_500u64).map(|d| (d * 7_919) % 10_007).collect();
+        for i in &ids {
+            let mut doc = TantivyDocument::new();
+            doc.add_u64(id, *i);
+            writer.add_document(doc).unwrap();
+        }
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let seg = &searcher.segment_readers()[0];
+        let wanted: Vec<u64> = (0..10_007).filter(|i| i % 3 == 0).collect();
+        let set = IdSet {
+            parts: vec![Arc::new(IdPart::from_sorted(wanted))],
+            union: OnceLock::new(),
+        };
+        let weight = IdsWeight(Arc::new(set), crate::filter::SegmentSets::default());
+        let got = weight.matches(seg).unwrap();
+        for (doc, i) in ids.iter().enumerate() {
+            assert_eq!(got.contains(doc as u32), i % 3 == 0, "doc {doc} id {i}");
+        }
+        assert_eq!(got.len(), ids.iter().filter(|i| *i % 3 == 0).count());
+        // An empty set marks nothing.
+        let none = IdsWeight(Arc::default(), crate::filter::SegmentSets::default());
+        assert_eq!(none.matches(seg).unwrap().len(), 0);
     }
 
     /// One segment's scan fails while its siblings are mid-scan: the
