@@ -3239,7 +3239,8 @@
     "2026-11-04T19:49Z Owner: slot limit 12 (\u00a72.36, PR #430, relayed via dashboard session) now; owner then asked to cut to 4 at 2026-11-05 17:00 MST (00:00Z 11/6), letting running sessions finish. Scheduled reminder trig_01RJzwL47gE81BrRv2vR2cx4 will record \u00a72.37 and set phase_total 4. SRC-3 round 2 (24d31e6) in fresh review.",
     "2026-11-04T19:53Z #416 merged (c0ce96cb), #430 merged (056b4d78, \u00a72.36 twelve slots). Launched ENR-2b (session_01MMjhnBqhBrL3X41eaSHgxj), ENR-3 (session_01MMjhn8dEWiKCRixMDKF56q), ENR-6 (session_01MMjhn8uYXmxva3B17bFjJW) in slots 9-11; slot 12 empty (nothing ready without overlap).",
     "2026-11-04T20:15Z #432 review MERGE but 2 PR-introduced leak regressions (Debug-form swallowing '://', '@<run>://' scheme) + '@secret/@' sent back for one round. #433 X-mem-gauges in review. X-merge-policy told (a) again.",
-    "2026-11-04T20:45Z: owner answered the queue (relayed); recorded in PR #435 as \u00a72.37. Slot-cut trigger now records \u00a72.38."
+    "2026-11-04T20:45Z: owner answered the queue (relayed); recorded in PR #435 as \u00a72.37. Slot-cut trigger now records \u00a72.38.",
+    "2026-11-04T20:55Z: #433 X-mem-gauges merged (b4fb3f87); #435 owner answers \u00a72.37 merged (f65f208d); main red in test (json_props lone-surrogate key, test bug), fix #439 reviewed MERGE, CI running."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4897,7 +4898,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T19:53Z",
+    "updated": "2026-11-04T20:55Z",
     "items": [
       {
         "slot": 1,
@@ -4920,7 +4921,7 @@
         "slice": "X-thp-off",
         "role": "build",
         "agent": "claude",
-        "doing": "Turning off transparent huge pages for the worker, the leading lead on soak memory growth.",
+        "doing": "PR #434 reviewed (merge); waiting for green CI, then merge.",
         "since": "2026-11-04T18:17Z"
       },
       {
@@ -4941,11 +4942,11 @@
       },
       {
         "slot": 6,
-        "slice": "X-mem-gauges",
+        "slice": "X-mem-gauges-2",
         "role": "build",
         "agent": "claude",
-        "doing": "Adding memory gauges (SQLite, mimalloc, RSS, huge pages, segments) so the next soak shows where the memory sits.",
-        "since": "2026-11-04T18:43Z"
+        "doing": "Gauges merged (#433). Small follow-up: fixing the soak report table and two gauge edge cases before soak r5.",
+        "since": "2026-11-04T20:55Z"
       },
       {
         "slot": 7,
