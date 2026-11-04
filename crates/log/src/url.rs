@@ -77,8 +77,9 @@ fn passkey_like(segment: &str) -> bool {
         && segment.bytes().any(|b| b.is_ascii_digit())
 }
 
-/// `segment` with each passkey-like run between `.`, `:`, `,`, `=`, `+`
-/// and `~` removed: `/dl/<passkey>.torrent` keeps `.torrent`.
+/// `segment` with each passkey-like run (letters, digits, `-` and `_`,
+/// between any other characters) removed: `/dl/<passkey>.torrent` keeps
+/// `.torrent`, and `[<passkey>&` keeps `[` and `&`.
 fn redact_runs(segment: &str) -> String {
     if passkey_like(segment) {
         return REDACTED.to_string();
@@ -86,7 +87,7 @@ fn redact_runs(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     let mut run = String::new();
     for c in segment.chars() {
-        if matches!(c, '.' | ':' | ',' | '=' | '+' | '~') {
+        if !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) {
             out.push_str(if passkey_like(&run) { REDACTED } else { &run });
             run.clear();
             out.push(c);
@@ -159,7 +160,10 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
                 };
                 // A host with its query or fragment and no path.
                 let host_end = authority.find(['?', '#']).unwrap_or(authority.len());
-                out.push_str(&authority[..host_end]);
+                // Free text's host may be a path segment of what came
+                // before (`/https://<passkey>/announce`, `@passkey=<k>`): a
+                // real host label is never passkey-like or `name=value`.
+                out.push_str(&redact_runs(&redact_secrets(&authority[..host_end])));
                 if host_end < authority.len() {
                     // `host?query`: the query is the rest's start.
                     let mut joined = authority[host_end..].to_string();
@@ -206,7 +210,8 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
         if i > 0 {
             out.push('/');
         }
-        out.push_str(&redact_runs(segment));
+        // `name=value` credentials too (`/dl/passkey=<k>`).
+        out.push_str(&redact_runs(&redact_secrets(segment)));
     }
     if let Some(query) = query {
         if drop_query {
@@ -425,8 +430,7 @@ pub fn scrub_text(text: &str) -> String {
                 // soft end (`)`, `]`, `,`, `'`, `}`) up to it: the next `://`
                 // may be inside a raw password (`http://u:pa]://x@h/`).
                 Some(_) | None if from == i => {
-                    out.push_str(&hide_runs(&redact_secrets(&rest[..start])));
-                    out.push_str(&redact_runs(&rest[start..i]));
+                    out.push_str(&lead(rest, start, i));
                     out.push_str("://");
                     out.push_str(REDACTED);
                     pos += nested;
@@ -439,12 +443,18 @@ pub fn scrub_text(text: &str) -> String {
                         .take_while(|&(j, c)| j >= scan && scheme_char(c))
                         .last()
                         .map_or(nested, |(j, _)| j);
-                    scheme_start.max(scan)
+                    // After `=` it's a value (`@passkey=<k>://`): it stays
+                    // with this URL, whose host and path rules see the
+                    // name, and the next URL has no scheme.
+                    match rest[..scheme_start].ends_with('=') {
+                        true => nested,
+                        false => scheme_start.max(scan),
+                    }
                 }
             },
         };
-        out.push_str(&hide_runs(&redact_secrets(&rest[..start])));
-        out.push_str(&scrub_with(&rest[start..end], Form::Absolute, true));
+        out.push_str(&lead(rest, start, i));
+        out.push_str(&scrub_with(&rest[i..end.max(i)], Form::Absolute, true));
         pos += end;
         if end == start {
             // Nothing consumed (a bare "://"): step past it.
@@ -460,8 +470,24 @@ pub fn scrub_text(text: &str) -> String {
     out
 }
 
+/// The text before a URL in `rest`, its scheme (`start..i`) included,
+/// scrubbed as plain text: a credential's value glued to `://`
+/// (`passkey=<k>://`) would otherwise be taken for a scheme. A scheme
+/// that's left whole goes through the passkey rules too.
+fn lead(rest: &str, start: usize, i: usize) -> String {
+    let lead = hide_runs(&redact_secrets(&rest[..i]));
+    let scheme = &rest[start..i];
+    match lead.strip_suffix(scheme) {
+        Some(before) if !scheme.is_empty() => format!("{before}{}", redact_runs(scheme)),
+        _ => lead,
+    }
+}
+
+/// A scheme's characters, and `_`: a passkey glued to a scheme
+/// (`/dl/<pass_key>http://`) is backed over whole, so the passkey rules
+/// see all of it.
 fn scheme_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')
+    c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | '_')
 }
 
 /// Where a URL starting at `scan` in `rest` ends, if it ends before
@@ -556,39 +582,41 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
             to += if b[to] == b'\\' { 2 } else { 1 };
         }
         let to = to.min(b.len());
-        out.push_str(&text[copied..from]);
-        // A stray `path: "` that runs over a field (`path: "a fragment:
-        // Some("f")`) would keep that field's secret: it goes, and the field
-        // is read again from its name.
-        if path {
-            let field_at = |k: usize| {
-                !name_char(b[k - 1])
-                    && FIELDS
-                        .iter()
-                        .any(|(f, ..)| b[k..].starts_with(f.as_bytes()))
-            };
-            if let Some(k) = (from..to).find(|&k| field_at(k)) {
-                out.push_str(REDACTED);
-                copied = k;
-                i = k;
-                continue;
-            }
+        if from < copied {
+            // Inside a value already scrubbed (see below).
+            i = from;
+            continue;
         }
+        out.push_str(&text[copied..from]);
+        // A stray field that runs over another (`path: "a fragment:
+        // Some("f")`) would keep that one's secret: the value is scrubbed
+        // whole, and the field inside is read again from its name. Its
+        // opening quote is this value's closing one, so its value starts
+        // after `to`.
+        let field_at = |k: usize| {
+            !name_char(b[k - 1])
+                && FIELDS
+                    .iter()
+                    .any(|(f, ..)| b[k..].starts_with(f.as_bytes()))
+        };
+        let inner = (from..to).find(|&k| field_at(k));
         match path {
+            // An `@` hides the path, as the URL rules do (`finish`).
+            true if text[from..to].contains('@') => out.push_str(REDACTED),
             true => {
                 let mut scrubbed = String::new();
                 for (k, segment) in text[from..to].split('/').enumerate() {
                     if k > 0 {
                         scrubbed.push('/');
                     }
-                    scrubbed.push_str(&redact_runs(segment));
+                    scrubbed.push_str(&redact_runs(&redact_secrets(segment)));
                 }
                 out.push_str(&scrubbed);
             }
             false => out.push_str(REDACTED),
         }
         copied = to;
-        i = to.max(from);
+        i = inner.unwrap_or(to.max(from));
     }
     out.push_str(&text[copied..]);
     out.into()
@@ -1143,6 +1171,38 @@ mod tests {
             let s = scrub_text(text);
             assert!(!s.contains(secret), "{text} -> {s}");
         }
+        // A passkey after a nested scheme, or glued to one (security
+        // review).
+        for (text, secret) in [
+            (
+                "https://tracker.example/https://a1b2c3d4e5f6a7b8c9d0/announce",
+                "a1b2c3d4",
+            ),
+            (
+                "http://h/https://0123456789abcdef0123/announce",
+                "0123456789",
+            ),
+            (
+                "http://u:p@h/https://0123456789abcdef0123.example/",
+                "0123456789",
+            ),
+            (
+                "see http://u:p@h/dl/0123456789ab_cdefghttp://x.example/y",
+                "0123456789",
+            ),
+            // A credential's value glued to `://` isn't a scheme.
+            ("x passkey=Zq9S3cr3t_://", "S3cr3t"),
+            ("x passkey=Zq9S3cr3t://h/", "S3cr3t"),
+            ("token=S3cr3t://h/x", "S3cr3t"),
+            ("x://a@passkey=Zq9S3cr3t/y", "S3cr3t"),
+            ("http://h/dl/passkey=Zq9S3cr3t", "S3cr3t"),
+            ("x://a@[Zq0123456789abcdef/y", "0123456789"),
+            ("http://h/a&Zq0123456789abcdef&b", "0123456789"),
+            ("'://?'@passkey=Zq9S3cr3t://&.", "S3cr3t"),
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains(secret), "{text} -> {s}");
+        }
         // Each URL keeps what it would keep alone.
         assert_eq!(
             scrub_text("see http://h/a then://@https://u:p@h2/b"),
@@ -1212,8 +1272,17 @@ mod tests {
         }
         assert_eq!(
             scrub_text(r#"path: "a fragment: Some("fr4g")"#),
-            r#"path: "[redacted]fragment: Some("[redacted]")"#
+            r#"path: "a fragment: Some("[redacted]")"#
         );
+        // What a stray field covers never stays (security review).
+        for text in [
+            r#"path: "/dl/fragment: /ABCDEF0123456789abcdef.torrent""#,
+            r#"path: "/ann/query: x/0123456789abcdef0123/announce""#,
+            r#"path: "fragment: Some("fragment: Some("0123456789abcdefZ"#,
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("0123456789"), "{text} -> {s}");
+        }
         // A plain path still keeps its words.
         let plain = format!("{:?}", ::url::Url::parse("https://h/a/b").unwrap());
         assert!(scrub_text(&plain).contains(r#"path: "/a/b""#));
@@ -1278,6 +1347,8 @@ mod tests {
                 (format!("{before}{scheme}://host.example/a?x=1&passkey={secret}&y{after}"), &secret),
                 (format!("{before}{scheme}://host.example/ann/{passkey}/announce{after}"), &passkey),
                 (format!("{before}{scheme}://host.example/dl/{passkey}.torrent{after}"), &passkey),
+                (format!("{before}{scheme}://host.example/{scheme}://{passkey}/announce{after}"), &passkey),
+                (format!("{before}{scheme}://host.example/dl/{passkey}{scheme}://x{after}"), &passkey),
                 (format!("{before}{scheme}://u:{secret}{syntax}@host.example/x{after}"), &secret),
                 (format!("{before}{scheme}://u:{syntax}{secret}@host.example/x{after}"), &secret),
             ] {

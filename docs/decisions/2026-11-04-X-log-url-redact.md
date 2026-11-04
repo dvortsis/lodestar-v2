@@ -27,7 +27,14 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 - **An `@` in the path, once the authority is off, hides the whole path and its query** (`http://[redacted]@h/[redacted]`). That includes the request form: `/api/@me/x?token=1` shows as `/[redacted]`. It's intended over-redaction, not a bug. It's the rule the authority already applied to an `@` after a `/` (`https://registry.npmjs.org/@scope/pkg` shows as `https://[redacted]`), carried past an earlier `@`. Over-redaction is accepted ("never too little"). A path without an `@` is unchanged.
 - **A query pair with no `=` that holds a URL is redacted,** as a value holding one already was.
 - **The IPv6 look-ahead's bound steps back to a char boundary,** as the userinfo look-ahead's already did.
-- **A Debug-form path that holds another field's name at a word boundary goes from there,** and scanning starts again at that field, so its value is scrubbed by its own rule.
+- **A Debug-form value that holds another field's name at a word boundary is scrubbed whole by its own rule,** and scanning starts again at that field, so its value is scrubbed by its own rule too. A Debug path holding an `@` is hidden, as `finish` hides one.
+- **The security review and a differential fuzz against `main` found more places where splitting at a nested `://` showed what `main` hid.** Each is fixed:
+  - **A host goes through the passkey and `name=value` rules.** After a split, a path segment can sit in host position (`/https://<passkey>/announce`, `@passkey=<k>`). A real host label is never passkey-like or `name=value`.
+  - **Path segments go through the `name=value` rules too** (`/dl/passkey=<k>`).
+  - **A passkey-like run is any run of letters, digits, `-` and `_` between other characters,** not only between `.`, `:`, `,`, `=`, `+` and `~`, so `[<passkey>&` loses it.
+  - **The scheme back-up includes `_`,** so a passkey glued to a scheme (`/dl/<pass_key>http://`) is seen whole.
+  - **The text before a URL and its scheme are scrubbed together as plain text,** so a credential's value glued to `://` (`passkey=<k>://`, `token=<t>://h/`) isn't taken for a scheme. That's on `main` too.
+  - **A scheme run right after `=` stays with the URL before it** (`@passkey=<k>://`), and the next URL has no scheme.
 - **Every existing test passes unchanged.**
 
 ## Tests
@@ -44,7 +51,8 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 - **A new property, `scrubbing_never_panics_on_url_tokens`,** builds input from URL and Debug-form tokens, which `\PC` almost never produces.
 - **`scrubbing_never_panics_on_odd_input` gains the IPv6 boundary case,** which panics on `main`.
 - **`crates/log/proptest-regressions/url.txt` is new** (other crates already use these files). Its seed fails both properties on the unfixed code, and `planted_secrets_never_get_through` shrinks it to `before = "://@"`.
-- **1,000,000 cases of each property pass locally** in a release build.
+- **1,000,000 cases of each property pass locally** in a release build, and 500,000 on the final code.
+- **A differential fuzz against `main` was run once, locally** (3,000,000 inputs, not committed). Each input put a well-formed credentialed URL, a passkey path or a Debug-form `Url` among random URL and Debug-form tokens. On the final code, `scrub_text` showed the planted secret in none of them, and in none where `main` hid it. `main` panicked on some of them (the IPv6 case).
 
 ## Known gaps, left for a later brief
 - **A password that holds both a hard stop and a later `://`** (`http://u:pa ss://@h/x`) still shows `pa ss`. It does on `main` too: the look-ahead stops at the next `://`, which keeps the scan linear. The proptest's password syntax doesn't combine the two.
