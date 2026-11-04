@@ -48,7 +48,7 @@ def case(name, exchanges):
         if req_body is not None:
             open(base + ".req.body", "wb").write(req_body.encode())
 
-for old in ("qbittorrent_poll", "qbittorrent_refused", "qbittorrent_login_page", "qbittorrent_list_403", "transmission_poll", "deluge_poll"):
+for old in ("qbittorrent_poll", "qbittorrent_refused", "qbittorrent_login_page", "qbittorrent_list_403", "qbittorrent_over_budget", "transmission_poll", "deluge_poll"):
     shutil.rmtree(os.path.join(root, old), ignore_errors=True)
 J = lambda v: json.dumps(v, separators=(",", ":"), sort_keys=True)
 
@@ -61,6 +61,8 @@ login = ("POST %s/api/v2/auth/login\n%s\nContent-Type: application/x-www-form-ur
 def qinfo(rows):
     return ("GET %s/api/v2/torrents/info?sort=added_on&limit=1000&offset=0\n%s\nCookie: SID=REDACTED" % (Q, QH),
             "HTTP 200\nContent-Type: application/json", J(rows), None)
+logout = ("POST %s/api/v2/auth/logout\n%s\nCookie: SID=REDACTED" % (Q, QH),
+          "HTTP 200\nContent-Type: text/plain", "", None)
 def qexport(h, status, body):
     return ("GET %s/api/v2/torrents/export?hash=%s\n%s\nCookie: SID=REDACTED" % (Q, h, QH),
             "HTTP %d\nContent-Type: application/x-bittorrent" % status, body, None)
@@ -76,12 +78,15 @@ case("qbittorrent_poll", [
     # No metadata yet: qBittorrent answers 409.
     ("GET %s/api/v2/torrents/export?hash=%s\n%s\nCookie: SID=REDACTED" % (Q, H2, QH),
      "HTTP 409\nContent-Type: text/plain", "Torrent metadata hasn't been downloaded yet", None),
+    # Each poll ends its session.
+    logout,
     login,
     qinfo([row1, row2, row3, {"hash": "not-a-hash"}]),
     # The new torrent first; its `.torrent` is another torrent's.
     qexport(H3, 200, other),
     # Then the retry: the metadata has arrived.
     qexport(H2, 200, sintel),
+    logout,
 ])
 case("qbittorrent_refused", [
     (login[0], "HTTP 200\nContent-Type: text/plain", "Fails.", login[3]),
@@ -98,7 +103,17 @@ case("qbittorrent_list_403", [
     login,
     qinfo([row1]),
     qexport(H1, 200, bunny),
+    logout,
 ])
+# More new torrents than a poll's 20 exports: the 21st is found at once
+# with the list's claims, and exported (and found again) next poll.
+filler = ["%040x" % (0xf00 + i) for i in range(20)]
+rows = [{"hash": h, "name": "Filler %02d" % i, "total_size": 1000 + i} for i, h in enumerate(filler)]
+rows.append(row1)
+case("qbittorrent_over_budget",
+    [login, qinfo(rows)]
+    + [qexport(h, 200, other) for h in filler]
+    + [logout, login, qinfo(rows), qexport(H1, 200, bunny), logout])
 
 # Transmission 4.0 (RPC 17).
 T = "http://transmission.example:9091/transmission/rpc"

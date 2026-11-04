@@ -473,6 +473,13 @@ pub trait Lister: Send + Sync + fmt::Debug {
 
     /// The `.torrent` bytes of `hash`, or `Unsupported(Export)`.
     fn export<'a>(&'a self, hash: &'a str) -> BoxFuture<'a, Result<Vec<u8>, ClientError>>;
+
+    /// Ends the session a list opened, where the client keeps one per
+    /// login (qBittorrent). Best effort: a failure is ignored, and the
+    /// client expires the session anyway.
+    fn finish(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
 }
 
 /// The [`Lister`] for a configured client over `wire`. rTorrent and Aria2
@@ -2051,6 +2058,30 @@ mod tests {
         assert_eq!(d.list().await.unwrap().torrents[0].hash, H1);
         let seen = seen.lock().unwrap().clone();
         assert_eq!(header(&seen[2].1, "cookie"), Some("_session_id=s1"));
+    }
+
+    #[tokio::test]
+    async fn qbittorrent_logs_out_once_after_a_list() {
+        let wire = Script::new(vec![
+            (200, &[("Set-Cookie", "SID=abc")], b"Ok."),
+            (200, &[], b"[]"),
+            (200, &[], b""),
+        ]);
+        let l = lister(&config(ClientKind::QBittorrent), wire.clone()).unwrap();
+        l.list().await.unwrap();
+        l.finish().await;
+        // Nothing left to end: no second logout.
+        l.finish().await;
+        let seen = wire.seen();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[2].url, "http://nas.lan:8080/api/v2/auth/logout");
+        assert_eq!(
+            Script::header(&seen[2], "cookie").as_deref(),
+            Some("SID=abc")
+        );
+        // The other clients keep no per-login session.
+        let t = lister(&config(ClientKind::Transmission), Script::new(vec![])).unwrap();
+        t.finish().await;
     }
 
     #[test]

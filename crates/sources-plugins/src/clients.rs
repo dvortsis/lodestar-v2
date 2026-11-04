@@ -12,8 +12,10 @@
 //!    login, the others' list call) through `Client::poll`;
 //! 2. for each torrent not seen yet, asks the client for its `.torrent`
 //!    where it can (qBittorrent 4.5 and later), at most
-//!    [`EXPORTS_PER_POLL`] a poll; the rest wait for the next poll, and a
-//!    failed export is tried again for up to [`MAX_EXPORT_TRIES`] polls;
+//!    [`EXPORTS_PER_POLL`] a poll. A new torrent over that budget is found
+//!    at once with the list's claims, and its export waits for a later
+//!    poll; a failed export is tried again for up to [`MAX_EXPORT_TRIES`]
+//!    polls;
 //! 3. emits one key per new torrent ([`to_found`]), and again when a
 //!    retried export brings the `.torrent`'s claims.
 //!
@@ -329,8 +331,21 @@ impl Clients {
         // New torrents first, then the ones whose export is still wanted;
         // each at most once a poll.
         let mut handled = HashSet::new();
+        // Retries go fewest failures first, so a torrent not asked yet
+        // isn't starved by ones whose metadata is slow to arrive.
+        let mut by_tries: Vec<&Listed> = listing.torrents.iter().collect();
+        by_tries.sort_by_key(|t| {
+            key_of(t)
+                .and_then(|k| state.pending.get(&k).copied())
+                .unwrap_or(0)
+        });
         for retry in [false, true] {
-            for t in &listing.torrents {
+            let order = if retry {
+                &by_tries
+            } else {
+                &listing.torrents.iter().collect::<Vec<_>>()
+            };
+            for &t in order {
                 let Some(key) = key_of(t) else { continue };
                 let new = !state.seen.contains(&key);
                 let wanted = if retry {
@@ -341,32 +356,37 @@ impl Clients {
                 if !wanted || handled.contains(&key) {
                     continue;
                 }
-                let exported = if !lister.can_export() {
-                    None
+                // `tried`: an export was asked for this poll.
+                let (exported, tried) = if !lister.can_export() {
+                    (None, false)
                 } else if budget == 0 {
-                    // Over this poll's budget: a later poll exports it.
-                    continue;
+                    if !new {
+                        // A retry over this poll's budget: a later poll.
+                        continue;
+                    }
+                    // A new torrent over the budget is found now, with the
+                    // list's claims; its export waits for a later poll.
+                    (None, false)
                 } else {
                     budget -= 1;
                     match lister.export(&t.hash).await {
-                        Ok(bytes) => Some(bytes),
+                        Ok(bytes) => (Some(bytes), true),
                         Err(e @ ClientError::Auth(_)) => return on_error(&e),
-                        Err(_) => None,
+                        Err(_) => (None, true),
                     }
                 };
                 handled.insert(key);
-                let tried = lister.can_export();
                 let Some(found) = to_found(t, exported.as_deref()) else {
                     continue;
                 };
                 if found.strategy == STRATEGY_EXPORT || exported.is_some() {
                     // Used, or the bytes are another torrent's: done.
                     state.pending.remove(&key);
-                } else if tried {
-                    // No metadata yet, or unreachable: try again later,
-                    // up to MAX_EXPORT_TRIES polls.
+                } else if lister.can_export() {
+                    // Not asked yet, no metadata yet, or unreachable: try
+                    // again later, up to MAX_EXPORT_TRIES failed polls.
                     let tries = state.pending.entry(key).or_insert(0);
-                    *tries += 1;
+                    *tries += u32::from(tried);
                     if *tries >= MAX_EXPORT_TRIES {
                         state.pending.remove(&key);
                     }
@@ -380,6 +400,9 @@ impl Clients {
                 state.seen.insert(key);
             }
         }
+        // End the client session the poll opened (qBittorrent's): the next
+        // poll logs in afresh, so none is left to expire on the client.
+        lister.finish().await;
         Next::Again
     }
 }
@@ -389,8 +412,8 @@ impl Clients {
 struct PollState {
     /// Torrents already emitted.
     seen: HashSet<InfoHash>,
-    /// Emitted with the list's claims while their export failed, by the
-    /// polls tried.
+    /// Emitted with the list's claims while their export is still wanted
+    /// (not asked yet, or failed), by the polls it failed on.
     pending: HashMap<InfoHash, u32>,
 }
 

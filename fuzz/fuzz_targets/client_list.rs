@@ -1,7 +1,12 @@
 //! The download clients' torrent lists (qBittorrent, Transmission and
 //! Deluge JSON) never panic and never break their bounds, and every
-//! listed torrent maps to a private find, with the rest of the input as
-//! its exported `.torrent`. The first byte picks the client.
+//! listed torrent maps to a private find, with an exported `.torrent`.
+//!
+//! Input: one byte picks the client, two bytes (little-endian) give the
+//! list's length, then the list, then the `.torrent` bytes every listed
+//! torrent is given as its export. Keeping the two apart lets the fuzzer
+//! build a list whose hash matches a real info dict, so the export branch
+//! is reached.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -11,8 +16,12 @@ use lodestar_sources_plugins::clients::{
 };
 
 fuzz_target!(|data: &[u8]| {
-    let (pick, body) = data.split_first().map_or((0, data), |(p, b)| (*p, b));
-    let kind = match pick % 3 {
+    let [pick, a, b, rest @ ..] = data else {
+        return;
+    };
+    let split = usize::from(u16::from_le_bytes([*a, *b])).min(rest.len());
+    let (body, export) = rest.split_at(split);
+    let kind = match *pick % 3 {
         0 => ClientKind::QBittorrent,
         1 => ClientKind::Transmission,
         _ => ClientKind::Deluge,
@@ -30,12 +39,12 @@ fuzz_target!(|data: &[u8]| {
             assert!(!name.chars().any(char::is_control));
         }
         assert!(t.size.is_none_or(|s| s > 0));
-        let f = to_found(t, Some(body)).expect("a listed hash is a key");
+        let f = to_found(t, Some(export)).expect("a listed hash is a key");
         assert!(f.private_source && f.peers.is_empty() && !f.interest);
         // The export's claims are used only when its info dict hashes to
         // the listed key.
         if f.strategy == STRATEGY_EXPORT {
-            let file = TorrentFile::parse(body).expect("an export that was used parses");
+            let file = TorrentFile::parse(export).expect("an export that was used parses");
             assert_eq!(file.info.primary_hash().to_string(), t.hash);
         }
         let c = f.claims.as_deref();

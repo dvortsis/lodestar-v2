@@ -851,6 +851,22 @@ impl Lister for QbitLister {
         })
     }
 
+    /// `auth/logout`, so a login a minute doesn't leave a session a minute
+    /// on the client until each expires.
+    fn finish(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let Some(cookie) = self.session.lock().await.take() else {
+                return;
+            };
+            if cookie.is_empty() {
+                return;
+            }
+            let mut req = self.request(WireMethod::Post, "auth/logout", MAX_RESPONSE);
+            req.headers.push(("Cookie", cookie.expose().to_owned()));
+            let _ = self.wire.exchange(&req).await;
+        })
+    }
+
     fn export<'a>(&'a self, hash: &'a str) -> BoxFuture<'a, Result<Vec<u8>, ClientError>> {
         Box::pin(async move {
             check_hash(hash)?;

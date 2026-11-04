@@ -120,8 +120,8 @@ async fn qbittorrent_lists_exports_and_keeps_every_find_private() {
     // Poll 1: login, list (two good entries, two malformed), export both
     // new ones (one has no metadata yet). Poll 2: login, list; the new
     // torrent's `.torrent` is another torrent's, and the retried export
-    // now has the metadata.
-    let (got, replayer) = replay(&p, "qbittorrent_poll", 8, 4).await;
+    // now has the metadata. Each poll ends with a logout.
+    let (got, replayer) = replay(&p, "qbittorrent_poll", 10, 4).await;
     // The login is each poll's gated request.
     assert_spacing(&replayer, |r| r.url.ends_with("/auth/login"));
     assert_private(&got);
@@ -181,7 +181,7 @@ async fn a_refused_list_is_waited_out_not_retried() {
     let p = qbittorrent();
     // The 403 blocks the host in the limiter; the plugin's next request is
     // the next poll's login once the block ends, with nothing in between.
-    let (got, replayer) = replay(&p, "qbittorrent_list_403", 5, 1).await;
+    let (got, replayer) = replay(&p, "qbittorrent_list_403", 6, 1).await;
     assert_private(&got);
     let at: Vec<_> = replayer.requests().into_iter().map(|(t, _)| t).collect();
     assert!(
@@ -420,4 +420,40 @@ proptest! {
             prop_assert!(t.size.is_none_or(|s| s > 0));
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn torrents_over_the_export_budget_are_found_at_once() {
+    let p = qbittorrent();
+    // Poll 1: 21 new torrents, 20 exports (each another torrent's bytes).
+    // The 21st is found at once with the list's claims; poll 2 exports it.
+    let (got, _) = replay(&p, "qbittorrent_over_budget", 27, 22).await;
+    assert_private(&got);
+    let bunny = by_key(&got, BUNNY);
+    assert_eq!(bunny.len(), 2);
+    assert_eq!(bunny[0].found.strategy, STRATEGY_LIST);
+    let c = bunny[0].found.claims.as_deref().unwrap();
+    assert_eq!(c.name.as_deref(), Some("Big Buck Bunny (2008)"));
+    assert_eq!(bunny[1].found.strategy, STRATEGY_EXPORT);
+    // All 21 were found in the first poll.
+    assert!(got[..21].iter().all(|d| d.found.strategy == STRATEGY_LIST));
+}
+
+/// The `client_list` fuzz target's export seed reaches its export branch:
+/// split the way the target splits it, its list's torrent maps to a find
+/// with the `.torrent`'s claims.
+#[test]
+fn the_fuzz_export_seed_reaches_the_export_branch() {
+    let seed = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fuzz/seeds/client_list/qbittorrent_export"),
+    )
+    .unwrap();
+    let [0, a, b, rest @ ..] = &seed[..] else {
+        panic!("not a qBittorrent seed")
+    };
+    let (list, export) = rest.split_at(usize::from(u16::from_le_bytes([*a, *b])));
+    let l = parse_list(ClientKind::QBittorrent, list).unwrap();
+    let f = to_found(&l.torrents[0], Some(export)).unwrap();
+    assert_eq!(f.strategy, STRATEGY_EXPORT);
 }
