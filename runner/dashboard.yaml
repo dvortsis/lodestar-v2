@@ -270,6 +270,8 @@ placement:
   - X-merge-policy
   - X-thp-off
   - X-mem-gauges
+  - X-mem-gauges-2
+  - X-mimalloc-override
   - R-rc3-cut
   - G-v051
   - D-v051-main
