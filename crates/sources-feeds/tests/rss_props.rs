@@ -142,7 +142,7 @@ proptest! {
     }
 }
 
-/// Any `infoHash` value, and how Nyaa's element took it.
+/// The first item's hashes, and the `bad_hash` and `no_hash` counts.
 fn verdict(f: &Feed) -> (Option<Hashes>, u32, u32) {
     let s = &f.summary;
     (
@@ -161,12 +161,14 @@ proptest! {
             "[0-9a-fA-F]{38,42}",
             "[A-Za-z2-7]{30,34}",
             "[0-9a-fA-F]{62,66}",
-            "[0-9a-zA-Z =&;#x]{0,70}",
+            "[0-9a-zA-Z =&;#x]{0,70}".prop_map(|v| v.replace('&', "&amp;")),
             Just("0".repeat(40)),
+            // Character references, resolved before validation.
+            "(&#x3[0-9];|&#4[89];|[0-9a-f]){38,42}",
+            Just(format!("&#x31;{}", "f".repeat(39))),
         ],
         magnet in any::<bool>(),
     ) {
-        let v = v.replace('&', "&amp;");
         let m = if magnet {
             "<link>magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567</link>"
         } else {

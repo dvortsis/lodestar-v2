@@ -109,7 +109,11 @@ fn valid_values() {
 #[test]
 fn uppercase_value() {
     assert_eq!(one(&bare(&HEX.to_uppercase())), Ok(v1(HEX)));
-    assert_eq!(one(&bare(&V2.to_uppercase())).map(|h| h.v1), Ok(None));
+    let v2 = Hashes {
+        v1: None,
+        v2: Some(V2.parse().unwrap()),
+    };
+    assert_eq!(one(&bare(&V2.to_uppercase())), Ok(v2));
 }
 
 #[test]
@@ -256,5 +260,5 @@ fn the_text_cap_applies() {
         bare(&"a".repeat(1 << 20))
     );
     let s = parse_each(huge.as_bytes(), &LIMITS, |_| n += 1);
-    assert_eq!(s.skipped.over_cap, 1);
+    assert_eq!((n, s.skipped.over_cap), (0, 1));
 }
