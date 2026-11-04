@@ -184,3 +184,10 @@ path = "fuzz_targets/client_list.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "tpdb"
+path = "fuzz_targets/tpdb.rs"
+test = false
+doc = false
+bench = false

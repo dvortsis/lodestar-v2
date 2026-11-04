@@ -10,5 +10,6 @@ mod common;
 pub mod json;
 pub mod rss;
 pub mod torznab;
+pub mod tpdb;
 
 pub use common::external_ref;
