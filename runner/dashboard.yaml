@@ -255,6 +255,7 @@ placement:
   match:
   - F-*
   - X-ci-health
+  - X-log-url-redact
   - L4-followups
   - S-settings-reconcile
 - ws: ws-cut
@@ -266,6 +267,7 @@ placement:
   - D-v051
   - X-mmap-cache-prune
   - X-merge-policy
+  - X-thp-off
   - X-mem-gauges
   - R-rc3-cut
   - G-v051
