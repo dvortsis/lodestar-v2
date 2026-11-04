@@ -43,6 +43,10 @@ Lodestar listens to the public BitTorrent DHT and fetches each torrent's small d
 - **Local and private.** Your searches, saved alerts and settings stay in your `/data` folder. Lodestar sends no telemetry.
 - **Safe defaults.** First run prints a one-time setup token to the container log so you can set an admin password. A built-in child-safety filter stays on at all times.
 
+## Legal
+
+Lodestar is for lawful use only. You run your own copy, you choose what it connects to, and you are responsible for how you use it and for anything you do with what it finds, under the laws where you are. The software comes with no warranty, under the AGPL-3.0 licence. Setup asks you to accept the [Terms of Use and Legal Notice](docs/legal/terms-of-use.md), which explain the risks and your responsibilities.
+
 ## How it works
 
 Five stages move each torrent from peer discovery to your browser:

@@ -10,7 +10,8 @@
   <Project>https://github.com/dvortsis/lodestar-v2</Project>
   <ReadMe>https://github.com/dvortsis/lodestar-v2/blob/main/docs/operations.md</ReadMe>
   <TemplateURL>https://github.com/dvortsis/lodestar-v2/raw/main/packaging/unraid/lodestar.xml</TemplateURL>
-  <Overview>Lodestar crawls the BitTorrent DHT, fetches torrent metadata from peers and makes it searchable. It keeps names, file lists, sizes, dates and swarm counts in one local index. Open the web UI after the first start. The setup token appears in the container log. Enter it to create the admin password.</Overview>
+  <Overview>Lodestar crawls the BitTorrent DHT, fetches torrent metadata from peers and makes it searchable. It keeps names, file lists, sizes, dates and swarm counts in one local index. Open the web UI after the first start. The setup token appears in the container log. Enter it to create the admin password.
+  Lodestar is for lawful use only: you run it, you choose what it connects to, and you accept responsibility for how you use it. Setup asks you to accept the Terms of Use (docs/legal/terms-of-use.md in the repository).</Overview>
   <Category>Network:Web Downloaders:Other</Category>
   <WebUI>http://[IP]:[PORT:8090]</WebUI>
   <ExtraParams>--stop-timeout=60</ExtraParams>
