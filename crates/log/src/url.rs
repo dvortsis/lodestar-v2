@@ -493,7 +493,14 @@ pub fn scrub_text(text: &str) -> String {
                     out.push_str(&lead(rest, start, i));
                     out.push_str("://");
                     out.push_str(REDACTED);
-                    pos += nested;
+                    // A magnet in what's hidden gets its own span (B-log1),
+                    // so its tracker URL is never read as the next URL.
+                    let stop = magnet
+                        .from(text, pos + i + 3)
+                        .map(|m| m - pos)
+                        .filter(|&m| m < nested)
+                        .unwrap_or(nested);
+                    pos += stop;
                     continue;
                 }
                 Some(_) | None => {
@@ -1441,6 +1448,25 @@ mod tests {
                 scrub_text(&format!("got {text} ok")),
                 "got magnet:[redacted] ok",
                 "{text}"
+            );
+        }
+        // Round 6: a URL, a soft end, then a magnet with a raw `tr=` URL.
+        for before in [
+            "udp://t.example:80/announce,",
+            "udp://t.example:80/announce]",
+            "udp://t.example:80/announce(",
+            "udp://t.example:80/announce'",
+            "https://h:443/a,",
+            "https://[::1]/a,",
+            "http://u:pa]",
+        ] {
+            let text = format!(
+                "see {before}magnet:?xt=urn:btih:abc&dn=SecretName&tr=udp://trk.example/a ok"
+            );
+            let s = scrub_text(&text);
+            assert!(
+                !s.contains("trk.example") && !s.contains("SecretName") && s.ends_with(" ok"),
+                "{text} -> {s}"
             );
         }
         // An IPv6 host in a URL in a fragment keeps its passkey hidden.

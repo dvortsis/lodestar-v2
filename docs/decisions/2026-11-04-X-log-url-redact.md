@@ -55,8 +55,10 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
   - **A Debug value's backed-over scheme is written only if it's a known scheme,** and as `[redacted]` otherwise (`query: Some("token=<secret>://h/")`).
   - **A `:` with no port number, with no `@` found, is a password** (`http://u:<secret>/x` shows as `http://[redacted]`). An IPv6 literal's `:` doesn't count.
   - **With a userinfo `@` found before the first hard stop, the wide look-ahead also crosses line breaks** (`u:&@<secret>` and a newline before the real `@`). It's still bounded by 512 bytes and the next `://`. The over-redaction is in the round 3 entry above.
+- **Round 6 (runner's fresh review): a URL, then a soft end, then a magnet with a raw `tr=` URL showed the tracker host,** which `main` hides (`see udp://t.example:80/announce,magnet:?xt=…&tr=udp://trk.example/a ok`). The "hide up to the next `://`" arm took the magnet's start with it. Now that arm stops at the first `magnet:` before the next `://`, so the magnet gets its own span. Every such shape shows as `…://[redacted]magnet:[redacted] ok`.
 - **Round 5 (runner's fresh review):**
   - **A magnet's span ends only at a hard stop,** never at a soft end (`)`, `]`, `,`, `'`, `}`) or an IPv6 `]`, both for its first end and past each glued URL's userinfo. Round 4 still let `…&dn=Secret,Name.2020&tr=http://…` show `,Name.2020&tr=…`, and `tr=…,_@ftp://[::1]/dl/<passkey>.torrent` show the passkey path. `(magnet:…)` now loses its `)`, which is accepted over-redaction.
+    - **So a magnet swallows everything glued to it up to the next whitespace,** a following URL or a `token=` included (`magnet:?xt=…,see:https://h/x?token=t` shows as `magnet:[redacted]`). That's accepted over-redaction ("never too little").
   - **The IPv6-literal skip is a helper, `past_ipv6`,** used for a URL's host and for each URL in a query or fragment. That closes `http://h/x#https://[::1]:6969/ann/<passkey>/announce`, which `main` leaks too.
 - **Over-redaction in a common log shape:** a comma-separated tracker list loses all but its last tracker. `udp://a.example:80/announce,udp://b.example:6969/announce` shows as `udp://[redacted]://b.example:6969/announce`. Each `://` with nothing but URL characters or a soft end before the next one is read as possibly inside a password. That's accepted ("never too little").
 
@@ -115,8 +117,19 @@ All of these leak on rc.3 as well.
   | 13 | 21 | 10 | 10 | 4 | 0 | 45 | 50,795 | 175,049 |
 
   This PR panics on none; `main` panics on 48, 57, 43 and 44.
+- **Round 6 (a magnet after a soft end gets its own span), same harness, 1,000,000 inputs per seed:**
+
+  | Seed | `://` after | `://` before | raw line break | `/` + hard stop, no marker | total | shown by PR | shown by `main` |
+  |---|---|---|---|---|---|---|---|
+  | 2 | 22 | 4 | 10 | 5 | 41 | 50,126 | 174,059 |
+  | 17 | 15 | 10 | 10 | 3 | 38 | 50,394 | 174,837 |
+
+  All are in the accepted classes; none is a passkey or magnet shape. The reviewer's `round5-inputs.txt` (14 shapes) shows no secret in this PR's `scrub_text`.
 - **A mixed encoding such as `http:%2F%2Fu:p@h`,** which `holds_url` misses. In `scrub` it's a kept query value; in `scrub_text`, URL forms without `://` aren't found at all.
-- **IPv6 hosts in URLs nested in a query or fragment, or after `magnet:`.**
+- **Malformed IPv6 literals** (`[::1]]`, an unclosed `[`). Round 5 closed well-formed IPv6 hosts in URLs nested in a query or fragment, and after `magnet:`.
+- **A magnet inside a `://` URL's path, query or fragment ends at the outer URL's soft end.** It's a B-log1 gap that `main` shares. Example: `GET http://lodestar:8080/api/add?uri=magnet:?xt=…&dn=Some.Movie,2020.1080p` shows `,2020.1080p`. The reviewer's try at cutting the outer URL at the magnet broke the `Next::from` cache and added a real regression, so it waits for X-log-url-redact-2 (runner, §2.19).
+- **A percent-encoded magnet in free text** (`magnet%3A%3Fxt=…&dn=…`) isn't found as a magnet. `main` shares this gap.
+- **An escaped `\"` inside a Debug-form magnet value** ends the value's scrubbing there. `main` shares this gap.
 - **Credential values glued on with `:` or `%3D`.**
 - **URL forms without `://`.**
 
