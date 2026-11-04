@@ -15,8 +15,8 @@
 //!   interval). The attempt is recorded before the request goes out, so a
 //!   failure or a crash mid-reply still counts;
 //! - **only inside the schedule window**, 01:00–07:00 by default, in the
-//!   user's time zone ([`Clock`]). A request that hasn't started by the
-//!   window's end is dropped.
+//!   user's time zone ([`Clock`]). A request starts only with a minute of
+//!   the window left, and is abandoned when the window closes.
 //!
 //! **Never on a private tracker (§18.7).** A scrape tells the tracker
 //! nothing about us that an announce wouldn't, but scraping a private
@@ -96,7 +96,8 @@ const MANIFEST: Manifest = Manifest {
     // (`FullScrape::endpoints`).
     endpoints: &[],
     risk: Risk::Low,
-    consent: Consent::External,
+    // §18.7: BEP 48 is in the "None" class, a plain toggle.
+    consent: Consent::None,
     default_priority: Priority::Low,
     enabled_by_default: false,
 };
@@ -120,8 +121,9 @@ const POLICY: Policy = Policy {
         },
     },
     config_schema: CONFIG_SCHEMA,
-    // One instance, or each worker would take its own daily scrape.
-    distribution: Distribution::Singleton,
+    // §19.5: sharded per tracker. Each tracker lives on one worker, so its
+    // daily cap is held there.
+    distribution: Distribution::ShardedUnit,
     schedule: SCHEDULE,
     max_agents: 1,
 };
@@ -276,9 +278,11 @@ pub trait PrivateTrackers: Send + Sync {
 }
 
 /// A fixed list of private hosts. For tests only: never wire it into the
-/// running app.
+/// running app, where the lookup must come from the store. It has no
+/// `Default`, so "nothing is private" is always spelled out
+/// ([`StaticPrivateTrackers::none`]).
 #[doc(hidden)]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StaticPrivateTrackers {
     hosts: Vec<String>,
     /// Every lookup fails.
@@ -291,6 +295,11 @@ impl StaticPrivateTrackers {
             hosts: hosts.iter().map(|h| h.as_ref().to_owned()).collect(),
             fail: false,
         }
+    }
+
+    /// No host is private. Tests only.
+    pub fn none() -> StaticPrivateTrackers {
+        StaticPrivateTrackers::new::<&str>(&[])
     }
 
     pub fn failing() -> StaticPrivateTrackers {
@@ -442,8 +451,9 @@ enum Outcome {
     Closed,
 }
 
-/// Minutes from `minute` until the window closes; 0 when it's closed.
-fn minutes_until_close(minute: u16) -> u16 {
+/// Minutes from `minute` (minutes past local midnight) until the window
+/// closes; 0 when it's closed.
+pub fn minutes_until_close(minute: u16) -> u16 {
     const DAY_MINUTES: u16 = 24 * 60;
     (0..DAY_MINUTES)
         .find(|d| !SCHEDULE.is_open((minute + d) % DAY_MINUTES))
@@ -497,16 +507,20 @@ impl FullScrape {
             Err(_) => return Outcome::Done,
         };
         if let Some(v) = last {
+            let day = DAY.as_secs() as i64;
             match std::str::from_utf8(&v)
                 .ok()
                 .and_then(|s| s.parse::<i64>().ok())
+                // More than a day ahead was written under a wrong clock:
+                // reset below rather than obeyed until then.
+                .filter(|last| *last <= now.saturating_add(day))
             {
                 // Also not due when the clock has gone back past it.
-                Some(last) if now < last.saturating_add(DAY.as_secs() as i64) => {
+                Some(last) if now < last.saturating_add(day) => {
                     return Outcome::Done;
                 }
                 Some(_) => {}
-                // Not ours to read: start the day from now.
+                // Unreadable, or from a wrong clock: the day starts now.
                 None => {
                     let _ = kit.state.set(&key, now.to_string().into_bytes()).await;
                     return Outcome::Done;
@@ -532,13 +546,15 @@ impl FullScrape {
         {
             return Outcome::Done;
         }
-        // Started inside the window or not at all.
+        // Started inside the window or not at all, and abandoned by its
+        // close. The minute may be part gone, so the deadline counts only
+        // the whole minutes after it.
         let left = minutes_until_close(self.clock.minute_of_day());
-        if left == 0 {
+        if left <= 1 {
             return Outcome::Done;
         }
         let req = Request::get(t.scrape.clone());
-        let deadline = Duration::from_secs(u64::from(left) * 60);
+        let deadline = Duration::from_secs(u64::from(left - 1) * 60);
         let res = match tokio::time::timeout(deadline, kit.http.poll(&t.announce, &req)).await {
             Ok(Ok(res)) if res.status == 200 => res,
             _ => return Outcome::Done,

@@ -7,7 +7,7 @@
 //! - **The parser's own heap** ([`Parser::heap_bytes`]) after every chunk
 //!   must equal what it held before the first: nothing it keeps grows with
 //!   the reply. This holds on every platform and is exact.
-//! - **The process's resident memory** (Linux, `/proc/self/statm`) is
+//! - **The process's resident memory** (Linux, `/proc/self/status`) is
 //!   sampled after every chunk; its growth over the parse must stay under
 //!   [`RSS_BOUND`]. A parser that buffered the reply or kept every key
 //!   would add tens of megabytes.
@@ -60,11 +60,13 @@ fn write_entry(i: u64, out: &mut Vec<u8>) {
     );
 }
 
-/// Resident bytes, where the platform tells us.
+/// Resident bytes, where the platform tells us (Linux's `VmRSS`, in kB,
+/// whatever the page size).
 fn rss() -> Option<u64> {
-    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
-    let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
-    Some(pages * 4096)
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb * 1024)
 }
 
 #[test]

@@ -77,7 +77,6 @@ struct Run {
     running: lodestar_sources::testing::Running,
     replayer: Arc<Replayer>,
     clock: TokioClock,
-    start: Instant,
 }
 
 /// Starts the plugin with the wall clock at `at` and `replayer` answering.
@@ -112,7 +111,6 @@ async fn start_with(
         running,
         replayer,
         clock,
-        start: Instant::now(),
     }
 }
 
@@ -138,7 +136,6 @@ impl Run {
         assert!(!self.running.is_finished(), "the plugin ended on its own");
         self.running.stop_within().await.unwrap();
         self.replayer.finish().unwrap();
-        let _ = self.start;
         self.ctx.drain()
     }
 }
@@ -168,7 +165,7 @@ async fn keys_are_emitted_with_the_tracker_claim() {
     let mut run = start(
         MIDNIGHT + HOUR,
         Replayer::new(vec![ok(reply(&[1, 2, 3]))]),
-        StaticPrivateTrackers::default(),
+        StaticPrivateTrackers::none(),
     )
     .await;
     wait_for("the scrape", || run.replayer.requests().len() == 1).await;
@@ -207,7 +204,7 @@ async fn at_most_one_scrape_per_tracker_per_day() {
     // Day 1 fails with a 500, which still counts; day 2 succeeds; day 3's
     // scrape is the third exchange. Nothing more in 3 days.
     let replayer = Replayer::new(vec![status(500), ok(reply(&[7])), ok(reply(&[8]))]);
-    let run = start(MIDNIGHT + HOUR, replayer, StaticPrivateTrackers::default()).await;
+    let run = start(MIDNIGHT + HOUR, replayer, StaticPrivateTrackers::none()).await;
     wait_for("day 1's scrape", || run.replayer.requests().len() == 1).await;
     // The rest of day 1, through the window and past it.
     run_clock(Duration::from_secs(23 * 3600)).await;
@@ -236,7 +233,7 @@ async fn a_restart_keeps_the_days_cap() {
     let run = start_with(
         MIDNIGHT + HOUR,
         replayer,
-        StaticPrivateTrackers::default(),
+        StaticPrivateTrackers::none(),
         Some(MIDNIGHT + HOUR / 2),
     )
     .await;
@@ -262,7 +259,7 @@ async fn nothing_is_sent_outside_the_window() {
     let run = start(
         MIDNIGHT + 12 * HOUR,
         replayer,
-        StaticPrivateTrackers::default(),
+        StaticPrivateTrackers::none(),
     )
     .await;
     run_clock(Duration::from_secs(12 * 3600 + 59 * 60)).await;
@@ -303,7 +300,7 @@ async fn a_broken_reply_keeps_its_complete_entries() {
     let mut run = start(
         MIDNIGHT + HOUR,
         Replayer::new(vec![ok(body)]),
-        StaticPrivateTrackers::default(),
+        StaticPrivateTrackers::none(),
     )
     .await;
     wait_for("the scrape", || run.replayer.requests().len() == 1).await;
@@ -322,7 +319,7 @@ async fn a_broken_reply_keeps_its_complete_entries() {
 #[tokio::test(start_paused = true)]
 async fn an_unconfigured_plugin_fails_before_any_request() {
     let p = Arc::new(FullScrape::unconfigured(
-        Arc::new(StaticPrivateTrackers::default()),
+        Arc::new(StaticPrivateTrackers::none()),
         Arc::new(TokioClock::starting_at(MIDNIGHT + HOUR)),
     ));
     assert!(p.endpoints().is_none());
@@ -335,18 +332,18 @@ async fn an_unconfigured_plugin_fails_before_any_request() {
 fn manifest_policy_and_caps() {
     let p = FullScrape::new(
         config(),
-        Arc::new(StaticPrivateTrackers::default()),
+        Arc::new(StaticPrivateTrackers::none()),
         Arc::new(TokioClock::starting_at(0)),
     );
     let m = p.manifest();
     assert_eq!(m.id, "full_scrape");
     assert_eq!(m.kinds, [Kind::Discovery]);
-    assert_eq!(m.consent, Consent::External);
+    assert_eq!(m.consent, Consent::None);
     assert!(m.endpoints.is_empty() && !m.enabled_by_default);
     assert!(p.endpoints().is_some());
 
     let policy = p.policy();
-    assert_eq!(policy.distribution, Distribution::Singleton);
+    assert_eq!(policy.distribution, Distribution::ShardedUnit);
     assert_eq!(policy.caps.max_full_scrapes_per_day, 1);
     assert!(!policy.schedule.is_open(0) && policy.schedule.is_open(60));
     assert!(policy.schedule.is_open(7 * 60 - 1) && !policy.schedule.is_open(7 * 60));
@@ -434,5 +431,184 @@ proptest! {
                 prop_assert!(!t.scrape_url().contains('?'));
             }
         }
+    }
+}
+
+#[test]
+fn the_window_closes_at_seven() {
+    use full_scrape::minutes_until_close as left;
+    assert_eq!(left(59), 0);
+    assert_eq!(left(60), 6 * 60);
+    assert_eq!(left(6 * 60 + 58), 2);
+    assert_eq!(left(6 * 60 + 59), 1);
+    assert_eq!(left(7 * 60), 0);
+    assert_eq!(left(12 * 60), 0);
+}
+
+/// A tracker that never answers. Records when each request started and
+/// how many were abandoned (their future dropped).
+#[derive(Default)]
+struct Hanging {
+    started: std::sync::Mutex<Vec<Instant>>,
+    dropped: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct OnDrop(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for OnDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl lodestar_sources::Fetch for Hanging {
+    fn fetch<'a>(
+        &'a self,
+        _: &'a lodestar_sources::Request,
+    ) -> lodestar_sources::BoxFuture<
+        'a,
+        Result<lodestar_sources::Response, lodestar_sources::HttpError>,
+    > {
+        self.started.lock().unwrap().push(Instant::now());
+        let guard = OnDrop(self.dropped.clone());
+        Box::pin(async move {
+            let _guard = guard;
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_request_still_running_at_seven_is_abandoned() {
+    use std::sync::atomic::Ordering;
+    let clock = TokioClock::starting_at(MIDNIGHT + 6 * HOUR + 58 * 60);
+    let p = Arc::new(FullScrape::new(
+        config(),
+        Arc::new(StaticPrivateTrackers::none()),
+        Arc::new(clock),
+    ));
+    let fetch = Arc::new(Hanging::default());
+    let mut ctx = FakeCtx::with_fetch(&*p, SourceId::new(9).unwrap(), fetch.clone());
+    let running = ctx.start(p);
+    wait_for("the scrape to start", || {
+        !fetch.started.lock().unwrap().is_empty()
+    })
+    .await;
+    let begun = fetch.started.lock().unwrap()[0];
+    wait_for("the scrape to be abandoned", || {
+        fetch.dropped.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    // Dropped by 07:00, i.e. within two minutes of 06:58.
+    assert!(Instant::now() - begun <= Duration::from_secs(120));
+    // Nothing else goes out until the next day's window.
+    run_clock(Duration::from_secs(17 * 3600)).await;
+    assert_eq!(fetch.started.lock().unwrap().len(), 1);
+    running.stop_within().await.unwrap();
+}
+
+/// A plugin state that can't be read.
+#[derive(Debug)]
+struct BrokenState;
+
+impl PluginState for BrokenState {
+    fn get<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> lodestar_sources::BoxFuture<'a, Result<Option<Vec<u8>>, lodestar_sources::StateError>>
+    {
+        Box::pin(async { Err(lodestar_sources::StateError::Store("broken".into())) })
+    }
+    fn set<'a>(
+        &'a self,
+        _: &'a str,
+        _: Vec<u8>,
+    ) -> lodestar_sources::BoxFuture<'a, Result<(), lodestar_sources::StateError>> {
+        Box::pin(async { Err(lodestar_sources::StateError::Store("broken".into())) })
+    }
+    fn remove<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> lodestar_sources::BoxFuture<'a, Result<(), lodestar_sources::StateError>> {
+        Box::pin(async { Err(lodestar_sources::StateError::Store("broken".into())) })
+    }
+    fn compare_and_set<'a>(
+        &'a self,
+        _: &'a str,
+        _: Option<&'a [u8]>,
+        _: Option<Vec<u8>>,
+    ) -> lodestar_sources::BoxFuture<'a, Result<bool, lodestar_sources::StateError>> {
+        Box::pin(async { Err(lodestar_sources::StateError::Store("broken".into())) })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_state_means_no_scrape() {
+    use lodestar_sources::{Emitter, HostLimiter, Kit, Shutdown, SourceCtx};
+    let p = Arc::new(FullScrape::new(
+        config(),
+        Arc::new(StaticPrivateTrackers::none()),
+        Arc::new(TokioClock::starting_at(MIDNIGHT + HOUR)),
+    ));
+    let replayer = Arc::new(Replayer::new(Vec::new()));
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let (trigger, shutdown) = Shutdown::new();
+    let source = SourceId::new(9).unwrap();
+    let ctx = SourceCtx {
+        source,
+        emitter: Emitter::new(source, tx),
+        peer_requests: None,
+        peer_replies: None,
+        shutdown,
+        kit: Kit::with_limiter(
+            Arc::new(BrokenState),
+            replayer.clone(),
+            HostLimiter::new(p.policy().limits(&UserLimits::default())),
+        ),
+    };
+    let task = tokio::spawn({
+        let p = p.clone();
+        async move { p.run(ctx).await }
+    });
+    run_clock(Duration::from_secs(2 * 24 * 3600)).await;
+    assert!(replayer.requests().is_empty());
+    let _ = trigger.send(true);
+    task.await.unwrap().unwrap();
+    replayer.finish().unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_garbled_or_future_state_restarts_the_day() {
+    for stored in [
+        b"garbage".to_vec(),
+        (MIDNIGHT + 400 * 24 * HOUR).to_string().into_bytes(),
+    ] {
+        let replayer = Replayer::new(vec![ok(reply(&[3]))]);
+        let clock = TokioClock::starting_at(MIDNIGHT + HOUR);
+        let p = Arc::new(FullScrape::new(
+            config(),
+            Arc::new(StaticPrivateTrackers::none()),
+            Arc::new(clock),
+        ));
+        let replayer = Arc::new(replayer);
+        let mut ctx = FakeCtx::with_fetch(&*p, SourceId::new(9).unwrap(), replayer.clone());
+        let key = format!("last:{HOST}");
+        ctx.state.set(&key, stored).await.unwrap();
+        let running = ctx.start(p);
+        // Not today: the day is reset to start now.
+        run_clock(Duration::from_secs(23 * 3600)).await;
+        assert!(replayer.requests().is_empty());
+        // Reset to the plugin's first look, within its first minutes.
+        let reset = ctx.state.get(&key).await.unwrap().unwrap();
+        let reset: i64 = String::from_utf8(reset).unwrap().parse().unwrap();
+        assert!(
+            (MIDNIGHT + HOUR..=MIDNIGHT + HOUR + 120).contains(&reset),
+            "{reset}"
+        );
+        // Tomorrow it runs as usual.
+        run_clock(Duration::from_secs(2 * 3600)).await;
+        wait_for("the next day's scrape", || replayer.requests().len() == 1).await;
+        running.stop_within().await.unwrap();
+        replayer.finish().unwrap();
     }
 }

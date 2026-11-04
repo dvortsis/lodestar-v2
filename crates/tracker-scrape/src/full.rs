@@ -261,10 +261,14 @@ impl Parser {
     }
 
     fn feed_inner(&mut self, chunk: &[u8], emit: &mut impl FnMut(&[InfoHash])) -> Result<()> {
-        let total = self.bytes.saturating_add(chunk.len() as u64);
-        if total > self.limits.max_bytes {
+        // The part of the chunk under the byte cap is parsed, so entries it
+        // completes are emitted; the rest is refused.
+        let room = self.limits.max_bytes.saturating_sub(self.bytes);
+        if chunk.len() as u64 > room {
+            self.feed_inner(&chunk[..room as usize], emit)?;
             return Err(Error::TooLarge);
         }
+        let total = self.bytes + chunk.len() as u64;
         let mut i = 0;
         while i < chunk.len() {
             let at = self.bytes + i as u64;
@@ -640,10 +644,15 @@ mod tests {
         };
         assert!(keys(&body, few).is_err());
         let small = Limits {
-            max_bytes: 40,
+            max_bytes: 100,
             ..LIMITS
         };
         assert!(matches!(keys(&body, small), Err(Error::TooLarge)));
+        // The entry completed under the cap is still emitted.
+        let mut out = Vec::new();
+        let r = parse(&body, small, body.len(), &mut |b| out.extend_from_slice(b));
+        assert!(matches!(r, Err(Error::TooLarge)));
+        assert_eq!(out, [InfoHash([1; 20])]);
         assert!(matches!(
             keys(b"d5:filesd3:abc999999999999:", LIMITS),
             Err(Error::TooLarge)
