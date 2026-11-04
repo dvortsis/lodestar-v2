@@ -15,7 +15,7 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 - **Modes:** `ingest` (memory), `latency` (search during ingest, through the real `SearchIndex` search path) and `fresh` (discovery-to-searchable at a pace, with `live.rs`'s commit rule and its 500 ms poll).
 - **Not exercised:** the extras in `live.rs`'s `follow` loop, which are the title set (`titles.committed()`), `IndexStats`, the commit hook and the population state; the `Retrying` directory wrapper; and the search-side query caches. The conclusions below cover the tantivy writers and store inserts that the harness drives.
 - **Schema version:** every measurement ran on base 3d45e86, schema v5, before SB-6 (#415, #418) added the `name_trigram` field (v6). The harness was brought up to v6 when `main` was merged in, and the latency table was re-run on v6; the memory rounds weren't. A trigram field adds terms per document, so v6 segments are larger, which could shift the levels measured here.
-- **Shared-file edits (`bench/Cargo.toml`):** a `tantivy` dev-dependency, at the same version and features as the search crate, and a `mimalloc-v2` feature for arm D.
+- **Shared-file edits (`bench/Cargo.toml`, `Cargo.lock`):** a `tantivy` dev-dependency, at the same version and features as the search crate, and a `mimalloc-v2` feature for arm D. `Cargo.lock` gains only that dependency line for `lodestar-bench`.
 
 ## Rules, fixed before any result (15:41:01Z, sent to the runner before the first run finished)
 - **Workload:** 20,000 synthetic torrents per run (about 22 files each, so about 440k file documents), real schemas, merges on, accelerated (each commit as soon as the last one finishes).
@@ -23,6 +23,8 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
   - A, B and D: 1 document per commit;
   - C: 6 documents per commit, the batching 30 s gives at 665 torrents/h.
 - **Build:** static musl through `cargo zigbuild` (zig 0.17, as the image builds), mimalloc v3. One process per run, at most 3 at once on 4 cores.
+- **Host:** a cloud container whose transparent huge pages are `enabled = madvise`, `defrag = madvise` (`/sys/kernel/mm/transparent_hugepage/`).
+- **Run durations** (the CSV's `secs`): A and B about 1,130–1,210 s; C about 195–220 s; D about 1,255–1,340 s.
 - **The arms:**
   - **A:** default `LogMergePolicy`;
   - **B:** `LogMergePolicy` with `min_layer_size` 300 on both indexes, `max_docs_before_merge` 100,000 on the file index (the default 10M on the torrent index);
@@ -66,7 +68,7 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 - **The anonymous growth is the allocator keeping memory,** not live data, and the policy doesn't change it beyond the noise.
 - **Caveat:** the per-row peak comes from a 2 ms sampler, which can miss short spikes.
 
-**Search and commit latency during ingest:** 5,000 torrents, one arm at a time, gnu with mimalloc, schema v6. The searcher reopens the index each round of queries, because `SearchIndex::refresh` reloads only the torrent reader, and file clauses have to see the file index's current segments. (The first latency run missed this: its file clauses searched a stale snapshot, so it was discarded.) The corpus is small, so these figures show only whether anything regresses.
+**Search and commit latency during ingest:** 5,000 torrents, one arm at a time, gnu with mimalloc, schema v6. Each round of the four queries runs on a newly opened `SearchIndex` handle, because `SearchIndex::refresh` reloads only the torrent reader, and file clauses have to see the file index's current segments. (The first latency run missed this: its file clauses searched a stale snapshot, so it was discarded.) The corpus is small, so these figures show only whether anything regresses.
 
 | Arm | Commit p50 / p95 | Search p50 / p95 | Segments at the end |
 |---|---|---|---|
@@ -76,7 +78,7 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 
 - **No arm regresses search** beyond the noise, though B and C keep three times A's file segments.
 
-**Discovery-to-searchable at 665 torrents/h:** 25 min per run, musl.
+**Discovery-to-searchable at 665 torrents/h:** 25 min per run, musl, schema v5 (the round-1 binary).
 - C (B with 30 s commits): p50 15.1 s, p95 28.6 s, max 30.2 s (273 torrents).
 - Today (A with 2 s commits): p50 0.3 s, p95 0.5 s, max 2.0 s (278 torrents).
 - Both are far inside the 10 min guardrail.
@@ -88,6 +90,7 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 - Each run seeds 150,000 torrents in 5,000-document commits, under its arm's own policy (the `--seed` flag).
 - Then it drips 20,000 torrents: 1 document per commit for A and B, 6 for C.
 - The fit runs from torrent 152,000 to the end.
+- Run durations (the CSV's `secs`, seeding included): A and B about 1,340–1,500 s, C about 380–415 s.
 - Arms, build, measure, estimator and pass rule are otherwise round 1's, with 3 runs per arm.
 
 **Results, musl anonymous memory, MiB per 1,000 torrents:**
@@ -107,6 +110,11 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
   - The same high-water as at 20k: a merge's heap peak doesn't scale with the corpus. Index data is mapped, not heap.
   - So the 20–45 MiB anonymous steps are most likely the allocator keeping pages from that high-water after it falls. The policy doesn't change them.
 
+## Limits
+- **The pace is accelerated.** Commits run back to back, so retention driven by time isn't exercised: khugepaged collapsing pages, mimalloc's timed purge, and SQLite cache growth over hours. A run lasts minutes, where the soak runs for hours.
+- **The workload is synthetic:** generator torrents, with no enrichment.
+- **The per-hour figures are conversions** from MiB per 1,000 torrents, not measurements at the production pace.
+
 ## What it means
 - **At r4's corpus size (round 1), the ingest path retains about 2.7 KiB per torrent.** r4 had 12,365 documents at hour 16.8, so the 20k runs cover it.
   - At r4's measured rate (about 683 stored torrents an hour, about one commit per torrent, runner 19:00Z), A's mean is about 1.8 MiB/h.
@@ -120,7 +128,7 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
   - dhat shows a flat live heap (about 5 MiB) and a high-water of about 40 MiB in every arm and at both corpus sizes. That fits a high-water set by the writers' heap-sized buffers rather than by the corpus or the merge size; no allocation sites were attributed.
   - The 20–45 MiB steps in anonymous memory are most likely mimalloc keeping pages from that peak.
 - **The owner's soak review agrees.** `docs/code-review/2026-11-04-soak-memory-review.md` (PR #425) finds a whole-index rewrite about every seven commits below 16.8k documents under the default `LogMergePolicy`. Arm A shows exactly that: about 2,810 torrent-index merges in 20,000 one-document commits, one every 7.1 commits. Its largest segment stops at 16,822 documents, `min_layer_size` (10,000) × 2^0.75. The rewrite is real; what it leaves behind is the level above, not a growing slope.
-- **mimalloc v2 (D1) is a lead, not a finding.** It has the lowest mean of the A-family runs (1.61 against 2.68) but doesn't pass the rule. THP off (D2) looks like A, though THP in production is under X-thp-off.
+- **mimalloc v2 (D1) is a lead, not a finding.** It has the lowest mean of the A-family runs (1.61 against 2.68) but doesn't pass the rule. THP off (D2) looks like A, but **D2 is uninformative**. On this `madvise` host, mimalloc v3 never asks for huge pages, so `MIMALLOC_ALLOW_THP=0` changes nothing. D2 is evidence neither for nor against X-thp-off.
 - **A recorded option, not taken: a 64 MiB writer heap** in place of `serve`'s 256 MiB.
   - If the buffers set the high-water (the inference above), the one-time level would fall by perhaps 20–30 MiB, at the cost of indexing throughput. That's unmeasured.
   - It doesn't touch the slope that fails r4.

@@ -253,9 +253,12 @@ fn measure() -> u64 {
 
 /// The heap's high-water since the last call, sampled every 2 ms by its
 /// own thread (dhat only: its `max_bytes` never resets).
+/// Dropped before the profiler (declared after it), and the drop joins
+/// the sampler, so `HeapStats::get()` never runs after the profiler ends.
 struct Peak {
     max: Arc<std::sync::atomic::AtomicU64>,
     stop: Arc<AtomicBool>,
+    sampler: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Peak {
@@ -263,16 +266,18 @@ impl Peak {
         let max = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         #[cfg(feature = "dhat-heap")]
-        {
+        let sampler = {
             let (max, stop) = (max.clone(), stop.clone());
-            std::thread::spawn(move || {
+            Some(std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     max.fetch_max(measure(), Ordering::Relaxed);
                     std::thread::sleep(Duration::from_millis(2));
                 }
-            });
-        }
-        Peak { max, stop }
+            }))
+        };
+        #[cfg(not(feature = "dhat-heap"))]
+        let sampler = None;
+        Peak { max, stop, sampler }
     }
 
     fn take(&self) -> u64 {
@@ -283,6 +288,9 @@ impl Peak {
 impl Drop for Peak {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(sampler) = self.sampler.take() {
+            let _ = sampler.join();
+        }
     }
 }
 
