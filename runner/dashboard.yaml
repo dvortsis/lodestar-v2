@@ -302,7 +302,6 @@ placement:
 - ws: ws-src-parse
   match:
   - SRC-6
-  - SRC-6b
   - SRC-8
   - SRC-9
 - ws: ws-src-plug
@@ -829,7 +828,7 @@ owner_queue:
   when: Before SRC-12 merges
 - n: 12
   type: info
-  action: 'For your veto (§2.19): SB-6 uses a size_bucket (2 buckets per power of two) instead of raw-size postings, to stay within the 800 B/torrent file-index budget; SRC-11 exports .torrent files automatically from your own LAN download client, as claims only and never contacting trackers; SRC-10b defers AnimeTosho file lists and media info until a parser extension (SRC-6b) exists'
+  action: 'For your veto (§2.19): SB-6 uses a size_bucket (2 buckets per power of two) instead of raw-size postings, to stay within the 800 B/torrent file-index budget; SRC-11 exports .torrent files automatically from your own LAN download client, as claims only and never contacting trackers; SRC-10b (AnimeTosho) is dropped because the site stopped ingesting in May 2026 and its feed is unreachable'
   unblocks: Nothing; proceeds unless you object
   when: Any time
 gates:
