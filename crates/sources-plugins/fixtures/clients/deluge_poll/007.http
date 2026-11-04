@@ -1,0 +1,7 @@
+POST http://deluge.example:8112/json
+Content-Type: application/json
+Accept: application/json
+Cookie: _session_id=REDACTED
+
+HTTP 200
+Content-Type: application/json

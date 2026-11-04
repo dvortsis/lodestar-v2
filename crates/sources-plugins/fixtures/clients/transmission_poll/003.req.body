@@ -1,0 +1,1 @@
+{"arguments":{"fields":["hashString","name","totalSize","status","error"]},"method":"torrent-get"}

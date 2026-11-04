@@ -1,0 +1,7 @@
+GET http://qbittorrent.example:8080/api/v2/torrents/export?hash=fb9ff1ef824d61bd83b24fb91811804db71c0c53
+Referer: http://qbittorrent.example:8080/
+Origin: http://qbittorrent.example:8080
+Cookie: SID=REDACTED
+
+HTTP 200
+Content-Type: application/x-bittorrent
