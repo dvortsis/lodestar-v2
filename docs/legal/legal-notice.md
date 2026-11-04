@@ -46,7 +46,7 @@ Lodestar sends nothing to its makers: no telemetry, no crash reports, no usage d
 - logs, which leave out torrent names unless you turn that on;
 - a **query log** of searches, which is **off by default**, and which you can clear.
 
-**Backups contain all of this**, including private findings and the encrypted credentials (without the key). Shareable search exports leave private findings out. Nobody but you can read a credential: it's encrypted, and the key file stays outside the database.
+Credentials are encrypted at rest with a key stored separately from the database; Lodestar decrypts them when it uses them, so access to both the database and the key can expose them. Database backups contain private findings and the encrypted credential values; a full copy of the data folder can also contain the key files and logs. Protect your server and your backups accordingly. Shareable search exports exclude private findings.
 
 Lodestar contacts the internet for the DHT and peers; for swarm counts from a built-in list of public trackers; for the sources you turn on; for blocklist and rule-pack downloads you choose; for notification channels you set up (ntfy, Discord, email, webhooks); and for update checks if you turn them on (those contact GitHub). The **Diagnostics** panel in Settings → About shows versions, platform and the names of changed settings, with no values, paths or torrent details; you can copy it, and nothing is sent unless you paste it somewhere.
 
