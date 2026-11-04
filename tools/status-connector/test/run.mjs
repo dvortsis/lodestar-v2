@@ -31,7 +31,9 @@ let github = {
     { slot: 2, slice: 'B0', doing: 'A second entry for slot 2.' },
     { slot: 3, slice: 'SRC-9', role: 'wizard', doing: 'The same slice again, with a role outside the set.' },
     { slot: 1.5, slice: 'SRC-4', doing: 'Fractional slot number.' },
-    { slot: 9, slice: 'SRC-4', doing: 'Out of range.' },
+    { slot: 9, slice: 'SRC-4', doing: 'Above the limit.' },
+    { slot: 1e9, slice: 'SRC-4', doing: 'A typo that must not cost memory.' },
+    { slot: 4, slice: { not: 'a string' }, doing: 42, since: ['x'], role: { r: 1 } },
   ] } },
   refs: [{ ref: 'refs/heads/slice/SRC-9' }, { ref: 'refs/heads/slice/SRC-12' }],            // branch only; SRC-12's PR was closed unmerged
   fail: false,
@@ -100,11 +102,12 @@ assert.equal((await tool('plan_owner')).rows.length, 1); assert.equal((await too
 const notes = (await tool('plan_notes')).rows; assert.deepEqual(notes.map((n) => n.group), ['now', 'you']); assert.equal(notes[0].asof, '2026-11-02');
 assert.equal((await tool('plan_crawler')).rows.length, 2); assert.equal((await tool('plan_soak')).rows.length, 1);
 const slots = (await tool('plan_slots')).rows;
-assert.deepEqual(slots.map((x) => x.status), ['working', 'working', 'working', 'idle', 'idle', 'idle', 'idle', 'idle', 'working'], 'slots 1..max(limit, highest listed); an unlisted slot is idle');
+assert.deepEqual(slots.map((x) => x.status), ['working', 'working', 'working', 'working'], 'rows are drawn for 1..limit only, never for a slot above it');
+assert.equal(slots[3].slice, '', 'a value that is not a string is dropped, not passed through'); assert.equal(slots[3].doing, '42'); assert.equal(slots[3].since, '');
 assert.equal(slots[0].slice, 'SRC-9'); assert.ok(slots[0].title && slots[0].stage, 'a slot takes its title and state from the slice graph');
 assert.equal(slots[1].slice, 'NOPE-3', 'the first entry for a slot wins');
 assert.equal(slots[2].role, 'build', 'a role outside the set falls back to build');
-for (const w of ['Unknown slice:NOPE-3', 'Slot listed twice:2', 'Bad slot number:1.5', 'Slice in two slots:SRC-9', 'Bad slot value:role wizard', 'Slots exceed the limit:9']) assert.ok(warnings.includes(w), 'reported: ' + w);
+for (const w of ['Unknown slice:NOPE-3', 'Slot listed twice:2', 'Bad slot number:1.5', 'Slice in two slots:SRC-9', 'Bad slot value:role wizard', 'Slot above the limit:9', 'Slot above the limit:1000000000']) assert.ok(warnings.includes(w), 'reported: ' + w);
 assert.ok(warnings.some((w) => w.startsWith('Slots list is stale')), 'a slots list the runner has not refreshed in 24 h is reported');
 // a condition with `auto:` follows GitHub: unmet until the tag exists
 assert.equal((await tool('plan_ext')).rows.find((e) => e.key === 'v-tagged').met, false);
@@ -146,6 +149,16 @@ const partialRes = (await partial.json()).result; assert.equal(partialRes.isErro
 assert.ok(JSON.parse(partialRes.content[0].text).some((r) => r.key === 'warning' && r.label === 'Merge history incomplete'), 'and it is reported');
 github.page2Fail = false;
 github.closed = savedClosed;
+// bad slot metadata is reported, never trusted
+const stateBefore = github.state;
+github.state = { updated_at: 'x', slots: { updated: '2999-01-01T00:00:00Z', items: 'not a list' } };
+const bad1 = (await metaOf('o/r6')).filter((r) => r.key === 'warning').map((r) => r.label);
+assert.ok(bad1.includes('Slots malformed'), 'items that is not a list is reported'); assert.ok(bad1.includes('Slots date invalid'), 'a date in the future is invalid, not fresh');
+github.state = { updated_at: 'x', slots: { updated: 'yesterday-ish', items: [] } };
+assert.ok((await metaOf('o/r7')).some((r) => r.label === 'Slots date invalid'), 'an unparseable date says invalid, not missing');
+github.state = { updated_at: 'x', slots: { items: [] } };
+assert.ok((await metaOf('o/r8')).some((r) => r.label === 'Slots date missing'), 'no date says missing');
+github.state = stateBefore;
 github.fail = true; // a GitHub failure is reported to the caller, not hidden
 const failed = (await (await worker.fetch(new Request('https://x/mcp/' + SECRET + '', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'plan_meta' } }) }), { ...env, CACHE_SECONDS: '0' })).json()).result;
 assert.equal(failed.isError, true); assert.match(failed.content[0].text, /Could not read GitHub/);

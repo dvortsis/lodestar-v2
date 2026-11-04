@@ -39,6 +39,8 @@ const failures = new Map<string, { at: number; message: string }>();
 const ERROR_SECONDS = 30;
 const cacheStore = (): Cache | null => (typeof caches !== 'undefined' && (caches as any).default ? (caches as any).default : null);
 
+const pause = () => new Promise((res) => setTimeout(res, 250 + Math.random() * 250)); // a short jittered wait before the single retry
+
 async function ghFetch(env: Env, path: string, raw: boolean, retry = true): Promise<any> {
   let r: Response;
   try { r = await fetch('https://api.github.com' + path, {
@@ -46,13 +48,13 @@ async function ghFetch(env: Env, path: string, raw: boolean, retry = true): Prom
       Authorization: 'Bearer ' + env.GITHUB_TOKEN, 'User-Agent': 'lodestar-status-connector', 'X-GitHub-Api-Version': '2022-11-28',
       Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
     },
-  }); } catch (e) { if (retry) return ghFetch(env, path, raw, false); throw e; } // a thrown fetch (network reset) gets one more try too
-  if (r.status >= 500 && retry) return ghFetch(env, path, raw, false); // GitHub's own timeouts (502, 503, 522) usually pass on a second try
+  }); } catch (e) { if (retry) { await pause(); return ghFetch(env, path, raw, false); } throw e; } // a thrown fetch (network reset) gets one more try too
+  if (r.status >= 500 && retry) { await pause(); return ghFetch(env, path, raw, false); } // GitHub's own timeouts (502, 503, 522) usually pass on a second try
   if (!r.ok) throw new Error(`GitHub ${r.status} for ${path}`);
   return raw ? r.text() : r.json();
 }
 
-async function gh(env: Env, path: string, ttl: number, raw = false): Promise<any> {
+async function gh(env: Env, path: string, ttl: number, raw = false, retry = true): Promise<any> {
   const key = (raw ? 'raw:' : 'json:') + path;
   const bad = failures.get(key);
   if (bad && Date.now() - bad.at < ERROR_SECONDS * 1000) throw new Error(bad.message);
@@ -60,7 +62,7 @@ async function gh(env: Env, path: string, ttl: number, raw = false): Promise<any
   if (ttl > 0 && store) { const hit = await store.match(req); if (hit) return raw ? hit.text() : hit.json(); }
   let p = inflight.get(key);
   if (!p) {
-    p = ghFetch(env, path, raw).then(async (v) => {
+    p = ghFetch(env, path, raw, retry).then(async (v) => {
       failures.delete(key);
       if (ttl > 0 && store) await store.put(req, new Response(raw ? v : JSON.stringify(v), { headers: { 'Cache-Control': `max-age=${ttl}` } }));
       return v;
@@ -78,7 +80,7 @@ async function closedPRs(env: Env, ttl: number): Promise<{ all: any[]; incomplet
   // page fails, the plan is built from what GitHub did return and says so, instead of every tool failing on one timeout.
   const all: any[] = []; let incomplete = false;
   for (let start = 1; start <= MAX_CLOSED_PAGES; start += 4) {
-    const results = await Promise.allSettled([0, 1, 2, 3].filter((k) => start + k <= MAX_CLOSED_PAGES).map((k) => gh(env, `/repos/${env.GITHUB_REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=${start + k}`, start + k === 1 ? ttl : ttl * 10)));
+    const results = await Promise.allSettled([0, 1, 2, 3].filter((k) => start + k <= MAX_CLOSED_PAGES).map((k) => gh(env, `/repos/${env.GITHUB_REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=${start + k}`, start + k === 1 ? ttl : ttl * 10, false, start + k === 1)));
     if (start === 1 && results[0].status === 'rejected') throw (results[0] as PromiseRejectedResult).reason;
     let full = true;
     // results come in page order: once a page is short, later pages do not exist, so their failures do not count

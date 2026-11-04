@@ -186,33 +186,40 @@ export function buildPlan(inp: Inputs) {
   // is the owner's limit in runner/slices.yaml (limits.phase_total), not a second copy. Anything out of step is reported, not hidden.
   const slots: any[] = [];
   const sl = inp.runnerState && inp.runnerState.slots ? inp.runnerState.slots : null;
+  const text = (v: any): string => (typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : '').slice(0, 300);
+  const MAX_SLOTS = 64;
   const ROLES = ['build', 'review', 'docs', 'soak', 'other'], AGENTS = ['claude', 'other'];
   if (sl) {
+    if (!Array.isArray(sl.items)) warn('Slots malformed', typeof sl.items, 'runner-state slots.items must be a list of entries; it is not, so no slot is shown');
     const items: any[] = Array.isArray(sl.items) ? sl.items : [];
+    // rows are drawn for 1..limit only; a typo like slot 1000000000 must not cost memory or break the other tables
     const limit = Number(inp.limits?.phase_total);
-    const top = items.reduce((m: number, x: any) => (Number.isInteger(x?.slot) ? Math.max(m, x.slot) : m), 0);
-    const cap = Number.isInteger(limit) && limit > 0 ? limit : top;
-    if (cap < top) warn('Slots exceed the limit', String(top), 'runner-state lists a slot ' + top + ' but limits.phase_total in runner/slices.yaml is ' + cap + '; update one of them');
+    const cap = Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_SLOTS) : 0;
+    if (!cap) warn('Slot limit unknown', String(inp.limits?.phase_total ?? 'none'), 'limits.phase_total in runner/slices.yaml is missing or not a whole number above 0, so no slot rows are drawn');
     const byId: Record<string, any> = {}; for (const n of nodes) byId[n.id] = n;
-    const slotAsof = String(sl.updated || '');
+    const slotAsof = typeof sl.updated === 'string' ? sl.updated : '';
     const seenSlice = new Map<string, number>(), seenSlot = new Set<number>();
     const rows: Record<number, any> = {};
     for (const x of items) {
-      if (!x || !Number.isInteger(x.slot) || x.slot < 1) { warn('Bad slot number', String(x?.slot), 'a slots entry in runner-state must have a whole slot number of 1 or more'); continue; }
+      if (!x || typeof x !== 'object' || !Number.isInteger(x.slot) || x.slot < 1) { warn('Bad slot number', String(x?.slot).slice(0, 20), 'a slots entry in runner-state must have a whole slot number of 1 or more'); continue; }
+      if (x.slot > cap) { warn('Slot above the limit', String(x.slot).slice(0, 20), 'runner-state lists slot ' + String(x.slot).slice(0, 20) + ' but limits.phase_total in runner/slices.yaml is ' + cap + '; it is not shown'); continue; }
       if (seenSlot.has(x.slot)) { warn('Slot listed twice', String(x.slot), 'runner-state slots has more than one entry for slot ' + x.slot); continue; }
       seenSlot.add(x.slot);
-      if (x.role !== undefined && !ROLES.includes(x.role)) warn('Bad slot value', 'role ' + x.role, 'slot ' + x.slot + ': role must be one of ' + ROLES.join(', '));
-      if (x.agent !== undefined && !AGENTS.includes(x.agent)) warn('Bad slot value', 'agent ' + x.agent, 'slot ' + x.slot + ': agent must be one of ' + AGENTS.join(', '));
-      const node = x.slice ? byId[x.slice] : undefined;
-      if (x.slice && !node) warn('Unknown slice', String(x.slice), 'slot ' + x.slot + ' in runner-state slots names a slice that is not in runner/slices.yaml');
-      if (node && ['done', 'closed'].includes(node.state)) warn('Slot lists finished work', String(x.slice), 'slot ' + x.slot + ' still shows a slice that has merged or closed; the runner should update slots');
-      if (x.slice) { if (seenSlice.has(x.slice)) warn('Slice in two slots', String(x.slice), 'slots ' + seenSlice.get(x.slice) + ' and ' + x.slot + ' both list it'); else seenSlice.set(x.slice, x.slot); }
-      rows[x.slot] = { slot: x.slot, status: x.status === 'idle' ? 'idle' : 'working', slice: x.slice || '', title: node?.title || '', doing: x.doing || '', agent: AGENTS.includes(x.agent) ? x.agent : node?.agent || '', model: node?.model || '', role: ROLES.includes(x.role) ? x.role : 'build', since: x.since || '', stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof };
+      if (x.role !== undefined && !ROLES.includes(x.role)) warn('Bad slot value', 'role ' + text(x.role), 'slot ' + x.slot + ': role must be one of ' + ROLES.join(', '));
+      if (x.agent !== undefined && !AGENTS.includes(x.agent)) warn('Bad slot value', 'agent ' + text(x.agent), 'slot ' + x.slot + ': agent must be one of ' + AGENTS.join(', '));
+      const slice = text(x.slice), doing = text(x.doing), since = text(x.since);
+      const node = slice ? byId[slice] : undefined;
+      if (slice && !node) warn('Unknown slice', slice, 'slot ' + x.slot + ' in runner-state slots names a slice that is not in runner/slices.yaml');
+      if (node && ['done', 'closed'].includes(node.state)) warn('Slot lists finished work', slice, 'slot ' + x.slot + ' still shows a slice that has merged or closed; the runner should update slots');
+      if (slice) { if (seenSlice.has(slice)) warn('Slice in two slots', slice, 'slots ' + seenSlice.get(slice) + ' and ' + x.slot + ' both list it'); else seenSlice.set(slice, x.slot); }
+      rows[x.slot] = { slot: x.slot, status: x.status === 'idle' ? 'idle' : 'working', slice, title: node?.title || '', doing, agent: AGENTS.includes(x.agent) ? x.agent : node?.agent || '', model: node?.model || '', role: ROLES.includes(x.role) ? x.role : 'build', since, stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof };
     }
-    for (let n = 1; n <= Math.max(cap, top); n++) slots.push(rows[n] || { slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', model: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof });
-    const age = slotAsof ? (Date.parse(inp.now) - Date.parse(slotAsof)) / 36e5 : Infinity;
-    if (!(age <= 24)) warn('Slots list is stale', slotAsof || 'no date', 'runner-state slots.updated is ' + (Number.isFinite(age) ? Math.round(age) + ' h old' : 'missing') + '; the runner should refresh it on the wake where a session starts, finishes or changes task');
-    const listed = new Set(items.map((x: any) => x?.slice).filter(Boolean));
+    for (let n = 1; n <= cap; n++) slots.push(rows[n] || { slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', model: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof });
+    const t = slotAsof ? Date.parse(slotAsof) : NaN, age = (Date.parse(inp.now) - t) / 36e5;
+    if (!slotAsof) warn('Slots date missing', 'none', 'runner-state slots.updated is missing, so the dashboard cannot tell how fresh the list is');
+    else if (!Number.isFinite(t) || age < -0.1) warn('Slots date invalid', slotAsof.slice(0, 40), 'runner-state slots.updated is not a past UTC time; the runner should set it to the time of its last change');
+    else if (age > 24) warn('Slots list is stale', slotAsof, 'runner-state slots.updated is ' + Math.round(age) + ' h old; the runner should refresh it on the wake where a session starts, finishes or changes task');
+    const listed = new Set(items.map((x: any) => text(x?.slice)).filter(Boolean));
     const loose = Object.keys(openById).filter((id) => !listed.has(id));
     if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner-state slots');
   } else if (inp.runnerState) warn('Slots not recorded', 'none', 'runner-state state.json has no slots key, so the dashboard cannot show what each slot is doing');
