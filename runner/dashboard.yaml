@@ -786,7 +786,7 @@ owner_queue:
   when: Before CR-4 lands
 - n: 3
   type: decision
-  action: Approve the plain-language consent texts SRC-4 drafted (Q1), at https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md#L79 ("Draft consent texts")
+  action: Approve the plain-language consent texts SRC-4 drafted (Q1), at https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md?plain=1#L79 ("Draft consent texts")
   unblocks: The consent dialogs and credentials screen (SRC-15b)
   when: Before SRC-15b
 - n: 4
@@ -931,5 +931,5 @@ notes:
     text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
-  - label: Optional
-    text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Review the draft consent texts (https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md#L79). The nightly signing key and the Unraid Backups share minimum free space are optional.
+  - label: Also for you
+    text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Review the draft consent texts (https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md?plain=1#L79). The nightly signing key and the Unraid Backups share minimum free space are optional.
