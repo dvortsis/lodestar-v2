@@ -1799,7 +1799,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **Sources, plugins and network tiers (draft 8 → 9):** every source is now an on/off **plugin** under one API and crawl scheduler (§18).
 - **Ranking:** sources are ranked by 0.4 × rarity/breadth + 0.3 × volume + 0.3 × ease, with risk deciding default state and consent class.
-- **Roadmap:** importers in v0.5; Prowlarr, Nyaa, BEP 48, Internet Archive and official lists in v0.6; enrichment and outputs (including a Stremio addon) in v0.7; Anna's Archive, Nostr and Lemmy in v0.8; then I2P (v1.1), eD2k/Kad (v1.2) and IPFS (v1.3).
+- **Roadmap:** importers in v0.5; Prowlarr, Nyaa, BEP 48, Internet Archive and official lists in v0.6; enrichment and outputs (including a Stremio addon) in v0.7; Nostr and Lemmy in v0.8 (~~Anna's Archive~~ *superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins*); then I2P (v1.1), eD2k/Kad (v1.2) and IPFS (v1.3).
 - **Priority and agents** are shares of one global budget (deficit round robin, min/max shares, hard politeness caps, optional auto-balance by marginal utility including unique finds), not raw thread counts, because sources share the same bottlenecks.
 - **Data model:** provenance bitset, claims, an unverified tier and network tiers.
 - **Safety:** CSAM blocklist universal and non-disableable; private-tracker results local-only.
@@ -3001,7 +3001,7 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 | — | **Mainline DHT** (BEP 5/51/passive, §5) | discovery | live | 3 | 5 | 3 | core | Med |
 | 1 | **Prowlarr/Jackett** (your indexers via Torznab/Newznab; private results local-only; also covers the public indexers, see below) | discovery | poll | 5 | 4 | 5 | **4.7** | Med |
 | 2 | **Rutracker catalogue dumps** (published XML exports: titles, hashes, categories, descriptions) | importer | import | 5 | 4 | 4 | **4.4** | Med |
-| 3 | **Anna's Archive / LibGen** (torrent lists + metadata dumps mapping files → titles/ISBNs) | importer + discovery | import/poll | 5 | 5 | 3 | **4.4** | High |
+| 3 | ~~**Anna's Archive / LibGen**~~ *superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins* (torrent lists + metadata dumps mapping files → titles/ISBNs) | importer + discovery | import/poll | 5 | 5 | 3 | **4.4** | High |
 | 4 | **Usenet NZB indexers** (your accounts, via Prowlarr's Newznab support; `usenet` tier, local-only) | network | poll | 5 | 4 | 4 | **4.4** | Med |
 | 5 | **MagnetDB** research dataset (DHT 2018–2024, 28.6M+ torrents, 950M+ files, IMDb-matched; access terms TBC) | importer | import | 4 | 5 | 4 | **4.3** | Med |
 | 6 | **Internet Archive** (item torrents + metadata API) | discovery | poll | 4 | 4 | 4 | **4.0** | Low |
@@ -3065,7 +3065,7 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 | **v0.5** (M2–M3) | **Importer framework**: bitmagnet DB (already planned), **Rutracker dumps**, **MagnetDB** (if access is granted), **Archive Team copies of defunct sites**, **RARBG/magnetico/bitmagnet exports**, **DMM hashlists**. Enrichment (M3): **No-Intro/Redump/TOSEC DATs** | The largest breadth for the least effort, and it solves the cold start. All use one streaming importer framework plus background DHT verification. DAT matching is cheap and fits the M3 enrichment work. |
 | **v0.6** (M4 + early M7) | **Companion manager v1** (§18.10: qBittorrent, Prowlarr + FlareSolverr, gluetun). **Prowlarr/Jackett** (local-only private results; public indexers included), **your download clients**, **Nyaa RSS**, **AnimeTosho**, **BEP 48 full scrape**, **Internet Archive**, **Academic/official lists**; enrichment: **torrent cache** | The top-scoring live sources, once claims/provenance and the unverified tier exist. Prowlarr and a download client need companions, so the manager lands here. The full scrape ships with the M4 tracker scraper. |
 | **v0.7** (M7) | **`usenet` tier** (+ SABnzbd/NZBGet companion), **private-tracker IRC announces**, **direct JSON API plugins** (optional). Enrichment: **srrDB, PreDB (+ live IRC feed), Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid status**. Outputs: **Torznab server, Stremio addon, bitmagnet export** | Turns breadth into findability: ambiguity resolution, multilingual titles, IDs. Usenet rides on the Prowlarr plumbing from v0.6. |
-| **v0.8** | **Anna's Archive / LibGen** (restricted consent), **Nostr NIP-35**, **Lemmy** (ActivityPub push). Adult sources need no special tier (§20.9) and can arrive with Prowlarr in v0.6 | Anna's Archive scores high but needs the consent framework and a restricted tier. Nostr and Lemmy are lower volume. |
+| **v0.8** | ~~**Anna's Archive / LibGen** (restricted consent)~~ (*superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins*), **Nostr NIP-35**, **Lemmy** (ActivityPub push). Adult sources need no special tier (§20.9) and can arrive with Prowlarr in v0.6 | Anna's Archive scores high but needs the consent framework and a restricted tier. Nostr and Lemmy are lower volume. |
 | **1.0** | Hardening across all plugins | Contract tests, politeness audits, purge correctness |
 | **v1.1** | **Network-tier infrastructure + I2P** (i2pd companion) | The first overlay network, at your request, for rare content |
 | **v1.2** | **eD2k/Kad** (+ shared-file browsing, aMule companion) | The deepest well of rare content; a new protocol stack |
@@ -3174,7 +3174,7 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
 | None | Mainline DHT, Internet Archive, Academic/official lists, BEP 48, Lemmy | a toggle |
 | External | public web services (Nyaa, Nostr, torrent cache, Wikidata, Sukebei, …) | a toggle + the endpoint list shown |
 | Account | Prowlarr/Jackett (incl. Usenet), private-tracker IRC announces, your download clients, debrid, keyed APIs (TMDB, IGDB, Discogs) | credentials (encrypted at rest, never exported); results local-only |
-| Restricted | Anna's Archive/LibGen and other High-risk content sources; tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
+| Restricted | High-risk content sources (~~Anna's Archive/LibGen~~ *superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins*); tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
 | Overlay | I2P, eD2k/Kad, IPFS | a consent screen + VPN recommendation; isolated tier; one-click purge |
 
 - **No profiles of people.** Peer IPs and IDs are used only briefly, to fetch metadata or count a swarm, and are **never stored alongside what they share**. The one exception is the opt-in, time-limited **Peer activity** log kind (§12.1, owner's decision §2.11), which writes only to the local log file and live log.
@@ -3597,8 +3597,8 @@ Packs are signed and versioned. **All six are on by default and shown, checked, 
 
 | ID | Matches | Action | False-positive guards |
 |---|---|---|---|
-| UC-1 | Camcorder, telesync, telecine and screener rips of films (`CAM`, `TS`, `TC`, `HDCAM`, `HDTS`, `DVDSCR`, `screener`), which have no lawful release form | hide | none needed beyond the parser's source field |
-| UC-2 | Cracked software: the parser's `cracked` flag (keygen, crack, activator, pre-activated) on a software release | hide | shared with MW-6; a title merely containing the word is not a flag |
+| UC-1 | Camcorder, telesync, telecine and screener rips of films (`CAM`, `TS`, `TC`, `HDCAM`, `HDTS`, `DVDSCR`, `screener`), which have no lawful release form | hide | none needed beyond the parser's source field; the lexicon rates a bare `ts` token a weak hit, so the rule requires the parsed source field, not the token alone |
+| UC-2 | Cracked software: the parser's `cracked` flag (keygen, crack, activator, pre-activated) on a software release | hide | the same flag feeds the malware pack as a new `cracked` junk reason and rule (MW-6, added by the pack slice); a title merely containing the word is not a flag |
 | UC-3 | Scene-style film and TV rips: parsed as film or TV, with a disc or web source tag and a release group | hide | items from official sources (Internet Archive, academic lists) exempt; a built-in allow list of public-domain and Creative Commons titles (Big Buck Bunny, Sintel, …); the user's Allow rules |
 
 The pack hides names that follow the conventions of unauthorised copies; it cannot know who holds the rights, and its description in the wizard says so.
