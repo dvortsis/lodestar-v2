@@ -11,6 +11,10 @@
 //!   [`AdultKind`] (§20.9);
 //! - the [`Junk`] score with its reasons.
 //!
+//! [`classify_enriched`] also takes an adult-enrichment match
+//! ([`EnrichmentMatch`]) as a strong adult signal; without one it's
+//! [`classify_corrected`] exactly.
+//!
 //! It's pure and CPU-only, so it runs on the worker side of the prepare
 //! step (§19.4). The cost is one pass over the files plus at most a few
 //! release parses, whatever the file count.
@@ -26,7 +30,7 @@ mod structure;
 
 use std::collections::HashSet;
 
-pub use adult::{ADULT_THRESHOLD, AdultKind};
+pub use adult::{ADULT_THRESHOLD, AdultKind, EnrichmentMatch, MATCH_CONFIDENCE, MatchKind};
 pub use composition::{COMP_VERSION, CategoryStat, Composition, DecodeError};
 pub use content::ContentType;
 pub use effective::{Effective, ResolvedVia};
@@ -141,6 +145,28 @@ pub fn classify(name: &str, files: &[FileInfo]) -> Classification {
 
 /// [`classify`], with your correction applied.
 pub fn classify_corrected(name: &str, files: &[FileInfo], fix: Correction) -> Classification {
+    classify_enriched(name, files, fix, None)
+}
+
+/// [`classify_corrected`], with an adult-enrichment match as a strong
+/// adult signal (§20.9, plan Q13). With no match it gives exactly what
+/// [`classify_corrected`] gives, so stored results stay valid and
+/// [`CLASSIFY_VERSION`] doesn't change.
+///
+/// A match pins the reported kind at [`MATCH_CONFIDENCE`]. Your
+/// correction or classification rule (`fix`) still wins: Not adult skips
+/// adult detection, match included, and Is adult gives the match's kind
+/// at the correction's confidence, 100. A match only adds: without a Not adult fix
+/// the result is adult, no less surely than without the match, and every
+/// field other than the type, confidence and kind is unchanged. Filtering
+/// judges the result with `Correction::default()`, so a match can only
+/// make filtering stricter (§20.7).
+pub fn classify_enriched(
+    name: &str,
+    files: &[FileInfo],
+    fix: Correction,
+    enrichment: Option<EnrichmentMatch>,
+) -> Classification {
     let mut composition = Composition::default();
     let mut largest: Option<usize> = None;
     let mut depth = 0usize;
@@ -170,14 +196,18 @@ pub fn classify_corrected(name: &str, files: &[FileInfo], fix: Correction) -> Cl
         content::content_type(&title, &composition, structure, files);
     let detected = match fix.adult {
         Some(false) => None,
-        _ => adult::detect(
+        _ => adult::detect_matched(
             name,
             &title.release,
             largest.map(|i| &files[i]),
             content_type,
+            enrichment,
         ),
     };
     let adult_kind = match (detected, fix.adult) {
+        // Is adult and a match agree: the reported kind, at the
+        // correction's full confidence, so the match never lowers it.
+        (Some((kind, _)), Some(true)) if enrichment.is_some() => Some((kind, 100)),
         (Some(d), _) => Some(d),
         (None, Some(true)) => Some((adult::forced_kind(content_type), 100)),
         (None, _) => None,

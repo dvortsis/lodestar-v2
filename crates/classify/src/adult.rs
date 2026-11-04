@@ -12,9 +12,15 @@
 //!   numbers (mainstream TV like *Sex Education*) cancel the supporting
 //!   ones.
 //!
-//! Signals that need more than the name and files (the source's own
-//! category, enrichment matches, user corrections) arrive with the filter
-//! engine and the plugins; they adjust this score rather than replace it.
+//! - Enrichment: a match from an adult-enrichment service (ThePornDB,
+//!   StashDB) is a strong signal that pins the kind the service reports
+//!   at [`MATCH_CONFIDENCE`] ([`detect_matched`], plan Q13). It only ever
+//!   adds: it makes a torrent adult, or more surely or more specifically
+//!   so, and never less. A user correction or classification rule still
+//!   wins over it (§20.7, V8/V9), since those are applied by the caller.
+//!
+//! The source's own category arrives with the filter engine and the
+//! plugins; it adjusts this score rather than replace it.
 
 use lodestar_release_parser::Release;
 
@@ -144,6 +150,54 @@ const VR: &[&str] = &[
     "vr", "oculus", "gearvr", "vr180", "vr360", "180x180", "3dh", "lr180",
 ];
 
+/// The kind an adult-enrichment service reports for a match (§20.9).
+/// Only video is matched, so these are the only kinds a match can pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MatchKind {
+    Scene,
+    Movie,
+    Vr,
+}
+
+impl MatchKind {
+    pub const ALL: [MatchKind; 3] = [MatchKind::Scene, MatchKind::Movie, MatchKind::Vr];
+
+    /// The adult kind the match pins.
+    pub fn adult_kind(self) -> AdultKind {
+        match self {
+            MatchKind::Scene => AdultKind::Scene,
+            MatchKind::Movie => AdultKind::Movie,
+            MatchKind::Vr => AdultKind::Vr,
+        }
+    }
+}
+
+/// A match from an adult-enrichment service, as classification takes it
+/// (§20.9, plan Q13). Only the kind is the caller's: the confidence is
+/// always [`MATCH_CONFIDENCE`], so no service score can lower detection's.
+/// Deciding whether a service result is a match at all is the caller's
+/// job (ENR-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EnrichmentMatch {
+    pub kind: MatchKind,
+}
+
+impl EnrichmentMatch {
+    pub fn new(kind: MatchKind) -> EnrichmentMatch {
+        EnrichmentMatch { kind }
+    }
+
+    /// The confidence a match gives (plan Q13).
+    pub fn confidence(self) -> u8 {
+        MATCH_CONFIDENCE
+    }
+}
+
+/// The confidence of an enrichment match (plan Q13): the heuristic cap,
+/// so a match never lowers a confidence detection gave, and still below
+/// a user correction or classification rule (100).
+pub const MATCH_CONFIDENCE: u8 = 99;
+
 #[derive(Debug, Default)]
 struct Signals {
     strong: u8,
@@ -221,17 +275,50 @@ fn scene_date(words: &[String]) -> bool {
 
 /// Whether the torrent is adult, as what kind and how surely. `base` is
 /// the content type it would otherwise have.
-pub(crate) fn detect(
+///
+/// `m` is an enrichment match, a strong signal (plan Q13). Without one,
+/// this is name-and-files detection alone. With one, the torrent is
+/// adult as the kind the service reports, at [`MATCH_CONFIDENCE`] (which
+/// no detection score exceeds), with one refinement: VR words, or
+/// detection's own VR, keep a Scene or Movie match as VR, the way they
+/// turn detection's Scene or Movie into VR. The name's counter-signals
+/// don't weaken a match: only items already classified adult are looked
+/// up (plan Q2), and a match can only add (§20.7 "stricter only"). That
+/// covers the counters scanned here only; how a future mainstream match
+/// (TMDB, TVDB, MusicBrainz, §20.9) weighs against an adult one is for
+/// the slice that adds it.
+pub(crate) fn detect_matched(
     name: &str,
     release: &Release,
     largest: Option<&FileInfo>,
     base: ContentType,
+    m: Option<EnrichmentMatch>,
 ) -> Option<(AdultKind, u8)> {
+    let s = signals(name, largest);
+    let detected = detect_from(&s, release, base);
+    let Some(m) = m else {
+        return detected;
+    };
+    // Detection's VR comes from the same VR words, so `s.vr` covers it.
+    let kind = match m.kind.adult_kind() {
+        AdultKind::Scene | AdultKind::Movie if s.vr => AdultKind::Vr,
+        k => k,
+    };
+    // No detection score is above the match's (`score()` caps at 99).
+    debug_assert!(detected.is_none_or(|(_, d)| d <= MATCH_CONFIDENCE));
+    Some((kind, MATCH_CONFIDENCE))
+}
+
+fn signals(name: &str, largest: Option<&FileInfo>) -> Signals {
     let mut s = Signals::default();
     s.scan(name);
     if let Some(f) = largest {
         s.scan(f.name());
     }
+    s
+}
+
+fn detect_from(s: &Signals, release: &Release, base: ContentType) -> Option<(AdultKind, u8)> {
     let score = s.score(release);
     if score < ADULT_THRESHOLD {
         return None;
@@ -269,6 +356,15 @@ pub(crate) fn forced_kind(base: ContentType) -> AdultKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn detect(
+        name: &str,
+        release: &Release,
+        largest: Option<&FileInfo>,
+        base: ContentType,
+    ) -> Option<(AdultKind, u8)> {
+        detect_matched(name, release, largest, base, None)
+    }
 
     fn score(name: &str) -> u8 {
         let mut s = Signals::default();
@@ -334,6 +430,138 @@ mod tests {
         for base in ContentType::ALL {
             assert_eq!(at("Irvine Welsh - Porno (2002)", base), None);
         }
+    }
+
+    /// `detect` exactly as it was before enrichment matches (ENR-6),
+    /// kept as the oracle that unmatched detection hasn't changed.
+    fn frozen_detect(
+        name: &str,
+        release: &Release,
+        largest: Option<&FileInfo>,
+        base: ContentType,
+    ) -> Option<(AdultKind, u8)> {
+        let mut s = Signals::default();
+        s.scan(name);
+        if let Some(f) = largest {
+            s.scan(f.name());
+        }
+        let score = s.score(release);
+        if score < ADULT_THRESHOLD {
+            return None;
+        }
+        let kind = match base {
+            ContentType::Movie if s.scene_date => AdultKind::Scene,
+            _ => forced_kind(base),
+        };
+        let kind = match kind {
+            AdultKind::Scene | AdultKind::Movie if s.vr => AdultKind::Vr,
+            k => k,
+        };
+        Some((kind, score))
+    }
+
+    fn word() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::prelude::*;
+        prop_oneof![
+            "[A-Za-z0-9]{0,8}",
+            "\\PC{0,6}",
+            proptest::sample::select(
+                [SITES, TERMS, COUNTERS, VR]
+                    .concat()
+                    .into_iter()
+                    .chain([
+                        "xxx",
+                        "XXX",
+                        "hentai",
+                        "hentai-free",
+                        "S01E02",
+                        "24",
+                        "01",
+                        "15"
+                    ])
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            ),
+        ]
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(4000))]
+
+        /// No match: detection is exactly what it was before ENR-6.
+        #[test]
+        fn no_match_matches_frozen_detect(
+            name in proptest::collection::vec(word(), 0..8),
+            sep in proptest::sample::select(vec![".", " ", "-", "_"]),
+            file in proptest::option::of(proptest::collection::vec(word(), 1..5)),
+            base in proptest::sample::select(ContentType::ALL.to_vec()),
+        ) {
+            let name = name.join(sep);
+            let file = file.map(|w| FileInfo::new(vec![w.join(".")], 1));
+            let r = lodestar_release_parser::parse(&name);
+            proptest::prop_assert_eq!(
+                detect_matched(&name, &r, file.as_ref(), base, None),
+                frozen_detect(&name, &r, file.as_ref(), base)
+            );
+        }
+    }
+
+    #[test]
+    fn a_match_pins_its_kind() {
+        let at = |name: &str, base, m: Option<MatchKind>| {
+            let r = lodestar_release_parser::parse(name);
+            detect_matched(name, &r, None, base, m.map(EnrichmentMatch::new))
+        };
+        // No match: detection as before.
+        for name in ["Lantern.Bay.Parody.XXX.1080p", "Some.Movie.2019.1080p"] {
+            for base in ContentType::ALL {
+                let r = lodestar_release_parser::parse(name);
+                assert_eq!(
+                    at(name, base, None),
+                    detect_from(&signals(name, None), &r, base)
+                );
+            }
+        }
+        // A match on a name detection doesn't call adult.
+        let plain = "Some.Title.2019.1080p";
+        for k in MatchKind::ALL {
+            assert_eq!(
+                at(plain, ContentType::Movie, Some(k)),
+                Some((k.adult_kind(), MATCH_CONFIDENCE))
+            );
+        }
+        // Counter-signals don't weaken a match.
+        let doc = "XXX.Industry.Documentary.2019";
+        assert_eq!(
+            at(doc, ContentType::Movie, Some(MatchKind::Movie)),
+            Some((AdultKind::Movie, MATCH_CONFIDENCE))
+        );
+        // The reported kind replaces detection's.
+        assert_eq!(
+            at(
+                "Brazzers.24.01.15.Title",
+                ContentType::Images,
+                Some(MatchKind::Scene)
+            ),
+            Some((AdultKind::Scene, MATCH_CONFIDENCE))
+        );
+        // VR stays VR.
+        let vr = "Lantern.Bay.Parody.XXX.VR180.LR";
+        for k in MatchKind::ALL {
+            assert_eq!(
+                at(vr, ContentType::Video, Some(k)),
+                Some((AdultKind::Vr, MATCH_CONFIDENCE))
+            );
+        }
+        assert_eq!(
+            at(
+                "Some.Title.VR180",
+                ContentType::Video,
+                Some(MatchKind::Scene)
+            ),
+            Some((AdultKind::Vr, MATCH_CONFIDENCE))
+        );
+        assert_eq!(EnrichmentMatch::new(MatchKind::Scene).confidence(), 99);
     }
 
     #[test]
