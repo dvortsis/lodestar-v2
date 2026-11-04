@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T15:13:00Z",
+ "updated_at": "2026-11-04T15:20:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2678,7 +2678,8 @@
    "launched": "2026-11-04T05:35:00Z",
    "brief": "briefs/SRC-11.md",
    "pr": 414,
-   "head": "1c2e9ff8"
+   "head": "1c2e9ff8",
+   "review": "Opus MERGE; fixes requested (emit list claims before export budget, fuzz split, decisions text, qbt logout); merge on green"
   },
   "SRC-12": {
    "status": "in_review",
@@ -2687,7 +2688,8 @@
    "launched": "2026-11-04T05:35:00Z",
    "brief": "briefs/SRC-12.md",
    "pr": 413,
-   "head": "ce13fe65"
+   "head": "ce13fe65",
+   "review": "Opus MERGE; one important fix (window check before quota) + nits requested; merge on green"
   },
   "SRC-10b": {
    "status": "running",
@@ -2724,6 +2726,14 @@
    "brief": "briefs/P-v06-rulepacks.md",
    "pr": 412,
    "head": "bbe2bc81"
+  },
+  "X-merge-policy": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhn93kPiUUHUcHmeaEZc",
+   "launched": "2026-11-04T15:20:00Z",
+   "brief": "briefs/X-merge-policy.md",
+   "note": "r4 contingency; phase 1 measurement; index.rs after SB-6 merges"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3113,7 +3123,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T15:13:00Z",
+ "last_heartbeat": "2026-11-04T15:20:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3129,7 +3139,8 @@
   "2026-11-04T05:35:00Z Owner lifted the pause: four slots. Launched SB-6, SRC-11, SRC-12 (Opus) and SRC-10b (Sonnet). Queue: SRC-10c, SRC-10d, P-v06-rulepacks, L4-followups (after SB-6).",
   "2026-11-04T05:42:00Z Owner: up to 8 slots plus auto-approve of UX/perf best-practice decisions. Launched SRC-10c, SRC-10d (Sonnet) and P-v06-rulepacks (Opus); 7 running. Next: expand E-M7 (runner) for slot 8; L4-followups after SB-6.",
   "2026-11-04T15:05:00Z #410 merged (3d45e86a, \u00a72.33). Fresh Opus reviews running on #413 SRC-12, #414 SRC-11, #415 SB-6; #412, #416, #411 next. Owner answers relayed: CR-SPEC confirmed (O1 exclude), #367 settled for v0.5.2 \u2014 to record as \u00a72.34. r4 at h13.9: mmap gauges bounded (prune confirmed), private memory still rising (no verdict); read-only retainer analysis running.",
-  "2026-11-04T15:13:00Z Owner allowed animetosho.org, feed.animetosho.org, academictorrents.com; SRC-10b/10d relaunched in fresh sessions. r4 retainer analysis in notes/r4-retainer-analysis.md; gauge asks sent to the dashboard session."
+  "2026-11-04T15:13:00Z Owner allowed animetosho.org, feed.animetosho.org, academictorrents.com; SRC-10b/10d relaunched in fresh sessions. r4 retainer analysis in notes/r4-retainer-analysis.md; gauge asks sent to the dashboard session.",
+  "2026-11-04T15:20:00Z r4 provisional fit h12-14: 23.1 MiB/h [15.6,30.6] (window incomplete, not a verdict); r4 not below r3 at same hours. Launched X-merge-policy (slot 8) as contingency. #416 review CHANGES: move slots into state.json. Network allowlist uses *.domain only \u2014 owner asked to add apex domains."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4115,7 +4126,11 @@
   "tantivy upstream issue draft: MmapDirectory::delete doc says it removes the cache entry; it does not (owner files)",
   "writer.rs:592 expect: check whether SRC-14a fixed it; else X-writer-join-error after Track R",
   "E-v06-workers: size worker fetch-pool cap for the 256 MB worker budget (r3: 200k cap ~150-185 MiB)",
-  "X-analyze-followups (small, helper): analyze_cr0 read each .prom once for counters+search (OSError ordering, analyze_cr0.py:178); commits_reason mirrors no_baseline/identity_change (:451-466); stored-torrent view reads r[\"counters\"][\"writer_stored_total\"][\"\"] (pre-existing: real evidence never had values.writer_stored_total, so that view always skipped). Not needed for r4 gate."
+  "X-analyze-followups (small, helper): analyze_cr0 read each .prom once for counters+search (OSError ordering, analyze_cr0.py:178); commits_reason mirrors no_baseline/identity_change (:451-466); stored-torrent view reads r[\"counters\"][\"writer_stored_total\"][\"\"] (pre-existing: real evidence never had values.writer_stored_total, so that view always skipped). Not needed for r4 gate.",
+  "crates/sources/src/http.rs:50 Request derives Debug (prints Cookie/Authorization) -> redacting Debug",
+  "SRC-12b fetch_stream with per-plugin timeout before SRC-G",
+  "SRC-6b torznab file list/mediainfo",
+  "metrics.md missing rows: search_commits_total, leases_outstanding, fetch_active, fetch_lookup_backlog, dht_routing_nodes"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
