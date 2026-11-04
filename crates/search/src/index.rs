@@ -10,8 +10,8 @@
 //! catch-up brings the index that's behind up to the other.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use lodestar_classify::{Composition, Record};
 use lodestar_metainfo::InfoHash;
@@ -29,6 +29,7 @@ use crate::compile;
 use crate::doc::{DocEnrichment, TorrentDoc};
 use crate::files::{self, FileFields};
 use crate::filter::{FastRange, PostFilter};
+use crate::population::{self, Availability, FieldAvailability, Generations, PopState};
 use crate::query::{Node, When};
 use crate::retry_dir::Retrying;
 use crate::schema::{self, Fields, SCHEMA_VERSION, TOKENIZER_VERSION};
@@ -157,6 +158,12 @@ pub struct SearchIndex {
     titles: Arc<crate::suggest::Titles>,
     /// The two indexes' mmap caches, pruned after each commit.
     mmaps: MmapCaches,
+    /// The tracked fields' generations this index is built to.
+    generations: Arc<Generations>,
+    /// What the torrent and file indexes' latest commits record for the
+    /// tracked fields, brought up to `generations`; the writer updates it
+    /// at each commit ([`SearchIndex::availability`]).
+    population: Arc<RwLock<PopView>>,
 }
 
 /// Tantivy's `MmapDirectory` (0.27) caches a weak entry for every file it
@@ -322,6 +329,13 @@ fn resolve_fields(f: &Fields, r: &Resolver<'_>) -> Fields {
         junk: m(f.junk),
         cat_count: f.cat_count.map(m),
         cat_bytes: f.cat_bytes.map(m),
+        verified: m(f.verified),
+        source: m(f.source),
+        network: m(f.network),
+        payload_sig: m(f.payload_sig),
+        group_key: m(f.group_key),
+        group_minhash: m(f.group_minhash),
+        name_trigram: m(f.name_trigram),
     }
 }
 
@@ -334,6 +348,9 @@ fn resolve_file_fields(f: &FileFields, r: &Resolver<'_>) -> FileFields {
         dir: m(f.dir),
         ext: m(f.ext),
         size: m(f.size),
+        size_bucket: m(f.size_bucket),
+        category: m(f.category),
+        pieces_root: m(f.pieces_root),
     }
 }
 
@@ -347,20 +364,58 @@ struct FileIndex {
     cache: Arc<files::FileSetCache>,
 }
 
-fn watermarks_of(index: &Index) -> Result<(i64, i64)> {
+/// What an index's latest commit payload records:
+/// `lodestar-watermark:{id};reindex:{seq};pop:{population}`. Indexes
+/// from before `reindex:` (v1) or `pop:` (v6, SB-6) lack those parts.
+#[derive(Debug, Default)]
+struct Payload {
+    last_id: i64,
+    reindex_seq: i64,
+    /// `None` without a `pop:` part, or with no commit at all.
+    population: Option<PopState>,
+    /// Whether the index has any commit of ours.
+    committed: bool,
+}
+
+fn payload_of(index: &Index) -> Result<Payload> {
     let Some(p) = index.load_metas()?.payload else {
-        return Ok((0, 0));
+        return Ok(Payload::default());
     };
     let bad = || Error::Corrupt("unknown commit payload");
     let rest = p.strip_prefix(PAYLOAD_PREFIX).ok_or_else(bad)?;
+    let (rest, population) = match rest.split_once(";pop:") {
+        Some((rest, pop)) => (rest, Some(PopState::decode(pop).ok_or_else(bad)?)),
+        None => (rest, None),
+    };
     let (id, seq) = match rest.split_once(";reindex:") {
         Some((id, seq)) => (id, seq),
         None => (rest, "0"),
     };
-    Ok((
-        id.parse().map_err(|_| bad())?,
-        seq.parse().map_err(|_| bad())?,
-    ))
+    Ok(Payload {
+        last_id: id.parse().map_err(|_| bad())?,
+        reindex_seq: seq.parse().map_err(|_| bad())?,
+        population,
+        committed: true,
+    })
+}
+
+fn watermarks_of(index: &Index) -> Result<(i64, i64)> {
+    let p = payload_of(index)?;
+    Ok((p.last_id, p.reindex_seq))
+}
+
+/// An index's population state brought up to `gens`: a new index (no
+/// commit of ours) is complete at them, since this build writes all it
+/// will hold; a committed one keeps what it recorded, and a field at
+/// another generation, or not recorded (an index from before `pop:`),
+/// is backfilled over every torrent it holds.
+fn population_of(p: &Payload, gens: &Generations, side: population::Side) -> PopState {
+    if !p.committed {
+        return PopState::fresh(gens, side);
+    }
+    let mut state = p.population.clone().unwrap_or_default();
+    state.reconcile(gens, side, p.last_id);
+    state
 }
 
 /// Bytes by (component, field) across an index's live segments, largest
@@ -402,6 +457,9 @@ fn prepare(index: &mut Index) -> Result<IndexReader> {
     index
         .tokenizers()
         .register(NAME_TOKENIZER, NameTokenizer::default());
+    index
+        .tokenizers()
+        .register(schema::TRIGRAM_TOKENIZER, schema::trigram_analyzer());
     Ok(index
         .reader_builder()
         .reload_policy(ReloadPolicy::Manual)
@@ -678,6 +736,12 @@ impl SearchIndex {
         }
         let mut s = SearchIndex::wrap(index, fields, file_index, file_fields, vec![main, file])?;
         s.read_only = compat == Compat::ReadOnly;
+        if s.read_only {
+            s.population = Arc::new(RwLock::new(PopView::new(read_only_population(
+                &s.index,
+                &s.files.index,
+            )?)));
+        }
         s.missing = absent
             .into_iter()
             .chain(file_absent.into_iter().map(|n| format!("file.{n}")))
@@ -733,6 +797,12 @@ impl SearchIndex {
         let mmaps = MmapCaches::new(mmaps);
         // Opening read every live segment's files: start from them.
         mmaps.prune();
+        let generations = Arc::new(Generations::current());
+        let population = Arc::new(RwLock::new(PopView::new(read_population(
+            &index,
+            &file_index,
+            &generations,
+        )?)));
         Ok(SearchIndex {
             index,
             reader,
@@ -753,6 +823,8 @@ impl SearchIndex {
             holders: Arc::default(),
             titles: Arc::default(),
             mmaps,
+            generations,
+            population,
         })
     }
 
@@ -824,6 +896,107 @@ impl SearchIndex {
 
     pub fn fields(&self) -> &Fields {
         &self.fields
+    }
+
+    /// Builds to these generations instead of this build's, for tests
+    /// that play a producer shipping (and the bench that measures a
+    /// backfill). Set it before taking a writer or cloning the index.
+    #[doc(hidden)]
+    pub fn with_generations(mut self, generations: Generations) -> Result<SearchIndex> {
+        let state = if self.read_only {
+            read_only_population(&self.index, &self.files.index)?
+        } else {
+            read_population(&self.index, &self.files.index, &generations)?
+        };
+        self.generations = Arc::new(generations);
+        self.population = Arc::new(RwLock::new(PopView::new(state)));
+        Ok(self)
+    }
+
+    /// How much of `field` this index can answer for (file-index fields
+    /// as `file.<name>`). A field this build added that the index lacks
+    /// is [`Availability::Missing`]; a field v6 added is tracked
+    /// ([`crate::population`]); any other is [`Availability::Ready`].
+    /// It follows the writer's latest commit, which a lease's older
+    /// snapshot may predate: a prefilter asks [`SearchIndex::prefilter`],
+    /// which checks the snapshot it runs on.
+    pub fn availability(&self, field: &str) -> Availability {
+        if self.missing.iter().any(|m| m == field) {
+            return Availability::Missing;
+        }
+        self.population
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .availability(field)
+            .unwrap_or(Availability::Ready)
+    }
+
+    /// Every field that isn't [`Availability::Ready`]: the missing ones
+    /// ([`SearchIndex::missing_fields`]) first, then the tracked ones
+    /// without a producer or being backfilled, so a query or the status
+    /// page can say what's partial and how far along it is.
+    pub fn unpopulated(&self) -> Vec<FieldAvailability> {
+        let mut out: Vec<FieldAvailability> = self
+            .missing
+            .iter()
+            .map(|f| FieldAvailability {
+                field: f.clone(),
+                availability: Availability::Missing,
+            })
+            .collect();
+        let view = self
+            .population
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        for s in view.states.iter() {
+            for f in s.fields() {
+                if out.iter().any(|o| o.field == f) {
+                    continue;
+                }
+                match s.availability(f) {
+                    Some(Availability::Ready) | None => {}
+                    Some(availability) => out.push(FieldAvailability {
+                        field: f.to_owned(),
+                        availability,
+                    }),
+                }
+            }
+        }
+        out
+    }
+
+    /// `query` as a prefilter on `field`, to run on `searcher` (a
+    /// snapshot of the index the field is in: the file index's for a
+    /// `file.` field), or `None` when the field isn't complete in that
+    /// snapshot: a document a backfill hadn't reached there (or written
+    /// before any producer) would fail it and look like "no match", so
+    /// the caller must not narrow by it and verifies every candidate
+    /// instead. Every prefilter on a tracked field goes through here.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "M7's regex and grouping prefilters are its callers"
+        )
+    )]
+    pub(crate) fn prefilter(
+        &self,
+        field: &str,
+        searcher: &Searcher,
+        query: Box<dyn Query>,
+    ) -> Option<Box<dyn Query>> {
+        if !self.availability(field).complete() {
+            return None;
+        }
+        let view = self
+            .population
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let seen = searcher.generation().generation_id();
+        view.ready_since
+            .get(field)
+            .is_none_or(|&since| seen >= since)
+            .then_some(query)
     }
 
     /// Alive while any clone of this index is: a retired index's
@@ -967,11 +1140,14 @@ impl SearchIndex {
         }
         // Tantivy wants at least 15 MB per writer.
         let file_heap = (heap_bytes / 4).max(15 << 20);
+        let gens = &self.generations;
         let torrents = Side::new(
             &self.index,
             heap_bytes.saturating_sub(file_heap).max(15 << 20),
+            gens,
+            population::Side::Torrents,
         )?;
-        let files = Side::new(&self.files.index, file_heap)?;
+        let files = Side::new(&self.files.index, file_heap, gens, population::Side::Files)?;
         Ok(Indexer {
             index: self.clone(),
             torrents,
@@ -1466,29 +1642,83 @@ fn stored_adult(store: &mut Store, id: i64) -> Result<bool> {
     Ok(is_adult(&doc_enrichment(store, id)?))
 }
 
+/// The tracked fields' population as the latest commits record it, and
+/// for each field that became complete while this index was open, the
+/// first searcher generation (of its own index's reader) that sees it
+/// complete: an older snapshot, such as a lease's, still lacks it there.
+#[derive(Debug, Default)]
+struct PopView {
+    states: [PopState; 2],
+    ready_since: std::collections::BTreeMap<String, u64>,
+}
+
+impl PopView {
+    fn new(states: [PopState; 2]) -> PopView {
+        PopView {
+            states,
+            ready_since: Default::default(),
+        }
+    }
+
+    fn availability(&self, field: &str) -> Option<Availability> {
+        self.states.iter().find_map(|s| s.availability(field))
+    }
+}
+
+/// What a read-only index (another schema's, serving during a rebuild)
+/// records, as recorded: it takes no writes, so nothing is reconciled
+/// with this build's generations. A field it recorded at generation 0 has
+/// no producer there, an open walk is still open. Without a `pop:` part
+/// it predates the contract, when a field only ever came with a full
+/// rebuild: each it has is complete, so nothing is recorded.
+fn read_only_population(index: &Index, files: &Index) -> Result<[PopState; 2]> {
+    Ok([
+        payload_of(index)?.population.unwrap_or_default(),
+        payload_of(files)?.population.unwrap_or_default(),
+    ])
+}
+
+/// Both indexes' population states, brought up to `gens`.
+fn read_population(index: &Index, files: &Index, gens: &Generations) -> Result<[PopState; 2]> {
+    Ok([
+        population_of(&payload_of(index)?, gens, population::Side::Torrents),
+        population_of(&payload_of(files)?, gens, population::Side::Files),
+    ])
+}
+
 /// One index's writer and how far it has followed the store.
 struct Side {
     writer: IndexWriter,
     last_id: i64,
     /// The last `reindex_log` entry applied.
     reindex_seq: i64,
+    /// Its tracked fields' population, committed with the watermarks.
+    population: PopState,
 }
 
 impl Side {
-    fn new(index: &Index, heap_bytes: usize) -> Result<Side> {
-        let (last_id, reindex_seq) = watermarks_of(index)?;
+    fn new(
+        index: &Index,
+        heap_bytes: usize,
+        gens: &Generations,
+        side: population::Side,
+    ) -> Result<Side> {
+        let p = payload_of(index)?;
         Ok(Side {
             writer: index.writer_with_num_threads(1, heap_bytes)?,
-            last_id,
-            reindex_seq,
+            last_id: p.last_id,
+            reindex_seq: p.reindex_seq,
+            population: population_of(&p, gens, side),
         })
     }
 
     fn commit(&mut self, reader: &IndexReader) -> Result<()> {
         let mut prepared = self.writer.prepare_commit()?;
         prepared.set_payload(&format!(
-            "{PAYLOAD_PREFIX}{};reindex:{}",
-            self.last_id, self.reindex_seq
+            "{PAYLOAD_PREFIX}{};reindex:{};pop:{}",
+            self.last_id,
+            self.reindex_seq,
+            self.population.encode()
         ));
         prepared.commit()?;
         reader.reload()?;
@@ -1508,6 +1738,9 @@ pub struct CatchUp {
     pub adult_added: usize,
     /// `reindex_log` entries replayed.
     pub replayed: usize,
+    /// Torrents re-indexed by a population backfill
+    /// ([`crate::population`]), counted once whichever index needed it.
+    pub backfilled: usize,
 }
 
 /// Adds torrents to both indexes in id order and commits each with its
@@ -1542,10 +1775,11 @@ impl Indexer {
 
     /// Indexes up to `limit` torrents stored after the watermarks, then
     /// re-indexes torrents changed since (upgraded partial imports, new
-    /// enrichment). Returns how many torrents it added or replaced.
+    /// enrichment) and those a population backfill still has to visit.
+    /// Returns how many torrents it added or replaced: 0 once caught up.
     pub fn catch_up(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
         let c = self.catch_up_counted(store, limit)?;
-        Ok(c.added + c.replayed)
+        Ok(c.added + c.replayed + c.backfilled)
     }
 
     /// [`Indexer::catch_up`], counting the torrents added and the
@@ -1595,7 +1829,51 @@ impl Indexer {
             self.pending += 1;
             counted.replayed += 1;
         }
+        // A backfill takes what's left of the step, but at least an
+        // eighth of it, so a busy crawl slows it without starving it.
+        let budget = limit
+            .saturating_sub(counted.added + counted.replayed)
+            .max(limit / 8)
+            .max(1);
+        counted.backfilled = self.backfill(store, budget)?;
         Ok(counted)
+    }
+
+    /// Re-indexes up to `budget` torrents for each index with a
+    /// population walk under way, from the store as it is now: a torrent
+    /// deleted meanwhile is dropped, one changed since is also replayed
+    /// from its `reindex_log` entry. The walks' cursors commit with the
+    /// documents, so a restart resumes them. Returns the torrents
+    /// re-indexed.
+    fn backfill(&mut self, store: &mut Store, budget: usize) -> Result<usize> {
+        let fields = self.index.fields;
+        let ff = self.index.files.fields;
+        let torrents = walk(&mut self.torrents, store, budget, |w, store, id, t| {
+            w.delete_term(Term::from_field_u64(fields.id, id as u64));
+            if let Some(t) = t {
+                w.add_document(torrent_doc(store, t)?.to_document(&fields))?;
+            }
+            Ok(())
+        })?;
+        let files = walk(&mut self.files, store, budget, |w, _, id, t| {
+            w.delete_term(Term::from_field_u64(ff.torrent, id as u64));
+            if let Some(t) = t {
+                for d in files::file_docs(id as u64, &t.tree) {
+                    w.add_document(d.to_document(&ff))?;
+                }
+            }
+            Ok(())
+        })?;
+        let n = torrents.done.max(files.done);
+        self.pending += n;
+        // A step that only moved a cursor (the walk's last ids were
+        // deleted) is still work to commit: otherwise an idle indexer,
+        // which commits only what's pending, would leave the field one
+        // step short of complete for good.
+        if torrents.moved || files.moved {
+            self.pending = self.pending.max(1);
+        }
+        Ok(n)
     }
 
     /// Whether both indexes have followed the store up to torrent `id`
@@ -1659,6 +1937,31 @@ impl Indexer {
         self.files.commit(&self.index.files.reader)?;
         self.torrents.commit(&self.index.reader)?;
         self.pending = 0;
+        let states = [
+            self.torrents.population.clone(),
+            self.files.population.clone(),
+        ];
+        let generation = |r: &IndexReader| r.searcher().generation().generation_id();
+        let seen = [
+            generation(&self.index.reader),
+            generation(&self.index.files.reader),
+        ];
+        let mut view = self
+            .index
+            .population
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (i, state) in states.iter().enumerate() {
+            for f in state.fields() {
+                let ready = state.availability(f) == Some(Availability::Ready);
+                let was = view.availability(f) == Some(Availability::Ready);
+                if ready && !was {
+                    view.ready_since.insert(f.to_owned(), seen[i]);
+                }
+            }
+        }
+        view.states = states;
+        drop(view);
         // After both reloads, so the files they replaced are unmapped
         // unless a searcher still holds them.
         self.index.mmaps.prune();
@@ -1673,6 +1976,51 @@ impl Indexer {
         self.index.reader.reload()?;
         Ok(())
     }
+}
+
+/// One step of `side`'s population walk: re-indexes, through `write`,
+/// up to `budget` stored torrents in the walk's range `(from, high]`,
+/// then moves its cursors past them. Ids deleted from the store are
+/// skipped by the read (their documents went with their `reindex_log`
+/// entries); one deleted between the reads reaches `write` as `None`.
+fn walk(
+    side: &mut Side,
+    store: &mut Store,
+    budget: usize,
+    mut write: impl FnMut(&mut IndexWriter, &mut Store, i64, Option<&Loaded>) -> Result<()>,
+) -> Result<Walked> {
+    let Some((from, high)) = side.population.pending() else {
+        return Ok(Walked::default());
+    };
+    let ids = store.ids_after(from, budget)?;
+    // Fewer than asked for: nothing more is stored up to `high`.
+    let mut to = if ids.len() < budget { high } else { from };
+    let mut n = 0;
+    for id in ids {
+        if id > high {
+            to = high;
+            break;
+        }
+        let t = load(store, id)?;
+        write(&mut side.writer, store, id, t.as_ref())?;
+        to = to.max(id);
+        n += 1;
+    }
+    let before = side.population.clone();
+    side.population.advance(to);
+    Ok(Walked {
+        done: n,
+        moved: side.population != before,
+    })
+}
+
+/// What one step of a population walk did.
+#[derive(Debug, Default, Clone, Copy)]
+struct Walked {
+    /// Torrents re-indexed.
+    done: usize,
+    /// Whether a cursor moved (or a walk completed): state to commit.
+    moved: bool,
 }
 
 /// Collects torrent ids from the `id` fast field: at most `left` across
@@ -1745,5 +2093,147 @@ impl tantivy::collector::SegmentCollector for IdsSegment {
 
     fn harvest(self) -> Vec<u64> {
         self.ids
+    }
+}
+
+#[cfg(test)]
+mod population_tests {
+    use super::*;
+    use tantivy::query::AllQuery;
+
+    const HEAP: usize = 15 << 20;
+
+    fn store(n: usize) -> Store {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        for i in 0..n {
+            let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+            let raw = to_vec(&OwnedValue::Dict(
+                [
+                    ("length", OwnedValue::Int(1 << 20)),
+                    ("name", b(&format!("Walk.{i}.mkv"))),
+                    ("piece length", OwnedValue::Int(1 << 16)),
+                    ("pieces", OwnedValue::Bytes(vec![0; 20])),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+            ));
+            let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+            store
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: Some(&raw),
+                    discovered_at: 1_700_000_000,
+                    metadata_at: 1_700_000_001,
+                    extra_flags: 0,
+                    source: lodestar_store::SourceId::new(0).unwrap(),
+                }])
+                .unwrap();
+        }
+        store
+    }
+
+    /// `store` fully indexed in RAM, then reopened by a build whose
+    /// `payload_sig` producer has shipped: a walk over everything.
+    fn shipped(store: &mut Store) -> SearchIndex {
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(store, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        drop(w);
+        index
+            .with_generations(Generations::current().with("payload_sig", 1))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_prefilter_waits_for_the_snapshot_that_sees_the_field_complete() {
+        let mut store = store(10);
+        let index = shipped(&mut store);
+        let mut w = index.writer(HEAP).unwrap();
+        w.catch_up(&mut store, 6).unwrap();
+        w.commit().unwrap();
+        let q = || -> Box<dyn Query> { Box::new(AllQuery) };
+        let partial = index.searcher();
+        assert!(index.prefilter("payload_sig", &partial, q()).is_none());
+        while w.catch_up(&mut store, 6).unwrap() > 0 {}
+        w.commit().unwrap();
+        assert_eq!(index.availability("payload_sig"), Availability::Ready);
+        // A lease still reading the snapshot from mid-backfill must not
+        // prefilter; a search on the new one may.
+        assert!(index.prefilter("payload_sig", &partial, q()).is_none());
+        assert!(
+            index
+                .prefilter("payload_sig", &index.searcher(), q())
+                .is_some()
+        );
+        // Fields complete since the index opened, or not tracked, are
+        // complete in every snapshot; one without a producer in none.
+        assert!(index.prefilter("file.category", &partial, q()).is_some());
+        assert!(index.prefilter("name", &partial, q()).is_some());
+        assert!(
+            index
+                .prefilter("verified", &index.searcher(), q())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_step_that_only_moves_the_cursor_is_committed() {
+        let mut store = store(10);
+        // The highest id is deleted before the walk starts: watermarks
+        // never go down, so the walk runs to 10 with 9 torrents stored.
+        let top = store.torrent(10).unwrap().unwrap().info_hash.0;
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut store, 100).unwrap() > 0 {}
+        store.delete_torrents(&[top]).unwrap();
+        while w.catch_up(&mut store, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        drop(w);
+        let index = index
+            .with_generations(Generations::current().with("payload_sig", 1))
+            .unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        // Exactly the 9 stored: the cursor stops at 9.
+        assert_eq!(w.catch_up_counted(&mut store, 9).unwrap().backfilled, 9);
+        w.commit().unwrap();
+        let backfilling = Availability::Backfilling { done: 9, upto: 10 };
+        assert_eq!(index.availability("payload_sig"), backfilling);
+        // Nothing left to read, but the walk completes: pending, so the
+        // live indexer commits it.
+        assert_eq!(w.catch_up_counted(&mut store, 9).unwrap().backfilled, 0);
+        assert!(w.pending() > 0);
+        w.commit().unwrap();
+        assert_eq!(index.availability("payload_sig"), Availability::Ready);
+        assert_eq!(w.catch_up(&mut store, 9).unwrap(), 0);
+        assert_eq!(w.pending(), 0);
+    }
+
+    #[test]
+    fn a_read_only_index_reports_what_it_recorded() {
+        let index = Index::create_in_ram(schema::build().0);
+        let mut w = index
+            .writer_with_num_threads::<TantivyDocument>(1, HEAP)
+            .unwrap();
+        let mut prepared = w.prepare_commit().unwrap();
+        prepared.set_payload(&format!(
+            "{PAYLOAD_PREFIX}9;reindex:0;pop:payload_sig=1@3/9,verified=0"
+        ));
+        prepared.commit().unwrap();
+        let [t, _] = read_only_population(&index, &index).unwrap();
+        // As recorded, not reconciled with this build's generations.
+        assert_eq!(
+            t.availability("payload_sig"),
+            Some(Availability::Backfilling { done: 3, upto: 9 })
+        );
+        assert_eq!(t.availability("verified"), Some(Availability::NoProducer));
+        // Without a `pop:` part it predates tracking: nothing recorded.
+        let bare = Index::create_in_ram(schema::build().0);
+        assert_eq!(
+            read_only_population(&bare, &bare).unwrap()[0],
+            PopState::default()
+        );
     }
 }

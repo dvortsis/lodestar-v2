@@ -81,6 +81,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "full_scrape"
+path = "fuzz_targets/full_scrape.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "tracker_scrape"
 path = "fuzz_targets/tracker_scrape.rs"
 test = false

@@ -70,7 +70,7 @@ lodestar_log::catalogue! {
         component: Search,
         level: Info,
         message: "Index: swapped to the rebuilt index",
-        fields: {},
+        fields: { disk_high_water_bytes: Label },
     }
     /// Stopping the index (or the old indexer at a swap) failed.
     STOP_FAILED {

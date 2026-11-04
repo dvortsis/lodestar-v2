@@ -1012,6 +1012,10 @@ mod rebuild {
                 crate::tokenizer::NAME_TOKENIZER,
                 crate::tokenizer::NameTokenizer::default(),
             );
+            index.tokenizers().register(
+                crate::schema::TRIGRAM_TOKENIZER,
+                crate::schema::trigram_analyzer(),
+            );
             index.writer::<TantivyDocument>(HEAP).unwrap()
         };
         let (mut w, mut fw) = (open(dir), open(&dir.join("files")));

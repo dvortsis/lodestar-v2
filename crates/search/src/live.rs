@@ -302,7 +302,9 @@ fn follow(
             added,
             adult_added: adult,
             replayed,
+            backfilled,
         } = indexer.catch_up_counted(store, config.batch)?;
+        let replayed = replayed + backfilled;
         pending.added += added as u64;
         pending.adult += adult as u64;
         pending.indexed += (added + replayed) as u64;
