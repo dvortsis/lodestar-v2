@@ -3238,7 +3238,8 @@
     "2026-11-04T19:50Z #416 review CHANGES (unbounded slot number crashes buildPlan; plus retry jitter, string coercion, date checks, docs fields, decisions file); relayed to dashboard session.",
     "2026-11-04T19:49Z Owner: slot limit 12 (\u00a72.36, PR #430, relayed via dashboard session) now; owner then asked to cut to 4 at 2026-11-05 17:00 MST (00:00Z 11/6), letting running sessions finish. Scheduled reminder trig_01RJzwL47gE81BrRv2vR2cx4 will record \u00a72.37 and set phase_total 4. SRC-3 round 2 (24d31e6) in fresh review.",
     "2026-11-04T19:53Z #416 merged (c0ce96cb), #430 merged (056b4d78, \u00a72.36 twelve slots). Launched ENR-2b (session_01MMjhnBqhBrL3X41eaSHgxj), ENR-3 (session_01MMjhn8dEWiKCRixMDKF56q), ENR-6 (session_01MMjhn8uYXmxva3B17bFjJW) in slots 9-11; slot 12 empty (nothing ready without overlap).",
-    "2026-11-04T20:15Z #432 review MERGE but 2 PR-introduced leak regressions (Debug-form swallowing '://', '@<run>://' scheme) + '@secret/@' sent back for one round. #433 X-mem-gauges in review. X-merge-policy told (a) again."
+    "2026-11-04T20:15Z #432 review MERGE but 2 PR-introduced leak regressions (Debug-form swallowing '://', '@<run>://' scheme) + '@secret/@' sent back for one round. #433 X-mem-gauges in review. X-merge-policy told (a) again.",
+    "2026-11-04T20:45Z: owner answered the queue (relayed); recorded in PR #435 as \u00a72.37. Slot-cut trigger now records \u00a72.38."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4244,7 +4245,9 @@
     "SRC-3b notes (from #426 review): fields_incomplete notice on /facets and /export if SRC-3 doesn't add it; SB-6 import->producer test; case-only plugin id collisions in source:",
     "Runner docs PR: dashboard.yaml notes ~923 still says 'Four slots'; set to eight (\u00a72.33).",
     "build-plan \u00a70.9 line ~317 'The eighth slot goes to\u2026' is stale under twelve (and soon four) slots; fix in the \u00a72.37 runner PR.",
-    "X-log-url-redact-2 (brief later, after #432): leaks also on rc.3 found by #432's differential fuzz: IPv6 host in URL nested in query/fragment or after magnet: (passkey path after ']' left plain); credential value glued to next scheme with ':' or '%3D'; raw hard stop plus '/' in password; URL forms without '://' (//u:p@h, http:/u:p@h, http:%2F%2F). Backport decision: the X-log-url-redact fix goes into rc.4 (or v0.5.1 if r4 passes, owner's call; cherry-picks cleanly)."
+    "X-log-url-redact-2 (brief later, after #432): leaks also on rc.3 found by #432's differential fuzz: IPv6 host in URL nested in query/fragment or after magnet: (passkey path after ']' left plain); credential value glued to next scheme with ':' or '%3D'; raw hard stop plus '/' in password; URL forms without '://' (//u:p@h, http:/u:p@h, http:%2F%2F). Backport decision: the X-log-url-redact fix goes into rc.4 (or v0.5.1 if r4 passes, owner's call; cherry-picks cleanly).",
+    "SRC-12 grey case (\u00a72.37): change the full-scrape settings description in crates/sources-plugins/src/full_scrape.rs (~:120) and the user guide to say 'public trackers whose published rules allow a full scrape'; SRC-G checks that wording. Small helper slice or D-* user-guide work.",
+    "X-mem-gauges review polish (#433): analyzer attribution_markdown breaks the table (move the approximation note after the segment rows); memory_attribution identity check uses usable rows only (use all baseline rows or reword); store memstats maps negative counters to 0 (mark absent). Before soak r5."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
