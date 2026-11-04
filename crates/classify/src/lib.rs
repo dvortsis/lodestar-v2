@@ -158,9 +158,15 @@ pub fn classify_corrected(name: &str, files: &[FileInfo], fix: Correction) -> Cl
 /// adult detection, match included, and Is adult gives the match's kind
 /// at the correction's confidence, 100. A match only adds: without a Not adult fix
 /// the result is adult, no less surely than without the match, and every
-/// field other than the type, confidence and kind is unchanged. Filtering
-/// judges the result with `Correction::default()`, so a match can only
-/// make filtering stricter (§20.7).
+/// field other than the type, confidence and kind is unchanged.
+///
+/// **Filtering never judges this result alone (§20.7).** Pack and user
+/// rules key on the content type (MW-3 fires only for Movie, TV or
+/// Video), so relabelling an item Adult can drop a hold. The engine
+/// judges detection's own, unmatched result ([`classify`], or this with
+/// `Correction::default()` and no match); when a match makes adult an
+/// item detection didn't call adult, the caller also judges the adult
+/// reading and keeps the stricter verdict, as an Is adult rule does.
 pub fn classify_enriched(
     name: &str,
     files: &[FileInfo],

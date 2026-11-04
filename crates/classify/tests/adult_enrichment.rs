@@ -1,6 +1,7 @@
 //! An adult-enrichment match as a strong adult signal (§20.9, plan ENR-6
 //! and Q13): what it pins, what still wins over it, and that it never
-//! weakens anything filtering relies on.
+//! makes an item less adult or its kind less specific. Filtering never
+//! judges the enriched result alone (see `classify_enriched`).
 
 use lodestar_classify::{
     AdultKind, Classification, ContentType, Correction, EnrichmentMatch, FileInfo,
@@ -96,6 +97,34 @@ fn vr_match() {
 }
 
 #[test]
+fn a_match_keeps_a_non_video_kind() {
+    // An image set and a game: their kinds are more specific than a
+    // video match, so they stay.
+    let sets: [(&str, Vec<FileInfo>, AdultKind); 2] = [
+        (
+            "Some.Site.Photo.Set.XXX",
+            (0..20)
+                .map(|i| file(&format!("Set/{i:03}.jpg"), 4 << 20))
+                .collect(),
+            AdultKind::Photos,
+        ),
+        (
+            "Some.Game.XXX",
+            vec![file("Game/setup.exe", 2 * GIB), file("Game/data.bin", GIB)],
+            AdultKind::Game,
+        ),
+    ];
+    for (name, files, want) in sets {
+        assert_eq!(classify(name, &files).adult_kind, Some(want), "{name}");
+        for k in MatchKind::ALL {
+            let c = classify_enriched(name, &files, NONE, matched(k));
+            assert_eq!(c.adult_kind, Some(want), "{name} {k:?}");
+            assert_eq!(c.confidence, MATCH_CONFIDENCE);
+        }
+    }
+}
+
+#[test]
 fn not_adult_correction_or_rule_wins_over_a_match() {
     // A Not adult correction and a Not adult classification rule both
     // reach the classifier as `Correction { adult: Some(false) }`.
@@ -106,8 +135,9 @@ fn not_adult_correction_or_rule_wins_over_a_match() {
         assert_ne!(c.content_type, ContentType::Adult);
         assert_eq!(c.adult_kind, None);
         assert_eq!(c, classify_corrected(name, &files, NOT_ADULT));
-        // Filtering judges detection's own result, so the item is still
-        // adult to the Adult-only core checks (§20.7).
+        // The correction hides the match from the stored classification
+        // only: the enriched reading the filter also judges (beside
+        // detection's own) is still adult (§20.7).
         let judged = classify_enriched(name, &files, NONE, matched(k));
         assert_eq!(judged.content_type, ContentType::Adult);
     }
@@ -163,7 +193,7 @@ fn not_junk_still_applies_with_a_match() {
 #[test]
 fn a_match_ignores_counter_signals() {
     // An item looked up because it was corrected Is adult, with a
-    // documentary word, judged as filtering judges it: still adult.
+    // documentary word: the enriched reading is still adult.
     let name = "XXX.Industry.Documentary.2019";
     let files = [file("XXX.Industry.Documentary.2019.mkv", 2 * GIB)];
     assert_ne!(classify(name, &files).content_type, ContentType::Adult);
@@ -262,7 +292,8 @@ proptest! {
     }
 
     /// A match only adds: adult, no less surely, as the reported kind (or
-    /// VR), with every other field unchanged; and Not adult still wins.
+    /// VR) where the own kind is video and the own kind otherwise, with
+    /// every other field unchanged; and Not adult still wins.
     #[test]
     fn a_match_never_weakens(name in name(), files in files(), fix in correction(), k in kind()) {
         let before = classify_corrected(&name, &files, fix);
@@ -278,7 +309,14 @@ proptest! {
             prop_assert_eq!(&c, &before);
         } else {
             prop_assert_eq!(c.content_type, ContentType::Adult);
-            prop_assert!(c.adult_kind == Some(k.adult_kind()) || c.adult_kind == Some(AdultKind::Vr));
+            // The torrent's own kind: detection's, or the nearest one for
+            // its type, as Is adult gives without a match.
+            let own = classify_corrected(&name, &files, IS_ADULT).adult_kind;
+            if matches!(own, Some(AdultKind::Scene | AdultKind::Movie | AdultKind::Vr)) {
+                prop_assert!(c.adult_kind == Some(k.adult_kind()) || c.adult_kind == Some(AdultKind::Vr));
+            } else {
+                prop_assert_eq!(c.adult_kind, own, "a non-video kind is kept");
+            }
             let want = if fix.adult == Some(true) { 100 } else { MATCH_CONFIDENCE };
             prop_assert_eq!(c.confidence, want);
             prop_assert!(c.confidence >= before.confidence);
@@ -286,7 +324,7 @@ proptest! {
                 prop_assert_eq!(c.adult_kind, Some(AdultKind::Vr));
             }
         }
-        // What filtering judges (no correction) is adult whatever the fix.
+        // The uncorrected enriched reading is adult whatever the fix.
         prop_assert_eq!(
             classify_enriched(&name, &files, NONE, matched(k)).content_type,
             ContentType::Adult

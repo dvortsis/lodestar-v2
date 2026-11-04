@@ -198,6 +198,11 @@ impl EnrichmentMatch {
 /// a user correction or classification rule (100).
 pub const MATCH_CONFIDENCE: u8 = 99;
 
+/// The highest score detection gives.
+const SCORE_CAP: u8 = 99;
+// A match never lowers detection's confidence.
+const _: () = assert!(SCORE_CAP <= MATCH_CONFIDENCE);
+
 #[derive(Debug, Default)]
 struct Signals {
     strong: u8,
@@ -255,7 +260,7 @@ impl Signals {
             support = 0;
         }
         let both = if strong > 0 && support > 0 { BOTH } else { 0 };
-        strong.max(support).saturating_add(both).min(99)
+        strong.max(support).saturating_add(both).min(SCORE_CAP)
     }
 }
 
@@ -278,10 +283,12 @@ fn scene_date(words: &[String]) -> bool {
 ///
 /// `m` is an enrichment match, a strong signal (plan Q13). Without one,
 /// this is name-and-files detection alone. With one, the torrent is
-/// adult as the kind the service reports, at [`MATCH_CONFIDENCE`] (which
-/// no detection score exceeds), with one refinement: VR words, or
-/// detection's own VR, keep a Scene or Movie match as VR, the way they
-/// turn detection's Scene or Movie into VR. The name's counter-signals
+/// adult at [`MATCH_CONFIDENCE`] (which no detection score exceeds). The
+/// kind never gets less specific: the reported kind is pinned only where
+/// the torrent's own kind is video (Scene, Movie or VR), and VR words
+/// keep a Scene or Movie match as VR, the way they turn detection's
+/// Scene or Movie into VR. A non-video kind from the files (Photos,
+/// Comics, Game, Audio) is kept. The name's counter-signals
 /// don't weaken a match: only items already classified adult are looked
 /// up (plan Q2), and a match can only add (§20.7 "stricter only"). That
 /// covers the counters scanned here only; how a future mainstream match
@@ -299,13 +306,16 @@ pub(crate) fn detect_matched(
     let Some(m) = m else {
         return detected;
     };
-    // Detection's VR comes from the same VR words, so `s.vr` covers it.
-    let kind = match m.kind.adult_kind() {
-        AdultKind::Scene | AdultKind::Movie if s.vr => AdultKind::Vr,
-        k => k,
+    let own = detected.map_or(forced_kind(base), |(k, _)| k);
+    let kind = match own {
+        AdultKind::Scene | AdultKind::Movie | AdultKind::Vr => match m.kind.adult_kind() {
+            // Detection's VR comes from the same VR words, so `s.vr`
+            // covers it.
+            AdultKind::Scene | AdultKind::Movie if s.vr => AdultKind::Vr,
+            k => k,
+        },
+        own => own,
     };
-    // No detection score is above the match's (`score()` caps at 99).
-    debug_assert!(detected.is_none_or(|(_, d)| d <= MATCH_CONFIDENCE));
     Some((kind, MATCH_CONFIDENCE))
 }
 
@@ -533,20 +543,36 @@ mod tests {
             at(doc, ContentType::Movie, Some(MatchKind::Movie)),
             Some((AdultKind::Movie, MATCH_CONFIDENCE))
         );
-        // The reported kind replaces detection's, non-video kinds too.
-        let name = "Brazzers.24.01.15.Title";
-        for base in [
-            ContentType::Images,
-            ContentType::Comic,
-            ContentType::Game,
-            ContentType::Music,
-        ] {
-            assert_ne!(at(name, base, None).map(|(k, _)| k), Some(AdultKind::Scene));
-            assert_eq!(
-                at(name, base, Some(MatchKind::Scene)),
-                Some((AdultKind::Scene, MATCH_CONFIDENCE))
-            );
+        // A non-video kind from the files is kept, detected or not: a
+        // match never makes the kind less specific.
+        for name in ["Brazzers.24.01.15.Title", "Some.Title.2019"] {
+            for base in [
+                ContentType::Images,
+                ContentType::Comic,
+                ContentType::Ebook,
+                ContentType::Game,
+                ContentType::Software,
+                ContentType::Music,
+                ContentType::Audiobook,
+            ] {
+                for k in MatchKind::ALL {
+                    assert_eq!(
+                        at(name, base, Some(k)),
+                        Some((forced_kind(base), MATCH_CONFIDENCE)),
+                        "{name} {base:?} {k:?}"
+                    );
+                }
+            }
         }
+        // A video kind takes the reported one.
+        assert_eq!(
+            at(
+                "Brazzers.24.01.15.Title",
+                ContentType::Movie,
+                Some(MatchKind::Movie)
+            ),
+            Some((AdultKind::Movie, MATCH_CONFIDENCE))
+        );
         // VR stays VR.
         let vr = "Lantern.Bay.Parody.XXX.VR180.LR";
         for k in MatchKind::ALL {
