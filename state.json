@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T15:20:00Z",
+ "updated_at": "2026-11-04T15:25:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3123,7 +3123,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T15:20:00Z",
+ "last_heartbeat": "2026-11-04T15:25:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -4771,5 +4771,74 @@
    "t": "2026-11-02T20:53:52Z",
    "text": "Once all active sessions are pushed, pause start of further sessions; wait until the soak results."
   }
- ]
+ ],
+ "slots": {
+  "updated": "2026-11-04T15:25:00Z",
+  "items": [
+   {
+    "slot": 1,
+    "slice": "SB-6",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Changing the search index layout so results can later show verified status, source and network, rebuilt in the background. In review.",
+    "since": "2026-11-04T05:33:51Z"
+   },
+   {
+    "slot": 2,
+    "slice": "SRC-11",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Letting Lodestar read what your qBittorrent, Transmission or Deluge already has, as a private source. Reviewed; final fixes being pushed.",
+    "since": "2026-11-04T05:33:52Z"
+   },
+   {
+    "slot": 3,
+    "slice": "SRC-12",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Reading trackers' full scrape lists, at most once per tracker per day. Reviewed; final fix being pushed.",
+    "since": "2026-11-04T05:33:53Z"
+   },
+   {
+    "slot": 4,
+    "slice": "SRC-10b",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Building the AnimeTosho source, starting with a check of the site's terms.",
+    "since": "2026-11-04T15:12:56Z"
+   },
+   {
+    "slot": 5,
+    "slice": "SRC-10c",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Building the Internet Archive source. Pull request open.",
+    "since": "2026-11-04T05:41:51Z"
+   },
+   {
+    "slot": 6,
+    "slice": "SRC-10d",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Building the Academic Torrents source, starting with a check of the site's terms and feed.",
+    "since": "2026-11-04T15:12:57Z"
+   },
+   {
+    "slot": 7,
+    "slice": "P-v06-rulepacks",
+    "role": "docs",
+    "agent": "claude",
+    "doing": "Planning the curated filter rule packs and adult-metadata lookups. In review.",
+    "since": "2026-11-04T05:41:53Z"
+   },
+   {
+    "slot": 8,
+    "slice": "X-merge-policy",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Measuring a second memory fix (search index merge settings) in case the current memory test fails.",
+    "since": "2026-11-04T15:18:41Z"
+   }
+  ]
+ }
 }
