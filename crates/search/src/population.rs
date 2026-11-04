@@ -69,7 +69,7 @@ pub const GENERATIONS: [(&str, u32); 10] = [
     ("group_key", 0),
     ("group_minhash", 0),
     ("name_trigram", 0),
-    ("file.size", 1),
+    ("file.size_bucket", 1),
     ("file.category", 1),
     ("file.pieces_root", 1),
 ];
@@ -350,7 +350,6 @@ mod tests {
             .iter()
             .map(|f| (*f).to_owned())
             .chain(crate::files::V6_FIELDS.iter().map(|f| format!("file.{f}")))
-            .chain(["file.size".to_owned()])
             .collect();
         want.sort();
         let g = gens();
@@ -375,7 +374,10 @@ mod tests {
         assert_eq!(t.pending(), None);
         let f = PopState::fresh(&gens(), Side::Files);
         assert_eq!(f.availability("file.category"), Some(Availability::Ready));
-        assert_eq!(f.encode(), "file.category=1,file.pieces_root=1,file.size=1");
+        assert_eq!(
+            f.encode(),
+            "file.category=1,file.pieces_root=1,file.size_bucket=1"
+        );
     }
 
     #[test]

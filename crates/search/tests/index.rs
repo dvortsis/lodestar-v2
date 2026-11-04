@@ -907,7 +907,7 @@ mod population {
         unpopulate_files(
             &dir,
             &mut store,
-            Some("file.category=0,file.pieces_root=0,file.size=1"),
+            Some("file.category=0,file.pieces_root=0,file.size_bucket=1"),
         );
         assert_eq!(file_counts(&dir), (60, 0));
 
@@ -915,7 +915,7 @@ mod population {
         // index holds 60 torrents built without it.
         let index = SearchIndex::open(&dir).unwrap();
         assert_eq!(index.availability("file.category"), backfilling(0, 60));
-        assert_eq!(index.availability("file.size"), Availability::Ready);
+        assert_eq!(index.availability("file.size_bucket"), Availability::Ready);
         assert!(!index.availability("file.category").complete());
         let mut w = index.writer(HEAP).unwrap();
         // Nothing new to index, so the step's whole budget backfills.
@@ -970,7 +970,7 @@ mod population {
         unpopulate_files(
             &dir,
             &mut store,
-            Some("file.category=0,file.pieces_root=0,file.size=1"),
+            Some("file.category=0,file.pieces_root=0,file.size_bucket=1"),
         );
         let index = SearchIndex::open(&dir).unwrap();
         let mut w = index.writer(HEAP).unwrap();
@@ -1021,7 +1021,7 @@ mod population {
         let mut store = indexed(tmp.path(), 12);
         unpopulate_files(&dir, &mut store, None);
         let index = SearchIndex::open(&dir).unwrap();
-        for f in ["file.category", "file.pieces_root", "file.size"] {
+        for f in ["file.category", "file.pieces_root", "file.size_bucket"] {
             assert_eq!(index.availability(f), backfilling(0, 12), "{f}");
         }
         // Fields without a producer have nothing to backfill.
@@ -1029,7 +1029,7 @@ mod population {
         let mut w = index.writer(HEAP).unwrap();
         while w.catch_up(&mut store, 5).unwrap() > 0 {}
         w.commit().unwrap();
-        assert_eq!(index.availability("file.size"), Availability::Ready);
+        assert_eq!(index.availability("file.size_bucket"), Availability::Ready);
         assert_eq!(file_counts(&dir), (12, 12));
     }
 

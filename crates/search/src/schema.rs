@@ -6,7 +6,7 @@
 //! v6 (SB-6, M7's one bump): `verified`, `source` and `network` (SRC-3,
 //! §18.6), `payload_sig`, `group_key` and `group_minhash` (grouping,
 //! §6), `name_trigram` (the regex prefilter, §8), and in the file index
-//! `category`, `pieces_root` and an inverted index on `size`. Fields
+//! `category`, `pieces_root` and `size_bucket`. Fields
 //! whose producers haven't shipped are defined and left empty; their
 //! population is tracked per field ([`crate::population`]).
 //!

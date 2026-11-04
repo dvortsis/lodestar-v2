@@ -348,6 +348,7 @@ fn resolve_file_fields(f: &FileFields, r: &Resolver<'_>) -> FileFields {
         dir: m(f.dir),
         ext: m(f.ext),
         size: m(f.size),
+        size_bucket: m(f.size_bucket),
         category: m(f.category),
         pieces_root: m(f.pieces_root),
     }

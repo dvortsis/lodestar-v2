@@ -598,23 +598,13 @@ fn dir_bytes(dir: &Path) -> u64 {
 }
 
 /// The schema a v5 build wrote: this one without the fields v6 added
-/// (`drop`) and, with `fast_only_size`, `size` without its index.
-fn v5_schema(
-    current: &tantivy::schema::Schema,
-    drop: &[&str],
-    fast_only_size: bool,
-) -> tantivy::schema::Schema {
-    use tantivy::schema::{FieldEntry, NumericOptions, Schema};
-    let mut b = Schema::builder();
+/// (`drop`).
+fn v5_schema(current: &tantivy::schema::Schema, drop: &[&str]) -> tantivy::schema::Schema {
+    let mut b = tantivy::schema::Schema::builder();
     for (_, entry) in current.fields() {
-        match entry.name() {
-            name if drop.contains(&name) => continue,
-            "size" if fast_only_size => b.add_field(FieldEntry::new_u64(
-                "size".into(),
-                NumericOptions::default().set_fast(),
-            )),
-            _ => b.add_field(entry.clone()),
-        };
+        if !drop.contains(&entry.name()) {
+            b.add_field(entry.clone());
+        }
     }
     b.build()
 }
@@ -627,8 +617,8 @@ fn build_v5(dir: &Path, store: &mut Store) {
     use tantivy::TantivyDocument;
     let (schema, fields) = lodestar_search::schema::build();
     let (file_schema, file_fields) = lodestar_search::files::schema();
-    let v5 = v5_schema(&schema, &lodestar_search::schema::V6_FIELDS, false);
-    let v5_files = v5_schema(&file_schema, &lodestar_search::files::V6_FIELDS, true);
+    let v5 = v5_schema(&schema, &lodestar_search::schema::V6_FIELDS);
+    let v5_files = v5_schema(&file_schema, &lodestar_search::files::V6_FIELDS);
     std::fs::create_dir_all(dir.join("files")).unwrap();
     let index = tantivy::Index::create_in_dir(dir, v5.clone()).unwrap();
     let files = tantivy::Index::builder()
@@ -720,6 +710,10 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
     assert_eq!(total(&index, "file:(ext:mkv size:>1MB)"), n);
     assert_eq!(index.availability("file.category"), Availability::Missing);
     assert_eq!(index.availability("verified"), Availability::Missing);
+    assert_eq!(
+        index.availability("file.size_bucket"),
+        Availability::Missing
+    );
     assert_eq!(index.availability("file.size"), Availability::Ready);
     assert!(!index.availability("file.category").complete());
     drop(index);
@@ -732,7 +726,7 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
     assert_eq!(total(&index, "file:(ext:mkv size:>1MB)"), n);
     // SB-6's own rebuild filled what the store has; fields whose
     // producers haven't shipped say so.
-    for f in FILE_V6.iter().chain(&["size"]) {
+    for f in FILE_V6 {
         assert_eq!(
             index.availability(&format!("file.{f}")),
             Availability::Ready,
