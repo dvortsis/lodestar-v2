@@ -56,6 +56,7 @@ fn named(name: &str) -> Claims {
             published_at: Some(T - 60),
             confidence: Confidence::Medium,
         },
+        adult: None,
     }
 }
 

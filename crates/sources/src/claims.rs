@@ -17,7 +17,22 @@
 //! The child-safety filter still runs on every claim before storage
 //! (§18.7, §20.1). Bounding here doesn't replace it.
 //!
+//! **The adult-enrichment section** ([`AdultEnrichment`], ENR-0) is the
+//! store's own type, re-exported, so the two crates can't disagree on what
+//! it may hold: names only, no performer id or other personal field
+//! (owner §2.37, plan Q4 and Q5). Clamping it degrades rather than
+//! spoils: a cut name may name someone else, so an over-long studio or
+//! performer name is dropped, not cut (a dropped performer sets
+//! `performers_truncated`), and a section whose scene id isn't valid is
+//! dropped whole, since a cut id points at another scene.
+//!
 //! [`Emitter`]: crate::Emitter
+
+use lodestar_store::claims::scene_id_ok;
+pub use lodestar_store::claims::{
+    AdultEnrichment, AdultKind, MAX_PERFORMER, MAX_PERFORMERS, MAX_SCENE_ID, MAX_SCENE_TITLE,
+    MAX_STUDIO, ReleaseDate,
+};
 
 /// Bytes in a claimed name.
 pub const MAX_NAME: usize = 1024;
@@ -40,7 +55,8 @@ pub const MAX_PUBLISHER: usize = 256;
 /// Bytes in a provenance external reference (a GUID or item URL).
 pub const MAX_EXTERNAL_REF: usize = 2048;
 /// Bytes of text in one event's claims overall. Every other field fits
-/// in about 200 KiB at its own limit, so this bounds the file list: files
+/// in about 220 KiB at its own limit (the adult section's ~17 KiB
+/// included), so this bounds the file list: files
 /// past the budget are dropped. Without it one event could hold 40 MB.
 pub const MAX_TOTAL: usize = 1024 * 1024;
 
@@ -72,6 +88,9 @@ pub struct Claims {
     /// The uploader or channel as the source names it. A public handle
     /// from the feed, never a peer address (§18.7: no profiles of people).
     pub publisher: Option<String>,
+    /// An adult-enrichment match (ENR-0, architecture §20.9), from an
+    /// enrichment source only.
+    pub adult: Option<AdultEnrichment>,
 }
 
 impl Claims {
@@ -84,6 +103,7 @@ impl Claims {
             && self.ids.is_empty()
             && self.description.is_none()
             && self.publisher.is_none()
+            && self.adult.is_none()
     }
 
     /// Cuts every field to its limit and the whole to [`MAX_TOTAL`].
@@ -107,6 +127,17 @@ impl Claims {
         self.ids.truncate(MAX_IDS);
         clamp_opt(&mut self.description, MAX_DESCRIPTION);
         clamp_opt(&mut self.publisher, MAX_PUBLISHER);
+        if let Some(a) = &mut self.adult {
+            if clamp_adult(a) {
+                // Nothing rides along beside a section (the store refuses
+                // it): no description (plan Q3), publisher or ids (Q4).
+                self.description = None;
+                self.publisher = None;
+                self.ids = Vec::new();
+            } else {
+                self.adult = None;
+            }
+        }
         let mut total = self.fixed_len();
         self.files.truncate(MAX_FILES);
         let mut keep = 0;
@@ -141,7 +172,30 @@ impl Claims {
                 .iter()
                 .map(|i| i.scheme.len() + i.value.len())
                 .sum::<usize>()
+            + self.adult.as_ref().map_or(0, AdultEnrichment::text_len)
     }
+}
+
+/// Bounds `a` in place; false when it can't be kept (a bad scene id).
+fn clamp_adult(a: &mut AdultEnrichment) -> bool {
+    if !scene_id_ok(&a.scene_id) {
+        return false;
+    }
+    clamp_opt(&mut a.title, MAX_SCENE_TITLE);
+    if a.studio
+        .as_ref()
+        .is_some_and(|s| s.is_empty() || s.len() > MAX_STUDIO)
+    {
+        a.studio = None;
+    }
+    let before = a.performers.len();
+    a.performers
+        .retain(|p| !p.is_empty() && p.len() <= MAX_PERFORMER);
+    a.performers.truncate(MAX_PERFORMERS);
+    if a.performers.len() < before {
+        a.performers_truncated = true;
+    }
+    true
 }
 
 /// How much the source's word is worth, as the plugin judges it. Ranking
@@ -236,6 +290,7 @@ mod tests {
             ],
             description: Some(long.clone()),
             publisher: Some(long),
+            adult: None,
         };
         c.clamp();
         assert_eq!(c.name.as_ref().unwrap().len(), MAX_NAME);
@@ -248,6 +303,132 @@ mod tests {
         assert_eq!(c.ids[0].value.len(), MAX_ID_PART);
         assert_eq!(c.description.as_ref().unwrap().len(), MAX_DESCRIPTION);
         assert_eq!(c.publisher.as_ref().unwrap().len(), MAX_PUBLISHER);
+        assert!(lodestar_store::claims::encode(&to_store(&c), 3).is_ok());
+    }
+
+    #[test]
+    fn clamp_bounds_the_adult_section() {
+        let long = "x".repeat(MAX_SCENE_TITLE * 2);
+        let mut c = Claims {
+            name: Some("n".into()),
+            ids: vec![ExternalId {
+                scheme: "stashdb-performer".into(),
+                value: "0b9e4c1a".into(),
+            }],
+            description: Some("d".into()),
+            publisher: Some("p".into()),
+            adult: Some(AdultEnrichment {
+                title: Some(long),
+                studio: Some("s".repeat(MAX_STUDIO + 1)),
+                performers: vec!["p".repeat(MAX_PERFORMER); MAX_PERFORMERS + 5],
+                ..AdultEnrichment::new("a".repeat(MAX_SCENE_ID))
+            }),
+            ..Claims::default()
+        };
+        c.clamp();
+        // Nothing rides along beside the section; the name stays.
+        assert_eq!(c.name.as_deref(), Some("n"));
+        assert!(c.ids.is_empty() && c.description.is_none() && c.publisher.is_none());
+        let a = c.adult.as_ref().unwrap();
+        assert_eq!(a.title.as_ref().unwrap().len(), MAX_SCENE_TITLE);
+        assert_eq!(a.studio, None, "a cut name may name someone else");
+        assert_eq!(a.performers.len(), MAX_PERFORMERS);
+        assert!(a.performers_truncated);
+        assert!(lodestar_store::claims::encode(&to_store(&c), 3).is_ok());
+    }
+
+    /// The store's claims for `c`, as SRC-2's mapping builds them, so the
+    /// clamp's output is checked against what the store accepts.
+    fn to_store(c: &Claims) -> lodestar_store::claims::Claims {
+        use lodestar_store::claims as s;
+        s::Claims {
+            name: c.name.clone(),
+            size: c.size,
+            files: c
+                .files
+                .iter()
+                .map(|f| s::ClaimedFile {
+                    path: f.path.clone(),
+                    size: f.size,
+                })
+                .collect(),
+            trackers: c.trackers.clone(),
+            ids: c
+                .ids
+                .iter()
+                .map(|i| s::ExternalId {
+                    scheme: i.scheme.clone(),
+                    value: i.value.clone(),
+                })
+                .collect(),
+            description: c.description.clone(),
+            publisher: c.publisher.clone(),
+            provenance: s::Provenance::default(),
+            adult: c.adult.clone(),
+        }
+    }
+
+    #[test]
+    fn clamp_degrades_the_adult_section() {
+        // Bad performer entries are dropped and flagged; the rest stays.
+        let mut c = Claims {
+            adult: Some(AdultEnrichment {
+                studio: Some(String::new()),
+                performers: vec![
+                    "A".into(),
+                    String::new(),
+                    "p".repeat(MAX_PERFORMER + 1),
+                    "B".into(),
+                ],
+                ..AdultEnrichment::new("123")
+            }),
+            ..Claims::default()
+        };
+        c.clamp();
+        let a = c.adult.as_ref().unwrap();
+        assert_eq!(a.performers, ["A", "B"]);
+        assert!(a.performers_truncated);
+        assert_eq!(a.studio, None);
+        assert!(!c.is_empty());
+
+        // A bad scene id drops the section whole: it can't be cut.
+        for id in [
+            String::new(),
+            "a b".into(),
+            "../x".into(),
+            "é".into(),
+            "x".repeat(MAX_SCENE_ID + 1),
+        ] {
+            let mut c = Claims {
+                adult: Some(AdultEnrichment::new(id)),
+                ..Claims::default()
+            };
+            c.clamp();
+            assert!(c.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_adult_section_counts_toward_the_total() {
+        let mut c = Claims {
+            files: vec![
+                ClaimedFile {
+                    path: "f".repeat(MAX_PATH),
+                    size: None
+                };
+                MAX_TOTAL / MAX_PATH
+            ],
+            adult: Some(AdultEnrichment {
+                performers: vec!["p".repeat(MAX_PERFORMER); MAX_PERFORMERS],
+                ..AdultEnrichment::new("1")
+            }),
+            ..Claims::default()
+        };
+        c.clamp();
+        assert!(c.text_len() <= MAX_TOTAL);
+        assert!(c.files.len() < MAX_TOTAL / MAX_PATH, "files make room");
+        assert_eq!(c.adult.as_ref().unwrap().performers.len(), MAX_PERFORMERS);
+        assert!(lodestar_store::claims::encode(&to_store(&c), 3).is_ok());
     }
 
     #[test]
