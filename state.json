@@ -2770,7 +2770,7 @@
       "brief": "briefs/RP-0.md"
     },
     "SRC-12b": {
-      "status": "in_review",
+      "status": "merged #421 d2cc87cf",
       "model": "opus",
       "session": "session_01MMjhnAc7bM46Pfez4aWgcX",
       "launched": "2026-11-04T16:22:00Z",
@@ -2803,6 +2803,9 @@
       "session": "session_01MMjhnBWo9QQ9qZJepHAQNc",
       "launched": "2026-11-04T17:43:00Z",
       "brief": "briefs/X-search-files-3.md"
+    },
+    "X-thp-off": {
+      "status": "running session_01MMjhnCQkmjmywGxSKFFdqM"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3219,7 +3222,8 @@
     "2026-11-04T17:43:00Z #420 L4-followups merged (fc324666). X-search-files-3 launched in slot 7.",
     "2026-11-04T17:51:00Z #419 SRC-8b merged (36e61ff2). SRC-10d relaunched on it. r4 likely fail (provisional 12.9 MiB/h); X-merge-policy top priority.",
     "2026-11-04T18:05:00Z X-merge-policy negative: indexing path explains <1/7 of r4 slope. Next lead: real-network fetch/crawler path or allocator/THP; read-only /proc status+smaps requested via dashboard session.",
-    "2026-11-04T18:20Z #422 ENR-2a fresh Opus MERGE at 8b42d8e2 (300k-input differential check identical); merge on green ci-ok. #421/#423 CI still running."
+    "2026-11-04T18:20Z #422 ENR-2a fresh Opus MERGE at 8b42d8e2 (300k-input differential check identical); merge on green ci-ok. #421/#423 CI still running.",
+    "2026-11-04T18:17Z #421 SRC-12b merged (d2cc87cf); session archived. X-thp-off launched (Opus) in its slot."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4854,7 +4858,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T17:51:00Z",
+    "updated": "2026-11-04T18:17Z",
     "items": [
       {
         "slot": 1,
@@ -4874,11 +4878,11 @@
       },
       {
         "slot": 3,
-        "slice": "SRC-12b",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Letting source plug-ins stream very large or slow downloads safely. Reviewed; merging on green.",
-        "since": "2026-11-04T16:22:00Z"
+        "slice": "X-thp-off",
+        "role": "Opus session",
+        "agent": "session_01MMjhnCQkmjmywGxSKFFdqM",
+        "doing": "building: prctl THP disable + mimalloc allow_thp off for the worker",
+        "since": "2026-11-04T18:17Z"
       },
       {
         "slot": 4,
