@@ -50,6 +50,11 @@ fn fragment() -> impl Strategy<Value = String> {
         Just(r#"<x xmlns:nyaa="urn:other">"#.to_string()),
         Just("</x>".to_string()),
         Just(format!("<nyaa:infoHash>{h}</nyaa:infoHash>")),
+        Just(format!("<infohash>{h}</infohash>")),
+        Just("<infohash>0000000000000000000000000000000000000000</infohash>".to_string()),
+        Just("<infohash>".to_string()),
+        Just("</infohash>".to_string()),
+        Just(format!(r#"<infohash xmlns="">{h}</infohash>"#)),
         Just("<nyaa:size>1.5 GiB</nyaa:size>".to_string()),
         Just("<nyaa:categoryId>1_2</nyaa:categoryId>".to_string()),
         Just(format!("<link>magnet:?xt=urn:btih:{h}</link>")),
@@ -97,7 +102,7 @@ proptest! {
     #[test]
     fn well_formed_items_read_back(
         items in proptest::collection::vec(
-            (any::<[u8; 20]>(), "[A-Za-z0-9 .\\[\\]-]{1,40}", any::<u32>(), any::<bool>()),
+            (any::<[u8; 20]>(), "[A-Za-z0-9 .\\[\\]-]{1,40}", any::<u32>(), 0..3u8),
             0..20,
         ),
         atom in any::<bool>(),
@@ -105,13 +110,14 @@ proptest! {
         let hex = |h: &[u8; 20]| h.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let body: String = items
             .iter()
-            .map(|(h, title, seeders, magnet)| {
-                let hash = if *magnet && atom {
-                    format!(r#"<link href="magnet:?xt=urn:btih:{}"/>"#, hex(h))
-                } else if *magnet {
-                    format!("<link>magnet:?xt=urn:btih:{}</link>", hex(h))
-                } else {
-                    format!("<nyaa:infoHash>{}</nyaa:infoHash>", hex(h))
+            .map(|(h, title, seeders, source)| {
+                let hash = match (source, atom) {
+                    (0, true) => format!(r#"<link href="magnet:?xt=urn:btih:{}"/>"#, hex(h)),
+                    (0, false) => format!("<link>magnet:?xt=urn:btih:{}</link>", hex(h)),
+                    (1, _) => format!("<nyaa:infoHash>{}</nyaa:infoHash>", hex(h)),
+                    // Academic Torrents' bare element, in no namespace.
+                    (_, true) => format!(r#"<infohash xmlns="">{}</infohash>"#, hex(h)),
+                    (_, false) => format!("<infohash>{}</infohash>", hex(h).to_uppercase()),
                 };
                 let (open, close) = if atom { ("<entry>", "</entry>") } else { ("<item>", "</item>") };
                 format!("{open}<title>{title}</title>{hash}<nyaa:seeders>{seeders}</nyaa:seeders>{close}")
@@ -133,5 +139,47 @@ proptest! {
             prop_assert_eq!(it.title.as_deref(), Some(title.trim()).filter(|t| !t.is_empty()));
             prop_assert_eq!(it.seeders, Some(*seeders));
         }
+    }
+}
+
+/// Any `infoHash` value, and how Nyaa's element took it.
+fn verdict(f: &Feed) -> (Option<Hashes>, u32, u32) {
+    let s = &f.summary;
+    (
+        f.items.first().map(|i| i.hashes),
+        s.skipped.bad_hash,
+        s.skipped.no_hash,
+    )
+}
+
+proptest! {
+    /// The bare `<infohash>` goes through the same validation as
+    /// `nyaa:infoHash`: for any value, the two give the same verdict.
+    #[test]
+    fn bare_hash_validates_like_nyaa(
+        v in prop_oneof![
+            "[0-9a-fA-F]{38,42}",
+            "[A-Za-z2-7]{30,34}",
+            "[0-9a-fA-F]{62,66}",
+            "[0-9a-zA-Z =&;#x]{0,70}",
+            Just("0".repeat(40)),
+        ],
+        magnet in any::<bool>(),
+    ) {
+        let v = v.replace('&', "&amp;");
+        let m = if magnet {
+            "<link>magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567</link>"
+        } else {
+            ""
+        };
+        let doc = |el: &str| {
+            format!(
+                r#"<rss xmlns:nyaa="https://nyaa.si/xmlns/nyaa"><channel><item>{m}<{el}>{v}</{el}></item></channel></rss>"#
+            )
+        };
+        let nyaa = parse(doc("nyaa:infoHash").as_bytes());
+        let bare = parse(doc("infohash").as_bytes());
+        prop_assert_eq!(verdict(&bare), verdict(&nyaa));
+        prop_assert_eq!(bare.summary.kept + bare.summary.skipped.total(), 1);
     }
 }

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Recorded from https://academictorrents.com/rss.xml on 2026-11-04: the channel and five of its 30 items, as served, with each item's description replaced. -->
+<rss xmlns:academictorrents="https://academictorrents.com" version="2.0">
+<channel>
+<title>Academic Torrents</title>
+<description>Recent Torrents</description>
+<link>https://academictorrents.com/</link>
+<item>
+<title>Pl@ntNet-300K: a plant image dataset with high label ambiguity and a long-tailed distribution</title>
+<category>Dataset</category>
+<infohash>447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</infohash>
+<guid>https://academictorrents.com/details/447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</guid>
+<link>https://academictorrents.com/details/447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</link>
+<description>[Description removed from the recording.]</description>
+<size>31670505069</size>
+</item><item>
+<title>AMOS Unlabeled Data Part I: Abdominal CT Scans</title>
+<category>Dataset</category>
+<infohash>470cfb013ee680b099b27a3ac6ae92733bcaf8f1</infohash>
+<guid>https://academictorrents.com/details/470cfb013ee680b099b27a3ac6ae92733bcaf8f1</guid>
+<link>https://academictorrents.com/details/470cfb013ee680b099b27a3ac6ae92733bcaf8f1</link>
+<description>[Description removed from the recording.]</description>
+<size>23286174260</size>
+</item><item>
+<title>MUSDB18-HQ: Uncompressed Music Source Separation Dataset (150 Songs with Stems)</title>
+<category>Dataset</category>
+<infohash>28ed43c7e0c349337bfb0ff3e01f03a3f2d8a492</infohash>
+<guid>https://academictorrents.com/details/28ed43c7e0c349337bfb0ff3e01f03a3f2d8a492</guid>
+<link>https://academictorrents.com/details/28ed43c7e0c349337bfb0ff3e01f03a3f2d8a492</link>
+<description>[Description removed from the recording.]</description>
+<size>22656664047</size>
+</item><item>
+<title>Ultrasound Medial Elbow Dataset</title>
+<category>Dataset</category>
+<infohash>6321c31bdac7d0a136e98fd67b52af5f8d8600d1</infohash>
+<guid>https://academictorrents.com/details/6321c31bdac7d0a136e98fd67b52af5f8d8600d1</guid>
+<link>https://academictorrents.com/details/6321c31bdac7d0a136e98fd67b52af5f8d8600d1</link>
+<description>[Description removed from the recording.]</description>
+<size>981778111</size>
+</item><item>
+<title>Histo-Seg: H&amp;E Whole Slide Image Segmentation Dataset</title>
+<category>Dataset</category>
+<infohash>887a4582525607c24f975666b22118030af533ed</infohash>
+<guid>https://academictorrents.com/details/887a4582525607c24f975666b22118030af533ed</guid>
+<link>https://academictorrents.com/details/887a4582525607c24f975666b22118030af533ed</link>
+<description>[Description removed from the recording.]</description>
+<size>2954856008</size>
+</item>
+</channel>
+</rss>
