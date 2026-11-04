@@ -25,7 +25,22 @@ Runner brief X-mem-gauges, 2026-11-04 (auto-approved under owner §2.33; Track R
   - `/security-review` was run; the PR description has its result.
 - **The history, for the runner.** The first draft asked to relax `forbid` before any approval existed. The session's safety check refused it, and the runner first decided to ship without SQLite (option b). It then took the exception to the owner, who approved it, and once #428 put §2.35 on `main` the half went in.
 - **Cost:** each read takes SQLite's memory-statistics mutex for one load. Every SQLite allocation takes that mutex already, and the reads hold it for nanoseconds, once a minute. No connection, page or lock of ours is touched.
-- **"Other heap"** is `RssAnon − mimalloc committed − SQLite`, labelled "other heap (zstd, other C code)". Evidence from binaries without the SQLite gauges falls back to `RssAnon − mimalloc committed`, labelled "other heap (includes SQLite, zstd, C code)", so nobody reads it as SQLite-free. The report records which in `other_heap_includes_sqlite`.
+- **"Other heap"** is `RssAnon − mimalloc committed − SQLite`, labelled "other heap (zstd, other C code)". Evidence from binaries without the SQLite gauges falls back to `RssAnon − mimalloc committed`, labelled "other heap (includes SQLite, zstd, C code)", so nobody reads it as SQLite-free. The report records which in `other_heap_excludes_sqlite`.
+
+## "Other heap" is an approximation
+- **It's no bound either way.** Besides zstd and other C allocations, `RssAnon − mimalloc committed − SQLite` holds:
+  - thread stacks and every other anonymous mapping;
+  - transparent huge pages that fault whole 2 MiB pages into mimalloc's arenas beyond the 64 KiB slices mimalloc counts as committed. r4 had 212 MiB of `AnonHugePages`, so this matters.
+- **It can also read too small:** mimalloc counts a slice as committed when it's first allocated, whether or not its pages are resident.
+- **So** `docs/metrics.md`, the module docs and the analyzer say "approximates", and the report puts a line beside the table telling you to read it with the `AnonHugePages` row (fresh self-review).
+- **SQLite is subtracted from every window point or none,** so a window where it appears part-way doesn't put a step into the slope.
+
+## Shared edits outside the brief's own paths
+- `crates/lodestar/src/main.rs`: the one `mod memstats;` line. The allocator and THP lines, which X-thp-off owns, are untouched.
+- `crates/lodestar/src/http.rs`: one argument, `index.segment_counts()`, passed to `render_search`.
+- `crates/lodestar/Cargo.toml` (the `extended` feature) and `Cargo.lock` (`cty`).
+- `crates/store/src/lib.rs` (`pub mod memstats;`) and `crates/store/Cargo.toml` (the lints block, owned under §2.35).
+- `runner/dashboard.yaml`: the placement line. `main` added the same line meanwhile, and the merge kept `main`'s.
 
 ## Soak tooling
 - **Collector (`docs/soak/tools/linux/collect.py`):** the seven memory gauges go into `STORAGE` (kept, never required, unlabelled). `search_segments` goes into `LABELLED`, so only `index="main"` and `index="files"` survive the sanitizer.

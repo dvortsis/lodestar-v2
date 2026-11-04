@@ -695,7 +695,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertAlmostEqual(attr["series"]["mem_sqlite_bytes"]["slope_per_hour"], 0.0, places=6)
         # Other heap = anon - mimalloc - sqlite: 400 - 150 - 40 = 210 MiB at hour 0, +0.75 MiB/h.
         other = attr["other_heap"]
-        self.assertTrue(attr["other_heap_includes_sqlite"])
+        self.assertTrue(attr["other_heap_excludes_sqlite"])
         self.assertAlmostEqual(other["first"], 210 + 0.75 * 12, places=2)
         self.assertAlmostEqual(other["slope_per_hour"], 0.75, places=3)
         self.assertEqual(attr["segments"]["main"]["max"], 12)
@@ -712,12 +712,26 @@ class AnalyzerTests(unittest.TestCase):
         report = analyze(self.root)
         attr = report["memory_attribution"]
         self.assertEqual(attr["series"]["mem_sqlite_bytes"], {"status": "absent"})
-        self.assertFalse(attr["other_heap_includes_sqlite"])
+        self.assertFalse(attr["other_heap_excludes_sqlite"])
         self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 0.75, places=3)
         self.assertEqual(attr["segments"]["main"], {"status": "absent"})
         text = markdown(report)
         self.assertIn("| Other heap (includes SQLite, zstd, C code): RssAnon - mimalloc (MiB) | 259.00 |", text)
         self.assertIn("| SQLite | absent | | | | |", text)
+
+    def test_other_heap_subtracts_sqlite_from_every_point_or_none(self):
+        # SQLite appears part-way through the window (an upgrade mid-run, say).
+        rows = self.attribution_rows(sqlite=False)
+        for i in range(len(rows) * 3 // 4, len(rows)):
+            (self.root / "metrics" / f"{i:05d}.prom").write_text(
+                (self.root / "metrics" / f"{i:05d}.prom").read_text()
+                + f"lodestar_mem_sqlite_bytes {40 * 2**20}\n")
+        self.rows(rows)
+        attr = analyze(self.root)["memory_attribution"]
+        self.assertFalse(attr["other_heap_excludes_sqlite"])
+        # No step: the slope is anon - mimalloc's alone, 0.75 MiB/h.
+        self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 0.75, places=3)
+        self.assertIn("read it with the AnonHugePages row", markdown(analyze(self.root)))
 
     def test_snapshots_without_the_memory_metrics_report_them_absent(self):
         # An r4-style run: snapshots carry other series, none of X-mem-gauges'.
@@ -730,7 +744,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIsNone(attr["refused"])
         self.assertTrue(all(g == {"status": "absent"} for g in attr["series"].values()))
         self.assertEqual(attr["other_heap"], {"status": "absent"})
-        self.assertIsNone(attr["other_heap_includes_sqlite"])
+        self.assertIsNone(attr["other_heap_excludes_sqlite"])
         self.assertEqual(attr["segments"], {"main": {"status": "absent"}, "files": {"status": "absent"}})
         self.assertTrue(report["memory_fit"]["window_complete"])  # the gate is untouched
         self.assertIn("| RssAnon | absent | | | | |", markdown(report))
@@ -752,8 +766,16 @@ class AnalyzerTests(unittest.TestCase):
             row["process_id"] = 456
         self.rows(rows)
         report = analyze(self.root)
-        self.assertEqual(report["memory_attribution"]["refused"], "identity_change")
+        attr = report["memory_attribution"]
+        self.assertEqual(attr["refused"], "identity_change")
+        self.assertEqual((attr["series"], attr["segments"]), ({}, {}))  # no misleading statuses
         self.assertIn("Not shown: identity_change.", markdown(report))
+        # A missing process_identity on some rows isn't a restart, as in the gate.
+        rows = self.attribution_rows()
+        for row in rows[::2]:
+            row["process_identity"] = "p1"
+        self.rows(rows)
+        self.assertIsNone(analyze(self.root)["memory_attribution"]["refused"])
         self.rows([sample(0, phase="startup")])
         self.assertEqual(analyze(self.root)["memory_attribution"]["refused"], "no_baseline")
 

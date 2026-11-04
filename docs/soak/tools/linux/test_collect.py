@@ -1202,7 +1202,7 @@ class PublicationTests(Base):
         self.assertAlmostEqual(attr["series"]["mem_rss_anon_bytes"]["slope_per_hour"], 2.0, places=3)
         self.assertAlmostEqual(attr["series"]["mem_anon_huge_bytes"]["last"], 212.0)
         self.assertEqual(attr["series"]["mem_sqlite_bytes"], {"status": "absent"})
-        self.assertFalse(attr["other_heap_includes_sqlite"])
+        self.assertFalse(attr["other_heap_excludes_sqlite"])
         self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 1.0, places=3)
         self.assertEqual(attr["segments"]["main"]["max"], 11)
         self.assertEqual(attr["segments"]["files"]["last"], 3)

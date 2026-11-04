@@ -12,9 +12,15 @@
 //!   `/proc/self/smaps_rollup`.
 //!
 //! C code (SQLite, zstd) allocates through the C library's `malloc`, which
-//! mimalloc doesn't count; `RssAnon` minus mimalloc's committed bytes and
-//! SQLite's own leaves the rest (zstd, other C code), which the analyzer
-//! reports as "other heap".
+//! mimalloc doesn't count. `RssAnon` minus mimalloc's committed bytes and
+//! SQLite's own approximates the rest, which the analyzer reports as "other
+//! heap". It's neither an upper nor a lower bound:
+//! - it also holds thread stacks and every other anonymous mapping;
+//! - transparent huge pages can fault whole 2 MiB pages into mimalloc's
+//!   arenas beyond the slices mimalloc counts, which lands here (read it
+//!   with `AnonHugePages`);
+//! - mimalloc counts committed slices whether or not they're resident,
+//!   which can make it too small.
 //!
 //! The storage sampler (`storage.rs`) calls [`sample`] every 60 s on a
 //! blocking thread, and `/metrics` reads the last values. Each value is on
@@ -166,7 +172,9 @@ fn proc_self() -> (Option<u64>, Option<u64>, Option<u64>) {
 
 /// The bytes in a `/proc` line `<key>: <n> kB`. `None` when the key is
 /// missing, appears twice, or its value isn't digits followed by `kB`
-/// (or overflows): an odd field is absent, never a guess.
+/// (or overflows): an odd field is absent, never a guess. Only the Linux
+/// sampler (and the tests) call it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn kb_field(text: &str, key: &str) -> Option<u64> {
     let mut found = None;
     for line in text.lines() {
@@ -194,6 +202,41 @@ pub fn kb_field(text: &str, key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Any text, any key: an answer or `None`, never a panic.
+        #[test]
+        fn kb_field_never_panics(text in "\\PC{0,200}", key in "[A-Za-z]{0,12}") {
+            let _ = kb_field(&text, &key);
+        }
+
+        /// A well-formed line, with any spacing around the number and unit,
+        /// reads back as its kilobytes in bytes (`None` past u64).
+        #[test]
+        fn a_well_formed_line_reads_back(
+            n in any::<u64>(),
+            a in "[ \t]{0,4}",
+            b in "[ \t]{1,4}",
+            c in "[ \t]{0,4}",
+            before in "([a-z]{1,8}:[ \t]*[0-9]{1,6} kB\n){0,3}",
+        ) {
+            let text = format!("{before}RssAnon:{a}{n}{b}kB{c}\nThreads:\t9\n");
+            prop_assert_eq!(kb_field(&text, "RssAnon"), n.checked_mul(1024));
+        }
+
+        /// Any JSON-ish text never panics, and a well-formed one reads back.
+        #[test]
+        fn mimalloc_json_reads_back_or_is_absent(
+            now in any::<u64>(), peak in any::<u64>(), junk in "\\PC{0,80}",
+        ) {
+            let _ = parse_mimalloc_json(&junk);
+            let json = format!(
+                r#"{{"process": {{"commit_current": {now}, "commit_peak": {peak}}}}}"#
+            );
+            prop_assert_eq!(parse_mimalloc_json(&json), (Some(now), Some(peak)));
+        }
+    }
 
     const STATUS: &str = "Name:\tlodestar\nVmRSS:\t  612340 kB\nRssAnon:\t  503808 kB\n\
         RssFile:\t  108000 kB\nRssShmem:\t       0 kB\nThreads:\t42\n";

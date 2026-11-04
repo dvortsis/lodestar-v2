@@ -493,28 +493,33 @@ def memory_attribution(rows):
 
     Over the gate's window (baseline hours 12-24), each X-mem-gauges series as a
     level (first, last, max) and an OLS slope per hour, the per-index segment
-    count likewise, and "other heap": RssAnon minus mimalloc's committed bytes
-    minus SQLite's own (when the binary reports it), so C allocations other than
-    SQLite's (zstd, musl itself) show up. A restart inside the window refuses the
-    slopes, as the gate does.
+    count likewise, and "other heap": RssAnon minus mimalloc's committed bytes,
+    minus SQLite's own when every window point has it. That approximates the C
+    allocations other than SQLite's (zstd, musl itself), but it also holds
+    thread stacks, other anonymous mappings and THP fill-in of mimalloc's
+    arenas, so read it with AnonHugePages; it's no bound either way. A restart
+    inside the window refuses the section, by the gate's own identity check.
     """
     f = MEMORY_FIT
     out = {"informational": True, "from_hour": f["from_hour"], "to_hour": f["to_hour"],
            "refused": None, "series": {}, "other_heap": {"status": "absent"},
-           "other_heap_includes_sqlite": None, "segments": {}}
+           "other_heap_excludes_sqlite": None, "segments": {}}
     baseline = [r for r in rows if r["phase"] == "baseline" and usable(r)]
-    mem_seen = {name for r in baseline for name in r.get("memory", {})}
-    seg_seen = {i for r in baseline for i in r.get("search", {}).get("segments", {})}
-    window = []
     if not baseline:
         out["refused"] = "no_baseline"
-    else:
-        t0 = [r for r in rows if r["phase"] == "baseline"][0]["elapsed_seconds"]
-        window = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
-        window = [(h, r) for h, r in window if f["from_hour"] <= h <= f["to_hour"]]
-        if len({identity(r) for _, r in window}) > 1:
-            out["refused"] = "identity_change"
-            window = []
+        return out
+    t0 = [r for r in rows if r["phase"] == "baseline"][0]["elapsed_seconds"]
+    window = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
+    window = [(h, r) for h, r in window if f["from_hour"] <= h <= f["to_hour"]]
+    # The same three checks as memory_fit, so both refuse in the same cases.
+    processes = {r["process_id"] for _, r in window}
+    identities = {r["process_identity"] for _, r in window if r.get("process_identity") is not None}
+    starts = {identity(r)[1] for _, r in window}
+    if len(processes) > 1 or len(identities) > 1 or len(starts) > 1:
+        out["refused"] = "identity_change"
+        return out
+    mem_seen = {name for r in baseline for name in r.get("memory", {})}
+    seg_seen = {i for r in baseline for i in r.get("search", {}).get("segments", {})}
     for name in MEMORY_GAUGES:
         pts = [(h, r["memory"][name]) for h, r in window if name in r.get("memory", {})]
         out["series"][name] = level_and_slope(pts, name in mem_seen, 2**20)
@@ -524,17 +529,14 @@ def memory_attribution(rows):
         out["segments"][index] = level_and_slope(pts, index in seg_seen, 1)
     need = ("mem_rss_anon_bytes", "mem_mimalloc_committed_bytes")
     if all(n in mem_seen for n in need):
-        pts = []
-        with_sqlite = []
-        for h, r in window:
-            m = r.get("memory", {})
-            if all(n in m for n in need):
-                sqlite = m.get("mem_sqlite_bytes")
-                with_sqlite.append(sqlite is not None)
-                pts.append((h, m["mem_rss_anon_bytes"] - m["mem_mimalloc_committed_bytes"] - (sqlite or 0)))
+        both = [(h, r["memory"]) for h, r in window if all(n in r.get("memory", {}) for n in need)]
+        # SQLite is subtracted from every point or from none, so a window where
+        # it appears part-way doesn't put a step into the slope.
+        excludes = bool(both) and all("mem_sqlite_bytes" in m for _, m in both)
+        pts = [(h, m["mem_rss_anon_bytes"] - m["mem_mimalloc_committed_bytes"]
+                - (m["mem_sqlite_bytes"] if excludes else 0)) for h, m in both]
         out["other_heap"] = level_and_slope(pts, True, 2**20)
-        # Only claimed when every point subtracted SQLite.
-        out["other_heap_includes_sqlite"] = bool(with_sqlite) and all(with_sqlite)
+        out["other_heap_excludes_sqlite"] = excludes if both else None
     return out
 
 
@@ -858,9 +860,12 @@ def attribution_markdown(attr):
     out += ["| Series | First | Last | Max | Slope per hour | Samples |",
             "| --- | ---: | ---: | ---: | ---: | ---: |"]
     out += [row(ATTRIBUTION_LABELS[name], g, "MiB") for name, g in attr["series"].items()]
-    label = ("Other heap (zstd, other C code): RssAnon - mimalloc - SQLite" if attr["other_heap_includes_sqlite"]
+    label = ("Other heap (zstd, other C code): RssAnon - mimalloc - SQLite" if attr["other_heap_excludes_sqlite"]
              else "Other heap (includes SQLite, zstd, C code): RssAnon - mimalloc")
     out.append(row(label, attr["other_heap"], "MiB"))
+    out += ["", "Other heap is an approximation, not a bound: it also holds thread stacks, other "
+            "anonymous mappings and transparent huge pages filling mimalloc's arenas, so read it "
+            "with the AnonHugePages row."]
     out += [row(f"Segments, {index}", g, "count") for index, g in attr["segments"].items()]
     return out
 

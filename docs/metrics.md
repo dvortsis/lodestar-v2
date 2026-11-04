@@ -823,7 +823,7 @@ The cache series render only with search on. There is no server-side detail cach
 
 Added so a soak's memory verdict can say which heap holds the memory. See [the decision](decisions/2026-11-04-X-mem-gauges.md). The storage sampler reads these every 60 s with the sizes above; a scrape reads the last sample. They come from the process that holds the corpus: the `--child` worker under the Unix supervisor, which serves `/metrics` itself, or the single process elsewhere. Each series is **absent** while it can't be read (before the first sample, on another OS, a field missing or odd), never 0.
 
-mimalloc is the Rust allocator only. C code (SQLite, zstd) allocates through the C library's `malloc`, which mimalloc doesn't count. SQLite counts its own heap, so `mem_rss_anon_bytes − mem_mimalloc_committed_bytes − mem_sqlite_bytes` leaves the rest: zstd, other C code, and allocator overhead.
+mimalloc is the Rust allocator only. C code (SQLite, zstd) allocates through the C library's `malloc`, which mimalloc doesn't count. SQLite counts its own heap, so `mem_rss_anon_bytes − mem_mimalloc_committed_bytes − mem_sqlite_bytes` approximates the rest: zstd, other C code and allocator overhead. It's neither an upper nor a lower bound. It also holds thread stacks and other anonymous mappings, and transparent huge pages that fill mimalloc's arenas past the slices mimalloc counts (read it with `mem_anon_huge_bytes`). mimalloc counts committed slices whether or not they're resident, which can make it too small.
 
 | Series | Type | Meaning |
 | --- | --- | --- |
