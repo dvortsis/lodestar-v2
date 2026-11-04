@@ -268,9 +268,16 @@ fn state_without_the_marker_or_unreadable_never_seeds() {
         );
         assert_eq!(s.setting_text(APPLIED_KEYS[1]).ok().flatten(), None);
     }
-    // The store's own seeding refuses too.
+    // An unreadable marker is reported.
     let mut s = store();
     corrupt(&s, SEEDED_KEY);
+    assert!(
+        load(&Manifest::builtin(), &s)
+            .pack_versions
+            .conditions
+            .contains(&Condition::MarkerUnreadable)
+    );
+    // The store's own seeding refuses too.
     assert!(
         s.seed_pack_versions("MW-1@1", "SC-1", "SC-2", "rules@1")
             .unwrap()
@@ -792,25 +799,39 @@ fn a_damaged_readable_record_fails_closed() {
 }
 
 #[test]
-fn a_downgrade_never_drops_unpreviewed() {
+fn a_downgrade_applies_the_builds_own_drop() {
     let m = Manifest::builtin();
     let mut s = store();
     seeded_with_malware(&mut s, &m);
+    s.set_pack_switch("fakes", true).unwrap();
     let text = upgrade::seed_record(&m)
         .encode()
-        .replace("MW-4@1", "MW-4@5");
+        .replace("MW-4@1", "MW-4@5")
+        .replace("FK-4@1", "FK-4@3");
     write_rows(&mut s, &text, &text);
     let e = load(&m, &s);
     assert_eq!(
         e.pack_versions.conditions,
-        [Condition::Downgrade(PackRule::Mw4)]
+        [
+            Condition::Downgrade(PackRule::Fk4),
+            Condition::Downgrade(PackRule::Mw4)
+        ]
     );
     assert!(!e.pack_versions.state(PackRule::Mw4).pending());
+    assert!(e.pack_versions.state(PackRule::Fk4).plain);
     let tiny = (
         "Movie 2019 1080p",
         &[("movie.mkv", 90_000), ("player.exe", 1 << 20)][..],
     );
-    assert_eq!(decide(&e, tiny).map(|d| d.1), Some(Action::Quarantine));
+    assert_eq!(
+        decide(&e, tiny),
+        Some((RuleRef::Pack(PackRule::Mw4), Action::Drop))
+    );
+    let empty = ("Empty 2019", &[("pad.bin", 0)][..]);
+    assert_eq!(
+        decide(&e, empty),
+        Some((RuleRef::Pack(PackRule::Fk4), Action::Drop))
+    );
 }
 
 #[test]

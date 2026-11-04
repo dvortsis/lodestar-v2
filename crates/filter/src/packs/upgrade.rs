@@ -172,6 +172,9 @@ pub enum Condition {
     Differ,
     /// Applied rows exist without the marker: never seeded over.
     MarkerMissing,
+    /// The marker row exists but doesn't read: still state, never seeded
+    /// over.
+    MarkerUnreadable,
     /// The applied version is newer than this build's.
     Downgrade(PackRule),
     /// The applied version's code is gone: the interim mode.
@@ -193,6 +196,7 @@ impl Condition {
             Condition::Lost => "packs.lost".to_owned(),
             Condition::Differ => "packs.differ".to_owned(),
             Condition::MarkerMissing => "packs.marker".to_owned(),
+            Condition::MarkerUnreadable => "packs.marker-unreadable".to_owned(),
             Condition::Downgrade(r) => format!("packs.downgrade.{}", r.id()),
             Condition::Skipped(r) => format!("packs.skipped.{}", r.id()),
             Condition::Narrowed(r) => format!("packs.narrowed.{}", r.id()),
@@ -382,7 +386,9 @@ impl PackVersions {
             | Condition::Skipped(r)
             | Condition::Narrowed(r)
             | Condition::Unknown(r) => *r == rule,
-            Condition::RowUnreadable | Condition::MarkerMissing => false,
+            Condition::RowUnreadable | Condition::MarkerMissing | Condition::MarkerUnreadable => {
+                false
+            }
         })
     }
 
@@ -400,6 +406,17 @@ impl PackVersions {
         } else {
             if rows.marker.is_none() && rows.applied.iter().any(Option::is_some) {
                 conditions.push(Condition::MarkerMissing);
+            }
+            let marker_reads = |t: &str| {
+                t == "1"
+                    || t.strip_prefix(SEEDED_ON_RULES)
+                        .and_then(|t| t.strip_prefix('@'))
+                        .is_some_and(|t| t.parse::<i64>().is_ok())
+            };
+            if matches!(&rows.marker, Some(Err(_)))
+                || matches!(&rows.marker, Some(Ok(t)) if !marker_reads(t))
+            {
+                conditions.push(Condition::MarkerUnreadable);
             }
             let read: Vec<Row> = rows.applied.iter().map(row).collect();
             let ok: Vec<Applied> = read
@@ -574,10 +591,10 @@ fn one_record(
         }
         Some(v) if v == cur => ((vec![cur], Vec::new()), Some(v), false),
         Some(v) if v > cur => {
-            // The build's own version applies, but no record shows it
-            // accepted on this install: held at most by quarantine.
+            // The build's own version applies, uncapped (runner, #424):
+            // the version this build ships, as the plan says.
             conditions.push(Condition::Downgrade(rule));
-            ((vec![cur], vec![cur]), Some(v), true)
+            ((vec![cur], Vec::new()), Some(v), true)
         }
         Some(v) if entry.retained(v).is_some() => ((vec![v], Vec::new()), Some(v), false),
         Some(v) => {

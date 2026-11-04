@@ -222,7 +222,7 @@ impl Store {
         copy_to: &str,
         marker_with_rules: &str,
     ) -> Result<Option<PackSeed>> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         if pack_version_rows(&tx)?.any() {
             return Ok(None);
         }
@@ -283,7 +283,7 @@ impl Store {
         applied: [Option<&str>; 2],
         switch: Option<(&str, bool)>,
     ) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         for (key, text) in PACKS_APPLIED_KEYS.iter().zip(applied) {
             if let Some(text) = text {
                 upsert_setting(&tx, key, text)?;
