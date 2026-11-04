@@ -656,6 +656,129 @@ class AnalyzerTests(unittest.TestCase):
                 "- Bar: upper 95% bound <= 2 MiB/h: misses the bar\n"
                 "- Peak private memory: 674.45 MiB\n\n"))
 
+    def attribution_rows(self, hours=24.5, step=60, sqlite=True, segments=True):
+        """Per minute: anon grows 1 MiB/h, mimalloc 0.25 MiB/h, SQLite flat at 40 MiB."""
+        rows = self.memory_rows(0.0, hours=hours, step=step)
+        for i, row in enumerate(rows):
+            h = row["elapsed_seconds"] / 3600
+            prom = ["# HELP lodestar_mem_rss_anon_bytes Resident anonymous memory.",
+                    "# TYPE lodestar_mem_rss_anon_bytes gauge",
+                    f"lodestar_mem_rss_anon_bytes {int((400 + 1.0 * h) * 2**20)}",
+                    f"lodestar_mem_rss_file_bytes {int(900 * 2**20)}",
+                    f"lodestar_mem_anon_huge_bytes {int(212 * 2**20)}",
+                    f"lodestar_mem_mimalloc_committed_bytes {int((150 + 0.25 * h) * 2**20)}",
+                    f"lodestar_mem_mimalloc_peak_committed_bytes {int(160 * 2**20)}",
+                    "lodestar_mem_rss_anon_bytes 1"]  # a duplicate: the first value is kept
+            if sqlite:
+                prom += [f"lodestar_mem_sqlite_bytes {40 * 2**20}",
+                         f"lodestar_mem_sqlite_highwater_bytes {48 * 2**20}"]
+            if segments:
+                prom += [f'lodestar_search_segments{{index="main"}} {10 + i % 3}',
+                         'lodestar_search_segments{index="files"} 4',
+                         'lodestar_search_segments{index="other"} 99']
+            (self.root / "metrics" / f"{i:05d}.prom").write_text("\n".join(prom) + "\n")
+        return rows
+
+    def test_memory_attribution_end_to_end(self):
+        self.rows(self.attribution_rows())
+        report = analyze(self.root)
+        attr = report["memory_attribution"]
+        self.assertIsNone(attr["refused"])
+        anon = attr["series"]["mem_rss_anon_bytes"]
+        self.assertEqual(anon["status"], "ok")
+        self.assertEqual(anon["samples"], 721)
+        self.assertAlmostEqual(anon["first"], 412.0, places=2)
+        self.assertAlmostEqual(anon["last"], 424.0, places=2)
+        self.assertAlmostEqual(anon["slope_per_hour"], 1.0, places=3)
+        self.assertAlmostEqual(attr["series"]["mem_mimalloc_committed_bytes"]["slope_per_hour"], 0.25, places=3)
+        self.assertAlmostEqual(attr["series"]["mem_anon_huge_bytes"]["last"], 212.0)
+        self.assertAlmostEqual(attr["series"]["mem_sqlite_bytes"]["slope_per_hour"], 0.0, places=6)
+        # Other heap = anon - mimalloc - sqlite: 400 - 150 - 40 = 210 MiB at hour 0, +0.75 MiB/h.
+        other = attr["other_heap"]
+        self.assertTrue(attr["other_heap_excludes_sqlite"])
+        self.assertAlmostEqual(other["first"], 210 + 0.75 * 12, places=2)
+        self.assertAlmostEqual(other["slope_per_hour"], 0.75, places=3)
+        self.assertEqual(attr["segments"]["main"]["max"], 12)
+        self.assertAlmostEqual(attr["segments"]["files"]["slope_per_hour"], 0.0)
+        self.assertNotIn("other", attr["segments"])
+        text = markdown(report)
+        self.assertIn("Memory attribution (informational; baseline hours 12-24):", text)
+        self.assertIn("| RssAnon (MiB) | 412.00 | 424.00 | 424.00 | 1.00 | 721 |", text)
+        self.assertIn("| Other heap (zstd, other C code): RssAnon - mimalloc - SQLite (MiB) | 219.00 | 228.00 |", text)
+        self.assertIn("| Segments, main (count) |", text)
+
+    def test_memory_attribution_without_sqlite_says_so(self):
+        self.rows(self.attribution_rows(sqlite=False, segments=False))
+        report = analyze(self.root)
+        attr = report["memory_attribution"]
+        self.assertEqual(attr["series"]["mem_sqlite_bytes"], {"status": "absent"})
+        self.assertFalse(attr["other_heap_excludes_sqlite"])
+        self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 0.75, places=3)
+        self.assertEqual(attr["segments"]["main"], {"status": "absent"})
+        text = markdown(report)
+        self.assertIn("| Other heap (includes SQLite, zstd, C code): RssAnon - mimalloc (MiB) | 259.00 |", text)
+        self.assertIn("| SQLite | absent | | | | |", text)
+
+    def test_other_heap_subtracts_sqlite_from_every_point_or_none(self):
+        # SQLite appears part-way through the window (an upgrade mid-run, say).
+        rows = self.attribution_rows(sqlite=False)
+        for i in range(len(rows) * 3 // 4, len(rows)):
+            (self.root / "metrics" / f"{i:05d}.prom").write_text(
+                (self.root / "metrics" / f"{i:05d}.prom").read_text()
+                + f"lodestar_mem_sqlite_bytes {40 * 2**20}\n")
+        self.rows(rows)
+        attr = analyze(self.root)["memory_attribution"]
+        self.assertFalse(attr["other_heap_excludes_sqlite"])
+        # No step: the slope is anon - mimalloc's alone, 0.75 MiB/h.
+        self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 0.75, places=3)
+        self.assertIn("read it with the AnonHugePages row", markdown(analyze(self.root)))
+
+    def test_snapshots_without_the_memory_metrics_report_them_absent(self):
+        # An r4-style run: snapshots carry other series, none of X-mem-gauges'.
+        rows = self.memory_rows(0.0)
+        for i in range(len(rows)):
+            (self.root / "metrics" / f"{i:05d}.prom").write_text("lodestar_torrents 5\n")
+        self.rows(rows)
+        report = analyze(self.root)
+        attr = report["memory_attribution"]
+        self.assertIsNone(attr["refused"])
+        self.assertTrue(all(g == {"status": "absent"} for g in attr["series"].values()))
+        self.assertEqual(attr["other_heap"], {"status": "absent"})
+        self.assertIsNone(attr["other_heap_excludes_sqlite"])
+        self.assertEqual(attr["segments"], {"main": {"status": "absent"}, "files": {"status": "absent"}})
+        self.assertTrue(report["memory_fit"]["window_complete"])  # the gate is untouched
+        self.assertIn("| RssAnon | absent | | | | |", markdown(report))
+        # No snapshots at all (an older collector) reads the same way.
+        for path in (self.root / "metrics").iterdir():
+            path.unlink()
+        self.rows(self.memory_rows(0.0))
+        attr = analyze(self.root)["memory_attribution"]
+        self.assertEqual(attr["series"]["mem_rss_anon_bytes"], {"status": "absent"})
+
+    def test_memory_attribution_short_runs_and_restarts(self):
+        # Present, but the run stopped before hour 12.
+        self.rows(self.attribution_rows(hours=2))
+        attr = analyze(self.root)["memory_attribution"]
+        self.assertEqual(attr["series"]["mem_rss_anon_bytes"], {"status": "no_window_samples"})
+        # A restart inside the window refuses the slopes, as the gate does.
+        rows = self.attribution_rows()
+        for row in rows[len(rows) * 3 // 4:]:
+            row["process_id"] = 456
+        self.rows(rows)
+        report = analyze(self.root)
+        attr = report["memory_attribution"]
+        self.assertEqual(attr["refused"], "identity_change")
+        self.assertEqual((attr["series"], attr["segments"]), ({}, {}))  # no misleading statuses
+        self.assertIn("Not shown: identity_change.", markdown(report))
+        # A missing process_identity on some rows isn't a restart, as in the gate.
+        rows = self.attribution_rows()
+        for row in rows[::2]:
+            row["process_identity"] = "p1"
+        self.rows(rows)
+        self.assertIsNone(analyze(self.root)["memory_attribution"]["refused"])
+        self.rows([sample(0, phase="startup")])
+        self.assertEqual(analyze(self.root)["memory_attribution"]["refused"], "no_baseline")
+
 
 if __name__ == "__main__":
     unittest.main()

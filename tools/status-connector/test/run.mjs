@@ -102,12 +102,14 @@ assert.equal((await tool('plan_owner')).rows.length, 1); assert.equal((await too
 const notes = (await tool('plan_notes')).rows; assert.deepEqual(notes.map((n) => n.group), ['now', 'you']); assert.equal(notes[0].asof, '2026-11-02');
 assert.equal((await tool('plan_crawler')).rows.length, 2); assert.equal((await tool('plan_soak')).rows.length, 1);
 const slots = (await tool('plan_slots')).rows;
-assert.deepEqual(slots.map((x) => x.status), ['working', 'working', 'working', 'working'], 'rows are drawn for 1..limit only, never for a slot above it');
+assert.deepEqual(slots.map((x) => x.status), ['working', 'working', 'working', 'working', 'finishing'], 'rows 1..limit, then a listed slot above the limit as finishing (the limit can be lowered while a session still runs)');
+assert.equal(slots[4].slot, 9);
 assert.equal(slots[3].slice, '', 'a value that is not a string is dropped, not passed through'); assert.equal(slots[3].doing, '42'); assert.equal(slots[3].since, '');
 assert.equal(slots[0].slice, 'SRC-9'); assert.ok(slots[0].title && slots[0].stage, 'a slot takes its title and state from the slice graph');
 assert.equal(slots[1].slice, 'NOPE-3', 'the first entry for a slot wins');
 assert.equal(slots[2].role, 'build', 'a role outside the set falls back to build');
-for (const w of ['Unknown slice:NOPE-3', 'Slot listed twice:2', 'Bad slot number:1.5', 'Slice in two slots:SRC-9', 'Bad slot value:role wizard', 'Slot above the limit:9', 'Slot above the limit:1000000000']) assert.ok(warnings.includes(w), 'reported: ' + w);
+for (const w of ['Unknown slice:NOPE-3', 'Slot listed twice:2', 'Bad slot number:1.5', 'Slice in two slots:SRC-9', 'Bad slot value:role wizard', 'Slot above the limit:1000000000']) assert.ok(warnings.includes(w), 'reported: ' + w);
+assert.ok(!warnings.includes('Slot above the limit:9'), 'a slot above the limit but within what is drawn is shown as finishing, not warned about');
 assert.ok(warnings.some((w) => w.startsWith('Slots list is stale')), 'a slots list the runner has not refreshed in 24 h is reported');
 // a condition with `auto:` follows GitHub: unmet until the tag exists
 assert.equal((await tool('plan_ext')).rows.find((e) => e.key === 'v-tagged').met, false);
