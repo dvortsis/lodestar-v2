@@ -1,0 +1,52 @@
+--- p_orig.rs	2026-11-04 21:10:07.602898128 +0000
++++ src/p.rs	2026-11-04 21:15:41.216359987 +0000
+@@ -168,6 +168,19 @@
+                 };
+                 // A host with its query or fragment and no path.
+                 let host_end = authority.find(['?', '#']).unwrap_or(authority.len());
++                // REVIEW FIX B: a `:` with no port number after it is a
++                // password whose `@` wasn't found.
++                if at.is_none() {
++                    let h = &authority[..host_end];
++                    if !h.starts_with('[')
++                        && h.rsplit_once(':').is_some_and(|(_, port)| {
++                            port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit())
++                        })
++                    {
++                        out.push_str(REDACTED);
++                        return out;
++                    }
++                }
+                 // Free text's host may be a path segment of what came
+                 // before (`/https://<passkey>/announce`, `@passkey=<k>`): a
+                 // real host label is never passkey-like or `name=value`.
+@@ -408,7 +421,18 @@
+             None if !rest[i..].starts_with("://") => {
+                 let end = url_end(scan);
+                 match scheme.from(text, pos + i).map(|n| n - pos) {
+-                    Some(n) if n < end => scheme_start(rest, i + 7, n).max(i + 7),
++                    // REVIEW FIX C': a URL glued to a magnet stays in it, and
++                    // the magnet runs on to that URL's end past its userinfo.
++                    Some(n) if n >= i + 7 && n < end => {
++                        let next = scheme
++                            .from(text, pos + n + 3)
++                            .map_or(rest.len(), |m| m - pos)
++                            - (n + 3);
++                        match userinfo_in_text(&rest[n + 3..], next) {
++                            Some(at) => end.max(url_end(n + 3 + at + 1)),
++                            None => end,
++                        }
++                    }
+                     _ => end,
+                 }
+             }
+@@ -691,7 +715,8 @@
+         if let Some(sep) = url {
+             // `[redacted]@` marks it as userinfo, so the URL rules read a
+             // password that runs on past the quote, `/` and all.
+-            out.push_str(&redact_runs(&text[to..sep - 3]));
++            let s = &text[to..sep - 3];
++            out.push_str(if known_scheme(s) { s } else { REDACTED });
+             out.push_str("://");
+             out.push_str(REDACTED);
+             out.push('@');
