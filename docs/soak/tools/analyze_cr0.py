@@ -504,20 +504,24 @@ def memory_attribution(rows):
     out = {"informational": True, "from_hour": f["from_hour"], "to_hour": f["to_hour"],
            "refused": None, "series": {}, "other_heap": {"status": "absent"},
            "other_heap_excludes_sqlite": None, "segments": {}}
-    baseline = [r for r in rows if r["phase"] == "baseline" and usable(r)]
+    every = [r for r in rows if r["phase"] == "baseline"]
+    baseline = [r for r in every if usable(r)]
     if not baseline:
         out["refused"] = "no_baseline"
         return out
-    t0 = [r for r in rows if r["phase"] == "baseline"][0]["elapsed_seconds"]
-    window = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
-    window = [(h, r) for h, r in window if f["from_hour"] <= h <= f["to_hour"]]
-    # The same three checks as memory_fit, so both refuse in the same cases.
-    processes = {r["process_id"] for _, r in window}
-    identities = {r["process_identity"] for _, r in window if r.get("process_identity") is not None}
-    starts = {identity(r)[1] for _, r in window}
+    t0 = every[0]["elapsed_seconds"]
+    span = [((r["elapsed_seconds"] - t0) / 3600, r) for r in every]
+    span = [(h, r) for h, r in span if f["from_hour"] <= h <= f["to_hour"]]
+    # The same three checks as memory_fit, over the same rows: every baseline row
+    # in the window counts for the process and its identity (a failed metrics read
+    # still names its process), and only usable rows for the start time.
+    processes = {r["process_id"] for _, r in span}
+    identities = {r["process_identity"] for _, r in span if r.get("process_identity") is not None}
+    starts = {identity(r)[1] for _, r in span if usable(r)}
     if len(processes) > 1 or len(identities) > 1 or len(starts) > 1:
         out["refused"] = "identity_change"
         return out
+    window = [(h, r) for h, r in span if usable(r)]
     mem_seen = {name for r in baseline for name in r.get("memory", {})}
     seg_seen = {i for r in baseline for i in r.get("search", {}).get("segments", {})}
     for name in MEMORY_GAUGES:
@@ -863,10 +867,11 @@ def attribution_markdown(attr):
     label = ("Other heap (zstd, other C code): RssAnon - mimalloc - SQLite" if attr["other_heap_excludes_sqlite"]
              else "Other heap (includes SQLite, zstd, C code): RssAnon - mimalloc")
     out.append(row(label, attr["other_heap"], "MiB"))
+    out += [row(f"Segments, {index}", g, "count") for index, g in attr["segments"].items()]
+    # After the last row: a line inside the table would end it.
     out += ["", "Other heap is an approximation, not a bound: it also holds thread stacks, other "
             "anonymous mappings and transparent huge pages filling mimalloc's arenas, so read it "
             "with the AnonHugePages row."]
-    out += [row(f"Segments, {index}", g, "count") for index, g in attr["segments"].items()]
     return out
 
 
