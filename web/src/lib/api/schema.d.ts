@@ -4361,6 +4361,11 @@ export interface components {
             warnings: components["schemas"]["PreviewWarning"][];
         };
         /**
+         * @description Why a field isn't complete.
+         * @enum {string}
+         */
+        FieldState: "missing" | "no_producer" | "backfilling";
+        /**
          * @description What a field's value is.
          * @enum {string}
          */
@@ -6733,6 +6738,14 @@ export interface components {
          *       "rebuild": null,
          *       "searchable_torrents": 84210,
          *       "unavailable": [],
+         *       "unpopulated": [
+         *         {
+         *           "done": 41000,
+         *           "field": "source",
+         *           "state": "backfilling",
+         *           "upto": 84000
+         *         }
+         *       ],
          *       "updated_at": 1792681200
          *     }
          */
@@ -6773,6 +6786,14 @@ export interface components {
              *     until a rebuild adds them.
              */
             unavailable: string[];
+            /**
+             * @description Every field the serving index can't fully answer for: the
+             *     `unavailable` ones (as `missing`), then those nothing fills yet
+             *     and those being filled in, with how far along.
+             *     Always sent; optional in the schema so older clients and
+             *     fixtures stay valid.
+             */
+            unpopulated?: components["schemas"]["UnpopulatedField"][];
             /**
              * Format: int64
              * @description Unix seconds these numbers were read.
@@ -6849,7 +6870,7 @@ export interface components {
          * @description A note on what a search left out.
          * @enum {string}
          */
-        SearchNotice: "adult_hidden";
+        SearchNotice: "adult_hidden" | "fields_incomplete";
         /**
          * @description Zero-result recovery: up to [`MAX_CLAUSES`] top-level clauses of the
          *     query (the `of` of a root `and`), each with the total the
@@ -6932,6 +6953,14 @@ export interface components {
             /** @description Present only when asked for with `explain`. */
             explain?: components["schemas"]["SearchExplain"];
             hits: components["schemas"]["SearchHit"][];
+            /**
+             * @description The fields this query's clauses name that the index can't fully
+             *     answer for yet, when `notices` has `fields_incomplete`; empty
+             *     otherwise.
+             *     Always sent; optional in the schema so older clients and
+             *     fixtures stay valid.
+             */
+            incomplete_fields?: components["schemas"]["UnpopulatedField"][];
             limit: number;
             /**
              * @description Pass as `cursor` for the next page, read from the same index
@@ -6943,7 +6972,8 @@ export interface components {
              * @description What the server left out of these results, for the UI to say:
              *     `adult_hidden` when the query asks for Adult (`type:adult`,
              *     `adult:…`) while "Show adult content" is off, so it matched
-             *     nothing adult (§20.9).
+             *     nothing adult (§20.9); `fields_incomplete` when a clause names a
+             *     field still being filled in (see `incomplete_fields`).
              */
             notices: components["schemas"]["SearchNotice"][];
             /** @description Hits before this page. */
@@ -8625,6 +8655,32 @@ export interface components {
             trend: components["schemas"]["UnderstandPoint"][];
             /** Format: int64 */
             updated_at: number;
+        };
+        /**
+         * @description A field the serving index can't fully answer for (architecture §8,
+         *     the population contract): `/search/state`'s `unpopulated`, and a
+         *     search's `incomplete_fields`.
+         */
+        UnpopulatedField: {
+            /**
+             * Format: int64
+             * @description While `backfilling`: torrents with ids up to this have the field.
+             *     Null otherwise.
+             */
+            done: number | null;
+            /**
+             * @description The field as the query language and `/search/state` name it;
+             *     file-index fields as `file.<name>`.
+             * @example source
+             */
+            field: string;
+            state: components["schemas"]["FieldState"];
+            /**
+             * Format: int64
+             * @description While `backfilling`: torrents with ids in `(done, upto]` may not
+             *     have it yet; later ones do. Null otherwise.
+             */
+            upto: number | null;
         };
         /**
          * @description `GET /alerts/unread`: the nav badge.

@@ -171,8 +171,16 @@ pub struct SearchResponse {
     /// What the server left out of these results, for the UI to say:
     /// `adult_hidden` when the query asks for Adult (`type:adult`,
     /// `adult:…`) while "Show adult content" is off, so it matched
-    /// nothing adult (§20.9).
+    /// nothing adult (§20.9); `fields_incomplete` when a clause names a
+    /// field still being filled in (see `incomplete_fields`).
     pub notices: Vec<SearchNotice>,
+    /// The fields this query's clauses name that the index can't fully
+    /// answer for yet, when `notices` has `fields_incomplete`; empty
+    /// otherwise.
+    /// Always sent; optional in the schema so older clients and
+    /// fixtures stay valid.
+    #[serde(default)]
+    pub incomplete_fields: Vec<UnpopulatedField>,
     /// Hits before this page.
     pub offset: usize,
     /// Present only on a first page with no matches whose query has two
@@ -244,6 +252,9 @@ pub struct ClauseRemoval {
     "rebuild": null,
     "searchable_torrents": 84210,
     "unavailable": [],
+    "unpopulated": [
+        {"field": "source", "state": "backfilling", "done": 41000, "upto": 84000}
+    ],
     "updated_at": 1792681200
 }))]
 pub struct SearchIndexState {
@@ -271,6 +282,13 @@ pub struct SearchIndexState {
     /// Fields the serving index lacks: clauses on them match nothing
     /// until a rebuild adds them.
     pub unavailable: Vec<String>,
+    /// Every field the serving index can't fully answer for: the
+    /// `unavailable` ones (as `missing`), then those nothing fills yet
+    /// and those being filled in, with how far along.
+    /// Always sent; optional in the schema so older clients and
+    /// fixtures stay valid.
+    #[serde(default)]
+    pub unpopulated: Vec<UnpopulatedField>,
     /// Unix seconds these numbers were read.
     pub updated_at: i64,
 }
@@ -304,6 +322,60 @@ pub enum SearchNotice {
     /// The query asks for Adult, which is hidden: turn on "Show adult
     /// content" in Settings to see it.
     AdultHidden,
+    /// A clause names a field the serving index can't fully answer for
+    /// yet (being filled in, or not in this index): some matches may be
+    /// missing. `incomplete_fields` says which and how far along.
+    FieldsIncomplete,
+}
+
+/// A field the serving index can't fully answer for (architecture §8,
+/// the population contract): `/search/state`'s `unpopulated`, and a
+/// search's `incomplete_fields`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct UnpopulatedField {
+    /// The field as the query language and `/search/state` name it;
+    /// file-index fields as `file.<name>`.
+    #[schema(example = "source")]
+    pub field: String,
+    pub state: FieldState,
+    /// While `backfilling`: torrents with ids up to this have the field.
+    /// Null otherwise.
+    #[schema(required = true)]
+    pub done: Option<i64>,
+    /// While `backfilling`: torrents with ids in `(done, upto]` may not
+    /// have it yet; later ones do. Null otherwise.
+    #[schema(required = true)]
+    pub upto: Option<i64>,
+}
+
+/// Why a field isn't complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldState {
+    /// The serving index doesn't have it (an older index serving during
+    /// a rebuild): clauses on it match nothing.
+    Missing,
+    /// Nothing fills it yet: no document has it.
+    NoProducer,
+    /// Being filled in for the torrents indexed before it shipped.
+    Backfilling,
+}
+
+impl From<&lodestar_search::FieldAvailability> for UnpopulatedField {
+    fn from(f: &lodestar_search::FieldAvailability) -> Self {
+        use lodestar_search::Availability as A;
+        let (state, done, upto) = match f.availability {
+            A::Missing | A::Ready => (FieldState::Missing, None, None),
+            A::NoProducer => (FieldState::NoProducer, None, None),
+            A::Backfilling { done, upto } => (FieldState::Backfilling, Some(done), Some(upto)),
+        };
+        UnpopulatedField {
+            field: f.field.clone(),
+            state,
+            done,
+            upto,
+        }
+    }
 }
 
 /// One search result: the torrent summary (`docs/metrics.md` §7.1), its
