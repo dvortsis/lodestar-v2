@@ -915,13 +915,20 @@ impl SearchIndex {
 
     /// How much of `field` this index can answer for (file-index fields
     /// as `file.<name>`). A field this build added that the index lacks
-    /// is [`Availability::Missing`]; a field v6 added is tracked
+    /// is [`Availability::Missing`], and so is a name neither index has;
+    /// a field v6 added is tracked
     /// ([`crate::population`]); any other is [`Availability::Ready`].
     /// It follows the writer's latest commit, which a lease's older
     /// snapshot may predate: a prefilter asks [`SearchIndex::prefilter`],
     /// which checks the snapshot it runs on.
     pub fn availability(&self, field: &str) -> Availability {
-        if self.missing.iter().any(|m| m == field) {
+        let known = match field.strip_prefix("file.") {
+            Some(name) => self.files.index.schema().get_field(name).is_ok(),
+            None => self.index.schema().get_field(field).is_ok(),
+        };
+        // A name no index has (a typo, say) fails closed: it's missing,
+        // so nothing ever narrows by it.
+        if !known || self.missing.iter().any(|m| m == field) {
             return Availability::Missing;
         }
         self.population
@@ -1848,22 +1855,39 @@ impl Indexer {
     fn backfill(&mut self, store: &mut Store, budget: usize) -> Result<usize> {
         let fields = self.index.fields;
         let ff = self.index.files.fields;
-        let torrents = walk(&mut self.torrents, store, budget, |w, store, id, t| {
-            w.delete_term(Term::from_field_u64(fields.id, id as u64));
-            if let Some(t) = t {
-                w.add_document(torrent_doc(store, t)?.to_document(&fields))?;
-            }
-            Ok(())
-        })?;
-        let files = walk(&mut self.files, store, budget, |w, _, id, t| {
-            w.delete_term(Term::from_field_u64(ff.torrent, id as u64));
-            if let Some(t) = t {
-                for d in files::file_docs(id as u64, &t.tree) {
-                    w.add_document(d.to_document(&ff))?;
+        // When both indexes walk, each torrent is read from the store once:
+        // the torrent walk keeps what it loaded for the file walk.
+        let both = self.torrents.population.pending().is_some()
+            && self.files.population.pending().is_some();
+        let mut loaded = std::collections::HashMap::new();
+        let torrents = walk(
+            &mut self.torrents,
+            store,
+            budget,
+            (&mut loaded, both),
+            |w, store, id, t| {
+                w.delete_term(Term::from_field_u64(fields.id, id as u64));
+                if let Some(t) = t {
+                    w.add_document(torrent_doc(store, t)?.to_document(&fields))?;
                 }
-            }
-            Ok(())
-        })?;
+                Ok(())
+            },
+        )?;
+        let files = walk(
+            &mut self.files,
+            store,
+            budget,
+            (&mut loaded, false),
+            |w, _, id, t| {
+                w.delete_term(Term::from_field_u64(ff.torrent, id as u64));
+                if let Some(t) = t {
+                    for d in files::file_docs(id as u64, &t.tree) {
+                        w.add_document(d.to_document(&ff))?;
+                    }
+                }
+                Ok(())
+            },
+        )?;
         let n = torrents.done.max(files.done);
         self.pending += n;
         // A step that only moved a cursor (the walk's last ids were
@@ -1983,10 +2007,13 @@ impl Indexer {
 /// then moves its cursors past them. Ids deleted from the store are
 /// skipped by the read (their documents went with their `reindex_log`
 /// entries); one deleted between the reads reaches `write` as `None`.
+/// `loaded` holds torrents an earlier walk in the same step read; this
+/// one takes them from there, and adds what it reads when `keep` is set.
 fn walk(
     side: &mut Side,
     store: &mut Store,
     budget: usize,
+    (loaded, keep): (&mut std::collections::HashMap<i64, Option<Loaded>>, bool),
     mut write: impl FnMut(&mut IndexWriter, &mut Store, i64, Option<&Loaded>) -> Result<()>,
 ) -> Result<Walked> {
     let Some((from, high)) = side.population.pending() else {
@@ -2001,8 +2028,14 @@ fn walk(
             to = high;
             break;
         }
-        let t = load(store, id)?;
+        let t = match loaded.remove(&id) {
+            Some(t) => t,
+            None => load(store, id)?,
+        };
         write(&mut side.writer, store, id, t.as_ref())?;
+        if keep {
+            loaded.insert(id, t);
+        }
         to = to.max(id);
         n += 1;
     }
@@ -2209,6 +2242,47 @@ mod population_tests {
         assert_eq!(index.availability("payload_sig"), Availability::Ready);
         assert_eq!(w.catch_up(&mut store, 9).unwrap(), 0);
         assert_eq!(w.pending(), 0);
+    }
+
+    #[test]
+    fn a_name_no_index_has_fails_closed() {
+        let index = SearchIndex::in_memory().unwrap();
+        for typo in [
+            "payload_sgi",
+            "file.categry",
+            "file.",
+            "",
+            "file.payload_sig",
+        ] {
+            assert_eq!(index.availability(typo), Availability::Missing, "{typo:?}");
+            let q: Box<dyn Query> = Box::new(AllQuery);
+            assert!(index.prefilter(typo, &index.searcher(), q).is_none());
+        }
+        assert_eq!(index.availability("name"), Availability::Ready);
+        assert_eq!(index.availability("file.name"), Availability::Ready);
+        assert_eq!(index.availability("file.category"), Availability::Ready);
+    }
+
+    #[test]
+    fn both_indexes_walk_in_one_pass() {
+        let mut store = store(30);
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut store, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        drop(w);
+        let gens = Generations::current()
+            .with("payload_sig", 1)
+            .with("file.category", 2);
+        let index = index.with_generations(gens).unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        // Counted once per torrent, though both indexes re-index it.
+        assert_eq!(w.catch_up_counted(&mut store, 20).unwrap().backfilled, 20);
+        while w.catch_up(&mut store, 20).unwrap() > 0 {}
+        w.commit().unwrap();
+        assert_eq!(index.availability("payload_sig"), Availability::Ready);
+        assert_eq!(index.availability("file.category"), Availability::Ready);
+        assert_eq!((index.num_docs(), index.num_files()), (30, 30));
     }
 
     #[test]
