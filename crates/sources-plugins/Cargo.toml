@@ -13,6 +13,8 @@ lodestar-integrations.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-sources.workspace = true
 lodestar-sources-feeds.workspace = true
+# SRC-12: the full-scrape parser and tracker URLs.
+lodestar-tracker-scrape.workspace = true
 # The workspace's existing pin (crates/sources-feeds, crates/integrations).
 quick-xml = { version = "=0.42.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }

@@ -1839,6 +1839,7 @@ dependencies = [
  "lodestar-sources",
  "lodestar-sources-feeds",
  "lodestar-store",
+ "lodestar-tracker-scrape",
  "proptest",
  "quick-xml",
  "serde",
