@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d2ed94e4fef3af8d67f1dbf3af295a0ec0ec3a641af72c2033b4ef6e5dccab1b # shrinks to junk = "", scheme = "http", secret = "a0Aa0a"
+# X-log-url-redact (2026-11-04): on the unfixed code this seed fails both
+# proptests; planted_secrets_never_get_through shrinks it to before = "://@",
+# scheme = "http": a stray `://@` hid the next URL's userinfo.
