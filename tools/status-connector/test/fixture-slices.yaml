@@ -1,4 +1,6 @@
 # A tiny slice graph for the connector's test. The real one is runner/slices.yaml.
+limits:
+  phase_total: 4
 external:
   owner-q2:
     check: The owner has answered the ToS/robots position for v0.6 sources

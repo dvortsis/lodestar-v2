@@ -25,6 +25,7 @@ pub mod hot;
 pub mod import;
 mod insights;
 mod insights_days;
+pub mod memstats;
 mod reporting;
 mod rules;
 mod saved;

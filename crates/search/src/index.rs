@@ -838,6 +838,16 @@ impl SearchIndex {
         })
     }
 
+    /// Live segments in each index's current searcher (torrent index,
+    /// file index), for `/metrics`. Loads each reader's current searcher:
+    /// an atomic pointer load and an `Arc` clone, no lock.
+    pub fn segment_counts(&self) -> [u64; 2] {
+        [
+            self.reader.searcher().segment_readers().len() as u64,
+            self.files.reader.searcher().segment_readers().len() as u64,
+        ]
+    }
+
     /// Turns the prune after each commit off (or back on), for every clone
     /// of this index. Only the regression test and M1-exp's control arm
     /// turn it off.
@@ -2205,6 +2215,19 @@ mod population_tests {
         index
             .with_generations(Generations::current().with("payload_sig", 1))
             .unwrap()
+    }
+
+    #[test]
+    fn segment_counts_follow_each_commit_in_both_indexes() {
+        let mut store = store(4);
+        let index = SearchIndex::in_memory().unwrap();
+        assert_eq!(index.segment_counts(), [0, 0]);
+        let mut w = index.writer(HEAP).unwrap();
+        w.catch_up(&mut store, 2).unwrap();
+        w.commit().unwrap();
+        let [main, files] = index.segment_counts();
+        assert_eq!(main, index.segments() as u64);
+        assert!(main >= 1 && files >= 1, "{main} {files}");
     }
 
     #[test]

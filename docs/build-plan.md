@@ -29,7 +29,7 @@ Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`)
 **All findings the 2026-10-30 plan listed as open are fixed** (A1-1..4, A2-1, A3-1..3, DUR-26), except S04 (uTP), which CR-4 addresses, and S03 (admission), which CR-ADM addresses behind its switch.
 
 ### 0.2 Order of work and tracks
-**Concurrency:** at most **eight slices at a time in total**: Opus, helper and docs slices alike (owner, §2.33, replacing §2.32's four). A slot stays empty rather than take a slice whose `owns` overlaps a running one. The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
+**Concurrency:** at most **twelve slices at a time in total**: Opus, helper and docs slices alike (owner, §2.36, replacing §2.33's eight). Filling every slot isn't required: a slot stays empty when no ready work fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap. The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
 
 **The ladder** (fill free slots in this order; the owner can reorder it in one line):
 1. **Close v0.5.1** (Track R): the memory fix, rc.3 (§2.31), soak r4, the gluetun leg, the Windows smoke, the tag.
@@ -113,7 +113,7 @@ Any worker table goes through the migration queue (§0.7). Interface changes fro
 - FUSE and network-filesystem detection: verify whether it exists;
 - the worker template: label it "requires v0.6" more prominently, or keep it out of the CA submission until Track W step 1 lands;
 - the user guide refreshed for v0.5.1 (the first hours are slow because of the 6 h sampling suppression; `docs/decisions/2026-10-31-owner-delegation.md`);
-- the Unraid Community Apps submission (**owner**).
+- the Unraid Community Apps submission (**owner**), after 1.0 (§2.37); not part of M6's exit.
 
 **Track M7 (E-M7, ready to expand).** Already merged: the integrations crate and adapters, notifiers, Send UI. To expand:
 - **SB-6, the schema-bump convergence slice (Opus, first).** Search allows one `SCHEMA_VERSION` bump per milestone (§1.3). SB-6 is the bump 5 → 6. It fixes, in one change: SRC-3's `verified:`/`source:`/`network:` fields; `payload_sig` and the grouping fields; the regex trigram field; file category and `pieces_root`; and `size` in the file index, which X-search-files-3 needs. It waits only on SRC-2 (so the unverified data model is settled), not on E-M7's expansion. Later M7 slices fill these fields; they don't bump again. It lands before the 10M import pilot.
@@ -142,13 +142,15 @@ On 2026-11-02 the owner told the runner to take its recommendation on every ques
 |---|---|---|
 | 1 | rc.3 (rc.2 + #357 + #402 + the fix, §2.31) is tagged and soak r4 is running on it (verdict about 11-05 01:00Z); then the gluetun leg and a short Windows MSI smoke on rc.3; tag `v0.5.1` and approve the release environment. (r1's upgrade still counts per §2.28: rc.3 changes no migration code.) | v0.5.1; the three held epics |
 | 2 | Name the **experiment host** for crawler A/B runs and book its calendar (about three weeks of exclusive use, §0.7) | Track C's live work (C2–C8) and the v0.6 tag |
-| 3 | Create the **nightly signing key** and its environment | update checks on the Nightly channel |
-| 4 | Make the web and E2E aggregate checks required in the ruleset (§2.28), **after** X-required-web-checks lands and names them | safer merges |
-| 5 | The Unraid Community Apps submission | M6 |
-| 6 | Approve the Q1 consent texts once SRC-4 drafts them | SRC-15b |
-| Later | **Checkpoint 1** decision (§0.5); the 50M numbers (§0.6); B-import-server-2's API surface and the `.torrent` upload middleware exception (the runner brings a recommendation when they're planned) | the v0.6 tag; the full-corpus import; server-side imports and M7 upload |
+| 3 | Create the **nightly signing key** and its environment (optional; skipped for v0.5.1, §2.37) | update checks on the Nightly channel |
+| 4 | Add `web-ok` and `e2e-ok` (X-required-web-checks' aggregates) to the main ruleset's required checks; the owner said yes (§2.37) | safer merges |
+| 5 | The Unraid Community Apps submission, after the 1.0 release is complete (§2.37) | the Unraid app-store listing |
+| 6 | Approve the Q1 consent texts SRC-4 drafted (`docs/decisions/2026-11-02-SRC-4.md`, "Draft consent texts") | SRC-15b |
+| Later | **Checkpoint 1** decision (§0.5); the 50M numbers (§0.6); B-import-server-2's API surface and the `.torrent` upload middleware exception go with the runner's recommendation, recorded when they're planned, and back to the owner only if what's built deviates (§2.37) | the v0.6 tag; the full-corpus import; server-side imports and M7 upload |
 
 Answered by §2.28 (and #357's release by §2.29): Q2, Q3, Q7 and Q15 (Q1 keeps the owner's approval of the drafted texts) (plan `2026-11-01-v06-sources.md` §5), migrations on `main` before the tag (allowed, so SRC-1 may land), #362's egress trade-off (accepted for v0.6), and adult stand-in holds (not released automatically).
+
+Answered by §2.37: rule-pack Q1-Q5 (plan `2026-11-04-v06-rulepacks.md` §5), SRC-12's grey case (skip), required web checks (yes), the server-import surface and upload exception (the runner's recorded recommendation), and no veto of SB-6's `size_bucket`, SRC-11's automatic export or dropping SRC-10b.
 
 `docs/owner-decisions.md` §3 ("Points still open") predates these; the owner may move answered items into §2.
 
@@ -314,7 +316,7 @@ flowchart LR
 | Owner answers arrive late | Owner actions (host, keys, tags) gate whole tracks | §2.28 delegates decisions to the runner's recommendation; ask once for actions, and fill the slots with Sources, Track B and the epics meanwhile |
 
 ### 0.9 Next actions
-In order, as slots allow (eight slices in total, §2.33; no two with overlapping `owns`). **2026-11-04:** SB-6, SRC-11, SRC-12, SRC-10b, SRC-10c, SRC-10d and P-v06-rulepacks launched. The eighth slot goes to the E-M7 expansion's first ready slice, or to L4-followups once SB-6 merges (L4-followups and SB-6 both own `crates/search/src/files.rs`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
+In order, as slots allow (twelve slices in total, §2.36; no two with overlapping `owns`). **2026-11-04:** SB-6, SRC-11, SRC-12, SRC-10b, SRC-10c, SRC-10d and P-v06-rulepacks launched. The eighth slot goes to the E-M7 expansion's first ready slice, or to L4-followups once SB-6 merges (L4-followups and SB-6 both own `crates/search/src/files.rs`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
 1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z; all merged since).
 2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars has merged as #373 (it was a recorded exception: it shared `crates/api/src/digest.rs` with #367, which merged first).
 3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first. 2026-11-04: SB-6 merged; P-v06-rulepacks merged (19 slices added); next on Track S: SRC-3 after SB-6b, SRC-12b, and SRC-10d after SRC-8b. SRC-10b (AnimeTosho) is dropped: the site stopped ingesting in May 2026.
@@ -364,7 +366,7 @@ A non-Claude agent picking up the work maps this to "use your strongest model fo
 ### 1.2 How a helper runs
 - **Launch:** the runner starts each slice in its own cloud session (`runner/README.md`). Inside a session, a helper is an Agent with `isolation: "worktree"`, `run_in_background: true` and the model above, branched from `main`.
 - **Brief:** every slice gets one, using the template in §7. The runner keeps them on the `runner-state` branch under `briefs/`.
-- **Cap:** at most eight slices in total at a time in the current phase (owner §2.33). `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
+- **Cap:** at most twelve slices in total at a time in the current phase (owner §2.36), and filling them all isn't required. `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
 - **Review gate** (for every result):
   - read the whole diff;
   - run `npm run check`, `npx vitest run`, `npx size-limit` and the affected Playwright specs;
@@ -420,7 +422,7 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
 ### P3: M6 packaging (mostly built; Track M6)
 Built: the clap CLI with `backup`, `rollback`, `vacuum`, `reindex`, `stats` and more; the Windows service entrypoint, port warnings and runtime work; the WiX MSI (service, firewall rules, opt-in Defender exclusion) and portable zip; Unraid templates (main, gluetun, worker); the systemd unit, Linux tarballs and the `release.yml` matrix; smoke jobs; the user guide in `docs/user/`.
 To audit and finish (E-M6 expansion): FUSE and network-filesystem detection; the worker template's v0.6 labelling; the user guide's v0.5.1 refresh; anything else the gap audit finds.
-**Owner actions:** the Unraid CA submission. The code-signing certificate is deferred (§2.23): Windows builds ship unsigned, and the guide covers the SmartScreen warning.
+**Owner actions:** the Unraid CA submission, after 1.0 (§2.37). The code-signing certificate is deferred (§2.23): Windows builds ship unsigned, and the guide covers the SmartScreen warning.
 
 ### P4: v0.6
 **Remote workers v1 (§19), Opus, about 6 PRs.** Built: cluster CA, mTLS and one-time join tokens; the postcard-over-WebSocket protocol, heartbeats and fencing (library only). To build: wiring and the `worker` command, have-filter replication, `sharded(keyspace)` DHT, fetch and prepare on workers plus the spool, the chaos harness and §19.8 gates (Track W). **[S]** Settings → Workers and per-worker Insights.

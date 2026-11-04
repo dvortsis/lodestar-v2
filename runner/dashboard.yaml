@@ -10,6 +10,7 @@
 #   - a phase, track or roadmap dependency changes (build-plan 0)     -> phases, workstreams, roadmap
 #   - a gate is defined, measured or passed                           -> gates, crawler, soak
 #   - the top-of-page notes are out of date                           -> notes
+#   Worker slots are NOT here: the runner keeps `slots` in runner-state's state.json (no PR); see CLAUDE.md.
 # `cd tools/status-connector && npm test` checks that this file and runner/slices.yaml agree.
 # See docs/handoff.md and CLAUDE.md ("Keeping the dashboard current").
 #
@@ -421,15 +422,15 @@ conditions:
     who: runner
     label: A free database-migration number (runner assigns V14)
   owner-rpq2:
-    met: false
+    met: true
     who: you
     label: You decide what ThePornDB and StashDB may be sent (rule-pack Q2)
   owner-rpq3:
-    met: false
+    met: true
     who: you
     label: You decide whether enrichment text is judged by the child-safety core (rule-pack Q3)
   owner-rpq4:
-    met: false
+    met: true
     who: you
     label: You decide how performers are handled and that no age data is used (rule-pack Q4, Q5)
   owner-q1:
@@ -486,11 +487,11 @@ conditions:
     who: you
     label: You approve the 50M import numbers
   owner-upload-exception:
-    met: false
+    met: true
     who: you
     label: You decide the torrent-upload exception
   owner-import-server-surface:
-    met: false
+    met: true
     who: you
     label: You approve the import-through-server attack surface
   release-after-parser:
@@ -785,55 +786,34 @@ owner_queue:
   when: Before CR-4 lands
 - n: 3
   type: decision
-  action: Approve the plain-language consent texts that SRC-4 drafts (Q1)
+  action: Approve the plain-language consent texts SRC-4 drafted (Q1), at https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md?plain=1#L79 ("Draft consent texts")
   unblocks: The consent dialogs and credentials screen (SRC-15b)
-  when: After SRC-4 merges, before SRC-15b
+  when: Before SRC-15b
 - n: 4
   type: action
-  action: Create the nightly signing key and its environment
+  action: Add web-ok and e2e-ok to the main ruleset's required checks, next to ci-ok (you said yes, §2.37)
+  unblocks: Safer merges
+  when: Any time
+- n: 5
+  type: action
+  action: Create the nightly signing key and its environment (skipped for v0.5.1)
   unblocks: Update checks on the Nightly channel
   when: Optional
-- n: 5
-  type: decision
-  action: Make "Web / web" and "E2E / run" required checks (runner recommends yes)
-  unblocks: Safer merges
-  when: Optional
 - n: 6
-  type: decision
-  action: Approve the new attack surface of importing through the running server; decide the torrent-upload middleware
-    exception
-  unblocks: Server-side imports; v0.7 upload
-  when: Later
-- n: 7
-  type: action
-  action: Submit to Unraid Community Apps
-  unblocks: Packaging milestone
-  when: Later
-- n: 8
   type: decision
   action: 'Checkpoint 1: re-decide the crawler gate if the projection falls short'
   unblocks: The v0.6 tag
   when: After the A/B runs
-- n: 9
+- n: 7
   type: action
   action: Fix your Backups share minimum free space (500 GB) on the Unraid box
   unblocks: Appdata Backup protection for the soak
   when: Optional
-- n: 10
-  type: decision
-  action: 'Rule-pack plan questions Q1-Q5 (runner recommends): (Q1) no separate pack signing channel in v0.6, packs change only with a signed release; (Q2) ThePornDB/StashDB get only verified, Adult-classified, non-held, non-private items, the display name or parsed site/date/title and never the hash or files, nothing while Show adult content is off; (Q3) the core judges enrichment text as extra evidence, stricter only, never a counter-signal; (Q4) store and show performer names in the item drawer only, no performer search, facet or pages; (Q5) no age data from enrichment in v0.6'
-  unblocks: ENR-0 and ENR-1 (adult enrichment), via ext:owner-rpq2, ext:owner-rpq3 and ext:owner-rpq4
-  when: Before ENR-0
-- n: 11
-  type: decision
-  action: 'SRC-12 grey case: a public tracker whose published rules forbid scraping but which still answers a full scrape. Runner recommends skipping such trackers'
-  unblocks: Which trackers the full-scrape plug-in contacts
-  when: Before the full-scrape plugin is wired in (before SRC-G)
-- n: 12
-  type: info
-  action: 'For your veto (§2.19): SB-6 uses a size_bucket (2 buckets per power of two) instead of raw-size postings, to stay within the 800 B/torrent file-index budget; SRC-11 exports .torrent files automatically from your own LAN download client, as claims only and never contacting trackers; SRC-10b (AnimeTosho) is dropped because the site stopped ingesting in May 2026 and its feed is unreachable'
-  unblocks: Nothing; proceeds unless you object
-  when: Any time
+- n: 8
+  type: action
+  action: Submit to Unraid Community Apps
+  unblocks: The Unraid app-store listing
+  when: After the 1.0 release is complete (§2.37)
 gates:
 - id: G-v05
   name: v0.5 MVP exit
@@ -913,25 +893,25 @@ crawler:
   note: 24 h mean, no hour below 70. Stretch goal 1,000 a minute, served by remote workers.
 soak:
 - stage: Settling
-  label: 'First 6 hours: sampling is suppressed'
-  start: '2026-11-01T15:46:16Z'
-  end: '2026-11-01T21:46:16Z'
+  label: 'First 6 hours: sampling is suppressed (soak r4 on release candidate 3)'
+  start: '2026-11-03T18:25:30Z'
+  end: '2026-11-04T00:25:30Z'
 - stage: Warm-up
   label: 30 minutes of warm-up
-  start: '2026-11-01T21:46:16Z'
-  end: '2026-11-01T22:16:16Z'
+  start: '2026-11-04T00:25:30Z'
+  end: '2026-11-04T00:55:30Z'
 - stage: Measured
-  label: 24 hours of measurement
-  start: '2026-11-01T22:16:16Z'
-  end: '2026-11-02T22:16:16Z'
+  label: 24 hours of measurement; hours 12 to 24 decide the memory gate
+  start: '2026-11-04T00:55:30Z'
+  end: '2026-11-05T00:55:30Z'
 - stage: Event
-  label: Hour 12 begins; the daily backup runs at 11:00 UTC inside it
-  start: '2026-11-02T10:16:16Z'
-  end: '2026-11-02T11:00:00Z'
+  label: Hour 12 begins; the deciding window opens (the nightly backup is switched off for this run)
+  start: '2026-11-04T12:55:30Z'
+  end: '2026-11-04T12:55:30Z'
 - stage: Verdict
-  label: 'r3 failed the memory gate: 1.88 MiB/h, 95% CI [1.43, 2.33] over hours 12-24 (bar: upper bound at most 2.0); r4 on rc.3 followed'
-  start: '2026-11-02T22:16:16Z'
-  end: '2026-11-02T22:16:16Z'
+  label: 'Verdict due after the last sample. r3 on rc.2 had failed: 1.88 MiB/h, 95% CI [1.43, 2.33] (bar: upper bound at most 2.0)'
+  start: '2026-11-05T00:55:30Z'
+  end: '2026-11-05T00:55:30Z'
 notes:
   updated: '2026-11-04'
   now:
@@ -944,12 +924,12 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Up to eight slots
-    text: 'By your instruction up to eight worker slots run at once, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33). All eight are in use; the runner keeps the current list in its state file, shown on the slots view.''s verdict.'
+  - label: Up to twelve slots
+    text: 'By your instruction up to twelve worker slots run at once, filled only when ready work fits the plan, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33, §2.36). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: Finish v0.5.1
     text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
-  - label: Optional
-    text: Signing key for nightly updates, required checks on main, and the Unraid Backups share minimum free space.
+  - label: Also for you
+    text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Review the draft consent texts (https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md?plain=1#L79). The nightly signing key and the Unraid Backups share minimum free space are optional.
