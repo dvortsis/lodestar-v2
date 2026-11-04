@@ -26,7 +26,7 @@
 //! `tests/fixtures/qbittorrent/`. qBittorrent 5.1 may answer `torrents/add`
 //! with a JSON summary instead of `Ok.`; that's accepted too.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,7 +38,6 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use super::Bounded;
 use super::{
     AddOptions, AddOutcome, AuthFailure, CLIENT_TIMEOUT, Capabilities, Category, ClientError,
     ClientInfo, ClientKind, DownloadClient, GuardedWire, Listed, Lister, Listing, MAX_LIST_BYTES,
@@ -46,6 +45,7 @@ use super::{
     WireRequest, WireResponse, category_name, check_hash, check_request, client_reason,
     form_encode, listed, state_text,
 };
+use super::{Bounded, Fields};
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
 use crate::secret::Secret;
@@ -733,7 +733,19 @@ impl QbitLister {
         }
     }
 
+    /// Logs in now, as the poll, replacing any session.
+    async fn fresh_login(&self) -> Result<(), ClientError> {
+        let mut session = self.session.lock().await;
+        *session = None;
+        *session = Some(self.login_as(true).await?);
+        Ok(())
+    }
+
     async fn login(&self) -> Result<Secret, ClientError> {
+        self.login_as(false).await
+    }
+
+    async fn login_as(&self, poll: bool) -> Result<Secret, ClientError> {
         let mut req = self.request(WireMethod::Post, "auth/login", MAX_RESPONSE);
         req.headers.push((
             "Content-Type",
@@ -744,6 +756,7 @@ impl QbitLister {
             ("password", self.password.expose()),
         ])
         .into_bytes();
+        req.poll = poll;
         let res = self.wire.exchange(&req).await?;
         let cookie = pick_session_cookie(res.headers("set-cookie"));
         if res.body.trim_ascii() == b"Fails." {
@@ -808,15 +821,33 @@ impl Lister for QbitLister {
         true
     }
 
+    /// Logs in afresh (the poll), then reads `torrents/info` a page at a
+    /// time, oldest first, until a short page or [`MAX_PAGES`]. A fresh
+    /// login each list means a session that expired between polls is
+    /// never sent: a source plugin's limiter would read its 403 as a
+    /// refusal and stop asking the host for an hour.
     fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>> {
         Box::pin(async move {
-            let mut req = self.request(WireMethod::Get, "torrents/info", MAX_LIST_BYTES);
-            req.poll = true;
-            let res = self.api(req).await?;
-            if res.status != 200 {
-                return Err(rejected(res.status, &res.body));
+            self.fresh_login().await?;
+            let (mut out, mut seen) = (Listing::default(), HashSet::new());
+            for page in 0..MAX_PAGES {
+                let endpoint = format!(
+                    "torrents/info?sort=added_on&limit={PAGE}&offset={}",
+                    page * PAGE
+                );
+                let req = self.request(WireMethod::Get, &endpoint, MAX_LIST_BYTES);
+                let res = self.api(req).await?;
+                if res.status != 200 {
+                    return Err(rejected(res.status, &res.body));
+                }
+                let got = parse_list(&res.body)?;
+                let entries = got.torrents.len() + got.malformed + got.over_cap;
+                out.merge(got, &mut seen);
+                if entries < PAGE {
+                    break;
+                }
             }
-            parse_list(&res.body)
+            Ok(out)
         })
     }
 
@@ -840,23 +871,14 @@ impl Lister for QbitLister {
     }
 }
 
-/// One `torrents/info` entry: the fields used, others ignored.
-#[derive(Deserialize)]
-struct RawTorrent {
-    hash: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    total_size: Option<i64>,
-    #[serde(default)]
-    size: Option<i64>,
-    #[serde(default)]
-    state: Option<String>,
-}
+/// One `torrents/info` entry: the fields used, others skipped unread.
+struct RawTorrent;
 
 impl RawEntry for RawTorrent {
-    fn into_listed(self, _: Option<&str>) -> Option<Listed> {
-        let state = match state_text(self.state.as_deref()) {
+    const KEYS: &'static [&'static str] = &["hash", "name", "total_size", "size", "state"];
+
+    fn into_listed(f: &Fields, _: Option<&str>) -> Option<Listed> {
+        let state = match state_text(f.str("state").ok()?) {
             "downloading" | "stalledDL" | "metaDL" | "forcedDL" | "forcedMetaDL" | "allocating" => {
                 TorrentState::Downloading
             }
@@ -867,14 +889,17 @@ impl RawEntry for RawTorrent {
             "error" | "missingFiles" => TorrentState::Error,
             _ => TorrentState::Other,
         };
-        listed(
-            &self.hash,
-            self.name.as_deref(),
-            self.total_size.or(self.size),
-            state,
-        )
+        let size = f.int("total_size").ok()?.or(f.int("size").ok()?);
+        listed(f.str("hash").ok()??, f.str("name").ok()?, size, state)
     }
 }
+
+/// Torrents per `torrents/info` page. An entry is 1–2.5 KB (about 50
+/// fields, the magnet link and paths among them), so a page stays far
+/// under [`MAX_LIST_BYTES`].
+pub const PAGE: usize = 1000;
+/// Pages read per list: enough for [`MAX_LISTED`](super::MAX_LISTED).
+pub const MAX_PAGES: usize = super::MAX_LISTED / PAGE + 1;
 
 /// `torrents/info`'s answer: a JSON array of torrent objects.
 pub(super) fn parse_list(body: &[u8]) -> Result<Listing, ClientError> {

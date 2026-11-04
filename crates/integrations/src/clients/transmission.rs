@@ -48,8 +48,8 @@ use super::{
     check_magnets, check_request, client_reason, partial, poll, rejected_status, skipped_files,
 };
 use super::{
-    Bounded, GuardedWire, Listed, Lister, Listing, MAX_LIST_BYTES, RawEntry, TorrentState, Wire,
-    WireMethod, WireRequest, listed,
+    Bounded, Fields, GuardedWire, Listed, Lister, Listing, MAX_LIST_BYTES, RawEntry, TorrentState,
+    Wire, WireMethod, WireRequest, listed,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -707,27 +707,17 @@ impl Lister for TransmissionLister {
 }
 
 /// One `torrent-get` entry.
-#[derive(Deserialize)]
-struct RawTorrent {
-    #[serde(rename = "hashString")]
-    hash: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(rename = "totalSize", default)]
-    total_size: Option<i64>,
-    #[serde(default)]
-    status: Option<i64>,
-    /// Non-zero when the torrent has an error.
-    #[serde(default)]
-    error: Option<i64>,
-}
+struct RawTorrent;
 
 impl RawEntry for RawTorrent {
-    fn into_listed(self, _: Option<&str>) -> Option<Listed> {
+    const KEYS: &'static [&'static str] = &["hashString", "name", "totalSize", "status", "error"];
+
+    fn into_listed(f: &Fields, _: Option<&str>) -> Option<Listed> {
         // `tr_torrent_activity`: 0 stopped, 1 and 2 checking, 3 and 5
-        // queued, 4 downloading, 6 seeding.
-        let state = match (self.error.unwrap_or(0), self.status) {
-            (e, _) if e != 0 => TorrentState::Error,
+        // queued, 4 downloading, 6 seeding. `error` 3 is a local error;
+        // 1 and 2 are the tracker's warning or error, not the torrent's.
+        let state = match (f.int("error").ok()?, f.int("status").ok()?) {
+            (Some(3), _) => TorrentState::Error,
             (_, Some(0)) => TorrentState::Paused,
             (_, Some(1 | 2)) => TorrentState::Checking,
             (_, Some(3 | 5)) => TorrentState::Queued,
@@ -735,7 +725,12 @@ impl RawEntry for RawTorrent {
             (_, Some(6)) => TorrentState::Seeding,
             _ => TorrentState::Other,
         };
-        listed(&self.hash, self.name.as_deref(), self.total_size, state)
+        listed(
+            f.str("hashString").ok()??,
+            f.str("name").ok()?,
+            f.int("totalSize").ok()?,
+            state,
+        )
     }
 }
 

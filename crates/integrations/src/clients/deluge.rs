@@ -54,8 +54,8 @@ use super::{
     skipped_files,
 };
 use super::{
-    Bounded, GuardedWire, Listed, Lister, Listing, MAX_LIST_BYTES, RawEntry, TorrentState, Wire,
-    WireMethod, WireRequest, listed, state_text,
+    Bounded, Fields, GuardedWire, Listed, Lister, Listing, MAX_LIST_BYTES, RawEntry, TorrentState,
+    Wire, WireMethod, WireRequest, listed, state_text,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -909,19 +909,13 @@ impl Lister for DelugeLister {
 }
 
 /// One `core.get_torrents_status` value; the hash is its key.
-#[derive(Deserialize)]
-struct RawTorrent {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    total_size: Option<i64>,
-    #[serde(default)]
-    state: Option<String>,
-}
+struct RawTorrent;
 
 impl RawEntry for RawTorrent {
-    fn into_listed(self, key: Option<&str>) -> Option<Listed> {
-        let state = match state_text(self.state.as_deref()) {
+    const KEYS: &'static [&'static str] = &["name", "total_size", "state"];
+
+    fn into_listed(f: &Fields, key: Option<&str>) -> Option<Listed> {
+        let state = match state_text(f.str("state").ok()?) {
             "Downloading" | "Allocating" => TorrentState::Downloading,
             "Seeding" => TorrentState::Seeding,
             "Paused" => TorrentState::Paused,
@@ -930,7 +924,7 @@ impl RawEntry for RawTorrent {
             "Error" => TorrentState::Error,
             _ => TorrentState::Other,
         };
-        listed(key?, self.name.as_deref(), self.total_size, state)
+        listed(key?, f.str("name").ok()?, f.int("total_size").ok()?, state)
     }
 }
 

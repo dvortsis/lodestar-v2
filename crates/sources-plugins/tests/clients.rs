@@ -23,7 +23,7 @@ use proptest::prelude::*;
 const POLL: Duration = Duration::from_secs(60);
 /// The key of the fixtures' real `.torrent` (Big Buck Bunny).
 const BUNNY: &str = "fb9ff1ef824d61bd83b24fb91811804db71c0c53";
-const SINTEL: &str = "00112233445566778899aabbccddeeff00112233";
+const SINTEL: &str = "6cd8bae816112560c859c22a04238d8f22c552df";
 const DREAM: &str = "abcdefabcdefabcdefabcdefabcdefabcdef0123";
 const TEARS: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -118,12 +118,14 @@ fn by_key<'a>(got: &'a [Discovery], h: &str) -> Vec<&'a Discovery> {
 async fn qbittorrent_lists_exports_and_keeps_every_find_private() {
     let p = qbittorrent();
     // Poll 1: login, list (two good entries, two malformed), export both
-    // new ones (one has no metadata yet). Poll 2: the list again; only the
-    // new torrent is exported, and its `.torrent` is another torrent's.
-    let (got, replayer) = replay(&p, "qbittorrent_poll", 6, 3).await;
-    assert_spacing(&replayer, |r| r.url.ends_with("/torrents/info"));
+    // new ones (one has no metadata yet). Poll 2: login, list; the new
+    // torrent's `.torrent` is another torrent's, and the retried export
+    // now has the metadata.
+    let (got, replayer) = replay(&p, "qbittorrent_poll", 8, 4).await;
+    // The login is each poll's gated request.
+    assert_spacing(&replayer, |r| r.url.ends_with("/auth/login"));
     assert_private(&got);
-    assert_eq!(p.skipped(), 2);
+    assert_eq!(p.skipped(), 1, "the last poll's malformed entry");
 
     let bunny = by_key(&got, BUNNY);
     assert_eq!(bunny.len(), 1, "found once, though listed twice");
@@ -141,22 +143,52 @@ async fn qbittorrent_lists_exports_and_keeps_every_find_private() {
         ]
     );
 
-    // No metadata yet: the list's own claims; size -1 isn't believed.
+    // No metadata at first: the list's own claims (size -1 isn't
+    // believed); once the export works, found again with its claims.
     let sintel = by_key(&got, SINTEL);
-    let f = &sintel[0].found;
-    assert_eq!(f.strategy, STRATEGY_LIST);
-    let c = f.claims.as_deref().unwrap();
+    assert_eq!(sintel.len(), 2);
+    let first = &sintel[0].found;
+    assert_eq!(first.strategy, STRATEGY_LIST);
+    let c = first.claims.as_deref().unwrap();
     assert_eq!((c.name.as_deref(), c.size), (Some("Sintel (2010)"), None));
+    let second = &sintel[1].found;
+    assert_eq!(second.strategy, STRATEGY_EXPORT);
+    assert_eq!(second.claims.as_deref().unwrap().size, Some(4096));
 
     // The exported `.torrent` hashes to another key: its info dict is
     // unused, and the list's claims stand.
     let dream = by_key(&got, DREAM);
+    assert_eq!(dream.len(), 1);
     let f = &dream[0].found;
     assert_eq!(f.strategy, STRATEGY_LIST);
     let c = f.claims.as_deref().unwrap();
     assert_eq!(c.name.as_deref(), Some("Elephants Dream (2006) 720p"));
     assert_eq!(c.size, Some(815_000_000));
     assert!(c.files.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_login_is_tried_again_a_poll_later_not_at_once() {
+    let p = qbittorrent();
+    let (got, replayer) = replay(&p, "qbittorrent_login_page", 2, 0).await;
+    assert!(got.is_empty());
+    let at: Vec<_> = replayer.requests().into_iter().map(|(t, _)| t).collect();
+    assert!(at[1] - at[0] >= POLL, "{:?}", at[1] - at[0]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_list_is_waited_out_not_retried() {
+    let p = qbittorrent();
+    // The 403 blocks the host in the limiter; the plugin's next request is
+    // the next poll's login once the block ends, with nothing in between.
+    let (got, replayer) = replay(&p, "qbittorrent_list_403", 5, 1).await;
+    assert_private(&got);
+    let at: Vec<_> = replayer.requests().into_iter().map(|(t, _)| t).collect();
+    assert!(
+        at[2] - at[1] >= Duration::from_secs(3600),
+        "{:?}",
+        at[2] - at[1]
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -193,7 +225,7 @@ async fn transmission_lists_after_its_session_id_and_exports_nothing() {
     }));
     let (got, replayer) = replay(&p, "transmission_poll", 3, 3).await;
     assert_private(&got);
-    assert_eq!(p.skipped(), 1);
+    assert_eq!(p.skipped(), 1, "the last poll's malformed entry");
     // The 409 and its retry are one poll; the next list is a poll later.
     let at: Vec<_> = replayer.requests().into_iter().map(|(t, _)| t).collect();
     assert!(at[2] - at[1] >= POLL, "{:?}", at[2] - at[1]);
@@ -216,7 +248,7 @@ async fn deluge_lists_and_logs_in_again_when_the_session_expires() {
     }));
     let (got, replayer) = replay(&p, "deluge_poll", 7, 3).await;
     assert_private(&got);
-    // "short" isn't a hash.
+    // "short" isn't a hash, in either poll.
     assert_eq!(p.skipped(), 1);
     let at: Vec<_> = replayer.requests().into_iter().map(|(t, _)| t).collect();
     assert!(at[3] - at[2] >= POLL, "{:?}", at[3] - at[2]);

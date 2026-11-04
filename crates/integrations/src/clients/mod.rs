@@ -30,7 +30,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use serde::Deserialize;
-use serde::de::{DeserializeOwned, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::{Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 use crate::BoxFuture;
 use crate::net::{AddrClass, GuardedClient, NetError, NetPolicy, redact};
@@ -466,8 +466,9 @@ pub trait Lister: Send + Sync + fmt::Debug {
     /// Whether [`export`](Self::export) can work at all for this client.
     fn can_export(&self) -> bool;
 
-    /// The client's torrents. The list request is marked
-    /// [`WireRequest::poll`]; logins and retries aren't.
+    /// The client's torrents. The first request of each list (qBittorrent's
+    /// fresh login, the others' list call) is marked [`WireRequest::poll`];
+    /// later pages, logins and retries aren't.
     fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>>;
 
     /// The `.torrent` bytes of `hash`, or `Unsupported(Export)`.
@@ -531,8 +532,8 @@ pub struct WireRequest {
     pub body: Vec<u8>,
     /// The body is refused past this many bytes.
     pub limit: usize,
-    /// This is the poll itself (the list), not a login, retry or export:
-    /// a source plugin sends it through its poll gate.
+    /// This is the first request of a list, not a later page, retry or
+    /// export: a source plugin sends it through its poll gate.
     pub poll: bool,
 }
 
@@ -618,8 +619,7 @@ impl Wire for GuardedWire {
     }
 }
 
-/// The largest list answer read: about 40,000 torrents at qBittorrent's
-/// ~400 bytes each.
+/// The largest list answer (one page, for qBittorrent) read.
 pub const MAX_LIST_BYTES: usize = 16 << 20;
 /// Torrents kept from one list; the rest are counted in
 /// [`Listing::over_cap`].
@@ -675,12 +675,24 @@ impl Listing {
             self.malformed += 1;
             return;
         };
-        if self.torrents.len() >= MAX_LISTED {
-            self.over_cap += 1;
-        } else if !seen.insert(entry.hash.clone()) {
+        if seen.contains(&entry.hash) {
             self.malformed += 1;
+        } else if self.torrents.len() >= MAX_LISTED {
+            self.over_cap += 1;
         } else {
+            seen.insert(entry.hash.clone());
             self.torrents.push(entry);
+        }
+    }
+}
+
+impl Listing {
+    /// Adds another page's entries and counts.
+    pub(crate) fn merge(&mut self, page: Listing, seen: &mut HashSet<String>) {
+        self.malformed += page.malformed;
+        self.over_cap += page.over_cap;
+        for t in page.torrents {
+            self.push(Some(t), seen);
         }
     }
 }
@@ -713,22 +725,159 @@ pub(crate) fn listed(
     })
 }
 
-/// A raw list entry of one client's shape.
-pub(crate) trait RawEntry: DeserializeOwned {
-    /// The entry, given the map key it sat under (Deluge's hash).
-    fn into_listed(self, key: Option<&str>) -> Option<Listed>;
+/// One client's list-entry shape: the keys it reads, and how they make a
+/// [`Listed`].
+pub(crate) trait RawEntry {
+    /// The keys kept; every other key's value is skipped unread.
+    const KEYS: &'static [&'static str];
+    /// The entry, given its kept fields and the map key it sat under
+    /// (Deluge's hash). `None` when it's malformed.
+    fn into_listed(fields: &Fields, key: Option<&str>) -> Option<Listed>;
 }
 
-/// An entry that parsed as `R`, or anything else (skipped and counted).
-#[derive(Deserialize)]
-#[serde(untagged, bound = "R: RawEntry")]
-enum Maybe<R> {
-    Entry(R),
-    Other(IgnoredAny),
+/// A kept field's value. Arrays and objects are skipped as they're read,
+/// never buffered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Val {
+    Str(String),
+    Int(i64),
+    /// `null`: treated as absent.
+    Null,
+    /// Anything else: a wrong type for every kept field.
+    Other,
+}
+
+impl<'de> Deserialize<'de> for Val {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Val, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Val;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a value")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Val, E> {
+                Ok(Val::Str(v.to_owned()))
+            }
+            fn visit_string<E>(self, v: String) -> Result<Val, E> {
+                Ok(Val::Str(v))
+            }
+            fn visit_i64<E>(self, v: i64) -> Result<Val, E> {
+                Ok(Val::Int(v))
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<Val, E> {
+                Ok(i64::try_from(v).map_or(Val::Other, Val::Int))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<Val, E> {
+                Ok(Val::Other)
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<Val, E> {
+                Ok(Val::Other)
+            }
+            fn visit_unit<E>(self) -> Result<Val, E> {
+                Ok(Val::Null)
+            }
+            fn visit_none<E>(self) -> Result<Val, E> {
+                Ok(Val::Null)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Val, A::Error> {
+                while seq.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(Val::Other)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Val, A::Error> {
+                while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+                Ok(Val::Other)
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// An entry's kept fields; a key given twice keeps its last value.
+#[derive(Debug, Default)]
+pub(crate) struct Fields(Vec<(&'static str, Val)>);
+
+impl Fields {
+    fn get(&self, key: &str) -> Option<&Val> {
+        self.0.iter().rev().find(|(k, _)| *k == key).map(|(_, v)| v)
+    }
+
+    /// A string field: `Ok(None)` when absent or null, `Err` for another
+    /// type.
+    pub(crate) fn str(&self, key: &str) -> Result<Option<&str>, ()> {
+        match self.get(key) {
+            None | Some(Val::Null) => Ok(None),
+            Some(Val::Str(s)) => Ok(Some(s)),
+            Some(_) => Err(()),
+        }
+    }
+
+    /// An integer field, as [`str`](Self::str).
+    pub(crate) fn int(&self, key: &str) -> Result<Option<i64>, ()> {
+        match self.get(key) {
+            None | Some(Val::Null) => Ok(None),
+            Some(Val::Int(n)) => Ok(Some(*n)),
+            Some(_) => Err(()),
+        }
+    }
+}
+
+/// One list element: its kept fields when it's an object, `None` for
+/// anything else (skipped as it's read).
+struct Entry<R>(Option<Fields>, PhantomData<R>);
+
+impl<'de, R: RawEntry> Deserialize<'de> for Entry<R> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Entry<R>, D::Error> {
+        struct V<R>(PhantomData<R>);
+        impl<'de, R: RawEntry> Visitor<'de> for V<R> {
+            type Value = Entry<R>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a torrent")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Entry<R>, A::Error> {
+                let mut fields = Fields::default();
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    match R::KEYS.iter().find(|k| **k == key) {
+                        Some(k) => fields.0.push((k, map.next_value::<Val>()?)),
+                        None => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(Entry(Some(fields), PhantomData))
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Entry<R>, A::Error> {
+                while seq.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(Entry(None, PhantomData))
+            }
+            fn visit_str<E>(self, _: &str) -> Result<Entry<R>, E> {
+                Ok(Entry(None, PhantomData))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<Entry<R>, E> {
+                Ok(Entry(None, PhantomData))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<Entry<R>, E> {
+                Ok(Entry(None, PhantomData))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<Entry<R>, E> {
+                Ok(Entry(None, PhantomData))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<Entry<R>, E> {
+                Ok(Entry(None, PhantomData))
+            }
+            fn visit_unit<E>(self) -> Result<Entry<R>, E> {
+                Ok(Entry(None, PhantomData))
+            }
+            fn visit_none<E>(self) -> Result<Entry<R>, E> {
+                Ok(Entry(None, PhantomData))
+            }
+        }
+        d.deserialize_any(V(PhantomData))
+    }
 }
 
 /// A list (JSON array) or a map keyed by hash (JSON object) of `R`,
-/// collected into a [`Listing`].
+/// collected into a [`Listing`]. Nothing is buffered beyond the kept
+/// fields of one entry.
 pub(crate) struct Bounded<R>(pub(crate) Listing, PhantomData<R>);
 
 impl<'de, R: RawEntry> Deserialize<'de> for Bounded<R> {
@@ -741,27 +890,15 @@ impl<'de, R: RawEntry> Deserialize<'de> for Bounded<R> {
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Bounded<R>, A::Error> {
                 let (mut out, mut seen) = (Listing::default(), HashSet::new());
-                while let Some(e) = seq.next_element::<Maybe<R>>()? {
-                    out.push(
-                        match e {
-                            Maybe::Entry(r) => r.into_listed(None),
-                            Maybe::Other(_) => None,
-                        },
-                        &mut seen,
-                    );
+                while let Some(e) = seq.next_element::<Entry<R>>()? {
+                    out.push(e.0.and_then(|f| R::into_listed(&f, None)), &mut seen);
                 }
                 Ok(Bounded(out, PhantomData))
             }
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Bounded<R>, A::Error> {
                 let (mut out, mut seen) = (Listing::default(), HashSet::new());
-                while let Some((key, e)) = map.next_entry::<String, Maybe<R>>()? {
-                    out.push(
-                        match e {
-                            Maybe::Entry(r) => r.into_listed(Some(&key)),
-                            Maybe::Other(_) => None,
-                        },
-                        &mut seen,
-                    );
+                while let Some((key, e)) = map.next_entry::<String, Entry<R>>()? {
+                    out.push(e.0.and_then(|f| R::into_listed(&f, Some(&key))), &mut seen);
                 }
                 Ok(Bounded(out, PhantomData))
             }
@@ -1522,12 +1659,12 @@ mod tests {
                 (
                     WireMethod::Post,
                     "http://nas.lan:8080/api/v2/auth/login",
-                    false
+                    true
                 ),
                 (
                     WireMethod::Get,
-                    "http://nas.lan:8080/api/v2/torrents/info",
-                    true
+                    "http://nas.lan:8080/api/v2/torrents/info?sort=added_on&limit=1000&offset=0",
+                    false
                 ),
                 (WireMethod::Get, export.as_str(), false),
                 (
@@ -1712,6 +1849,208 @@ mod tests {
             l.export(H1).await,
             Err(ClientError::Unsupported(Feature::Export))
         );
+    }
+
+    #[tokio::test]
+    async fn qbittorrent_lists_page_by_page_until_a_short_page() {
+        let full: Vec<String> = (0..qbittorrent::PAGE)
+            .map(|i| format!(r#"{{"hash":"{i:040x}"}}"#))
+            .collect();
+        // The second page repeats the first page's last torrent (one was
+        // added between the pages) and ends the list.
+        let second = format!(
+            r#"[{{"hash":"{:040x}"}},{{"hash":"{H1}"}}]"#,
+            qbittorrent::PAGE - 1
+        );
+        let first = format!("[{}]", full.join(","));
+        let wire = Script::new(vec![
+            (200, &[("Set-Cookie", "SID=abc")], b"Ok."),
+            (200, &[], first.as_bytes()),
+            (200, &[], second.as_bytes()),
+        ]);
+        let l = lister(&config(ClientKind::QBittorrent), wire.clone()).unwrap();
+        let got = l.list().await.unwrap();
+        assert_eq!(got.torrents.len(), qbittorrent::PAGE + 1);
+        assert_eq!(got.malformed, 1, "the repeat");
+        let seen = wire.seen();
+        assert!(
+            seen[2].url.ends_with("limit=1000&offset=1000"),
+            "{}",
+            seen[2].url
+        );
+        assert_eq!(seen.iter().filter(|r| r.poll).count(), 1);
+    }
+
+    #[test]
+    fn a_huge_malformed_entry_is_skipped_as_it_is_read() {
+        // A million-element array as one entry, and as a kept field's value:
+        // skipped without being buffered, and counted.
+        let zeros = vec!["0"; 1_000_000].join(",");
+        let body = format!(
+            r#"[[{zeros}], {{"hash":"{H1}","name":[{zeros}]}}, {{"hash":"{H2}","junk":{{"a":[{zeros}]}}}}]"#
+        );
+        let l = parse_list(ClientKind::QBittorrent, body.as_bytes()).unwrap();
+        assert_eq!(l.torrents.len(), 1);
+        assert_eq!(l.torrents[0].hash, H2);
+        assert_eq!(l.malformed, 2);
+        // Transmission's tracker warning (error 1) isn't the torrent's error.
+        let t = format!(
+            r#"{{"result":"success","arguments":{{"torrents":[{{"hashString":"{H1}","status":6,"error":1}}]}}}}"#
+        );
+        let l = parse_list(ClientKind::Transmission, t.as_bytes()).unwrap();
+        assert_eq!(l.torrents[0].state, TorrentState::Seeding);
+    }
+
+    /// A served answer: status, headers and body.
+    type Served = (u16, Vec<(&'static str, String)>, Vec<u8>);
+
+    type Seen = Arc<std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>>;
+
+    /// A real HTTP server on loopback answering `answers` in order; records
+    /// each request's method, path and query, and headers.
+    async fn serve(answers: Vec<Served>) -> (String, Seen) {
+        use axum::body::Body;
+        use axum::extract::Request;
+        let answers = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from(
+            answers,
+        )));
+        let seen: Seen = Arc::default();
+        let log = seen.clone();
+        let app = axum::Router::new().fallback(move |req: Request| {
+            let (answers, log) = (answers.clone(), log.clone());
+            async move {
+                let line = format!("{} {}", req.method(), req.uri());
+                let headers = req
+                    .headers()
+                    .iter()
+                    .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_owned()))
+                    .collect();
+                log.lock().unwrap().push((line, headers));
+                let (status, headers, body) =
+                    answers
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .unwrap_or((599, vec![], vec![]));
+                let mut res = axum::response::Response::builder().status(status);
+                for (n, v) in headers {
+                    res = res.header(n, v);
+                }
+                res.body(Body::from(body)).unwrap()
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}/"), seen)
+    }
+
+    fn header<'a>(h: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        h.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+    }
+
+    #[tokio::test]
+    async fn the_adapters_list_and_export_over_real_http() {
+        let list = format!(r#"[{{"hash":"{H1}","name":"Sintel","total_size":5}}]"#);
+        let (url, seen) = serve(vec![
+            (
+                200,
+                vec![("set-cookie", "SID=abc; HttpOnly".into())],
+                b"Ok.".to_vec(),
+            ),
+            (200, vec![], list.into_bytes()),
+            (
+                200,
+                vec![("content-type", "application/x-bittorrent".into())],
+                b"d4:infod4:name1:xee".to_vec(),
+            ),
+            // A redirect is answered as it is, never followed.
+            (
+                302,
+                vec![("location", "http://169.254.169.254/".into())],
+                vec![],
+            ),
+        ])
+        .await;
+        let q = connect(ClientConfig::QBittorrent {
+            url: url.clone(),
+            username: "admin".into(),
+            password: Secret::new("hunter2"),
+        })
+        .unwrap();
+        let got = q.list().await.unwrap();
+        assert_eq!(got.torrents[0].name.as_deref(), Some("Sintel"));
+        assert_eq!(q.export(H1).await.unwrap(), b"d4:infod4:name1:xee");
+        assert!(matches!(q.export(H2).await, Err(ClientError::Rejected(_))));
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 4);
+        assert_eq!(
+            seen[1].0,
+            "GET /api/v2/torrents/info?sort=added_on&limit=1000&offset=0"
+        );
+        assert_eq!(header(&seen[1].1, "cookie"), Some("SID=abc"));
+        assert_eq!(
+            header(&seen[1].1, "origin"),
+            Some(url.trim_end_matches('/'))
+        );
+        assert_eq!(seen[2].0, format!("GET /api/v2/torrents/export?hash={H1}"));
+
+        let tlist = format!(
+            r#"{{"result":"success","arguments":{{"torrents":[{{"hashString":"{H1}","status":4}}]}}}}"#
+        );
+        let (url, seen) = serve(vec![
+            (
+                409,
+                vec![("x-transmission-session-id", "tok3n".into())],
+                vec![],
+            ),
+            (200, vec![], tlist.into_bytes()),
+        ])
+        .await;
+        let t = connect(ClientConfig::Transmission {
+            url,
+            auth: Some(BasicAuth {
+                username: "admin".into(),
+                password: Secret::new("hunter2"),
+            }),
+        })
+        .unwrap();
+        assert_eq!(
+            t.list().await.unwrap().torrents[0].state,
+            TorrentState::Downloading
+        );
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen[1].0, "POST /transmission/rpc");
+        assert_eq!(
+            header(&seen[1].1, "x-transmission-session-id"),
+            Some("tok3n")
+        );
+        let basic = format!("Basic {}", base64(b"admin:hunter2"));
+        assert_eq!(header(&seen[1].1, "authorization"), Some(basic.as_str()));
+
+        let dlist = format!(r#"{{"id":3,"error":null,"result":{{"{H1}":{{"name":"Sintel"}}}}}}"#);
+        let (url, seen) = serve(vec![
+            (
+                200,
+                vec![("set-cookie", "_session_id=s1; Path=/json".into())],
+                br#"{"id":1,"result":true,"error":null}"#.to_vec(),
+            ),
+            (
+                200,
+                vec![],
+                br#"{"id":2,"result":true,"error":null}"#.to_vec(),
+            ),
+            (200, vec![], dlist.into_bytes()),
+        ])
+        .await;
+        let d = connect(ClientConfig::Deluge {
+            url,
+            password: Secret::new("hunter2"),
+        })
+        .unwrap();
+        assert_eq!(d.list().await.unwrap().torrents[0].hash, H1);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(header(&seen[2].1, "cookie"), Some("_session_id=s1"));
     }
 
     #[test]

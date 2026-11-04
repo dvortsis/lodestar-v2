@@ -8,11 +8,17 @@
 //!
 //! 1. lists the client's torrents (`DownloadClient::list`'s protocol,
 //!    [`Lister`]), over the plugin's own egress (SRC-5): every request goes
-//!    through `ctx.kit.http`, the list through `Client::poll`;
+//!    through `ctx.kit.http`, the first of each cycle (qBittorrent's
+//!    login, the others' list call) through `Client::poll`;
 //! 2. for each torrent not seen yet, asks the client for its `.torrent`
 //!    where it can (qBittorrent 4.5 and later), at most
-//!    [`EXPORTS_PER_POLL`] a poll; the rest wait for the next poll;
-//! 3. emits one key per new torrent ([`to_found`]).
+//!    [`EXPORTS_PER_POLL`] a poll; the rest wait for the next poll, and a
+//!    failed export is tried again for up to [`MAX_EXPORT_TRIES`] polls;
+//! 3. emits one key per new torrent ([`to_found`]), and again when a
+//!    retried export brings the `.torrent`'s claims.
+//!
+//! Each cycle starts at least a poll interval after the last, whichever
+//! request fails, and a host the limiter has blocked is waited out.
 //!
 //! **Everything it finds is `private_source`** (§18.7): it is never sent to
 //! DHT `get_peers`, PEX or a public tracker (the pool refuses such keys),
@@ -28,14 +34,16 @@
 //! claims. Trackers are never kept: a private tracker's announce URL holds
 //! the user's passkey.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use tokio::time::Instant;
+
 use lodestar_integrations::clients::{
-    self, ClientConfig, ClientError, Feature, Listed, Lister, Wire, WireMethod, WireRequest,
-    WireResponse,
+    self, AuthFailure, ClientConfig, ClientError, Feature, Listed, Lister, Wire, WireMethod,
+    WireRequest, WireResponse,
 };
 use lodestar_integrations::net::NetPolicy;
 use lodestar_metainfo::{InfoHash, TorrentFile};
@@ -43,8 +51,8 @@ use lodestar_sources::claims::{self, ClaimedFile, Claims, Confidence, Provenance
 use lodestar_sources::http::{Method, host_key};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Client, Consent, Distribution, Emitter, Endpoints, Found, HostRate,
-    HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, Schedule,
-    SourceCtx, SourcePlugin,
+    HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx,
+    SourcePlugin,
 };
 
 pub use lodestar_integrations::clients::{
@@ -62,6 +70,9 @@ pub const STRATEGY_EXPORT: u8 = 2;
 pub const UNIT: &str = "torrents";
 /// `.torrent` exports asked for per poll.
 pub const EXPORTS_PER_POLL: usize = 20;
+/// Polls a torrent's export is tried on while the client has no
+/// metadata for it yet (a magnet still fetching), about an hour.
+pub const MAX_EXPORT_TRIES: u32 = 60;
 /// The largest size claim believed: 1 PiB.
 pub const MAX_SIZE: u64 = 1 << 50;
 
@@ -104,8 +115,8 @@ const POLICY: Policy = Policy {
     // The client is on the coordinator's network; a remote worker can't
     // reach it (§19.5).
     distribution: Distribution::Coordinator,
-    schedule: Schedule::ALWAYS,
     max_agents: 1,
+    ..Policy::STRICT
 };
 
 /// The download-clients plugin.
@@ -150,7 +161,7 @@ impl Clients {
         Some(Endpoints::user_entered(NetPolicy::download_client()).only_hosts(&[host]))
     }
 
-    /// List entries skipped since start: malformed, or past
+    /// List entries the last poll skipped: malformed, or past
     /// [`MAX_LISTED`].
     pub fn skipped(&self) -> u64 {
         self.skipped.load(Ordering::Relaxed)
@@ -185,8 +196,9 @@ fn fail(msg: &str) -> PluginError {
     PluginError(msg.to_owned())
 }
 
-/// A [`Wire`] over the plugin's paced client: the list through
-/// `Client::poll`, everything else through `Client::send`.
+/// A [`Wire`] over the plugin's paced client: the request marked
+/// [`WireRequest::poll`] through `Client::poll`, everything else through
+/// `Client::send`.
 struct KitWire(Client);
 
 impl Wire for KitWire {
@@ -226,6 +238,13 @@ impl Wire for KitWire {
                 // host, a down route and no egress are all "unreachable"
                 // to the poll loop, which tries again a poll later.
                 Err(HttpError::BadUrl) => Err(ClientError::InvalidRequest("the client's URL")),
+                // The limiter has the host blocked (a 401 or 403, or a
+                // Retry-After): wait it out here, so a caller that tries
+                // again at once can't spin.
+                Err(HttpError::Blocked { until }) => {
+                    tokio::time::sleep_until(until).await;
+                    Err(ClientError::Unreachable)
+                }
                 Err(_) => Err(ClientError::Unreachable),
             }
         })
@@ -253,24 +272,32 @@ impl Clients {
         let config = self.config.as_ref().ok_or_else(|| {
             fail("needs setup: no download client is set up in Settings → Integrations")
         })?;
+        let every = kit.http.limiter().limits().poll_interval;
         let lister = match clients::lister(config, Arc::new(KitWire(kit.http))) {
             Ok(l) => l,
-            Err(ClientError::Unsupported(_)) => {
-                return Err(fail(
-                    "listing torrents works with qBittorrent, Transmission and Deluge only",
-                ));
-            }
+            Err(ClientError::Unsupported(_)) => return Err(fail(UNSUPPORTED)),
             Err(_) => {
                 return Err(fail(
                     "needs setup: the download client's address isn't usable",
                 ));
             }
         };
-        let mut seen = HashSet::new();
+        let mut state = PollState::default();
+        let mut last: Option<Instant> = None;
         loop {
+            // Every cycle starts at least a poll interval after the last,
+            // whatever request it fails on: a login that fails before the
+            // list's poll gate mustn't retry at once (Q4).
+            if let Some(last) = last {
+                tokio::select! {
+                    _ = shutdown.requested() => return Ok(()),
+                    _ = tokio::time::sleep_until(last + every) => {}
+                }
+            }
+            last = Some(Instant::now());
             let next = tokio::select! {
                 _ = shutdown.requested() => return Ok(()),
-                n = self.poll(&*lister, &emitter, &mut seen) => n,
+                n = self.poll(&*lister, &emitter, &mut state) => n,
             };
             match next {
                 Next::Again => {}
@@ -280,66 +307,106 @@ impl Clients {
         }
     }
 
-    async fn poll(
-        &self,
-        lister: &dyn Lister,
-        emitter: &Emitter,
-        seen: &mut HashSet<InfoHash>,
-    ) -> Next {
+    async fn poll(&self, lister: &dyn Lister, emitter: &Emitter, state: &mut PollState) -> Next {
         let listing = match lister.list().await {
             Ok(l) => l,
             Err(e) => return on_error(&e),
         };
-        let skipped = (listing.malformed + listing.over_cap) as u64;
-        self.skipped.fetch_add(skipped, Ordering::Relaxed);
-        // Forget what the client no longer has, so the set stays within
+        self.skipped.store(
+            (listing.malformed + listing.over_cap) as u64,
+            Ordering::Relaxed,
+        );
+        // Forget what the client no longer has, so the sets stay within
         // MAX_LISTED and a re-added torrent is found again.
         let listed: HashSet<InfoHash> = listing.torrents.iter().filter_map(key_of).collect();
-        seen.retain(|k| listed.contains(k));
-        let mut exports = 0;
-        for t in &listing.torrents {
-            let Some(key) = key_of(t) else { continue };
-            if seen.contains(&key) {
-                continue;
-            }
-            let bytes = if lister.can_export() {
-                if exports == EXPORTS_PER_POLL {
-                    // The rest are exported over the next polls.
+        state.seen.retain(|k| listed.contains(k));
+        state.pending.retain(|k, _| listed.contains(k));
+        let mut budget = if lister.can_export() {
+            EXPORTS_PER_POLL
+        } else {
+            0
+        };
+        // New torrents first, then the ones whose export is still wanted;
+        // each at most once a poll.
+        let mut handled = HashSet::new();
+        for retry in [false, true] {
+            for t in &listing.torrents {
+                let Some(key) = key_of(t) else { continue };
+                let new = !state.seen.contains(&key);
+                let wanted = if retry {
+                    !new && state.pending.contains_key(&key)
+                } else {
+                    new
+                };
+                if !wanted || handled.contains(&key) {
                     continue;
                 }
-                exports += 1;
-                match lister.export(&t.hash).await {
-                    Ok(bytes) => Some(bytes),
-                    Err(e @ ClientError::Auth(_)) => return on_error(&e),
-                    // No metadata yet, or gone since the list: the list's
-                    // own claims stand.
-                    Err(_) => None,
+                let exported = if !lister.can_export() {
+                    None
+                } else if budget == 0 {
+                    // Over this poll's budget: a later poll exports it.
+                    continue;
+                } else {
+                    budget -= 1;
+                    match lister.export(&t.hash).await {
+                        Ok(bytes) => Some(bytes),
+                        Err(e @ ClientError::Auth(_)) => return on_error(&e),
+                        Err(_) => None,
+                    }
+                };
+                handled.insert(key);
+                let tried = lister.can_export();
+                let Some(found) = to_found(t, exported.as_deref()) else {
+                    continue;
+                };
+                if found.strategy == STRATEGY_EXPORT || exported.is_some() {
+                    // Used, or the bytes are another torrent's: done.
+                    state.pending.remove(&key);
+                } else if tried {
+                    // No metadata yet, or unreachable: try again later,
+                    // up to MAX_EXPORT_TRIES polls.
+                    let tries = state.pending.entry(key).or_insert(0);
+                    *tries += 1;
+                    if *tries >= MAX_EXPORT_TRIES {
+                        state.pending.remove(&key);
+                    }
                 }
-            } else {
-                None
-            };
-            let Some(found) = to_found(t, bytes.as_deref()) else {
-                continue;
-            };
-            if emitter.emit(found).await.is_err() {
-                return Next::Done;
+                // A retry is emitted again only when it brings the
+                // `.torrent`'s claims.
+                if (new || found.strategy == STRATEGY_EXPORT) && emitter.emit(found).await.is_err()
+                {
+                    return Next::Done;
+                }
+                state.seen.insert(key);
             }
-            seen.insert(key);
         }
         Next::Again
     }
 }
 
+/// What the run remembers between polls.
+#[derive(Debug, Default)]
+struct PollState {
+    /// Torrents already emitted.
+    seen: HashSet<InfoHash>,
+    /// Emitted with the list's claims while their export failed, by the
+    /// polls tried.
+    pending: HashMap<InfoHash, u32>,
+}
+
+const UNSUPPORTED: &str = "listing torrents works with qBittorrent, Transmission and Deluge only";
+
 fn on_error(e: &ClientError) -> Next {
     match e {
+        // A session refused straight after logging in (Transmission's
+        // second 409, a daemon restarting): try again next poll.
+        ClientError::Auth(AuthFailure::SessionRefused) => Next::Again,
         // Fixed text, no URL or secret (`ClientError`'s Display).
         ClientError::Auth(_) => Next::Stop(PluginError(format!("the download client: {e}"))),
-        ClientError::Blocked(_) | ClientError::InvalidRequest(_) => Next::Stop(fail(
+        ClientError::InvalidRequest(_) => Next::Stop(fail(
             "needs setup: the download client's address isn't one Lodestar may reach",
         )),
-        ClientError::Unsupported(Feature::List) => Next::Stop(fail(
-            "listing torrents works with qBittorrent, Transmission and Deluge only",
-        )),
+        ClientError::Unsupported(Feature::List) => Next::Stop(fail(UNSUPPORTED)),
         _ => Next::Again,
     }
 }

@@ -32,7 +32,8 @@ bunny, H1 = torrent({"name": "Big Buck Bunny (2008)", "piece length": 262144,
 # A valid torrent, but not the one listed as H3: its info dict is unused.
 other, _ = torrent({"name": "Elephants Dream", "length": 1000, "piece length": 16384,
     "pieces": pieces(1)})
-H2 = "00112233445566778899aabbccddeeff00112233"
+sintel, H2 = torrent({"name": "Sintel (2010)", "length": 4096, "piece length": 16384,
+    "pieces": pieces(1), "private": 1})
 H3 = "abcdefabcdefabcdefabcdefabcdefabcdef0123"
 H4 = "0123456789abcdef0123456789abcdef01234567"
 
@@ -47,7 +48,7 @@ def case(name, exchanges):
         if req_body is not None:
             open(base + ".req.body", "wb").write(req_body.encode())
 
-for old in ("qbittorrent_poll", "qbittorrent_refused", "transmission_poll", "deluge_poll"):
+for old in ("qbittorrent_poll", "qbittorrent_refused", "qbittorrent_login_page", "qbittorrent_list_403", "transmission_poll", "deluge_poll"):
     shutil.rmtree(os.path.join(root, old), ignore_errors=True)
 J = lambda v: json.dumps(v, separators=(",", ":"), sort_keys=True)
 
@@ -58,7 +59,7 @@ login = ("POST %s/api/v2/auth/login\n%s\nContent-Type: application/x-www-form-ur
          "HTTP 200\nSet-Cookie: SID=REDACTED; HttpOnly; path=/; SameSite=Strict",
          "Ok.", "username=REDACTED&password=REDACTED")
 def qinfo(rows):
-    return ("GET %s/api/v2/torrents/info\n%s\nCookie: SID=REDACTED" % (Q, QH),
+    return ("GET %s/api/v2/torrents/info?sort=added_on&limit=1000&offset=0\n%s\nCookie: SID=REDACTED" % (Q, QH),
             "HTTP 200\nContent-Type: application/json", J(rows), None)
 def qexport(h, status, body):
     return ("GET %s/api/v2/torrents/export?hash=%s\n%s\nCookie: SID=REDACTED" % (Q, h, QH),
@@ -68,17 +69,35 @@ row1 = {"hash": H1, "name": "Big Buck Bunny (2008)", "size": 525312, "total_size
 row2 = {"hash": H2, "name": "Sintel (2010)", "size": -1, "total_size": -1, "state": "metaDL"}
 row3 = {"hash": H3, "name": "Elephants Dream (2006) 720p", "total_size": 815000000, "state": "pausedDL"}
 case("qbittorrent_poll", [
+    # Each poll logs in afresh, so an expired session is never sent.
     login,
     qinfo([row1, row2, {"hash": "not-a-hash"}, 42]),
     qexport(H1, 200, bunny),
     # No metadata yet: qBittorrent answers 409.
     ("GET %s/api/v2/torrents/export?hash=%s\n%s\nCookie: SID=REDACTED" % (Q, H2, QH),
      "HTTP 409\nContent-Type: text/plain", "Torrent metadata hasn't been downloaded yet", None),
-    qinfo([row1, row2, row3]),
+    login,
+    qinfo([row1, row2, row3, {"hash": "not-a-hash"}]),
+    # The new torrent first; its `.torrent` is another torrent's.
     qexport(H3, 200, other),
+    # Then the retry: the metadata has arrived.
+    qexport(H2, 200, sintel),
 ])
 case("qbittorrent_refused", [
     (login[0], "HTTP 200\nContent-Type: text/plain", "Fails.", login[3]),
+])
+# A reverse proxy's sign-in page instead of qBittorrent: tried again a
+# poll later, never at once.
+page = (login[0], "HTTP 200\nContent-Type: text/html", "<html><body>Sign in</body></html>", login[3])
+case("qbittorrent_login_page", [page, page])
+# The list refused with a 403: the limiter blocks the host, and the plugin
+# waits the block out instead of retrying.
+case("qbittorrent_list_403", [
+    login,
+    (qinfo([])[0], "HTTP 403\nContent-Type: text/plain", "Forbidden", None),
+    login,
+    qinfo([row1]),
+    qexport(H1, 200, bunny),
 ])
 
 # Transmission 4.0 (RPC 17).
@@ -96,7 +115,7 @@ case("transmission_poll", [
     ("POST %s\nContent-Type: application/json\n%s\nX-Transmission-Session-Id: REDACTED" % (T, auth),
      "HTTP 200\nContent-Type: application/json", tlist([t1, t2, {"hashString": 5}]), tget),
     ("POST %s\nContent-Type: application/json\n%s\nX-Transmission-Session-Id: REDACTED" % (T, auth),
-     "HTTP 200\nContent-Type: application/json", tlist([t1, t2, t3]), tget),
+     "HTTP 200\nContent-Type: application/json", tlist([t1, t2, t3, {"hashString": 5}]), tget),
 ])
 
 # Deluge 2.1 Web UI.
@@ -114,7 +133,7 @@ status = [{}, ["name", "total_size", "state"]]
 d1 = {H1: {"name": "Big Buck Bunny (2008)", "total_size": 525312, "state": "Seeding"},
       H2: {"name": "Sintel (2010)", "total_size": 0, "state": "Paused"},
       "short": {"name": "x"}}
-d2 = dict(d1); del d2["short"]; d2[H4] = {"name": "Tears of Steel (2012)", "total_size": 6000000000, "state": "Downloading"}
+d2 = dict(d1); d2[H4] = {"name": "Tears of Steel (2012)", "total_size": 6000000000, "state": "Downloading"}
 case("deluge_poll", [
     dex("auth.login", ["REDACTED"], 1, True, cookie=False, set_cookie=True),
     dex("web.connected", [], 2, True),
@@ -125,4 +144,4 @@ case("deluge_poll", [
     dex("web.connected", [], 6, True),
     dex("core.get_torrents_status", status, 7, d2),
 ])
-print(H1)
+print(H1, H2)

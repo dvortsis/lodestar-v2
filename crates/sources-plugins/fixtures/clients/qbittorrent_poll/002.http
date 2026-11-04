@@ -1,4 +1,4 @@
-GET http://qbittorrent.example:8080/api/v2/torrents/info
+GET http://qbittorrent.example:8080/api/v2/torrents/info?sort=added_on&limit=1000&offset=0
 Referer: http://qbittorrent.example:8080/
 Origin: http://qbittorrent.example:8080
 Cookie: SID=REDACTED

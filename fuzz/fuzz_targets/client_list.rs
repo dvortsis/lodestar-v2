@@ -5,6 +5,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use lodestar_metainfo::TorrentFile;
 use lodestar_sources_plugins::clients::{
     ClientKind, MAX_LISTED, MAX_LISTED_NAME, MAX_SIZE, STRATEGY_EXPORT, parse_list, to_found,
 };
@@ -31,9 +32,12 @@ fuzz_target!(|data: &[u8]| {
         assert!(t.size.is_none_or(|s| s > 0));
         let f = to_found(t, Some(body)).expect("a listed hash is a key");
         assert!(f.private_source && f.peers.is_empty() && !f.interest);
-        // The body isn't this torrent's `.torrent` unless its info dict
-        // hashes to the key, which a fuzzer won't find.
-        assert!(f.strategy != STRATEGY_EXPORT || f.key.to_string() == t.hash);
+        // The export's claims are used only when its info dict hashes to
+        // the listed key.
+        if f.strategy == STRATEGY_EXPORT {
+            let file = TorrentFile::parse(body).expect("an export that was used parses");
+            assert_eq!(file.info.primary_hash().to_string(), t.hash);
+        }
         let c = f.claims.as_deref();
         assert!(c.and_then(|c| c.size).is_none_or(|s| (1..=MAX_SIZE).contains(&s)));
         assert!(c.is_none_or(|c| c.trackers.is_empty()));
