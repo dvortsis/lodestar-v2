@@ -497,7 +497,7 @@ slices:
 
   # Track M7: the one search schema bump for M7 (build-plan §1.3, §0.2 Track M7).
   - {id: SB-6, title: "Search SCHEMA_VERSION 5 -> 6: verified/source/network, payload_sig and grouping, trigram, file category and pieces_root, file-index size fields, rebuilt blue/green", kind: core, model: opus, deps: [SRC-2, G-m5], owns: ["crates/search/src/schema.rs", "crates/search/src/doc.rs", "crates/search/src/index.rs", "crates/search/src/files.rs", "crates/search/tests/index.rs", "crates/search/tests/rebuild.rs"], spec: ["§8 Index evolution", "build-plan §1.3"], notes: "lands before G-import-10M; later M7 slices and SRC-3 fill these fields without another bump. Defines the population contract every producer ships: per-field population generation, resumable reindex_log backfill, completion criteria, truthful availability (build-plan §0.2 Track M7)."}
-  - {id: SB-6b, title: "Population backfill follow-ups: swap drain, unknown fields fail closed, shared load, progress", kind: core, model: opus, deps: [SB-6], owns: ["crates/search/src/rebuild.rs"]}
+  - {id: SB-6b, title: "Population backfill follow-ups: swap drain, unknown fields fail closed, shared load, progress", kind: core, model: opus, deps: [SB-6], owns: ["crates/search/src/index.rs", "crates/search/src/rebuild.rs"]}
 
   # Track R: release.
   - {id: D-v051-main, title: "Bring v0.5.1 release notes to main, mark v0.5.0 as never released, update the README release status", kind: docs, model: sonnet, deps: ["ext:v051-tagged"], owns: ["docs/releases/**", "README.md"], spec: [".claude/skills/user-docs/SKILL.md"]}
