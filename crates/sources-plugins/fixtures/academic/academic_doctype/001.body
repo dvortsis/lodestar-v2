@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!DOCTYPE rss [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]>
+
+<rss xmlns:academictorrents="https://academictorrents.com" version="2.0">
+<channel>
+<title>Academic Torrents</title>
+<description>Recent Torrents</description>
+<link>https://academictorrents.com/</link>
+<item>
+<title>&b;Pl@ntNet-300K: a plant image dataset with high label ambiguity and a long-tailed distribution</title>
+<category>Dataset</category>
+<infohash>447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</infohash>
+<guid>https://academictorrents.com/details/447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</guid>
+<link>https://academictorrents.com/details/447df5f09ca5c48b0cf2844cfffc1425ae18aaa4</link>
+<description>[Description removed from the recording.]</description>
+<size>31670505069</size>
+</item><item>
+<title>AMOS Unlabeled Data Part I: Abdominal CT Scans</title>
+<category>Dataset</category>
+<infohash>470cfb013ee680b099b27a3ac6ae92733bcaf8f1</infohash>
+<guid>https://academictorrents.com/details/470cfb013ee680b099b27a3ac6ae92733bcaf8f1</guid>
+<link>https://academictorrents.com/details/470cfb013ee680b099b27a3ac6ae92733bcaf8f1</link>
+<description>[Description removed from the recording.]</description>
+<size>23286174260</size>
+</item>
+</channel>
+</rss>
