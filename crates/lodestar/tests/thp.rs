@@ -8,7 +8,6 @@
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-
 const DEADLINE: Duration = Duration::from_secs(60);
 
 /// A supervisor that's killed, with its worker, when the test ends.
