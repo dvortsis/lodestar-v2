@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T15:47:00Z",
+ "updated_at": "2026-11-04T16:22:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2679,26 +2679,28 @@
    "brief": "briefs/SRC-11.md",
    "pr": 414,
    "head": "1c2e9ff8",
-   "review": "Opus MERGE; fixes requested (emit list claims before export budget, fuzz split, decisions text, qbt logout); merge on green"
+   "review": "Opus MERGE; fixes requested (emit list claims before export budget, fuzz split, decisions text, qbt logout); merge on green",
+   "note": "conflicts after #413; merging main, then merge on green"
   },
   "SRC-12": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
-   "session": "session_01MMjhnA3tr6gjmiQQwvAgh9",
+   "session": "archived",
    "launched": "2026-11-04T05:35:00Z",
    "brief": "briefs/SRC-12.md",
    "pr": 413,
    "head": "ce13fe65",
-   "review": "Opus MERGE; one important fix (window check before quota) + nits requested; merge on green"
+   "review": "Opus MERGE; one important fix (window check before quota) + nits requested; merge on green",
+   "merge": "b3d678dd"
   },
   "SRC-10b": {
-   "status": "running",
+   "status": "dropped",
    "model": "sonnet",
    "session": "session_01MMjhn8LtF8MFPtM7yaXHdK",
    "launched": "2026-11-04T05:35:00Z",
    "brief": "briefs/SRC-10b.md",
    "relaunched": "2026-11-04T15:13:00Z",
-   "note": "first session archived: hosts blocked; owner allowed animetosho hosts"
+   "note": "AnimeTosho stopped ingesting 2026-05; dropped in #417"
   },
   "SRC-10c": {
    "status": "in_review",
@@ -2752,6 +2754,20 @@
    "session": "session_01MMjhn8a8EcfirHuNtWTQ4e",
    "launched": "2026-11-04T15:47:00Z",
    "brief": "briefs/SRC-8b.md"
+  },
+  "RP-0": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhnAi7k5eQ7gZHLSbyYi",
+   "launched": "2026-11-04T16:22:00Z",
+   "brief": "briefs/RP-0.md"
+  },
+  "SRC-12b": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhnAc7bM46Pfez4aWgcX",
+   "launched": "2026-11-04T16:22:00Z",
+   "brief": "briefs/SRC-12b.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3141,7 +3157,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T15:47:00Z",
+ "last_heartbeat": "2026-11-04T16:22:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3161,7 +3177,8 @@
   "2026-11-04T15:20:00Z r4 provisional fit h12-14: 23.1 MiB/h [15.6,30.6] (window incomplete, not a verdict); r4 not below r3 at same hours. Launched X-merge-policy (slot 8) as contingency. #416 review CHANGES: move slots into state.json. Network allowlist uses *.domain only \u2014 owner asked to add apex domains.",
   "2026-11-04T15:35:00Z #415 SB-6 merged (33088edd). SB-6b follow-up in same session. L4-followups now dependency-ready; waits for a free slot. X-merge-policy told index.rs waits for SB-6b.",
   "2026-11-04T15:38:00Z #412 merged (de00b6cd): 19 rule-pack/enrichment slices to add to slices.yaml (with nits) in next runner PR; owner questions Q1-Q5 to queue. L4-followups launched in slot 7.",
-  "2026-11-04T15:47:00Z SRC-10d blocked on parser (bare <infohash>); SRC-8b (Opus) launched in slot 6; SRC-10d relaunches after. #417 and #418 in review."
+  "2026-11-04T15:47:00Z SRC-10d blocked on parser (bare <infohash>); SRC-8b (Opus) launched in slot 6; SRC-10d relaunches after. #417 and #418 in review.",
+  "2026-11-04T16:22:00Z Merged #417 (8f282e6c: \u00a72.34, 19 rule-pack slices, SRC-10b dropped) and #413 SRC-12 (b3d678dd). Launched RP-0 and SRC-12b. #414 SRC-11 needs a main merge. #418 SB-6b MERGE verdict, CI running."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4794,7 +4811,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-04T15:47:00Z",
+  "updated": "2026-11-04T16:22:00Z",
   "items": [
    {
     "slot": 1,
@@ -4814,19 +4831,19 @@
    },
    {
     "slot": 3,
-    "slice": "SRC-12",
+    "slice": "SRC-12b",
     "role": "build",
     "agent": "claude",
-    "doing": "Reading trackers' full scrape lists, at most once per tracker per day. Reviewed; final fix being pushed.",
-    "since": "2026-11-04T05:33:53Z"
+    "doing": "Letting source plug-ins stream very large or slow downloads safely, so the biggest trackers' full scrapes work.",
+    "since": "2026-11-04T16:22:00Z"
    },
    {
     "slot": 4,
-    "slice": "SRC-10b",
+    "slice": "RP-0",
     "role": "build",
     "agent": "claude",
-    "doing": "Building the AnimeTosho source, starting with a check of the site's terms.",
-    "since": "2026-11-04T15:12:56Z"
+    "doing": "Adding versions and change tracking to the filter rule packs, so an update never weakens filtering without your OK.",
+    "since": "2026-11-04T16:22:00Z"
    },
    {
     "slot": 5,
