@@ -4911,7 +4911,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T23:03Z",
+    "updated": "2026-11-04T23:11Z",
     "items": [
       {
         "slot": 2,
@@ -4947,10 +4947,10 @@
       },
       {
         "slot": 6,
-        "slice": "X-mem-gauges-2",
+        "slice": "X-mem-gauges",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #442 (three small gauge fixes) in review.",
+        "doing": "Follow-up PR #442 (X-mem-gauges-2, on branch slice/X-mem-gauges): three small gauge and soak-report fixes before soak r5.",
         "since": "2026-11-04T20:55Z"
       },
       {
