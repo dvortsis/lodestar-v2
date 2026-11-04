@@ -298,6 +298,23 @@ fn a_mid_value_error_stops_the_parse() {
     }
 }
 
+/// A body that stops being UTF-8 is parsed up to there: the scenes
+/// before it are kept, and the parse stops there.
+#[test]
+fn invalid_utf8_stops_after_whole_scenes() {
+    let mut body = format!(
+        r#"{{"data":{{"searchScene":[{{"id":"{}","title":"Kept"}},"#,
+        id(1)
+    )
+    .into_bytes();
+    body.push(0xff);
+    body.extend_from_slice(format!(r#"{{"id":"{}"}}]}}}}"#, id(2)).as_bytes());
+    let f = parse(&body);
+    assert_eq!(f.page.stop, Some(Stop::NotUtf8));
+    assert_eq!((f.page.kept, f.page.skipped.total()), (1, 0));
+    assert_eq!(f.scenes[0].matched.title.as_deref(), Some("Kept"));
+}
+
 #[test]
 fn field_faults_skip_the_scene() {
     let s = |fields: &str| {
@@ -323,7 +340,7 @@ fn field_faults_skip_the_scene() {
         perf(r#"{"as":"x"}"#),
         perf(r#"{"performer":null}"#),
         perf(&format!(
-            r#"{{"performer":{{"id":"{}","name":"​"}}}}"#,
+            r#"{{"performer":{{"id":"{}","name":"\u200b"}}}}"#,
             id(2)
         )),
         perf(r#"{"performer":{"id":"x","name":"Example"}}"#),
@@ -388,7 +405,7 @@ fn field_faults_skip_the_scene() {
     ));
     let f = parse(at.as_bytes());
     assert_eq!(f.page.kept, 1);
-    let blank = s(r#""title":" ​ ""#);
+    let blank = s(r#""title":" \u200b ""#);
     assert_eq!(parse(blank.as_bytes()).scenes[0].matched.title, None);
     // No id, or a null one.
     for body in [
@@ -452,6 +469,9 @@ proptest! {
         if body.len() > cut {
             prop_assert_eq!(f.page.stop, Some(Stop::Bytes));
         }
+        // Only scenes whose object closed inside the cut are kept.
+        let whole = body[..cut.min(body.len())].matches("\"t\"}").count();
+        prop_assert_eq!(f.scenes.len(), whole);
     }
 
     #[test]

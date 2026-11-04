@@ -42,6 +42,10 @@ id title release_date studio { id name } performers { performer { id name } } } 
 
 /// Looks one scene up by its StashDB id. Variable: `id`. Answers
 /// `{"data": {"findScene": scene}}`, or `null` for no such scene.
+///
+/// The parser doesn't know which query an answer is for, so it reads
+/// either field. A caller of this one checks that the scene's id is the
+/// one it asked for.
 pub const FIND_SCENE: &str = "query FindScene($id: ID!) { \
 findScene(id: $id) { \
 id title release_date studio { id name } performers { performer { id name } } } }";
