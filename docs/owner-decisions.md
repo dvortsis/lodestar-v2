@@ -396,6 +396,15 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **At most four slice sessions at once,** replacing §2.30's two and ending its launch pause. `runner/slices.yaml` records it as `limits.phase_total: 4`. The ladder in build plan §0.2 still decides what fills a slot.
     - **What the message leaves unchanged (runner's reading, per §2.31 and build plan §0.2 rung 4):** soak r4, the gluetun leg, the Windows smoke and the `v0.5.1` tag follow §2.31, and the epics held for the soak verdict (E-M6, E-v06-workers, E-v06-companions) stay held until r4's verdict.
 
+33. **Up to eight slots, and auto-approval of best-practice decisions** (owner, 2026-11-04, build-runner session): "Auto approve plans and normal decisions as long as they support UX and performance best practices. Are you able to increase number of slots up to 8 without losing efficiency?" The runner answered that eight works while that many ready slices own disjoint files, and raised the cap.
+    - **At most eight slice sessions at once,** replacing §2.32's four. `runner/slices.yaml` records it as `limits.phase_total: 8`. A slot stays empty rather than take a slice whose `owns` overlaps a running one.
+    - **Auto-approval.** The runner approves its own plans, and normal decisions that follow UX and performance best practice, without asking first. It lists them in the daily summary, where the owner can veto them (§2.19). This extends §2.26 and §2.28.
+    - **Still for the owner (runner's reading, from CLAUDE.md's order of authority):**
+      - reversing or loosening one of the owner's decisions;
+      - weakening a security or content-safety decision;
+      - a terms-of-service grey case (§2.28 Q2);
+      - steps that need the owner's hands: tags, hosts, releases, rulesets.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
