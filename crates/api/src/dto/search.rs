@@ -361,20 +361,22 @@ pub enum FieldState {
     Backfilling,
 }
 
-impl From<&lodestar_search::FieldAvailability> for UnpopulatedField {
-    fn from(f: &lodestar_search::FieldAvailability) -> Self {
+impl UnpopulatedField {
+    /// `f` as reported; `None` when it's ready (nothing to report).
+    pub fn of(f: &lodestar_search::FieldAvailability) -> Option<UnpopulatedField> {
         use lodestar_search::Availability as A;
         let (state, done, upto) = match f.availability {
-            A::Missing | A::Ready => (FieldState::Missing, None, None),
+            A::Ready => return None,
+            A::Missing => (FieldState::Missing, None, None),
             A::NoProducer => (FieldState::NoProducer, None, None),
             A::Backfilling { done, upto } => (FieldState::Backfilling, Some(done), Some(upto)),
         };
-        UnpopulatedField {
+        Some(UnpopulatedField {
             field: f.field.clone(),
             state,
             done,
             upto,
-        }
+        })
     }
 }
 
@@ -563,6 +565,29 @@ pub struct CompositionShare {
     pub pct_files: u8,
 }
 
+/// Whether an item has verified metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AstVerified {
+    Yes,
+    No,
+}
+
+/// A network tier (§18.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum AstNetwork {
+    #[serde(rename = "bt")]
+    Bt,
+    #[serde(rename = "bt-i2p")]
+    BtI2p,
+    #[serde(rename = "ed2k")]
+    Ed2k,
+    #[serde(rename = "ipfs")]
+    Ipfs,
+    #[serde(rename = "usenet")]
+    Usenet,
+}
+
 // The AST's schema. `Node` lives in `lodestar-search`, which knows
 // nothing of OpenAPI; these mirror its serde shape for the schema only,
 // and a test round-trips every kind of node through them.
@@ -640,6 +665,19 @@ pub enum AstNode {
     Tag {
         key: AstTagKey,
         any: Vec<String>,
+    },
+    /// `verified:` (§18.6); matches any of the values.
+    Verified {
+        any: Vec<AstVerified>,
+    },
+    /// `source:`, by plugin id (lowercase letters, digits, `.`, `_`,
+    /// `-`; at most 32 bytes); matches any.
+    Source {
+        any: Vec<String>,
+    },
+    /// `network:` (§18.6); matches any.
+    Network {
+        any: Vec<AstNetwork>,
     },
     /// Torrents with at least one file matching every clause of `of`.
     File {
@@ -746,6 +784,7 @@ mod tests {
         "file:(ext:flac size:>50MB) -file:sample",
         "cat:video>=80% bytes:video=10..50",
         "seeders:>=5 leechers:<10 trackers:3.. dht:>0 seen:<7d time:22:00..02:00",
+        "verified:yes,no source:nyaa,dht network:bt,bt-i2p,ed2k,ipfs,usenet",
     ];
 
     #[test]
@@ -773,14 +812,17 @@ mod tests {
             "fuzzy",
             "hash",
             "near",
+            "network",
             "not",
             "or",
             "phrase",
             "prefix",
             "range",
             "share",
+            "source",
             "tag",
             "time_of_day",
+            "verified",
             "word",
         ];
         assert_eq!(ops.into_iter().collect::<Vec<_>>(), all.map(String::from));

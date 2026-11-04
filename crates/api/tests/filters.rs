@@ -903,6 +903,19 @@ async fn every_filters_route_needs_a_session_and_errors_use_the_envelope() {
         (&body["error"]["start"], &body["error"]["end"]),
         (&json!(0), &json!(5))
     );
+    // Provenance isn't the judge's to know (SRC-3): refused, not
+    // silently never (or, negated, always) matching.
+    for q in ["source:nyaa", "-verified:yes", "x (network:bt | y)"] {
+        let (status, body) = apply(
+            &f,
+            &c,
+            json!({ "op": "add_rule", "query": q, "action": "hide" }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{q}");
+        assert_eq!(body["error"]["code"], json!("provenance_in_rule"), "{q}");
+    }
 
     // A weakening change: first the confirmation request, with the
     // assessment beside the error, then a wrong password.

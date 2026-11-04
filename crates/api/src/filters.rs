@@ -250,13 +250,25 @@ fn action(name: &str) -> ApiResult<Action> {
 }
 
 fn query(text: &str) -> ApiResult<Node> {
-    parse(text).map_err(|e| {
+    let node = parse(text).map_err(|e| {
         bad(
             "query_syntax",
             format!("The query doesn't parse: {}", e.message),
         )
         .span(e.start, e.end)
-    })
+    })?;
+    // The judge doesn't know an item's provenance: claims and fetched
+    // metadata are judged alike, and its sources aren't known yet
+    // (SRC-3). A rule on them would silently never match, or with `-`,
+    // match everything.
+    if node.mentions_provenance() {
+        return Err(bad(
+            "provenance_in_rule",
+            "Rules can't test verified:, source: or network:. Filters judge what a torrent \
+             says it is, before search knows where it came from.",
+        ));
+    }
+    Ok(node)
 }
 
 fn days(d: Option<u32>, now: i64) -> Option<i64> {

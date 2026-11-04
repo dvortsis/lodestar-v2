@@ -7595,6 +7595,17 @@
           "seen"
         ]
       },
+      "AstNetwork": {
+        "type": "string",
+        "description": "A network tier (§18.6).",
+        "enum": [
+          "bt",
+          "bt-i2p",
+          "ed2k",
+          "ipfs",
+          "usenet"
+        ]
+      },
       "AstNode": {
         "oneOf": [
           {
@@ -7967,6 +7978,72 @@
           },
           {
             "type": "object",
+            "description": "`verified:` (§18.6); matches any of the values.",
+            "required": [
+              "any",
+              "op"
+            ],
+            "properties": {
+              "any": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AstVerified"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "verified"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`source:`, by plugin id (lowercase letters, digits, `.`, `_`,\n`-`; at most 32 bytes); matches any.",
+            "required": [
+              "any",
+              "op"
+            ],
+            "properties": {
+              "any": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "source"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`network:` (§18.6); matches any.",
+            "required": [
+              "any",
+              "op"
+            ],
+            "properties": {
+              "any": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AstNetwork"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "network"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Torrents with at least one file matching every clause of `of`.",
             "required": [
               "of",
@@ -8095,6 +8172,14 @@
           "name",
           "path",
           "title"
+        ]
+      },
+      "AstVerified": {
+        "type": "string",
+        "description": "Whether an item has verified metadata.",
+        "enum": [
+          "yes",
+          "no"
         ]
       },
       "AstWhen": {

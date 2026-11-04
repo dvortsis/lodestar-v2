@@ -1421,6 +1421,16 @@ impl Node {
         }
     }
 
+    /// Whether any clause tests `verified:`, `source:` or `network:`.
+    pub fn mentions_provenance(&self) -> bool {
+        match self {
+            Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => true,
+            Node::And { of } | Node::Or { of } => of.iter().any(Node::mentions_provenance),
+            Node::Not { of } | Node::File { of } => of.mentions_provenance(),
+            _ => false,
+        }
+    }
+
     /// Whether any clause tests `verified:`.
     pub fn mentions_verified(&self) -> bool {
         match self {

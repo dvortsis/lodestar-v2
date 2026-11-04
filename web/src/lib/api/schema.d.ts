@@ -2473,6 +2473,11 @@ export interface components {
         };
         /** @enum {string} */
         AstDateField: "discovered" | "seen";
+        /**
+         * @description A network tier (§18.6).
+         * @enum {string}
+         */
+        AstNetwork: "bt" | "bt-i2p" | "ed2k" | "ipfs" | "usenet";
         /** @description A parsed query (§8), tagged by `op`. */
         AstNode: {
             /** @enum {string} */
@@ -2551,6 +2556,18 @@ export interface components {
             /** @enum {string} */
             op: "tag";
         } | {
+            any: components["schemas"]["AstVerified"][];
+            /** @enum {string} */
+            op: "verified";
+        } | {
+            any: string[];
+            /** @enum {string} */
+            op: "source";
+        } | {
+            any: components["schemas"]["AstNetwork"][];
+            /** @enum {string} */
+            op: "network";
+        } | {
             of: components["schemas"]["AstNode"];
             /** @enum {string} */
             op: "file";
@@ -2579,6 +2596,11 @@ export interface components {
         AstTagKey: "type" | "res" | "hdr" | "codec" | "audio" | "lang" | "group" | "has" | "resolved" | "adult";
         /** @enum {string} */
         AstTextField: "any" | "name" | "path" | "title";
+        /**
+         * @description Whether an item has verified metadata.
+         * @enum {string}
+         */
+        AstVerified: "yes" | "no";
         /**
          * @description One end of a date range: seconds before the search (`ago`), or a Unix
          *     time (`at`).

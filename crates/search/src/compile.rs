@@ -153,6 +153,15 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
                     boosts.push((Occur::Should, boost));
                 }
             }
+            // `verified:yes` (the hidden-by-default clause on every
+            // search) and `network:bt`: their excluded terms join the
+            // top-level conjunction as plain `MustNot`s, so it stays one
+            // flat intersection and the score is untouched.
+            n if excludes_only(n) => {
+                for (field, t) in excluded(n, f) {
+                    clauses.push((Occur::MustNot, term(field, t, IndexRecordOption::Basic)));
+                }
+            }
             n => {
                 if let Some(q) = compile_opt(n, f, now) {
                     push_must(&mut clauses, q);
@@ -431,10 +440,30 @@ fn excludes_only(n: &Node) -> bool {
     }
 }
 
-/// Everything but the documents with any of `terms` in `field`.
-fn all_but(field: Field, terms: impl Iterator<Item = &'static str>) -> Q {
+/// The terms an [`excludes_only`] clause leaves out: it matches
+/// everything without them.
+fn excluded(n: &Node, f: &Cx<'_>) -> Vec<(Field, &'static str)> {
+    match n {
+        Node::Verified { any } if !any.contains(&Verified::No) => {
+            vec![(f.verified, Verified::No.as_str())]
+        }
+        Node::Network { any } => Network::ALL
+            .into_iter()
+            .filter(|t| !any.contains(t))
+            .map(|t| (f.network, t.as_str()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Everything but the documents with any of `terms`.
+fn all_but(terms: Vec<(Field, &'static str)>) -> Q {
     let mut clauses: Vec<(Occur, Q)> = vec![(Occur::Must, Box::new(AllQuery))];
-    clauses.extend(terms.map(|t| (Occur::MustNot, term(field, t, IndexRecordOption::Basic))));
+    clauses.extend(
+        terms
+            .into_iter()
+            .map(|(fld, t)| (Occur::MustNot, term(fld, t, IndexRecordOption::Basic))),
+    );
     if clauses.len() == 1 {
         return Box::new(AllQuery);
     }
@@ -468,20 +497,11 @@ fn any_term<'t>(field: Field, terms: impl Iterator<Item = &'t str>) -> Q {
 /// ([`Node::population_fields`]).
 fn provenance(node: &Node, f: &Cx<'_>) -> Q {
     match node {
-        Node::Verified { any } => match (any.contains(&Verified::Yes), any.contains(&Verified::No))
-        {
-            (true, true) => Box::new(AllQuery),
-            (true, false) => all_but(f.verified, std::iter::once(Verified::No.as_str())),
-            (false, true) => term(f.verified, Verified::No.as_str(), IndexRecordOption::Basic),
-            (false, false) => Box::new(EmptyQuery),
-        },
-        Node::Network { any } if any.contains(&Network::Bt) => all_but(
-            f.network,
-            Network::ALL
-                .into_iter()
-                .filter(|n| !any.contains(n))
-                .map(Network::as_str),
-        ),
+        n if excludes_only(n) => all_but(excluded(n, f)),
+        Node::Verified { any } if any.contains(&Verified::No) => {
+            term(f.verified, Verified::No.as_str(), IndexRecordOption::Basic)
+        }
+        Node::Verified { .. } => Box::new(EmptyQuery),
         Node::Network { any } => any_term(f.network, any.iter().map(|n| n.as_str())),
         Node::Source { any } => any_term(f.source, any.iter().map(String::as_str)),
         _ => unreachable!("provenance clauses only"),

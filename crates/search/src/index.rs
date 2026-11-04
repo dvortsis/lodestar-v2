@@ -1002,8 +1002,29 @@ impl SearchIndex {
         let seen = searcher.generation().generation_id();
         view.ready_since
             .get(field)
-            .is_none_or(|&since| seen >= since)
+            .is_none_or(|&(since, _)| seen >= since)
             .then_some(query)
+    }
+
+    /// [`SearchIndex::availability`] as `lease`'s snapshot sees it: a
+    /// torrent-index field that completed after the lease's snapshot is
+    /// still what it was there (SRC-3: a later page of a lease from
+    /// mid-backfill keeps its "partial" notice). File-index fields
+    /// follow the latest commit.
+    pub fn availability_in(&self, field: &str, lease: &crate::Lease) -> Availability {
+        let now = self.availability(field);
+        if now != Availability::Ready || field.starts_with("file.") {
+            return now;
+        }
+        let view = self
+            .population
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let seen = lease.searcher().generation().generation_id();
+        match view.ready_since.get(field) {
+            Some(&(since, before)) if seen < since => before,
+            _ => now,
+        }
     }
 
     /// Alive while any clone of this index is: a retired index's
@@ -1692,7 +1713,10 @@ fn stored_adult(store: &mut Store, id: i64) -> Result<bool> {
 #[derive(Debug, Default)]
 struct PopView {
     states: [PopState; 2],
-    ready_since: std::collections::BTreeMap<String, u64>,
+    /// The generation, and what the field was just before (its walk's
+    /// last `Backfilling`), for what [`SearchIndex::availability_in`]
+    /// tells a lease on an older snapshot.
+    ready_since: std::collections::BTreeMap<String, (u64, Availability)>,
 }
 
 impl PopView {
@@ -2034,9 +2058,10 @@ impl Indexer {
         for (i, state) in states.iter().enumerate() {
             for f in state.fields() {
                 let ready = state.availability(f) == Some(Availability::Ready);
-                let was = view.availability(f) == Some(Availability::Ready);
-                if ready && !was {
-                    view.ready_since.insert(f.to_owned(), seen[i]);
+                let was = view.availability(f);
+                if ready && was != Some(Availability::Ready) {
+                    let before = was.unwrap_or(Availability::NoProducer);
+                    view.ready_since.insert(f.to_owned(), (seen[i], before));
                 }
             }
         }

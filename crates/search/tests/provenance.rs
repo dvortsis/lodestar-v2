@@ -249,6 +249,15 @@ fn the_backfill_resumes_after_a_restart_and_hides_nothing_meanwhile() {
         "resumed from the commit"
     );
     whole(&index);
+    // A lease on this mid-backfill snapshot (a search's later pages).
+    let lease = lodestar_search::Lease::new(
+        std::sync::Arc::new(index.clone()),
+        &parse("source:dht").unwrap(),
+        NOW,
+        lodestar_search::Sort::Relevance,
+        &lodestar_search::CancelToken::new(),
+    )
+    .unwrap();
     let mut w = index.writer(HEAP).unwrap();
     let mut steps = 0;
     while index.availability("source") != Availability::Ready {
@@ -259,6 +268,19 @@ fn the_backfill_resumes_after_a_restart_and_hides_nothing_meanwhile() {
         steps += 1;
     }
     assert_eq!(steps, 3, "24 left in steps of 10");
+    // The lease still reads the snapshot from mid-backfill, and is told
+    // so; a search taken now is complete.
+    // (It reports the walk as it stood just before completing.)
+    assert_eq!(index.availability_in("source", &lease), backfilling(36));
+    let fresh = lodestar_search::Lease::new(
+        std::sync::Arc::new(index.clone()),
+        &parse("source:dht").unwrap(),
+        NOW,
+        lodestar_search::Sort::Relevance,
+        &lodestar_search::CancelToken::new(),
+    )
+    .unwrap();
+    assert_eq!(index.availability_in("source", &fresh), Availability::Ready);
     for f in ["verified", "source", "network"] {
         assert_eq!(index.availability(f), Availability::Ready, "{f}");
     }

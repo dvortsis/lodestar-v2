@@ -528,7 +528,8 @@ async fn run_search(
         }
         // Only the hits served: nothing the page left out is explained.
         let explain = explained.map(|e| explanation(&e, &hits));
-        let incomplete_fields = incomplete_fields(&ast, lease.index());
+        let incomplete_fields =
+            incomplete_fields(&ast, |f| lease.index().availability_in(f, &lease));
         if !incomplete_fields.is_empty() {
             notices.push(SearchNotice::FieldsIncomplete);
         }
@@ -555,19 +556,21 @@ async fn run_search(
 /// The fields `ast`'s clauses name that `index` can't fully answer for
 /// (the population contract, `docs/decisions/2026-11-04-SB-6.md`): only
 /// the user's clauses, since the visibility defaults are complete by
-/// construction ([`lodestar_search::Node::population_fields`]). It reads
-/// the index's latest commit, which a lease's snapshot can predate by a
-/// commit: a field that just completed may be reported once more.
-fn incomplete_fields(ast: &Node, index: &lodestar_search::SearchIndex) -> Vec<UnpopulatedField> {
+/// construction ([`lodestar_search::Node::population_fields`]). The
+/// search asks the lease's snapshot ([`SearchIndex::availability_in`]),
+/// so a later page of a lease from mid-backfill stays reported.
+///
+/// [`SearchIndex::availability_in`]: lodestar_search::SearchIndex::availability_in
+fn incomplete_fields(
+    ast: &Node,
+    availability: impl Fn(&str) -> lodestar_search::Availability,
+) -> Vec<UnpopulatedField> {
     ast.population_fields()
         .into_iter()
         .filter_map(|field| {
-            let availability = index.availability(field);
-            (!availability.complete()).then(|| {
-                UnpopulatedField::from(&lodestar_search::FieldAvailability {
-                    field: field.to_owned(),
-                    availability,
-                })
+            UnpopulatedField::of(&lodestar_search::FieldAvailability {
+                field: field.to_owned(),
+                availability: availability(field),
             })
         })
         .collect()
@@ -797,7 +800,10 @@ fn state_of(
         rebuild,
         searchable_torrents: searchable,
         unavailable: missing.to_vec(),
-        unpopulated: unpopulated.iter().map(UnpopulatedField::from).collect(),
+        unpopulated: unpopulated
+            .iter()
+            .filter_map(UnpopulatedField::of)
+            .collect(),
         updated_at: now,
     }
 }
@@ -1455,12 +1461,14 @@ mod tests {
         use crate::dto::search::FieldState;
         let parse = |q: &str| lodestar_search::parse(q).unwrap();
         let ready = lodestar_search::SearchIndex::in_memory().unwrap();
-        assert!(incomplete_fields(&parse("source:nyaa"), &ready).is_empty());
+        assert!(incomplete_fields(&parse("source:nyaa"), |f| ready.availability(f)).is_empty());
         let none = lodestar_search::SearchIndex::in_memory()
             .unwrap()
             .with_generations(lodestar_search::Generations::current().with("source", 0))
             .unwrap();
-        let got = incomplete_fields(&parse("x (source:nyaa | -source:dht)"), &none);
+        let got = incomplete_fields(&parse("x (source:nyaa | -source:dht)"), |f| {
+            none.availability(f)
+        });
         assert_eq!(
             got,
             [UnpopulatedField {
@@ -1471,7 +1479,10 @@ mod tests {
             }]
         );
         // Clauses complete by construction, and the default, aren't.
-        assert!(incomplete_fields(&parse("x verified:no network:bt"), &none).is_empty());
+        assert!(
+            incomplete_fields(&parse("x verified:no network:bt"), |f| none.availability(f))
+                .is_empty()
+        );
     }
 
     #[test]
