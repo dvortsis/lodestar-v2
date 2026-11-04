@@ -581,3 +581,242 @@ fn a_new_install_or_a_current_index_needs_no_rebuild() {
         names_in(&root) == vec![NEW.dir_name(), "v9-t9".to_string()]
     });
 }
+
+/// Bytes in the files under `dir`, at any depth.
+fn dir_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            if e.file_type().unwrap().is_dir() {
+                dir_bytes(&e.path())
+            } else {
+                e.metadata().unwrap().len()
+            }
+        })
+        .sum()
+}
+
+/// The schema a v5 build wrote: this one without the fields v6 added
+/// (`drop`).
+fn v5_schema(current: &tantivy::schema::Schema, drop: &[&str]) -> tantivy::schema::Schema {
+    let mut b = tantivy::schema::Schema::builder();
+    for (_, entry) in current.fields() {
+        if !drop.contains(&entry.name()) {
+            b.add_field(entry.clone());
+        }
+    }
+    b.build()
+}
+
+/// A v5 index of everything in `store`, at `dir`, as a v5 build left it:
+/// its own schemas, documents with only their fields, and v5's commit
+/// payload (no population part).
+fn build_v5(dir: &Path, store: &mut Store) {
+    use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
+    use tantivy::TantivyDocument;
+    let (schema, fields) = lodestar_search::schema::build();
+    let (file_schema, file_fields) = lodestar_search::files::schema();
+    let v5 = v5_schema(&schema, &lodestar_search::schema::V6_FIELDS);
+    let v5_files = v5_schema(&file_schema, &lodestar_search::files::V6_FIELDS);
+    std::fs::create_dir_all(dir.join("files")).unwrap();
+    let index = tantivy::Index::create_in_dir(dir, v5.clone()).unwrap();
+    let files = tantivy::Index::builder()
+        .schema(v5_files.clone())
+        .settings(lodestar_search::files::settings())
+        .create_in_dir(dir.join("files"))
+        .unwrap();
+    // A document of this build, with only the fields `to` has.
+    let map = |from: &tantivy::schema::Schema, to: &tantivy::schema::Schema, d: TantivyDocument| {
+        let mut out = TantivyDocument::new();
+        for (f, v) in d.field_values() {
+            if let Ok(g) = to.get_field(from.get_field_name(f)) {
+                out.add_field_value(g, v);
+            }
+        }
+        out
+    };
+    let writer = |i: &tantivy::Index| {
+        i.tokenizers()
+            .register(NAME_TOKENIZER, NameTokenizer::default());
+        i.writer::<TantivyDocument>(HEAP).unwrap()
+    };
+    let (mut w, mut fw) = (writer(&index), writer(&files));
+    let ids = store.ids_after(0, 100_000).unwrap();
+    for &id in &ids {
+        let row = store.torrent(id).unwrap().unwrap();
+        let tree = store.files(id).unwrap().unwrap();
+        let doc = lodestar_search::TorrentDoc::new(&row, &tree).to_document(&fields);
+        w.add_document(map(&schema, &v5, doc)).unwrap();
+        for d in lodestar_search::files::file_docs(id as u64, &tree) {
+            fw.add_document(map(&file_schema, &v5_files, d.to_document(&file_fields)))
+                .unwrap();
+        }
+    }
+    let payload = format!(
+        "lodestar-watermark:{};reindex:{}",
+        ids.last().unwrap(),
+        store.reindex_head().unwrap()
+    );
+    for w in [&mut fw, &mut w] {
+        let mut prepared = w.prepare_commit().unwrap();
+        prepared.set_payload(&payload);
+        prepared.commit().unwrap();
+    }
+}
+
+#[test]
+fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
+    use lodestar_search::{Availability, files::V6_FIELDS as FILE_V6, schema::V6_FIELDS};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let db = dir.path().join("s.db");
+    let n = 600;
+    let mut writer = store(dir.path(), n);
+    let v5 = IndexVersion {
+        schema: 5,
+        tokenizer: 1,
+    };
+    assert_eq!(IndexVersion::CURRENT.schema, 6);
+    build_v5(&root.join(v5.dir_name()), &mut writer);
+    let v5_bytes = dir_bytes(&root);
+
+    // A first start built part of v6, then stopped (a crash after a
+    // commit).
+    let mut reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let mut b = Rebuild::open(&root, IndexVersion::CURRENT, HEAP).unwrap();
+    for _ in 0..3 {
+        assert_eq!(b.step(&mut reader, 100).unwrap().added, 100);
+    }
+    b.commit().unwrap();
+    drop(b);
+
+    let start = Arc::new(AtomicBool::new(true));
+    let config = ServingConfig {
+        hold_before_start: Some(start.clone()),
+        ..config(IndexVersion::CURRENT)
+    };
+    let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
+    let p = serving.progress().unwrap();
+    assert_eq!((p.from, p.to), (v5, IndexVersion::CURRENT));
+    assert_eq!(p.done, 300, "resumed, not started over");
+    let mut want: Vec<String> = V6_FIELDS.iter().map(|f| (*f).to_owned()).collect();
+    want.extend(FILE_V6.iter().map(|f| format!("file.{f}")));
+    assert_eq!(p.unavailable, want);
+
+    // The v5 index serves meanwhile, and says what it lacks.
+    let index = serving.index();
+    assert_eq!(total(&index, "common movie"), n);
+    assert_eq!(total(&index, "file:(ext:mkv size:>1MB)"), n);
+    assert_eq!(index.availability("file.category"), Availability::Missing);
+    assert_eq!(index.availability("verified"), Availability::Missing);
+    assert_eq!(
+        index.availability("file.size_bucket"),
+        Availability::Missing
+    );
+    assert_eq!(index.availability("file.size"), Availability::Ready);
+    assert!(!index.availability("file.category").complete());
+    drop(index);
+
+    start.store(false, Ordering::Relaxed);
+    finished(&serving);
+    let index = serving.index();
+    assert!(index.missing_fields().is_empty());
+    assert_eq!(total(&index, "common movie"), n);
+    assert_eq!(total(&index, "file:(ext:mkv size:>1MB)"), n);
+    // SB-6's own rebuild filled what the store has; fields whose
+    // producers haven't shipped say so.
+    for f in FILE_V6 {
+        assert_eq!(
+            index.availability(&format!("file.{f}")),
+            Availability::Ready,
+            "{f}"
+        );
+    }
+    for f in V6_FIELDS {
+        assert_eq!(index.availability(f), Availability::NoProducer, "{f}");
+    }
+    let files =
+        tantivy::Index::open_in_dir(root.join(IndexVersion::CURRENT.dir_name()).join("files"))
+            .unwrap();
+    let category = files.schema().get_field("category").unwrap();
+    let video = tantivy::query::TermQuery::new(
+        tantivy::Term::from_field_text(category, "video"),
+        tantivy::schema::IndexRecordOption::Basic,
+    );
+    let searcher = files.reader().unwrap().searcher();
+    assert_eq!(
+        searcher.search(&video, &tantivy::collector::Count).unwrap(),
+        n
+    );
+    drop((searcher, files, index));
+
+    // The high-water mark counts both indexes at once.
+    wait("the v5 index is deleted", || {
+        names_in(&root) == vec![IndexVersion::CURRENT.dir_name()]
+    });
+    let hw = serving.disk_high_water();
+    assert!(hw > v5_bytes, "{hw} ≤ {v5_bytes}");
+    assert!(
+        hw >= v5_bytes + dir_bytes(&root) / 2,
+        "{hw} vs {v5_bytes} + v6"
+    );
+    serving.shutdown().unwrap();
+}
+
+#[test]
+/// Correctness end to end; that the swap leaves the walk to the live
+/// indexer is `rebuild::tests::the_swaps_catch_up_…`'s to show.
+fn a_build_resumed_with_other_generations_still_completes_its_walk() {
+    use lodestar_search::Availability;
+    use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let db = dir.path().join("s.db");
+    let n = 400;
+    let mut writer = store(dir.path(), n);
+    build_complete(&root, OLD, &mut writer);
+
+    // A first build got half way, then stopped.
+    let mut reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let mut b = Rebuild::open(&root, NEW, HEAP).unwrap();
+    for _ in 0..2 {
+        assert_eq!(b.step(&mut reader, 100).unwrap().added, 100);
+    }
+    b.commit().unwrap();
+    drop(b);
+    // Its file index recorded `category` at an older generation, as a
+    // build from before that producer would have.
+    let files = root
+        .join(format!("{}.building", NEW.dir_name()))
+        .join("files");
+    let index = tantivy::Index::open_in_dir(&files).unwrap();
+    index
+        .tokenizers()
+        .register(NAME_TOKENIZER, NameTokenizer::default());
+    let payload = index.load_metas().unwrap().payload.unwrap();
+    let (watermarks, pop) = payload.split_once(";pop:").unwrap();
+    assert!(pop.contains("file.category=1"), "{pop}");
+    let mut w = index.writer::<tantivy::TantivyDocument>(HEAP).unwrap();
+    let mut prepared = w.prepare_commit().unwrap();
+    prepared.set_payload(&format!(
+        "{watermarks};pop:{}",
+        pop.replace("file.category=1", "file.category=0")
+    ));
+    prepared.commit().unwrap();
+    drop((w, index));
+
+    let serving = Serving::open_or_rebuild(&root, &db, config(NEW)).unwrap();
+    finished(&serving);
+    let index = serving.index();
+    assert_eq!(index.num_docs(), n as u64);
+    assert_eq!(total(&index, "common movie"), n);
+    drop(index);
+    // The walk over what the first build wrote ends after the swap, in
+    // the live indexer, and the field then reads as complete.
+    wait("the walk completes", || {
+        serving.index().availability("file.category") == Availability::Ready
+    });
+    assert_eq!(serving.index().num_files(), n as u64);
+    serving.shutdown().unwrap();
+}

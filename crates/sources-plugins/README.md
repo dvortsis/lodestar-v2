@@ -13,10 +13,10 @@ One module per plugin, `src/<plugin>.rs`, with one `pub mod` line in `src/lib.rs
 2. **A config parser** that checks every field and names the rule it broke, never the value. Credentials are never config: they come from the [`Credentials`](src/lib.rs) trait (SRC-4's store), read once at start.
 3. **The mapping** from a parser's items (`lodestar_sources_feeds`) to `Found`, as a public pure function, so tests and the fuzz target can call it. Every field is a claim. The key comes only from the parser's hash fields. Sizes and dates outside sane ranges are dropped.
 4. **`run`**, which:
-   - sends HTTP only through `ctx.kit.http`: each poll of a feed or indexer through `Client::poll(unit, …)`, so the poll gate spaces it, and follow-ups through `Client::send`. It never builds a client: the host gives it one from SRC-5's `EgressFactory`, with the plugin's route and kill switch;
+   - sends HTTP only through `ctx.kit.http`: each poll's first request through `Client::poll(unit, …)` (usually the feed or indexer request; for a client that logs in each poll, the login), so the poll gate spaces it, and follow-ups through `Client::send`. A plugin whose cycle can fail before that request still waits a poll interval before the next cycle (SRC-11's `clients.rs`); It never builds a client: the host gives it one from SRC-5's `EgressFactory`, with the plugin's route and kill switch;
    - waits on every await inside `tokio::select!` with `shutdown.requested()`, and drops any spawned work on return, so it stops within a second (`STOP_WITHIN`);
    - returns `Err` with a plain message (no URL, key or server text) when it can't go on: not set up, or the key was refused. It doesn't retry those every poll;
-   - sets `private_source` on everything found through a private tracker, a Usenet account or the user's own client (§18.7). Such finds carry claims only (Q15): no automatic `.torrent` fetch, and no external reference that could hold a passkey.
+   - sets `private_source` on everything found through a private tracker, a Usenet account or the user's own client (§18.7). Such finds carry claims only (Q15): no automatic `.torrent` fetch through a private indexer, no trackers, and no external reference that could hold a passkey. A `.torrent` exported from the user's own client never contacts the tracker, so `clients.rs` reads it automatically, and still emits claims only (runner, SRC-11).
 
 ## Fixtures
 

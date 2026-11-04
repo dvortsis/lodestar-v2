@@ -33,6 +33,7 @@
 //! `tests/fixtures/deluge/`.
 
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -51,6 +52,10 @@ use super::{
     POLL_INTERVAL, Priorities, Selection, TorrentFile, already_there, base64, category_name,
     check_file_count, check_magnets, check_request, client_reason, partial, poll, rejected_status,
     skipped_files,
+};
+use super::{
+    Bounded, Fields, GuardedWire, Listed, Lister, Listing, MAX_LIST_BYTES, RawEntry, TorrentState,
+    Wire, WireMethod, WireRequest, listed, state_text,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -85,6 +90,8 @@ pub struct Deluge {
     metadata_wait: Duration,
     poll_interval: Duration,
     timeout: Duration,
+    /// Listing (SRC-11), over the same guarded client.
+    lister: DelugeLister,
 }
 
 impl fmt::Debug for Deluge {
@@ -167,12 +174,15 @@ impl Deluge {
         password: Secret,
         http: GuardedClient,
     ) -> Result<Deluge, ClientError> {
-        let mut endpoint = parse_url(url, http.policy())?;
-        endpoint.set_query(None);
-        endpoint.set_fragment(None);
-        let path = format!("{}/json", endpoint.path().trim_end_matches('/'));
-        endpoint.set_path(&path);
+        let endpoint = json_url(url, http.policy())?;
+        let lister = DelugeLister::new(
+            url,
+            password.clone(),
+            Arc::new(GuardedWire(http.clone())),
+            http.policy(),
+        )?;
         Ok(Deluge {
+            lister,
             endpoint,
             password,
             http,
@@ -683,6 +693,10 @@ impl DownloadClient for Deluge {
                 .collect())
         })
     }
+
+    fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>> {
+        self.lister.list()
+    }
 }
 
 /// The daemon's reason out of a Deluge error message: the exception's text
@@ -700,6 +714,273 @@ fn deluge_reason(message: &str) -> String {
         None => text,
     };
     client_reason(text.as_bytes())
+}
+
+/// Lists torrents (`core.get_torrents_status`) over a [`Wire`], logging in
+/// and connecting the Web UI to its daemon as [`Deluge`] does. Deluge's
+/// RPC has no way to read a torrent's `.torrent` bytes, so
+/// [`Lister::export`] is `Unsupported(Export)`.
+pub struct DelugeLister {
+    endpoint: Url,
+    password: Secret,
+    wire: Arc<dyn Wire>,
+    session: Mutex<Option<Secret>>,
+    next_id: AtomicU64,
+}
+
+impl fmt::Debug for DelugeLister {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DelugeLister")
+            .field("url", &redact(&self.endpoint))
+            .finish_non_exhaustive()
+    }
+}
+
+/// The status keys a list asks for.
+const LIST_KEYS: [&str; 3] = ["name", "total_size", "state"];
+
+impl DelugeLister {
+    pub fn new(
+        url: &str,
+        password: Secret,
+        wire: Arc<dyn Wire>,
+        policy: NetPolicy,
+    ) -> Result<DelugeLister, ClientError> {
+        Ok(DelugeLister {
+            endpoint: json_url(url, policy)?,
+            password,
+            wire,
+            session: Mutex::new(None),
+            next_id: AtomicU64::new(1),
+        })
+    }
+
+    /// Sends one call; returns the reply and any session cookie set.
+    async fn once<T: DeserializeOwned>(
+        &self,
+        method: &'static str,
+        params: &Value,
+        cookie: Option<&Secret>,
+        limit: usize,
+        poll: bool,
+    ) -> Result<(Reply<T>, Option<Secret>), ClientError> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let body = serde_json::to_vec(&json!({ "method": method, "params": params, "id": id }))
+            .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
+        let mut headers = vec![
+            ("Content-Type", "application/json".to_owned()),
+            ("Accept", "application/json".to_owned()),
+        ];
+        if let Some(cookie) = cookie {
+            headers.push(("Cookie", cookie.expose().to_owned()));
+        }
+        let req = WireRequest {
+            method: WireMethod::Post,
+            url: self.endpoint.to_string(),
+            headers,
+            body,
+            limit,
+            poll,
+        };
+        let res = self.wire.exchange(&req).await?;
+        let set_cookie = res.headers("set-cookie").find_map(session_cookie);
+        if res.status != 200 {
+            return Err(rejected_status(res.status, &res.body));
+        }
+        let (reply, _) = decode(&res.body, Some(id), method)?;
+        Ok((reply, set_cookie))
+    }
+
+    async fn login(&self) -> Result<Secret, ClientError> {
+        let params = json!([self.password.expose()]);
+        let (reply, cookie) = self
+            .once::<bool>("auth.login", &params, None, MAX_RESPONSE, false)
+            .await?;
+        match reply {
+            Reply::Ok(Some(true)) => {}
+            Reply::Ok(Some(false)) => return Err(ClientError::Auth(AuthFailure::BadCredentials)),
+            _ => return Err(ClientError::Protocol("the login answer")),
+        }
+        let cookie = cookie.ok_or(ClientError::Protocol("the login set no session cookie"))?;
+        if !self.connected(&cookie).await? {
+            let hosts: Vec<HostId> = self
+                .logged_in(&cookie, "web.get_hosts", json!([]))
+                .await?
+                .unwrap_or_default();
+            let host = hosts
+                .into_iter()
+                .next()
+                .map(|h| h.0)
+                .filter(|id| id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric()))
+                .ok_or(ClientError::Rejected(
+                    "Deluge's Web UI has no daemon to connect to".into(),
+                ))?;
+            self.logged_in::<IgnoredAny>(&cookie, "web.connect", json!([host]))
+                .await?;
+            if !self.connected(&cookie).await? {
+                return Err(ClientError::Rejected(
+                    "Deluge's Web UI couldn't connect to its daemon".into(),
+                ));
+            }
+        }
+        Ok(cookie)
+    }
+
+    async fn connected(&self, cookie: &Secret) -> Result<bool, ClientError> {
+        self.logged_in(cookie, "web.connected", json!([]))
+            .await?
+            .ok_or(ClientError::Protocol("web.connected isn't true or false"))
+    }
+
+    async fn logged_in<T: DeserializeOwned>(
+        &self,
+        cookie: &Secret,
+        method: &'static str,
+        params: Value,
+    ) -> Result<Option<T>, ClientError> {
+        match self
+            .once(method, &params, Some(cookie), MAX_RESPONSE, false)
+            .await?
+            .0
+        {
+            Reply::Ok(v) => Ok(v),
+            Reply::NotAuthenticated => Err(ClientError::Auth(AuthFailure::SessionRefused)),
+        }
+    }
+
+    async fn session(&self, stale: Option<&Secret>) -> Result<Secret, ClientError> {
+        let mut session = self.session.lock().await;
+        match (&*session, stale) {
+            (Some(current), None) => return Ok(current.clone()),
+            (Some(current), Some(stale)) if current.expose() != stale.expose() => {
+                return Ok(current.clone());
+            }
+            _ => {}
+        }
+        *session = None;
+        let cookie = self.login().await?;
+        *session = Some(cookie.clone());
+        Ok(cookie)
+    }
+}
+
+impl Lister for DelugeLister {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Deluge
+    }
+
+    fn can_export(&self) -> bool {
+        false
+    }
+
+    fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>> {
+        Box::pin(async move {
+            let params = json!([{}, LIST_KEYS]);
+            let mut cookie = self.session(None).await?;
+            for attempt in 0..2 {
+                let reply = self
+                    .once::<Bounded<RawTorrent>>(
+                        "core.get_torrents_status",
+                        &params,
+                        Some(&cookie),
+                        MAX_LIST_BYTES,
+                        attempt == 0,
+                    )
+                    .await?
+                    .0;
+                match reply {
+                    Reply::Ok(Some(list)) => return Ok(list.0),
+                    Reply::Ok(None) => {
+                        return Err(ClientError::Protocol("the torrent list is null"));
+                    }
+                    Reply::NotAuthenticated if attempt == 0 => {
+                        cookie = self.session(Some(&cookie)).await?;
+                    }
+                    Reply::NotAuthenticated => break,
+                }
+            }
+            Err(ClientError::Auth(AuthFailure::SessionRefused))
+        })
+    }
+
+    fn export<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Vec<u8>, ClientError>> {
+        Box::pin(async { Err(ClientError::Unsupported(Feature::Export)) })
+    }
+}
+
+/// One `core.get_torrents_status` value; the hash is its key.
+struct RawTorrent;
+
+impl RawEntry for RawTorrent {
+    const KEYS: &'static [&'static str] = &["name", "total_size", "state"];
+
+    fn into_listed(f: &Fields, key: Option<&str>) -> Option<Listed> {
+        let state = match state_text(f.str("state").ok()?) {
+            "Downloading" | "Allocating" => TorrentState::Downloading,
+            "Seeding" => TorrentState::Seeding,
+            "Paused" => TorrentState::Paused,
+            "Checking" | "Moving" => TorrentState::Checking,
+            "Queued" => TorrentState::Queued,
+            "Error" => TorrentState::Error,
+            _ => TorrentState::Other,
+        };
+        listed(key?, f.str("name").ok()?, f.int("total_size").ok()?, state)
+    }
+}
+
+/// A JSON-RPC answer: the reply and the answer's id. With `want`, an id
+/// that doesn't match is refused. Error codes as [`Deluge`] reads them.
+fn decode<T: DeserializeOwned>(
+    body: &[u8],
+    want: Option<u64>,
+    method: &str,
+) -> Result<(Reply<T>, Option<u64>), ClientError> {
+    let answer: Answer<T> = serde_json::from_slice(body)
+        .map_err(|_| ClientError::Protocol("the answer isn't Deluge's JSON"))?;
+    if let Some(error) = answer.error {
+        // Code 5's message quotes the request (password included).
+        if error.code == 5 {
+            return Err(ClientError::Protocol("Deluge couldn't read the request"));
+        }
+        if want.is_some() && answer.id != want {
+            return Err(ClientError::Protocol("the answer is for another request"));
+        }
+        return match error.code {
+            1 => Ok((Reply::NotAuthenticated, answer.id)),
+            2 => Err(ClientError::Rejected(format!(
+                "Deluge doesn't know {}",
+                client_reason(method.as_bytes())
+            ))),
+            _ => Err(ClientError::Rejected(deluge_reason(&error.message))),
+        };
+    }
+    if want.is_some() && answer.id != want {
+        return Err(ClientError::Protocol("the answer is for another request"));
+    }
+    Ok((Reply::Ok(answer.result), answer.id))
+}
+
+/// `core.get_torrents_status`'s answer: a map from hash to status.
+pub(super) fn parse_list(body: &[u8]) -> Result<(Listing, Option<u64>), ClientError> {
+    if body.len() > MAX_LIST_BYTES {
+        return Err(ClientError::Protocol("the torrent list is too large"));
+    }
+    match decode::<Bounded<RawTorrent>>(body, None, "core.get_torrents_status")? {
+        (Reply::Ok(Some(list)), id) => Ok((list.0, id)),
+        (Reply::Ok(None), _) => Err(ClientError::Protocol("the torrent list is null")),
+        (Reply::NotAuthenticated, _) => Err(ClientError::Auth(AuthFailure::SessionRefused)),
+    }
+}
+
+/// The JSON-RPC URL for an address: checked against `policy`, no query or
+/// fragment, `/json` added.
+fn json_url(url: &str, policy: NetPolicy) -> Result<Url, ClientError> {
+    let mut endpoint = parse_url(url, policy)?;
+    endpoint.set_query(None);
+    endpoint.set_fragment(None);
+    let path = format!("{}/json", endpoint.path().trim_end_matches('/'));
+    endpoint.set_path(&path);
+    Ok(endpoint)
 }
 
 #[cfg(test)]

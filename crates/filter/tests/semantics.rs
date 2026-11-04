@@ -764,7 +764,10 @@ fn pack_decision(name: &str, files: &[FileInfo], neutral: &[Override]) -> Option
 fn a_neutralized_word_is_no_pack_evidence() {
     use lodestar_filter::PackRule;
     let files = [FileInfo::new(vec!["readme.txt".into()], 90)];
-    let sc1 = Some(RuleRef::Pack(PackRule::Sc1));
+    // `robux` is SC-2's since RP-0 split SC-2 out of SC-1.
+    let sc1 = Some(RuleRef::Pack(PackRule::Sc2));
+    // Held under either id: SC-1 ∪ SC-2 is SC-1 as it was.
+    assert!(pack_decision("Free Robux Generator", &files, &[]).is_some());
     assert_eq!(pack_decision("Free Robux Generator", &files, &[]), sc1);
     // `robux` was the only service: nothing else catches it.
     assert_eq!(

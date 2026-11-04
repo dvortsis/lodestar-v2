@@ -406,6 +406,26 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - a terms-of-service grey case (§2.28 Q2);
       - steps that need the owner's hands: tags, hosts, releases, rulesets.
 
+34. **CR-SPEC confirmed, with the runner's answers to O1-O6** (owner, 2026-11-04, relayed by a helper session; the owner approved the runner's recommendations in chat).
+    - **CR-SPEC (`docs/decisions/2026-11-02-CR-SPEC.md`) is confirmed.** `owner-cr-spec` holds.
+    - **O1: exclude.** The 24 h gate window excludes the 6 h first-start suppression and the 60 min warm-up (rule 1.1). Startup is still published (rule 1.7). O2-O6 are accepted as written.
+    - **#367 stays out of v0.5.1** and ships in v0.5.2 from `main`, with no rc.4.
+    - **Still queued:** the Q1 consent texts wait until SRC-4's drafts can be reviewed, and Checkpoint 1 stays queued.
+
+35. **A narrow `unsafe` exception for SQLite's allocator and memory statistics, and UTC-only records** (owner, 2026-11-04, build-runner session). Asked two questions, the owner answered "Yes" to the first and "Follow your recommendation" to the second.
+    - **The exception.** The workspace keeps `unsafe_code = "forbid"` (§1b.5), except in `lodestar-store` alone, where it is `deny`. There, `#[allow(unsafe_code)]` is permitted only on:
+      - the argument-free reads `sqlite3_memory_used()` and `sqlite3_memory_highwater()`, for the memory attribution gauges (X-mem-gauges);
+      - one `sqlite3_config(SQLITE_CONFIG_MALLOC, …)` call before the first connection opens, which routes SQLite's allocations through mimalloc (X-sqlite-malloc). The memory-routing slice was named in the question.
+
+      Each `allow` sits on the smallest possible block, with a `// SAFETY:` comment. Each PR that adds one runs `/security-review` and records it in its decisions file. Any other `unsafe`, in this crate or elsewhere, still needs the owner.
+    - **Not covered: the allocator callbacks.** `SQLITE_CONFIG_MALLOC` takes a `sqlite3_mem_methods` table of `extern "C"` callbacks (xMalloc, xFree, xRealloc, xSize, xRoundup, xInit, xShutdown). Each of those needs `unsafe` of its own and would call mimalloc through a new `libmimalloc-sys` dependency. The runner had described the routing fix as one start-up call, which understated it (corrected by #428's review). So before X-sqlite-malloc launches, the runner brings its full `unsafe` surface to the owner, or a route with no `unsafe` (for example mimalloc's `override` feature or a build-time flag).
+    - **Times in records are UTC.** New docs, reviews, soak notes and evidence give times in UTC (`Z`), never a local time zone, offset or place. The existing files on `main` that name a local time zone stay as they are, because git history keeps them anyway (runner's recommendation, accepted).
+
+36. **Up to twelve slots, filled only when it makes sense** (owner, 2026-11-04; given in the dashboard session and relayed to the runner in their words): "Let's increase slot limit to 12, although not mandatory to fill all slots if there isn't enough work or doesn't make sense for the roadmap / plan."
+    - **At most twelve slice sessions at once,** replacing §2.33's eight. `runner/slices.yaml` records it as `limits.phase_total: 12`.
+    - **Filling them all isn't required.** A slot stays empty when no ready slice fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap or plan. That's the runner's judgment, as under §2.33. Review bandwidth stays the real limit: every slice still gets a fresh Opus review before merge.
+    - §2.33's auto-approval and its "still for the owner" list are unchanged.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

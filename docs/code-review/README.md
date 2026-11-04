@@ -1,5 +1,13 @@
 # Review log
 
+## 2026-10-29 to 2026-11-04
+
+- [Soak memory and performance review](2026-11-04-soak-memory-review.md): read-only review of the r1–r4 soak evidence and the rc.3 source. Where the memory sits (the 185 MiB fetch-pool step, the corpus-proportional plateau), the residual slope candidates after the mmap-cache fix (one commit per torrent and the whole-index merge regime, the unmeasured C heap under musl's allocator), r4 watch items, and the changes that can precede the next frozen soak, split into metrics-only and class A.
+- [Master plan r2 review](2026-11-01-master-plan-r2-review.md): eight findings against `e528c369` (collector evidence gaps, schema-field backfill, runner takeover fence, 10M rebuild acceptance, measurement specification, required web checks, online import acceptance, ordering rules) plus owner decisions and scheduling risks.
+- [Master plan review](2026-10-29-master-plan-review.md): review of the October 29 soak-to-release master plan; revise-before-approval findings on the restart shortcut, throughput inference, admission coordination, A/B design, release transfer, import contracts, PostgreSQL restoration, storage estimates, history replacement and CI mapping.
+
+These are review records, not completed fixes.
+
 ## 2026-10-24
 
 > **Status, 2026-10-30:** the Bugbot findings and the UI audit fixes listed below landed with the owner's soak follow-ups (landing range L4: the snapshot deletion journal, the file-cache budget, cold-compile cancellation, the verified partial-import upgrade, updater ordering and the audit fixes). DUR-26 (updater write errors) is F-updater. These entries are the 2026-10-24 record.

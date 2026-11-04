@@ -7,11 +7,12 @@
 //! finished, and skips (and counts) an item that breaks a field cap or has
 //! no usable hash. A half-read item is never used. It never panics.
 //!
-//! The JSON reader is written here rather than taken from `serde_json`,
-//! so every cap holds while reading, not after a whole tree is built:
-//! nesting is walked without recursion past the few levels the shapes
-//! have, a string is copied only when it's a field the parser keeps, and
-//! its raw length is checked against [`Limits::max_text`] first.
+//! It reads with the bounded [`json`](crate::json) reader rather than
+//! `serde_json`, so every cap holds while reading, not after a whole tree
+//! is built: nesting is walked without recursion past the few levels the
+//! shapes have, a string is copied only when it's a field the parser
+//! keeps, and its raw length is checked against [`Limits::max_text`]
+//! first.
 //!
 //! The shapes, matched by key wherever they appear in the root object:
 //!
@@ -32,6 +33,7 @@
 
 use crate::common::{Bad, clean_title, hash, prepare, rfc3339};
 pub use crate::common::{Hashes, MAX_REF, MAX_TITLE, Skipped, Stop, Summary};
+use crate::json::{self, R, Reader, TextError, Walk};
 
 /// Bytes in a kept identifier. IA's own limit is 100.
 pub const MAX_IDENTIFIER: usize = 100;
@@ -158,12 +160,15 @@ pub fn parse_each(body: &[u8], limits: &Limits, mut emit: impl FnMut(Item)) -> P
         ..crate::common::LIMITS
     };
     let text = prepare(body, &bytes, &mut page.summary);
+    let reader = json::Limits {
+        max_depth: limits.max_depth,
+        max_values: limits.max_values,
+        max_array: limits.max_array,
+        max_text: limits.max_text,
+    };
     let mut p = Parser {
-        s: text,
-        i: 0,
+        j: Reader::new(text, reader),
         l: limits,
-        depth: 0,
-        values: 0,
         items: 0,
         page,
     };
@@ -172,8 +177,6 @@ pub fn parse_each(body: &[u8], limits: &Limits, mut emit: impl FnMut(Item)) -> P
     }
     p.page
 }
-
-type R<T> = Result<T, Stop>;
 
 /// The item being read: a search doc, or the root of a metadata answer.
 #[derive(Debug, Default)]
@@ -222,258 +225,24 @@ struct FileDraft {
 }
 
 struct Parser<'a, 'l> {
-    s: &'a str,
-    i: usize,
+    j: Reader<'a>,
     l: &'l Limits,
-    depth: usize,
-    values: usize,
     items: usize,
     page: Page,
 }
 
-impl<'a> Parser<'a, '_> {
-    // --- The JSON reader ---------------------------------------------
-
-    fn peek(&mut self) -> Option<u8> {
-        let b = self.s.as_bytes();
-        while let Some(b' ' | b'\t' | b'\n' | b'\r') = b.get(self.i) {
-            self.i += 1;
-        }
-        b.get(self.i).copied()
+impl<'a> Walk<'a> for Parser<'a, '_> {
+    fn json(&mut self) -> &mut Reader<'a> {
+        &mut self.j
     }
+}
 
-    fn eat(&mut self, c: u8) -> R<()> {
-        if self.peek() != Some(c) {
-            return Err(Stop::Malformed);
-        }
-        self.i += 1;
-        Ok(())
-    }
-
-    /// Counts one value.
-    fn value(&mut self) -> R<()> {
-        self.values += 1;
-        if self.values > self.l.max_values {
-            return Err(Stop::Elements);
-        }
-        Ok(())
-    }
-
-    /// Opens a container whose `c` is next.
-    fn open(&mut self, c: u8) -> R<()> {
-        self.eat(c)?;
-        self.depth += 1;
-        if self.depth > self.l.max_depth {
-            return Err(Stop::Depth);
-        }
-        Ok(())
-    }
-
-    /// Closes the container if `c` is next.
-    fn close(&mut self, c: u8) -> bool {
-        if self.peek() != Some(c) {
-            return false;
-        }
-        self.i += 1;
-        self.depth -= 1;
-        true
-    }
-
-    /// After an element: `,` (true), or the closing `c` (false).
-    fn next(&mut self, c: u8) -> R<bool> {
-        if self.peek() == Some(b',') {
-            self.i += 1;
-            return Ok(true);
-        }
-        if self.close(c) {
-            return Ok(false);
-        }
-        Err(Stop::Malformed)
-    }
-
-    /// An object that is next, handing each key to `f`, which reads the
-    /// value. A key is compared as written; IA doesn't escape keys.
-    fn object(&mut self, mut f: impl FnMut(&mut Self, &str) -> R<()>) -> R<()> {
-        self.value()?;
-        self.open(b'{')?;
-        if self.close(b'}') {
-            return Ok(());
-        }
-        loop {
-            let key = self.string()?;
-            self.eat(b':')?;
-            f(self, key)?;
-            if !self.next(b'}')? {
-                return Ok(());
-            }
-        }
-    }
-
-    /// An array that is next, handing each element's index to `f`, which
-    /// reads the element.
-    fn array(&mut self, mut f: impl FnMut(&mut Self, usize) -> R<()>) -> R<()> {
-        self.value()?;
-        self.open(b'[')?;
-        if self.close(b']') {
-            return Ok(());
-        }
-        for n in 0.. {
-            f(self, n)?;
-            if !self.next(b']')? {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    /// A string that is next, still escaped, without its quotes. Escapes
-    /// are checked; the text is valid UTF-8 already.
-    fn string(&mut self) -> R<&'a str> {
-        self.eat(b'"')?;
-        let (s, start) = (self.s, self.i);
-        let b = s.as_bytes();
-        loop {
-            match b.get(self.i) {
-                Some(b'"') => {
-                    let raw = s.get(start..self.i).ok_or(Stop::Malformed)?;
-                    self.i += 1;
-                    return Ok(raw);
-                }
-                Some(b'\\') => match b.get(self.i + 1) {
-                    Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => self.i += 2,
-                    Some(b'u')
-                        if b.get(self.i + 2..self.i + 6)
-                            .is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit)) =>
-                    {
-                        self.i += 6
-                    }
-                    _ => return Err(Stop::Malformed),
-                },
-                Some(&c) if c >= 0x20 => self.i += 1,
-                _ => return Err(Stop::Malformed),
-            }
-        }
-    }
-
-    /// A number that is next, as written (RFC 8259 grammar).
-    fn number(&mut self) -> R<&'a str> {
-        let (s, start) = (self.s, self.i);
-        let b = s.as_bytes();
-        let digits = |i: &mut usize| {
-            let from = *i;
-            while b.get(*i).is_some_and(u8::is_ascii_digit) {
-                *i += 1;
-            }
-            *i > from
-        };
-        let mut i = start;
-        if b.get(i) == Some(&b'-') {
-            i += 1;
-        }
-        match b.get(i) {
-            Some(b'0') => i += 1,
-            Some(b'1'..=b'9') => {
-                digits(&mut i);
-            }
-            _ => return Err(Stop::Malformed),
-        }
-        if b.get(i) == Some(&b'.') {
-            i += 1;
-            if !digits(&mut i) {
-                return Err(Stop::Malformed);
-            }
-        }
-        if matches!(b.get(i), Some(b'e' | b'E')) {
-            i += 1;
-            if matches!(b.get(i), Some(b'+' | b'-')) {
-                i += 1;
-            }
-            if !digits(&mut i) {
-                return Err(Stop::Malformed);
-            }
-        }
-        self.i = i;
-        s.get(start..i).ok_or(Stop::Malformed)
-    }
-
-    fn literal(&mut self, word: &str) -> R<()> {
-        if !self.s.get(self.i..).is_some_and(|r| r.starts_with(word)) {
-            return Err(Stop::Malformed);
-        }
-        self.i += word.len();
-        Ok(())
-    }
-
-    /// Reads past the next value without keeping it. True when an array
-    /// in it is longer than [`Limits::max_array`]. Iterative: its stack
-    /// is bounded by [`Limits::max_depth`].
-    fn skip(&mut self) -> R<bool> {
-        let mut over = false;
-        // One entry per open container: whether it's an array, and its
-        // elements so far.
-        let mut stack: Vec<(bool, usize)> = Vec::new();
-        loop {
-            self.value()?;
-            let opened = match self.peek() {
-                Some(b'{') => {
-                    self.open(b'{')?;
-                    !self.close(b'}') && {
-                        stack.push((false, 1));
-                        true
-                    }
-                }
-                Some(b'[') => {
-                    self.open(b'[')?;
-                    !self.close(b']') && {
-                        stack.push((true, 1));
-                        over |= self.l.max_array == 0;
-                        true
-                    }
-                }
-                Some(b'"') => self.string().map(|_| false)?,
-                Some(b't') => self.literal("true").map(|_| false)?,
-                Some(b'f') => self.literal("false").map(|_| false)?,
-                Some(b'n') => self.literal("null").map(|_| false)?,
-                Some(b'-' | b'0'..=b'9') => self.number().map(|_| false)?,
-                _ => return Err(Stop::Malformed),
-            };
-            if opened {
-                if stack.last().is_some_and(|t| !t.0) {
-                    self.string()?;
-                    self.eat(b':')?;
-                }
-                continue;
-            }
-            // A value ended: close what ends with it, then go on to the
-            // next element of the innermost open container.
-            loop {
-                let Some(&(is_array, n)) = stack.last() else {
-                    return Ok(over);
-                };
-                let close = if is_array { b']' } else { b'}' };
-                if !self.next(close)? {
-                    stack.pop();
-                    continue;
-                }
-                if is_array {
-                    over |= n >= self.l.max_array;
-                } else {
-                    self.string()?;
-                    self.eat(b':')?;
-                }
-                if let Some(t) = stack.last_mut() {
-                    t.1 = n + 1;
-                }
-                break;
-            }
-        }
-    }
-
+impl Parser<'_, '_> {
     // --- Values the parser keeps -------------------------------------
 
     /// Skips the next value inside an item; an over-long array spoils it.
     fn skip_in(&mut self, d: &mut Draft) -> R<()> {
-        if self.skip()? {
+        if self.j.skip()? {
             d.spoil(Bad::OverCap);
         }
         Ok(())
@@ -482,24 +251,23 @@ impl<'a> Parser<'a, '_> {
     /// A string within [`Limits::max_text`], decoded; one over the cap or
     /// with a bad escape spoils the item.
     fn text(&mut self, d: &mut Draft) -> R<Option<String>> {
-        self.value()?;
-        let raw = self.string()?;
-        if raw.len() > self.l.max_text {
-            d.spoil(Bad::OverCap);
-            return Ok(None);
+        match self.j.text()? {
+            Ok(s) => Ok(Some(s)),
+            Err(e) => {
+                d.spoil(match e {
+                    TextError::OverCap => Bad::OverCap,
+                    TextError::Malformed => Bad::Malformed,
+                });
+                Ok(None)
+            }
         }
-        let s = decode(raw);
-        if s.is_none() {
-            d.spoil(Bad::Malformed);
-        }
-        Ok(s)
     }
 
     /// Up to `keep` strings: a string value, or the first strings of an
     /// array (IA writes a field either way). Anything else is skipped.
     fn strings(&mut self, d: &mut Draft, keep: usize) -> R<Vec<String>> {
         let mut out = Vec::new();
-        match self.peek() {
+        match self.j.peek() {
             Some(b'"') => out.extend(self.text(d)?),
             Some(b'[') => {
                 let max = self.l.max_array;
@@ -507,7 +275,7 @@ impl<'a> Parser<'a, '_> {
                     if n >= max {
                         d.spoil(Bad::OverCap);
                     }
-                    if out.len() < keep && p.peek() == Some(b'"') {
+                    if out.len() < keep && p.j.peek() == Some(b'"') {
                         out.extend(p.text(d)?);
                         Ok(())
                     } else {
@@ -528,11 +296,8 @@ impl<'a> Parser<'a, '_> {
 
     /// A count: a number or a string of up to 20 digits, nothing else.
     fn count(&mut self, d: &mut Draft) -> R<Option<u64>> {
-        match self.peek() {
-            Some(b'-' | b'0'..=b'9') => {
-                self.value()?;
-                Ok(digits(self.number()?))
-            }
+        match self.j.peek() {
+            Some(b'-' | b'0'..=b'9') => Ok(digits(self.j.num()?)),
             Some(b'"') => Ok(self.text(d)?.as_deref().map(str::trim).and_then(digits)),
             _ => self.skip_in(d).map(|()| None),
         }
@@ -541,7 +306,7 @@ impl<'a> Parser<'a, '_> {
     // --- The shapes --------------------------------------------------
 
     fn document(&mut self, emit: &mut dyn FnMut(Item)) -> R<()> {
-        if self.peek() == Some(b'{') {
+        if self.j.peek() == Some(b'{') {
             let mut root = Draft::default();
             let mut is_item = false;
             self.object(|p, k| p.root(k, &mut root, &mut is_item, emit))?;
@@ -549,12 +314,9 @@ impl<'a> Parser<'a, '_> {
                 self.finish(root, emit);
             }
         } else {
-            self.skip()?;
+            self.j.skip()?;
         }
-        if self.peek().is_some() {
-            return Err(Stop::Malformed);
-        }
-        Ok(())
+        self.j.end()
     }
 
     fn root(
@@ -566,13 +328,13 @@ impl<'a> Parser<'a, '_> {
     ) -> R<()> {
         let mut scratch = Draft::default();
         match key {
-            "response" if self.peek() == Some(b'{') => self.object(|p, k| match k {
+            "response" if self.j.peek() == Some(b'{') => self.object(|p, k| match k {
                 "docs" => p.docs(emit),
                 "numFound" if p.page.total.is_none() => {
                     p.page.total = p.count(&mut scratch)?;
                     Ok(())
                 }
-                _ => p.skip().map(drop),
+                _ => p.j.skip().map(drop),
             }),
             "items" => self.docs(emit),
             "total" if self.page.total.is_none() => {
@@ -589,8 +351,8 @@ impl<'a> Parser<'a, '_> {
                     self.start_item()?;
                 }
                 match key {
-                    "metadata" if self.peek() == Some(b'{') => self.object(|p, k| p.field(d, k)),
-                    "files" if self.peek() == Some(b'[') => self.array(|p, _| p.file(d)),
+                    "metadata" if self.j.peek() == Some(b'{') => self.object(|p, k| p.field(d, k)),
+                    "files" if self.j.peek() == Some(b'[') => self.array(|p, _| p.file(d)),
                     "files" => {
                         // Not a list: whatever it names isn't listed.
                         d.truncated = true;
@@ -600,7 +362,7 @@ impl<'a> Parser<'a, '_> {
                     _ => self.skip_in(d),
                 }
             }
-            _ => self.skip().map(drop),
+            _ => self.j.skip().map(drop),
         }
     }
 
@@ -614,13 +376,13 @@ impl<'a> Parser<'a, '_> {
 
     /// `docs` or `items`: an array of search docs.
     fn docs(&mut self, emit: &mut dyn FnMut(Item)) -> R<()> {
-        if self.peek() != Some(b'[') {
-            return self.skip().map(drop);
+        if self.j.peek() != Some(b'[') {
+            return self.j.skip().map(drop);
         }
         self.array(|p, _| {
             p.start_item()?;
-            if p.peek() != Some(b'{') {
-                p.skip()?;
+            if p.j.peek() != Some(b'{') {
+                p.j.skip()?;
                 p.page.summary.skipped.malformed += 1;
                 return Ok(());
             }
@@ -666,7 +428,7 @@ impl<'a> Parser<'a, '_> {
 
     /// One `files` entry of a metadata item.
     fn file(&mut self, d: &mut Draft) -> R<()> {
-        if self.peek() != Some(b'{') {
+        if self.j.peek() != Some(b'{') {
             // An entry that isn't an object may still name a file.
             d.truncated = true;
             return self.skip_in(d);
@@ -675,7 +437,7 @@ impl<'a> Parser<'a, '_> {
         let mut named = false;
         self.object(|p, k| {
             match k {
-                "name" if !named && p.peek() == Some(b'"') => {
+                "name" if !named && p.j.peek() == Some(b'"') => {
                     named = true;
                     f.name = p.text(d)?.map(|s| s.trim().to_owned());
                 }
@@ -849,68 +611,6 @@ fn ends_with(s: &str, suffix: &str) -> bool {
             .is_some_and(|e| e.eq_ignore_ascii_case(suffix))
 }
 
-/// A JSON string's text without its escapes; `None` for a lone surrogate.
-/// The escapes were checked by the reader. Never longer than `raw`.
-fn decode(raw: &str) -> Option<String> {
-    if !raw.contains('\\') {
-        return Some(raw.to_owned());
-    }
-    let b = raw.as_bytes();
-    let mut out = String::with_capacity(raw.len());
-    let (mut i, mut run) = (0, 0);
-    while let Some(&c) = b.get(i) {
-        if c != b'\\' {
-            i += 1;
-            continue;
-        }
-        out.push_str(raw.get(run..i)?);
-        let ch = match b.get(i + 1)? {
-            b'"' => '"',
-            b'\\' => '\\',
-            b'/' => '/',
-            b'b' => '\u{8}',
-            b'f' => '\u{c}',
-            b'n' => '\n',
-            b'r' => '\r',
-            b't' => '\t',
-            b'u' => {
-                let hi = hex4(raw.get(i + 2..i + 6)?)?;
-                i += 6;
-                let cp = match hi {
-                    0xD800..=0xDBFF => {
-                        if raw.get(i..i + 2)? != "\\u" {
-                            return None;
-                        }
-                        let lo = hex4(raw.get(i + 2..i + 6)?)?;
-                        if !(0xDC00..=0xDFFF).contains(&lo) {
-                            return None;
-                        }
-                        i += 6;
-                        0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)
-                    }
-                    0xDC00..=0xDFFF => return None,
-                    _ => hi,
-                };
-                out.push(char::from_u32(cp)?);
-                run = i;
-                continue;
-            }
-            _ => return None,
-        };
-        out.push(ch);
-        i += 2;
-        run = i;
-    }
-    out.push_str(raw.get(run..)?);
-    Some(out)
-}
-
-fn hex4(s: &str) -> Option<u32> {
-    (s.len() == 4 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| u32::from_str_radix(s, 16).ok())
-        .flatten()
-}
-
 /// Up to 20 ASCII digits that fit a `u64`.
 fn digits(s: &str) -> Option<u64> {
     let ok = !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit());
@@ -954,6 +654,7 @@ fn date(s: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json::{decode, hex4};
 
     #[test]
     fn decodes_escapes() {

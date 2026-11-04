@@ -1398,6 +1398,7 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-sources",
  "lodestar-sources-feeds",
+ "lodestar-tracker-scrape",
  "quick-xml",
  "serde",
  "serde_json",

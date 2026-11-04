@@ -3,19 +3,26 @@
 //! fingerprints, so the packs and the junk score never disagree, and each
 //! carries its false-positive guards.
 //!
+//! Each rule has a version in the compiled-in [`manifest`], and the
+//! version this install applied is recorded and resolved by [`upgrade`]
+//! (RP-0, §20.6 "signed, versioned", §20.10).
+//!
 //! Not yet built, because they need data that doesn't exist yet: FK-3
 //! (pre-release fakes need a TMDB release date), SP-3 (flooding needs
 //! per-publisher rates) and SP-4 (clones of hidden spam need a signature
 //! index of hidden items).
 //!
 //! A CSX-5 *Neutralize term* stops a word counting as evidence in the
-//! rules that read keyword lists (MW-3, LU-2, LU-4, SC-1) and in LU-1's
+//! rules that read keyword lists (MW-3, LU-2, LU-4, SC-1, SC-2) and in LU-1's
 //! lure notes (§20.5.5), as it does in the core and your rules. The
 //! words of a name or file the rules count are read with the neutralized
 //! ones blanked, positions kept ([`Ctx::evidence`], [`Ctx::live_lure`]). The guards that keep a rule from matching
-//! (FK-2's `trailer`/`sample`, SC-1's `trainer`/`mod`/`offline`) read the
+//! (FK-2's `trailer`/`sample`, SC-1's and SC-2's `trainer`/`mod`/`offline`) read the
 //! torrent as it is, as `unless` does, so neutralizing never widens a
 //! rule.
+
+pub mod manifest;
+pub mod upgrade;
 
 use std::collections::BTreeSet;
 
@@ -76,11 +83,14 @@ pub enum PackRule {
     Sp1,
     Sp2,
     Sc1,
+    /// "Generator / hack" for online-game currencies or accounts, split
+    /// out of SC-1 so it has its own switch (plan 2026-11-04 Q16).
+    Sc2,
 }
 
 impl PackRule {
     /// In evaluation order: the strongest action within a pack first.
-    pub const ALL: [PackRule; 16] = [
+    pub const ALL: [PackRule; 17] = [
         PackRule::Mw4,
         PackRule::Mw1,
         PackRule::Mw2,
@@ -97,7 +107,16 @@ impl PackRule {
         PackRule::Sp2,
         PackRule::Sp1,
         PackRule::Sc1,
+        PackRule::Sc2,
     ];
+
+    /// How many rules there are.
+    pub const COUNT: usize = PackRule::ALL.len();
+
+    /// A dense index, `0..COUNT`, in declaration order.
+    pub fn index(self) -> usize {
+        self as usize
+    }
 
     pub fn id(self) -> &'static str {
         match self {
@@ -117,6 +136,7 @@ impl PackRule {
             PackRule::Sp1 => "SP-1",
             PackRule::Sp2 => "SP-2",
             PackRule::Sc1 => "SC-1",
+            PackRule::Sc2 => "SC-2",
         }
     }
 
@@ -131,15 +151,16 @@ impl PackRule {
             Lu1 | Lu2 | Lu3 | Lu4 => Pack::Lures,
             Fk1 | Fk2 | Fk4 | Fk5 => Pack::Fakes,
             Sp1 | Sp2 => Pack::Spam,
-            Sc1 => Pack::Scams,
+            Sc1 | Sc2 => Pack::Scams,
         }
     }
 
+    /// The action of the version this build ships ([`manifest`]).
     pub fn action(self) -> Action {
         use PackRule::*;
         match self {
             Mw4 | Fk4 => Action::Drop,
-            Mw1 | Mw2 | Mw3 | Mw5 | Lu1 | Lu4 | Fk1 | Sp2 | Sc1 => Action::Hide,
+            Mw1 | Mw2 | Mw3 | Mw5 | Lu1 | Lu4 | Fk1 | Sp2 | Sc1 | Sc2 => Action::Hide,
             Lu2 | Lu3 | Fk5 | Sp1 => Action::Demote,
             Fk2 => Action::Flag,
         }
@@ -201,11 +222,15 @@ const HOW_TO: &[&[&str]] = &[
 ];
 
 /// Online services and games whose "free premium" or currency
-/// generators are scams (SC-1/SC-2).
+/// generators are scams: SC-2 reads the [`GAMES`] among them, SC-1 the
+/// rest, so the two together match what SC-1 alone matched before RP-0.
 const SERVICES: &[&str] = &[
     "spotify", "netflix", "robux", "vbucks", "roblox", "fortnite", "disney", "hbo", "deezer",
     "tidal", "onlyfans", "bitcoin", "wallet", "crypto", "paypal",
 ];
+
+/// The online games and their currencies among [`SERVICES`] (SC-2).
+const GAMES: &[&str] = &["robux", "vbucks", "roblox", "fortnite"];
 
 const SCAM_WORDS: &[&str] = &[
     "generator",
@@ -372,7 +397,14 @@ impl<'a> Ctx<'a> {
             .map(|(f, _)| *f)
     }
 
-    /// Whether a pack rule matches.
+    /// The torrent's name as it is.
+    pub fn name(&self) -> &str {
+        self.item.name
+    }
+
+    /// Whether a pack rule matches, by the code of the version this
+    /// build ships. A version a release replaced keeps its code in the
+    /// [`manifest`] while an install may still have it applied.
     pub fn matches(&self, rule: PackRule) -> bool {
         use PackRule::*;
         let f = self.facts;
@@ -435,16 +467,22 @@ impl<'a> Ctx<'a> {
             }
             Sp1 => site_advert(self.item.name),
             Sp2 => stuffed(self.item.name) && !matches!(t, ContentType::Music),
-            Sc1 => {
-                let w = self.name_evidence();
-                w.iter().any(|x| SERVICES.contains(&x.as_str()))
-                    && w.iter().any(|x| SCAM_WORDS.contains(&x.as_str()))
-                    && !self
-                        .name_words()
-                        .iter()
-                        .any(|x| x == "trainer" || x == "mod" || x == "offline")
-            }
+            Sc1 => self.scam(|x| !GAMES.contains(&x)),
+            Sc2 => self.scam(|x| GAMES.contains(&x)),
         }
+    }
+
+    /// SC-1 and SC-2: a service `which` takes and a scam word in the
+    /// name's evidence, and none of the guards in the name as it is.
+    fn scam(&self, which: impl Fn(&str) -> bool) -> bool {
+        let w = self.name_evidence();
+        w.iter()
+            .any(|x| SERVICES.contains(&x.as_str()) && which(x.as_str()))
+            && w.iter().any(|x| SCAM_WORDS.contains(&x.as_str()))
+            && !self
+                .name_words()
+                .iter()
+                .any(|x| x == "trainer" || x == "mod" || x == "offline")
     }
 }
 
@@ -538,11 +576,16 @@ mod tests {
         };
         let neutral = keys(neutral);
         let ctx = Ctx::new(&item, &facts, &neutral);
-        PackRule::ALL
+        // SC-2 was part of SC-1 before RP-0: the tests written then see
+        // the two as one, so SC-1 ∪ SC-2 is checked against today's SC-1
+        // (plan 2026-11-04 Q16). `sc_split` tells them apart.
+        let mut ids: Vec<&'static str> = PackRule::ALL
             .into_iter()
             .filter(|r| ctx.matches(*r))
-            .map(PackRule::id)
-            .collect()
+            .map(|r| if r == PackRule::Sc2 { "SC-1" } else { r.id() })
+            .collect();
+        ids.dedup();
+        ids
     }
 
     /// The keys a Neutralize entry for each word supplies, as
@@ -562,6 +605,57 @@ mod tests {
 
     fn hit(name: &str, paths: &[(&str, u64)]) -> Vec<&'static str> {
         hit_with(name, paths, &[])
+    }
+
+    /// The pack rules that match, SC-1 and SC-2 apart.
+    fn split_hits(name: &str, paths: &[(&str, u64)]) -> Vec<&'static str> {
+        let f = files(paths);
+        let class = classify(name, &f);
+        let facts = Facts {
+            class: &class,
+            size: 0,
+            piece_len: 0,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        };
+        let item = Item {
+            hashes: &[[0; 20]],
+            name,
+            files: &f,
+            content_type: class.content_type,
+        };
+        let ctx = Ctx::new(&item, &facts, &[]);
+        PackRule::ALL
+            .into_iter()
+            .filter(|r| ctx.matches(*r))
+            .map(PackRule::id)
+            .collect()
+    }
+
+    /// SC-2 takes the online games out of SC-1, and the two together
+    /// match what SC-1 matched before (plan 2026-11-04 Q16).
+    #[test]
+    fn sc_split() {
+        let exe = [("x.exe", 1 << 20)];
+        let sc = |name: &str| -> Vec<&'static str> {
+            split_hits(name, &exe)
+                .into_iter()
+                .filter(|r| r.starts_with("SC-"))
+                .collect()
+        };
+        assert_eq!(sc("Free Robux Generator 2024"), ["SC-2"]);
+        assert_eq!(sc("Fortnite VBucks Hack"), ["SC-2"]);
+        assert_eq!(sc("Spotify Premium Free APK"), ["SC-1"]);
+        assert_eq!(sc("Bitcoin Wallet Recovery Generator"), ["SC-1"]);
+        assert_eq!(sc("Netflix and Roblox Premium Generator"), ["SC-1", "SC-2"]);
+        assert!(sc("Fortnite Trainer Offline Mod").is_empty());
+        assert!(sc("Roblox Studio Tutorial").is_empty());
+        for w in GAMES {
+            assert!(SERVICES.contains(w), "{w} is a service SC-1 read");
+        }
+        assert_eq!(PackRule::Sc2.pack(), Pack::Scams);
+        assert_eq!(PackRule::Sc2.action(), PackRule::Sc1.action());
     }
 
     #[test]
