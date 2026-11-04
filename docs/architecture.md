@@ -2956,7 +2956,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 Lodestar's reach comes from **many sources, each a plugin you can switch on or off**. The Mainline DHT crawler (§5) is just the first. This section defines the plugin model, ranks every candidate source, sets the roadmap, and specifies how sources share the machine (priority, agents, budgets).
 
 ### 18.1 Plugin model
-- **Compiled in, not dynamically loaded.** Every plugin is a Rust module behind a cargo feature (`src-i2p`, `src-ed2k`, `src-ipfs`, `src-annas`, …).
+- **Compiled in, not dynamically loaded.** Every plugin is a Rust module behind a cargo feature (`src-i2p`, `src-ed2k`, `src-ipfs`, ~~`src-annas`~~ *superseded 2026-11-04, owner §2.38*, …).
   - Official builds include all plugins, **disabled by default except the Mainline DHT**.
   - A `minimal` build flavour leaves out the overlay-network plugins entirely.
   - There are no third-party binaries or ABI issues. WASM-sandboxed community plugins are a post-1.0 idea.
@@ -3065,7 +3065,7 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 | **v0.5** (M2–M3) | **Importer framework**: bitmagnet DB (already planned), **Rutracker dumps**, **MagnetDB** (if access is granted), **Archive Team copies of defunct sites**, **RARBG/magnetico/bitmagnet exports**, **DMM hashlists**. Enrichment (M3): **No-Intro/Redump/TOSEC DATs** | The largest breadth for the least effort, and it solves the cold start. All use one streaming importer framework plus background DHT verification. DAT matching is cheap and fits the M3 enrichment work. |
 | **v0.6** (M4 + early M7) | **Companion manager v1** (§18.10: qBittorrent, Prowlarr + FlareSolverr, gluetun). **Prowlarr/Jackett** (local-only private results; public indexers included), **your download clients**, **Nyaa RSS**, **AnimeTosho**, **BEP 48 full scrape**, **Internet Archive**, **Academic/official lists**; enrichment: **torrent cache** | The top-scoring live sources, once claims/provenance and the unverified tier exist. Prowlarr and a download client need companions, so the manager lands here. The full scrape ships with the M4 tracker scraper. |
 | **v0.7** (M7) | **`usenet` tier** (+ SABnzbd/NZBGet companion), **private-tracker IRC announces**, **direct JSON API plugins** (optional). Enrichment: **srrDB, PreDB (+ live IRC feed), Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid status**. Outputs: **Torznab server, Stremio addon, bitmagnet export** | Turns breadth into findability: ambiguity resolution, multilingual titles, IDs. Usenet rides on the Prowlarr plumbing from v0.6. |
-| **v0.8** | ~~**Anna's Archive / LibGen** (restricted consent)~~ (*superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins*), **Nostr NIP-35**, **Lemmy** (ActivityPub push). Adult sources need no special tier (§20.9) and can arrive with Prowlarr in v0.6 | Anna's Archive scores high but needs the consent framework and a restricted tier. Nostr and Lemmy are lower volume. |
+| **v0.8** | ~~**Anna's Archive / LibGen** (restricted consent)~~ (*superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins*), **Nostr NIP-35**, **Lemmy** (ActivityPub push). Adult sources need no special tier (§20.9) and can arrive with Prowlarr in v0.6 | ~~Anna's Archive scores high but needs the consent framework and a restricted tier.~~ *Superseded 2026-11-04 (owner §2.38).* Nostr and Lemmy are lower volume. |
 | **1.0** | Hardening across all plugins | Contract tests, politeness audits, purge correctness |
 | **v1.1** | **Network-tier infrastructure + I2P** (i2pd companion) | The first overlay network, at your request, for rare content |
 | **v1.2** | **eD2k/Kad** (+ shared-file browsing, aMule companion) | The deepest well of rare content; a new protocol stack |
@@ -3557,6 +3557,7 @@ Packs are signed and versioned. **All six are on by default and shown, checked, 
 | MW-3 | Video + an executable named codec / player / setup / install / unlock | hide | same as MW-2 |
 | MW-4 | `junk:tiny-video` **and** an executable | drop | the combination only |
 | MW-5 | `.scr`/`.pif` anywhere | hide | `unless type:software` with screensaver context |
+| MW-6 | Cracked software: a release the parser classifies as software carrying the `cracked` flag (keygen, crack, activator, pre-activated) | hide | the parser's flag only, never a title that merely contains the word; the software kind is required, so game levels, track titles and film titles with the word aren't matched; the release-parser corpus is its precision set. Owner §2.39 (2026-11-04), added by RP-UC; its own switch, so turning `unauthorised-copy` off doesn't restore cracked software |
 
 **`lures`**
 
@@ -3590,15 +3591,15 @@ Packs are signed and versioned. **All six are on by default and shown, checked, 
 
 | ID | Matches | Action | False-positive guards |
 |---|---|---|---|
-| SC-1 | "Free premium / crack / activator" for **online services** (streaming and music premium APKs, "free Robux/V-Bucks", crypto "wallet recovery", "Bitcoin generator") | hide | offline software cracks aren't covered (a preference, not a scam) |
+| SC-1 | "Free premium / crack / activator" for **online services** (streaming and music premium APKs, "free Robux/V-Bucks", crypto "wallet recovery", "Bitcoin generator") | hide | offline software cracks aren't a scam and aren't matched here; MW-6 covers them (owner §2.39, 2026-11-04) |
 | SC-2 | "Generator / hack" for online-game currencies or accounts | hide | single-player trainers and mods excluded |
 
 **`unauthorised-copy`** (owner, 2026-11-04, §2.39; built on the release parser's fields, with the parser's golden corpus as its test set and a lawful-names set that must never be hidden)
 
 | ID | Matches | Action | False-positive guards |
 |---|---|---|---|
-| UC-1 | Camcorder, telesync, telecine and screener rips of films (`CAM`, `TS`, `TC`, `HDCAM`, `HDTS`, `DVDSCR`, `screener`), which have no lawful release form | hide | none needed beyond the parser's source field; the lexicon rates a bare `ts` token a weak hit, so the rule requires the parsed source field, not the token alone |
-| UC-2 | Cracked software: the parser's `cracked` flag (keygen, crack, activator, pre-activated) on a software release | hide | the same flag feeds the malware pack as a new `cracked` junk reason and rule (MW-6, added by the pack slice); a title merely containing the word is not a flag |
+| UC-1 | Camcorder, telesync, telecine and screener rips of films (`CAM`, `TS`, `TC`, `HDCAM`, `HDTS`, `DVDSCR`, `screener`), which have no lawful public release | hide | none needed beyond the parser's source field; the lexicon rates a bare `ts` token a weak hit, so the rule requires the parsed source field, not the token alone |
+| UC-2 | Cracked software: the parser's `cracked` flag (keygen, crack, activator, pre-activated) on a software release | hide | the same flag feeds the malware pack as a new `cracked` junk reason and rule (MW-6, added by the same slice), so switching this pack off doesn't restore cracked software while MW-6 is on; a title merely containing the word is not a flag |
 | UC-3 | Scene-style film and TV rips: parsed as film or TV, with a disc or web source tag and a release group | hide | items from official sources (Internet Archive, academic lists) exempt; a built-in allow list of public-domain and Creative Commons titles (Big Buck Bunny, Sintel, …); the user's Allow rules |
 
 The pack hides names that follow the conventions of unauthorised copies; it cannot know who holds the rights, and its description in the wizard says so.
