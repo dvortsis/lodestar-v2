@@ -676,3 +676,209 @@ async fn a_late_slot_stays_put() {
     assert!(times.iter().all(|t| in_window(*t)), "{times:?}");
     run.finish().await;
 }
+
+// ---- Streamed replies (SRC-12b) ----
+
+/// A tracker that streams a generated full scrape: `entries` entries of
+/// about 1 KiB each (so the reply is well over the old 16 MiB buffered
+/// limit), in 64 KiB chunks, one every `every` of the paused clock. It
+/// builds each chunk when asked, so the reply never exists whole.
+struct StreamingTracker {
+    entries: u32,
+    every: Duration,
+    /// Requests seen.
+    sent: std::sync::atomic::AtomicUsize,
+}
+
+/// Entry `i`'s info hash: unique per entry.
+fn streamed_hash(i: u32) -> InfoHash {
+    let mut h = [0x77; 20];
+    h[..4].copy_from_slice(&i.to_be_bytes());
+    InfoHash(h)
+}
+
+/// Entry `i`, padded to about 1 KiB with a field the parser skips.
+fn padded_entry(i: u32) -> Vec<u8> {
+    let mut v = b"20:".to_vec();
+    v.extend_from_slice(&streamed_hash(i).0);
+    v.extend_from_slice(b"d8:completei1e1:x960:");
+    v.extend_from_slice(&[b'p'; 960]);
+    v.push(b'e');
+    v
+}
+
+struct StreamingBody {
+    entries: u32,
+    every: Duration,
+    next: u32,
+    started: bool,
+    ended: bool,
+}
+
+impl lodestar_sources::http::BodyStream for StreamingBody {
+    fn next_chunk(
+        &mut self,
+    ) -> lodestar_sources::BoxFuture<'_, Result<Option<Vec<u8>>, lodestar_sources::HttpError>> {
+        Box::pin(async move {
+            tokio::time::sleep(self.every).await;
+            if self.ended {
+                return Ok(None);
+            }
+            let mut chunk = Vec::with_capacity(64 * 1024 + 1024);
+            if !self.started {
+                chunk.extend_from_slice(b"d5:filesd");
+                self.started = true;
+            }
+            while chunk.len() < 64 * 1024 && self.next < self.entries {
+                chunk.extend_from_slice(&padded_entry(self.next));
+                self.next += 1;
+            }
+            if self.next == self.entries {
+                chunk.extend_from_slice(b"ee");
+                self.ended = true;
+            }
+            Ok(Some(chunk))
+        })
+    }
+}
+
+impl lodestar_sources::Fetch for StreamingTracker {
+    fn fetch<'a>(
+        &'a self,
+        _: &'a lodestar_sources::Request,
+    ) -> lodestar_sources::BoxFuture<
+        'a,
+        Result<lodestar_sources::Response, lodestar_sources::HttpError>,
+    > {
+        // The plugin must stream: a buffered fetch is a bug.
+        Box::pin(async { Err(lodestar_sources::HttpError::Transport("buffered".into())) })
+    }
+
+    fn fetch_stream<'a>(
+        &'a self,
+        req: &'a lodestar_sources::Request,
+        _: lodestar_sources::http::StreamLimits,
+    ) -> lodestar_sources::BoxFuture<
+        'a,
+        Result<lodestar_sources::http::StreamResponse, lodestar_sources::HttpError>,
+    > {
+        assert_eq!(req.url, SCRAPE);
+        self.sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let body = Box::new(StreamingBody {
+            entries: self.entries,
+            every: self.every,
+            next: 0,
+            started: false,
+            ended: false,
+        });
+        Box::pin(async move {
+            Ok(lodestar_sources::http::StreamResponse {
+                status: 200,
+                headers: Vec::new(),
+                body,
+            })
+        })
+    }
+}
+
+/// Starts the plugin at 01:00 against `tracker`; collects keys until
+/// `want` have come or the plugin's day is over, and returns them.
+async fn scrape_streamed(tracker: StreamingTracker, want: usize) -> (Vec<InfoHash>, usize) {
+    let p = Arc::new(FullScrape::new(
+        config(),
+        Arc::new(StaticPrivateTrackers::none()),
+        Arc::new(TokioClock::starting_at(MIDNIGHT + HOUR)),
+    ));
+    let tracker = Arc::new(tracker);
+    let mut ctx = FakeCtx::with_fetch(&*p, SourceId::new(9).unwrap(), tracker.clone());
+    let running = ctx.start(p);
+    let mut keys = Vec::new();
+    let t0 = Instant::now();
+    wait_for("the keys, or the scrape's end", || {
+        keys.extend(ctx.drain().into_iter().map(|d| d.found.key));
+        keys.len() >= want || Instant::now() - t0 > full_scrape::STREAM.timeout * 2
+    })
+    .await;
+    running.stop_within().await.unwrap();
+    keys.extend(ctx.drain().into_iter().map(|d| d.found.key));
+    let sent = tracker.sent.load(std::sync::atomic::Ordering::SeqCst);
+    (keys, sent)
+}
+
+/// A 24 MiB reply that takes over six minutes to arrive, past both the
+/// old buffered limit (16 MiB) and the egress's usual timeout (30 s), is
+/// read whole: every key, in order, from one request.
+#[tokio::test(start_paused = true)]
+async fn a_large_slow_reply_is_streamed_whole() {
+    let entries = 24 * 1024;
+    let (keys, sent) = scrape_streamed(
+        StreamingTracker {
+            entries,
+            every: Duration::from_secs(1),
+            sent: Default::default(),
+        },
+        entries as usize,
+    )
+    .await;
+    assert_eq!(sent, 1);
+    assert_eq!(keys.len(), entries as usize);
+    assert!(keys.iter().zip(0..).all(|(k, i)| *k == streamed_hash(i)));
+}
+
+/// A reply slower than the plugin's ten minutes fails closed: the keys of
+/// the entries that came stand, the rest never come, and the day is used.
+#[tokio::test(start_paused = true)]
+async fn a_reply_over_the_plugins_timeout_fails_closed() {
+    let entries = 24 * 1024;
+    // About 63 entries per chunk, one chunk every 30 s: 12 minutes.
+    let (keys, sent) = scrape_streamed(
+        StreamingTracker {
+            entries,
+            every: Duration::from_secs(30),
+            sent: Default::default(),
+        },
+        entries as usize,
+    )
+    .await;
+    assert_eq!(sent, 1);
+    assert!(
+        !keys.is_empty() && keys.len() < entries as usize,
+        "{}",
+        keys.len()
+    );
+    assert!(keys.iter().zip(0..).all(|(k, i)| *k == streamed_hash(i)));
+}
+
+/// A reply over the plugin's 256 MiB cap fails closed at the cap.
+#[tokio::test(start_paused = true)]
+async fn a_reply_over_the_plugins_cap_fails_closed() {
+    // About 270 MiB.
+    let entries = 270 * 1024;
+    let (keys, sent) = scrape_streamed(
+        StreamingTracker {
+            entries,
+            every: Duration::ZERO,
+            sent: Default::default(),
+        },
+        entries as usize,
+    )
+    .await;
+    assert_eq!(sent, 1);
+    let cap = full_scrape::STREAM.max_bytes as usize;
+    // Every entry wholly under the cap came, and none past it.
+    let entry = padded_entry(0).len();
+    assert!(keys.len() < entries as usize);
+    assert!(keys.len() * entry <= cap, "{}", keys.len());
+    assert!((keys.len() + 70) * entry >= cap, "{}", keys.len());
+}
+
+#[test]
+fn the_stream_limits_are_the_plugins_own() {
+    use lodestar_sources::http::STREAM_CEILING;
+    let s = full_scrape::STREAM;
+    assert_eq!(s.max_bytes, 256 * 1024 * 1024);
+    assert_eq!(s.timeout, Duration::from_secs(600));
+    assert_eq!(s.clamped(), s, "within the kit's ceiling");
+    assert!(s.max_bytes < STREAM_CEILING.max_bytes);
+    assert_eq!(full_scrape::REPLY_LIMITS.max_bytes, s.max_bytes);
+}

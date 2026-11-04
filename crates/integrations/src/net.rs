@@ -765,31 +765,50 @@ impl GuardedClient {
         body: Vec<u8>,
         limit: usize,
     ) -> Result<Exchange, NetError> {
-        let method = Method::from_bytes(method.as_bytes()).map_err(|_| NetError::Http)?;
-        let url = Url::parse(url).map_err(|_| NetError::InvalidUrl("it doesn't parse"))?;
-        let mut req = Request::new(method, url);
-        for (name, value) in headers {
-            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                .map_err(|_| NetError::Http)?;
-            let value =
-                reqwest::header::HeaderValue::from_str(value).map_err(|_| NetError::Http)?;
-            req.headers_mut().append(name, value);
-        }
-        if !body.is_empty() {
-            *req.body_mut() = Some(body.into());
-        }
+        let req = build_request(method, url, headers, body)?;
         let resp = self.send(req).await?;
         let status = resp.status().as_u16();
-        let headers = resp
-            .headers()
-            .iter()
-            .filter_map(|(n, v)| Some((n.as_str().to_owned(), v.to_str().ok()?.to_owned())))
-            .collect();
+        let headers = visible_headers(&resp);
         let body = read_limited(resp, limit).await?;
         Ok(Exchange {
             status,
             headers,
             body,
+        })
+    }
+
+    /// One request without following redirects, as
+    /// [`exchange`](Self::exchange), but with the body handed back as a
+    /// [`StreamBody`] read a chunk at a time, never whole. `timeout`
+    /// replaces the client's own for this request and covers everything
+    /// from connecting to the last body byte (connecting is still capped
+    /// at 10 s); the body carries at most `limit` bytes. Both are held to
+    /// [`STREAM_CEILING_BYTES`] and [`STREAM_CEILING_TIMEOUT`] here,
+    /// whatever the caller asks. The same checks as every request: the
+    /// policy's address classes before and after DNS, and the route.
+    pub async fn exchange_stream(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: Vec<u8>,
+        limit: u64,
+        timeout: Duration,
+    ) -> Result<StreamExchange, NetError> {
+        let mut req = build_request(method, url, headers, body)?;
+        *req.timeout_mut() = Some(timeout.min(STREAM_CEILING_TIMEOUT));
+        let limit = limit.min(STREAM_CEILING_BYTES);
+        let resp = self.send(req).await?;
+        if resp.content_length().is_some_and(|n| n > limit) {
+            return Err(NetError::TooLarge);
+        }
+        Ok(StreamExchange {
+            status: resp.status().as_u16(),
+            headers: visible_headers(&resp),
+            body: StreamBody {
+                resp: Some(resp),
+                remaining: limit,
+            },
         })
     }
 
@@ -827,6 +846,88 @@ impl GuardedClient {
         }
         Err(NetError::Redirect)
     }
+}
+
+/// The most body bytes [`GuardedClient::exchange_stream`] reads, whatever
+/// its caller asks.
+pub const STREAM_CEILING_BYTES: u64 = 1024 * 1024 * 1024;
+/// The longest a streamed exchange may take, whatever its caller asks.
+pub const STREAM_CEILING_TIMEOUT: Duration = Duration::from_secs(3600);
+
+/// One HTTP answer whose body is read a chunk at a time
+/// ([`GuardedClient::exchange_stream`]).
+#[derive(Debug)]
+pub struct StreamExchange {
+    pub status: u16,
+    /// Header values that aren't visible ASCII are dropped.
+    pub headers: Vec<(String, String)>,
+    pub body: StreamBody,
+}
+
+/// A response body read a chunk at a time, within a byte limit and the
+/// request's timeout. Dropping it closes the connection's stream.
+pub struct StreamBody {
+    /// `None` once the body has ended or failed: it isn't read again.
+    resp: Option<Response>,
+    remaining: u64,
+}
+
+impl fmt::Debug for StreamBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StreamBody")
+            .field("remaining", &self.remaining)
+            .finish_non_exhaustive()
+    }
+}
+
+impl StreamBody {
+    /// The next chunk, `Ok(None)` at the end. A chunk that would pass the
+    /// limit fails with [`NetError::TooLarge`] and isn't returned. After
+    /// the end or an error, every call returns `Ok(None)` without reading.
+    pub async fn chunk(&mut self) -> Result<Option<Vec<u8>>, NetError> {
+        let Some(resp) = self.resp.as_mut() else {
+            return Ok(None);
+        };
+        let next = match resp.chunk().await {
+            Ok(Some(c)) if c.len() as u64 > self.remaining => Err(NetError::TooLarge),
+            Ok(Some(c)) => {
+                self.remaining -= c.len() as u64;
+                return Ok(Some(c.to_vec()));
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(map_reqwest(e)),
+        };
+        self.resp = None;
+        next
+    }
+}
+
+fn build_request(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: Vec<u8>,
+) -> Result<Request, NetError> {
+    let method = Method::from_bytes(method.as_bytes()).map_err(|_| NetError::Http)?;
+    let url = Url::parse(url).map_err(|_| NetError::InvalidUrl("it doesn't parse"))?;
+    let mut req = Request::new(method, url);
+    for (name, value) in headers {
+        let name =
+            reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| NetError::Http)?;
+        let value = reqwest::header::HeaderValue::from_str(value).map_err(|_| NetError::Http)?;
+        req.headers_mut().append(name, value);
+    }
+    if !body.is_empty() {
+        *req.body_mut() = Some(body.into());
+    }
+    Ok(req)
+}
+
+fn visible_headers(resp: &Response) -> Vec<(String, String)> {
+    resp.headers()
+        .iter()
+        .filter_map(|(n, v)| Some((n.as_str().to_owned(), v.to_str().ok()?.to_owned())))
+        .collect()
 }
 
 /// Maps a reqwest error without keeping its text, which includes the URL.

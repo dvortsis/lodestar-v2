@@ -39,11 +39,11 @@
 //!
 //! **The reply is untrusted.** It is parsed by
 //! [`lodestar_tracker_scrape::full::Parser`], streaming, with caps on
-//! bytes, entries, entry size and depth. Today the kit's `Fetch` hands
-//! back the body whole, up to its 16 MiB `MAX_BODY`, so that is the
-//! largest reply this plugin can use; the parser is fed it in chunks and
-//! emits keys as it goes, so moving to a streamed body changes only the
-//! loop that feeds it.
+//! bytes, entries, entry size and depth. The body is streamed
+//! ([`Client::poll_stream`](lodestar_sources::Client::poll_stream)) under
+//! this plugin's own [`STREAM`] limits (256 MiB, ten minutes, a stall of
+//! a minute), never held whole: each chunk is fed to the parser and its
+//! keys emitted before the next chunk is read.
 
 use std::fmt;
 use std::sync::Arc;
@@ -51,7 +51,7 @@ use std::time::Duration;
 
 use lodestar_integrations::net::{self, NetPolicy};
 use lodestar_sources::claims::{Claims, Confidence, Provenance};
-use lodestar_sources::http::{MAX_BODY, host_key};
+use lodestar_sources::http::{StreamLimits, StreamResponse, host_key};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Distribution, Emitter, Endpoints, Found, HostRate, Kind,
     Kit, Manifest, Network, PluginError, Policy, Priority, Request, Risk, Schedule, SourceCtx,
@@ -74,17 +74,24 @@ pub const PASSKEY_MIN: usize = 16;
 pub const DAY: Duration = Duration::from_secs(24 * 3600);
 /// How often the plugin looks again while the window is open.
 pub const CHECK_EVERY: Duration = Duration::from_secs(15 * 60);
-/// Bytes of the body fed to the parser at a time; the keys found in one
-/// chunk are emitted before the next is parsed.
-pub const CHUNK: usize = 64 * 1024;
 /// The default schedule window, 01:00–07:00 (§18.4).
 pub const WINDOW: Window = Window::new(60, 7 * 60);
 const SCHEDULE: Schedule = Schedule(&[WINDOW]);
 
+/// How large and how slow one tracker's reply may be: 256 MiB within ten
+/// minutes (the largest public trackers' full scrapes, with room), and no
+/// wait over a minute for the headers or any chunk. The schedule window's
+/// close cuts it shorter when that comes first.
+pub const STREAM: StreamLimits = StreamLimits {
+    max_bytes: 256 * 1024 * 1024,
+    timeout: Duration::from_secs(10 * 60),
+    idle: Duration::from_secs(60),
+};
+
 /// The parser's caps for one reply: the defaults, with the byte cap at
-/// the most the kit's `Fetch` returns.
+/// the stream's.
 pub const REPLY_LIMITS: Limits = Limits {
-    max_bytes: MAX_BODY as u64,
+    max_bytes: STREAM.max_bytes,
     ..full::LIMITS
 };
 
@@ -578,22 +585,38 @@ impl FullScrape {
             return Outcome::Done;
         }
         let req = Request::get(t.scrape.clone());
-        let res = match tokio::time::timeout(deadline, kit.http.poll(&t.announce, &req)).await {
-            Ok(Ok(res)) if res.status == 200 => res,
-            _ => return Outcome::Done,
+        let limits = StreamLimits {
+            timeout: STREAM.timeout.min(deadline),
+            ..STREAM
         };
-        emit_reply(&res.body, t, emitter).await
+        let scrape = async {
+            match kit.http.poll_stream(&t.announce, &req, limits).await {
+                Ok(res) if res.status == 200 => emit_reply(res, t, emitter).await,
+                _ => Outcome::Done,
+            }
+        };
+        // The stream's own timeout is the same or sooner; this also bounds
+        // the time spent waiting for the pipeline to take the keys.
+        tokio::time::timeout(deadline, scrape)
+            .await
+            .unwrap_or(Outcome::Done)
     }
 }
 
-/// Parses `body` in [`CHUNK`]s and emits each chunk's keys before the
-/// next. A parse error ends it; the keys already emitted stand, as each
-/// came from a complete entry.
-async fn emit_reply(body: &[u8], t: &Tracker, emitter: &Emitter) -> Outcome {
+/// Feeds the body to the parser a chunk at a time, as it arrives, and
+/// emits each chunk's keys before reading the next. A parse error or a
+/// body that fails (too slow, too large, cut off) ends it; the keys
+/// already emitted stand, as each came from a complete entry.
+async fn emit_reply(mut res: StreamResponse, t: &Tracker, emitter: &Emitter) -> Outcome {
     let mut parser = Parser::new(REPLY_LIMITS);
     let mut keys = Vec::new();
-    for chunk in body.chunks(CHUNK) {
-        let fed = parser.feed(chunk, &mut |b| keys.extend_from_slice(b));
+    loop {
+        let chunk = match res.next_chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(_) => return Outcome::Done,
+        };
+        let fed = parser.feed(&chunk, &mut |b| keys.extend_from_slice(b));
         if send(&mut keys, t, emitter).await == Outcome::Closed {
             return Outcome::Closed;
         }

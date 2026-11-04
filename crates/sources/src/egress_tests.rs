@@ -32,6 +32,20 @@ enum Reply {
     Bytes(Vec<u8>),
     /// Hold the connection open without answering.
     Stall,
+    /// Write the head, then each chunk `every` apart (pacing the server,
+    /// not the test), then close.
+    Dribble {
+        head: Vec<u8>,
+        chunks: Vec<Vec<u8>>,
+        every: Duration,
+    },
+    /// Write these bytes, then hold the connection open.
+    ThenStall(Vec<u8>),
+}
+
+/// A 200 head with no length: the body runs until the connection closes.
+fn open_head() -> Vec<u8> {
+    b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec()
 }
 
 fn ok(body: &str) -> Reply {
@@ -103,6 +117,25 @@ async fn serve(handler: impl Fn(&str) -> Reply + Send + Sync + 'static) -> Serve
                         let _ = sock.shutdown().await;
                     }
                     Reply::Stall => {
+                        let mut sink = [0u8; 64];
+                        while matches!(sock.read(&mut sink).await, Ok(n) if n > 0) {}
+                    }
+                    Reply::Dribble {
+                        head,
+                        chunks,
+                        every,
+                    } => {
+                        let _ = sock.write_all(&head).await;
+                        for c in chunks {
+                            tokio::time::sleep(every).await;
+                            if sock.write_all(&c).await.is_err() {
+                                return;
+                            }
+                        }
+                        let _ = sock.shutdown().await;
+                    }
+                    Reply::ThenStall(b) => {
+                        let _ = sock.write_all(&b).await;
                         let mut sink = [0u8; 64];
                         while matches!(sock.read(&mut sink).await, Ok(n) if n > 0) {}
                     }
@@ -382,6 +415,35 @@ fn egress_down(r: Result<Response, HttpError>) -> String {
     match r {
         Err(e @ HttpError::EgressDown(_)) => e.to_string(),
         other => panic!("expected the kill switch, got {other:?}"),
+    }
+}
+
+/// A streamed request's error text, as [`transport`] gives a buffered one's.
+fn stream_err(r: Result<StreamResponse, HttpError>) -> HttpError {
+    match r {
+        Err(e) => e,
+        Ok(res) => panic!("expected a failed request, got {res:?}"),
+    }
+}
+
+/// Reads a streamed body to its end: the bytes, or the error with what
+/// was read before it.
+async fn read_stream(res: &mut StreamResponse) -> Result<Vec<u8>, (usize, HttpError)> {
+    let mut all = Vec::new();
+    loop {
+        match res.next_chunk().await {
+            Ok(Some(c)) => all.extend_from_slice(&c),
+            Ok(None) => return Ok(all),
+            Err(e) => return Err((all.len(), e)),
+        }
+    }
+}
+
+fn stream_limits(max_bytes: u64, timeout: Duration) -> StreamLimits {
+    StreamLimits {
+        max_bytes,
+        timeout,
+        idle: timeout,
     }
 }
 
@@ -1442,4 +1504,240 @@ async fn a_route_that_dies_between_probes_is_the_kill_switchs_error_not_the_host
     let result = egress.fetch(&Request::get(url)).await;
     assert!(matches!(result, Err(HttpError::Transport(_))), "{result:?}");
     assert_eq!(egress.status().counters.transport_failures, 1);
+}
+
+// ---------------------------------------------------------------- streamed bodies (SRC-12b)
+
+/// A body over `MAX_BODY`, which `fetch` refuses, comes whole through
+/// `fetch_stream` within the plugin's cap.
+#[tokio::test]
+async fn a_body_over_max_body_streams_within_the_plugins_cap() {
+    let big = vec![b'z'; MAX_BODY + 4 * 1024 * 1024];
+    let mut reply = open_head();
+    reply.extend_from_slice(&big);
+    let server = serve(move |_| Reply::Bytes(reply.clone())).await;
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let err = transport(egress.fetch(&Request::get(server.url("/"))).await);
+    assert!(err.contains("too large"), "{err}");
+    let mut res = within(egress.fetch_stream(
+        &Request::get(server.url("/")),
+        stream_limits(64 << 20, DEADLINE),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(res.status, 200);
+    let body = within(read_stream(&mut res)).await.unwrap();
+    assert_eq!(body.len(), big.len());
+    assert!(body.iter().all(|b| *b == b'z'));
+    assert_eq!(egress.status().counters.answered, 1);
+}
+
+/// A body that takes longer than the factory's timeout is read whole
+/// when the plugin's own timeout allows it; `fetch` on the same reply
+/// times out.
+#[tokio::test]
+async fn a_slow_body_streams_past_the_factorys_timeout() {
+    let server = serve(|_| Reply::Dribble {
+        head: open_head(),
+        chunks: vec![b"one,".to_vec(), b"two,".to_vec(), b"three".to_vec()],
+        every: Duration::from_millis(700),
+    })
+    .await;
+    let egress = EgressFactory::with_resolver(Arc::new(NoCredentials), Scripted::new(&[]))
+        .with_timeout(MIN_TIMEOUT)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let err = transport(within(egress.fetch(&Request::get(server.url("/")))).await);
+    assert!(err.contains("timed out"), "{err}");
+    let mut res = within(egress.fetch_stream(
+        &Request::get(server.url("/")),
+        stream_limits(1 << 20, DEADLINE),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        within(read_stream(&mut res)).await.unwrap(),
+        b"one,two,three"
+    );
+}
+
+/// Past the plugin's timeout the transport ends the body, and the
+/// stream fails closed.
+#[tokio::test]
+async fn a_body_past_the_plugins_timeout_fails_closed() {
+    let server = serve(|_| Reply::Dribble {
+        head: open_head(),
+        chunks: (0..20).map(|_| b"slow".to_vec()).collect(),
+        every: Duration::from_millis(400),
+    })
+    .await;
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let mut res = within(egress.fetch_stream(
+        &Request::get(server.url("/")),
+        stream_limits(1 << 20, Duration::from_secs(1)),
+    ))
+    .await
+    .unwrap();
+    let (read, e) = within(read_stream(&mut res)).await.unwrap_err();
+    assert!(read < 80, "{read}");
+    assert!(
+        matches!(&e, HttpError::Transport(t) if t.contains("timed out")),
+        "{e:?}"
+    );
+    // Fused: the transport isn't read again.
+    assert_eq!(res.next_chunk().await, Ok(None));
+    assert_eq!(egress.status().counters.transport_failures, 1);
+}
+
+/// The byte cap holds in the transport: a declared length over it is
+/// refused at the head, and a body that grows past it fails there.
+#[tokio::test]
+async fn a_body_over_the_plugins_cap_fails_closed_in_the_transport() {
+    let server = serve(|line| {
+        if line.contains("/declared") {
+            ok(&"d".repeat(5000))
+        } else {
+            let mut b = open_head();
+            b.extend_from_slice(&[b'u'; 5000]);
+            Reply::Bytes(b)
+        }
+    })
+    .await;
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let e = stream_err(
+        egress
+            .fetch_stream(
+                &Request::get(server.url("/declared")),
+                stream_limits(1000, DEADLINE),
+            )
+            .await,
+    );
+    assert!(
+        matches!(&e, HttpError::Transport(t) if t.contains("too large")),
+        "{e:?}"
+    );
+    let mut res = within(egress.fetch_stream(
+        &Request::get(server.url("/undeclared")),
+        stream_limits(1000, DEADLINE),
+    ))
+    .await
+    .unwrap();
+    let (read, e) = within(read_stream(&mut res)).await.unwrap_err();
+    assert!(read <= 1000, "{read}");
+    assert!(
+        matches!(&e, HttpError::Transport(t) if t.contains("too large")),
+        "{e:?}"
+    );
+}
+
+/// `net` holds a streamed exchange to its own ceiling whatever its
+/// caller asks: a declared length past it is refused.
+#[tokio::test]
+async fn the_transport_holds_its_own_ceiling() {
+    let declared = net::STREAM_CEILING_BYTES + 1;
+    let server = serve(move |_| {
+        Reply::ThenStall(
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\n\r\n").into_bytes(),
+        )
+    })
+    .await;
+    let client =
+        GuardedClient::with_resolver(NetPolicy::download_client(), DEADLINE, Scripted::new(&[]))
+            .unwrap();
+    let e = within(client.exchange_stream(
+        "GET",
+        &server.url("/"),
+        &[],
+        Vec::new(),
+        u64::MAX,
+        Duration::MAX,
+    ))
+    .await
+    .unwrap_err();
+    assert_eq!(e, NetError::TooLarge);
+}
+
+/// The kill switch abandons a body still being read, and refuses a
+/// streamed request before sending while the route is down.
+#[tokio::test]
+async fn the_kill_switch_abandons_a_streamed_body_in_flight() {
+    let mut first = open_head();
+    first.extend_from_slice(b"first");
+    let server = serve(move |_| Reply::ThenStall(first.clone())).await;
+    let mut requests = server.requests;
+    let switch = Arc::new(Switch(AtomicBool::new(true)));
+    let client = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        DEADLINE * 3,
+        Scripted::new(&[]),
+        &Route::Direct,
+    )
+    .unwrap();
+    let egress = Arc::new(PluginEgress::new(
+        "p",
+        RouteKind::Interface,
+        Ok(client),
+        Arc::clone(&switch) as Arc<dyn RouteProbe>,
+        lan(),
+    ));
+    let monitor = {
+        let egress = Arc::clone(&egress);
+        tokio::spawn(async move { egress.monitor(Duration::from_millis(20)).await })
+    };
+    let url = format!("http://{}/", server.addr);
+    let mut res = within(egress.fetch_stream(
+        &Request::get(url.clone()),
+        stream_limits(1 << 20, DEADLINE * 3),
+    ))
+    .await
+    .unwrap();
+    within(requests.recv()).await.unwrap();
+    assert_eq!(within(res.next_chunk()).await.unwrap().unwrap(), b"first");
+    // The body would stall for 30 s; the switch ends it well before the
+    // deadline.
+    let reading = tokio::spawn(async move { res.next_chunk().await });
+    switch.0.store(false, Ordering::SeqCst);
+    let e = within(reading).await.unwrap().unwrap_err();
+    assert!(
+        matches!(&e, HttpError::EgressDown(t) if t.contains("went down in flight")),
+        "{e:?}"
+    );
+    assert_eq!(egress.status().counters.kill_switch_aborts, 1);
+    // Down: refused before anything is sent.
+    let e = stream_err(
+        within(egress.fetch_stream(&Request::get(url), stream_limits(1 << 20, DEADLINE))).await,
+    );
+    assert!(matches!(e, HttpError::EgressDown(_)), "{e:?}");
+    assert_eq!(egress.status().counters.kill_switch_refusals, 1);
+    assert_eq!(server.conns.load(Ordering::SeqCst), 1);
+    monitor.abort();
+}
+
+/// The endpoint policy applies to a streamed request as to any other.
+#[tokio::test]
+async fn a_streamed_request_keeps_the_endpoint_policy() {
+    let server = serve(|_| ok("never")).await;
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::Direct, public_only())
+        .await;
+    let e = stream_err(
+        egress
+            .fetch_stream(
+                &Request::get(server.url("/")),
+                stream_limits(1 << 20, DEADLINE),
+            )
+            .await,
+    );
+    assert!(
+        matches!(&e, HttpError::Transport(t) if t.contains("endpoint policy")),
+        "{e:?}"
+    );
+    assert_eq!(server.conns(), 0);
+    assert_eq!(egress.status().counters.policy_refusals, 1);
 }
