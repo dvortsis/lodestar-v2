@@ -5,7 +5,7 @@
 Lodestar shows this notice once, before first use, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
 
 ## 1. Who publishes Lodestar, and under what licence
-Lodestar is published by its copyright holder, the project owner who maintains the repository at https://github.com/dvortsis/lodestar-v2, together with the contributors named in that repository's history.
+Lodestar is published by its copyright holder, **Benjamin Dvortsis**, who maintains the repository at https://github.com/dvortsis/lodestar-v2, together with the contributors named in that repository's history.
 
 The software is free software under the **GNU Affero General Public License, version 3 or any later version** (the "AGPL"). The AGPL lets you run, study, change and share it. You don't have to accept anything to run it; the confirmation Lodestar asks for is only that you have read this notice. The Lodestar name, logo, mascot and icons are **not** covered by the AGPL; `brand/LICENSE.md` says what you may do with them.
 
