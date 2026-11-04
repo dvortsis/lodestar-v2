@@ -637,11 +637,16 @@ impl Supervisor {
             notices: plan.notices.clone(),
         };
         // `ps` shows `lodestar`, not `/proc/self/fd/<n>`.
-        let child = std::process::Command::new(&plan.program)
+        let mut command = std::process::Command::new(&plan.program);
+        command
             .arg0("lodestar")
             .args(&self.args)
-            .env(control::ENV, hint.encode())
-            .spawn()?;
+            .env(control::ENV, hint.encode());
+        // mimalloc reads its options as it starts (X-thp-off).
+        if let Some((key, value)) = crate::thp::child_env(crate::thp::from_env()) {
+            command.env(key, value);
+        }
+        let child = command.spawn()?;
         // Never `Child::wait`: the reaper collects it. Dropping the handle
         // leaves the process running.
         let raw = child.id() as i32;
