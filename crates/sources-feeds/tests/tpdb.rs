@@ -301,13 +301,13 @@ fn array_cap() {
 
 #[test]
 fn text_cap() {
-    // Every string the parser reads is measured raw: title, type, date,
-    // id, studio and performer names.
+    // Every string of the item the parser reads is measured raw: title,
+    // type, date, id and studio. Over the cap the item is skipped.
     for field in [
         r#""title":"abcdef""#,
         r#""type":"Scene\u0020""#,
+        r#""date":"abcdef""#,
         r#""site":{"name":"abcdef"}"#,
-        r#""performers":[{"id":"p","name":"abcdef"}]"#,
         r#""id":"abcdef""#,
     ] {
         let lead = if field.starts_with(r#""id""#) {
@@ -331,6 +331,55 @@ fn text_cap() {
         let over = at(n - 1);
         assert_eq!((over.page.stop, ids(&over)), (None, vec!["b"]), "{field}");
         assert_eq!(over.page.skipped.over_cap, 1, "{field}");
+    }
+    // A performer's id and name are measured too, but over the cap only
+    // the performer is dropped: the match doesn't depend on whether
+    // performers are read (plan Q4).
+    for field in [
+        r#"{"id":"abcdef","name":"N"}"#,
+        r#"{"id":"p","name":"abcdef"}"#,
+        r#"{"id":"p","name":"\ud800"}"#,
+    ] {
+        let body =
+            format!(r#"{{"data":{{"id":"a","performers":[{field},{{"id":"q","name":"Q"}}]}}}}"#);
+        for max_performers in [0, 2] {
+            let a = with(
+                body.as_bytes(),
+                &Limits {
+                    max_text: 5,
+                    max_performers,
+                    ..WIDE
+                },
+            );
+            assert_eq!((a.page.kept, a.page.skipped.total()), (1, 0), "{field}");
+            let p = &a.found[0].performers;
+            let want = if max_performers == 0 {
+                vec![]
+            } else {
+                vec![performer("q", "Q")]
+            };
+            assert_eq!((&p.list, p.truncated), (&want, true), "{field}");
+        }
+        let a = with(
+            body.as_bytes(),
+            &Limits {
+                max_text: 6,
+                ..WIDE
+            },
+        );
+        let n = if field.contains("ud800") { 1 } else { 2 };
+        assert_eq!(a.found[0].performers.list.len(), n, "{field}");
+    }
+    // An over-long array spoils the item whether performers are read or
+    // not.
+    let body = br#"{"data":{"id":"a","performers":[{"id":"p","name":[1,2,3]}]}}"#;
+    for max_performers in [0, 2] {
+        let l = Limits {
+            max_array: 2,
+            max_performers,
+            ..WIDE
+        };
+        assert_eq!(with(body, &l).page.skipped.over_cap, 1);
     }
     // A long description is never read, so it spoils nothing.
     let long = format!(
@@ -436,6 +485,15 @@ fn field_rules() {
         (y.matched.studio.as_deref(), y.performers.truncated),
         (None, false)
     );
+    // Titles are trimmed after hidden characters go, and after the cut.
+    let t = |raw: &str| {
+        let body = format!(r#"{{"data":{{"id":"a","title":{raw}}}}}"#);
+        parse(body.as_bytes()).found[0].matched.title.clone()
+    };
+    assert_eq!(t(r#"" a \u200b""#).as_deref(), Some("a"));
+    assert_eq!(t(r#""\u200b \u200b""#), None);
+    let cut = format!("\"{} b\"", "a".repeat(MAX_TITLE - 1));
+    assert_eq!(t(&cut), Some("a".repeat(MAX_TITLE - 1)));
     // `meta.total` is a number or nothing.
     assert_eq!(a.page.total, None);
     // Not an object at the root: nothing, no stop.

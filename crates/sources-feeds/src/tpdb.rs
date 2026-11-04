@@ -115,8 +115,10 @@ pub struct Performer {
 pub struct Performers {
     /// At most [`Limits::max_performers`], in the service's order.
     pub list: Vec<Performer>,
-    /// Some were left out: over [`Limits::max_performers`], or an entry
-    /// without a usable id and name, or `performers` not being a list.
+    /// Some were left out: over [`Limits::max_performers`], an entry
+    /// without a usable id and name (a string over [`Limits::max_text`]
+    /// or with a lone surrogate included), or `performers` being neither
+    /// a list nor `null`.
     pub truncated: bool,
 }
 
@@ -332,14 +334,14 @@ impl Parser<'_, '_> {
         }
         if self.j.peek() != Some(b'{') {
             self.j.skip()?;
-            self.page.skipped.malformed += 1;
+            self.page.skipped.malformed = self.page.skipped.malformed.saturating_add(1);
             return Ok(());
         }
         let mut d = Draft::default();
         self.object(|p, k| p.field(&mut d, k))?;
         match d.finish() {
             Ok(f) => {
-                self.page.kept += 1;
+                self.page.kept = self.page.kept.saturating_add(1);
                 emit(f);
             }
             Err(skip) => skip(&mut self.page.skipped),
@@ -354,7 +356,8 @@ impl Parser<'_, '_> {
             "id" if d.id.is_none() => d.id = Some(self.id(d)?),
             "type" if d.kind.is_none() => d.kind = Some(self.text(d)?.and_then(|s| kind(&s))),
             "title" if d.title.is_none() => {
-                let t = self.text(d)?.map(|t| clean_title(t.trim()));
+                // Clean first: a space can sit behind a hidden character.
+                let t = self.text(d)?.map(|t| clean_title(&t).trim().to_owned());
                 d.title = Some(t.filter(|t| !t.is_empty()));
             }
             "date" if d.released.is_none() => {
@@ -402,25 +405,42 @@ impl Parser<'_, '_> {
 
     /// One `performers` entry: its `id` and `name` only. The rest
     /// (`extra`, `bio`, `parent`, images) is passed over undecoded.
+    ///
+    /// A bad string in the `id` or `name` drops only the performer, so
+    /// whether a match is kept doesn't depend on whether performers are
+    /// read ([`Limits::max_performers`], plan Q4). An over-long array
+    /// still spoils the item, read or not, as anywhere in it.
     fn performer(&mut self, d: &mut Draft, list: &mut Performers) -> R<()> {
         if self.j.peek() != Some(b'{') {
             list.truncated = true;
             return self.skip_in(d);
         }
         let (mut pid, mut name) = (None, None);
+        let mut own = Draft::default();
         // Past the cap, the entry is only read past.
         let keep = list.list.len() < self.l.max_performers;
         self.object(|p, k| {
             match k {
-                "id" if keep && pid.is_none() => pid = Some(p.id(d)?),
+                // Only a string (or an id's number) is read with `own`;
+                // anything else is skipped against the item as usual.
+                "id" if keep && pid.is_none() => {
+                    pid = Some(match p.j.peek() {
+                        Some(b'"' | b'-' | b'0'..=b'9') => p.id(&mut own)?,
+                        _ => p.skip_in(d).map(|()| None)?,
+                    });
+                }
                 "name" if keep && name.is_none() => {
-                    name = Some(p.text(d)?.and_then(|s| clean_name(&s)));
+                    name = Some(match p.j.peek() {
+                        Some(b'"') => p.text(&mut own)?.and_then(|s| clean_name(&s)),
+                        _ => p.skip_in(d).map(|()| None)?,
+                    });
                 }
                 _ => p.skip_in(d)?,
             }
             Ok(())
         })?;
-        match (keep, pid.flatten(), name.flatten()) {
+        // `own` holds only the faults of this entry's two strings.
+        match (keep && own.bad.is_none(), pid.flatten(), name.flatten()) {
             (true, Some(id), Some(name)) => list.list.push(Performer { id, name }),
             _ => list.truncated = true,
         }
@@ -436,13 +456,13 @@ impl Draft {
     /// The finished match, or the counter it's skipped under.
     fn finish(self) -> Result<Found, fn(&mut Skipped)> {
         match self.bad {
-            Some(Bad::OverCap) => return Err(|s| s.over_cap += 1),
-            Some(Bad::Malformed) => return Err(|s| s.malformed += 1),
+            Some(Bad::OverCap) => return Err(|s| s.over_cap = s.over_cap.saturating_add(1)),
+            Some(Bad::Malformed) => return Err(|s| s.malformed = s.malformed.saturating_add(1)),
             None => {}
         }
         let id = match self.id {
-            None => return Err(|s| s.no_id += 1),
-            Some(None) => return Err(|s| s.bad_id += 1),
+            None => return Err(|s| s.no_id = s.no_id.saturating_add(1)),
+            Some(None) => return Err(|s| s.bad_id = s.bad_id.saturating_add(1)),
             Some(Some(id)) => id,
         };
         Ok(Found {
