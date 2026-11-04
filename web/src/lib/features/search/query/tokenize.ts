@@ -63,7 +63,10 @@ export const FIELDS = new Set([
 	'trackers',
 	'dht',
 	'seen',
-	'time'
+	'time',
+	'verified',
+	'source',
+	'network'
 ]);
 
 // ASCII whitespace as Rust's `is_ascii_whitespace` (no vertical tab), and the word stops.

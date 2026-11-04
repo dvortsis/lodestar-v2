@@ -146,6 +146,16 @@ jobs:
         os: ${{ fromJSON(needs.changes.outputs.test_os) }}
     runs-on: ${{ matrix.os }}
     steps:
+      # The workspace's test build no longer fits the Linux runner's free
+      # disk (os error 28 on #432 and #434, 2026-11-04). Remove preinstalled
+      # SDKs Lodestar never uses; nothing it builds or tests changes.
+      - name: free disk space
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

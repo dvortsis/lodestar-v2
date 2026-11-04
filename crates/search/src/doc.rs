@@ -7,7 +7,7 @@ use lodestar_store::{FileTree, TorrentRow, flags};
 use tantivy::TantivyDocument;
 use tantivy::tokenizer::PreTokenizedString;
 
-use crate::query::TagKey;
+use crate::query::{Network, TagKey, Verified};
 use crate::schema::Fields;
 use crate::tokenizer::{self, MAX_NAME_TOKENS};
 
@@ -41,6 +41,42 @@ pub struct TorrentDoc {
     pub metadata_at: i64,
     /// What enrichment adds; empty until the torrent is enriched.
     pub enriched: DocEnrichment,
+    /// Where it came from (§18.6, SRC-3).
+    pub provenance: DocProvenance,
+}
+
+/// The provenance fields of a document (§18.6): `verified`, `network`
+/// and `source`. There's no default: each kind of document says what it
+/// is, so one built from claims can't be indexed as verified by
+/// omission (SRC-3b builds those).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocProvenance {
+    pub verified: Verified,
+    pub network: Network,
+    /// The plugin ids of the sources that found it, as [`source_term`]
+    /// gives them.
+    pub sources: Vec<String>,
+}
+
+impl DocProvenance {
+    /// A stored torrent's: verified clearnet BitTorrent metadata
+    /// (`torrents` holds nothing else, §18.5), its sources filled in by
+    /// the indexer.
+    pub fn stored_torrent() -> DocProvenance {
+        DocProvenance {
+            verified: Verified::Yes,
+            network: Network::Bt,
+            sources: Vec::new(),
+        }
+    }
+}
+
+/// A source plugin's id as `source:` indexes it, or `None` when it can't
+/// be one ([`crate::query::source_value`]): such a source isn't
+/// searchable by name. The query parser reads values the same way, so
+/// every indexed term can be asked for.
+pub fn source_term(plugin: &str) -> Option<String> {
+    crate::query::source_value(plugin)
 }
 
 /// The enrichment fields of a document (§6, §8).
@@ -200,6 +236,7 @@ impl TorrentDoc {
             discovered_at: row.discovered_at,
             metadata_at: row.metadata_at,
             enriched: DocEnrichment::default(),
+            provenance: DocProvenance::stored_torrent(),
         }
     }
 
@@ -273,6 +310,12 @@ impl TorrentDoc {
         d.add_u64(f.piece_len, self.piece_len);
         d.add_i64(f.discovered, self.discovered_at);
         d.add_i64(f.metadata, self.metadata_at);
+        let p = &self.provenance;
+        d.add_text(f.verified, p.verified.as_str());
+        d.add_text(f.network, p.network.as_str());
+        for s in &p.sources {
+            d.add_text(f.source, s);
+        }
         d
     }
 }

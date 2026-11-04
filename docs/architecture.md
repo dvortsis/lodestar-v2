@@ -173,7 +173,7 @@ The Mainline DHT crawler is **source plugin #1**. Every other discovery source, 
 
 Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 
-**Safety:** content filtering is a rule engine (§20): the always-on, editable **child-safety core**, rule packs on by default and reviewed in the wizard (owner §2.38), and your own rules and exceptions, with graduated actions (flag / demote / hide / quarantine / drop), live preview, review, and effect warnings with password confirmation for risky changes (no audit log). Hash lists are one kind of rule, and everything runs **before** storage.
+**Safety:** content filtering is a rule engine (§20): the always-on, editable **child-safety core**, rule packs on by default and reviewed in the wizard (owner §2.39), and your own rules and exceptions, with graduated actions (flag / demote / hide / quarantine / drop), live preview, review, and effect warnings with password confirmation for risky changes (no audit log). Hash lists are one kind of rule, and everything runs **before** storage.
 
 ## 7. Storage (SQLite = source of truth)
 
@@ -2480,7 +2480,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - The collection is **24 families × light and dark = 48 themes**. §10.18 names 23 families; the 24th is **Rosewood**, proposed in the palette work (PR #37) and approved.
 - **Filtering decisions (owner, 2026-10-22; `docs/owner-decisions.md` §2.7–2.9):**
   - Config files may only **add** to the locked floor. Removals or weakenings (deleting a hash from `blocklist.files`, a floor-marked list's upstream removals) are refused at start-up and go through the app with the effect warning and password.
-  - Rule packs are off until chosen and pre-checked in the first-run wizard (§20.6), never on by default. **Superseded 2026-11-04 (owner §2.38):** packs are on by default and shown checked in the wizard, where the user can uncheck any.
+  - Rule packs are off until chosen and pre-checked in the first-run wizard (§20.6), never on by default. **Superseded 2026-11-04 (owner §2.39):** packs are on by default and shown checked in the wizard, where the user can uncheck any.
   - Blocklist subscriptions are off by default and chosen in the wizard or Settings, with a warning matched to how strict the chosen lists are. The §20.13 refresh mechanics stay as designed.
 - **Riverstone colour-blind figures corrected** in §10.18. The palette is unchanged by owner decision.
 - **The build runs as parallel slices** (`docs/build-plan.md`, `runner/`).
@@ -2488,7 +2488,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
 
 **M5 decisions (filtering, owner 2026-10-22):**
-- **Rule packs are off until chosen (§2.8, §20.6).** With nothing stored, `pack_switches` starts from no pack on. Packs turn on only through a stored choice: the wizard (pre-checked there) or Settings through the filters API. The guards and pack logic are unchanged. **Superseded 2026-11-04 (owner §2.38):** with nothing stored, every pack is on; the wizard shows them for review and a stored choice records what the user switched off.
+- **Rule packs are off until chosen (§2.8, §20.6).** With nothing stored, `pack_switches` starts from no pack on. Packs turn on only through a stored choice: the wizard (pre-checked there) or Settings through the filters API. The guards and pack logic are unchanged. **Superseded 2026-11-04 (owner §2.39):** with nothing stored, every pack is on; the wizard shows them for review and a stored choice records what the user switched off.
 - **The 50 µs budget is the owner's (§1.6.6, §20.8).** `LODESTAR_BUDGET_US` is gone. The `filter budget` CI job runs the gate in release.
   - **The first gate wasn't honest.** It judged one torrent, over and over, against rules none of whose words it had, so the narrowing skipped 99% of them. The review made 10% of the rules candidates that matched nothing and measured 16.8–17.0 ms per torrent.
   - **The gate now** judges a varied set of 512 torrents with 1%, 10% and 25% of the rules built on words they have, and about 40 rules per torrent that get the full match (§20.8). It holds the core, 1% and 10%; 25% is reported.
@@ -3380,7 +3380,7 @@ Filtering must **block exactly what it's meant to block** and **avoid false posi
 | Layer | Edited by | Can be disabled? | Purpose |
 |---|---|---|---|
 | **Child-safety core** | Ships as signed, versioned base rules, **all on by default**. **You can edit every rule**, add your own, and **switch off any non-floor rule** (§20.5.3) | **The core as a whole: no.** It runs on every source, network, importer and worker. Its **locked floor** (CS-1a/1b, CS-8a) is always on. Non-floor rules can be switched off individually, and **CSX-5** (your override list, keywords included) overrides any non-floor rule | Keep CSAM out of the index |
-| **Rule packs** | Curated, signed packs, on by default and reviewed in the wizard (§20.6, owner §2.38) | Yes, per pack and per rule | Malware, lures, fakes, spam, scams, unauthorised-copy patterns |
+| **Rule packs** | Curated, signed packs, on by default and reviewed in the wizard (§20.6, owner §2.39) | Yes, per pack and per rule | Malware, lures, fakes, spam, scams, unauthorised-copy patterns |
 | **Your rules and exceptions** | You | Yes | Anything else you want blocked, hidden, demoted or flagged, and exceptions to packs and to your own rules |
 
 **Evaluation order:**
@@ -3546,7 +3546,7 @@ Plain-text must-not-match fixtures ship with them: *Sex Education S02E03 – The
 **Precision in the curated base:** single ambiguous words never trigger on their own (e.g. "teen", common in legal adult marketing for 18–19-year-olds). Rules need multiple independent indicators, with stricter thresholds inside Adult (§20.9).
 
 ### 20.6 Rule packs (built in)
-Packs are signed and versioned. **All six are on by default and shown, checked, in the first-run wizard for review; the user can uncheck any pack or rule there or in Settings** (owner, 2026-11-04, §2.38, which supersedes the earlier "off until chosen"). Each ships with its test corpus and changelog, and every rule can be toggled. Packs reuse the M3 junk reasons (`classify::junk`), so the junk score and the packs never disagree.
+Packs are signed and versioned. **All six are on by default and shown, checked, in the first-run wizard for review; the user can uncheck any pack or rule there or in Settings** (owner, 2026-11-04, §2.39, which supersedes the earlier "off until chosen"). Each ships with its test corpus and changelog, and every rule can be toggled. Packs reuse the M3 junk reasons (`classify::junk`), so the junk score and the packs never disagree.
 
 **`malware`**
 
@@ -3593,7 +3593,7 @@ Packs are signed and versioned. **All six are on by default and shown, checked, 
 | SC-1 | "Free premium / crack / activator" for **online services** (streaming and music premium APKs, "free Robux/V-Bucks", crypto "wallet recovery", "Bitcoin generator") | hide | offline software cracks aren't covered (a preference, not a scam) |
 | SC-2 | "Generator / hack" for online-game currencies or accounts | hide | single-player trainers and mods excluded |
 
-**`unauthorised-copy`** (owner, 2026-11-04, §2.38; built on the release parser's fields, with the parser's golden corpus as its test set and a lawful-names set that must never be hidden)
+**`unauthorised-copy`** (owner, 2026-11-04, §2.39; built on the release parser's fields, with the parser's golden corpus as its test set and a lawful-names set that must never be hidden)
 
 | ID | Matches | Action | False-positive guards |
 |---|---|---|---|
@@ -3610,7 +3610,7 @@ The pack hides names that follow the conventions of unauthorised copies; it cann
   - entries are exact torrents, keywords (normalized the same way the core normalizes, so evasion doesn't help) or queries, with an optional scope, an expiry and a shadow period;
   - *Neutralize term* takes one word. It removes that word's evidence from the core and from query rules.
 - **Exceptions** are per rule, by exact torrents, payload or query. The floor takes none. *Always allow* skips your rules and the packs.
-- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. **Packs are on by default** (owner, 2026-11-04, §2.38, superseding "off until chosen"): with nothing stored, every pack is on; the first-run wizard shows all of them checked for review, and the user switches any off there or in Settings through the filters API. Until that slice lands, the code still starts from no pack on. Not yet built:
+- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. **Packs are on by default** (owner, 2026-11-04, §2.39, superseding "off until chosen"): with nothing stored, every pack is on; the first-run wizard shows all of them checked for review, and the user switches any off there or in Settings through the filters API. Until that slice lands, the code still starts from no pack on. Not yet built:
   - FK-3, which needs TMDB release dates;
   - SP-3, which needs per-publisher rates;
   - SP-4, which needs a signature index of hidden items.

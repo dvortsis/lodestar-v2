@@ -18,8 +18,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use lodestar_filter::load::{STAND_INS_KEY, StandIn, StandIns};
-use lodestar_search::parse;
+use lodestar_filter::load::{STAND_INS_KEY, StandIn, StandIns, stored_rule_reads};
 use lodestar_store::{HoldRow, Store};
 
 use super::{Action, FiltersApi, Pending, set_pending_requeues, stopping};
@@ -129,9 +128,9 @@ fn rule_reads(store: &Store, label: &str) -> ApiResult<bool> {
     let id: i64 = label[2..].parse().map_err(internal)?;
     let set = store.rule_set().map_err(internal)?;
     Ok(set.rules.iter().find(|r| r.id == id).is_none_or(|r| {
-        parse(&r.query).is_ok()
+        stored_rule_reads(&r.query)
             && Action::from_code(r.action).is_some()
-            && r.unless_query.as_deref().is_none_or(|u| parse(u).is_ok())
+            && r.unless_query.as_deref().is_none_or(stored_rule_reads)
     }))
 }
 
