@@ -196,6 +196,34 @@ fn no_performer_ids() {
     }
 }
 
+/// Both enrichment parsers cut a title the same way (`common::title`,
+/// the runner's D4): a multi-byte character across `MAX_TITLE` is dropped
+/// whole, never split, and the result is trimmed after the cut.
+#[test]
+fn both_parsers_cut_titles_alike() {
+    use lodestar_sources_feeds::stashdb;
+    let long = "a".repeat(MAX_TITLE - 1);
+    let fits = "a".repeat(MAX_TITLE - 2);
+    for (raw, want) in [
+        (format!("{long}é…"), long.clone()),
+        (format!("{long}\\u00e9…"), long.clone()),
+        (format!("{fits}é…"), format!("{fits}é")),
+        (format!(" {long} b"), long.clone()),
+    ] {
+        let t = parse(format!(r#"{{"data":{{"id":"a","title":"{raw}"}}}}"#).as_bytes());
+        let s = stashdb::parse(
+            format!(
+                r#"{{"data":{{"findScene":{{"id":"00000000-0000-4000-8000-000000000001","title":"{raw}"}}}}}}"#
+            )
+            .as_bytes(),
+        );
+        let tt = t.found[0].matched.title.as_deref();
+        let st = s.scenes[0].matched.title.as_deref();
+        assert_eq!(tt, Some(want.as_str()));
+        assert_eq!(st, tt);
+    }
+}
+
 fn fixtures() -> Vec<std::path::PathBuf> {
     let mut v: Vec<_> = std::fs::read_dir(DIR)
         .unwrap()
