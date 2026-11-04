@@ -18,12 +18,15 @@
 //! file. Metadata comes from the DHT, as for any unverified key.
 //!
 //! **The cursor** is the newest `publicdate` seen, in Unix seconds, kept
-//! under [`CURSOR_KEY`] in the plugin's [`PluginState`]. It is saved after
-//! a page's finds are sent, so a restart resumes where it stopped and
-//! repeats at most one page (the pipeline already drops keys it has). A
-//! first run, or an unreadable cursor, starts [`FIRST_WINDOW`] back: the
-//! plugin follows what is new and never backfills the Archive. A full page
-//! is followed at once by the next, at most [`MAX_PAGES`] a poll.
+//! under [`CURSOR_KEY`] in the plugin's [`PluginState`]. A poll asks for
+//! items from [`LOOKBACK`] before it (inclusive, so a second shared by
+//! several items is never split) and reads pages `1..` of that one query,
+//! so a page boundary can't lose an item. The cursor is saved after a
+//! page's finds are sent, so a restart resumes close to where it stopped
+//! (the pipeline already drops keys it has). A first run, or an
+//! unreadable cursor, starts [`FIRST_WINDOW`] back: the plugin follows
+//! what is new and never backfills the Archive. A full page is followed at
+//! once by the next, at most [`MAX_PAGES`] a poll.
 //!
 //! **Pace.** One poll an hour ([`POLICY`]); the follow-up pages of one
 //! poll go through `Client::send`, so the per-host rate (one request a
@@ -57,8 +60,16 @@ pub const HOST: &str = "archive.org";
 pub const CURSOR_KEY: &str = "since";
 /// Rows asked for per page. Under the parser's item cap.
 pub const ROWS: u32 = 500;
-/// Pages followed in one poll: at most 5,000 items.
-pub const MAX_PAGES: u32 = 10;
+/// Pages followed in one poll: at most 10,000 items.
+pub const MAX_PAGES: u32 = 20;
+/// How far before the cursor each poll's query starts. An item is public
+/// from its `publicdate`, but its Archive torrent (and so its `btih` and
+/// the format the query asks for) appears only after the Archive's derive
+/// step, which can take hours for large items. Asking again for the last
+/// [`LOOKBACK`] picks those up. The cost is that the window is fetched
+/// again each poll and the pipeline drops the keys it has. An assumption,
+/// to be checked against the live Archive before SRC-G.
+pub const LOOKBACK: i64 = 6 * 3600;
 /// How far back a first run starts: one day.
 pub const FIRST_WINDOW: i64 = 24 * 3600;
 
@@ -192,11 +203,18 @@ enum Poll {
 }
 
 async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn() -> i64) -> Poll {
-    let mut since = load_cursor(state, now()).await;
+    let saved = load_cursor(state, now()).await;
+    // The query starts a lookback before the cursor (see `LOOKBACK`), or a
+    // day back on a first run, and stays put while its pages are read.
+    let from = match saved {
+        Some(c) => (c - LOOKBACK).max(MIN_PUBLISHED),
+        None => (now() - FIRST_WINDOW).max(MIN_PUBLISHED),
+    };
+    let mut cursor = saved.unwrap_or(0);
     let mut seen = HashSet::new();
-    for page in 0..MAX_PAGES {
-        let req = Request::get(search_url(since)).header("Accept", "application/json");
-        let sent = if page == 0 {
+    for page in 1..=MAX_PAGES {
+        let req = Request::get(search_url(from, page)).header("Accept", "application/json");
+        let sent = if page == 1 {
             http.poll("search", &req).await
         } else {
             http.send(&req).await
@@ -205,8 +223,8 @@ async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn
             Ok(res) if res.status == 200 => res.body,
             _ => return Poll::Done,
         };
-        let (at, mut found, mut newest) = (now(), Vec::new(), since);
-        let page_info = archive_org::parse_each(&body, &PAGE_LIMITS, |item| {
+        let (at, mut found, mut newest) = (now(), Vec::new(), cursor);
+        let info = archive_org::parse_each(&body, &PAGE_LIMITS, |item| {
             if let Some(t) = item.published.filter(|t| plausible(*t, at)) {
                 newest = newest.max(t);
             }
@@ -224,13 +242,11 @@ async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn
         }
         // Saved after the finds are sent: a restart repeats a page at
         // worst, and never skips one.
-        let advanced = newest > since;
-        if advanced {
-            since = newest;
-            save_cursor(state, since).await;
+        if newest > cursor {
+            cursor = newest;
+            save_cursor(state, cursor).await;
         }
-        let docs = page_info.summary.kept + page_info.summary.skipped.total();
-        if docs < ROWS || !advanced {
+        if info.summary.kept + info.summary.skipped.total() < ROWS {
             break;
         }
     }
@@ -247,14 +263,13 @@ fn plausible(t: i64, now: i64) -> bool {
     (MIN_PUBLISHED..=now.saturating_add(MAX_FUTURE)).contains(&t)
 }
 
-/// The saved cursor, or a day back from `now` when there is none or it is
-/// unreadable or implausible.
-async fn load_cursor(state: &dyn PluginState, now: i64) -> i64 {
-    let saved = match state.get(CURSOR_KEY).await {
+/// The saved cursor, or `None` when there is none or it is unreadable or
+/// implausible.
+async fn load_cursor(state: &dyn PluginState, now: i64) -> Option<i64> {
+    match state.get(CURSOR_KEY).await {
         Ok(Some(v)) => parse_cursor(&v, now),
         _ => None,
-    };
-    saved.unwrap_or_else(|| (now - FIRST_WINDOW).max(MIN_PUBLISHED))
+    }
 }
 
 /// Digits only, a believable date.
@@ -271,18 +286,18 @@ async fn save_cursor(state: &dyn PluginState, since: i64) {
     let _ = state.set(CURSOR_KEY, since.to_string().into_bytes()).await;
 }
 
-/// The search request for items published after `since` (Unix seconds):
+/// The search request for items published from `since` (Unix seconds, inclusive), page `page` (from 1):
 /// items with an Archive torrent, oldest first. Built from fixed text and
 /// the cursor's digits, so nothing in it comes from an answer.
-pub fn search_url(since: i64) -> String {
+pub fn search_url(since: i64, page: u32) -> String {
     let (y, mo, d, h, mi, s) = civil(since);
     format!(
         "https://{HOST}/advancedsearch.php\
-         ?q=format%3A%22Archive%20BitTorrent%22%20AND%20publicdate%3A%7B\
+         ?q=format%3A%22Archive%20BitTorrent%22%20AND%20publicdate%3A%5B\
          {y:04}-{mo:02}-{d:02}T{h:02}%3A{mi:02}%3A{s:02}Z%20TO%20%2A%5D\
          &fl%5B%5D=identifier&fl%5B%5D=btih&fl%5B%5D=title&fl%5B%5D=item_size\
          &fl%5B%5D=mediatype&fl%5B%5D=collection&fl%5B%5D=publicdate\
-         &sort%5B%5D=publicdate%20asc&rows={ROWS}&page=1&output=json"
+         &sort%5B%5D=publicdate%20asc&rows={ROWS}&page={page}&output=json"
     )
 }
 
@@ -327,7 +342,8 @@ pub fn content_type(mediatype: &str) -> Option<&'static str> {
 /// - The identifier becomes `archive-org:<identifier>`, the media type
 ///   `archive-mediatype:<type>` and, when known, `content-type:<type>`
 ///   ([`content_type`]), and each collection `archive-collection:<id>`.
-/// - Files, where an item lists them, become file claims.
+/// - Files, where an item lists them, become file claims. A list the
+///   parser marked truncated is still true, only partial.
 pub fn to_found(item: Item, now: i64) -> Option<Found> {
     let key = item.hashes.key()?;
     let mut ids = Vec::new();

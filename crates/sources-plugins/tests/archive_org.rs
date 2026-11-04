@@ -23,7 +23,8 @@ use lodestar_sources::{
 };
 use lodestar_sources_feeds::archive_org::{File, Hashes, Item};
 use lodestar_sources_plugins::archive_org::{
-    self, ArchiveOrg, CURSOR_KEY, FIRST_WINDOW, MAX_SIZE, ROWS, content_type, search_url, to_found,
+    self, ArchiveOrg, CURSOR_KEY, FIRST_WINDOW, LOOKBACK, MAX_PAGES, MAX_SIZE, ROWS, content_type,
+    search_url, to_found,
 };
 use lodestar_store::SourceId;
 use proptest::prelude::*;
@@ -73,11 +74,14 @@ async fn replay_with(
     }
     let state = ctx.state.clone();
     let running = ctx.start(p.clone());
+    // Drain while waiting: the pipeline's channel is bounded, and a plugin
+    // with more finds than it holds waits for the reader.
+    let mut got = Vec::new();
     wait_for("the recorded requests", || {
+        got.extend(ctx.drain());
         replayer.requests().len() >= requests
     })
     .await;
-    let mut got = Vec::new();
     wait_for("the discoveries", || {
         got.extend(ctx.drain());
         got.len() >= finds
@@ -108,15 +112,23 @@ fn scratch(name: &str) -> PathBuf {
 
 /// Writes exchange `n` of a scratch fixture: a 200 answer to the search
 /// after `since`.
-fn write_exchange(dir: &Path, n: usize, since: i64, body: &str) {
+fn write_exchange(dir: &Path, n: usize, from: i64, page: u32, body: &str) {
+    write_status(dir, n, from, page, 200, "Content-Type: application/json\n");
+    write_body(dir, n, body);
+}
+
+fn write_status(dir: &Path, n: usize, from: i64, page: u32, status: u16, headers: &str) {
     std::fs::write(
         dir.join(format!("{n:03}.http")),
         format!(
-            "GET {}\nAccept: application/json\n\nHTTP 200\nContent-Type: application/json\n",
-            search_url(since)
+            "GET {}\nAccept: application/json\n\nHTTP {status}\n{headers}",
+            search_url(from, page)
         ),
     )
     .unwrap();
+}
+
+fn write_body(dir: &Path, n: usize, body: &str) {
     std::fs::write(dir.join(format!("{n:03}.body")), body).unwrap();
 }
 
@@ -172,8 +184,8 @@ async fn a_normal_page_is_found_and_the_cursor_moves_to_the_newest() {
         .into_iter()
         .map(|(_, r)| r.url)
         .collect();
-    assert_eq!(urls[0], search_url(NOW - FIRST_WINDOW));
-    assert_eq!(urls[1], search_url(NEWEST));
+    assert_eq!(urls[0], search_url(NOW - FIRST_WINDOW, 1));
+    assert_eq!(urls[1], search_url(NEWEST - LOOKBACK, 1));
     let times: Vec<_> = replayer.requests().into_iter().map(|(at, _)| at).collect();
     assert!(times[1] - times[0] >= POLL);
     assert_eq!(cursor.as_deref(), Some(NEWEST.to_string().as_bytes()));
@@ -231,7 +243,7 @@ async fn an_empty_answer_finds_nothing_and_the_cursor_stays() {
     assert_spacing(&replayer, POLL);
     assert_eq!(cursor, None, "nothing new, nothing saved");
     for (_, req) in replayer.requests() {
-        assert_eq!(req.url, search_url(NOW - FIRST_WINDOW));
+        assert_eq!(req.url, search_url(NOW - FIRST_WINDOW, 1));
     }
 }
 
@@ -239,11 +251,12 @@ async fn an_empty_answer_finds_nothing_and_the_cursor_stays() {
 async fn a_saved_cursor_resumes_without_refetching() {
     // After a restart the first request is the one after the saved cursor.
     let dir = scratch("resume");
-    write_exchange(&dir, 1, NEWEST, r#"{"response":{"numFound":0,"docs":[]}}"#);
-    write_exchange(&dir, 2, NEWEST, r#"{"response":{"numFound":0,"docs":[]}}"#);
+    let from = NEWEST - LOOKBACK;
+    write_exchange(&dir, 1, from, 1, r#"{"response":{"numFound":0,"docs":[]}}"#);
+    write_exchange(&dir, 2, from, 1, r#"{"response":{"numFound":0,"docs":[]}}"#);
     let (_, replayer, cursor) = replay_with(&dir, Some(NEWEST.to_string().as_bytes()), 2, 0).await;
     assert_eq!(cursor.as_deref(), Some(NEWEST.to_string().as_bytes()));
-    assert_eq!(replayer.requests()[0].1.url, search_url(NEWEST));
+    assert_eq!(replayer.requests()[0].1.url, search_url(from, 1));
 }
 
 #[tokio::test(start_paused = true)]
@@ -261,7 +274,7 @@ async fn an_unreadable_or_implausible_cursor_starts_a_day_back() {
         let (_, replayer, _) = replay_with(&fixture("archive_empty"), Some(bad), 2, 0).await;
         assert_eq!(
             replayer.requests()[0].1.url,
-            search_url(NOW - FIRST_WINDOW),
+            search_url(NOW - FIRST_WINDOW, 1),
             "{bad:?}"
         );
     }
@@ -308,11 +321,12 @@ async fn an_answer_over_the_item_cap_is_cut_off_and_followed_up() {
     let cap = archive_org::PAGE_LIMITS.max_items;
     let dir = scratch("oversized");
     let start = 1_793_664_000;
-    write_exchange(&dir, 1, NOW - FIRST_WINDOW, &docs(0, cap + 100, start));
+    write_exchange(&dir, 1, NOW - FIRST_WINDOW, 1, &docs(0, cap + 100, start));
     write_exchange(
         &dir,
         2,
-        start + cap as i64 - 1,
+        NOW - FIRST_WINDOW,
+        2,
         r#"{"response":{"numFound":0,"docs":[]}}"#,
     );
     let (got, _, _) = replay_with(&dir, None, 2, cap).await;
@@ -324,9 +338,9 @@ async fn a_full_page_is_followed_by_the_next_a_second_later() {
     let dir = scratch("paging");
     let start = 1_793_664_000;
     let n = ROWS as usize;
-    write_exchange(&dir, 1, NOW - FIRST_WINDOW, &docs(0, n, start));
+    write_exchange(&dir, 1, NOW - FIRST_WINDOW, 1, &docs(0, n, start));
     let last = start + n as i64 - 1;
-    write_exchange(&dir, 2, last, &docs(n, 2, last + 1));
+    write_exchange(&dir, 2, NOW - FIRST_WINDOW, 2, &docs(n, 2, last + 1));
     let (got, replayer, cursor) = replay_with(&dir, None, 2, n + 2).await;
     assert_eq!(got.len(), n + 2);
     let times: Vec<_> = replayer.requests().into_iter().map(|(at, _)| at).collect();
@@ -343,7 +357,7 @@ async fn a_429_backs_off_for_its_retry_after_then_polling_resumes() {
     let (got, replayer) = replay("archive_429", 2, 1).await;
     let times: Vec<_> = replayer.requests().into_iter().map(|(at, _)| at).collect();
     assert!(
-        times[1] - times[0] >= Duration::from_secs(1800),
+        times[1] - times[0] >= Duration::from_secs(7200),
         "retried after {:?}",
         times[1] - times[0]
     );
@@ -405,15 +419,15 @@ fn manifest_and_policy() {
 
 #[test]
 fn the_request_is_fixed_text_and_the_cursor() {
-    let url = search_url(NOW - FIRST_WINDOW);
+    let url = search_url(NOW - FIRST_WINDOW, 1);
     assert!(url.starts_with("https://archive.org/advancedsearch.php?q="));
-    assert!(url.contains("publicdate%3A%7B2026-11-02T12%3A00%3A00Z%20TO"));
+    assert!(url.contains("publicdate%3A%5B2026-11-02T12%3A00%3A00Z%20TO"));
     assert!(url.contains("rows=500") && url.contains("output=json"));
     assert!(!url.contains(' ') && !url.contains('"'));
     // The date arithmetic across a leap day and the epoch.
-    assert!(search_url(0).contains("1970-01-01T00%3A00%3A00Z"));
-    assert!(search_url(1_709_164_800).contains("2024-02-29T00%3A00%3A00Z"));
-    assert!(search_url(1_709_251_199).contains("2024-02-29T23%3A59%3A59Z"));
+    assert!(search_url(0, 1).contains("1970-01-01T00%3A00%3A00Z"));
+    assert!(search_url(1_709_164_800, 1).contains("2024-02-29T00%3A00%3A00Z"));
+    assert!(search_url(1_709_251_199, 1).contains("2024-02-29T23%3A59%3A59Z"));
 }
 
 #[test]
@@ -524,7 +538,102 @@ proptest! {
 
     #[test]
     fn the_cursor_dates_never_panic(t in any::<i64>()) {
-        let url = search_url(t);
+        let url = search_url(t, 1);
         prop_assert!(url.is_ascii() && !url.contains(' '));
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn items_sharing_a_second_across_a_page_boundary_are_all_found() {
+    // 500 docs and then 2 more, all in the same second: the second page
+    // is the same query, so nothing at the boundary is lost.
+    let dir = scratch("ties");
+    let t = 1_793_664_000;
+    let n = ROWS as usize;
+    let page1: String = {
+        let d: Vec<String> = (0..n)
+            .map(|i| {
+                format!(
+                    r#"{{"identifier":"i{i}","btih":"{:040x}","publicdate":"{}"}}"#,
+                    i + 1,
+                    rfc3339(t)
+                )
+            })
+            .collect();
+        format!(r#"{{"response":{{"docs":[{}]}}}}"#, d.join(","))
+    };
+    let page2 = format!(
+        r#"{{"response":{{"docs":[{{"identifier":"x1","btih":"{:040x}","publicdate":"{}"}},{{"identifier":"x2","btih":"{:040x}","publicdate":"{}"}}]}}}}"#,
+        n + 1,
+        rfc3339(t),
+        n + 2,
+        rfc3339(t)
+    );
+    write_exchange(&dir, 1, NOW - FIRST_WINDOW, 1, &page1);
+    write_exchange(&dir, 2, NOW - FIRST_WINDOW, 2, &page2);
+    let (got, _, cursor) = replay_with(&dir, None, 2, n + 2).await;
+    assert_eq!(got.len(), n + 2);
+    assert_eq!(cursor.as_deref(), Some(t.to_string().as_bytes()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_full_page_of_skipped_items_does_not_stall_the_poll() {
+    // 500 docs with no hash: nothing kept, the cursor can't move, and the
+    // next page is still read.
+    let dir = scratch("skipped");
+    let n = ROWS as usize;
+    let page1: String = {
+        let d: Vec<String> = (0..n)
+            .map(|i| format!(r#"{{"identifier":"i{i}","title":"No torrent"}}"#))
+            .collect();
+        format!(r#"{{"response":{{"docs":[{}]}}}}"#, d.join(","))
+    };
+    write_exchange(&dir, 1, NOW - FIRST_WINDOW, 1, &page1);
+    write_exchange(&dir, 2, NOW - FIRST_WINDOW, 2, &docs(0, 1, 1_793_664_000));
+    let (got, _, cursor) = replay_with(&dir, None, 2, 1).await;
+    assert_eq!(got.len(), 1);
+    assert!(cursor.is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_poll_reads_at_most_max_pages_pages() {
+    let dir = scratch("max_pages");
+    let n = ROWS as usize;
+    let start = 1_793_664_000;
+    for p in 1..=MAX_PAGES {
+        let first = (p as usize - 1) * n;
+        write_exchange(
+            &dir,
+            p as usize,
+            NOW - FIRST_WINDOW,
+            p,
+            &docs(first, n, start + first as i64),
+        );
+    }
+    let total = MAX_PAGES as usize * n;
+    let (got, replayer, cursor) = replay_with(&dir, None, MAX_PAGES as usize, total).await;
+    assert_eq!(got.len(), total);
+    // The next page waits for the next poll, which starts closer to the
+    // saved cursor.
+    assert_eq!(replayer.requests().len(), MAX_PAGES as usize);
+    assert_eq!(
+        cursor.as_deref(),
+        Some((start + total as i64 - 1).to_string().as_bytes())
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_429_on_a_follow_up_page_keeps_the_finds_so_far_and_the_cursor() {
+    let dir = scratch("followup_429");
+    let n = ROWS as usize;
+    let start = 1_793_664_000;
+    write_exchange(&dir, 1, NOW - FIRST_WINDOW, 1, &docs(0, n, start));
+    write_status(&dir, 2, NOW - FIRST_WINDOW, 2, 429, "Retry-After: 7200\n");
+    let (got, replayer, cursor) = replay_with(&dir, None, 2, n).await;
+    assert_eq!(got.len(), n);
+    assert_eq!(replayer.requests().len(), 2);
+    assert_eq!(
+        cursor.as_deref(),
+        Some((start + n as i64 - 1).to_string().as_bytes())
+    );
 }
