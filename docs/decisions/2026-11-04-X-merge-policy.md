@@ -1,6 +1,8 @@
 # X-merge-policy decisions
 
-Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-approved under owner §2.33). Soak r4 (rc.3, with #406's mmap prune) had a provisional slope over hours 12–14 of 23 MiB/h, 95% CI [15.6, 30.6]. The runner's static analysis (`notes/r4-retainer-analysis.md` on runner-state) ranked tantivy's default `LogMergePolicy` as the first suspect. This file records Phase 1, a measurement with no production change. **Status: Phase 1 is reported, and Phase 2 waits on the runner's ruling.**
+Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-approved under owner §2.33). Soak r4 (rc.3, with #406's mmap prune) had a provisional slope over hours 12–14 of 23 MiB/h, 95% CI [15.6, 30.6]. The runner's static analysis (`notes/r4-retainer-analysis.md` on runner-state) ranked tantivy's default `LogMergePolicy` as the first suspect. This file records Phase 1, a measurement with no production change.
+
+**Outcome: a negative result, set down as a negative result.** Neither the merge policy nor the commit cadence passed the rule fixed in advance. The runner closed the slice after Phase 1 (2026-11-04, 18:01Z and 19:00Z): no Phase 2, no edit to `index.rs`. The commit cadence (M2) will be judged in its own slice, on disk and CPU grounds.
 
 ## Phase 1: the harness
 - **`bench/examples/mem-merge.rs`.** The production writers have no hook for a merge policy, and `index.rs` was off-limits until SB-6 (#415) merged. So the harness builds both writers itself, the way `SearchIndex::writer`, `Side` and `Indexer::commit` do:
@@ -100,7 +102,20 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
   - The 20–45 MiB anonymous steps are therefore the allocator keeping the high-water's pages after the arenas are freed, which the policy doesn't change.
 
 ## What it means
-- **At 1 document per commit, the merge policy is not r4's retainer.** All of A's ingest-path growth converts to about 1.3–1.8 MiB/h at 665 torrents/h, about 2–2.7 KiB per torrent, at both 20k and 150k. r4's provisional 23 MiB/h is roughly 35 KiB per torrent at that pace, and its later fit of 12.88 MiB/h is roughly 20 KiB. So even removing the whole ingest-path growth would explain about a tenth of it, unless r4 indexes much faster than 665/h.
-- **The tuned policy and the longer cadence don't measurably cut it.** At 20k, C's mean is the lowest, but under the frozen rule it isn't distinguishable from A. At 150k, B and C are no better than A.
-- **mimalloc v2 (D1)** has the lowest point estimates among the 1-document arms, but it isn't separable either. THP off (D2) looks like A.
-- **The next suspects** (`notes/r4-retainer-analysis.md`): the real-network fetch path, which no harness has exercised, and per-commit thread churn. Phase 1 points away from merging, toward those.
+- **At a soak-sized corpus, the ingest path retains about 2.7 KiB per torrent.** r4 had 12,365 documents at hour 16.8, so the 20k runs cover it. That's about 1.8 MiB/h at 665 torrents/h.
+  - At r4's measured rate (about 683 stored torrents an hour, about one commit per torrent, runner 19:00Z), A's mean is about 1.3–1.8 MiB/h. On its own that would pass the 2.0 MiB/h gate.
+  - At 150k, A's slope is about the same: around 2 MiB per 1,000 torrents.
+- **Neither the merge policy nor the commit cadence passes,** under the rule fixed in advance, in either round.
+  - In round 1, C (M2's cadence, 6 documents a commit) has the lowest mean: 1.49 against A's 2.68 MiB per 1,000 torrents. Its runs overlap A's, so it fails the rule.
+  - At 150k, C (2.81) doesn't improve on A (1.99), the opposite of round 1's small-corpus hint. M2 is to be judged on disk and CPU grounds, not on memory.
+- **r4's slope is mostly outside the indexing path.** Its provisional 12.9 MiB/h is about 19 KiB per torrent, against the ingest path's 2–2.7 KiB.
+- **The anonymous steps are a level, not a slope.**
+  - dhat shows a flat live heap (about 5 MiB) and a high-water of about 40 MiB in every arm and at both corpus sizes. The writers' arenas set that high-water, not the corpus or the merge size.
+  - The 20–45 MiB steps in anonymous memory are mimalloc keeping pages from that peak.
+- **The owner's soak review agrees.** `docs/code-review/2026-11-04-soak-memory-review.md` (PR #425) finds a whole-index rewrite about every seven commits below 16.8k documents under the default `LogMergePolicy`. Arm A shows exactly that: about 2,810 torrent-index merges in 20,000 one-document commits, one every 7.1 commits. Its largest segment stops at 16,822 documents, `min_layer_size` (10,000) × 2^0.75. The rewrite is real; what it leaves behind is the level above, not a growing slope.
+- **mimalloc v2 (D1) is a lead, not a finding.** It has the lowest mean of the A-family runs (1.61 against 2.68) but doesn't pass the rule. THP off (D2) looks like A, though THP in production is under X-thp-off.
+- **A recorded option, not taken: a 64 MiB writer heap** in place of `serve`'s 256 MiB.
+  - It would lower the high-water, so the one-time level falls by perhaps 20–30 MiB, at the cost of indexing throughput.
+  - It doesn't touch the slope that fails r4.
+  - It's worth measuring only if X-mem-gauges shows that mimalloc's retention matters at the next soak. It changes a number the owner set, so it's a §2.26 call for the runner.
+- **The next leads are outside indexing,** in the runner's list: THP (X-thp-off), C heap outside mimalloc (X-mem-gauges) and the real-network fetch path, which no harness exercises.
