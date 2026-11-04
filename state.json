@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T16:58:00Z",
+ "updated_at": "2026-11-04T16:59:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2785,6 +2785,13 @@
   "SRC-3b": {
    "status": "pending",
    "note": "unverified items in search: reindex_log writes for unverified put/delete/refile/purge/promote + triggers (migration), ids_after, claims-to-doc loader; from SRC-3"
+  },
+  "ENR-2a": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhn94ghTyx5Kp1Udph4b",
+   "launched": "2026-11-04T16:59:00Z",
+   "brief": "briefs/ENR-2a.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4830,7 +4837,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-04T16:24:00Z",
+  "updated": "2026-11-04T16:59:00Z",
   "items": [
    {
     "slot": 1,
@@ -4842,11 +4849,11 @@
    },
    {
     "slot": 2,
-    "slice": "SRC-11",
+    "slice": "ENR-2a",
     "role": "build",
     "agent": "claude",
-    "doing": "Letting Lodestar read what your qBittorrent, Transmission or Deluge already has, as a private source. Reviewed; final fixes being pushed.",
-    "since": "2026-11-04T05:33:52Z"
+    "doing": "Moving the safe JSON reader into a shared place, so the ThePornDB lookup can reuse it.",
+    "since": "2026-11-04T16:59:00Z"
    },
    {
     "slot": 3,
@@ -4877,7 +4884,7 @@
     "slice": "SRC-8b",
     "role": "build",
     "agent": "claude",
-    "doing": "Teaching the feed reader to read Academic Torrents' torrent hashes, so that source can be built next.",
+    "doing": "Teaching the feed reader to read Academic Torrents' hashes and sizes. Reviewed; last small round.",
     "since": "2026-11-04T15:47:00Z"
    },
    {
@@ -4885,7 +4892,7 @@
     "slice": "L4-followups",
     "role": "build",
     "agent": "claude",
-    "doing": "Finishing three search follow-ups: rollback keeps later deletions, a memory cap for broad file searches, and cancelling abandoned requests.",
+    "doing": "Search follow-ups: an audit plus stopping abandoned compare requests. In review.",
     "since": "2026-11-04T15:38:00Z"
    },
    {
