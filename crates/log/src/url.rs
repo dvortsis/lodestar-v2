@@ -566,9 +566,21 @@ fn userinfo_in_text(after: &str, next: usize) -> Option<usize> {
     while !after.is_char_boundary(bound) {
         bound -= 1;
     }
-    // One scan: the window ends at the first `/` or line break.
+    // One scan: the window ends at the first line break, and at the first
+    // `/` unless there's userinfo: an `@` before the first hard stop, or a
+    // `:` with no port number after it (`u:/p"@h/`). Its password may hold
+    // `/` and a hard stop (`u:@/p"@h/`).
     let window = &after[..bound];
-    let window = &window[..window.find(['/', '\n', '\r']).unwrap_or(window.len())];
+    let authority = &after[..after.find(['/', '?', '#']).unwrap_or(after.len()).min(hard)];
+    let no_port = !authority.starts_with('[')
+        && authority
+            .rsplit_once(':')
+            .is_some_and(|(_, port)| port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()));
+    let ends: &[char] = match narrow.is_some() || no_port {
+        true => &['\n', '\r'],
+        false => &['/', '\n', '\r'],
+    };
+    let window = &window[..window.find(ends).unwrap_or(window.len())];
     let wide = window.rfind('@');
     narrow.max(wide)
 }
@@ -677,9 +689,12 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
             false => out.push_str(REDACTED),
         }
         if let Some(sep) = url {
+            // `[redacted]@` marks it as userinfo, so the URL rules read a
+            // password that runs on past the quote, `/` and all.
             out.push_str(&redact_runs(&text[to..sep - 3]));
             out.push_str("://");
             out.push_str(REDACTED);
+            out.push('@');
         }
         copied = value_end;
         i = inner.unwrap_or(value_end.max(from));
@@ -1279,6 +1294,12 @@ mod tests {
                 "S3cr3t",
             ),
             ("magnet:%3Ahttp://u:]S3cr3t?@h.example/x", "S3cr3t"),
+            // Round 3: a raw `/` and a hard stop in a password that `main`
+            // hid only because something before it swallowed the span.
+            (r#"] ://http://u:@/S3cr3t"@h.example/x"#, "S3cr3t"),
+            (r#"x magnet:http://u:/S3cr3t"@h.example/x"#, "S3cr3t"),
+            (r#"fragment: Some("http://u:"S3cr3t/@h.example/x"#, "S3cr3t"),
+            ("http://u:@/S3 cr3t@h.example/x", "cr3t"),
         ] {
             let s = scrub_text(text);
             assert!(!s.contains(secret), "{text} -> {s}");
@@ -1413,12 +1434,14 @@ mod tests {
             scheme in "(https?|udp|ftp)",
             secret in "[A-Za-z0-9]{6,20}",
             // URL syntax inside a raw password (review): one kind at a
-            // time. A space with a `://` after it is a known gap (the
-            // look-ahead stops at the `://`; decisions file).
+            // time, or a `/` and a hard stop after a `:` or `@`. A space
+            // with a `://` after it is a known gap (the look-ahead stops at
+            // the `://`; decisions file).
             syntax in proptest::prop_oneof![
                 "[:/@?#,')\\[\\]]{1,4}",
                 "[:/@?#]{0,3}://[a-z:/@]{0,4}",
                 "[ \"<>`]{1,3}",
+                "[:@]{1,2}/[ \"<>`]{1,2}",
             ],
         ) {
             let passkey = format!("Zq{secret}90{secret}");

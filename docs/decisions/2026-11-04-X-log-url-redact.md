@@ -43,6 +43,12 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
   - **Splitting trusts only known schemes:** `http`, `https`, `ws`, `wss`, `udp`, `tcp`, `ftp`, `ftps`, `sftp`, `socks4`, `socks4a`, `socks5`, `socks5h` and `file`. Any other run before a nested `://` may be a password's tail (`u:@/<secret>://@h/`), so it's hidden with what comes before it.
   - **An `@` anywhere after the authority hides the host and everything after it** (`http://u:@S3cr3t/@h/` shows as `http://[redacted]`). That's on `main` too. It extends the path rule above: `http://a@h/r/https://u:p@h2/x` now shows as `http://[redacted]`, and `http://u:p@h/x?email=a@b` loses its host as well.
   - **A magnet link ends before a URL glued to it** (`magnet:%3Ahttp://u:]p?@h/`), and that URL gets its own userinfo search.
+- **Round 3 (runner): nothing `main` hides may show, even where `main` hid it by luck.** The fix is in the wide look-ahead:
+  - **When there's userinfo, the wide look-ahead runs past a `/`,** to the line's end within its 512 bytes. Userinfo means an `@` before the first hard stop, or a `:` in the authority with no port number after it (`u:/p"@h/`, `u:@/p"@h/`).
+  - So a password holding a raw `/` and a hard stop is read whole, and the rule that an `@` after the authority hides the rest covers what follows.
+  - Without such a sign the window still stops at `/`, so `see https://a.example/p and me@x` keeps its path.
+  - **The cost is over-redaction:** `http://u:p@h/x and mail me@y` now hides up to `me@`. A `host:port` with a numeric port (`http://localhost:8191/`) and an IPv6 literal are unaffected.
+  - **A Debug value's URL is written as `scheme://[redacted]@`,** which marks it as userinfo for the same rule.
 - **Over-redaction in a common log shape:** a comma-separated tracker list loses all but its last tracker. `udp://a.example:80/announce,udp://b.example:6969/announce` shows as `udp://[redacted]://b.example:6969/announce`. Each `://` with nothing but URL characters or a soft end before the next one is read as possibly inside a password. That's accepted ("never too little").
 
 ## Tests
@@ -63,11 +69,13 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 - **1,000,000 cases of each property pass locally** in a release build, and 300,000 on the final code.
 - **A differential fuzz against `main` was run once, locally** (3,000,000 inputs, not committed). Each input put a well-formed credentialed URL, a passkey path or a Debug-form `Url` among random URL and Debug-form tokens. After the security-review round, `scrub_text` showed the planted secret in none of them. `main` panicked on some of them (the IPv6 case).
   - **After the runner's round, a wider run** put URL syntax on both sides of the password and added Debug `username` fields. `scrub_text` showed the planted secret in 13,890 of the 3,000,000 inputs; `main` showed it in more of them.
-  - **418 of those are inputs where `main` happened to hide the secret.** Every one is a password holding both a raw `/` and a hard stop (`http://u:@/<secret>"@h/`), the class left for X-log-url-redact-2 (below). `main` hid them only because a stray Debug field or a URL ahead of them swallowed the span.
+  - **418 of those were inputs where `main` happened to hide the secret.** Every one was a password holding both a raw `/` and a hard stop (`http://u:@/<secret>"@h/`). `main` hid them only because a stray Debug field or a URL ahead of them swallowed the span. Round 3 fixes them.
+  - **After round 3, the same run** (seed 11, 3,000,000 inputs) has 0 secrets shown by this PR but hidden by `main`. This PR shows 3,170 in all; `main` shows 91,523.
+  - **Seeds 12 and 13 (3,000,000 each) and seed 99 (10,000,000) also have 0.** This PR shows 3,147, 3,121 and 10,532; `main` shows 91,108, 90,883 and 305,788.
 
 ## Known gaps, for X-log-url-redact-2 (the runner is briefing it)
 All of these leak on rc.3 as well.
-- **A raw hard stop with a `/` in a password** (`http://u:@/<secret>"@h/`, `http://u:pa ss://@h/x`). The wide look-ahead stops at a `/` and at the next `://`, which keeps the scan linear.
+- **A raw hard stop with a `/` in a password when nothing marks the userinfo** (`http://u/<secret>"@h/`, no `:` or `@` before it), and one with a later `://` (`http://u:pa ss://@h/x`). The wide look-ahead stops at that `/` and at the next `://`, which keeps the scan linear.
 - **A mixed encoding such as `http:%2F%2Fu:p@h`,** which `holds_url` misses. In `scrub` it's a kept query value; in `scrub_text`, URL forms without `://` aren't found at all.
 - **IPv6 hosts in URLs nested in a query or fragment, or after `magnet:`.**
 - **Credential values glued on with `:` or `%3D`.**
