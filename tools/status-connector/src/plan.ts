@@ -8,6 +8,8 @@ export interface Inputs {
   runnerState: any | null;       // runner-state/state.json (optional; Claude runner only)
   mergedPRs: PR[];
   closedPRs?: PR[];              // closed without merging
+  limits?: { phase_total?: number };  // runner/slices.yaml -> limits
+  historyIncomplete?: boolean;   // GitHub did not answer for some older pages of closed pull requests
   openPRs: PR[];
   branches: string[];            // ids from refs/heads/slice/<id>
   refs?: { branches: string[]; tags: string[] }; // names GitHub knows, for conditions with `auto:`
@@ -179,6 +181,50 @@ export function buildPlan(inp: Inputs) {
   const crawler = (cfg.crawler || []).map((c: any) => ({ label: c.label, value: c.value, kind: c.kind, note: c.note || '' }));
   const soak = (cfg.soak || []).map((x: any) => ({ stage: x.stage, label: x.label, start: x.start, end: x.end }));
 
+  // worker slots: the runner records who works on what in runner-state's state.json (`slots`), pushed on the wake where a session
+  // starts, finishes, is archived or changes task, with no PR. GitHub supplies each slice's title, state and PR. The number of slots
+  // is the owner's limit in runner/slices.yaml (limits.phase_total), not a second copy. Anything out of step is reported, not hidden.
+  const slots: any[] = [];
+  const sl = inp.runnerState && inp.runnerState.slots ? inp.runnerState.slots : null;
+  const text = (v: any): string => (typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : '').slice(0, 300);
+  const MAX_SLOTS = 64;
+  const ROLES = ['build', 'review', 'docs', 'soak', 'other'], AGENTS = ['claude', 'other'];
+  if (sl) {
+    if (!Array.isArray(sl.items)) warn('Slots malformed', typeof sl.items, 'runner-state slots.items must be a list of entries; it is not, so no slot is shown');
+    const items: any[] = Array.isArray(sl.items) ? sl.items : [];
+    // rows are drawn for 1..limit only; a typo like slot 1000000000 must not cost memory or break the other tables
+    const limit = Number(inp.limits?.phase_total);
+    const cap = Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_SLOTS) : 0;
+    if (!cap) warn('Slot limit unknown', String(inp.limits?.phase_total ?? 'none'), 'limits.phase_total in runner/slices.yaml is missing or not a whole number above 0, so no slot rows are drawn');
+    const byId: Record<string, any> = {}; for (const n of nodes) byId[n.id] = n;
+    const slotAsof = typeof sl.updated === 'string' ? sl.updated : '';
+    const seenSlice = new Map<string, number>(), seenSlot = new Set<number>();
+    const rows: Record<number, any> = {};
+    for (const x of items) {
+      if (!x || typeof x !== 'object' || !Number.isInteger(x.slot) || x.slot < 1) { warn('Bad slot number', String(x?.slot).slice(0, 20), 'a slots entry in runner-state must have a whole slot number of 1 or more'); continue; }
+      if (x.slot > cap) { warn('Slot above the limit', String(x.slot).slice(0, 20), 'runner-state lists slot ' + String(x.slot).slice(0, 20) + ' but limits.phase_total in runner/slices.yaml is ' + cap + '; it is not shown'); continue; }
+      if (seenSlot.has(x.slot)) { warn('Slot listed twice', String(x.slot), 'runner-state slots has more than one entry for slot ' + x.slot); continue; }
+      seenSlot.add(x.slot);
+      if (x.role !== undefined && !ROLES.includes(x.role)) warn('Bad slot value', 'role ' + text(x.role), 'slot ' + x.slot + ': role must be one of ' + ROLES.join(', '));
+      if (x.agent !== undefined && !AGENTS.includes(x.agent)) warn('Bad slot value', 'agent ' + text(x.agent), 'slot ' + x.slot + ': agent must be one of ' + AGENTS.join(', '));
+      const slice = text(x.slice), doing = text(x.doing), since = text(x.since);
+      const node = slice ? byId[slice] : undefined;
+      if (slice && !node) warn('Unknown slice', slice, 'slot ' + x.slot + ' in runner-state slots names a slice that is not in runner/slices.yaml');
+      if (node && ['done', 'closed'].includes(node.state)) warn('Slot lists finished work', slice, 'slot ' + x.slot + ' still shows a slice that has merged or closed; the runner should update slots');
+      if (slice) { if (seenSlice.has(slice)) warn('Slice in two slots', slice, 'slots ' + seenSlice.get(slice) + ' and ' + x.slot + ' both list it'); else seenSlice.set(slice, x.slot); }
+      rows[x.slot] = { slot: x.slot, status: x.status === 'idle' ? 'idle' : 'working', slice, title: node?.title || '', doing, agent: AGENTS.includes(x.agent) ? x.agent : node?.agent || '', model: node?.model || '', role: ROLES.includes(x.role) ? x.role : 'build', since, stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof };
+    }
+    for (let n = 1; n <= cap; n++) slots.push(rows[n] || { slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', model: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof });
+    const t = slotAsof ? Date.parse(slotAsof) : NaN, age = (Date.parse(inp.now) - t) / 36e5;
+    if (!slotAsof) warn('Slots date missing', 'none', 'runner-state slots.updated is missing, so the dashboard cannot tell how fresh the list is');
+    else if (!Number.isFinite(t) || age < -0.1) warn('Slots date invalid', slotAsof.slice(0, 40), 'runner-state slots.updated is not a past UTC time; the runner should set it to the time of its last change');
+    else if (age > 24) warn('Slots list is stale', slotAsof, 'runner-state slots.updated is ' + Math.round(age) + ' h old; the runner should refresh it on the wake where a session starts, finishes or changes task');
+    const listed = new Set(items.map((x: any) => text(x?.slice)).filter(Boolean));
+    const loose = Object.keys(openById).filter((id) => !listed.has(id));
+    if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner-state slots');
+  } else if (inp.runnerState) warn('Slots not recorded', 'none', 'runner-state state.json has no slots key, so the dashboard cannot show what each slot is doing');
+
+  if (inp.historyIncomplete) warn('Merge history incomplete', 'yes', 'GitHub did not answer for some older pages of closed pull requests, so some finished slices may show as not yet merged until it does');
   if (unplaced.length) warn('Slices not placed', String(unplaced.length), 'No placement rule covers: ' + unplaced.slice(0, 12).join(', ') + (unplaced.length > 12 ? ', …' : '') + '. Add them to placement: in runner/dashboard.yaml.');
   const metaRows: any[] = [
     { key: 'main', label: 'Main branch', value: inp.mainSha.slice(0, 8), note: inp.mainDate },
@@ -187,5 +233,5 @@ export function buildPlan(inp: Inputs) {
     { key: 'built', label: 'Built at', value: inp.now.slice(0, 16).replace('T', ' ') + ' UTC', note: 'live, by the status connector' },
     ...warnings.map((w) => ({ key: 'warning', label: w.label, value: w.value, note: w.note })),
   ];
-  return { nodes, road, edges, activity, recent, meta: metaRows, gates, owner, ext, notes, crawler, soak };
+  return { nodes, road, edges, activity, recent, meta: metaRows, gates, owner, ext, notes, crawler, soak, slots };
 }

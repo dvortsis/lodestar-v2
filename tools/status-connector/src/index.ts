@@ -18,6 +18,7 @@ const TOOLS = [
   ['plan_notes', 'The plain-language notes at the top of the dashboard.'],
   ['plan_crawler', 'Measured crawler rates against the v0.6 gate.'],
   ['plan_soak', 'The phases of the running 24-hour memory test.'],
+  ['plan_slots', 'What each worker slot is doing now, from the runner\'s list, with each slice\'s state read from GitHub.'],
 ] as const;
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const MIN_SECRET = 32;
@@ -38,18 +39,22 @@ const failures = new Map<string, { at: number; message: string }>();
 const ERROR_SECONDS = 30;
 const cacheStore = (): Cache | null => (typeof caches !== 'undefined' && (caches as any).default ? (caches as any).default : null);
 
-async function ghFetch(env: Env, path: string, raw: boolean): Promise<any> {
-  const r = await fetch('https://api.github.com' + path, {
+const pause = () => new Promise((res) => setTimeout(res, 250 + Math.random() * 250)); // a short jittered wait before the single retry
+
+async function ghFetch(env: Env, path: string, raw: boolean, retry = true): Promise<any> {
+  let r: Response;
+  try { r = await fetch('https://api.github.com' + path, {
     headers: {
       Authorization: 'Bearer ' + env.GITHUB_TOKEN, 'User-Agent': 'lodestar-status-connector', 'X-GitHub-Api-Version': '2022-11-28',
       Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
     },
-  });
+  }); } catch (e) { if (retry) { await pause(); return ghFetch(env, path, raw, false); } throw e; } // a thrown fetch (network reset) gets one more try too
+  if (r.status >= 500 && retry) { await pause(); return ghFetch(env, path, raw, false); } // GitHub's own timeouts (502, 503, 522) usually pass on a second try
   if (!r.ok) throw new Error(`GitHub ${r.status} for ${path}`);
   return raw ? r.text() : r.json();
 }
 
-async function gh(env: Env, path: string, ttl: number, raw = false): Promise<any> {
+async function gh(env: Env, path: string, ttl: number, raw = false, retry = true): Promise<any> {
   const key = (raw ? 'raw:' : 'json:') + path;
   const bad = failures.get(key);
   if (bad && Date.now() - bad.at < ERROR_SECONDS * 1000) throw new Error(bad.message);
@@ -57,7 +62,7 @@ async function gh(env: Env, path: string, ttl: number, raw = false): Promise<any
   if (ttl > 0 && store) { const hit = await store.match(req); if (hit) return raw ? hit.text() : hit.json(); }
   let p = inflight.get(key);
   if (!p) {
-    p = ghFetch(env, path, raw).then(async (v) => {
+    p = ghFetch(env, path, raw, retry).then(async (v) => {
       failures.delete(key);
       if (ttl > 0 && store) await store.put(req, new Response(raw ? v : JSON.stringify(v), { headers: { 'Cache-Control': `max-age=${ttl}` } }));
       return v;
@@ -69,16 +74,20 @@ async function gh(env: Env, path: string, ttl: number, raw = false): Promise<any
 
 const toPR = (p: any): PR => ({ number: p.number, title: p.title, head_ref: p.head?.ref || '', merged_at: p.merged_at, body: p.body, user: p.user?.login });
 
-async function closedPRs(env: Env, ttl: number): Promise<any[]> {
+async function closedPRs(env: Env, ttl: number): Promise<{ all: any[]; incomplete: boolean }> {
   // newest first; keep going until a page is not full, so no merged slice drops out as the repository grows.
-  // Older pages change rarely, so they are cached ten times longer than the first.
-  const all: any[] = [];
+  // Older pages change rarely, so they are cached ten times longer than the first. The first page is required; if an older
+  // page fails, the plan is built from what GitHub did return and says so, instead of every tool failing on one timeout.
+  const all: any[] = []; let incomplete = false;
   for (let start = 1; start <= MAX_CLOSED_PAGES; start += 4) {
-    const pages = await Promise.all([0, 1, 2, 3].filter((k) => start + k <= MAX_CLOSED_PAGES).map((k) => gh(env, `/repos/${env.GITHUB_REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=${start + k}`, start + k === 1 ? ttl : ttl * 10)));
-    for (const pg of pages) all.push(...pg);
-    if (pages[pages.length - 1].length < 100 || pages.some((pg) => pg.length < 100)) break;
+    const results = await Promise.allSettled([0, 1, 2, 3].filter((k) => start + k <= MAX_CLOSED_PAGES).map((k) => gh(env, `/repos/${env.GITHUB_REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=${start + k}`, start + k === 1 ? ttl : ttl * 10, false, start + k === 1)));
+    if (start === 1 && results[0].status === 'rejected') throw (results[0] as PromiseRejectedResult).reason;
+    let full = true;
+    // results come in page order: once a page is short, later pages do not exist, so their failures do not count
+    for (const r of results) { if (!full) break; if (r.status === 'fulfilled') { all.push(...r.value); if (r.value.length < 100) full = false; } else { incomplete = true; full = false; } }
+    if (!full) break;
   }
-  return all;
+  return { all, incomplete };
 }
 
 let memo: { at: number; plan: any } | null = null;
@@ -101,8 +110,8 @@ async function load(env: Env) {
   // if GitHub can't answer, say nothing about refs, so an `auto:` condition keeps its file value instead of flipping to unmet
   const refs = wantsRefs ? await Promise.all([gh(env, `/repos/${repo}/git/matching-refs/heads/release/`, ttl), gh(env, `/repos/${repo}/git/matching-refs/tags/?per_page=100`, ttl * 5)]).then(([h, t]) => ({ branches: (h as any[]).map((r) => String(r.ref).replace('refs/heads/', '')), tags: (t as any[]).map((r) => String(r.ref).replace('refs/tags/', '')) })).catch(() => undefined) : undefined;
   const plan = buildPlan({
-    slices: y.slices, external: y.external || {}, cfg, refs, runnerState: state,
-    mergedPRs: closed.filter((p: any) => p.merged_at).map(toPR), closedPRs: closed.filter((p: any) => !p.merged_at).map(toPR), openPRs: open.map(toPR),
+    slices: y.slices, external: y.external || {}, limits: y.limits, cfg, refs, runnerState: state,
+    mergedPRs: closed.all.filter((p: any) => p.merged_at).map(toPR), closedPRs: closed.all.filter((p: any) => !p.merged_at).map(toPR), historyIncomplete: closed.incomplete, openPRs: open.map(toPR),
     branches: (branches as any[]).map((b) => String(b.ref).replace('refs/heads/slice/', '')),
     mainSha: main.sha, mainDate: main.commit?.committer?.date || '', now: new Date().toISOString(),
   });
@@ -126,7 +135,7 @@ export default {
     if (id === undefined) return new Response(null, { status: 202 }); // notification
     switch (method) {
       case 'initialize':
-        return rpc(id, { protocolVersion: PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0], capabilities: { tools: {} }, serverInfo: { name: 'lodestar-status', version: '1.2.0' } });
+        return rpc(id, { protocolVersion: PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0], capabilities: { tools: {} }, serverInfo: { name: 'lodestar-status', version: '1.3.0' } });
       case 'ping': return rpc(id, {});
       case 'tools/list':
         return rpc(id, { tools: TOOLS.map(([name, description]) => ({ name, description, inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, openWorldHint: true } })) });
