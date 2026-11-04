@@ -494,11 +494,14 @@ pub fn scrub_text(text: &str) -> String {
                     out.push_str("://");
                     out.push_str(REDACTED);
                     // A magnet in what's hidden gets its own span (B-log1),
-                    // so its tracker URL is never read as the next URL.
+                    // so its tracker URL is never read as the next URL. Only
+                    // when no hard stop lies between it and the next `://`:
+                    // then its span surely reaches that far, and a password
+                    // after it can't print (`u:magnet:?dn=X <secret>@h://`).
                     let stop = magnet
                         .from(text, pos + i + 3)
                         .map(|m| m - pos)
-                        .filter(|&m| m < nested)
+                        .filter(|&m| m < nested && !rest[m..nested].contains(hard_stop))
                         .unwrap_or(nested);
                     pos += stop;
                     continue;
@@ -1467,6 +1470,19 @@ mod tests {
             assert!(
                 !s.contains("trk.example") && !s.contains("SecretName") && s.ends_with(" ok"),
                 "{text} -> {s}"
+            );
+        }
+        // Round 7: a magnet inside a password, or with an `@` in its name.
+        for text in [
+            "see udp://u:magnet:?dn=X SecretPw@h://y ok",
+            "see udp://u:magnet:?dn=X\tSecretPw@h://y ok",
+            "see udp://u:magnet:?dn=X\"SecretPw@h://y ok",
+            "see http://h,magnet:?dn=Name@Group&tr=udp://trk.example/a ok",
+        ] {
+            let s = scrub_text(text);
+            assert!(
+                !s.contains("SecretPw") && !s.contains("trk.example") && !s.contains("Group"),
+                "{text:?} -> {s}"
             );
         }
         // An IPv6 host in a URL in a fragment keeps its passkey hidden.
