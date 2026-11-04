@@ -1029,7 +1029,10 @@ fn rebuild_and_swap(
     }
     // The old index is still there, and the new one's catch-up wrote more.
     shared.note_disk(&root);
-    lodestar_log::log_event!(crate::log_events::SWAPPED);
+    lodestar_log::log_event!(
+        crate::log_events::SWAPPED,
+        disk_high_water_bytes = lodestar_log::Count(shared.disk_high_water.load(Ordering::Relaxed))
+    );
     Ok(Some(old.holders()))
 }
 

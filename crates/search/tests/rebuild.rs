@@ -721,11 +721,7 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
     assert_eq!(index.availability("file.category"), Availability::Missing);
     assert_eq!(index.availability("verified"), Availability::Missing);
     assert_eq!(index.availability("file.size"), Availability::Ready);
-    assert!(
-        index
-            .prefilter("file.category", Box::new(tantivy::query::AllQuery))
-            .is_none()
-    );
+    assert!(!index.availability("file.category").complete());
     drop(index);
 
     start.store(false, Ordering::Relaxed);

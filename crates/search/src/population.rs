@@ -285,8 +285,8 @@ impl PopState {
     }
 
     /// Parses [`PopState::encode`]'s form. Anything else, including a
-    /// repeated or out-of-order field or a walk that's empty or runs
-    /// backwards, is
+    /// repeated or out-of-order field, a walk that's empty or runs
+    /// backwards, or a walk at generation 0, is
     /// `None`: the payload is ours alone, so it's corrupt.
     pub fn decode(s: &str) -> Option<PopState> {
         let mut out = BTreeMap::new();
@@ -307,7 +307,8 @@ impl PopState {
                 Some((g, w)) => {
                     let (c, h) = w.split_once('/')?;
                     let (cursor, high) = (number::<i64>(c)?, number::<i64>(h)?);
-                    if cursor >= high {
+                    // A walk without a producer has nothing to write.
+                    if cursor >= high || g == "0" {
                         return None;
                     }
                     (number::<u32>(g)?, Some(Walk { cursor, high }))
@@ -462,6 +463,7 @@ mod tests {
             "x=1@5/5",
             "x=1@6/5",
             "x=1@-1/5",
+            "x=0@1/5",
             "x=1@1",
             "x=1@1/",
             "x=1,",
@@ -478,7 +480,7 @@ mod tests {
         let walk = proptest::option::of((0i64..1 << 40, 1i64..1 << 20));
         let rec = (any::<u32>(), walk).prop_map(|(generation, w)| Recorded {
             generation,
-            walk: w.map(|(cursor, len)| Walk {
+            walk: w.filter(|_| generation > 0).map(|(cursor, len)| Walk {
                 cursor,
                 high: cursor + len,
             }),

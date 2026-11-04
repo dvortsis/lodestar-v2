@@ -785,7 +785,7 @@ mod population {
     use std::path::Path;
     use tantivy::TantivyDocument;
     use tantivy::collector::Count;
-    use tantivy::query::{AllQuery, Query, TermQuery};
+    use tantivy::query::{AllQuery, TermQuery};
     use tantivy::schema::IndexRecordOption;
 
     const HEAP: usize = 15 << 20;
@@ -865,10 +865,6 @@ mod population {
         Availability::Backfilling { done, upto }
     }
 
-    fn query() -> Box<dyn Query> {
-        Box::new(AllQuery)
-    }
-
     #[test]
     fn a_fresh_index_reports_fields_without_a_producer_and_nothing_else() {
         let mut store = store_with(&[movie(0)]);
@@ -897,10 +893,10 @@ mod population {
         assert_eq!(index.availability("file.category"), Availability::Ready);
         assert_eq!(index.availability("file.pieces_root"), Availability::Ready);
         assert_eq!(index.availability("name"), Availability::Ready);
-        // A prefilter runs only on a complete field.
-        assert!(index.prefilter("file.category", query()).is_some());
-        assert!(index.prefilter("payload_sig", query()).is_none());
-        assert!(index.prefilter("name", query()).is_some());
+        // Only a complete field may be prefiltered on.
+        assert!(index.availability("file.category").complete());
+        assert!(!index.availability("payload_sig").complete());
+        assert!(index.availability("name").complete());
     }
 
     #[test]
@@ -920,7 +916,7 @@ mod population {
         let index = SearchIndex::open(&dir).unwrap();
         assert_eq!(index.availability("file.category"), backfilling(0, 60));
         assert_eq!(index.availability("file.size"), Availability::Ready);
-        assert!(index.prefilter("file.category", query()).is_none());
+        assert!(!index.availability("file.category").complete());
         let mut w = index.writer(HEAP).unwrap();
         // Nothing new to index, so the step's whole budget backfills.
         let c = w.catch_up_counted(&mut store, 25).unwrap();
@@ -949,7 +945,7 @@ mod population {
         }
         assert_eq!(steps, 4, "35 left in steps of 10");
         assert_eq!(index.availability("file.pieces_root"), Availability::Ready);
-        assert!(index.prefilter("file.category", query()).is_some());
+        assert!(index.availability("file.category").complete());
         // Every file once, every one with its category.
         assert_eq!(file_counts(&dir), (60, 60));
         assert_eq!(index.num_files(), 60);
