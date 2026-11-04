@@ -148,8 +148,8 @@ workstreams:
     plain: Sources in Settings, provenance in the detail view, and the sources gate.
   ws-src-plan:
     phase: ph-sources
-    name: Planning
-    plain: Plans for later source work.
+    name: Rule packs and enrichment
+    plain: Curated filter rule packs and the ThePornDB/StashDB lookups, planned in P-v06-rulepacks.
   ws-imp-tools:
     phase: ph-imports
     name: Import tools
@@ -265,6 +265,7 @@ placement:
   - CR-0f
   - D-v051
   - X-mmap-cache-prune
+  - X-merge-policy
   - R-rc3-cut
   - G-v051
   - D-v051-main
@@ -309,6 +310,7 @@ placement:
   - SRC-10*
   - SRC-11*
   - SRC-12
+  - SRC-12b
   - SRC-13
 - ws: ws-src-ui
   match:
@@ -325,6 +327,8 @@ placement:
   match:
   - E-v06-sources
   - P-v06-rulepacks
+  - RP-*
+  - ENR-*
 - ws: ws-imp-tools
   match:
   - IMP-*
@@ -356,6 +360,7 @@ placement:
   match:
   - E-M7
   - SB-6
+  - SB-6b
 - ws: ws-v10
   match:
   - E-v08
@@ -380,7 +385,7 @@ state_override:
   G-v051: active
 conditions:
   owner-cr-spec:
-    met: false
+    met: true
     who: you
     label: You confirm the frozen crawler measurement specification (CR-SPEC)
   owner-migrations-on-main:
@@ -412,6 +417,18 @@ conditions:
     met: false
     who: runner
     label: A free database-migration number (runner assigns V14)
+  owner-rpq2:
+    met: false
+    who: you
+    label: You decide what ThePornDB and StashDB may be sent (rule-pack Q2)
+  owner-rpq3:
+    met: false
+    who: you
+    label: You decide whether enrichment text is judged by the child-safety core (rule-pack Q3)
+  owner-rpq4:
+    met: false
+    who: you
+    label: You decide how performers are handled and that no age data is used (rule-pack Q4, Q5)
   owner-q1:
     met: false
     who: you
@@ -759,56 +776,61 @@ owner_queue:
   unblocks: v0.5.1 release; the three held epics
   when: r4's verdict, due about 01:00 UTC on 5 November
 - n: 2
-  type: decision
-  action: Confirm CR-SPEC, the frozen crawler measurement specification, including its open question O1
-  unblocks: The first crawler acceptance analysis (CR-COL-3, the live A/B runs)
-  when: Before the first A/B run
-- n: 3
   type: action
   action: Name the experiment host for crawler tests, and when it is free
   unblocks: All live crawler measurement and the v0.6 tag
   when: Before CR-4 lands
-- n: 4
+- n: 3
   type: decision
   action: Approve the plain-language consent texts that SRC-4 drafts (Q1)
   unblocks: The consent dialogs and credentials screen (SRC-15b)
   when: After SRC-4 merges, before SRC-15b
-- n: 5
-  type: decision
-  action: 'Settled: rc.3 was built without #367 (the filter stand-in re-judge, merged as 785b282c), as §2.31 set its contents. #367 ships in v0.5.2 from main. Say so only if you want it in v0.5.1, which would need an rc.4 and a fresh soak.'
-  unblocks: Nothing now; v0.5.2 carries it
-  when: Only if you want it in v0.5.1
-- n: 6
+- n: 4
   type: action
   action: Create the nightly signing key and its environment
   unblocks: Update checks on the Nightly channel
   when: Optional
-- n: 7
+- n: 5
   type: decision
   action: Make "Web / web" and "E2E / run" required checks (runner recommends yes)
   unblocks: Safer merges
   when: Optional
-- n: 8
+- n: 6
   type: decision
   action: Approve the new attack surface of importing through the running server; decide the torrent-upload middleware
     exception
   unblocks: Server-side imports; v0.7 upload
   when: Later
-- n: 9
+- n: 7
   type: action
   action: Submit to Unraid Community Apps
   unblocks: Packaging milestone
   when: Later
-- n: 10
+- n: 8
   type: decision
   action: 'Checkpoint 1: re-decide the crawler gate if the projection falls short'
   unblocks: The v0.6 tag
   when: After the A/B runs
-- n: 11
+- n: 9
   type: action
   action: Fix your Backups share minimum free space (500 GB) on the Unraid box
   unblocks: Appdata Backup protection for the soak
   when: Optional
+- n: 10
+  type: decision
+  action: 'Rule-pack plan questions Q1-Q5 (runner recommends): (Q1) no separate pack signing channel in v0.6, packs change only with a signed release; (Q2) ThePornDB/StashDB get only verified, Adult-classified, non-held, non-private items, the display name or parsed site/date/title and never the hash or files, nothing while Show adult content is off; (Q3) the core judges enrichment text as extra evidence, stricter only, never a counter-signal; (Q4) store and show performer names in the item drawer only, no performer search, facet or pages; (Q5) no age data from enrichment in v0.6'
+  unblocks: ENR-0 and ENR-1 (adult enrichment), via ext:owner-rpq2, ext:owner-rpq3 and ext:owner-rpq4
+  when: Before ENR-0
+- n: 11
+  type: decision
+  action: 'SRC-12 grey case: a public tracker whose published rules forbid scraping but which still answers a full scrape. Runner recommends skipping such trackers'
+  unblocks: Which trackers the full-scrape plug-in contacts
+  when: Before the full-scrape plugin is wired in (before SRC-G)
+- n: 12
+  type: info
+  action: 'For your veto (§2.19): SB-6 uses a size_bucket (2 buckets per power of two) instead of raw-size postings, to stay within the 800 B/torrent file-index budget; SRC-11 exports .torrent files automatically from your own LAN download client, as claims only and never contacting trackers; SRC-10b (AnimeTosho) is dropped because the site stopped ingesting in May 2026 and its feed is unreachable'
+  unblocks: Nothing; proceeds unless you object
+  when: Any time
 gates:
 - id: G-v05
   name: v0.5 MVP exit
@@ -920,14 +942,10 @@ notes:
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
   - label: Up to eight slots
-    text: 'By your instruction up to eight worker slots run at once, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33). Seven are under way: the search schema bump, download clients as a source, the full tracker scrape, the AnimeTosho, Internet Archive and Academic Torrents plug-ins, and the rule-pack plan. Workers, companions and packaging stay held until soak r4''s verdict.'
+    text: 'By your instruction up to eight worker slots run at once, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33). All eight are in use; the runner keeps the current list in its state file, shown on the slots view.''s verdict.'
   you:
   - label: Finish v0.5.1
     text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.
-  - label: Confirm the crawler measurement specification
-    text: CR-SPEC freezes how every crawler run is measured. It needs your confirmation, including its open question O1, before the first acceptance analysis.
-  - label: '#367 ships in v0.5.2'
-    text: rc.3 was built without the filter stand-in re-judge, as you set its contents. It ships in v0.5.2 from main. Say so only if you want it in v0.5.1; that would mean an rc.4 and a fresh soak.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Optional

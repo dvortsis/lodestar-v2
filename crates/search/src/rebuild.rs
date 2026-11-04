@@ -184,7 +184,8 @@ pub struct RebuildProgress {
     /// before finishing. Later ones are added at the swap.
     pub total: u64,
     /// `reindex_log` entries replayed into the new index, apart from
-    /// `done`.
+    /// `done`, and torrents a population backfill re-indexed in it
+    /// ([`crate::population`]).
     pub replayed: u64,
     /// Failed steps (each is retried), apart from the live indexer's.
     pub errors: u64,
@@ -220,10 +221,15 @@ pub struct Step {
     pub added: usize,
     /// `reindex_log` entries replayed.
     pub replayed: usize,
+    /// Torrents a population backfill re-indexed. A build that resumes a
+    /// directory written to other generations walks it; the walk isn't
+    /// following the store, so [`Step::is_empty`] leaves it out, and what
+    /// the swap leaves of it the new live indexer finishes.
+    pub backfilled: usize,
 }
 
 impl Step {
-    /// Nothing to do: caught up with the store.
+    /// Nothing new from the store: caught up with it.
     pub fn is_empty(&self) -> bool {
         self.added == 0 && self.replayed == 0
     }
@@ -270,6 +276,7 @@ impl Rebuild {
         Ok(Step {
             added: c.added,
             replayed: c.replayed,
+            backfilled: c.backfilled,
         })
     }
 
@@ -916,7 +923,7 @@ fn rebuild_and_swap(
                 wait = config.live.poll;
                 shared.update(|p| {
                     p.done += step.added as u64;
-                    p.replayed += step.replayed as u64;
+                    p.replayed += (step.replayed + step.backfilled) as u64;
                     // The last step can run past the snapshot.
                     p.total = p.total.max(p.done);
                 });
@@ -979,7 +986,7 @@ fn rebuild_and_swap(
     let mut fresh = None;
     let started = (|| {
         let mut w = new.writer(config.live.heap_bytes)?;
-        while w.catch_up(&mut store, config.live.batch)? > 0 {}
+        swap_catch_up(&mut w, &mut store, config.live.batch)?;
         w.commit()?;
         let last = w.last_id();
         w.finish()?;
@@ -1050,6 +1057,21 @@ fn dir_bytes(dir: &Path) -> u64 {
             Err(_) => 0,
         })
         .sum()
+}
+
+/// The swap's last catch-up with the store, while no live indexer runs:
+/// it stops once no new torrent or `reindex_log` entry is left. A
+/// population walk the new index still has (a build resumed by one with
+/// other generations) advances at most one bounded batch per step here,
+/// the last step included, and its live indexer finishes it: it never
+/// holds up the swap.
+fn swap_catch_up(w: &mut Indexer, store: &mut Store, batch: usize) -> Result<()> {
+    loop {
+        let c = w.catch_up_counted(store, batch)?;
+        if c.added + c.replayed == 0 {
+            return Ok(());
+        }
+    }
 }
 
 /// Torrents stored with ids in `(after, upto]`.
@@ -1232,6 +1254,44 @@ mod tests {
         assert_eq!(waits.len() as u32, RENAME_ATTEMPTS - 1);
         assert_eq!(waits[..3], [25, 50, 100].map(Duration::from_millis));
         assert_eq!(waits.last(), Some(&Duration::from_secs(4)));
+    }
+
+    #[test]
+    fn the_swaps_catch_up_takes_new_torrents_and_leaves_a_walk_to_the_live_indexer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("s.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        for i in 0..200 {
+            add(&mut store, &format!("Walked.{i}.mkv"));
+        }
+        let index = SearchIndex::open(&tmp.path().join("v")).unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut store, 1000).unwrap() > 0 {}
+        w.commit().unwrap();
+        drop(w);
+        drop(index);
+        // Reopened by a build whose producer shipped (a resumed build
+        // with other generations), with torrents arriving meanwhile.
+        let gens = crate::Generations::current().with("payload_sig", 1);
+        let index = SearchIndex::open(&tmp.path().join("v"))
+            .unwrap()
+            .with_generations(gens)
+            .unwrap();
+        for i in 0..5 {
+            add(&mut store, &format!("Fresh.{i}.mkv"));
+        }
+        let mut w = index.writer(HEAP).unwrap();
+        swap_catch_up(&mut w, &mut store, 10).unwrap();
+        w.commit().unwrap();
+        assert_eq!(index.watermark().unwrap(), 205, "every new torrent");
+        // A bounded part of the walk at most (a batch a step), not all
+        // 200: the live indexer does the rest.
+        match index.availability("payload_sig") {
+            crate::Availability::Backfilling { done, upto: 200 } => {
+                assert!(done > 0 && done <= 20, "{done}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

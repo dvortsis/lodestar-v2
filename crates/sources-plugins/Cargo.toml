@@ -8,11 +8,19 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+# Test doubles for the plugins' host interfaces (full_scrape's
+# StaticPrivateTrackers and TokioClock), for this crate's tests. Never
+# enabled by the running app.
+testing = []
+
 [dependencies]
 lodestar-integrations.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-sources.workspace = true
 lodestar-sources-feeds.workspace = true
+# SRC-12: the full-scrape parser and tracker URLs.
+lodestar-tracker-scrape.workspace = true
 # The workspace's existing pin (crates/sources-feeds, crates/integrations).
 quick-xml = { version = "=0.42.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -21,6 +29,7 @@ tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
 url = "2.5.8"
 
 [dev-dependencies]
+lodestar-sources-plugins = { path = ".", features = ["testing"] }
 lodestar-store.workspace = true
 proptest = "1.11.0"
 tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util"] }
