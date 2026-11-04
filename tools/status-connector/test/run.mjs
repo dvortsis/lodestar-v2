@@ -24,7 +24,17 @@ let github = {
     pr(5, 'SRC-12: Scrape', 'slice/SRC-12', '', false),                                  // closed, never merged
   ],
   open: [pr(3, 'SRC-5: Per-plugin egress', 'agent-x/egress', '', false)],                // open PR
-  tags: [], tagsFail: false,
+  tags: [], tagsFail: false, page2Fail: false,
+  state: { updated_at: '2026-11-02T00:00:00Z', slots: { updated: '2020-01-01T00:00:00Z', items: [
+    { slot: 1, slice: 'SRC-9', role: 'build', agent: 'claude', doing: 'Parsing Internet Archive responses.' },
+    { slot: 2, slice: 'NOPE-3', doing: 'Names a slice that does not exist.' },
+    { slot: 2, slice: 'B0', doing: 'A second entry for slot 2.' },
+    { slot: 3, slice: 'SRC-9', role: 'wizard', doing: 'The same slice again, with a role outside the set.' },
+    { slot: 1.5, slice: 'SRC-4', doing: 'Fractional slot number.' },
+    { slot: 9, slice: 'SRC-4', doing: 'Above the limit.' },
+    { slot: 1e9, slice: 'SRC-4', doing: 'A typo that must not cost memory.' },
+    { slot: 4, slice: { not: 'a string' }, doing: 42, since: ['x'], role: { r: 1 } },
+  ] } },
   refs: [{ ref: 'refs/heads/slice/SRC-9' }, { ref: 'refs/heads/slice/SRC-12' }],            // branch only; SRC-12's PR was closed unmerged
   fail: false,
 };
@@ -35,8 +45,9 @@ globalThis.fetch = async (url) => {
   if (p.endsWith('/contents/runner/dashboard.yaml')) return new Response(dashYaml);
   if (p.includes('/git/matching-refs/tags/')) return github.tagsFail ? new Response('boom', { status: 500 }) : json(github.tags);
   if (p.includes('/git/matching-refs/heads/release/')) return json([]);
-  if (p.endsWith('/contents/state.json')) return new Response('missing', { status: 404 }); // optional
+  if (p.endsWith('/contents/state.json')) return github.state ? new Response(JSON.stringify(github.state)) : new Response('missing', { status: 404 }); // optional
   if (p.endsWith('/pulls') && u.searchParams.get('state') === 'open') return json(github.open);
+  if (p.endsWith('/pulls') && github.page2Fail && u.searchParams.get('page') === '2') return new Response('timeout', { status: 522 });
   if (p.endsWith('/pulls')) return json(u.searchParams.get('page') === '1' ? github.closed : []);
   if (p.includes('/git/matching-refs')) return json(github.refs);
   if (p.endsWith('/commits/main')) return json({ sha: 'abcdef0123456789', commit: { committer: { date: '2026-11-02T00:00:00Z' } } });
@@ -63,7 +74,7 @@ assert.equal((await (await call(null)).json()).error.code, -32600);
 assert.equal((await call({ jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202, 'notification');
 assert.equal((await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '1999-01-01' } })).result.protocolVersion, '2025-06-18', 'only a supported protocol version is answered');
 assert.equal((await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })).result.serverInfo.name, 'lodestar-status');
-assert.deepEqual((await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.map((t) => t.name), ['plan_nodes', 'plan_road', 'plan_edges', 'plan_activity', 'plan_recent', 'plan_meta', 'plan_gates', 'plan_owner', 'plan_ext', 'plan_notes', 'plan_crawler', 'plan_soak']);
+assert.deepEqual((await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.map((t) => t.name), ['plan_nodes', 'plan_road', 'plan_edges', 'plan_activity', 'plan_recent', 'plan_meta', 'plan_gates', 'plan_owner', 'plan_ext', 'plan_notes', 'plan_crawler', 'plan_soak', 'plan_slots']);
 
 const nodes = (await tool('plan_nodes')).rows; const by = Object.fromEntries(nodes.map((n) => [n.id, n]));
 assert.equal(by.B0.state, 'done'); assert.equal(by.B0.agent, 'claude');
@@ -90,6 +101,16 @@ const gates = (await tool('plan_gates')).rows; assert.equal(gates.find((g) => g.
 assert.equal((await tool('plan_owner')).rows.length, 1); assert.equal((await tool('plan_edges')).rows.length, 1, 'an arrow to a missing step is dropped');
 const notes = (await tool('plan_notes')).rows; assert.deepEqual(notes.map((n) => n.group), ['now', 'you']); assert.equal(notes[0].asof, '2026-11-02');
 assert.equal((await tool('plan_crawler')).rows.length, 2); assert.equal((await tool('plan_soak')).rows.length, 1);
+const slots = (await tool('plan_slots')).rows;
+assert.deepEqual(slots.map((x) => x.status), ['working', 'working', 'working', 'working', 'finishing'], 'rows 1..limit, then a listed slot above the limit as finishing (the limit can be lowered while a session still runs)');
+assert.equal(slots[4].slot, 9);
+assert.equal(slots[3].slice, '', 'a value that is not a string is dropped, not passed through'); assert.equal(slots[3].doing, '42'); assert.equal(slots[3].since, '');
+assert.equal(slots[0].slice, 'SRC-9'); assert.ok(slots[0].title && slots[0].stage, 'a slot takes its title and state from the slice graph');
+assert.equal(slots[1].slice, 'NOPE-3', 'the first entry for a slot wins');
+assert.equal(slots[2].role, 'build', 'a role outside the set falls back to build');
+for (const w of ['Unknown slice:NOPE-3', 'Slot listed twice:2', 'Bad slot number:1.5', 'Slice in two slots:SRC-9', 'Bad slot value:role wizard', 'Slot above the limit:1000000000']) assert.ok(warnings.includes(w), 'reported: ' + w);
+assert.ok(!warnings.includes('Slot above the limit:9'), 'a slot above the limit but within what is drawn is shown as finishing, not warned about');
+assert.ok(warnings.some((w) => w.startsWith('Slots list is stale')), 'a slots list the runner has not refreshed in 24 h is reported');
 // a condition with `auto:` follows GitHub: unmet until the tag exists
 assert.equal((await tool('plan_ext')).rows.find((e) => e.key === 'v-tagged').met, false);
 assert.equal(by['SRC-AUTO'].state, 'you', 'waits on the untagged release');
@@ -120,6 +141,26 @@ await (await call({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name:
 assert.ok(pagesAsked.includes(2), 'page 2 of closed pull requests is read when page 1 is full');
 globalThis.fetch = realFetch; github.closed = [];
 
+// one timed-out page of older closed pull requests must not take every tool down: the plan is built without it and says so
+github.page2Fail = true;
+const metaOf = async (repo) => JSON.parse((await (await call({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'plan_meta', arguments: {} } }, '/mcp/' + SECRET, 'POST', { ...env, CACHE_SECONDS: '0', GITHUB_REPO: repo })).json()).result.content[0].text);
+assert.ok(!(await metaOf('o/r4')).some((r) => r.label === 'Merge history incomplete'), 'a failing page after a short page is ignored: that page does not exist');
+const savedClosed = github.closed; github.closed = Array.from({ length: 100 }, (_, i) => pr(5000 + i, 'X-fill-' + i, 'x/fill-' + i, '', false)); // page 1 full, so page 2 matters
+const partial = await call({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'plan_meta', arguments: {} } }, '/mcp/' + SECRET, 'POST', { ...env, CACHE_SECONDS: '0', GITHUB_REPO: 'o/r3' });
+const partialRes = (await partial.json()).result; assert.equal(partialRes.isError, false, 'a failed older page is not fatal');
+assert.ok(JSON.parse(partialRes.content[0].text).some((r) => r.key === 'warning' && r.label === 'Merge history incomplete'), 'and it is reported');
+github.page2Fail = false;
+github.closed = savedClosed;
+// bad slot metadata is reported, never trusted
+const stateBefore = github.state;
+github.state = { updated_at: 'x', slots: { updated: '2999-01-01T00:00:00Z', items: 'not a list' } };
+const bad1 = (await metaOf('o/r6')).filter((r) => r.key === 'warning').map((r) => r.label);
+assert.ok(bad1.includes('Slots malformed'), 'items that is not a list is reported'); assert.ok(bad1.includes('Slots date invalid'), 'a date in the future is invalid, not fresh');
+github.state = { updated_at: 'x', slots: { updated: 'yesterday-ish', items: [] } };
+assert.ok((await metaOf('o/r7')).some((r) => r.label === 'Slots date invalid'), 'an unparseable date says invalid, not missing');
+github.state = { updated_at: 'x', slots: { items: [] } };
+assert.ok((await metaOf('o/r8')).some((r) => r.label === 'Slots date missing'), 'no date says missing');
+github.state = stateBefore;
 github.fail = true; // a GitHub failure is reported to the caller, not hidden
 const failed = (await (await worker.fetch(new Request('https://x/mcp/' + SECRET + '', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'plan_meta' } }) }), { ...env, CACHE_SECONDS: '0' })).json()).result;
 assert.equal(failed.isError, true); assert.match(failed.content[0].text, /Could not read GitHub/);
