@@ -1,4 +1,4 @@
-# X-legal-docs decisions (#446)
+# X-legal-docs decisions (#447)
 
 **Legal notice and lawful-use notices (owner request, 2026-11-04, revised the same day).**
 
