@@ -392,6 +392,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **rc.3 = rc.2 + #357 + #402 + the memory fix,** then one fresh frozen soak (r4) on rc.3. This replaces §2.29's "rc.3 = rc.2 + #357". The memory fix is the first thing built.
     - **Launches stay paused (§2.30),** except work by the sessions that already exist. The soak containers are stopped at the owner's convenience.
 
+32. **Launches resume with four slots** (owner, 2026-11-04, build-runner session, after the weekly usage limit reset): "My limit reset. You can continue building at full speed with all four slots."
+    - **At most four slice sessions at once,** replacing §2.30's two and ending its launch pause. `runner/slices.yaml` records it as `limits.phase_total: 4`. The ladder in build plan §0.2 still decides what fills a slot.
+    - **Track R is unchanged:** soak r4, the gluetun leg, the Windows smoke and the `v0.5.1` tag follow §2.31, and the epics held for the soak verdict (E-M6, E-v06-workers, E-v06-companions) stay held until r4's verdict.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

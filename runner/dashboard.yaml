@@ -919,11 +919,11 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Two slots, launches paused
-    text: By your instruction there are at most two worker slots, and no new work starts until you say so. Sessions that already exist may finish and their pull requests may merge (owner-decisions §2.30, §2.31). Workers, companions and packaging stay held.
+  - label: Four slots, building again
+    text: By your instruction four worker slots are running again (owner-decisions §2.32). The search schema bump, download clients as a source, the full tracker scrape and the AnimeTosho plug-in are under way. Workers, companions and packaging stay held until soak r4's verdict.
   you:
-  - label: After the memory fix
-    text: Run soak r4 on rc.3, then the 2-hour VPN (gluetun) leg and a short Windows smoke, then tag v0.5.1. You can stop the r3 soak containers whenever it suits you.
+  - label: Finish v0.5.1
+    text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Approve the waiting Windows installer job in the rc.3 Release run for the Windows smoke. Then the 2-hour VPN (gluetun) leg, and tag v0.5.1.
   - label: Confirm the crawler measurement specification
     text: CR-SPEC freezes how every crawler run is measured. It needs your confirmation, including its open question O1, before the first acceptance analysis.
   - label: Say whether #367 joins rc.3

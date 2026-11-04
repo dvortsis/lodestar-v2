@@ -9,7 +9,7 @@ limits:
   max_helpers: 16          # Sonnet/Haiku slices at once (owner, 2026-10-22)
   max_launches_per_day: 60 # backstop against runaway loops, not a budget (owner raised from 40, 2026-10-23)
   review_rounds_before_escalation: 2
-  phase_total: 2           # owner §2.30 (2026-11-02, weekly usage limit): at most 2 slices at once in total; was 4 (§2.25). Launches are also paused until the soak r3 verdict (§2.30). Remove when the owner lifts it (runner/README.md step 7)
+  phase_total: 4           # owner §2.32 (2026-11-04): at most 4 slices at once in total, ending §2.30's two-slot cap and launch pause. Remove when the owner lifts it (runner/README.md step 7)
 
 external:
   m4-schema-settled:
