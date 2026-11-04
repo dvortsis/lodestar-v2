@@ -8,7 +8,6 @@
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-mod common;
 
 const DEADLINE: Duration = Duration::from_secs(60);
 
@@ -30,7 +29,7 @@ fn serve(thp: Option<&str>) -> Serve {
     let dir = tempfile::tempdir().unwrap();
     let mut c = Command::new(env!("CARGO_BIN_EXE_lodestar"));
     c.env("LODESTAR_DATA_DIR", dir.path())
-        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
+        .env("LODESTAR_HTTP_BIND", "127.0.0.1:0")
         .env("LODESTAR_DHT_ENABLED", "false")
         .env("LODESTAR_SCRAPE_ENABLED", "false")
         .env("LODESTAR_LOG", "warn")
