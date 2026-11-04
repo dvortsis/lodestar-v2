@@ -944,8 +944,8 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Up to eight slots
-    text: 'By your instruction up to eight worker slots run at once, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33). All eight are in use; the runner keeps the current list in its state file, shown on the slots view.''s verdict.'
+  - label: Up to twelve slots
+    text: 'By your instruction up to twelve worker slots run at once, filled only when ready work fits the plan, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33, §2.36). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: Finish v0.5.1
     text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.
