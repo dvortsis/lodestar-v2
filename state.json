@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T15:38:00Z",
+ "updated_at": "2026-11-04T15:47:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2710,13 +2710,13 @@
    "head": "b36f27d3"
   },
   "SRC-10d": {
-   "status": "running",
+   "status": "blocked",
    "model": "sonnet",
-   "session": "session_01MMjhnD1GRbKMEJEdDJnfdw",
+   "session": "archived",
    "launched": "2026-11-04T05:42:00Z",
    "brief": "briefs/SRC-10d.md",
    "relaunched": "2026-11-04T15:13:00Z",
-   "note": "first session archived: hosts blocked; owner allowed academictorrents.com"
+   "note": "Academic Torrents feed uses bare <infohash>; waits on SRC-8b. Q2 clear; findings in brief"
   },
   "P-v06-rulepacks": {
    "status": "merged",
@@ -2738,11 +2738,20 @@
    "note": "r4 contingency; phase 1 measurement; index.rs after SB-6 merges"
   },
   "SB-6b": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01MMjhnCswQZZQH5WaWTukzL",
    "launched": "2026-11-04T15:35:00Z",
-   "note": "follow-ups from SB-6 review: swap drain, unknown-field availability fail-closed, shared load, progress"
+   "note": "follow-ups from SB-6 review: swap drain, unknown-field availability fail-closed, shared load, progress",
+   "pr": 418,
+   "head": "93a12281"
+  },
+  "SRC-8b": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhn8a8EcfirHuNtWTQ4e",
+   "launched": "2026-11-04T15:47:00Z",
+   "brief": "briefs/SRC-8b.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3132,7 +3141,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T15:38:00Z",
+ "last_heartbeat": "2026-11-04T15:47:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3151,7 +3160,8 @@
   "2026-11-04T15:13:00Z Owner allowed animetosho.org, feed.animetosho.org, academictorrents.com; SRC-10b/10d relaunched in fresh sessions. r4 retainer analysis in notes/r4-retainer-analysis.md; gauge asks sent to the dashboard session.",
   "2026-11-04T15:20:00Z r4 provisional fit h12-14: 23.1 MiB/h [15.6,30.6] (window incomplete, not a verdict); r4 not below r3 at same hours. Launched X-merge-policy (slot 8) as contingency. #416 review CHANGES: move slots into state.json. Network allowlist uses *.domain only \u2014 owner asked to add apex domains.",
   "2026-11-04T15:35:00Z #415 SB-6 merged (33088edd). SB-6b follow-up in same session. L4-followups now dependency-ready; waits for a free slot. X-merge-policy told index.rs waits for SB-6b.",
-  "2026-11-04T15:38:00Z #412 merged (de00b6cd): 19 rule-pack/enrichment slices to add to slices.yaml (with nits) in next runner PR; owner questions Q1-Q5 to queue. L4-followups launched in slot 7."
+  "2026-11-04T15:38:00Z #412 merged (de00b6cd): 19 rule-pack/enrichment slices to add to slices.yaml (with nits) in next runner PR; owner questions Q1-Q5 to queue. L4-followups launched in slot 7.",
+  "2026-11-04T15:47:00Z SRC-10d blocked on parser (bare <infohash>); SRC-8b (Opus) launched in slot 6; SRC-10d relaunches after. #417 and #418 in review."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4784,14 +4794,14 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-04T15:38:00Z",
+  "updated": "2026-11-04T15:47:00Z",
   "items": [
    {
     "slot": 1,
     "slice": "SB-6b",
     "role": "build",
     "agent": "claude",
-    "doing": "Tidying up the new search index backfill: safer handling of unknown fields and a faster swap.",
+    "doing": "Tidying up the new search index backfill. In review.",
     "since": "2026-11-04T15:35:00Z"
    },
    {
@@ -4828,11 +4838,11 @@
    },
    {
     "slot": 6,
-    "slice": "SRC-10d",
+    "slice": "SRC-8b",
     "role": "build",
     "agent": "claude",
-    "doing": "Building the Academic Torrents source, starting with a check of the site's terms and feed.",
-    "since": "2026-11-04T15:12:57Z"
+    "doing": "Teaching the feed reader to read Academic Torrents' torrent hashes, so that source can be built next.",
+    "since": "2026-11-04T15:47:00Z"
    },
    {
     "slot": 7,
