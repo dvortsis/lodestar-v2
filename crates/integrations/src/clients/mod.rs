@@ -4,6 +4,13 @@
 //! Each client is an adapter in `src/clients/<name>.rs` implementing
 //! [`DownloadClient`]. [`qbittorrent`] is the reference; the README lists
 //! what a new adapter must do and test.
+//!
+//! Listing a client's torrents and exporting their `.torrent` bytes
+//! (SRC-11, a client as a source) is a [`Lister`] over a [`Wire`], so a
+//! source plugin can speak the protocol through its own egress. The
+//! adapters' [`DownloadClient::list`] and [`DownloadClient::export`] are
+//! the same listers over their guarded client. Every list answer is
+//! untrusted and parsed within [`MAX_LIST_BYTES`] and [`MAX_LISTED`].
 
 pub mod aria2;
 pub mod deluge;
@@ -13,17 +20,20 @@ pub mod rtorrent;
 pub mod transmission;
 mod xmlrpc;
 
+use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
+use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
 
 use serde::Deserialize;
-use serde::de::{Deserializer, IgnoredAny, SeqAccess, Visitor};
+use serde::de::{DeserializeOwned, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 use crate::BoxFuture;
-use crate::net::{AddrClass, NetError, redact};
+use crate::net::{AddrClass, GuardedClient, NetError, NetPolicy, redact};
 use crate::secret::Secret;
 
 pub use magnet::{Magnet, MagnetError};
@@ -82,6 +92,10 @@ pub enum Feature {
     /// File selection for a magnet (a `.torrent` still can be).
     MagnetFileSelection,
     TorrentFile,
+    /// Listing the client's torrents ([`DownloadClient::list`]).
+    List,
+    /// Exporting a torrent's `.torrent` bytes ([`DownloadClient::export`]).
+    Export,
 }
 
 impl Feature {
@@ -95,6 +109,8 @@ impl Feature {
                 "selecting a magnet's files; send all files, or the .torrent file"
             }
             Feature::TorrentFile => "adding .torrent files",
+            Feature::List => "listing its torrents",
+            Feature::Export => "exporting .torrent files",
         }
     }
 }
@@ -422,6 +438,375 @@ pub trait DownloadClient: Send + Sync + fmt::Debug {
 
     /// The categories or labels the client knows, sorted by name.
     fn categories(&self) -> BoxFuture<'_, Result<Vec<Category>, ClientError>>;
+
+    /// The torrents in the client (SRC-11), parsed within the
+    /// [`MAX_LIST_BYTES`] and [`MAX_LISTED`] bounds; malformed entries are
+    /// skipped and counted. Unsupported unless the adapter overrides it.
+    fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>> {
+        Box::pin(async { Err(ClientError::Unsupported(Feature::List)) })
+    }
+
+    /// The `.torrent` bytes of the listed torrent `hash` (40 hex digits),
+    /// at most [`MAX_TORRENT_FILE`]. Untrusted: parse them with
+    /// `lodestar-metainfo` and check the info-hash before using them.
+    fn export<'a>(&'a self, hash: &'a str) -> BoxFuture<'a, Result<Vec<u8>, ClientError>> {
+        let _ = hash;
+        Box::pin(async { Err(ClientError::Unsupported(Feature::Export)) })
+    }
+}
+
+/// Lists and exports a client's torrents over a [`Wire`], so a caller
+/// that owns the transport (a source plugin's egress, SRC-5) speaks the
+/// client's protocol without building its own HTTP client. The adapters'
+/// [`DownloadClient::list`] and [`DownloadClient::export`] are this over
+/// their guarded client.
+pub trait Lister: Send + Sync + fmt::Debug {
+    fn kind(&self) -> ClientKind;
+
+    /// Whether [`export`](Self::export) can work at all for this client.
+    fn can_export(&self) -> bool;
+
+    /// The client's torrents. The list request is marked
+    /// [`WireRequest::poll`]; logins and retries aren't.
+    fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>>;
+
+    /// The `.torrent` bytes of `hash`, or `Unsupported(Export)`.
+    fn export<'a>(&'a self, hash: &'a str) -> BoxFuture<'a, Result<Vec<u8>, ClientError>>;
+}
+
+/// The [`Lister`] for a configured client over `wire`. rTorrent and Aria2
+/// have none: `Unsupported(List)`.
+pub fn lister(config: &ClientConfig, wire: Arc<dyn Wire>) -> Result<Box<dyn Lister>, ClientError> {
+    let policy = NetPolicy::download_client();
+    match config {
+        ClientConfig::QBittorrent {
+            url,
+            username,
+            password,
+        } => Ok(Box::new(qbittorrent::QbitLister::new(
+            url,
+            username.clone(),
+            password.clone(),
+            wire,
+            policy,
+        )?)),
+        ClientConfig::Transmission { url, auth } => Ok(Box::new(
+            transmission::TransmissionLister::new(url, auth.clone(), wire, policy)?,
+        )),
+        ClientConfig::Deluge { url, password } => Ok(Box::new(deluge::DelugeLister::new(
+            url,
+            password.clone(),
+            wire,
+            policy,
+        )?)),
+        ClientConfig::RTorrent { .. } | ClientConfig::Aria2 { .. } => {
+            Err(ClientError::Unsupported(Feature::List))
+        }
+    }
+}
+
+/// An HTTP method a [`Lister`] uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WireMethod {
+    Get,
+    Post,
+}
+
+impl WireMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WireMethod::Get => "GET",
+            WireMethod::Post => "POST",
+        }
+    }
+}
+
+/// One request in plain values. Header values may hold a session cookie
+/// or a password, so `Debug` prints header names only.
+#[derive(Clone)]
+pub struct WireRequest {
+    pub method: WireMethod,
+    pub url: String,
+    pub headers: Vec<(&'static str, String)>,
+    pub body: Vec<u8>,
+    /// The body is refused past this many bytes.
+    pub limit: usize,
+    /// This is the poll itself (the list), not a login, retry or export:
+    /// a source plugin sends it through its poll gate.
+    pub poll: bool,
+}
+
+impl fmt::Debug for WireRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(n, _)| *n).collect();
+        f.debug_struct("WireRequest")
+            .field("method", &self.method)
+            .field("headers", &names)
+            .field("body", &self.body.len())
+            .field("poll", &self.poll)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One answer, the body read whole within the request's limit.
+#[derive(Clone, PartialEq, Eq)]
+pub struct WireResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl fmt::Debug for WireResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WireResponse")
+            .field("status", &self.status)
+            .field("body", &self.body.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl WireResponse {
+    /// Every value of header `name`, ignoring ASCII case.
+    pub fn headers<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.headers
+            .iter()
+            .filter(move |(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// Sends one [`WireRequest`]. It never follows redirects, and refuses a
+/// body past the request's limit.
+pub trait Wire: Send + Sync {
+    fn exchange<'a>(
+        &'a self,
+        req: &'a WireRequest,
+    ) -> BoxFuture<'a, Result<WireResponse, ClientError>>;
+}
+
+/// A [`Wire`] over the download-client [`GuardedClient`].
+#[derive(Debug, Clone)]
+pub struct GuardedWire(pub GuardedClient);
+
+impl Wire for GuardedWire {
+    fn exchange<'a>(
+        &'a self,
+        req: &'a WireRequest,
+    ) -> BoxFuture<'a, Result<WireResponse, ClientError>> {
+        Box::pin(async move {
+            let headers: Vec<(String, String)> = req
+                .headers
+                .iter()
+                .map(|(n, v)| ((*n).to_owned(), v.clone()))
+                .collect();
+            let ex = self
+                .0
+                .exchange(
+                    req.method.as_str(),
+                    &req.url,
+                    &headers,
+                    req.body.clone(),
+                    req.limit,
+                )
+                .await?;
+            Ok(WireResponse {
+                status: ex.status,
+                headers: ex.headers,
+                body: ex.body,
+            })
+        })
+    }
+}
+
+/// The largest list answer read: about 40,000 torrents at qBittorrent's
+/// ~400 bytes each.
+pub const MAX_LIST_BYTES: usize = 16 << 20;
+/// Torrents kept from one list; the rest are counted in
+/// [`Listing::over_cap`].
+pub const MAX_LISTED: usize = 50_000;
+/// Bytes in a listed name; a longer one makes the entry malformed.
+pub const MAX_LISTED_NAME: usize = 4096;
+/// Bytes in a listed state string.
+const MAX_STATE: usize = 64;
+
+/// What a client says a torrent is doing, in common terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TorrentState {
+    Downloading,
+    Seeding,
+    Paused,
+    Checking,
+    Queued,
+    Error,
+    /// A state this adapter doesn't map, or none.
+    Other,
+}
+
+/// One torrent as the client listed it. Every field is the client's
+/// claim; only [`hash`](Self::hash) is checked for form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    /// The client's id for it: 40 lowercase hex digits (the v1 info-hash,
+    /// or a v2-only torrent's truncated v2 hash).
+    pub hash: String,
+    /// Control characters dropped and trimmed; `None` when empty.
+    pub name: Option<String>,
+    /// The total size, when the client knows it.
+    pub size: Option<u64>,
+    pub state: TorrentState,
+}
+
+/// One list answer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Listing {
+    /// In the client's order, each hash once.
+    pub torrents: Vec<Listed>,
+    /// Entries skipped as malformed: not an object, a missing or bad hash,
+    /// a field of the wrong type, an over-long name, or a repeated hash.
+    pub malformed: usize,
+    /// Well-formed entries past [`MAX_LISTED`], dropped.
+    pub over_cap: usize,
+}
+
+impl Listing {
+    /// Adds one entry, or counts why not.
+    pub(crate) fn push(&mut self, entry: Option<Listed>, seen: &mut HashSet<String>) {
+        let Some(entry) = entry else {
+            self.malformed += 1;
+            return;
+        };
+        if self.torrents.len() >= MAX_LISTED {
+            self.over_cap += 1;
+        } else if !seen.insert(entry.hash.clone()) {
+            self.malformed += 1;
+        } else {
+            self.torrents.push(entry);
+        }
+    }
+}
+
+/// A listed entry from its raw fields, or `None` when it's malformed.
+pub(crate) fn listed(
+    hash: &str,
+    name: Option<&str>,
+    size: Option<i64>,
+    state: TorrentState,
+) -> Option<Listed> {
+    if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let name = match name {
+        Some(n) if n.len() > MAX_LISTED_NAME => return None,
+        Some(n) => {
+            let clean: String = n.chars().filter(|c| !c.is_control()).collect();
+            let clean = clean.trim();
+            (!clean.is_empty()).then(|| clean.to_owned())
+        }
+        None => None,
+    };
+    Some(Listed {
+        hash: hash.to_ascii_lowercase(),
+        name,
+        // Clients say -1 (or 0) before they have the metadata.
+        size: size.and_then(|s| u64::try_from(s).ok()).filter(|&s| s > 0),
+        state,
+    })
+}
+
+/// A raw list entry of one client's shape.
+pub(crate) trait RawEntry: DeserializeOwned {
+    /// The entry, given the map key it sat under (Deluge's hash).
+    fn into_listed(self, key: Option<&str>) -> Option<Listed>;
+}
+
+/// An entry that parsed as `R`, or anything else (skipped and counted).
+#[derive(Deserialize)]
+#[serde(untagged, bound = "R: RawEntry")]
+enum Maybe<R> {
+    Entry(R),
+    Other(IgnoredAny),
+}
+
+/// A list (JSON array) or a map keyed by hash (JSON object) of `R`,
+/// collected into a [`Listing`].
+pub(crate) struct Bounded<R>(pub(crate) Listing, PhantomData<R>);
+
+impl<'de, R: RawEntry> Deserialize<'de> for Bounded<R> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Bounded<R>, D::Error> {
+        struct Collector<R>(PhantomData<R>);
+        impl<'de, R: RawEntry> Visitor<'de> for Collector<R> {
+            type Value = Bounded<R>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a torrent list")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Bounded<R>, A::Error> {
+                let (mut out, mut seen) = (Listing::default(), HashSet::new());
+                while let Some(e) = seq.next_element::<Maybe<R>>()? {
+                    out.push(
+                        match e {
+                            Maybe::Entry(r) => r.into_listed(None),
+                            Maybe::Other(_) => None,
+                        },
+                        &mut seen,
+                    );
+                }
+                Ok(Bounded(out, PhantomData))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Bounded<R>, A::Error> {
+                let (mut out, mut seen) = (Listing::default(), HashSet::new());
+                while let Some((key, e)) = map.next_entry::<String, Maybe<R>>()? {
+                    out.push(
+                        match e {
+                            Maybe::Entry(r) => r.into_listed(Some(&key)),
+                            Maybe::Other(_) => None,
+                        },
+                        &mut seen,
+                    );
+                }
+                Ok(Bounded(out, PhantomData))
+            }
+        }
+        d.deserialize_any(Collector(PhantomData))
+    }
+}
+
+/// A state string, cut to a sane length (it's only compared).
+pub(crate) fn state_text(s: Option<&str>) -> &str {
+    s.filter(|s| s.len() <= MAX_STATE).unwrap_or("")
+}
+
+/// Parses one client's list answer, as its [`Lister`] does after the
+/// HTTP exchange (Deluge's request-id check aside). Pure, for the fuzz
+/// target and tests: the body is untrusted, and is refused past
+/// [`MAX_LIST_BYTES`].
+pub fn parse_list(kind: ClientKind, body: &[u8]) -> Result<Listing, ClientError> {
+    if body.len() > MAX_LIST_BYTES {
+        return Err(ClientError::Protocol("the torrent list is too large"));
+    }
+    match kind {
+        ClientKind::QBittorrent => qbittorrent::parse_list(body),
+        ClientKind::Transmission => transmission::parse_list(body),
+        ClientKind::Deluge => deluge::parse_list(body).map(|(listing, _)| listing),
+        ClientKind::RTorrent | ClientKind::Aria2 => Err(ClientError::Unsupported(Feature::List)),
+    }
+}
+
+/// Whether `hash` is a torrent id an export may be asked for.
+pub(crate) fn check_hash(hash: &str) -> Result<(), ClientError> {
+    if hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(ClientError::InvalidRequest(
+            "the info-hash isn't 40 hex digits",
+        ))
+    }
+}
+
+/// `application/x-www-form-urlencoded`, as a browser encodes a form.
+pub(crate) fn form_encode(fields: &[(&str, &str)]) -> String {
+    let mut url = reqwest::Url::parse("http://form.invalid/").expect("a fixed URL parses");
+    url.query_pairs_mut().extend_pairs(fields);
+    url.query().unwrap_or("").to_owned()
 }
 
 /// HTTP basic authentication: Transmission's RPC password, or the web
@@ -924,5 +1309,444 @@ mod tests {
             ClientError::from(NetError::Connect),
             ClientError::Unreachable
         );
+    }
+
+    /// A scripted answer: status, headers and body.
+    type Answer<'a> = (u16, &'a [(&'a str, &'a str)], &'a [u8]);
+
+    /// A [`Wire`] that answers from a script and records each request.
+    #[derive(Default)]
+    struct Script {
+        answers: std::sync::Mutex<std::collections::VecDeque<WireResponse>>,
+        seen: std::sync::Mutex<Vec<WireRequest>>,
+    }
+
+    impl Script {
+        fn new(answers: Vec<Answer<'_>>) -> Arc<Script> {
+            Arc::new(Script {
+                answers: std::sync::Mutex::new(
+                    answers
+                        .into_iter()
+                        .map(|(status, headers, body)| WireResponse {
+                            status,
+                            headers: headers
+                                .iter()
+                                .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+                                .collect(),
+                            body: body.to_vec(),
+                        })
+                        .collect(),
+                ),
+                seen: std::sync::Mutex::default(),
+            })
+        }
+
+        fn seen(&self) -> Vec<WireRequest> {
+            self.seen.lock().unwrap().clone()
+        }
+
+        fn header(req: &WireRequest, name: &str) -> Option<String> {
+            req.headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    impl Wire for Script {
+        fn exchange<'a>(
+            &'a self,
+            req: &'a WireRequest,
+        ) -> BoxFuture<'a, Result<WireResponse, ClientError>> {
+            self.seen.lock().unwrap().push(req.clone());
+            let next = self.answers.lock().unwrap().pop_front();
+            Box::pin(async move { next.ok_or(ClientError::Unreachable) })
+        }
+    }
+
+    const H1: &str = "1f2e3d4c5b6a79880123456789abcdeffedcba98";
+    const H2: &str = "00112233445566778899aabbccddeeff00112233";
+
+    #[test]
+    fn qbittorrent_lists_are_bounded_and_skip_malformed_entries() {
+        let body = format!(
+            r#"[{{"hash":"{}","name":"Big Buck Bunny\u0007","total_size":928670754,"size":1,"state":"uploading"}},
+               {{"hash":"{H2}","name":"Sintel","size":-1,"state":"metaDL"}},
+               {{"hash":"{H2}","name":"again"}},
+               {{"hash":"xyz"}}, 7, {{"name":"no hash"}}, {{"hash":"{H1}","size":"big"}},
+               {{"hash":"{}", "name":"{}"}}]"#,
+            H1.to_uppercase(),
+            "a".repeat(40),
+            "n".repeat(MAX_LISTED_NAME + 1),
+        );
+        let l = parse_list(ClientKind::QBittorrent, body.as_bytes()).unwrap();
+        assert_eq!(
+            l.torrents,
+            vec![
+                Listed {
+                    hash: H1.into(),
+                    name: Some("Big Buck Bunny".into()),
+                    size: Some(928_670_754),
+                    state: TorrentState::Seeding,
+                },
+                Listed {
+                    hash: H2.into(),
+                    name: Some("Sintel".into()),
+                    size: None,
+                    state: TorrentState::Downloading,
+                },
+            ]
+        );
+        // The repeat, the bad hash, the number, no hash, a string size
+        // (also a repeat), and the over-long name.
+        assert_eq!((l.malformed, l.over_cap), (6, 0));
+        for bad in [&b"{oops"[..], b"\"x\"", b"null"] {
+            assert!(parse_list(ClientKind::QBittorrent, bad).is_err());
+        }
+        let huge = vec![b' '; MAX_LIST_BYTES + 1];
+        assert!(parse_list(ClientKind::QBittorrent, &huge).is_err());
+    }
+
+    #[test]
+    fn lists_stop_keeping_entries_at_the_cap() {
+        let mut body = String::from("[");
+        for i in 0..MAX_LISTED + 3 {
+            body.push_str(&format!(r#"{{"hash":"{i:040x}"}},"#));
+        }
+        body.push_str("1]");
+        let l = parse_list(ClientKind::QBittorrent, body.as_bytes()).unwrap();
+        assert_eq!(
+            (l.torrents.len(), l.over_cap, l.malformed),
+            (MAX_LISTED, 3, 1)
+        );
+    }
+
+    #[test]
+    fn transmission_and_deluge_lists() {
+        let body = format!(
+            r#"{{"arguments":{{"torrents":[{{"hashString":"{H1}","name":"Big Buck Bunny","totalSize":5,"status":6,"error":0}},
+                {{"hashString":"{H2}","status":0,"error":3}}, {{"hashString":1}}]}},"result":"success"}}"#
+        );
+        let l = parse_list(ClientKind::Transmission, body.as_bytes()).unwrap();
+        assert_eq!(l.torrents.len(), 2);
+        assert_eq!(l.torrents[0].state, TorrentState::Seeding);
+        assert_eq!(l.torrents[1].state, TorrentState::Error);
+        assert_eq!(l.malformed, 1);
+        assert!(matches!(
+            parse_list(ClientKind::Transmission, br#"{"result":"no"}"#),
+            Err(ClientError::Rejected(_))
+        ));
+        assert!(parse_list(ClientKind::Transmission, br#"{"result":"success"}"#).is_err());
+
+        let body = format!(
+            r#"{{"id":3,"error":null,"result":{{"{H1}":{{"name":"Sintel","total_size":9,"state":"Paused"}},"short":{{}},"{H2}":[1]}}}}"#
+        );
+        let l = parse_list(ClientKind::Deluge, body.as_bytes()).unwrap();
+        assert_eq!(
+            l.torrents,
+            vec![Listed {
+                hash: H1.into(),
+                name: Some("Sintel".into()),
+                size: Some(9),
+                state: TorrentState::Paused,
+            }]
+        );
+        assert_eq!(l.malformed, 2);
+        let refused = br#"{"id":1,"result":null,"error":{"code":5,"message":"echo hunter2"}}"#;
+        let e = parse_list(ClientKind::Deluge, refused).unwrap_err();
+        assert!(!e.to_string().contains("hunter2"), "{e}");
+        for kind in [ClientKind::RTorrent, ClientKind::Aria2] {
+            assert_eq!(
+                parse_list(kind, b"[]"),
+                Err(ClientError::Unsupported(Feature::List))
+            );
+        }
+    }
+
+    fn config(kind: ClientKind) -> ClientConfig {
+        let url = "http://nas.lan:8080/".to_owned();
+        match kind {
+            ClientKind::QBittorrent => ClientConfig::QBittorrent {
+                url,
+                username: "admin".into(),
+                password: Secret::new("hunter2"),
+            },
+            ClientKind::Transmission => ClientConfig::Transmission {
+                url,
+                auth: Some(BasicAuth {
+                    username: "admin".into(),
+                    password: Secret::new("hunter2"),
+                }),
+            },
+            ClientKind::Deluge => ClientConfig::Deluge {
+                url,
+                password: Secret::new("hunter2"),
+            },
+            ClientKind::RTorrent => ClientConfig::RTorrent { url, auth: None },
+            ClientKind::Aria2 => ClientConfig::Aria2 { url, secret: None },
+        }
+    }
+
+    #[tokio::test]
+    async fn qbittorrent_logs_in_lists_and_exports_logging_in_again_on_403() {
+        let list = format!(r#"[{{"hash":"{H1}","name":"Big Buck Bunny"}}]"#);
+        let wire = Script::new(vec![
+            (200, &[("Set-Cookie", "SID=abc; HttpOnly")], b"Ok."),
+            (200, &[], list.as_bytes()),
+            // The session expired: one new login, one retry.
+            (403, &[], b"Forbidden"),
+            (200, &[("Set-Cookie", "SID=def")], b"Ok."),
+            (200, &[], b"d4:infod4:name1:xee"),
+            (404, &[], b"Not Found"),
+        ]);
+        let l = lister(&config(ClientKind::QBittorrent), wire.clone()).unwrap();
+        assert!(l.can_export() && l.kind() == ClientKind::QBittorrent);
+        assert_eq!(l.list().await.unwrap().torrents.len(), 1);
+        assert_eq!(l.export(H1).await.unwrap(), b"d4:infod4:name1:xee");
+        assert!(matches!(l.export(H2).await, Err(ClientError::Rejected(_))));
+        assert_eq!(
+            l.export("../../etc").await,
+            Err(ClientError::InvalidRequest(
+                "the info-hash isn't 40 hex digits"
+            ))
+        );
+        let seen = wire.seen();
+        let urls: Vec<_> = seen
+            .iter()
+            .map(|r| (r.method, r.url.as_str(), r.poll))
+            .collect();
+        let export = format!("http://nas.lan:8080/api/v2/torrents/export?hash={H1}");
+        assert_eq!(
+            urls,
+            vec![
+                (
+                    WireMethod::Post,
+                    "http://nas.lan:8080/api/v2/auth/login",
+                    false
+                ),
+                (
+                    WireMethod::Get,
+                    "http://nas.lan:8080/api/v2/torrents/info",
+                    true
+                ),
+                (WireMethod::Get, export.as_str(), false),
+                (
+                    WireMethod::Post,
+                    "http://nas.lan:8080/api/v2/auth/login",
+                    false
+                ),
+                (WireMethod::Get, export.as_str(), false),
+                (
+                    WireMethod::Get,
+                    "http://nas.lan:8080/api/v2/torrents/export?hash=00112233445566778899aabbccddeeff00112233",
+                    false
+                ),
+            ]
+        );
+        assert_eq!(seen[0].body, b"username=admin&password=hunter2");
+        assert_eq!(
+            Script::header(&seen[1], "cookie").as_deref(),
+            Some("SID=abc")
+        );
+        assert_eq!(
+            Script::header(&seen[4], "cookie").as_deref(),
+            Some("SID=def")
+        );
+        assert_eq!(
+            Script::header(&seen[1], "origin").as_deref(),
+            Some("http://nas.lan:8080")
+        );
+        assert_eq!(seen[1].limit, MAX_LIST_BYTES);
+        assert_eq!(seen[2].limit, MAX_TORRENT_FILE);
+        let debug = format!("{l:?} {:?}", seen[1]);
+        assert!(
+            !debug.contains("hunter2") && !debug.contains("abc"),
+            "{debug}"
+        );
+    }
+
+    #[tokio::test]
+    async fn qbittorrent_refusals_are_typed() {
+        let wire = Script::new(vec![(200, &[], b"Fails.")]);
+        let l = lister(&config(ClientKind::QBittorrent), wire).unwrap();
+        assert_eq!(
+            l.list().await,
+            Err(ClientError::Auth(AuthFailure::BadCredentials))
+        );
+        let wire = Script::new(vec![
+            (200, &[], b"Ok."),
+            (403, &[], b""),
+            (200, &[], b"Ok."),
+            (403, &[], b""),
+        ]);
+        let l = lister(&config(ClientKind::QBittorrent), wire.clone()).unwrap();
+        assert_eq!(
+            l.list().await,
+            Err(ClientError::Auth(AuthFailure::SessionRefused))
+        );
+        // Authentication bypassed for this address: no cookie is sent.
+        assert!(Script::header(&wire.seen()[1], "cookie").is_none());
+    }
+
+    #[tokio::test]
+    async fn transmission_answers_409_once_and_has_no_export() {
+        let list = format!(
+            r#"{{"arguments":{{"torrents":[{{"hashString":"{H1}","name":"Sintel","totalSize":3,"status":4}}]}},"result":"success"}}"#
+        );
+        let wire = Script::new(vec![
+            (
+                409,
+                &[("X-Transmission-Session-Id", "tok3n")],
+                b"<h1>409</h1>",
+            ),
+            (200, &[], list.as_bytes()),
+            (409, &[("X-Transmission-Session-Id", "tok4n")], b""),
+            (409, &[("X-Transmission-Session-Id", "tok5n")], b""),
+        ]);
+        let l = lister(&config(ClientKind::Transmission), wire.clone()).unwrap();
+        assert!(!l.can_export());
+        let got = l.list().await.unwrap();
+        assert_eq!(got.torrents[0].state, TorrentState::Downloading);
+        assert_eq!(
+            l.list().await,
+            Err(ClientError::Auth(AuthFailure::SessionRefused))
+        );
+        assert_eq!(
+            l.export(H1).await,
+            Err(ClientError::Unsupported(Feature::Export))
+        );
+        let seen = wire.seen();
+        assert_eq!(seen[0].url, "http://nas.lan:8080/transmission/rpc");
+        assert!(seen[0].poll && !seen[1].poll);
+        assert_eq!(
+            Script::header(&seen[1], "x-transmission-session-id").as_deref(),
+            Some("tok3n")
+        );
+        assert_eq!(
+            Script::header(&seen[0], "authorization").as_deref(),
+            Some(format!("Basic {}", base64(b"admin:hunter2")).as_str())
+        );
+        let body: serde_json::Value = serde_json::from_slice(&seen[0].body).unwrap();
+        assert_eq!(body["method"], "torrent-get");
+        let wire = Script::new(vec![(401, &[], b"")]);
+        let l = lister(&config(ClientKind::Transmission), wire).unwrap();
+        assert_eq!(
+            l.list().await,
+            Err(ClientError::Auth(AuthFailure::BadCredentials))
+        );
+    }
+
+    #[tokio::test]
+    async fn deluge_logs_in_connects_and_logs_in_again_once() {
+        let list = format!(
+            r#"{{"id":6,"error":null,"result":{{"{H1}":{{"name":"Sintel","total_size":3,"state":"Seeding"}}}}}}"#
+        );
+        let wire = Script::new(vec![
+            (
+                200,
+                &[("Set-Cookie", "_session_id=s1; Path=/json")],
+                br#"{"id":1,"result":true,"error":null}"#,
+            ),
+            (200, &[], br#"{"id":2,"result":false,"error":null}"#),
+            (
+                200,
+                &[],
+                br#"{"id":3,"result":[["abc123","127.0.0.1",58846,"Online"]],"error":null}"#,
+            ),
+            (200, &[], br#"{"id":4,"result":null,"error":null}"#),
+            (200, &[], br#"{"id":5,"result":true,"error":null}"#),
+            (200, &[], list.as_bytes()),
+            (
+                200,
+                &[],
+                br#"{"id":7,"result":null,"error":{"code":1,"message":"Not authenticated"}}"#,
+            ),
+            (
+                200,
+                &[("Set-Cookie", "_session_id=s2")],
+                br#"{"id":8,"result":true,"error":null}"#,
+            ),
+            (200, &[], br#"{"id":9,"result":true,"error":null}"#),
+            (200, &[], br#"{"id":99,"result":{},"error":null}"#),
+        ]);
+        let l = lister(&config(ClientKind::Deluge), wire.clone()).unwrap();
+        assert_eq!(l.list().await.unwrap().torrents[0].hash, H1);
+        // The retry's answer has the wrong id: refused.
+        assert_eq!(
+            l.list().await,
+            Err(ClientError::Protocol("the answer is for another request"))
+        );
+        let seen = wire.seen();
+        let methods: Vec<String> = seen
+            .iter()
+            .map(|r| {
+                serde_json::from_slice::<serde_json::Value>(&r.body).unwrap()["method"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(
+            methods,
+            [
+                "auth.login",
+                "web.connected",
+                "web.get_hosts",
+                "web.connect",
+                "web.connected",
+                "core.get_torrents_status",
+                "core.get_torrents_status",
+                "auth.login",
+                "web.connected",
+                "core.get_torrents_status"
+            ]
+        );
+        let polls: Vec<usize> = (0..seen.len()).filter(|&i| seen[i].poll).collect();
+        assert_eq!(polls, [5, 6]);
+        assert_eq!(
+            Script::header(&seen[9], "cookie").as_deref(),
+            Some("_session_id=s2")
+        );
+        assert_eq!(seen[0].url, "http://nas.lan:8080/json");
+        assert_eq!(
+            l.export(H1).await,
+            Err(ClientError::Unsupported(Feature::Export))
+        );
+    }
+
+    #[test]
+    fn rtorrent_and_aria2_have_no_lister() {
+        for kind in [ClientKind::RTorrent, ClientKind::Aria2] {
+            assert!(matches!(
+                lister(&config(kind), Script::new(vec![])),
+                Err(ClientError::Unsupported(Feature::List))
+            ));
+        }
+        assert!(matches!(
+            lister(
+                &ClientConfig::Deluge {
+                    url: "http://169.254.169.254/".into(),
+                    password: Secret::new("x")
+                },
+                Script::new(vec![])
+            ),
+            Err(ClientError::Blocked(AddrClass::Metadata))
+        ));
+    }
+
+    #[tokio::test]
+    async fn adapters_without_listing_say_so() {
+        let c = connect(config(ClientKind::Aria2)).unwrap();
+        assert_eq!(c.list().await, Err(ClientError::Unsupported(Feature::List)));
+        assert_eq!(
+            c.export(H1).await,
+            Err(ClientError::Unsupported(Feature::Export))
+        );
+        let c = connect(config(ClientKind::Transmission)).unwrap();
+        assert_eq!(
+            c.export(H1).await,
+            Err(ClientError::Unsupported(Feature::Export))
+        );
+        assert_eq!(form_encode(&[("a b", "x&y=z")]), "a+b=x%26y%3Dz");
     }
 }

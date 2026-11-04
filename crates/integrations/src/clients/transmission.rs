@@ -30,6 +30,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
@@ -45,6 +46,10 @@ use super::{
     ClientError, ClientInfo, ClientKind, DownloadClient, Feature, FileCount, METADATA_WAIT, Magnet,
     POLL_INTERVAL, Selection, TorrentFile, already_there, base64, category_name, check_file_count,
     check_magnets, check_request, client_reason, partial, poll, rejected_status, skipped_files,
+};
+use super::{
+    Bounded, GuardedWire, Listed, Lister, Listing, MAX_LIST_BYTES, RawEntry, TorrentState, Wire,
+    WireMethod, WireRequest, listed,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -85,6 +90,8 @@ pub struct Transmission {
     metadata_wait: Duration,
     poll_interval: Duration,
     timeout: Duration,
+    /// Listing (SRC-11), over the same guarded client.
+    lister: TransmissionLister,
 }
 
 impl fmt::Debug for Transmission {
@@ -165,14 +172,15 @@ impl Transmission {
         auth: Option<BasicAuth>,
         http: GuardedClient,
     ) -> Result<Transmission, ClientError> {
-        let mut endpoint = parse_url(url, http.policy())?;
-        endpoint.set_query(None);
-        endpoint.set_fragment(None);
-        if !endpoint.path().ends_with("/rpc") {
-            let path = format!("{}/transmission/rpc", endpoint.path().trim_end_matches('/'));
-            endpoint.set_path(&path);
-        }
+        let endpoint = rpc_url(url, http.policy())?;
+        let lister = TransmissionLister::new(
+            url,
+            auth.clone(),
+            Arc::new(GuardedWire(http.clone())),
+            http.policy(),
+        )?;
         Ok(Transmission {
+            lister,
             endpoint,
             auth,
             http,
@@ -540,6 +548,23 @@ impl DownloadClient for Transmission {
                 .collect())
         })
     }
+
+    fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>> {
+        self.lister.list()
+    }
+}
+
+/// The RPC URL for an address: checked against `policy`, no query or
+/// fragment, `/transmission/rpc` added unless the path ends in `/rpc`.
+fn rpc_url(url: &str, policy: NetPolicy) -> Result<Url, ClientError> {
+    let mut endpoint = parse_url(url, policy)?;
+    endpoint.set_query(None);
+    endpoint.set_fragment(None);
+    if !endpoint.path().ends_with("/rpc") {
+        let path = format!("{}/transmission/rpc", endpoint.path().trim_end_matches('/'));
+        endpoint.set_path(&path);
+    }
+    Ok(endpoint)
 }
 
 /// A session id from a 409: printable ASCII token characters, so it can't
@@ -561,6 +586,186 @@ fn version_text(v: &str) -> Result<String, ClientError> {
         return Err(ClientError::Protocol("the version isn't a version"));
     }
     Ok(v.to_owned())
+}
+
+/// Lists torrents (`torrent-get`) over a [`Wire`], with the session-id
+/// and basic-auth handling [`Transmission`] uses. Transmission's RPC has
+/// no way to read a torrent's `.torrent` bytes (`torrentFile` is a path on
+/// the daemon's disk), so [`Lister::export`] is `Unsupported(Export)`.
+pub struct TransmissionLister {
+    endpoint: Url,
+    auth: Option<BasicAuth>,
+    wire: Arc<dyn Wire>,
+    session: Mutex<Option<Secret>>,
+}
+
+impl fmt::Debug for TransmissionLister {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TransmissionLister")
+            .field("url", &redact(&self.endpoint))
+            .finish_non_exhaustive()
+    }
+}
+
+/// The fields a list asks for.
+const LIST_FIELDS: [&str; 5] = ["hashString", "name", "totalSize", "status", "error"];
+
+impl TransmissionLister {
+    pub fn new(
+        url: &str,
+        auth: Option<BasicAuth>,
+        wire: Arc<dyn Wire>,
+        policy: NetPolicy,
+    ) -> Result<TransmissionLister, ClientError> {
+        Ok(TransmissionLister {
+            endpoint: rpc_url(url, policy)?,
+            auth,
+            wire,
+            session: Mutex::new(None),
+        })
+    }
+
+    /// One RPC call, answering a 409 with the new session id once. Only
+    /// the first attempt carries `poll`.
+    async fn call(
+        &self,
+        method: &str,
+        arguments: Value,
+        limit: usize,
+        poll: bool,
+    ) -> Result<Vec<u8>, ClientError> {
+        let body = serde_json::to_vec(&json!({ "method": method, "arguments": arguments }))
+            .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
+        for attempt in 0..2 {
+            let mut headers = vec![("Content-Type", "application/json".to_owned())];
+            if let Some(auth) = &self.auth {
+                let pair = format!("{}:{}", auth.username, auth.password.expose());
+                headers.push((
+                    "Authorization",
+                    format!("Basic {}", base64(pair.as_bytes())),
+                ));
+            }
+            if let Some(id) = &*self.session.lock().await {
+                headers.push(("X-Transmission-Session-Id", id.expose().to_owned()));
+            }
+            let req = WireRequest {
+                method: WireMethod::Post,
+                url: self.endpoint.to_string(),
+                headers,
+                body: body.clone(),
+                limit,
+                poll: poll && attempt == 0,
+            };
+            let res = self.wire.exchange(&req).await?;
+            match res.status {
+                409 if attempt == 0 => {
+                    let id = res
+                        .headers(SESSION_HEADER)
+                        .next()
+                        .and_then(session_id)
+                        .ok_or(ClientError::Protocol("a 409 without a usable session id"))?;
+                    *self.session.lock().await = Some(id);
+                }
+                409 => return Err(ClientError::Auth(AuthFailure::SessionRefused)),
+                401 => return Err(ClientError::Auth(AuthFailure::BadCredentials)),
+                403 => return Err(ClientError::Auth(AuthFailure::AddressRefused)),
+                421 => return Err(ClientError::Auth(AuthFailure::OriginRefused)),
+                200 => return Ok(res.body),
+                status => return Err(rejected_status(status, &res.body)),
+            }
+        }
+        Err(ClientError::Auth(AuthFailure::SessionRefused))
+    }
+}
+
+impl Lister for TransmissionLister {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Transmission
+    }
+
+    fn can_export(&self) -> bool {
+        false
+    }
+
+    fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>> {
+        Box::pin(async move {
+            let body = self
+                .call(
+                    "torrent-get",
+                    json!({ "fields": LIST_FIELDS }),
+                    MAX_LIST_BYTES,
+                    true,
+                )
+                .await?;
+            parse_list(&body)
+        })
+    }
+
+    fn export<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Vec<u8>, ClientError>> {
+        Box::pin(async { Err(ClientError::Unsupported(Feature::Export)) })
+    }
+}
+
+/// One `torrent-get` entry.
+#[derive(Deserialize)]
+struct RawTorrent {
+    #[serde(rename = "hashString")]
+    hash: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(rename = "totalSize", default)]
+    total_size: Option<i64>,
+    #[serde(default)]
+    status: Option<i64>,
+    /// Non-zero when the torrent has an error.
+    #[serde(default)]
+    error: Option<i64>,
+}
+
+impl RawEntry for RawTorrent {
+    fn into_listed(self, _: Option<&str>) -> Option<Listed> {
+        // `tr_torrent_activity`: 0 stopped, 1 and 2 checking, 3 and 5
+        // queued, 4 downloading, 6 seeding.
+        let state = match (self.error.unwrap_or(0), self.status) {
+            (e, _) if e != 0 => TorrentState::Error,
+            (_, Some(0)) => TorrentState::Paused,
+            (_, Some(1 | 2)) => TorrentState::Checking,
+            (_, Some(3 | 5)) => TorrentState::Queued,
+            (_, Some(4)) => TorrentState::Downloading,
+            (_, Some(6)) => TorrentState::Seeding,
+            _ => TorrentState::Other,
+        };
+        listed(&self.hash, self.name.as_deref(), self.total_size, state)
+    }
+}
+
+/// `torrent-get`'s answer: `{"arguments": {"torrents": [...]}, "result":
+/// "success"}`. Another `result` is the daemon's refusal.
+pub(super) fn parse_list(body: &[u8]) -> Result<Listing, ClientError> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        result: String,
+        #[serde(default)]
+        arguments: Option<Args>,
+    }
+    #[derive(Deserialize)]
+    struct Args {
+        torrents: Bounded<RawTorrent>,
+    }
+    if body.len() > MAX_LIST_BYTES {
+        return Err(ClientError::Protocol("the torrent list is too large"));
+    }
+    let answer: Envelope = serde_json::from_slice(body)
+        .map_err(|_| ClientError::Protocol("the answer isn't Transmission's JSON"))?;
+    if answer.result != "success" {
+        return Err(ClientError::Rejected(client_reason(
+            answer.result.as_bytes(),
+        )));
+    }
+    answer
+        .arguments
+        .map(|a| a.torrents.0)
+        .ok_or(ClientError::Protocol("the answer has no torrent list"))
 }
 
 #[cfg(test)]

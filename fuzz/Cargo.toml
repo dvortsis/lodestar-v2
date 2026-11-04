@@ -163,3 +163,10 @@ path = "fuzz_targets/prowlarr.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "client_list"
+path = "fuzz_targets/client_list.rs"
+test = false
+doc = false
+bench = false

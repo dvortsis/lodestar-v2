@@ -28,6 +28,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{COOKIE, HeaderValue, ORIGIN, REFERER, SET_COOKIE};
@@ -37,10 +38,13 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
+use super::Bounded;
 use super::{
     AddOptions, AddOutcome, AuthFailure, CLIENT_TIMEOUT, Capabilities, Category, ClientError,
-    ClientInfo, ClientKind, DownloadClient, Magnet, Selection, TorrentFile, category_name,
-    check_request, client_reason,
+    ClientInfo, ClientKind, DownloadClient, GuardedWire, Listed, Lister, Listing, MAX_LIST_BYTES,
+    MAX_TORRENT_FILE, Magnet, RawEntry, Selection, TorrentFile, TorrentState, Wire, WireMethod,
+    WireRequest, WireResponse, category_name, check_hash, check_request, client_reason,
+    form_encode, listed, state_text,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -77,6 +81,8 @@ pub struct QBittorrent {
     poll_interval: Duration,
     /// Per request; uploads get more (see [`upload_timeout`]).
     timeout: Duration,
+    /// Listing and export (SRC-11), over the same guarded client.
+    lister: QbitLister,
 }
 
 impl fmt::Debug for QBittorrent {
@@ -114,13 +120,14 @@ impl QBittorrent {
         password: Secret,
         http: GuardedClient,
     ) -> Result<QBittorrent, ClientError> {
-        let mut base = parse_url(url, http.policy())?;
-        base.set_query(None);
-        base.set_fragment(None);
-        if !base.path().ends_with('/') {
-            let path = format!("{}/", base.path());
-            base.set_path(&path);
-        }
+        let base = base_url(url, http.policy())?;
+        let lister = QbitLister::new(
+            url,
+            username.clone(),
+            password.clone(),
+            Arc::new(GuardedWire(http.clone())),
+            http.policy(),
+        )?;
         let origin = base.origin().ascii_serialization();
         let header = |s: &str| {
             HeaderValue::from_str(s).map_err(|_| ClientError::InvalidRequest("the URL's host"))
@@ -136,6 +143,7 @@ impl QBittorrent {
             metadata_wait: Duration::from_secs(30),
             timeout: CLIENT_TIMEOUT,
             poll_interval: Duration::from_millis(500),
+            lister,
         })
     }
 
@@ -559,6 +567,14 @@ impl DownloadClient for QBittorrent {
                 .collect())
         })
     }
+
+    fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>> {
+        self.lister.list()
+    }
+
+    fn export<'a>(&'a self, hash: &'a str) -> BoxFuture<'a, Result<Vec<u8>, ClientError>> {
+        self.lister.export(hash)
+    }
 }
 
 /// The session among a login's `Set-Cookie` headers: the first plausible
@@ -647,6 +663,227 @@ fn add_answer(body: &[u8]) -> Result<(), ClientError> {
 
 fn rejected(status: u16, body: &[u8]) -> ClientError {
     ClientError::Rejected(format!("HTTP {status}: {}", client_reason(body)))
+}
+
+/// The WebUI's base URL: checked against `policy`, no query or fragment,
+/// ending in `/`.
+fn base_url(url: &str, policy: NetPolicy) -> Result<Url, ClientError> {
+    let mut base = parse_url(url, policy)?;
+    base.set_query(None);
+    base.set_fragment(None);
+    if !base.path().ends_with('/') {
+        let path = format!("{}/", base.path());
+        base.set_path(&path);
+    }
+    Ok(base)
+}
+
+/// Lists torrents (`torrents/info`) and exports them (`torrents/export`,
+/// API 2.8.14, qBittorrent 4.5 and later) over a [`Wire`]. It logs in as
+/// [`QBittorrent`] does: a form `auth/login`, the session cookie from
+/// `Set-Cookie`, `Origin` and `Referer` on every request, and one new
+/// login on a 403.
+pub struct QbitLister {
+    base: Url,
+    origin: String,
+    username: String,
+    password: Secret,
+    wire: Arc<dyn Wire>,
+    session: Mutex<Option<Secret>>,
+}
+
+impl fmt::Debug for QbitLister {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QbitLister")
+            .field("url", &redact(&self.base))
+            .finish_non_exhaustive()
+    }
+}
+
+impl QbitLister {
+    pub fn new(
+        url: &str,
+        username: String,
+        password: Secret,
+        wire: Arc<dyn Wire>,
+        policy: NetPolicy,
+    ) -> Result<QbitLister, ClientError> {
+        let base = base_url(url, policy)?;
+        Ok(QbitLister {
+            origin: base.origin().ascii_serialization(),
+            base,
+            username,
+            password,
+            wire,
+            session: Mutex::new(None),
+        })
+    }
+
+    fn request(&self, method: WireMethod, endpoint: &str, limit: usize) -> WireRequest {
+        WireRequest {
+            method,
+            url: format!("{}api/v2/{endpoint}", self.base),
+            headers: vec![
+                ("Referer", format!("{}/", self.origin)),
+                ("Origin", self.origin.clone()),
+            ],
+            body: Vec::new(),
+            limit,
+            poll: false,
+        }
+    }
+
+    async fn login(&self) -> Result<Secret, ClientError> {
+        let mut req = self.request(WireMethod::Post, "auth/login", MAX_RESPONSE);
+        req.headers.push((
+            "Content-Type",
+            "application/x-www-form-urlencoded".to_owned(),
+        ));
+        req.body = form_encode(&[
+            ("username", self.username.as_str()),
+            ("password", self.password.expose()),
+        ])
+        .into_bytes();
+        let res = self.wire.exchange(&req).await?;
+        let cookie = pick_session_cookie(res.headers("set-cookie"));
+        if res.body.trim_ascii() == b"Fails." {
+            return Err(ClientError::Auth(AuthFailure::BadCredentials));
+        }
+        match res.status {
+            200 if res.body.trim_ascii() == b"Ok." => match cookie {
+                Some(Some(cookie)) => Ok(cookie),
+                Some(None) => Err(ClientError::Protocol("the session cookie is malformed")),
+                None => Ok(Secret::new("")),
+            },
+            401 => Err(ClientError::Auth(AuthFailure::OriginRefused)),
+            403 => Err(ClientError::Auth(AuthFailure::Banned)),
+            _ => Err(ClientError::Protocol("the login answer")),
+        }
+    }
+
+    async fn session(&self, stale: Option<&Secret>) -> Result<Secret, ClientError> {
+        let mut session = self.session.lock().await;
+        match (&*session, stale) {
+            (Some(current), None) => return Ok(current.clone()),
+            (Some(current), Some(stale)) if current.expose() != stale.expose() => {
+                return Ok(current.clone());
+            }
+            _ => {}
+        }
+        *session = None;
+        let cookie = self.login().await?;
+        *session = Some(cookie.clone());
+        Ok(cookie)
+    }
+
+    /// One call with the session, logging in again once on 403. Only the
+    /// first attempt carries `poll`.
+    async fn api(&self, mut req: WireRequest) -> Result<WireResponse, ClientError> {
+        let base_headers = req.headers.len();
+        let mut cookie = self.session(None).await?;
+        for attempt in 0..2 {
+            req.headers.truncate(base_headers);
+            if !cookie.is_empty() {
+                req.headers.push(("Cookie", cookie.expose().to_owned()));
+            }
+            req.poll &= attempt == 0;
+            let res = self.wire.exchange(&req).await?;
+            match res.status {
+                403 if attempt == 0 => cookie = self.session(Some(&cookie)).await?,
+                403 => return Err(ClientError::Auth(AuthFailure::SessionRefused)),
+                401 => return Err(ClientError::Auth(AuthFailure::OriginRefused)),
+                _ => return Ok(res),
+            }
+        }
+        Err(ClientError::Auth(AuthFailure::SessionRefused))
+    }
+}
+
+impl Lister for QbitLister {
+    fn kind(&self) -> ClientKind {
+        ClientKind::QBittorrent
+    }
+
+    fn can_export(&self) -> bool {
+        true
+    }
+
+    fn list(&self) -> BoxFuture<'_, Result<Listing, ClientError>> {
+        Box::pin(async move {
+            let mut req = self.request(WireMethod::Get, "torrents/info", MAX_LIST_BYTES);
+            req.poll = true;
+            let res = self.api(req).await?;
+            if res.status != 200 {
+                return Err(rejected(res.status, &res.body));
+            }
+            parse_list(&res.body)
+        })
+    }
+
+    fn export<'a>(&'a self, hash: &'a str) -> BoxFuture<'a, Result<Vec<u8>, ClientError>> {
+        Box::pin(async move {
+            check_hash(hash)?;
+            let endpoint = format!("torrents/export?hash={}", hash.to_ascii_lowercase());
+            let req = self.request(WireMethod::Get, &endpoint, MAX_TORRENT_FILE);
+            let res = self.api(req).await?;
+            match res.status {
+                200 if !res.body.is_empty() => Ok(res.body),
+                // No such torrent, or a qBittorrent before 4.5.
+                404 => Err(ClientError::Rejected(
+                    "no such torrent, or the client can't export (qBittorrent 4.5 or later can)"
+                        .into(),
+                )),
+                // 409: the client doesn't have the metadata yet.
+                _ => Err(rejected(res.status, &res.body)),
+            }
+        })
+    }
+}
+
+/// One `torrents/info` entry: the fields used, others ignored.
+#[derive(Deserialize)]
+struct RawTorrent {
+    hash: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    total_size: Option<i64>,
+    #[serde(default)]
+    size: Option<i64>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+impl RawEntry for RawTorrent {
+    fn into_listed(self, _: Option<&str>) -> Option<Listed> {
+        let state = match state_text(self.state.as_deref()) {
+            "downloading" | "stalledDL" | "metaDL" | "forcedDL" | "forcedMetaDL" | "allocating" => {
+                TorrentState::Downloading
+            }
+            "uploading" | "stalledUP" | "forcedUP" => TorrentState::Seeding,
+            "pausedDL" | "pausedUP" | "stoppedDL" | "stoppedUP" => TorrentState::Paused,
+            "checkingDL" | "checkingUP" | "checkingResumeData" | "moving" => TorrentState::Checking,
+            "queuedDL" | "queuedUP" => TorrentState::Queued,
+            "error" | "missingFiles" => TorrentState::Error,
+            _ => TorrentState::Other,
+        };
+        listed(
+            &self.hash,
+            self.name.as_deref(),
+            self.total_size.or(self.size),
+            state,
+        )
+    }
+}
+
+/// `torrents/info`'s answer: a JSON array of torrent objects.
+pub(super) fn parse_list(body: &[u8]) -> Result<Listing, ClientError> {
+    if body.len() > MAX_LIST_BYTES {
+        return Err(ClientError::Protocol("the torrent list is too large"));
+    }
+    let list: Bounded<RawTorrent> =
+        serde_json::from_slice(body).map_err(|_| ClientError::Protocol("the torrent list"))?;
+    Ok(list.0)
 }
 
 #[cfg(test)]
