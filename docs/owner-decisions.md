@@ -426,17 +426,17 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Filling them all isn't required.** A slot stays empty when no ready slice fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap or plan. That's the runner's judgment, as under §2.33. Review bandwidth stays the real limit: every slice still gets a fresh Opus review before merge.
     - §2.33's auto-approval and its "still for the owner" list are unchanged.
 
-37. **The owner's answers to the owner queue** (owner, 2026-11-04 about 20:30Z; given in the dashboard session and relayed to the runner). Queue items 1, 2, 8 and 9 were left unanswered and stay open.
+37. **The owner's answers to the owner queue** (owner, 2026-11-04 about 20:30Z; given in the dashboard session and relayed to the runner). Item numbers are the queue's as of 2026-11-04 before this record; the queue was renumbered after it. Queue items 1, 2, 8 and 9 were left unanswered and stay open.
     - **Required web checks: yes** (queue item 5, the runner's recommendation). `web-ok` and `e2e-ok`, the always-reporting aggregates X-required-web-checks added, join `ci-ok` as required checks on `main`. Adding them to the ruleset is the owner's step. Until it's done, the runner judges them by the green rule (`runner/README.md`).
     - **Imports through the running server, and the `.torrent` upload middleware exception** (queue item 6): "go with the recommended solution once identified." The runner identifies the recommendation when B-import-server-2 or E-M7's upload slice is planned, records it in that slice's decisions file, flags it (§2.19) and runs `/security-review` on the slice. It goes back to the owner only if the solution built deviates from that recommendation. `owner-import-server-surface` and `owner-upload-exception` hold on those terms.
     - **Unraid Community Apps:** the owner submits after the 1.0 release is complete, not before (queue item 7).
-    - **Rule-pack Q1-Q5: the runner's recommendations** (queue item 10, `docs/decisions/2026-11-04-P-v06-rulepacks.md`). `owner-rpq2`, `owner-rpq3` and `owner-rpq4` hold.
-      - Q1: no separate pack signing channel in v0.6. Packs change only with a signed release.
-      - Q2: ThePornDB and StashDB get only verified, Adult-classified, non-held, non-private items. They are sent the display name or the parsed site, date and title, never the hash or the file list, and nothing while Show adult content is off.
-      - Q3: the core judges enrichment text as extra evidence. It can only make a result stricter, never act as a counter-signal.
-      - Q4: performer names are stored and shown in the item drawer only. No performer search, facet or pages.
-      - Q5: no age data from enrichment in v0.6.
-    - **SRC-12's grey case: skip** (queue item 11). The full-scrape plugin doesn't contact a public tracker whose published rules forbid scraping, even if it answers.
+    - **Rule-pack Q1-Q5: the runner's recommended answers, as written in `docs/plan/2026-11-04-v06-rulepacks.md` §5** (queue item 10). That table is the decision; the bullets below summarise it. `owner-rpq2`, `owner-rpq3` and `owner-rpq4` hold.
+      - Q1: no separate pack signing channel in v0.6. Packs change only with a signed release, and RP-0's versions and changelogs make each change visible.
+      - Q2: ThePornDB and StashDB are sent only verified, Adult-classified items; never held, hidden, `private_source` or unverified items. Only the display name or the parsed site, date and title, never the hash or the files. User interest first, then a capped backfill. Nothing while "Show adult content" is off.
+      - Q3: the child-safety core judges enrichment text, stricter only. It can add a hold through the core's pattern rules (with their age-signal thresholds for Adult), never remove one, and never counts as a counter-signal. Descriptions aren't fetched or stored.
+      - Q4: performer names are stored and shown on the item they belong to (the drawer only). No `performer:` search field or facet, no per-performer pages or cross-item lists, and no other personal fields.
+      - Q5: no age data from enrichment in v0.6. Birth dates are neither requested nor stored.
+    - **SRC-12's grey case: skip** (queue item 11). Lodestar ships and suggests no such tracker. The settings text and the user guide tell the user to add only public trackers whose published rules allow a full scrape. The plugin can't detect those rules (`docs/decisions/2026-11-04-SRC-12.md`), so it relies on the user's list.
     - **No veto** (queue item 12) of SB-6's `size_bucket`, SRC-11's automatic `.torrent` export, or dropping SRC-10b.
     - **Signing keys** (queue item 4): the owner reports the release and freshness environments and keys as created. The freshness key (generation 0, `FCA9AFC5C8D864FE`) was already embedded by #211, merged 2026-10-30. The nightly key is skipped for v0.5.1, so that item stays open and optional.
     - **Q1 consent texts: not yet approved** (queue item 3). The draft is in `docs/decisions/2026-11-02-SRC-4.md`, "Draft consent texts". `owner-q1` stays unmet.

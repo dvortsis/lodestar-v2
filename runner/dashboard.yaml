@@ -786,7 +786,7 @@ owner_queue:
   when: Before CR-4 lands
 - n: 3
   type: decision
-  action: Approve the plain-language consent texts SRC-4 drafted (Q1), in docs/decisions/2026-11-02-SRC-4.md, "Draft consent texts"
+  action: Approve the plain-language consent texts SRC-4 drafted (Q1), at https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md#L79 ("Draft consent texts")
   unblocks: The consent dialogs and credentials screen (SRC-15b)
   when: Before SRC-15b
 - n: 4
@@ -812,7 +812,7 @@ owner_queue:
 - n: 8
   type: action
   action: Submit to Unraid Community Apps
-  unblocks: Packaging milestone
+  unblocks: The Unraid app-store listing
   when: After the 1.0 release is complete (§2.37)
 gates:
 - id: G-v05
@@ -932,4 +932,4 @@ notes:
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Optional
-    text: Signing key for nightly updates, required checks on main, and the Unraid Backups share minimum free space.
+    text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Review the draft consent texts (https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md#L79). The nightly signing key and the Unraid Backups share minimum free space are optional.
