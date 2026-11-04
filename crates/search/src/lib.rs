@@ -41,7 +41,7 @@ pub use cache::{
 pub use cancel::{CancelOnDrop, CancelToken};
 pub use count::{EXACT_UP_TO, Total};
 pub use cursor::{Cursor, LeaseId, Position};
-pub use doc::{DocEnrichment, TorrentDoc, extension, flag_names};
+pub use doc::{DocEnrichment, DocProvenance, TorrentDoc, extension, flag_names};
 pub use explain::{EXPLAIN_MAX, Explained, Explanation, Parts, Priors, WEIGHTS, Weights, explain};
 pub use facets::{
     Bin, Facet, FacetParams, Facets, Histo, Histogram, TermCounts, Unit, ValueCount, facets,

@@ -184,3 +184,10 @@ path = "fuzz_targets/client_list.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "stashdb"
+path = "fuzz_targets/stashdb.rs"
+test = false
+doc = false
+bench = false
