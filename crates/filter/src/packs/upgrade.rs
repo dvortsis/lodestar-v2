@@ -54,7 +54,8 @@ pub use lodestar_store::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rows {
     pub applied: [StoredText; 2],
-    pub marker: bool,
+    /// The marker row: `1`, or [`SEEDED_ON_RULES`]`@<time>`.
+    pub marker: StoredText,
 }
 
 impl Rows {
@@ -62,7 +63,7 @@ impl Rows {
     pub fn of(set: &lodestar_store::RuleSet) -> Rows {
         Rows {
             applied: set.pack_versions.applied.clone(),
-            marker: set.pack_versions.seeded.is_some(),
+            marker: set.pack_versions.seeded.clone(),
         }
     }
 
@@ -70,14 +71,14 @@ impl Rows {
         let r = store.pack_version_rows()?;
         Ok(Rows {
             applied: r.applied,
-            marker: r.seeded.is_some(),
+            marker: r.seeded,
         })
     }
 
     /// Whether any row exists, readable or not: a row that won't read
     /// counts as state, so it never lets seeding run again.
     pub fn exist(&self) -> bool {
-        self.marker || self.applied.iter().any(Option::is_some)
+        self.marker.is_some() || self.applied.iter().any(Option::is_some)
     }
 }
 
@@ -200,11 +201,11 @@ impl Condition {
     }
 }
 
-/// The `filter.stand_ins` label prefix of [`Condition`]s, and of the
-/// seeding report ([`SEEDED_LABEL`]).
+/// The `filter.stand_ins` label prefix of [`Condition`]s.
 pub const LABEL_PREFIX: &str = "packs.";
-/// Seeding ran on a store whose rule set wasn't empty.
-pub const SEEDED_LABEL: &str = "packs.seeded";
+/// The marker's value when seeding ran on a store whose rule set wasn't
+/// empty: `rules@<unix seconds>` ([`PackVersions::seeded_over_rules`]).
+pub const SEEDED_ON_RULES: &str = "rules";
 
 /// What applies of one rule.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -352,6 +353,10 @@ pub struct PackVersions {
     /// switch and exceptions to SC-2, which the engine does in memory
     /// meanwhile ([`crate::load`]).
     pub unseeded: bool,
+    /// Seeding ran, at this time, on a store whose rule set already had
+    /// rows: an upgrade from before RP-0, or an install whose version
+    /// rows were all lost. Reported for the Filters & Safety notice.
+    pub seeded_over_rules: Option<i64>,
 }
 
 impl PackVersions {
@@ -393,7 +398,7 @@ impl PackVersions {
         let records: Vec<Applied> = if unseeded {
             vec![seed_record(manifest)]
         } else {
-            if !rows.marker && rows.applied.iter().any(Option::is_some) {
+            if rows.marker.is_none() && rows.applied.iter().any(Option::is_some) {
                 conditions.push(Condition::MarkerMissing);
             }
             let read: Vec<Row> = rows.applied.iter().map(row).collect();
@@ -455,10 +460,18 @@ impl PackVersions {
         }
         conditions.sort_by_key(|c| c.label());
         conditions.dedup();
+        let seeded_over_rules = match &rows.marker {
+            Some(Ok(t)) => t
+                .strip_prefix(SEEDED_ON_RULES)
+                .and_then(|t| t.strip_prefix('@'))
+                .and_then(|t| t.parse().ok()),
+            _ => None,
+        };
         PackVersions {
             rules: states,
             conditions,
             unseeded,
+            seeded_over_rules,
         }
     }
 
@@ -601,9 +614,9 @@ pub fn copy_sc1_switch(stored: &[(String, bool)]) -> Vec<(String, bool)> {
 
 /// Seeds the pack versions once (the module docs): only when no
 /// pack-version row exists at all, in one transaction, [`seed_record`],
-/// SC-1's stored switch and exceptions copied to SC-2, the marker, and,
-/// when the rule set already had rows, the report [`SEEDED_LABEL`] at
-/// `now` in `filter.stand_ins` (kept a week). Run at every start before
+/// SC-1's stored switch and exceptions copied to SC-2, and the marker,
+/// which records `now` when the rule set already had rows
+/// ([`SEEDED_ON_RULES`]), so such a seeding is never silent. Run at every start before
 /// the filter is first read (the pipeline's start), and by the filters
 /// API before any change. Returns what it did, or `None` when the store
 /// had state.
@@ -615,12 +628,11 @@ pub fn ensure_seeded(
     if Rows::read(store)?.exist() {
         return Ok(None);
     }
-    let report = format!("{SEEDED_LABEL}@{now}");
     store.seed_pack_versions(
         &seed_record(manifest).encode(),
         PackRule::Sc1.id(),
         PackRule::Sc2.id(),
-        Some((crate::load::STAND_INS_KEY, &report)),
+        &format!("{SEEDED_ON_RULES}@{now}"),
     )
 }
 
@@ -823,7 +835,7 @@ mod tests {
                 Some(Ok(seed_record(&m).encode())),
                 Some(Ok(seed_record(&m).encode())),
             ],
-            marker: true,
+            marker: Some(Ok("1".into())),
         };
         let seeded = PackVersions::resolve(&m, &rows);
         assert!(!seeded.unseeded && seeded.conditions.is_empty());

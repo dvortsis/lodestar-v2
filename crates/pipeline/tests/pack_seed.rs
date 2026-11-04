@@ -33,15 +33,16 @@ async fn the_first_start_seeds_pack_versions_once() {
     assert_eq!(rows[0], rows[1]);
     let rec = Applied::decode(rows[0].as_deref().unwrap()).unwrap();
     assert_eq!(rec.get(PackRule::Sc2), Some(1));
-    assert!(store.setting_text(SEEDED_KEY).unwrap().is_some());
     let set = store.rule_set().unwrap();
     assert!(set.pack_switches.contains(&("SC-2".into(), false)));
     assert_eq!(
         set.exceptions.iter().filter(|e| e.rule == "SC-2").count(),
         1
     );
-    let report = store.setting_text(STAND_INS_KEY).unwrap().unwrap();
-    assert!(report.starts_with("packs.seeded@"), "{report}");
+    // Reported in the marker: the store had rules.
+    let report = store.setting_text(SEEDED_KEY).unwrap().unwrap();
+    assert!(report.starts_with("rules@"), "{report}");
+    assert_eq!(store.setting_text(STAND_INS_KEY).unwrap(), None);
     drop(store);
     // A second start seeds nothing more.
     let store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -49,6 +50,6 @@ async fn the_first_start_seeds_pack_versions_once() {
         .await
         .unwrap();
     let store = pipeline.shutdown().await.unwrap();
-    assert_eq!(store.setting_text(STAND_INS_KEY).unwrap(), Some(report));
+    assert_eq!(store.setting_text(SEEDED_KEY).unwrap(), Some(report));
     assert_eq!(store.rule_set().unwrap().exceptions.len(), 2);
 }

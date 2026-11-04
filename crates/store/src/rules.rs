@@ -212,16 +212,15 @@ impl Store {
     /// switch as `copy_to`'s (when `copy_from` has one and `copy_to`
     /// doesn't), and a copy of every exception to `copy_from` for
     /// `copy_to` (one with the same match already there isn't copied
-    /// again). When the rule set already had rows, `report`'s token is
-    /// appended to the text setting it names, in the same transaction, so
-    /// such a seeding is never silent. Returns `None` when any row exists:
-    /// nothing is written.
+    /// again). The marker's value is `1`, or `marker_with_rules` when the
+    /// rule set already had rows, so such a seeding is never silent.
+    /// Returns `None` when any row exists: nothing is written.
     pub fn seed_pack_versions(
         &mut self,
         applied: &str,
         copy_from: &str,
         copy_to: &str,
-        report: Option<(&str, &str)>,
+        marker_with_rules: &str,
     ) -> Result<Option<PackSeed>> {
         let tx = self.conn.transaction()?;
         if pack_version_rows(&tx)?.any() {
@@ -244,7 +243,6 @@ impl Store {
         for key in PACKS_APPLIED_KEYS {
             upsert_setting(&tx, key, applied)?;
         }
-        upsert_setting(&tx, PACKS_SEEDED_KEY, "1")?;
         let from: Option<bool> = tx
             .query_row(
                 "SELECT enabled FROM pack_switches WHERE id = ?1",
@@ -267,20 +265,18 @@ impl Store {
              ORDER BY e.id",
             params![copy_from, copy_to],
         )?;
-        if let Some((key, token)) = report.filter(|_| seed.rule_set_nonempty) {
-            // A value that isn't text is replaced: it couldn't be read.
-            let text = match stored_text(&tx, key)? {
-                Some(Ok(t)) if !t.trim().is_empty() => format!("{t} {token}"),
-                _ => token.to_owned(),
-            };
-            upsert_setting(&tx, key, &text)?;
-        }
+        let marker = if seed.rule_set_nonempty {
+            marker_with_rules
+        } else {
+            "1"
+        };
+        upsert_setting(&tx, PACKS_SEEDED_KEY, marker)?;
         tx.commit()?;
         Ok(Some(seed))
     }
 
     /// Writes the pack-version rows in one transaction: each applied row
-    /// that's `Some`, the marker, and with `switch` a pack switch too, so
+    /// that's `Some`, the marker when it's missing (one there is kept), and with `switch` a pack switch too, so
     /// a pack turned on and the versions it records land together.
     pub fn write_pack_versions(
         &mut self,
@@ -293,7 +289,10 @@ impl Store {
                 upsert_setting(&tx, key, text)?;
             }
         }
-        upsert_setting(&tx, PACKS_SEEDED_KEY, "1")?;
+        tx.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, '1')",
+            [PACKS_SEEDED_KEY],
+        )?;
         if let Some((id, on)) = switch {
             tx.execute(
                 "INSERT OR REPLACE INTO pack_switches (id, enabled) VALUES (?1, ?2)",
@@ -769,14 +768,13 @@ mod tests {
         s.set_pack_switch("SC-1", false).unwrap();
         s.add_exception("SC-1", 2, b"q").unwrap();
         s.add_exception("MW-1", 2, b"r").unwrap();
-        s.set_settings_text(&[("report", "U-1@5")]).unwrap();
         let seed = s
-            .seed_pack_versions("MW-1@1", "SC-1", "SC-2", Some(("report", "seeded@9")))
+            .seed_pack_versions("MW-1@1", "SC-1", "SC-2", "rules@9")
             .unwrap()
             .unwrap();
         assert_eq!(
-            s.setting_text("report").unwrap().as_deref(),
-            Some("U-1@5 seeded@9")
+            s.setting_text(PACKS_SEEDED_KEY).unwrap().as_deref(),
+            Some("rules@9")
         );
         assert_eq!(
             seed,
@@ -789,7 +787,7 @@ mod tests {
         let set = s.rule_set().unwrap();
         assert_eq!(set.pack_versions.applied[0], Some(Ok("MW-1@1".into())));
         assert_eq!(set.pack_versions.applied[0], set.pack_versions.applied[1]);
-        assert_eq!(set.pack_versions.seeded, Some(Ok("1".into())));
+        assert_eq!(set.pack_versions.seeded, Some(Ok("rules@9".into())));
         assert!(set.pack_switches.contains(&("SC-2".into(), false)));
         assert_eq!(
             set.exceptions.iter().filter(|e| e.rule == "SC-2").count(),
@@ -797,7 +795,7 @@ mod tests {
         );
         // Never again.
         assert_eq!(
-            s.seed_pack_versions("MW-1@2", "SC-1", "SC-2", None)
+            s.seed_pack_versions("MW-1@2", "SC-1", "SC-2", "rules@1")
                 .unwrap(),
             None
         );
@@ -805,11 +803,15 @@ mod tests {
         // An empty store seeds quietly.
         let mut s = store();
         let seed = s
-            .seed_pack_versions("", "SC-1", "SC-2", Some(("report", "seeded@9")))
+            .seed_pack_versions("", "SC-1", "SC-2", "rules@9")
             .unwrap()
             .unwrap();
         assert_eq!(seed, PackSeed::default());
-        assert_eq!(s.setting_text("report").unwrap(), None, "quiet");
+        assert_eq!(
+            s.setting_text(PACKS_SEEDED_KEY).unwrap().as_deref(),
+            Some("1"),
+            "quiet"
+        );
     }
 
     #[test]

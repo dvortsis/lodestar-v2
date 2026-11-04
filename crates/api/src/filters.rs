@@ -1159,13 +1159,11 @@ impl FiltersApi {
         Ok(a)
     }
 
-    /// Reloads the rule layers and switches from the store.
     /// Seeds the pack versions if the store never was (RP-0). A seeding
-    /// on a store that already had rules is reported in the same
-    /// transaction (`packs.seeded` in `filter.stand_ins`, kept a week):
-    /// an upgrade from before RP-0, or an install whose version rows were
-    /// all lost. The pipeline's start seeds first, so this is the
-    /// fallback. Returns whether it seeded.
+    /// on a store that already had rules is recorded in the marker
+    /// (`PackVersions::seeded_over_rules`): an upgrade from before RP-0, or
+    /// an install whose version rows were all lost. The pipeline's start
+    /// seeds first, so this is the fallback. Returns whether it seeded.
     fn seed_packs(&self, store: &mut Store, now: i64) -> ApiResult<bool> {
         let manifest = self.engine.current().manifest.clone();
         Ok(pack_upgrade::ensure_seeded(store, &manifest, now)
@@ -3316,8 +3314,12 @@ mod tests {
                 .pack_switches
                 .contains(&("SC-2".into(), false))
         );
-        let record = api.store().setting_text(STAND_INS_KEY).unwrap().unwrap();
-        assert_eq!(record, "packs.seeded@500", "seeding on a store with rules");
+        assert_eq!(
+            api.engine.current().pack_versions.seeded_over_rules,
+            Some(500),
+            "seeding on a store with rules is reported"
+        );
+        assert_eq!(api.store().setting_text(STAND_INS_KEY).unwrap(), None);
         assert!(!api.engine.current().packs.is_on(PackRule::Sc2));
         // SC-2 has its own effect warning.
         assert!(api.assess(&pack("SC-2", false), 1_000).unwrap().weakening);
@@ -3344,14 +3346,8 @@ mod tests {
         assert_eq!(rows[0].as_deref(), Some(accepted.encode().as_str()));
         apply_change(&api, Change::Undo);
         assert_eq!(version_rows(&api), rows);
-        // The report stays a week, then goes.
-        let week = lodestar_filter::load::SEEDED_NOTICE_SECS;
-        let mut store = api.store();
-        api.note_pack_conditions(&mut store, 500 + week - 1)
-            .unwrap();
-        assert!(store.setting_text(STAND_INS_KEY).unwrap().is_some());
-        api.note_pack_conditions(&mut store, 500 + week).unwrap();
-        assert_eq!(store.setting_text(STAND_INS_KEY).unwrap(), None);
+        // The marker still carries the report.
+        assert_eq!(rows[2].as_deref(), Some("rules@500"));
     }
 
     fn widened(c: &lodestar_filter::packs::Ctx<'_>) -> bool {

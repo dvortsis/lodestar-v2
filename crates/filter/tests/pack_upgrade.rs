@@ -185,11 +185,10 @@ fn seeding_keeps_every_rule_at_baseline_and_copies_sc1_to_sc2() {
     let seeded = upgrade::ensure_seeded(&mut s, &m, 0).unwrap().unwrap();
     assert!(seeded.rule_set_nonempty, "reported: the rule set had rows");
     assert_eq!(
-        s.setting_text(lodestar_filter::load::STAND_INS_KEY)
-            .unwrap()
-            .as_deref(),
-        Some("packs.seeded@0")
+        s.setting_text(SEEDED_KEY).unwrap().as_deref(),
+        Some("rules@0")
     );
+    assert_eq!(load(&m, &s).pack_versions.seeded_over_rules, Some(0));
     assert!(seeded.switch_copied);
     assert_eq!(seeded.exceptions_copied, 1);
     let set = s.rule_set().unwrap();
@@ -273,7 +272,7 @@ fn state_without_the_marker_or_unreadable_never_seeds() {
     let mut s = store();
     corrupt(&s, SEEDED_KEY);
     assert!(
-        s.seed_pack_versions("MW-1@1", "SC-1", "SC-2", None)
+        s.seed_pack_versions("MW-1@1", "SC-1", "SC-2", "rules@1")
             .unwrap()
             .is_none()
     );

@@ -149,9 +149,6 @@ impl Unreadable {
 /// The `settings` key of the [`StandIns`] record.
 pub const STAND_INS_KEY: &str = "filter.stand_ins";
 
-/// How long the report of a seeding on a store with rules stays.
-pub const SEEDED_NOTICE_SECS: i64 = 7 * 86_400;
-
 /// One row that failed closed ([`StandIns`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StandIn {
@@ -253,22 +250,10 @@ impl StandIns {
     /// [`upgrade::Condition::label`]) replaced by `labels`, the conditions
     /// as they are now: one still there keeps the time it was first
     /// found, one that's gone is dropped (they made no holds of their own
-    /// to re-judge). The seeding report ([`upgrade::SEEDED_LABEL`]) stays
-    /// for a week from when it was made, then goes. Other entries are
-    /// kept as they are.
+    /// to re-judge). Other entries are kept as they are.
     pub fn with_packs(&self, labels: &[String], now: i64) -> StandIns {
         let pack = |l: &str| l.starts_with(upgrade::LABEL_PREFIX);
         let mut out: Vec<StandIn> = self.0.iter().filter(|e| !pack(&e.label)).cloned().collect();
-        // The newest seeding report only, while it's fresh.
-        if let Some(e) = self
-            .0
-            .iter()
-            .filter(|e| e.label == upgrade::SEEDED_LABEL)
-            .max_by_key(|e| e.since)
-            .filter(|e| now - e.since < SEEDED_NOTICE_SECS)
-        {
-            out.push(e.clone());
-        }
         for l in labels {
             let since = self
                 .0
