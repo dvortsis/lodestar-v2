@@ -170,9 +170,14 @@ github.open = [
   pr(20, 'X-brand-new: Not in slices.yaml yet', 'slice/X-brand-new', 'Generated with [Claude Code]', false), // an X-* slice slices.yaml does not list
   pr(21, 'B0-2: Follow-up to a merged slice', 'slice/B0', '', false),                    // a follow-up on a reused branch: title id differs
   pr(22, 'Y-2: Title id differs from the branch', 'slice/Y-1', '', false),
+  pr(24, 'X-both: Listed by runner-state and has a PR', 'slice/X-both', '', false),       // runner-state already draws it as a round: no second node
+  pr(25, 'X-a-2: Follow-up on a reused branch', 'slice/X-a', '', false),                 // title id only: one provisional node, not two
+  pr(26, 'X-placed-1: A placement rule covers it', 'slice/X-placed-1', '', false),
+  pr(27, 'X-done-1: Merged earlier, new PR', 'slice/X-done-1', '', false),
 ];
-github.refs = [{ ref: 'refs/heads/slice/Q-branch-only' }];
-github.state = { updated_at: 'x', slots: { updated: new Date().toISOString(), items: [
+github.closed = [...savedClosed, pr(30, 'X-done-1: Merged', 'slice/X-done-1', '', true)];
+github.refs = [{ ref: 'refs/heads/slice/Q-branch-only' }, { ref: 'refs/heads/slice/X-bare' }];
+github.state = { updated_at: 'x', slices: { 'X-both': { status: 'building', notes: 'in runner-state' } }, slots: { updated: new Date().toISOString(), items: [
   { slot: 1, slice: 'B0', doing: 'Follow-up on a merged slice.' },
   { slot: 2, slice: 'Y-1', doing: 'Named by its branch.' },
   { slot: 3, slice: 'X-brand-new', doing: 'Not in the plan files yet.' },
@@ -187,16 +192,21 @@ assert.ok(adW.includes('Unknown slice:NOPE-9'), 'a slot naming a slice with neit
 assert.ok(adN.includes('Slot slice not in plan files yet:Q-branch-only') && adN.includes('Slot slice not in plan files yet:Y-1'), 'a slot slice that only has a branch or a PR is a quieter note');
 assert.ok(adN.includes('Slice not in plan files yet:X-brand-new'), 'an X-* slice with an open PR is noted');
 const openLoose = ad.find((r) => r.label === 'Open work in no slot');
-assert.ok(openLoose && openLoose.value === '1' && /SRC-5/.test(openLoose.note) && !/B0-2|Y-2/.test(openLoose.note), 'a PR counts as slotted through its branch name; only the one nobody lists is reported');
+assert.ok(openLoose && /SRC-5/.test(openLoose.note) && !/B0-2|Y-2|X-brand-new/.test(openLoose.note), 'a PR counts as slotted through its branch name; only the one nobody lists is reported');
 const adNodes = await toolR('plan_nodes', 'o/r9'), brand = adNodes.find((n) => n.id === 'X-brand-new');
 assert.ok(brand && brand.state === 'active' && brand.pr === 20 && brand.level === 'slice' && brand.parent === 'ws-small', 'an X-* slice with an open PR appears in the default lane at once');
 const adSlots = await toolR('plan_slots', 'o/r9');
 assert.deepEqual(adSlots.slice(0, 4).map((x) => [x.slice, x.stage, x.pr]), [['B0', 'active', 21], ['Y-1', 'active', 22], ['X-brand-new', 'active', 20], ['Q-branch-only', 'active', 0]], 'rows show the live state and the open PR');
 assert.ok(!adNodes.some((n) => n.id === 'Y-1' || n.id === 'Q-branch-only'), 'only X-* slices get a tree node');
+assert.deepEqual(adNodes.filter((n) => n.id === 'X-both').map((n) => n.kind), ['round'], 'an id runner-state already lists is one node, not two');
+assert.deepEqual(adNodes.filter((n) => /^X-a/.test(n.id)).map((n) => n.id), ['X-a-2'], 'a follow-up PR on a reused branch is one provisional node, from its title id');
+assert.equal(adNodes.filter((n) => n.id === 'X-a-2').length, 1); assert.equal(ad.filter((r) => r.key === 'note' && r.label === 'Slice not in plan files yet' && r.value === 'X-a-2').length, 1, 'and one note');
+assert.equal(adNodes.find((n) => n.id === 'X-placed-1').parent, 'ws-src', 'a placement rule decides the lane');
+assert.ok(!adNodes.some((n) => n.id === 'X-done-1' || n.id === 'X-bare'), 'a merged X-* slice and a bare branch draw no provisional node');
 // a merged X-* slice does not come back as a provisional node, and a bare branch does not make one
 github.open = [pr(23, 'B0: Reopened', 'slice/B0', '', false)]; github.state = { updated_at: 'x', slots: { updated: new Date().toISOString(), items: [] } };
 assert.ok(!(await toolR('plan_nodes', 'o/r10')).some((n) => n.kind === 'extra'), 'nothing provisional without an X-* id');
-github.open = savedOpen; github.refs = savedRefs;
+github.open = savedOpen; github.refs = savedRefs; github.closed = savedClosed;
 github.state = stateBefore;
 github.fail = true; // a GitHub failure is reported to the caller, not hidden
 const failed = (await (await worker.fetch(new Request('https://x/mcp/' + SECRET + '', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'plan_meta' } }) }), { ...env, CACHE_SECONDS: '0' })).json()).result;

@@ -40,6 +40,7 @@ const sliceIdsOf = (pr: PR): string[] => {
 };
 // an open pull request also counts for the slice its branch is named after: a follow-up on a reused branch keeps its title id
 const openIdsOf = (pr: PR): string[] => { const b = /^slice\/(.+)$/.exec(pr.head_ref || ''); return [...new Set([...sliceIdsOf(pr), ...(b ? [b[1]] : [])])]; };
+const stripId = (title: string) => title.replace(/^[^:]*:\s*/, '').slice(0, 120);
 const agentOf = (pr: PR) => (/claude\.ai\/code|Generated with \[Claude Code\]/.test(pr.body || '') || /^claude\//.test(pr.head_ref || '') ? 'claude' : 'other');
 
 export function buildPlan(inp: Inputs) {
@@ -71,7 +72,7 @@ export function buildPlan(inp: Inputs) {
   const openById: Record<string, number> = {}, openPR: Record<string, PR> = {};
   for (const p of inp.openPRs) for (const id of openIdsOf(p)) { openById[id] = p.number; openPR[id] = p; }
   // a branch that only has closed, unmerged PRs is abandoned work, not work in progress
-  const abandoned = new Set<string>(); for (const p of inp.closedPRs || []) for (const id of sliceIdsOf(p)) abandoned.add(id);
+  const abandoned = new Set<string>(); for (const p of inp.closedPRs || []) for (const id of openIdsOf(p)) abandoned.add(id);
   const started = new Set(inp.branches.filter((b) => !abandoned.has(b)));
 
   const cls = (i: string): string => {
@@ -136,15 +137,19 @@ export function buildPlan(inp: Inputs) {
       deps: (s.deps || []).join(','), why: finished ? '' : why(i).join(';'), unlocks: finished ? 0 : open.length, note: first(s.notes),
     });
   }
-  // an X-* slice that has an open pull request but is not in slices.yaml yet is shown at once in its placement (or the default lane)
-  for (const id of Object.keys(openPR)) {
-    if (byid[id] || mergedById[id] || !/^X-[\w.-]+$/.test(id)) continue;
-    const p = openPR[id], pl = place(cfg, id), ws = wsIds.has(pl.ws) ? pl.ws : 'ws-small';
-    nodes.push({ id, parent: ws, level: 'slice', title: p.title.replace(/^[^:]*:\s*/, '').slice(0, 120) || id, agent: agentOf(p), kind: 'extra', model: '', state: 'active', pr: p.number, deps: '', why: '', unlocks: 0, note: 'Not in runner/slices.yaml yet' });
+  // an X-* slice that has an open pull request but is not in slices.yaml yet is shown at once in its placement (or the default lane).
+  // The title id decides (a PR titled X-a-2 on slice/X-a is one slice, not two), and an id runner-state already lists is drawn as its round below.
+  const isRound = (k: string, v: any) => !!v && typeof v === 'object' && !k.startsWith('runner-') && k !== 'M4' && k !== 'CR-0' && v.status != null;
+  const provisional = new Set<string>();
+  for (const p of inp.openPRs) for (const id of sliceIdsOf(p)) {
+    if (provisional.has(id) || byid[id] || mergedById[id] || isRound(id, S[id]) || !/^X-[\w.-]+$/.test(id)) continue;
+    provisional.add(id);
+    const pl = place(cfg, id), ws = wsIds.has(pl.ws) ? pl.ws : 'ws-small';
+    nodes.push({ id, parent: ws, level: 'slice', title: stripId(p.title) || id, agent: agentOf(p), kind: 'extra', model: '', state: 'active', pr: p.number, deps: '', why: '', unlocks: 0, note: 'Not in runner/slices.yaml yet' });
     notice('Slice not in plan files yet', id, 'PR #' + p.number + ' is for ' + id + ', which runner/slices.yaml does not list yet; it is shown as active until it does');
   }
   for (const [k, v] of Object.entries(S) as any) {
-    if (byid[k]) continue; if (!v || typeof v !== 'object' || k.startsWith('runner-') || k === 'M4' || k === 'CR-0' || v.status == null) continue;
+    if (byid[k] || !isRound(k, v)) continue;
     let st = cls(k); if (st === 'held') st = 'done';
     nodes.push({ id: k, parent: 'ws-rounds', level: 'slice', title: first(v.notes || k).slice(0, 90) || k, agent: v.session ? 'claude' : '', kind: 'round', model: v.model || '', state: st, pr: typeof v.pr === 'number' ? v.pr : 0, deps: '', why: '', unlocks: 0, note: '' });
   }
@@ -231,7 +236,7 @@ export function buildPlan(inp: Inputs) {
       const followUp = !!node && ['done', 'closed'].includes(node.state) && !!livePR;
       if (node && ['done', 'closed'].includes(node.state) && !followUp) warn('Slot lists finished work', slice, 'slot ' + x.slot + ' still shows a slice that has merged or closed; the runner should update slots');
       if (slice) { if (seenSlice.has(slice)) warn('Slice in two slots', slice, 'slots ' + seenSlice.get(slice) + ' and ' + x.slot + ' both list it'); else seenSlice.set(slice, x.slot); }
-      rows[x.slot] = { slot: x.slot, status: x.status === 'idle' ? 'idle' : x.slot > cap ? 'finishing' : 'working', slice, title: node?.title || (livePR ? livePR.title.replace(/^[^:]*:\s*/, '').slice(0, 120) : ''), doing, agent: AGENTS.includes(x.agent) ? x.agent : node?.agent || (livePR ? agentOf(livePR) : ''), model: node?.model || '', role: ROLES.includes(x.role) ? x.role : 'build', since, stage: followUp ? 'active' : node?.state || (live ? 'active' : ''), pr: (followUp && livePR ? livePR.number : node?.pr) || livePR?.number || 0, asof: slotAsof };
+      rows[x.slot] = { slot: x.slot, status: x.status === 'idle' ? 'idle' : x.slot > cap ? 'finishing' : 'working', slice, title: node?.title || (livePR ? stripId(livePR.title) : ''), doing, agent: AGENTS.includes(x.agent) ? x.agent : node?.agent || (livePR ? agentOf(livePR) : ''), model: node?.model || '', role: ROLES.includes(x.role) ? x.role : 'build', since, stage: followUp ? 'active' : node?.state || (live ? 'active' : ''), pr: (followUp && livePR ? livePR.number : node?.pr) || livePR?.number || 0, asof: slotAsof };
     }
     for (let n = 1; n <= cap; n++) slots.push(rows[n] || { slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', model: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof });
     // a session still running in a slot above the limit (the limit was lowered while it works) is shown as finishing, not hidden
