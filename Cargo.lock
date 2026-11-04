@@ -1581,6 +1581,7 @@ dependencies = [
  "mimalloc",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
+ "tantivy",
  "tempfile",
  "tokio",
  "tower",
