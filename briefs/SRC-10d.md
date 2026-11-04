@@ -43,3 +43,9 @@ Academic Torrents and official distribution lists (Linux distros and similar) ar
 `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test -p lodestar-sources-plugins` pass, and a fresh self-review is done.
 
 Branch `slice/SRC-10d`. Open the PR titled "SRC-10d: Academic Torrents and official lists plugin". Follow `.claude/skills/steward/SKILL.md`. Message the runner (session_01EYhgh4JX3AmHzKXPjYCoUg) with the PR number and head, using the `send_message` tool of the Claude Code Remote MCP server. Never merge. Push once per round. Work frugally. Don't background long jobs with `&`.
+
+## Runner decisions (2026-11-04, after the first session was blocked)
+- The owner has added `academictorrents.com` to the environment's allowed domains. **Start by verifying:** robots.txt and the terms (Q2), the exact feed URL, and whether feed items carry an infohash or magnet that SRC-8's parser reads. Fetching a `.torrent` or a details page is not allowed.
+- **If the items carry no usable hash, or Q2 is grey,** stop and message the runner with what you found. Write no code.
+- **Scope:** Academic Torrents only. Official distro feeds aren't in this slice unless they're reachable, Q2-clear and carry hashes. Name each one in the decisions file, or leave them for a follow-up.
+- Fixtures are scrubbed recordings of the real feed.

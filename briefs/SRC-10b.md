@@ -42,3 +42,8 @@ This plugin is on the v0.6 sources critical path (SRC-10* → SRC-G). AnimeTosho
 `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test -p lodestar-sources-plugins` pass, and a fresh self-review is done.
 
 Branch `slice/SRC-10b`. Open the PR titled "SRC-10b: AnimeTosho plugin". Follow `.claude/skills/steward/SKILL.md`. Message the runner (session_01EYhgh4JX3AmHzKXPjYCoUg) with the PR number and head, using the `send_message` tool of the Claude Code Remote MCP server. Never merge. Push once per round. Work frugally. Don't background long jobs with `&`.
+
+## Runner decisions (2026-11-04, after the first session was blocked)
+- The owner has added `animetosho.org` and `feed.animetosho.org` to the environment's allowed domains. **Verify the feed host and the Q2 terms and robots check yourself** before fixing the endpoint in the manifest. If the check is grey, stop and tell the runner.
+- **Claims:** title, size, category, ids and the file count. Drop seeders and leechers, as SRC-10a does. The file list and media info wait for a follow-up parser slice (SRC-6b), because SRC-6's `Item` has only a file count. Name the deferral in the decisions file.
+- Fixtures may be scrubbed recordings of the real feed (preferred) or hand-written in its exact shape. Say which.
