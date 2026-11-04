@@ -4880,7 +4880,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T19:28Z",
+    "updated": "2026-11-04T19:41Z",
     "items": [
       {
         "slot": 1,
@@ -4901,9 +4901,9 @@
       {
         "slot": 3,
         "slice": "X-thp-off",
-        "role": "Opus session",
-        "agent": "session_01MMjhnCQkmjmywGxSKFFdqM",
-        "doing": "building: prctl THP disable + mimalloc allow_thp off for the worker",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Turning off transparent huge pages for the worker, the leading lead on soak memory growth.",
         "since": "2026-11-04T18:17Z"
       },
       {
