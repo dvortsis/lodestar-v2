@@ -4274,7 +4274,8 @@
     "Owner flag (§2.19): owner said \"all filters pre-checked\"; #447 §2.39 leaves blocklist subscriptions off by default. Confirm with the owner.",
     "LEGAL-2 (crawler paused on a fresh data dir until setup completes): adopted under §2.26, after v0.5.1. Add to slices.yaml in the post-#447 runner PR.",
     "After X-mimalloc-override and #442 merge: fix crates/lodestar/src/memstats.rs module doc (\"not override\", C allocs not counted); optional musl-only C_MALLOC_IS_MIMALLOC const.",
-    "X-search-files-4: 10M file-query gate (<150 ms, architecture §3) open after #429 (cold p95 263.7 ms). Measure (a) one-atom file clauses from torrent index (semantics change, decide on evidence) and (b) torrent-level size_bucket. (c) cache-with-corpus off (owner memory guarantee). Move G-import-10M dep from X-search-files-3 to X-search-files-4."
+    "X-search-files-4: 10M file-query gate (<150 ms, architecture §3) open after #429 (cold p95 263.7 ms). Measure (a) one-atom file clauses from torrent index (semantics change, decide on evidence) and (b) torrent-level size_bucket. (c) cache-with-corpus off (owner memory guarantee). Move G-import-10M dep from X-search-files-3 to X-search-files-4.",
+    "ENR-0 review notes for later briefs: ENR-4/ENR-5 external_ref only the scene page from Match::link (never a performer page) and must not rely on description/publisher/ids beside an adult section (clamped); ENR-1 rejects adult from a non-Kind::Enrichment plugin; ENR-7 URL-joins/percent-encodes the scene id; ENR-7/8 show partial dates as stored, never pad; ENR-4 brief states where ThePornDB JAV maps (Scene or none)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -4917,7 +4918,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-04T23:58Z",
+    "updated": "2026-11-04T23:59Z",
     "items": [
       {
         "slot": 1,
@@ -4940,7 +4941,7 @@
         "slice": "ENR-0",
         "role": "build",
         "agent": "claude",
-        "doing": "Adding version 2 of the stored claim format, with an optional adult-enrichment section (names only, no performer ids).",
+        "doing": "PR #444 reviewed (merge); two small polish fixes, then green CI.",
         "since": "2026-11-04T21:59Z"
       },
       {
