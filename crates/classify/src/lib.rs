@@ -153,9 +153,11 @@ pub fn classify_corrected(name: &str, files: &[FileInfo], fix: Correction) -> Cl
 /// [`classify_corrected`] gives, so stored results stay valid and
 /// [`CLASSIFY_VERSION`] doesn't change.
 ///
-/// A match pins the reported kind at [`MATCH_CONFIDENCE`]. Your
+/// A match makes the torrent adult at [`MATCH_CONFIDENCE`], with the
+/// reported kind where its own kind is video (Scene, Movie or VR); a
+/// non-video kind is kept. Your
 /// correction or classification rule (`fix`) still wins: Not adult skips
-/// adult detection, match included, and Is adult gives the match's kind
+/// adult detection, match included, and Is adult gives the matched kind
 /// at the correction's confidence, 100. A match only adds: without a Not adult fix
 /// the result is adult, no less surely than without the match, and every
 /// field other than the type, confidence and kind is unchanged.
@@ -211,7 +213,7 @@ pub fn classify_enriched(
         ),
     };
     let adult_kind = match (detected, fix.adult) {
-        // Is adult and a match agree: the reported kind, at the
+        // Is adult and a match agree: the matched kind, at the
         // correction's full confidence, so the match never lowers it.
         (Some((kind, _)), Some(true)) if enrichment.is_some() => Some((kind, 100)),
         (Some(d), _) => Some(d),

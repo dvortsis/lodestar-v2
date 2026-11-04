@@ -14,6 +14,7 @@
 //!
 //! - Enrichment: a match from an adult-enrichment service (ThePornDB,
 //!   StashDB) is a strong signal that pins the kind the service reports
+//!   where the torrent's own kind is video (a non-video kind is kept),
 //!   at [`MATCH_CONFIDENCE`] ([`detect_matched`], plan Q13). It only ever
 //!   adds: it makes a torrent adult, or more surely or more specifically
 //!   so, and never less. A user correction or classification rule still
