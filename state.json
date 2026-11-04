@@ -3234,7 +3234,8 @@
     "2026-11-04T19:08Z Owner: Yes to the narrow store-crate unsafe exception; follow runner's UTC-only recommendation. Recorded as \u00a72.35 in runner PR #428 (review and CI running). X-mem-gauges told to add the SQLite half.",
     "2026-11-04T19:12Z #426 SRC-3 review CHANGES: stored filter rows with source:/verified:/network: words fail open on load (load.rs). Runner approved load.rs shared edit after #424 (RP-0 owns load.rs) merges; also percolator without_unverified and explicit DocProvenance.verified.",
     "2026-11-04T19:20Z #428 review CHANGES: \u00a72.35 scope narrowed (allocator callbacks not covered), collector UTC default sent to X-mem-gauges; delta at 5a341ea5 under re-review.",
-    "2026-11-04T19:28Z #428 merged (16e3460c, owner \u00a72.35). #424 RP-0 merged (75fd512f); session archived. RP-1 launched (Opus, session_01MMjhnBsHgoPQwNTpeSGLmm). #429 X-search-files-3 review running; merge waits for 10M (projection ~177 ms vs 150). SRC-3 cleared for load.rs."
+    "2026-11-04T19:28Z #428 merged (16e3460c, owner \u00a72.35). #424 RP-0 merged (75fd512f); session archived. RP-1 launched (Opus, session_01MMjhnBsHgoPQwNTpeSGLmm). #429 X-search-files-3 review running; merge waits for 10M (projection ~177 ms vs 150). SRC-3 cleared for load.rs.",
+    "2026-11-04T19:50Z #416 review CHANGES (unbounded slot number crashes buildPlan; plus retry jitter, string coercion, date checks, docs fields, decisions file); relayed to dashboard session."
   ],
   "owner_flags": [
     "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4237,7 +4238,8 @@
     "Runner docs PR: add X-log-url-redact to slices.yaml and ws placement",
     "X-commit-cadence (M2): memory benefit not shown at 150k (X-merge-policy round 2); justify on disk writes/CPU only; lower priority than X-thp-off and X-mem-gauges for rc.4.",
     "X-sqlite-malloc: NOT yet unblocked. \u00a72.35 covers only the sqlite3_config call; the sqlite3_mem_methods callbacks (about 6 unsafe sites plus a libmimalloc-sys dependency) need the owner first, or a route with no unsafe (mimalloc override feature or a build flag). Brief after X-mem-gauges measures the SQLite heap.",
-    "SRC-3b notes (from #426 review): fields_incomplete notice on /facets and /export if SRC-3 doesn't add it; SB-6 import->producer test; case-only plugin id collisions in source:"
+    "SRC-3b notes (from #426 review): fields_incomplete notice on /facets and /export if SRC-3 doesn't add it; SB-6 import->producer test; case-only plugin id collisions in source:",
+    "Runner docs PR: dashboard.yaml notes ~923 still says 'Four slots'; set to eight (\u00a72.33)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
