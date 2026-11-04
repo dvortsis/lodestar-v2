@@ -179,6 +179,33 @@ export function buildPlan(inp: Inputs) {
   const crawler = (cfg.crawler || []).map((c: any) => ({ label: c.label, value: c.value, kind: c.kind, note: c.note || '' }));
   const soak = (cfg.soak || []).map((x: any) => ({ stage: x.stage, label: x.label, start: x.start, end: x.end }));
 
+  // worker slots: the runner lists who works on what in runner/dashboard.yaml `slots`; GitHub supplies each slice's title, state and PR.
+  // A slot the runner has not described shows as idle, and anything that looks out of step is reported rather than hidden.
+  const sl = cfg.slots || {};
+  const items: any[] = Array.isArray(sl.items) ? sl.items : [];
+  const cap = Math.max(0, Number.isFinite(Number(sl.capacity)) ? Number(sl.capacity) : items.length);
+  const byId: Record<string, any> = {}; for (const n of nodes) byId[n.id] = n;
+  const slotAsof = String(sl.updated || '');
+  const slots: any[] = [];
+  for (let n = 1; n <= cap; n++) {
+    const it = items.filter((x) => Number(x.slot) === n);
+    if (it.length > 1) warn('Slot listed twice', String(n), 'runner/dashboard.yaml slots has more than one entry for slot ' + n);
+    const x = it[0];
+    if (!x) { slots.push({ slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof }); continue; }
+    const node = x.slice ? byId[x.slice] : undefined;
+    if (x.slice && !node) warn('Unknown slice', String(x.slice), 'slot ' + n + ' in runner/dashboard.yaml slots names a slice that is not in runner/slices.yaml');
+    if (node && ['done', 'closed'].includes(node.state)) warn('Slot lists finished work', String(x.slice), 'slot ' + n + ' still shows a slice that has merged or closed; the runner should update slots');
+    slots.push({ slot: n, status: x.status || 'working', slice: x.slice || '', title: node?.title || '', doing: x.doing || '', agent: x.agent || node?.agent || '', role: x.role || 'build', since: x.since || '', stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof });
+  }
+  for (const x of items) if (!(Number(x.slot) >= 1 && Number(x.slot) <= cap)) warn('Slot out of range', String(x.slot), 'runner/dashboard.yaml slots has an entry outside 1..capacity (' + cap + ')');
+  if (sl.capacity !== undefined) {
+    const age = slotAsof ? (Date.parse(inp.now) - Date.parse(slotAsof)) / 36e5 : Infinity;
+    if (!(age <= 8)) warn('Slots list is stale', slotAsof || 'no date', 'runner/dashboard.yaml slots.updated is ' + (Number.isFinite(age) ? Math.round(age) + ' h old' : 'missing') + '; the runner should refresh it whenever a session starts or ends');
+    const listed = new Set(items.map((x) => x.slice).filter(Boolean));
+    const loose = Object.keys(openById).filter((id) => !listed.has(id));
+    if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner/dashboard.yaml slots');
+  }
+
   if (unplaced.length) warn('Slices not placed', String(unplaced.length), 'No placement rule covers: ' + unplaced.slice(0, 12).join(', ') + (unplaced.length > 12 ? ', …' : '') + '. Add them to placement: in runner/dashboard.yaml.');
   const metaRows: any[] = [
     { key: 'main', label: 'Main branch', value: inp.mainSha.slice(0, 8), note: inp.mainDate },
@@ -187,5 +214,5 @@ export function buildPlan(inp: Inputs) {
     { key: 'built', label: 'Built at', value: inp.now.slice(0, 16).replace('T', ' ') + ' UTC', note: 'live, by the status connector' },
     ...warnings.map((w) => ({ key: 'warning', label: w.label, value: w.value, note: w.note })),
   ];
-  return { nodes, road, edges, activity, recent, meta: metaRows, gates, owner, ext, notes, crawler, soak };
+  return { nodes, road, edges, activity, recent, meta: metaRows, gates, owner, ext, notes, crawler, soak, slots };
 }

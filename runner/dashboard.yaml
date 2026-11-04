@@ -10,6 +10,7 @@
 #   - a phase, track or roadmap dependency changes (build-plan 0)     -> phases, workstreams, roadmap
 #   - a gate is defined, measured or passed                           -> gates, crawler, soak
 #   - the top-of-page notes are out of date                           -> notes
+#   - a worker session starts, ends or changes task                   -> slots (runner only)
 # `cd tools/status-connector && npm test` checks that this file and runner/slices.yaml agree.
 # See docs/handoff.md and CLAUDE.md ("Keeping the dashboard current").
 #
@@ -907,6 +908,23 @@ soak:
   label: 'r3 failed the memory gate: 1.88 MiB/h, 95% CI [1.43, 2.33] over hours 12-24 (bar: upper bound at most 2.0); r4 on rc.3 followed'
   start: '2026-11-02T22:16:16Z'
   end: '2026-11-02T22:16:16Z'
+# slots: what each worker slot is doing now. The RUNNER alone edits this block, in a small PR of its own (or the PR that
+#   starts or ends a session), every time a session is launched, finishes, is archived, changes task, or capacity changes.
+#   Set `updated` to the UTC time of the edit. The dashboard shows a warning when `updated` is over 8 hours old, when a slot
+#   names a slice that has merged, and when an open slice PR is in no slot. Slots 1..capacity with no entry show as idle.
+#   Per item: slot (1..capacity), slice (id in slices.yaml, optional for non-slice work), doing (one plain sentence for a
+#   non-technical reader), agent (claude | other), role (build | review | docs | soak | other), since (UTC, optional).
+slots:
+  updated: '2026-11-04T06:05:00Z'
+  capacity: 8
+  items:
+  - {slot: 1, slice: SB-6, role: build, agent: claude, doing: 'Changing the search index layout (schema 6) so results can show verified status, source and network, with the index rebuilt in the background.'}
+  - {slot: 2, slice: SRC-11, role: build, agent: claude, doing: 'Letting Lodestar read what your qBittorrent, Transmission or Deluge already has, as a private source.'}
+  - {slot: 3, slice: SRC-12, role: build, agent: claude, doing: 'Reading trackers'' full scrape files, one per tracker per day, to discover torrents.'}
+  - {slot: 4, slice: SRC-10b, role: build, agent: claude, doing: 'Building the AnimeTosho source (a Torznab feed, with file lists and media info).'}
+  - {slot: 5, slice: SRC-10c, role: build, agent: claude, doing: 'Building the Internet Archive source.'}
+  - {slot: 6, slice: SRC-10d, role: build, agent: claude, doing: 'Building the Academic Torrents and official lists source.'}
+  - {slot: 7, slice: P-v06-rulepacks, role: docs, agent: claude, doing: 'Planning the curated rule packs and the ThePornDB / StashDB enrichment slices.'}
 notes:
   updated: '2026-11-04'
   now:

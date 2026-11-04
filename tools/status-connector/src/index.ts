@@ -18,6 +18,7 @@ const TOOLS = [
   ['plan_notes', 'The plain-language notes at the top of the dashboard.'],
   ['plan_crawler', 'Measured crawler rates against the v0.6 gate.'],
   ['plan_soak', 'The phases of the running 24-hour memory test.'],
+  ['plan_slots', 'What each worker slot is doing now, from the runner\'s list, with each slice\'s state read from GitHub.'],
 ] as const;
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const MIN_SECRET = 32;
@@ -126,7 +127,7 @@ export default {
     if (id === undefined) return new Response(null, { status: 202 }); // notification
     switch (method) {
       case 'initialize':
-        return rpc(id, { protocolVersion: PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0], capabilities: { tools: {} }, serverInfo: { name: 'lodestar-status', version: '1.2.0' } });
+        return rpc(id, { protocolVersion: PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0], capabilities: { tools: {} }, serverInfo: { name: 'lodestar-status', version: '1.3.0' } });
       case 'ping': return rpc(id, {});
       case 'tools/list':
         return rpc(id, { tools: TOOLS.map(([name, description]) => ({ name, description, inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, openWorldHint: true } })) });

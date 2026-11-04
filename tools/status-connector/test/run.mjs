@@ -63,7 +63,7 @@ assert.equal((await (await call(null)).json()).error.code, -32600);
 assert.equal((await call({ jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202, 'notification');
 assert.equal((await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '1999-01-01' } })).result.protocolVersion, '2025-06-18', 'only a supported protocol version is answered');
 assert.equal((await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })).result.serverInfo.name, 'lodestar-status');
-assert.deepEqual((await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.map((t) => t.name), ['plan_nodes', 'plan_road', 'plan_edges', 'plan_activity', 'plan_recent', 'plan_meta', 'plan_gates', 'plan_owner', 'plan_ext', 'plan_notes', 'plan_crawler', 'plan_soak']);
+assert.deepEqual((await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.map((t) => t.name), ['plan_nodes', 'plan_road', 'plan_edges', 'plan_activity', 'plan_recent', 'plan_meta', 'plan_gates', 'plan_owner', 'plan_ext', 'plan_notes', 'plan_crawler', 'plan_soak', 'plan_slots']);
 
 const nodes = (await tool('plan_nodes')).rows; const by = Object.fromEntries(nodes.map((n) => [n.id, n]));
 assert.equal(by.B0.state, 'done'); assert.equal(by.B0.agent, 'claude');
@@ -90,6 +90,11 @@ const gates = (await tool('plan_gates')).rows; assert.equal(gates.find((g) => g.
 assert.equal((await tool('plan_owner')).rows.length, 1); assert.equal((await tool('plan_edges')).rows.length, 1, 'an arrow to a missing step is dropped');
 const notes = (await tool('plan_notes')).rows; assert.deepEqual(notes.map((n) => n.group), ['now', 'you']); assert.equal(notes[0].asof, '2026-11-02');
 assert.equal((await tool('plan_crawler')).rows.length, 2); assert.equal((await tool('plan_soak')).rows.length, 1);
+const slots = (await tool('plan_slots')).rows;
+assert.deepEqual(slots.map((x) => x.status), ['working', 'working', 'idle'], 'slots 1..capacity, an unlisted slot is idle');
+assert.equal(slots[0].slice, 'SRC-9'); assert.ok(slots[0].title && slots[0].stage, 'a slot takes its title and state from the slice graph');
+assert.ok(warnings.includes('Unknown slice:NOPE-3'), 'a slot naming a missing slice is reported');
+assert.ok(warnings.some((w) => w.startsWith('Slots list is stale')), 'a slots list the runner has not refreshed is reported');
 // a condition with `auto:` follows GitHub: unmet until the tag exists
 assert.equal((await tool('plan_ext')).rows.find((e) => e.key === 'v-tagged').met, false);
 assert.equal(by['SRC-AUTO'].state, 'you', 'waits on the untagged release');

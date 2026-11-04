@@ -76,7 +76,7 @@ Settings, Connectors, Add custom connector.
 - Read-only. The token can't write and the server never calls a write endpoint.
 - Answers are cached in Cloudflare for 60 seconds (older pages of closed pull requests for ten minutes), and a GitHub error is remembered for 30 seconds. See `docs/decisions/2026-11-02-status-connector.md` for the quota limits and how to rotate the secret and token.
 - Anyone with the URL can read slice names and pull request titles. Keep it private. To stop it, delete the connector in claude.ai and the Worker in Cloudflare, and revoke the token.
-- Tools (none takes arguments): `plan_nodes`, `plan_road`, `plan_edges`, `plan_activity`, `plan_recent`, `plan_meta`, `plan_gates`, `plan_owner`, `plan_ext`, `plan_notes`, `plan_crawler`, `plan_soak`.
+- Tools (none takes arguments): `plan_nodes`, `plan_road`, `plan_edges`, `plan_activity`, `plan_recent`, `plan_meta`, `plan_gates`, `plan_owner`, `plan_ext`, `plan_notes`, `plan_crawler`, `plan_soak`, `plan_slots`.
 
 ## Tests
 ```bash

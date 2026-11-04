@@ -41,3 +41,9 @@ crawler:
   - { label: Gate, value: 100, kind: gate }
 soak:
   - { stage: Measured, label: 24 hours, start: "2026-11-01T22:16:16Z", end: "2026-11-02T22:16:16Z" }
+slots:
+  updated: "2020-01-01T00:00:00Z"
+  capacity: 3
+  items:
+    - { slot: 1, slice: SRC-9, role: build, agent: claude, doing: Parsing Internet Archive responses. }
+    - { slot: 2, slice: NOPE-3, doing: Names a slice that does not exist. }
