@@ -421,6 +421,11 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Not covered: the allocator callbacks.** `SQLITE_CONFIG_MALLOC` takes a `sqlite3_mem_methods` table of `extern "C"` callbacks (xMalloc, xFree, xRealloc, xSize, xRoundup, xInit, xShutdown). Each of those needs `unsafe` of its own and would call mimalloc through a new `libmimalloc-sys` dependency. The runner had described the routing fix as one start-up call, which understated it (corrected by #428's review). So before X-sqlite-malloc launches, the runner brings its full `unsafe` surface to the owner, or a route with no `unsafe` (for example mimalloc's `override` feature or a build-time flag).
     - **Times in records are UTC.** New docs, reviews, soak notes and evidence give times in UTC (`Z`), never a local time zone, offset or place. The existing files on `main` that name a local time zone stay as they are, because git history keeps them anyway (runner's recommendation, accepted).
 
+36. **Up to twelve slots, filled only when it makes sense** (owner, 2026-11-04; given in the dashboard session and relayed to the runner in their words): "Let's increase slot limit to 12, although not mandatory to fill all slots if there isn't enough work or doesn't make sense for the roadmap / plan."
+    - **At most twelve slice sessions at once,** replacing §2.33's eight. `runner/slices.yaml` records it as `limits.phase_total: 12`.
+    - **Filling them all isn't required.** A slot stays empty when no ready slice fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap or plan. That's the runner's judgment, as under §2.33. Review bandwidth stays the real limit: every slice still gets a fresh Opus review before merge.
+    - §2.33's auto-approval and its "still for the owner" list are unchanged.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
