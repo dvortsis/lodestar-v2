@@ -61,6 +61,12 @@ The owner asked whether the release-parser corpus could serve as an optional exc
 - **Two slices, scheduled by the runner for v0.5.1:** (1) packs on by default: `crates/filter/src/load.rs::pack_switches` starts from every pack on, the stored switches record what the user turned off, the wizard's packs step shows all checked and no longer treats "at least one pack on" as a stored choice (`docs/decisions/2026-10-31-S-wizard.md` is superseded on that point; the wizard needs an explicit reviewed marker), and the wizard and Settings copy change in en and zh; (2) the `unauthorised-copy` pack with its three rules, the `cracked` junk reason (also MW-6), the allow list, the precision set, API goldens, UI keys and the user guide's filters chapter. Both are core content-safety work: main session or an Opus agent, fresh Opus review.
 - **Unchanged:** blocklist subscriptions stay off until chosen (§2.9, offline by default). The owner was told this and can extend the decision.
 
+## Small gaps closed after the audit (2026-11-04)
+- **A copyright notice naming the owner** was missing everywhere: the README's licence section and `Cargo.toml`'s workspace `authors` now carry Benjamin Dvortsis, so the notice's "copyright holder" has a matching notice in the repository (AGPL "How to Apply").
+- **The Docker image's licence label** said `NOASSERTION`; it now says `AGPL-3.0-or-later`.
+- **The notice mentions adult material** and that the software is not meant for minors (information, not a condition).
+- **Follow-up for the packaging slice:** the Windows installer's licence dialog (`packaging/windows/main.wxs`, `LicenseAgreementDlg`, `LicenseAccepted`) presents the AGPL as an agreement to accept, which the AGPL (§9) doesn't require. When the notice ships, show the Legal Notice there instead, with "I have read" wording, and keep the AGPL text one click away.
+
 ## Shared files touched
 - `README.md`: a "Legal" paragraph under "What Lodestar does and never does".
 - `docs/legal/`: new folder (the notice, the operator guidance, the review).
@@ -68,6 +74,7 @@ The owner asked whether the release-parser corpus could serve as an optional exc
 - `packaging/unraid/*.xml`: one sentence in each `Overview`, and the category.
 - `web/src/lib/features/wizard/messages/{en,zh}.json`: one string.
 - `crates/release-parser/tests/golden/README.md`: a statement of purpose.
+- `Cargo.toml` (workspace `authors`), `packaging/docker/Dockerfile` (the licence label).
 - `docs/owner-decisions.md`: §2.37, §2.38 and a superseded note on §2.8.
 - `docs/architecture.md`: §20.6 (packs on by default, the sixth pack), the safety summary, §16's filtering decisions and M5 decisions marked superseded, the §20 summary table.
 - `docs/plan/2026-11-04-v06-rulepacks.md` §1: the first fixed constraint, per the owner.

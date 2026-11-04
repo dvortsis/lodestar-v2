@@ -127,6 +127,8 @@ See [Chapter 2](docs/user/02-install-lodestar-on-unraid-and-docker.md) for the U
 
 ## Licence
 
+Copyright © 2026 Benjamin Dvortsis and the Lodestar contributors.
+
 Lodestar is free software. It is licensed under the [GNU Affero General Public License, version 3 or later](LICENSE) (`AGPL-3.0-or-later`).
 
 If you run a modified version for others over a network, the AGPL asks you to offer them your version's source. The app's About screen links to the source of the version it runs.
