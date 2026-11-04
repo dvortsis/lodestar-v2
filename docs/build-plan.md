@@ -1,7 +1,7 @@
 # Lodestar v2 build plan: v0.5.1 → 1.0, with helper-agent orchestration
 
 > First written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
-> **§0 (2026-11-02, r3) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.31 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md` (an external review's findings).
+> **§0 (2026-11-02, r3) is the current plan.** It replaces the 2026-10-30 §0, whose lanes are done. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.32 and on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md` (an external review's findings).
 > **Picking this up from another session or agent?** Start at [`docs/handoff.md`](handoff.md).
 
 ## 0. Status and plan from 2026-11-02
@@ -315,7 +315,7 @@ flowchart LR
 
 ### 0.9 Next actions
 In order, as slots allow (four slices in total, §2.32; no two with overlapping `owns`). **2026-11-04:** SB-6, SRC-11, SRC-12 and SRC-10b launched; next are SRC-10c, SRC-10d and P-v06-rulepacks, then L4-followups once SB-6 merges (both own `crates/search/src/files.rs`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
-1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z; all merged since, and the limit is now two, §2.30).
+1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z; all merged since).
 2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars has merged as #373 (it was a recorded exception: it shared `crates/api/src/digest.rs` with #367, which merged first).
 3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first.
 4. r3 failed (memory). Now: R1-fix (X-mmap-cache-prune, M1-exp first), then R3′ (rc.3 = rc.2 + #357 + #402 + the fix, §2.31), then R1′ (soak r4 on rc.3), then the gluetun leg, the Windows smoke and the tag (owner queue #1). Ask for the experiment host and its calendar (#2) in the same message.

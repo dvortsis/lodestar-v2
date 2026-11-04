@@ -480,7 +480,7 @@ conditions:
 roadmap:
   steps:
   - id: soak
-    label: Unraid memory test (r3 failed, r4 next)
+    label: Unraid memory test (r3 failed, r4 running)
     plain: The 24-hour test of release candidate 2 failed on memory growth (1.88 MiB an hour, upper bound 2.33, bar 2.0). A fix comes first, then a fresh test (r4) on release candidate 3.
     col: 0
     row: 2
@@ -755,9 +755,9 @@ roadmap:
 owner_queue:
 - n: 1
   type: action
-  action: Run soak r4 on rc.3 (after the memory fix), then the gluetun leg and the tag
+  action: Soak r4 on rc.3 is running; then the gluetun leg, the Windows smoke and the tag
   unblocks: v0.5.1 release; the three held epics
-  when: After the memory fix is merged and rc.3 is built
+  when: r4's verdict, due about 01:00 UTC on 5 November
 - n: 2
   type: decision
   action: Confirm CR-SPEC, the frozen crawler measurement specification, including its open question O1
@@ -904,14 +904,14 @@ soak:
   start: '2026-11-02T10:16:16Z'
   end: '2026-11-02T11:00:00Z'
 - stage: Verdict
-  label: 'r3 failed the memory gate: 1.88 MiB/h, 95% CI [1.43, 2.33] over hours 12-24 (bar: upper bound at most 2.0); r4 on rc.3 is next'
+  label: 'r3 failed the memory gate: 1.88 MiB/h, 95% CI [1.43, 2.33] over hours 12-24 (bar: upper bound at most 2.0); r4 on rc.3 followed'
   start: '2026-11-02T22:16:16Z'
   end: '2026-11-02T22:16:16Z'
 notes:
-  updated: '2026-11-03'
+  updated: '2026-11-04'
   now:
-  - label: The release is waiting on a memory fix
-    text: The 24-hour memory test of release candidate 2 grew 1.88 MiB an hour (upper bound 2.33, bar 2.0), so it failed narrowly. The cause is a cache in the search library that never forgets deleted files. Release candidate 3 will be rc.2 plus the filter fail-closed fix (#357, merged on the release branch as #377), the crawler lease fix (#402) and the memory fix, as you decided. Then one fresh 24-hour test (r4) runs on it.
+  - label: Release candidate 3 is on its memory test
+    text: The 24-hour memory test of release candidate 2 failed narrowly (1.88 MiB an hour, upper bound 2.33, bar 2.0). The cause was a cache in the search library that never forgot deleted files. Release candidate 3 is rc.2 plus the filter fail-closed fix (#357), the crawler lease fix (#402) and the memory fix, as you decided. Its fresh 24-hour test (r4) is running.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
       The live tests wait for an experiment host you name.
@@ -923,7 +923,7 @@ notes:
     text: By your instruction four worker slots are running again (owner-decisions §2.32). The search schema bump, download clients as a source, the full tracker scrape and the AnimeTosho plug-in are under way. Workers, companions and packaging stay held until soak r4's verdict.
   you:
   - label: Finish v0.5.1
-    text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Approve the waiting Windows installer job in the rc.3 Release run for the Windows smoke. Then the 2-hour VPN (gluetun) leg, and tag v0.5.1.
+    text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.
   - label: Confirm the crawler measurement specification
     text: CR-SPEC freezes how every crawler run is measured. It needs your confirmation, including its open question O1, before the first acceptance analysis.
   - label: Say whether #367 joins rc.3
