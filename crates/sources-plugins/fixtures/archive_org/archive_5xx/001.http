@@ -1,0 +1,4 @@
+GET https://archive.org/advancedsearch.php?q=format%3A%22Archive%20BitTorrent%22%20AND%20publicdate%3A%7B2026-11-02T12%3A00%3A00Z%20TO%20%2A%5D&fl%5B%5D=identifier&fl%5B%5D=btih&fl%5B%5D=title&fl%5B%5D=item_size&fl%5B%5D=mediatype&fl%5B%5D=collection&fl%5B%5D=publicdate&sort%5B%5D=publicdate%20asc&rows=500&page=1&output=json
+Accept: application/json
+
+HTTP 503

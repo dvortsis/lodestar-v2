@@ -19,6 +19,7 @@ use lodestar_sources::BoxFuture;
 use lodestar_sources::consent::SourceCredentials;
 use lodestar_sources::egress::CredentialError;
 
+pub mod archive_org;
 pub mod nyaa;
 pub mod prowlarr;
 
