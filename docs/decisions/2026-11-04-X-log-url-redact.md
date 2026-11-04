@@ -42,13 +42,19 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
   - **What was read as userinfo or host is never read again as a scheme.** A nested `://` with no `/` between the userinfo and it is in this URL's authority (`ws://u:?@S3cr3t9://@h:80`), so everything up to it goes.
   - **Splitting trusts only known schemes:** `http`, `https`, `ws`, `wss`, `udp`, `tcp`, `ftp`, `ftps`, `sftp`, `socks4`, `socks4a`, `socks5`, `socks5h` and `file`. Any other run before a nested `://` may be a password's tail (`u:@/<secret>://@h/`), so it's hidden with what comes before it.
   - **An `@` anywhere after the authority hides the host and everything after it** (`http://u:@S3cr3t/@h/` shows as `http://[redacted]`). That's on `main` too. It extends the path rule above: `http://a@h/r/https://u:p@h2/x` now shows as `http://[redacted]`, and `http://u:p@h/x?email=a@b` loses its host as well.
-  - **A magnet link ends before a URL glued to it** (`magnet:%3Ahttp://u:]p?@h/`), and that URL gets its own userinfo search.
+  - **A magnet link once ended before a URL glued to it. Round 4 reverses that** (below): it showed tracker hosts, against B-log1.
 - **Round 3 (runner): nothing `main` hides may show, even where `main` hid it by luck.** The fix is in the wide look-ahead:
   - **When there's userinfo, the wide look-ahead runs past a `/`,** to the line's end within its 512 bytes. Userinfo means an `@` before the first hard stop, or a `:` in the authority with no port number after it (`u:/p"@h/`, `u:@/p"@h/`).
   - So a password holding a raw `/` and a hard stop is read whole, and the rule that an `@` after the authority hides the rest covers what follows.
   - Without such a sign the window still stops at `/`, so `see https://a.example/p and me@x` keeps its path.
-  - **The cost is over-redaction:** `http://u:p@h/x and mail me@y` now hides up to `me@`. A `host:port` with a numeric port (`http://localhost:8191/`) and an IPv6 literal are unaffected.
+  - **The cost is over-redaction.** A credentialed URL followed by any `@` within 512 bytes loses its host, its path and the text between. Since round 4, that includes an `@` on a later line. Example: `warn: tracker udp://u:p@t.example:6969/announce failed: timed out (peer@1.2.3.4 said no)` shows as `warn: tracker udp://[redacted] said no)`. That's accepted ("never too little"). A URL without userinfo is unaffected (`see https://a.example/p and me@x` keeps its path), and so are a `host:port` with a numeric port (`http://localhost:8191/`) and an IPv6 literal.
   - **A Debug value's URL is written as `scheme://[redacted]@`,** which marks it as userinfo for the same rule.
+- **Round 4 (runner's fresh review):**
+  - **Magnet links are never split** (B-log1, `docs/decisions/2026-10-23-B-log1.md`: "Magnet links are never shown"). Round 2's split showed the tracker host, and sometimes the torrent's name, of a raw `tr=` URL (`magnet:?xt=…&dn=Some.Movie.2020.1080p&tr=http://t.example/announce`). That loosened a security decision.
+    - Now a URL glued to a magnet stays inside it. Each `://` the magnet runs over gets its userinfo searched, so the magnet ends past any raw password, and the whole span shows as `magnet:[redacted]`.
+  - **A Debug value's backed-over scheme is written only if it's a known scheme,** and as `[redacted]` otherwise (`query: Some("token=<secret>://h/")`).
+  - **A `:` with no port number, with no `@` found, is a password** (`http://u:<secret>/x` shows as `http://[redacted]`). An IPv6 literal's `:` doesn't count.
+  - **With a userinfo `@` found before the first hard stop, the wide look-ahead also crosses line breaks** (`u:&@<secret>` and a newline before the real `@`). It's still bounded by 512 bytes and the next `://`. The over-redaction is in the round 3 entry above.
 - **Over-redaction in a common log shape:** a comma-separated tracker list loses all but its last tracker. `udp://a.example:80/announce,udp://b.example:6969/announce` shows as `udp://[redacted]://b.example:6969/announce`. Each `://` with nothing but URL characters or a soft end before the next one is read as possibly inside a password. That's accepted ("never too little").
 
 ## Tests
@@ -66,8 +72,23 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 - **`scrubbing_never_panics_on_odd_input` gains the IPv6 boundary case,** which panics on `main`.
 - **`crates/log/proptest-regressions/url.txt` is new** (other crates already use these files). Its seed fails both properties on the unfixed code, and `planted_secrets_never_get_through` shrinks it to `before = "://@"`.
 - **The runner's inputs are deterministic tests in `a_stray_scheme_separator_never_hides_a_later_url`,** along with the shapes the differential fuzz found (a Debug value holding a URL, an `@` in the query, a URL glued to `magnet:`). The proptest's passwords now carry URL syntax on both sides of the secret.
+- **Round 4 tests:**
+  - `a_magnet_link_is_never_shown_in_part` covers raw `tr=` URLs: http, udp, two trackers, and a glued `dn`.
+  - `a_debug_value_glued_to_a_scheme_keeps_no_secret` covers the reviewer's three Debug inputs.
+  - `a_port_that_is_no_number_is_a_password` covers fix B.
+  - The property `debug_values_and_magnets_keep_no_secret` builds Debug `query`/`fragment` values shaped `{name}={secret}{glue}{scheme}://…`, and magnets shaped `magnet:?xt=…&dn={secret}&tr={scheme}://{host}/announce`. It asserts the magnet shows only as `magnet:[redacted]`.
+  - Each of these fails on round 3's code.
 - **1,000,000 cases of each property pass locally** in a release build, and 300,000 on the final code.
-- **A differential fuzz against `main` was run once, locally** (3,000,000 inputs, not committed). Each input put a well-formed credentialed URL, a passkey path or a Debug-form `Url` among random URL and Debug-form tokens. After the security-review round, `scrub_text` showed the planted secret in none of them. `main` panicked on some of them (the IPv6 case).
+- **Differential fuzz against `main`, run locally (not committed).** Two generators, both re-run on round 4's code:
+  - **Mine** puts a credentialed URL (`http://u:{a}<secret>{b}@h.example/x`), a `passkey=` query, a passkey path, or a Debug `Url` among random URL and Debug-form tokens. `{a}` and `{b}` come from `: / @ ? # :// " ' ) ] @/ ?@ :/@`.
+    - It leaves out: percent-encoded userinfo, raw newlines and tabs in passwords, IPv6 and odd hosts, non-`http` schemes, magnets with raw `tr=` URLs, and Debug `query`/`fragment` values.
+    - **Round 4, seed 11, 3,000,000 inputs:** 0 shown by this PR but hidden by `main`. This PR shows 3,593 in all; `main` shows 91,523.
+  - **The reviewer's** (`reviews/432/review-diff-harness.rs` on `runner-state`) covers what mine leaves out: 11 schemes, `%3A`/`%40`/`%2F`, newlines and tabs, IPv6 and `host:abc` hosts, `tr=` magnets, Debug query and fragment values, and two URLs per line.
+    - **Round 4, seed 2:** 14 shown by this PR but hidden by `main` at 300,000 inputs (this PR shows 15,581 in all, `main` 52,106). At 1,000,000 inputs it's 46 (this PR 52,143, `main` 174,059).
+    - At round 3 it was 372 at 300,000, and about 1,235 at 1,000,000.
+    - No panics in this PR; `main` panics on 48 of the 1,000,000 inputs (the IPv6 case).
+  - **The 46 left all hold a `://` inside the password, after the secret** (`udp://h/xudp://u:@<secret>"://@h/x`), so the userinfo search, bounded by the next `://`, can't reach the real `@`. 41 also hold a raw hard stop, and 21 a percent-encoded userinfo (`%3A`). `main` hid them only because an earlier span swallowed them. Closing them means letting the userinfo search cross the next `://`, the bound that keeps the scan linear. That's reported to the runner, which decides whether they go to X-log-url-redact-2.
+- **Earlier runs of my generator, for the record** (3,000,000 inputs each). Each input put a well-formed credentialed URL, a passkey path or a Debug-form `Url` among random URL and Debug-form tokens. After the security-review round, `scrub_text` showed the planted secret in none of them. `main` panicked on some of them (the IPv6 case).
   - **After the runner's round, a wider run** put URL syntax on both sides of the password and added Debug `username` fields. `scrub_text` showed the planted secret in 13,890 of the 3,000,000 inputs; `main` showed it in more of them.
   - **418 of those were inputs where `main` happened to hide the secret.** Every one was a password holding both a raw `/` and a hard stop (`http://u:@/<secret>"@h/`). `main` hid them only because a stray Debug field or a URL ahead of them swallowed the span. Round 3 fixes them.
   - **After round 3, the same run** (seed 11, 3,000,000 inputs) has 0 secrets shown by this PR but hidden by `main`. This PR shows 3,170 in all; `main` shows 91,523.
@@ -75,7 +96,7 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 
 ## Known gaps, for X-log-url-redact-2 (the runner is briefing it)
 All of these leak on rc.3 as well.
-- **A raw hard stop with a `/` in a password when nothing marks the userinfo** (`http://u/<secret>"@h/`, no `:` or `@` before it), and one with a later `://` (`http://u:pa ss://@h/x`). The wide look-ahead stops at that `/` and at the next `://`, which keeps the scan linear.
+- **A raw hard stop with a `/` in a password when nothing marks the userinfo** (`http://u/<secret>"@h/`, no `:` or `@` before it), and one with a later `://` (`http://u:pa ss://@h/x`). The wide look-ahead stops at that `/` and at the next `://`, which keeps the scan linear. The 46 the reviewer's harness still finds (Tests, above) are in this class, unless the runner decides otherwise.
 - **A mixed encoding such as `http:%2F%2Fu:p@h`,** which `holds_url` misses. In `scrub` it's a kept query value; in `scrub_text`, URL forms without `://` aren't found at all.
 - **IPv6 hosts in URLs nested in a query or fragment, or after `magnet:`.**
 - **Credential values glued on with `:` or `%3D`.**

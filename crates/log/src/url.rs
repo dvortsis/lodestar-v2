@@ -168,6 +168,19 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
                 };
                 // A host with its query or fragment and no path.
                 let host_end = authority.find(['?', '#']).unwrap_or(authority.len());
+                // A `:` with no port number after it, and no `@` found,
+                // is a password whose `@` wasn't found (`u:<secret>/x`).
+                if at.is_none() {
+                    let h = &authority[..host_end];
+                    if !h.starts_with('[')
+                        && h.rsplit_once(':').is_some_and(|(_, port)| {
+                            port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit())
+                        })
+                    {
+                        out.push_str(REDACTED);
+                        return out;
+                    }
+                }
                 // Free text's host may be a path segment of what came
                 // before (`/https://<passkey>/announce`, `@passkey=<k>`): a
                 // real host label is never passkey-like or `name=value`.
@@ -408,7 +421,28 @@ pub fn scrub_text(text: &str) -> String {
             None if !rest[i..].starts_with("://") => {
                 let end = url_end(scan);
                 match scheme.from(text, pos + i).map(|n| n - pos) {
-                    Some(n) if n < end => scheme_start(rest, i + 7, n).max(i + 7),
+                    // A URL glued to a magnet stays in it (B-log1: magnet
+                    // links are never shown), and the magnet runs on to
+                    // that URL's end, past its userinfo.
+                    // Each `://` it runs over gets its userinfo searched,
+                    // and a scan never covers bytes an earlier one did.
+                    Some(mut n) if n >= i + 7 && n < end => {
+                        let mut end = end;
+                        loop {
+                            let next = scheme.from(text, pos + n + 3).map(|m| m - pos);
+                            let bound = next.unwrap_or(rest.len()) - (n + 3);
+                            if let Some(at) = userinfo_in_text(&rest[n + 3..], bound) {
+                                let after = n + 3 + at + 1;
+                                if after >= end {
+                                    end = url_end(after);
+                                }
+                            }
+                            match next {
+                                Some(m) if m < end => n = m,
+                                _ => break end,
+                            }
+                        }
+                    }
                     _ => end,
                 }
             }
@@ -576,9 +610,10 @@ fn userinfo_in_text(after: &str, next: usize) -> Option<usize> {
         && authority
             .rsplit_once(':')
             .is_some_and(|(_, port)| port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()));
-    let ends: &[char] = match narrow.is_some() || no_port {
-        true => &['\n', '\r'],
-        false => &['/', '\n', '\r'],
+    let ends: &[char] = match (narrow.is_some(), no_port) {
+        (true, _) => &[],
+        (false, true) => &['\n', '\r'],
+        (false, false) => &['/', '\n', '\r'],
     };
     let window = &window[..window.find(ends).unwrap_or(window.len())];
     let wide = window.rfind('@');
@@ -691,7 +726,8 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
         if let Some(sep) = url {
             // `[redacted]@` marks it as userinfo, so the URL rules read a
             // password that runs on past the quote, `/` and all.
-            out.push_str(&redact_runs(&text[to..sep - 3]));
+            let s = &text[to..sep - 3];
+            out.push_str(if known_scheme(s) { s } else { REDACTED });
             out.push_str("://");
             out.push_str(REDACTED);
             out.push('@');
@@ -1294,6 +1330,7 @@ mod tests {
                 "S3cr3t",
             ),
             ("magnet:%3Ahttp://u:]S3cr3t?@h.example/x", "S3cr3t"),
+            ("magnet:://>\"@#http://u:]S3cr3t#@h.example/x", "S3cr3t"),
             // Round 3: a raw `/` and a hard stop in a password that `main`
             // hid only because something before it swallowed the span.
             (r#"] ://http://u:@/S3cr3t"@h.example/x"#, "S3cr3t"),
@@ -1357,6 +1394,59 @@ mod tests {
         assert_eq!(
             scrub("http://a@h/r/x?n=1", Form::Absolute),
             "http://[redacted]@h/r/x?n=1"
+        );
+    }
+
+    #[test]
+    fn a_magnet_link_is_never_shown_in_part() {
+        // B-log1: magnet links are never shown, a raw tracker URL in one
+        // included (runner, round 4).
+        for text in [
+            "magnet:?xt=urn:btih:abc&dn=Some.Movie.2020.1080p&tr=http://t.example/announce",
+            "magnet:?xt=urn:btih:abc&tr=udp://t.example:6969/announce",
+            "magnet:?xt=urn:btih:abc&tr=udp://a.example:80/announce&tr=http://b.example/ann",
+            "magnet:?xt=urn:btih:abc&dn=Some.Movie.2020http://t.example/announce",
+        ] {
+            assert_eq!(scrub_text(text), "magnet:[redacted]", "{text}");
+            assert_eq!(
+                scrub_text(&format!("got {text} ok")),
+                "got magnet:[redacted] ok",
+                "{text}"
+            );
+        }
+        // A glued URL's userinfo stays inside the magnet.
+        let s = scrub_text("magnet:?xt=urn:btih:abc&tr=http://u:pa ss@t.example/a ok");
+        assert_eq!(s, "magnet:[redacted] ok");
+    }
+
+    #[test]
+    fn a_debug_value_glued_to_a_scheme_keeps_no_secret() {
+        // Runner, round 4: the run before a Debug value's `://` is shown
+        // only if it's a known scheme.
+        for text in [
+            r#"query: Some("token=S3cr3t9://h/")"#,
+            r#"fragment: Some("S3cr3t9http://h/")"#,
+            r#"query: Some("a=1&sig=S3cr3t9://x")"#,
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("S3cr3t"), "{text} -> {s}");
+        }
+        assert_eq!(
+            scrub_text(r#"query: Some("http://u:p@h/")"#),
+            r#"query: Some("http://[redacted]@")"#
+        );
+    }
+
+    #[test]
+    fn a_port_that_is_no_number_is_a_password() {
+        // Runner, round 4: `u:<secret>` with no `@` found.
+        for url in ["http://u:S3cr3t9", "http://u:S3cr3t9/x", "http://u:/x"] {
+            assert_eq!(scrub(url, Form::Absolute), "http://[redacted]", "{url}");
+        }
+        assert_eq!(scrub("http://h:8080/x", Form::Absolute), "http://h:8080/x");
+        assert_eq!(
+            scrub("http://[::1]:6969/x", Form::Absolute),
+            "http://[::1]:6969/x"
         );
     }
 
@@ -1461,6 +1551,26 @@ mod tests {
                 let s = scrub_text(&text);
                 proptest::prop_assert!(!s.contains(secret.as_str()), "{} -> {}", text, s);
             }
+        }
+
+        #[test]
+        fn debug_values_and_magnets_keep_no_secret(
+            name in "(token|sig|a|passkey|x)",
+            field in "(query|fragment)",
+            scheme in "(https?|udp|ftp|ws)",
+            host in "[a-z]{2,8}\\.example(:[0-9]{2,5})?",
+            secret in "[A-Za-z0-9]{6,20}",
+            glue in "(|=|&|\\.)",
+        ) {
+            let secret = format!("Zq{secret}9");
+            let debug = format!(r#"{field}: Some("{name}={secret}{glue}{scheme}://{host}/a")"#);
+            let s = scrub_text(&debug);
+            proptest::prop_assert!(!s.contains(&secret), "{} -> {}", debug, s);
+            let magnet = format!(
+                "x magnet:?xt=urn:btih:abc&dn={secret}{glue}&tr={scheme}://{host}/announce y"
+            );
+            let s = scrub_text(&magnet);
+            proptest::prop_assert_eq!(&s, "x magnet:[redacted] y", "{}", magnet);
         }
 
         #[test]
