@@ -1,0 +1,57 @@
+{
+  "data": {
+    "searchScene": [
+      {
+        "id": "00000000-0000-4000-8000-0000000000d1",
+        "title": "Synthetic Scene Delta",
+        "release_date": "2021-06-01",
+        "date": "PERSONAL-LEGACY-DATE",
+        "details": "PERSONAL-DETAILS",
+        "urls": [{"url": "https://example.invalid/PERSONAL-URL", "type": "STUDIO"}],
+        "images": [{"id": "PERSONAL-IMAGE", "url": "https://example.invalid/PERSONAL-IMAGE.jpg", "width": 1, "height": 1}],
+        "tags": [{"id": "00000000-0000-4000-8000-0000000000f1", "name": "PERSONAL-TAG"}],
+        "fingerprints": [{"algorithm": "PHASH", "hash": "PERSONAL-FINGERPRINT", "duration": 1}],
+        "studio": {
+          "id": "00000000-0000-4000-8000-0000000000c4",
+          "name": "Example Studio Four",
+          "urls": [{"url": "https://example.invalid/PERSONAL-STUDIO-URL"}],
+          "images": [{"url": "https://example.invalid/PERSONAL-STUDIO-IMAGE.jpg"}]
+        },
+        "performers": [
+          {
+            "as": "PERSONAL-CREDITED-ALIAS",
+            "performer": {
+              "id": "00000000-0000-4000-8000-0000000000e5",
+              "name": "Example Performer Five",
+              "disambiguation": "PERSONAL-DISAMBIGUATION",
+              "aliases": ["PERSONAL-ALIAS-ONE", "PERSONAL-ALIAS-TWO"],
+              "gender": "PERSONAL-GENDER",
+              "birth_date": "PERSONAL-BIRTH-DATE",
+              "birthdate": {"date": "PERSONAL-BIRTHDATE-OBJECT", "accuracy": "DAY"},
+              "age": 99999,
+              "death_date": "PERSONAL-DEATH-DATE",
+              "ethnicity": "PERSONAL-ETHNICITY",
+              "country": "PERSONAL-COUNTRY",
+              "birthplace": "PERSONAL-BIRTHPLACE",
+              "eye_color": "PERSONAL-EYE-COLOR",
+              "hair_color": "PERSONAL-HAIR-COLOR",
+              "height": 99998,
+              "measurements": {"cup_size": "PERSONAL-CUP", "band_size": 99997, "waist": 99996, "hip": 99995},
+              "cup_size": "PERSONAL-CUP-SIZE",
+              "band_size": 99994,
+              "waist_size": 99993,
+              "hip_size": 99992,
+              "breast_type": "PERSONAL-BREAST-TYPE",
+              "career_start_year": 99991,
+              "career_end_year": 99990,
+              "tattoos": [{"location": "PERSONAL-TATTOO", "description": "PERSONAL-TATTOO-TEXT"}],
+              "piercings": [{"location": "PERSONAL-PIERCING"}],
+              "images": [{"url": "https://example.invalid/PERSONAL-PERFORMER-IMAGE.jpg"}],
+              "urls": [{"url": "https://example.invalid/PERSONAL-PERFORMER-URL"}]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
