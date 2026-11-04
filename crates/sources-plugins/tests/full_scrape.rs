@@ -781,9 +781,20 @@ impl lodestar_sources::Fetch for StreamingTracker {
     }
 }
 
+/// What [`scrape_streamed`] saw.
+struct Streamed {
+    keys: Vec<InfoHash>,
+    /// Requests the tracker got.
+    sent: usize,
+    /// Paused-clock time from the start until the last key came.
+    took: Duration,
+    /// The tracker's persisted last attempt.
+    last: Option<i64>,
+}
+
 /// Starts the plugin at 01:00 against `tracker`; collects keys until
-/// `want` have come or the plugin's day is over, and returns them.
-async fn scrape_streamed(tracker: StreamingTracker, want: usize) -> (Vec<InfoHash>, usize) {
+/// `want` have come or twice the plugin's timeout has passed.
+async fn scrape_streamed(tracker: StreamingTracker, want: usize) -> Streamed {
     let p = Arc::new(FullScrape::new(
         config(),
         Arc::new(StaticPrivateTrackers::none()),
@@ -794,15 +805,30 @@ async fn scrape_streamed(tracker: StreamingTracker, want: usize) -> (Vec<InfoHas
     let running = ctx.start(p);
     let mut keys = Vec::new();
     let t0 = Instant::now();
+    let mut took = Duration::ZERO;
     wait_for("the keys, or the scrape's end", || {
+        let before = keys.len();
         keys.extend(ctx.drain().into_iter().map(|d| d.found.key));
+        if keys.len() > before {
+            took = Instant::now() - t0;
+        }
         keys.len() >= want || Instant::now() - t0 > full_scrape::STREAM.timeout * 2
     })
     .await;
     running.stop_within().await.unwrap();
     keys.extend(ctx.drain().into_iter().map(|d| d.found.key));
-    let sent = tracker.sent.load(std::sync::atomic::Ordering::SeqCst);
-    (keys, sent)
+    let last = ctx
+        .state
+        .get(&format!("last:{HOST}"))
+        .await
+        .unwrap()
+        .map(|v| String::from_utf8(v).unwrap().parse().unwrap());
+    Streamed {
+        keys,
+        sent: tracker.sent.load(std::sync::atomic::Ordering::SeqCst),
+        took,
+        last,
+    }
 }
 
 /// A 24 MiB reply that takes over six minutes to arrive, past both the
@@ -811,7 +837,7 @@ async fn scrape_streamed(tracker: StreamingTracker, want: usize) -> (Vec<InfoHas
 #[tokio::test(start_paused = true)]
 async fn a_large_slow_reply_is_streamed_whole() {
     let entries = 24 * 1024;
-    let (keys, sent) = scrape_streamed(
+    let got = scrape_streamed(
         StreamingTracker {
             entries,
             every: Duration::from_secs(1),
@@ -820,9 +846,16 @@ async fn a_large_slow_reply_is_streamed_whole() {
         entries as usize,
     )
     .await;
-    assert_eq!(sent, 1);
-    assert_eq!(keys.len(), entries as usize);
-    assert!(keys.iter().zip(0..).all(|(k, i)| *k == streamed_hash(i)));
+    assert_eq!(got.sent, 1);
+    assert_eq!(got.keys.len(), entries as usize);
+    assert!(
+        got.keys
+            .iter()
+            .zip(0..)
+            .all(|(k, i)| *k == streamed_hash(i))
+    );
+    // About 390 one-second chunks.
+    assert!(got.took >= Duration::from_secs(6 * 60), "{:?}", got.took);
 }
 
 /// A reply slower than the plugin's ten minutes fails closed: the keys of
@@ -830,8 +863,8 @@ async fn a_large_slow_reply_is_streamed_whole() {
 #[tokio::test(start_paused = true)]
 async fn a_reply_over_the_plugins_timeout_fails_closed() {
     let entries = 24 * 1024;
-    // About 63 entries per chunk, one chunk every 30 s: 12 minutes.
-    let (keys, sent) = scrape_streamed(
+    // About 63 entries per chunk, one chunk every 30 s: over three hours.
+    let got = scrape_streamed(
         StreamingTracker {
             entries,
             every: Duration::from_secs(30),
@@ -840,13 +873,23 @@ async fn a_reply_over_the_plugins_timeout_fails_closed() {
         entries as usize,
     )
     .await;
-    assert_eq!(sent, 1);
+    assert_eq!(got.sent, 1);
+    let n = got.keys.len();
+    assert!(n > 0 && n < entries as usize, "{n}");
     assert!(
-        !keys.is_empty() && keys.len() < entries as usize,
-        "{}",
-        keys.len()
+        got.keys
+            .iter()
+            .zip(0..)
+            .all(|(k, i)| *k == streamed_hash(i))
     );
-    assert!(keys.iter().zip(0..).all(|(k, i)| *k == streamed_hash(i)));
+    // Nothing came after the plugin's ten minutes (plus a wait_for step).
+    assert!(
+        got.took <= full_scrape::STREAM.timeout + Duration::from_secs(1),
+        "{:?}",
+        got.took
+    );
+    // The day is used: recorded at the attempt, 01:00.
+    assert_eq!(got.last, Some(MIDNIGHT + HOUR));
 }
 
 /// A reply over the plugin's 256 MiB cap fails closed at the cap.
@@ -854,7 +897,7 @@ async fn a_reply_over_the_plugins_timeout_fails_closed() {
 async fn a_reply_over_the_plugins_cap_fails_closed() {
     // About 270 MiB.
     let entries = 270 * 1024;
-    let (keys, sent) = scrape_streamed(
+    let Streamed { keys, sent, .. } = scrape_streamed(
         StreamingTracker {
             entries,
             every: Duration::ZERO,

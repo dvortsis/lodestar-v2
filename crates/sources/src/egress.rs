@@ -916,6 +916,10 @@ impl PluginEgress {
             limits.max_bytes,
             limits.timeout,
         );
+        // The headers' idle wait starts here, once admitted: a refusal
+        // while the route is down (paced up to `DOWN_DELAY_MAX`) is the
+        // kill switch's answer, never a stall the host is blamed for.
+        let headers_by = Instant::now() + limits.idle;
         let result = tokio::select! {
             r = exchange => r,
             Ok(state) = down.wait_for(|s| matches!(s, RouteState::Down(_))) => {
@@ -925,6 +929,10 @@ impl PluginEgress {
                 };
                 Counters::bump(&self.counters.kill_switch_aborts);
                 return Err(HttpError::EgressDown(format!("went down in flight: {reason}")));
+            }
+            () = tokio::time::sleep_until(headers_by) => {
+                Counters::bump(&self.counters.transport_failures);
+                return Err(HttpError::Transport(crate::http::STALLED.into()));
             }
         };
         match result {
@@ -937,12 +945,12 @@ impl PluginEgress {
                 Ok(StreamResponse {
                     status,
                     headers,
-                    body: Box::new(EgressBody {
+                    body: Box::new(EgressBody::new(
                         body,
                         down,
-                        probe: Arc::clone(&self.probe),
-                        counters: Arc::clone(&self.counters),
-                    }),
+                        Arc::clone(&self.probe),
+                        Arc::clone(&self.counters),
+                    )),
                 })
             }
             Err(e) => Err(self.failed(e).await),
@@ -950,49 +958,144 @@ impl PluginEgress {
     }
 }
 
+/// How often a streamed body re-probes its route by itself, at the
+/// least: a body can stay open for up to an hour, so it doesn't rely on
+/// [`PluginEgress::monitor`] or another request to notice a route that
+/// went down. A route's own probe TTL is used when that's longer.
+pub const BODY_REPROBE: Duration = Duration::from_secs(2);
+
 /// A streamed answer's body, still under its plugin's kill switch: a
 /// route that goes down while the body is being read abandons it with
-/// [`HttpError::EgressDown`], as it would a buffered body. A connection
-/// that fails part way on a checked route is re-probed, so a route outage
-/// reads as the kill switch's and not the host's. (The probe here doesn't
-/// publish a new state: the monitor, or the plugin's next request, does.)
+/// [`HttpError::EgressDown`], as it would a buffered body. The body sees
+/// a published outage at once, and on a checked route also probes the
+/// route itself every [`BODY_REPROBE`] (or the probe's TTL) while it
+/// waits for a chunk. A connection that fails part way on a checked
+/// route is re-probed too, so a route outage reads as the kill switch's
+/// and not the host's. (The body's probes don't publish a new state: the
+/// monitor, or the plugin's next request, does.) Fused: after the end,
+/// an error or an abort it never reads again.
 struct EgressBody {
     body: net::StreamBody,
     down: watch::Receiver<RouteState>,
     probe: Arc<dyn RouteProbe>,
     counters: Arc<Counters>,
+    next_probe: Instant,
+    /// The error every later read returns, or `Some(None)` once ended.
+    done: Option<Option<HttpError>>,
 }
 
 impl EgressBody {
+    fn new(
+        body: net::StreamBody,
+        down: watch::Receiver<RouteState>,
+        probe: Arc<dyn RouteProbe>,
+        counters: Arc<Counters>,
+    ) -> EgressBody {
+        EgressBody {
+            next_probe: Instant::now() + reprobe_every(&*probe),
+            body,
+            down,
+            probe,
+            counters,
+            done: None,
+        }
+    }
+
     async fn next(&mut self) -> Result<Option<Vec<u8>>, HttpError> {
-        let read = tokio::select! {
-            r = self.body.chunk() => r,
-            Ok(state) = self.down.wait_for(|s| matches!(s, RouteState::Down(_))) => {
-                let reason = match *state {
-                    RouteState::Down(r) => r,
-                    _ => DownReason::ClientUnavailable,
-                };
-                Counters::bump(&self.counters.kill_switch_aborts);
-                return Err(HttpError::EgressDown(format!("went down in flight: {reason}")));
+        match &self.done {
+            Some(None) => return Ok(None),
+            Some(Some(e)) => return Err(e.clone()),
+            None => {}
+        }
+        let r = self.read().await;
+        match &r {
+            Ok(Some(_)) => {}
+            Ok(None) => self.done = Some(None),
+            Err(e) => self.done = Some(Some(e.clone())),
+        }
+        r
+    }
+
+    async fn read(&mut self) -> Result<Option<Vec<u8>>, HttpError> {
+        let checked = self.probe.ttl().is_some();
+        let every = reprobe_every(&*self.probe);
+        let EgressBody {
+            body,
+            down,
+            probe,
+            counters,
+            next_probe,
+            ..
+        } = self;
+        let chunk = body.chunk();
+        tokio::pin!(chunk);
+        let read = loop {
+            let step = tokio::select! {
+                biased;
+                Some(reason) = went_down(down) => Step::Down(reason),
+                () = tokio::time::sleep_until(*next_probe), if checked => Step::Probe,
+                r = &mut chunk => Step::Read(r),
+            };
+            match step {
+                Step::Down(reason) => {
+                    Counters::bump(&counters.kill_switch_aborts);
+                    return Err(HttpError::EgressDown(format!(
+                        "went down in flight: {reason}"
+                    )));
+                }
+                Step::Probe => {
+                    if let Err(reason) = probe.probe().await {
+                        Counters::bump(&counters.kill_switch_aborts);
+                        return Err(HttpError::EgressDown(format!(
+                            "went down in flight: {reason}"
+                        )));
+                    }
+                    *next_probe = Instant::now() + every;
+                }
+                Step::Read(r) => break r,
             }
         };
         match read {
             Ok(chunk) => Ok(chunk),
             Err(e) => {
                 if matches!(e, NetError::Connect | NetError::Timeout | NetError::Http)
-                    && self.probe.ttl().is_some()
-                    && let Err(reason) = self.probe.probe().await
+                    && checked
+                    && let Err(reason) = probe.probe().await
                 {
-                    Counters::bump(&self.counters.kill_switch_aborts);
+                    Counters::bump(&counters.kill_switch_aborts);
                     return Err(HttpError::EgressDown(format!(
                         "went down in flight: {reason}"
                     )));
                 }
-                Counters::bump(&self.counters.transport_failures);
+                Counters::bump(&counters.transport_failures);
                 Err(HttpError::Transport(e.to_string()))
             }
         }
     }
+}
+
+/// What a streamed body's wait ended on.
+enum Step {
+    Down(DownReason),
+    Probe,
+    Read(Result<Option<Vec<u8>>, NetError>),
+}
+
+/// Resolves when the route is published as down, with why; `None` if the
+/// state can no longer change (the egress is gone).
+async fn went_down(rx: &mut watch::Receiver<RouteState>) -> Option<DownReason> {
+    let state = *rx
+        .wait_for(|s| matches!(s, RouteState::Down(_)))
+        .await
+        .ok()?;
+    match state {
+        RouteState::Down(r) => Some(r),
+        _ => Some(DownReason::ClientUnavailable),
+    }
+}
+
+fn reprobe_every(probe: &dyn RouteProbe) -> Duration {
+    probe.ttl().unwrap_or(BODY_REPROBE).max(BODY_REPROBE)
 }
 
 impl BodyStream for EgressBody {

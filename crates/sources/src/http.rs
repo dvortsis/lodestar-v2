@@ -246,11 +246,13 @@ pub trait Fetch: Send + Sync {
     fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>>;
 
     /// Sends one request and hands back its body as a stream of chunks,
-    /// never the whole body at once. `limits` (already held to
-    /// [`STREAM_CEILING`] by the [`Client`]) say how long the whole
-    /// exchange may take and how many body bytes it may carry; an
-    /// implementation that opens connections gives its transport that
-    /// timeout in place of its usual one. The [`Client`] enforces both
+    /// never the whole body at once. `limits` say how long the whole
+    /// exchange may take, how many body bytes it may carry, and how long
+    /// to wait for the headers once the request is admitted (past the
+    /// egress's checks). The [`Client`] clamps them to [`STREAM_CEILING`];
+    /// any other caller must clamp them itself, and `PluginEgress` does
+    /// again. An implementation that opens connections gives its
+    /// transport that timeout in place of its usual one. The [`Client`] enforces both
     /// limits again on the chunks it passes on, so an implementation that
     /// ignores them can't exceed them. The same contract as
     /// [`fetch`](Fetch::fetch) otherwise: no redirects followed, and the
@@ -309,6 +311,14 @@ pub const STREAM_CEILING: StreamLimits = StreamLimits {
     timeout: Duration::from_secs(3600),
     idle: Duration::from_secs(120),
 };
+
+// The kit's ceiling is the transport's: `net` enforces the same one on
+// its own, so the two can't drift apart.
+const _: () = assert!(
+    STREAM_CEILING.max_bytes == lodestar_integrations::net::STREAM_CEILING_BYTES
+        && STREAM_CEILING.timeout.as_secs()
+            == lodestar_integrations::net::STREAM_CEILING_TIMEOUT.as_secs()
+);
 
 /// The least: a timeout or idle wait under a second would fail every
 /// real reply.
@@ -493,7 +503,7 @@ impl BodyStream for Guarded {
 /// A streamed reply that ran past its plugin's timeout.
 const TOO_SLOW: &str = "the reply took longer than the plugin's timeout";
 /// One that waited past its idle limit for headers or a chunk.
-const STALLED: &str = "the reply stalled";
+pub(crate) const STALLED: &str = "the reply stalled";
 /// One whose body passed the plugin's byte cap.
 const TOO_LARGE: &str = "the reply is larger than the plugin's limit";
 
@@ -1093,9 +1103,10 @@ impl<F: Fetch> Client<F> {
     /// as [`poll`](Self::poll), but the body comes a chunk at a time, under
     /// `limits` held to [`STREAM_CEILING`] ([`StreamLimits::clamped`]).
     ///
-    /// - The headers must come within `limits.idle`, each chunk within
-    ///   `limits.idle` of the last, and the whole body within
-    ///   `limits.timeout` of sending. A reply that misses any of them fails
+    /// - The headers must come within `limits.timeout` (and within
+    ///   `limits.idle` of the request being admitted, which the `Fetch`
+    ///   enforces), each chunk within `limits.idle` of being asked for, and
+    ///   the whole body within `limits.timeout` of sending. A reply that misses any of them fails
     ///   with [`HttpError::Transport`].
     /// - A `Content-Length` over `limits.max_bytes` fails before the body
     ///   is read; a body that grows past it fails at the chunk that
@@ -1118,10 +1129,14 @@ impl<F: Fetch> Client<F> {
         self.gate_poll(unit, &host).await?;
         let sent = Instant::now();
         let deadline = later(sent, limits.timeout);
-        let headers_by = later(sent, limits.idle).min(deadline);
-        let result = match timeout_at(headers_by, self.fetch.fetch_stream(req, limits)).await {
+        // The headers are bounded here by the whole deadline only. The
+        // idle wait for them is the `Fetch`'s to start once it has
+        // admitted the request (`PluginEgress` does), so a kill-switch
+        // refusal paced while the route is down never reads as a stall
+        // that backs the host off.
+        let result = match timeout_at(deadline, self.fetch.fetch_stream(req, limits)).await {
             Ok(r) => r,
-            Err(_) => Err(HttpError::Transport(STALLED.into())),
+            Err(_) => Err(HttpError::Transport(TOO_SLOW.into())),
         };
         let res = match result {
             Ok(res) => res,
@@ -1859,9 +1874,11 @@ mod tests {
         assert_eq!(Instant::now() - t0, Duration::from_secs(60));
     }
 
-    /// Headers that don't come within the idle limit fail the poll.
+    /// Headers that never come fail the poll at the deadline. (The idle
+    /// wait for them is the egress's, after admission: see
+    /// `egress_tests`.)
     #[tokio::test(start_paused = true)]
-    async fn headers_that_never_come_fail_at_the_idle_limit() {
+    async fn headers_that_never_come_fail_at_the_deadline() {
         struct Silent;
         impl Fetch for Silent {
             fn fetch<'a>(&'a self, _: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
@@ -1878,8 +1895,8 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(e, HttpError::Transport(STALLED.into()));
-        assert_eq!(Instant::now() - t0, Duration::from_secs(45));
+        assert_eq!(e, HttpError::Transport(TOO_SLOW.into()));
+        assert_eq!(Instant::now() - t0, Duration::from_secs(600));
         assert!(matches!(
             c.limiter().state("t.test", Instant::now()),
             HostState::BackingOff { .. }

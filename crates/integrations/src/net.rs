@@ -855,8 +855,8 @@ pub const STREAM_CEILING_BYTES: u64 = 1024 * 1024 * 1024;
 pub const STREAM_CEILING_TIMEOUT: Duration = Duration::from_secs(3600);
 
 /// One HTTP answer whose body is read a chunk at a time
-/// ([`GuardedClient::exchange_stream`]).
-#[derive(Debug)]
+/// ([`GuardedClient::exchange_stream`]). Its `Debug` shows header names
+/// only: a value may be a session cookie.
 pub struct StreamExchange {
     pub status: u16,
     /// Header values that aren't visible ASCII are dropped.
@@ -870,6 +870,16 @@ pub struct StreamBody {
     /// `None` once the body has ended or failed: it isn't read again.
     resp: Option<Response>,
     remaining: u64,
+}
+
+impl fmt::Debug for StreamExchange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(n, _)| n.as_str()).collect();
+        f.debug_struct("StreamExchange")
+            .field("status", &self.status)
+            .field("headers", &names)
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for StreamBody {

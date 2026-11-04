@@ -1569,8 +1569,8 @@ async fn a_slow_body_streams_past_the_factorys_timeout() {
 async fn a_body_past_the_plugins_timeout_fails_closed() {
     let server = serve(|_| Reply::Dribble {
         head: open_head(),
-        chunks: (0..20).map(|_| b"slow".to_vec()).collect(),
-        every: Duration::from_millis(400),
+        chunks: (0..6).map(|_| b"slow".to_vec()).collect(),
+        every: Duration::from_millis(1500),
     })
     .await;
     let egress = factory(Scripted::new(&[]))
@@ -1583,13 +1583,13 @@ async fn a_body_past_the_plugins_timeout_fails_closed() {
     .await
     .unwrap();
     let (read, e) = within(read_stream(&mut res)).await.unwrap_err();
-    assert!(read < 80, "{read}");
+    assert!(read < 24, "{read}");
     assert!(
         matches!(&e, HttpError::Transport(t) if t.contains("timed out")),
         "{e:?}"
     );
-    // Fused: the transport isn't read again.
-    assert_eq!(res.next_chunk().await, Ok(None));
+    // Fused: the same error again, and the transport isn't read again.
+    assert_eq!(res.next_chunk().await, Err(e));
     assert_eq!(egress.status().counters.transport_failures, 1);
 }
 
@@ -1740,4 +1740,115 @@ async fn a_streamed_request_keeps_the_endpoint_policy() {
     );
     assert_eq!(server.conns(), 0);
     assert_eq!(egress.status().counters.policy_refusals, 1);
+}
+
+/// With no monitor running and no other request, a body still being
+/// read notices its route going down: it probes the route itself.
+#[tokio::test]
+async fn a_streamed_body_probes_its_route_without_a_monitor() {
+    let mut first = open_head();
+    first.extend_from_slice(b"first");
+    let server = serve(move |_| Reply::ThenStall(first.clone())).await;
+    let switch = Arc::new(Switch(AtomicBool::new(true)));
+    let client = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        DEADLINE * 3,
+        Scripted::new(&[]),
+        &Route::Direct,
+    )
+    .unwrap();
+    let egress = PluginEgress::new(
+        "p",
+        RouteKind::Interface,
+        Ok(client),
+        Arc::clone(&switch) as Arc<dyn RouteProbe>,
+        lan(),
+    );
+    let mut res = within(egress.fetch_stream(
+        &Request::get(server.url("/")),
+        stream_limits(1 << 20, DEADLINE * 3),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(within(res.next_chunk()).await.unwrap().unwrap(), b"first");
+    switch.0.store(false, Ordering::SeqCst);
+    let e = within(res.next_chunk()).await.unwrap_err();
+    assert!(
+        matches!(&e, HttpError::EgressDown(t) if t.contains("went down in flight")),
+        "{e:?}"
+    );
+    // Fused: the same answer again, without reading.
+    assert_eq!(res.next_chunk().await.unwrap_err(), e);
+    assert_eq!(egress.status().counters.kill_switch_aborts, 1);
+}
+
+/// A refusal while the route is down is the kill switch's answer even
+/// when it takes longer than the plugin's idle wait: the host isn't
+/// blamed for a stall and isn't backed off.
+#[tokio::test]
+async fn a_slow_refusal_is_not_a_stall() {
+    let switch = Arc::new(Switch(AtomicBool::new(false)));
+    let client = GuardedClient::with_route(
+        NetPolicy::download_client(),
+        DEADLINE,
+        Scripted::new(&[]),
+        &Route::Direct,
+    )
+    .unwrap();
+    let egress: Arc<dyn Fetch> = Arc::new(PluginEgress::new(
+        "p",
+        RouteKind::Interface,
+        Ok(client),
+        Arc::clone(&switch) as Arc<dyn RouteProbe>,
+        lan(),
+    ));
+    let client = Client::new(egress, HostLimiter::with_seed(fast_limits(), 1));
+    let url = format!("http://{}/", unused_port_addr());
+    let limits = StreamLimits {
+        max_bytes: 1 << 20,
+        timeout: DEADLINE,
+        idle: Duration::from_secs(1),
+    };
+    // The second refusal in a row is paced for 2 s, past the 1 s idle.
+    for unit in ["a", "b"] {
+        let started = std::time::Instant::now();
+        let e = within(client.poll_stream(unit, &Request::get(url.clone()), limits))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, HttpError::EgressDown(_)), "{unit}: {e:?}");
+        if unit == "b" {
+            assert!(started.elapsed() >= Duration::from_millis(1500));
+        }
+    }
+    let host = host_key(&url).unwrap();
+    assert_eq!(
+        client.limiter().state(&host, Instant::now()),
+        crate::http::HostState::Ready
+    );
+}
+
+/// Headers that don't come within the idle wait after admission fail as
+/// a stall.
+#[tokio::test]
+async fn headers_past_the_idle_wait_are_a_stall() {
+    let server = serve(|_| Reply::Stall).await;
+    let egress = factory(Scripted::new(&[]))
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let e = stream_err(
+        within(egress.fetch_stream(
+            &Request::get(server.url("/")),
+            StreamLimits {
+                max_bytes: 1 << 20,
+                timeout: DEADLINE,
+                idle: Duration::from_secs(1),
+            },
+        ))
+        .await,
+    );
+    assert!(
+        matches!(&e, HttpError::Transport(t) if t.contains("stalled")),
+        "{e:?}"
+    );
+    assert_eq!(egress.status().counters.transport_failures, 1);
 }
