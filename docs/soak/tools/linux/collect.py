@@ -78,6 +78,11 @@ STORAGE = (
     # CR-COL-4: memory against commits. The gauge ({index="main"|"files"}, live mappings
     # kept after the latest prune) is absent from binaries that predate it.
     "search_commits_total", "search_mmap_cache_entries",
+    # X-mem-gauges: which heap the anonymous memory is in. Each is absent from older
+    # binaries, and the /proc ones off Linux (docs/decisions/2026-11-04-X-mem-gauges.md).
+    "mem_mimalloc_committed_bytes", "mem_mimalloc_peak_committed_bytes",
+    "mem_rss_anon_bytes", "mem_rss_file_bytes", "mem_anon_huge_bytes",
+    "mem_sqlite_bytes", "mem_sqlite_highwater_bytes",
 )
 # CR-COL-3: the crawler gate's evidence (docs/decisions/2026-11-02-CR-SPEC.md rules
 # 3, 4, 5 and 6.10). Each labelled series lists its label keys, in rendered order,
@@ -126,6 +131,8 @@ LABELLED = {
     "dht_harvested_total": (("strategy", frozenset(("sample", "get_peers", "announce"))),),
     "dht_sample_suppression_reason": (("reason", SUPPRESSION_REASONS),),
     "discovery_to_searchable_seconds_bucket": (("le", frozenset(LATENCY_EDGES)),),
+    # X-mem-gauges: live segments per index.
+    "search_segments": (("index", frozenset(("main", "files"))),),
 }
 # Gate series that carry no labels.
 PLAIN = frozenset((
@@ -1785,7 +1792,7 @@ def build_parser():
     p.add_argument("--require-gluetun", action="store_true", help="Refuse to start unless gluetun is the network parent")
     p.add_argument("--intensity", choices=("low", "balanced", "aggressive"),
                    help="The intensity preset Lodestar runs at, recorded in run.json for the analyzer")
-    p.add_argument("--user-timezone", default="America/Denver")
+    p.add_argument("--user-timezone", default="UTC")
     p.add_argument("--tick-seconds", type=float, default=1.0, help=argparse.SUPPRESS)
     return p
 

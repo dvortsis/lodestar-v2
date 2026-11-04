@@ -741,12 +741,14 @@ fn render_gate(o: &mut Out, g: &GateStats) {
 
 /// The search index's counters (§8). `mmap` is
 /// [`lodestar_search::SearchIndex::mmap_cache_entries`] (torrent index,
-/// file index); `None` (a RAM index) leaves its gauge out.
+/// file index); `None` (a RAM index) leaves its gauge out. `segments` is
+/// [`lodestar_search::SearchIndex::segment_counts`], in the same order.
 pub fn render_search(
     out: &mut String,
     docs: u64,
     stats: &lodestar_search::IndexStats,
     mmap: Option<[u64; 2]>,
+    segments: [u64; 2],
 ) {
     let mut o = Out(std::mem::take(out));
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
@@ -796,6 +798,14 @@ pub fn render_search(
         o.value(name, "index=\"main\"", main);
         o.value(name, "index=\"files\"", files);
     }
+    let name = "search_segments";
+    o.family(
+        name,
+        "gauge",
+        "Live segments in each index's current searcher.",
+    );
+    o.value(name, "index=\"main\"", segments[0]);
+    o.value(name, "index=\"files\"", segments[1]);
     *out = o.0;
 }
 
@@ -1338,7 +1348,55 @@ pub fn render_storage(out: &mut String, g: &crate::storage::Gauges) {
         "Storage sizes that couldn't be read; each keeps its last value.",
         get(&g.errors),
     );
+    render_memory(&mut o, &g.mem.snapshot());
     *out = o.0;
+}
+
+/// The memory attribution gauges (X-mem-gauges), sampled with the storage
+/// sizes. Each is left out while absent: the `/proc` ones off Linux, any
+/// one that didn't read.
+fn render_memory(o: &mut Out, m: &crate::memstats::Snapshot) {
+    for (name, help, v) in [
+        (
+            "mem_mimalloc_committed_bytes",
+            "Bytes the Rust allocator (mimalloc) has committed from the OS, sampled.",
+            m.mimalloc_committed,
+        ),
+        (
+            "mem_mimalloc_peak_committed_bytes",
+            "Most bytes mimalloc has had committed since start, sampled.",
+            m.mimalloc_peak_committed,
+        ),
+        (
+            "mem_sqlite_bytes",
+            "Bytes SQLite has allocated and not freed (its own count, outside mimalloc), sampled.",
+            m.sqlite,
+        ),
+        (
+            "mem_sqlite_highwater_bytes",
+            "Most bytes SQLite has had allocated since start, sampled.",
+            m.sqlite_highwater,
+        ),
+        (
+            "mem_rss_anon_bytes",
+            "Resident anonymous memory (RssAnon), sampled; Linux only.",
+            m.rss_anon,
+        ),
+        (
+            "mem_rss_file_bytes",
+            "Resident file-backed memory (RssFile), sampled; Linux only.",
+            m.rss_file,
+        ),
+        (
+            "mem_anon_huge_bytes",
+            "Anonymous memory in transparent huge pages (AnonHugePages), sampled; Linux only.",
+            m.anon_huge,
+        ),
+    ] {
+        if let Some(v) = v {
+            o.one(name, "gauge", help, v);
+        }
+    }
 }
 
 /// Stored filter rows the engine couldn't read, by kind: rules,
@@ -1433,7 +1491,7 @@ mod tests {
     fn the_mmap_cache_gauge_is_labelled_by_index_and_absent_for_a_ram_index() {
         let stats = lodestar_search::IndexStats::default();
         let mut out = String::new();
-        render_search(&mut out, 0, &stats, Some([12, 30]));
+        render_search(&mut out, 0, &stats, Some([12, 30]), [3, 1]);
         assert!(
             out.contains("# TYPE lodestar_search_mmap_cache_entries gauge\n"),
             "{out}"
@@ -1447,8 +1505,88 @@ mod tests {
             "{out}"
         );
         let mut ram = String::new();
-        render_search(&mut ram, 0, &stats, None);
+        render_search(&mut ram, 0, &stats, None, [0, 0]);
         assert!(!ram.contains("mmap_cache"), "{ram}");
+    }
+
+    #[test]
+    fn segments_render_per_index_for_every_index() {
+        let stats = lodestar_search::IndexStats::default();
+        for mmap in [Some([1, 1]), None] {
+            let mut out = String::new();
+            render_search(&mut out, 0, &stats, mmap, [7, 2]);
+            assert_eq!(
+                out.matches("# TYPE lodestar_search_segments gauge\n")
+                    .count(),
+                1,
+                "{out}"
+            );
+            for line in [
+                "lodestar_search_segments{index=\"main\"} 7\n",
+                "lodestar_search_segments{index=\"files\"} 2\n",
+            ] {
+                assert_eq!(out.matches(line).count(), 1, "{line}: {out}");
+            }
+        }
+    }
+
+    /// The memory families, as the storage sampler's gauges render them.
+    const MEMORY_FAMILIES: [&str; 7] = [
+        "mem_mimalloc_committed_bytes",
+        "mem_mimalloc_peak_committed_bytes",
+        "mem_sqlite_bytes",
+        "mem_sqlite_highwater_bytes",
+        "mem_rss_anon_bytes",
+        "mem_rss_file_bytes",
+        "mem_anon_huge_bytes",
+    ];
+
+    #[test]
+    fn memory_gauges_render_their_values_and_leave_absent_ones_out() {
+        let g = crate::storage::Gauges::default();
+        let mut out = String::new();
+        render_storage(&mut out, &g);
+        assert!(!out.contains("lodestar_mem_"), "nothing sampled: {out}");
+        g.mem.store(crate::memstats::Snapshot {
+            mimalloc_committed: Some(41_943_040),
+            mimalloc_peak_committed: Some(52_428_800),
+            sqlite: Some(41_000_000),
+            sqlite_highwater: None,
+            rss_anon: Some(515_899_392),
+            rss_file: Some(0),
+            anon_huge: None,
+        });
+        let mut out = String::new();
+        render_storage(&mut out, &g);
+        for family in MEMORY_FAMILIES {
+            let ty = format!("# TYPE lodestar_{family} gauge\n");
+            let want = usize::from(
+                family != "mem_anon_huge_bytes" && family != "mem_sqlite_highwater_bytes",
+            );
+            assert_eq!(out.matches(&ty).count(), want, "{family}: {out}");
+        }
+        for line in [
+            "lodestar_mem_mimalloc_committed_bytes 41943040\n",
+            "lodestar_mem_mimalloc_peak_committed_bytes 52428800\n",
+            "lodestar_mem_sqlite_bytes 41000000\n",
+            "lodestar_mem_rss_anon_bytes 515899392\n",
+            "lodestar_mem_rss_file_bytes 0\n",
+        ] {
+            assert_eq!(out.matches(line).count(), 1, "{line}: {out}");
+        }
+    }
+
+    /// Each new family has its row in docs/metrics.md.
+    #[test]
+    fn memory_and_segment_families_are_documented() {
+        let doc = include_str!("../../../docs/metrics.md");
+        for family in MEMORY_FAMILIES.iter().chain(&["search_segments"]) {
+            let row = format!("| `{family}");
+            assert!(
+                doc.lines().any(|l| l.starts_with(&row)),
+                "docs/metrics.md has no row for {family}"
+            );
+        }
     }
 
     /// Every slot of the pool's failure array has a label, in index order,
