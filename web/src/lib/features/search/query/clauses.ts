@@ -378,6 +378,11 @@ function parts(node: Ast, depth: number): Part[] {
 			return [
 				m.search_filters_time({ key: m.discovered(), from: clock(node.from), to: clock(node.to) })
 			];
+		case 'verified':
+		case 'source':
+		case 'network':
+			// Provenance (SRC-3) shows as its query text until SRC-17 gives it words.
+			return [mono(`${node.op}:${node.any.join(',')}`)];
 		default: {
 			// Exhaustive: a new AST op fails type-checking here until it has a label.
 			const unknown: never = node;

@@ -162,7 +162,7 @@ pub fn run_once(
         match serde_json::from_str::<Node>(&s.ast) {
             Ok(node) => {
                 seen.unreadable.remove(&s.id);
-                parsed.push((s.id, s.watermark, node));
+                parsed.push((s.id, s.watermark, alert_query(node)));
             }
             Err(_) => {
                 // Skipped, not moved past: once its query is saved again
@@ -308,7 +308,7 @@ fn run_promoted(
         .iter()
         .filter_map(|s| {
             let node = serde_json::from_str::<Node>(&s.ast).ok()?;
-            Some((s.id, s.watermark, s.ast.as_str(), node))
+            Some((s.id, s.watermark, s.ast.as_str(), alert_query(node)))
         })
         .collect();
     let limits = PercolateLimits {
@@ -552,8 +552,29 @@ async fn retry(stopped: &mut watch::Receiver<bool>, wake: &Wake, delay: Duration
     true
 }
 
+/// A saved search's query as alerts run it: unverified items stay out
+/// unless it names `verified:` itself, as in a search (§18.6, SRC-3).
+fn alert_query(node: Node) -> Node {
+    node.without_unverified()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn alerts_leave_unverified_items_out_unless_asked() {
+        use lodestar_search::parse;
+        assert_eq!(
+            super::alert_query(parse("movie").unwrap()),
+            parse("movie verified:yes").unwrap()
+        );
+        assert_eq!(
+            super::alert_query(Node::All),
+            parse("verified:yes").unwrap()
+        );
+        let asked = parse("movie verified:yes,no").unwrap();
+        assert_eq!(super::alert_query(asked.clone()), asked);
+    }
+
     use std::sync::atomic::AtomicBool;
 
     use lodestar_search::{LiveConfig, LiveIndexer, Serving, ServingConfig, parse};

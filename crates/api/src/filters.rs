@@ -29,6 +29,7 @@ use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::load::{
     KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, STAND_INS_KEY, StandIns, encode_match,
+    stored_rule_reads,
 };
 use lodestar_filter::packs::upgrade::{self as pack_upgrade, Applied};
 use lodestar_filter::{
@@ -253,13 +254,25 @@ fn action(name: &str) -> ApiResult<Action> {
 }
 
 fn query(text: &str) -> ApiResult<Node> {
-    parse(text).map_err(|e| {
+    let node = parse(text).map_err(|e| {
         bad(
             "query_syntax",
             format!("The query doesn't parse: {}", e.message),
         )
         .span(e.start, e.end)
-    })
+    })?;
+    // The judge doesn't know an item's provenance: claims and fetched
+    // metadata are judged alike, and its sources aren't known yet
+    // (SRC-3). A rule on them would silently never match, or with `-`,
+    // match everything.
+    if node.mentions_provenance() {
+        return Err(bad(
+            "provenance_in_rule",
+            "Rules can't test verified:, source: or network:. Filters judge what a torrent \
+             says it is, before search knows where it came from.",
+        ));
+    }
+    Ok(node)
 }
 
 fn days(d: Option<u32>, now: i64) -> Option<i64> {
@@ -1534,12 +1547,12 @@ impl FiltersApi {
                 // It failed closed while unreadable (lodestar_filter::load):
                 // what it held then is released below, to be judged again
                 // as fixed, never by the stand-in.
-                let was_unreadable = parse(&row.query).is_err()
+                let was_unreadable = !stored_rule_reads(&row.query)
                     || Action::from_code(row.action).is_none()
                     || row
                         .unless_query
                         .as_deref()
-                        .is_some_and(|u| parse(u).is_err());
+                        .is_some_and(|u| !stored_rule_reads(u));
                 if let Some(q) = q {
                     row.query = query(q)?.to_query();
                 }
@@ -2547,7 +2560,7 @@ impl FiltersApi {
         };
         // An unreadable Not adult rule was skipped while loaded, so it
         // marked nothing: nothing to classify again.
-        if !adult && parse(&q).is_err() {
+        if !adult && !stored_rule_reads(&q) {
             drop_pending_requeue(&mut store, &q)?;
             self.rules_changed(&mut store)?;
             return Ok(ClassRuleRemoved {
@@ -2613,7 +2626,7 @@ impl FiltersApi {
         // A rule that didn't parse matched everything while it was loaded
         // (an Is adult one, lodestar_filter::load): everything is
         // classified again.
-        let node = parse(text).unwrap_or(Node::All);
+        let node = lodestar_filter::load::rule_query(text).unwrap_or(Node::All);
         self.requeue(&node, text, now)
     }
 
@@ -3018,7 +3031,7 @@ pub(crate) async fn remove_class_rule(
             .class_rules()
             .map_err(internal)?
             .iter()
-            .any(|r| r.0 == body.id && parse(&r.1).is_err());
+            .any(|r| r.0 == body.id && !stored_rule_reads(&r.1));
         f.remove_class_rule(body.id, crate::unix_now())
             .map(|r| (r, unreadable))
     })

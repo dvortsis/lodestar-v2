@@ -212,6 +212,8 @@ impl<'a> Doc<'a> {
                 };
                 (*lo..=*hi).contains(&pct)
             }
+            // As the matcher: the judge doesn't see provenance (SRC-3).
+            Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => false,
         }
     }
 
