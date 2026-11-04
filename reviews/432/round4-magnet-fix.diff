@@ -1,0 +1,29 @@
+421a422,428
+>                 // REVIEW: a magnet ends at a hard stop only.
+>                 let url_end = |from: usize| {
+>                     rest[from..]
+>                         .char_indices()
+>                         .find(|(_, c)| hard_stop(*c))
+>                         .map_or(rest.len(), |(j, _)| from + j)
+>                 };
+470a478
+>                         let scan = past_ipv6(rest, scan);
+526a535,552
+> }
+> 
+> fn past_ipv6(rest: &str, host: usize) -> usize {
+>     if !rest[host..].starts_with('[') {
+>         return host;
+>     }
+>     let mut bound = rest.len().min(host + 64);
+>     while !rest.is_char_boundary(bound) {
+>         bound -= 1;
+>     }
+>     let literal = &rest[host + 1..bound];
+>     match literal
+>         .find(|c: char| !(c.is_ascii_hexdigit() || matches!(c, ':' | '.' | '%')))
+>         .filter(|&k| literal[k..].starts_with(']'))
+>     {
+>         Some(close) => host + 1 + close + 1,
+>         None => host,
+>     }
