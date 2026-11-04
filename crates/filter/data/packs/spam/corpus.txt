@@ -1,0 +1,31 @@
+# The spam pack's corpus (RP-1). Format: crates/filter/src/corpus.rs.
+# Every name is made up; site names use the reserved example domains.
+
+rule SP-1
+match www.example.com - Example Movie 2019 1080p
+  file 4G Example.Movie.2019.1080p.mkv
+match [example.org] Sample Band - Example Album (2020)
+  file 30M 01 - Example Song.mp3
+match Example Show S01 720p (example.net)
+  file 700M Example.Show.S01E01.720p.mkv
+miss Example Movie 2019 [Director's Cut] (1080p)
+  file 4G Example.Movie.2019.1080p.mkv
+miss [GRP] Example Show - 01 [1080p]
+  file 700M Example Show - 01.mkv
+miss Example Tool v1.2 (x64)
+  file 50M setup.exe
+
+rule SP-2
+match free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download free movie download
+  file 1G a.mkv
+match Example Movie 2019 1080p full hd watch online Example Movie 2019 1080p full hd watch online Example Movie 2019 1080p full hd watch online Example Movie 2019 1080p full hd watch online Example Movie 2019 1080p full hd watch online Example Movie 2019 1080p full hd watch online Example Movie 2019 1080p full hd watch online Example Movie 2019 1080p full hd watch online
+  file 4G Example.Movie.2019.1080p.mkv
+match crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download crack keygen serial free download
+  file 50M setup.exe
+miss Example Archive of Assorted Public Domain Lectures on Astronomy, Botany, Chemistry, Dentistry, Ecology, Forestry, Geology, Histology, Immunology, Journalism, Kinesiology, Linguistics, Meteorology, Neurology, Oceanography, Pharmacology, Quantum Theory, Radiology, Seismology, Toxicology, Urology, Virology, Woodworking, Xylography, Yachting and Zoology (1950-1990)
+  file 300M lectures.zip
+miss Example Movie Example Movie Example Movie 1080p
+  file 4G Example.Movie.mkv
+miss Sample Band - Album 01 [FLAC] Sample Band - Album 02 [FLAC] Sample Band - Album 03 [FLAC] Sample Band - Album 04 [FLAC] Sample Band - Album 05 [FLAC] Sample Band - Album 06 [FLAC] Sample Band - Album 07 [FLAC] Sample Band - Album 08 [FLAC] Sample Band - Album 09 [FLAC] Sample Band - Album 10 [FLAC] Sample Band - Album 11 [FLAC] Sample Band - Album 12 [FLAC] Sample Band - Album 13 [FLAC] Sample Band - Album 14 [FLAC] Sample Band - Album 15 [FLAC]
+  file 30M Album 01/01 - Example Song.flac
+  file 30M Album 02/01 - Another Song.flac
