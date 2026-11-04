@@ -28,7 +28,8 @@
 //! cargo run --release -p lodestar-bench --example mem-merge -- fresh tuned 1200 --per-hour 665 --every 30
 //! ```
 //!
-//! Flags: `--docs K` documents per commit (default 1); `--min-layer N`
+//! Flags: `--docs K` documents per commit (default 1); `--seed N`
+//! torrents indexed first in 5,000-document commits (`ingest`, default 0); `--min-layer N`
 //! (tuned, default 300); `--files-cap N` (tuned, default 100,000);
 //! `--main-cap N` (tuned, default tantivy's 10M).
 //!
@@ -284,23 +285,38 @@ fn flag<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
     args.get(i + 1)?.parse().ok()
 }
 
-/// `n` torrents, `docs` per commit, as fast as commits complete.
-fn ingest(tuned: Option<Tuned>, n: usize, docs: usize) {
+/// `n` torrents, `docs` per commit, as fast as commits complete, after
+/// `seed` torrents indexed in bulk.
+fn ingest(tuned: Option<Tuned>, n: usize, docs: usize, seed: usize) {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::builder().testing().build();
+    let started = Instant::now();
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut store =
         Store::open(tmp.path().join("lodestar.db"), StoreConfig::default()).expect("store");
     let mut w = Writers::open(&tmp.path().join("index"), tuned);
     let mut generator = Generator::new(7);
+    // `--seed N`: a corpus of N torrents first, in 5,000-document commits
+    // under the arm's own policy, so the drip measured after it runs
+    // against soak-sized segments.
+    let mut indexed = 0usize;
+    while indexed < seed {
+        let k = (seed - indexed).min(5000);
+        insert(&mut store, &mut generator, k);
+        indexed += w.catch_up(&mut store, k);
+        w.commit();
+    }
+    println!(
+        "# seeded {indexed} torrents in {:.0} s",
+        started.elapsed().as_secs_f64()
+    );
     let peak = Peak::start();
     println!(
         "torrents,commits,measure_bytes,min_bytes,peak_bytes,segs_t,max_seg_t,segs_f,max_seg_f,merges_t,merges_f,secs"
     );
-    let started = Instant::now();
-    let (mut indexed, mut commits, mut next_row) = (0usize, 0u64, 250usize);
+    let (mut commits, mut next_row) = (0u64, indexed + 250);
     let (mut least, mut merges, mut last_segs) = (u64::MAX, [0u64; 2], [0usize; 2]);
-    while indexed < n {
+    while indexed < seed + n {
         insert(&mut store, &mut generator, docs);
         indexed += w.catch_up(&mut store, docs);
         w.commit();
@@ -460,7 +476,7 @@ fn main() {
     let docs = flag(&args, "--docs").unwrap_or(1usize).max(1);
     println!("# mode={mode} policy={tuned:?} n={n} docs_per_commit={docs}");
     match mode {
-        "ingest" => ingest(tuned, n, docs),
+        "ingest" => ingest(tuned, n, docs, flag(&args, "--seed").unwrap_or(0)),
         "latency" => latency(tuned, n, docs),
         "fresh" => fresh(
             tuned,

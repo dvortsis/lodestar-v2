@@ -73,8 +73,29 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 - Today (A with 2 s commits): p50 0.3 s, p95 0.5 s, max 2.0 s (278 torrents).
 - Both are far inside the 10 min guardrail.
 
+## Round 2: a soak-sized corpus
+**Why it ran.** Later, r4 showed steps of about 70–90 MiB that grew with the corpus (runner, 17:43Z). The 20k runs never build corpus-sized segments, so a second round measured against a large index.
+
+**Rules, fixed at 18:05:17Z before any result:**
+- Each run seeds 150,000 torrents in 5,000-document commits, under its arm's own policy (the `--seed` flag).
+- Then it drips 20,000 torrents: 1 document per commit for A and B, 6 for C.
+- The fit runs from torrent 152,000 to the end.
+- Arms, build, measure, estimator and pass rule are otherwise round 1's, with 3 runs per arm.
+
+**Results, musl anonymous memory, MiB per 1,000 torrents:**
+
+| Arm | Runs | Arm mean | Anon over the drip (MiB) | Largest step between rows (MiB) | Segments at the end |
+|---|---|---|---|---|---|
+| A default | 2.20 [1.83, 2.56] / 2.24 [1.83, 2.65] / 1.53 [1.12, 1.93] | 1.99 [0.99, 2.98] | 95→154 / 95→158 / 86→159 | 24 / 21 / 27 | 10 / 24 |
+| B tuned | 5.05 [4.41, 5.69] / 1.01 [0.68, 1.34] / 2.03 [1.70, 2.36] | 2.70 [−2.52, 7.91] | 97→207 / 91→142 / 101→155 | 45 / 22 / 26 | 24 / 68 |
+| C tuned, 6/commit | 2.75 [2.06, 3.44] / 2.05 [1.29, 2.81] / 3.64 [2.72, 4.55] | 2.81 [0.84, 4.78] | 123→180 / 99→187 / 89→210 | 34 / 42 / 34 | 25 / 58 |
+
+- **Under the frozen rule, nothing passes.** B and C's means are above A's.
+- **Every arm shows steps of 20–45 MiB.** The tuned policy leaves two to three times the segments and doesn't make the steps smaller.
+- **A's slope at 150k (about 2 MiB/1k) matches its slope at 20k.** There's no sign that the ingest path's growth rises with the corpus.
+
 ## What it means
-- **At 1 document per commit, the merge policy is not r4's retainer.** All of A's ingest-path growth converts to about 1.8 MiB/h at 665 torrents/h, about 2.7 KiB per torrent. r4's provisional 23 MiB/h is roughly 35 KiB per torrent at that pace. So even removing the whole ingest-path growth would explain under a tenth of it.
-- **The tuned policy and the longer cadence don't measurably cut it.** C's mean is the lowest, but under the frozen rule it isn't distinguishable from A.
+- **At 1 document per commit, the merge policy is not r4's retainer.** All of A's ingest-path growth converts to about 1.3–1.8 MiB/h at 665 torrents/h, about 2–2.7 KiB per torrent, at both 20k and 150k. r4's provisional 23 MiB/h is roughly 35 KiB per torrent at that pace, and its later fit of 12.88 MiB/h is roughly 20 KiB. So even removing the whole ingest-path growth would explain about a tenth of it, unless r4 indexes much faster than 665/h.
+- **The tuned policy and the longer cadence don't measurably cut it.** At 20k, C's mean is the lowest, but under the frozen rule it isn't distinguishable from A. At 150k, B and C are no better than A.
 - **mimalloc v2 (D1)** has the lowest point estimates among the 1-document arms, but it isn't separable either. THP off (D2) looks like A.
 - **The next suspects** (`notes/r4-retainer-analysis.md`): the real-network fetch path, which no harness has exercised, and per-commit thread churn. Phase 1 points away from merging, toward those.
