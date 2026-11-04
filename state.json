@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T15:05:00Z",
+ "updated_at": "2026-11-04T15:13:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2692,9 +2692,11 @@
   "SRC-10b": {
    "status": "running",
    "model": "sonnet",
-   "session": "session_01MMjhnBcVh4ZZ3fDSWegH9M",
+   "session": "session_01MMjhn8LtF8MFPtM7yaXHdK",
    "launched": "2026-11-04T05:35:00Z",
-   "brief": "briefs/SRC-10b.md"
+   "brief": "briefs/SRC-10b.md",
+   "relaunched": "2026-11-04T15:13:00Z",
+   "note": "first session archived: hosts blocked; owner allowed animetosho hosts"
   },
   "SRC-10c": {
    "status": "in_review",
@@ -2708,9 +2710,11 @@
   "SRC-10d": {
    "status": "running",
    "model": "sonnet",
-   "session": "session_01MMjhn8iwJSVtxwkSDZCNMd",
+   "session": "session_01MMjhnD1GRbKMEJEdDJnfdw",
    "launched": "2026-11-04T05:42:00Z",
-   "brief": "briefs/SRC-10d.md"
+   "brief": "briefs/SRC-10d.md",
+   "relaunched": "2026-11-04T15:13:00Z",
+   "note": "first session archived: hosts blocked; owner allowed academictorrents.com"
   },
   "P-v06-rulepacks": {
    "status": "in_review",
@@ -3109,7 +3113,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T15:05:00Z",
+ "last_heartbeat": "2026-11-04T15:13:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3124,7 +3128,8 @@
   "2026-11-03T23:36:52Z soak r4 record (owner via dashboard): start 2026-11-03T18:25:30Z; baseline 2026-11-04T00:55:30Z..2026-11-05T00:55:30Z; leg main, balanced, memory_stop_basis anon; image sha256:d9365b8e..cafc9, commit bd9300dd; collector+analyzer from main 508d23b7 (contains 94457d83), hashes match git; --stop set. r3 containers exited 0, evidence intact. Nightly Appdata Backup disabled for r4 (re-enable after baseline). CA auto-update 2026-11-08 is after r4. MSI job still awaiting environment approval. Verdict due ~01:00Z Nov 5.",
   "2026-11-04T05:35:00Z Owner lifted the pause: four slots. Launched SB-6, SRC-11, SRC-12 (Opus) and SRC-10b (Sonnet). Queue: SRC-10c, SRC-10d, P-v06-rulepacks, L4-followups (after SB-6).",
   "2026-11-04T05:42:00Z Owner: up to 8 slots plus auto-approve of UX/perf best-practice decisions. Launched SRC-10c, SRC-10d (Sonnet) and P-v06-rulepacks (Opus); 7 running. Next: expand E-M7 (runner) for slot 8; L4-followups after SB-6.",
-  "2026-11-04T15:05:00Z #410 merged (3d45e86a, \u00a72.33). Fresh Opus reviews running on #413 SRC-12, #414 SRC-11, #415 SB-6; #412, #416, #411 next. Owner answers relayed: CR-SPEC confirmed (O1 exclude), #367 settled for v0.5.2 \u2014 to record as \u00a72.34. r4 at h13.9: mmap gauges bounded (prune confirmed), private memory still rising (no verdict); read-only retainer analysis running."
+  "2026-11-04T15:05:00Z #410 merged (3d45e86a, \u00a72.33). Fresh Opus reviews running on #413 SRC-12, #414 SRC-11, #415 SB-6; #412, #416, #411 next. Owner answers relayed: CR-SPEC confirmed (O1 exclude), #367 settled for v0.5.2 \u2014 to record as \u00a72.34. r4 at h13.9: mmap gauges bounded (prune confirmed), private memory still rising (no verdict); read-only retainer analysis running.",
+  "2026-11-04T15:13:00Z Owner allowed animetosho.org, feed.animetosho.org, academictorrents.com; SRC-10b/10d relaunched in fresh sessions. r4 retainer analysis in notes/r4-retainer-analysis.md; gauge asks sent to the dashboard session."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
