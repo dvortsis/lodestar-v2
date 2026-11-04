@@ -1063,7 +1063,8 @@ fn dir_bytes(dir: &Path) -> u64 {
 /// it stops once no new torrent or `reindex_log` entry is left. A
 /// population walk the new index still has (a build resumed by one with
 /// other generations) advances at most one bounded batch per step here,
-/// and its live indexer finishes it: it never holds up the swap.
+/// the last step included, and its live indexer finishes it: it never
+/// holds up the swap.
 fn swap_catch_up(w: &mut Indexer, store: &mut Store, batch: usize) -> Result<()> {
     loop {
         let c = w.catch_up_counted(store, batch)?;
@@ -1283,15 +1284,14 @@ mod tests {
         swap_catch_up(&mut w, &mut store, 10).unwrap();
         w.commit().unwrap();
         assert_eq!(index.watermark().unwrap(), 205, "every new torrent");
-        // Two steps' worth of the walk (5 beside the new ones, then 10),
-        // not all 200.
-        assert_eq!(
-            index.availability("payload_sig"),
-            crate::Availability::Backfilling {
-                done: 15,
-                upto: 200
+        // A bounded part of the walk at most (a batch a step), not all
+        // 200: the live indexer does the rest.
+        match index.availability("payload_sig") {
+            crate::Availability::Backfilling { done, upto: 200 } => {
+                assert!(done > 0 && done <= 20, "{done}");
             }
-        );
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

@@ -1846,55 +1846,74 @@ impl Indexer {
         Ok(counted)
     }
 
-    /// Re-indexes up to `budget` torrents for each index with a
+    /// Re-indexes up to `budget` torrents for the indexes with a
     /// population walk under way, from the store as it is now: a torrent
     /// deleted meanwhile is dropped, one changed since is also replayed
     /// from its `reindex_log` entry. The walks' cursors commit with the
     /// documents, so a restart resumes them. Returns the torrents
     /// re-indexed.
+    ///
+    /// When both indexes walk, they go in lockstep from the lower cursor:
+    /// each torrent is read from the store once and written to each index
+    /// whose walk covers it, and only that one torrent is held at a time
+    /// (its metadata, from untrusted peers, can be large).
     fn backfill(&mut self, store: &mut Store, budget: usize) -> Result<usize> {
-        let fields = self.index.fields;
-        let ff = self.index.files.fields;
-        // When both indexes walk, each torrent is read from the store once:
-        // the torrent walk keeps what it loaded for the file walk.
-        let both = self.torrents.population.pending().is_some()
-            && self.files.population.pending().is_some();
-        let mut loaded = std::collections::HashMap::new();
-        let torrents = walk(
-            &mut self.torrents,
-            store,
-            budget,
-            (&mut loaded, both),
-            |w, store, id, t| {
+        let ranges = [
+            self.torrents.population.pending(),
+            self.files.population.pending(),
+        ];
+        let Some(from) = ranges.iter().flatten().map(|r| r.0).min() else {
+            return Ok(0);
+        };
+        let high = ranges.iter().flatten().map(|r| r.1).max().unwrap_or(from);
+        let covers = |side: usize, id: i64| ranges[side].is_some_and(|(a, h)| id > a && id <= h);
+        let ids = store.ids_after(from, budget)?;
+        // Fewer than asked for: nothing more is stored up to `high`.
+        let mut to = if ids.len() < budget { high } else { from };
+        let (fields, ff) = (self.index.fields, self.index.files.fields);
+        let mut n = 0;
+        for id in ids {
+            if id > high {
+                to = high;
+                break;
+            }
+            to = to.max(id);
+            let (torrents, files) = (covers(0, id), covers(1, id));
+            if !torrents && !files {
+                continue;
+            }
+            let t = load(store, id)?;
+            if torrents {
+                let w = &mut self.torrents.writer;
                 w.delete_term(Term::from_field_u64(fields.id, id as u64));
-                if let Some(t) = t {
+                if let Some(t) = &t {
                     w.add_document(torrent_doc(store, t)?.to_document(&fields))?;
                 }
-                Ok(())
-            },
-        )?;
-        let files = walk(
-            &mut self.files,
-            store,
-            budget,
-            (&mut loaded, false),
-            |w, _, id, t| {
+            }
+            if files {
+                let w = &mut self.files.writer;
                 w.delete_term(Term::from_field_u64(ff.torrent, id as u64));
-                if let Some(t) = t {
+                if let Some(t) = &t {
                     for d in files::file_docs(id as u64, &t.tree) {
                         w.add_document(d.to_document(&ff))?;
                     }
                 }
-                Ok(())
-            },
-        )?;
-        let n = torrents.done.max(files.done);
+            }
+            n += 1;
+        }
+        // Every id up to `to` that a walk covers was just re-indexed.
+        let mut moved = false;
+        for side in [&mut self.torrents, &mut self.files] {
+            let before = side.population.clone();
+            side.population.advance(to);
+            moved |= side.population != before;
+        }
         self.pending += n;
         // A step that only moved a cursor (the walk's last ids were
         // deleted) is still work to commit: otherwise an idle indexer,
         // which commits only what's pending, would leave the field one
         // step short of complete for good.
-        if torrents.moved || files.moved {
+        if moved {
             self.pending = self.pending.max(1);
         }
         Ok(n)
@@ -2000,60 +2019,6 @@ impl Indexer {
         self.index.reader.reload()?;
         Ok(())
     }
-}
-
-/// One step of `side`'s population walk: re-indexes, through `write`,
-/// up to `budget` stored torrents in the walk's range `(from, high]`,
-/// then moves its cursors past them. Ids deleted from the store are
-/// skipped by the read (their documents went with their `reindex_log`
-/// entries); one deleted between the reads reaches `write` as `None`.
-/// `loaded` holds torrents an earlier walk in the same step read; this
-/// one takes them from there, and adds what it reads when `keep` is set.
-fn walk(
-    side: &mut Side,
-    store: &mut Store,
-    budget: usize,
-    (loaded, keep): (&mut std::collections::HashMap<i64, Option<Loaded>>, bool),
-    mut write: impl FnMut(&mut IndexWriter, &mut Store, i64, Option<&Loaded>) -> Result<()>,
-) -> Result<Walked> {
-    let Some((from, high)) = side.population.pending() else {
-        return Ok(Walked::default());
-    };
-    let ids = store.ids_after(from, budget)?;
-    // Fewer than asked for: nothing more is stored up to `high`.
-    let mut to = if ids.len() < budget { high } else { from };
-    let mut n = 0;
-    for id in ids {
-        if id > high {
-            to = high;
-            break;
-        }
-        let t = match loaded.remove(&id) {
-            Some(t) => t,
-            None => load(store, id)?,
-        };
-        write(&mut side.writer, store, id, t.as_ref())?;
-        if keep {
-            loaded.insert(id, t);
-        }
-        to = to.max(id);
-        n += 1;
-    }
-    let before = side.population.clone();
-    side.population.advance(to);
-    Ok(Walked {
-        done: n,
-        moved: side.population != before,
-    })
-}
-
-/// What one step of a population walk did.
-#[derive(Debug, Default, Clone, Copy)]
-struct Walked {
-    /// Torrents re-indexed.
-    done: usize,
-    /// Whether a cursor moved (or a walk completed): state to commit.
-    moved: bool,
 }
 
 /// Collects torrent ids from the `id` fast field: at most `left` across
@@ -2264,20 +2229,34 @@ mod population_tests {
     }
 
     #[test]
-    fn both_indexes_walk_in_one_pass() {
+    fn both_indexes_walk_in_lockstep_from_the_lower_cursor() {
         let mut store = store(30);
         let index = SearchIndex::in_memory().unwrap();
         let mut w = index.writer(HEAP).unwrap();
         while w.catch_up(&mut store, 100).unwrap() > 0 {}
         w.commit().unwrap();
         drop(w);
-        let gens = Generations::current()
-            .with("payload_sig", 1)
-            .with("file.category", 2);
-        let index = index.with_generations(gens).unwrap();
+        // One producer ships and walks a third of the way...
+        let first = Generations::current().with("payload_sig", 1);
+        let index = index.with_generations(first.clone()).unwrap();
         let mut w = index.writer(HEAP).unwrap();
-        // Counted once per torrent, though both indexes re-index it.
+        assert_eq!(w.catch_up_counted(&mut store, 10).unwrap().backfilled, 10);
+        w.commit().unwrap();
+        drop(w);
+        // ...then a second, on the other index, starts from the beginning.
+        let index = index
+            .with_generations(first.with("file.category", 2))
+            .unwrap();
+        let backfilling = |done, upto| Availability::Backfilling { done, upto };
+        assert_eq!(index.availability("payload_sig"), backfilling(10, 30));
+        assert_eq!(index.availability("file.category"), backfilling(0, 30));
+        let mut w = index.writer(HEAP).unwrap();
+        // One pass from the lower cursor: 20 torrents read once each, the
+        // first ten only into the file index.
         assert_eq!(w.catch_up_counted(&mut store, 20).unwrap().backfilled, 20);
+        w.commit().unwrap();
+        assert_eq!(index.availability("payload_sig"), backfilling(20, 30));
+        assert_eq!(index.availability("file.category"), backfilling(20, 30));
         while w.catch_up(&mut store, 20).unwrap() > 0 {}
         w.commit().unwrap();
         assert_eq!(index.availability("payload_sig"), Availability::Ready);

@@ -765,7 +765,9 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
 }
 
 #[test]
-fn a_build_resumed_with_other_generations_swaps_and_then_finishes_its_walk() {
+/// Correctness end to end; that the swap leaves the walk to the live
+/// indexer is `rebuild::tests::the_swaps_catch_up_…`'s to show.
+fn a_build_resumed_with_other_generations_still_completes_its_walk() {
     use lodestar_search::Availability;
     use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
     let dir = tempfile::tempdir().unwrap();
