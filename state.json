@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T17:43:00Z",
+ "updated_at": "2026-11-04T17:51:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2715,12 +2715,12 @@
    "head": "b36f27d3"
   },
   "SRC-10d": {
-   "status": "blocked",
+   "status": "running",
    "model": "sonnet",
-   "session": "archived",
+   "session": "session_01MMjhnCM4nAM6GP7aHPbJP9",
    "launched": "2026-11-04T05:42:00Z",
    "brief": "briefs/SRC-10d.md",
-   "relaunched": "2026-11-04T15:13:00Z",
+   "relaunched": "2026-11-04T17:51:00Z",
    "note": "Academic Torrents feed uses bare <infohash>; waits on SRC-8b. Q2 clear; findings in brief"
   },
   "P-v06-rulepacks": {
@@ -2753,13 +2753,14 @@
    "merge": "9887ab52"
   },
   "SRC-8b": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
-   "session": "session_01MMjhn8a8EcfirHuNtWTQ4e",
+   "session": "archived",
    "launched": "2026-11-04T15:47:00Z",
    "brief": "briefs/SRC-8b.md",
    "pr": 419,
-   "review": "Opus MERGE; one small round (bare <size>, fuzz seed) then merge on green"
+   "review": "Opus MERGE; one small round (bare <size>, fuzz seed) then merge on green",
+   "merge": "36e61ff2"
   },
   "RP-0": {
    "status": "running",
@@ -3191,7 +3192,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T17:43:00Z",
+ "last_heartbeat": "2026-11-04T17:51:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3215,7 +3216,8 @@
   "2026-11-04T16:22:00Z Merged #417 (8f282e6c: \u00a72.34, 19 rule-pack slices, SRC-10b dropped) and #413 SRC-12 (b3d678dd). Launched RP-0 and SRC-12b. #414 SRC-11 needs a main merge. #418 SB-6b MERGE verdict, CI running.",
   "2026-11-04T16:24:00Z #418 SB-6b merged (9887ab52). SRC-3 launched in slot 1. X-merge-policy cleared for index.rs after its phase-1 report.",
   "2026-11-04T16:58:00Z #414 SRC-11 merged (08e32a13). ENR-2a brief written for slot 2. X-search-files-3 waits for #420 (files.rs). SRC-3b recorded as follow-up.",
-  "2026-11-04T17:43:00Z #420 L4-followups merged (fc324666). X-search-files-3 launched in slot 7."
+  "2026-11-04T17:43:00Z #420 L4-followups merged (fc324666). X-search-files-3 launched in slot 7.",
+  "2026-11-04T17:51:00Z #419 SRC-8b merged (36e61ff2). SRC-10d relaunched on it. r4 likely fail (provisional 12.9 MiB/h); X-merge-policy top priority."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4849,7 +4851,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-04T17:43:00Z",
+  "updated": "2026-11-04T17:51:00Z",
   "items": [
    {
     "slot": 1,
@@ -4893,11 +4895,11 @@
    },
    {
     "slot": 6,
-    "slice": "SRC-8b",
+    "slice": "SRC-10d",
     "role": "build",
     "agent": "claude",
-    "doing": "Teaching the feed reader to read Academic Torrents' hashes and sizes. Reviewed; last small round.",
-    "since": "2026-11-04T15:47:00Z"
+    "doing": "Building the Academic Torrents source on the updated feed reader.",
+    "since": "2026-11-04T17:51:00Z"
    },
    {
     "slot": 7,
@@ -4916,5 +4918,6 @@
     "since": "2026-11-04T15:18:41Z"
    }
   ]
- }
+ },
+ "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail."
 }
