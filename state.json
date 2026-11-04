@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-04T15:25:00Z",
+ "updated_at": "2026-11-04T15:35:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2663,13 +2663,15 @@
    "notes": "collector KEEP + analyzer parse search_commits_total and mmap gauge; provisional interim fits; e2e test; merges before r4. R-mem-triage or a helper."
   },
   "SB-6": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnCswQZZQH5WaWTukzL",
    "launched": "2026-11-04T05:35:00Z",
    "brief": "briefs/SB-6.md",
    "pr": 415,
-   "head": "61bcaa39"
+   "head": "61bcaa39",
+   "merge": "33088edd",
+   "review": "Opus MERGE"
   },
   "SRC-11": {
    "status": "in_review",
@@ -2725,7 +2727,8 @@
    "launched": "2026-11-04T05:42:00Z",
    "brief": "briefs/P-v06-rulepacks.md",
    "pr": 412,
-   "head": "bbe2bc81"
+   "head": "bbe2bc81",
+   "review": "round 2 CHANGES sent (seed pre-RP-0 rules; fresh-install def; first version widens; fail-closed wording; Done-when tests)"
   },
   "X-merge-policy": {
    "status": "running",
@@ -2734,6 +2737,13 @@
    "launched": "2026-11-04T15:20:00Z",
    "brief": "briefs/X-merge-policy.md",
    "note": "r4 contingency; phase 1 measurement; index.rs after SB-6 merges"
+  },
+  "SB-6b": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhnCswQZZQH5WaWTukzL",
+   "launched": "2026-11-04T15:35:00Z",
+   "note": "follow-ups from SB-6 review: swap drain, unknown-field availability fail-closed, shared load, progress"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3123,7 +3133,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-04T15:25:00Z",
+ "last_heartbeat": "2026-11-04T15:35:00Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -3140,7 +3150,8 @@
   "2026-11-04T05:42:00Z Owner: up to 8 slots plus auto-approve of UX/perf best-practice decisions. Launched SRC-10c, SRC-10d (Sonnet) and P-v06-rulepacks (Opus); 7 running. Next: expand E-M7 (runner) for slot 8; L4-followups after SB-6.",
   "2026-11-04T15:05:00Z #410 merged (3d45e86a, \u00a72.33). Fresh Opus reviews running on #413 SRC-12, #414 SRC-11, #415 SB-6; #412, #416, #411 next. Owner answers relayed: CR-SPEC confirmed (O1 exclude), #367 settled for v0.5.2 \u2014 to record as \u00a72.34. r4 at h13.9: mmap gauges bounded (prune confirmed), private memory still rising (no verdict); read-only retainer analysis running.",
   "2026-11-04T15:13:00Z Owner allowed animetosho.org, feed.animetosho.org, academictorrents.com; SRC-10b/10d relaunched in fresh sessions. r4 retainer analysis in notes/r4-retainer-analysis.md; gauge asks sent to the dashboard session.",
-  "2026-11-04T15:20:00Z r4 provisional fit h12-14: 23.1 MiB/h [15.6,30.6] (window incomplete, not a verdict); r4 not below r3 at same hours. Launched X-merge-policy (slot 8) as contingency. #416 review CHANGES: move slots into state.json. Network allowlist uses *.domain only \u2014 owner asked to add apex domains."
+  "2026-11-04T15:20:00Z r4 provisional fit h12-14: 23.1 MiB/h [15.6,30.6] (window incomplete, not a verdict); r4 not below r3 at same hours. Launched X-merge-policy (slot 8) as contingency. #416 review CHANGES: move slots into state.json. Network allowlist uses *.domain only \u2014 owner asked to add apex domains.",
+  "2026-11-04T15:35:00Z #415 SB-6 merged (33088edd). SB-6b follow-up in same session. L4-followups now dependency-ready; waits for a free slot. X-merge-policy told index.rs waits for SB-6b."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4773,15 +4784,15 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-04T15:25:00Z",
+  "updated": "2026-11-04T15:35:00Z",
   "items": [
    {
     "slot": 1,
-    "slice": "SB-6",
+    "slice": "SB-6b",
     "role": "build",
     "agent": "claude",
-    "doing": "Changing the search index layout so results can later show verified status, source and network, rebuilt in the background. In review.",
-    "since": "2026-11-04T05:33:51Z"
+    "doing": "Tidying up the new search index backfill: safer handling of unknown fields and a faster swap.",
+    "since": "2026-11-04T15:35:00Z"
    },
    {
     "slot": 2,
