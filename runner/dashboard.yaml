@@ -266,6 +266,7 @@ placement:
   - CR-0d
   - CR-0f
   - D-v051
+  - X-legal-docs
   - X-mmap-cache-prune
   - X-merge-policy
   - X-thp-off
