@@ -17,8 +17,9 @@
 //!    initialises before `main` (the runtime allocates first), and setting
 //!    the option from Rust needs `unsafe`, which the workspace forbids, so
 //!    it can only reach a process that's about to start. The child's
-//!    mimalloc then stops advising huge pages and sizes its purges for
-//!    small pages. Cheap, and it holds even if (1) ever failed.
+//!    mimalloc then stops advising `MADV_HUGEPAGE` and sets
+//!    PR_SET_THP_DISABLE itself, so it holds even if (1) ever failed. It
+//!    covers only mimalloc, not the C heaps (SQLite, zstd, ring); (1) does.
 //!
 //! `LODESTAR_THP=allow` is the escape hatch: neither switch is touched, as
 //! before this change.
@@ -72,7 +73,8 @@ pub fn child_env(mode: Mode) -> Option<(&'static str, &'static str)> {
 pub fn apply() -> Mode {
     let value = std::env::var(ENV).ok();
     let (mode, unknown) = mode(value.as_deref());
-    if let Some(v) = unknown {
+    // The supervisor has already warned; its worker inherits the value.
+    if let Some(v) = unknown.filter(|_| !is_worker()) {
         eprintln!("{ENV}: {v:?} isn't `allow` or `off`; transparent huge pages stay off");
     }
     if mode == Mode::Off
@@ -81,6 +83,17 @@ pub fn apply() -> Mode {
         eprintln!("{ENV}: can't turn transparent huge pages off: {e}");
     }
     mode
+}
+
+/// Whether this is the supervisor's `--child`, which it marks with its hint.
+#[cfg(unix)]
+fn is_worker() -> bool {
+    std::env::var_os(crate::update::control::ENV).is_some()
+}
+
+#[cfg(not(unix))]
+fn is_worker() -> bool {
+    false
 }
 
 /// Sets PR_SET_THP_DISABLE for the whole process.

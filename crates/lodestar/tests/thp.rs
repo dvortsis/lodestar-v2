@@ -5,7 +5,10 @@
 //! `LODESTAR_THP=allow` leaves both alone. Linux only, as the switch is.
 #![cfg(target_os = "linux")]
 
+use std::io::Read;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const DEADLINE: Duration = Duration::from_secs(60);
@@ -13,7 +16,27 @@ const DEADLINE: Duration = Duration::from_secs(60);
 /// A supervisor that's killed, with its worker, when the test ends.
 struct Serve {
     child: Child,
+    /// Everything the supervisor and its worker printed to stderr so far.
+    stderr: Arc<Mutex<String>>,
+    reader: Option<JoinHandle<()>>,
     _dir: tempfile::TempDir,
+}
+
+impl Serve {
+    /// Stops both processes and returns all they printed to stderr, once
+    /// the pipe has closed (both have exited) or the deadline passes.
+    fn stop(mut self) -> String {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let start = Instant::now();
+        let reader = self.reader.take().unwrap();
+        while !reader.is_finished() && start.elapsed() < DEADLINE {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(reader.is_finished(), "stderr stayed open for {DEADLINE:?}");
+        reader.join().unwrap();
+        self.stderr.lock().unwrap().clone()
+    }
 }
 
 impl Drop for Serve {
@@ -38,13 +61,28 @@ fn serve(thp: Option<&str>) -> Serve {
         .env_remove("MIMALLOC_ALLOW_THP")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     match thp {
         Some(v) => c.env("LODESTAR_THP", v),
         None => c.env_remove("LODESTAR_THP"),
     };
+    let mut child = c.spawn().unwrap();
+    // Drained as it comes, so a full pipe can never block either process.
+    let mut pipe = child.stderr.take().unwrap();
+    let stderr = Arc::new(Mutex::new(String::new()));
+    let sink = stderr.clone();
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok(n @ 1..) = pipe.read(&mut buf) {
+            sink.lock()
+                .unwrap()
+                .push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    });
     Serve {
-        child: c.spawn().unwrap(),
+        child,
+        stderr,
+        reader: Some(reader),
         _dir: dir,
     }
 }
@@ -59,6 +97,38 @@ fn thp_enabled(pid: &str) -> Option<bool> {
         "1" => Some(true),
         _ => None,
     }
+}
+
+/// Waits until `pid` runs more than one thread: `main` applies
+/// `LODESTAR_THP` before it spawns any, so it has run by then.
+fn past_startup(pid: u32) -> Result<(), String> {
+    let start = Instant::now();
+    loop {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+        let threads = status
+            .lines()
+            .find_map(|l| l.strip_prefix("Threads:"))
+            .and_then(|v| v.trim().parse::<u32>().ok());
+        if threads.is_some_and(|t| t > 1) {
+            return Ok(());
+        }
+        if start.elapsed() > DEADLINE {
+            return Err(format!(
+                "{pid} still single-threaded after {DEADLINE:?}: {threads:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// `THP_enabled` is in `/proc/<pid>/status` from Linux 5.0. Without it
+/// there's nothing to read the flag from outside the process.
+fn kernel_reports_thp() -> bool {
+    let known = thp_enabled("self").is_some();
+    if !known {
+        eprintln!("skipped: this kernel has no THP_enabled line in /proc/<pid>/status");
+    }
+    known
 }
 
 /// The worker's pid once the supervisor has spawned it and it has exec'd
@@ -93,6 +163,9 @@ fn environ(pid: &str) -> Option<Vec<String>> {
 
 #[test]
 fn the_worker_starts_with_thp_disabled() {
+    if !kernel_reports_thp() {
+        return;
+    }
     let s = serve(None);
     let sup = s.child.id();
     let kid = worker(sup).unwrap_or_else(|e| panic!("{e}"));
@@ -106,14 +179,32 @@ fn the_worker_starts_with_thp_disabled() {
 }
 
 #[test]
-fn an_unknown_value_still_disables_thp() {
+fn an_unknown_value_still_disables_thp_and_warns_once() {
+    if !kernel_reports_thp() {
+        return;
+    }
     let s = serve(Some("sometimes"));
-    let kid = worker(s.child.id()).unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(thp_enabled(&kid.to_string()), Some(false));
+    let sup = s.child.id();
+    let kid = worker(sup).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(thp_enabled(&sup.to_string()), Some(false), "the supervisor");
+    assert_eq!(thp_enabled(&kid.to_string()), Some(false), "the worker");
+    let env = environ(&kid.to_string()).unwrap();
+    assert!(
+        env.iter().any(|v| v == "MIMALLOC_ALLOW_THP=0"),
+        "the worker's environment: {env:?}"
+    );
+    // Once the worker is past its own start, a second warning would be out.
+    past_startup(kid).unwrap_or_else(|e| panic!("{e}"));
+    let stderr = s.stop();
+    let warning = "LODESTAR_THP: \"sometimes\" isn't `allow` or `off`";
+    assert_eq!(stderr.matches(warning).count(), 1, "stderr: {stderr}");
 }
 
 #[test]
 fn allow_leaves_thp_as_it_was() {
+    if !kernel_reports_thp() {
+        return;
+    }
     // A test runner already started with the flag set passes it on to
     // everything; `allow` doesn't clear it, so there's nothing to compare.
     if thp_enabled("self") != Some(true) {
