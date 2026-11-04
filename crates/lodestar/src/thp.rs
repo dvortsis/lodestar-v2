@@ -86,7 +86,7 @@ pub fn apply() -> Mode {
 /// Sets PR_SET_THP_DISABLE for the whole process.
 #[cfg(target_os = "linux")]
 fn disable() -> std::io::Result<()> {
-    rustix::thread::set_transparent_huge_pages_disabled(true).map_err(Into::into)
+    rustix::thread::disable_transparent_huge_pages(true).map_err(Into::into)
 }
 
 /// Other systems have no Linux THP to turn off.
