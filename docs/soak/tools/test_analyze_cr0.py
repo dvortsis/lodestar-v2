@@ -704,7 +704,7 @@ class AnalyzerTests(unittest.TestCase):
         text = markdown(report)
         self.assertIn("Memory attribution (informational; baseline hours 12-24):", text)
         self.assertIn("| RssAnon (MiB) | 412.00 | 424.00 | 424.00 | 1.00 | 721 |", text)
-        self.assertIn("| Other heap: RssAnon - mimalloc - SQLite (MiB) | 219.00 | 228.00 |", text)
+        self.assertIn("| Other heap (zstd, other C code): RssAnon - mimalloc - SQLite (MiB) | 219.00 | 228.00 |", text)
         self.assertIn("| Segments, main (count) |", text)
 
     def test_memory_attribution_without_sqlite_says_so(self):
@@ -716,7 +716,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 0.75, places=3)
         self.assertEqual(attr["segments"]["main"], {"status": "absent"})
         text = markdown(report)
-        self.assertIn("| Other heap: RssAnon - mimalloc (SQLite absent, so included) (MiB) | 259.00 |", text)
+        self.assertIn("| Other heap (includes SQLite, zstd, C code): RssAnon - mimalloc (MiB) | 259.00 |", text)
         self.assertIn("| SQLite | absent | | | | |", text)
 
     def test_snapshots_without_the_memory_metrics_report_them_absent(self):

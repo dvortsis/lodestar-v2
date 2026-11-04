@@ -1793,7 +1793,7 @@ def build_parser():
     p.add_argument("--require-gluetun", action="store_true", help="Refuse to start unless gluetun is the network parent")
     p.add_argument("--intensity", choices=("low", "balanced", "aggressive"),
                    help="The intensity preset Lodestar runs at, recorded in run.json for the analyzer")
-    p.add_argument("--user-timezone", default="America/Denver")
+    p.add_argument("--user-timezone", default="UTC")
     p.add_argument("--tick-seconds", type=float, default=1.0, help=argparse.SUPPRESS)
     return p
 

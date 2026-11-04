@@ -859,8 +859,8 @@ def attribution_markdown(attr):
     out += ["| Series | First | Last | Max | Slope per hour | Samples |",
             "| --- | ---: | ---: | ---: | ---: | ---: |"]
     out += [row(ATTRIBUTION_LABELS[name], g, "MiB") for name, g in attr["series"].items()]
-    label = ("Other heap: RssAnon - mimalloc - SQLite" if attr["other_heap_includes_sqlite"]
-             else "Other heap: RssAnon - mimalloc (SQLite absent, so included)")
+    label = ("Other heap (zstd, other C code): RssAnon - mimalloc - SQLite" if attr["other_heap_includes_sqlite"]
+             else "Other heap (includes SQLite, zstd, C code): RssAnon - mimalloc")
     out.append(row(label, attr["other_heap"], "MiB"))
     out += [row(f"Segments, {index}", g, "count") for index, g in attr["segments"].items()]
     return out
