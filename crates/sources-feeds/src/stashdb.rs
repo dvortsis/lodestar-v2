@@ -5,10 +5,16 @@
 //! The safety rules are [`archive_org`](crate::archive_org)'s. It's a pure
 //! function from bytes to scenes with no I/O. It reads one scene at a
 //! time, stops at a structural cap with a [`Stop`] reason and keeps the
-//! scenes it finished, and skips (and counts) a scene that breaks a field
-//! cap, has a malformed field or has no id. A half-read scene is never
+//! scenes it finished, and skips (and counts) a scene whose own id, date
+//! or field types are bad, or that has no id. A half-read scene is never
 //! used: a scene is handed out only once its object has closed and every
 //! field in it checked out. It never panics.
+//!
+//! Extra evidence degrades instead of spoiling the scene (runner, ENR-3
+//! review): a long title is cut, a studio with a bad or long name is
+//! dropped, and a bad performer entry, or one past
+//! [`Limits::max_performers`], is left out and sets
+//! [`Scene::performers_truncated`].
 //!
 //! It reads with the bounded [`json`](crate::json) reader, so every cap
 //! holds while reading. A structural fault (bad JSON, input cut short, a
@@ -17,8 +23,9 @@
 //!
 //! **What it keeps, and what it never asks for.** The queries select only
 //! what the enrichment claim can store (plan §4.3, ENR-0): the scene's id,
-//! title, release date and studio, and each performer's id and name. They
-//! never select a performer's birth date, measurements, birthplace,
+//! title, release date and studio, and each performer's name. They
+//! never select a performer's id (no per-performer pages or cross-item
+//! lists, plan Q4), birth date, measurements, birthplace,
 //! aliases, images or any other personal field (plan Q5), and the parser
 //! has nowhere to put one if a server sends it anyway: unknown keys are
 //! read past, never copied. Performers come back beside the match
@@ -29,7 +36,7 @@
 //! `{"data": {"findScene": scene | null}}`, with an optional `errors`
 //! array, which is counted and never read.
 
-use crate::common::{self, Bad, days_in_month, prepare, small, unsafe_char};
+use crate::common::{self, Bad, clean_title, days_in_month, prepare, small, unsafe_char};
 pub use crate::common::{MAX_TITLE, Stop};
 use crate::json::{self, R, Reader, TextError, Walk};
 
@@ -38,7 +45,7 @@ use crate::json::{self, R, Reader, TextError, Walk};
 /// `limit`. Answers `{"data": {"searchScene": [scene, …]}}`.
 pub const SEARCH_SCENE: &str = "query SearchScene($term: String!, $limit: Int) { \
 searchScene(term: $term, limit: $limit) { \
-id title release_date studio { id name } performers { performer { id name } } } }";
+id title release_date studio { id name } performers { performer { name } } } }";
 
 /// Looks one scene up by its StashDB id. Variable: `id`. Answers
 /// `{"data": {"findScene": scene}}`, or `null` for no such scene.
@@ -48,7 +55,7 @@ id title release_date studio { id name } performers { performer { id name } } } 
 /// one it asked for.
 pub const FIND_SCENE: &str = "query FindScene($id: ID!) { \
 findScene(id: $id) { \
-id title release_date studio { id name } performers { performer { id name } } } }";
+id title release_date studio { id name } performers { performer { name } } } }";
 
 /// Bytes in a StashDB id: a UUID, `8-4-4-4-12` hex digits.
 pub const ID_LEN: usize = 36;
@@ -70,13 +77,15 @@ pub struct Limits {
     /// Scenes, kept or skipped ([`Stop::Items`]). A `null` `findScene` is
     /// no scene.
     pub max_items: usize,
-    /// Performers in one scene; over it the scene is skipped.
+    /// Performers kept in one scene; later ones are left out
+    /// ([`Scene::performers_truncated`]).
     pub max_performers: usize,
     /// Elements in one array the parser reads past inside a scene; over
-    /// it the scene is skipped.
+    /// it the scene is skipped, or the studio or performer entry it's in
+    /// dropped.
     pub max_array: usize,
     /// Raw bytes of a string the parser reads; over it the scene is
-    /// skipped.
+    /// skipped, or the studio or performer entry it's in dropped.
     pub max_text: usize,
 }
 
@@ -139,11 +148,10 @@ impl Match {
     }
 }
 
-/// A performer credited in a scene: an id and a name, nothing else.
+/// A performer credited in a scene: a name, nothing else. No id, so
+/// nothing links one person across scenes (plan Q4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Performer {
-    /// A UUID, lower case.
-    pub id: String,
     /// Not empty, at most [`MAX_NAME`] bytes, hidden characters removed.
     pub name: String,
 }
@@ -155,6 +163,9 @@ pub struct Scene {
     pub matched: Match,
     /// In StashDB's order, at most [`Limits::max_performers`].
     pub performers: Vec<Performer>,
+    /// Some performers were left out: past [`Limits::max_performers`], or
+    /// an entry that wasn't a performer with a usable name.
+    pub performers_truncated: bool,
 }
 
 /// Scenes skipped, by reason.
@@ -162,10 +173,11 @@ pub struct Scene {
 pub struct Skipped {
     /// No `id`, or a `null` one.
     pub no_id: u32,
-    /// A field over a cap in [`Limits`], [`MAX_TITLE`] or [`MAX_NAME`].
+    /// A string over [`Limits::max_text`] raw in the scene's own fields,
+    /// or an array read past that's over [`Limits::max_array`].
     pub over_cap: u32,
-    /// A field of the wrong type or an invalid value, a repeated key, a
-    /// studio or performer missing its id or name, or a scene that isn't
+    /// A kept field of the wrong type, an id that isn't a UUID, a date
+    /// that isn't one, a bad escape, a repeated key, or a scene that isn't
     /// an object.
     pub malformed: u32,
 }
@@ -243,6 +255,7 @@ struct Draft {
     studio: Option<Studio>,
     released: Option<Date>,
     performers: Vec<Performer>,
+    truncated: bool,
 }
 
 const F_ID: u8 = 1;
@@ -288,6 +301,7 @@ impl Draft {
                 released: self.released,
             },
             performers: self.performers,
+            performers_truncated: self.truncated,
         })
     }
 }
@@ -353,7 +367,8 @@ impl Parser<'_, '_> {
     }
 
     /// A required name: a string with something left once trimmed and
-    /// cleaned, at most [`MAX_NAME`] bytes. Anything else spoils the scene.
+    /// cleaned, at most [`MAX_NAME`] bytes. Anything else spoils `d`, which
+    /// for a studio or performer is that entry's own draft.
     fn name(&mut self, d: &mut Draft) -> R<Option<String>> {
         let Some(s) = self.text(d)? else {
             return Ok(None);
@@ -468,12 +483,9 @@ impl Parser<'_, '_> {
             F_ID => d.id = self.id(d)?,
             F_TITLE => {
                 if let Some(t) = self.text(d)? {
-                    let t = clean(&t);
-                    if t.len() > MAX_TITLE {
-                        d.spoil(Bad::OverCap);
-                    } else if !t.is_empty() {
-                        d.title = Some(t);
-                    }
+                    // Cut to [`MAX_TITLE`] as the other feeds do.
+                    let t = clean_title(t.trim()).trim().to_owned();
+                    d.title = Some(t).filter(|t| !t.is_empty());
                 }
             }
             F_DATE => {
@@ -490,38 +502,37 @@ impl Parser<'_, '_> {
         Ok(())
     }
 
-    /// `studio`: `null`, or an object with an id and a name.
+    /// `studio`: `null`, or an object with an id and a name. Any other
+    /// type spoils the scene; an object without a valid id and name is
+    /// dropped and the scene kept.
     fn studio(&mut self, d: &mut Draft) -> R<Option<Studio>> {
         match self.j.peek() {
             Some(b'n') => self.j.skip().map(|_| None),
             Some(b'{') => {
-                let (id, name) = self.person_like(d)?;
-                Ok(id.zip(name).map(|(id, name)| Studio { id, name }))
+                let mut e = Draft::default();
+                let (mut id, mut name, mut seen) = (None, None, 0u8);
+                self.object(|p, k| {
+                    match k {
+                        "id" if e.once(&mut seen, F_ID) => id = p.id(&mut e)?,
+                        "name" if e.once(&mut seen, F_NAME) => name = p.name(&mut e)?,
+                        _ => p.skip_in(&mut e)?,
+                    }
+                    Ok(())
+                })?;
+                let ok = e.bad.is_none();
+                Ok(id
+                    .zip(name)
+                    .filter(|_| ok)
+                    .map(|(id, name)| Studio { id, name }))
             }
             _ => self.wrong(d).map(|()| None),
         }
     }
 
-    /// An object with a required `id` and `name`, other keys read past.
-    /// Either missing spoils the scene.
-    fn person_like(&mut self, d: &mut Draft) -> R<(Option<String>, Option<String>)> {
-        let (mut id, mut name, mut seen) = (None, None, 0u8);
-        self.object(|p, k| {
-            match k {
-                "id" if d.once(&mut seen, F_ID) => id = p.id(d)?,
-                "name" if d.once(&mut seen, F_NAME) => name = p.name(d)?,
-                _ => p.skip_in(d)?,
-            }
-            Ok(())
-        })?;
-        if id.is_none() || name.is_none() {
-            d.spoil(Bad::Malformed);
-            return Ok((None, None));
-        }
-        Ok((id, name))
-    }
-
-    /// `performers`: `null`, or a list of `{"performer": {id, name}}`.
+    /// `performers`: `null`, or a list of `{"performer": {"name": …}}`.
+    /// Any other type spoils the scene. An entry past
+    /// [`Limits::max_performers`], or without one usable name, is left
+    /// out and sets `truncated`; nothing is stored past the cap.
     fn performers(&mut self, d: &mut Draft) -> R<()> {
         match self.j.peek() {
             Some(b'n') => return self.j.skip().map(drop),
@@ -531,30 +542,45 @@ impl Parser<'_, '_> {
         let max = self.l.max_performers;
         self.array(|p, n| {
             if n >= max {
-                d.spoil(Bad::OverCap);
-                return p.skip_in(d);
+                d.truncated = true;
+                return p.j.skip().map(drop);
             }
-            if p.j.peek() != Some(b'{') {
-                return p.wrong(d);
-            }
-            let (mut found, mut seen) = (None, 0u8);
-            p.object(|p, k| {
-                if k != "performer" || !d.once(&mut seen, F_PERFORMER) {
-                    return p.skip_in(d);
-                }
-                if p.j.peek() != Some(b'{') {
-                    return p.wrong(d);
-                }
-                let (id, name) = p.person_like(d)?;
-                found = id.zip(name).map(|(id, name)| Performer { id, name });
-                Ok(())
-            })?;
-            match found {
+            match p.performer()? {
                 Some(f) => d.performers.push(f),
-                None => d.spoil(Bad::Malformed),
+                None => d.truncated = true,
             }
             Ok(())
         })
+    }
+
+    /// One `performers` entry, or `None` if it isn't usable. Its faults
+    /// are its own: they never spoil the scene.
+    fn performer(&mut self) -> R<Option<Performer>> {
+        let mut e = Draft::default();
+        if self.j.peek() != Some(b'{') {
+            self.j.skip()?;
+            return Ok(None);
+        }
+        let (mut name, mut seen) = (None, 0u8);
+        self.object(|p, k| {
+            if k != "performer" || !e.once(&mut seen, F_PERFORMER) {
+                return p.skip_in(&mut e);
+            }
+            if p.j.peek() != Some(b'{') {
+                return p.wrong(&mut e);
+            }
+            let mut inner = 0u8;
+            p.object(|p, k| {
+                match k {
+                    "name" if e.once(&mut inner, F_NAME) => name = p.name(&mut e)?,
+                    _ => p.skip_in(&mut e)?,
+                }
+                Ok(())
+            })
+        })?;
+        Ok(name
+            .filter(|_| e.bad.is_none())
+            .map(|name| Performer { name }))
     }
 }
 
@@ -683,8 +709,11 @@ mod tests {
             let open = q.matches('{').count();
             assert_eq!(open, q.matches('}').count(), "{q}");
             assert!(q.contains(
-                "{ id title release_date studio { id name } performers { performer { id name } } }"
+                "{ id title release_date studio { id name } performers { performer { name } } }"
             ));
+            // No performer ids (plan Q4): `id` only at the scene and studio.
+            let people = &q[q.find("performers").unwrap()..];
+            assert!(!people.contains("id"), "{q}");
         }
     }
 }

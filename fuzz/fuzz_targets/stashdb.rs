@@ -58,7 +58,7 @@ fuzz_target!(|data: &[u8]| {
             }));
             assert!(s.performers.len() <= limits.max_performers);
             for p in &s.performers {
-                assert!(uuid(&p.id) && name(&p.name));
+                assert!(name(&p.name));
             }
         });
         assert_eq!(page.kept as usize, kept);

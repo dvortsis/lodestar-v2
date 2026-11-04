@@ -1,7 +1,8 @@
 //! StashDB answers (ENR-3): golden tests on the synthetic fixtures, the
 //! personal-field test (plan Q5), the stop-on-error test, every cap
-//! stopping exactly, and property tests: never panics, never exceeds a
-//! cap, uses a scene whole or not at all. The last test runs the fuzz
+//! stopping exactly, extra evidence degrading without spoiling a scene,
+//! and property tests: never panics, never exceeds a cap, uses a scene
+//! whole or not at all. The last test runs the fuzz
 //! target's checks over a long mutated corpus, for machines without
 //! cargo-fuzz.
 
@@ -37,11 +38,8 @@ fn studio(n: u32, name: &str) -> Option<Studio> {
     })
 }
 
-fn performer(n: u32, name: &str) -> Performer {
-    Performer {
-        id: id(n),
-        name: name.into(),
-    }
+fn performer(name: &str) -> Performer {
+    Performer { name: name.into() }
 }
 
 fn day(y: u16, m: u8, d: u8) -> Option<Date> {
@@ -90,7 +88,7 @@ fn check(f: &Found, limits: &Limits) {
         }));
         assert!(s.performers.len() <= limits.max_performers);
         for p in &s.performers {
-            assert!(uuid(&p.id) && name(&p.name));
+            assert!(name(&p.name));
         }
     }
 }
@@ -103,11 +101,11 @@ fn search_answer() {
     assert_eq!(
         f.page,
         Page {
-            kept: 3,
+            kept: 4,
             skipped: Skipped {
                 no_id: 1,
                 over_cap: 0,
-                malformed: 3,
+                malformed: 2,
             },
             stop: None,
             errors: 0,
@@ -124,11 +122,11 @@ fn search_answer() {
                     studio: studio(0xc1, "Example Studio One"),
                     released: day(2024, 3, 15),
                 },
-                // The second id was upper case.
                 performers: vec![
-                    performer(0xe1, "Example Performer One"),
-                    performer(0xe2, "Example Performer Two"),
+                    performer("Example Performer One"),
+                    performer("Example Performer Two"),
                 ],
+                performers_truncated: false,
             },
             Scene {
                 matched: Match {
@@ -144,6 +142,7 @@ fn search_answer() {
                     }),
                 },
                 performers: vec![],
+                performers_truncated: false,
             },
             Scene {
                 matched: Match {
@@ -153,7 +152,20 @@ fn search_answer() {
                     studio: studio(0xc2, "Example Studio Two"),
                     released: None,
                 },
-                performers: vec![performer(0xe1, "Example Performer One")],
+                performers: vec![performer("Example Performer One")],
+                performers_truncated: false,
+            },
+            // A performer without a name is left out; the scene stays.
+            Scene {
+                matched: Match {
+                    kind: Kind::Scene,
+                    id: id(0xa7),
+                    title: Some("Synthetic Scene With A Half Performer".into()),
+                    studio: None,
+                    released: None,
+                },
+                performers: vec![performer("Example Performer One")],
+                performers_truncated: true,
             },
         ]
     );
@@ -184,7 +196,8 @@ fn find_answers() {
                     day: None,
                 }),
             },
-            performers: vec![performer(0xe4, "Example Performer Four")],
+            performers: vec![performer("Example Performer Four")],
+            performers_truncated: false,
         }
     );
     // No such scene is no scene, not a skipped one.
@@ -237,11 +250,14 @@ fn personal_fields_are_never_kept() {
                 studio: studio(0xc4, "Example Studio Four"),
                 released: day(2021, 6, 1),
             },
-            performers: vec![performer(0xe5, "Example Performer Five")],
+            performers: vec![performer("Example Performer Five")],
+            performers_truncated: false,
         }
     );
     let out = format!("{f:?}");
     assert!(!out.contains("PERSONAL") && !out.contains("999"), "{out}");
+    // The performer's id was sent but isn't kept (plan Q4).
+    assert!(!out.contains("0000000000e5"), "{out}");
 }
 
 /// Performers are apart from the match, so dropping them is one move.
@@ -249,8 +265,8 @@ fn personal_fields_are_never_kept() {
 fn performers_drop_with_the_match_alone() {
     let f = parse(&fixture("search.json"));
     let matches: Vec<Match> = f.scenes.into_iter().map(|s| s.matched).collect();
-    assert_eq!(matches.len(), 3);
-    assert!(!format!("{matches:?}").contains("Performer"));
+    assert_eq!(matches.len(), 4);
+    assert!(!format!("{matches:?}").contains("Example Performer"));
 }
 
 /// A structural fault mid-value ends the parse: the reader's cursor is
@@ -316,7 +332,7 @@ fn invalid_utf8_stops_after_whole_scenes() {
 }
 
 #[test]
-fn field_faults_skip_the_scene() {
+fn field_faults_skip_or_degrade() {
     let s = |fields: &str| {
         format!(
             r#"{{"data":{{"findScene":{{"id":"{}",{fields}}}}}}}"#,
@@ -324,37 +340,20 @@ fn field_faults_skip_the_scene() {
         )
     };
     let perf = |p: &str| s(&format!(r#""performers":[{p}]"#));
+    // Faults in the scene's own fields skip it.
     let malformed = [
         s(r#""title":1"#),
         s(r#""title":["a"]"#),
         s(r#""title":true"#),
+        s(r#""title":"a\ud800""#),
         s(r#""release_date":"2024-02-30""#),
         s(r#""release_date":20240101"#),
         s(r#""studio":"Example""#),
-        s(r#""studio":{"name":"Example Studio"}"#),
-        s(&format!(r#""studio":{{"id":"{}"}}"#, id(2))),
-        s(&format!(r#""studio":{{"id":"{}","name":"  "}}"#, id(2))),
-        s(&format!(r#""studio":{{"id":"{}","name":null}}"#, id(2))),
         s(r#""performers":{}"#),
-        perf("null"),
-        perf(r#"{"as":"x"}"#),
-        perf(r#"{"performer":null}"#),
-        perf(&format!(
-            r#"{{"performer":{{"id":"{}","name":"\u200b"}}}}"#,
-            id(2)
-        )),
-        perf(r#"{"performer":{"id":"x","name":"Example"}}"#),
         // A repeated key: which one the server meant is unclear.
         s(r#""title":"a","title":"b""#),
         s(&format!(r#""id":"{}""#, id(1))),
-        perf(&format!(
-            r#"{{"performer":{{"id":"{}","name":"A","name":"B"}}}}"#,
-            id(2)
-        )),
-        perf(&format!(
-            r#"{{"performer":{{"id":"{0}","name":"A"}},"performer":{{"id":"{0}","name":"A"}}}}"#,
-            id(2)
-        )),
+        s(r#""studio":null,"studio":null"#),
         // Not an object.
         r#"{"data":{"findScene":"x"}}"#.to_string(),
         r#"{"data":{"searchScene":[null]}}"#.to_string(),
@@ -375,12 +374,6 @@ fn field_faults_skip_the_scene() {
         );
     }
     let over = [
-        s(&format!(r#""title":"{}""#, "t".repeat(MAX_TITLE + 1))),
-        s(&format!(
-            r#""studio":{{"id":"{}","name":"{}"}}"#,
-            id(2),
-            "n".repeat(MAX_NAME + 1)
-        )),
         s(&format!(r#""title":"{}""#, "t".repeat(LIMITS.max_text + 1))),
         s(&format!(
             r#""tags":[{}]"#,
@@ -396,7 +389,56 @@ fn field_faults_skip_the_scene() {
             &body[..80]
         );
     }
-    // At the caps exactly, kept; nulls and empties are absent fields.
+    // A bad studio is dropped and the scene kept (runner, ENR-3 review).
+    let long_array = vec!["1"; LIMITS.max_array + 1].join(",");
+    for bad in [
+        r#"{"name":"Example Studio"}"#.to_string(),
+        format!(r#"{{"id":"{}"}}"#, id(2)),
+        r#"{"id":"x","name":"Example"}"#.to_string(),
+        format!(r#"{{"id":"{}","name":"  "}}"#, id(2)),
+        format!(r#"{{"id":"{}","name":null}}"#, id(2)),
+        format!(r#"{{"id":"{}","name":"\ud800"}}"#, id(2)),
+        format!(
+            r#"{{"id":"{}","name":"{}"}}"#,
+            id(2),
+            "n".repeat(MAX_NAME + 1)
+        ),
+        format!(r#"{{"id":"{0}","id":"{0}","name":"A"}}"#, id(2)),
+        format!(r#"{{"id":"{}","name":"A","x":[{long_array}]}}"#, id(2)),
+    ] {
+        let f = parse(s(&format!(r#""studio":{bad}"#)).as_bytes());
+        assert_eq!((f.page.kept, f.page.skipped.total()), (1, 0), "{bad}");
+        assert_eq!(f.scenes[0].matched.studio, None, "{bad}");
+    }
+    // A bad performer entry is left out and the scene kept.
+    for bad in [
+        "null".to_string(),
+        "7".to_string(),
+        r#"{"as":"x"}"#.to_string(),
+        r#"{"performer":null}"#.to_string(),
+        r#"{"performer":{}}"#.to_string(),
+        r#"{"performer":{"name":"\u200b"}}"#.to_string(),
+        r#"{"performer":{"name":"\ud800"}}"#.to_string(),
+        format!(
+            r#"{{"performer":{{"name":"{}"}}}}"#,
+            "n".repeat(MAX_NAME + 1)
+        ),
+        r#"{"performer":{"name":"A","name":"B"}}"#.to_string(),
+        r#"{"performer":{"name":"A"},"performer":{"name":"A"}}"#.to_string(),
+        format!(r#"{{"performer":{{"name":"A","x":[{long_array}]}}}}"#),
+    ] {
+        let body = perf(&format!(r#"{{"performer":{{"name":"Kept"}}}},{bad}"#));
+        let f = parse(body.as_bytes());
+        assert_eq!((f.page.kept, f.page.skipped.total()), (1, 0), "{bad}");
+        assert_eq!(f.scenes[0].performers, [performer("Kept")], "{bad}");
+        assert!(f.scenes[0].performers_truncated, "{bad}");
+    }
+    // A long title is cut as the other feeds cut theirs, then trimmed.
+    let long = format!("{} {}", "t".repeat(MAX_TITLE - 1), "u".repeat(10));
+    let f = parse(s(&format!(r#""title":"{long}""#)).as_bytes());
+    let want = "t".repeat(MAX_TITLE - 1);
+    assert_eq!(f.scenes[0].matched.title.as_deref(), Some(&*want));
+    // At the caps exactly, kept whole; nulls and empties are absent fields.
     let at = s(&format!(
         r#""title":"{}","studio":{{"id":"{}","name":"{}"}},"release_date":null,"performers":null"#,
         "t".repeat(MAX_TITLE),
@@ -405,6 +447,9 @@ fn field_faults_skip_the_scene() {
     ));
     let f = parse(at.as_bytes());
     assert_eq!(f.page.kept, 1);
+    let m = &f.scenes[0].matched;
+    assert_eq!(m.title.as_ref().map(String::len), Some(MAX_TITLE));
+    assert!(m.studio.is_some() && !f.scenes[0].performers_truncated);
     let blank = s(r#""title":" \u200b ""#);
     assert_eq!(parse(blank.as_bytes()).scenes[0].matched.title, None);
     // No id, or a null one.
@@ -504,7 +549,7 @@ proptest! {
     #[test]
     fn performer_cap_is_exact(n in 0usize..20, cap in 0usize..20) {
         let list: Vec<String> = (0..n)
-            .map(|i| format!(r#"{{"performer":{{"id":"{}","name":"P{i}"}}}}"#, id(i as u32)))
+            .map(|i| format!(r#"{{"performer":{{"name":"P{i}"}}}}"#))
             .collect();
         let body = format!(
             r#"{{"data":{{"findScene":{{"id":"{}","performers":[{}]}}}}}}"#,
@@ -513,11 +558,11 @@ proptest! {
         );
         let limits = Limits { max_performers: cap, ..LIMITS };
         let f = with(body.as_bytes(), &limits);
-        prop_assert_eq!(f.page.kept, u32::from(n <= cap));
-        prop_assert_eq!(f.page.skipped.over_cap, u32::from(n > cap));
-        if n <= cap {
-            prop_assert_eq!(f.scenes[0].performers.len(), n);
-        }
+        // Over the cap, the first `cap` are kept and the scene with them.
+        prop_assert_eq!(f.page.kept, 1);
+        let want: Vec<Performer> = (0..n.min(cap)).map(|i| performer(&format!("P{i}"))).collect();
+        prop_assert_eq!(&f.scenes[0].performers, &want);
+        prop_assert_eq!(f.scenes[0].performers_truncated, n > cap);
     }
 
     #[test]
@@ -604,8 +649,9 @@ fn fragment() -> impl Strategy<Value = String> {
     ]
 }
 
-/// A generated scene: whether it's good, and its parts. Bad ones carry a
-/// fault at a random place, after some good fields.
+/// A generated scene and its parts. Some carry a fault at a random place:
+/// one in the scene's own fields skips it; a bad studio or performer
+/// entry is dropped and the scene kept.
 #[derive(Debug, Clone)]
 struct Gen {
     id: u32,
@@ -614,7 +660,8 @@ struct Gen {
     date: Option<(u16, u8, u8)>,
     studio: Option<String>,
     performers: Vec<String>,
-    /// `None` is a good scene; else which fault, and where it goes.
+    /// `None` is a good scene; else which fault, and where it goes. 0–2
+    /// are performer entries, 3 a studio, 4–5 the scene's own fields.
     fault: Option<(u8, usize)>,
 }
 
@@ -669,12 +716,12 @@ impl Gen {
             .collect();
         if let Some((kind, at)) = self.fault {
             let fault = match kind {
-                0 => r#"{"performer":{"name":"No Id"}}"#.to_string(),
-                1 => format!(r#"{{"performer":{{"id":"{}"}}}}"#, id(5)),
+                0 => r#"{"performer":{"name":"Leaked \ud800"}}"#.to_string(),
+                1 => r#"{"performer":{"nom":"Leaked Name"}}"#.to_string(),
                 2 => r#"{"performer":7}"#.to_string(),
-                3 => format!(r#""release_date":"{}""#, "2024-13-01"),
-                4 => r#""studio":{"id":"bad","name":"S"}"#.to_string(),
-                _ => format!(r#""title":"{}""#, "x".repeat(MAX_TITLE + 1)),
+                3 => r#""studio":{"id":"bad","name":"Leaked Studio"}"#.to_string(),
+                4 => format!(r#""release_date":"{}""#, "2024-13-01"),
+                _ => r#""title":["Leaked Title"]"#.to_string(),
             };
             if kind < 3 {
                 ps.insert(at % (ps.len() + 1), fault);
@@ -691,7 +738,8 @@ impl Gen {
     }
 
     fn expect(&self) -> Option<Scene> {
-        if self.fault.is_some() {
+        let fault = self.fault.map(|f| f.0);
+        if fault.is_some_and(|k| k >= 4) {
             return None;
         }
         let clean = |s: &str| s.chars().filter(|&c| !hidden_char(c)).collect::<String>();
@@ -700,25 +748,22 @@ impl Gen {
                 kind: Kind::Scene,
                 id: id(self.id),
                 title: Some(clean(&self.title).trim().to_owned()).filter(|t| !t.is_empty()),
-                studio: self.studio.as_ref().map(|s| Studio {
-                    id: id(self.id ^ 1),
-                    name: s.trim().to_owned(),
-                }),
+                studio: self
+                    .studio
+                    .as_ref()
+                    .filter(|_| fault != Some(3))
+                    .map(|s| Studio {
+                        id: id(self.id ^ 1),
+                        name: s.trim().to_owned(),
+                    }),
                 released: self.date.map(|(y, m, d)| Date {
                     year: y,
                     month: Some(m),
                     day: Some(d),
                 }),
             },
-            performers: self
-                .performers
-                .iter()
-                .enumerate()
-                .map(|(i, n)| Performer {
-                    id: id(self.id.wrapping_add(i as u32 + 2)),
-                    name: n.clone(),
-                })
-                .collect(),
+            performers: self.performers.iter().map(|n| performer(n)).collect(),
+            performers_truncated: fault.is_some_and(|k| k < 3),
         })
     }
 }
@@ -742,9 +787,9 @@ proptest! {
         }
     }
 
-    /// Good scenes read back exactly; a scene with a fault anywhere is
-    /// skipped whole, and nothing of it (not one performer) reaches any
-    /// other scene.
+    /// Good scenes read back exactly. A scene with a fault in its own
+    /// fields is skipped whole; a bad studio or performer is dropped
+    /// alone. Nothing dropped reaches any scene.
     #[test]
     fn skipped_scenes_never_leak(gens in proptest::collection::vec(generated(), 0..12)) {
         let body: Vec<String> = gens.iter().map(Gen::body).collect();
@@ -754,10 +799,10 @@ proptest! {
         prop_assert_eq!(f.page.stop, None);
         let want: Vec<Scene> = gens.iter().filter_map(Gen::expect).collect();
         prop_assert_eq!(&f.scenes, &want);
-        let bad = gens.iter().filter(|g| g.fault.is_some()).count();
+        let bad = gens.iter().filter(|g| g.fault.is_some_and(|f| f.0 >= 4)).count();
         prop_assert_eq!(f.page.skipped.total() as usize, bad);
         let out = format!("{:?}", f.scenes);
-        prop_assert!(!out.contains("No Id") && !out.contains("PERSONAL"));
+        prop_assert!(!out.contains("Leaked") && !out.contains("PERSONAL"), "{}", out);
     }
 }
 

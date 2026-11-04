@@ -6,10 +6,10 @@ Every name and id is obviously synthetic (`Example Performer One`, `00000000-000
 
 | File | What it is |
 |---|---|
-| `search.json` | A `searchScene` answer: three good scenes and four skipped (no id, a bad id, a bad date, a performer missing a name). |
+| `search.json` | A `searchScene` answer: four kept scenes (one with a performer entry that has no name, which is left out) and three skipped (no id, a bad id, a bad date). |
 | `find.json` | A `findScene` answer with one scene. |
 | `find_null.json` | A `findScene` answer for no such scene. |
 | `errors.json` | A failed query: `errors` and `data: null`. |
-| `personal.json` | A scene whose performer carries every personal field stash-box has (birth date, measurements, birthplace, aliases, images and more), each valued `PERSONAL-…` or `999…`. The parser must keep none of them. |
+| `personal.json` | A scene whose performer carries every personal field stash-box has (birth date, measurements, birthplace, aliases, images and more), each valued `PERSONAL-…` or `999…`, and a performer id. The parser must keep none of them. |
 
 `fuzz/seeds/stashdb/` holds copies of the `.json` files.
