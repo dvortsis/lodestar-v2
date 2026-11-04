@@ -415,15 +415,9 @@ impl Parser<'_, '_> {
             "performers" if d.performers.is_none() => {
                 let mut list = Performers::default();
                 match self.j.peek() {
-                    Some(b'[') => {
-                        let max = self.l.max_array;
-                        self.array(|p, n| {
-                            if n >= max {
-                                d.spoil(Bad::OverCap);
-                            }
-                            p.performer(d, &mut list)
-                        })?;
-                    }
+                    // The list's length isn't a fault: `max_values` and
+                    // `max_bytes` bound it, and `max_performers` what's kept.
+                    Some(b'[') => self.array(|p, _| p.performer(&mut list))?,
                     Some(b'n') => self.j.skip().map(drop)?,
                     _ => {
                         list.truncated = true;
@@ -440,34 +434,30 @@ impl Parser<'_, '_> {
     /// One `performers` entry: its `name` only. The rest (`id`, `extra`,
     /// `bio`, `parent`, images) is passed over undecoded.
     ///
-    /// A bad `name` string drops only the performer, so
-    /// whether a match is kept doesn't depend on whether performers are
-    /// read ([`Limits::max_performers`], plan Q4). An over-long array
-    /// still spoils the item, read or not, as anywhere in it.
-    fn performer(&mut self, d: &mut Draft, list: &mut Performers) -> R<()> {
+    /// Any fault in the entry (a bad `name`, an over-long array or string
+    /// anywhere in it, or an entry that isn't an object) drops only that
+    /// performer and sets `truncated`, so whether a match is kept doesn't
+    /// depend on whether performers are read ([`Limits::max_performers`],
+    /// plan Q4). The same rule as ENR-3's StashDB parser (runner, D3).
+    fn performer(&mut self, list: &mut Performers) -> R<()> {
+        // Every fault in the entry lands here, never on the item.
+        let mut own = Draft::default();
         if self.j.peek() != Some(b'{') {
             list.truncated = true;
-            return self.skip_in(d);
+            return self.skip_in(&mut own);
         }
         let mut name = None;
-        let mut own = Draft::default();
         // Past the cap, the entry is only read past.
         let keep = list.list.len() < self.l.max_performers;
         self.object(|p, k| {
             match k {
-                // Only a string is read with `own`; anything else is
-                // skipped against the item as usual.
                 "name" if keep && name.is_none() => {
-                    name = Some(match p.j.peek() {
-                        Some(b'"') => p.text(&mut own)?.and_then(|s| clean_name(&s)),
-                        _ => p.skip_in(d).map(|()| None)?,
-                    });
+                    name = Some(p.strict(&mut own)?.and_then(|s| clean_name(&s)));
                 }
-                _ => p.skip_in(d)?,
+                _ => p.skip_in(&mut own)?,
             }
             Ok(())
         })?;
-        // `own` holds only the faults of this entry's name.
         match (keep && own.bad.is_none(), name.flatten()) {
             (true, Some(name)) => list.list.push(Performer { name }),
             _ => list.truncated = true,

@@ -303,10 +303,7 @@ fn item_cap() {
 
 #[test]
 fn array_cap() {
-    for (key, arr) in [
-        ("tags", "[1,2,3]"),
-        ("performers", r#"[{"id":"p","name":"N"},2,3]"#),
-    ] {
+    for (key, arr) in [("tags", "[1,2,3]"), ("site", r#"{"x":[1,2,3]}"#)] {
         let body = format!(r#"{{"data":[{{"id":"a","{key}":{arr}}},{{"id":"b"}}]}}"#);
         let at = |n| {
             with(
@@ -323,6 +320,17 @@ fn array_cap() {
         assert_eq!((over.page.stop, ids(&over)), (None, vec!["b"]), "{key}");
         assert_eq!(over.page.skipped.over_cap, 1, "{key}");
     }
+    // The performers list itself isn't capped by `max_array` (D3):
+    // `max_values` and `max_bytes` bound it, `max_performers` what's kept.
+    let body = br#"{"data":{"id":"a","performers":[{"name":"A"},{"name":"B"},{"name":"C"}]}}"#;
+    let a = with(
+        body,
+        &Limits {
+            max_array: 2,
+            ..WIDE
+        },
+    );
+    assert_eq!((a.page.kept, a.found[0].performers.list.len()), (1, 3));
 }
 
 #[test]
@@ -417,16 +425,20 @@ fn text_cap() {
         let n = if field.contains("ud800") { 1 } else { 2 };
         assert_eq!(a.found[0].performers.list.len(), n, "{field}");
     }
-    // An over-long array spoils the item whether performers are read or
-    // not.
-    let body = br#"{"data":{"id":"a","performers":[{"id":"p","name":[1,2,3]}]}}"#;
-    for max_performers in [0, 2] {
+    // Any fault inside an entry, an over-long array included, drops only
+    // that entry, whether performers are read or not (D3).
+    let body = br#"{"data":{"id":"a","performers":[
+        {"name":"P","x":[1,2,3]},{"name":[1,2,3]},{"name":5},"x",{"name":"Q"}]}}"#;
+    for (max_performers, want) in [(0, vec![]), (5, vec![performer("Q")])] {
         let l = Limits {
             max_array: 2,
             max_performers,
             ..WIDE
         };
-        assert_eq!(with(body, &l).page.skipped.over_cap, 1);
+        let a = with(body, &l);
+        assert_eq!((a.page.kept, a.page.skipped.total()), (1, 0));
+        let p = &a.found[0].performers;
+        assert_eq!((&p.list, p.truncated), (&want, true));
     }
     // A long description is never read, so it spoils nothing.
     let long = format!(
