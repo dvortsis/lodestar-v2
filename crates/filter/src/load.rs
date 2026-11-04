@@ -33,8 +33,17 @@ pub const KIND_PAYLOAD: u8 = 3;
 /// them; a row saved before they were fields (when `source:x` read as
 /// the word `source:x`) or restored by Undo is unreadable here instead,
 /// so it fails closed or is skipped like any other unreadable row.
-fn rule_query(text: &str) -> Option<Node> {
+/// Every reader of a stored rule's query uses this or
+/// [`stored_rule_reads`], so the API and the loader agree on what's
+/// unreadable.
+pub fn rule_query(text: &str) -> Option<Node> {
     parse(text).ok().filter(|n| !n.mentions_provenance())
+}
+
+/// Whether a stored rule query reads as the engine loads it
+/// ([`rule_query`]).
+pub fn stored_rule_reads(text: &str) -> bool {
+    rule_query(text).is_some()
 }
 
 /// The stored form of a match: its kind and value.

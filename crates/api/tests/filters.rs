@@ -2689,13 +2689,14 @@ async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
 /// `network:`), as a rule saved before they were fields reads now, or as
 /// Undo restores one, are unreadable: the judge can't answer them, and a
 /// negated one would otherwise match everything. Rules and `unless`
-/// fail closed; Always-allow, override scopes, exceptions and Not-adult
-/// class rules are skipped, never applied.
+/// fail closed, and so does an Is-adult class rule (it marks everything
+/// adult); Always-allow, override scopes, exceptions and Not-adult class
+/// rules are skipped, never applied. All seven kinds.
 #[tokio::test]
 async fn stored_provenance_rows_fail_closed_on_load_and_undo() {
     let f = fixture();
     let cookie = logged_in(&f).await;
-    let (rule, unless, class, allow, over, exc) = {
+    let (rule, unless, class, adult, allow, over, exc) = {
         let mut s = f.api.store.lock().unwrap();
         (
             s.add_rule("source:x", Action::Hide.code(), None, None)
@@ -2703,6 +2704,7 @@ async fn stored_provenance_rows_fail_closed_on_load_and_undo() {
             s.add_rule("spam", Action::Drop.code(), None, Some("-source:x"))
                 .unwrap(),
             s.add_class_rule("-verified:no", false).unwrap(),
+            s.add_class_rule("-source:dht", true).unwrap(),
             s.add_allow("-network:ipfs").unwrap(),
             s.add_override(1, b"alpha", 0, Some("network:bt"), 0, None, None)
                 .unwrap(),
@@ -2724,6 +2726,7 @@ async fn stored_provenance_rows_fail_closed_on_load_and_undo() {
     let mut want = vec![
         format!("A-{allow}"),
         format!("C-{class}"),
+        format!("C-{adult}"),
         format!("E-{exc}"),
         format!("O-{over}"),
         format!("U-{rule}"),
