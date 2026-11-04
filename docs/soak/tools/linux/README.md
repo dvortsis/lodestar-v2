@@ -225,6 +225,15 @@ covered prints as `provisional (window incomplete)`, with no pass or fail wordin
 itself is unchanged. Soak r4's record pins the collector and analyzer git revision next to
 the rc.3 image digest.
 
+**Memory attribution (X-mem-gauges).** Snapshots also keep the worker's
+`lodestar_mem_rss_anon_bytes`, `_rss_file_bytes`, `_anon_huge_bytes`,
+`_mimalloc_committed_bytes`, `_mimalloc_peak_committed_bytes`, `_sqlite_bytes` and
+`_sqlite_highwater_bytes`, plus `lodestar_search_segments{index="main"|"files"}`. The report's `memory_attribution`
+section gives each one's first, last and max and its slope per hour over the gate's hours
+12-24, and "other heap": RssAnon minus mimalloc minus SQLite, or minus mimalloc alone for
+evidence from binaries without the SQLite gauges (the report says which). It's informational and doesn't change the gate.
+Evidence without these metrics analyzes as before, with each reported `absent`.
+
 **Memory gate (v0.5.1).** The report's `memory_fit` section (in Markdown, "Memory
 gate") fits the OLS slope of `private_bytes` (cgroup `anon`, or `RssAnon` on a
 native run) over baseline hours 12–24, with its 95% CI and the run's peak. The

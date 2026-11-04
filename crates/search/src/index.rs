@@ -838,6 +838,16 @@ impl SearchIndex {
         })
     }
 
+    /// Live segments in each index's current searcher (torrent index,
+    /// file index), for `/metrics`. Loads each reader's current searcher:
+    /// an atomic pointer load and an `Arc` clone, no lock.
+    pub fn segment_counts(&self) -> [u64; 2] {
+        [
+            self.reader.searcher().segment_readers().len() as u64,
+            self.files.reader.searcher().segment_readers().len() as u64,
+        ]
+    }
+
     /// Turns the prune after each commit off (or back on), for every clone
     /// of this index. Only the regression test and M1-exp's control arm
     /// turn it off.
@@ -1002,8 +1012,29 @@ impl SearchIndex {
         let seen = searcher.generation().generation_id();
         view.ready_since
             .get(field)
-            .is_none_or(|&since| seen >= since)
+            .is_none_or(|&(since, _)| seen >= since)
             .then_some(query)
+    }
+
+    /// [`SearchIndex::availability`] as `lease`'s snapshot sees it: a
+    /// torrent-index field that completed after the lease's snapshot is
+    /// still what it was there (SRC-3: a later page of a lease from
+    /// mid-backfill keeps its "partial" notice). File-index fields
+    /// follow the latest commit.
+    pub fn availability_in(&self, field: &str, lease: &crate::Lease) -> Availability {
+        let now = self.availability(field);
+        if now != Availability::Ready || field.starts_with("file.") {
+            return now;
+        }
+        let view = self
+            .population
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let seen = lease.searcher().generation().generation_id();
+        match view.ready_since.get(field) {
+            Some(&(since, before)) if seen < since => before,
+            _ => now,
+        }
     }
 
     /// Alive while any clone of this index is: a retired index's
@@ -1160,6 +1191,7 @@ impl SearchIndex {
             torrents,
             files,
             pending: 0,
+            sources: SourceNames::default(),
         })
     }
 
@@ -1604,10 +1636,45 @@ fn load(store: &mut Store, id: i64) -> Result<Option<Loaded>> {
 /// The torrent's document, with its enrichment when it has a readable
 /// one. A record the codec rejects is left out: the writer's backfill
 /// derives it again and logs the torrent for reindexing.
-fn torrent_doc(store: &mut Store, t: &Loaded) -> Result<TorrentDoc> {
+fn torrent_doc(store: &mut Store, t: &Loaded, sources: &mut SourceNames) -> Result<TorrentDoc> {
     let mut doc = TorrentDoc::new(&t.row, &t.tree);
     doc.enriched = doc_enrichment(store, t.row.id)?;
+    doc.provenance.sources = sources.of(store, t.row.sources)?;
     Ok(doc)
+}
+
+/// The `source:` term of each source bit (SRC-3), read from the store's
+/// registry when a torrent names a bit not seen yet. Ids are never
+/// reused and a plugin's id never changes, so an entry never goes stale.
+#[derive(Debug, Default)]
+struct SourceNames {
+    names: Vec<Option<String>>,
+    /// Bits looked up: registered, or found unregistered once (a
+    /// corrupt bit, read again only after the next new source).
+    known: u64,
+}
+
+impl SourceNames {
+    fn of(&mut self, store: &Store, bits: u64) -> Result<Vec<String>> {
+        if bits & !self.known != 0 {
+            let rows = store.sources()?;
+            self.names = vec![None; usize::from(lodestar_store::MAX_SOURCES)];
+            for r in rows {
+                self.names[usize::from(r.id.get())] = crate::doc::source_term(&r.plugin);
+            }
+            self.known |= bits;
+            self.known |= self
+                .names
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.is_some())
+                .fold(0, |m, (i, _)| m | 1 << i);
+        }
+        Ok((0..64)
+            .filter(|b| bits >> b & 1 == 1)
+            .filter_map(|b| self.names.get(b).cloned().flatten())
+            .collect())
+    }
 }
 
 /// The enrichment half of torrent `id`'s document.
@@ -1656,7 +1723,10 @@ fn stored_adult(store: &mut Store, id: i64) -> Result<bool> {
 #[derive(Debug, Default)]
 struct PopView {
     states: [PopState; 2],
-    ready_since: std::collections::BTreeMap<String, u64>,
+    /// The generation, and what the field was just before (its walk's
+    /// last `Backfilling`), for what [`SearchIndex::availability_in`]
+    /// tells a lease on an older snapshot.
+    ready_since: std::collections::BTreeMap<String, (u64, Availability)>,
 }
 
 impl PopView {
@@ -1757,6 +1827,7 @@ pub struct Indexer {
     torrents: Side,
     files: Side,
     pending: usize,
+    sources: SourceNames,
 }
 
 impl std::fmt::Debug for Indexer {
@@ -1813,7 +1884,7 @@ impl Indexer {
                         .writer
                         .delete_term(Term::from_field_u64(fields.id, id as u64));
                     if let Some(t) = &t {
-                        let doc = torrent_doc(store, t)?;
+                        let doc = torrent_doc(store, t, &mut self.sources)?;
                         torrents.writer.add_document(doc.to_document(fields))?;
                     }
                 }
@@ -1887,7 +1958,7 @@ impl Indexer {
                 let w = &mut self.torrents.writer;
                 w.delete_term(Term::from_field_u64(fields.id, id as u64));
                 if let Some(t) = &t {
-                    w.add_document(torrent_doc(store, t)?.to_document(&fields))?;
+                    w.add_document(torrent_doc(store, t, &mut self.sources)?.to_document(&fields))?;
                 }
             }
             if files {
@@ -1940,7 +2011,7 @@ impl Indexer {
             let mut class = None;
             if id > self.torrents.last_id {
                 if let Some(t) = &t {
-                    let doc = torrent_doc(store, t)?;
+                    let doc = torrent_doc(store, t, &mut self.sources)?;
                     class = Some(is_adult(&doc.enriched));
                     self.torrents
                         .writer
@@ -1997,9 +2068,10 @@ impl Indexer {
         for (i, state) in states.iter().enumerate() {
             for f in state.fields() {
                 let ready = state.availability(f) == Some(Availability::Ready);
-                let was = view.availability(f) == Some(Availability::Ready);
-                if ready && !was {
-                    view.ready_since.insert(f.to_owned(), seen[i]);
+                let was = view.availability(f);
+                if ready && was != Some(Availability::Ready) {
+                    let before = was.unwrap_or(Availability::NoProducer);
+                    view.ready_since.insert(f.to_owned(), (seen[i], before));
                 }
             }
         }
@@ -2146,6 +2218,19 @@ mod population_tests {
     }
 
     #[test]
+    fn segment_counts_follow_each_commit_in_both_indexes() {
+        let mut store = store(4);
+        let index = SearchIndex::in_memory().unwrap();
+        assert_eq!(index.segment_counts(), [0, 0]);
+        let mut w = index.writer(HEAP).unwrap();
+        w.catch_up(&mut store, 2).unwrap();
+        w.commit().unwrap();
+        let [main, files] = index.segment_counts();
+        assert_eq!(main, index.segments() as u64);
+        assert!(main >= 1 && files >= 1, "{main} {files}");
+    }
+
+    #[test]
     fn a_prefilter_waits_for_the_snapshot_that_sees_the_field_complete() {
         let mut store = store(10);
         let index = shipped(&mut store);
@@ -2172,7 +2257,7 @@ mod population_tests {
         assert!(index.prefilter("name", &partial, q()).is_some());
         assert!(
             index
-                .prefilter("verified", &index.searcher(), q())
+                .prefilter("group_key", &index.searcher(), q())
                 .is_none()
         );
     }

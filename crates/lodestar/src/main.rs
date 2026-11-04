@@ -12,6 +12,7 @@ mod fsdetect;
 mod http;
 mod insights;
 mod logging;
+mod memstats;
 mod metrics;
 mod ops;
 mod percolator;
@@ -23,6 +24,7 @@ mod subscriptions;
 mod system;
 #[cfg(test)]
 mod test_log;
+mod thp;
 mod update;
 mod web;
 #[cfg(test)]
@@ -44,6 +46,8 @@ use crate::services::{BoxError, Services};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> ExitCode {
+    // Before any thread or arena growth; the `--child` inherits it (X-thp-off).
+    thp::apply();
     if let Some(code) = windows::hook() {
         return code;
     }

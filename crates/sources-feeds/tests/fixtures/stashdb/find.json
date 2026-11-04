@@ -1,0 +1,20 @@
+{
+  "data": {
+    "findScene": {
+      "id": "00000000-0000-4000-8000-0000000000b1",
+      "title": "Synthetic Scene Gamma",
+      "release_date": "2022",
+      "studio": {
+        "id": "00000000-0000-4000-8000-0000000000c3",
+        "name": "Example Studio Three"
+      },
+      "performers": [
+        {
+          "performer": {
+            "name": "Example Performer Four"
+          }
+        }
+      ]
+    }
+  }
+}

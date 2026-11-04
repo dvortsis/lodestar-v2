@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "message": "synthetic error: not authorized",
+      "path": ["searchScene"],
+      "extensions": {"code": "UNAUTHORIZED"}
+    }
+  ],
+  "data": null
+}

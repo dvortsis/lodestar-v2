@@ -105,6 +105,7 @@ fn doc(i: u64) -> TorrentDoc {
             ambiguous: i.is_multiple_of(8),
             shares,
         },
+        provenance: crate::doc::DocProvenance::stored_torrent(),
     }
 }
 

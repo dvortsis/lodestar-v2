@@ -475,7 +475,10 @@ pub(crate) fn compile(node: &Node) -> Compiled {
         | Node::Flag { .. }
         | Node::Hash { .. }
         | Node::Share { .. }
-        | Node::TimeOfDay { .. } => Compiled::Leaf(Box::new(node.clone())),
+        | Node::TimeOfDay { .. }
+        | Node::Verified { .. }
+        | Node::Source { .. }
+        | Node::Network { .. } => Compiled::Leaf(Box::new(node.clone())),
     }
 }
 
@@ -1260,6 +1263,9 @@ impl<'a> Doc<'a> {
             }
             Node::Flag { name, value } => self.flag(name) == *value,
             Node::Hash { hash } => self.item.hashes.iter().any(|h| hex(h) == *hash),
+            // Provenance is the search index's (SRC-3, §18.6): the judge
+            // doesn't see it, so, like `seen:`, it matches nothing here.
+            Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => false,
             // Rules have no time zone: UTC.
             Node::TimeOfDay { from, to } => self.facts.is_some_and(|f| {
                 lodestar_search::in_time(

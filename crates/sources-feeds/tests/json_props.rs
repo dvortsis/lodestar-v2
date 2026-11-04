@@ -83,7 +83,9 @@ fn read(r: &mut Reader<'_>) -> R<V> {
         Some(b'{') => {
             let mut m = Vec::new();
             r.object(|r, k| {
-                let k = decode(k).expect("a key the test wrote");
+                // Arbitrary input can hold a key with a lone surrogate: it is
+                // scanned but not decoded, like a string value.
+                let k = decode(k).unwrap_or_else(|| "<bad>".into());
                 m.push((k, read(r)?));
                 Ok(())
             })?;

@@ -215,6 +215,13 @@ fn shape(kind: FieldKind) -> (ValueType, &'static [Op], Vec<&'static str>) {
             Category::ALL.iter().map(|c| c.as_str()).collect(),
         ),
         FieldKind::File => (ValueType::File, FILE, Vec::new()),
+        FieldKind::Verified => (ValueType::Enum, LIST, vec!["yes", "no"]),
+        FieldKind::Source => (ValueType::Keyword, LIST, Vec::new()),
+        FieldKind::Network => (
+            ValueType::Enum,
+            LIST,
+            query::Network::ALL.map(query::Network::as_str).to_vec(),
+        ),
         FieldKind::TimeOfDay => (ValueType::Time, TIME, Vec::new()),
         FieldKind::Later(_) => unreachable!("left out of the catalogue"),
     }
