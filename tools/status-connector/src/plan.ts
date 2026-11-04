@@ -8,6 +8,7 @@ export interface Inputs {
   runnerState: any | null;       // runner-state/state.json (optional; Claude runner only)
   mergedPRs: PR[];
   closedPRs?: PR[];              // closed without merging
+  limits?: { phase_total?: number };  // runner/slices.yaml -> limits
   historyIncomplete?: boolean;   // GitHub did not answer for some older pages of closed pull requests
   openPRs: PR[];
   branches: string[];            // ids from refs/heads/slice/<id>
@@ -180,32 +181,41 @@ export function buildPlan(inp: Inputs) {
   const crawler = (cfg.crawler || []).map((c: any) => ({ label: c.label, value: c.value, kind: c.kind, note: c.note || '' }));
   const soak = (cfg.soak || []).map((x: any) => ({ stage: x.stage, label: x.label, start: x.start, end: x.end }));
 
-  // worker slots: the runner lists who works on what in runner/dashboard.yaml `slots`; GitHub supplies each slice's title, state and PR.
-  // A slot the runner has not described shows as idle, and anything that looks out of step is reported rather than hidden.
-  const sl = cfg.slots || {};
-  const items: any[] = Array.isArray(sl.items) ? sl.items : [];
-  const cap = Math.max(0, Number.isFinite(Number(sl.capacity)) ? Number(sl.capacity) : items.length);
-  const byId: Record<string, any> = {}; for (const n of nodes) byId[n.id] = n;
-  const slotAsof = String(sl.updated || '');
+  // worker slots: the runner records who works on what in runner-state's state.json (`slots`), pushed on the wake where a session
+  // starts, finishes, is archived or changes task, with no PR. GitHub supplies each slice's title, state and PR. The number of slots
+  // is the owner's limit in runner/slices.yaml (limits.phase_total), not a second copy. Anything out of step is reported, not hidden.
   const slots: any[] = [];
-  for (let n = 1; n <= cap; n++) {
-    const it = items.filter((x) => Number(x.slot) === n);
-    if (it.length > 1) warn('Slot listed twice', String(n), 'runner/dashboard.yaml slots has more than one entry for slot ' + n);
-    const x = it[0];
-    if (!x) { slots.push({ slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', model: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof }); continue; }
-    const node = x.slice ? byId[x.slice] : undefined;
-    if (x.slice && !node) warn('Unknown slice', String(x.slice), 'slot ' + n + ' in runner/dashboard.yaml slots names a slice that is not in runner/slices.yaml');
-    if (node && ['done', 'closed'].includes(node.state)) warn('Slot lists finished work', String(x.slice), 'slot ' + n + ' still shows a slice that has merged or closed; the runner should update slots');
-    slots.push({ slot: n, status: x.status || 'working', slice: x.slice || '', title: node?.title || '', doing: x.doing || '', agent: x.agent || node?.agent || '', model: node?.model || '', role: x.role || 'build', since: x.since || '', stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof });
-  }
-  for (const x of items) if (!(Number(x.slot) >= 1 && Number(x.slot) <= cap)) warn('Slot out of range', String(x.slot), 'runner/dashboard.yaml slots has an entry outside 1..capacity (' + cap + ')');
-  if (sl.capacity !== undefined) {
+  const sl = inp.runnerState && inp.runnerState.slots ? inp.runnerState.slots : null;
+  const ROLES = ['build', 'review', 'docs', 'soak', 'other'], AGENTS = ['claude', 'other'];
+  if (sl) {
+    const items: any[] = Array.isArray(sl.items) ? sl.items : [];
+    const limit = Number(inp.limits?.phase_total);
+    const top = items.reduce((m: number, x: any) => (Number.isInteger(x?.slot) ? Math.max(m, x.slot) : m), 0);
+    const cap = Number.isInteger(limit) && limit > 0 ? limit : top;
+    if (cap < top) warn('Slots exceed the limit', String(top), 'runner-state lists a slot ' + top + ' but limits.phase_total in runner/slices.yaml is ' + cap + '; update one of them');
+    const byId: Record<string, any> = {}; for (const n of nodes) byId[n.id] = n;
+    const slotAsof = String(sl.updated || '');
+    const seenSlice = new Map<string, number>(), seenSlot = new Set<number>();
+    const rows: Record<number, any> = {};
+    for (const x of items) {
+      if (!x || !Number.isInteger(x.slot) || x.slot < 1) { warn('Bad slot number', String(x?.slot), 'a slots entry in runner-state must have a whole slot number of 1 or more'); continue; }
+      if (seenSlot.has(x.slot)) { warn('Slot listed twice', String(x.slot), 'runner-state slots has more than one entry for slot ' + x.slot); continue; }
+      seenSlot.add(x.slot);
+      if (x.role !== undefined && !ROLES.includes(x.role)) warn('Bad slot value', 'role ' + x.role, 'slot ' + x.slot + ': role must be one of ' + ROLES.join(', '));
+      if (x.agent !== undefined && !AGENTS.includes(x.agent)) warn('Bad slot value', 'agent ' + x.agent, 'slot ' + x.slot + ': agent must be one of ' + AGENTS.join(', '));
+      const node = x.slice ? byId[x.slice] : undefined;
+      if (x.slice && !node) warn('Unknown slice', String(x.slice), 'slot ' + x.slot + ' in runner-state slots names a slice that is not in runner/slices.yaml');
+      if (node && ['done', 'closed'].includes(node.state)) warn('Slot lists finished work', String(x.slice), 'slot ' + x.slot + ' still shows a slice that has merged or closed; the runner should update slots');
+      if (x.slice) { if (seenSlice.has(x.slice)) warn('Slice in two slots', String(x.slice), 'slots ' + seenSlice.get(x.slice) + ' and ' + x.slot + ' both list it'); else seenSlice.set(x.slice, x.slot); }
+      rows[x.slot] = { slot: x.slot, status: x.status === 'idle' ? 'idle' : 'working', slice: x.slice || '', title: node?.title || '', doing: x.doing || '', agent: AGENTS.includes(x.agent) ? x.agent : node?.agent || '', model: node?.model || '', role: ROLES.includes(x.role) ? x.role : 'build', since: x.since || '', stage: node?.state || '', pr: node?.pr || 0, asof: slotAsof };
+    }
+    for (let n = 1; n <= Math.max(cap, top); n++) slots.push(rows[n] || { slot: n, status: 'idle', slice: '', title: '', doing: '', agent: '', model: '', role: '', since: '', stage: '', pr: 0, asof: slotAsof });
     const age = slotAsof ? (Date.parse(inp.now) - Date.parse(slotAsof)) / 36e5 : Infinity;
-    if (!(age <= 8)) warn('Slots list is stale', slotAsof || 'no date', 'runner/dashboard.yaml slots.updated is ' + (Number.isFinite(age) ? Math.round(age) + ' h old' : 'missing') + '; the runner should refresh it whenever a session starts or ends');
-    const listed = new Set(items.map((x) => x.slice).filter(Boolean));
+    if (!(age <= 24)) warn('Slots list is stale', slotAsof || 'no date', 'runner-state slots.updated is ' + (Number.isFinite(age) ? Math.round(age) + ' h old' : 'missing') + '; the runner should refresh it on the wake where a session starts, finishes or changes task');
+    const listed = new Set(items.map((x: any) => x?.slice).filter(Boolean));
     const loose = Object.keys(openById).filter((id) => !listed.has(id));
-    if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner/dashboard.yaml slots');
-  }
+    if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner-state slots');
+  } else if (inp.runnerState) warn('Slots not recorded', 'none', 'runner-state state.json has no slots key, so the dashboard cannot show what each slot is doing');
 
   if (inp.historyIncomplete) warn('Merge history incomplete', 'yes', 'GitHub did not answer for some older pages of closed pull requests, so some finished slices may show as not yet merged until it does');
   if (unplaced.length) warn('Slices not placed', String(unplaced.length), 'No placement rule covers: ' + unplaced.slice(0, 12).join(', ') + (unplaced.length > 12 ? ', …' : '') + '. Add them to placement: in runner/dashboard.yaml.');

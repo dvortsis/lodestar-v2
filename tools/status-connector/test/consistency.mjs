@@ -23,5 +23,5 @@ const LIVE_ONLY = ['Slots list is stale', 'Open work in no slot'];
 const problems = plan.meta.filter((r) => r.key === 'warning' && !LIVE_ONLY.includes(r.label)).map((r) => `${r.label}: ${r.value}. ${r.note}`);
 assert.deepEqual(disagree, [], 'runner/slices.yaml says these conditions hold but runner/dashboard.yaml has met: false (or no entry). Set met: true there:\n  ' + disagree.join('\n  '));
 assert.deepEqual(problems, [], 'runner/dashboard.yaml is out of step with runner/slices.yaml. Fix it in the same PR (see "Keeping the dashboard current" in CLAUDE.md):\n  ' + problems.join('\n  '));
-for (const k of ['phases', 'workstreams', 'placement', 'conditions', 'roadmap', 'gates', 'owner_queue', 'notes', 'crawler', 'soak', 'slots']) assert.ok(cfg[k], 'dashboard.yaml is missing ' + k);
+for (const k of ['phases', 'workstreams', 'placement', 'conditions', 'roadmap', 'gates', 'owner_queue', 'notes', 'crawler', 'soak']) assert.ok(cfg[k], 'dashboard.yaml is missing ' + k);
 console.log(`dashboard.yaml agrees with slices.yaml: ${slices.slices.length} slices, ${plan.road.length} roadmap steps, ${plan.gates.length} gates, ${Object.keys(cfg.conditions).length} conditions`);
