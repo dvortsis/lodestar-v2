@@ -60,33 +60,40 @@ fn academic_torrents_recording() {
     let want = [
         (
             "447df5f09ca5c48b0cf2844cfffc1425ae18aaa4",
+            31_670_505_069,
             "Pl@ntNet-300K: a plant image dataset with high label ambiguity and a long-tailed distribution",
         ),
         (
             "470cfb013ee680b099b27a3ac6ae92733bcaf8f1",
+            23_286_174_260,
             "AMOS Unlabeled Data Part I: Abdominal CT Scans",
         ),
         (
             "28ed43c7e0c349337bfb0ff3e01f03a3f2d8a492",
+            22_656_664_047,
             "MUSDB18-HQ: Uncompressed Music Source Separation Dataset (150 Songs with Stems)",
         ),
         (
             "6321c31bdac7d0a136e98fd67b52af5f8d8600d1",
+            981_778_111,
             "Ultrasound Medial Elbow Dataset",
         ),
         (
             "887a4582525607c24f975666b22118030af533ed",
+            2_954_856_008,
             "Histo-Seg: H&E Whole Slide Image Segmentation Dataset",
         ),
     ];
-    for (it, (hash, title)) in f.items.iter().zip(want) {
+    for (it, (hash, size, title)) in f.items.iter().zip(want) {
         assert_eq!(it.hashes, v1(hash));
         assert_eq!(it.title.as_deref(), Some(title));
         let page = format!("https://academictorrents.com/details/{hash}");
         assert_eq!(it.guid.as_deref(), Some(page.as_str()));
         assert_eq!(it.link.as_deref(), Some(page.as_str()));
-        // `<size>` and `<category>` here aren't Nyaa's, so aren't read.
-        assert_eq!((it.size, it.category.as_deref()), (None, None));
+        // `<size>` is a plain byte count. `<category>` isn't Nyaa's id,
+        // so isn't read (SRC-10d maps it).
+        assert_eq!(it.size, Some(size));
+        assert_eq!(it.category, None);
         assert_eq!(it.published, None);
     }
 }
@@ -261,4 +268,43 @@ fn the_text_cap_applies() {
     );
     let s = parse_each(huge.as_bytes(), &LIMITS, |_| n += 1);
     assert_eq!((n, s.skipped.over_cap), (0, 1));
+}
+
+#[test]
+fn bare_size_is_a_plain_byte_count() {
+    let size = |inner: &str| {
+        let f = rss(&format!("<item>{}{inner}</item>", bare(HEX)));
+        assert_eq!(f.summary.kept, 1, "{f:#?}");
+        f.items[0].size
+    };
+    assert_eq!(size("<size>31670505069</size>"), Some(31_670_505_069));
+    assert_eq!(size("<size> 734\n</size>"), Some(734));
+    assert_eq!(size("<size>18446744073709551615</size>"), Some(u64::MAX));
+    // Units, signs, points and overflow aren't byte counts; the item stays.
+    for bad in [
+        "1.5 GiB",
+        "512 KiB",
+        "734 Bytes",
+        "1.5",
+        "-1",
+        "+1",
+        "1e3",
+        "18446744073709551616",
+        "x",
+    ] {
+        assert_eq!(size(&format!("<size>{bad}</size>")), None, "{bad}");
+    }
+    // Prefixed or namespaced elsewhere, it isn't the RSS one.
+    assert_eq!(size(r#"<size xmlns="urn:other">5</size>"#), None);
+}
+
+#[test]
+fn size_first_wins_between_nyaa_and_bare() {
+    let size = |inner: &str| rss(&format!("<item>{}{inner}</item>", bare(HEX))).items[0].size;
+    let nyaa = "<nyaa:size>1.0 KiB</nyaa:size>";
+    let plain = "<size>5</size>";
+    assert_eq!(size(&format!("{nyaa}{plain}")), Some(1024));
+    assert_eq!(size(&format!("{plain}{nyaa}")), Some(5));
+    // A value that doesn't parse leaves the slot for the next one.
+    assert_eq!(size(&format!("<size>1.5 GiB</size>{nyaa}")), Some(1024));
 }

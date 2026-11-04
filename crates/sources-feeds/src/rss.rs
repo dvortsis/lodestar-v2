@@ -52,8 +52,10 @@ pub struct Item {
     /// At most [`MAX_TITLE`] bytes, with control characters and the bidi
     /// controls `torznab` strips removed (U+202A–202E, U+2066–2069, U+200E/F, U+061C).
     pub title: Option<String>,
-    /// Content bytes (`nyaa:size`, `1.2 GiB`). An enclosure's `length` is
-    /// the size of the linked file, so it isn't used.
+    /// Content bytes: `nyaa:size` (`1.2 GiB`), or a no-namespace `<size>`
+    /// that is a plain byte count (Academic Torrents), whichever comes
+    /// first. An enclosure's `length` is the size of the linked file, so
+    /// it isn't used.
     pub size: Option<u64>,
     /// `pubDate`, or Atom's `published` else `updated`, in Unix seconds.
     pub published: Option<i64>,
@@ -157,6 +159,8 @@ enum Field {
     Leechers,
     Downloads,
     Size,
+    /// A no-namespace `<size>`: a plain byte count only.
+    BareSize,
     Category,
     Trusted,
     Remake,
@@ -347,6 +351,7 @@ impl Parser<'_> {
             (Ns::Nyaa, "leechers") => Some(Field::Leechers),
             (Ns::Nyaa, "downloads") => Some(Field::Downloads),
             (Ns::Nyaa, "size") => Some(Field::Size),
+            (Ns::None, "size") => Some(Field::BareSize),
             (Ns::Nyaa, "categoryId") => Some(Field::Category),
             (Ns::Nyaa, "trusted") => Some(Field::Trusted),
             (Ns::Nyaa, "remake") => Some(Field::Remake),
@@ -477,7 +482,7 @@ impl Draft {
             Field::Seeders => it.seeders.is_none(),
             Field::Leechers => it.leechers.is_none(),
             Field::Downloads => it.downloads.is_none(),
-            Field::Size => it.size.is_none(),
+            Field::Size | Field::BareSize => it.size.is_none(),
             Field::Category => it.category.is_none(),
             Field::Trusted => it.trusted.is_none(),
             Field::Remake => it.remake.is_none(),
@@ -513,6 +518,14 @@ impl Draft {
             Field::Leechers => it.leechers = t.parse().ok(),
             Field::Downloads => it.downloads = t.parse().ok(),
             Field::Size => it.size = size(t),
+            // No units: a generic feed's `1.5 GiB` here isn't a byte count.
+            Field::BareSize => {
+                it.size = t
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+                    .then(|| t.parse().ok())
+                    .flatten();
+            }
             Field::Category => {
                 let ok =
                     t.len() <= MAX_CATEGORY && t.bytes().all(|b| b.is_ascii_digit() || b == b'_');

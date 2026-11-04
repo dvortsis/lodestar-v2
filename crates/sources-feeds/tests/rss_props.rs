@@ -56,6 +56,8 @@ fn fragment() -> impl Strategy<Value = String> {
         Just("</infohash>".to_string()),
         Just(format!(r#"<infohash xmlns="">{h}</infohash>"#)),
         Just("<nyaa:size>1.5 GiB</nyaa:size>".to_string()),
+        Just("<size>1234</size>".to_string()),
+        Just("<size>1.5 GiB</size>".to_string()),
         Just("<nyaa:categoryId>1_2</nyaa:categoryId>".to_string()),
         Just(format!("<link>magnet:?xt=urn:btih:{h}</link>")),
         Just(format!(r#"<link href="magnet:?xt=urn:btih:{h}"/>"#)),
