@@ -387,18 +387,10 @@ pub fn scrub_text(text: &str) -> String {
         // the URL.
         let mut scan = from;
         let host = if from == i { i + 3 } else { from };
-        if rest[i..].starts_with("://") && rest[host..].starts_with('[') {
-            // Hex digits, `:`, `.` and a zone's `%`, up to the `]`.
-            let mut bound = rest.len().min(host + 64);
-            while !rest.is_char_boundary(bound) {
-                bound -= 1;
-            }
-            let literal = &rest[host + 1..bound];
-            if let Some(close) = literal
-                .find(|c: char| !(c.is_ascii_hexdigit() || matches!(c, ':' | '.' | '%')))
-                .filter(|&k| literal[k..].starts_with(']'))
-            {
-                scan = host + 1 + close + 1;
+        if rest[i..].starts_with("://") {
+            let past = past_ipv6(rest, host);
+            if past != host {
+                scan = past;
             }
         }
         let url_end = |from: usize| {
@@ -416,14 +408,19 @@ pub fn scrub_text(text: &str) -> String {
         // next URL starts at the `://` itself. The first scan stops at
         // that `://`, so a line of them stays linear.
         let end = match nested {
-            // A magnet link ends before a URL glued to it (`magnet:?xt=
-            // http://u:p@h/`), which gets its own userinfo search.
+            // A magnet link (B-log1: never shown) ends only at a hard stop,
+            // never at a soft end or an IPv6 `]` (`dn=Name,2020`,
+            // `tr=udp://[::1]:6969/`). A URL glued to it stays in it, and
+            // the magnet runs on to that URL's end, past its userinfo.
             None if !rest[i..].starts_with("://") => {
-                let end = url_end(scan);
+                let magnet_end = |from: usize| {
+                    rest[from..]
+                        .char_indices()
+                        .find(|(_, c)| hard_stop(*c))
+                        .map_or(rest.len(), |(j, _)| from + j)
+                };
+                let end = magnet_end(scan);
                 match scheme.from(text, pos + i).map(|n| n - pos) {
-                    // A URL glued to a magnet stays in it (B-log1: magnet
-                    // links are never shown), and the magnet runs on to
-                    // that URL's end, past its userinfo.
                     // Each `://` it runs over gets its userinfo searched,
                     // and a scan never covers bytes an earlier one did.
                     Some(mut n) if n >= i + 7 && n < end => {
@@ -434,7 +431,7 @@ pub fn scrub_text(text: &str) -> String {
                             if let Some(at) = userinfo_in_text(&rest[n + 3..], bound) {
                                 let after = n + 3 + at + 1;
                                 if after >= end {
-                                    end = url_end(after);
+                                    end = magnet_end(after);
                                 }
                             }
                             match next {
@@ -468,6 +465,8 @@ pub fn scrub_text(text: &str) -> String {
                         let bound = next.unwrap_or(rest.len()) - (cur + 3);
                         let scan = userinfo_in_text(&rest[cur + 3..], bound)
                             .map_or(cur + 3, |at| cur + 3 + at + 1);
+                        // An IPv6 host's `]` doesn't end it here either.
+                        let scan = past_ipv6(rest, scan);
                         match next {
                             Some(n) => match url_end_before(rest, scan, n) {
                                 Some(end) => break end,
@@ -536,6 +535,27 @@ fn lead(rest: &str, start: usize, i: usize) -> String {
     match lead.strip_suffix(scheme) {
         Some(before) if !scheme.is_empty() => format!("{before}{}", redact_runs(scheme)),
         _ => lead,
+    }
+}
+
+/// Past an IPv6 literal host at `host` in `rest` (`[::1]`, hex digits,
+/// `:`, `.` and a zone's `%` up to the `]`), or `host` if there's none:
+/// its `]` doesn't end the URL.
+fn past_ipv6(rest: &str, host: usize) -> usize {
+    if !rest[host..].starts_with('[') {
+        return host;
+    }
+    let mut bound = rest.len().min(host + 64);
+    while !rest.is_char_boundary(bound) {
+        bound -= 1;
+    }
+    let literal = &rest[host + 1..bound];
+    match literal
+        .find(|c: char| !(c.is_ascii_hexdigit() || matches!(c, ':' | '.' | '%')))
+        .filter(|&k| literal[k..].starts_with(']'))
+    {
+        Some(close) => host + 1 + close + 1,
+        None => host,
     }
 }
 
@@ -1406,6 +1426,15 @@ mod tests {
             "magnet:?xt=urn:btih:abc&tr=udp://t.example:6969/announce",
             "magnet:?xt=urn:btih:abc&tr=udp://a.example:80/announce&tr=http://b.example/ann",
             "magnet:?xt=urn:btih:abc&dn=Some.Movie.2020http://t.example/announce",
+            // Round 5: a soft end or an IPv6 `]` doesn't end a magnet.
+            "magnet:?xt=urn:btih:abc&tr=udp://t.example:80/announce,_@ftp://[::1]/dl/Zq0123456789abcdef0123.torrent",
+            "magnet:?xt=urn:btih:abc&dn=Secret,Name.2020&tr=http://t.example/a",
+            "magnet:?xt=urn:btih:abc&dn=Secret'Name&tr=http://t.example/a",
+            "magnet:?xt=urn:btih:abc&dn=Secret(Name)2020&tr=http://t.example/a",
+            "magnet:?xt=urn:btih:abc&dn=Secret[Name]2020&tr=http://t.example/a",
+            "magnet:?xt=urn:btih:abc&dn=Secret}Name&tr=http://t.example/a",
+            "magnet:?xt=urn:btih:abc&tr=udp://a.example:80/announce,udp://b.example/a",
+            "magnet:?xt=urn:btih:abc&tr=udp://[::1]:6969/announce&dn=Secret.Name",
         ] {
             assert_eq!(scrub_text(text), "magnet:[redacted]", "{text}");
             assert_eq!(
@@ -1414,6 +1443,9 @@ mod tests {
                 "{text}"
             );
         }
+        // An IPv6 host in a URL in a fragment keeps its passkey hidden.
+        let s = scrub_text("x http://h/x#https://[::1]:6969/ann/Zq0123456789abcdef0123/announce y");
+        assert!(!s.contains("0123456789"), "{s}");
         // A glued URL's userinfo stays inside the magnet.
         let s = scrub_text("magnet:?xt=urn:btih:abc&tr=http://u:pa ss@t.example/a ok");
         assert_eq!(s, "magnet:[redacted] ok");
@@ -1558,9 +1590,9 @@ mod tests {
             name in "(token|sig|a|passkey|x)",
             field in "(query|fragment)",
             scheme in "(https?|udp|ftp|ws)",
-            host in "[a-z]{2,8}\\.example(:[0-9]{2,5})?",
+            host in "([a-z]{2,8}\\.example|\\[::1\\])(:[0-9]{2,5})?",
             secret in "[A-Za-z0-9]{6,20}",
-            glue in "(|=|&|\\.)",
+            glue in "(|=|&|\\.|,|'|\\(|\\)|\\]|\\})",
         ) {
             let secret = format!("Zq{secret}9");
             let debug = format!(r#"{field}: Some("{name}={secret}{glue}{scheme}://{host}/a")"#);

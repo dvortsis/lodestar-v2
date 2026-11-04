@@ -55,6 +55,9 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
   - **A Debug value's backed-over scheme is written only if it's a known scheme,** and as `[redacted]` otherwise (`query: Some("token=<secret>://h/")`).
   - **A `:` with no port number, with no `@` found, is a password** (`http://u:<secret>/x` shows as `http://[redacted]`). An IPv6 literal's `:` doesn't count.
   - **With a userinfo `@` found before the first hard stop, the wide look-ahead also crosses line breaks** (`u:&@<secret>` and a newline before the real `@`). It's still bounded by 512 bytes and the next `://`. The over-redaction is in the round 3 entry above.
+- **Round 5 (runner's fresh review):**
+  - **A magnet's span ends only at a hard stop,** never at a soft end (`)`, `]`, `,`, `'`, `}`) or an IPv6 `]`, both for its first end and past each glued URL's userinfo. Round 4 still let `…&dn=Secret,Name.2020&tr=http://…` show `,Name.2020&tr=…`, and `tr=…,_@ftp://[::1]/dl/<passkey>.torrent` show the passkey path. `(magnet:…)` now loses its `)`, which is accepted over-redaction.
+  - **The IPv6-literal skip is a helper, `past_ipv6`,** used for a URL's host and for each URL in a query or fragment. That closes `http://h/x#https://[::1]:6969/ann/<passkey>/announce`, which `main` leaks too.
 - **Over-redaction in a common log shape:** a comma-separated tracker list loses all but its last tracker. `udp://a.example:80/announce,udp://b.example:6969/announce` shows as `udp://[redacted]://b.example:6969/announce`. Each `://` with nothing but URL characters or a soft end before the next one is read as possibly inside a password. That's accepted ("never too little").
 
 ## Tests
@@ -87,7 +90,7 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
     - **Round 4, seed 2:** 14 shown by this PR but hidden by `main` at 300,000 inputs (this PR shows 15,581 in all, `main` 52,106). At 1,000,000 inputs it's 46 (this PR 52,143, `main` 174,059).
     - At round 3 it was 372 at 300,000, and about 1,235 at 1,000,000.
     - No panics in this PR; `main` panics on 48 of the 1,000,000 inputs (the IPv6 case).
-  - **The 46 left all hold a `://` inside the password, after the secret** (`udp://h/xudp://u:@<secret>"://@h/x`), so the userinfo search, bounded by the next `://`, can't reach the real `@`. 41 also hold a raw hard stop, and 21 a percent-encoded userinfo (`%3A`). `main` hid them only because an earlier span swallowed them. Closing them means letting the userinfo search cross the next `://`, the bound that keeps the scan linear. That's reported to the runner, which decides whether they go to X-log-url-redact-2.
+  - **Round 4's 46 at seed 2 were misclassified** in round 4's write-up as all holding `://` after the secret. The reviewer's labelled harness (`reviews/432/round4-harness-labelled.rs` and `round4-classify.py` on `runner-state`) showed only 23 do; round 5's counts by class are below.
 - **Earlier runs of my generator, for the record** (3,000,000 inputs each). Each input put a well-formed credentialed URL, a passkey path or a Debug-form `Url` among random URL and Debug-form tokens. After the security-review round, `scrub_text` showed the planted secret in none of them. `main` panicked on some of them (the IPv6 case).
   - **After the runner's round, a wider run** put URL syntax on both sides of the password and added Debug `username` fields. `scrub_text` showed the planted secret in 13,890 of the 3,000,000 inputs; `main` showed it in more of them.
   - **418 of those were inputs where `main` happened to hide the secret.** Every one was a password holding both a raw `/` and a hard stop (`http://u:@/<secret>"@h/`). `main` hid them only because a stray Debug field or a URL ahead of them swallowed the span. Round 3 fixes them.
@@ -96,9 +99,22 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 
 ## Known gaps, for X-log-url-redact-2 (the runner is briefing it)
 All of these leak on rc.3 as well.
-- **A raw hard stop with a `/` in a password when nothing marks the userinfo** (`http://u/<secret>"@h/`, no `:` or `@` before it), and one with a later `://` (`http://u:pa ss://@h/x`). The wide look-ahead stops at that `/` and at the next `://`, which keeps the scan linear. - **Accepted by the runner (2026-11-04, §2.33; flagged to the owner under §2.19):** the 46 per 1,000,000 the reviewer's harness still finds at seed 2 on round 4 (Tests, above) go to X-log-url-redact-2.
-  - **The shape:** each holds a password that itself contains `://` after the secret (`udp://h/xudp://u:@<secret>"://@h/x`), and most also hold a raw hard stop or a percent-encoded userinfo.
-  - **Why:** `main` hides them only by luck, and closing them would break the bound that keeps the scan linear (the userinfo search stops at the next `://`). Against that, this PR shows about 3.3× fewer secrets overall on the same harness and removes `main`'s panics (48 per 1,000,000 inputs).
+- **Accepted by the runner (2026-11-04, §2.33; flagged to the owner under §2.19): the password classes below go to X-log-url-redact-2.** In each, the reviewer confirmed the secret also leaks on `main` when the URL stands alone; `main` hid the regressed inputs only because an earlier span swallowed them. Closing the first two would mean letting the userinfo search cross the next `://`, the bound that keeps the scan linear. Against that, this PR shows about 3.5× fewer secrets overall on the reviewer's harness and removes `main`'s panics (43 to 57 per 1,000,000 inputs).
+  - **`://` after the secret in the password** (`udp://h/xudp://u:@<secret>"://@h/x`).
+  - **`://` before the secret in the password** (`ssh://u:://@<secret>"@h/`).
+  - **A raw line break in the password,** including one with no userinfo `@` before it (`ssh://u:\n<secret>@h`, `wss://u%3A<secret>\n@h`).
+  - **A `/` and a hard stop in the password with nothing marking the userinfo** (`http://<secret>/"@h/` with no `u:`, or `u%3A` encoded). The wide look-ahead stops at that `/`.
+  - **Whitespace or a line break inside a magnet** (`dn=Secret Name`): a magnet ends at a hard stop.
+- **Per class, round 5's code, the reviewer's labelled harness, 1,000,000 inputs per seed** (shown by this PR but hidden by `main`):
+
+  | Seed | `://` after | `://` before | raw line break | `/` + hard stop, no marker | passkey behind IPv6 | total | shown by PR | shown by `main` |
+  |---|---|---|---|---|---|---|---|---|
+  | 2 | 23 | 6 | 11 | 5 | 0 | 45 | 50,176 | 174,059 |
+  | 5 | 22 | 9 | 8 | 5 | 0 | 44 | 50,539 | 175,289 |
+  | 9 | 21 | 8 | 18 | 6 | 0 | 53 | 50,337 | 175,340 |
+  | 13 | 21 | 10 | 10 | 4 | 0 | 45 | 50,795 | 175,049 |
+
+  This PR panics on none; `main` panics on 48, 57, 43 and 44.
 - **A mixed encoding such as `http:%2F%2Fu:p@h`,** which `holds_url` misses. In `scrub` it's a kept query value; in `scrub_text`, URL forms without `://` aren't found at all.
 - **IPv6 hosts in URLs nested in a query or fragment, or after `magnet:`.**
 - **Credential values glued on with `:` or `%3D`.**
