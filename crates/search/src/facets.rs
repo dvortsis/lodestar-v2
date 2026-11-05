@@ -658,12 +658,13 @@ pub fn facets(
             policy.samples(lease.total().value, largest),
         )
     } else {
-        rebuilt = index.compile_cancelled(
+        rebuilt = index.compile_at(
             &full,
             lease.now(),
             lease.utc_offset(),
             lease.stemmed(),
             cancel,
+            Some(lease.searcher().generation().generation_id()),
         )?;
         let estimate =
             count::estimate_with(searcher, &rebuilt, cancel, policy.segment_sample_above)?;
@@ -696,12 +697,13 @@ pub fn facets(
             variant = with_filters(variant, &[adult_class()]);
         }
         let variant = with_filters(variant, filters);
-        let compiled = index.compile_cancelled(
+        let compiled = index.compile_at(
             &variant,
             lease.now(),
             lease.utc_offset(),
             lease.stemmed(),
             cancel,
+            Some(lease.searcher().generation().generation_id()),
         )?;
         let estimate =
             count::estimate_with(searcher, &compiled, cancel, policy.segment_sample_above)?;

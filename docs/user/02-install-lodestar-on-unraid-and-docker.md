@@ -242,7 +242,7 @@ To create the admin password:
 ![Lodestar first-run setup screen with the Setup token field outlined](images/setup-screen.png)
 *Figure 2.4: The setup token step, with the Setup token field outlined.*
 
-The crawler starts at once. The library fills slowly at first while the DHT routing table warms up.
+Nothing connects to the network until setup is done: the crawler waits, and it starts on its own when you finish setup. The library fills slowly at first while the DHT routing table warms up.
 
 To read the notice again later, open **Settings** → **About** and select **Show the Legal Notice** in the **Legal** section.
 

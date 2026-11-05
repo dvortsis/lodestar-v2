@@ -40,6 +40,9 @@ use reqwest::{Method, Request, Response, Url};
 use crate::BoxFuture;
 use crate::secret::Secret;
 
+mod tracker;
+pub use tracker::public_tracker_url;
+
 /// The class of an IP address, for [`NetPolicy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AddrClass {

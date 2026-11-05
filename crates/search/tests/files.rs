@@ -401,3 +401,313 @@ fn one_atom_extension_clauses_cover_every_file_and_words_stay_on_the_file_index(
     assert_eq!(ids(&index, &file(word(TextField::Any, "cover"))), vec![2]);
     assert_eq!(ids(&index, &word(TextField::Path, "cover")), vec![2]);
 }
+
+/// `node` with a never-matching exclusion added inside every `file:(…)`
+/// clause but a lone extension's (which is the torrent's own `ext`, by
+/// X-search-files-4's accepted rule): the same files, but no bucket
+/// clause, so each runs on the file index (the path before
+/// X-search-files-5).
+fn on_the_file_index(node: &Node) -> Node {
+    let never = Node::Not {
+        of: Box::new(Node::Word {
+            field: TextField::Any,
+            word: "zzqxnever".into(),
+        }),
+    };
+    match node {
+        Node::And { of } => Node::And {
+            of: of.iter().map(on_the_file_index).collect(),
+        },
+        Node::Or { of } => Node::Or {
+            of: of.iter().map(on_the_file_index).collect(),
+        },
+        Node::Not { of } => Node::Not {
+            of: Box::new(on_the_file_index(of)),
+        },
+        Node::File { of } if lone_extension(of) => node.clone(),
+        Node::File { of } => {
+            let mut inner = match &**of {
+                Node::And { of } => of.clone(),
+                n => vec![n.clone()],
+            };
+            inner.push(never.clone());
+            file(Node::And { of: inner })
+        }
+        n => n.clone(),
+    }
+}
+
+/// `ext:a`, or alternatives of extensions only.
+fn lone_extension(n: &Node) -> bool {
+    match n {
+        Node::Ext { .. } => true,
+        Node::Or { of } => !of.is_empty() && of.iter().all(lone_extension),
+        _ => false,
+    }
+}
+
+/// Hits by id, for comparing sets whose ties may order differently.
+fn by_id(hits: &[(u64, f32)]) -> Vec<(u64, f32)> {
+    let mut v = hits.to_vec();
+    v.sort_by_key(|h| h.0);
+    v
+}
+
+/// Every hit's id and score, in result order.
+fn ranked(index: &SearchIndex, node: &Node) -> Vec<(u64, f32)> {
+    index
+        .search(&index.query(node, NOW), 10_000)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|h| (h.id, h.score))
+        .collect()
+}
+
+/// The torrent index's bucket terms (X-search-files-5) give exactly what
+/// the file index does: the same torrents, in the same order, with the
+/// same scores, for every positive shape of size clause — bare and with
+/// extensions, at and beside every bucket boundary, open at either end,
+/// alone, beside a word, a top-level range or another file clause, in an
+/// alternative and negated — over files smart coverage leaves out (a
+/// large pack's small images, a hidden file) as well as covered ones.
+#[test]
+fn bucket_terms_answer_as_the_file_index_does() {
+    const MIB: u64 = 1 << 20;
+    let exts = ["mkv", "srt", "bin", "jpg"];
+    // One torrent a boundary size, its file's extension cycling, every
+    // third with a 7-byte `x.txt` too; sizes kept under 2^40 so totals
+    // stay small.
+    let sizes: Vec<u64> = boundary_sizes()
+        .into_iter()
+        .filter(|s| *s < 1 << 40)
+        .collect();
+    let mut torrents: Vec<Vec<u8>> = sizes
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mut files = vec![(format!("f.{}", exts[i % exts.len()]), *s as i64)];
+            if has_txt(i, *s) {
+                files.push(("x.txt".to_owned(), 7));
+            }
+            sized(&format!("torrent {i}"), &files)
+        })
+        .collect();
+    // A pack whose small images smart coverage leaves out, beside one
+    // covered video; and a torrent whose only video is hidden.
+    let mut pack: Vec<(String, i64, &str)> = (0..1_200)
+        .map(|i| (format!("pics/p{i:04}.jpg"), (3 * MIB) as i64, ""))
+        .collect();
+    pack.push(("big.mkv".into(), (2u64 << 30) as i64, ""));
+    torrents.push(with_attrs("pack", &pack));
+    torrents.push(with_attrs(
+        "hidden",
+        &[
+            ("c.mkv".to_owned(), (700 * MIB) as i64, "h"),
+            ("c.txt".to_owned(), 10, ""),
+        ],
+    ));
+    let mut store = store_with(&torrents);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(60 << 20).unwrap();
+    w.catch_up(&mut store, 100_000).unwrap();
+    w.commit().unwrap();
+
+    // Ranges: open both ways from every boundary, one bucket exactly,
+    // whole buckets, a part of one, and wider spans.
+    let mut ranges: Vec<(Option<u64>, Option<u64>)> = Vec::new();
+    for b in [0u64, 1, 2, 5, 20, 41, 45, 53, 59, 60, 61, 70] {
+        let floor = bucket_floor(b);
+        let next = bucket_floor(b + 1);
+        ranges.extend([
+            (Some(floor), None),
+            (Some(floor + 1), None),
+            (None, Some(floor)),
+            (None, Some(floor.saturating_sub(1))),
+            (Some(floor), Some(next.saturating_sub(1))),
+            (Some(floor + 1), Some(next.saturating_sub(2))),
+            (Some(floor), Some(bucket_floor(b + 4).saturating_sub(1))),
+            (Some(floor.saturating_sub(1)), Some(next + 1)),
+        ]);
+    }
+    ranges.extend([
+        (Some(100 * MIB + 1), None),
+        (Some((1 << 30) + 1), None),
+        (Some(0), Some(0)),
+        (None, None),
+    ]);
+    let word = |w: &str| Node::Word {
+        field: TextField::Any,
+        word: w.into(),
+    };
+    let exts_node = |any: &[&str]| Node::Ext {
+        any: any.iter().map(|e| (*e).to_owned()).collect(),
+    };
+    let mut checked = 0;
+    for &(lo, hi) in &ranges {
+        let r = range(lo, hi);
+        let bare = file(r.clone());
+        let mkv = file(Node::And {
+            of: vec![exts_node(&["mkv"]), r.clone()],
+        });
+        let media = file(Node::And {
+            of: vec![r.clone(), exts_node(&["mkv", "jpg"])],
+        });
+        let either = file(Node::And {
+            of: vec![
+                Node::Or {
+                    of: vec![exts_node(&["srt"]), exts_node(&["bin"])],
+                },
+                r.clone(),
+            ],
+        });
+        let shapes = vec![
+            bare.clone(),
+            mkv.clone(),
+            media.clone(),
+            either,
+            Node::And {
+                of: vec![word("torrent"), bare.clone()],
+            },
+            Node::And {
+                of: vec![bare.clone(), range(Some(MIB), None)],
+            },
+            Node::And {
+                of: vec![range(Some(MIB), None), mkv.clone()],
+            },
+            Node::And {
+                of: vec![bare.clone(), file(exts_node(&["jpg"]))],
+            },
+            Node::And {
+                of: vec![mkv.clone(), media.clone()],
+            },
+            Node::Or {
+                of: vec![bare.clone(), file(exts_node(&["srt"]))],
+            },
+            Node::Or {
+                of: vec![word("pack"), mkv.clone()],
+            },
+            Node::And {
+                of: vec![
+                    word("torrent"),
+                    Node::Not {
+                        of: Box::new(bare.clone()),
+                    },
+                ],
+            },
+            Node::And {
+                of: vec![
+                    file(exts_node(&["mkv", "jpg", "bin"])),
+                    Node::Not {
+                        of: Box::new(media.clone()),
+                    },
+                ],
+            },
+        ];
+        for q in shapes {
+            let reference = on_the_file_index(&q);
+            assert_eq!(ranked(&index, &q), ranked(&index, &reference), "{q:?}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 1_000, "{checked}");
+}
+
+/// While the bucket terms are backfilled (a build shipping a new
+/// generation of `file_bucket`), every bucket clause runs on the file
+/// index, so a document the walk hasn't reached can't be missed; once
+/// the walk completes they answer again, the same. A lease taken
+/// mid-walk and paged after it keeps the answer it was compiled for.
+#[test]
+fn bucket_clauses_fall_back_while_their_terms_are_backfilled() {
+    use lodestar_search::{Availability, CancelToken, Generations, Lease, Sort, Start};
+    let sizes: Vec<u64> = boundary_sizes()
+        .into_iter()
+        .filter(|s| *s < 1 << 40)
+        .collect();
+    let torrents: Vec<Vec<u8>> = sizes
+        .iter()
+        .enumerate()
+        .map(|(i, s)| sized(&format!("torrent {i}"), &[(format!("f{i}.bin"), *s as i64)]))
+        .collect();
+    let mut store = store_with(&torrents);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(60 << 20).unwrap();
+    w.catch_up(&mut store, 100_000).unwrap();
+    w.commit().unwrap();
+    drop(w);
+    let gens = Generations::current();
+    let next = gens.get("file_bucket").unwrap() + 1;
+    let index = std::sync::Arc::new(
+        index
+            .with_generations(gens.with("file_bucket", next))
+            .unwrap(),
+    );
+    let queries: Vec<Node> = [
+        (Some((1u64 << 30) + 1), None),
+        (None, Some(1 << 20)),
+        (Some(bucket_floor(30)), Some(bucket_floor(40) - 1)),
+        (Some(100 << 20), None),
+    ]
+    .iter()
+    .flat_map(|&(lo, hi)| {
+        [
+            file(range(lo, hi)),
+            file(Node::And {
+                of: vec![ext("bin"), range(lo, hi)],
+            }),
+        ]
+    })
+    .collect();
+    let want: Vec<Vec<(u64, f32)>> = queries
+        .iter()
+        .map(|q| ranked(&index, &on_the_file_index(q)))
+        .collect();
+    assert!(want.iter().all(|w| !w.is_empty()));
+    // A third of the walk done.
+    let mut w = index.writer(60 << 20).unwrap();
+    w.catch_up(&mut store, sizes.len() / 3).unwrap();
+    w.commit().unwrap();
+    assert!(matches!(
+        index.availability("file_bucket"),
+        Availability::Backfilling { .. }
+    ));
+    // The same as the file index at this moment (ties order by document,
+    // and the walk rewrites documents), and the same torrents as before.
+    for (q, want) in queries.iter().zip(&want) {
+        let got = ranked(&index, q);
+        assert_eq!(got, ranked(&index, &on_the_file_index(q)), "mid-walk {q:?}");
+        assert_eq!(by_id(&got), by_id(want), "mid-walk {q:?}");
+    }
+    let lease = Lease::new(
+        index.clone(),
+        &queries[0],
+        NOW,
+        Sort::Relevance,
+        &CancelToken::new(),
+    )
+    .unwrap();
+    // The walk done: the terms answer, the same.
+    while w.catch_up(&mut store, 100_000).unwrap() > 0 {}
+    w.commit().unwrap();
+    assert_eq!(index.availability("file_bucket"), Availability::Ready);
+    // The same as the file index at this moment (ties order by document,
+    // and the walk rewrites documents), and the same torrents as before.
+    for (q, want) in queries.iter().zip(&want) {
+        let got = ranked(&index, q);
+        assert_eq!(
+            got,
+            ranked(&index, &on_the_file_index(q)),
+            "after the walk {q:?}"
+        );
+        assert_eq!(by_id(&got), by_id(want), "after the walk {q:?}");
+    }
+    let page = lease
+        .page(Start::Offset(0), 10_000, &CancelToken::new())
+        .unwrap();
+    let mut got: Vec<u64> = page.hits.iter().map(|h| h.id).collect();
+    let mut expect: Vec<u64> = want[0].iter().map(|h| h.0).collect();
+    got.sort_unstable();
+    expect.sort_unstable();
+    assert_eq!(got, expect, "the mid-walk lease");
+}

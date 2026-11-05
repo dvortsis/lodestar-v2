@@ -478,6 +478,7 @@ pub struct Source {
         },
         "enabled": true,
         "endpoints": [],
+        "finds_private": false,
         "health": {
             "harvested_24h": 1840221,
             "last_error": null,
