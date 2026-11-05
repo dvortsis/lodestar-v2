@@ -1,0 +1,2 @@
+200
+{"integrations":[{"integration":"sonarr","path":"/api/v1/webhooks/sonarr","token_set":true,"found":0,"ignored":0,"malformed":0,"refused":0},{"integration":"radarr","path":"/api/v1/webhooks/radarr","token_set":false,"found":0,"ignored":0,"malformed":0,"refused":0}]}

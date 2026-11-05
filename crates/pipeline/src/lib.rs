@@ -29,6 +29,7 @@ pub mod health;
 pub mod log_events;
 mod rollups;
 pub mod source_adult;
+pub mod torrent_cache;
 pub mod unverified;
 mod worker;
 mod writer;

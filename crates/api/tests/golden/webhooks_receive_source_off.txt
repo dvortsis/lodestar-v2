@@ -1,0 +1,2 @@
+503
+{"error":{"code":"source_off","message":"The Sonarr and Radarr webhooks source is turned off in Settings → Sources."}}
