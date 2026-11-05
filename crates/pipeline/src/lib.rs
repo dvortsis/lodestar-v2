@@ -69,7 +69,7 @@ pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
 pub use rollups::{Rollups, metric};
-pub use writer::WriterStats;
+pub use writer::{LIVE_FEEDS, WriterStats};
 
 /// `events.kind` codes. Persisted: append only.
 pub mod event {

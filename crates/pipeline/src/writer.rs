@@ -1963,7 +1963,7 @@ fn with_item<T>(
 /// Academic Torrents their own collections, Prowlarr every indexer at
 /// once, and the torrent cache and importers lookups and history. The
 /// ids are the plugins' own `ID`s in `crates/sources-plugins`.
-pub(crate) const LIVE_FEEDS: &[&str] = &["nyaa", "sukebei"];
+pub const LIVE_FEEDS: &[&str] = &["nyaa", "sukebei"];
 
 /// SP-3's state in the writer (RP-4, plan 2026-11-04 Q10): the rate map,
 /// and which sources count, with a publisher or without.
@@ -1973,7 +1973,9 @@ pub(crate) struct Flooding {
     /// The sources, a bitset over [`SourceId`]s, whose claims' publisher
     /// counts: every registered source but a peer finder (the DHT, which
     /// publishes nothing, Q10) and an enrichment source, whose matches
-    /// describe torrents others published.
+    /// describe torrents others published. The one exception is the
+    /// torrent cache (an enrichment source): a cache's file counts
+    /// against the publisher its claims name ([`Flooding::who`]).
     pub claims_from: u64,
     /// Of them, the sources whose finds also count against the source
     /// itself when no publisher is named: the live feeds
@@ -2151,6 +2153,14 @@ impl Flooding {
                 .find_map(|h| self.notes.by_key.get(&h.0))
             {
                 return Some(*w);
+            }
+            // Without a note, the item is read only when a live feed is
+            // among the finders (runner, #495). A non-live source's claim
+            // counts only through its note, so one claimed before a
+            // restart isn't counted: that undercounts, never overcounts,
+            // and keeps a full scrape's bulk commits free of a read.
+            if self.finders(c) & self.per_source == 0 {
+                return None;
             }
             for h in c.results.torrent.swarm_hashes() {
                 let Ok(Some(item)) = store.unverified(Network::Bt, &h.0) else {
@@ -5012,25 +5022,55 @@ mod tests {
     fn sp3_off_counts_without_judging() {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
         let feed = store.register_source("feed", "1", 0).unwrap();
+        // A CSX-5 entry in shadow mode is logged beside a decision that
+        // stands. The prepared verdict (trusted as is) has none, so the
+        // entry shows only when the commit was judged again.
         let mut e = sp3_engine();
-        e.packs.rules_off.insert(lodestar_filter::PackRule::Sp3);
-        let mut flood = Flooding {
+        e.overrides.push(lodestar_filter::Override {
+            id: 8,
+            what: lodestar_filter::Match::Keyword("example".into()),
+            strength: lodestar_filter::Strength::Override,
+            scope: None,
+            expires_at: None,
+            shadow_until: Some(i64::MAX),
+        });
+        let shadows = |e: &Engine, flood: &mut Flooding| -> usize {
+            let have = Have::new(1024);
+            (0..30)
+                .map(|i| {
+                    let mut r = results_named(&episode(i));
+                    r.worker = WorkerId::LOCAL;
+                    r.version = e.version;
+                    let c = committing(r, feed);
+                    let mut out = judge(
+                        &store,
+                        e,
+                        AdultSources::default(),
+                        None,
+                        flood,
+                        &have,
+                        vec![c],
+                    );
+                    let c = out.pop().unwrap();
+                    usize::from(c.shadow.iter().any(|d| d.rule == RuleRef::Override(8)))
+                })
+                .sum()
+        };
+        let flood = || Flooding {
             claims_from: bit(feed),
             per_source: bit(feed),
             clock: Some(10_000),
             ..Default::default()
         };
-        let cs = (0..30)
-            .map(|i| committing(results_named(&episode(i)), feed))
-            .collect();
-        assert!(
-            sp3_of(&store, &e, &mut flood, cs)
-                .iter()
-                .all(Option::is_none)
-        );
+        // On: the 20th to 30th are judged again.
+        assert_eq!(shadows(&e, &mut flood()), 11);
+        // Off: counted all the same, never judged again.
+        e.packs.rules_off.insert(lodestar_filter::PackRule::Sp3);
+        let mut off = flood();
+        assert_eq!(shadows(&e, &mut off), 0);
         let sig = lodestar_filter::flood::signature("Example Show").unwrap();
         assert_eq!(
-            flood.map.count(
+            off.map.count(
                 lodestar_filter::flood::Origin::Source(feed.get()),
                 sig,
                 10_000
@@ -5197,6 +5237,7 @@ mod tests {
         let mut store = Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap();
         let dht = store.register_source("dht", "1", 0).unwrap();
         let feed = store.register_source("feed", "1", 0).unwrap();
+        let scrape = store.register_source("full_scrape", "1", 0).unwrap();
         let e = sp3_engine();
         const N: usize = 10_240;
         let mut cs: Vec<Committing> = (0..N)
@@ -5278,7 +5319,7 @@ mod tests {
         // `noted`: the feed's claims came through this start's writer.
         let mut time = |source: SourceId, publisher: Option<&str>, noted: bool| {
             let mut flood = Flooding {
-                claims_from: bit(feed),
+                claims_from: bit(feed) | bit(scrape),
                 per_source: bit(feed),
                 clock: Some(10_000),
                 ..Default::default()
@@ -5318,6 +5359,10 @@ mod tests {
         let (feed_ns, feed_levels) = time(feed, None, false);
         let (noted_ns, noted_levels) = time(feed, None, true);
         let (pub_ns, _) = time(feed, Some("uploader"), false);
+        // A non-live source's claimed find (a full scrape's), with no note:
+        // no store read (runner, #495).
+        let (scrape_ns, scrape_levels) = time(scrape, None, false);
+        assert_eq!(scrape_levels, 0);
         assert_eq!(noted_levels, feed_levels);
         assert_eq!(dht_levels, 0);
         assert!(feed_levels > 0);
@@ -5338,8 +5383,9 @@ mod tests {
         println!(
             "per insert: {:.2} µs (a feed's promoted find: {:.2} µs); SP-3: DHT find {:.3} µs \
              ({:.2}% of an insert), feed find {:.2} µs ({:.1}% of its commit; {:.2} µs, {:.1}%, \
-             when its claims came this start), named publisher {:.2} µs ({:.1}%); a flooded \
-             commit's second judgment {:.2} µs; \
+             when its claims came this start), named publisher {:.2} µs ({:.1}%), a full \
+             scrape's claimed find {:.3} µs ({:.2}% of an insert); a flooded commit's second \
+             judgment {:.2} µs; \
              {feed_levels} of {N} feed finds reached a level",
             insert / 1000.0,
             promoted / 1000.0,
@@ -5351,9 +5397,12 @@ mod tests {
             100.0 * noted_ns / promoted,
             pub_ns / 1000.0,
             100.0 * pub_ns / promoted,
+            scrape_ns / 1000.0,
+            100.0 * scrape_ns / insert,
             rejudge_ns / 1000.0,
         );
         assert!(dht_ns <= 0.05 * insert, "the crawl's commits");
         assert!(noted_ns <= 0.05 * promoted, "a feed's commits");
+        assert!(scrape_ns <= 0.05 * insert, "a full scrape's commits");
     }
 }
