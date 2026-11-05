@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T19:39Z",
+  "updated_at": "2026-11-05T19:47Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3019,7 +3019,8 @@
       "pr": 505,
       "head": "1f2f9e32",
       "merge": "a1e0d849",
-      "done": "2026-11-05T18:56Z"
+      "done": "2026-11-05T18:56Z",
+      "archived": true
     },
     "RP-1b": {
       "status": "merged",
