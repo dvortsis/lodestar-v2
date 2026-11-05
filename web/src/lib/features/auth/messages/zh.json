@@ -6,5 +6,21 @@
 	"auth_welcome_lead": "Lodestar 已准备就绪。开始搜索，或查看您的设置。",
 	"auth_welcome_search": "前往搜索",
 	"auth_welcome_settings": "查看设置",
-	"auth_welcome_retry": "重试"
+	"auth_welcome_retry": "重试",
+	"auth_setup_step_notice": "法律声明",
+	"auth_notice_label": "法律声明",
+	"auth_notice_intro": "了解 Lodestar 在你的网络上做什么，以及哪些事情由你决定。请滚动阅读全文。",
+	"auth_notice_confirm": "我已阅读法律声明",
+	"auth_notice_loading": "正在加载法律声明…",
+	"auth_notice_failed": "无法加载法律声明。请确认 Lodestar 正在运行，然后重试。",
+	"auth_notice_retry": "重试",
+	"auth_notice_title": "法律声明",
+	"auth_notice_lead": "请阅读法律声明，然后接受以继续。",
+	"auth_notice_accept": "我已阅读，继续",
+	"auth_error_notice_unchecked": "请确认你已阅读法律声明后继续。",
+	"auth_error_notice_changed": "此页面打开期间法律声明已更新。请阅读新版本，然后再次确认。",
+	"auth_about_legal": "法律",
+	"auth_about_legal_lead": "此版本 Lodestar 的法律声明：Lodestar 在你的网络上做什么，哪些事情由你决定，以及开发者承诺与不承诺的内容。",
+	"auth_notice_gate_changed": "法律声明再次更新。请阅读新版本，然后接受。",
+	"auth_about_title": "关于"
 }

@@ -1,5 +1,5 @@
-//! `/auth`, `/setup`, `/login`, `/logout`, `/password`, `/auth/proxy` and
-//! `/sessions/revoke-others` (§12).
+//! `/auth`, `/setup`, `/login`, `/logout`, `/password`, `/auth/proxy`,
+//! `/sessions/revoke-others` (§12) and `/legal/*` (the Legal Notice).
 
 use std::fmt;
 
@@ -12,6 +12,10 @@ use super::REDACTED;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct AuthStatus {
     pub logged_in: bool,
+    /// Signed in, but the current Legal Notice isn't accepted yet: show it
+    /// and `POST /legal/accept`. Every other session route answers `409
+    /// notice_required` meanwhile. Always `false` when not signed in.
+    pub notice_required: bool,
     /// No password yet: claim the instance with the setup token from the
     /// logs.
     pub setup_required: bool,
@@ -37,6 +41,33 @@ pub struct SetupRequest {
     pub token: String,
     /// At least 10 characters.
     pub password: String,
+    /// The Legal Notice version shown and accepted (`GET /legal/notice`).
+    /// Missing or not the current one: `409 notice_required`.
+    #[serde(default)]
+    #[schema(nullable = false)]
+    pub notice_version: Option<u32>,
+}
+
+/// `GET /legal/notice`: the Legal Notice this build shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 2 · 2026-11-04**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+    "version": 2
+}))]
+pub struct LegalNotice {
+    /// Raised only when the notice changes in substance; send it back to
+    /// accept.
+    pub version: u32,
+    /// The notice as Markdown (headings, paragraphs, lists, bold, italics,
+    /// code and links), in English only.
+    pub text: String,
+}
+
+/// `POST /legal/accept`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AcceptNoticeRequest {
+    /// The version shown. Not the current one: `409 notice_required`.
+    pub version: u32,
 }
 
 /// `POST /login`.
@@ -136,6 +167,7 @@ impl fmt::Debug for SetupRequest {
         f.debug_struct("SetupRequest")
             .field("token", &REDACTED)
             .field("password", &REDACTED)
+            .field("notice_version", &self.notice_version)
             .finish()
     }
 }
@@ -170,6 +202,7 @@ mod tests {
                 SetupRequest {
                     token: secret.into(),
                     password: secret.into(),
+                    notice_version: Some(2),
                 }
             ),
             format!(

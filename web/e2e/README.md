@@ -50,7 +50,7 @@ test('search shows results', async ({ page, mock, go }) => {
 		took_ms: 1,
 		total: 0
 	}); // typed as SearchResponse
-	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+	mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 	mock.on('getTorrent', (request) => ({ status: 200, body: fixtureFor(request.url()) }));
 	mock.error('searchGet', 400, 'unknown_sort', 'Unknown sort', { field: 'sort' }); // error envelope
 	await go('/search?q=ubuntu');

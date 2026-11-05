@@ -26,11 +26,14 @@ export function setSession(status: SessionStatus): void {
 
 /**
  * Wires W5's 401 handler: an expired session goes to `/login?next=<the current URL>`, an instance
- * that still needs its first-run setup to `/setup`. Returns the uninstall.
+ * that still needs its first-run setup to `/setup`, and a session that hasn't accepted the current
+ * Legal Notice (409 `notice_required`) to `/login?next=…` too, where the notice is shown. Returns
+ * the uninstall.
  */
 export function installAuthHandlers(): () => void {
-	onLoginRequired((next, { setupRequired }) => {
-		setSession(setupRequired ? 'setup_required' : 'signed_out');
+	onLoginRequired((next, { setupRequired, noticeRequired }) => {
+		// A pending Legal Notice keeps the session: the sign-in page shows the notice.
+		if (!noticeRequired) setSession(setupRequired ? 'setup_required' : 'signed_out');
 		void (setupRequired ? toSetup() : toLoginFrom(next));
 	});
 	const off = onSessionOk(() => setSession('signed_in'));

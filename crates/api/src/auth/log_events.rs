@@ -191,6 +191,7 @@ fn reason(e: &AuthError) -> &'static str {
         AuthError::NotSetUp => "not_set_up",
         AuthError::SetupDone => "setup_done",
         AuthError::RateLimited => "rate_limited",
+        AuthError::NoticeRequired => "notice_required",
         AuthError::Storage(_) => "storage",
     }
 }
@@ -288,6 +289,7 @@ mod tests {
             AuthError::NotSetUp,
             AuthError::SetupDone,
             AuthError::RateLimited,
+            AuthError::NoticeRequired,
         ] {
             assert!(!reason(&e).is_empty());
         }

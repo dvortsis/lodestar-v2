@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { redirectFor } from './gate';
 
-const status = (setup_required: boolean, logged_in: boolean) => ({ setup_required, logged_in });
+const status = (setup_required: boolean, logged_in: boolean, notice_required = false) => ({
+	setup_required,
+	logged_in,
+	notice_required
+});
 
 describe('redirectFor', () => {
 	it('sign-in page: setup first, signed-in visitors on to next, otherwise the form', () => {
 		expect(redirectFor('login', status(true, false), '/x')).toBe('/setup');
 		expect(redirectFor('login', status(false, true), '/x')).toBe('/x');
 		expect(redirectFor('login', status(false, false), '/x')).toBeNull();
+	});
+
+	it('sign-in page: a signed-in visitor with the Legal Notice pending stays to read it', () => {
+		expect(redirectFor('login', status(false, true, true), '/x')).toBeNull();
 	});
 
 	it('setup page: once set up, always to sign in', () => {

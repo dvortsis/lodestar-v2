@@ -1,2 +1,2 @@
 200
-{"logged_in":true,"setup_required":false}
+{"logged_in":true,"notice_required":false,"setup_required":false}

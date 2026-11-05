@@ -363,7 +363,7 @@ test.describe('full-page states', () => {
 		go,
 		mock
 	}) => {
-		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+		mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 		await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
 		await go('/search');
 		await engage(page);
@@ -385,7 +385,7 @@ test.describe('401 hand-off', () => {
 
 	test('a first run goes to /setup', async ({ page, mock }) => {
 		// The setup screen checks GET /auth itself and goes back to /login if no setup is needed.
-		mock.on('getAuthStatus', { logged_in: false, setup_required: true });
+		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: true });
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(true)));
 		await page.goto('/search');
 		await engage(page);
