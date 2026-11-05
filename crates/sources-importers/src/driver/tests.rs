@@ -805,9 +805,11 @@ fn a_dump_holding_a_hash_an_always_adult_source_claims_is_stored_adult() {
             .unwrap()
             .contains(&t1)
     );
-    // Claimed, and only the adult reading meets CS-5a: held.
+    // Claimed, and only the adult reading meets CS-5a: held, as an adult
+    // hold (a tombstone when the quarantine ends, §20.9).
     assert!(stored(&store, 2).is_none());
     assert_eq!(r.counters.quarantined, 1);
+    assert!(store.adult_hold(&hash(2)).unwrap());
     // Unclaimed: the dump's own classification.
     let (_, sources, class) = stored(&store, 3).expect("unclaimed is stored");
     assert!(!mask.any(sources));

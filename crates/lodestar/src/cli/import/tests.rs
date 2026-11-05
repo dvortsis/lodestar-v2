@@ -686,3 +686,55 @@ fn the_import_marks_only_sukebeis_bit() {
         lodestar_classify::ContentType::Adult.code()
     );
 }
+
+/// `lodestar import start` end to end (X-source-adult-2): a hash only an
+/// always-adult source (Sukebei) has claimed is stored Adult, with that
+/// source's bit; the dump's other records aren't affected. Only the CLI's
+/// own mark makes this happen: the driver doesn't set it.
+#[test]
+fn start_stores_a_hash_sukebei_claims_as_adult() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 3);
+    let config = data(&dir.path().join("data"));
+    let sukebei = {
+        let mut store = Store::open(config.db_path(), StoreConfig::default()).unwrap();
+        let s = store
+            .register_source(lodestar_sources_plugins::nyaa::SUKEBEI_ID, "1", NOW)
+            .unwrap();
+        let claims = lodestar_store::claims::Claims {
+            name: Some("claimed".into()),
+            ..Default::default()
+        };
+        store
+            .put_unverified(&[lodestar_store::unverified::NewUnverified {
+                network: lodestar_store::unverified::Network::Bt,
+                key: &hash_of(1),
+                source: s,
+                private_source: false,
+                claims: Some(&claims),
+                at: NOW,
+            }])
+            .unwrap();
+        s
+    };
+    block_on(start(&config, &magnetico(&src), None, true, None)).unwrap();
+    let store = Store::open(config.db_path(), StoreConfig::default()).unwrap();
+    let adult = Some(lodestar_classify::ContentType::Adult.code());
+    let row = |i| {
+        let id = store
+            .find(&lodestar_metainfo::InfoHash(hash_of(i)))
+            .unwrap()
+            .expect("stored");
+        let t = store.torrent(id).unwrap().unwrap();
+        (
+            t.sources & (1u64 << sukebei.get()) != 0,
+            store.content_type(id).unwrap(),
+        )
+    };
+    assert_eq!(row(1), (true, adult));
+    for i in [2, 3] {
+        let (bit, class) = row(i);
+        assert!(!bit && class != adult, "{i}");
+    }
+}

@@ -13,11 +13,11 @@ Slice X-source-adult-2 (runner brief, 2026-11-05T10:20Z). It closes the first tw
   - the row gains that source's bit (only the always-adult bits, never the other finders'). A disabled or purged source's bit is left out, as `Store::write` and `Store::promote` leave it out (SRC-14b), so the stopped-and-purged gap stays the runner's call and imports don't decide it;
   - `mark_adult_found` marks it for the backfill, unless it's stored Adult already or you said Not adult.
 
-  So the derived signal is stored with the row in one transaction, and no crash can leave it un-adult with no retry. With an empty mark nothing is read. On the merge path the check runs before a held record's early return, since a claim under any of the record's hashes concerns the stored row.
+  So the derived signal is stored with the row in one transaction, and no crash can leave it un-adult with no retry. With an empty mark nothing is read. On the merge path the check runs before a held record's early return, since a claim under any of the record's hashes concerns the stored row. A candidate record (no info dict) that merges into a stored row does the same.
 - **The driver judges a claimed record as adult before the commit.** `driver::run` (`crates/sources-importers`) asks `Store::adult_finders` for each record's hashes:
   - A claimed record is judged by `lodestar_filter::reclassify::judge_source_adult`: detection's reading and the adult reading, the stricter verdict standing. That's the pipeline's `source_adult::judge`, moved to `lodestar-filter` with `stricter`, and the pipeline now delegates to it.
   - The record is stored Adult (nearest adult kind, as an Is adult correction makes it), so the commit writes it adult and the mark isn't needed.
-  - The floor's hit still comes back alone, and a dropping list's drop wins the stricter verdict (the full judgment covers both).
+  - A hash on the floor's or a dropping list is checked first either way, as in `judge_with_rules` and the pipeline's claims judge.
   - A Not adult classification rule never un-adults a claimed record.
   - A read error counts as adult (stricter), as in `Writer::source_adult`.
   - The mark in the commit covers a claim that lands after this read: the record is stored as the driver judged it, with the bit and the mark, and the backfill classifies it Adult.
@@ -37,16 +37,16 @@ Slice X-source-adult-2 (runner brief, 2026-11-05T10:20Z). It closes the first tw
   - `crates/api/tests/source_adult.rs`: clear, Not junk only, Is adult, Not adult (with and without Not junk) and clear again on a source-adult torrent, through `FiltersApi::correct`. A plain source's torrent isn't affected. The test fails with an empty mask.
   - `crates/sources-importers/src/driver/tests.rs`:
     - a Magnetico dump holding a hash a Sukebei item claims is stored Adult with the bit, and the backfill keeps it adult;
-    - a claimed name only the adult reading's CS-5a meets is quarantined, and the same name unclaimed is stored;
+    - a claimed name only the adult reading's CS-5a meets is quarantined as an adult hold, and the same name unclaimed is stored;
     - a claim that another connection adds just before the commit leaves the row with the bit and the mark, and the backfill then makes it Adult (the crash between the two steps).
 
     Each half of the fix was switched off in turn to check that these tests fail without it. The brief's "crash between the two steps" is covered twice: the store test's crash inside the commit (nothing is left half-written), and the driver test's claim arriving after the driver's read (the commit's mark makes the backfill finish the job). `lodestar-sources-importers` gains `lodestar-pipeline` as a dev-dependency for the backfill.
-  - `crates/store/src/import.rs`: a crash inside the transaction leaves nothing; the commit adds only the always-adult bit and marks the row; a disabled source's bit is left out; a merge into a row lacking the bit gains it and is marked; a row stored Adult gains the bit but isn't marked.
-  - `crates/lodestar/src/cli/import/tests.rs`: the CLI's mask is Sukebei's bit only, matched by its manifest id, with the Adult code; it's empty while Sukebei isn't registered.
+  - `crates/store/src/import.rs`: a crash inside the transaction leaves nothing; the commit adds only the always-adult bit and marks the row; a disabled source's bit is left out; a merge into a row lacking the bit gains it and is marked, from a torrent record or a candidate; a row stored Adult gains the bit but isn't marked.
+  - `crates/lodestar/src/cli/import/tests.rs`: the CLI's mask is Sukebei's bit only, matched by its manifest id, with the Adult code; it's empty while Sukebei isn't registered. End to end, `lodestar import start` stores a hash a Sukebei unverified item claims as Adult with Sukebei's bit, and the dump's other records as they were.
   - `crates/filter/src/reclassify.rs`: unit tests for `source_adult` and `stricter`.
   - Not tested at the API level: that clearing a Not adult correction judges the adult reading through the Adult-only core again. `reclassify_row` does it for any row becoming adult, and its own tests cover that.
 - **Paths outside the brief's list.** The runner approved the `services.rs` and `pipeline/src/lib.rs` hunks. The rest are listed here for the runner to confirm. Each is needed because the api and importers crates can't depend on the pipeline for shared logic, and the CLI is where an import's connection is opened:
-  - `crates/filter/src/reclassify.rs`: the shared `source_adult`, `judge_source_adult` and `stricter`;
+  - `crates/filter/src/reclassify.rs`: the shared `source_adult`, `judge_source_adult` and `stricter` (which calls the engine's own, now `pub(crate)` in `engine.rs`);
   - `crates/pipeline/src/source_adult.rs`: delegates to them, plus `store_mark`;
   - `crates/pipeline/src/lib.rs`: the getter;
   - `crates/lodestar/src/services.rs`: one line;

@@ -984,7 +984,7 @@ impl Store {
                     }
                     o
                 }
-                ImportRecord::Candidate(cand) => commit_candidate(&tx, batch, cand)?,
+                ImportRecord::Candidate(cand) => commit_candidate(&tx, batch, cand, adult_mark)?,
                 ImportRecord::Invalid => RecordOutcome::Invalid,
             };
             match outcome {
@@ -1742,6 +1742,7 @@ fn commit_candidate(
     tx: &Transaction<'_>,
     batch: &ImportBatch<'_>,
     cand: &ImportCandidate<'_>,
+    adult_mark: AdultMark,
 ) -> Result<RecordOutcome> {
     let mut hashes = vec![cand.hash];
     if let Some(v2) = cand
@@ -1755,6 +1756,9 @@ fn commit_candidate(
         return Ok(held_outcome(held));
     }
     if let Some(id) = find_any(tx, hashes.iter().copied())? {
+        // As for a torrent record: a claim under its hashes concerns the
+        // stored row, whatever becomes of this record.
+        adult_claimed(tx, id, &hashes, adult_mark)?;
         if let Some(held) = cand.decision.held() {
             return Ok(held_outcome(held));
         }
@@ -2504,6 +2508,41 @@ mod tests {
         store.conn.execute(unmark, []).unwrap();
         store.commit_import_batch(&batch(3)).unwrap();
         assert_eq!(row(&store, &a).unwrap(), (sources, 1));
+
+        // A candidate (no info dict) under the stored row's hash merges the
+        // same way: the bit and the mark.
+        store
+            .conn
+            .execute(
+                "UPDATE torrents SET sources = ?1, content_type = 1 WHERE info_hash = ?2",
+                params![src.bit(), &a.info_hash.0[..]],
+            )
+            .unwrap();
+        store.conn.execute(unmark, []).unwrap();
+        let cand = [ImportRecord::Candidate(ImportCandidate {
+            hash: a.info_hash,
+            hash_v2: None,
+            name: Some(b"Alpha"),
+            size: Some(5),
+            privacy: Privacy::Unknown,
+            source_at: None,
+            decision: PASS,
+        })];
+        let merged = store
+            .commit_import_batch(&ImportBatch {
+                seq: 4,
+                records: &cand,
+                ..batch(4)
+            })
+            .unwrap();
+        let BatchCommitted::Committed { outcomes, .. } = merged else {
+            panic!("{merged:?}");
+        };
+        assert!(
+            matches!(outcomes[..], [RecordOutcome::Merged(_)]),
+            "{outcomes:?}"
+        );
+        assert_eq!(row(&store, &a).unwrap(), (sources, 0));
     }
 
     #[test]

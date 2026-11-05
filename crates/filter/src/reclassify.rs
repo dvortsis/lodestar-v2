@@ -199,17 +199,7 @@ pub fn judge_source_adult(
 /// The heavier decision of two verdicts (a tie keeps `a`'s), and both
 /// verdicts' shadow decisions: the engine's own rule for two readings.
 pub fn stricter(a: Verdict, b: Verdict) -> Verdict {
-    let decision = match (a.decision, b.decision) {
-        (Some(x), Some(y)) => Some(if y.action > x.action { y } else { x }),
-        (x, y) => x.or(y),
-    };
-    let mut shadow = a.shadow;
-    for d in b.shadow {
-        if !shadow.contains(&d) {
-            shadow.push(d);
-        }
-    }
-    Verdict { decision, shadow }
+    crate::engine::stricter(a, b)
 }
 
 /// What a classification rule's say changes: Is adult (`true`) or Not
