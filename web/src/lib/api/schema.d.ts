@@ -1763,7 +1763,13 @@ export interface paths {
          *     (`409 credentials_required`). Agents, egress and the schedule apply
          *     at the next start; changing egress needs the admin `"password"`
          *     (`428 confirm_required`), and the `interface` and `bind_address`
-         *     routes are refused (`409 route_unavailable`). A purge isn't a field:
+         *     routes are refused (`409 route_unavailable`). `config` sets the
+         *     source's settings, for a source whose `editable` lists it: a JSON
+         *     object of at most 16 KiB that the source's own rules check (`400
+         *     invalid_config` names the rule, never a value). It applies at the next
+         *     start; a torrent cache whose new list holds an address its
+         *     acknowledgement doesn't is switched off there until you acknowledge the
+         *     new list. A purge isn't a field:
          *     it's `POST /sources/{id}/purge` (`409 not_editable` here).
          */
         patch: operations["patchSource"];
@@ -8035,9 +8041,10 @@ export interface components {
              */
             consent_required: boolean;
             /**
-             * @description The version an acknowledgement must name. It changes when the
-             *     class's consent text or the source's endpoints change, and then
-             *     the source asks again. Empty for `none` and `account`.
+             * @description The version an acknowledgement must name, sent back as it is. It
+             *     holds the class's consent-text version and every address in
+             *     `endpoints`, so it changes when either does, and then the source
+             *     asks again. Empty for `none` and `account`.
              */
             consent_version: string;
             /**
@@ -8141,8 +8148,14 @@ export interface components {
             /** @description Its stored state is `enabled`. */
             enabled: boolean;
             /**
-             * @description The hosts it contacts, as `protocol://host`: what an `external`
-             *     source's acknowledgement covers.
+             * @description The addresses it contacts, as `protocol://address`, sorted: what
+             *     the consent dialog shows and an acknowledgement covers, compared
+             *     exactly. A built-in source lists hosts; one whose addresses come
+             *     from your settings (a torrent cache) lists each full address
+             *     template, path and query included, such as
+             *     `https://cache.example/~me/{hash}.torrent`. These are the
+             *     addresses it runs with now: settings saved since apply at the next
+             *     start (`restart_required`).
              */
             endpoints: string[];
             health: components["schemas"]["SourceHealth"];
@@ -8181,8 +8194,8 @@ export interface components {
              */
             purge_pending: boolean;
             /**
-             * @description Its stored state differs from what's running: it starts or stops
-             *     at the next restart.
+             * @description Its stored state or saved settings differ from what's running: it
+             *     starts, stops or picks up its new settings at the next restart.
              */
             restart_required: boolean;
             /** @enum {string} */
@@ -8331,6 +8344,16 @@ export interface components {
              * @description Its concurrency, 1 to its `agents.max`. Applies at the next start.
              */
             agents?: number;
+            /**
+             * @description The source's settings, as its `config_schema` describes them: a
+             *     JSON object of at most 16 KiB, checked by the source's own rules
+             *     (`400 invalid_config` names the rule broken, never a value). Only
+             *     a source whose `editable` lists `config` takes it. Applies at the
+             *     next start. A torrent cache's list is `{"caches": [...]}`; a list
+             *     with an address its acknowledgement doesn't cover switches it off
+             *     at that start until you acknowledge the new list.
+             */
+            config?: Record<string, never>;
             /**
              * @description The consent class you acknowledge; needed to enable a source whose
              *     `needs` is `endpoints_ack` or `consent`, and must be its class.

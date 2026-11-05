@@ -856,10 +856,22 @@ fn a_new_or_changed_address_asks_again_and_an_unchanged_list_doesnt() {
             "https://b.example/{hash}",
             "https://c.example/{hash}",
         ][..],
-        &["https://a.example/t/{hash}.torrent", "https://c.example/{hash}"][..],
-        &["https://a.example:8443/t/{hash}.torrent", "https://b.example/{hash}"][..],
-        &["https://a.example/~me/{hash}.torrent", "https://b.example/{hash}"][..],
-        &["https://a.example/t/{HASH}.torrent", "https://b.example/{hash}"][..],
+        &[
+            "https://a.example/t/{hash}.torrent",
+            "https://c.example/{hash}",
+        ][..],
+        &[
+            "https://a.example:8443/t/{hash}.torrent",
+            "https://b.example/{hash}",
+        ][..],
+        &[
+            "https://a.example/~me/{hash}.torrent",
+            "https://b.example/{hash}",
+        ][..],
+        &[
+            "https://a.example/t/{HASH}.torrent",
+            "https://b.example/{hash}",
+        ][..],
         &["https://a.example/t/{hash}.torrent"][..],
         &[][..],
     ] {
@@ -890,7 +902,10 @@ fn settings_written_through_the_api_are_checked_and_saved_in_one_form() {
     assert_eq!(p.check_config(&saved).unwrap(), saved, "a fixed point");
     let again = built(&["https://a.example/t/{hash}"]);
     assert_eq!(again.config_json().as_deref(), Some(saved.as_str()));
-    assert_eq!(built(&[]).config_json().as_deref(), Some(r#"{"caches":[]}"#));
+    assert_eq!(
+        built(&[]).config_json().as_deref(),
+        Some(r#"{"caches":[]}"#)
+    );
     for bad in [
         "not json",
         "[]",

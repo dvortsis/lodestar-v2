@@ -5793,7 +5793,7 @@
         "tags": [
           "crawler"
         ],
-        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; enabling a `restricted` or `overlay` source\nalso needs the admin `\"password\"`, every time (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress and the schedule apply\nat the next start; changing egress needs the admin `\"password\"`\n(`428 confirm_required`), and the `interface` and `bind_address`\nroutes are refused (`409 route_unavailable`). A purge isn't a field:\nit's `POST /sources/{id}/purge` (`409 not_editable` here).",
+        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; enabling a `restricted` or `overlay` source\nalso needs the admin `\"password\"`, every time (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress and the schedule apply\nat the next start; changing egress needs the admin `\"password\"`\n(`428 confirm_required`), and the `interface` and `bind_address`\nroutes are refused (`409 route_unavailable`). `config` sets the\nsource's settings, for a source whose `editable` lists it: a JSON\nobject of at most 16 KiB that the source's own rules check (`400\ninvalid_config` names the rule, never a value). It applies at the next\nstart; a torrent cache whose new list holds an address its\nacknowledgement doesn't is switched off there until you acknowledge the\nnew list. A purge isn't a field:\nit's `POST /sources/{id}/purge` (`409 not_editable` here).",
         "operationId": "patchSource",
         "parameters": [
           {
@@ -19744,7 +19744,7 @@
           },
           "consent_version": {
             "type": "string",
-            "description": "The version an acknowledgement must name. It changes when the\nclass's consent text or the source's endpoints change, and then\nthe source asks again. Empty for `none` and `account`."
+            "description": "The version an acknowledgement must name, sent back as it is. It\nholds the class's consent-text version and every address in\n`endpoints`, so it changes when either does, and then the source\nasks again. Empty for `none` and `account`."
           },
           "credentials": {
             "type": "array",
@@ -19930,7 +19930,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The hosts it contacts, as `protocol://host`: what an `external`\nsource's acknowledgement covers."
+            "description": "The addresses it contacts, as `protocol://address`, sorted: what\nthe consent dialog shows and an acknowledgement covers, compared\nexactly. A built-in source lists hosts; one whose addresses come\nfrom your settings (a torrent cache) lists each full address\ntemplate, path and query included, such as\n`https://cache.example/~me/{hash}.torrent`. These are the\naddresses it runs with now: settings saved since apply at the next\nstart (`restart_required`)."
           },
           "health": {
             "$ref": "#/components/schemas/SourceHealth"
@@ -20004,7 +20004,7 @@
           },
           "restart_required": {
             "type": "boolean",
-            "description": "Its stored state differs from what's running: it starts or stops\nat the next restart."
+            "description": "Its stored state or saved settings differ from what's running: it\nstarts, stops or picks up its new settings at the next restart."
           },
           "risk": {
             "type": "string",
@@ -20210,6 +20210,10 @@
             "format": "int32",
             "description": "Its concurrency, 1 to its `agents.max`. Applies at the next start.",
             "minimum": 0
+          },
+          "config": {
+            "type": "object",
+            "description": "The source's settings, as its `config_schema` describes them: a\nJSON object of at most 16 KiB, checked by the source's own rules\n(`400 invalid_config` names the rule broken, never a value). Only\na source whose `editable` lists `config` takes it. Applies at the\nnext start. A torrent cache's list is `{\"caches\": [...]}`; a list\nwith an address its acknowledgement doesn't cover switches it off\nat that start until you acknowledge the new list."
           },
           "consent": {
             "oneOf": [

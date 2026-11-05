@@ -592,7 +592,10 @@ impl std::fmt::Debug for SourceChange {
             .field("enabled", &self.enabled)
             .field("priority", &self.priority)
             .field("consent", &self.consent)
-            .field("consent_version", &self.consent_version.as_ref().map(|_| "…"))
+            .field(
+                "consent_version",
+                &self.consent_version.as_ref().map(|_| "…"),
+            )
             .field("password_confirmed", &self.password_confirmed)
             .field("egress", &self.egress)
             .field("schedule", &self.schedule)

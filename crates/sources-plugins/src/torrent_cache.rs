@@ -69,9 +69,9 @@ use lodestar_metainfo::{Info, InfoHash, Limits, ParseOptions, TorrentFile};
 use lodestar_sources::claims::{self, Claims, Confidence, Provenance};
 use lodestar_sources::http::{HostState, StreamLimits, host_key};
 use lodestar_sources::{
-    Backoff, BoxFuture, Caps, Client, Consent, Distribution, Endpoint, Endpoints, HostRate,
-    ConfigRefusal, HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx,
-    SourcePlugin,
+    Backoff, BoxFuture, Caps, Client, ConfigRefusal, Consent, Distribution, Endpoint, Endpoints,
+    HostRate, HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk,
+    SourceCtx, SourcePlugin,
 };
 use serde::Deserialize;
 use tokio::sync::{Mutex, mpsc};

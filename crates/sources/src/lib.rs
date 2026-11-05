@@ -30,8 +30,7 @@ pub use manifest::{
 };
 pub use plugin::{
     BoxFuture, Closed, ConfigRefusal, Discovery, Emitter, Found, Kit, LookupSession, PeerRequest,
-    PluginError,
-    SessionAdmission, Shutdown, SourceCtx, SourcePlugin, Terminal,
+    PluginError, SessionAdmission, Shutdown, SourceCtx, SourcePlugin, Terminal,
 };
 pub use pool::{FetchedKey, Fetcher, PeerWireFetcher, PoolConfig, PoolHandle, PoolIo, PoolStats};
 pub use state::{MemoryState, PluginState, StateError};

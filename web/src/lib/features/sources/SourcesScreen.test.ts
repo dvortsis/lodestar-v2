@@ -59,7 +59,9 @@ describe('Sources screen', () => {
 		const empty = source({ ...cache, id: 10, endpoints: [] });
 		setup(sourceList(dht, cache, empty));
 		const list = await screen.findByTestId('source-9-addresses');
-		const items = within(list).getAllByRole('listitem').map((li) => li.textContent);
+		const items = within(list)
+			.getAllByRole('listitem')
+			.map((li) => li.textContent);
 		expect(items).toEqual([
 			'https://a.example/~me/{hash}.torrent',
 			'https://b.example/get?h={HASH}'

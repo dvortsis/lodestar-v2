@@ -1436,8 +1436,7 @@ fn with_cache(dir: &tempfile::TempDir) -> Vec<Arc<dyn SourcePlugin>> {
     let config = Store::open(&db, StoreConfig::default())
         .map(|s| crate::torrent_cache::saved_config(&s))
         .unwrap_or_default();
-    let mut plugins: Vec<Arc<dyn SourcePlugin>> =
-        gated().into_iter().map(|(p, _)| p).collect();
+    let mut plugins: Vec<Arc<dyn SourcePlugin>> = gated().into_iter().map(|(p, _)| p).collect();
     plugins.push(crate::torrent_cache::build(config).plugin);
     plugins
 }
@@ -1470,11 +1469,19 @@ async fn a_config_written_through_the_api_turns_the_cache_off_until_acknowledged
     assert_eq!(s["needs"], json!("endpoints_ack"));
     // Only a plugin whose settings can be written takes them.
     let other = f.source(&c, "external").await;
-    assert!(!other["editable"].as_array().unwrap().contains(&json!("config")));
+    assert!(
+        !other["editable"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("config"))
+    );
     let (status, e) = f
         .patch(&c, "external", json!({ "config": { "caches": [] } }))
         .await;
-    assert_eq!((status, e["error"]["code"].clone()), (400, json!("invalid_config")));
+    assert_eq!(
+        (status, e["error"]["code"].clone()),
+        (400, json!("invalid_config"))
+    );
 
     // Refused: not an object, an unknown field, over the size cap, plain
     // http. None of them quotes what was sent.
@@ -1493,17 +1500,29 @@ async fn a_config_written_through_the_api_turns_the_cache_off_until_acknowledged
         assert!(!e.to_string().contains("private-token"), "{e}");
     }
     let store = Store::open(&f.dir.path().join("t.db"), StoreConfig::default()).unwrap();
-    assert!(crate::torrent_cache::saved_config(&store).caches().is_empty());
+    assert!(
+        crate::torrent_cache::saved_config(&store)
+            .caches()
+            .is_empty()
+    );
     drop(store);
 
     // Saved; it applies at the next start.
     let a = "https://a.example/~me/{hash}.torrent";
     let (status, s) = f
-        .patch(&c, ID, json!({ "config": { "caches": [format!(" {a} ")] } }))
+        .patch(
+            &c,
+            ID,
+            json!({ "config": { "caches": [format!(" {a} ")] } }),
+        )
         .await;
     assert_eq!(status, 200, "{s}");
     assert_eq!(s["restart_required"], json!(true));
-    assert_eq!(s["endpoints"], json!([]), "the running list until the restart");
+    assert_eq!(
+        s["endpoints"],
+        json!([]),
+        "the running list until the restart"
+    );
     let GatedFixture { pipeline, dir, .. } = f;
     pipeline.shutdown().await.unwrap();
 
@@ -1521,7 +1540,10 @@ async fn a_config_written_through_the_api_turns_the_cache_off_until_acknowledged
         .patch(&c, ID, json!({ "enabled": true, "consent": "external" }))
         .await;
     assert_eq!(status, 409);
-    assert!(!e.to_string().contains("a.example"), "the 409 quotes no address: {e}");
+    assert!(
+        !e.to_string().contains("a.example"),
+        "the 409 quotes no address: {e}"
+    );
     let (status, _) = f
         .patch(
             &c,

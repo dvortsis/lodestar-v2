@@ -585,12 +585,18 @@ mod tests {
     /// The legacy digest, SRC-4's `<text version>-<FNV-1a>`, kept here to
     /// show that a record in that form covers nothing now.
     fn legacy_version(m: &Manifest) -> String {
-        let mut list: Vec<(&str, &str)> = m.endpoints.iter().map(|e| (e.protocol, e.host)).collect();
+        let mut list: Vec<(&str, &str)> =
+            m.endpoints.iter().map(|e| (e.protocol, e.host)).collect();
         list.sort_unstable();
         list.dedup();
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for (protocol, host) in list {
-            for b in protocol.bytes().chain(*b"://").chain(host.bytes()).chain(*b"\n") {
+            for b in protocol
+                .bytes()
+                .chain(*b"://")
+                .chain(host.bytes())
+                .chain(*b"\n")
+            {
                 h ^= u64::from(b);
                 h = h.wrapping_mul(0x0100_0000_01b3);
             }
