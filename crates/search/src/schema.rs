@@ -3,6 +3,13 @@
 //!
 //! v5 (B6, facets): `release_year`, the year histogram's fast column.
 //!
+//! v6 (SB-6, M7's one bump): `verified`, `source` and `network` (SRC-3,
+//! §18.6), `payload_sig`, `group_key` and `group_minhash` (grouping,
+//! §6), `name_trigram` (the regex prefilter, §8), and in the file index
+//! `category`, `pieces_root` and `size_bucket`. Fields
+//! whose producers haven't shipped are defined and left empty; their
+//! population is tracked per field ([`crate::population`]).
+//!
 //! Only `id` and `name` are stored; everything shown comes from SQLite.
 
 use lodestar_classify::Category;
@@ -13,9 +20,21 @@ use tantivy::schema::{
 
 use crate::tokenizer::NAME_TOKENIZER;
 
+/// The tokenizer of `name_trigram`: the lowercased name's overlapping
+/// three-character grams (§8: the zoekt technique). Registered on every
+/// index, so a writer can open an index that has the field.
+pub const TRIGRAM_TOKENIZER: &str = "trigram";
+
+/// The trigram analyzer [`TRIGRAM_TOKENIZER`] names.
+pub fn trigram_analyzer() -> tantivy::tokenizer::TextAnalyzer {
+    use tantivy::tokenizer::{LowerCaser, NgramTokenizer, TextAnalyzer};
+    let grams = NgramTokenizer::all_ngrams(3, 3).expect("3..=3 is a valid gram range");
+    TextAnalyzer::builder(grams).filter(LowerCaser).build()
+}
+
 /// Bump on any schema change: a new version is a new index directory,
 /// built in the background while the old one serves (§8).
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 /// Bump on any tokenizer change, for the same reason.
 pub const TOKENIZER_VERSION: u32 = 1;
 
@@ -81,7 +100,41 @@ pub struct Fields {
     /// [`Category::ALL`] order. Only non-zero shares are written.
     pub cat_count: [Field; 10],
     pub cat_bytes: [Field; 10],
+    /// v6. Whether the item has verified metadata (`yes`/`no`, keyword):
+    /// SRC-3 fills it and hides `no` unless asked for (§18.6).
+    pub verified: Field,
+    /// v6. The sources that found it (keyword, several), for `source:`.
+    pub source: Field,
+    /// v6. Its network tier (`bt`, `bt-i2p`, …; keyword), for `network:`.
+    pub network: Field,
+    /// v6. The exact payload signature (§6: a hash of the sorted
+    /// non-padding file sizes), indexed for `sig:` and fast for the
+    /// "Identical clones" panel.
+    pub payload_sig: Field,
+    /// v6. The grouping key (normalized title, year, S/E), indexed and
+    /// fast, for "N other versions of this".
+    pub group_key: Field,
+    /// v6. The MinHash bands over the major file sizes (several), in the
+    /// inverted index, for near-duplicate candidates.
+    pub group_minhash: Field,
+    /// v6. The name's trigrams, docs only (no freqs, positions or norms),
+    /// for substring search and the regex prefilter. Off in low-resource
+    /// mode (§3).
+    pub name_trigram: Field,
 }
+
+/// The fields v6 added to the torrent index, by name: the ones whose
+/// population is tracked ([`crate::population`]). Every older field is
+/// filled for every document by construction.
+pub const V6_FIELDS: [&str; 7] = [
+    "verified",
+    "source",
+    "network",
+    "payload_sig",
+    "group_key",
+    "group_minhash",
+    "name_trigram",
+];
 
 /// The fast-field name of a category share.
 pub fn share_field(bytes: bool, cat: Category) -> String {
@@ -154,6 +207,59 @@ pub fn build() -> (Schema, Fields) {
         junk: b.add_u64_field("junk", num()),
         cat_count,
         cat_bytes,
+        verified: b.add_text_field("verified", keyword.clone()),
+        source: b.add_text_field("source", keyword.clone()),
+        network: b.add_text_field("network", keyword.clone()),
+        payload_sig: b.add_u64_field("payload_sig", INDEXED | FAST),
+        group_key: b.add_u64_field("group_key", INDEXED | FAST),
+        group_minhash: b.add_u64_field("group_minhash", multi()),
+        name_trigram: b.add_text_field(
+            "name_trigram",
+            TextOptions::default().set_indexing_options(
+                TextFieldIndexing::default()
+                    .set_tokenizer(TRIGRAM_TOKENIZER)
+                    .set_index_option(IndexRecordOption::Basic)
+                    .set_fieldnorms(false),
+            ),
+        ),
     };
     (b.build(), fields)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v6_fields_exist_with_their_names() {
+        let (schema, f) = build();
+        for name in V6_FIELDS {
+            assert!(schema.get_field(name).is_ok(), "{name}");
+        }
+        let named = [
+            (f.verified, "verified"),
+            (f.source, "source"),
+            (f.network, "network"),
+            (f.payload_sig, "payload_sig"),
+            (f.group_key, "group_key"),
+            (f.group_minhash, "group_minhash"),
+            (f.name_trigram, "name_trigram"),
+        ];
+        for (field, name) in named {
+            assert_eq!(schema.get_field_name(field), name);
+        }
+        let sig = schema.get_field_entry(f.payload_sig);
+        assert!(sig.is_indexed() && sig.is_fast());
+    }
+
+    #[test]
+    fn the_trigram_analyzer_lowercases_and_splits_in_threes() {
+        let mut a = trigram_analyzer();
+        let mut stream = a.token_stream("AbcD");
+        let mut grams = Vec::new();
+        while let Some(t) = stream.next() {
+            grams.push(t.text.clone());
+        }
+        assert_eq!(grams, ["abc", "bcd"]);
+    }
 }

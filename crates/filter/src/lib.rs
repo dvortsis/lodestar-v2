@@ -15,6 +15,7 @@
 //! authoritatively, at commit (§19.4).
 
 mod core;
+pub mod corpus;
 mod engine;
 mod fasttok;
 mod hash;
@@ -24,7 +25,7 @@ pub mod load;
 pub mod log_events;
 mod matcher;
 pub mod normalize;
-mod packs;
+pub mod packs;
 mod payload;
 mod prefilter;
 pub mod reclassify;

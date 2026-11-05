@@ -1,0 +1,1 @@
+{"id":4,"method":"core.get_torrents_status","params":[{},["name","total_size","state"]]}

@@ -19,7 +19,10 @@ use lodestar_sources::BoxFuture;
 use lodestar_sources::consent::SourceCredentials;
 use lodestar_sources::egress::CredentialError;
 
+pub mod academic;
 pub mod archive_org;
+pub mod clients;
+pub mod full_scrape;
 pub mod nyaa;
 pub mod prowlarr;
 

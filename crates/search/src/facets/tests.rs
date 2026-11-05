@@ -105,6 +105,7 @@ fn doc(i: u64) -> TorrentDoc {
             ambiguous: i.is_multiple_of(8),
             shares,
         },
+        provenance: crate::doc::DocProvenance::stored_torrent(),
     }
 }
 
@@ -1011,6 +1012,10 @@ mod rebuild {
             index.tokenizers().register(
                 crate::tokenizer::NAME_TOKENIZER,
                 crate::tokenizer::NameTokenizer::default(),
+            );
+            index.tokenizers().register(
+                crate::schema::TRIGRAM_TOKENIZER,
+                crate::schema::trigram_analyzer(),
             );
             index.writer::<TantivyDocument>(HEAP).unwrap()
         };

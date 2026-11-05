@@ -14,7 +14,9 @@ use tantivy::schema::{Field, IndexRecordOption};
 
 use crate::files::{IdSet, IdsQuery};
 use crate::filter::{CheckQuery, FastRange};
-use crate::query::{DateField, Node, NumField, ShareBy, TagKey, TextField, When};
+use crate::query::{
+    DateField, Network, Node, NumField, ShareBy, TagKey, TextField, Verified, When,
+};
 use crate::schema::{Fields, NAME_BOOST, PATH_BOOST, STEM_SCORE, TITLE_BOOST, share_field};
 use crate::seek_guard::SeekGuard;
 use crate::tokenizer::{self, Tok, TokKind};
@@ -123,6 +125,7 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
     // (`-x`, `private:no`) only removes a few from everything.
     let drives = |n: &&Node| {
         !matches!(n, Node::Not { .. } | Node::Flag { value: false, .. })
+            && !excludes_only(n)
             && compile_opt(n, f, now).is_some()
     };
     let keep = usize::from(!rest.iter().any(drives)).min(ranges.len());
@@ -148,6 +151,15 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
                 if let Some((m, boost)) = any_word(word, f) {
                     push_must(&mut clauses, m);
                     boosts.push((Occur::Should, boost));
+                }
+            }
+            // `verified:yes` (the hidden-by-default clause on every
+            // search) and `network:bt`: their excluded terms join the
+            // top-level conjunction as plain `MustNot`s, so it stays one
+            // flat intersection and the score is untouched.
+            n if excludes_only(n) => {
+                for (field, t) in excluded(n, f) {
+                    clauses.push((Occur::MustNot, term(field, t, IndexRecordOption::Basic)));
                 }
             }
             n => {
@@ -417,6 +429,85 @@ fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
     })
 }
 
+/// Whether a clause compiles to everything minus a few terms
+/// (`verified:yes`, `network:bt`; see [`provenance`]), so like a negation
+/// it shouldn't drive the query.
+fn excludes_only(n: &Node) -> bool {
+    match n {
+        Node::Verified { any } => any.contains(&Verified::Yes),
+        Node::Network { any } => any.contains(&Network::Bt),
+        _ => false,
+    }
+}
+
+/// The terms an [`excludes_only`] clause leaves out: it matches
+/// everything without them.
+fn excluded(n: &Node, f: &Cx<'_>) -> Vec<(Field, &'static str)> {
+    match n {
+        Node::Verified { any } if !any.contains(&Verified::No) => {
+            vec![(f.verified, Verified::No.as_str())]
+        }
+        Node::Network { any } => Network::ALL
+            .into_iter()
+            .filter(|t| !any.contains(t))
+            .map(|t| (f.network, t.as_str()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Everything but the documents with any of `terms`.
+fn all_but(terms: Vec<(Field, &'static str)>) -> Q {
+    let mut clauses: Vec<(Occur, Q)> = vec![(Occur::Must, Box::new(AllQuery))];
+    clauses.extend(
+        terms
+            .into_iter()
+            .map(|(fld, t)| (Occur::MustNot, term(fld, t, IndexRecordOption::Basic))),
+    );
+    if clauses.len() == 1 {
+        return Box::new(AllQuery);
+    }
+    Box::new(BooleanQuery::new(clauses))
+}
+
+/// Any of `terms` in `field`.
+fn any_term<'t>(field: Field, terms: impl Iterator<Item = &'t str>) -> Q {
+    let mut clauses: Vec<(Occur, Q)> = terms
+        .map(|t| (Occur::Should, term(field, t, IndexRecordOption::Basic)))
+        .collect();
+    match clauses.len() {
+        0 => Box::new(EmptyQuery),
+        1 => clauses.pop().expect("one").1,
+        _ => Box::new(BooleanQuery::new(clauses)),
+    }
+}
+
+/// `verified:`, `source:` and `network:` (§18.6, SRC-3).
+///
+/// While the population contract backfills these fields, documents
+/// indexed before SRC-3 carry none of them, and every one of those is a
+/// stored, verified clearnet torrent: unverified and other-network items
+/// are only ever indexed with their fields. So the values a backfill
+/// would write are compiled as "not any other value": `verified:yes` is
+/// everything but `verified:no`, `network:bt` everything but the other
+/// tiers. They're complete on a partly backfilled index, and hiding
+/// unverified items by default never hides a torrent the walk hasn't
+/// reached. `source:` has no such complement: it matches only documents
+/// that carry it, and the search reports the field while it's partial
+/// ([`Node::population_fields`]).
+fn provenance(node: &Node, f: &Cx<'_>) -> Q {
+    match node {
+        n if excludes_only(n) => all_but(excluded(n, f)),
+        Node::Verified { any } if any.contains(&Verified::No) => {
+            term(f.verified, Verified::No.as_str(), IndexRecordOption::Basic)
+        }
+        Node::Verified { .. } => Box::new(EmptyQuery),
+        Node::Network { any } => any_term(f.network, any.iter().map(|n| n.as_str())),
+        Node::Source { any } => any_term(f.source, any.iter().map(String::as_str)),
+        _ => unreachable!("provenance clauses only"),
+    }
+}
+
 /// A check nothing passes.
 fn nothing() -> FastRange {
     FastRange::Hot {
@@ -601,6 +692,7 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
                 _ => Box::new(BooleanQuery::new(clauses)),
             }
         }
+        Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => provenance(node, f),
         Node::Share { by, cat, lo, hi } => {
             let Some(c) = category(cat) else {
                 return Some(Box::new(EmptyQuery));

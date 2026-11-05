@@ -1,6 +1,7 @@
 //! RSS 2.0 items and Atom entries that name torrents (architecture §18.2):
-//! Nyaa's RSS with its `nyaa:` namespace, AnimeTosho's feeds, and any feed
-//! whose items carry an info hash or a magnet.
+//! Nyaa's RSS with its `nyaa:` namespace, AnimeTosho's feeds, Academic
+//! Torrents' RSS with its bare `<infohash>`, and any feed whose items carry
+//! an info hash or a magnet.
 //!
 //! The safety rules are [`torznab`](crate::torznab)'s, with the same
 //! [`Limits`]: it streams one item at a time, refuses DTDs, resolves only
@@ -15,6 +16,14 @@
 //! [`ATOM_NS`]. Only the bindings that can matter are tracked (a known
 //! URI, the default namespace, or a prefix that shadows one); more than
 //! [`MAX_NS`] in scope stops the parse ([`Stop::Namespaces`]).
+//!
+//! An item's hash comes from the first of these that is present:
+//! `nyaa:infoHash`, then a no-namespace `<infohash>` (Academic Torrents),
+//! then a magnet. A present but invalid one skips the item (`bad_hash`).
+//! A later source only adds the other hash version when it agrees with
+//! what came before ([`merge`]); one that disagrees is ignored, as a
+//! disagreeing magnet always was. A repeated element is read once: the
+//! first wins.
 
 use crate::common::{
     Bad, attrs, clean_title, hash, is_magnet, magnet_hashes, merge, prepare, resolve_ref, rfc2822,
@@ -43,8 +52,10 @@ pub struct Item {
     /// At most [`MAX_TITLE`] bytes, with control characters and the bidi
     /// controls `torznab` strips removed (U+202A–202E, U+2066–2069, U+200E/F, U+061C).
     pub title: Option<String>,
-    /// Content bytes (`nyaa:size`, `1.2 GiB`). An enclosure's `length` is
-    /// the size of the linked file, so it isn't used.
+    /// Content bytes: `nyaa:size` (`1.2 GiB`), or a no-namespace `<size>`
+    /// that is a plain byte count (Academic Torrents), whichever comes
+    /// first. An enclosure's `length` is the size of the linked file, so
+    /// it isn't used.
     pub size: Option<u64>,
     /// `pubDate`, or Atom's `published` else `updated`, in Unix seconds.
     pub published: Option<i64>,
@@ -142,10 +153,14 @@ enum Field {
     Published,
     Updated,
     InfoHash,
+    /// A no-namespace `<infohash>` (Academic Torrents).
+    BareHash,
     Seeders,
     Leechers,
     Downloads,
     Size,
+    /// A no-namespace `<size>`: a plain byte count only.
+    BareSize,
     Category,
     Trusted,
     Remake,
@@ -160,6 +175,8 @@ struct Draft {
     buf: String,
     /// `nyaa:infoHash`: `Some(None)` when present but invalid.
     infohash: Option<Option<Hashes>>,
+    /// A no-namespace `<infohash>`, the same way.
+    bare: Option<Option<Hashes>>,
     /// The first magnet in an Atom link.
     magnet: Option<String>,
     /// The first enclosure URL (RSS, or Atom `rel="enclosure"`).
@@ -327,10 +344,14 @@ impl Parser<'_> {
             (Ns::Atom, "published") => Some(Field::Published),
             (Ns::Atom, "updated") => Some(Field::Updated),
             (Ns::Nyaa, "infoHash") => Some(Field::InfoHash),
+            // Matched exactly, like every other name here. Inside an Atom
+            // entry it needs `xmlns=""`; Atom has no such element.
+            (Ns::None, "infohash") => Some(Field::BareHash),
             (Ns::Nyaa, "seeders") => Some(Field::Seeders),
             (Ns::Nyaa, "leechers") => Some(Field::Leechers),
             (Ns::Nyaa, "downloads") => Some(Field::Downloads),
             (Ns::Nyaa, "size") => Some(Field::Size),
+            (Ns::None, "size") => Some(Field::BareSize),
             (Ns::Nyaa, "categoryId") => Some(Field::Category),
             (Ns::Nyaa, "trusted") => Some(Field::Trusted),
             (Ns::Nyaa, "remake") => Some(Field::Remake),
@@ -457,10 +478,11 @@ impl Draft {
             Field::PubDate | Field::Published => it.published.is_none(),
             Field::Updated => self.updated.is_none(),
             Field::InfoHash => self.infohash.is_none(),
+            Field::BareHash => self.bare.is_none(),
             Field::Seeders => it.seeders.is_none(),
             Field::Leechers => it.leechers.is_none(),
             Field::Downloads => it.downloads.is_none(),
-            Field::Size => it.size.is_none(),
+            Field::Size | Field::BareSize => it.size.is_none(),
             Field::Category => it.category.is_none(),
             Field::Trusted => it.trusted.is_none(),
             Field::Remake => it.remake.is_none(),
@@ -474,9 +496,11 @@ impl Draft {
             return;
         }
         if t.is_empty() {
-            // An empty `infoHash` is present but invalid, as in `torznab`.
-            if f == Field::InfoHash {
-                self.infohash = Some(None);
+            // An empty hash element is present but invalid, as in `torznab`.
+            match f {
+                Field::InfoHash => self.infohash = Some(None),
+                Field::BareHash => self.bare = Some(None),
+                _ => {}
             }
             return;
         }
@@ -489,10 +513,19 @@ impl Draft {
             Field::Published => it.published = rfc3339(t),
             Field::Updated => self.updated = rfc3339(t),
             Field::InfoHash => self.infohash = Some(hash(t)),
+            Field::BareHash => self.bare = Some(hash(t)),
             Field::Seeders => it.seeders = t.parse().ok(),
             Field::Leechers => it.leechers = t.parse().ok(),
             Field::Downloads => it.downloads = t.parse().ok(),
             Field::Size => it.size = size(t),
+            // No units: a generic feed's `1.5 GiB` here isn't a byte count.
+            Field::BareSize => {
+                it.size = t
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+                    .then(|| t.parse().ok())
+                    .flatten();
+            }
             Field::Category => {
                 let ok =
                     t.len() <= MAX_CATEGORY && t.bytes().all(|b| b.is_ascii_digit() || b == b'_');
@@ -516,8 +549,14 @@ impl Draft {
             .flatten()
             .find(|s| is_magnet(s));
         let from_magnet = magnet.and_then(|m| magnet_hashes(m));
-        let hashes = match (self.infohash, magnet) {
-            (Some(h), _) => h.map(|h| merge(h, from_magnet)),
+        // The first hash element present decides; the bare one, when it
+        // comes second, only merges in (module docs).
+        let (stated, second) = match self.infohash {
+            Some(h) => (Some(h), self.bare.flatten()),
+            None => (self.bare, None),
+        };
+        let hashes = match (stated, magnet) {
+            (Some(h), _) => h.map(|h| merge(merge(h, second), from_magnet)),
             (None, Some(_)) => from_magnet,
             (None, None) => return Err(|s| s.no_hash += 1),
         };

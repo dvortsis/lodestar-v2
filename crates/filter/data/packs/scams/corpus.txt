@@ -1,0 +1,33 @@
+# The scams pack's corpus (RP-1). Format: crates/filter/src/corpus.rs.
+# The service and game words are the ones the rules read; every name is
+# otherwise made up, and nothing points to a real download.
+
+rule SC-1
+match Spotify Premium Free APK
+  file 30M app.apk
+match Netflix Premium Unlocked Free 2024
+  file 40M app.apk
+match Bitcoin Wallet Recovery Generator
+  file 2M generator.exe
+miss Spotify Premium Offline Mod
+  file 30M app.apk
+miss Example Documentary 2019 Netflix 1080p WEB
+  file 4G Example.Documentary.2019.1080p.mkv
+miss Free Example Movie 2019
+  file 4G Example.Movie.2019.mkv
+miss Free Robux Generator 2024
+  file 1M generator.exe
+
+rule SC-2
+match Free Robux Generator 2024
+  file 1M generator.exe
+match Fortnite VBucks Hack
+  file 1M hack.exe
+match Roblox Free Robux Adder
+  file 1M adder.exe
+miss Fortnite Trainer Offline Mod
+  file 1M trainer.exe
+miss Roblox Studio Tutorial
+  file 700M tutorial.mp4
+miss Spotify Premium Free APK
+  file 30M app.apk

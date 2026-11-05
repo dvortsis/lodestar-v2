@@ -20,6 +20,7 @@ mod live;
 pub mod log_events;
 pub mod natural;
 mod percolate;
+pub mod population;
 pub mod query;
 mod rebuild;
 pub mod recovery;
@@ -40,7 +41,7 @@ pub use cache::{
 pub use cancel::{CancelOnDrop, CancelToken};
 pub use count::{EXACT_UP_TO, Total};
 pub use cursor::{Cursor, LeaseId, Position};
-pub use doc::{DocEnrichment, TorrentDoc, extension, flag_names};
+pub use doc::{DocEnrichment, DocProvenance, TorrentDoc, extension, flag_names};
 pub use explain::{EXPLAIN_MAX, Explained, Explanation, Parts, Priors, WEIGHTS, Weights, explain};
 pub use facets::{
     Bin, Facet, FacetParams, Facets, Histo, Histogram, TermCounts, Unit, ValueCount, facets,
@@ -55,6 +56,7 @@ pub use index::{
 pub use lease::{EXACT_BUDGET, Lease, LeaseConfig, Leases, Page, Start};
 pub use live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
 pub use percolate::{Due, Matched, PercolateLimits, Percolation, percolate};
+pub use population::{Availability, FieldAvailability, Generations};
 pub use query::{Node, ParseError, parse};
 pub use rebuild::{
     IndexVersion, Ranking, Rebuild, RebuildPhase, RebuildProgress, Serving, ServingConfig,

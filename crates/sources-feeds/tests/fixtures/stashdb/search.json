@@ -1,0 +1,78 @@
+{
+  "data": {
+    "searchScene": [
+      {
+        "id": "00000000-0000-4000-8000-0000000000a1",
+        "title": "Synthetic Scene Alpha",
+        "release_date": "2024-03-15",
+        "studio": {
+          "id": "00000000-0000-4000-8000-0000000000c1",
+          "name": "Example Studio One"
+        },
+        "performers": [
+          {
+            "performer": {
+              "name": "Example Performer One"
+            }
+          },
+          {
+            "performer": {
+              "name": "Example Performer Two"
+            }
+          }
+        ]
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000a2",
+        "title": "  Synthetic Scene Beta​  ",
+        "release_date": "2023-11",
+        "studio": null,
+        "performers": []
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000a3",
+        "title": null,
+        "release_date": null,
+        "studio": {
+          "id": "00000000-0000-4000-8000-0000000000c2",
+          "name": "Example Studio Two"
+        },
+        "performers": [
+          {
+            "performer": {
+              "name": "Example Performer One"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Synthetic Scene Without An Id",
+        "performers": []
+      },
+      {
+        "id": "not-a-stashdb-id",
+        "title": "Synthetic Scene With A Bad Id"
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000a6",
+        "title": "Synthetic Scene With A Bad Date",
+        "release_date": "15/03/2024"
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000a7",
+        "title": "Synthetic Scene With A Half Performer",
+        "performers": [
+          {
+            "performer": {
+              "name": "Example Performer One"
+            }
+          },
+          {
+            "performer": {
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

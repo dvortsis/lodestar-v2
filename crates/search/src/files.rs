@@ -31,7 +31,8 @@ use tantivy::query::{
     FuzzyTermQuery, Occur, Query, RangeQuery, RegexQuery, Scorer, TermQuery, Weight,
 };
 use tantivy::schema::{
-    FAST, Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing, TextOptions,
+    BytesOptions, FAST, Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing,
+    TextOptions,
 };
 use tantivy::store::{Compressor, ZstdCompressor};
 use tantivy::{
@@ -64,7 +65,24 @@ pub struct FileFields {
     pub dir: Field,
     pub ext: Field,
     pub size: Field,
+    /// v6. [`size_bucket`] of the size, in the inverted index, so a
+    /// `size:` range can read the postings of the buckets inside it and
+    /// check the column only in the two at its edges, instead of every
+    /// file's value (X-search-files-2). Indexing `size` itself would
+    /// cost a term per distinct size: 307 B per torrent, over §3's
+    /// file-index budget on its own.
+    pub size_bucket: Field,
+    /// v6. The file's category ([`Category::as_str`], keyword), from its
+    /// extension: `video` for `.mkv`, `other` without one.
+    pub category: Field,
+    /// v6. The v2 Merkle root (32 bytes), for "same file" across
+    /// torrents. Only v2 and hybrid torrents have one.
+    pub pieces_root: Field,
 }
+
+/// The fields v6 added to the file index, by name (as
+/// [`crate::schema::V6_FIELDS`]).
+pub const V6_FIELDS: [&str; 3] = ["size_bucket", "category", "pieces_root"];
 
 pub fn schema() -> (Schema, FileFields) {
     let mut b = Schema::builder();
@@ -96,8 +114,11 @@ pub fn schema() -> (Schema, FileFields) {
         index: b.add_u64_field("index", FAST),
         name: b.add_text_field("name", text(true)),
         dir: b.add_text_field("dir", text(false)),
-        ext: b.add_text_field("ext", keyword),
+        ext: b.add_text_field("ext", keyword.clone()),
         size: b.add_u64_field("size", NumericOptions::default().set_fast()),
+        size_bucket: b.add_u64_field("size_bucket", NumericOptions::default().set_indexed()),
+        category: b.add_text_field("category", keyword),
+        pieces_root: b.add_bytes_field("pieces_root", BytesOptions::default().set_indexed()),
     };
     (b.build(), fields)
 }
@@ -124,6 +145,9 @@ pub struct FileDoc {
     pub dirs: Vec<String>,
     pub ext: Option<String>,
     pub size: u64,
+    /// From the extension; [`Category::Other`] without one.
+    pub category: Category,
+    pub pieces_root: Option<[u8; 32]>,
 }
 
 impl FileDoc {
@@ -139,8 +163,36 @@ impl FileDoc {
             d.add_text(f.ext, e);
         }
         d.add_u64(f.size, self.size);
+        d.add_u64(f.size_bucket, size_bucket(self.size));
+        d.add_text(f.category, self.category.as_str());
+        if let Some(root) = &self.pieces_root {
+            d.add_bytes(f.pieces_root, root);
+        }
         d
     }
+}
+
+/// The bucket of a file size: two per power of two (the highest bit and
+/// the one below it), so each spans at most half its lowest size and
+/// there are at most 128. Sizes below 2 share bucket 0 and 1. Monotonic:
+/// a larger size never has a smaller bucket.
+pub fn size_bucket(size: u64) -> u64 {
+    if size < 2 {
+        return size;
+    }
+    let top = 63 - u64::from(size.leading_zeros());
+    let half = (size >> (top - 1)) & 1;
+    top * 2 + half
+}
+
+/// The smallest size in `bucket`, the inverse of [`size_bucket`]'s
+/// lower edge.
+pub fn bucket_floor(bucket: u64) -> u64 {
+    if bucket < 2 {
+        return bucket;
+    }
+    let (top, half) = (bucket / 2, bucket % 2);
+    (1 << top) | (half << (top - 1))
 }
 
 /// The files of a torrent that smart coverage indexes.
@@ -178,8 +230,10 @@ pub fn file_docs(torrent: u64, tree: &FileTree) -> Vec<FileDoc> {
             index: i as u64,
             name,
             dirs: segments,
+            category: ext.as_deref().map_or(Category::Other, category_of),
             ext,
             size: f.size,
+            pieces_root: f.pieces_root,
         });
     }
     out
@@ -1194,6 +1248,62 @@ mod tests {
         assert_eq!(docs[0].dirs, ["Album"]);
         assert_eq!(docs[0].ext.as_deref(), Some("flac"));
         assert_eq!((docs[1].torrent, docs[1].index), (7, 1));
+    }
+
+    #[test]
+    fn size_buckets_are_monotonic_and_invert_at_their_floors() {
+        assert_eq!((0..4).map(size_bucket).collect::<Vec<_>>(), [0, 1, 2, 3]);
+        assert_eq!(size_bucket(5), 4);
+        assert_eq!(size_bucket(6), 5);
+        assert_eq!(size_bucket(u64::MAX), 127);
+        let mut sizes: Vec<u64> = (0..64)
+            .flat_map(|b| {
+                let p = 1u64 << b;
+                [p - 1, p, p + 1, p + p / 2 - 1, p + p / 2]
+            })
+            .collect();
+        sizes.sort_unstable();
+        let mut last = 0;
+        for s in sizes {
+            let k = size_bucket(s);
+            assert!(k >= last, "{s}");
+            last = k;
+            assert!(bucket_floor(k) <= s, "{s}");
+            assert_eq!(size_bucket(bucket_floor(k)), k, "{s}");
+            if k < 127 {
+                assert!(bucket_floor(k + 1) > s, "{s}");
+            }
+        }
+    }
+
+    #[test]
+    fn file_docs_carry_category_and_pieces_root() {
+        use tantivy::schema::Value;
+        let mut t = tree(&[
+            ("Show/E01.MKV", 1 << 30, FileAttrs::empty()),
+            ("Show/README", 10, FileAttrs::empty()),
+            ("Show/subs.srt", 10, FileAttrs::empty()),
+        ]);
+        t.files[0].pieces_root = Some([7; 32]);
+        let docs = file_docs(1, &t);
+        let cats: Vec<_> = docs.iter().map(|d| d.category).collect();
+        assert_eq!(cats, [Category::Video, Category::Other, Category::Subtitle]);
+        assert_eq!(docs[0].pieces_root, Some([7; 32]));
+        assert_eq!(docs[1].pieces_root, None);
+
+        // Written as a keyword and 32 bytes; the root only when present.
+        let (_, f) = schema();
+        let d = docs[0].to_document(&f);
+        let text = |field| {
+            d.get_first(field)
+                .and_then(|v| v.as_str().map(str::to_owned))
+        };
+        assert_eq!(text(f.category).as_deref(), Some("video"));
+        assert_eq!(
+            d.get_first(f.pieces_root).and_then(|v| v.as_bytes()),
+            Some(&[7u8; 32][..])
+        );
+        assert!(docs[1].to_document(&f).get_first(f.pieces_root).is_none());
     }
 
     #[test]

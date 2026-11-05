@@ -392,6 +392,55 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **rc.3 = rc.2 + #357 + #402 + the memory fix,** then one fresh frozen soak (r4) on rc.3. This replaces §2.29's "rc.3 = rc.2 + #357". The memory fix is the first thing built.
     - **Launches stay paused (§2.30),** except work by the sessions that already exist. The soak containers are stopped at the owner's convenience.
 
+32. **Launches resume with four slots** (owner, 2026-11-04, build-runner session, after the usage limit reset): "My limit reset. You can continue building at full speed with all four slots."
+    - **At most four slice sessions at once,** replacing §2.30's two and ending its launch pause. `runner/slices.yaml` records it as `limits.phase_total: 4`. The ladder in build plan §0.2 still decides what fills a slot.
+    - **What the message leaves unchanged (runner's reading, per §2.31 and build plan §0.2 rung 4):** soak r4, the gluetun leg, the Windows smoke and the `v0.5.1` tag follow §2.31, and the epics held for the soak verdict (E-M6, E-v06-workers, E-v06-companions) stay held until r4's verdict.
+
+33. **Up to eight slots, and auto-approval of best-practice decisions** (owner, 2026-11-04, build-runner session): "Auto approve plans and normal decisions as long as they support UX and performance best practices. Are you able to increase number of slots up to 8 without losing efficiency?" The runner answered that eight works while that many ready slices own disjoint files, and raised the cap.
+    - **At most eight slice sessions at once,** replacing §2.32's four. `runner/slices.yaml` records it as `limits.phase_total: 8`. A slot stays empty rather than take a slice whose `owns` overlaps a running one.
+    - **Auto-approval.** The runner approves its own plans and normal decisions without asking first, as long as they support UX and performance best practice. Each is still recorded in a `docs/decisions/` file and named in the daily summary, where the owner can veto it (§2.19, §2.26). This extends §2.26 and §2.28.
+    - **Still for the owner (runner's reading, from CLAUDE.md's order of authority and §2.28):**
+      - reversing or loosening one of the owner's decisions;
+      - weakening a security or content-safety decision;
+      - changing a number the owner set, other than performance and UX changes under §2.26;
+      - a terms-of-service grey case (§2.28 Q2);
+      - steps that need the owner's hands: tags, hosts, releases, rulesets.
+
+34. **CR-SPEC confirmed, with the runner's answers to O1-O6** (owner, 2026-11-04, relayed by a helper session; the owner approved the runner's recommendations in chat).
+    - **CR-SPEC (`docs/decisions/2026-11-02-CR-SPEC.md`) is confirmed.** `owner-cr-spec` holds.
+    - **O1: exclude.** The 24 h gate window excludes the 6 h first-start suppression and the 60 min warm-up (rule 1.1). Startup is still published (rule 1.7). O2-O6 are accepted as written.
+    - **#367 stays out of v0.5.1** and ships in v0.5.2 from `main`, with no rc.4.
+    - **Still queued:** the Q1 consent texts wait until SRC-4's drafts can be reviewed, and Checkpoint 1 stays queued.
+
+35. **A narrow `unsafe` exception for SQLite's allocator and memory statistics, and UTC-only records** (owner, 2026-11-04, build-runner session). Asked two questions, the owner answered "Yes" to the first and "Follow your recommendation" to the second.
+    - **The exception.** The workspace keeps `unsafe_code = "forbid"` (§1b.5), except in `lodestar-store` alone, where it is `deny`. There, `#[allow(unsafe_code)]` is permitted only on:
+      - the argument-free reads `sqlite3_memory_used()` and `sqlite3_memory_highwater()`, for the memory attribution gauges (X-mem-gauges);
+      - one `sqlite3_config(SQLITE_CONFIG_MALLOC, …)` call before the first connection opens, which routes SQLite's allocations through mimalloc (X-sqlite-malloc). The memory-routing slice was named in the question.
+
+      Each `allow` sits on the smallest possible block, with a `// SAFETY:` comment. Each PR that adds one runs `/security-review` and records it in its decisions file. Any other `unsafe`, in this crate or elsewhere, still needs the owner.
+    - **Not covered: the allocator callbacks.** `SQLITE_CONFIG_MALLOC` takes a `sqlite3_mem_methods` table of `extern "C"` callbacks (xMalloc, xFree, xRealloc, xSize, xRoundup, xInit, xShutdown). Each of those needs `unsafe` of its own and would call mimalloc through a new `libmimalloc-sys` dependency. The runner had described the routing fix as one start-up call, which understated it (corrected by #428's review). So before X-sqlite-malloc launches, the runner brings its full `unsafe` surface to the owner, or a route with no `unsafe` (for example mimalloc's `override` feature or a build-time flag).
+    - **Times in records are UTC.** New docs, reviews, soak notes and evidence give times in UTC (`Z`), never a local time zone, offset or place. The existing files on `main` that name a local time zone stay as they are, because git history keeps them anyway (runner's recommendation, accepted).
+
+36. **Up to twelve slots, filled only when it makes sense** (owner, 2026-11-04; given in the dashboard session and relayed to the runner in their words): "Let's increase slot limit to 12, although not mandatory to fill all slots if there isn't enough work or doesn't make sense for the roadmap / plan."
+    - **At most twelve slice sessions at once,** replacing §2.33's eight. `runner/slices.yaml` records it as `limits.phase_total: 12`.
+    - **Filling them all isn't required.** A slot stays empty when no ready slice fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap or plan. That's the runner's judgment, as under §2.33. Review bandwidth stays the real limit: every slice still gets a fresh Opus review before merge.
+    - §2.33's auto-approval and its "still for the owner" list are unchanged.
+
+37. **The owner's answers to the owner queue** (owner, 2026-11-04 about 20:30Z; given in the dashboard session and relayed to the runner). Item numbers are the queue's as of 2026-11-04 before this record; the queue was renumbered after it. Queue items 1, 2, 8 and 9 were left unanswered and stay open.
+    - **Required web checks: yes** (queue item 5, the runner's recommendation). `web-ok` and `e2e-ok`, the always-reporting aggregates X-required-web-checks added, join `ci-ok` as required checks on `main`. Adding them to the ruleset is the owner's step. Until it's done, the runner judges them by the green rule (`runner/README.md`).
+    - **Imports through the running server, and the `.torrent` upload middleware exception** (queue item 6): "go with the recommended solution once identified." The runner identifies the recommendation when B-import-server-2 or E-M7's upload slice is planned, records it in that slice's decisions file, flags it (§2.19) and runs `/security-review` on the slice. It goes back to the owner only if the solution built deviates from that recommendation. `owner-import-server-surface` and `owner-upload-exception` hold on those terms.
+    - **Unraid Community Apps:** the owner submits after the 1.0 release is complete, not before (queue item 7).
+    - **Rule-pack Q1-Q5: the runner's recommended answers, as written in `docs/plan/2026-11-04-v06-rulepacks.md` §5** (queue item 10). That table is the decision; the bullets below summarise it. `owner-rpq2`, `owner-rpq3` and `owner-rpq4` hold.
+      - Q1: no separate pack signing channel in v0.6. Packs change only with a signed release, and RP-0's versions and changelogs make each change visible. A between-release channel can come later with its own key, like §2.21's freshness key, if the owner wants faster pack fixes.
+      - Q2: ThePornDB and StashDB are sent only verified, Adult-classified items; never held, hidden, `private_source` or unverified items. Only the display name or the parsed site, date and title, never the hash or the files. User interest first, then a capped backfill. Nothing while "Show adult content" is off.
+      - Q3: the child-safety core judges enrichment text, stricter only. It can add a hold through the core's pattern rules (with their age-signal thresholds for Adult), never remove one, and never counts as a counter-signal. Descriptions aren't fetched or stored.
+      - Q4: performer names are stored and shown on the item they belong to (the drawer only). No `performer:` search field or facet, no per-performer pages or cross-item lists in v0.6, and no other personal fields.
+      - Q5: no age data from enrichment in v0.6. Birth dates are neither requested nor stored.
+    - **SRC-12's grey case: skip** (queue item 11): "skip public trackers whose published rules forbid scraping." Lodestar ships and suggests no such tracker, and the settings text and the user guide tell the user not to add a public tracker whose published rules forbid scraping. The plugin can't detect those rules (`docs/decisions/2026-11-04-SRC-12.md`), so it relies on the user's list.
+    - **No veto** (queue item 12) of SB-6's `size_bucket`, SRC-11's automatic `.torrent` export, or dropping SRC-10b.
+    - **Signing keys** (queue item 4): the owner reports the release and freshness environments and keys as created. The freshness key (generation 0, `FCA9AFC5C8D864FE`) was already embedded by #211, merged 2026-10-30. The nightly key is skipped for v0.5.1, so that item stays open and optional.
+    - **Q1 consent texts: not yet approved** (queue item 3). The draft is in `docs/decisions/2026-11-02-SRC-4.md`, "Draft consent texts". `owner-q1` stays unmet.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

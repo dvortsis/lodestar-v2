@@ -40,7 +40,7 @@ Then list open pull requests: the GitHub UI, the GitHub MCP `list_pull_requests`
 1. Read the ladder and track tables in [build-plan §0.2](build-plan.md#02-order-of-work-and-tracks) and the list in [§0.9 Next actions](build-plan.md#09-next-actions).
 2. Check the slice in `runner/slices.yaml`. It's **ready** when every id in `deps` is merged and every `ext:<name>` condition in the `external` section holds. Most `ext:` conditions are owner actions (§0.3 of the plan).
 3. Check that nobody else has it: no open PR on its branch, no running session for it in `state.json`, and no running slice whose `owns` overlaps its paths.
-4. **Check the slot count.** In this phase at most four slices run at once, in total (owner §2.25 as the runner applies it; build-plan §0.2). Count the running sessions and open slice PRs first. When several slices are ready, **the ladder in §0.2 decides**, not graph readiness: a low-ranked slice that happens to be ready waits for a higher-ranked one.
+4. **Check the slot count.** In this phase at most twelve slices run at once, in total, and filling them all isn't required (owner §2.36; build-plan §0.2, `limits.phase_total`). Count the running sessions and open slice PRs first. When several slices are ready, **the ladder in §0.2 decides**, not graph readiness: a low-ranked slice that happens to be ready waits for a higher-ranked one.
 5. If it's an `epic`, it needs expanding into slices first (`runner/README.md` step 8): read the architecture sections and the code as it stands, write the slices into `slices.yaml` in a docs PR, then start them.
 
 ## 4. Path A: a Claude runner
