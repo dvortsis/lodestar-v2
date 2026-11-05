@@ -7,8 +7,15 @@ import { expect, test } from './support/test';
 
 const TOKEN = 'AB12-CD34-EF56-7890';
 const envelope = (code: string) => ({ error: { code, message: `server text for ${code}` } });
-const signedOut = { logged_in: false, setup_required: false };
-const fresh = { logged_in: false, setup_required: true };
+const signedOut = { logged_in: false, notice_required: false, setup_required: false };
+const fresh = { logged_in: false, notice_required: false, setup_required: true };
+const NOTICE_VERSION = 3;
+
+/** Setup's first step, the Legal Notice: tick the box, then on to the token. */
+async function readNotice(page: import('@playwright/test').Page) {
+	await page.getByLabel('I have read the Legal Notice').check();
+	await page.getByRole('button', { name: 'Continue' }).click();
+}
 
 /** The path and query the page ended on, without the harness's density parameter. */
 function landed(url: string) {
@@ -32,6 +39,14 @@ for (const [themeId, colorMode] of [
 			mock.on('getAuthStatus', fresh);
 			mock.on('setup', { status: 401, body: envelope('bad_token') });
 			await go('/setup');
+			// The Legal Notice is the first step; Continue refuses until its box is ticked.
+			await expect(page.getByRole('region', { name: 'Legal Notice' })).toBeVisible();
+			await expectNoA11yViolations(page);
+			await page.getByRole('button', { name: 'Continue' }).click();
+			await expect(page.getByText(/Confirm that you have read the Legal Notice/)).toBeVisible();
+			await expect(page.getByLabel('Setup token')).toHaveCount(0);
+			await expectNoA11yViolations(page);
+			await readNotice(page);
 			await page.getByText('Where to find the log').click();
 			await page.getByLabel('Setup token').fill('nonsense');
 			await page.getByRole('button', { name: 'Continue' }).click();
@@ -59,17 +74,18 @@ for (const [themeId, colorMode] of [
 	});
 }
 
-test('first-run setup: token from a pasted log line, password, then /welcome', async ({
+test('first-run setup: the Legal Notice, a token from a pasted log line, password, then /welcome', async ({
 	page,
 	go,
 	mock
 }) => {
 	mock.on('getAuthStatus', fresh);
 	mock.on('setup', () => {
-		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+		mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 		return { ok: true };
 	});
 	await go('/setup');
+	await readNotice(page);
 	await page
 		.getByLabel('Setup token')
 		.fill(
@@ -83,7 +99,11 @@ test('first-run setup: token from a pasted log line, password, then /welcome', a
 	await expect(page).toHaveURL(/\/welcome(\?|$)/);
 	await expect(page.getByRole('heading', { level: 1, name: 'Finish setting up' })).toBeVisible();
 	const [call] = mock.calls('setup');
-	expect(call!.postDataJSON()).toEqual({ token: TOKEN, password: 'correct horse battery' });
+	expect(call!.postDataJSON()).toEqual({
+		token: TOKEN,
+		password: 'correct horse battery',
+		notice_version: NOTICE_VERSION
+	});
 	expect(call!.headers()['content-type']).toBe('application/json');
 	// Nothing sensitive was left in the URL or in browser storage.
 	expect(page.url()).not.toContain(TOKEN);
@@ -92,7 +112,7 @@ test('first-run setup: token from a pasted log line, password, then /welcome', a
 	expect(stored).not.toContain('correct horse');
 });
 
-test('a wrong setup token returns to step 1 with a clear error, never echoing the token', async ({
+test('a wrong setup token returns to the token step with a clear error, never echoing the token', async ({
 	page,
 	go,
 	mock
@@ -100,6 +120,7 @@ test('a wrong setup token returns to step 1 with a clear error, never echoing th
 	mock.on('getAuthStatus', fresh);
 	mock.on('setup', { status: 401, body: envelope('bad_token') });
 	await go('/setup');
+	await readNotice(page);
 	await page.getByLabel('Setup token').fill(TOKEN);
 	await page.getByRole('button', { name: 'Continue' }).click();
 	await page.getByLabel('New admin password').fill('correct horse battery');
@@ -167,7 +188,7 @@ for (const evil of [
 }
 
 test('a signed-in visitor of /login goes straight to next', async ({ page, go, mock }) => {
-	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+	mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 	await go(`/login?next=${encodeURIComponent('/settings/general')}`);
 	await expect(page).toHaveURL(/\/settings\/general/);
 });
@@ -177,7 +198,7 @@ test('a signed-in visitor with a dot-segment next lands home, not stuck', async 
 	go,
 	mock
 }) => {
-	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+	mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 	await go(`/login?next=${encodeURIComponent('/.//evil.example/')}`);
 	await expect(page).toHaveURL(/\/search/);
 	expect(new URL(page.url()).hostname).toBe('localhost');
@@ -212,7 +233,7 @@ test('a session that expires mid-use goes to /login?next=… and back', async ({
 	let session = false;
 	mock.on('getAuthStatus', () => ({
 		status: 200,
-		body: { logged_in: session, setup_required: false }
+		body: { logged_in: session, notice_required: false, setup_required: false }
 	}));
 	mock.on('getFilters', () =>
 		session
@@ -244,4 +265,32 @@ test('setup_required on a 401 goes to /setup instead', async ({ page, mock }) =>
 	await page.goto('/dev/auth');
 	await expect(page).toHaveURL(/\/setup$/);
 	await expect(page.getByRole('heading', { name: 'Set up Lodestar' })).toBeVisible();
+});
+
+test('a session with the Legal Notice pending sees it at /login?next=…, accepts, and goes back', async ({
+	page,
+	mock
+}) => {
+	let accepted = false;
+	mock.on('getAuthStatus', () => ({
+		status: 200,
+		body: { logged_in: true, notice_required: !accepted, setup_required: false }
+	}));
+	mock.on('getFilters', () =>
+		accepted ? { status: 200, body: {} } : { status: 409, body: envelope('notice_required') }
+	);
+	mock.on('acceptLegalNotice', () => {
+		accepted = true;
+		return { status: 200, body: { ok: true } };
+	});
+	await page.goto('/dev/auth?q=ubuntu');
+	await expect(page).toHaveURL(/\/login\?next=/);
+	await expect(page.getByRole('heading', { name: 'Legal Notice', level: 1 })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Legal Notice' })).toBeVisible();
+	await expect(page.getByLabel('Password')).toHaveCount(0);
+	await expectNoA11yViolations(page);
+	await page.getByRole('button', { name: 'I have read it, continue' }).click();
+	await expect(page).toHaveURL(/\/dev\/auth\?q=ubuntu$/);
+	await expect(page.getByText('Loaded with a session')).toBeVisible();
+	expect(mock.calls('acceptLegalNotice')[0]!.postDataJSON()).toEqual({ version: NOTICE_VERSION });
 });

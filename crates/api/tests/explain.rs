@@ -175,7 +175,7 @@ async fn session(f: &Fixture) -> String {
     let req = Request::post("/api/v1/setup")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
-            json!({ "token": token, "password": PASSWORD }).to_string(),
+            json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }).to_string(),
         ))
         .unwrap();
     let (status, cookie, _) = call(&f.app, req).await;

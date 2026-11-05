@@ -235,7 +235,7 @@ async fn session(f: &Fixture) -> String {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": PASSWORD }),
+            json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;
@@ -681,7 +681,7 @@ async fn search_disabled() {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": PASSWORD }),
+            json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;

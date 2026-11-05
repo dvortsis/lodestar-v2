@@ -160,7 +160,7 @@ async fn an_always_adult_sources_clean_find_is_hidden_until_adult_is_shown() {
     let setup = Request::post("/api/v1/setup")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
-            json!({ "token": token, "password": PASSWORD }).to_string(),
+            json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }).to_string(),
         ))
         .unwrap();
     let (status, cookie, _) = call(&app, setup).await;

@@ -35,7 +35,22 @@ fn store(applied: &str) -> Store {
 }
 
 fn builtin_record() -> String {
-    upgrade::current_record(&Manifest::builtin()).encode()
+    upgrade::current_record(&at_v1()).encode()
+}
+
+/// The built-in manifest with MW-2 at version 1 only, the base these
+/// tests start from (the build ships MW-2@2 since RP-1b): the version 1
+/// this build keeps.
+fn at_v1() -> Arc<Manifest> {
+    let b = Manifest::builtin();
+    let mut entries: Vec<RuleEntry> = PackRule::ALL
+        .into_iter()
+        .filter(|r| *r != PackRule::Mw2)
+        .map(|r| b.entry(r).clone())
+        .collect();
+    let v1 = b.entry(PackRule::Mw2).retained(1).expect("kept").clone();
+    entries.push(RuleEntry::new(PackRule::Mw2, true, vec![v1]));
+    Arc::new(Manifest::new(entries).unwrap())
 }
 
 fn engine(manifest: &Arc<Manifest>, set: &RuleSet) -> (Engine, Vec<String>) {
@@ -118,7 +133,7 @@ fn real_mw2(c: &PackCtx<'_>) -> bool {
 /// MW-2 at version 2 matching the same with `action`, version 1 (hide)
 /// kept.
 fn mw2_v2(direction: Direction, action: Action) -> Arc<Manifest> {
-    let b = Manifest::builtin();
+    let b = at_v1();
     let mut entries: Vec<RuleEntry> = PackRule::ALL
         .into_iter()
         .filter(|r| *r != PackRule::Mw2)
@@ -137,7 +152,7 @@ fn mw2_v2(direction: Direction, action: Action) -> Arc<Manifest> {
 
 #[test]
 fn an_override_changes_the_action_never_what_the_rule_matches() {
-    let m = Manifest::builtin();
+    let m = at_v1();
     let mut s = store(&builtin_record());
     assert_eq!(decide(&load(&m, &s), A), Some((MW2, Action::Hide)));
     for action in [Action::Flag, Action::Demote, Action::Drop] {
@@ -163,7 +178,7 @@ fn an_override_changes_the_action_never_what_the_rule_matches() {
 
 #[test]
 fn an_override_of_a_rule_switched_off_does_nothing() {
-    let m = Manifest::builtin();
+    let m = at_v1();
     let mut s = store(&builtin_record());
     s.set_pack_switch("MW-2", false).unwrap();
     s.set_pack_override("MW-2", Some(&row(1, Action::Drop, None)))
@@ -173,7 +188,7 @@ fn an_override_of_a_rule_switched_off_does_nothing() {
 
 #[test]
 fn the_layers_above_the_packs_still_decide_first() {
-    let m = Manifest::builtin();
+    let m = at_v1();
     let mut s = store(&builtin_record());
     s.set_pack_override("MW-2", Some(&row(1, Action::Drop, None)))
         .unwrap();
@@ -233,7 +248,7 @@ fn the_layers_above_the_packs_still_decide_first() {
 
 #[test]
 fn within_the_pack_layer_the_strongest_action_still_wins() {
-    let m = Manifest::builtin();
+    let m = at_v1();
     let s = store(&builtin_record());
     let base = s.rule_set().unwrap();
     let list = ListLayer {
@@ -350,7 +365,7 @@ fn a_version_state_in_doubt_counts_as_changed_and_never_drops_unaccepted() {
 
 #[test]
 fn unreadable_rows_fail_closed_and_are_listed() {
-    let m = Manifest::builtin();
+    let m = at_v1();
     let s = store(&builtin_record());
     let base = s.rule_set().unwrap();
     let with = |value: Result<String, Vec<u8>>| RuleSet {
@@ -436,7 +451,7 @@ fn unreadable_rows_fail_closed_and_are_listed() {
 
 #[test]
 fn unknown_rules_are_kept_and_ignored() {
-    let m = Manifest::builtin();
+    let m = at_v1();
     let mut s = store(&builtin_record());
     s.set_pack_override("XX-9", Some("1\n1\ndrop")).unwrap();
     let e = load(&m, &s);

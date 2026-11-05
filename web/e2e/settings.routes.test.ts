@@ -104,7 +104,7 @@ function settingsValues(section: string, revision = 3) {
 }
 
 test.beforeEach(({ mock }) => {
-	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+	mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 	mock.on('listSettings', index);
 	mock.on('getSettings', (request) => ({
 		status: 200,

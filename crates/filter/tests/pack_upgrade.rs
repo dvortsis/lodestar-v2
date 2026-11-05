@@ -20,6 +20,26 @@ use lodestar_filter::{
 };
 use lodestar_store::{RuleSet, Store, StoreConfig};
 
+/// The built-in manifest with every rule at its first version: MW-2 and
+/// FK-2 cut back to the version 1 this build keeps (RP-1b ships their
+/// version 2). These tests are about how versions are recorded, seeded
+/// and accepted, which they pin from a build with every rule at 1; the
+/// real build's MW-2@2 and FK-2@2 upgrade path is pinned in
+/// `packs::upgrade`'s `unseeded_and_seeded_resolve_to_today`.
+fn baseline() -> Arc<Manifest> {
+    let b = Manifest::builtin();
+    let entries = PackRule::ALL
+        .into_iter()
+        .map(|r| {
+            let e = b.entry(r);
+            let first = e.versions()[0].clone();
+            assert!(first.code.is_some(), "{} keeps its version 1", r.id());
+            RuleEntry::new(r, e.baseline, vec![first])
+        })
+        .collect();
+    Arc::new(Manifest::new(entries).unwrap())
+}
+
 /// A store as an earlier build left it: created before RP-DEF, so
 /// without the fresh marker its creating migration now writes.
 fn store() -> Store {
@@ -111,7 +131,7 @@ fn v(version: u32, direction: Direction, action: Action, code: Option<Code>) -> 
 
 /// The built-in manifest with some entries replaced.
 fn manifest(replace: Vec<RuleEntry>) -> Arc<Manifest> {
-    let b = Manifest::builtin();
+    let b = baseline();
     let mut entries: Vec<RuleEntry> = PackRule::ALL
         .into_iter()
         .filter(|r| !replace.iter().any(|e| e.rule == *r))
@@ -179,7 +199,7 @@ fn corrupt(store: &Store, key: &str) {
 
 #[test]
 fn seeding_keeps_every_rule_at_baseline_and_copies_sc1_to_sc2() {
-    let m = Manifest::builtin();
+    let m = baseline();
     let mut s = store();
     // Before RP-0: scams on, SC-1 switched off, an exception to SC-1.
     s.set_pack_switch("scams", true).unwrap();
@@ -240,7 +260,7 @@ fn seeding_keeps_every_rule_at_baseline_and_copies_sc1_to_sc2() {
 /// keeps every pack off: RP-DEF writes the off rows explicitly.
 #[test]
 fn an_upgraded_store_seeds_quietly_and_keeps_packs_off() {
-    let m = Manifest::builtin();
+    let m = baseline();
     let mut s = store();
     let seeded = upgrade::ensure_seeded(&mut s, &m, 0).unwrap().unwrap();
     assert!(!seeded.rule_set_nonempty && !seeded.switch_copied);
@@ -267,7 +287,7 @@ fn an_upgraded_store_seeds_quietly_and_keeps_packs_off() {
 /// rule switches the user set.
 #[test]
 fn an_upgraded_store_keeps_every_packs_state() {
-    let m = Manifest::builtin();
+    let m = baseline();
     let mut s = store();
     s.set_pack_switch("malware", true).unwrap();
     s.set_pack_switch("spam", false).unwrap();
@@ -352,7 +372,7 @@ fn a_fresh_marker_over_existing_rows_keeps_them() {
 /// returns to that snapshot's off state, and nothing seeds again.
 #[test]
 fn undo_to_a_pre_defaults_rule_set_is_off() {
-    let m = Manifest::builtin();
+    let m = baseline();
     let mut s = fresh_store();
     let before = s.rule_set().unwrap();
     assert!(before.pack_switches.is_empty());
@@ -367,7 +387,7 @@ fn undo_to_a_pre_defaults_rule_set_is_off() {
 
 #[test]
 fn state_without_the_marker_or_unreadable_never_seeds() {
-    let m = Manifest::builtin();
+    let m = baseline();
     // Applied rows without the marker.
     let mut s = store();
     s.set_settings_text(&[(APPLIED_KEYS[0], "MW-1@1")]).unwrap();
@@ -400,7 +420,7 @@ fn state_without_the_marker_or_unreadable_never_seeds() {
     let mut s = store();
     corrupt(&s, SEEDED_KEY);
     assert!(
-        load(&Manifest::builtin(), &s)
+        load(&baseline(), &s)
             .pack_versions
             .conditions
             .contains(&Condition::MarkerUnreadable)
@@ -441,7 +461,7 @@ fn one_unreadable_row_falls_back_to_the_other() {
 /// A rule added after RP-0 (LU-4 stands in for SP-3, SP-4), and a
 /// widening of MW-2 at version 2.
 fn with_new_rule() -> Arc<Manifest> {
-    let b = Manifest::builtin();
+    let b = baseline();
     let mut lu4 = b.entry(PackRule::Lu4).clone();
     lu4.baseline = false;
     let mw2 = RuleEntry::new(
@@ -543,7 +563,7 @@ fn both_rows_lost_runs_the_interim_mode_and_keeps_what_was_accepted() {
 
 #[test]
 fn the_marker_without_rows_is_lost_state() {
-    let m = Manifest::builtin();
+    let m = baseline();
     let mut s = store();
     s.set_settings_text(&[(SEEDED_KEY, "1")]).unwrap();
     assert!(upgrade::ensure_seeded(&mut s, &m, 0).unwrap().is_none());
@@ -938,7 +958,7 @@ fn a_damaged_readable_record_fails_closed() {
 
 #[test]
 fn a_downgrade_applies_the_builds_own_drop() {
-    let m = Manifest::builtin();
+    let m = baseline();
     let mut s = store();
     seeded_with_malware(&mut s, &m);
     s.set_pack_switch("fakes", true).unwrap();
@@ -975,7 +995,7 @@ fn a_downgrade_applies_the_builds_own_drop() {
 #[test]
 fn a_downgrade_applies_the_builds_version_and_the_upgrade_back_keeps_the_accepted_one() {
     let newer = mw2_bump(Direction::Widens, Action::Hide, widened);
-    let older = Manifest::builtin();
+    let older = baseline();
     let mut s = store();
     seeded_with_malware(&mut s, &newer);
     upgrade::accept(&mut s, &newer, &[PackRule::Mw2], 0).unwrap();
@@ -1012,7 +1032,7 @@ fn a_downgrade_applies_the_builds_version_and_the_upgrade_back_keeps_the_accepte
 
 #[test]
 fn unknown_switches_and_versions_are_kept_and_ignored() {
-    let m = Manifest::builtin();
+    let m = baseline();
     let mut s = store();
     seeded_with_malware(&mut s, &m);
     let seed = upgrade::seed_record(&m).encode();
@@ -1035,4 +1055,80 @@ fn unknown_switches_and_versions_are_kept_and_ignored() {
     let set = s.rule_set().unwrap();
     assert!(set.pack_switches.contains(&("ZZ-9".into(), true)));
     assert!(set.pack_switches.contains(&("newpack".into(), true)));
+}
+
+/// A music-production pack MW-2@1 hides and MW-2@2 passes (RP-1b).
+const DRUMS: (&str, &[(&str, u64)]) = (
+    "Example Drum Samples Vol 3 WAV",
+    &[
+        ("Kicks/Kick 01.wav", 30 << 20),
+        ("Snares/Snare 01.wav", 30 << 20),
+        ("Installer.exe", 2 << 20),
+    ],
+);
+/// A short-episode pack FK-2@1 flags and FK-2@2 passes (RP-1b).
+const SHORTS: (&str, &[(&str, u64)]) = (
+    "Example Shorts S01 1080p WEB",
+    &[
+        ("Example Shorts S01E01 1080p WEB.mkv", 35 << 20),
+        ("Example Shorts S01E02 1080p WEB.mkv", 35 << 20),
+        ("Example Shorts S01E03 1080p WEB.mkv", 35 << 20),
+        ("Example Shorts S01E04 1080p WEB.mkv", 35 << 20),
+    ],
+);
+
+/// RP-1b on the real build: an install that applied every rule at
+/// version 1 keeps filtering with MW-2@1 and FK-2@1, with version 2 in
+/// shadow as a narrowing whose acceptance is weakening (the password),
+/// until it's accepted; a fresh store applies version 2 with nothing
+/// pending.
+#[test]
+fn a_version_1_install_keeps_mw2_and_fk2_at_1_until_accepted() {
+    let m = Manifest::builtin();
+    let mut s = store();
+    s.set_pack_switch("fakes", true).unwrap();
+    seeded_with_malware(&mut s, &m);
+    let e = load(&m, &s);
+    for r in [PackRule::Mw2, PackRule::Fk2] {
+        let st = e.pack_versions.state(r);
+        assert_eq!(
+            (st.applied, st.apply.clone(), st.shadow),
+            (Some(1), vec![1], Some(2)),
+            "{}",
+            r.id()
+        );
+        assert_eq!(st.direction, Some(Direction::Narrows), "{}", r.id());
+    }
+    // Version 1 still decides, and the shadow shows only it holds them.
+    assert_eq!(decide(&e, DRUMS), Some((MW2, Action::Hide)));
+    let fk2 = RuleRef::Pack(PackRule::Fk2);
+    assert_eq!(decide(&e, SHORTS), Some((fk2, Action::Flag)));
+    for (t, rule) in [(DRUMS, PackRule::Mw2), (SHORTS, PackRule::Fk2)] {
+        let sh = shadow_of(&e, t);
+        assert_eq!(sh.len(), 1, "{}", t.0);
+        assert_eq!(sh[0].side(), Some(Side::AppliedOnly), "{}", t.0);
+        assert!(!acceptance_strengthens(&e.pack_versions, rule, &sh));
+    }
+    // Accepted (the route asks for the password first): both pass.
+    upgrade::accept(&mut s, &m, &[PackRule::Mw2, PackRule::Fk2], 0).unwrap();
+    let e = load(&m, &s);
+    for r in [PackRule::Mw2, PackRule::Fk2] {
+        let st = e.pack_versions.state(r);
+        assert_eq!(st.apply, [2], "{}", r.id());
+        assert!(!st.pending() && st.plain, "{}", r.id());
+    }
+    assert_eq!(decide(&e, DRUMS), None);
+    assert_eq!(decide(&e, SHORTS), None);
+    assert!(shadow_of(&e, DRUMS).is_empty() && shadow_of(&e, SHORTS).is_empty());
+    // A fresh store applies version 2, with nothing pending.
+    let mut fresh = fresh_store();
+    assert!(upgrade::ensure_seeded(&mut fresh, &m, 0).unwrap().is_some());
+    let e = load(&m, &fresh);
+    for r in [PackRule::Mw2, PackRule::Fk2] {
+        let st = e.pack_versions.state(r);
+        assert_eq!(st.apply, [2], "{}", r.id());
+        assert!(!st.pending(), "{}", r.id());
+    }
+    assert_eq!(decide(&e, DRUMS), None);
+    assert_eq!(decide(&e, SHORTS), None);
 }

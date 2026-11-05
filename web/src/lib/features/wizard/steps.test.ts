@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STEPS, advance, back, readProgress, stepIndex, writeProgress } from './steps';
+import { SETUP_STEPS, STEPS, advance, back, readProgress, stepIndex, writeProgress } from './steps';
 
 beforeEach(() => sessionStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe('wizard progress', () => {
+	it('runs the Legal Notice first, in /setup, before the token and the password', () => {
+		expect(SETUP_STEPS).toEqual(['legal', 'token', 'password']);
+		expect(STEPS.some((s) => (SETUP_STEPS as readonly string[]).includes(s.id))).toBe(false);
+	});
+
 	it('starts at the network check', () => {
 		expect(readProgress()).toEqual({ step: 'network', skipped: [], done: [], restart: false });
 	});

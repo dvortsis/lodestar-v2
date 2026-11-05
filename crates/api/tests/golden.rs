@@ -414,7 +414,7 @@ async fn session(f: &Fixture) -> String {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": PASSWORD }),
+            json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await
@@ -456,7 +456,7 @@ async fn auth_endpoints() {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": "nope", "password": PASSWORD }),
+            json!({ "token": "nope", "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;
@@ -467,7 +467,7 @@ async fn auth_endpoints() {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": "short" }),
+            json!({ "token": token, "password": "short", "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;
@@ -501,7 +501,7 @@ async fn auth_endpoints() {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": PASSWORD }),
+            json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;
@@ -511,7 +511,7 @@ async fn auth_endpoints() {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": PASSWORD }),
+            json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;

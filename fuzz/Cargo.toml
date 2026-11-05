@@ -205,3 +205,10 @@ path = "fuzz_targets/stashdb.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "torrent_cache"
+path = "fuzz_targets/torrent_cache.rs"
+test = false
+doc = false
+bench = false
