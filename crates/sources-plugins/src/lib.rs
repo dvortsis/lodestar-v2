@@ -27,6 +27,7 @@ pub mod clients;
 pub mod full_scrape;
 pub mod nyaa;
 pub mod prowlarr;
+pub mod stashdb;
 pub mod torrent_cache;
 pub mod tpdb;
 

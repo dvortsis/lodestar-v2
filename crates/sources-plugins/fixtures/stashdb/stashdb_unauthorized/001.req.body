@@ -1,0 +1,1 @@
+{"query":"query SearchScene($term: String!, $limit: Int) { searchScene(term: $term, limit: $limit) { id title release_date studio { id name } performers { performer { name } } } }","variables":{"term":"Example.Studio.24.03.15.Synthetic.Scene.Alpha.1080p","limit":1}}
