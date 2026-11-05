@@ -4924,7 +4924,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T00:45Z",
+    "updated": "2026-11-05T01:00Z",
     "items": [
       {
         "slot": 1,
@@ -4941,14 +4941,6 @@
         "agent": "claude",
         "doing": "PR #447: owner decisions §2.38–§2.39 (Legal Notice, rule packs on by default), the legal docs and the specs for LEGAL-1, RP-DEF and RP-UC. Reviewed; waiting for green CI.",
         "since": "2026-11-05T00:37Z"
-      },
-      {
-        "slot": 3,
-        "slice": "ENR-0",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #444 reviewed (merge); two small polish fixes, then green CI.",
-        "since": "2026-11-04T21:59Z"
       },
       {
         "slot": 5,
