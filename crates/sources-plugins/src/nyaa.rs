@@ -26,13 +26,13 @@
 //! **Sukebei** ([`Sukebei`], SRC-10e) is the same plugin on Nyaa's adult
 //! sister site, as its own plugin id with its own manifest: off by
 //! default, External consent, the same 5-minute poll. Every item is forced
-//! into the Adult category at mapping time ([`to_found_adult`]): the feed's
-//! own category is kept only as the `nyaa-category` claim, and the content
-//! type claim is always `adult`. **Today that is a claim only:** nothing in
-//! the pipeline reads `content-type` yet, so the item is not yet stored as
-//! Adult (see `docs/decisions/2026-11-05-SRC-10e.md`). The search layer
-//! hides Adult unless "Show adult content" is on; the plugin does not
-//! decide visibility. The filter
+//! into the Adult category: its manifest says `always_adult`, so the
+//! pipeline classifies each of its items Adult, as an Is adult correction
+//! does, whatever its name (X-source-adult). At mapping time
+//! ([`to_found_adult`]) the feed's own category is kept only as the
+//! `sukebei-category` claim, and the content type claim is always `adult`,
+//! for information. The search layer hides Adult unless "Show adult
+//! content" is on; the plugin does not decide visibility. The filter
 //! pipeline applies to its finds exactly as to any other (child-safety core
 //! and floor before storage).
 
@@ -92,6 +92,7 @@ const MANIFEST: Manifest = Manifest {
     consent: Consent::External,
     default_priority: Priority::Normal,
     enabled_by_default: false,
+    always_adult: false,
 };
 
 const SUKEBEI_MANIFEST: Manifest = Manifest {
@@ -101,6 +102,10 @@ const SUKEBEI_MANIFEST: Manifest = Manifest {
         protocol: "https",
         host: SUKEBEI_HOST,
     }],
+    // Owner Q7: every Sukebei find is adult, whatever its name says. The
+    // pipeline reads this, not the `content-type` claim, so a feed can't
+    // turn it off (X-source-adult).
+    always_adult: true,
     ..MANIFEST
 };
 
@@ -331,16 +336,26 @@ pub fn to_found(item: Item, now: i64) -> Option<Found> {
 ///
 /// It is [`to_found`] with the content-type claim replaced: any
 /// `content-type` the feed's category would give is dropped and
-/// `content-type:adult` is the only one. The feed's own category stays as
-/// the `nyaa-category` claim. Everything else (the key, the bounds, Low
-/// confidence, no uploader, no `.torrent` link) is unchanged. The find
-/// carries no flag that skips the filter: the child-safety core and floor
-/// judge it before storage like any other.
+/// `content-type:adult` is the only one. The feed's own category is kept
+/// under its own scheme, `sukebei-category`: Sukebei's ids mean other
+/// things than Nyaa's, so they never share `nyaa-category`. Everything
+/// else (the key, the bounds, Low confidence, no uploader, no `.torrent`
+/// link) is unchanged. The find carries no flag that skips the filter: the
+/// child-safety core and floor judge it before storage like any other.
+///
+/// The claim is informational: what makes a Sukebei item adult in the
+/// pipeline is the manifest's `always_adult`, which a feed can't change
+/// (X-source-adult).
 pub fn to_found_adult(item: Item, now: i64) -> Option<Found> {
     let mut found = to_found(item, now)?;
     // `with_claims` drops empty claims, so a bare find has none yet.
     let claims = found.claims.get_or_insert_with(Box::default);
     claims.ids.retain(|i| i.scheme != "content-type");
+    for i in &mut claims.ids {
+        if i.scheme == "nyaa-category" {
+            i.scheme = SUKEBEI_CATEGORY.to_owned();
+        }
+    }
     claims.ids.push(ExternalId {
         scheme: "content-type".to_owned(),
         value: ADULT.to_owned(),
@@ -350,3 +365,6 @@ pub fn to_found_adult(item: Item, now: i64) -> Option<Found> {
 
 /// `ContentType::Adult.as_str()` (`lodestar-classify`).
 pub const ADULT: &str = "adult";
+
+/// The scheme of a Sukebei find's category claim (`sukebei-category:1_2`).
+pub const SUKEBEI_CATEGORY: &str = "sukebei-category";

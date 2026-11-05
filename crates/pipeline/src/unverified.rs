@@ -43,6 +43,7 @@ use lodestar_store::unverified::{
 };
 use lodestar_store::{Filtered, Held, Prepared, SearchableCodes, SourceId, Store};
 
+use crate::source_adult::AdultSources;
 use crate::writer::Backoff;
 
 /// The codes a promotion is counted under as newly searchable: Insights'
@@ -330,11 +331,17 @@ pub fn claimed_files(c: &Claims) -> Vec<FileInfo> {
 /// Weaker decisions (flag, hide, demote) and shadow-mode rules don't stop
 /// storage: an unverified item isn't searchable, and its verified metadata
 /// is judged again when it's promoted.
+///
+/// `adult`: an always-adult source made these claims, or found the key
+/// ([`crate::source_adult`]). Each text is then judged as adult as well,
+/// as an Is adult correction makes it, and the stricter verdict stands:
+/// the Adult-only core (CS-5a and the rest) checks it whatever its name.
 pub fn judge(
     engine: &Engine,
     key: [u8; 20],
     c: &Claims,
     sealer: Option<&Sealer>,
+    adult: bool,
     now: i64,
 ) -> Option<Hold> {
     let hashes = vec![key];
@@ -354,7 +361,7 @@ pub fn judge(
             continue;
         }
         let files: &[FileInfo] = if with_files { &files } else { &[] };
-        let Some(h) = judge_text(engine, &hashes, text, files, size, sealer, now) else {
+        let Some(h) = judge_text(engine, &hashes, text, files, size, sealer, adult, now) else {
             continue;
         };
         if h.core {
@@ -366,6 +373,7 @@ pub fn judge(
 }
 
 /// [`judge`] for one text, as a torrent's name, with `files`.
+#[allow(clippy::too_many_arguments)]
 fn judge_text(
     engine: &Engine,
     hashes: &[[u8; 20]],
@@ -373,6 +381,7 @@ fn judge_text(
     files: &[FileInfo],
     size: u64,
     sealer: Option<&Sealer>,
+    adult: bool,
     now: i64,
 ) -> Option<Hold> {
     let class = classify_corrected(name, files, Correction::default());
@@ -390,7 +399,22 @@ fn judge_text(
         files,
         content_type: class.content_type,
     };
-    let (verdict, fix) = judge_with_rules(engine, &item, &class, &facts, now);
+    let (verdict, fix) = if adult {
+        // A hash on the floor's or a dropping list first, as
+        // `judge_with_rules` does; then both readings.
+        match engine.blocked_hash(hashes) {
+            Some(d) => (
+                lodestar_filter::Verdict {
+                    decision: Some(d),
+                    shadow: Vec::new(),
+                },
+                None,
+            ),
+            None => crate::source_adult::judge(engine, &item, &facts, now),
+        }
+    } else {
+        judge_with_rules(engine, &item, &class, &facts, now)
+    };
     let d = verdict.decision?;
     let core = matches!(d.rule, RuleRef::Core(_));
     let action = match d.action {
@@ -414,18 +438,21 @@ fn judge_text(
         held,
         sealed,
         evidence: d.evidence_codes(),
-        // Held by the Adult-only core only because your rule made it
-        // adult: a tombstone when the quarantine ends (§20.9).
+        // Held by the Adult-only core only because your rule (or its
+        // source) made it adult: a tombstone when the quarantine ends
+        // (§20.9).
         adult_hold: fix == Some(true) && adult_hold(&d),
         core,
     })
 }
 
 /// What the writer needs to judge and hold.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Ctx<'a> {
     pub sealer: Option<&'a Sealer>,
     pub quarantine_secs: i64,
+    /// The sources whose every find is adult ([`crate::source_adult`]).
+    pub adult: AdultSources,
 }
 
 impl std::fmt::Debug for Ctx<'_> {
@@ -433,6 +460,7 @@ impl std::fmt::Debug for Ctx<'_> {
         f.debug_struct("Ctx")
             .field("sealer", &self.sealer.is_some())
             .field("quarantine_secs", &self.quarantine_secs)
+            .field("adult", &self.adult)
             .finish()
     }
 }
@@ -447,6 +475,9 @@ pub struct Ingested {
     /// The writer accounts each as a rediscovery, as a bare sighting of a
     /// stored key is.
     pub touched: Vec<(i64, i64, SourceId, u8)>,
+    /// Stored torrents an always-adult source has just claimed: the writer
+    /// classifies them as adult (`enrich::adult_by_source`).
+    pub adult: Vec<i64>,
 }
 
 /// Judges a batch of discoveries with claims and stores what the rules
@@ -473,7 +504,8 @@ pub fn ingest(
             UnverifiedStats::add(&stats.invalid, 1);
             continue;
         }
-        let Some(mut h) = judge(engine, d.found.key.0, &c, ctx.sealer, now) else {
+        let adult = ctx.adult.has(d.source);
+        let Some(mut h) = judge(engine, d.found.key.0, &c, ctx.sealer, adult, now) else {
             keep.push((d, c));
             continue;
         };
@@ -546,6 +578,9 @@ pub fn ingest(
                 Put::Existing(_) => &stats.existing,
                 Put::Torrent(id) => {
                     out.touched.push((id, d.at, d.source, d.found.strategy));
+                    if ctx.adult.has(d.source) {
+                        out.adult.push(id);
+                    }
                     &stats.on_torrent
                 }
                 Put::Held | Put::Bare => &stats.refused,
@@ -692,7 +727,7 @@ pub fn refile_step(
             };
             let judged: Vec<(i64, Option<Hold>)> = page
                 .iter()
-                .filter_map(|i| judge_item(&engine, i, ctx.sealer, now))
+                .filter_map(|i| judge_item(&engine, i, ctx, now))
                 .collect();
             let refiled: Vec<RefiledUnverified<'_>> = judged
                 .iter()
@@ -744,7 +779,10 @@ pub fn refile_step(
                 let Some(hashes) = store.torrent_swarm_hashes(c.torrent_id)? else {
                     continue;
                 };
-                if let Some(mut h) = judge_hashes(&engine, &hashes, claims, ctx.sealer, now) {
+                // Claims an always-adult source made: judged as adult too.
+                let adult = ctx.adult.has(c.source);
+                if let Some(mut h) = judge_hashes(&engine, &hashes, claims, ctx.sealer, adult, now)
+                {
                     // Only the floor and the core hold a stored torrent on
                     // a claim; any other rule only takes the claims away.
                     let hold = h.core.then(|| {
@@ -792,7 +830,7 @@ pub fn refile_step(
 fn judge_item(
     engine: &Engine,
     i: &UnverifiedItem,
-    sealer: Option<&Sealer>,
+    ctx: Ctx<'_>,
     now: i64,
 ) -> Option<(i64, Option<Hold>)> {
     let Some(claims) = &i.claims else {
@@ -807,8 +845,10 @@ fn judge_item(
         return Some((i.id, None));
     };
     // Only the floor and the core hold; any other rule removes the item
-    // and holds nothing (runner, #383).
-    judge(engine, key, claims, sealer, now).map(|h| (i.id, h.core.then_some(h)))
+    // and holds nothing (runner, #383). An item any always-adult source
+    // found is judged as adult too, whichever source's claims it holds.
+    let adult = ctx.adult.any(i.sources) || ctx.adult.has(i.source);
+    judge(engine, key, claims, ctx.sealer, adult, now).map(|h| (i.id, h.core.then_some(h)))
 }
 
 /// [`judge`] against every swarm hash of a stored torrent.
@@ -817,15 +857,16 @@ fn judge_hashes(
     hashes: &[[u8; 20]],
     c: &Claims,
     sealer: Option<&Sealer>,
+    adult: bool,
     now: i64,
 ) -> Option<Hold> {
     let first = *hashes.first()?;
-    let mut h = judge(engine, first, c, sealer, now);
+    let mut h = judge(engine, first, c, sealer, adult, now);
     for &other in &hashes[1..] {
         if h.is_some() {
             break;
         }
-        h = judge(engine, other, c, sealer, now);
+        h = judge(engine, other, c, sealer, adult, now);
     }
     h
 }

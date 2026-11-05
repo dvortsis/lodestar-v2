@@ -216,6 +216,7 @@ mod tests {
             consent: lodestar_sources::Consent::None,
             default_priority: lodestar_sources::Priority::Normal,
             enabled_by_default: false,
+            always_adult: false,
         };
         &M
     }
