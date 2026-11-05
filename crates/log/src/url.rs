@@ -1248,7 +1248,7 @@ mod wide {
             || [b"%3a%2f%2f".as_slice(), b"%3a//"]
                 .iter()
                 .any(|n| find_ci_bytes(value.as_bytes(), n).is_some())
-            || normalize_separators(value, false).contains("://")
+            || normalize_separators(value).contains("://")
             || holds_magnet(value)
     }
 
@@ -1562,7 +1562,7 @@ mod wide {
         // encoded magnet's span split a value the credential rules hid whole.
         // The second pass can only hide more, since what the first hid is
         // already gone.
-        let separated = normalize_separators(&first, true);
+        let separated = normalize_separators(&first);
         let encoded = [b"magnet%3a".as_slice(), b"magnet%253a"]
             .iter()
             .any(|m| find_ci_bytes(separated.as_bytes(), m).is_some());
@@ -2059,10 +2059,11 @@ mod wide {
     ///   after it on the same line.
     ///
     /// The URL then shows with a plain `://`, whatever it was written with.
-    /// With `keep_values`, a separator inside a credential's value (what
-    /// [`redact_secrets`] would hide) is left as it is, so the value stays
-    /// one and is hidden whole.
-    fn normalize_separators(text: &str, keep_values: bool) -> std::borrow::Cow<'_, str> {
+    /// A separator inside a credential's value may split it into a URL
+    /// (`secret=https%3A%2F%2Fh/<secret>`): stage 1 never rewrites one, so it
+    /// still hides that value whole, and [`only_more`](super::only_more)
+    /// keeps what it hid (X-log-url-redact-3).
+    fn normalize_separators(text: &str) -> std::borrow::Cow<'_, str> {
         let b = text.as_bytes();
         if !b.contains(&b'/')
             && find_ci_bytes(b, b"%2f").is_none()
@@ -2070,14 +2071,6 @@ mod wide {
         {
             return text.into();
         }
-        // A credential's value is never split (security review): one holding
-        // an encoded `://` (`secret=https%3A%2F%2Fh/<secret>`, `token%3A%2F%2F
-        // <secret>`) stays one value, which the credential rules hide whole.
-        let cuts = match keep_values {
-            true => secret_cuts(text),
-            false => Vec::new(),
-        };
-        let mut cut = 0;
         let mut out = String::new();
         let mut copied = 0;
         let mut at = Next::new("@", false);
@@ -2087,9 +2080,6 @@ mod wide {
         // a URL is that URL's rules' (`https://h/{//u@<s>` keeps its path `@`).
         let mut in_url = false;
         while k < b.len() {
-            while cuts.get(cut).is_some_and(|&(_, to)| to < k) {
-                cut += 1;
-            }
             if b[k].is_ascii_whitespace() {
                 in_url = false;
             } else if b[k..].starts_with(b"://") {
@@ -2113,22 +2103,16 @@ mod wide {
                     let colon = text[k + 2..]
                         .find(|c: char| matches!(c, ':' | '/') || c.is_whitespace())
                         .is_some_and(|j| text[k + 2 + j..].starts_with(':'));
-                    // And not where a credential's value starts before that `@`
-                    // (`//x Authorization: u@<secret>`): it would become a host.
                     let at_after = word_start
                         && host_next
                         && at.from(text, k + 2).is_some_and(|a| {
                             a - k <= USERINFO_LOOKAHEAD
                                 && (colon || line.from(text, k).is_none_or(|l| l > a))
-                                && cuts.get(cut).is_none_or(|&(from, _)| from > a)
                         });
                     at_after.then_some((2, "://"))
                 }
                 _ => None,
             };
-            // Not where it touches a cut: inside one, or ending at one's start.
-            let found =
-                found.filter(|&(len, _)| cuts.get(cut).is_none_or(|&(from, _)| from > k + len));
             match found {
                 Some((len, with)) => {
                     out.push_str(&text[copied..k]);
