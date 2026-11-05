@@ -366,6 +366,17 @@ mod tests {
         );
     }
 
+    /// Setup happens in the web UI, which shows the Legal Notice first;
+    /// this page links there and treats the notice gate's 409 as a reason
+    /// to re-check, never as an unreachable server.
+    #[test]
+    fn the_status_page_leaves_setup_and_the_notice_to_the_web_ui() {
+        assert!(!STATUS_PAGE.contains("/api/v1/setup"));
+        assert!(STATUS_PAGE.contains(r#"href="/setup""#));
+        assert!(STATUS_PAGE.contains("a.notice_required"));
+        assert_eq!(STATUS_PAGE.matches("r.status === 409").count(), 2);
+    }
+
     /// The page reads errors through the API's envelope
     /// (`{ "error": { "message", "start", "end" } }`), not as a string.
     #[test]

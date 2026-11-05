@@ -53,7 +53,8 @@ td.health.bad::before { border-radius: 0; }
 code { font-family: "Atkinson Hyperlegible Mono", ui-monospace, monospace; }
 form.auth { max-width: 360px; display: grid; gap: 10px; margin-top: 16px; }
 input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--field-border); border-radius: 6px; padding: 8px 10px; }
-input:focus-visible, button:focus-visible { outline: 2px solid var(--primary-ink); outline-offset: 2px; }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--primary-ink); outline-offset: 2px; }
+a { color: var(--primary-ink); }
 button { font: inherit; border: 0; border-radius: 6px; padding: 8px 14px; background: var(--primary-ink); color: var(--primary-content); cursor: pointer; }
 button.link { background: none; color: var(--primary-ink); padding: 0; }
 .search { display: flex; gap: 8px; margin-top: 16px; }
@@ -67,13 +68,12 @@ button.link { background: none; color: var(--primary-ink); padding: 0; }
   <h1>Lodestar</h1>
   <p class="meta" id="meta">Loading…</p>
 
-  <form class="auth" id="setup" hidden>
-    <p>First run: enter the setup token printed in the server log, then choose the admin password.</p>
-    <input id="setup-token" autocomplete="off" placeholder="Setup token (XXXX-XXXX-XXXX-XXXX)" required>
-    <input id="setup-pw" type="password" autocomplete="new-password" placeholder="New password (10+ characters)" minlength="10" required>
-    <button>Create password</button>
-    <p class="err" id="setup-err"></p>
-  </form>
+  <div class="auth" id="setup" hidden>
+    <p>First run: <a href="/setup">set up Lodestar</a> with the setup token from the server log. Setup shows the Legal Notice first.</p>
+  </div>
+  <div class="auth" id="notice" hidden>
+    <p>Read and accept the Legal Notice to continue: <a href="/login">open the Legal Notice</a>.</p>
+  </div>
   <form class="auth" id="login" hidden>
     <input id="login-pw" type="password" autocomplete="current-password" placeholder="Password" required>
     <button>Log in</button>
@@ -157,7 +157,8 @@ function fill(id, rows) { $(id).replaceChildren(...rows.map(row)); }
 async function refresh() {
   try {
     const r = await fetch("/api/status");
-    if (r.status === 401) { gate(); return; }
+    // 409: signed in, but the Legal Notice isn't accepted yet.
+    if (r.status === 401 || r.status === 409) { gate(); return; }
     const s = await r.json();
     const up = Math.max(1, s.now - s.started_at);
     $("meta").textContent = "v" + s.version + " · up " + Math.floor(up / 3600) + " h " + Math.floor(up % 3600 / 60) + " min";
@@ -199,12 +200,15 @@ async function post(url, body) {
 }
 let timer = null;
 function show(id) {
-  for (const x of ["setup", "login", "app"]) $(x).hidden = x !== id;
+  for (const x of ["setup", "notice", "login", "app"]) $(x).hidden = x !== id;
 }
 async function gate() {
   clearInterval(timer);
   const a = await (await fetch("/api/v1/auth")).json();
-  if (a.logged_in) {
+  if (a.logged_in && a.notice_required) {
+    show("notice");
+    $("meta").textContent = "Accept the Legal Notice to continue.";
+  } else if (a.logged_in) {
     show("app");
     refresh();
     timer = setInterval(refresh, 5000);
@@ -213,12 +217,6 @@ async function gate() {
     $("meta").textContent = a.setup_required ? "Not set up yet." : "Log in to continue.";
   }
 }
-$("setup").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const r = await post("/api/v1/setup", { token: $("setup-token").value, password: $("setup-pw").value });
-  $("setup-err").textContent = r.ok ? "" : r.data.error?.message || "Setup failed.";
-  if (r.ok) gate();
-});
 $("login").addEventListener("submit", async (e) => {
   e.preventDefault();
   const r = await post("/api/v1/login", { password: $("login-pw").value });
@@ -233,7 +231,7 @@ $("search").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("q").value;
   const r = await fetch("/api/v1/search?q=" + encodeURIComponent(q));
-  if (r.status === 401) { gate(); return; }
+  if (r.status === 401 || r.status === 409) { gate(); return; }
   const data = await r.json();
   if (!r.ok) {
     const err = data.error || {};

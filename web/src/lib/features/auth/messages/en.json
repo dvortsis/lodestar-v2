@@ -54,7 +54,7 @@
 	"auth_notice_failed": "Couldn't load the Legal Notice. Check that Lodestar is running, then try again.",
 	"auth_notice_retry": "Try again",
 	"auth_notice_title": "Legal Notice",
-	"auth_notice_lead": "The Legal Notice has changed since you last read it. Read it, then accept it to continue.",
+	"auth_notice_lead": "Read the Legal Notice, then accept it to continue.",
 	"auth_notice_accept": "I have read it, continue",
 	"auth_error_notice_unchecked": "Confirm that you have read the Legal Notice to continue.",
 	"auth_error_notice_changed": "The Legal Notice changed while this page was open. Read the new version, then confirm again.",

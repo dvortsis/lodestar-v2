@@ -26,6 +26,7 @@ struct App {
     app: Router,
     auth: Arc<Auth>,
     store: Arc<Mutex<Store>>,
+    state: ApiState,
 }
 
 /// The API over `dir`, showing notice `version`.
@@ -41,23 +42,26 @@ fn app(dir: &Path, version: u32) -> App {
             .with_notice_version(version)
             .without_refill(),
     );
-    let app = Router::new().nest(
-        "/api/v1",
-        router(ApiState {
-            auth: auth.clone(),
-            index: None,
-            reader: Arc::new(Mutex::new(reader)),
-            filters: None,
-            hot: None,
-            events: None,
-            settings: None,
-            ops: None,
-            user_data: Some(store.clone()),
-            adult: Default::default(),
-            insights: None,
-        }),
-    );
-    App { app, auth, store }
+    let state = ApiState {
+        auth: auth.clone(),
+        index: None,
+        reader: Arc::new(Mutex::new(reader)),
+        filters: None,
+        hot: None,
+        events: None,
+        settings: None,
+        ops: None,
+        user_data: Some(store.clone()),
+        adult: Default::default(),
+        insights: None,
+    };
+    let app = Router::new().nest("/api/v1", router(state.clone()));
+    App {
+        app,
+        auth,
+        store,
+        state,
+    }
 }
 
 /// From its own address unless `ip` is given, so the per-IP login limit
@@ -512,4 +516,67 @@ async fn the_gate_covers_proxy_sessions_and_streams() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _, _) = send(&a, proxy(), Some([10, 7, 0, 1])).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// The other two ways a browser session reaches the server: the feed
+/// route's key-or-session guard with a cookie, and `require_session`,
+/// which the binary puts on `/api/status`. Both meet the gate.
+#[tokio::test]
+async fn feeds_and_require_session_meet_the_gate() {
+    use axum::routing::get as route_get;
+
+    let dir = tempfile::tempdir().unwrap();
+    let a = set_up_then(dir.path(), NOTICE_VERSION, NOTICE_VERSION + 1).await;
+    let cookie = login(&a).await;
+    let (status, body, _) = send(&a, get("/api/v1/feeds/1", Some(&cookie)), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "notice_required");
+
+    let status_app = App {
+        app: Router::new()
+            .route("/api/status", route_get(|| async { "{}" }))
+            .route_layer(axum::middleware::from_fn_with_state(
+                a.state.clone(),
+                lodestar_api::require_session,
+            ))
+            .with_state(a.state.clone()),
+        auth: a.auth.clone(),
+        store: a.store.clone(),
+        state: a.state.clone(),
+    };
+    let (status, body, _) = send(&status_app, get("/api/status", Some(&cookie)), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, _, _) = send(&status_app, get("/api/status", None), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    a.auth.accept_notice(NOTICE_VERSION + 1).unwrap();
+    let (status, _, _) = send(&status_app, get("/api/status", Some(&cookie)), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(&a, get("/api/v1/feeds/1", Some(&cookie)), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "past the gate: no such feed");
+}
+
+/// A hand-edited `notice_version` that isn't a version stops the server
+/// at load, the way any malformed `auth.json` does, rather than loading
+/// as accepted.
+#[test]
+fn a_malformed_notice_version_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auth.json");
+    let key = "ab".repeat(32);
+    for bad in [r#""2""#, "-1", "2.5", "null"] {
+        std::fs::write(
+            &path,
+            format!(r#"{{"password":null,"session_key":"{key}","notice_version":{bad}}}"#),
+        )
+        .unwrap();
+        let loaded = Auth::load(&path, false);
+        if bad == "null" {
+            // JSON null is the field left out: not accepted.
+            assert!(loaded.is_ok());
+        } else {
+            let e = loaded.expect_err(bad);
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidData, "{bad}");
+        }
+    }
 }

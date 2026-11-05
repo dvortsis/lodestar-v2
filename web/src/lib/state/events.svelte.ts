@@ -179,10 +179,9 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 				const e = await errorFromResponse(res);
 				if (c.signal.aborted) return;
 				error = e;
-				if (e.status === 401 || e.status === 409) {
+				if (e.status === 401 || e.code === 'notice_required') {
 					// Signed out, or (409 notice_required) the Legal Notice pending: the sign-in page
-					// takes over, and the stream resumes once a request works again. Any other 4xx
-					// stops it below, so a different 409 stopping here changes nothing.
+					// takes over, and the stream resumes once a request works again.
 					handleUnauthorized(e, '/events');
 					unauthorized = true;
 					status = 'stopped';

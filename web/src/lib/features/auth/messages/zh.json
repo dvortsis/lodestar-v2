@@ -15,7 +15,7 @@
 	"auth_notice_failed": "无法加载法律声明。请确认 Lodestar 正在运行，然后重试。",
 	"auth_notice_retry": "重试",
 	"auth_notice_title": "法律声明",
-	"auth_notice_lead": "自你上次阅读以来，法律声明已更新。请阅读并接受后继续。",
+	"auth_notice_lead": "请阅读法律声明，然后接受以继续。",
 	"auth_notice_accept": "我已阅读，继续",
 	"auth_error_notice_unchecked": "请确认你已阅读法律声明后继续。",
 	"auth_error_notice_changed": "此页面打开期间法律声明已更新。请阅读新版本，然后再次确认。",
