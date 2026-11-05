@@ -4375,7 +4375,9 @@
     "X-mimalloc-docs (after #448 merges; small): memstats.rs module doc (not override / C allocs not counted -> now counted on musl); crates/lodestar/src/thp.rs:22-23 says MIMALLOC_ALLOW_THP covers only mimalloc (stale for musl); docs/soak/tools/analyze_cr0.py subtracts SQLite from other heap, which double-subtracts on musl builds where SQLite is inside mimalloc committed bytes. Optional musl-only C_MALLOC_IS_MIMALLOC const.",
     "Filter budget: Xeon 6973P-C runner is unlisted (1 job, reads 49.7 µs); next likely flake. After #451 merges, add it once 3+ jobs exist (X-filter-budget-noise decisions file says what to watch).",
     "Owner flag (§2.19) pending #451: re-derived filter-budget calibration constants loosen listed non-reference CI models ~2–10% toward the 7763 reference reading; 50 µs unchanged; replay in-sample.",
-    "Owner flag (§2.19), X-search-files-4: one-atom file:(ext:x) now answered from the torrent-level ext (only gains results: files left out by smart coverage or hidden by BEP 47 now match); file:word moves to path:word only with a fallback for truncated paths. Option (b) torrent size_bucket deferred until the 10M report."
+    "Owner flag (§2.19), X-search-files-4: one-atom file:(ext:x) now answered from the torrent-level ext (only gains results: files left out by smart coverage or hidden by BEP 47 now match); file:word moves to path:word only with a fallback for truncated paths. Option (b) torrent size_bucket deferred until the 10M report.",
+    "Owner flag (§2.19), RP-DEF #454: unchecking a pack in the setup wizard opens the Filters screen change dialog (effect warning + password) rather than an inline password field.",
+    "RP-UC brief: packs.defaults is set once, so on stores RP-DEF already set up RP-UC must write unauthorised-copy explicit off row itself (it reads as off with no row anyway). Also: wizard/packs.svelte.ts header still says the wizard only turns packs ON (stale after RP-DEF)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
