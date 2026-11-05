@@ -138,6 +138,16 @@ pub fn change_detail(change: &Change) -> String {
             opt("shadow_days", shadow_days)
         ),
         Change::RemoveRule { id } => format!("remove_rule id={id}"),
+        Change::SetPackOverride {
+            rule,
+            action,
+            unless,
+            ..
+        } => format!(
+            "set_pack_override rule={rule} action={action}{}",
+            opt("unless", unless)
+        ),
+        Change::RemovePackOverride { rule } => format!("remove_pack_override rule={rule}"),
         Change::AddOverride {
             what: m,
             neutralize,

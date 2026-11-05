@@ -1076,6 +1076,36 @@ fn budget() {
             });
             cases.push((what, t, held));
         }
+        // The mixed set with pack-rule overrides (RP-2): a lighter
+        // action, a heavier one, one with an `unless`, and one on a rule
+        // that flags.
+        engine.rules = mixed_rules().into();
+        engine.pack_overrides = lodestar_filter::packs::overrides::PackOverrides::resolve(
+            &engine.manifest,
+            &engine.pack_versions,
+            &[
+                ("MW-2".to_owned(), Ok("1\n1\ndemote".to_owned())),
+                ("SP-1".to_owned(), Ok("1\n1\nhide".to_owned())),
+                (
+                    "LU-2".to_owned(),
+                    Ok("1\n1\nflag\nsample OR trailer".to_owned()),
+                ),
+                ("FK-2".to_owned(), Ok("1\n1\ndrop".to_owned())),
+            ],
+        );
+        assert_eq!(engine.pack_overrides.iter().count(), 4);
+        assert!(
+            engine
+                .pack_overrides
+                .iter()
+                .all(|o| !o.unreadable() && !o.changed)
+        );
+        let what = "engine, packs on, 10,000 rules, mixed, 4 pack overrides (1 with unless)";
+        let t = time(what, &|i| {
+            std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
+        });
+        cases.push((what.to_owned(), t, true));
+        engine.pack_overrides = Default::default();
         // The mixed set again with common words neutralized (CSX-5
         // *Neutralize term*): every keyword entry reads the name and
         // paths, and every text clause checks the words.

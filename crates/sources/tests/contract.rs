@@ -326,6 +326,7 @@ static MANIFEST: Manifest = Manifest {
     consent: Consent::External,
     default_priority: Priority::Low,
     enabled_by_default: false,
+    always_adult: false,
 };
 
 static POLICY: Policy = Policy {

@@ -55,6 +55,10 @@ pub struct Backfill<'a> {
     pub sealer: Option<&'a Sealer>,
     /// How long such a quarantine lasts.
     pub quarantine_secs: i64,
+    /// The sources whose every find is adult: a torrent one of them found
+    /// is classified as with an Is adult correction, unless its own
+    /// correction says Not adult ([`crate::source_adult`]).
+    pub adult: crate::source_adult::AdultSources,
 }
 
 /// One batch of background enrichment.
@@ -104,17 +108,39 @@ pub fn enrich_stored_marking(
     let Some(&last) = ids.last() else {
         return Ok(None);
     };
+    let done = enrich_ids(store, generation, engine.as_deref(), &ids, ctx, mark)?;
+    Ok(Some(Backfilled {
+        // Rejected: the same batch again.
+        last: if done.rejected { after } else { last },
+        ..done
+    }))
+}
+
+/// Classifies stored torrents `ids` again under generation `generation`,
+/// as the backfill does, and writes them in one transaction. `last` is
+/// left 0 for the caller to set.
+fn enrich_ids(
+    store: &mut Store,
+    generation: i64,
+    engine: Option<&lodestar_filter::Engine>,
+    ids: &[i64],
+    ctx: &Backfill<'_>,
+    mark: &dyn Fn(&Store, &[[u8; 20]]),
+) -> Result<Backfilled, lodestar_store::Error> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     let mut batch = Vec::with_capacity(ids.len());
     let mut refilings = Vec::new();
-    for id in ids {
+    for &id in ids {
         if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
             let own = store.correction(id)?.map(correction).unwrap_or_default();
+            // An always-adult source among its finders: Is adult, unless
+            // your own correction says otherwise.
+            let own = crate::source_adult::correction(own, row.sources, ctx.adult);
             let was_adult = store.content_type(id)? == Some(ContentType::Adult.code());
             let files = file_infos(&tree.files, tree.encoding);
-            let r = reclassify_row(&row, &files, own, was_adult, engine.as_deref(), now);
+            let r = reclassify_row(&row, &files, own, was_adult, engine, now);
             refilings.extend(r.refilings(&row, ctx.sealer));
             batch.push((id, r.enriched));
         }
@@ -132,18 +158,58 @@ pub fn enrich_stored_marking(
         mark(store, &held);
     }
     let Some(enriched) = store.set_enrichments_at(generation, &batch, &refiled)? else {
-        return Ok(Some(Backfilled {
-            last: after,
+        return Ok(Backfilled {
             rejected: true,
             ..Backfilled::default()
-        }));
+        });
     };
-    Ok(Some(Backfilled {
-        last,
+    Ok(Backfilled {
+        last: 0,
         enriched,
         held,
         rejected: false,
-    }))
+    })
+}
+
+/// Classifies again, at once, the stored torrents among `ids` that an
+/// always-adult source has just found and that aren't stored as adult
+/// yet (X-source-adult): Is adult unless your own correction says Not
+/// adult, judged as adult as at ingest, in one transaction. The rest are
+/// left alone. When the rules changed under it, nothing is written and
+/// the torrents are marked for the backfill instead, which applies the
+/// same correction (`rejected` is set: the caller starts that pass).
+pub fn adult_by_source(
+    store: &mut Store,
+    ids: &[i64],
+    ctx: &Backfill<'_>,
+    mark: &dyn Fn(&Store, &[[u8; 20]]),
+) -> Result<Backfilled, lodestar_store::Error> {
+    if ctx.adult.is_empty() || ids.is_empty() {
+        return Ok(Backfilled::default());
+    }
+    let generation = store.class_gen()?;
+    let engine = ctx.filter.map(Handle::current);
+    let mut due = Vec::new();
+    for &id in ids {
+        if due.contains(&id) || store.content_type(id)? == Some(ContentType::Adult.code()) {
+            continue;
+        }
+        let Some(row) = store.torrent(id)? else {
+            continue;
+        };
+        let own = store.correction(id)?.map(correction).unwrap_or_default();
+        if crate::source_adult::correction(own, row.sources, ctx.adult).adult == Some(true) {
+            due.push(id);
+        }
+    }
+    if due.is_empty() {
+        return Ok(Backfilled::default());
+    }
+    let done = enrich_ids(store, generation, engine.as_deref(), &due, ctx, mark)?;
+    if done.rejected {
+        store.mark_unenriched(&due)?;
+    }
+    Ok(done)
 }
 
 /// One batch of the import-candidate refile sweep

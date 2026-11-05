@@ -47,6 +47,7 @@ fn probe_with(
             consent,
             default_priority: Priority::Low,
             enabled_by_default,
+            always_adult: false,
         },
         ran: ran.clone(),
     };
@@ -620,6 +621,7 @@ async fn resume_reaches_a_running_dht(coordinated: bool) {
             consent: Consent::None,
             default_priority: Priority::Normal,
             enabled_by_default: true,
+            always_adult: false,
         },
         rx: Mutex::new(Some(rx)),
     });
@@ -760,6 +762,7 @@ async fn a_source_runs_on_its_saved_egress_and_its_settings_are_checked() {
             consent: Consent::None,
             default_priority: Priority::Normal,
             enabled_by_default: true,
+            always_adult: false,
         },
         result: result.clone(),
     });
@@ -924,6 +927,7 @@ async fn an_unreadable_egress_setting_refuses_every_request() {
                     consent: Consent::None,
                     default_priority: Priority::Normal,
                     enabled_by_default: true,
+                    always_adult: false,
                 },
                 result: result.clone(),
             }) as Arc<dyn SourcePlugin>

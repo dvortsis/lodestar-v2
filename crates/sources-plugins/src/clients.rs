@@ -91,6 +91,7 @@ const MANIFEST: Manifest = Manifest {
     consent: Consent::Account,
     default_priority: Priority::Normal,
     enabled_by_default: false,
+    always_adult: false,
 };
 
 /// No settings of its own: the client and its credentials are Settings →

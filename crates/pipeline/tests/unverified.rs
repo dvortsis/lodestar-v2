@@ -96,6 +96,7 @@ fn ingest(
     let ctx = Ctx {
         sealer,
         quarantine_secs: 86_400,
+        ..Ctx::default()
     };
     let done =
         unverified::ingest(store, &filter.current(), ctx, batch, &stats, T, &|_, _| {}).unwrap();
@@ -152,6 +153,7 @@ fn sweep(store: &mut Store, filter: &Handle, sealer: Option<&Sealer>) -> (usize,
     let ctx = Ctx {
         sealer,
         quarantine_secs: 86_400,
+        ..Ctx::default()
     };
     let (mut phase, mut after_item, mut after_claims) = (Phase::Items, 0, (0, 0));
     let (mut steps, mut removed) = (0, 0);
@@ -508,6 +510,7 @@ fn a_sweep_under_stale_rules_writes_nothing() {
     let ctx = Ctx {
         sealer: None,
         quarantine_secs: 86_400,
+        ..Ctx::default()
     };
     let s = unverified::refile_step(
         &mut store,
