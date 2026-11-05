@@ -70,11 +70,26 @@ async fn replay_state(
     Arc<Replayer>,
     Arc<lodestar_sources::MemoryState>,
 ) {
+    let seeds: Vec<(&str, &[u8])> = seed.map(|v| (CURSOR_KEY, v)).into_iter().collect();
+    replay_seeded(dir, &seeds, requests, finds).await
+}
+
+/// As [`replay_state`], with any state keys seeded.
+async fn replay_seeded(
+    dir: &Path,
+    seeds: &[(&str, &[u8])],
+    requests: usize,
+    finds: usize,
+) -> (
+    Vec<Discovery>,
+    Arc<Replayer>,
+    Arc<lodestar_sources::MemoryState>,
+) {
     let p = Arc::new(ArchiveOrg::with_clock(clock));
     let replayer = Arc::new(Replayer::load(dir).unwrap());
     let mut ctx = FakeCtx::with_fetch(&*p, SourceId::new(7).unwrap(), replayer.clone());
-    if let Some(v) = seed {
-        ctx.state.set(CURSOR_KEY, v.to_vec()).await.unwrap();
+    for (k, v) in seeds {
+        ctx.state.set(k, v.to_vec()).await.unwrap();
     }
     let state = ctx.state.clone();
     let running = ctx.start(p.clone());
@@ -772,7 +787,10 @@ async fn the_lookback_after_a_resume_run_starts_no_earlier_than_the_run_ended() 
         .collect();
     assert_eq!(urls[MAX_PAGES as usize + 1], search_url(last + 3, 1));
     assert_eq!(state.get(RESUME_KEY).await.unwrap(), None);
-    assert!(state.get(FLOOR_KEY).await.unwrap().is_some());
+    assert_eq!(
+        state.get(FLOOR_KEY).await.unwrap().as_deref(),
+        Some((last + 3).to_string().as_bytes())
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -804,4 +822,38 @@ async fn skipped_rows_still_move_the_cursor() {
         cursor.as_deref(),
         Some((t + ROWS as i64 - 1).to_string().as_bytes())
     );
+}
+
+/// A poll with `cursor` and `floor` saved and no resume point asks for
+/// `expect` and finds nothing.
+async fn start_with_floor(name: &str, floor: i64, expect: i64) {
+    let dir = scratch(name);
+    let cursor: i64 = 1_793_692_800;
+    for n in 1..=2 {
+        write_exchange(&dir, n, expect, 1, r#"{"response":{"docs":[]}}"#);
+    }
+    let (cursor_s, floor_s) = (cursor.to_string(), floor.to_string());
+    replay_seeded(
+        &dir,
+        &[
+            (CURSOR_KEY, cursor_s.as_bytes()),
+            (FLOOR_KEY, floor_s.as_bytes()),
+        ],
+        2,
+        0,
+    )
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_old_floor_leaves_the_six_hour_lookback_alone() {
+    let cursor: i64 = 1_793_692_800;
+    start_with_floor("floor_old", cursor - LOOKBACK - 1000, cursor - LOOKBACK).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_floor_inside_the_lookback_window_is_where_the_poll_starts() {
+    let cursor: i64 = 1_793_692_800;
+    let floor = cursor - LOOKBACK + 1000;
+    start_with_floor("floor_inside", floor, floor).await;
 }

@@ -73,7 +73,8 @@ pub const RESUME_KEY: &str = "resume";
 /// last resume run ended. The lookback that follows a run's catch-up never
 /// starts before it, so it can't re-read the bulk the run just worked off
 /// and set the resume point back inside it. Once the cursor's own lookback
-/// has passed it, it has no effect.
+/// has passed it, it has no effect. It is never removed, on purpose: a stale
+/// floor is a no-op under the `max`, and the next catch-up overwrites it.
 pub const FLOOR_KEY: &str = "floor";
 /// Rows asked for per page. Under the parser's item cap.
 pub const ROWS: u32 = 500;
