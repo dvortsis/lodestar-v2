@@ -2842,6 +2842,20 @@
       "session": "session_01MMjhn8ohYvc28hCgRNG7oC",
       "launched": "2026-11-05T01:17Z",
       "brief": "briefs/RP-DEF.md"
+    },
+    "X-mimalloc-docs": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnBNGBqwHtoDuNj9t9F",
+      "launched": "2026-11-05T01:52Z",
+      "brief": "briefs/X-mimalloc-docs.md"
+    },
+    "X-log-url-redact-2": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnAgrquL8it3PiuejSu",
+      "launched": "2026-11-05T01:52Z",
+      "brief": "briefs/X-log-url-redact-2.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4966,6 +4980,22 @@
   "slots": {
     "updated": "2026-11-05T01:52Z",
     "items": [
+      {
+        "slot": 1,
+        "slice": "X-mimalloc-docs",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Fixing the soak analyzer and docs after the allocator fix, before soak r5.",
+        "since": "2026-11-05T01:52Z"
+      },
+      {
+        "slot": 2,
+        "slice": "X-log-url-redact-2",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Security: closing the remaining ways a URL password can reach the logs.",
+        "since": "2026-11-05T01:52Z"
+      },
       {
         "slot": 3,
         "slice": "R-rc4-cut",
