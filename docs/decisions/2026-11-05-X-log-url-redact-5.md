@@ -24,7 +24,7 @@ None of these hid the value in either stage:
 - **One table.** `look_alike(c, all)` maps:
   - every colon look-alike to `:`;
   - both equals look-alikes to `=`;
-  - every non-ASCII Unicode space (`char::is_whitespace`) and the three zero-width spaces to a space.
+  - every non-ASCII Unicode space (`char::is_whitespace`), the vertical tab (U+000B, whitespace to Rust but not ASCII whitespace to the credential rules) and the three zero-width spaces to a space.
 
   With `all` false, it maps only #488's three (`：`, `＝`, U+00A0).
 - **Two new readings,** each through an `only_more` of its own, after #488's:
@@ -86,12 +86,12 @@ None of these hid the value in either stage:
 - **What the test found:** the original text's reading hid a word glued to a hash-like run (`<hash>日本`). That reading didn't hide runs as the stages do, so `日本` wasn't a word of its own there. It hides them now (`hide_runs`). The fast path is exact again, and that word no longer goes.
 
 ## Tests
-- **`a_look_alike_space_or_separator_keeps_its_value_hidden`:** 32 inputs, each refused by `plain_line`.
-  - **30 showed the secret on `main`:**
+- **`a_look_alike_space_or_separator_keeps_its_value_hidden`:** 33 inputs, each refused by `plain_line`.
+  - **31 showed the secret on `main`:**
     - the shapes above;
     - one per table arm;
     - the vertical tab after `Bearer` and before `:`;
-    - two that only the wide output's reading hides: `https://h/pass?x":\u{3000}"<s>"` and `https://h/pass?x"\u{fe55}"<s>"`. The runner's review found that arm untested: these fail without it.
+    - three that only the wide output's reading hides: `https://h/pass?x":\u{3000}"<s>"`, `https://h/pass?x"\u{fe55}"<s>"` and, for its vertical-tab clause, `https://h/pass?x":\u{b}"<s>"`. The runner's reviews found the arm and that clause untested: each fails without them.
   - **Two are guards that `main` hides too:** `token＝r\u{200b}<s>` and `password＝a\u{3000}<s>`. Merging the new readings into #488's would show them, so they keep the layers apart.
   - **It also checks five lines are kept:** `共 12\u{3000}个`, `a\u{a0}b ok`, `時刻：12 ok`, `ratio 1∶2 ok` and `IPA /kæːt/ ok`.
 - **`the_fast_path_matches_both_stages`** also accepts `a\u{200c}b` and `naːm`: a non-ASCII character that's no look-alike still takes the fast path.
@@ -148,4 +148,6 @@ None of these hid the value in either stage:
   - an encoded `//` in a credential's value: `PW: %2F%2Fu: <s>@h`, `token=%2F%2Fu: <s>@h`;
   - a `//` after `%3D`, which isn't a word's start to the separator pass: `apikey%3D//u: <s>@h`;
   - a look-alike space between the name and the `//`: `PW:\u{3000}//u: <s>@h`.
+- **A secret that also shows elsewhere on the line,** on `main` too. That's `only_more`'s documented limit: a word the reading shows anywhere is kept everywhere.
+  - Take `password\u{fe55}_<s> 0123456789abcdef0123456789abcdef_<s>`. `hide_runs` hides the hash-like run but keeps `_<s>` after it as its own word, so the bare `<s>` after the look-alike stays too.
 - **The near variants #488's security review listed are unchanged:** in each, the name before the value isn't a credential's.

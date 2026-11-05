@@ -4185,6 +4185,7 @@ pass:"S3CRET"#,
             // goes, which leaves `pass` before a look-alike and the value.
             "https://h/pass?x\":\u{3000}\"S3CRETxyz\"",
             "https://h/pass?x\"\u{fe55}\"S3CRETxyz\"",
+            "https://h/pass?x\":\u{b}\"S3CRETxyz\"",
             // Why X-log-url-redact-4's reading keeps its three: read with
             // every look-alike, the zero-width space or the ideographic space
             // ends the value early, and only that reading hides it whole.
