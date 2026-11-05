@@ -1,20 +1,24 @@
 <script lang="ts">
 	// "Show unverified" (SRC-3: hidden unless the query asks). Reads and writes the query's AST, so
-	// the strip shows the `verified:` chip and Back undoes it, like any facet click.
+	// the strip shows the `verified:` chip and Back undoes it, like any facet click. `count` is the
+	// server's count of unverified items for the shown query (the `verified` facet's `no`).
+	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { search } from '$lib/state/search.svelte';
+	import type { Ast } from '$lib/state/search.svelte';
 	import Checkbox from '$lib/ui/fields/Checkbox.svelte';
-	import { ensureSearchPath } from '../query/path';
 	import { showsUnverified, withUnverified } from './toggle';
 
-	const on = $derived(showsUnverified(search.ast));
+	interface Props {
+		ast: Ast | null;
+		onchange: (next: Ast) => void;
+		count?: { value: number; approx: boolean } | null;
+	}
+	let { ast, onchange, count = null }: Props = $props();
 
+	const on = $derived(showsUnverified(ast));
 	function change(e: Event) {
-		const next = (e.currentTarget as HTMLInputElement).checked;
-		ensureSearchPath();
-		search.setAst(withUnverified(search.ast, next)).catch(() => {
-			(e.target as HTMLInputElement).checked = on; // nothing changed: show the real state
-		});
+		onchange(withUnverified(ast, (e.currentTarget as HTMLInputElement).checked));
 	}
 </script>
 
@@ -25,7 +29,12 @@
 		onchange={change}
 		aria-describedby="unverified-hint"
 	/>
-	<p id="unverified-hint" class="text-caption text-base-content/70">
+	{#if count}
+		<span class="text-caption" data-testid="unverified-count"
+			>{formatCount(count, currentLocale())}</span
+		>
+	{/if}
+	<p id="unverified-hint" class="fr-muted">
 		{m.search_unverified_hint()}
 	</p>
 </div>

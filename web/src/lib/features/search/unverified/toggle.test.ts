@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Ast } from '$lib/state/search.svelte';
 import { showsUnverified, withUnverified } from './toggle';
 
-const word: Ast = { op: 'word', value: 'dune' } as Ast;
+const word: Ast = { op: 'word', field: 'any', word: 'dune' };
 const both: Ast = { op: 'verified', any: ['yes', 'no'] };
 
 describe('showsUnverified', () => {

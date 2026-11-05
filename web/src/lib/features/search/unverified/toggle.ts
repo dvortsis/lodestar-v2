@@ -23,9 +23,11 @@ export function showsUnverified(ast: Ast | null | undefined): boolean {
 
 /** The query with unverified items shown (`on`) or hidden again; other clauses are kept. */
 export function withUnverified(ast: Ast | null | undefined, on: boolean): Ast {
-	const rest = conjuncts(ast).filter((node) => !isVerified(node));
-	if (on) rest.push({ op: 'verified', any: ['yes', 'no'] });
-	else {
+	const rest: Ast[] = conjuncts(ast).filter((node) => !isVerified(node));
+	if (on) {
+		const shown: Ast = { op: 'verified', any: ['yes', 'no'] };
+		rest.push(shown);
+	} else {
 		// Hiding again keeps a `verified:yes` the user typed.
 		const yes = conjuncts(ast).filter((n) => isVerified(n) && !n.any.includes('no'));
 		rest.push(...yes);

@@ -1,0 +1,47 @@
+<script lang="ts">
+	// The Source facet and the "Show unverified" control with its count, mounted in the facet rail
+	// (one line). Counts are the server's; `source` counts are partial while its index field is
+	// still being filled in. A private source never arrives by name for a non-admin caller: the
+	// server folds it into `other`, which TermGroup shows without naming anything.
+	import { m } from '$lib/paraglide/messages.js';
+	import type { Ast } from '$lib/state/search.svelte';
+	import TermGroup from '../facets/TermGroup.svelte';
+	import type { FacetsResponse } from '../facets/facets.svelte';
+	import { clearSources, shortName, toggleSource } from './source';
+	import UnverifiedToggle from './UnverifiedToggle.svelte';
+
+	interface Props {
+		data: FacetsResponse;
+		ast: Ast | null;
+		onchange: (next: Ast) => void;
+	}
+	let { data, ast, onchange }: Props = $props();
+
+	const source = $derived(data.facets.source);
+	const unverified = $derived(data.facets.verified?.values.find((v) => v.value === 'no'));
+	const nameOf = (id: string) => shortName(data.source_names[id] ?? id);
+</script>
+
+{#if source && source.values.length}
+	<div data-testid="facet-source-wrap">
+		<TermGroup
+			name="source"
+			title={m.search_unverified_source()}
+			facet={source}
+			labelOf={nameOf}
+			excludable={false}
+			onvalue={(v) => onchange(toggleSource(ast, v))}
+			onclear={() => onchange(clearSources(ast))}
+		/>
+		{#if source.partial}
+			<p class="fr-muted" data-testid="facet-source-partial">
+				{m.search_unverified_partial()}
+			</p>
+		{/if}
+	</div>
+{/if}
+<UnverifiedToggle
+	{ast}
+	{onchange}
+	count={unverified ? { value: unverified.count, approx: source?.approx ?? false } : null}
+/>

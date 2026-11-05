@@ -11,6 +11,7 @@
 	import type { Ast } from '$lib/state/search.svelte';
 	import type { FacetsResponse, TermFacet } from './facets.svelte';
 	import { ADULT_VALUE } from '../query/clauses';
+	import SourceFacets from '../unverified/SourceFacets.svelte';
 	import { wholeDays } from './bins';
 	import RangeGroup from './RangeGroup.svelte';
 	import SwarmGroup from './SwarmGroup.svelte';
@@ -191,6 +192,7 @@
 			</p>
 		{/if}
 		{@render term('type')}
+		<SourceFacets {data} {ast} {onchange} />
 		{@const disc = data.histograms.discovered}
 		{#if disc}
 			<div bind:this={histogram}>
