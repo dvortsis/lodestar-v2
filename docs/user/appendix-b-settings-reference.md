@@ -22,9 +22,9 @@ These are in the web app, under **Settings → Sources**, not in the template. E
 
 | Setting | What it does | Recommended | Notes |
 |---|---|---|---|
-| On | Turns the source on or off | On for **Mainline DHT**; off for **External** and **Account** sources unless you need them | Applies at once, with no Undo. **Applies at next start** means the source starts or stops at the next restart. |
-| Priority | Share of fetch work (**Low**, **Normal**, **High**, **Maximum**) | `Normal` | Applies at once, with no Undo. |
-| Setup | Accepting the sites a source contacts, or adding account details | Not available yet | A source marked **Needs setup** stays off. |
+| On | Turns the source on or off | On for **Mainline DHT**; off for **External** and **Account** sources unless you need them | Saved at once, with no Undo. The row shows **Applies at next start**: the source starts or stops at the next restart. |
+| Priority | Share of fetch work (**Low**, **Normal**, **High**, **Maximum**) | `Normal` | Saved and applied at once, with no Undo. |
+| Setup | Accepting what a source does and the sites it contacts, adding account details, or typing your password | Not available yet | A source marked **Needs setup** stays off. |
 
 The templates do not include a Log level field. You can optionally add a custom
 container variable with key `LODESTAR_LOG` to set how much Lodestar logs on every output
