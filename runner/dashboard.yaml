@@ -266,13 +266,17 @@ placement:
   - CR-0d
   - CR-0f
   - D-v051
+  - X-legal-docs
   - X-mmap-cache-prune
   - X-merge-policy
   - X-thp-off
   - X-mem-gauges
   - X-mem-gauges-2
   - X-mimalloc-override
+  - X-mimalloc-docs
   - R-rc3-cut
+  - R-rc4-cut
+  - LEGAL-1r
   - G-v051
   - D-v051-main
   - P-v052-cut
@@ -335,6 +339,8 @@ placement:
   - P-v06-rulepacks
   - RP-*
   - ENR-*
+  - LEGAL-1
+  - LEGAL-2
 - ws: ws-imp-tools
   match:
   - IMP-*
@@ -342,6 +348,7 @@ placement:
 - ws: ws-imp-scale
   match:
   - X-search-files-3
+  - X-search-files-4
   - G-import-*
   - CR-3
   - G-rebuild-10M
@@ -374,6 +381,8 @@ placement:
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
+  X-dashboard-adapts: ws-small
+  X-filter-budget-noise: ws-small
   F-filter-standin-undo: ws-small
   X-overflow-links: ws-small
   X-polish-carry-1102: ws-small
@@ -503,8 +512,8 @@ conditions:
 roadmap:
   steps:
   - id: soak
-    label: Unraid memory test (r3 failed, r4 running)
-    plain: The 24-hour test of release candidate 2 failed on memory growth (1.88 MiB an hour, upper bound 2.33, bar 2.0). The fix is in release candidate 3, and its fresh test (r4) is running.
+    label: Unraid memory test (r3 and r4 failed, r5 next on rc.4)
+    plain: The 24-hour tests of release candidates 2 and 3 failed on memory growth (1.88 and 29.35 MiB an hour; bar 2.0). Release candidate 4 carries the allocator fix, and its fresh test (r5) runs next.
     col: 0
     row: 2
     members: []
@@ -778,9 +787,9 @@ roadmap:
 owner_queue:
 - n: 1
   type: action
-  action: Soak r4 on rc.3 is running; then the gluetun leg, the Windows smoke and the tag
+  action: Soak r4 on rc.3 failed its memory gate. rc.4 (the memory fixes and the Legal Notice, §2.40) is being built; then you tag rc.4 and run soak r5, the gluetun leg, the Windows smoke and the tag
   unblocks: v0.5.1 release; the three held epics
-  when: r4's verdict, due about 01:00 UTC on 5 November
+  when: The runner sends the rc.4 tag steps
 - n: 2
   type: action
   action: Name the experiment host for crawler tests, and when it is free
@@ -816,6 +825,11 @@ owner_queue:
   action: Submit to Unraid Community Apps
   unblocks: The Unraid app-store listing
   when: After the 1.0 release is complete (§2.37)
+- n: 9
+  type: action
+  action: Have Colorado counsel review docs/legal/legal-notice.md and docs/legal/operator-guidance.md (advisory, not a gate on the v0.5.1 tag; §2.38)
+  unblocks: Counsel's comments on the Legal Notice
+  when: When convenient
 gates:
 - id: G-v05
   name: v0.5 MVP exit
@@ -911,14 +925,14 @@ soak:
   start: '2026-11-04T12:55:30Z'
   end: '2026-11-04T12:55:30Z'
 - stage: Verdict
-  label: 'Verdict due after the last sample. r3 on rc.2 had failed: 1.88 MiB/h, 95% CI [1.43, 2.33] (bar: upper bound at most 2.0)'
+  label: 'Verdict: failed the memory gate, 29.35 MiB/h, 95% CI [28.75, 29.96] (bar: upper bound at most 2.0). Soak r5 runs on release candidate 4'
   start: '2026-11-05T00:55:30Z'
   end: '2026-11-05T00:55:30Z'
 notes:
-  updated: '2026-11-04'
+  updated: '2026-11-05'
   now:
-  - label: Release candidate 3 is on its memory test
-    text: The 24-hour memory test of release candidate 2 failed narrowly (1.88 MiB an hour, upper bound 2.33, bar 2.0). The cause was a cache in the search library that never forgot deleted files. Release candidate 3 is rc.2 plus the filter fail-closed fix (#357), the crawler lease fix (#402) and the memory fix, as you decided. Its fresh 24-hour test (r4) is running.
+  - label: Release candidate 4 is being built
+    text: The 24-hour memory test of release candidate 3 failed (29.35 MiB an hour, bar 2.0). The growth was in memory the release build's C code takes from its own allocator, which never gives it back. Release candidate 4 adds that fix (mimalloc serves the C code too), the other memory fixes and the Legal Notice at setup, as you decided (§2.40); the runner adds the log redaction security fix. Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
       The live tests wait for an experiment host you name.
@@ -930,7 +944,7 @@ notes:
     text: 'By your instruction up to twelve worker slots run at once, filled only when ready work fits the plan, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33, §2.36). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: Finish v0.5.1
-    text: Soak r4 on rc.3 is running; its verdict is due about 01:00 UTC on 5 November. Run the short Windows smoke on the rc.3 installer from the draft release, then the 2-hour VPN (gluetun) leg after r4, then tag v0.5.1.
+    text: The runner sends the rc.4 tag steps when release candidate 4 is ready. Then soak r5 on rc.4 (Appdata Backup stays off until all soaks are done), the short Windows smoke on the rc.4 installer, the 2-hour VPN (gluetun) leg, and the v0.5.1 tag.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Also for you

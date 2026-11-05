@@ -1,5 +1,7 @@
 # Release-parser golden corpus
 
+The names below are strings collected to test how the parser reads the naming conventions used on public networks, including the ones used for cracked software and camcorder rips, so that the classifier and the filters can recognise them. It is the test set for the `unauthorised-copy` rule pack (architecture §20.6), together with a set of lawful names that the pack must never hide. No torrent, file or content is involved, and nothing here is an example of what to search for.
+
 Hand-labelled release names (architecture §14 M3 exit criterion: ≥ 95% field
 accuracy). The labels say what a careful human reads from the name. They
 aren't copied from the parser's output, so a wrong parse shows up as a
