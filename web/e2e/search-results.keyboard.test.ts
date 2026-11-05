@@ -39,10 +39,12 @@ test('/ then a query, Enter, Tab, j and k, Enter opens; j moves the open drawer;
 	await expect(bar).toBeFocused();
 	await page.keyboard.type('lantern');
 	await expect(bar).toHaveText('lantern'); // typing has settled before Enter submits it
+	// The suggestions open only once the lazy autocomplete has mounted; Enter then closes them.
+	await expect(bar).toHaveAttribute('aria-expanded', 'true');
 	await kbd.press('Enter');
 	await expect(page).toHaveURL(/[?&]q=lantern/);
 	await expect(rowOf(page, 1)).toBeVisible();
-	// No suggestions open: a Tab with them showing would accept one instead of leaving the bar.
+	// Suggestions closed: a Tab with them showing would accept one instead of leaving the bar.
 	await expect(bar).toHaveAttribute('aria-expanded', 'false');
 	// Shortcuts don't fire in the bar (§10.16): Tab to the list, which is one tab stop.
 	await focusFirstRow(page, kbd);
