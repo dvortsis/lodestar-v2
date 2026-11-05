@@ -61,7 +61,7 @@ const FILE_PREFIX: &str = "file.";
 /// existing index then backfills that field, and its acceptance tests
 /// run SB-6 → import → producer on an existing database, including a
 /// restart mid-backfill.
-pub const GENERATIONS: [(&str, u32); 10] = [
+pub const GENERATIONS: [(&str, u32); 12] = [
     // SRC-3 (§18.6): every torrent's provenance.
     ("verified", 1),
     ("source", 1),
@@ -73,6 +73,9 @@ pub const GENERATIONS: [(&str, u32); 10] = [
     ("file.size_bucket", 1),
     ("file.category", 1),
     ("file.pieces_root", 1),
+    // X-search-files-5 (v7): filled by the rebuild that makes v7.
+    ("file_bucket", 1),
+    ("file_ext_bucket", 1),
 ];
 
 /// The generations an index is built to: [`GENERATIONS`], or another
@@ -349,6 +352,7 @@ mod tests {
     fn tracked_fields_are_v6s() {
         let mut want: Vec<String> = crate::schema::V6_FIELDS
             .iter()
+            .chain(&crate::schema::V7_FIELDS)
             .map(|f| (*f).to_owned())
             .chain(crate::files::V6_FIELDS.iter().map(|f| format!("file.{f}")))
             .collect();

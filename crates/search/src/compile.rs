@@ -45,6 +45,10 @@ pub(crate) struct Cx<'a> {
     pub hot: Option<&'a Arc<HotColumns>>,
     /// Seconds east of UTC, for `time:`.
     pub utc_offset: i32,
+    /// Whether the torrent index's v7 bucket terms (`file_bucket`,
+    /// `file_ext_bucket`) are complete, so [`bucket_clause`]s read them
+    /// ([`search_file_clauses`] says which file sets that needs).
+    pub buckets: bool,
 }
 
 impl std::ops::Deref for Cx<'_> {
@@ -118,6 +122,144 @@ pub(crate) fn file_exts(of: &Node) -> Option<Vec<String>> {
     }
 }
 
+/// What the search's file pass runs on the file index for `node`: as
+/// [`file_clauses`], except that a [`bucket_clause`] the torrent index
+/// answers (when `buckets`) needs only its edge buckets' files, and none
+/// when its range is whole buckets ([`bucket_edges`]).
+pub(crate) fn search_file_clauses(node: &Node, buckets: bool, out: &mut Vec<Node>) {
+    match node {
+        Node::And { of } | Node::Or { of } => {
+            for n in of {
+                search_file_clauses(n, buckets, out);
+            }
+        }
+        Node::Not { of } => search_file_clauses(of, buckets, out),
+        Node::File { of } if buckets && bucket_clause(of).is_some() => {
+            out.extend(bucket_edges(of));
+        }
+        Node::File { of } => out.push((**of).clone()),
+        _ => {}
+    }
+}
+
+/// A `file:(…)` clause the torrent index's v7 bucket terms answer
+/// (X-search-files-5): one size range, alone or beside one extension
+/// atom (`file:(size:>1GB)`, `file:(ext:mkv,mp4 size:>1GB)`). A file has
+/// one size, so one bucket, and one extension, so the torrent's
+/// `file_bucket` and `file_ext_bucket` terms say exactly whether one of
+/// its covered files is in a bucket (with that extension). Buckets wholly
+/// inside the range are answered there; the file index checks the files
+/// of the (at most two) edge buckets ([`bucket_edges`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BucketClause {
+    pub exts: Option<Vec<String>>,
+    pub lo: u64,
+    pub hi: u64,
+}
+
+pub(crate) fn bucket_clause(of: &Node) -> Option<BucketClause> {
+    let range = |n: &Node| match n {
+        Node::Range {
+            field: NumField::Size,
+            lo,
+            hi,
+        } => Some((lo.unwrap_or(0), hi.unwrap_or(u64::MAX))),
+        _ => None,
+    };
+    let (exts, (lo, hi)) = match of {
+        n @ Node::Range { .. } => (None, range(n)?),
+        Node::And { of } if of.len() == 2 => match (file_exts(&of[0]), file_exts(&of[1])) {
+            (Some(e), None) => (Some(e), range(&of[1])?),
+            (None, Some(e)) => (Some(e), range(&of[0])?),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    // An empty range matches nothing either way; leave it to the file
+    // index, which says so without a term.
+    (lo <= hi).then_some(BucketClause { exts, lo, hi })
+}
+
+/// The file-index clause for a [`bucket_clause`]'s edge buckets: its
+/// extension (if any) and the part of its range in each edge bucket.
+/// `None` when the range covers whole buckets only.
+pub(crate) fn bucket_edges(of: &Node) -> Option<Node> {
+    let b = bucket_clause(of)?;
+    let (_, edges) = crate::files::split_range(b.lo, b.hi);
+    let mut ranges: Vec<Node> = edges
+        .into_iter()
+        .map(|(lo, hi)| Node::Range {
+            field: NumField::Size,
+            lo: Some(lo),
+            hi: Some(hi),
+        })
+        .collect();
+    let sizes = match ranges.len() {
+        0 => return None,
+        1 => ranges.pop().expect("one"),
+        _ => Node::Or { of: ranges },
+    };
+    Some(match b.exts {
+        None => sizes,
+        Some(any) => Node::And {
+            of: vec![Node::Ext { any }, sizes],
+        },
+    })
+}
+
+/// Whether the torrent index answers a `file:(…)` clause itself: a lone
+/// extension ([`file_exts`]), or a [`bucket_clause`] when its terms are
+/// complete.
+fn torrent_level(of: &Node, f: &Cx<'_>) -> bool {
+    file_exts(of).is_some() || (f.buckets && bucket_clause(of).is_some())
+}
+
+/// The torrent-index query for a [`torrent_level`] clause, unscored.
+fn torrent_level_query(of: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
+    if let Some(any) = file_exts(of) {
+        return compile_opt(&Node::Ext { any }, f, now);
+    }
+    let b = bucket_clause(of)?;
+    let (inner, _) = crate::files::split_range(b.lo, b.hi);
+    let mut clauses: Vec<(Occur, Q)> = Vec::new();
+    for bucket in inner {
+        match &b.exts {
+            None if f.file_bucket != ABSENT => clauses.push((
+                Occur::Should,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(f.file_bucket, bucket),
+                    IndexRecordOption::Basic,
+                )),
+            )),
+            Some(any) => {
+                for e in any {
+                    clauses.push((
+                        Occur::Should,
+                        term(
+                            f.file_ext_bucket,
+                            &crate::files::ext_bucket_term(e, bucket),
+                            IndexRecordOption::Basic,
+                        ),
+                    ));
+                }
+            }
+            None => {}
+        }
+    }
+    // The edge buckets' files, from the file pass.
+    if let Some(edges) = bucket_edges(of) {
+        let ids = f.ids(&edges);
+        if !ids.is_empty() {
+            clauses.push((Occur::Should, Box::new(IdsQuery { ids })));
+        }
+    }
+    Some(if clauses.is_empty() {
+        Box::new(EmptyQuery)
+    } else {
+        Box::new(BooleanQuery::new(clauses))
+    })
+}
+
 /// A compiled query in its parts.
 pub(crate) struct Parts {
     /// Selects the matches and gives the phase-1 score.
@@ -151,7 +293,7 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
         Node::Not { of } => always_lifted(of),
         n => always_lifted(n),
     });
-    let (ranges, mut rest): (Vec<&Node>, Vec<&Node>) = of.into_iter().partition(|n| liftable(n));
+    let (ranges, mut rest): (Vec<&Node>, Vec<&Node>) = of.into_iter().partition(|n| liftable(n, f));
     // A clause drives when it narrows the matches by itself; a negation
     // (`-x`, `private:no`) only removes a few from everything.
     let drives = |n: &&Node| {
@@ -168,7 +310,7 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
         .collect();
     // Whether a clause other than a lone extension drives the query, for
     // a lone extension's score below.
-    let lone_ext = |n: &&Node| matches!(n, Node::File { of } if file_exts(of).is_some());
+    let lone_ext = |n: &&Node| matches!(n, Node::File { of } if torrent_level(of, f));
     let others_drive = rest.iter().any(|n| drives(n) && !lone_ext(n));
     let mut scored_lone = false;
     let mut clauses = Vec::new();
@@ -206,8 +348,8 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
             // the first such set stayed in the query and scored 1.0
             // (`IdsQuery`), the text the priors multiply, and the rest
             // were lifted; all 0 would leave every hit at 0, unranked.
-            Node::File { of } if let Some(any) = file_exts(of) => {
-                if let Some(q) = compile_opt(&Node::Ext { any }, f, now) {
+            Node::File { of } if torrent_level(of, f) => {
+                if let Some(q) = torrent_level_query(of, f, now) {
                     let score = if others_drive || scored_lone {
                         0.0
                     } else {
@@ -397,12 +539,13 @@ fn share_name(by: ShareBy, cat: &str) -> Option<String> {
 }
 
 /// Whether a top-level clause can be checked in the collector.
-fn liftable(n: &Node) -> bool {
+fn liftable(n: &Node, f: &Cx<'_>) -> bool {
     match n {
         Node::Range { field, .. } => field.is_fast() || field.is_hot(),
         Node::Date { .. } | Node::TimeOfDay { .. } => true,
-        // `file:(ext:…)` is the torrent's extension terms, searched.
-        Node::File { of } => file_exts(of).is_none(),
+        // `file:(ext:…)` and bucketed sizes are the torrent's own
+        // terms, searched.
+        Node::File { of } => !torrent_level(of, f),
         Node::Share { by, cat, .. } => share_name(*by, cat).is_some(),
         _ => false,
     }
@@ -481,7 +624,7 @@ fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
                 missing: (fld != ABSENT).then_some(0),
             }
         }
-        Node::File { of } if file_exts(of).is_none() => FastRange::Ids { ids: cx.ids(of) },
+        Node::File { of } if !torrent_level(of, cx) => FastRange::Ids { ids: cx.ids(of) },
         _ => return None,
     })
 }
@@ -780,10 +923,9 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             }
         }
         // A filter, scored as a file clause's id set is.
-        Node::File { of } if let Some(any) = file_exts(of) => Box::new(ConstScoreQuery::new(
-            compile_opt(&Node::Ext { any }, f, now)?,
-            1.0,
-        )),
+        Node::File { of } if torrent_level(of, f) => {
+            Box::new(ConstScoreQuery::new(torrent_level_query(of, f, now)?, 1.0))
+        }
         Node::File { of } => {
             let ids = f.ids(of);
             if ids.is_empty() {

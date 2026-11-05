@@ -202,12 +202,19 @@ pub fn bucket_floor(bucket: u64) -> u64 {
     (1 << top) | (half << (top - 1))
 }
 
+/// Padding and hidden files (BEP 47), which no index covers.
+fn skipped(f: &File) -> bool {
+    f.attrs.contains(FileAttrs::PADDING) || f.attrs.contains(FileAttrs::HIDDEN)
+}
+
+/// Whether smart coverage treats `tree` as a large pack.
+fn is_pack(tree: &FileTree) -> bool {
+    tree.files.iter().filter(|f| !skipped(f)).count() > SMART_ALL_FILES
+}
+
 /// The files of a torrent that smart coverage indexes.
 pub fn file_docs(torrent: u64, tree: &FileTree) -> Vec<FileDoc> {
-    let skipped =
-        |f: &File| f.attrs.contains(FileAttrs::PADDING) || f.attrs.contains(FileAttrs::HIDDEN);
-    let real = tree.files.iter().filter(|f| !skipped(f)).count();
-    let pack = real > SMART_ALL_FILES;
+    let pack = is_pack(tree);
     let mut out = Vec::new();
     for (i, f) in tree.files.iter().enumerate() {
         if skipped(f) {
@@ -244,6 +251,73 @@ pub fn file_docs(torrent: u64, tree: &FileTree) -> Vec<FileDoc> {
         });
     }
     out
+}
+
+/// The distinct size buckets of the files [`file_docs`] indexes, sorted,
+/// and their distinct `{ext}:{bucket}` pairs, sorted: the torrent index's
+/// v7 `file_bucket` and `file_ext_bucket` (X-search-files-5). Decided by
+/// exactly `file_docs`' rule (test `covered_buckets_are_the_file_docs`),
+/// so a bucket or pair term holds for a torrent exactly when one of its
+/// file documents is in that bucket, with that extension. Only each
+/// file's name is decoded, not its directories.
+pub fn covered_buckets(tree: &FileTree) -> (Vec<u64>, Vec<String>) {
+    let pack = is_pack(tree);
+    let mut buckets = Vec::new();
+    let mut pairs = Vec::new();
+    for f in tree.files.iter().filter(|f| !skipped(f)) {
+        let Some(name) = f.path.last() else {
+            continue;
+        };
+        let text = Text {
+            raw: name.clone(),
+            encoding: tree.encoding,
+        };
+        let ext = extension(&text.decode());
+        if pack && !worth_it_in_a_pack(ext.as_deref(), f.size) {
+            continue;
+        }
+        let b = size_bucket(f.size);
+        buckets.push(b);
+        if let Some(e) = ext {
+            pairs.push(ext_bucket_term(&e, b));
+        }
+    }
+    buckets.sort_unstable();
+    buckets.dedup();
+    pairs.sort_unstable();
+    pairs.dedup();
+    (buckets, pairs)
+}
+
+/// `file_ext_bucket`'s term for a file of extension `ext` in `bucket`.
+/// Extensions are ASCII letters and digits (`doc::extension`), so the
+/// colon can't be part of one.
+pub fn ext_bucket_term(ext: &str, bucket: u64) -> String {
+    format!("{ext}:{bucket}")
+}
+
+/// A size range split at its buckets: those wholly inside it, and the
+/// part of it in each bucket it only partly covers (at most two, the
+/// first and the last), as closed ranges within those buckets.
+pub(crate) fn split_range(lo: u64, hi: u64) -> (Vec<u64>, Vec<(u64, u64)>) {
+    let range = SizeRange {
+        field: ABSENT,
+        bucket: ABSENT,
+        range: lo..=hi,
+    };
+    let mut inner = Vec::new();
+    let mut edges = Vec::new();
+    if lo > hi {
+        return (inner, edges);
+    }
+    for (b, edge) in range.buckets() {
+        if edge {
+            edges.push((lo.max(bucket_floor(b)), hi.min(bucket_ceil(b))));
+        } else {
+            inner.push(b);
+        }
+    }
+    (inner, edges)
 }
 
 /// In a large pack, big files and media or software files are indexed;

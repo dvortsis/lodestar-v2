@@ -10,6 +10,13 @@
 //! whose producers haven't shipped are defined and left empty; their
 //! population is tracked per field ([`crate::population`]).
 //!
+//! v7 (X-search-files-5, a second M7 bump the runner allowed before the
+//! v0.5.2 cut): `file_bucket` and `file_ext_bucket`, the size buckets of
+//! a torrent's covered files, alone and with each file's extension, so
+//! `file:(size:…)` and `file:(ext:… size:…)` read torrent postings for
+//! the buckets wholly inside the range and the file index only at its
+//! edges. The rebuild fills them; their population is tracked too.
+//!
 //! Only `id` and `name` are stored; everything shown comes from SQLite.
 
 use lodestar_classify::Category;
@@ -34,7 +41,7 @@ pub fn trigram_analyzer() -> tantivy::tokenizer::TextAnalyzer {
 
 /// Bump on any schema change: a new version is a new index directory,
 /// built in the background while the old one serves (§8).
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 /// Bump on any tokenizer change, for the same reason.
 pub const TOKENIZER_VERSION: u32 = 1;
 
@@ -121,6 +128,16 @@ pub struct Fields {
     /// for substring search and the regex prefilter. Off in low-resource
     /// mode (§3).
     pub name_trigram: Field,
+    /// v7. The distinct [`size_bucket`](crate::files::size_bucket)s of
+    /// the files the file index covers ([`crate::files::covered_buckets`]),
+    /// in the inverted index only. A file is in exactly one bucket, so a
+    /// bucket wholly inside a `file:(size:…)` range answers for every
+    /// file in it.
+    pub file_bucket: Field,
+    /// v7. The same files' `{ext}:{bucket}` pairs (keyword, docs only),
+    /// for `file:(ext:… size:…)`: one file's extension and bucket
+    /// together, so it's exact for one file.
+    pub file_ext_bucket: Field,
 }
 
 /// The fields v6 added to the torrent index, by name: the ones whose
@@ -135,6 +152,10 @@ pub const V6_FIELDS: [&str; 7] = [
     "group_minhash",
     "name_trigram",
 ];
+
+/// The fields v7 added to the torrent index, by name, tracked as
+/// [`V6_FIELDS`] are.
+pub const V7_FIELDS: [&str; 2] = ["file_bucket", "file_ext_bucket"];
 
 /// The fast-field name of a category share.
 pub fn share_field(bytes: bool, cat: Category) -> String {
@@ -222,6 +243,16 @@ pub fn build() -> (Schema, Fields) {
                     .set_fieldnorms(false),
             ),
         ),
+        file_bucket: b.add_u64_field("file_bucket", multi()),
+        file_ext_bucket: b.add_text_field(
+            "file_ext_bucket",
+            TextOptions::default().set_indexing_options(
+                TextFieldIndexing::default()
+                    .set_tokenizer("raw")
+                    .set_index_option(IndexRecordOption::Basic)
+                    .set_fieldnorms(false),
+            ),
+        ),
     };
     (b.build(), fields)
 }
@@ -233,7 +264,7 @@ mod tests {
     #[test]
     fn v6_fields_exist_with_their_names() {
         let (schema, f) = build();
-        for name in V6_FIELDS {
+        for name in V6_FIELDS.iter().chain(&V7_FIELDS) {
             assert!(schema.get_field(name).is_ok(), "{name}");
         }
         let named = [

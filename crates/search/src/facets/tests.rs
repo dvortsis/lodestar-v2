@@ -106,6 +106,8 @@ fn doc(i: u64) -> TorrentDoc {
             shares,
         },
         provenance: provenance(i),
+        file_buckets: Vec::new(),
+        file_ext_buckets: Vec::new(),
     }
 }
 

@@ -702,7 +702,9 @@ mod tests {
         let (index, _) = index_with(10, 1);
         let per = u64::from(CHECK_EVERY);
         append_files(&index, 1..11, per);
-        let node = parse("file:(size:>0)").unwrap();
+        // The exclusion keeps it on the file index (a bare range is the
+        // torrent index\'s bucket terms, X-search-files-5).
+        let node = parse("file:(size:>0 -zzqxnever)").unwrap();
         let token = CancelToken::new();
         let (trip, visits) = tripwire(100, &token);
         FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
@@ -722,7 +724,9 @@ mod tests {
         let (index, _) = index_with(10, 1);
         let per = u64::from(CHECK_EVERY);
         append_files(&index, 1..11, per);
-        let files = parse("file:(size:>0)").unwrap();
+        // The exclusion keeps it on the file index (a bare range is the
+        // torrent index\'s bucket terms, X-search-files-5).
+        let files = parse("file:(size:>0 -zzqxnever)").unwrap();
         let plain = parse("Common").unwrap();
         let due = [file_due(1, &files, false), file_due(2, &plain, false)];
         let token = CancelToken::new();
@@ -745,7 +749,9 @@ mod tests {
         let (index, _) = index_with(10, 1);
         append_files(&index, 1..11, 10_000);
         let plain = parse("Common").unwrap();
-        let files = parse("file:(size:>0)").unwrap();
+        // The exclusion keeps it on the file index (a bare range is the
+        // torrent index\'s bucket terms, X-search-files-5).
+        let files = parse("file:(size:>0 -zzqxnever)").unwrap();
         let due = [file_due(1, &plain, false), file_due(2, &files, false)];
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::scope(|s| {

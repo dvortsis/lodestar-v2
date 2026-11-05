@@ -336,6 +336,8 @@ fn resolve_fields(f: &Fields, r: &Resolver<'_>) -> Fields {
         group_key: m(f.group_key),
         group_minhash: m(f.group_minhash),
         name_trigram: m(f.name_trigram),
+        file_bucket: m(f.file_bucket),
+        file_ext_bucket: m(f.file_ext_bucket),
     }
 }
 
@@ -923,6 +925,16 @@ impl SearchIndex {
         Ok(self)
     }
 
+    /// Whether the v7 bucket terms answer `file:(size:…)` here: both are
+    /// in this index and complete ([`crate::population`]). An older index
+    /// serving during the rebuild lacks them, and a backfill of them
+    /// isn't complete until it is: either way the file index answers.
+    pub(crate) fn bucket_terms_ready(&self) -> bool {
+        schema::V7_FIELDS
+            .iter()
+            .all(|f| self.availability(f) == Availability::Ready)
+    }
+
     /// How much of `field` this index can answer for (file-index fields
     /// as `file.<name>`). A field this build added that the index lacks
     /// is [`Availability::Missing`], and so is a name neither index has;
@@ -1284,9 +1296,11 @@ impl SearchIndex {
         cancel: &crate::CancelToken,
     ) -> Result<Compiled> {
         cancel.check()?;
-        // `file:(…)` clauses run on the file index first.
+        // `file:(…)` clauses run on the file index first, but for what
+        // the torrent index's bucket terms answer (X-search-files-5).
+        let buckets = self.bucket_terms_ready();
         let mut clauses = Vec::new();
-        compile::file_clauses(node, &mut clauses);
+        compile::search_file_clauses(node, buckets, &mut clauses);
         let mut sets = compile::FileSets::new();
         let files_searcher = self.files.reader.searcher();
         for of in &clauses {
@@ -1326,6 +1340,7 @@ impl SearchIndex {
             stems,
             hot: self.hot.as_ref(),
             utc_offset,
+            buckets,
         };
         let compile::Parts {
             query,

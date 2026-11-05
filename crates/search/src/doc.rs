@@ -43,6 +43,10 @@ pub struct TorrentDoc {
     pub enriched: DocEnrichment,
     /// Where it came from (§18.6, SRC-3).
     pub provenance: DocProvenance,
+    /// v7. The covered files' size buckets and `{ext}:{bucket}` pairs
+    /// ([`crate::files::covered_buckets`]).
+    pub file_buckets: Vec<u64>,
+    pub file_ext_buckets: Vec<String>,
 }
 
 /// The provenance fields of a document (§18.6): `verified`, `network`
@@ -222,6 +226,7 @@ impl TorrentDoc {
                 hashes.push(short);
             }
         }
+        let (file_buckets, file_ext_buckets) = crate::files::covered_buckets(tree);
         TorrentDoc {
             id: row.id as u64,
             hashes,
@@ -237,6 +242,8 @@ impl TorrentDoc {
             metadata_at: row.metadata_at,
             enriched: DocEnrichment::default(),
             provenance: DocProvenance::stored_torrent(),
+            file_buckets,
+            file_ext_buckets,
         }
     }
 
@@ -315,6 +322,12 @@ impl TorrentDoc {
         d.add_text(f.network, p.network.as_str());
         for s in &p.sources {
             d.add_text(f.source, s);
+        }
+        for b in &self.file_buckets {
+            d.add_u64(f.file_bucket, *b);
+        }
+        for t in &self.file_ext_buckets {
+            d.add_text(f.file_ext_bucket, t);
         }
         d
     }

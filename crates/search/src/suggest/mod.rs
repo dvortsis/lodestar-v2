@@ -895,7 +895,9 @@ mod tests {
         FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
         let restrict = |n: Node| n;
         let req = Request {
-            q: "file:(size:>0) knigth",
+            // The exclusion keeps it on the file index (a bare range is
+            // the torrent index's bucket terms, X-search-files-5).
+            q: "file:(size:>0 -zzqxnever) knigth",
             pos: None,
             limit: 8,
             shown: Shown {
