@@ -2989,6 +2989,13 @@
    "session": "session_01MMjhnArzYGMNe1kwRV3kqG",
    "launched": "2026-11-05T06:51Z",
    "brief": "briefs/RP-3.md"
+  },
+  "X-flake-search-keyboard": {
+   "status": "building",
+   "model": "sonnet",
+   "session": "session_01MMjhnCAdiVGJVoABeaW595",
+   "launched": "2026-11-05T06:52Z",
+   "brief": "briefs/X-flake-search-keyboard.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5177,12 +5184,15 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T06:52Z",
+  "updated": "2026-11-05T06:53Z",
   "items": [
    {
     "slot": 1,
-    "status": "idle",
-    "doing": "Held: X-source-adult-2 waits on RP-2 (#465) and RP-UC (#469), which edit api/filters.rs; RP-4 waits on #465 and SRC-13b (writer.rs); X-search-files-5 waits on #468"
+    "slice": "X-flake-search-keyboard",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Test reliability: the search-results keyboard e2e focus race (seen on #469 and #306)",
+    "since": "2026-11-05T06:52Z"
    },
    {
     "slot": 2,
