@@ -1245,6 +1245,47 @@ impl SearchIndex {
         self.compile_cancelled(node, now, utc_offset, false, cancel)
     }
 
+    /// `node`, compiled, and narrowed to the torrents whose v7
+    /// `title_identity` term is `key` ([`crate::doc::TitleIdentityParts::key`]):
+    /// "other versions of this" by one term (B13b), where a phrase query
+    /// over a short title can match too many torrents to rank them all.
+    /// The term adds nothing to the score, so `node` ranks as it would
+    /// alone. `None` when this index can't answer it: the field is
+    /// missing (an older index serving during the rebuild) or not
+    /// complete (a backfill of it running), so the caller searches
+    /// without it rather than read an unpopulated field as "none". A
+    /// search without a lease reads the latest snapshot, which can only be
+    /// newer than the one this decides by.
+    pub fn query_title_identity(
+        &self,
+        node: &Node,
+        key: u64,
+        now: i64,
+        utc_offset: i32,
+        cancel: &crate::CancelToken,
+    ) -> Result<Option<Compiled>> {
+        if self.fields.title_identity == compile::ABSENT
+            || self.availability("title_identity") != Availability::Ready
+        {
+            return Ok(None);
+        }
+        let mut compiled = self.compile_cancelled(node, now, utc_offset, false, cancel)?;
+        let term = TermQuery::new(
+            Term::from_field_u64(self.fields.title_identity, key),
+            IndexRecordOption::Basic,
+        );
+        let query = std::mem::replace(&mut compiled.query, Box::new(tantivy::query::EmptyQuery));
+        compiled.query = Box::new(BooleanQuery::new(vec![
+            (Occur::Must, query),
+            (
+                Occur::Must,
+                Box::new(tantivy::query::ConstScoreQuery::new(Box::new(term), 0.0)),
+            ),
+        ]));
+        compiled.key.push_str(&format!("@identity{key}"));
+        Ok(Some(compiled))
+    }
+
     /// The same query with the stem tier: each stemmable word also
     /// matches by its light stem in the title (§8). `None` when no word
     /// has a stem alternative, so it would match the same torrents.

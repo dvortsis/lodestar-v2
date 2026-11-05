@@ -339,34 +339,70 @@ impl TorrentDoc {
     }
 }
 
-/// A torrent's title identity, hashed (v7, for B13b; B13's "Known
-/// limit"): the effective title's words as search's tokenizer folds them
-/// (its parts), and the sorted, distinct `year`, `season`, `episode` and
-/// `absolute` spans as the record renders them, an absent set a value of
-/// its own: exactly what `api::compare::identity` compares, so torrents
-/// with one identity share one term. `None` without a title with words.
-/// FNV-1a, so the term is the same in every build; a collision only
-/// over-matches, and the stored records decide.
-pub fn title_identity(record: &Record) -> Option<u64> {
-    let words: Vec<String> = tokenizer::tokenize(record.release("title")?)
+/// A torrent's title identity (B13, `docs/decisions/2026-10-22-B13.md`):
+/// the effective title's words as search's tokenizer folds them (its
+/// parts, so `Spider-Man`, `Spider Man` and `SpiderMan` are all
+/// `spider man`), and the sorted, distinct `year`, `season`, `episode`
+/// and `absolute` spans as the record renders them, an absent set a value
+/// of its own. Two torrents are versions of one work when theirs are
+/// equal. The one definition: `api::compare` builds the identity it shows
+/// and compares from it, and [`title_identity`] hashes it (B13b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleIdentityParts {
+    pub title_words: Vec<String>,
+    pub years: Vec<String>,
+    pub seasons: Vec<String>,
+    pub episodes: Vec<String>,
+    pub absolute: Vec<String>,
+}
+
+impl TitleIdentityParts {
+    /// The identity as one term (v7's `title_identity`): FNV-1a over the
+    /// words and each span set in turn, so it's the same in every build.
+    /// A collision only over-matches; the parts decide.
+    pub fn key(&self) -> u64 {
+        let mut key = self.title_words.join(" ");
+        for spans in [&self.years, &self.seasons, &self.episodes, &self.absolute] {
+            key.push('\u{1f}');
+            key.push_str(&spans.join(","));
+        }
+        key.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+}
+
+/// `record`'s [`TitleIdentityParts`]; `None` without a parsed title that
+/// has any words.
+pub fn title_identity_parts(record: &Record) -> Option<TitleIdentityParts> {
+    let title_words: Vec<String> = tokenizer::tokenize(record.release("title")?)
         .into_iter()
         .filter(|t| t.kind == tokenizer::TokKind::Part)
         .map(|t| t.text)
         .collect();
-    if words.is_empty() {
+    if title_words.is_empty() {
         return None;
     }
-    let mut key = words.join(" ");
-    for k in ["year", "season", "episode", "absolute"] {
-        let mut spans: Vec<&str> = record.release_all(k).collect();
-        spans.sort_unstable();
-        spans.dedup();
-        key.push('\u{1f}');
-        key.push_str(&spans.join(","));
-    }
-    Some(key.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    }))
+    let spans = |k: &str| {
+        let mut v: Vec<String> = record.release_all(k).map(str::to_owned).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    Some(TitleIdentityParts {
+        title_words,
+        years: spans("year"),
+        seasons: spans("season"),
+        episodes: spans("episode"),
+        absolute: spans("absolute"),
+    })
+}
+
+/// A torrent's title identity as v7 indexes it: [`TitleIdentityParts::key`]
+/// of [`title_identity_parts`], so torrents with one identity share one
+/// term. `None` without a title with words.
+pub fn title_identity(record: &Record) -> Option<u64> {
+    title_identity_parts(record).map(|p| p.key())
 }
 
 /// The lowercased extension of a file name, if it looks like one.
