@@ -76,6 +76,10 @@ pub struct FilterHit {
 /// Marks a filter hit as shadow mode: logged, not applied (§20.3).
 pub const SHADOW: u8 = 0x80;
 
+/// Hashes per query of [`Store::latest_hits`]: under SQLite's variable
+/// limit.
+pub const LATEST_HITS_CHUNK: usize = 500;
+
 /// How long a WAL scrub's TRUNCATE checkpoint may wait for readers and
 /// writers on other connections (see [`Store::scrub_wal`]).
 const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
@@ -804,25 +808,70 @@ impl Store {
     }
 
     /// The newest applied filter hit on `hash` (not a shadow one), if
-    /// `filter_hits` still holds one: the decision ingest last recorded
-    /// for it. There's no index on `hash`, so this scans the table: for
-    /// rare paths (SP-4's Undo, RP-5), not ingest.
+    /// `filter_hits` still holds one ([`Store::latest_hits`]).
     pub fn latest_hit(&self, hash: &[u8; 20]) -> Result<Option<FilterHit>> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT rule, action, at, evidence FROM filter_hits
-             WHERE hash = ?1 AND action & ?2 = 0 ORDER BY at DESC, id DESC LIMIT 1",
-        )?;
-        Ok(stmt
-            .query_row(params![&hash[..], i64::from(SHADOW)], |r| {
-                Ok(FilterHit {
-                    hash: *hash,
-                    rule: r.get(0)?,
-                    action: r.get(1)?,
-                    at: r.get(2)?,
-                    evidence: r.get(3)?,
-                })
-            })
-            .optional()?)
+        Ok(self.latest_hits(std::slice::from_ref(hash))?.remove(hash))
+    }
+
+    /// The newest applied filter hit (not a shadow one) on each of
+    /// `hashes` that `filter_hits` still holds one for: the decision
+    /// ingest last recorded, under the torrent's first swarm hash. There's
+    /// no index on `hash`, so each chunk of [`LATEST_HITS_CHUNK`] hashes
+    /// is one scan of the table: for rare paths (SP-4's release hook and
+    /// Undo, RP-5), never ingest.
+    pub fn latest_hits(
+        &self,
+        hashes: &[[u8; 20]],
+    ) -> Result<std::collections::HashMap<[u8; 20], FilterHit>> {
+        let mut out: std::collections::HashMap<[u8; 20], (i64, FilterHit)> =
+            std::collections::HashMap::new();
+        let mut wanted: Vec<&[u8; 20]> = hashes.iter().collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        for chunk in wanted.chunks(LATEST_HITS_CHUNK) {
+            let marks = vec!["?"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT hash, rule, action, at, evidence, id FROM filter_hits
+                 WHERE action & {SHADOW} = 0 AND hash IN ({marks})"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(chunk.iter().map(|h| &h[..])),
+                |r| {
+                    Ok((
+                        r.get::<_, Vec<u8>>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, u8>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, Vec<u8>>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                },
+            )?;
+            for row in rows {
+                let (h, rule, action, at, evidence, id) = row?;
+                let hash = hash20(h)?;
+                let newer = out
+                    .get(&hash)
+                    .is_none_or(|(old_id, old)| (at, id) > (old.at, *old_id));
+                if newer {
+                    out.insert(
+                        hash,
+                        (
+                            id,
+                            FilterHit {
+                                hash,
+                                rule,
+                                action,
+                                at,
+                                evidence,
+                            },
+                        ),
+                    );
+                }
+            }
+        }
+        Ok(out.into_iter().map(|(h, (_, hit))| (h, hit)).collect())
     }
 
     /// Filter hits since `since`, oldest first.
@@ -859,8 +908,6 @@ mod tests {
     use super::*;
     use crate::StoreConfig;
 
-    /// The adult-hold mark is a suffix on the stored rule id; reads strip
-    /// it. Pinned because no migration records it (§20.7).
     #[test]
     fn the_latest_hit_is_the_newest_applied_one() {
         let s = Store::open_in_memory(StoreConfig::default()).unwrap();
@@ -882,6 +929,51 @@ mod tests {
         assert_eq!(s.latest_hit(&[9; 20]).unwrap().unwrap().rule, "U-1");
     }
 
+    /// Many hashes in one call, past a chunk: each hash's newest applied
+    /// hit, by time and then by insertion, as written.
+    #[test]
+    fn latest_hits_in_chunks_find_each_hashs_newest_applied_hit() {
+        let s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let hash = |i: u32| {
+            let mut h = [0u8; 20];
+            h[..4].copy_from_slice(&i.to_le_bytes());
+            h
+        };
+        let n = LATEST_HITS_CHUNK as u32 * 2 + 7;
+        let mut want: std::collections::HashMap<[u8; 20], (String, i64)> = Default::default();
+        for i in 0..n {
+            for (k, rule) in ["SP-2", "SP-3", "U-1"].iter().enumerate() {
+                if (i + k as u32).is_multiple_of(3) {
+                    continue;
+                }
+                let shadow = (i + k as u32).is_multiple_of(5);
+                let at = i64::from((i * 7 + k as u32 * 3) % 4);
+                s.conn
+                    .execute(
+                        "INSERT INTO filter_hits (hash, rule, action, at, evidence)
+                         VALUES (?1, ?2, ?3, ?4, x'')",
+                        params![&hash(i)[..], rule, if shadow { 0x82 } else { 2 }, at],
+                    )
+                    .unwrap();
+                // Later inserts win a tie.
+                if !shadow && want.get(&hash(i)).is_none_or(|(_, old)| at >= *old) {
+                    want.insert(hash(i), ((*rule).to_owned(), at));
+                }
+            }
+        }
+        let all: Vec<[u8; 20]> = (0..n + 3).map(hash).collect();
+        let got = s.latest_hits(&all).unwrap();
+        assert!(got.len() > LATEST_HITS_CHUNK);
+        assert_eq!(got.len(), want.len());
+        for (h, (rule, at)) in &want {
+            let hit = &got[h];
+            assert_eq!((&hit.rule, hit.at), (rule, *at));
+            assert_eq!(s.latest_hit(h).unwrap().as_ref(), Some(hit));
+        }
+    }
+
+    /// The adult-hold mark is a suffix on the stored rule id; reads strip
+    /// it. Pinned because no migration records it (§20.7).
     #[test]
     fn the_adult_hold_mark_is_a_rule_suffix() {
         let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();

@@ -619,6 +619,48 @@ impl Snapshot {
     }
 }
 
+/// A stored torrent as SP-4's release hook reads it (RP-5).
+struct StoredPayload {
+    /// Its first swarm hash, the one ingest records its hits under.
+    primary: [u8; 20],
+    flags: i64,
+    sig: u64,
+}
+
+/// The stored torrents among `hashes`, by any of their swarm hashes, once
+/// each, with a payload specific enough to be in SP-4's set.
+fn stored_payloads(store: &mut Store, hashes: &[[u8; 20]]) -> ApiResult<Vec<StoredPayload>> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for h in hashes {
+        let Some(id) = store
+            .find(&lodestar_metainfo::InfoHash(*h))
+            .map_err(internal)?
+        else {
+            continue;
+        };
+        if !seen.insert(id) {
+            continue;
+        }
+        let (Some(row), Some(tree)) = (
+            store.torrent(id).map_err(internal)?,
+            store.files(id).map_err(internal)?,
+        ) else {
+            continue;
+        };
+        let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+        if let Some(sig) = lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(&files))
+        {
+            out.push(StoredPayload {
+                primary: row.info_hash.0,
+                flags: row.flags,
+                sig,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// The exceptions by hash to SP-2 and SP-3 in `set`, one per hash: those
 /// whose originals' SP-4 signatures they release.
 fn sp4_hash_exceptions(set: &RuleSet) -> HashSet<(PackRule, [u8; 20])> {
@@ -1682,61 +1724,58 @@ impl FiltersApi {
     /// released, if that original is still hidden (or, for SP-3, demoted),
     /// so its clones are held again; one that's back removes it again.
     /// Only an original that rule decided: its newest stored hit
-    /// (`filter_hits`) names the rule with an action that feeds the set,
-    /// and its mark is still on. A torrent your rule, or another pack
-    /// rule, hid is never made an original by an exception that came and
-    /// went. A signature already in the set is left as it is. One by
-    /// payload that's gone can't be put back: the original isn't known.
+    /// (`filter_hits`, under its primary hash) names the rule with an
+    /// action that feeds the set, and its mark is still on. A torrent your
+    /// rule, or another pack rule, hid is never made an original by an
+    /// exception that came and went. A signature already in the set is
+    /// left as it is. One by payload that's gone can't be put back: the
+    /// original isn't known. One read of `filter_hits` per rule and chunk
+    /// of hashes ([`Store::latest_hits`]).
     fn follow_exceptions(
         &self,
         store: &mut Store,
         before: &HashSet<(PackRule, [u8; 20])>,
     ) -> ApiResult<()> {
         let after = sp4_hash_exceptions(&store.rule_set().map_err(internal)?);
-        for (rule, hash) in after.difference(before) {
-            self.release_clones(store, &[*hash], Some(*rule))?;
-        }
+        let by_rule = |set: HashSet<&(PackRule, [u8; 20])>, rule: PackRule| -> Vec<[u8; 20]> {
+            set.into_iter()
+                .filter(|(r, _)| *r == rule)
+                .map(|(_, h)| *h)
+                .collect()
+        };
         let engine = self.engine.current();
         let mut restored = false;
-        for (rule, hash) in before.difference(&after) {
-            let Some(id) = store
-                .find(&lodestar_metainfo::InfoHash(*hash))
-                .map_err(internal)?
-            else {
-                continue;
-            };
-            let Some(row) = store.torrent(id).map_err(internal)? else {
-                continue;
-            };
-            // What the rule decided, as ingest recorded it.
-            let Some(hit) = store.latest_hit(hash).map_err(internal)? else {
-                continue;
-            };
-            let decided = (hit.rule == rule.id())
-                .then(|| lodestar_filter::Action::from_code(hit.action))
-                .flatten()
-                .and_then(|a| lodestar_filter::spam_sigs::Original::of(*rule, a));
-            let Some(original) = decided else {
-                continue;
-            };
-            // Its mark still on: nothing has refiled it since.
-            let mark = match original.action {
-                lodestar_filter::Action::Hide => lodestar_store::flags::HIDDEN,
-                _ => lodestar_store::flags::DEMOTED,
-            };
-            if row.flags & mark == 0 {
+        for rule in [PackRule::Sp2, PackRule::Sp3] {
+            let back = by_rule(after.difference(before).collect(), rule);
+            if !back.is_empty() {
+                self.release_clones(store, &back, Some(rule))?;
+            }
+            let gone = by_rule(before.difference(&after).collect(), rule);
+            if gone.is_empty() {
                 continue;
             }
-            let Some(tree) = store.files(id).map_err(internal)? else {
-                continue;
-            };
-            let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
-            if let Some(sig) =
-                lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(&files))
-                && engine.spam_sigs.get(sig).is_none()
-            {
-                engine.spam_sigs.add(sig, original);
-                restored = true;
+            let stored = stored_payloads(store, &gone)?;
+            let primaries: Vec<[u8; 20]> = stored.iter().map(|t| t.primary).collect();
+            // What the rule decided, as ingest recorded it.
+            let hits = store.latest_hits(&primaries).map_err(internal)?;
+            for t in stored {
+                let decided = hits
+                    .get(&t.primary)
+                    .filter(|hit| hit.rule == rule.id())
+                    .and_then(|hit| lodestar_filter::Action::from_code(hit.action))
+                    .and_then(|a| lodestar_filter::spam_sigs::Original::of(rule, a));
+                let Some(original) = decided else {
+                    continue;
+                };
+                // Its mark still on: nothing has refiled it since.
+                let mark = match original.action {
+                    lodestar_filter::Action::Hide => lodestar_store::flags::HIDDEN,
+                    _ => lodestar_store::flags::DEMOTED,
+                };
+                if t.flags & mark != 0 && engine.spam_sigs.get(t.sig).is_none() {
+                    engine.spam_sigs.add(t.sig, original);
+                    restored = true;
+                }
             }
         }
         if restored {
@@ -1750,9 +1789,10 @@ impl FiltersApi {
     /// clones of an original that's released or excepted follow it. With
     /// `rule`, only a signature that rule added (an exception to SP-2
     /// leaves what SP-3 hid). A hash that isn't stored, or whose payload
-    /// isn't specific, has none. A clone (its own newest hit is SP-4's)
-    /// releases only itself, through its own mark: its family stays
-    /// held. Returns how many were in the set.
+    /// isn't specific, has none. A clone (its own newest hit, under its
+    /// primary hash, is SP-4's) keeps its family held: an exception lets
+    /// it through by its own mark, and a release has nothing of it to
+    /// release. Returns how many were in the set.
     fn release_clones(
         &self,
         store: &mut Store,
@@ -1763,35 +1803,26 @@ impl FiltersApi {
         if engine.spam_sigs.is_empty() {
             return Ok(0);
         }
-        let mut sigs = Vec::new();
-        for h in hashes {
-            let Some(id) = store
-                .find(&lodestar_metainfo::InfoHash(*h))
-                .map_err(internal)?
-            else {
-                continue;
-            };
-            let Some(tree) = store.files(id).map_err(internal)? else {
-                continue;
-            };
-            let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
-            let Some(sig) =
-                lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(&files))
-            else {
-                continue;
-            };
-            // Read only when the signature is in the set: it scans
-            // `filter_hits`.
-            if engine.spam_sigs.get(sig).is_some()
-                && store
-                    .latest_hit(h)
-                    .map_err(internal)?
-                    .is_some_and(|hit| hit.rule == PackRule::Sp4.id())
-            {
-                continue;
-            }
-            sigs.push(sig);
+        let stored: Vec<StoredPayload> = stored_payloads(store, hashes)?
+            .into_iter()
+            .filter(|t| engine.spam_sigs.get(t.sig).is_some())
+            .collect();
+        if stored.is_empty() {
+            return Ok(0);
         }
+        // Read only for signatures in the set: it scans `filter_hits`,
+        // once per chunk of hashes.
+        let primaries: Vec<[u8; 20]> = stored.iter().map(|t| t.primary).collect();
+        let hits = store.latest_hits(&primaries).map_err(internal)?;
+        let sigs: Vec<u64> = stored
+            .iter()
+            .filter(|t| {
+                !hits
+                    .get(&t.primary)
+                    .is_some_and(|hit| hit.rule == PackRule::Sp4.id())
+            })
+            .map(|t| t.sig)
+            .collect();
         if sigs.is_empty() {
             return Ok(0);
         }
@@ -3915,19 +3946,46 @@ mod tests {
         action: lodestar_filter::Action,
         in_set: Option<lodestar_filter::spam_sigs::Original>,
     ) -> (tempfile::TempDir, FiltersApi, [u8; 20], u64) {
+        sp4_stored_as(rule, action, in_set, false)
+    }
+
+    /// [`sp4_stored`], hybrid (v1 and v2) when `hybrid`: its hash is then
+    /// the truncated v2 one, while ingest records its hit under the v1.
+    fn sp4_stored_as(
+        rule: &str,
+        action: lodestar_filter::Action,
+        in_set: Option<lodestar_filter::spam_sigs::Original>,
+        hybrid: bool,
+    ) -> (tempfile::TempDir, FiltersApi, [u8; 20], u64) {
         use lodestar_bencode::{OwnedValue, to_vec};
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
-        let raw = to_vec(&OwnedValue::Dict(
-            [
-                (b"length".to_vec(), OwnedValue::Int(1_234_567_891)),
-                (b"name".to_vec(), OwnedValue::Bytes(b"spam.mkv".to_vec())),
-                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
-                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
-            ]
-            .into_iter()
-            .collect(),
-        ));
+        let size = 1_234_567_891;
+        let mut dict: std::collections::BTreeMap<Vec<u8>, OwnedValue> = [
+            (b"length".to_vec(), OwnedValue::Int(size)),
+            (b"name".to_vec(), OwnedValue::Bytes(b"spam.mkv".to_vec())),
+            (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+            (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+        ]
+        .into_iter()
+        .collect();
+        if hybrid {
+            let leaf = OwnedValue::Dict(
+                [
+                    (b"length".to_vec(), OwnedValue::Int(size)),
+                    (b"pieces root".to_vec(), OwnedValue::Bytes(vec![5; 32])),
+                ]
+                .into_iter()
+                .collect(),
+            );
+            let file = OwnedValue::Dict([(Vec::new(), leaf)].into_iter().collect());
+            dict.insert(
+                b"file tree".to_vec(),
+                OwnedValue::Dict([(b"spam.mkv".to_vec(), file)].into_iter().collect()),
+            );
+            dict.insert(b"meta version".to_vec(), OwnedValue::Int(2));
+        }
+        let raw = to_vec(&OwnedValue::Dict(dict.into_iter().collect()));
         let info = lodestar_metainfo::Info::parse(&raw).unwrap();
         let mark = match action {
             lodestar_filter::Action::Hide => lodestar_store::flags::HIDDEN,
@@ -3943,11 +4001,19 @@ mod tests {
                 source: lodestar_store::SourceId::new(0).unwrap(),
             }])
             .unwrap();
-        let hash = info.primary_hash().0;
+        let primary = info.primary_hash().0;
+        let hash = if hybrid {
+            let v2 = info.v2.expect("a hybrid").truncated().0;
+            assert_ne!(v2, primary);
+            v2
+        } else {
+            primary
+        };
         store
             .write(&lodestar_store::WriteBatch {
                 filtered: &[lodestar_store::Filtered {
-                    hashes: &[hash],
+                    // As ingest records it: under the first swarm hash.
+                    hashes: &[primary, hash],
                     rule,
                     action: action.code(),
                     held: None,
@@ -4055,6 +4121,60 @@ mod tests {
         assert_eq!(api.engine.current().spam_sigs.get(sig), Some(sp3));
         apply_change(&api, Change::Undo);
         assert_eq!(api.engine.current().spam_sigs.get(sig), Some(sp3));
+    }
+
+    /// A hybrid torrent named by its v2 hash: its hit is found under its
+    /// primary hash, so Undo puts its signature back, and excepting a
+    /// hybrid clone by that hash keeps its family held.
+    #[test]
+    fn sp4_a_hybrid_is_read_by_its_primary_hash() {
+        use lodestar_filter::Action;
+        use lodestar_filter::spam_sigs::Original;
+        let hid = Original {
+            rule: PackRule::Sp2,
+            action: Action::Hide,
+        };
+        let (_dir, api, hash, sig) = sp4_stored_as("SP-2", Action::Hide, Some(hid), true);
+        apply_change(&api, sp4_exception("SP-2", &hash));
+        assert_eq!(api.engine.current().spam_sigs.get(sig), None);
+        apply_change(&api, Change::Undo);
+        assert_eq!(api.engine.current().spam_sigs.get(sig), Some(hid));
+        let (_dir, api, hash, sig) = sp4_stored_as("SP-4", Action::Hide, Some(hid), true);
+        apply_change(&api, sp4_exception("SP-2", &hash));
+        assert_eq!(api.engine.current().spam_sigs.get(sig), Some(hid));
+    }
+
+    /// An exception of many hashes, past one read's chunk, with the
+    /// original among them: its Undo puts the signature back, as one
+    /// hash's does.
+    #[test]
+    fn sp4_undo_of_a_many_hash_exception() {
+        use lodestar_filter::Action;
+        use lodestar_filter::spam_sigs::Original;
+        let hid = Original {
+            rule: PackRule::Sp2,
+            action: Action::Hide,
+        };
+        let (_dir, api, hash, sig) = sp4_stored("SP-2", Action::Hide, Some(hid));
+        let mut hashes: Vec<String> = (0..lodestar_store::LATEST_HITS_CHUNK as u32 + 20)
+            .map(|i| {
+                let mut h = [0xaa; 20];
+                h[..4].copy_from_slice(&i.to_le_bytes());
+                hex(&h)
+            })
+            .collect();
+        hashes.push(hex(&hash));
+        let change = Change::AddException {
+            rule: "SP-2".into(),
+            what: MatchInput {
+                hashes: Some(hashes),
+                ..MatchInput::default()
+            },
+        };
+        apply_change(&api, change);
+        assert_eq!(api.engine.current().spam_sigs.get(sig), None);
+        apply_change(&api, Change::Undo);
+        assert_eq!(api.engine.current().spam_sigs.get(sig), Some(hid));
     }
 
     /// Releasing a clone, or excepting it by hash, frees only the clone:

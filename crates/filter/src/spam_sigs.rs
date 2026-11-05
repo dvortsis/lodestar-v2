@@ -82,9 +82,10 @@ pub const MAX_ROW: u64 = 1 << 40;
 /// listed as a lost key and never sets where numbering starts, and no
 /// row is started there. Reaching it from row 0 takes 2^39 rows of 511
 /// hides; only a stray key near it can bring it close. Then, once the
-/// numbers run out, the set stops growing and says so
+/// numbers run out, the set stops changing and says so
 /// ([`SpamSigs::labels`]: `packs.sp4.row.numbers`), rather than write a
-/// row a restart wouldn't read.
+/// row a restart wouldn't read: no signature is added, and no release
+/// takes effect either (that errs strict).
 pub const ROW_BAND: u64 = MAX_ROW / 2;
 /// The label suffix when the row numbers ran out ([`ROW_BAND`]).
 const OUT_OF_NUMBERS: &str = "numbers";
@@ -772,8 +773,9 @@ fn sanitize(s: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
         .take(32)
         .collect();
-    // Never a bare number: it would read as a row's label.
-    if clean.is_empty() || clean.bytes().all(|b| b.is_ascii_digit()) {
+    // Never a bare number, which would read as a row's label, nor the
+    // label of the numbers running out.
+    if clean.is_empty() || clean.bytes().all(|b| b.is_ascii_digit()) || clean == OUT_OF_NUMBERS {
         format!("key-{clean}")
     } else {
         clean
@@ -843,6 +845,11 @@ mod tests {
         assert_eq!(canonical("+1"), None);
         assert_eq!(sanitize("a b@c~"), "abc");
         assert_eq!(sanitize("+1"), "key-1", "never a row's label");
+        assert_eq!(
+            sanitize("numbers"),
+            "key-numbers",
+            "never running out's label"
+        );
         assert_eq!(canonical(&ROW_BAND.to_string()), None);
         assert_eq!(canonical(&(MAX_ROW - 1).to_string()), None);
         assert_eq!(canonical(&(ROW_BAND - 1).to_string()), Some(ROW_BAND - 1));
