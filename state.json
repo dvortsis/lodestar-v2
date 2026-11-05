@@ -2807,6 +2807,20 @@
     },
     "X-thp-off": {
       "status": "running session_01MMjhnCQkmjmywGxSKFFdqM"
+    },
+    "R-rc4-cut": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhn8mf22UX2LbFAWGs3j",
+      "launched": "2026-11-05T01:12Z",
+      "brief": "briefs/R-rc4-cut.md"
+    },
+    "LEGAL-1r": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnCfjgKx3a1uKRGVh9g",
+      "launched": "2026-11-05T01:12Z",
+      "brief": "briefs/LEGAL-1r.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3253,7 +3267,8 @@
     "2026-11-04T23:03Z: #426 SRC-3 merged (a0f8c51b), session archived. Next candidates now unblocked: SRC-3b; RP-2 (load.rs free).",
     "2026-11-04T23:10Z glibc harness on main 6861f02c (write+claims+index, one commit/torrent, 10k torrents): no per-torrent C allocation; hblks 1 flat; 128–512 KiB VMAs flat 24–25; sqlite_memory_used caps at 8.5 MB (~7k torrents, page caches); zstd keeps nothing. Code path cleared under glibc -> musl mallocng retention is the lead. musl harness run started (+ mimalloc override comparison).",
     "2026-11-04T23:38Z: musl harness: release C allocator is zig's SmpAllocator (64 KiB slabs never unmapped, per-CPU-slot freelists), not mallocng; single-threaded growth stops with SQLite; override moves C into mimalloc (outside-arena ~0.3 MiB). Lead: cross-thread freelist pile-up. Launched X-mimalloc-override (session_01MMjhn8MbfjxtzM7rZbDoV9).",
-    "2026-11-04T23:38Z: OWNER (runner chat): legal-notice session's three slices (LEGAL-1, RP-DEF, RP-UC) go into v0.5.1 via rc.4; Colorado counsel review is advisory only, not a gate. Legal branch renumbers to §2.38/§2.39."
+    "2026-11-04T23:38Z: OWNER (runner chat): legal-notice session's three slices (LEGAL-1, RP-DEF, RP-UC) go into v0.5.1 via rc.4; Colorado counsel review is advisory only, not a gate. Legal branch renumbers to §2.38/§2.39.",
+    "2026-11-05T01:12Z Owner (chat, ~01:15Z answer): rc.4 = memory fixes + release-branch Legal Notice (LEGAL-1r); RP-DEF and RP-UC (packs on by default, unauthorised-copy pack) move to v0.5.2; LEGAL-1 (main wizard step) after LEGAL-1r. Record as owner-decisions §2.40. Launched R-rc4-cut and LEGAL-1r."
   ],
   "owner_flags": [
     "2026-10-23 00:33 §2.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4926,7 +4941,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T01:08Z",
+    "updated": "2026-11-05T01:12Z",
     "items": [
       {
         "slot": 1,
@@ -4943,6 +4958,22 @@
         "agent": "claude",
         "doing": "PR #447: owner decisions §2.38–§2.39 (Legal Notice, rule packs on by default), the legal docs and the specs for LEGAL-1, RP-DEF and RP-UC. Reviewed; waiting for green CI.",
         "since": "2026-11-05T00:37Z"
+      },
+      {
+        "slot": 3,
+        "slice": "R-rc4-cut",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Bringing the memory and log-redaction fixes onto the release branch for rc.4 (soak r4 failed its memory gate).",
+        "since": "2026-11-05T01:12Z"
+      },
+      {
+        "slot": 4,
+        "slice": "LEGAL-1r",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Adding the Legal Notice to the release build: setup and login refuse until it is accepted (owner: in v0.5.1).",
+        "since": "2026-11-05T01:12Z"
       },
       {
         "slot": 5,
