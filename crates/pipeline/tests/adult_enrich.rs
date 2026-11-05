@@ -61,6 +61,7 @@ static MANIFEST: Manifest = Manifest {
     default_priority: Priority::Normal,
     enabled_by_default: false,
     always_adult: false,
+    finds_private: false,
 };
 
 fn info_dict(name: &str) -> Vec<u8> {
