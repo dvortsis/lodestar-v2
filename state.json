@@ -5380,7 +5380,7 @@
       {
         "slot": 10,
         "status": "idle",
-        "doing": "Free since #486 merged at 12:07Z; filling at this wake"
+        "doing": "Held: no ready slice. ENR-1b waits on #480; LEGAL-2 and X-settings-trim on #472; RP-5 on RP-4; B13b on X-search-files-5"
       },
       {
         "slot": 11,
