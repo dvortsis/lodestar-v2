@@ -127,9 +127,9 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
         return format!("magnet:{REDACTED}");
     }
     // A magnet glued to the authority (`http://[::1]magnet%3A…`, B-log1):
-    // it and all after it go, and with an `@` after it the rest goes too,
-    // since the URL rules would have hidden what's before that `@`. One in
-    // the path or query is `finish`'s.
+    // the whole authority goes with it, since cutting there would drop what
+    // makes the rules below hide it (`https://<secret>,magnet:` lost its
+    // `:`; review). One in the path or query is `finish`'s.
     let in_authority = |m: usize| {
         form == Form::Absolute
             && url[..m]
@@ -137,19 +137,8 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
                 .is_some_and(|s| !url[s + 3..m].contains(['/', '?', '#']))
     };
     if let Some(m) = magnets().from(url, 1).filter(|&m| in_authority(m)) {
-        if url[m..].contains('@') {
-            return match url[..m].find("://") {
-                Some(s) if form == Form::Absolute => {
-                    format!("{}://{REDACTED}", redact_runs(&redact_secrets(&url[..s])))
-                }
-                _ if url.starts_with('/') => format!("/{REDACTED}"),
-                _ => REDACTED.to_string(),
-            };
-        }
-        let mut out = scrub_with(&url[..glued_run_start(url, m)], form, drop_query);
-        out.push_str("magnet:");
-        out.push_str(REDACTED);
-        return out;
+        let s = url[..m].find("://").unwrap_or(0);
+        return format!("{}://{REDACTED}", redact_runs(&redact_secrets(&url[..s])));
     }
     let mut out = String::with_capacity(url.len());
     // The authority, userinfo included, comes off the raw URL first: a
@@ -204,7 +193,10 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
                                     .strip_prefix(':')
                                     .is_some_and(|p| p.bytes().all(|b| b.is_ascii_digit())))
                     }),
-                    None => h.contains('%'),
+                    // Nor any character a host can't hold, nor a port that's
+                    // no number (`@token:https:\/\/…`, a credential's value
+                    // read as a host; review).
+                    None => marks_userinfo(h, false),
                 };
                 if odd {
                     out.push_str(REDACTED);
@@ -246,7 +238,12 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
 /// `https%3A%2F%2F…`, `https:%2F%2F…`, `https:\/\/…`), whose userinfo
 /// would otherwise stay, or a magnet link (B-log1).
 fn holds_url(value: &str) -> bool {
-    normalize_separators(value).contains("://") || holds_magnet(value)
+    value.contains("://")
+        || [b"%3a%2f%2f".as_slice(), b"%3a//"]
+            .iter()
+            .any(|n| find_ci_bytes(value.as_bytes(), n).is_some())
+        || normalize_separators(value, false).contains("://")
+        || holds_magnet(value)
 }
 
 /// `rest` (a path, query and fragment) appended to `out`, scrubbed.
@@ -276,12 +273,10 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
         out.push_str(REDACTED);
         return out;
     }
-    for (i, segment) in path.split('/').enumerate() {
-        if i > 0 {
-            out.push('/');
-        }
-        // `name=value` credentials too (`/dl/passkey=<k>`).
-        out.push_str(&redact_runs(&redact_secrets(segment)));
+    let (scrubbed, cut) = scrub_path(path);
+    out.push_str(&scrubbed);
+    if cut {
+        return out;
     }
     if magnet {
         out.push_str("magnet:");
@@ -331,6 +326,29 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
         }
     }
     out
+}
+
+/// A path scrubbed segment by segment, `name=value` credentials included
+/// (`/dl/passkey=<k>`), and whether all after some point went: a
+/// credential's value that runs over a `/` (`/token:https:\/\/h\/<s>`)
+/// takes the rest of the path with it.
+fn scrub_path(path: &str) -> (String, bool) {
+    let cut = secret_cuts(path)
+        .into_iter()
+        .find(|&(a, b)| path[a..b].contains('/'))
+        .map(|(a, _)| a);
+    let keep = &path[..cut.unwrap_or(path.len())];
+    let mut out = String::with_capacity(path.len());
+    for (i, segment) in keep.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(&redact_runs(&redact_secrets(segment)));
+    }
+    if cut.is_some() {
+        out.push_str(REDACTED);
+    }
+    (out, cut.is_some())
 }
 
 /// Where an authority's userinfo ends and the authority itself ends, in
@@ -494,13 +512,15 @@ pub fn scrub_text(text: &str) -> String {
     let debug = scrub_debug_forms(text);
     // URL forms without a raw `://` (`http:%2F%2F`, `http:/`, `//u:p@h`)
     // are written with one, so the rules below find them.
-    let separated = normalize_separators(&debug);
+    let separated = normalize_separators(&debug, true);
     let text: &str = &separated;
     let ats = Ats::new(text);
     let mut out = String::with_capacity(text.len());
     let mut pos = 0;
     let mut scheme = Next::new("://", false);
     let mut magnet = magnets();
+    // A credential's name that ended the last span (see below).
+    let mut carry: Option<String> = None;
     while pos < text.len() {
         let Some(i) = [scheme.from(text, pos), magnet.from(text, pos)]
             .into_iter()
@@ -613,7 +633,7 @@ pub fn scrub_text(text: &str) -> String {
                         || !rest[from..nested].contains('/')
                         || !known_scheme(&rest[scheme_start(rest, scan, nested)..nested]) =>
                 {
-                    out.push_str(&lead(rest, start, i));
+                    out.push_str(&lead(rest, start, i, carry.take()));
                     out.push_str("://");
                     out.push_str(REDACTED);
                     // A magnet in what's hidden gets its own span (B-log1),
@@ -654,8 +674,15 @@ pub fn scrub_text(text: &str) -> String {
             Some(m) if url && m < end => end.max(magnet_span(text, pos, m, &mut scheme, &ats)),
             _ => end,
         };
-        out.push_str(&lead(rest, start, i));
+        out.push_str(&lead(rest, start, i, carry.take()));
         out.push_str(&scrub_with(&rest[i..end.max(i)], Form::Absolute, true));
+        // A span that ends on a credential's name (`&tr=Authorization:`,
+        // `/token=`, `@Bearer`) leaves its value after the span: the text
+        // after it is read with that name before it, so the plain-text
+        // rules still hide the value (review). The span itself is scrubbed
+        // whole as before, since the name may be glued to a passkey
+        // (`/<passkey>Authorization:`).
+        carry = credential_tail(&rest[i..end.max(i)]).map(|t| rest[i + t..end].to_string());
         pos += end;
         if end == start {
             // Nothing consumed (a bare "://"): step past it.
@@ -667,8 +694,23 @@ pub fn scrub_text(text: &str) -> String {
             pos += step;
         }
     }
-    out.push_str(&hide_runs(&redact_secrets(&text[pos..])));
+    out.push_str(&plain(&text[pos..], carry.take()));
     out
+}
+
+/// `text` scrubbed as plain text, read after `carry` (a credential's name
+/// that ended the span before it) so the name's value is hidden; the name
+/// itself isn't written again. Should the rules ever cut into the name, the
+/// whole text goes.
+fn plain(text: &str, carry: Option<String>) -> String {
+    let Some(carry) = carry else {
+        return hide_runs(&redact_secrets(text));
+    };
+    let joined = hide_runs(&redact_secrets(&format!("{carry}{text}")));
+    match joined.strip_prefix(carry.as_str()) {
+        Some(rest) => rest.to_string(),
+        None => REDACTED.to_string(),
+    }
 }
 
 /// Where the magnet link at `k` in `text[pos..]` ends. It ends only at a
@@ -699,6 +741,38 @@ fn magnet_span(text: &str, pos: usize, k: usize, scheme: &mut Next, ats: &Ats) -
             Some(m) if m < end => n = m,
             _ => return end,
         }
+    }
+}
+
+/// Where the credential name that ends `span` starts, if one does: a
+/// credential-like name and `=`, `:`, `%3D` or `%3A`, a quote allowed
+/// between (`&tr=Authorization:`, `"token":`), or a bare `Bearer`.
+fn credential_tail(span: &str) -> Option<usize> {
+    let b = span.as_bytes();
+    let sep = match () {
+        _ if span.ends_with(['=', ':']) => 1,
+        _ if ["%3d", "%3a"].iter().any(|e| {
+            span.len() >= 3
+                && span.is_char_boundary(span.len() - 3)
+                && span[span.len() - 3..].eq_ignore_ascii_case(e)
+        }) =>
+        {
+            3
+        }
+        _ => 0,
+    };
+    let mut end = b.len() - sep;
+    if sep > 0 && end > 0 && matches!(b[end - 1], b'"' | b'\'') {
+        end -= 1;
+    }
+    let start = end - b[..end].iter().rev().take_while(|&&c| name_char(c)).count();
+    let name = &span[start..end];
+    match sep {
+        // A bare `Bearer`, even glued on (`token%3ABearer`): only it is
+        // carried, so the rules read it as `Bearer`.
+        0 => (name.len() >= 6 && name[name.len() - 6..].eq_ignore_ascii_case("bearer"))
+            .then(|| end - 6),
+        _ => (!name.is_empty() && credential(name)).then_some(start),
     }
 }
 
@@ -798,7 +872,10 @@ fn starts_ci(s: &str, prefix: &str) -> bool {
 ///   after it on the same line.
 ///
 /// The URL then shows with a plain `://`, whatever it was written with.
-fn normalize_separators(text: &str) -> std::borrow::Cow<'_, str> {
+/// With `keep_values`, a separator inside a credential's value (what
+/// [`redact_secrets`] would hide) is left as it is, so the value stays
+/// one and is hidden whole.
+fn normalize_separators(text: &str, keep_values: bool) -> std::borrow::Cow<'_, str> {
     let b = text.as_bytes();
     if !b.contains(&b'/')
         && find_ci_bytes(b, b"%2f").is_none()
@@ -806,12 +883,23 @@ fn normalize_separators(text: &str) -> std::borrow::Cow<'_, str> {
     {
         return text.into();
     }
+    // A credential's value is never split (security review): one holding
+    // an encoded `://` (`secret=https%3A%2F%2Fh/<secret>`, `token%3A%2F%2F
+    // <secret>`) stays one value, which the credential rules hide whole.
+    let cuts = match keep_values {
+        true => secret_cuts(text),
+        false => Vec::new(),
+    };
+    let mut cut = 0;
     let mut out = String::new();
     let mut copied = 0;
     let mut at = Next::new("@", false);
     let mut line = AnyOf([Next::new("\n", false), Next::new("\r", false)]);
     let mut k = 0;
     while k < b.len() {
+        while cuts.get(cut).is_some_and(|&(_, to)| to < k) {
+            cut += 1;
+        }
         // (what's replaced, what it becomes)
         let found = match b[k] {
             b':' | b'%' => separator_len(text, k).map(|len| (len, "://")),
@@ -829,16 +917,21 @@ fn normalize_separators(text: &str) -> std::borrow::Cow<'_, str> {
                 let colon = text[k + 2..]
                     .find(|c: char| matches!(c, ':' | '/') || c.is_whitespace())
                     .is_some_and(|j| text[k + 2 + j..].starts_with(':'));
+                // And not where a credential's value starts before that `@`
+                // (`//x Authorization: u@<secret>`): it would become a host.
                 let at_after = word_start
                     && host_next
                     && at.from(text, k + 2).is_some_and(|a| {
                         a - k <= USERINFO_LOOKAHEAD
                             && (colon || line.from(text, k).is_none_or(|l| l > a))
+                            && cuts.get(cut).is_none_or(|&(from, _)| from > a)
                     });
                 at_after.then_some((2, "://"))
             }
             _ => None,
         };
+        // Not where it touches a cut: inside one, or ending at one's start.
+        let found = found.filter(|&(len, _)| cuts.get(cut).is_none_or(|&(from, _)| from > k + len));
         match found {
             Some((len, with)) => {
                 out.push_str(&text[copied..k]);
@@ -859,6 +952,10 @@ fn normalize_separators(text: &str) -> std::borrow::Cow<'_, str> {
 /// How long the URL separator written another way at `k` in `text` is
 /// (see [`normalize_separators`]), if there is one there.
 fn separator_len(text: &str, k: usize) -> Option<usize> {
+    // A scheme always comes before it (`[:/%2F` is no URL's).
+    if !text[..k].ends_with(scheme_char) {
+        return None;
+    }
     let s = &text[k..];
     let colon = [":", "%3a", "%253a"]
         .iter()
@@ -903,8 +1000,8 @@ fn separator_len(text: &str, k: usize) -> Option<usize> {
 /// scrubbed as plain text: a credential's value glued to `://`
 /// (`passkey=<k>://`) would otherwise be taken for a scheme. A scheme
 /// that's left whole goes through the passkey rules too.
-fn lead(rest: &str, start: usize, i: usize) -> String {
-    let lead = hide_runs(&redact_secrets(&rest[..i]));
+fn lead(rest: &str, start: usize, i: usize, carry: Option<String>) -> String {
+    let lead = plain(&rest[..i], carry);
     let scheme = &rest[start..i];
     match lead.strip_suffix(scheme) {
         Some(before) if !scheme.is_empty() => format!("{before}{}", redact_runs(scheme)),
@@ -1199,17 +1296,14 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
             true if text[from..to].contains('@') || holds_magnet(&text[from..to]) => {
                 out.push_str(REDACTED)
             }
-            true => {
-                let mut scrubbed = String::new();
-                for (k, segment) in text[from..to].split('/').enumerate() {
-                    if k > 0 {
-                        scrubbed.push('/');
-                    }
-                    scrubbed.push_str(&redact_runs(&redact_secrets(segment)));
-                }
-                out.push_str(&scrubbed);
-            }
+            true => out.push_str(&scrub_path(&text[from..to]).0),
             false => out.push_str(REDACTED),
+        }
+        // A value holding an `@` keeps one after it: the field's name may be
+        // inside a URL's raw password (`http://u:a path: "b@h/`), whose `@`
+        // the URL rules then still find.
+        if text[from..to].contains('@') {
+            out.push('@');
         }
         if let Some(sep) = url {
             // `[redacted]@` marks it as userinfo, so the URL rules read a
@@ -1222,6 +1316,35 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
         }
         copied = value_end;
         i = inner.unwrap_or(value_end.max(from));
+        // A value that ends on a credential's name (`password: Some("user:
+        // username:"<secret>`): its closing quote opens that name's value,
+        // which goes too, read with the name before it.
+        if let Some(t) = (url.is_none() && inner.is_none())
+            .then(|| credential_tail(&text[from..to]))
+            .flatten()
+        {
+            let name = &text[from + t..to];
+            let mut bound = text.len().min(value_end + USERINFO_LOOKAHEAD);
+            while !text.is_char_boundary(bound) {
+                bound -= 1;
+            }
+            let probe = format!("{name}{}", &text[value_end..bound]);
+            let value = secret_cuts(&probe)
+                .into_iter()
+                .map(|(a, b)| {
+                    (
+                        value_end + a.max(name.len()) - name.len(),
+                        value_end + b - name.len(),
+                    )
+                })
+                .find(|&(_, b)| b > value_end);
+            if let Some((a, b)) = value {
+                out.push_str(&text[value_end..a]);
+                out.push_str(REDACTED);
+                copied = b;
+                i = b;
+            }
+        }
     }
     out.push_str(&text[copied..]);
     out.into()
@@ -1247,14 +1370,36 @@ fn name_char(b: u8) -> bool {
 /// `token = …`), quoted or not (`password: "…"`, `{"x-api-key": "…"}`,
 /// `token='…'`).
 fn redact_secrets(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (from, to) in secret_cuts(text) {
+        out.push_str(&text[copied..from]);
+        out.push_str(REDACTED);
+        copied = to;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// The byte ranges [`redact_secrets`] replaces, in order and apart.
+fn secret_cuts(text: &str) -> Vec<(usize, usize)> {
     let b = text.as_bytes();
+    // Where an unquoted value ends, remembered (the last search's start and
+    // answer), since values are read again from their start (below).
+    let last = std::cell::Cell::new((usize::MAX, 0));
     let stop = |from: usize| {
-        (from..b.len())
+        let (start, at) = last.get();
+        if start <= from && from <= at {
+            return at;
+        }
+        let at = (from..b.len())
             .find(|&k| {
                 b[k].is_ascii_whitespace()
                     || matches!(b[k], b'&' | b';' | b',' | b'"' | b'\'' | b')')
             })
-            .unwrap_or(b.len())
+            .unwrap_or(b.len());
+        last.set((from, at));
+        at
     };
     // Byte ranges to replace, in order; every bound is next to ASCII, so
     // each is a char boundary.
@@ -1265,8 +1410,11 @@ fn redact_secrets(text: &str) -> String {
         _ => cuts.push((from, to)),
     };
     let mut i = 0;
+    // Where the value being read again starts: a word starts there even
+    // after `%3D` (`key%3DAuthorization: <secret>`).
+    let mut value_at = usize::MAX;
     while i < b.len() {
-        let at_word = i == 0 || !name_char(b[i - 1]);
+        let at_word = i == 0 || i == value_at || !name_char(b[i - 1]);
         if !at_word || !name_char(b[i]) {
             i += 1;
             continue;
@@ -1320,7 +1468,7 @@ fn redact_secrets(text: &str) -> String {
             {
                 j = skip_space(b, j + 5);
             }
-            let (j, end, quoted) = match b.get(j) {
+            let (j, end) = match b.get(j) {
                 // A quoted value runs to its closing quote, past escaped
                 // ones (`"a\"b"`).
                 Some(&q @ (b'"' | b'\'')) => {
@@ -1329,7 +1477,7 @@ fn redact_secrets(text: &str) -> String {
                     while to < b.len() && b[to] != q {
                         to += if b[to] == b'\\' { 2 } else { 1 };
                     }
-                    (from, to.min(b.len()), true)
+                    (from, to.min(b.len()))
                 }
                 _ => {
                     let mut end = stop(j);
@@ -1352,33 +1500,33 @@ fn redact_secrets(text: &str) -> String {
                             end = stop(next);
                         }
                     }
-                    (j, end, false)
+                    (j, end)
                 }
             };
             if end > j {
                 cut(j, end);
             }
-            // A quoted value is read again from its start: its closing
-            // quote may open the next field's value (`password: Some("
-            // username: "<secret>"`), whose name is inside it. It ends at
-            // the next quote of its kind, so the reading stays linear.
-            i = match quoted {
-                true => j,
-                false => end.max(sep + sep_len),
-            };
+            // A value is read again from its start, so a credential's name
+            // inside it keeps its own value hidden: a quoted value's closing
+            // quote may open the next field's (`password: Some("username:
+            // "<secret>"`), and an unquoted one may be a name glued on
+            // (`pass:token: <secret>`). Each value's end is searched once
+            // (`stop` remembers it), and a quoted one ends at the next quote
+            // of its kind, so the reading stays linear.
+            // After `%3D` or `%3A`, from its `3`: that's where a word starts
+            // when the value isn't read again (`Bearer pass%3Authorization:`
+            // has `3Authorization`).
+            i = match sep_len {
+                3 => sep + 1,
+                _ => j,
+            }
+            .max(i + 1);
+            value_at = i;
             continue;
         }
         i = name_end;
     }
-    let mut out = String::with_capacity(text.len());
-    let mut copied = 0;
-    for (from, to) in cuts {
-        out.push_str(&text[copied..from]);
-        out.push_str(REDACTED);
-        copied = to;
-    }
-    out.push_str(&text[copied..]);
-    out
+    cuts
 }
 
 /// The first index at or after `from` that isn't ASCII whitespace.
@@ -1785,6 +1933,11 @@ me@x"
             "Bearer token=",
             "password: Some(\"username: \"",
             "a: 'b: \"",
+            "x/Authorization: ",
+            "Bearer a:",
+            "token=token=",
+            "magnet:?xt=a &tr=token: ",
+            "pass:%2F%2F",
         ] {
             let [small, large] = times_for(unit, 256 << 10, 4 << 20);
             let small = small.max(std::time::Duration::from_micros(50));
@@ -2261,6 +2414,95 @@ me@x"
     }
 
     #[test]
+    fn a_credential_s_value_is_never_split_into_a_url() {
+        // Security review: the separator pass made a URL inside a value.
+        for text in [
+            r#"{"token":"https:\/\/hooks.slack.com\/services\/T0\/B0\/S3CRETxyz"}"#,
+            "secret=https%3A%2F%2Fhooks.slack.com/services/T0/B0/S3CRETxyz ok",
+            "token='https%3A%2F%2Fh.example/hook/S3CRETxyz'",
+            "GET /announce?passkey=Zq%3A%2F%2FS3CRETxyz HTTP/1.1",
+            "username=bob&password=p%3A%2F%2FS3CRETxyz",
+            "token%3A%2F%2FS3CRETxyz",
+            "Authorization: Bearer abc:%2F%2FS3CRETxyz",
+            "password:%2F%2Fab+S3CRETxyz==",
+            "?sig%3A%2F%2FS3CRETxyz",
+            "key:%252F%252FS3CRETxyz",
+            r"token:\/\/S3CRETxyz",
+            "pass:http:/S3CRETxyz",
+            "api_key:http%3A%2F%2FS3CRETxyz",
+            "x %3A/%2FAuthorization: S3CRETxyz",
+            "//]Basic Authorization: -sid%3A@passS3CRETxyz ",
+            "://=[:/%2FS3CRETxyz",
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text:?} -> {s:?}");
+        }
+        assert_eq!(
+            scrub_text("secret=https%3A%2F%2Fh.example/x ok"),
+            "secret=[redacted] ok"
+        );
+    }
+
+    #[test]
+    fn a_name_glued_on_never_escapes_with_its_value() {
+        // Fresh review: a `Bearer` token, a value or a span that ends on a
+        // credential's name kept that name's value.
+        for text in [
+            "Bearer pass:token: S3CRET",
+            r#"Bearer key:password: "S3CRET hunter""#,
+            r#"Bearer token:password:"S3CRET"#,
+            "Bearer pass%3Authorization: S3CRET",
+            r#"Bearer key%3Atoken%3D"S3CRET"#,
+            r#"Bearer user:username:"S3CRET"#,
+            "bearer\tkey%3DAuthorization: aS3CRET\"",
+            "pass:token: S3CRET",
+            r#"user:username:"S3CRET"#,
+            "magnet:?xt=a &tr=Authorization: S3CRET",
+            "//@Bearer S3CRET",
+            "x ://S3CRET&magnet:",
+            "://S3CRET=magnet:",
+            "see https://h/x/token: S3CRET ok",
+            "https://h/Some(Bearer Bearer S3CRET",
+        ] {
+            for s in [
+                scrub_text(text),
+                scrub(text, Form::Absolute),
+                scrub(text, Form::Request),
+            ] {
+                assert!(!s.contains("S3CRET"), "{text:?} -> {s:?}");
+            }
+        }
+        assert_eq!(
+            scrub_text("see https://h/x/token: S3CRET ok"),
+            "see https://h/x/token: [redacted] ok"
+        );
+        // A magnet glued to an authority hides the whole URL.
+        assert_eq!(
+            scrub("https://S3CRET,magnet:?xt=a", Form::Absolute),
+            "https://[redacted]"
+        );
+    }
+
+    #[test]
+    fn a_debug_field_name_in_a_password_keeps_its_at() {
+        // Runner (rc.4 delta): a Debug field's name inside a raw password
+        // was read as a field, and the value it took held the userinfo's
+        // `@`, so what came before showed as a host.
+        for text in [
+            r#"s3://u:>`S3CRET,path: "x@h/x"#,
+            r#"socks5://u:<S3CRET{ fragment: Some("x")@h/x"#,
+            r#"https://u:<]S3CRET{ username: "a""@h/x"#,
+            r#"wss://u:"S3CRET,query: Some("[@h.example/x"#,
+            r#"udp://u:a path: "b"S3CRET@h/x ok"#,
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text:?} -> {s:?}");
+        }
+        let s = scrub_text(r#"Url { username: "a@b.example", password: None }"#);
+        assert!(!s.contains("b.example"), "{s}");
+    }
+
+    #[test]
     fn a_debug_value_glued_to_a_scheme_keeps_no_secret() {
         // Runner, round 4: the run before a Debug value's `://` is shown
         // only if it's a known scheme.
@@ -2433,6 +2675,23 @@ me@x"
             );
             let s = scrub_text(&magnet);
             proptest::prop_assert_eq!(&s, "x magnet:[redacted] y", "{}", magnet);
+        }
+
+        #[test]
+        fn a_credential_s_value_keeps_its_secret(
+            name in "(token|password|passkey|api_key|Authorization|sig|secret|key)",
+            glue in "(:|=|%3A|%3D|: |=\"|: \"|: Some\\(\")",
+            // What the value starts with: an encoded or escaped `//`, a
+            // scheme and `:/`, a `Bearer` chain, a field's name.
+            lead in "(|%2F%2F|%252F%252F|\\\\/\\\\/|http:/|https%3A%2F%2F|https:\\\\/\\\\/h\\\\/|Bearer |pass:|user:username:\"|key%3A|x%3D)",
+            before in "(|Bearer |x |https://h/|magnet:\\?xt=a&tr=|//@)",
+            secret in "[A-Za-z0-9]{6,20}",
+            after in "(| ok|\" }|&n=1)",
+        ) {
+            let secret = format!("Zq{secret}9");
+            let text = format!("{before}{name}{glue}{lead}{secret}{after}");
+            let s = scrub_text(&text);
+            proptest::prop_assert!(!s.contains(&secret), "{:?} -> {:?}", text, s);
         }
 
         #[test]

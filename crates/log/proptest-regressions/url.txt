@@ -14,3 +14,10 @@ cc 36fe0ee1759e74f525c0d5d8d697446a8d96328ce1422dabf2823d52cab15d63 # shrinks to
 # X-log-url-redact-2 (2026-11-05): saved by scrub_text_never_panics while the
 # magnet cut in scrub_with searched an empty URL from byte 1. Fixed before the
 # PR; kept as a cheap replay.
+# X-log-url-redact-2, review round: credential values the separator pass,
+# a span's last name or a Debug value split off (each fixed in the PR).
+cc 8be0818822a6f2d726ce5f0a591ac5605001babaa53d396c664bcc1fe4bc4513 # shrinks to name = "token", glue = ":", lead = "https:\\/\\/h\\/", before = "//@", secret = "00Aa0a", after = ""
+cc f9a3c9efdfa8c58dc62eff2f82d5a683f4c733be6b22a4e805169035cb69beb0 # shrinks to name = "token", glue = "%3A", lead = "Bearer ", before = "https://h/", secret = "00A0a0", after = ""
+cc 2527fdfe30ec4b50d46f2cf1c9060f1c433b9537fb6c749ebcc26486d4b7888b # shrinks to name = "password", glue = ": Some(\"", lead = "user:username:\"", before = "", secret = "aaa0AA", after = ""
+cc 64a8aadbb564d23cd8ea85e418e2ceb00455a658ca4b457100f3e64bc0a9028c # shrinks to name = "token", glue = ":", lead = "https:\\/\\/h\\/", before = "https://h/", secret = "AaaAaA", after = ""
+cc ebd035619b909e3f2df136f41213bc32400e77d00e5e61f257defe8409072260 # shrinks to before = "", after = "pW:!a", scheme = "http", secret = "0aAAa0", syntax = ")", bare = "<", sep = "://"

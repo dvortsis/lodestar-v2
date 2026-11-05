@@ -37,6 +37,22 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
     - a typed URL's scheme, and a query pair with no raw `=`, go through the `name=value` rules (`?passkey%3D<k>`, `?token:<t>`, `token:<t>://h`);
     - a scheme run after `:` or `%3D` stays with the URL before it, as one after `=` did;
     - a `Bearer` token takes `%` and `:`, and the scan reads it again from its start, so a credential's name inside it (`Bearer %3Apassword: "…"`) still has its value hidden. Overlapping cuts merge.
+- **A Debug field's name inside a raw password** (added to the scope by the runner, from rc.4's delta report). `scrub_debug_forms` read `path: "`, `fragment: Some("` and the others inside a URL's password as a new field, and the value it hid held the userinfo's `@`. What came before it then showed as a host. A hidden value that held an `@` now keeps one after it (`[redacted]@`), so the URL rules still find the userinfo. The fuzz's case 25 plants a field's name in a password four ways; this PR shows none, and `main` shows 17,972 per 300,000.
+
+## Review round (self-review and `/security-review`)
+Both found shapes where this PR showed a secret `main` hid. Each is fixed, and each input is a test.
+- **The separator pass split a credential's value into a URL** (security review). Examples: `secret=https%3A%2F%2Fh/<s>`, `{"token":"https:\/\/h\/<s>"}`, `token%3A%2F%2F<s>`, `passkey=Zq%3A%2F%2F<s>`.
+  - The pass now skips any separator that touches a value `redact_secrets` would hide. `secret_cuts` is that function's cut-finding, split out so both use it.
+  - A `//` is rewritten only when no such value starts before its `@`.
+  - A mixed-encoding separator needs a scheme character before it.
+  - `holds_url` still finds encoded URLs as `main` did.
+- **A `Bearer` token, or any value, swallowed the next credential's name** (`Bearer pass:token: <s>`, `pass:token: <s>`, `user:username:"<s>`). Every value is now read again from its start. After `%3D` or `%3A` that's from the `3`, as `main` read it. `stop` remembers its last answer, so this stays linear.
+- **A span that ends on a credential's name** (`magnet:?xt=a &tr=Authorization: <s>`, `//@Bearer <s>`, `https://h/x/token: <s>`). The span is still scrubbed whole, since the name may be glued to a passkey. The text after it is then read with that name before it (`carry` and `plain`), so its value goes.
+- **A Debug value that ends on a credential's name** (`password: Some("user:username:"<s>`, which `main` shows too). The name's value after the closing quote goes as well.
+- **A credential's value in a path or an authority that holds `/`** (`/token:https:\/\/h\/<s>`, `@token:https:\/\/…`). Both show on `main` too.
+  - In a path, the value and the rest of the path go (`scrub_path`, used by `finish` and by a Debug `path`).
+  - A host holding a character no host can, or a port that's no number, hides the rest of the URL.
+- **A magnet glued to an authority hides the whole URL** (`https://<s>,magnet:?xt=a` shows as `https://[redacted]`). Cutting there dropped the `:` that made `main` hide it.
 
 ## Over-redaction accepted ("never too little")
 - **A URL followed by any `@` on the same line, within 512 bytes and before the next `://`, loses its host and path,** whether it has userinfo or not.
@@ -54,10 +70,15 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
 - **The forms without `://` show with one** (`http:/u:p@h` shows as `http://[redacted]@h`, `//u:p@h` as `://[redacted]@h`). A redacted line needn't keep the spelling.
 
 ## Known gaps left
-Each one leaks on `main` too, and none is in the brief's list.
+Each one leaks on `main` too.
 - **A username-only userinfo (no `:` or other sign) holding a raw line break** (`ssh://<secret>\n@h`). It can't be told from a URL at a line's end with an address on the next line, and hiding every such URL loses too much. About 200 of the fuzz's 300,000 inputs per seed hit this.
 - **A single-slash form behind an unknown scheme** (`x:/u:p@h`). Taking any word before `:/` would turn `C:/Users` into a URL.
 - **A `Debug` value holding a raw, unescaped `"`.** `Debug` never writes one; the fuzz's cases 7 and 8 plant them.
+- **Forms escaped or encoded more than the pass knows** (class 7): a double JSON escape (`http:\\\/\\\/u:<s>@h`), an encoded backslash (`http:%5C/%5C/u:<s>@h`), and a magnet encoded three times (`magnet%25253A…`, class 4). Each extra form is one more spelling in `separator_len` or `magnets` if logs ever show it.
+- **`scrub` (typed URLs) given free text with a credential's value before `://`** (`secret=https%3A%2F%2Fh/<s>` as an absolute URL). Typed URLs come from the code, never from such text; `scrub_text` hides it.
+
+## Cost
+- **`Ats` takes 4 bytes per byte of text** (4 MiB for a 1 MiB line), for the time a line is scrubbed. It's built only when the text holds an `@`.
 
 ## Tests
 - **Deterministic tests, one per class, with every input leaking on `main`:**
@@ -68,13 +89,16 @@ Each one leaks on `main` too, and none is in the brief's list.
   - `a_malformed_ipv6_host_never_ends_the_url_early`
   - `url_forms_without_a_raw_scheme_separator_lose_their_secrets`
   - `a_credential_glued_on_with_a_colon_or_an_encoded_equals_goes`
+  - `a_debug_field_name_in_a_password_keeps_its_at` (the runner's case)
+  - `a_credential_s_value_is_never_split_into_a_url` and `a_name_glued_on_never_escapes_with_its_value` (the review round)
 - **Existing tests whose expected output changed:** four exact outputs, named in the over-redaction section above, and the magnet test's `dn`-last case. Every other assertion is unchanged.
 - **Properties:**
   - `planted_secrets_never_get_through` adds line breaks and `://` on both sides of a hard stop, `u%3A`, unmarked userinfo holding `/` and hard stops, every form without `://`, and the `//` and single-slash forms.
   - A new `magnets_keep_no_secret` covers whitespace in `dn`, `kt` and `tr`, a magnet in a URL after a soft end, encoded and `Debug`-escaped magnets, and a malformed IPv6 literal before a passkey.
-  - 30 extra runs of 1,024 cases each, all passing.
+  - A new `a_credential_s_value_keeps_its_secret` puts a credential's value after `Bearer`, a URL or a magnet. The value may start with an encoded or escaped `//`, a scheme and `:/`, a `Bearer` chain or a field's name.
+  - 15 extra runs of 1,024 cases each after the review round, all passing. The seeds they saved during the round are kept in `proptest-regressions/url.txt`.
 - **Speed:**
-  - `scrub_text_is_linear` gains 9 units and the 1 MiB test 3: `://u:x`, a magnet with a raw space, ` //a@`, `[::1]]`, `\"` and others.
+  - `scrub_text_is_linear` gains 18 units and the 1 MiB test 3: `://u:x`, a magnet with a raw space, ` //a@`, `[::1]]`, `\"`, `token: "`, `Bearer a:`, `token=token=`, `x/Authorization: ` and others.
   - In a release build, every unit takes about 4× as long at 4 MiB as at 1 MiB. The slowest, `:/`, takes about 0.13 s per MiB.
 - **No panics:** none in the fuzz on either side. The new magnet cut panicked on an empty URL during development; its seed is kept in `proptest-regressions/url.txt`.
 
