@@ -718,8 +718,19 @@ impl SizeChecked {
     fn checked_weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<SizeCheckedWeight> {
         let lo = self.ranges.iter().map(|r| *r.range.start()).max();
         let hi = self.ranges.iter().map(|r| *r.range.end()).min();
+        // The other clauses as plain terms, if they are: their files are
+        // then counted from the term dictionary, without opening postings.
+        let mut terms = Vec::new();
+        let rest: &dyn Query = match self.rest.downcast_ref::<BooleanQuery>() {
+            Some(b) if b.clauses().len() == 1 && b.clauses()[0].0 == Occur::Must => {
+                b.clauses()[0].1.as_ref()
+            }
+            _ => self.rest.as_ref(),
+        };
+        let rest_terms = TermUnion::terms(rest, &mut terms).then_some(terms);
         Ok(SizeCheckedWeight {
             rest: self.rest.weight(scoring)?,
+            rest_terms,
             whole: self.whole.weight(scoring)?,
             ranges: self.ranges.clone(),
             bounds: (lo.unwrap_or(0), hi.unwrap_or(u64::MAX)),
@@ -737,6 +748,8 @@ impl Query for SizeChecked {
 
 struct SizeCheckedWeight {
     rest: Box<dyn Weight>,
+    /// `rest` when it's any of some terms (`ext:mkv,mp4`).
+    rest_terms: Option<Vec<Term>>,
     whole: Box<dyn Weight>,
     ranges: Vec<SizeRange>,
     /// Every range's bounds at once: their intersection, `lo > hi` when
@@ -746,18 +759,27 @@ struct SizeCheckedWeight {
     columns: SegColumns,
 }
 
+/// How a [`SizeCheckedWeight`] runs in one segment.
+enum Plan {
+    /// The plain conjunction: the ranges' buckets hold few files.
+    Whole,
+    /// Nothing matches: the segment has no sizes.
+    Empty,
+    /// The other clauses' files, each size checked in the column.
+    Check(Box<dyn Scorer>, Column<u64>),
+}
+
 impl SizeCheckedWeight {
-    /// The size column, if this segment should check it rather than run
-    /// the plain conjunction (`None`).
-    fn checks(
-        &self,
-        seg: &SegmentReader,
-        rest: &dyn Scorer,
-    ) -> tantivy::Result<Option<Option<Column<u64>>>> {
+    /// Which way this segment runs. Only the scorer that runs is built:
+    /// where the other clauses are plain terms their files are counted
+    /// from the term dictionary, so a segment that runs the plain
+    /// conjunction opens no postings for the check it didn't take
+    /// (X-search-files-5, #468's review P2).
+    fn plan(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Plan> {
         let field = self.ranges[0].field;
         // A segment without sizes matches none, as the range would.
         let Some(sizes) = self.columns.get(seg, field)? else {
-            return Ok(Some(None));
+            return Ok(Plan::Empty);
         };
         // The fewest files any range's buckets hold. Without buckets a
         // range reads the column for every file, so checking is better.
@@ -768,22 +790,55 @@ impl SizeCheckedWeight {
                 fewest = Some(fewest.map_or(n, |f| f.min(n)));
             }
         }
-        let lead = u64::from(rest.size_hint());
-        Ok(match fewest {
-            Some(n) if n.saturating_mul(self.ratio) < lead => None,
-            _ => Some(Some(sizes)),
-        })
+        let Some(fewest) = fewest else {
+            return Ok(Plan::Check(self.rest.scorer(seg, boost)?, sizes));
+        };
+        let (lead, rest) = match &self.rest_terms {
+            Some(terms) => (self.term_files(seg, terms)?, None),
+            None => {
+                let rest = self.rest.scorer(seg, boost)?;
+                (u64::from(rest.size_hint()), Some(rest))
+            }
+        };
+        if fewest.saturating_mul(self.ratio) < lead {
+            return Ok(Plan::Whole);
+        }
+        let rest = match rest {
+            Some(r) => r,
+            None => self.rest.scorer(seg, boost)?,
+        };
+        Ok(Plan::Check(rest, sizes))
+    }
+
+    /// The files `terms` hold in `seg` (deleted ones included), from the
+    /// term dictionary: an upper bound, as a union's size hint is.
+    fn term_files(&self, seg: &SegmentReader, terms: &[Term]) -> tantivy::Result<u64> {
+        let mut n = 0u64;
+        for t in terms {
+            if seg
+                .schema()
+                .get_field_entry(t.field())
+                .field_type()
+                .get_index_record_option()
+                .is_none()
+            {
+                continue;
+            }
+            if let Some(info) = seg.inverted_index(t.field())?.get_term_info(t)? {
+                n += u64::from(info.doc_freq);
+            }
+        }
+        Ok(n)
     }
 }
 
 impl Weight for SizeCheckedWeight {
     fn scorer(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
-        let rest = self.rest.scorer(seg, boost)?;
-        match self.checks(seg, rest.as_ref())? {
-            None => self.whole.scorer(seg, boost),
-            Some(None) => Ok(Box::new(tantivy::query::EmptyScorer)),
-            Some(Some(sizes)) => Ok(Box::new(CheckedScorer::new(rest, sizes, self.bounds))),
-        }
+        Ok(match self.plan(seg, boost)? {
+            Plan::Whole => self.whole.scorer(seg, boost)?,
+            Plan::Empty => Box::new(tantivy::query::EmptyScorer),
+            Plan::Check(rest, sizes) => Box::new(CheckedScorer::new(rest, sizes, self.bounds)),
+        })
     }
 
     fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
@@ -1795,14 +1850,11 @@ fn scan_segment(
     };
     let gather = match source {
         Source::Weight(weight) => scan_scorer(weight.scorer(seg, 1.0)?, None)?,
-        Source::Checked(w) => {
-            let rest = w.rest.scorer(seg, 1.0)?;
-            match w.checks(seg, rest.as_ref())? {
-                None => scan_scorer(w.whole.scorer(seg, 1.0)?, None)?,
-                Some(None) => gather_for(0),
-                Some(Some(sizes)) => scan_scorer(rest, Some((&sizes, w.bounds)))?,
-            }
-        }
+        Source::Checked(w) => match w.plan(seg, 1.0)? {
+            Plan::Whole => scan_scorer(w.whole.scorer(seg, 1.0)?, None)?,
+            Plan::Empty => gather_for(0),
+            Plan::Check(rest, sizes) => scan_scorer(rest, Some((&sizes, w.bounds)))?,
+        },
         Source::Terms(union, exclude) => {
             let gather = scan_terms(
                 seg,
@@ -3530,6 +3582,79 @@ mod bucket_props {
         };
         assert!(Weight::explain(&edge, seg, 0).is_err());
         assert!(Weight::explain(&edge, seg, 1).is_ok());
+    }
+
+    /// A weight that counts the scorers built from it.
+    struct Counting(Box<dyn Weight>, Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Weight for Counting {
+        fn scorer(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            self.0.scorer(seg, boost)
+        }
+
+        fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
+            self.0.explain(seg, doc)
+        }
+    }
+
+    /// Where the ranges' buckets hold far fewer files than the other
+    /// clauses' terms, the plain conjunction runs, and the other clauses'
+    /// own scorer is never built (#468's review P2): their files are
+    /// counted from the term dictionary. Where the check runs, it's built
+    /// once a segment and piece. The results are the same either way.
+    #[test]
+    fn the_plain_conjunction_builds_no_scorer_for_the_check() {
+        // Every file is `bin`; one in fifty is big.
+        let sizes: Vec<Vec<u64>> = (0..2_000u64)
+            .map(|i| vec![if i % 50 == 0 { 1 << 30 } else { 1_000 + i }])
+            .collect();
+        let (searcher, f) = index(&[sizes], &[]);
+        let ext = Node::Ext {
+            any: vec!["bin".into()],
+        };
+        let checked = |ratio: u64| {
+            let ext_q = compile_node(&ext, &f).unwrap();
+            let range = SizeRange {
+                field: f.size,
+                bucket: f.size_bucket,
+                range: (1 << 29)..=u64::MAX,
+            };
+            SizeChecked {
+                rest: Box::new(BooleanQuery::new(vec![(Occur::Must, ext_q.box_clone())])),
+                ranges: vec![range.clone()],
+                whole: Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, ext_q),
+                    (Occur::Must, Box::new(range) as Q),
+                ])),
+                ratio,
+            }
+        };
+        let seg = &searcher.segment_readers()[0];
+        let scoring = EnableScoring::disabled_from_searcher(&searcher);
+        let mut want = None;
+        for (ratio, whole) in [(CHECK_RATIO, true), (u64::MAX, false)] {
+            let q = checked(ratio);
+            let mut w = q.checked_weight(scoring).unwrap();
+            assert!(w.rest_terms.is_some(), "an extension is plain terms");
+            let built = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            w.rest = Box::new(Counting(w.rest, built.clone()));
+            let plan = w.plan(seg, 1.0).unwrap();
+            assert_eq!(matches!(plan, Plan::Whole), whole, "ratio {ratio}");
+            assert_eq!(
+                built.load(Ordering::Relaxed),
+                usize::from(!whole),
+                "ratio {ratio}"
+            );
+            let got = ids(&searcher, &q, PIECE_DOCS);
+            assert_eq!(
+                *want.get_or_insert_with(|| got.clone()),
+                got,
+                "ratio {ratio}"
+            );
+        }
+        // One torrent in fifty, torrent 2 (deleted) not among them.
+        assert_eq!(want.unwrap().len(), 40);
     }
 
     /// The size check where some files have no size (never written by
