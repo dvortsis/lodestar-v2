@@ -756,6 +756,15 @@ async fn resume(
 /// switches, packs and your rules. The classification rules' generation
 /// is read first, as the writer does.
 fn filter(config: &Config, store: &mut Store) -> Outcome<(Arc<Engine>, i64)> {
+    // The server's start seeds the rule packs before the filter is first
+    // read (RP-0, RP-DEF): so does the import, so a store it creates is
+    // judged with every pack on, as the server will serve it.
+    lodestar_filter::packs::upgrade::ensure_seeded(
+        store,
+        &lodestar_filter::packs::manifest::Manifest::builtin(),
+        unix_now(),
+    )
+    .map_err(failed("seeding the rule packs"))?;
     let class_gen = store.class_gen().map_err(failed("reading the rules"))?;
     let files = config
         .blocklist_files()

@@ -3312,7 +3312,7 @@ mod tests {
     /// leaving the versions.
     #[test]
     fn pack_versions_are_seeded_once_and_undo_leaves_them() {
-        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        let mut store = old_store();
         // As before RP-0: scams on, SC-1 switched off.
         store.set_pack_switch("scams", true).unwrap();
         store.set_pack_switch("SC-1", false).unwrap();
@@ -3392,6 +3392,69 @@ mod tests {
             vec![v(1, real_mw2), v(2, widened)],
         ));
         Arc::new(Manifest::new(entries).unwrap())
+    }
+
+    /// A store from before RP-DEF: its creating migration wrote no fresh
+    /// marker.
+    fn old_store() -> Store {
+        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        store
+            .update_settings_text(&[], &[pack_upgrade::FRESH_KEY])
+            .unwrap();
+        store
+    }
+
+    fn applied_record(api: &FiltersApi) -> pack_upgrade::Applied {
+        let rows = version_rows(api);
+        assert_eq!(rows[0], rows[1]);
+        pack_upgrade::Applied::decode(rows[0].as_deref().unwrap()).unwrap()
+    }
+
+    /// RP-DEF: packs that are off on an existing install are offered, not
+    /// flipped; turning one on through the preview and apply records its
+    /// rules at their current versions, so nothing of it is pending.
+    #[test]
+    fn turning_a_pack_on_through_preview_and_apply_records_its_current_versions() {
+        let api = test_api(old_store());
+        api.engine.update_engine(|e| e.manifest = bumped());
+        api.start_packs(500).unwrap();
+        let e = api.engine.current();
+        assert!(!e.packs.on.contains(&Pack::Malware), "not flipped");
+        assert_eq!(applied_record(&api).get(PackRule::Mw2), Some(1));
+        let change = pack("malware", true);
+        let preview = api.assess(&change, 1_000).unwrap();
+        assert!(!preview.weakening);
+        api.apply(&change, preview, 1_000).unwrap();
+        let e = api.engine.current();
+        assert!(e.packs.on.contains(&Pack::Malware));
+        let rec = applied_record(&api);
+        for r in PackRule::ALL
+            .into_iter()
+            .filter(|r| r.pack() == Pack::Malware)
+        {
+            let current = e.manifest.entry(r).current().version;
+            assert_eq!(rec.get(r), Some(current), "{}", r.id());
+            assert!(!e.pack_versions.state(r).pending(), "{}", r.id());
+        }
+        assert_eq!(rec.get(PackRule::Mw2), Some(2));
+        // The other packs stay off, with their explicit rows.
+        let set = api.store().rule_set().unwrap();
+        assert!(set.pack_switches.contains(&("spam".into(), false)));
+    }
+
+    /// RP-DEF: the API's seeding fallback seeds a fresh store as the
+    /// pipeline's start does: every pack on at current versions.
+    #[test]
+    fn the_seeding_fallback_seeds_a_fresh_store_with_every_pack_on() {
+        let api = test_api(Store::open_in_memory(Default::default()).unwrap());
+        api.engine.update_engine(|e| e.manifest = bumped());
+        api.start_packs(500).unwrap();
+        let e = api.engine.current();
+        assert!(Pack::ALL.iter().all(|p| e.packs.on.contains(p)));
+        assert_eq!(applied_record(&api).get(PackRule::Mw2), Some(2));
+        assert!(!e.pack_versions.state(PackRule::Mw2).pending());
+        // Turning a pack off is weakening, as any other.
+        assert!(api.assess(&pack("spam", false), 1_000).unwrap().weakening);
     }
 
     /// With a version really pending: a wizard re-run, Undo and redo leave
@@ -3506,6 +3569,45 @@ mod tests {
         assert_eq!(sc2[0].value, b"robux");
         let e = api.engine.current();
         assert!(!e.packs.is_on(PackRule::Sc2));
+    }
+
+    /// RP-DEF: an Undo to a rule set saved before RP-DEF (no pack rows)
+    /// returns to that set's off state, and nothing seeds the packs on
+    /// again at the next start.
+    #[test]
+    fn undo_to_a_set_from_before_rp_def_is_off_and_stays_off() {
+        let api = test_api(Store::open_in_memory(Default::default()).unwrap());
+        api.start_packs(500).unwrap();
+        assert!(
+            Pack::ALL
+                .iter()
+                .all(|p| api.engine.current().packs.on.contains(p))
+        );
+        let old = json!({
+            "rules": [], "overrides": [], "allow": [], "core": [], "packs": [], "exceptions": [],
+        });
+        api.store()
+            .save_previous(old.to_string().as_bytes())
+            .unwrap();
+        apply_change(&api, Change::Undo);
+        let off = |api: &FiltersApi| {
+            let e = api.engine.current();
+            assert!(PackRule::ALL.iter().all(|r| !e.packs.is_on(*r)));
+            assert!(api.store().rule_set().unwrap().pack_switches.is_empty());
+        };
+        off(&api);
+        api.start_packs(600).unwrap();
+        off(&api);
+        assert!(
+            pack_upgrade::ensure_seeded(
+                &mut api.store(),
+                &lodestar_filter::packs::manifest::Manifest::builtin(),
+                700
+            )
+            .unwrap()
+            .is_none()
+        );
+        off(&api);
     }
 
     /// A full re-mark is cleared only if no shutdown and no rule change

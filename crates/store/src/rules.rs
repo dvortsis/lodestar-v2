@@ -303,6 +303,66 @@ impl Store {
         Ok(())
     }
 
+    /// Applies this build's pack defaults once, in one transaction (RP-DEF,
+    /// `docs/decisions/2026-11-05-RP-DEF.md`); the meaning is the filter
+    /// engine's (`packs::upgrade::ensure_seeded`).
+    /// - **`on`, a fresh store:** only while [`crate::PACKS_FRESH_KEY`] is
+    ///   there. Each of `packs` without a switch row gets an on row, `applied`
+    ///   (when given) is written to both applied rows with the seeded marker,
+    ///   and the fresh marker is consumed.
+    /// - **Not `on`, an existing store:** only while neither marker is
+    ///   there. Each of `packs` without a switch row gets an explicit off
+    ///   row, so nothing flips.
+    ///
+    /// Either way [`crate::PACKS_DEFAULTS_KEY`] is set. A row already there
+    /// is never changed: it's a choice. Returns whether it wrote anything.
+    pub fn apply_pack_defaults(
+        &mut self,
+        on: bool,
+        packs: &[&str],
+        applied: Option<[&str; 2]>,
+    ) -> Result<bool> {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let has = |key: &str| -> Result<bool> {
+            Ok(tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM settings WHERE key = ?1)",
+                [key],
+                |r| r.get(0),
+            )?)
+        };
+        let fresh = has(crate::PACKS_FRESH_KEY)?;
+        let ready = if on {
+            fresh
+        } else {
+            !fresh && !has(crate::PACKS_DEFAULTS_KEY)?
+        };
+        if !ready {
+            return Ok(false);
+        }
+        for id in packs {
+            tx.execute(
+                "INSERT OR IGNORE INTO pack_switches (id, enabled) VALUES (?1, ?2)",
+                params![id, on],
+            )?;
+        }
+        if let Some(applied) = applied {
+            for (key, text) in PACKS_APPLIED_KEYS.iter().zip(applied) {
+                upsert_setting(&tx, key, text)?;
+            }
+            tx.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, '1')",
+                [PACKS_SEEDED_KEY],
+            )?;
+        }
+        upsert_setting(&tx, crate::PACKS_DEFAULTS_KEY, "1")?;
+        tx.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            [crate::PACKS_FRESH_KEY],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Adds a rule at the end of the list.
     pub fn add_rule(
         &mut self,
@@ -760,6 +820,67 @@ mod tests {
         assert_eq!(rows.applied[1], Some(Err(vec![0xff])));
         assert_eq!(rows.seeded, Some(Err(b"7".to_vec())));
         assert!(rows.any());
+    }
+
+    fn has(s: &Store, key: &str) -> bool {
+        s.setting_text(key).unwrap().is_some()
+    }
+
+    #[test]
+    fn pack_defaults_on_a_fresh_store_switch_on_and_consume_the_marker() {
+        let mut s = store();
+        assert!(has(&s, crate::PACKS_FRESH_KEY), "a new store is fresh");
+        s.set_pack_switch("lures", false).unwrap();
+        // The existing-store step refuses while the store is fresh.
+        assert!(!s.apply_pack_defaults(false, &["malware"], None).unwrap());
+        assert!(
+            s.apply_pack_defaults(true, &["malware", "lures"], Some(["MW-1@2", "MW-1@2"]))
+                .unwrap()
+        );
+        let set = s.rule_set().unwrap();
+        assert_eq!(
+            set.pack_switches,
+            [("lures".to_owned(), false), ("malware".to_owned(), true)],
+            "a row already there is a choice, and kept"
+        );
+        assert_eq!(set.pack_versions.applied[0], Some(Ok("MW-1@2".into())));
+        assert_eq!(set.pack_versions.applied[1], Some(Ok("MW-1@2".into())));
+        assert_eq!(set.pack_versions.seeded, Some(Ok("1".into())));
+        assert!(!has(&s, crate::PACKS_FRESH_KEY));
+        assert_eq!(
+            s.setting_text(crate::PACKS_DEFAULTS_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("1")
+        );
+        // Once only, either way.
+        assert!(!s.apply_pack_defaults(true, &["spam"], None).unwrap());
+        assert!(!s.apply_pack_defaults(false, &["spam"], None).unwrap());
+        assert_eq!(s.rule_set().unwrap().pack_switches.len(), 2);
+    }
+
+    #[test]
+    fn pack_defaults_on_an_existing_store_write_off_rows() {
+        let mut s = store();
+        s.update_settings_text(&[], &[crate::PACKS_FRESH_KEY])
+            .unwrap();
+        s.set_pack_switch("malware", true).unwrap();
+        assert!(
+            !s.apply_pack_defaults(true, &["spam"], None).unwrap(),
+            "not fresh"
+        );
+        assert!(
+            s.apply_pack_defaults(false, &["malware", "spam"], None)
+                .unwrap()
+        );
+        let set = s.rule_set().unwrap();
+        assert_eq!(
+            set.pack_switches,
+            [("malware".to_owned(), true), ("spam".to_owned(), false)]
+        );
+        assert!(!set.pack_versions.any(), "no version rows written");
+        assert!(has(&s, crate::PACKS_DEFAULTS_KEY));
+        assert!(!s.apply_pack_defaults(false, &["fakes"], None).unwrap());
     }
 
     #[test]

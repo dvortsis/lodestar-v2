@@ -91,7 +91,8 @@ tempfile = "3.27.0"
 windows-service = "0.8.1"
 
 # One allocator for Rust and C in the static musl release build: `override`
-# makes mimalloc define `malloc`/`free`, so SQLite, zstd and ring stop using
-# zig's libc heap (X-mimalloc-override). Windows and glibc builds unchanged.
+# makes mimalloc define `malloc`, `free`, `calloc`, `realloc` and the rest, so
+# SQLite and zstd stop using zig's libc heap (X-mimalloc-override). Windows
+# and glibc builds unchanged.
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
 mimalloc = { version = "0.1", default-features = false, features = ["override"] }

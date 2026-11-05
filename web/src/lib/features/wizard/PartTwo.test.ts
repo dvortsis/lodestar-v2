@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { clearIndexCache } from '../settings/form/schema';
 import { writeProgress, type StepId } from './steps';
-import { PACK_IDS, wizardServer } from './testing/server';
+import { PACK_IDS, PASSWORD, wizardServer } from './testing/server';
 import { strengthening, weakening } from '../filters/flows/testing/fixtures';
 
 vi.mock('$app/paths', () => ({
@@ -45,69 +45,177 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-describe('rule-pack step', () => {
-	it('pre-checks all five packs when the server has none on', async () => {
+describe('rule-pack step, fresh install (RP-DEF): every pack on, opt out', () => {
+	it('shows all five packs checked, as the server has them on', async () => {
 		start('packs');
 		await heading('Rule packs');
-		for (const id of PACK_IDS) expect((await box(id)).checked).toBe(true);
-		expect(screen.queryByTestId('wizard-packs-stored')).toBeNull();
+		for (const id of PACK_IDS) {
+			const b = await box(id);
+			expect(b.checked).toBe(true);
+			expect(b.disabled).toBe(false);
+		}
+		expect(screen.queryByTestId('wizard-packs-offered')).toBeNull();
+		expect(screen.getByText(/All five are on by default/)).toBeTruthy();
 	});
 
-	it('Continue turns the checked packs on, each through a preview and a plain apply', async () => {
+	it('Continue with nothing changed sends nothing and marks the step done', async () => {
 		start('packs');
 		await box('malware');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Blocklists');
-		expect(applies().map((c) => c.body)).toEqual(
-			PACK_IDS.map((id) => ({ change: { op: 'pack_switch', id, on: true } }))
-		);
-		expect(posts().filter((c) => c.path === '/filters/preview/jobs')).toHaveLength(5);
+		expect(posts()).toEqual([]);
 		expect(server.packs.every((p) => p.on)).toBe(true);
 		expect(progress().done).toContain('packs');
 	});
 
-	it('only ever turns packs on and never sends a password', async () => {
-		start('packs');
-		await fireEvent.click(await box('spam'));
-		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
-		await heading('Blocklists');
-		const bodies = applies().map((c) => c.body as { change: { on: boolean }; password?: string });
-		expect(bodies).toHaveLength(4);
-		expect(bodies.every((b) => b.change.on === true && !('password' in b))).toBe(true);
-		expect(server.packs.find((p) => p.id === 'spam')!.on).toBe(false);
-	});
-
-	it('Skip sends nothing, so packs stay off', async () => {
+	it('Skip sends nothing, so packs stay on', async () => {
 		start('packs');
 		await box('malware');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
 		await heading('Blocklists');
 		expect(posts()).toEqual([]);
-		expect(server.packs.some((p) => p.on)).toBe(false);
+		expect(server.packs.every((p) => p.on)).toBe(true);
 		expect(progress().skipped).toEqual(['packs']);
 	});
 
-	it('Continue with none checked sends nothing', async () => {
+	it('unchecking a pack goes through the weakening flow: the effect warning, then the password', async () => {
 		start('packs');
-		for (const id of PACK_IDS) await fireEvent.click(await box(id));
+		await fireEvent.click(await box('spam'));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await screen.findByRole('dialog', { name: 'Turn off Spam' });
+		expect((await screen.findByTestId('effect-warning-text')).textContent).toContain(
+			'shows what it hid'
+		);
+		// Nothing is applied without the password.
+		expect(applies()).toEqual([]);
+		await fireEvent.input(await screen.findByTestId('change-password'), {
+			target: { value: PASSWORD }
+		});
+		await fireEvent.click(await screen.findByTestId('change-apply'));
+		await waitFor(() => expect(server.packs.find((p) => p.id === 'spam')!.on).toBe(false));
+		await fireEvent.click(await screen.findByTestId('change-cancel'));
+		await heading('Blocklists');
+		expect(applies().map((c) => c.body)).toEqual([
+			{ change: { op: 'pack_switch', id: 'spam', on: false }, password: PASSWORD }
+		]);
+		expect(server.packs.filter((p) => p.on).map((p) => p.id)).toEqual(
+			PACK_IDS.filter((id) => id !== 'spam')
+		);
+		expect(progress().done).toContain('packs');
+	});
+
+	it('a cancelled weakening flow keeps the pack on, keeps the unchecks, and Continue retries', async () => {
+		start('packs');
+		await fireEvent.click(await box('fakes'));
+		await fireEvent.click(await box('spam'));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await screen.findByRole('dialog', { name: 'Turn off Fakes' });
+		await fireEvent.click(await screen.findByTestId('change-cancel'));
+		expect((await screen.findByTestId('wizard-packs-error')).textContent).toContain(
+			"wasn't turned off"
+		);
+		await settled('Save and continue');
+		expect(applies()).toEqual([]);
+		expect(server.packs.every((p) => p.on)).toBe(true);
+		// The user's choices are kept: both still unchecked, though both are still on.
+		expect((await box('fakes')).checked).toBe(false);
+		expect((await box('spam')).checked).toBe(false);
+		expect(progress().step).toBe('packs');
+		expect(progress().done).not.toContain('packs');
+		// Continue tries again; this time Fakes is kept on, so only Spam's dialog opens.
+		await fireEvent.click(await box('fakes'));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await screen.findByRole('dialog', { name: 'Turn off Spam' });
+		await fireEvent.input(await screen.findByTestId('change-password'), {
+			target: { value: PASSWORD }
+		});
+		await fireEvent.click(await screen.findByTestId('change-apply'));
+		await waitFor(() => expect(server.packs.find((p) => p.id === 'spam')!.on).toBe(false));
+		await fireEvent.click(await screen.findByTestId('change-cancel'));
+		await heading('Blocklists');
+		expect(server.packs.find((p) => p.id === 'fakes')!.on).toBe(true);
+		expect(applies()).toHaveLength(1);
+	});
+
+	it('turns one pack on and two off in one Continue: on first, then one password prompt each', async () => {
+		server.packs.find((p) => p.id === 'lures')!.on = false;
+		start('packs');
+		await fireEvent.click(await box('lures'));
+		await fireEvent.click(await box('spam'));
+		await fireEvent.click(await box('scams'));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		for (const name of ['Spam', 'Scams']) {
+			await screen.findByRole('dialog', { name: `Turn off ${name}` });
+			await fireEvent.input(await screen.findByTestId('change-password'), {
+				target: { value: PASSWORD }
+			});
+			await fireEvent.click(await screen.findByTestId('change-apply'));
+			await waitFor(() =>
+				expect(server.packs.find((p) => p.id === name.toLowerCase())!.on).toBe(false)
+			);
+			await fireEvent.click(await screen.findByTestId('change-cancel'));
+		}
+		await heading('Blocklists');
+		expect(applies().map((c) => c.body)).toEqual([
+			{ change: { op: 'pack_switch', id: 'lures', on: true } },
+			{ change: { op: 'pack_switch', id: 'spam', on: false }, password: PASSWORD },
+			{ change: { op: 'pack_switch', id: 'scams', on: false }, password: PASSWORD }
+		]);
+		expect(server.packs.filter((p) => p.on).map((p) => p.id)).toEqual([
+			'malware',
+			'lures',
+			'fakes'
+		]);
+	});
+
+	it('a wrong password changes nothing', async () => {
+		start('packs');
+		await fireEvent.click(await box('scams'));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await fireEvent.input(await screen.findByTestId('change-password'), {
+			target: { value: 'wrong' }
+		});
+		await fireEvent.click(await screen.findByTestId('change-apply'));
+		await screen.findAllByText('That password is wrong. Enter it again.');
+		expect(applies()).toHaveLength(1);
+		expect(server.packs.every((p) => p.on)).toBe(true);
+		await fireEvent.click(await screen.findByTestId('change-cancel'));
+		await screen.findByTestId('wizard-packs-error');
+		expect(progress().done).not.toContain('packs');
+	});
+});
+
+describe('rule-pack step, existing install with packs off: offered, not flipped', () => {
+	it("shows the server's off state unchecked and offers the packs", async () => {
+		server.existingInstall();
+		start('packs');
+		await heading('Rule packs');
+		await screen.findByTestId('wizard-packs-offered');
+		for (const id of PACK_IDS) expect((await box(id)).checked).toBe(false);
+	});
+
+	it('Continue with nothing checked sends nothing, so packs stay off', async () => {
+		server.existingInstall();
+		start('packs');
+		await box('malware');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Blocklists');
 		expect(posts()).toEqual([]);
 		expect(server.packs.some((p) => p.on)).toBe(false);
 	});
 
-	it('shows a stored choice as the server has it, not pre-checked, and cannot turn a pack off', async () => {
-		server.packs[0]!.on = true;
+	it('checking packs turns them on, each through a preview and a plain apply, no password', async () => {
+		server.existingInstall();
 		start('packs');
-		await heading('Rule packs');
-		await screen.findByTestId('wizard-packs-stored');
-		const malware = await box('malware');
-		expect(malware.checked).toBe(true);
-		expect(malware.disabled).toBe(true);
-		for (const id of PACK_IDS.slice(1)) expect((await box(id)).checked).toBe(false);
+		for (const id of PACK_IDS.filter((id) => id !== 'spam')) await fireEvent.click(await box(id));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Blocklists');
-		expect(posts()).toEqual([]);
+		const bodies = applies().map((c) => c.body as { change: { on: boolean }; password?: string });
+		expect(bodies).toHaveLength(4);
+		expect(bodies.every((b) => b.change.on === true && !('password' in b))).toBe(true);
+		expect(posts().filter((c) => c.path === '/filters/preview/jobs')).toHaveLength(4);
+		expect(server.packs.find((p) => p.id === 'spam')!.on).toBe(false);
+		expect(progress().done).toContain('packs');
 	});
 
 	it('a failed apply stays on the step, shows the server’s state and the error, and is not done', async () => {
@@ -118,8 +226,10 @@ describe('rule-pack step', () => {
 			server.packs.find((p) => p.id === body.change.id)!.on = true;
 			return server.json(200, { applied: true, assessment: strengthening(), version: 3 });
 		});
+		server.existingInstall();
 		start('packs');
 		await box('malware');
+		for (const id of PACK_IDS) await fireEvent.click(await box(id));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await settled('Save and continue');
 		expect((await screen.findByTestId('wizard-packs-error')).textContent).toContain(
@@ -129,7 +239,10 @@ describe('rule-pack step', () => {
 		expect(progress().step).toBe('packs');
 		expect(progress().done).not.toContain('packs');
 		// The first pack went through; the screen now shows what the server has.
-		await waitFor(async () => expect((await box('malware')).disabled).toBe(true));
+		await waitFor(() =>
+			expect(server.filterCalls.filter((c) => c.method === 'GET').length).toBeGreaterThan(1)
+		);
+		expect((await box('malware')).checked).toBe(true);
 		expect(applies()).toHaveLength(2);
 		expect(server.packs.map((p) => p.on)).toEqual([true, false, false, false, false]);
 		// The user's choice for the others is kept, so Continue tries them again.
@@ -138,8 +251,10 @@ describe('rule-pack step', () => {
 
 	it('leaves a change that needs a confirmation to Settings: nothing is applied', async () => {
 		server.setAssessment(weakening());
+		server.existingInstall();
 		start('packs');
 		await box('malware');
+		for (const id of PACK_IDS) await fireEvent.click(await box(id));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await settled('Save and continue');
 		expect((await screen.findByTestId('wizard-packs-error')).textContent).toContain('Settings');
@@ -150,8 +265,10 @@ describe('rule-pack step', () => {
 
 	it('does not apply a change whose preview carries a warning', async () => {
 		server.setAssessment(strengthening({ warning: 'This turns off a check.' }));
+		server.existingInstall();
 		start('packs');
 		await box('malware');
+		for (const id of PACK_IDS) await fireEvent.click(await box(id));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await settled('Save and continue');
 		await screen.findByTestId('wizard-packs-error');
@@ -170,8 +287,10 @@ describe('rule-pack step', () => {
 			server.packs.find((p) => p.id === body.change.id)!.on = true;
 			return server.json(200, { applied: true, assessment: strengthening(), version: 3 });
 		});
+		server.existingInstall();
 		start('packs');
 		await box('malware');
+		for (const id of PACK_IDS) await fireEvent.click(await box(id));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Blocklists');
 		const bodies = applies().map((c) => c.body as { change: { id: string; on: boolean } });
@@ -182,8 +301,10 @@ describe('rule-pack step', () => {
 
 	it('does not apply a weakening change even when the server asks for no password', async () => {
 		server.setAssessment(weakening({ confirm: false }));
+		server.existingInstall();
 		start('packs');
 		await box('malware');
+		for (const id of PACK_IDS) await fireEvent.click(await box(id));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await settled('Save and continue');
 		await screen.findByTestId('wizard-packs-error');

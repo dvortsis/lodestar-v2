@@ -15,6 +15,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 
 import analyze_cr  # noqa: E402
+import analyze_cr0  # noqa: E402
 import collect  # noqa: E402
 import test_analyze_cr  # noqa: E402
 from test_collect import (COMMIT, CONTAINER_ID, SECRETS, Base, FakeDocker,  # noqa: E402
@@ -65,8 +66,13 @@ class SpecDocker(FakeDocker):
 class FakeAPI:
     """The settings and Insights APIs behind a login."""
 
-    def __init__(self, intensity="balanced", imports=0):
+    def __init__(self, intensity="balanced", imports=0, system=None):
         self.intensity, self.imports, self.calls, self.expire = intensity, imports, [], False
+        # GET /system, abridged: the build block as the shipped binary reports it.
+        self.system = system if system is not None else {
+            "build": {"commit": "d" * 40, "date": 1792677600, "rustc": "rustc 1.92.0",
+                      "target": "x86_64-unknown-linux-musl", "ui_build_id": "1792677600"},
+            "version": "0.5.1-rc.4", "host": {"time_zone": "Europe/Berlin"}}
 
     def __call__(self, method, url, body, cookie):
         self.calls.append((method, url.split("/api/v1", 1)[1], cookie))
@@ -80,6 +86,8 @@ class FakeAPI:
             return 200, {}, json.dumps({"fields": {
                 "intensity": {"value": self.intensity, "source": "default"},
                 "paused": {"value": False, "source": "default"}}, "restart_required": []}).encode()
+        if url.endswith("/system"):
+            return (200, {}, json.dumps(self.system).encode()) if self.system != 404 else (404, {}, b"")
         if "/insights/events" in url:
             notes = [{"at": 1, "kind": "import_finished", "text": "", "import": {"job": 3, "source": "magnetico"}}] \
                 * self.imports
@@ -243,6 +251,84 @@ class SpecRunTests(SpecBase):
         self.assertIn("failed", statuses)
         failed_at = next(i for i, r in enumerate(rows) if r.get("public_ip") == "failed")
         self.assertEqual(rows[failed_at + 1]["public_ip"], "unchanged")
+
+    def test_run_json_records_the_build_target_only(self):
+        # X-mimalloc-docs: the analyzer reads who serves C's malloc from it.
+        self.spec_run()
+        run = self.run_doc()
+        self.assertEqual(run["build_target"], "x86_64-unknown-linux-musl")
+        text = (self.root / "run.json").read_text()
+        for private in ("Europe/Berlin", "d" * 40, "rustc 1.92.0", "0.5.1-rc.4"):
+            self.assertNotIn(private, text)
+        self.assertEqual(analyze_cr0.c_allocator(run)["c_allocator"], "mimalloc")
+
+    def test_the_target_pattern_matches_the_analyzers(self):
+        self.assertEqual(collect.TARGET.pattern, analyze_cr0.TARGET.pattern)
+
+    def test_build_target_absent_when_the_system_api_fails_or_is_malformed(self):
+        # A failed read is noted (the last case); a malformed answer is just absent.
+        for system in ({"build": {"target": "x86_64 unknown; rm -rf"}}, {"build": "musl"}, {"version": "x"}, 404):
+            self.setUp()
+            self.spec_run(api=FakeAPI(system=system))
+            run = self.run_doc()
+            self.assertNotIn("build_target", run, system)
+            self.assertIsNone(analyze_cr0.c_allocator(run)["c_allocator"])
+        events = (self.root / "events.log").read_text()
+        self.assertIn("system API unavailable at start: build target retried on later samples", events)
+        self.assertNotIn("build target recorded", events)  # 404 throughout: never recorded
+
+    def test_build_target_is_retried_until_the_api_answers(self):
+        api = FakeAPI()
+        down = {"n": 0}
+
+        def slow(method, url, body, cookie):
+            if url.endswith("/system") and down["n"] < 3:
+                down["n"] += 1
+                return 503, {}, b""
+            return api(method, url, body, cookie)
+        self.spec_run(api=slow)
+        self.assertEqual(self.run_doc()["build_target"], "x86_64-unknown-linux-musl")
+        self.assertEqual(down["n"], 3)
+        # Once it has answered, /system isn't asked again.
+        self.assertEqual(sum(1 for _, path, _ in api.calls if path == "/system"), 1)
+        self.assertIn("build target recorded at elapsed", (self.root / "events.log").read_text())
+
+    def cr0_run(self, *extra, api=None):
+        write_cgroup(self.cgroup)
+        self.api = FakeDocker()
+        instance = collect.DockerInstance(self.api, "lodestar", self.cgroup, clock=self.clock.clock,
+                                          sleep=self.clock.sleep)
+        args = args_for(self.root, "--url", self.lodestar.url, *extra)
+        c = collect.Collector(args, instance, clock=self.clock.clock, sleep=self.clock.sleep, now=self.clock.now,
+                              volumes=fixed_volumes(), api_call=api)
+        return c.run()
+
+    def test_cr0_run_records_the_build_target_only_when_it_logs_in(self):
+        # A CR-0 run (r5's kind) logs in only when given --password-file.
+        password = self.tmp / "password"
+        password.write_text(PASSWORD + "\n")
+        password.chmod(0o600)
+        api = FakeAPI()
+        self.assertEqual(self.cr0_run("--password-file", str(password), api=api), 0, self.result()["reason"])
+        self.assertEqual(self.run_doc()["build_target"], "x86_64-unknown-linux-musl")
+        self.assertEqual(sum(1 for _, path, _ in api.calls if path == "/login"), 1)
+        self.setUp()
+        api = FakeAPI()
+        self.assertEqual(self.cr0_run(api=api), 0, self.result()["reason"])
+        self.assertNotIn("build_target", self.run_doc())
+        self.assertEqual(api.calls, [])  # no password, no login, no call
+
+    def test_cr0_password_file_gets_the_same_guards(self):
+        password = self.tmp / "password"
+        password.write_text(PASSWORD + "\n")
+        password.chmod(0o644)
+        with self.assertRaises(SystemExit) as caught:
+            self.cr0_run("--password-file", str(password), api=FakeAPI())
+        self.assertIn("chmod 600", str(caught.exception))
+        password.chmod(0o600)
+        with self.assertRaises(SystemExit) as caught:
+            self.cr0_run("--password-file", str(self.tmp / "missing"), api=FakeAPI())
+        self.assertIn("readable file", str(caught.exception))
 
     def test_settings_session_is_renewed_after_a_401(self):
         api = FakeAPI()

@@ -1153,22 +1153,26 @@ async fn a_not_adult_rule_never_takes_a_torrent_out_of_the_adult_only_core() {
     );
 }
 
-/// §20.6 and the owner's decision (§2.8): packs are off until chosen, so
-/// a fresh install that never chose stores a torrent a pack would hide.
+/// Owner §2.39 (RP-DEF): packs are on by default, so a fresh install hides
+/// a torrent a pack hides; an install from before RP-DEF that never chose
+/// keeps them off, so it stores that torrent as before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn packs_are_off_on_a_fresh_install() {
+async fn packs_are_on_on_a_fresh_install_and_stay_off_on_an_old_one() {
     use lodestar_store::flags;
     // MW-1: an executable posing as a video.
     let lure: &[(&str, i64)] = &[("Movie.2023.1080p.mp4.exe", 2_000_000)];
-    let run = |chosen: bool| async move {
+    let run = |fresh: bool| async move {
         let dir = tempfile::tempdir().unwrap();
         let seeds = vec![Seed::v1(info_dict_with("Movie 2023 1080p", lure))];
         let key = InfoHash(seeds[0].info_hash);
         let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
         let mut store =
             Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
-        if chosen {
-            store.set_pack_switch("malware", true).unwrap();
+        if !fresh {
+            // A store from before RP-DEF: no fresh marker.
+            store
+                .update_settings_text(&[], &[lodestar_store::PACKS_FRESH_KEY])
+                .unwrap();
         }
         let (feed, feed_tx) = scripted("feed");
         let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
@@ -1190,13 +1194,18 @@ async fn packs_are_off_on_a_fresh_install() {
             store.filter_hits(0).unwrap(),
         )
     };
-    let (hidden, hits) = run(false).await;
-    assert!(!hidden, "no pack is on until one is chosen");
-    assert!(hits.is_empty(), "{hits:?}");
-    // The same torrent once the pack is chosen, so the case above is real.
     let (hidden, hits) = run(true).await;
-    assert!(hidden);
-    assert!(hits.iter().any(|h| h.rule == "MW-1"), "{hits:?}");
+    assert!(hidden, "a fresh install has every pack on");
+    // A pack rule holds it (with every pack on, FK-1 decides before MW-1).
+    assert!(
+        hits.iter()
+            .any(|h| lodestar_filter::PackRule::from_id(&h.rule).is_some()),
+        "{hits:?}"
+    );
+    // An old store that never chose: nothing flips.
+    let (hidden, hits) = run(false).await;
+    assert!(!hidden, "an old store keeps its packs off");
+    assert!(hits.is_empty(), "{hits:?}");
 }
 
 /// The crawler gate (owner-decisions §2.25), counted at the writer's
