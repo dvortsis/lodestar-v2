@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T10:55Z",
+  "updated_at": "2026-11-05T11:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3058,6 +3058,21 @@
       "status": "running",
       "session": "session_01MMjhn93TXYuo1mo58RPGAc",
       "since": "2026-11-05T10:55Z"
+    },
+    "X-fuzz-1105": {
+      "status": "merged",
+      "merge": "6648e69f",
+      "pr": 484
+    },
+    "X-log-url-redact-3": {
+      "status": "merged",
+      "merge": "09c51792",
+      "pr": 483
+    },
+    "X-fuzz-cache-1105": {
+      "status": "running",
+      "session": "session_01MMjhnC1gwsQMnqDNH6xVCb",
+      "since": "2026-11-05T11:10Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4617,7 +4632,7 @@
     "Owner flag (\u00a72.26) from LEGAL-1 (#472) after main merge: CSS budget 19.65 \u2192 19.72 kB (under the \u00a710.1 20 kB cap), /t/[hash] 21,776 \u2192 21,840 B. The legal notice dropped the unauthorised-copy (planned) marker and its status line, still v3.",
     "After #479 merges: split a sync verify_body out of TorrentCache::ask (sources-plugins/src/torrent_cache.rs) so the torrent_cache fuzz target calls the real reply path and fuzzes Verified::claims (X-fuzz-1105, #484 decisions file). Next fuzz campaign: give more time to metainfo (~1k exec/s), rss, release, query and tokenizer.",
     "owner-flag \u00a72.19 (RP-1b #485): MW-2@2 narrows a malware rule; residual: one .exe in a Music torrent with two samples in a sample folder passes MW-2, only MW-1 can hold it. Flag with the PR merge.",
-    "After #479: add a sync verify_body path for the torrent_cache fuzz target (fuzz harness follow-up; small, Sonnet-ok after review)."
+    "Flake: crates/lodestar subscriptions::tests::a_stalled_download_is_cut_off_at_the_time_limit hung #480's ubuntu job 2h (run 41995084843); runner fix on slice/X-flake-subs-stall."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5278,23 +5293,23 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T10:55Z",
+    "updated": "2026-11-05T11:10Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-fuzz-1105",
+        "slice": "X-fuzz-cache-1105",
         "role": "build",
         "agent": "claude",
-        "doing": "Security: a longer fuzz campaign on the untrusted-input parsers merged this week (webhooks, feeds, scrape, cache)",
-        "since": "2026-11-05T08:37Z"
+        "doing": "Security: fuzzing the torrent-cache parse directly, plus Verified::claims",
+        "since": "2026-11-05T11:10Z"
       },
       {
         "slot": 2,
-        "slice": "X-log-url-redact-3",
+        "slice": "X-log-url-redact-4",
         "role": "build",
         "agent": "claude",
-        "doing": "Security/performance: a proven fast path and the two narrowings for log redaction",
-        "since": "2026-11-05T09:06Z"
+        "doing": "Security: three known log-redaction leaks on main, plus look-alike separators",
+        "since": "2026-11-05T11:10Z"
       },
       {
         "slot": 3,
