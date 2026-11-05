@@ -2963,7 +2963,9 @@ export interface components {
         /**
          * @description What a source claimed that the verified metadata contradicts
          *     (§18.5). A field is null when the source didn't state it or it
-         *     agrees; claimed file lists themselves are never returned.
+         *     agrees; claimed file lists themselves are never returned. Names are
+         *     compared byte for byte, so a feed's tidied title differs: show it as
+         *     information, not a warning.
          */
         ClaimDifferences: {
             file_count: null | components["schemas"]["ClaimedNumber"];
@@ -6132,7 +6134,8 @@ export interface components {
          *     clients), claims that came through a private source, and every
          *     source of a `private_source` torrent are shown only to the signed-in
          *     admin session. Any other caller (an API key, once these routes take
-         *     one) gets them left out and `withheld` set.
+         *     one) gets them left out (a public source with a private claim keeps
+         *     its name, with `claim` null) and `withheld` set.
          * @example {
          *       "network": "bt",
          *       "sources": [

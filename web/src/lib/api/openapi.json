@@ -9232,7 +9232,7 @@
       },
       "ClaimDifferences": {
         "type": "object",
-        "description": "What a source claimed that the verified metadata contradicts\n(§18.5). A field is null when the source didn't state it or it\nagrees; claimed file lists themselves are never returned.",
+        "description": "What a source claimed that the verified metadata contradicts\n(§18.5). A field is null when the source didn't state it or it\nagrees; claimed file lists themselves are never returned. Names are\ncompared byte for byte, so a feed's tidied title differs: show it as\ninformation, not a warning.",
         "required": [
           "file_count",
           "matches",
@@ -16042,7 +16042,7 @@
       },
       "Provenance": {
         "type": "object",
-        "description": "A torrent's provenance (architecture §18.5, §18.6, §18.8).\n\n**Private sources (§18.7):** a source with the account consent class\n(Prowlarr, Jackett, private-tracker announces, your own download\nclients), claims that came through a private source, and every\nsource of a `private_source` torrent are shown only to the signed-in\nadmin session. Any other caller (an API key, once these routes take\none) gets them left out and `withheld` set.",
+        "description": "A torrent's provenance (architecture §18.5, §18.6, §18.8).\n\n**Private sources (§18.7):** a source with the account consent class\n(Prowlarr, Jackett, private-tracker announces, your own download\nclients), claims that came through a private source, and every\nsource of a `private_source` torrent are shown only to the signed-in\nadmin session. Any other caller (an API key, once these routes take\none) gets them left out (a public source with a private claim keeps\nits name, with `claim` null) and `withheld` set.",
         "required": [
           "network",
           "sources",
