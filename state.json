@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T23:49Z",
+ "updated_at": "2026-11-05T23:50Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -5004,6 +5004,11 @@
    "id": "runner-docs-owner-nolimit-2345",
    "note": "Record in the runner docs PR: owner 23:35Z \"Use as many resources as needed to get as much done in the next 30 mins as possible.\"; owner ~23:45Z \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Planning slices launched: P-v06-workers, P-v06-companions, P-m6-audit, P-v052-manifest, P-m8, P-v08; plus a read-only security pre-audit of v0.6 sources.",
    "added": "2026-11-05T23:37Z"
+  },
+  {
+   "id": "gate-notes-from-preaudit",
+   "note": "From the runner security pre-audit (main 63a2c6df) for the gates: SRC-G must require a store-backed, fail-closed PrivateTrackers before full_scrape is wired (only StaticPrivateTrackers exists, test-only). ENR-G must check that the host Switches::kill_switch_tripped treats an Unchecked or permanently-down route as tripped. Add both to the gates notes in the runner docs PR.",
+   "added": "2026-11-05T23:50Z"
   }
  ],
  "main_health": [
