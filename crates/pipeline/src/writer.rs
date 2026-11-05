@@ -602,7 +602,8 @@ impl Writer {
 
     /// [`Writer::commit`], with `cache`'s lease-free files committed in the
     /// same transaction. Returns those of them it stored: the index in
-    /// `cache`, the torrent's id, and whether it's a new row.
+    /// `cache`, the torrent's id, whether it's a new row, and whether it
+    /// was committed as `private_source` (read from the store at judging).
     async fn commit_all(
         &mut self,
         results: Vec<Results>,
@@ -611,7 +612,7 @@ impl Writer {
         swarm: Vec<SwarmUpdate>,
         events: Vec<Event>,
         retry: &mpsc::Sender<Discovery>,
-    ) -> Vec<(usize, i64, bool)> {
+    ) -> Vec<(usize, i64, bool, bool)> {
         // Fencing (§19.3): only results under a current lease count. A
         // stale one comes from a holder whose lease expired; the key's new
         // holder will deliver it.
@@ -853,7 +854,7 @@ impl Writer {
                 } else {
                     cs.existing.fetch_add(1, Ordering::Relaxed);
                 }
-                cache_stored.push((i - first_cache, id, new));
+                cache_stored.push((i - first_cache, id, new, c.results.private_source));
                 continue;
             }
             // The gate counts what the store says, whether or not the
@@ -1004,8 +1005,9 @@ impl Writer {
     /// - **`Held`** is written as a held ingest verdict is (a tombstone or
     ///   quarantine, with the rule id and evidence, and the sealed name of
     ///   a quarantine), with intake told before the write. One held under
-    ///   rules that have since changed is dropped, not written: the cursor
-    ///   offers the key again.
+    ///   rules that have since changed is judged again under the current
+    ///   ones first ([`Writer::rejudge_stale_holds`]); should they change
+    ///   once more meanwhile, it's dropped unwritten.
     /// - **`Refused`** is counted and dropped (the judge task counts it).
     ///
     /// [`torrent_cache::judge`]: crate::torrent_cache::judge
@@ -1042,8 +1044,8 @@ impl Writer {
                     sealed,
                     adult_hold,
                 } => {
+                    // Counted as `stale` when it was judged again.
                     let Some(d) = verdict.decision.filter(|_| judged_under == version) else {
-                        cs.stale.fetch_add(1, Ordering::Relaxed);
                         continue;
                     };
                     let held = match d.action {
@@ -1086,14 +1088,20 @@ impl Writer {
             .await;
         // The fields outside the info dict, as the plugin's claims on what
         // it stored: never on what was held or refused.
-        let mut keep = vec![false; claims.len()];
-        for (j, _, _) in stored {
-            keep[j] = true;
+        // Marked private as the commit was: storing them must never make a
+        // torrent public that the commit kept private (`put_one` clears
+        // the mark for a public sighting).
+        let mut keep: Vec<Option<bool>> = vec![None; claims.len()];
+        for (j, _, _, private) in stored {
+            keep[j] = Some(private);
         }
         let found: Vec<Discovery> = claims
             .into_iter()
             .zip(keep)
-            .filter_map(|(d, k)| k.then_some(d))
+            .filter_map(|(mut d, k)| {
+                d.found.private_source = k?;
+                Some(d)
+            })
             .collect();
         if !found.is_empty() {
             self.ingest_found(found, false).await;
@@ -1103,7 +1111,9 @@ impl Writer {
     /// Judges again, on the blocking pool and under the current rules,
     /// each held cache file that was judged under rules that have changed
     /// since: a looser rule set may now store it, a stricter one still
-    /// holds it. Counted as `stale`.
+    /// holds it. Counted as `stale`. A file whose judging panics stays
+    /// held as it was (counted as an error), never stored; the panic
+    /// doesn't reach the writer, whose store the task holds.
     async fn rejudge_stale_holds(
         &mut self,
         mut batch: Vec<crate::torrent_cache::ToCommit>,
@@ -1121,25 +1131,45 @@ impl Writer {
             .fetch_add(n as u64, Ordering::Relaxed);
         let store = self.store.take().expect("store");
         let sealer = self.sealer.clone();
-        let (store, batch) = tokio::task::spawn_blocking(move || {
+        let (store, batch, failed) = tokio::task::spawn_blocking(move || {
             let mut preparer = store.preparer();
+            let mut failed = 0u64;
             for t in &mut batch {
                 if matches!(t.judged, Judged::Held { version, .. } if version != engine.version) {
-                    t.judged = crate::torrent_cache::judge_sealed(
-                        &engine,
-                        &mut preparer,
-                        sealer.as_deref(),
-                        t.key,
-                        &t.info_raw,
-                        unix_now(),
-                    );
+                    // A panic judging one file mustn't take the writer
+                    // down: it stays held, as it was, under these rules.
+                    let judged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::torrent_cache::judge_sealed(
+                            &engine,
+                            &mut preparer,
+                            sealer.as_deref(),
+                            t.key,
+                            &t.info_raw,
+                            unix_now(),
+                        )
+                    }));
+                    match judged {
+                        Ok(j) => t.judged = j,
+                        Err(_) => {
+                            failed += 1;
+                            if let Judged::Held { version, .. } = &mut t.judged {
+                                *version = engine.version;
+                            }
+                        }
+                    }
                 }
             }
-            (store, batch)
+            (store, batch, failed)
         })
         .await
         .expect("cache rejudge task");
         self.store = Some(store);
+        if failed > 0 {
+            self.stats
+                .torrent_cache
+                .errors
+                .fetch_add(failed, Ordering::Relaxed);
+        }
         batch
     }
 
@@ -4164,7 +4194,13 @@ mod tests {
         let cache = store.register_source("torrent_cache", "1", 1).unwrap();
         let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
         let (retry, _rx) = mpsc::channel(4);
-        let c = cached(&w, "Sintel 2011", cache);
+        let mut c = cached(&w, "Sintel 2011", cache);
+        // A file with the fields outside its info dict, so its claims are
+        // stored too (runner's delta review of #479): they mustn't make it
+        // public either.
+        c.claims.trackers = vec!["udp://tracker.example:1337/announce".into()];
+        c.claims.description = Some("Encoded by someone".into());
+        c.provenance.published_at = Some(1_600_000_000);
         // Stored by a private source after the lookup, before the commit.
         let r = results_named("Sintel 2011");
         let id = w
@@ -4191,5 +4227,10 @@ mod tests {
         let row = w.store.as_ref().unwrap().torrent(id).unwrap().unwrap();
         assert_ne!(row.flags & flags::PRIVATE_SOURCE, 0, "still private");
         assert_ne!(row.sources & bit(cache), 0);
+        // The claims were stored, as a private source's are.
+        assert_eq!(w.stats.unverified.on_torrent.load(Ordering::Relaxed), 1);
+        let claims = w.store.as_ref().unwrap().torrent_claims(id).unwrap();
+        let mine = claims.iter().find(|c| c.source == cache).expect("claims");
+        assert!(mine.private_source);
     }
 }
