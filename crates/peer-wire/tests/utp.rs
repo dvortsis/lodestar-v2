@@ -165,28 +165,40 @@ async fn hostile_peers_fail_the_same_way_over_utp() {
 /// the fetch at once (`early eof`, serving another torrent) instead of
 /// leaving it to time out.
 ///
-/// The UDP port is taken first, from the system's UDP ports, then the
-/// TCP listener on the same number. The other way round, a TCP port can
-/// fall in a range Windows reserves for UDP (Hyper-V, WinNAT): every port
-/// handed out next to it was refused, and 100 tries in a row failed on CI.
+/// Windows reserves port ranges per protocol (Hyper-V, WinNAT), so a port
+/// free in one can be refused in the other, and either order has failed
+/// 100 times in a row on CI: TCP first (every port beside it reserved for
+/// UDP), and UDP first ("no UDP port of 100 was also free over TCP", seen
+/// on #472). The tries alternate between the two orders, so a run of
+/// ports reserved for one protocol can't fail both.
 async fn tcp_only_peer(seed: Seed) -> (FakePeer, std::net::UdpSocket) {
-    const TRIES: usize = 100;
-    for _ in 0..TRIES {
-        let silent = std::net::UdpSocket::bind("127.0.0.1:0").expect("a UDP port");
-        let at = silent.local_addr().expect("bound");
-        let peer = FakePeer::spawn_at(
+    const TRIES: usize = 200;
+    let spawn = |at: SocketAddr| {
+        FakePeer::spawn_at(
             at,
             vec![seed.clone()],
             Accept::Both,
             Behavior::Honest,
             vec![],
         )
-        .await;
-        if let Ok(peer) = peer {
-            return (peer, silent);
+    };
+    for i in 0..TRIES {
+        if i % 2 == 0 {
+            let silent = std::net::UdpSocket::bind("127.0.0.1:0").expect("a UDP port");
+            let at = silent.local_addr().expect("bound");
+            if let Ok(peer) = spawn(at).await {
+                return (peer, silent);
+            }
+        } else {
+            let peer = spawn("127.0.0.1:0".parse().unwrap())
+                .await
+                .expect("a TCP port");
+            if let Ok(silent) = std::net::UdpSocket::bind(peer.addr()) {
+                return (peer, silent);
+            }
         }
     }
-    panic!("no UDP port of {TRIES} was also free over TCP");
+    panic!("no port of {TRIES}, in either order, was free over both UDP and TCP");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

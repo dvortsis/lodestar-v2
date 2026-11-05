@@ -1018,9 +1018,6 @@ mod tests {
         assert!(!auth.notice_pending(), "accepted for good");
     }
 
-    /// An instance set up before the notice existed (rc.1 to rc.3: no
-    /// `notice_version`) shows it once, and accepting records it; another
-    /// change to `auth.json` keeps it.
     #[test]
     fn set_up_turns_true_only_when_setup_saves_the_password() {
         // LEGAL-2's hold follows this signal.
@@ -1053,6 +1050,9 @@ mod tests {
         assert!(*Auth::load(&path, false).unwrap().watch_set_up().borrow());
     }
 
+    /// An instance set up before the notice existed (rc.1 to rc.3: no
+    /// `notice_version`) shows it once, and accepting records it; another
+    /// change to `auth.json` keeps it.
     #[test]
     fn an_older_install_accepts_the_notice_once() {
         let (dir, auth) = fresh();
