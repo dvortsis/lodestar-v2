@@ -133,6 +133,9 @@ async fn a_request_carries_the_name_and_the_key_header_only() {
         .find(|(n, _)| n.eq_ignore_ascii_case("authorization"))
         .map(|(_, v)| v.as_str());
     assert_eq!(auth, Some("Bearer REDACTED"));
+    let names: Vec<&str> = req.headers.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["Accept", "Authorization"], "no other header");
+    assert!(!format!("{req:?}").contains(NAME), "Debug shows no name");
 }
 
 #[tokio::test(start_paused = true)]
@@ -204,6 +207,14 @@ async fn a_429_backs_off_and_the_next_lookup_waits_without_a_request() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_redirect_is_not_followed() {
+    let (got, replayer) = lookup("tpdb_redirect", &name()).await;
+    assert_eq!(got.unwrap_err().0, "ThePornDB's request failed");
+    assert_eq!(replayer.requests().len(), 1, "no request to the Location");
+    replayer.finish().unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_401_hold_does_not_read_as_a_rate_limit() {
     let replayer = Arc::new(Replayer::load(&fixture("tpdb_unauthorized")).unwrap());
     let p = plugin();
@@ -234,6 +245,15 @@ fn answers_that_are_not_understood_are_errors() {
         // The service's own error object on a 200 is not a miss.
         b"{\"message\":\"anything\"}",
         b"{}",
+        // `data` must be the root's own key, with a list, object or null.
+        br#"{"message":"data"}"#,
+        br#"{"errors":{"data":[]}}"#,
+        br#"{"data":"x"}"#,
+        br#"{"data":5}"#,
+        br#"{"data"}"#,
+        // Only the top result is used: an unreadable one is an error, not a
+        // reason to take the second-best.
+        br#"{"data":[{"id":"bad id!","title":"A"},{"id":"good-1","title":"B"}]}"#,
         b"{\"data\":[{\"id\":\"a\",\"title\":",
         // Every item skipped: nothing the parser trusts.
         b"{\"data\":[{\"title\":\"no id\"},{\"id\":\"not valid!\"}]}",
@@ -247,6 +267,7 @@ fn answers_that_are_not_understood_are_errors() {
     for body in [
         &b"{\"data\":[]}"[..],
         b"{\"data\":null}",
+        b"{ \"meta\": {\"data\": 5}, \"data\" : [] }",
         b"\xEF\xBB\xBF {\"data\":[]}",
     ] {
         assert_eq!(
@@ -256,6 +277,18 @@ fn answers_that_are_not_understood_are_errors() {
             String::from_utf8_lossy(body)
         );
     }
+}
+
+#[test]
+fn only_the_first_result_is_used() {
+    let good = br#"{"data":[{"id":"good-1","title":"First"},{"id":"good-2","title":"Second"}]}"#;
+    let Lookup::Match(s) = tpdb::parse_answer(good).unwrap() else {
+        panic!("a match")
+    };
+    assert_eq!(
+        (s.scene_id.as_str(), s.title.as_deref()),
+        ("good-1", Some("First"))
+    );
 }
 
 #[test]
@@ -364,30 +397,35 @@ fn nothing_prints_the_key_or_the_query() {
     )
     .unwrap();
     assert!(!format!("{req:?}").contains("topsecretkey"));
+    assert!(!format!("{req:?}").contains("Secret Name"));
     let q = Query::name("Secret Name").unwrap();
     assert!(!format!("{q:?}").contains("Secret"));
 }
 
 #[tokio::test(start_paused = true)]
-async fn no_error_holds_the_key() {
-    let key = "topsecretkey";
-    let p = plugin_with(key);
+async fn no_error_holds_the_key_or_the_service_text() {
+    // The real key is in the request (the fixtures match on it), so a leak
+    // in any outcome would show.
+    let key = KEY;
+    let p = plugin();
     for case in [
         "tpdb_unauthorized",
         "tpdb_forbidden",
         "tpdb_rate_limited",
         "tpdb_server_error",
         "tpdb_bad_body",
+        "tpdb_html_body",
+        "tpdb_redirect",
     ] {
-        // The fixtures expect `Bearer REDACTED`; a different key makes the
-        // replayer fail the request, which is one more error path to check.
         let r = Arc::new(Replayer::load(&fixture(case)).unwrap());
-        let k = kit(&p, r);
+        let k = kit(&p, r.clone());
         let e = p.lookup(&k, &name()).await.unwrap_err();
+        let shown = format!("{} {e:?}", e.0);
         assert!(
-            !e.0.contains(key) && !format!("{e:?}").contains(key),
+            !shown.contains(key) && !shown.contains("SENTINEL"),
             "{case}"
         );
+        r.finish().unwrap();
     }
 }
 

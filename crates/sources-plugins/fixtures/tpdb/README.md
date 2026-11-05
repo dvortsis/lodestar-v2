@@ -13,3 +13,4 @@ Every name, id, title and studio is made up. The key is `REDACTED` everywhere. `
 | `tpdb_rate_limited` | 429 with `Retry-After`: back off |
 | `tpdb_server_error` | 500 |
 | `tpdb_bad_body`, `tpdb_html_body` | a 200 that is cut short, or is HTML: an error, never a cached miss |
+| `tpdb_redirect` | a 302 to another host: not followed, one request, a plain failure |

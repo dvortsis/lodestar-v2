@@ -54,11 +54,12 @@ pub const PER_PAGE: u8 = 5;
 /// Bytes in an API key. ThePornDB's are about 40 characters.
 pub const MAX_KEY: usize = 256;
 
-/// The caps for one answer: ENR-2b's, with `per_page` items at most (ten
-/// times that is more than a hostile server needs to be cut off at) and the
-/// performer limit the section holds.
+/// The caps for one answer: ENR-2b's, with one item read and the performer
+/// limit the section holds. Only the service's top-ranked result is used:
+/// if it can't be read, the answer is an error, never the second-best
+/// guess, which could pin another scene's performers on the torrent (Q4).
 pub const ANSWER_LIMITS: Limits = Limits {
-    max_items: PER_PAGE as usize * 10,
+    max_items: 1,
     max_performers: MAX_PERFORMERS,
     ..LIMITS
 };
@@ -240,18 +241,59 @@ pub fn parse_answer(body: &[u8]) -> Result<Lookup, PluginError> {
             found.push(f);
         }
     });
+    // A second item ends the read (`Stop::Items`) after the first was kept;
+    // that's expected. An unreadable first item leaves nothing here.
     if let Some(f) = found.into_iter().next() {
         return Ok(to_lookup(f));
     }
     if page.stop.is_some() || page.skipped.total() > 0 {
         return Err(fail(BAD_ANSWER));
     }
-    // The parser doesn't say whether it saw `data`; an object without the
-    // key (the service's error object on a 200) isn't a miss.
-    if !root.windows(6).any(|w| w == b"\"data\"") {
+    // The parser doesn't say whether it saw the root's `data`, so this does:
+    // a miss is `data` as an empty list or `null`, and nothing else. An error
+    // object on a 200, or a `data` of another type, is not a miss.
+    if !matches!(data_start(root), Some(b'[' | b'{' | b'n')) {
         return Err(fail(BAD_ANSWER));
     }
     Ok(Lookup::NoMatch)
+}
+
+/// The first byte of the value of the root object's `data` key, if it has
+/// one (the first such key, as the parser reads it). Strings and nesting are
+/// tracked, so `"data"` inside a value or a nested object doesn't count.
+/// A stopgap until `sources-feeds` reports whether the parser saw `data`.
+fn data_start(root: &[u8]) -> Option<u8> {
+    let (mut i, mut depth, mut key) = (0, 0usize, false);
+    while i < root.len() {
+        match root[i] {
+            b'"' => {
+                let start = i + 1;
+                i = start;
+                while i < root.len() && root[i] != b'"' {
+                    i += if root[i] == b'\\' { 2 } else { 1 };
+                }
+                if depth == 1 && key {
+                    key = false;
+                    if root.get(start..i) == Some(b"data") {
+                        let mut rest = root
+                            .get(i + 1..)?
+                            .iter()
+                            .filter(|b| !b.is_ascii_whitespace());
+                        return (rest.next()? == &b':').then(|| rest.next().copied())?;
+                    }
+                }
+            }
+            b'{' | b'[' => {
+                depth += 1;
+                key = depth == 1 && root[i] == b'{';
+            }
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            b',' if depth == 1 => key = true,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// ENR-0's section from one match. A scene id the section refuses is no
