@@ -470,7 +470,13 @@ const aboutBody = /features\/settings\/about\/AboutScreen\.svelte$/;
 const updatesBody = /features\/settings\/updates\/UpdatesScreen\.svelte$/;
 // Filters & Safety (S-filters): the review queue loads from its body alone, so its import of the
 // body is of code already loaded.
-const filtersLater = [/features\/filters\/screens\/Queue\.svelte$/];
+const filtersLater = [
+	/features\/filters\/screens\/Queue\.svelte$/,
+	// What each rule pack hides, opened from the packs list (RP-UC, runner on #469).
+	/features\/filters\/screens\/PackInfo\.svelte$/,
+	// The packs list, loaded from the switches (RP-UC).
+	/features\/filters\/screens\/Packs\.svelte$/
+];
 const filtersBody = /features\/filters\/screens\/FiltersScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
@@ -716,8 +722,18 @@ const filtersDoorLazy = filtersLazy({
 });
 const filtersQueueLazy = filtersLazy({
 	name: 'Filters review queue (on demand)',
-	keys: filtersLater,
+	keys: [filtersLater[0]],
 	stop: filtersDialogs
+});
+const filtersPackInfoLazy = filtersLazy({
+	name: 'Filters pack descriptions (on demand)',
+	keys: [filtersLater[1]],
+	stop: filtersDialogs
+});
+const filtersPacksLazy = filtersLazy({
+	name: 'Filters packs list (on demand)',
+	keys: [filtersLater[2]],
+	stop: [...filtersDialogs, filtersLater[1]]
 });
 const settingsEditorLazy = requireMeasuredJs(
 	'Appearance theme editor (on demand)',
@@ -1194,6 +1210,8 @@ export default [
 	// there); Block dialog +1.4 KB. Was 34.4 KB.
 	entry('Filters dialogs (on demand)', filtersDialogsLazy, '35.9 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
+	entry('Filters pack descriptions (on demand)', filtersPackInfoLazy, '1.6 KB'), // measured 1.43 KB + 10%
+	entry('Filters packs list (on demand)', filtersPacksLazy, '1.6 KB'), // measured 1.27 KB + ~25% for later packs
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.
