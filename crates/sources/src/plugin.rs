@@ -13,6 +13,7 @@ use lodestar_store::SourceId;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::claims::{Claims, Provenance};
+use crate::egress::Endpoints;
 use crate::http::{Client, Fetch, HostLimiter, NoEgress};
 use crate::manifest::{Manifest, Policy, UserLimits};
 use crate::state::{MemoryState, PluginState};
@@ -95,6 +96,13 @@ pub trait SourcePlugin: Send + Sync {
     /// v2). Plugins that don't say get [`Policy::STRICT`].
     fn policy(&self) -> &Policy {
         &Policy::STRICT
+    }
+
+    /// Where its requests may go (SRC-5's egress host list): its
+    /// manifest's own endpoints, unless the plugin's settings name them
+    /// (a torrent cache's list). `None` reaches nothing at all.
+    fn endpoints(&self) -> Option<Endpoints> {
+        Some(Endpoints::manifest(self.manifest().endpoints))
     }
 
     fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>>;

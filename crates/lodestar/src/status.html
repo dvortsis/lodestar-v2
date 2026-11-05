@@ -117,6 +117,17 @@ button.link { background: none; color: var(--primary-ink); padding: 0; }
     <div class="scroll"><table><thead><tr><th>Tracker</th><th>Health</th><th class="n">OK</th><th class="n">Timeouts</th><th class="n">Errors</th><th class="n">Skipped</th><th>Last answer</th></tr></thead><tbody id="trackers"></tbody></table></div>
   </div>
 
+  <div id="cache" hidden>
+    <h2>Torrent cache</h2>
+    <div class="kpis" style="margin-top:0">
+      <div class="kpi"><b id="tc-lookups" data-testid="kpi-cache-lookups">—</b><span>lookups</span></div>
+      <div class="kpi"><b id="tc-verified" data-testid="kpi-cache-verified">—</b><span>verified files</span></div>
+      <div class="kpi"><b id="tc-stored" data-testid="kpi-cache-stored">—</b><span>stored</span></div>
+      <div class="kpi"><b id="tc-held" data-testid="kpi-cache-held">—</b><span>held by filters</span></div>
+    </div>
+    <p class="meta" id="tc-meta" data-testid="cache-meta" style="margin:8px 0"></p>
+  </div>
+
   <h2>Latest torrents</h2>
   <table><thead><tr><th>Name</th><th class="n">Size</th><th class="n">Files</th></tr></thead><tbody id="latest"></tbody></table>
 
@@ -185,6 +196,15 @@ async function refresh() {
         const [label, cls] = HEALTH[t.health] || [String(t.health), "wait"];
         return [[t.url, "name"], [label, "health " + cls], [fmt.format(t.ok), "n"], [fmt.format(t.timeout), "n"], [fmt.format(t.error), "n"], [fmt.format(t.skipped), "n"], [t.last_ok_at == null ? "—" : ago(t.last_ok_at, s.now)]];
       }));
+    }
+    const c = s.torrent_cache;
+    $("cache").hidden = !c;
+    if (c) {
+      $("tc-lookups").textContent = fmt.format(c.lookups);
+      $("tc-verified").textContent = fmt.format(c.verified);
+      $("tc-stored").textContent = fmt.format(c.stored);
+      $("tc-held").textContent = fmt.format(c.held);
+      $("tc-meta").textContent = fmt.format(c.missed) + " not in any cache · " + fmt.format(c.mismatched) + " wrong file · " + fmt.format(c.invalid) + " unreadable · " + fmt.format(c.failed) + " failed · " + fmt.format(c.skipped) + " caches passed over · " + fmt.format(c.dropped) + " dropped (queue full) · " + fmt.format(c.promoted) + " promoted · " + fmt.format(c.existing) + " already stored · " + fmt.format(c.refused) + " refused · " + fmt.format(c.stale) + " held under old rules · " + fmt.format(c.errors) + " store errors";
     }
     if (s.latest) fill("latest", s.latest.map((t) => [[t.name, "name"], [bytes(t.size), "n"], [fmt.format(t.files), "n"]]));
   } catch (e) {

@@ -72,6 +72,8 @@ pub struct Handles {
     updates: Option<(watch::Sender<bool>, JoinHandle<()>)>,
     /// The storage size sampler (R-gauges).
     storage: (watch::Sender<bool>, JoinHandle<()>),
+    /// The torrent cache's feeder (SRC-13b), while it's enabled.
+    torrent_cache: Option<(watch::Sender<bool>, JoinHandle<()>)>,
 }
 
 impl Services {
@@ -253,6 +255,16 @@ impl Services {
             dht_source = Some(dht.clone());
             plugins.push(dht);
         }
+        // The torrent cache (SRC-13b): registered from its saved settings,
+        // off until you enable it, and its consent covers its listed hosts.
+        let (control, cache_config) = tokio::task::spawn_blocking(move || {
+            let c = crate::torrent_cache::saved_config(&control);
+            (control, c)
+        })
+        .await?;
+        let cache = crate::torrent_cache::build(cache_config);
+        plugins.push(cache.plugin.clone());
+        pipeline_config.torrent_cache = Some(crate::torrent_cache::ID);
         pipeline_config.hot = Some(hot.clone());
         // The gate's searchable count follows the serving index (below).
         pipeline_config.gate_follows_index = serving.is_some();
@@ -307,6 +319,11 @@ impl Services {
             ))
         });
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
+        // Fed and drained only while it's enabled at this start with a
+        // cache listed: with none, it stops at "needs setup".
+        let cache_feed = pipeline
+            .torrent_cache_feed()
+            .filter(|_| !cache.plugin.config().caches().is_empty());
         // Pause, resume, sources and the network check (B14), applied
         // however the registry's crawler section changes.
         let crawl = Control::start(
@@ -342,6 +359,31 @@ impl Services {
             subscriptions_stopped,
         ));
         let reader = Arc::new(Mutex::new(reader));
+        let (cache_hints, cache_task) = match cache_feed {
+            Some(feed) => {
+                // Its own read-only connection, so its store reads never
+                // wait on the API's.
+                let (db, store_config) = (config.db_path(), config.store_config());
+                let cache_reader =
+                    tokio::task::spawn_blocking(move || Store::open_reader(db, store_config))
+                        .await??;
+                let (hints, interest) = crate::torrent_cache::InterestHints::new();
+                let (stop, stopped) = watch::channel(false);
+                let task = crate::torrent_cache::run(
+                    crate::torrent_cache::Wiring {
+                        feed,
+                        verified: cache.verified,
+                        queue: cache.queue,
+                        reader: Arc::new(Mutex::new(cache_reader)),
+                        interest,
+                        page_every: crate::torrent_cache::PAGE_EVERY,
+                    },
+                    stopped,
+                );
+                (Some(hints), Some((stop, task)))
+            }
+            None => (None, None),
+        };
         let search_state = serving.as_ref().map(|s| http::SearchState {
             index: SearchHandle::serving(s.clone()),
             stats: s.stats(),
@@ -408,6 +450,7 @@ impl Services {
             events: Some(Arc::new(Events {
                 health: monitor.health().cloned(),
                 rollups: monitor.rollups().clone(),
+                torrent_cache: cache_hints,
             })),
             ops: Some(ops),
             user_data: Some(Arc::new(Mutex::new(user_data))),
@@ -434,6 +477,7 @@ impl Services {
             search: search_state,
             storage: Some(storage),
             filter: api.filters.as_ref().map(|f| f.engine.clone()),
+            torrent_cache: cache_task.as_ref().map(|_| cache.stats.clone()),
         };
         // The live stream (§9): new torrents from the serving index's
         // commits, crawler snapshots from the status page's counters, and
@@ -531,6 +575,7 @@ impl Services {
                 percolator,
                 updates: updates.task,
                 storage: (stop_storage, sampler),
+                torrent_cache: cache_task,
             },
             listener,
             system,
@@ -694,6 +739,11 @@ impl Handles {
         let (stop, refresher) = self.subscriptions;
         let _ = stop.send(true);
         let _ = refresher.await;
+        // Before the pipeline: nothing more is queued or handed over.
+        if let Some((stop, task)) = self.torrent_cache {
+            let _ = stop.send(true);
+            let _ = task.await;
+        }
         let mut store = self.pipeline.shutdown().await?;
         // A failed snapshot only costs a rebuild from SQLite at the next
         // start; the indexer still gets to stop cleanly.
@@ -759,12 +809,19 @@ fn seal_key(path: &Path) -> Result<[u8; 32], BoxError> {
 struct Events {
     health: Option<HealthHandle>,
     rollups: Arc<Rollups>,
+    /// The torrent cache's interest hints, while it's enabled (SRC-13b).
+    torrent_cache: Option<crate::torrent_cache::InterestHints>,
 }
 
 impl lodestar_api::ApiEvents for Events {
     fn interest(&self, id: i64) {
         if let Some(h) = &self.health {
             h.interest(id);
+        }
+        // Only an id: what it may look up, and whether it's private, is
+        // read from the store (SRC-13b).
+        if let Some(c) = &self.torrent_cache {
+            c.hint(id);
         }
     }
 
