@@ -494,8 +494,15 @@ fn config_refusals_name_the_rule() {
         ("https:c.example/{hash}", "start with https://"),
         ("https://[{hash}]/x", "valid address"),
         ("https://c.example\\@d.example/{hash}", "backslash"),
-        ("https://c.example%2Eevil.net/{hash}", "plain form"),
-        ("https://c.example%E3%80%82evil.net/{hash}", "plain form"),
+        ("https://c.example%2Eevil.net/{hash}", "a %"),
+        ("https://c.example%E3%80%82evil.net/{hash}", "a %"),
+        ("https://c.example/~alice/%2e%2e/~bob/{hash}", "a %"),
+        ("https://c.example/~alice/%2E./~bob/{hash}", "a %"),
+        ("https://c.example/a%2Fb/{hash}", "a %"),
+        ("https://c.example/~alice/../~bob/{hash}", "as it's sent"),
+        ("https://c.example/~alice/./{hash}", "as it's sent"),
+        ("https://c.example?h={hash}", "as it's sent"),
+        ("https://c.example/a\"b/{hash}", "as it's sent"),
         ("https://0x08080808/{hash}", "plain form"),
         ("https://010.010.010.010/{hash}", "plain form"),
         ("https://134744072/{hash}", "plain form"),
@@ -521,6 +528,10 @@ fn config_refusals_name_the_rule() {
         .collect();
     assert!(Config::new(&nine).is_err());
     assert!(Config::new(&["https://c.example/{hash}", "https://c.example/{hash}"]).is_err());
+    // The same requests in another case are the same cache; the
+    // placeholder's case is a different request.
+    assert!(Config::new(&["https://C.example/{hash}", "https://c.example/{hash}"]).is_err());
+    assert!(Config::new(&["https://c.example/{hash}", "https://c.example/{HASH}"]).is_ok());
     assert!(Config::from_json(r#"{"caches":[],"extra":1}"#).is_err());
     let long = format!("https://c.example/{}{{hash}}", "a".repeat(600));
     assert!(Config::new(&[long]).is_err());

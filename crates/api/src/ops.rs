@@ -149,8 +149,9 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
     fn restart_network_check(&self) -> Result<NetworkCheck, OpsError>;
 }
 
-/// Why an operation was refused.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why an operation was refused. Its `Debug` leaves out a consent
+/// version, which holds every address (they can be per-user ones).
+#[derive(Clone, PartialEq, Eq)]
 pub enum OpsError {
     UnknownSource,
     /// Enabling the source needs an acknowledgement of its class at this
@@ -181,6 +182,37 @@ pub enum OpsError {
     },
     /// Logged, never shown.
     Internal(String),
+}
+
+impl std::fmt::Debug for OpsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpsError::UnknownSource => f.write_str("UnknownSource"),
+            OpsError::ConsentRequired { class, .. } => f
+                .debug_struct("ConsentRequired")
+                .field("class", class)
+                .finish_non_exhaustive(),
+            OpsError::PasswordRequired => f.write_str("PasswordRequired"),
+            OpsError::CredentialsRequired => f.write_str("CredentialsRequired"),
+            OpsError::BadCredential(r) => f.debug_tuple("BadCredential").field(r).finish(),
+            OpsError::Invalid {
+                code,
+                field,
+                message,
+            } => f
+                .debug_struct("Invalid")
+                .field("code", code)
+                .field("field", field)
+                .field("message", message)
+                .finish(),
+            OpsError::RouteUnavailable => f.write_str("RouteUnavailable"),
+            OpsError::RateLimited { retry_after_secs } => f
+                .debug_struct("RateLimited")
+                .field("retry_after_secs", retry_after_secs)
+                .finish(),
+            OpsError::Internal(e) => f.debug_tuple("Internal").field(e).finish(),
+        }
+    }
 }
 
 fn class_name(c: ConsentClass) -> &'static str {

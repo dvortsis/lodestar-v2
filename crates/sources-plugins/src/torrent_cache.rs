@@ -191,6 +191,9 @@ pub struct Cache {
     /// dialog shows and what an acknowledgement covers
     /// ([`TorrentCache::manifest`]).
     template: String,
+    /// The address as sent, host in lower case, and the placeholder's
+    /// case: two templates that send the same requests are one cache.
+    same: (String, bool),
 }
 
 impl Cache {
@@ -248,14 +251,17 @@ impl Config {
     ///   bidirectional or look-alike character (a non-ASCII host is
     ///   written in its `xn--` form), and with no `\`, which the URL
     ///   parser reads as `/`;
-    /// - the host as written is the host contacted: no percent-encoding,
+    /// - the address as written is the address requested: no `%`, no `.`
+    ///   or `..` path segment, nothing the parser rewrites, and the host
+    ///   as the host contacted: no percent-encoding,
     ///   no numeric form the parser rewrites (`0x08080808`), and no
     ///   explicit `:443`;
     /// - https, with a host, no user name or password and no fragment: a
     ///   lookup over plain http would show the hash to the whole path;
     /// - not a literal LAN, loopback or link-local address: these are
     ///   public caches;
-    /// - at most [`MAX_CACHES`], none repeated.
+    /// - at most [`MAX_CACHES`], none repeated (two that send the same
+    ///   requests, such as `A.example` and `a.example`, are one).
     ///
     /// An empty list is valid: it's where the list starts.
     pub fn new<S: AsRef<str>>(templates: &[S]) -> Result<Config, ConfigError> {
@@ -265,7 +271,7 @@ impl Config {
         let mut caches: Vec<Cache> = Vec::with_capacity(templates.len());
         for t in templates {
             let c = cache(t.as_ref().trim())?;
-            if caches.contains(&c) {
+            if caches.iter().any(|d| d.same == c.same) {
                 return Err(ConfigError("a cache is listed twice"));
             }
             caches.push(c);
@@ -303,6 +309,13 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
     }
     // The URL parser reads `\` as `/`, so `https://a.example\@b.example/`
     // would show one host and reach another.
+    // A `%` is refused anywhere: the shown text must be what's sent, and
+    // a server can decode `%2F` or `%2e` into a path it never showed.
+    if raw.contains('%') {
+        return Err(ConfigError(
+            "a cache address can't hold a %: write it without percent-encoding",
+        ));
+    }
     if raw.contains('\\') {
         return Err(ConfigError("a cache address can't hold a backslash"));
     }
@@ -362,6 +375,17 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
             "write a cache address's host in its plain form, with no encoding, and no port 443",
         ));
     }
+    // The path and query as written must be what's requested: the parser
+    // resolves `.` and `..` segments (`/~alice/../~bob/` requests
+    // `/~bob/`, a different party on a per-user host) and may encode
+    // characters. Only the host's case may differ.
+    let rest = &probe["https://".len() + written.len()..];
+    if url.as_str() != format!("https://{parsed}{rest}") {
+        return Err(ConfigError(
+            "write a cache address as it's sent: no . or .. path segments, and nothing the \
+             browser would rewrite",
+        ));
+    }
     net::check_url(&url, NetPolicy::notification(false))
         .map_err(|_| ConfigError("a cache address isn't a public one"))?;
     let host = host_key(url.as_str()).ok_or(ConfigError("a cache address has no host"))?;
@@ -371,6 +395,7 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
         upper: is_upper,
         host,
         template: raw.to_owned(),
+        same: (url.as_str().to_owned(), is_upper),
     })
 }
 
