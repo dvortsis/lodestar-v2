@@ -1430,6 +1430,7 @@ impl FiltersApi {
             .as_deref()
             .and_then(StandIns::decode)
             .unwrap_or_default();
+        packs::note_shadows(store, &manifest)?;
         let after = before.with_packs(&labels, now);
         if after == before {
             return Ok(());
@@ -1445,13 +1446,13 @@ impl FiltersApi {
     /// At start: seeding if needed, the engine reloaded when it seeded,
     /// and the conditions recorded.
     fn start_packs(&self, now: i64) -> ApiResult<()> {
-        packs::note_start();
         let mut store = self.store();
         if self.seed_packs(&mut store, now)? {
             self.reload(&store)?;
         }
-        packs::prune_review(&mut store)?;
-        self.note_pack_conditions(&mut store, now)
+        self.note_pack_conditions(&mut store, now)?;
+        let _ = packs::prune_review(&mut store);
+        Ok(())
     }
 
     /// Accepts the pending versions of `rules` (RP-3 puts it behind
@@ -1809,10 +1810,6 @@ impl FiltersApi {
                 if moved || (acc.weakening && (!out.assessment.confirm || versions.is_none())) {
                     return Err(changed_since_preview());
                 }
-                // Shadow hits first: should the acceptance fail, a later
-                // preview has less evidence of agreement, never stale
-                // evidence.
-                packs::forget_shadow_hits(store, &acc.rules)?;
                 pack_upgrade::accept(store, &manifest, &acc.rules, now).map_err(internal)?;
                 packs::add_review(store, &acc.review)?;
                 out.assessment.pack_versions = Some(acc.versions);
@@ -2181,19 +2178,11 @@ impl FiltersApi {
             lodestar_filter::lists::apply(store, &self.engine, &self.ips).map_err(internal)?;
         }
         self.reload(store)?;
-        if let Change::AcceptPackVersions { .. } = change {
-            // What the writer logged with the engine before the reload.
-            let accepted: Vec<PackRule> = out
-                .assessment
-                .pack_versions
-                .iter()
-                .flatten()
-                .filter_map(|v| PackRule::from_id(v.split('@').next().unwrap_or_default()))
-                .collect();
-            packs::forget_shadow_hits(store, &accepted)?;
-        }
-        packs::prune_review(store)?;
         self.note_pack_conditions(store, now)?;
+        // Best effort, after what must be recorded: the row only marks
+        // holds, so one left unpruned until the next change marks a hold
+        // that's gone, which no page lists.
+        let _ = packs::prune_review(store);
         out.version = self.engine.current().version;
         let version = lodestar_log::Count(out.version);
         lodestar_log::log_event!(
@@ -2251,6 +2240,7 @@ impl FiltersApi {
                 .filter(|o| o.unreadable())
                 .map(|o| pack_overrides::label(o.rule)),
         );
+        let pending_on = packs::pending_on(&set, &versions);
         if packs::review_unreadable(&store)? {
             pack_conditions.push(packs::REVIEW_UNREADABLE.to_owned());
         }
@@ -2369,7 +2359,7 @@ impl FiltersApi {
                             base_changed: stored_overrides.get(*r).is_some_and(|o| o.changed),
                             id: r.id().to_string(),
                             on: engine.packs.is_on(*r),
-                            pending: versions.state(*r).shadow,
+                            pending: pending_on.iter().find(|(p, _)| p == r).map(|(_, v)| *v),
                             version: manifest.entry(*r).current().version,
                             pack_override: stored_overrides.get(*r).map(|o| PackOverrideState {
                                 action: o.decoded.action.map(|a| a.as_str().to_string()),
@@ -2384,7 +2374,7 @@ impl FiltersApi {
                 })
                 .collect(),
             packs_seeded_over_rules: versions.seeded_over_rules,
-            pending_pack_versions: packs::pending(manifest, &versions),
+            pending_pack_versions: packs::pending(manifest, &set, &versions),
             quarantine,
             rules: set
                 .rules

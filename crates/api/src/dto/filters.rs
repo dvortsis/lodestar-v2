@@ -922,6 +922,9 @@ pub struct PackCorpus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct PackFixtureCounts {
+    /// Versions of the rule whose recorded direction the corpus doesn't
+    /// show (RP-1's direction checks).
+    pub direction_disagreements: usize,
     /// Examples the rule gets wrong.
     pub failing: usize,
     /// Precision items the rule holds because a guard it should have

@@ -343,12 +343,14 @@ async fn get_filters_lists_versions_changelogs_and_pending_versions() {
 async fn a_widening_acceptance_whose_shadow_agrees_needs_no_password() {
     let f = fixture(bumped(Direction::Widens, Action::Hide));
     let c = logged_in(&f).await;
-    // Only the new version holds 1; both hold 2 the same way; 3 was held
-    // by version 1 before the shadow ran, so it says nothing.
+    // 3 was held by version 1 before the shadow ran, so it says nothing
+    // once the start records where the shadow begins.
+    hit(&f, "MW-2", 3, Action::Hide, false, 20 * 86_400);
+    f.api.resume_requeues(now()).unwrap();
+    // Only the new version holds 1; both hold 2 the same way.
     hit(&f, "MW-2", 1, Action::Hide, true, 100);
     hit(&f, "MW-2", 2, Action::Hide, true, 90);
     hit(&f, "MW-2", 2, Action::Hide, false, 90);
-    hit(&f, "MW-2", 3, Action::Hide, false, 20 * 86_400);
     let change = accept(&["MW-2"], None);
     let p = preview(&f, &c, &change).await;
     assert_eq!(p["weakening"], json!(false), "{p}");
@@ -377,11 +379,15 @@ async fn a_widening_acceptance_whose_shadow_agrees_needs_no_password() {
             .state(PackRule::Mw2)
             .pending()
     );
-    assert_eq!(
-        shadow_hits(&f, "MW-2"),
-        0,
-        "the accepted version's shadow is forgotten"
-    );
+    assert_eq!(shadow_hits(&f, "MW-2"), 2, "the shadow hits are kept");
+    let since = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .setting_text("filter.packs.shadow_since")
+        .unwrap();
+    assert_eq!(since, None, "nothing is pending, so nothing is recorded");
     let o = get(&f, &c, "/api/v1/filters").await;
     assert_eq!(o["pending_pack_versions"], json!([]));
     assert_eq!(rule_state(&o, "MW-2")["applied"], json!(2));
@@ -759,6 +765,7 @@ async fn fixtures_report_the_pack_corpora_per_rule() {
         assert!(r["must_match"].as_u64().unwrap() >= 3, "{r}");
         assert!(r["must_not_match"].as_u64().unwrap() >= 3, "{r}");
         assert_eq!(r["failing"], json!(0), "{r}");
+        assert_eq!(r["direction_disagreements"], json!(0), "{r}");
         assert_eq!(r["version"], json!(1));
     }
     // RP-1's known gaps show per rule, so they never read as a clean pass.
@@ -840,4 +847,68 @@ async fn an_unreadable_review_row_fails_closed() {
             .iter()
             .any(|c| c == "packs.review-unreadable")
     );
+}
+
+/// Where the shadow started is kept across restarts: applied-only holds
+/// made while it ran still disagree after one, and holds from before it
+/// never count.
+#[tokio::test]
+async fn shadow_evidence_survives_a_restart() {
+    let f = fixture(bumped(Direction::Widens, Action::Hide));
+    let c = logged_in(&f).await;
+    // No start recorded yet: every hit in the window counts, so a hold
+    // only version 1 made reads as a disagreement.
+    hit(&f, "MW-2", 9, Action::Hide, false, 25 * 86_400);
+    let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+    assert_eq!(p["weakening"], json!(true), "{p}");
+    // The start records where the shadow begins: 9 is from before it.
+    f.api.resume_requeues(now()).unwrap();
+    let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+    assert_eq!(p["weakening"], json!(false), "{p}");
+    // While it runs, version 1 holds 2 and the new version doesn't.
+    hit(&f, "MW-2", 2, Action::Hide, false, 10);
+    // A restart, with nothing the new version has held since.
+    f.api.resume_requeues(now()).unwrap();
+    let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+    assert_eq!(p["weakening"], json!(true), "{p}");
+    assert_eq!(p["pack_acceptance"][0]["disagreements"], json!(1));
+    needs_password(&f, &c, "applied-only before a restart").await;
+}
+
+/// An applied hit counts as the applied version's own action, whatever
+/// action an override gave it: a heavier override doesn't read as a
+/// disagreement.
+#[tokio::test]
+async fn an_override_does_not_skew_the_comparison() {
+    let f = fixture(bumped(Direction::Widens, Action::Hide));
+    let c = logged_in(&f).await;
+    let set = json!({ "op": "set_pack_override", "rule": "MW-2", "action": "drop" });
+    assert_eq!(apply(&f, &c, &set, None).await.0, StatusCode::OK);
+    f.api.resume_requeues(now()).unwrap();
+    // Version 1 held it and the override dropped it; version 2 hides it.
+    hit(&f, "MW-2", 1, Action::Drop, false, 50);
+    hit(&f, "MW-2", 1, Action::Hide, true, 50);
+    let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+    assert_eq!(p["weakening"], json!(false), "{p}");
+    assert_eq!(p["pack_acceptance"][0]["disagreements"], json!(0));
+}
+
+/// A rule that's switched off runs no shadow and has nothing waiting:
+/// switching it on records its current version.
+#[tokio::test]
+async fn a_rule_that_is_off_has_nothing_pending() {
+    let f = fixture(bumped(Direction::Narrows, Action::Hide));
+    let c = logged_in(&f).await;
+    let off = json!({ "op": "pack_switch", "id": "MW-2", "on": false });
+    let (status, body) = apply(&f, &c, &off, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let o = get(&f, &c, "/api/v1/filters").await;
+    assert_eq!(o["pending_pack_versions"], json!([]));
+    assert_eq!(rule_state(&o, "MW-2")["pending"], json!(null));
+    let (status, body) = apply(&f, &c, &accept(&["MW-2"], None), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], json!("not_pending"));
+    let on = json!({ "op": "pack_switch", "id": "MW-2", "on": true });
+    assert_eq!(apply(&f, &c, &on, None).await.0, StatusCode::OK);
+    assert_eq!(applied(&f).get(PackRule::Mw2), Some(2));
 }
