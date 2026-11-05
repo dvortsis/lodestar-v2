@@ -78,6 +78,10 @@ The database Lodestar stores its torrents in. It needs fast local storage.
 
 A web server in front of an app that adds HTTPS. Lodestar needs `LODESTAR_SECURE_COOKIES=true` behind one.
 
+## Torrent cache
+
+A website that serves a torrent's `.torrent` file for its info hash. Each lookup tells it which torrent you want.
+
 ## UDP
 
 A network protocol without a connection setup, used for peer discovery. Firewall and router rules list it separately from TCP.

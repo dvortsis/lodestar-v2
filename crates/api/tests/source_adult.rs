@@ -4,14 +4,21 @@
 //! search, counts and detail by hash leave it out while "Show adult
 //! content" is off and show it once it's on. Exports and feeds read the
 //! same effective class (`export.rs`, `digest.rs`).
+//!
+//! `/classify/correct` keeps it adult (X-source-adult-2): clearing a
+//! correction or setting only Not junk never un-adults it; only your own
+//! Not adult does.
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
+use lodestar_api::dto::filters::CorrectBody;
+use lodestar_api::filters::FiltersApi;
 use lodestar_api::{AdultVisibility, ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
@@ -181,4 +188,101 @@ async fn an_always_adult_sources_clean_find_is_hidden_until_adult_is_shown() {
     assert_eq!(names(&body), NAMES);
     let (status, _, _) = call(&app, get(&format!("/api/v1/torrents/{}", hashes[0]), &c)).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// A correction on a torrent an always-adult source found, through the
+/// API's own handler: clear, Not junk only and Is adult leave it Adult;
+/// your Not adult makes it detection's type; clearing again restores it.
+#[test]
+fn a_correction_never_un_adults_a_source_adult_torrent_but_yours() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let adult = store.register_source("adult", "1", 1).unwrap();
+    let plain = store.register_source("plain", "1", 1).unwrap();
+    let raws: Vec<Vec<u8>> = NAMES.iter().map(|n| raw(n)).collect();
+    let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
+    let batch: Vec<NewTorrent<'_>> = infos
+        .iter()
+        .zip(&raws)
+        .zip([adult, plain])
+        .map(|((info, raw), source)| NewTorrent {
+            info,
+            raw_info: Some(raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_100,
+            extra_flags: 0,
+            source,
+        })
+        .collect();
+    store.insert(&batch).unwrap();
+    let mask = AdultSources(1 << adult.get());
+    let filter = lodestar_pipeline::default_filter();
+    let ctx = Backfill {
+        filter: Some(&filter),
+        adult: mask,
+        ..Backfill::default()
+    };
+    assert!(
+        enrich_stored_with(&mut store, 0, 10, &ctx)
+            .unwrap()
+            .is_some()
+    );
+    let hex = |i: &Info| -> String {
+        i.primary_hash()
+            .0
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let ids: Vec<i64> = infos
+        .iter()
+        .map(|i| store.find(&i.primary_hash()).unwrap().unwrap())
+        .collect();
+    let adult_code = Some(lodestar_classify::ContentType::Adult.code());
+    assert_eq!(store.content_type(ids[0]).unwrap(), adult_code);
+    assert_ne!(store.content_type(ids[1]).unwrap(), adult_code);
+
+    let api = FiltersApi {
+        store: Arc::new(Mutex::new(store)),
+        engine: Arc::new(filter),
+        held: Default::default(),
+        sealer: None,
+        ips: Default::default(),
+        index: None,
+        reenrich: Arc::new(AtomicBool::new(false)),
+        jobs: Default::default(),
+        quarantine_secs: 30 * 86_400,
+        shutdown: Default::default(),
+        adult_sources: mask.0,
+    };
+    let correct = |i: usize, adult: Option<bool>, not_junk: bool| {
+        let r = api
+            .correct(&CorrectBody {
+                hash: hex(&infos[i]),
+                adult,
+                not_junk,
+            })
+            .unwrap();
+        let stored = api.store.lock().unwrap().content_type(ids[i]).unwrap();
+        (r.content_type, stored)
+    };
+    let is_adult = |(ty, stored): (String, Option<u8>)| ty == "adult" && stored == adult_code;
+    let is_not = |(ty, stored): (String, Option<u8>)| ty != "adult" && stored != adult_code;
+
+    // Clear (no correction at all), Not junk only, Is adult: still adult.
+    assert!(is_adult(correct(0, None, false)), "clear");
+    assert!(is_adult(correct(0, None, true)), "Not junk only");
+    assert!(is_adult(correct(0, Some(true), false)), "Is adult");
+    // Your own Not adult wins: detection's type.
+    assert!(is_not(correct(0, Some(false), false)), "Not adult");
+    assert!(is_not(correct(0, Some(false), true)), "Not adult, Not junk");
+    // Clearing it again: the source makes it adult once more.
+    assert!(is_adult(correct(0, None, false)), "cleared again");
+    // The correction stored is yours alone: never a pretend Is adult.
+    let stored = api.store.lock().unwrap().correction(ids[0]).unwrap();
+    assert!(stored.is_none_or(|c| c.adult.is_none()), "{stored:?}");
+
+    // A plain source's torrent: clearing leaves it detection's type.
+    assert!(is_not(correct(1, None, true)), "plain, Not junk only");
 }

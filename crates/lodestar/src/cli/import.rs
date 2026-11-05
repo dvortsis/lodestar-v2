@@ -803,6 +803,27 @@ fn sealer(config: &Config) -> Option<Sealer> {
     }
 }
 
+/// The sources in the store whose plugin's manifest says `always_adult`
+/// (Sukebei). The import runs without the pipeline, so it reads the
+/// manifests compiled into this build; the store leaves a disabled or
+/// purged one's bit out, as the writer does (SRC-14b).
+fn adult_sources(
+    store: &Store,
+) -> lodestar_store::Result<lodestar_pipeline::source_adult::AdultSources> {
+    use lodestar_sources::SourcePlugin;
+    let sukebei = lodestar_sources_plugins::nyaa::Sukebei::new();
+    let manifests = [sukebei.manifest()];
+    let rows = store.sources()?;
+    Ok(lodestar_pipeline::source_adult::AdultSources::of(
+        rows.iter().flat_map(|r| {
+            manifests
+                .iter()
+                .filter(move |m| m.id == r.plugin)
+                .map(move |m| (r.id, *m))
+        }),
+    ))
+}
+
 async fn run_job(
     config: &Config,
     store: &mut Store,
@@ -821,6 +842,12 @@ async fn run_job(
     let source = store
         .register_source(adapter.name(), env!("CARGO_PKG_VERSION"), unix_now())
         .map_err(failed("registering the source"))?;
+    // A record an always-adult source has claimed is stored adult, with
+    // that source's bit (X-source-adult-2).
+    let mark = adult_sources(store)
+        .map_err(failed("reading the sources"))?
+        .store_mark();
+    store.set_adult_mark(mark);
     let stop = Arc::new(AtomicBool::new(false));
     {
         let (stop, cancel) = (stop.clone(), adapter.canceller());

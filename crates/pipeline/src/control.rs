@@ -11,6 +11,12 @@
 //!   state itself is the settings registry's (`crawler.paused`): after
 //!   each change the binary calls [`Control::sync`], which applies the
 //!   registry's value as it is then.
+//! - **The setup hold** (LEGAL-2, [`crate::setup_hold`]): while the
+//!   pipeline waits for setup, the crawler is paused whatever the setting
+//!   says, and [`CrawlerStatus::waiting_for_setup`] says why. The setting
+//!   is still followed underneath: when setup completes the hold lifts
+//!   on its own and the setting's value applies, so a pause the user
+//!   chose stays on.
 //! - **Events:** every pause, resume and intensity change is an `events`
 //!   row ([`crate::event`]), written through the control connection.
 //! - **Rates and reachability** come from one sampler task reading the
@@ -451,6 +457,9 @@ pub struct NetworkCheck {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrawlerStatus {
     pub paused: bool,
+    /// Paused by the setup hold (LEGAL-2): nobody has set the instance
+    /// up yet. `paused` is then `true` whatever the setting says.
+    pub waiting_for_setup: bool,
     /// Unix seconds of the last pause or resume (or the start).
     pub since: i64,
     /// `None` when the DHT is off or hasn't reported yet.
@@ -501,6 +510,9 @@ pub struct SourceView {
     /// A purge started and didn't finish (a crash, a cancel or an error):
     /// the source stays off until a purge run again finishes it.
     pub purge_pending: bool,
+    /// Its saved settings differ from the ones it was built with at this
+    /// start: they apply at the next one.
+    pub config_pending: bool,
 }
 
 /// `HTTPS_PROXY` or `ALL_PROXY` is set while a source connects directly.
@@ -556,7 +568,12 @@ pub fn egress_warnings(
     out
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// The largest settings document `PATCH /sources/{id}` takes, in bytes.
+/// A plugin's own rules are tighter (a torrent cache's list is at most
+/// about 4 KiB); this bounds what reaches them.
+pub const MAX_CONFIG_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct SourceChange {
     pub enabled: Option<bool>,
     pub priority: Option<Priority>,
@@ -573,9 +590,33 @@ pub struct SourceChange {
     /// `Some(windows)` sets them (`[]`: any time).
     pub schedule: Option<Vec<Window>>,
     pub agents: Option<u32>,
+    /// The plugin's settings as JSON, checked by the plugin
+    /// (`SourcePlugin::check_config`). Applies at the next start.
+    pub config: Option<String>,
 }
 
-#[derive(Debug)]
+impl std::fmt::Debug for SourceChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceChange")
+            .field("enabled", &self.enabled)
+            .field("priority", &self.priority)
+            .field("consent", &self.consent)
+            .field(
+                "consent_version",
+                &self.consent_version.as_ref().map(|_| "…"),
+            )
+            .field("password_confirmed", &self.password_confirmed)
+            .field("egress", &self.egress)
+            .field("schedule", &self.schedule)
+            .field("agents", &self.agents)
+            // Settings can hold a per-user address: never printed.
+            .field("config", &self.config.as_ref().map(|_| "…"))
+            .finish()
+    }
+}
+
+/// Its `Debug` leaves out a consent version, which holds every address
+/// (they can be per-user ones).
 pub enum SourceError {
     Unknown,
     /// Enabling needs an acknowledgement of this class, at this version
@@ -601,6 +642,28 @@ pub enum SourceError {
     Store(Error),
 }
 
+impl std::fmt::Debug for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SourceError::Unknown => f.write_str("Unknown"),
+            SourceError::ConsentRequired { class, .. } => f
+                .debug_struct("ConsentRequired")
+                .field("class", class)
+                .finish_non_exhaustive(),
+            SourceError::PasswordRequired => f.write_str("PasswordRequired"),
+            SourceError::CredentialsRequired => f.write_str("CredentialsRequired"),
+            SourceError::Credential(r) => f.debug_tuple("Credential").field(r).finish(),
+            SourceError::Sealing => f.write_str("Sealing"),
+            SourceError::Invalid { field, reason } => f
+                .debug_struct("Invalid")
+                .field("field", field)
+                .field("reason", reason)
+                .finish(),
+            SourceError::Store(e) => f.debug_tuple("Store").field(e).finish(),
+        }
+    }
+}
+
 impl From<Error> for SourceError {
     fn from(e: Error) -> SourceError {
         SourceError::Store(e)
@@ -618,7 +681,12 @@ pub type CredentialChange = (String, Option<Secret>);
 
 #[derive(Debug)]
 struct State {
+    /// What's applied: `wanted`, or paused while `held`.
     paused: bool,
+    /// The pause the settings ask for.
+    wanted: bool,
+    /// The setup hold is on.
+    held: bool,
     since: i64,
     /// The last intensity recorded, so a repeat writes no event.
     intensity: Intensity,
@@ -653,8 +721,10 @@ impl std::fmt::Debug for Control {
 impl Control {
     /// Takes over a started pipeline, whose pool and DHT already have
     /// `paused` (`PoolConfig::paused`, the node's `Config::paused`), and
-    /// starts the sampler. `store` is a connection for events and source
-    /// settings, apart from the writer's.
+    /// starts the sampler. A pipeline held for setup started its pool
+    /// paused whatever `paused` says; this lifts the hold when setup
+    /// completes, then applies the setting. `store` is a connection for
+    /// events and source settings, apart from the writer's.
     pub async fn start(
         monitor: Monitor,
         dht: Option<Arc<DhtSource>>,
@@ -692,6 +762,20 @@ impl Control {
             .iter()
             .map(|s| (s.id, s.priority))
             .collect();
+        let hold = monitor
+            .setup_done()
+            .filter(|rx| crate::setup_hold::held(Some(rx)))
+            .cloned();
+        let held = hold.is_some();
+        // Held, the DHT starts paused too, whenever its plugin starts.
+        if let (true, Some(dht)) = (held, &dht) {
+            dht.set_paused(true);
+        }
+        // Set up between the pipeline's start (which paused the pool for
+        // the hold) and now: the pool takes the setting's value here.
+        if monitor.setup_done().is_some() && !held && !paused {
+            monitor.pool().set_paused(false).await;
+        }
         let control = Control {
             inner: Arc::new(Inner {
                 monitor,
@@ -701,7 +785,9 @@ impl Control {
                 epoch_unix: unix_now(),
                 toggle: tokio::sync::Mutex::new(()),
                 state: Mutex::new(State {
-                    paused,
+                    paused: paused || held,
+                    wanted: paused,
+                    held,
                     since,
                     intensity,
                     priorities,
@@ -711,7 +797,27 @@ impl Control {
         };
         control.sample_now();
         tokio::spawn(sampler(Arc::downgrade(&control.inner)));
+        if let Some(hold) = hold {
+            let inner = Arc::downgrade(&control.inner);
+            tokio::spawn(async move {
+                crate::setup_hold::released(hold).await;
+                if let Some(inner) = inner.upgrade() {
+                    Control { inner }.release_setup_hold().await;
+                }
+            });
+        }
         Ok(control)
+    }
+
+    /// Lifts the setup hold and applies the setting's pause (LEGAL-2).
+    async fn release_setup_hold(&self) {
+        let _one = self.inner.toggle.lock().await;
+        let wanted = {
+            let mut st = self.state();
+            st.held = false;
+            st.wanted
+        };
+        self.apply_effective(wanted).await;
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -748,8 +854,19 @@ impl Control {
         self.apply_intensity(intensity).await
     }
 
+    /// With `toggle` held: records the setting's pause and applies it,
+    /// unless the setup hold keeps the crawler paused anyway.
+    async fn apply_paused(&self, wanted: bool) -> bool {
+        let paused = {
+            let mut st = self.state();
+            st.wanted = wanted;
+            wanted || st.held
+        };
+        self.apply_effective(paused).await
+    }
+
     /// With `toggle` held.
-    async fn apply_paused(&self, paused: bool) -> bool {
+    async fn apply_effective(&self, paused: bool) -> bool {
         if self.state().paused == paused {
             return false;
         }
@@ -833,14 +950,15 @@ impl Control {
     }
 
     pub fn status(&self) -> CrawlerStatus {
-        let (paused, since) = {
+        let (paused, since, waiting_for_setup) = {
             let st = self.state();
-            (st.paused, st.since)
+            (st.paused, st.since, st.held)
         };
         let p = self.inner.monitor.pool_stats();
         let get = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
         CrawlerStatus {
             paused,
+            waiting_for_setup,
             since,
             dht: self
                 .inner
@@ -923,7 +1041,12 @@ impl Control {
                     let names = store.source_secret_names(s.manifest.id)?;
                     let settings = saved_settings(&store, s.manifest.id, false)?;
                     let pending = store.source_purge_started(s.manifest.id)?.is_some();
-                    Ok((s.id, (need, names, settings, pending)))
+                    let config = if s.config_editable {
+                        store.source_setting(s.manifest.id, SourceSetting::Config)?
+                    } else {
+                        None
+                    };
+                    Ok((s.id, (need, names, settings, pending, config)))
                 })
                 .collect::<Result<HashMap<_, _>, Error>>()?;
             (store.sources()?, store.cohorts(hour - 23, hour + 1)?, gates)
@@ -935,8 +1058,18 @@ impl Control {
             .into_iter()
             .map(|status| {
                 let row = rows.iter().find(|r| r.id == status.id);
-                let (need, credentials, settings, purge_pending) =
+                let (need, credentials, settings, purge_pending, saved_config) =
                     gates.get(&status.id).cloned().unwrap_or_default();
+                // Compared in the plugin's saved form. Settings it refuses
+                // are built as its defaults at the start, so they aren't
+                // pending either.
+                let config_pending = saved_config.is_some_and(|saved| {
+                    let monitor = &self.inner.monitor;
+                    match monitor.check_config(status.id, &saved) {
+                        Some(Ok(form)) => monitor.running_config(status.id) != Some(form),
+                        _ => false,
+                    }
+                });
                 let egress_warnings = egress_warnings(
                     &settings.egress,
                     status.egress.as_ref(),
@@ -966,6 +1099,7 @@ impl Control {
                     settings,
                     egress_warnings,
                     purge_pending,
+                    config_pending,
                     status,
                 }
             })
@@ -990,6 +1124,28 @@ impl Control {
     ) -> Result<SourceView, SourceError> {
         let manifest = self.manifest(id)?;
         let priority = change.priority;
+        // The plugin checks its settings before anything is read or
+        // written; what's saved is its own form of them. A refusal names
+        // the rule, never a value.
+        let config = match &change.config {
+            None => None,
+            Some(json) if json.len() > MAX_CONFIG_BYTES => {
+                return Err(SourceError::Invalid {
+                    field: "config",
+                    reason: format!("the settings are over {} KiB", MAX_CONFIG_BYTES / 1024),
+                });
+            }
+            Some(json) => Some(
+                self.inner
+                    .monitor
+                    .check_config(id, json)
+                    .ok_or(SourceError::Unknown)?
+                    .map_err(|r| SourceError::Invalid {
+                        field: "config",
+                        reason: r.0.to_string(),
+                    })?,
+            ),
+        };
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
             let mut store = this.inner.store.lock().expect("store lock");
@@ -1042,7 +1198,14 @@ impl Control {
             if change.egress.is_some() && !change.password_confirmed {
                 return Err(SourceError::PasswordRequired);
             }
-            let settings = settings_changes(&change, &this.policy(id)?)?;
+            let mut settings = settings_changes(&change, &this.policy(id)?)?;
+            if let Some(json) = config {
+                // Applies at the next start, when the plugin is built from
+                // it: a list with an address the stored acknowledgement
+                // doesn't hold switches the source off there until it's
+                // acknowledged again (`consent::need_in`).
+                settings.push((SourceSetting::Config, json));
+            }
             if let Some(p) = change.priority {
                 let key = format!("{PRIORITY_KEY}{}", manifest.id);
                 let value = format!("\"{}\"", priority_name(p));

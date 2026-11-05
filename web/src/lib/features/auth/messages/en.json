@@ -10,6 +10,7 @@
 	"auth_logout_failed": "Couldn't sign out: Lodestar isn't responding. Check that it's running, then try again.",
 	"auth_setup_title": "Set up Lodestar",
 	"auth_setup_lead": "Verify access, then set a password.",
+	"auth_setup_crawler_waits": "The crawler doesn't connect to the network until setup is done. It then starts on its own.",
 	"auth_setup_steps": "Setup steps",
 	"auth_setup_step_token": "Setup token",
 	"auth_setup_step_password": "Admin password",

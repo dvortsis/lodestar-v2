@@ -43,6 +43,10 @@ pub struct TorrentDoc {
     pub enriched: DocEnrichment,
     /// Where it came from (§18.6, SRC-3).
     pub provenance: DocProvenance,
+    /// v7. The covered files' size buckets and `{ext}:{bucket}` pairs
+    /// ([`crate::files::covered_buckets`]).
+    pub file_buckets: Vec<u64>,
+    pub file_ext_buckets: Vec<String>,
 }
 
 /// The provenance fields of a document (§18.6): `verified`, `network`
@@ -93,6 +97,8 @@ pub struct DocEnrichment {
     pub ambiguous: bool,
     /// Non-zero shares as (category, % of files, % of bytes).
     pub shares: Vec<(Category, u8, u8)>,
+    /// v7. [`title_identity`] of the record.
+    pub title_identity: Option<u64>,
 }
 
 impl DocEnrichment {
@@ -144,6 +150,7 @@ impl DocEnrichment {
                 .chain(record.release_all("absolute")),
             MAX_EPISODES,
         );
+        e.title_identity = title_identity(record);
         if let Some(c) = comp {
             for cat in Category::ALL {
                 let (count, bytes) = (c.pct_count(cat), c.pct_bytes(cat));
@@ -222,6 +229,7 @@ impl TorrentDoc {
                 hashes.push(short);
             }
         }
+        let (file_buckets, file_ext_buckets) = crate::files::covered_buckets(tree);
         TorrentDoc {
             id: row.id as u64,
             hashes,
@@ -237,6 +245,8 @@ impl TorrentDoc {
             metadata_at: row.metadata_at,
             enriched: DocEnrichment::default(),
             provenance: DocProvenance::stored_torrent(),
+            file_buckets,
+            file_ext_buckets,
         }
     }
 
@@ -291,6 +301,9 @@ impl TorrentDoc {
                 d.add_u64(field, *v);
             }
         }
+        if let Some(id) = e.title_identity {
+            d.add_u64(f.title_identity, id);
+        }
         // `years` is sorted.
         if let Some(y) = e.years.first() {
             d.add_u64(f.release_year, *y);
@@ -316,8 +329,44 @@ impl TorrentDoc {
         for s in &p.sources {
             d.add_text(f.source, s);
         }
+        for b in &self.file_buckets {
+            d.add_u64(f.file_bucket, *b);
+        }
+        for t in &self.file_ext_buckets {
+            d.add_text(f.file_ext_bucket, t);
+        }
         d
     }
+}
+
+/// A torrent's title identity, hashed (v7, for B13b; B13's "Known
+/// limit"): the effective title's words as search's tokenizer folds them
+/// (its parts), and the sorted, distinct `year`, `season`, `episode` and
+/// `absolute` spans as the record renders them, an absent set a value of
+/// its own: exactly what `api::compare::identity` compares, so torrents
+/// with one identity share one term. `None` without a title with words.
+/// FNV-1a, so the term is the same in every build; a collision only
+/// over-matches, and the stored records decide.
+pub fn title_identity(record: &Record) -> Option<u64> {
+    let words: Vec<String> = tokenizer::tokenize(record.release("title")?)
+        .into_iter()
+        .filter(|t| t.kind == tokenizer::TokKind::Part)
+        .map(|t| t.text)
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    let mut key = words.join(" ");
+    for k in ["year", "season", "episode", "absolute"] {
+        let mut spans: Vec<&str> = record.release_all(k).collect();
+        spans.sort_unstable();
+        spans.dedup();
+        key.push('\u{1f}');
+        key.push_str(&spans.join(","));
+    }
+    Some(key.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    }))
 }
 
 /// The lowercased extension of a file name, if it looks like one.
@@ -406,6 +455,57 @@ fn title_stems(titles: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    fn record(release: &[(&str, &str)]) -> Record {
+        let mut r = Record::decode(b"e1\ntype\tother").expect("a bare record");
+        r.release = release
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        r
+    }
+
+    /// One term per title identity, as B13 compares them: spelling
+    /// variants and alternative titles fold together; a missing year, a
+    /// season pack and absolute numbering each stay apart; no title, or
+    /// one without words, has none. The value is fixed across builds.
+    #[test]
+    fn title_identity_follows_b13s_rule() {
+        let id = |r: &[(&str, &str)]| title_identity(&record(r));
+        let base = id(&[("title", "Spider-Man"), ("year", "2002")]);
+        assert!(base.is_some());
+        for same in [
+            &[("title", "Spider Man"), ("year", "2002")][..],
+            &[("title", "SpiderMan"), ("year", "2002"), ("year", "2002")],
+            &[("title", "spider-man"), ("year", "2002"), ("alt", "Other")],
+        ] {
+            assert_eq!(id(same), base, "{same:?}");
+        }
+        for other in [
+            &[("title", "Spider-Man")][..],
+            &[("title", "Spider-Man"), ("year", "2004")],
+            &[("title", "Spider-Man 2"), ("year", "2002")],
+            &[("title", "Spider-Man"), ("year", "2002"), ("season", "1")],
+        ] {
+            assert_ne!(id(other), base, "{other:?}");
+        }
+        assert_ne!(
+            id(&[("title", "Show"), ("episode", "2")]),
+            id(&[("title", "Show"), ("absolute", "2")])
+        );
+        assert_ne!(
+            id(&[("title", "Show"), ("season", "1")]),
+            id(&[("title", "Show"), ("season", "1"), ("episode", "1")])
+        );
+        assert_eq!(
+            id(&[("title", "Show"), ("season", "1-2"), ("season", "1")]),
+            id(&[("title", "Show"), ("season", "1"), ("season", "1-2")])
+        );
+        assert_eq!(id(&[("year", "2002")]), None);
+        assert_eq!(id(&[("title", "--")]), None);
+        // FNV-1a of "show\x1f\x1f\x1f\x1f": a build can't change it.
+        assert_eq!(id(&[("title", "Show")]), Some(0xf42e_4ea2_e59f_9558));
+    }
+
     use super::*;
 
     #[test]

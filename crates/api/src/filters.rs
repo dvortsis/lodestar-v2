@@ -113,6 +113,11 @@ pub struct FiltersApi {
     /// unmarked. A re-queue cut short stays pending and runs again at the
     /// next start ([`FiltersApi::resume_requeues`]).
     pub shutdown: lodestar_search::CancelToken,
+    /// The registered always-adult sources, as a bitset over source ids
+    /// (X-source-adult; `lodestar_pipeline::Pipeline::adult_sources`). A
+    /// correction never un-adults a torrent one of them found unless it
+    /// says Not adult. Empty while none is registered.
+    pub adult_sources: u64,
 }
 
 /// The replay window (§20.10).
@@ -2788,6 +2793,11 @@ impl FiltersApi {
         };
         let was_adult = store.content_type(id).map_err(internal)?
             == Some(lodestar_classify::ContentType::Adult.code());
+        // An always-adult source among its finders: classified Is adult,
+        // as the pipeline does, unless you said Not adult. Clearing a
+        // correction or setting only Not junk never un-adults it. Only the
+        // classification uses it: the stored correction is yours alone.
+        let fix = lodestar_filter::reclassify::source_adult(fix, row.sources, self.adult_sources);
         let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
         // Under the lock, the generation can't move between reading it and
         // the write; the check still guards the order (§20.9).
@@ -3710,6 +3720,7 @@ mod tests {
             jobs: Default::default(),
             quarantine_secs: 0,
             shutdown: Default::default(),
+            adult_sources: 0,
         }
     }
 
@@ -4167,6 +4178,7 @@ mod tests {
             jobs: Default::default(),
             quarantine_secs: 86_400,
             shutdown: Default::default(),
+            adult_sources: 0,
         };
         api.held.insert(hash);
         CORRECT_MARKED.set(Some(marked));

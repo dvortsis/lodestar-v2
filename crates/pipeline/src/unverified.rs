@@ -199,6 +199,7 @@ pub fn tracker_url(t: &str) -> bool {
         && !rest.is_empty()
         && !rest.starts_with('/')
         && !t.chars().any(|c| c.is_whitespace() || c.is_control())
+        && lodestar_integrations::net::public_tracker_url(t).as_deref() == Some(t)
 }
 
 /// The store's claims for a discovery: the source's claims and

@@ -617,7 +617,13 @@ fn build_v5(dir: &Path, store: &mut Store) {
     use tantivy::TantivyDocument;
     let (schema, fields) = lodestar_search::schema::build();
     let (file_schema, file_fields) = lodestar_search::files::schema();
-    let v5 = v5_schema(&schema, &lodestar_search::schema::V6_FIELDS);
+    // v5 has neither v6's fields nor v7's.
+    let newer: Vec<&str> = lodestar_search::schema::V6_FIELDS
+        .iter()
+        .chain(&lodestar_search::schema::V7_FIELDS)
+        .copied()
+        .collect();
+    let v5 = v5_schema(&schema, &newer);
     let v5_files = v5_schema(&file_schema, &lodestar_search::files::V6_FIELDS);
     std::fs::create_dir_all(dir.join("files")).unwrap();
     let index = tantivy::Index::create_in_dir(dir, v5.clone()).unwrap();
@@ -666,8 +672,15 @@ fn build_v5(dir: &Path, store: &mut Store) {
 }
 
 #[test]
-fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
-    use lodestar_search::{Availability, files::V6_FIELDS as FILE_V6, schema::V6_FIELDS};
+/// Straight from v5 to this build's version, two bumps on (v6, SB-6;
+/// v7, X-search-files-5): the rebuild builds the current schema from the
+/// store, so no version between is ever built (runner, 2026-11-05).
+fn a_v5_index_serves_while_v7_is_built_resumed_and_swapped_in() {
+    use lodestar_search::{
+        Availability,
+        files::V6_FIELDS as FILE_V6,
+        schema::{V6_FIELDS, V7_FIELDS},
+    };
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("index");
     let db = dir.path().join("s.db");
@@ -677,11 +690,11 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
         schema: 5,
         tokenizer: 1,
     };
-    assert_eq!(IndexVersion::CURRENT.schema, 6);
+    assert_eq!(IndexVersion::CURRENT.schema, 7);
     build_v5(&root.join(v5.dir_name()), &mut writer);
     let v5_bytes = dir_bytes(&root);
 
-    // A first start built part of v6, then stopped (a crash after a
+    // A first start built part of v7, then stopped (a crash after a
     // commit).
     let mut reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let mut b = Rebuild::open(&root, IndexVersion::CURRENT, HEAP).unwrap();
@@ -700,14 +713,34 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
     let p = serving.progress().unwrap();
     assert_eq!((p.from, p.to), (v5, IndexVersion::CURRENT));
     assert_eq!(p.done, 300, "resumed, not started over");
-    let mut want: Vec<String> = V6_FIELDS.iter().map(|f| (*f).to_owned()).collect();
+    let mut want: Vec<String> = V6_FIELDS
+        .iter()
+        .chain(&V7_FIELDS)
+        .map(|f| (*f).to_owned())
+        .collect();
     want.extend(FILE_V6.iter().map(|f| format!("file.{f}")));
-    assert_eq!(p.unavailable, want);
+    let mut got = p.unavailable.clone();
+    got.sort();
+    want.sort();
+    assert_eq!(got, want);
+    // Only v5 and the v7 build: no v6 on the way.
+    assert_eq!(
+        names_in(&root),
+        vec![
+            v5.dir_name(),
+            format!("{}.building", IndexVersion::CURRENT.dir_name())
+        ]
+    );
 
-    // The v5 index serves meanwhile, and says what it lacks.
+    // The v5 index serves meanwhile, and says what it lacks: a bucketed
+    // size clause runs on its file index instead.
     let index = serving.index();
     assert_eq!(total(&index, "common movie"), n);
     assert_eq!(total(&index, "file:(ext:mkv size:>1MB)"), n);
+    assert_eq!(total(&index, "file:(size:>1MB)"), n);
+    for f in V7_FIELDS {
+        assert_eq!(index.availability(f), Availability::Missing, "{f}");
+    }
     assert_eq!(index.availability("file.category"), Availability::Missing);
     assert_eq!(index.availability("verified"), Availability::Missing);
     assert_eq!(
@@ -724,6 +757,11 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
     assert!(index.missing_fields().is_empty());
     assert_eq!(total(&index, "common movie"), n);
     assert_eq!(total(&index, "file:(ext:mkv size:>1MB)"), n);
+    assert_eq!(total(&index, "file:(size:>1MB)"), n);
+    // The rebuild filled v7's bucket terms.
+    for f in V7_FIELDS {
+        assert_eq!(index.availability(f), Availability::Ready, "{f}");
+    }
     // SB-6's own rebuild filled what the store has; fields whose
     // producers haven't shipped say so.
     for f in FILE_V6 {
@@ -765,7 +803,7 @@ fn a_v5_index_serves_while_v6_is_built_resumed_and_swapped_in() {
     assert!(hw > v5_bytes, "{hw} ≤ {v5_bytes}");
     assert!(
         hw >= v5_bytes + dir_bytes(&root) / 2,
-        "{hw} vs {v5_bytes} + v6"
+        "{hw} vs {v5_bytes} + v7"
     );
     serving.shutdown().unwrap();
 }

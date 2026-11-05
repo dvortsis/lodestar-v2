@@ -202,12 +202,19 @@ pub fn bucket_floor(bucket: u64) -> u64 {
     (1 << top) | (half << (top - 1))
 }
 
+/// Padding and hidden files (BEP 47), which no index covers.
+fn skipped(f: &File) -> bool {
+    f.attrs.contains(FileAttrs::PADDING) || f.attrs.contains(FileAttrs::HIDDEN)
+}
+
+/// Whether smart coverage treats `tree` as a large pack.
+fn is_pack(tree: &FileTree) -> bool {
+    tree.files.iter().filter(|f| !skipped(f)).count() > SMART_ALL_FILES
+}
+
 /// The files of a torrent that smart coverage indexes.
 pub fn file_docs(torrent: u64, tree: &FileTree) -> Vec<FileDoc> {
-    let skipped =
-        |f: &File| f.attrs.contains(FileAttrs::PADDING) || f.attrs.contains(FileAttrs::HIDDEN);
-    let real = tree.files.iter().filter(|f| !skipped(f)).count();
-    let pack = real > SMART_ALL_FILES;
+    let pack = is_pack(tree);
     let mut out = Vec::new();
     for (i, f) in tree.files.iter().enumerate() {
         if skipped(f) {
@@ -244,6 +251,107 @@ pub fn file_docs(torrent: u64, tree: &FileTree) -> Vec<FileDoc> {
         });
     }
     out
+}
+
+/// The distinct [`size_code`]s of the files [`file_docs`] indexes, sorted,
+/// and their distinct `{ext}:{code}` pairs, sorted: the torrent index's
+/// v7 `file_bucket` and `file_ext_bucket` (X-search-files-5). Decided by
+/// exactly `file_docs`' rule (test `covered_buckets_are_the_file_docs`),
+/// so a bucket or pair term holds for a torrent exactly when one of its
+/// file documents is in that bucket, with that extension. Only each
+/// file's name is decoded, not its directories.
+pub fn covered_buckets(tree: &FileTree) -> (Vec<u64>, Vec<String>) {
+    let pack = is_pack(tree);
+    let mut buckets = Vec::new();
+    let mut pairs = Vec::new();
+    for f in tree.files.iter().filter(|f| !skipped(f)) {
+        let Some(name) = f.path.last() else {
+            continue;
+        };
+        let text = Text {
+            raw: name.clone(),
+            encoding: tree.encoding,
+        };
+        let ext = extension(&text.decode());
+        if pack && !worth_it_in_a_pack(ext.as_deref(), f.size) {
+            continue;
+        }
+        let c = size_code(f.size);
+        buckets.push(c);
+        if let Some(e) = ext {
+            pairs.push(ext_bucket_term(&e, c));
+        }
+    }
+    buckets.sort_unstable();
+    buckets.dedup();
+    pairs.sort_unstable();
+    pairs.dedup();
+    (buckets, pairs)
+}
+
+/// A file's code in the torrent's `file_bucket` and `file_ext_bucket`:
+/// its [`size_bucket`] twice, plus one when it's above the bucket's floor.
+/// Splitting a bucket at its floor makes a range with a strict lower
+/// bound on a floor (`size:>1GiB`) or an upper bound on one (`size:<=1GiB`)
+/// whole codes, where it would otherwise check every file of the edge
+/// bucket in the file index (X-search-files-5). Sizes exactly on a floor
+/// are rare, so it costs almost no terms.
+pub fn size_code(size: u64) -> u64 {
+    let b = size_bucket(size);
+    b * 2 + u64::from(size > bucket_floor(b))
+}
+
+/// `file_ext_bucket`'s term for a file of extension `ext` and
+/// [`size_code`] `code`. Extensions are ASCII letters and digits
+/// (`doc::extension`), so the colon can't be part of one.
+pub fn ext_bucket_term(ext: &str, code: u64) -> String {
+    format!("{ext}:{code}")
+}
+
+/// How the torrent's codes answer a size range: the [`size_code`]s the
+/// range holds whole, and the parts of it left for the file index (in at
+/// most two edge buckets, each within the bucket and not a whole code).
+pub(crate) fn code_plan(lo: u64, hi: u64) -> (Vec<u64>, Vec<(u64, u64)>) {
+    let (inner, edges) = split_range(lo, hi);
+    let mut codes: Vec<u64> = inner.iter().flat_map(|b| [b * 2, b * 2 + 1]).collect();
+    let mut left = Vec::new();
+    for (elo, ehi) in edges {
+        let b = size_bucket(elo);
+        let (floor, ceil) = (bucket_floor(b), bucket_ceil(b));
+        if elo == floor && ehi == floor {
+            codes.push(b * 2);
+        } else if elo == floor.saturating_add(1) && ehi == ceil && b >= 2 {
+            codes.push(b * 2 + 1);
+        } else {
+            left.push((elo, ehi));
+        }
+    }
+    codes.sort_unstable();
+    (codes, left)
+}
+
+/// A size range split at its buckets: those wholly inside it, and the
+/// part of it in each bucket it only partly covers (at most two, the
+/// first and the last), as closed ranges within those buckets.
+pub(crate) fn split_range(lo: u64, hi: u64) -> (Vec<u64>, Vec<(u64, u64)>) {
+    let range = SizeRange {
+        field: ABSENT,
+        bucket: ABSENT,
+        range: lo..=hi,
+    };
+    let mut inner = Vec::new();
+    let mut edges = Vec::new();
+    if lo > hi {
+        return (inner, edges);
+    }
+    for (b, edge) in range.buckets() {
+        if edge {
+            edges.push((lo.max(bucket_floor(b)), hi.min(bucket_ceil(b))));
+        } else {
+            inner.push(b);
+        }
+    }
+    (inner, edges)
 }
 
 /// In a large pack, big files and media or software files are indexed;
@@ -718,8 +826,19 @@ impl SizeChecked {
     fn checked_weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<SizeCheckedWeight> {
         let lo = self.ranges.iter().map(|r| *r.range.start()).max();
         let hi = self.ranges.iter().map(|r| *r.range.end()).min();
+        // The other clauses as plain terms, if they are: their files are
+        // then counted from the term dictionary, without opening postings.
+        let mut terms = Vec::new();
+        let rest: &dyn Query = match self.rest.downcast_ref::<BooleanQuery>() {
+            Some(b) if b.clauses().len() == 1 && b.clauses()[0].0 == Occur::Must => {
+                b.clauses()[0].1.as_ref()
+            }
+            _ => self.rest.as_ref(),
+        };
+        let rest_terms = TermUnion::terms(rest, &mut terms).then_some(terms);
         Ok(SizeCheckedWeight {
             rest: self.rest.weight(scoring)?,
+            rest_terms,
             whole: self.whole.weight(scoring)?,
             ranges: self.ranges.clone(),
             bounds: (lo.unwrap_or(0), hi.unwrap_or(u64::MAX)),
@@ -737,6 +856,8 @@ impl Query for SizeChecked {
 
 struct SizeCheckedWeight {
     rest: Box<dyn Weight>,
+    /// `rest` when it's any of some terms (`ext:mkv,mp4`).
+    rest_terms: Option<Vec<Term>>,
     whole: Box<dyn Weight>,
     ranges: Vec<SizeRange>,
     /// Every range's bounds at once: their intersection, `lo > hi` when
@@ -746,18 +867,27 @@ struct SizeCheckedWeight {
     columns: SegColumns,
 }
 
+/// How a [`SizeCheckedWeight`] runs in one segment.
+enum Plan {
+    /// The plain conjunction: the ranges' buckets hold few files.
+    Whole,
+    /// Nothing matches: the segment has no sizes.
+    Empty,
+    /// The other clauses' files, each size checked in the column.
+    Check(Box<dyn Scorer>, Column<u64>),
+}
+
 impl SizeCheckedWeight {
-    /// The size column, if this segment should check it rather than run
-    /// the plain conjunction (`None`).
-    fn checks(
-        &self,
-        seg: &SegmentReader,
-        rest: &dyn Scorer,
-    ) -> tantivy::Result<Option<Option<Column<u64>>>> {
+    /// Which way this segment runs. Only the scorer that runs is built:
+    /// where the other clauses are plain terms their files are counted
+    /// from the term dictionary, so a segment that runs the plain
+    /// conjunction opens no postings for the check it didn't take
+    /// (X-search-files-5, #468's review P2).
+    fn plan(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Plan> {
         let field = self.ranges[0].field;
         // A segment without sizes matches none, as the range would.
         let Some(sizes) = self.columns.get(seg, field)? else {
-            return Ok(Some(None));
+            return Ok(Plan::Empty);
         };
         // The fewest files any range's buckets hold. Without buckets a
         // range reads the column for every file, so checking is better.
@@ -768,22 +898,57 @@ impl SizeCheckedWeight {
                 fewest = Some(fewest.map_or(n, |f| f.min(n)));
             }
         }
-        let lead = u64::from(rest.size_hint());
-        Ok(match fewest {
-            Some(n) if n.saturating_mul(self.ratio) < lead => None,
-            _ => Some(Some(sizes)),
-        })
+        let Some(fewest) = fewest else {
+            return Ok(Plan::Check(self.rest.scorer(seg, boost)?, sizes));
+        };
+        let (lead, rest) = match &self.rest_terms {
+            Some(terms) => (self.term_files(seg, terms)?, None),
+            None => {
+                let rest = self.rest.scorer(seg, boost)?;
+                (u64::from(rest.size_hint()), Some(rest))
+            }
+        };
+        if fewest.saturating_mul(self.ratio) < lead {
+            return Ok(Plan::Whole);
+        }
+        let rest = match rest {
+            Some(r) => r,
+            None => self.rest.scorer(seg, boost)?,
+        };
+        Ok(Plan::Check(rest, sizes))
+    }
+
+    /// The files `terms` hold in `seg` (deleted ones included), from the
+    /// term dictionary: their sum, at least the union's size and no less
+    /// than Tantivy's estimate of it, so the plan leans towards the plain
+    /// conjunction. Either plan gives the same files.
+    fn term_files(&self, seg: &SegmentReader, terms: &[Term]) -> tantivy::Result<u64> {
+        let mut n = 0u64;
+        for t in terms {
+            if seg
+                .schema()
+                .get_field_entry(t.field())
+                .field_type()
+                .get_index_record_option()
+                .is_none()
+            {
+                continue;
+            }
+            if let Some(info) = seg.inverted_index(t.field())?.get_term_info(t)? {
+                n += u64::from(info.doc_freq);
+            }
+        }
+        Ok(n)
     }
 }
 
 impl Weight for SizeCheckedWeight {
     fn scorer(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
-        let rest = self.rest.scorer(seg, boost)?;
-        match self.checks(seg, rest.as_ref())? {
-            None => self.whole.scorer(seg, boost),
-            Some(None) => Ok(Box::new(tantivy::query::EmptyScorer)),
-            Some(Some(sizes)) => Ok(Box::new(CheckedScorer::new(rest, sizes, self.bounds))),
-        }
+        Ok(match self.plan(seg, boost)? {
+            Plan::Whole => self.whole.scorer(seg, boost)?,
+            Plan::Empty => Box::new(tantivy::query::EmptyScorer),
+            Plan::Check(rest, sizes) => Box::new(CheckedScorer::new(rest, sizes, self.bounds)),
+        })
     }
 
     fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
@@ -1795,14 +1960,11 @@ fn scan_segment(
     };
     let gather = match source {
         Source::Weight(weight) => scan_scorer(weight.scorer(seg, 1.0)?, None)?,
-        Source::Checked(w) => {
-            let rest = w.rest.scorer(seg, 1.0)?;
-            match w.checks(seg, rest.as_ref())? {
-                None => scan_scorer(w.whole.scorer(seg, 1.0)?, None)?,
-                Some(None) => gather_for(0),
-                Some(Some(sizes)) => scan_scorer(rest, Some((&sizes, w.bounds)))?,
-            }
-        }
+        Source::Checked(w) => match w.plan(seg, 1.0)? {
+            Plan::Whole => scan_scorer(w.whole.scorer(seg, 1.0)?, None)?,
+            Plan::Empty => gather_for(0),
+            Plan::Check(rest, sizes) => scan_scorer(rest, Some((&sizes, w.bounds)))?,
+        },
         Source::Terms(union, exclude) => {
             let gather = scan_terms(
                 seg,
@@ -2277,6 +2439,116 @@ mod tests {
             .map(|d| d.name)
             .collect();
         assert_eq!(names, ["big.jpg", "a.mp3"]);
+    }
+
+    /// The torrent's bucket terms come from exactly the files
+    /// `file_docs` indexes: in a small torrent every real file, in a
+    /// large pack only the big and media ones, never padding, hidden
+    /// files or a file without a path; a file without an extension has a
+    /// bucket but no pair.
+    #[test]
+    fn covered_buckets_are_the_file_docs() {
+        let want = |t: &FileTree| {
+            let docs = file_docs(1, t);
+            let mut b: Vec<u64> = docs.iter().map(|d| size_code(d.size)).collect();
+            let mut p: Vec<String> = docs
+                .iter()
+                .filter_map(|d| {
+                    d.ext
+                        .as_ref()
+                        .map(|e| ext_bucket_term(e, size_code(d.size)))
+                })
+                .collect();
+            b.sort_unstable();
+            b.dedup();
+            p.sort_unstable();
+            p.dedup();
+            (b, p)
+        };
+        let small = tree(&[
+            ("a/movie.mkv", 4 << 30, FileAttrs::empty()),
+            ("a/movie.srt", 40_000, FileAttrs::empty()),
+            ("README", 900, FileAttrs::empty()),
+            ("pad", 1 << 20, FileAttrs::PADDING),
+            ("hidden.exe", 5 << 20, FileAttrs::HIDDEN),
+            ("", 7, FileAttrs::empty()),
+        ]);
+        let (b, p) = covered_buckets(&small);
+        assert_eq!((b.clone(), p.clone()), want(&small));
+        assert!(b.contains(&size_code(900)), "README has a bucket");
+        assert!(!p.iter().any(|t| t.starts_with("exe:")), "{p:?}");
+        let mut files: Vec<(String, u64)> = (0..SMART_ALL_FILES + 5)
+            .map(|i| (format!("pics/{i}.jpg"), 100_000 + i as u64))
+            .collect();
+        files.push(("pics/big.jpg".into(), SMART_MIN_SIZE));
+        files.push(("music/a.mp3".into(), 4 << 20));
+        files.push(("info.nfo".into(), 2_000));
+        files.push(("noext".into(), 3_000));
+        let refs: Vec<(&str, u64, FileAttrs)> = files
+            .iter()
+            .map(|(p, s)| (p.as_str(), *s, FileAttrs::empty()))
+            .collect();
+        let pack = tree(&refs);
+        let (b, p) = covered_buckets(&pack);
+        assert_eq!((b.clone(), p.clone()), want(&pack));
+        assert_eq!(
+            p,
+            [
+                ext_bucket_term("jpg", size_code(SMART_MIN_SIZE)),
+                ext_bucket_term("mp3", size_code(4 << 20)),
+            ]
+        );
+    }
+
+    /// A strict lower bound on a bucket's floor, or an upper bound on one,
+    /// is whole codes; any other edge is left to the file index.
+    #[test]
+    fn floors_split_buckets_into_whole_codes() {
+        let g = 1u64 << 30;
+        let b = size_bucket(g);
+        assert_eq!(bucket_floor(b), g);
+        assert_eq!((size_code(g), size_code(g + 1)), (b * 2, b * 2 + 1));
+        assert_eq!(size_code(0), 0);
+        assert_eq!(size_code(1), 2);
+        // `size:>1GiB`: every code from b's upper half on, no file check.
+        let (codes, left) = code_plan(g + 1, u64::MAX);
+        assert!(left.is_empty());
+        assert_eq!(codes[0], b * 2 + 1);
+        assert_eq!(codes.len() as u64, 256 - (b * 2 + 1));
+        // `size:<=1GiB`: up to b's floor code.
+        let (codes, left) = code_plan(0, g);
+        assert!(left.is_empty());
+        assert_eq!(codes.last(), Some(&(b * 2)));
+        // `size:>100MiB`: mid-bucket, left to the file index.
+        let m = 100u64 << 20;
+        let (_, left) = code_plan(m + 1, u64::MAX);
+        assert_eq!(left, [(m + 1, bucket_ceil(size_bucket(m)))]);
+    }
+
+    /// A range splits into the buckets wholly inside it and its parts in
+    /// the (at most two) buckets it partly covers.
+    #[test]
+    fn a_range_splits_into_whole_buckets_and_edges() {
+        assert_eq!(split_range(5, 4), (vec![], vec![]));
+        // One bucket exactly: whole, no edges.
+        let (lo, hi) = (bucket_floor(20), bucket_floor(21) - 1);
+        assert_eq!(split_range(lo, hi), (vec![20], vec![]));
+        // Inside one bucket: an edge only.
+        assert_eq!(
+            split_range(lo + 1, hi - 1),
+            (vec![], vec![(lo + 1, hi - 1)])
+        );
+        // Across: edges at both ends, whole buckets between.
+        let (inner, edges) = split_range(lo + 1, bucket_floor(24) + 3);
+        assert_eq!(inner, [21, 22, 23]);
+        assert_eq!(
+            edges,
+            [(lo + 1, hi), (bucket_floor(24), bucket_floor(24) + 3)]
+        );
+        // Open at the top: bucket 127 runs to the end.
+        let (inner, edges) = split_range(bucket_floor(120), u64::MAX);
+        assert_eq!(inner, (120..=127).collect::<Vec<_>>());
+        assert!(edges.is_empty());
     }
 
     #[test]
@@ -3285,6 +3557,41 @@ mod bucket_props {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// The torrent's codes and the file index's edges answer a range
+        /// exactly: every size inside it is in a whole code or an edge,
+        /// none outside is in either, an edge is never also a whole code,
+        /// and edges are inside the range, each within one bucket, at
+        /// most two (X-search-files-5).
+        #[test]
+        fn a_code_plan_covers_exactly_its_range(lo in size(), hi in size(), probes in prop::collection::vec(size(), 0..40)) {
+            let (codes, edges) = code_plan(lo, hi);
+            prop_assert!(edges.len() <= 2);
+            for &(a, b) in &edges {
+                prop_assert!(lo <= a && a <= b && b <= hi, "{a}..={b} outside {lo}..={hi}");
+                prop_assert_eq!(size_bucket(a), size_bucket(b));
+            }
+            let near = |x: u64| [x.saturating_sub(1), x, x.saturating_add(1)];
+            let mut sizes: Vec<u64> = probes;
+            sizes.extend(near(lo).into_iter().chain(near(hi)));
+            for &(a, b) in &edges {
+                sizes.extend(near(a).into_iter().chain(near(b)));
+            }
+            for &c in &codes {
+                let f = bucket_floor(c / 2);
+                sizes.extend(near(f).into_iter().chain(near(bucket_ceil(c / 2))));
+            }
+            for s in sizes {
+                let coded = codes.binary_search(&size_code(s)).is_ok();
+                let edged = edges.iter().any(|&(a, b)| (a..=b).contains(&s));
+                prop_assert!(!(coded && edged), "{s} in a code and an edge");
+                prop_assert_eq!(coded || edged, lo <= s && s <= hi, "{} for {}..={}", s, lo, hi);
+            }
+        }
+    }
+
+    proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
         /// Bucketed and scanned, bare and under a boolean, whole and in
@@ -3530,6 +3837,79 @@ mod bucket_props {
         };
         assert!(Weight::explain(&edge, seg, 0).is_err());
         assert!(Weight::explain(&edge, seg, 1).is_ok());
+    }
+
+    /// A weight that counts the scorers built from it.
+    struct Counting(Box<dyn Weight>, Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Weight for Counting {
+        fn scorer(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            self.0.scorer(seg, boost)
+        }
+
+        fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
+            self.0.explain(seg, doc)
+        }
+    }
+
+    /// Where the ranges' buckets hold far fewer files than the other
+    /// clauses' terms, the plain conjunction runs, and the other clauses'
+    /// own scorer is never built (#468's review P2): their files are
+    /// counted from the term dictionary. Where the check runs, it's built
+    /// once a segment and piece. The results are the same either way.
+    #[test]
+    fn the_plain_conjunction_builds_no_scorer_for_the_check() {
+        // Every file is `bin`; one in fifty is big.
+        let sizes: Vec<Vec<u64>> = (0..2_000u64)
+            .map(|i| vec![if i % 50 == 0 { 1 << 30 } else { 1_000 + i }])
+            .collect();
+        let (searcher, f) = index(&[sizes], &[]);
+        let ext = Node::Ext {
+            any: vec!["bin".into()],
+        };
+        let checked = |ratio: u64| {
+            let ext_q = compile_node(&ext, &f).unwrap();
+            let range = SizeRange {
+                field: f.size,
+                bucket: f.size_bucket,
+                range: (1 << 29)..=u64::MAX,
+            };
+            SizeChecked {
+                rest: Box::new(BooleanQuery::new(vec![(Occur::Must, ext_q.box_clone())])),
+                ranges: vec![range.clone()],
+                whole: Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, ext_q),
+                    (Occur::Must, Box::new(range) as Q),
+                ])),
+                ratio,
+            }
+        };
+        let seg = &searcher.segment_readers()[0];
+        let scoring = EnableScoring::disabled_from_searcher(&searcher);
+        let mut want = None;
+        for (ratio, whole) in [(CHECK_RATIO, true), (u64::MAX, false)] {
+            let q = checked(ratio);
+            let mut w = q.checked_weight(scoring).unwrap();
+            assert!(w.rest_terms.is_some(), "an extension is plain terms");
+            let built = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            w.rest = Box::new(Counting(w.rest, built.clone()));
+            let plan = w.plan(seg, 1.0).unwrap();
+            assert_eq!(matches!(plan, Plan::Whole), whole, "ratio {ratio}");
+            assert_eq!(
+                built.load(Ordering::Relaxed),
+                usize::from(!whole),
+                "ratio {ratio}"
+            );
+            let got = ids(&searcher, &q, PIECE_DOCS);
+            assert_eq!(
+                *want.get_or_insert_with(|| got.clone()),
+                got,
+                "ratio {ratio}"
+            );
+        }
+        // One torrent in fifty, torrent 2 (deleted) not among them.
+        assert_eq!(want.unwrap().len(), 40);
     }
 
     /// The size check where some files have no size (never written by

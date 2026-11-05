@@ -213,7 +213,7 @@ impl Engine {
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
         let correction = self.class_rules.decide(&doc);
-        let v = self.judge_doc(item, facts, &doc, now).0;
+        let v = self.judge_doc(item, facts, &doc, now, None).0;
         if correction != Some(true) || item.content_type == ContentType::Adult {
             return (v, correction);
         }
@@ -255,7 +255,70 @@ impl Engine {
             return (v, Vec::new());
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
-        self.judge_doc(item, facts, &doc, now)
+        self.judge_doc(item, facts, &doc, now, None)
+    }
+
+    /// The writer's verdict for a torrent whose publisher, or source, is
+    /// flooding (SP-3, RP-4): the torrent judged again with SP-3 matching
+    /// at `level`, inside the engine's precedence. The floor is final; a
+    /// CSX-5 Override, *Always allow*, a core hit or one of your rules
+    /// decides before the pack layer is reached, and an exception for
+    /// SP-3, its switches and your override of it apply as for any pack
+    /// rule; in the pack layer the strongest action wins. Pending, SP-3
+    /// runs in shadow ([`crate::packs::upgrade`]).
+    ///
+    /// `adult`: an always-adult source found it, so it's judged as adult
+    /// too, as the writer's other verdicts are
+    /// (`lodestar_pipeline::source_adult`); so is a torrent your Is adult
+    /// rule makes adult ([`Engine::judge_classified`]). The stricter
+    /// verdict stands. Nothing here changes what the classification rules
+    /// say: the writer keeps that from its first verdict.
+    ///
+    /// Adding SP-3 only adds to the pack layer, so this is never weaker
+    /// than the verdict without it.
+    pub fn judge_flooded(
+        &self,
+        item: &Item,
+        facts: &Facts,
+        now: i64,
+        level: crate::flood::Level,
+        adult: bool,
+    ) -> Verdict {
+        if let Some(hit) = self.core.floor_hit(item) {
+            return Verdict {
+                decision: Some(hit.into()),
+                shadow: Vec::new(),
+            };
+        }
+        let doc = Doc::new(item, Some(facts)).with_near(self.rules.near_terms());
+        let correction = self.class_rules.decide(&doc);
+        let v = self.judge_doc(item, Some(facts), &doc, now, Some(level)).0;
+        if !(adult || correction == Some(true)) || item.content_type == ContentType::Adult {
+            return v;
+        }
+        let adult_item = Item {
+            content_type: ContentType::Adult,
+            ..*item
+        };
+        let adult_class = facts.class.as_adult();
+        let adult_facts = Facts {
+            class: &adult_class,
+            ..*facts
+        };
+        // As [`Engine::judge`] reads the adult side: its floor first.
+        let as_adult = match self.core.floor_hit(&adult_item) {
+            Some(hit) => Verdict {
+                decision: Some(hit.into()),
+                shadow: Vec::new(),
+            },
+            None => {
+                let doc =
+                    Doc::new(&adult_item, Some(&adult_facts)).with_near(self.rules.near_terms());
+                self.judge_doc(&adult_item, Some(&adult_facts), &doc, now, Some(level))
+                    .0
+            }
+        };
+        stricter(v, as_adult)
     }
 
     /// The override and neutralize entries that apply to a torrent:
@@ -292,20 +355,38 @@ impl Engine {
     /// than it was (docs/decisions/2026-11-02-F-normalize-invisible.md,
     /// docs/decisions/2026-11-02-F-visible-format-two-readings.md).
     /// Elsewhere the two judgments are the same, so one is made.
+    ///
+    /// `flood`: SP-3's level, from the writer ([`Engine::judge_flooded`]);
+    /// `None` everywhere else, where SP-3 never matches.
     fn judge_doc(
         &self,
         item: &Item,
         facts: Option<&Facts>,
         doc: &Doc,
         now: i64,
+        flood: Option<crate::flood::Level>,
     ) -> (Verdict, Vec<PackShadow>) {
         let mut pack_shadow = Vec::new();
-        let (mut v, mut released) =
-            self.judge_reading(item, facts, doc, now, Reading::Joined, &mut pack_shadow);
+        let (mut v, mut released) = self.judge_reading(
+            item,
+            facts,
+            doc,
+            now,
+            Reading::Joined,
+            flood,
+            &mut pack_shadow,
+        );
         if doc.reads_twice() || self.keywords_differ(item, doc) {
             let mut before_shadow = Vec::new();
-            let (before, also) =
-                self.judge_reading(item, facts, doc, now, Reading::Before, &mut before_shadow);
+            let (before, also) = self.judge_reading(
+                item,
+                facts,
+                doc,
+                now,
+                Reading::Before,
+                flood,
+                &mut before_shadow,
+            );
             v = stricter(before, v);
             // Each pending rule's stronger side over the two readings.
             for s in before_shadow {
@@ -355,6 +436,7 @@ impl Engine {
 
     /// [`Engine::judge_doc`] in one reading: the verdict, and the shadow
     /// override entries that matched.
+    #[allow(clippy::too_many_arguments)]
     fn judge_reading(
         &self,
         item: &Item,
@@ -362,6 +444,7 @@ impl Engine {
         doc: &Doc,
         now: i64,
         reading: Reading,
+        flood: Option<crate::flood::Level>,
         pack_shadow: &mut Vec<PackShadow>,
     ) -> (Verdict, Vec<u32>) {
         let mut v = Verdict::default();
@@ -380,6 +463,7 @@ impl Engine {
                 &neutral_words,
                 now,
                 reading,
+                flood,
                 &mut v.shadow,
                 pack_shadow,
             );
@@ -397,6 +481,7 @@ impl Engine {
         neutral_words: &[String],
         now: i64,
         reading: Reading,
+        flood: Option<crate::flood::Level>,
         shadow: &mut Vec<Decision>,
         pack_shadow: &mut Vec<PackShadow>,
     ) -> Option<Decision> {
@@ -451,18 +536,22 @@ impl Engine {
             }
             return stronger_of(held, Some(d));
         }
-        let ctx = facts.map(|f| packs::Ctx::new(item, f, neutral_words));
+        let ctx = facts.map(|f| packs::Ctx::new(item, f, neutral_words).with_flood(flood));
         let mut packs = Vec::new();
         if let Some(ctx) = &ctx {
             for r in PackRule::ALL.into_iter().filter(|r| self.packs.is_on(*r)) {
                 let pv = &self.pack_versions;
-                let applied = pv.applied_action(&self.manifest, r, ctx);
+                // SP-3 flags below its demote level ([`packs::sp3::cap`]),
+                // in both versions' results.
+                let cap = |a: Option<Action>| a.map(|a| packs::sp3::cap(r, flood, a));
+                let applied = cap(pv.applied_action(&self.manifest, r, ctx));
                 // A pending version runs in shadow where the rule isn't
                 // excepted: nothing it holds is applied.
                 if pv.state(r).pending()
-                    && let Some(s) = pv.shadow(&self.manifest, r, ctx, applied)
+                    && let Some(mut s) = pv.shadow(&self.manifest, r, ctx, applied)
                     && !self.excepted(RuleRef::Pack(r), item, doc, reading)
                 {
+                    s.shadow = cap(s.shadow);
                     if let Some(action) = s.shadow {
                         shadow.push(Decision {
                             rule: RuleRef::Pack(r),
@@ -615,7 +704,7 @@ fn stronger_of(first: Option<Decision>, second: Option<Decision>) -> Option<Deci
 
 /// The stricter of two verdicts: the stronger decision (the first on a
 /// tie), and every shadow decision either logged.
-fn stricter(a: Verdict, b: Verdict) -> Verdict {
+pub(crate) fn stricter(a: Verdict, b: Verdict) -> Verdict {
     let decision = match (a.decision, b.decision) {
         (Some(x), Some(y)) => Some(if y.action > x.action { y } else { x }),
         (x, y) => x.or(y),

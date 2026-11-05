@@ -57,6 +57,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
         shutdown: Default::default(),
+        adult_sources: 0,
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
@@ -1293,6 +1294,7 @@ fn restart(f: &Fixture, index: Option<lodestar_search::SearchHandle>) -> Filters
         jobs: Default::default(),
         quarantine_secs: f.api.quarantine_secs,
         shutdown: Default::default(),
+        adult_sources: 0,
     }
 }
 

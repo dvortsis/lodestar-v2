@@ -507,7 +507,9 @@ fn relevance_with_hot_columns_reranks_and_explains() {
 fn cold_file_compilation_preserves_cancellation_and_deadline_errors() {
     let (index, _) = index_with(10, 1);
     let index = Arc::new(index);
-    let node = crate::parse("file:(size:>0)").unwrap();
+    // The exclusion keeps it on the file index (a bare range is the
+    // torrent index\'s bucket terms, X-search-files-5).
+    let node = crate::parse("file:(size:>0 -zzqxnever)").unwrap();
     let cancel = CancelToken::new();
     cancel.cancel();
     assert!(matches!(
@@ -530,7 +532,9 @@ fn a_file_scan_cancelled_partway_fails_the_compile_and_caches_nothing() {
     // Past the scan's first periodic check, so the cancel lands mid-segment.
     let per = u64::from(crate::cancel::CHECK_EVERY);
     append_files(&index, 1..11, per);
-    let node = crate::parse("file:(size:>0)").unwrap();
+    // The exclusion keeps it on the file index (a bare range is the
+    // torrent index\'s bucket terms, X-search-files-5).
+    let node = crate::parse("file:(size:>0 -zzqxnever)").unwrap();
     let cancel = CancelToken::new();
     let (trip, visits) = tripwire(100, &cancel);
     // Taken by the scan below; a compile that stopped before its file
@@ -571,7 +575,9 @@ fn a_cancelled_scan_over_several_segments_caches_no_segment() {
     let per = u64::from(crate::cancel::CHECK_EVERY);
     append_files(&index, 5..13, per);
     assert_eq!(index.files_searcher().segment_readers().len(), 3);
-    let node = crate::parse("file:(size:>0)").unwrap();
+    // The exclusion keeps it on the file index (a bare range is the
+    // torrent index\'s bucket terms, X-search-files-5).
+    let node = crate::parse("file:(size:>0 -zzqxnever)").unwrap();
     let cancel = CancelToken::new();
     // The small segments hold 40 files, so the cancel lands in the large one.
     let (trip, _) = tripwire(100, &cancel);

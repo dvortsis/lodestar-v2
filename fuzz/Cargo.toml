@@ -15,6 +15,7 @@ lodestar-classify = { path = "../crates/classify" }
 lodestar-cluster = { path = "../crates/cluster" }
 lodestar-dht = { path = "../crates/dht" }
 lodestar-filter = { path = "../crates/filter" }
+lodestar-integrations = { path = "../crates/integrations" }
 lodestar-metainfo = { path = "../crates/metainfo" }
 lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }

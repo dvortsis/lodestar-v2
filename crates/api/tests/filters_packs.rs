@@ -143,6 +143,7 @@ fn fixture_with(manifest: Arc<Manifest>, missing: &[PackRule]) -> Fixture {
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
         shutdown: Default::default(),
+        adult_sources: 0,
     });
     // The engine as the store has it: MW-2's version 1 applied, version 2
     // in shadow.
@@ -784,7 +785,14 @@ async fn fixtures_report_the_pack_corpora_per_rule() {
     assert_eq!(packs["precision_failing"], json!(0));
     assert!(packs["precision_items"].as_u64().unwrap() >= 20);
     let rules = packs["rules"].as_array().unwrap();
-    assert_eq!(rules.len(), PackRule::ALL.len());
+    // The stateful rules (SP-3, RP-4) have sequence fixtures, not a
+    // per-item corpus, so the report leaves them out.
+    let stateless = PackRule::ALL
+        .into_iter()
+        .filter(|r| lodestar_filter::corpus::stateless(*r))
+        .count();
+    assert_eq!(rules.len(), stateless);
+    assert!(rules.iter().all(|r| r["rule"] != "SP-3"));
     for r in rules {
         assert!(r["must_match"].as_u64().unwrap() >= 3, "{r}");
         assert!(r["must_not_match"].as_u64().unwrap() >= 3, "{r}");

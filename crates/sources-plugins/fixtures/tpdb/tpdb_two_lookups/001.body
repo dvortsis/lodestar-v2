@@ -1,0 +1,144 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "_id": 1000001,
+      "title": "Synthetic Scene One",
+      "type": "Scene",
+      "slug": "example-studio-synthetic-scene-one",
+      "external_id": "ext-0001",
+      "description": "A synthetic description that the parser never reads.",
+      "site_id": 1,
+      "date": "2024-02-29",
+      "url": "https://studio.example/scenes/0001?token=NOT-A-REAL-KEY",
+      "image": "https://cdn.example/scene-0001.jpg",
+      "back_image": null,
+      "poster": "https://cdn.example/poster-0001.jpg",
+      "trailer": null,
+      "duration": 1800,
+      "format": null,
+      "sku": null,
+      "posters": {"large": "https://cdn.example/l.jpg", "medium": "https://cdn.example/m.jpg", "small": "https://cdn.example/s.jpg"},
+      "background": {"full": "https://cdn.example/f.jpg", "large": "https://cdn.example/l.jpg"},
+      "created": "2024-03-01T00:00:00.000000Z",
+      "last_updated": "2024-03-02T00:00:00.000000Z",
+      "performers": [
+        {
+          "id": "00000000-0000-4000-8000-0000000000a1",
+          "_id": 2000001,
+          "slug": "example-performer-one",
+          "site_id": 1,
+          "name": "Example Performer One",
+          "bio": "SENTINEL-BIO",
+          "is_parent": false,
+          "extra": {
+            "gender": "SENTINEL-GENDER",
+            "birthday": "1990-01-02",
+            "birthplace": "SENTINEL-BIRTHPLACE",
+            "astrology": "SENTINEL-ASTROLOGY",
+            "ethnicity": "SENTINEL-ETHNICITY",
+            "nationality": "SENTINEL-NATIONALITY",
+            "hair_colour": "SENTINEL-HAIR",
+            "eye_colour": "SENTINEL-EYES",
+            "height": "SENTINEL-HEIGHT",
+            "weight": "SENTINEL-WEIGHT",
+            "measurements": "SENTINEL-MEASUREMENTS",
+            "cupsize": "SENTINEL-CUPSIZE",
+            "tattoos": "SENTINEL-TATTOOS",
+            "piercings": "SENTINEL-PIERCINGS",
+            "first_seen": "2024-01-01",
+            "aliases": ["SENTINEL-ALIAS"]
+          },
+          "image": "https://cdn.example/SENTINEL-IMAGE.jpg",
+          "thumbnail": "https://cdn.example/SENTINEL-THUMB.jpg",
+          "face": "https://cdn.example/SENTINEL-FACE.jpg",
+          "parent": {
+            "id": "00000000-0000-4000-8000-0000000000b1",
+            "_id": 3000001,
+            "slug": "example-performer-one",
+            "name": "SENTINEL-PARENT-NAME",
+            "disambiguation": "SENTINEL-DISAMBIGUATION",
+            "bio": "SENTINEL-PARENT-BIO",
+            "rating": 0,
+            "is_parent": true,
+            "extras": {
+              "gender": "SENTINEL-GENDER",
+              "birthday": "1990-01-02",
+              "birthday_timestamp": 631238400,
+              "deathday": null,
+              "birthplace": "SENTINEL-BIRTHPLACE",
+              "birthplace_code": "XX",
+              "measurements": "SENTINEL-MEASUREMENTS",
+              "links": {"SENTINEL-LINK": "https://social.example/SENTINEL-HANDLE"}
+            },
+            "aliases": ["SENTINEL-ALIAS"],
+            "image": "https://cdn.example/SENTINEL-IMAGE.jpg",
+            "posters": [{"id": 1, "url": "https://cdn.example/SENTINEL-POSTER.jpg", "size": 1, "order": 1}]
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-0000000000a2",
+          "_id": 2000002,
+          "name": "Example Performer Two",
+          "extra": {"birthday": "1990-01-02"},
+          "parent": null
+        },
+        {
+          "_id": 2000003,
+          "name": "Example Performer Without Id"
+        }
+      ],
+      "site": {
+        "uuid": "00000000-0000-4000-8000-0000000000c1",
+        "id": 1,
+        "parent_id": 2,
+        "network_id": 3,
+        "name": "Example Studio",
+        "short_name": "examplestudio",
+        "url": "https://studio.example",
+        "description": "SENTINEL-SITE-DESCRIPTION",
+        "logo": "https://cdn.example/logo.png",
+        "network": {"id": 3, "name": "SENTINEL-NETWORK-NAME"}
+      },
+      "tags": [{"id": 1, "name": "Synthetic Tag"}],
+      "hashes": [{"hash": "0123456789abcdef", "type": "OSHASH", "duration": 1800}],
+      "markers": [],
+      "directors": [{"id": "d1", "name": "SENTINEL-DIRECTOR"}],
+      "links": {"site": "https://studio.example"}
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "title": "Synthetic Scene Two\u200b",
+      "type": "JAV",
+      "date": null,
+      "performers": [],
+      "site": null
+    },
+    {
+      "_id": 1000003,
+      "title": "Synthetic Scene Without Id",
+      "type": "Scene"
+    },
+    {
+      "id": "not a valid id",
+      "title": "Synthetic Scene With A Bad Id",
+      "type": "Scene"
+    },
+    "not an item"
+  ],
+  "links": {
+    "first": "https://tpdb.example/scenes?page=1",
+    "last": "https://tpdb.example/scenes?page=1",
+    "prev": null,
+    "next": null
+  },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "last_page": 1,
+    "path": "https://tpdb.example/scenes",
+    "per_page": 25,
+    "to": 5,
+    "total": 5
+  }
+}

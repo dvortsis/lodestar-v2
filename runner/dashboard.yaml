@@ -213,6 +213,7 @@ placement:
   - S-keys
   - M-auth
   - X-settings-trim
+  - X-settings-followups
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -257,6 +258,7 @@ placement:
   match:
   - F-*
   - X-ci-health
+  - X-flake-update-log
   - X-log-url-redact
   - X-log-url-redact-2
   - X-log-url-redact-3
@@ -268,6 +270,7 @@ placement:
   - X-source-adult-2
   - X-flakes-1105
   - X-fuzz-cache-1105
+  - X-claim-trackers
   - D-sources-guide
   - L4-followups
   - S-settings-reconcile
@@ -335,6 +338,7 @@ placement:
   - SRC-12b
   - SRC-13
   - SRC-13b
+  - SRC-13c
   - X-source-adult
 - ws: ws-src-ui
   match:

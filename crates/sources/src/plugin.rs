@@ -105,7 +105,39 @@ pub trait SourcePlugin: Send + Sync {
         Some(Endpoints::manifest(self.manifest().endpoints))
     }
 
+    /// Whether its settings can be written through the API
+    /// (`PATCH /sources/{id}`'s `config`). Plugins that don't say can't.
+    fn config_editable(&self) -> bool {
+        false
+    }
+
+    /// The settings it was built with, in the form [`check_config`] saves;
+    /// `None` for a plugin whose settings can't be written.
+    ///
+    /// [`check_config`]: SourcePlugin::check_config
+    fn config_json(&self) -> Option<String> {
+        None
+    }
+
+    /// Checks settings the user sent against the plugin's own rules, and
+    /// gives the form to save. They apply at the next start, when the
+    /// plugin is built from what's saved. A refusal names the rule, never
+    /// a value. Plugins whose settings can't be written refuse all.
+    fn check_config(&self, _json: &str) -> Result<String, ConfigRefusal> {
+        Err(ConfigRefusal("this source has no settings to change"))
+    }
+
     fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>>;
+}
+
+/// Why settings were refused: names the rule, never a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigRefusal(pub &'static str);
+
+impl std::fmt::Display for ConfigRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
 }
 
 #[derive(Debug)]

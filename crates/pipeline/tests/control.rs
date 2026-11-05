@@ -1084,3 +1084,123 @@ async fn a_purge_stops_the_source_survives_a_crash_and_finishes_when_run_again()
     drop(control);
     pipeline.shutdown().await.unwrap();
 }
+
+/// Takes any settings, and counts the checks that reached it.
+struct Settable {
+    manifest: Manifest,
+    checks: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl SourcePlugin for Settable {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn config_editable(&self) -> bool {
+        true
+    }
+
+    fn config_json(&self) -> Option<String> {
+        Some("{}".into())
+    }
+
+    fn check_config(&self, json: &str) -> Result<String, lodestar_sources::ConfigRefusal> {
+        self.checks.fetch_add(1, Ordering::SeqCst);
+        Ok(json.to_owned())
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        Box::pin(async move {
+            ctx.shutdown.requested().await;
+            Ok(())
+        })
+    }
+}
+
+/// SRC-13c: the control's own size cap holds before the plugin is asked,
+/// a plugin whose settings can't be written refuses them, and what's saved
+/// is pending until the next start.
+#[tokio::test]
+async fn settings_are_capped_checked_by_the_plugin_and_pending_until_a_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let settable = Arc::new(Settable {
+        manifest: Manifest {
+            id: "settable",
+            ..probe("settable", Consent::None).0.manifest.clone()
+        },
+        checks: checks.clone(),
+    });
+    let (plain, _) = probe("plain", Consent::None);
+    let pipeline = Pipeline::start_with(
+        PipelineConfig::default(),
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![settable, plain],
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    let control_store = Arc::new(Mutex::new(
+        Store::open(&db, StoreConfig::default()).unwrap(),
+    ));
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        control_store,
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    let id = |plugin: &str| {
+        pipeline
+            .sources()
+            .into_iter()
+            .find(|s| s.plugin == plugin)
+            .unwrap()
+            .id
+    };
+    let config = |json: String| SourceChange {
+        config: Some(json),
+        ..SourceChange::default()
+    };
+    let big = format!(
+        "{{\"x\":\"{}\"}}",
+        "a".repeat(lodestar_pipeline::control::MAX_CONFIG_BYTES)
+    );
+    assert!(matches!(
+        control.update_source(id("settable"), config(big)).await,
+        Err(SourceError::Invalid {
+            field: "config",
+            ..
+        })
+    ));
+    assert_eq!(
+        checks.load(Ordering::SeqCst),
+        0,
+        "refused before the plugin"
+    );
+    assert!(matches!(
+        control
+            .update_source(id("plain"), config("{}".into()))
+            .await,
+        Err(SourceError::Invalid {
+            field: "config",
+            ..
+        })
+    ));
+    let view = control
+        .update_source(id("settable"), config(r#"{"a":1}"#.into()))
+        .await
+        .unwrap();
+    assert!(view.config_pending, "applies at the next start");
+    // The plugin is asked once for the write and once for the view.
+    assert!(checks.load(Ordering::SeqCst) >= 1);
+    let same = control
+        .update_source(id("settable"), config("{}".into()))
+        .await
+        .unwrap();
+    assert!(!same.config_pending, "the running settings, saved again");
+    pipeline.shutdown().await.unwrap();
+}

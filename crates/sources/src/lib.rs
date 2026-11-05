@@ -30,8 +30,8 @@ pub use manifest::{
     Network, Policy, Priority, Risk, Schedule, UserLimits, Window, floors,
 };
 pub use plugin::{
-    BoxFuture, Closed, Discovery, Emitter, Found, Kit, LookupSession, PeerRequest, PluginError,
-    SessionAdmission, Shutdown, SourceCtx, SourcePlugin, Terminal,
+    BoxFuture, Closed, ConfigRefusal, Discovery, Emitter, Found, Kit, LookupSession, PeerRequest,
+    PluginError, SessionAdmission, Shutdown, SourceCtx, SourcePlugin, Terminal,
 };
 pub use pool::{FetchedKey, Fetcher, PeerWireFetcher, PoolConfig, PoolHandle, PoolIo, PoolStats};
 pub use state::{MemoryState, PluginState, StateError};

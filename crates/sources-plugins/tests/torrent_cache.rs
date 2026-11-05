@@ -485,18 +485,53 @@ fn config_refusals_name_the_rule() {
         ("https://c.example/{hash}#x", "fragment"),
         ("https://192.168.1.10/{hash}", "public"),
         ("https://127.0.0.1/{hash}", "public"),
-        ("not a url {hash}", "valid address"),
+        ("not a url {hash}", "plain ASCII"),
+        ("https://c.example/ {hash}", "plain ASCII"),
+        ("https://c.example/\t{hash}", "plain ASCII"),
+        ("https://c.example/\u{202e}{hash}", "plain ASCII"),
+        ("https://c\u{0435}.example/{hash}", "plain ASCII"),
+        ("HTTPS://c.example/{hash}", "start with https://"),
+        ("https:c.example/{hash}", "start with https://"),
+        ("https://[{hash}]/x", "valid address"),
+        ("https://c.example\\@d.example/{hash}", "backslash"),
+        ("https://c.example%2Eevil.net/{hash}", "a %"),
+        ("https://c.example%E3%80%82evil.net/{hash}", "a %"),
+        ("https://c.example/~alice/%2e%2e/~bob/{hash}", "a %"),
+        ("https://c.example/~alice/%2E./~bob/{hash}", "a %"),
+        ("https://c.example/a%2Fb/{hash}", "a %"),
+        ("https://c.example/~alice/../~bob/{hash}", "as it's sent"),
+        ("https://c.example/~alice/./{hash}", "as it's sent"),
+        ("https://c.example?h={hash}", "as it's sent"),
+        ("https://c.example/a\"b/{hash}", "as it's sent"),
+        ("https://0x08080808/{hash}", "plain form"),
+        ("https://010.010.010.010/{hash}", "plain form"),
+        ("https://134744072/{hash}", "plain form"),
+        ("https://c.example:443/{hash}", "plain form"),
     ];
     for (t, rule) in bad {
         let e = Config::new(&[t]).unwrap_err();
         assert!(e.0.contains(rule), "{t}: {e}");
         assert!(!e.0.contains("c.example"), "the error holds the value");
     }
+    // Plain forms the parser leaves alone are kept, any case.
+    for ok in [
+        "https://C.Example/{hash}",
+        "https://c.example:8443/{hash}",
+        "https://8.8.8.8/{hash}",
+        "https://[2001:4860:4860::8888]/{hash}",
+        "https://xn--bcher-kva.example/{hash}",
+    ] {
+        Config::new(&[ok]).unwrap_or_else(|e| panic!("{ok}: {e}"));
+    }
     let nine: Vec<String> = (0..9)
         .map(|i| format!("https://c{i}.example/{{hash}}"))
         .collect();
     assert!(Config::new(&nine).is_err());
     assert!(Config::new(&["https://c.example/{hash}", "https://c.example/{hash}"]).is_err());
+    // The same requests in another case are the same cache; the
+    // placeholder's case is a different request.
+    assert!(Config::new(&["https://C.example/{hash}", "https://c.example/{hash}"]).is_err());
+    assert!(Config::new(&["https://c.example/{hash}", "https://c.example/{HASH}"]).is_ok());
     assert!(Config::from_json(r#"{"caches":[],"extra":1}"#).is_err());
     let long = format!("https://c.example/{}{{hash}}", "a".repeat(600));
     assert!(Config::new(&[long]).is_err());
@@ -787,48 +822,85 @@ fn built(templates: &[&str]) -> TorrentCache {
 }
 
 #[test]
-fn the_manifest_lists_the_configured_hosts_as_https_endpoints() {
+fn the_manifest_lists_the_configured_templates_as_https_endpoints() {
     let p = built(&[
         "https://b.example/t/{hash}.torrent",
-        "https://a.example:8443/get?h={HASH}",
+        " https://a.example:8443/get?h={HASH} ",
         "https://b.example/other/{hash}",
     ]);
-    let hosts: Vec<(&str, &str)> = p
+    let listed: Vec<(&str, &str)> = p
         .manifest()
         .endpoints
         .iter()
         .map(|e| (e.protocol, e.host))
         .collect();
     assert_eq!(
-        hosts,
-        [("https", "a.example:8443"), ("https", "b.example")],
-        "sorted, once each"
+        listed,
+        [
+            ("https", "a.example:8443/get?h={HASH}"),
+            ("https", "b.example/other/{hash}"),
+            ("https", "b.example/t/{hash}.torrent"),
+        ],
+        "sorted, trimmed, each full template"
+    );
+    // What the consent dialog shows (`GET /sources`'s endpoints).
+    assert_eq!(
+        consent::addresses(p.manifest()),
+        [
+            "https://a.example:8443/get?h={HASH}",
+            "https://b.example/other/{hash}",
+            "https://b.example/t/{hash}.torrent",
+        ]
     );
     assert_eq!(p.manifest().id, torrent_cache::ID);
     assert_eq!(p.manifest().consent, Consent::External);
 }
 
-/// An acknowledgement is bound to the hosts it was shown: adding or
-/// changing a cache host asks again, and an unchanged list doesn't, as the
+/// An acknowledgement is bound to the full addresses it was shown, as the
 /// pipeline's start checks it (`consent::need_in`) for a plugin rebuilt
-/// from its saved settings.
+/// from its saved settings: adding or changing a cache asks again, its
+/// path included, and an unchanged list doesn't (SRC-13c).
 #[test]
-fn a_new_or_changed_host_asks_again_and_an_unchanged_list_doesnt() {
-    let shown = built(&["https://a.example/t/{hash}.torrent"]);
+fn a_new_or_changed_address_asks_again_and_an_unchanged_list_doesnt() {
+    let shown = built(&[
+        "https://a.example/t/{hash}.torrent",
+        "https://b.example/{hash}",
+    ]);
     let ack = Ack::of(shown.manifest());
     let need = |p: &TorrentCache| consent::need(p.manifest(), Some(&ack), &[]);
-    // The next start, the same settings: no question.
-    assert_eq!(need(&built(&["https://a.example/t/{hash}.torrent"])), None);
-    // The same host under another path: the same hosts are contacted.
-    assert_eq!(need(&built(&["https://a.example/x?h={HASH}"])), None);
-    // A host added, a host changed, the list emptied: asked again.
+    // The next start, the same settings, in another order: no question.
+    assert_eq!(
+        need(&built(&[
+            "https://b.example/{hash}",
+            "https://a.example/t/{hash}.torrent"
+        ])),
+        None
+    );
+    // A cache added, a host changed, a port, a path or the case of the
+    // placeholder changed, one dropped, the list emptied: asked again.
     for changed in [
         &[
             "https://a.example/t/{hash}.torrent",
             "https://b.example/{hash}",
+            "https://c.example/{hash}",
         ][..],
-        &["https://b.example/t/{hash}.torrent"][..],
-        &["https://a.example:8443/t/{hash}.torrent"][..],
+        &[
+            "https://a.example/t/{hash}.torrent",
+            "https://c.example/{hash}",
+        ][..],
+        &[
+            "https://a.example:8443/t/{hash}.torrent",
+            "https://b.example/{hash}",
+        ][..],
+        &[
+            "https://a.example/~me/{hash}.torrent",
+            "https://b.example/{hash}",
+        ][..],
+        &[
+            "https://a.example/t/{HASH}.torrent",
+            "https://b.example/{hash}",
+        ][..],
+        &["https://a.example/t/{hash}.torrent"][..],
         &[][..],
     ] {
         assert_eq!(need(&built(changed)), Some(Need::Endpoints), "{changed:?}");
@@ -843,6 +915,40 @@ fn a_new_or_changed_host_asks_again_and_an_unchanged_list_doesnt() {
         ),
         Some(Need::Endpoints)
     );
+}
+
+/// The write path's check (`PATCH /sources/{id}`'s `config`): the
+/// plugin's own rules, and what's saved reads back to the same settings.
+#[test]
+fn settings_written_through_the_api_are_checked_and_saved_in_one_form() {
+    let p = built(&[]);
+    assert!(SourcePlugin::config_editable(&p));
+    let saved = p
+        .check_config(r#"{"caches":[" https://a.example/t/{hash} "]}"#)
+        .unwrap();
+    assert_eq!(saved, r#"{"caches":["https://a.example/t/{hash}"]}"#);
+    assert_eq!(p.check_config(&saved).unwrap(), saved, "a fixed point");
+    let again = built(&["https://a.example/t/{hash}"]);
+    assert_eq!(again.config_json().as_deref(), Some(saved.as_str()));
+    assert_eq!(
+        built(&[]).config_json().as_deref(),
+        Some(r#"{"caches":[]}"#)
+    );
+    for bad in [
+        "not json",
+        "[]",
+        r#"{"caches":"https://a.example/{hash}"}"#,
+        r#"{"caches":[],"extra":1}"#,
+        r#"{}"#,
+        r#"{"caches":["http://a.example/{hash}"]}"#,
+        r#"{"caches":["https://secret.example/~me/token123"]}"#,
+    ] {
+        let e = p.check_config(bad).unwrap_err();
+        assert!(
+            !e.0.contains("example") && !e.0.contains("token123"),
+            "a refusal names the rule, never the value: {e}"
+        );
+    }
 }
 
 #[test]

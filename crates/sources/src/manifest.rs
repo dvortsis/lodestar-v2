@@ -45,7 +45,12 @@ pub enum Network {
     Usenet,
 }
 
-/// An external endpoint the plugin contacts.
+/// An external endpoint the plugin contacts: `protocol` and what follows
+/// `://`, a host (or `host:port`) for a compiled-in manifest, or a whole
+/// address template for one built from the user's settings. It's what the
+/// consent dialog shows and an acknowledgement covers
+/// ([`crate::consent::addresses`]); the egress host list comes from
+/// [`crate::SourcePlugin::endpoints`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Endpoint {
     pub protocol: &'static str,
