@@ -1,4 +1,4 @@
-# X-filter-budget-noise decisions
+# X-filter-budget-noise decisions (#451)
 
 Runner brief X-filter-budget-noise, 2026-11-05: make the `filter budget (§20.8)` gate robust to shared-runner noise. This is a performance-measurement call the runner decides under `docs/owner-decisions.md` §2.26, as a refinement under §2.19 that it flags to the owner. The owner's 50 µs per torrent at 10,000 rules (§1.6.6, architecture §20.8) is unchanged. So are the EPYC 7763 reference and its raw reading (§2.20), every held case, the calibration and its drift check, and the 0.4–2.0× range. Two changes follow from the diagnosis below:
 1. a robust statistic (noise);
