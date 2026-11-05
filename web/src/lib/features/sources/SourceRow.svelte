@@ -8,7 +8,6 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Badge from '$lib/ui/labels/Badge.svelte';
-	import Mono from '$lib/ui/labels/Mono.svelte';
 	import Select from '$lib/ui/fields/Select.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import StatusPill from './StatusPill.svelte';
@@ -122,7 +121,7 @@
 			{#if s.endpoints.length > 0}
 				<ul class="flex flex-col gap-1">
 					{#each s.endpoints as address (address)}
-						<li><Mono wrap>{address}</Mono></li>
+						<li><code class="font-mono break-all">{address}</code></li>
 					{/each}
 				</ul>
 			{:else}

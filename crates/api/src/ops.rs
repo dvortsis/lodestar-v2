@@ -927,7 +927,7 @@ mod tests {
     fn refusals_map_to_the_envelope() {
         let e = ApiError::from(OpsError::ConsentRequired {
             class: ConsentClass::Restricted,
-            version: "1-00ff".into(),
+            version: "t1 25:https://a.example/~me/x".into(),
         });
         assert_eq!(
             (e.status(), e.code()),
@@ -940,7 +940,9 @@ mod tests {
                 .unwrap()
                 .contains("\"restricted\"")
         );
-        assert!(e.body().to_string().contains("1-00ff"));
+        // The version holds every address, which can be a per-user one:
+        // it isn't quoted (`GET /sources` gives it).
+        assert!(!e.body().to_string().contains("~me"));
         let e = ApiError::from(OpsError::PasswordRequired);
         assert_eq!(
             (e.status(), e.code()),

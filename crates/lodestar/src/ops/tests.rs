@@ -215,13 +215,22 @@ impl Fixture {
         )
     }
 
+    /// A session: through setup on a fresh data directory, or a login
+    /// once setup was done (after a restart).
     async fn session(&self) -> String {
-        let token = self.auth.setup_token().unwrap();
-        let mut req = Request::post("/api/v1/setup")
+        let (uri, body) = match self.auth.setup_token() {
+            Some(token) => (
+                "/api/v1/setup",
+                json!({ "token": token, "password": "correct horse battery" }),
+            ),
+            None => (
+                "/api/v1/login",
+                json!({ "password": "correct horse battery" }),
+            ),
+        };
+        let mut req = Request::post(uri)
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                json!({ "token": token, "password": "correct horse battery" }).to_string(),
-            ))
+            .body(Body::from(body.to_string()))
             .unwrap();
         req.extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 2], 1))));
@@ -1055,13 +1064,22 @@ impl GatedFixture {
         )
     }
 
+    /// A session: through setup on a fresh data directory, or a login
+    /// once setup was done (after a restart).
     async fn session(&self) -> String {
-        let token = self.auth.setup_token().unwrap();
-        let mut req = Request::post("/api/v1/setup")
+        let (uri, body) = match self.auth.setup_token() {
+            Some(token) => (
+                "/api/v1/setup",
+                json!({ "token": token, "password": "correct horse battery" }),
+            ),
+            None => (
+                "/api/v1/login",
+                json!({ "password": "correct horse battery" }),
+            ),
+        };
+        let mut req = Request::post(uri)
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                json!({ "token": token, "password": "correct horse battery" }).to_string(),
-            ))
+            .body(Body::from(body.to_string()))
             .unwrap();
         req.extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 2], 1))));
@@ -1442,7 +1460,7 @@ fn with_cache(dir: &tempfile::TempDir) -> Vec<Arc<dyn SourcePlugin>> {
 }
 
 fn cache_state(dir: &tempfile::TempDir) -> lodestar_store::SourceState {
-    Store::open(&dir.path().join("t.db"), StoreConfig::default())
+    Store::open(dir.path().join("t.db"), StoreConfig::default())
         .unwrap()
         .sources()
         .unwrap()
@@ -1499,7 +1517,7 @@ async fn a_config_written_through_the_api_turns_the_cache_off_until_acknowledged
         assert_eq!(e["error"]["field"], json!("config"));
         assert!(!e.to_string().contains("private-token"), "{e}");
     }
-    let store = Store::open(&f.dir.path().join("t.db"), StoreConfig::default()).unwrap();
+    let store = Store::open(f.dir.path().join("t.db"), StoreConfig::default()).unwrap();
     assert!(
         crate::torrent_cache::saved_config(&store)
             .caches()

@@ -492,7 +492,7 @@ fn config_refusals_name_the_rule() {
         ("https://c\u{0435}.example/{hash}", "plain ASCII"),
         ("HTTPS://c.example/{hash}", "start with https://"),
         ("https:c.example/{hash}", "start with https://"),
-        ("https://[{hash}]/x", "path or the query"),
+        ("https://[{hash}]/x", "valid address"),
     ];
     for (t, rule) in bad {
         let e = Config::new(&[t]).unwrap_err();
