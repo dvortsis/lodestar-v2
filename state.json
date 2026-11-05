@@ -4926,6 +4926,11 @@
    "from": "#512 review",
    "note": "P1 pipeline proptest for tracker_url/stored_trackers (fixed point, <=64, within room, no dups); P2 reword fuzz/fuzz_targets/verified_claims.rs:226-232 comment; P3 decisions clause on first-fit trade in near-full pack; P4 doc wrap unverified.rs:196-197. Carry into the next slice touching crates/pipeline/src/unverified.rs.",
    "added": "2026-11-05T22:11Z"
+  },
+  {
+   "id": "runner-docs-g-v051-measure",
+   "note": "dashboard.yaml G-v051 gate measure still reads \"Soak r3 running...\"; update to soak r5 (rc.4, baseline ends 2026-11-06T13:12:25Z; r4 ended 29.35 MiB/h) in the 00:00Z runner docs PR.",
+   "added": "2026-11-05T22:18Z"
   }
  ],
  "main_health": [
