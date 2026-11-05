@@ -1998,6 +1998,7 @@ mod tests {
                     route: None,
                     setting: Ok(lodestar_pipeline::control::EgressSetting::Direct),
                 }),
+                auto_dns: lodestar_sources::SocksDns::Proxy,
             };
         let mut o = Out(String::new());
         render_egress(

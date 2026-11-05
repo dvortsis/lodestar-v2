@@ -145,6 +145,12 @@ jobs:
       matrix:
         os: ${{ fromJSON(needs.changes.outputs.test_os) }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Debug info is most of target/ (the Linux job filled 41 GB free on
+      # 2026-11-05). Line tables keep backtraces with file:line. Also part of
+      # rust-cache's key, so the old, fatter cache is not reused.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       # The workspace's test build no longer fits the Linux runner's free
       # disk (os error 28 on #432 and #434, 2026-11-04). Remove preinstalled
@@ -160,6 +166,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # Disk numbers for the next time this job runs short (X-ci-disk).
+      - name: disk after test build
+        if: always() && runner.os == 'Linux'
+        run: |
+          df -h /
+          du -sh target
+          du -s target/debug/deps/* 2>/dev/null | sort -rn | head -15 \
+            | awk '{printf "%7.0f MB  %s\n", $1/1024, $2}'
       # The DHT's tests in their production configuration (no `testing`),
       # which the workspace run above never builds.
       # Only lodestar-crawler-sim enables the `testing` seams, so these

@@ -135,13 +135,17 @@ pub enum SourceSetting {
     Schedule,
     /// Its concurrency, in the plugin's own unit.
     Agents,
+    /// The plugin's own settings, as its settings form saves them (JSON
+    /// under its `config_schema`), read when it's built at start.
+    Config,
 }
 
 impl SourceSetting {
-    pub const ALL: [SourceSetting; 3] = [
+    pub const ALL: [SourceSetting; 4] = [
         SourceSetting::Egress,
         SourceSetting::Schedule,
         SourceSetting::Agents,
+        SourceSetting::Config,
     ];
 
     fn key(self, plugin: &str) -> String {
@@ -149,6 +153,7 @@ impl SourceSetting {
             SourceSetting::Egress => "sources.egress.",
             SourceSetting::Schedule => "sources.schedule.",
             SourceSetting::Agents => "sources.agents.",
+            SourceSetting::Config => "sources.config.",
         };
         format!("{prefix}{plugin}")
     }
@@ -598,6 +603,7 @@ mod tests {
                 (SourceSetting::Egress, Some("e")),
                 (SourceSetting::Schedule, Some("s")),
                 (SourceSetting::Agents, Some("2")),
+                (SourceSetting::Config, Some("{}")),
             ],
         )
         .unwrap();

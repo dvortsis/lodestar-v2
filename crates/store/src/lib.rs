@@ -448,6 +448,19 @@ pub struct Store {
     path: Option<PathBuf>,
     /// How far each snapshot was checked by [`Store::purge_snapshots`].
     snapshot_marks: snapshots::Marks,
+    /// The always-adult sources whose finds a write marks for the
+    /// backfill ([`Store::set_adult_mark`]).
+    adult_mark: AdultMark,
+}
+
+/// The sources whose every find is classified adult (X-source-adult), and
+/// the content-type code that class is stored as. The store knows neither
+/// on its own: the pipeline sets them ([`Store::set_adult_mark`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AdultMark {
+    /// A bitset over [`SourceId`]s. Empty: nothing is marked.
+    pub sources: u64,
+    pub content_type: u8,
 }
 
 impl Store {
@@ -519,6 +532,7 @@ impl Store {
             scrub_pending: false,
             path: None,
             snapshot_marks: Default::default(),
+            adult_mark: AdultMark::default(),
         })
     }
 
@@ -538,6 +552,17 @@ impl Store {
                 ..WriteBatch::default()
             })?
             .torrents)
+    }
+
+    /// Which sources are always adult, for this connection's writes. Each
+    /// [`Store::write`] and [`Store::promote`] then marks for background
+    /// enrichment (`parser_ver = 0`), in its own transaction, every row it
+    /// stores or touches that one of them has found and that isn't stored
+    /// as `content_type` yet. The pipeline classifies those rows as adult
+    /// in a second transaction; if that never commits (a crash, an error),
+    /// the backfill finds the mark and does the same.
+    pub fn set_adult_mark(&mut self, mark: AdultMark) {
+        self.adult_mark = mark;
     }
 
     /// A [`Preparer`] using this store's blob dictionaries.
@@ -561,7 +586,9 @@ impl Store {
             scrub_pending: _,
             path: _,
             snapshot_marks: _,
+            adult_mark,
         } = self;
+        let adult_mark = *adult_mark;
         let own: Vec<Prepared> = batch
             .torrents
             .iter()
@@ -607,6 +634,15 @@ impl Store {
                 }
             }
             touched.push(id);
+        }
+        // Rows an always-adult source has found that aren't stored adult
+        // yet: marked here, so the reclassification that follows this
+        // transaction is retried by the backfill if it never commits.
+        if adult_mark.sources != 0 {
+            let ids = out.iter().chain(&prepared).filter_map(|i| i.stored());
+            for id in ids.chain(touched.iter().flatten().copied()) {
+                mark_adult_found(&tx, adult_mark, id)?;
+            }
         }
         let swarm = batch
             .swarm
@@ -1355,6 +1391,26 @@ fn make_public(conn: &Connection, id: i64) -> Result<()> {
         "UPDATE torrents SET flags = flags & ~?2 WHERE id = ?1 AND flags & ?2 != 0",
     )?
     .execute(params![id, flags::PRIVATE_SOURCE])?;
+    Ok(())
+}
+
+/// Marks torrent `id` for background enrichment when one of `mark`'s
+/// sources has found it, it isn't stored as adult, and your own
+/// correction doesn't say Not adult (which the pipeline's adult step
+/// leaves alone, so nothing would ever clear the mark).
+pub(crate) fn mark_adult_found(conn: &Connection, mark: AdultMark, id: i64) -> Result<()> {
+    if mark.sources == 0 {
+        return Ok(());
+    }
+    conn.prepare_cached(
+        "UPDATE torrent_parsed SET parser_ver = 0
+         WHERE torrent_id = ?1 AND parser_ver != 0 AND EXISTS (
+             SELECT 1 FROM torrents WHERE id = ?1 AND sources & ?2 != 0
+                 AND content_type IS NOT ?3)
+             AND NOT EXISTS (
+                 SELECT 1 FROM class_corrections WHERE torrent_id = ?1 AND adult = 0)",
+    )?
+    .execute(params![id, mark.sources as i64, mark.content_type])?;
     Ok(())
 }
 
