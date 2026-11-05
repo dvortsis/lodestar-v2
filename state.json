@@ -5114,7 +5114,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T05:47Z",
+  "updated": "2026-11-05T06:16Z",
   "items": [
    {
     "slot": 1,
@@ -5135,7 +5135,7 @@
    {
     "slot": 3,
     "slice": "LEGAL-1",
-    "role": "slice",
+    "role": "build",
     "agent": "claude",
     "doing": "Legal Notice on main: LEGAL-1r gate ported, plus the setup-wizard step (v0.5.2)",
     "since": "2026-11-05T04:38Z"
