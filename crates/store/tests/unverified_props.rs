@@ -64,6 +64,7 @@ fn claims() -> impl Strategy<Value = Claims> {
                 description,
                 publisher,
                 provenance,
+                adult: None,
             },
         )
 }

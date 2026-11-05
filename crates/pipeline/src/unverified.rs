@@ -237,6 +237,8 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
                 _ => claims::Confidence::Low,
             },
         },
+        // Not stored until ENR-1 judges the section's text first (plan Q3).
+        adult: None,
     })
 }
 
