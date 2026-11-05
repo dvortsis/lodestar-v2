@@ -3,6 +3,7 @@
 // A changelog is text. Axe checks the notice, both dialogs' states, the done state, the override
 // editor, paused / changed / unreadable overrides and the corpus badges.
 import { expectNoA11yViolations } from './a11y';
+import type { components } from '../src/lib/api/schema';
 import type { OpenApiMock } from './mock/openapi-mock';
 import { expect, test } from './support/test';
 
@@ -47,6 +48,8 @@ const weakening = {
 	warning: 'Accepting MW-2 version 2 lets some torrents through that version 1 held.',
 	pack_acceptance: [{ ...acceptance, strengthens: false, in_doubt: true, direction: null }]
 };
+
+type PackOverride = components['schemas']['PackOverrideState'];
 
 function serve(mock: OpenApiMock, assessment: typeof weakening | typeof strengthening) {
 	mock.on('getFilters', {
@@ -228,7 +231,7 @@ test('overrides and corpus states have no axe violations; Quarantine is not offe
 		base_action: 'hide',
 		base_changed: true
 	};
-	const ov = {
+	const ov: PackOverride = {
 		action: 'drop',
 		base: 1,
 		changed: true,
@@ -236,7 +239,7 @@ test('overrides and corpus states have no axe violations; Quarantine is not offe
 		unless: null,
 		unreadable: false
 	};
-	const rule = (id: string, pack_override: object) => ({ ...base, id, pack_override });
+	const rule = (id: string, pack_override: PackOverride) => ({ ...base, id, pack_override });
 	mock.on('getFilters', {
 		allow: [],
 		core: [],
