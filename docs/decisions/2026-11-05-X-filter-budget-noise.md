@@ -58,13 +58,14 @@ Both are in `crates/filter/tests/props.rs`, as separate commits. This supersedes
     - any steady held case over budget, at once, as before;
     - the last attempt over budget, busy or not;
     - drift on every attempt.
-  - **Why it can't pass a slow engine:** only an attempt under budget passes, and noise only adds time to a case. A slower engine slows every pass, so its case is steady and fails at once. The calibration is the one place noise loosens: a slowed calibration makes a scaled model read faster. The gate takes the fastest of its 14 passes per attempt, and the 15% drift check bounds what noise on one side can hide. Each extra attempt draws a new calibration under the same rule. That was true before this slice, and the 7763 reads raw, so it has no calibration in its verdict.
+  - **Why it can't pass a slow engine:** only an attempt under budget passes, and noise only adds time to a case. A slower engine slows every pass, so its case is steady and fails at once. The calibration is the one place noise loosens: a slowed calibration makes a scaled model read faster. The gate takes the fastest of its 14 passes per attempt, and the 15% drift check bounds what noise on one side can hide. Once a busy attempt has measured again, a scaled model is scaled by the fastest calibration of any attempt (runner, review of #451), which is the strictest. So a failing run can't pass on a slower calibration draw, and noise can't make a calibration faster. The 7763 reads raw, so it has no calibration in its verdict.
 - **Replayed on the 72 jobs, under change 2's constants (in-sample: the same jobs derive the constants):** every held case is under 50 µs. #429's job reads 47.2 µs (its third-fastest pass, 37.2 µs, ÷ the divisor 9.06 ÷ 10.59 × 0.922 = 0.789). The 9V45 job reads 45.4 µs (25.6 µs ÷ 0.564).
 
 ## Change 2: re-derived constants
 **The method:** the formula from `2026-10-30-X-filter-budget-8573C.md`, over all 72 jobs, on the third-fastest pass the gate now uses.
 - **R:** a job's raw mixed µs ÷ its `calibration:` µs.
 - **Skew:** a model's median R ÷ the 7763's median R.
+- **Why the 2026-10-28..30 jobs are left out:** the formula takes skews at the same code. Those jobs ran an engine from before the filter changes of 10-31..11-02 (the neutralize paths, and judging both readings of text with format characters). They also ran when the 7763 fleet was mostly in its slower calibration band. Pooling them would mix two eras' ratios. For comparison, the 9V45's 13 earlier jobs reproduce 0.894 (0.861–0.945), and pooling them with the 8 new ones gives 0.901, against 0.944 from the new jobs alone.
 
 **The derived values:**
 
@@ -88,10 +89,10 @@ Each `ENGINE_SPEED` entry and `REFERENCE` lists its run IDs, dates and the first
   | 126991634314 | 7763 | 4.04 | 42.4 / 42.5 | 42.4 / 42.4 |
   | 126993334096 | 9V45 | 3.27 | 40.6 / 42.3 | 36.7 / 38.1 |
 
-  - **The 9V45 job reads 13% below the 7763.** Its R (3.27) is far below the 9V45's in-sample 3.71–3.90, so its engine ran fast for its calibration. That is a 9V45 host spread of about ±9%, which no single skew can follow. It is under `MODEL_DRIFT`, so it doesn't warn.
+  - **The 9V45 job reads 13% below the 7763.** Its R (3.27) is far below the 9V45's in-sample 3.59–3.88 (skews 0.892–0.965 × 4.02), so its engine ran fast for its calibration. That is a 9V45 host spread of about ±9%, which no single skew can follow. It is under `MODEL_DRIFT`, so it doesn't warn.
   - **What that costs:** on such a host, a regression up to about 13% would read no higher than the 7763 does today. Under the old constants the same job read 3% low, but the old constants failed steady 9V45 hosts like job 126848927600.
   - **Why it's still the better trade:** the skew is the documented median, and a median skew reads half a model's hosts low and half high by construction. The 7763 reads raw and decides most jobs, so a regression on it fails whatever the 9V45 reads.
-  - **Next step (runner):** check the first ten or so 9V45 jobs after merge, and re-derive in its own PR if their R settles away from 3.79. Every listed model now reads within about 1–2 µs of the 7763's raw time:
+  - **Next step (runner, which owns this check):** read the first ten or so 9V45 jobs after merge, and re-derive in its own PR if their R settles away from 3.79. Every listed model now reads within about 1–2 µs of the 7763's raw time:
 
   | CPU (jobs) | Mixed | Neutralized |
   |---|---|---|
@@ -103,7 +104,13 @@ Each `ENGINE_SPEED` entry and `REFERENCE` lists its run IDs, dates and the first
 - **Why this isn't moving the table to make a run pass:**
   - The trigger is the one the constants' own docs name: "when the calibration's time moves". The 7763's calibration moved by 4.5% with its engine unchanged, and that is what made the listed models read high.
   - The 7763 reads raw before and after, so the reference's verdict doesn't change.
-  - **What the change does:** listed models get about 2–9% looser, back toward the 7763's raw reading at the same code. The 8573C and 9V74 move 1–3%.
+  - **What the change does:** listed models read 2–10% lower, back toward the 7763's raw reading at the same code. Per model, the divisor's change (skew ÷ `CALIB_TYPICAL_NS`, new over old) lowers readings by:
+    - 8573C: 2.0% (1.097 ÷ 10.59 against 1.126 ÷ 11.09);
+    - 8370C: 4.9%;
+    - 9V74: 5.4%;
+    - 9V45: 9.6%.
+
+    The third-fastest statistic takes off about 0.2% more.
   - **Unlisted models** get 2.4% looser through `CALIB_REF_NS`.
 - **Not listed: the Xeon 6973P-C,** which has one job (run 41212909255). It is still scaled by the calibration alone. Its R gives a skew of 1.18, so it reads high: mixed 49.7 µs under the new constants, 51.1 µs under the old ones. That is 0.6% from failing on a hosted model, and it is the next flake this gate is likely to hand an unrelated PR.
   - **Next step (runner's queue):** list it, provisional, once it has a few jobs. Until then a 6973P-C failure close to 50 µs is this gap, not the PR's code.

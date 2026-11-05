@@ -897,8 +897,10 @@ fn a_provisional_skew_still_scales_and_warns() {
 /// seven, which noise can't make faster
 /// (`docs/decisions/2026-11-05-X-filter-budget-noise.md`). An attempt
 /// where every held case over budget had a pass more than 15% over its own
-/// fastest measures again; one with a steady case over budget fails. Raw passes, the divisor and where
-/// it came from are printed too.
+/// fastest measures again; one with a steady case over budget fails. From
+/// then on, a scaled model is scaled by the fastest calibration of any
+/// attempt, the strictest, so a fresh draw can't loosen it. Raw passes, the
+/// divisor and where it came from are printed too.
 ///
 /// This is a budget gate, not a regression gate: a slowdown that keeps a
 /// case under 50 µs passes (about +40% at 10% on today's code).
@@ -1015,6 +1017,12 @@ fn budget() {
     // if the engine reads under budget. A steady case over budget fails
     // at once.
     let mut drifted = Vec::new();
+    // The fastest calibration of any attempt so far, and whether a busy
+    // attempt over budget has measured again: from then on that fastest
+    // calibration scales, so a failing scaled run can't pass on a slower
+    // calibration draw. Noise can't make a calibration faster.
+    let mut fastest_calib = f64::INFINITY;
+    let mut busy_retried = false;
     for attempt in 1..=ATTEMPTS {
         println!("attempt {attempt} of {ATTEMPTS}");
         let before = calibration("before");
@@ -1093,6 +1101,7 @@ fn budget() {
         let after = calibration("after");
 
         let calib_us = before.min(after);
+        fastest_calib = fastest_calib.min(calib_us);
         // How many times the reference's time this runner takes, by the
         // calibration.
         let calibrated = calib_us * 1e3 / CALIB_REF_NS;
@@ -1138,7 +1147,18 @@ fn budget() {
             .expect("the mixed case")
             .1
             .at;
-        let Scaling { speed, how, notes } = scaling(&cpu, calib_us, mixed);
+        let scale_us = if busy_retried {
+            fastest_calib
+        } else {
+            calib_us
+        };
+        if scale_us < calib_us {
+            println!(
+                "after a busy attempt, scaling by the fastest calibration of any attempt, \
+                 {scale_us:.2} µs, not this attempt's {calib_us:.2} µs"
+            );
+        }
+        let Scaling { speed, how, notes } = scaling(&cpu, scale_us, mixed);
         for note in notes {
             println!("{note}");
         }
@@ -1174,6 +1194,7 @@ fn budget() {
                  (only an attempt under budget passes)"
             );
             drifted.push(note);
+            busy_retried = true;
             continue;
         }
         assert!(
