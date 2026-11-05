@@ -4281,7 +4281,8 @@
     "X-search-files-4 brief nits from #429 review: assert id column ColumnIndex::Full in the join test + id>u32 and non-full cases; fix wrong comment in the_column_fallback_matches_nothing_outside_the_segments_sizes; note belt-and-braces guard; scan_buckets gather sizing per piece.",
     "X-filter-budget-noise (small, Opus): filter budget (§20.8) row \"mixed, 5 common words neutralized\" failed 50.8 µs vs 50 on #429 e2f578e (7 passes 36.4–63.9 µs). Owner number (§1.6.6) unchanged; investigate which statistic the row gates on (crates/filter/tests/props.rs spread/calibration) and make it robust to shared-host noise under §2.26. Launch when a slot frees.",
     "SRC-10c Q2 check owed (runner or owner; this container cannot reach archive.org): read archive.org terms + robots.txt live; confirm advancedsearch query syntax (format:\"Archive BitTorrent\", btih, sort[]=publicdate asc); measure intake rate and torrent delay vs 6 h lookback and 20-page cap; owner grey case if the terms say access is \"for scholarship and research purposes only\". Plugin stays unregistered until recorded (plan §5 Q2, §2.28).",
-    "SRC-10c-2 (before the Q2 HOLD lifts; small, Sonnet ok): test the one-second resume advance (20 full pages at one second -> resume = from+1); doc says plainly rows past the 10,000th in one second are skipped; start the post-resume lookback poll no earlier than where the resume run ended (avoids re-reading a bulk for ~6 h); parser page summary reports the newest date among skipped items so skipped-only windows advance; doc notes lookback is off while every poll is full."
+    "SRC-10c-2 (before the Q2 HOLD lifts; small, Sonnet ok): test the one-second resume advance (20 full pages at one second -> resume = from+1); doc says plainly rows past the 10,000th in one second are skipped; start the post-resume lookback poll no earlier than where the resume run ended (avoids re-reading a bulk for ~6 h); parser page summary reports the newest date among skipped items so skipped-only windows advance; doc notes lookback is off while every poll is full.",
+    "X-mimalloc-docs (after #448 merges; small): memstats.rs module doc (not override / C allocs not counted -> now counted on musl); crates/lodestar/src/thp.rs:22-23 says MIMALLOC_ALLOW_THP covers only mimalloc (stale for musl); docs/soak/tools/analyze_cr0.py subtracts SQLite from other heap, which double-subtracts on musl builds where SQLite is inside mimalloc committed bytes. Optional musl-only C_MALLOC_IS_MIMALLOC const."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -4924,14 +4925,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T01:04Z",
+    "updated": "2026-11-05T01:08Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-mimalloc-override",
         "role": "build",
         "agent": "claude",
-        "doing": "Making mimalloc serve SQLite and zstd too in the release build (one allocator), the likely fix for soak r4's memory growth.",
+        "doing": "PR #448 in review: mimalloc override on the musl release build; harness shows the 128-512 KiB outside-arena mappings go to zero.",
         "since": "2026-11-04T23:38Z"
       },
       {
