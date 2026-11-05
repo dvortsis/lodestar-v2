@@ -111,18 +111,22 @@ Each one leaks on `main` too.
 - **No panics:** none in the fuzz on either side. The new magnet cut panicked on an empty URL during development; its seed is kept in `proptest-regressions/url.txt`.
 
 ## Differential fuzz against `main`
-The harness is #432's labelled one (`reviews/432/round4-harness-labelled.rs` on `runner-state`), with nine cases added for this slice's classes (16 to 24). It compares this PR's `scrub_text`, `scrub` (absolute) and `scrub` (request) with `origin/main` at e62a8b3. A regression is a planted secret this PR shows and `main` hides.
+- **Two harnesses, both comparing this PR with `origin/main` at e62a8b3:**
+  - **The labelled harness** is #432's (`reviews/432/round4-harness-labelled.rs` on `runner-state`), with ten cases added for this slice: 16 to 24 for the brief's classes, and 25 for a Debug field's name in a password. It checks `scrub_text`, `scrub` (absolute) and `scrub` (request).
+  - **The credential harness** is the fresh reviewer's (`fz2`). It glues credential names, separators, `Bearer`, encodings, magnets and URL syntax around a planted secret.
+- **A regression is a planted secret this PR shows that `main` hides.**
+- **These are the final code's numbers, 1,000,000 inputs per run.** Earlier rounds' runs found the regressions listed under the review round; each is fixed and its input is a test.
 
-| Run | Seed | Inputs | Regressions | Shown by PR | Shown by `main` | Panics (PR / `main`) |
-|---|---|---|---|---|---|---|
-| Original cases 0–15 | 2 | 1,000,000 | 0 | 6,536 | 50,650 | 0 / 0 |
-| | 5 | 1,000,000 | 0 | 6,709 | 50,464 | 0 / 0 |
-| | 9 | 1,000,000 | 0 | 6,522 | 50,085 | 0 / 0 |
-| | 13 | 1,000,000 | 0 | 6,666 | 50,984 | 0 / 0 |
-| New cases 16–24 | NEW_ROWS |
-| `review-diff-harness.rs` | 7 | 1,000,000 | 0 | 6,603 | 50,197 | 0 / 0 |
+| Run | Seeds | Regressions | Shown by PR, per run | Shown by `main`, per run | Panics (PR / `main`) |
+|---|---|---|---|---|---|
+| Labelled, original cases 0–15 | 2, 5, 9, 13 | 0 | 6,471–6,656 | 50,085–50,984 | 0 / 0 |
+| Labelled, new cases 16–24 | 2, 5, 9, 13, 31, 41 | 0 | 5,472–5,670 | 578,046–579,616 | 0 / 0 |
+| Labelled, case 25 (Debug field in a password) | 7, 11, 19 | 0 | 0 | 60,680–61,045 | 0 / 0 |
+| Credential harness (`fz2`) | 1–8 | 0 | 1,678,449–1,680,936 | 1,828,170–1,830,674 | 0 / – |
+| `review-diff-harness.rs` | 7 | 0 | 6,550 | 50,197 | 0 / 0 |
 
-What this PR still shows is in the three gaps above: cases 7 and 8 (raw `"` in a `Debug` value), case 3 (an unmarked username with a raw line break) and case 23 (`x:/` and other unknown schemes).
+- **What the labelled harness still shows is in the gaps above:** cases 7 and 8 (raw `"` in a `Debug` value), case 3 (an unmarked username with a raw line break), and cases 16–24's single-slash forms behind unknown schemes (`x:/`).
+- **The credential harness's counts are high on both sides by design.** Most of its inputs plant the secret where no rule could know it's one (`aQz…` glued to plain words).
 
 ## Released builds
 - **Every class leaks on v0.5.1-rc.1 to rc.4,** since they share `main`'s scrubber.
