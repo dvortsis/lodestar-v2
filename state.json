@@ -4964,7 +4964,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T01:17Z",
+    "updated": "2026-11-05T01:35Z",
     "items": [
       {
         "slot": 1,
@@ -4973,14 +4973,6 @@
         "agent": "claude",
         "doing": "PR #448 in review: mimalloc override on the musl release build; harness shows the 128-512 KiB outside-arena mappings go to zero.",
         "since": "2026-11-04T23:38Z"
-      },
-      {
-        "slot": 2,
-        "slice": "X-legal-docs",
-        "role": "docs",
-        "agent": "claude",
-        "doing": "PR #447: owner decisions §2.38–§2.39 (Legal Notice, rule packs on by default), the legal docs and the specs for LEGAL-1, RP-DEF and RP-UC. Reviewed; waiting for green CI.",
-        "since": "2026-11-05T00:37Z"
       },
       {
         "slot": 3,
