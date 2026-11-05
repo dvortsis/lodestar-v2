@@ -136,6 +136,10 @@ pub struct Page {
     pub cursor: Option<String>,
     /// `numFound` or the scrape API's `total`.
     pub total: Option<u64>,
+    /// The newest `publicdate` (else `addeddate`) among the items skipped
+    /// for no or a bad hash, or a cap. A caller that follows a date can
+    /// move past rows that will never be kept.
+    pub skipped_newest: Option<i64>,
 }
 
 /// Every kept item and the page.
@@ -456,12 +460,16 @@ impl Parser<'_, '_> {
     }
 
     fn finish(&mut self, d: Draft, emit: &mut dyn FnMut(Item)) {
+        let date = d.published.or(d.added);
         match d.finish() {
             Ok(item) => {
                 self.page.summary.kept += 1;
                 emit(item);
             }
-            Err(skip) => skip(&mut self.page.summary.skipped),
+            Err(skip) => {
+                skip(&mut self.page.summary.skipped);
+                self.page.skipped_newest = self.page.skipped_newest.max(date);
+            }
         }
     }
 }
