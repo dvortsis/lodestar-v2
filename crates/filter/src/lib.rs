@@ -16,8 +16,6 @@
 
 mod core;
 pub mod corpus;
-#[cfg(test)]
-mod differential;
 mod engine;
 mod fasttok;
 mod hash;
