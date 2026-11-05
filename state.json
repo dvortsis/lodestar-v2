@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T23:24Z",
+ "updated_at": "2026-11-05T23:26Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3292,6 +3292,12 @@
    "session": "session_01MMjhnAMPZTrQgedhh4nNLA",
    "brief": "briefs/X-search-files-6.md",
    "launched": "2026-11-05T22:18Z"
+  },
+  "X-claim-store-polish": {
+   "status": "running",
+   "session": "session_01MMjhn9BtnKc4evPFE9banG",
+   "brief": "briefs/X-claim-store-polish.md",
+   "launched": "2026-11-05T23:26Z"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5614,7 +5620,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T23:24Z",
+  "updated": "2026-11-05T23:26Z",
   "items": [
    {
     "slot": 1,
@@ -5671,12 +5677,12 @@
    },
    {
     "slot": 9,
-    "slice": null,
+    "slice": "X-claim-store-polish",
     "role": "build",
     "agent": "claude",
-    "doing": "Retired: SRC-11c merged (#490, a7778e71).",
-    "since": "2026-11-05T22:18Z",
-    "status": "idle"
+    "doing": "Security: property test for the tracker guard path, plus #512 doc fixes",
+    "since": "2026-11-05T23:26Z",
+    "session": "session_01MMjhn9BtnKc4evPFE9banG"
    },
    {
     "slot": 12,
