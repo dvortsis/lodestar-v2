@@ -4,7 +4,7 @@
 
 > **Status (2026-11-04).** Sections 1–5 review the withdrawn version-1 *Terms of Use*. The owner replaced it the same day with a notice that adds no terms to the AGPL (owner §2.38), so where these sections describe the Terms as adopted, they describe the withdrawn draft. Sections 6–10 record the later reviews and supersede sections 1–5 wherever they differ.
 
-**This is research by an AI assistant, not legal advice,** and no lawyer has reviewed it. Case holdings below were checked against secondary sources (law-firm alerts, case summaries, the statutes' own text) in November 2026; pin cites and recent decisions should be confirmed against the opinions before anyone relies on them. **Recommendation: have a US attorney who handles copyright and online terms review the notice and the operator guidance** (advisory, not a release gate: owner, 2026-11-04). It's a small document, and that review is cheap compared with the exposure it addresses.
+**This is research by an AI assistant, not legal advice,** and no lawyer has reviewed it. Case holdings below were checked against secondary sources (law-firm alerts, case summaries, the statutes' own text) in November 2026; pin cites and recent decisions should be confirmed against the opinions before anyone relies on them. **Recommendation: have Colorado counsel familiar with open-source licensing review the notice and the operator guidance** (advisory, not a release gate: owner, 2026-11-04). It's a small document, and that review is cheap compared with the exposure it addresses.
 
 ## 1. What a disclaimer can and cannot do
 A terms-of-use text does three real things:
