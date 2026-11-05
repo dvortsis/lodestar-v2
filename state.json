@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T17:10Z",
+  "updated_at": "2026-11-05T17:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3069,9 +3069,13 @@
       "since": "2026-11-05T10:55Z"
     },
     "SRC-13c": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhn93TXYuo1mo58RPGAc",
-      "since": "2026-11-05T10:55Z"
+      "since": "2026-11-05T10:55Z",
+      "pr": 493,
+      "merge": "3ac92464",
+      "archived": true,
+      "done": "2026-11-05T17:40Z"
     },
     "X-fuzz-1105": {
       "status": "merged",
@@ -4772,7 +4776,8 @@
     "owner-flag §2.19/§2.26 (ENR-7 #504): drawer lookups rate-limited per client 10 burst + 1/30 s (IPv4 or IPv6 /64) and overall 30 burst + 1/20 s, 1,024 clients tracked; Public viewers never get the section; a Not adult correction hides a match.",
     "ENR-G note (from #504 review): the detail API held_back check is narrower than the enrichment gate (no floor/dropping-list blocked_hash, no live filter verdict); until a refile sets HIDDEN a newly hidden item still shows its stored match.",
     "Q15 cap fix folded into ENR-1c #502 (17:12Z): Interest::opened lookups count against the 5,000/day cap per owner plan Q15; no separate ENR-1d slice (8-slot drain).",
-    "owner-flag §2.19 (RP-4 #495): with no plugin setting a publisher yet, SP-3 counts per source for Nyaa and Sukebei only; a busy release day (20+ same-title uploads in an hour across groups) can flag (never hide) a legitimate title, per Q10 as written."
+    "owner-flag §2.19 (RP-4 #495): with no plugin setting a publisher yet, SP-3 counts per source for Nyaa and Sukebei only; a busy release day (20+ same-title uploads in an hour across groups) can flag (never hide) a legitimate title, per Q10 as written.",
+    "owner flag sent 17:40Z: SRC-13c consent (#493 merged 3ac92464)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5433,7 +5438,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T16:20Z",
+    "updated": "2026-11-05T17:40Z",
     "items": [
       {
         "slot": 1,
@@ -5505,14 +5510,6 @@
         "role": "build",
         "agent": "claude",
         "doing": "Sources: wiring the Sonarr/Radarr webhooks into the app",
-        "since": "2026-11-05T10:55Z"
-      },
-      {
-        "slot": 11,
-        "slice": "SRC-13c",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Sources: saving a plugin's settings, with exact-host consent and full addresses in the dialog",
         "since": "2026-11-05T10:55Z"
       },
       {
