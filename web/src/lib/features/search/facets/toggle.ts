@@ -17,7 +17,10 @@ type DateField = components['schemas']['AstDateField'];
 export type When = components['schemas']['AstWhen'];
 
 export type FacetField =
-	{ kind: 'tag'; key: TagKey } | { kind: 'ext' } | { kind: 'flag'; name: string };
+	| { kind: 'tag'; key: TagKey }
+	| { kind: 'ext' }
+	| { kind: 'source' }
+	| { kind: 'flag'; name: string };
 
 const TAGS: readonly string[] = [
 	'type',
@@ -36,6 +39,7 @@ const FLAGS: readonly string[] = ['private', 'v2', 'ambiguous', 'imported', 'bac
 export function fieldOf(facet: string): FacetField | null {
 	if (TAGS.includes(facet)) return { kind: 'tag', key: facet as TagKey };
 	if (facet === 'ext') return { kind: 'ext' };
+	if (facet === 'source') return { kind: 'source' };
 	if (FLAGS.includes(facet)) return { kind: 'flag', name: facet };
 	return null;
 }
@@ -55,6 +59,7 @@ function rebuild(of: Ast[]): Ast {
 function leafValues(node: Ast, field: FacetField): string[] | null {
 	if (field.kind === 'tag' && node.op === 'tag' && node.key === field.key) return node.any;
 	if (field.kind === 'ext' && node.op === 'ext') return node.any;
+	if (field.kind === 'source' && node.op === 'source') return node.any;
 	if (field.kind === 'flag' && node.op === 'flag' && node.name === field.name)
 		return [node.value ? 'yes' : 'no'];
 	return null;
@@ -93,6 +98,7 @@ export function selection(ast: Ast | null | undefined, field: FacetField): Selec
 function leaf(field: FacetField, values: string[]): Ast {
 	if (field.kind === 'tag') return { op: 'tag', key: field.key, any: values };
 	if (field.kind === 'ext') return { op: 'ext', any: values };
+	if (field.kind === 'source') return { op: 'source', any: values };
 	const flags: Ast[] = values.map((v) => ({ op: 'flag', name: field.name, value: v === 'yes' }));
 	return flags.length === 1 ? flags[0]! : { op: 'or', of: flags };
 }

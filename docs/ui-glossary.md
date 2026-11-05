@@ -113,5 +113,10 @@ Category labels (facets, file tree) and the group each colours as
 | `update_major` | Major | A release that may change config or behaviour; read its notes first. | 重大 (TBD) |
 | `update_rolled_back` | Rolled back | An update that failed its health check and was undone automatically. | 已回滚 (TBD) |
 | `needs_attention` | Needs attention | The Overview's list of problems, each with one action that fixes it. | 需要注意 (TBD) |
+| `unverified` | Unverified | A torrent a source reported but whose metadata Lodestar hasn't confirmed yet. Hidden from search unless "Show unverified" is on. | 未验证 (TBD) |
+| `show_unverified` | Show unverified | The search option that adds unverified torrents to the results (the `verified:yes,no` filter). | 显示未验证项 (TBD) |
+| `source` | Source | Where a torrent was found: the DHT, a feed, an indexer or an import. Searched with `source:`. | 来源 (TBD) |
+| `found_by` | Found by | The sources that reported a torrent, listed in its details. | 发现于 (TBD) |
+| `private_source` | Private source | A source whose finds aren't shared: only the signed-in admin sees it by name; everyone else sees only that some details are private. | 私有来源 (TBD) |
 
 Don't write "env", "override", "custom" or "dirty" in these labels.

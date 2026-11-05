@@ -1672,6 +1672,7 @@ dependencies = [
  "lodestar-classify",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-release-parser",
  "lodestar-search",
  "lodestar-store",
  "proptest",

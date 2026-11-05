@@ -28,6 +28,7 @@
 	import { formatShare } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import UnverifiedBadge from '../unverified/UnverifiedBadge.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import { composition } from './composition';
@@ -165,6 +166,9 @@
 							>
 						{/if}
 					</span>
+				{/if}
+				{#if hit.verified === false}
+					<UnverifiedBadge />
 				{/if}
 				{#if hit.swarm_suspect}
 					<span class="rr-fact" title={m.swarm_suspect()}>

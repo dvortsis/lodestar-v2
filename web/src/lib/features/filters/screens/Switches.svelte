@@ -7,7 +7,7 @@
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
-	import { coreSwitch, floorRemoval, packSwitch } from './ops';
+	import { coreSwitch, floorRemoval } from './ops';
 	import type { Ask } from './types';
 	import type { Overview } from './model.svelte';
 
@@ -82,30 +82,7 @@
 	</section>
 {/if}
 
-<section class="flex flex-col gap-3" aria-labelledby="filters-packs-h">
-	<h2 id="filters-packs-h" class="text-small font-semibold">{m.filters_packs_heading()}</h2>
-	<ul class="flex flex-col gap-2" data-testid="filters-packs">
-		{#each o.packs as p (p.id)}
-			<li class="flex flex-wrap items-center gap-3" data-testid="pack-{p.id}">
-				<Mono>{p.id}</Mono>
-				<Badge variant={p.on ? 'success' : 'warning'}
-					>{p.on ? m.filters_state_on() : m.filters_state_off()}</Badge
-				>
-				<Button
-					dense
-					onclick={() =>
-						ask(packSwitch(p.id, !p.on), {
-							title: m.filters_pack_title({ id: p.id }),
-							applyLabel: p.on
-								? m.filters_pack_apply_off({ id: p.id })
-								: m.filters_pack_apply_on({ id: p.id })
-						})}
-					data-testid="pack-switch-{p.id}"
-					>{p.on
-						? m.filters_pack_turn_off({ id: p.id })
-						: m.filters_pack_turn_on({ id: p.id })}</Button
-				>
-			</li>
-		{/each}
-	</ul>
-</section>
+<!-- The packs load on demand, with what each hides behind its own door (runner, #469). -->
+{#await import('./Packs.svelte') then { default: Packs }}
+	<Packs {o} {ask} />
+{/await}
