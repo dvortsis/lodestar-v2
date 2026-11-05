@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T23:37Z",
+ "updated_at": "2026-11-05T23:49Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -2108,11 +2108,14 @@
    "head": "4e8d1438"
   },
   "X-search-headroom-2": {
-   "status": "building",
+   "status": "merged",
    "session": "session_01MMjhnA1PYR1bubrPSKmbpg",
    "model": "sonnet",
    "brief": "briefs/X-search-headroom-2.md",
-   "launched_at": "2026-11-01T09:11Z"
+   "launched_at": "2026-11-01T09:11Z",
+   "pr": 332,
+   "merged_at": "2026-11-01T10:16Z",
+   "note": "stale \"building\" corrected 2026-11-05T23:50Z"
   },
   "X-web-polish-1101c": {
    "status": "review-ready",
@@ -3281,11 +3284,13 @@
    "merge": "01d956f3"
   },
   "P-v07": {
-   "status": "running",
+   "status": "in review",
    "brief": "briefs/P-v07.md",
    "note": "launch first after the 00:00Z usage reset",
    "session": "session_01MMjhnCcXx6GNpK4VimTstF",
-   "launched": "2026-11-05T23:24Z"
+   "launched": "2026-11-05T23:24Z",
+   "pr": 514,
+   "head": "e8d5f69b"
   },
   "X-search-files-6": {
    "status": "running",
