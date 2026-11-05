@@ -85,7 +85,11 @@ impl Cursor {
             if row.network != Network::Bt {
                 continue;
             }
-            if let Ok(k) = <[u8; 20]>::try_from(row.key.as_slice()) {
+            // One lookup per key, however many rows hold it: each costs a
+            // cache's once-a-minute slot.
+            if let Ok(k) = <[u8; 20]>::try_from(row.key.as_slice())
+                && !page.keys.contains(&InfoHash(k))
+            {
                 page.keys.push(InfoHash(k));
             }
         }

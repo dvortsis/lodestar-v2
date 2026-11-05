@@ -8,11 +8,19 @@
 //!
 //! **Each lookup tells the cache which hash you're interested in** (Q3),
 //! so the plugin is held tight:
-//! - **Off by default, External consent** (§18.7): enabling it shows the
-//!   cache list, and the server refuses to turn it on until that list is
-//!   acknowledged (SRC-4).
+//! - **Off by default, External consent** (§18.7): the server refuses to
+//!   turn it on until its consent is acknowledged (SRC-4). The manifest
+//!   lists no endpoints of its own, so the acknowledgement covers the
+//!   class's text; each cache address the user enters is their consent to
+//!   that host, as with `full_scrape` and `prowlarr`. Asking again when
+//!   the list changes is the settings form's (SRC-15b).
 //! - **The cache list is the user's** and starts empty. [`SUGGESTED`] is
 //!   shown beside it in the settings form, never enabled for them.
+//!
+//! **ToS (Q2, `docs/owner-decisions.md` §2.28).** Lodestar ships no cache
+//! the user didn't enter. No suggestion is listed until the owner has
+//! checked a cache's terms allow automated lookups
+//! (`docs/decisions/2026-11-05-SRC-13.md`).
 //! - **Never a `private_source` hash, at any layer.** A [`Lookup`] can't
 //!   be made for one ([`Lookup::new`] says `None`), a request is built
 //!   only from a `Lookup` ([`TorrentCache::request`]), and the pipeline's
@@ -107,13 +115,11 @@ pub struct Suggestion {
     pub template: &'static str,
 }
 
-/// Shown, not enabled (Q3). Each is checked by [`Config::new`]'s rules in
-/// this module's tests. Its terms are the owner's to check before the
-/// plugin ships (Q2, `docs/decisions/2026-11-05-SRC-13.md`).
-pub const SUGGESTED: &[Suggestion] = &[Suggestion {
-    name: "iTorrents",
-    template: "https://itorrents.org/torrent/{HASH}.torrent",
-}];
+/// Shown, not enabled (Q3). Each must pass [`Config::new`]'s rules (this
+/// module's tests) and appear in [`CONFIG_SCHEMA`]'s `examples`. Empty
+/// until the owner has checked a cache's terms (Q2,
+/// `docs/decisions/2026-11-05-SRC-13.md`).
+pub const SUGGESTED: &[Suggestion] = &[];
 
 const MANIFEST: Manifest = Manifest {
     id: ID,
@@ -133,7 +139,7 @@ const MANIFEST: Manifest = Manifest {
 };
 
 /// The settings form (§10.10). The list starts empty.
-pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"caches":{"type":"array","title":"Torrent caches","description":"Addresses that serve a .torrent by its info hash, with {hash} (lower case) or {HASH} (upper case) where the hash goes, such as https://cache.example/torrent/{HASH}.torrent. Each lookup tells the cache which torrent you want. Private torrents are never looked up.","items":{"type":"string","format":"uri-template","maxLength":512},"maxItems":8,"uniqueItems":true,"default":[],"examples":[["https://itorrents.org/torrent/{HASH}.torrent"]]}},"required":["caches"],"additionalProperties":false}"#;
+pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"caches":{"type":"array","title":"Torrent caches","description":"Addresses that serve a .torrent by its info hash, with {hash} (lower case) or {HASH} (upper case) where the hash goes, such as https://cache.example/torrent/{HASH}.torrent. Each lookup tells the cache which torrent you want. Private torrents are never looked up.","items":{"type":"string","format":"uri-template","maxLength":512},"maxItems":8,"uniqueItems":true,"default":[],"examples":[]}},"required":["caches"],"additionalProperties":false}"#;
 
 /// One lookup a minute per cache, one request every 10 s per host, and a
 /// back-off from a minute to six hours: a third party's free service.
@@ -310,10 +316,19 @@ pub enum Why {
 }
 
 /// A key that may be sent to a cache. The only way a request is built.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Its `Debug` leaves the key out, so a log line can't leak it.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Lookup {
     key: InfoHash,
     why: Why,
+}
+
+impl std::fmt::Debug for Lookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Lookup")
+            .field("why", &self.why)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Lookup {
@@ -399,13 +414,23 @@ pub struct Stats {
 }
 
 /// A cached `.torrent` whose info dict hashes to its lookup's key. Made
-/// only by [`TorrentCache::lookup`], after that check.
-#[derive(Debug, Clone)]
+/// only by [`TorrentCache::lookup`], after that check. Its `Debug` shows
+/// neither the key nor the file.
+#[derive(Clone)]
 pub struct Verified {
     lookup: Lookup,
     torrent: TorrentFile,
     v2: bool,
     host: String,
+}
+
+impl std::fmt::Debug for Verified {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Verified")
+            .field("why", &self.lookup.why)
+            .field("v2", &self.v2)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Verified {
@@ -441,7 +466,8 @@ impl Verified {
     /// comment. Trackers are kept only for a torrent that isn't marked
     /// `private`, and only those with no user name, query or
     /// passkey-shaped part, since a private tracker's address holds the
-    /// uploader's passkey. Web seeds and `created by` have no claim field
+    /// uploader's passkey, and none on a literal LAN, loopback or
+    /// link-local address: the file is a third party's. Web seeds and `created by` have no claim field
     /// yet (`docs/decisions/2026-11-05-SRC-13.md`).
     pub fn claims(&self) -> Claims {
         let trackers = if self.torrent.info.private {
@@ -489,8 +515,18 @@ fn public_tracker(raw: &str) -> bool {
     let Ok(url) = url::Url::parse(raw) else {
         return false;
     };
-    matches!(url.scheme(), "http" | "https" | "udp")
-        && url.host_str().is_some()
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    // `check_url` takes http(s) only: a UDP tracker's host is checked as
+    // the same host over http.
+    let public = match url.scheme() {
+        "http" | "https" => net::check_url(&url, NetPolicy::notification(false)).is_ok(),
+        "udp" => url::Url::parse(&format!("http://{host}/"))
+            .is_ok_and(|u| net::check_url(&u, NetPolicy::notification(false)).is_ok()),
+        _ => false,
+    };
+    public
         && url.username().is_empty()
         && url.password().is_none()
         && url.query().is_none()
@@ -728,6 +764,28 @@ mod tests {
     fn suggestions_pass_the_rules() {
         for s in SUGGESTED {
             Config::new(&[s.template]).unwrap();
+        }
+    }
+
+    #[test]
+    fn only_public_trackers_are_kept() {
+        for ok in [
+            "udp://tracker.example:1337/announce",
+            "https://tracker.example/announce",
+        ] {
+            assert!(public_tracker(ok), "{ok}");
+        }
+        for bad in [
+            "http://192.168.1.1/announce",
+            "udp://127.0.0.1:6969/announce",
+            "udp://[::1]:6969/announce",
+            "http://169.254.169.254/announce",
+            "https://t.example/announce?passkey=x",
+            "https://t.example/abcdef0123456789abcd/announce",
+            "wss://t.example/announce",
+            "https://user@t.example/announce",
+        ] {
+            assert!(!public_tracker(bad), "{bad}");
         }
     }
 

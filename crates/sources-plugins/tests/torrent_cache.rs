@@ -442,9 +442,16 @@ fn the_list_starts_empty_and_suggestions_are_not_enabled() {
             .caches()
             .is_empty()
     );
-    assert!(!SUGGESTED.is_empty());
-    for s in SUGGESTED {
-        Config::new(&[s.template]).unwrap();
+    // The form's examples are exactly the suggestions, each valid.
+    let templates: Vec<&str> = SUGGESTED.iter().map(|s| s.template).collect();
+    let examples = if templates.is_empty() {
+        serde_json::json!([])
+    } else {
+        serde_json::json!([templates])
+    };
+    assert_eq!(caches["examples"], examples);
+    for t in templates {
+        Config::new(&[t]).unwrap();
     }
 }
 
@@ -594,4 +601,73 @@ proptest::proptest! {
             proptest::prop_assert_eq!(torrent_cache::verify(&f, &InfoHash([0xa5; 20])), None);
         }
     }
+}
+
+// ---- v2 and hybrid keys (Q8: SHA-1 or the v2 hash) ----
+
+/// A one-file v2 info dict (BEP 52), or a hybrid one with a v1 layout
+/// too.
+fn v2_info(hybrid: bool) -> Vec<u8> {
+    let mut v = b"d9:file treed8:film.mkvd0:d6:lengthi70000e11:pieces root".to_vec();
+    v.extend(bytes(&[2u8; 32]));
+    v.extend_from_slice(b"eee");
+    if hybrid {
+        v.extend_from_slice(b"6:lengthi70000e");
+    }
+    v.extend_from_slice(b"12:meta versioni2e4:name8:film.mkv12:piece lengthi16384e");
+    if hybrid {
+        v.extend_from_slice(b"6:pieces");
+        v.extend(bytes(&[5u8; 100]));
+    }
+    v.push(b'e');
+    v
+}
+
+fn parsed(info: &[u8]) -> (lodestar_metainfo::TorrentFile, lodestar_metainfo::Info) {
+    let file =
+        lodestar_metainfo::TorrentFile::parse(&torrent_of(info, "udp://t.example:1/a")).unwrap();
+    (file, lodestar_metainfo::Info::parse(info).unwrap())
+}
+
+#[test]
+fn a_v2_key_is_the_truncated_sha256() {
+    let (file, info) = parsed(&v2_info(false));
+    assert!(info.v1.is_none());
+    let full = info.v2.unwrap();
+    assert_eq!(torrent_cache::verify(&file, &full.truncated()), Some(true));
+    // The other end of the SHA-256 isn't the key.
+    let mut tail = [0u8; 20];
+    tail.copy_from_slice(&full.0[12..]);
+    assert_eq!(torrent_cache::verify(&file, &InfoHash(tail)), None);
+}
+
+#[test]
+fn a_hybrid_verifies_under_either_key() {
+    let (file, info) = parsed(&v2_info(true));
+    let (v1, v2) = (info.v1.unwrap(), info.v2.unwrap().truncated());
+    assert_ne!(v1, v2);
+    assert_eq!(torrent_cache::verify(&file, &v1), Some(false));
+    assert_eq!(torrent_cache::verify(&file, &v2), Some(true));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_v2_file_is_verified_and_marked_v2() {
+    let raw = v2_info(false);
+    let key = parsed(&raw).1.v2.unwrap().truncated();
+    let fake = FakeCache::new(&[(
+        "c.example",
+        Answer::File(torrent_of(&raw, "udp://t.example:1/a")),
+    )]);
+    let mut run = start(&["https://c.example/{hash}"], fake, &[unverified(key)]);
+    let v = run.verified.recv().await.unwrap();
+    assert_eq!(v.key(), key);
+    assert!(v.is_v2());
+    run.running.stop_within().await.unwrap();
+}
+
+#[test]
+fn debug_never_shows_the_key() {
+    let key = InfoHash([0xcd; 20]);
+    let shown = format!("{:?}", unverified(key));
+    assert!(!shown.contains(&key.to_string()), "{shown}");
 }

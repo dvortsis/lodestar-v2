@@ -191,3 +191,24 @@ fn a_key_on_the_floors_hash_list_is_refused_before_preparing() {
     let j = torrent_cache::judge(&engine, &mut store.preparer(), key, &info, T);
     assert!(matches!(j, Judged::Refused(Refusal::Blocked)));
 }
+
+/// The plugin's recorded cache reply, judged whole: the file the
+/// plugin's contract test verifies is the file the filter judges.
+fn fixture_file() -> lodestar_metainfo::TorrentFile {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sources-plugins/fixtures/torrent_cache/hit/002.body");
+    lodestar_metainfo::TorrentFile::parse(&std::fs::read(path).unwrap()).unwrap()
+}
+
+#[test]
+fn the_recorded_file_is_admitted_and_a_rule_on_its_name_holds_it() {
+    let file = fixture_file();
+    let key: InfoHash = "695b0b3debb14473d741f7a3a86561e42009d6dc".parse().unwrap();
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let filter = stand_in();
+    let j = torrent_cache::judge(&filter.current(), &mut store.preparer(), key, &file.info, T);
+    assert!(matches!(j, Judged::Store(_)), "{j:?}");
+    rule(&filter, "sintel", Action::Drop);
+    let j = torrent_cache::judge(&filter.current(), &mut store.preparer(), key, &file.info, T);
+    assert!(matches!(j, Judged::Held { .. }), "{j:?}");
+}
