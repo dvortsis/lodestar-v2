@@ -311,7 +311,8 @@ fn run(
     source: SourceId,
     config: Config,
 ) -> Running {
-    let (src, interest) = AdultEnrichSource::new(plugin, store, filter, adult, switches, config);
+    let (src, interest) =
+        AdultEnrichSource::new(plugin, store, filter, adult, switches, config).unwrap();
     let stats = src.stats();
     let (tx, found) = mpsc::channel(64);
     let (stop, shutdown) = Shutdown::new();
@@ -1119,7 +1120,8 @@ async fn the_plugin_cannot_reach_the_runtimes_state() {
         AdultSources::default(),
         on(),
         interest_only(),
-    );
+    )
+    .unwrap();
     let stats = src.stats();
     let (tx, _found) = mpsc::channel(4);
     let (stop, shutdown) = Shutdown::new();
@@ -1580,6 +1582,7 @@ async fn a_match_is_not_counted_as_harvested() {
     let config = lodestar_pipeline::PipelineConfig {
         flush_every: Duration::from_millis(100),
         filter: stand_in(),
+        adult_enrichers: vec!["test-enricher"],
         ..lodestar_pipeline::PipelineConfig::default()
     };
     let pipeline = lodestar_pipeline::Pipeline::start(
@@ -1631,4 +1634,94 @@ async fn a_match_is_not_counted_as_harvested() {
     }
     let store = pipeline.shutdown().await.unwrap();
     assert_eq!(harvested(&store), 1, "only the feed's discovery");
+}
+
+/// An always-adult plugin can't run as an adult-enrichment source: its
+/// answers aren't finds, so its mask would never apply (ENR-1c).
+#[test]
+fn an_always_adult_plugin_is_refused() {
+    struct Both;
+    static BOTH: Manifest = Manifest {
+        id: "both",
+        always_adult: true,
+        ..MANIFEST
+    };
+    impl AdultEnricher for Both {
+        fn manifest(&self) -> &Manifest {
+            &BOTH
+        }
+        fn query_form(&self) -> QueryForm {
+            QueryForm::Name
+        }
+        fn lookup<'a>(
+            &'a self,
+            _kit: &'a Kit,
+            _query: &'a Query,
+        ) -> BoxFuture<'a, Result<Lookup, PluginError>> {
+            Box::pin(async { Ok(Lookup::NoMatch) })
+        }
+    }
+    let (s, _, _) = store();
+    let got = AdultEnrichSource::new(
+        Arc::new(Both),
+        Arc::new(Mutex::new(s)),
+        stand_in(),
+        AdultSources::default(),
+        on(),
+        interest_only(),
+    );
+    assert_eq!(got.err(), Some(adult_enrich::AlwaysAdult));
+}
+
+/// A section-only claim on a key an unverified item holds is that item's
+/// sighting (ENR-1c), as any claim from the source would be: the item gains
+/// the source and its time, a public one clears the item's private mark,
+/// and a private one never does. No section is stored on it.
+#[test]
+fn a_section_only_claim_on_an_unverified_item_is_its_sighting() {
+    let (mut s, dht, enr) = store();
+    let feed = s.register_source("feed", "1", 0).unwrap();
+    let engine = stand_in().current();
+    let ctx = Ctx {
+        enrichers: EnrichSources(1 << enr.get()),
+        ..Ctx::default()
+    };
+    let key = [5; 20];
+    let c = Claims {
+        name: Some("Garden Walk".into()),
+        ..Claims::default()
+    };
+    s.put_unverified(&[NewUnverified {
+        network: Net::Bt,
+        key: &key,
+        source: dht,
+        private_source: true,
+        claims: Some(&c),
+        at: T,
+    }])
+    .unwrap();
+    let item = |s: &Store| s.unverified(Net::Bt, &key).unwrap().unwrap();
+    assert!(item(&s).private_source);
+    // A private source's section-only claim: its bit, never public.
+    let mut d = matched(feed, InfoHash(key), section(Some(Kind2::Scene), "Garden"));
+    d.found.private_source = true;
+    d.at = T + 10;
+    let done = ingest_with(&mut s, &engine, ctx, &d);
+    assert!(done.matched.is_empty() && done.touched.is_empty());
+    let i = item(&s);
+    assert!(i.private_source, "a private sighting never clears it");
+    assert_ne!(i.sources & (1 << feed.get()), 0);
+    // A public one clears the private mark, as any public sighting does.
+    let mut d = matched(feed, InfoHash(key), section(Some(Kind2::Scene), "Garden"));
+    d.at = T + 20;
+    ingest_with(&mut s, &engine, ctx, &d);
+    let i = item(&s);
+    assert!(!i.private_source);
+    let claims = i.claims.unwrap();
+    assert!(claims.adult.is_none(), "no section kept");
+    assert_eq!(
+        claims.name.as_deref(),
+        Some("Garden Walk"),
+        "its own claims stay"
+    );
 }

@@ -169,8 +169,9 @@ pub struct UnverifiedStats {
     pub sweeps: AtomicU64,
     /// Keys the verification cursor handed to intake.
     pub verify_sent: AtomicU64,
-    /// Enrichment matches the store couldn't classify again or mark for
-    /// the backfill (ENR-1c): logged, and left for the next pass.
+    /// Store failures while classifying enrichment matches again or marking
+    /// them for the backfill (ENR-1c), one per failed call: logged, and the
+    /// matches left for the next pass.
     pub enrich_failed: AtomicU64,
     /// The promoted ids, published after each commit.
     pub promoted_hook: PromotedHook,

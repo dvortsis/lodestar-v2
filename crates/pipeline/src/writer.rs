@@ -487,22 +487,30 @@ impl Writer {
     /// pass. A separate transaction after the commit: a crash between them
     /// leaves the kind unpinned until the next rules or parser change.
     async fn mark_rewritten(&mut self, ids: Vec<i64>) {
+        // Nothing can hold a match while no adult-enrichment source is
+        // registered (ENR-1c).
         if ids.is_empty() || self.enrichers.0 == 0 {
             return;
         }
         let mut store = self.store.take().expect("store");
-        let (store, result, marked) = tokio::task::spawn_blocking(move || {
+        let (store, result, fallback) = tokio::task::spawn_blocking(move || {
             let result = crate::enrich::mark_matched(&mut store, &ids);
             // Failed (a busy claims read): mark them all, as
             // `adult_by_source` does, so the backfill finds out (ENR-1c).
-            let marked = result.is_err() && store.mark_unenriched(&ids).is_ok();
-            (store, result, marked)
+            let fallback = result.is_err().then(|| store.mark_unenriched(&ids));
+            (store, result, fallback)
         })
         .await
         .expect("mark task");
         self.store = Some(store);
-        if marked {
-            self.reenrich.store(true, Ordering::Release);
+        match fallback {
+            Some(Ok(_)) => self.reenrich.store(true, Ordering::Release),
+            // Both failed: the next commit or start tries again.
+            Some(Err(e)) => lodestar_log::log_event!(
+                crate::log_events::ENRICHMENT_FAILED,
+                error = crate::log_events::store_error(&e)
+            ),
+            None => {}
         }
         match result {
             Ok(marked) if !marked.is_empty() => self.reenrich.store(true, Ordering::Release),
@@ -876,12 +884,10 @@ impl Writer {
             .collect();
         // Rows already stored that this commit rewrote (a partial import's
         // upgrade writes prepare's record, which knows no match: ENR-1b).
-        // None while no enrichment source is registered: nothing can hold
-        // a match (ENR-1c).
         let rewritten: Vec<i64> = outcome
             .stored
             .iter()
-            .filter(|s| !s.2 && self.enrichers.0 != 0)
+            .filter(|s| !s.2)
             .map(|s| s.1)
             .collect();
         let committed_at = unix_now();

@@ -156,6 +156,11 @@ pub struct PipelineConfig {
     /// registered and enabled, [`Pipeline::torrent_cache_feed`] takes its
     /// verified files to be judged and stored. `None`: no feed.
     pub torrent_cache: Option<&'static str>,
+    /// The manifest ids of the adult-enrichment plugins the host runs
+    /// (`adult_enrich::AdultEnrichSource`, ENR-1c): only these may attach
+    /// an adult-enrichment section. `Kind::Enrichment` alone isn't enough:
+    /// the torrent cache is that kind too. Empty: none may.
+    pub adult_enrichers: Vec<&'static str>,
 }
 
 /// How often a running plugin's non-direct route is probed, so a route
@@ -198,6 +203,7 @@ impl Default for PipelineConfig {
             verify_unverified: false,
             egress: None,
             torrent_cache: None,
+            adult_enrichers: Vec::new(),
         }
     }
 }
@@ -586,6 +592,7 @@ impl Pipeline {
                 .iter()
                 .zip(&plugins)
                 .map(|((id, ..), p)| (*id, p.manifest())),
+            &config.adult_enrichers,
         );
         lodestar_log::log_event!(
             log_events::STARTING,
