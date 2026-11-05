@@ -847,7 +847,7 @@ See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
 
 | Series | Type | Meaning |
 | --- | --- | --- |
-| `filter_rows_unreadable{kind}` | gauge | Stored filter rows the engine couldn't read at its last load, by `kind`: `rule`, `unless`, `class_rule`, `override`, `exception`, `allow`. Enabled withholding rules, the `unless` of an enabled rule and Is adult classification rules fail closed; the rest are skipped, which only tightens. Every kind is rendered, 0 included. It drops back to 0 once the row is fixed or removed. The Insights exception `filter_rows_unreadable` names the rows. |
+| `filter_rows_unreadable{kind}` | gauge | Stored filter rows the engine couldn't read at its last load, by `kind`: `rule`, `unless`, `class_rule`, `override`, `exception`, `allow`, `pack_override`. Enabled withholding rules, the `unless` of an enabled rule, Is adult classification rules and pack-rule overrides (the stronger action kept, the `unless` dropped; RP-2) fail closed; the rest are skipped, which only tightens. Every kind is rendered, 0 included. It drops back to 0 once the row is fixed or removed. The Insights exception `filter_rows_unreadable` names the rows. |
 
 ## Source egress and kill switch (SRC-5, 2026-11-02)
 

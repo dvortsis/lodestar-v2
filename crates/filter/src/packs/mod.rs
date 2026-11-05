@@ -22,6 +22,7 @@
 //! rule.
 
 pub mod manifest;
+pub mod overrides;
 pub mod upgrade;
 
 use std::collections::BTreeSet;

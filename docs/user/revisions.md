@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 1.6 | 2026-11-05 | Added section 5.4 on Settings → Sources, its rows in Appendix B, and two glossary entries. |
 | 1.5 | 2026-11-04 | Added the lawful-use note and the Legal Notice link to section 1.2, and qualified the traffic takeaway. |
 | 1.4 | 2026-11-02 | Added a note in section 3.3 and Appendix B that blocklist downloads ignore HTTPS_PROXY, and a glossary entry. |
 | 1.3 | 2026-10-30 | Added section 3.8 on safe restart, the restart record folder and keeping it out of backups. |
