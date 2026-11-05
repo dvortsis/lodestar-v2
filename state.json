@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T15:41Z",
+  "updated_at": "2026-11-05T15:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3150,6 +3150,21 @@
       "session": "session_01MMjhnBwEorNQE51FrPWpnt",
       "since": "2026-11-05T15:40Z",
       "note": "same session as ENR-1b; #497 review polish"
+    },
+    "X-log-url-redact-5": {
+      "status": "merged",
+      "pr": 492,
+      "merge": "ce5cb314",
+      "archived": true,
+      "session": "session_01MMjhnAijx4Mbp6KDrYQq6W",
+      "done": "2026-11-05T15:56Z"
+    },
+    "ENR-4": {
+      "status": "running",
+      "session": "session_01MMjhn9nYcoG92h6XmRaJTH",
+      "since": "2026-11-05T15:55Z",
+      "model": "sonnet",
+      "brief": "briefs/ENR-4.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4726,7 +4741,8 @@
     "Handoff (from #490 review): the slice that opens /search or /facets to keys must, for Viewer::Public, reject or neutralise source: terms naming a non-public plugin (arr_webhooks, clients, prowlarr), and review withheld:true and discovered_at (a webhook grab time can be first_at). Not live while search/facets/detail are auth::protected.",
     "Owner question (low): open /metrics source_up / source_dropped_total reveal whether arr_webhooks, clients or prowlarr run (no torrent named). Leave or drop setup-revealing sources from open metrics?",
     "SRC-15b dialog note (from #493 review): SourceRow shows the running address list under \"Accepting covers exactly these addresses\" while a saved list is pending (restart_required); show the pending list or say a restart is needed. Fails closed today.",
-    "owner-flag sent 15:40Z: ENR-1b NoQuery (#497 merged 2874b259)."
+    "owner-flag sent 15:40Z: ENR-1b NoQuery (#497 merged 2874b259).",
+    "Owner ask (ENR-4/ENR-5): the Q2 terms and robots check for ThePornDB and StashDB APIs before either plugin is registered (HOLD in their decisions files, like SRC-10e)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5387,7 +5403,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T15:41Z",
+    "updated": "2026-11-05T15:56Z",
     "items": [
       {
         "slot": 1,
@@ -5399,11 +5415,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-log-url-redact-5",
+        "slice": "ENR-4",
         "role": "build",
         "agent": "claude",
-        "doing": "Security: the log-redaction gaps main also has (non-ASCII spaces next to separators, look-alikes)",
-        "since": "2026-11-05T12:15Z"
+        "doing": "Enrichment: the ThePornDB plugin, built but not registered until the terms check",
+        "since": "2026-11-05T15:55Z"
       },
       {
         "slot": 3,

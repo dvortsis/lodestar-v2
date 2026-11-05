@@ -1,5 +1,5 @@
 # ENR-4: the ThePornDB plugin (Account class, off by default, not registered)
-**Model:** Sonnet (glue on top of Opus-built parts). `/security-review`, then a fresh Opus reviewer. Runner brief, 2026-11-05T16:00Z.
+**Model:** Sonnet (glue on top of Opus-built parts). `/security-review`, then a fresh Opus reviewer. Runner brief, 2026-11-05T15:55Z.
 
 ## Why
 ENR-1 (#480) and ENR-1b (#497) built the adult-enrichment runtime and its gate. ENR-2b (#440) built the bounded ThePornDB response parser. ENR-4 is the plugin between them. It's on the ENR-G path (ENR-4 and ENR-5, then ENR-G).
