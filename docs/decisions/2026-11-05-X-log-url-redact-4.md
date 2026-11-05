@@ -1,4 +1,4 @@
-# X-log-url-redact-4 decisions (PR to be numbered)
+# X-log-url-redact-4 decisions (#488)
 
 A security fix in `crates/log/src/url.rs` (architecture §12.1, B12, B-log1).
 - **Where it came from:** #483's `/security-review` (X-log-url-redact-3) found the leaks and recorded them in `docs/decisions/2026-11-05-X-log-url-redact-3.md`.
@@ -16,10 +16,10 @@ A security fix in `crates/log/src/url.rs` (architecture §12.1, B12, B-log1).
   - `https://h/apikey?a=1'=x%3A%2F%2Fh/<s>`
 
 ## The rule
-- **What runs:** `scrub_text` reads the wide output again with the credential rules (`wide::redact_secrets`). It applies the result through a second `only_more`: `only_more(only_more(floor, wide), redact_secrets(wide))`.
+- **What runs:** off the fast path, `scrub_text` (`scrub_text_slow`) reads the wide output again with the credential rules (`wide::redact_secrets`, after `ascii_separators`, below). It applies the result through a second `only_more`: `only_more(only_more(floor, wide), redact_secrets(ascii_separators(wide)))`.
 - **Why it's monotone by construction:** `only_more` replaces only text of its first argument, with `[redacted]`. So the outer call hides all that the inner one hides, which is #483's output, and possibly more. Nothing #483 or `main` hides can show.
 - **Why it's a separate `only_more`:** `redact_secrets(wide)` isn't used as the wide output itself. A cut after `%3D` can leave a new word fragment, `3D` in `key%3D[redacted]`. The inner `only_more` would then keep that word wherever stage 1 shows it. The outer call only ever adds `[redacted]`.
-- **The fast path is unchanged:** a line it accepts holds no credential separator, so `redact_secrets` would find nothing there either.
+- **The fast path's output is unchanged:** a line it accepts holds no credential separator, so `redact_secrets` finds nothing there either. It now declines more lines, though (see the look-alikes below).
 
 ## Look-alike separators (runner's review of #483)
 - **The leak:** a fullwidth `：` (U+FF1A) or `＝` (U+FF1D) after a credential's name, or a no-break space (U+00A0) after `Bearer`, hid nothing in either stage, on `main` too.
@@ -29,23 +29,27 @@ A security fix in `crates/log/src/url.rs` (architecture §12.1, B12, B-log1).
   - None of them is a word's character, so the words stay the same.
   - That reading feeds only the outer `only_more`, so it still hides only more.
   - The first stage and the wide rules are unchanged.
-- **The fast path stays exact:** `plain_line` now refuses a line that holds any of the three. Its trigger list in `docs/decisions/2026-11-05-X-log-url-redact-3.md` gains one row:
+- **The fast path stays exact:** `plain_line` now refuses a line that holds any of the three.
+  - On a line `plain_line` accepts, `ascii_separators` changes nothing. So the reading is `redact_secrets` of `hide_runs(text)`, which finds no cut, and the fast path's proof still holds.
+  - The U+00A0 refusal is margin, not needed for exactness: `bearer` is already refused, and a space never makes a `:` or an `=`. It's kept so that every character `ascii_separators` maps is refused.
+  - `the_fast_path_matches_both_stages` now compares the fast path with `scrub_text_slow`, the whole slow path, all three stages included. It plants the three characters among its triggers, and checks that `©`, `（`, `ｘ` and `；`, which start with the same bytes, are still accepted.
+  - **What it costs:** a line holding one of the three now takes the slow path. Fullwidth colons are common in Chinese text, and Lodestar ships `zh`: `下载完成：12 个文件` takes 3.5 µs instead of #483's fast path of about 0.5 µs.
+- **This file adds one row to the fast path's trigger list** in `docs/decisions/2026-11-05-X-log-url-redact-3.md`:
 
 | Rule | What it needs to fire | Excluded by |
 |---|---|---|
 | The second credential reading, with look-alikes | a credential name and `：` or `＝`, or `bearer` and U+00A0 | the three characters, refused by `plain_line` |
 
-  - On a line `plain_line` accepts, `ascii_separators` changes nothing. So the reading is `redact_secrets` of `hide_runs(text)`, which finds no cut: the fast path's proof still holds.
-  - `the_fast_path_matches_both_stages` now plants the three characters among its triggers, too.
-- **Test:** `a_look_alike_separator_still_marks_a_credential` has six inputs, each of which showed the secret on `main`. It also checks that `時刻：12 ok` is kept.
+- **Test:** `a_look_alike_separator_still_marks_a_credential` has seven inputs, each of which showed the secret on `main`. It also checks that `時刻：12 ok` is kept. (`Authorization: Bearer\u{a0}<s>` isn't among them: `main` hides it already, because an `Authorization:` value runs to the next ASCII whitespace.)
 
 ## `AnyOf::new` asserts its size (runner's review of #483)
 - **What changed:** it asserts it gets 1 to 3 needles, in release builds too.
-- **Why:** an empty slice underflowed `needles.len() - 1`. All three callers pass 1 to 3, so this is a guard, not a fix.
+- **Why:** an empty slice underflowed `needles.len() - 1`. All three callers pass 1 to 3 constant needles, so this is a guard, not a fix.
+- **Test:** `any_of_refuses_no_needles`.
 
 ## Over-redaction accepted
 - **The rule hides more than the three shapes.** A value after any credential's name that the wide rules' output holds now goes, even when the original line didn't read as one. That costs only lines whose URL path ends in a credential's name (`/token`, `/key`, `/session`, `/auth`…) followed by a quote, a `:` or an `=`.
-- **Ordinary lines are unchanged.** These give the same output as on `main`:
+- **Ordinary lines are unchanged.** These give the same output as on `main`, and `a_name_left_at_a_url_s_end_keeps_its_value_hidden` pins each one, with one accepted over-redaction (`GET https://h/api/key?id=7 = 200 OK` gives `GET https://h/api/key = [redacted] OK`):
   - `GET https://api.example/v1/auth?x=1: 401 unauthorized`
   - `POST https://h/session?id=1 status=200 took=12ms`
   - `fetch https://h/oauth/token?grant=x failed: connection reset`
@@ -78,10 +82,10 @@ A security fix in `crates/log/src/url.rs` (architecture §12.1, B12, B-log1).
 - **What the counts show:** most of the extra hidden are in the new slots, which leak on `main`. Typed `scrub` is unchanged.
 
 ## Cost
-- **The fast path doesn't change.**
-- **The extra cost on other lines:** one more credential pass over the wide output, plus one more `only_more`. That's about 0.6 to 1.7 µs on a short line in a release build, measured with the fuzz running alongside.
+- **The fast path's output doesn't change.** It now declines lines holding the three look-alikes (above).
+- **The extra cost on other lines:** one more credential pass over the wide output, plus one more `only_more`. On a quiet machine, in a release build, that's about 0.8 to 1.2 µs on a short line: `dht: 1024 nodes` takes 2.4 µs, and `peer 1.2.3.4:6881 connected` takes 3.8 µs.
 - **Linear sweep:** 3,100 units, from 32 KiB to 256 KiB, on the final code.
-  - The worst time ratio, normalised to 1 for linear, is 4.27 (`}`). It's a fast-path unit at 10 ms, where small timings are noisy.
+  - The worst time ratio, normalised to 1 for linear, is 4.27 (`}`). It's a fast-path unit at 10 ms, where small timings are noisy, and the sweep ran alongside the fuzz. These ratios are dominated by noise. The test that gates linear time is `scrub_text_is_linear`, which passes.
   - The next are 3.38 (`日本u:`) and 3.24 (`x"%40[`).
   - The worst units take 3.4 to 5 times as long at each 4 times in size, from 1 to 16 MiB:
 
