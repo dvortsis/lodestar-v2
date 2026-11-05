@@ -106,19 +106,7 @@ impl DocEnrichment {
         e.titles
             .extend(record.release_all("alt").map(str::to_owned));
         let mut tag = |key: TagKey, value: &str| {
-            // `key:value`, the value lowercased: built in place, as the
-            // filter builds these for every torrent it judges.
-            let key = key.as_str();
-            let mut t = String::with_capacity(key.len() + 1 + value.len());
-            t.push_str(key);
-            t.push(':');
-            if value.is_ascii() {
-                let at = t.len();
-                t.push_str(value);
-                t[at..].make_ascii_lowercase();
-            } else {
-                t.push_str(&value.to_lowercase());
-            }
+            let t = format!("{}:{}", key.as_str(), value.to_lowercase());
             if !e.tags.contains(&t) {
                 e.tags.push(t);
             }
