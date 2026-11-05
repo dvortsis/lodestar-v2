@@ -1,0 +1,45 @@
+{
+ "responseHeader": {
+  "status": 0,
+  "QTime": 5
+ },
+ "response": {
+  "numFound": 3,
+  "start": 0,
+  "docs": [
+   {
+    "identifier": "big-buck-bunny-example",
+    "title": "Big Buck Bunny (2008)",
+    "btih": "1f2e3d4c5b6a79880123456789abcdeffedcba98",
+    "item_size": 276134947,
+    "publicdate": "2026-11-02T13:00:00Z",
+    "mediatype": "movies",
+    "collection": [
+     "opensource_movies",
+     "community"
+    ]
+   },
+   {
+    "identifier": "sintel-soundtrack-example",
+    "title": "A repost",
+    "btih": "1f2e3d4c5b6a79880123456789abcdeffedcba98",
+    "item_size": "52428800",
+    "publicdate": "2026-11-02T18:30:00Z",
+    "mediatype": "audio",
+    "collection": "opensource_audio"
+   },
+   {
+    "identifier": "sintel-soundtrack-example",
+    "title": [
+     "Sintel Soundtrack",
+     "second title"
+    ],
+    "btih": "ZHQVOY7XELZD5GFCTXWN7LRUDOMNKMCW",
+    "item_size": "52428800",
+    "publicdate": "2026-11-02T18:30:00Z",
+    "mediatype": "audio",
+    "collection": "opensource_audio"
+   }
+  ]
+ }
+}
