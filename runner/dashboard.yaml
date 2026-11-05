@@ -258,6 +258,8 @@ placement:
   - X-ci-health
   - X-log-url-redact
   - X-log-url-redact-2
+  - X-log-url-redact-3
+  - X-log-url-redact-4
   - X-flake-boot-shell
   - X-followups-1105
   - X-source-adult-2
@@ -394,6 +396,7 @@ pinned:
   X-dashboard-adapts: ws-small
   X-dashboard-idle-slots: ws-small
   X-filter-budget-noise: ws-small
+  X-filter-perf-1105: ws-small
   F-filter-standin-undo: ws-small
   X-overflow-links: ws-small
   X-polish-carry-1102: ws-small

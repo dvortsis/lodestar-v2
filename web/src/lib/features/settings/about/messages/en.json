@@ -109,5 +109,11 @@
 	"settings_about_credit_icons": "Icons: Phosphor (MIT).",
 	"settings_about_credit_brand": "Brand artwork: see brand/LICENSE.md.",
 	"settings_about_check_failed": "Couldn't check for updates. Try again in a minute.",
-	"settings_about_diagnostics_error": "Couldn't load the diagnostics."
+	"settings_about_diagnostics_error": "Couldn't load the diagnostics.",
+	"settings_about_legal": "Legal",
+	"settings_about_legal_lead": "The Legal Notice for this version of Lodestar: what it does on your network, what is yours to decide, and what its makers do and don't promise. It's the notice you confirmed you had read.",
+	"settings_about_legal_show": "Show the Legal Notice",
+	"settings_about_legal_version": "Version {version}",
+	"settings_about_legal_error": "Couldn't open the Legal Notice.",
+	"settings_about_legal_operators": "Guidance for anyone who makes their instance public"
 }

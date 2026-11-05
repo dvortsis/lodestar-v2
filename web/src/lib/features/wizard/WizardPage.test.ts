@@ -40,12 +40,18 @@ afterEach(() => {
 });
 
 describe('wizard shell', () => {
-	it('shows steps 1 and 2 as done and the rest as steps, one marked current', async () => {
+	it('shows the setup steps as done and the rest as steps, one marked current', async () => {
 		start('network');
 		await heading('Network check');
 		const list = screen.getByTestId('wizard-progress');
-		expect(list).toBeTruthy();
-		expect(screen.getByText('Setup token')).toBeTruthy();
+		// /setup's steps (the Legal Notice first), then this list's, numbered on from them.
+		const items = within(list).getAllByRole('listitem');
+		expect(items.slice(0, 3).map((li) => li.textContent?.trim().split(/\s+/)[0])).toEqual([
+			'Legal',
+			'Setup',
+			'Admin'
+		]);
+		expect(screen.getByTestId('wizard-step-network').textContent).toContain('4. Network check');
 		expect(screen.getByTestId('wizard-step-network').getAttribute('aria-current')).toBe('step');
 		expect(screen.getByTestId('wizard-step-how').getAttribute('data-state')).toBe('later');
 		// Status is icon plus text, never colour alone.

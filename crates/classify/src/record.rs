@@ -67,8 +67,10 @@ impl std::error::Error for RecordError {}
 impl Record {
     pub fn new(c: &Classification) -> Record {
         let r = &c.title.release;
-        let mut release: Vec<(String, String)> = Vec::new();
-        for (k, v) in r.fields() {
+        let fields = r.fields();
+        let mut release: Vec<(String, String)> =
+            Vec::with_capacity(fields.len() + r.alt_titles.len());
+        for (k, v) in fields {
             if k == "alt" {
                 release.extend(r.alt_titles.iter().map(|a| ("alt".to_owned(), a.clone())));
             } else {

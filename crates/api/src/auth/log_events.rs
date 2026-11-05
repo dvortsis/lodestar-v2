@@ -49,6 +49,17 @@ lodestar_log::catalogue! {
         message: "Too many attempts from one address; it has to wait",
         fields: { client: Client, limit: Label },
     }
+    /// The signed-in admin accepted the Legal Notice `version` (the
+    /// sign-in gate, `POST /legal/accept`). Setup's acceptance is
+    /// `auth.setup_complete`. The record's own time says when; never the
+    /// session.
+    AUTH_NOTICE_ACCEPTED {
+        id: "auth.notice_accepted",
+        component: Auth,
+        level: Info,
+        message: "The Legal Notice was accepted",
+        fields: { client: Client, version: Label },
+    }
     /// The admin password changed; every other session ended.
     AUTH_PASSWORD_CHANGED {
         id: "auth.password_changed",
@@ -191,8 +202,18 @@ fn reason(e: &AuthError) -> &'static str {
         AuthError::NotSetUp => "not_set_up",
         AuthError::SetupDone => "setup_done",
         AuthError::RateLimited => "rate_limited",
+        AuthError::NoticeRequired => "notice_required",
         AuthError::Storage(_) => "storage",
     }
+}
+
+/// Logs that the admin at `ip` accepted notice `version`.
+pub(crate) fn notice_accepted(ip: IpAddr, version: u32) {
+    log_event!(
+        AUTH_NOTICE_ACCEPTED,
+        client = Client(ip),
+        version = count(version as usize)
+    );
 }
 
 /// A count as a label: how many ranges are trusted (`0` … `64`).
@@ -254,6 +275,7 @@ mod tests {
         checked(ip, Check::SignIn, &ok);
         checked(ip, Check::PasswordChange, &ok);
         checked(ip, Check::Confirm, &ok);
+        notice_accepted(ip, 3);
         for (check, e) in [
             (Check::SignIn, AuthError::BadPassword),
             (Check::Setup, AuthError::BadToken),
@@ -269,6 +291,7 @@ mod tests {
         let want = [
             "auth.sign_in Signed in client=198.51.100.41",
             "auth.password_changed The admin password was changed; other sessions ended client=198.51.100.41",
+            "auth.notice_accepted The Legal Notice was accepted client=198.51.100.41 version=3",
             "auth.sign_in_failed A password check failed client=198.51.100.41 action=sign_in reason=bad_password",
             "auth.sign_in_failed A password check failed client=198.51.100.41 action=setup reason=bad_token",
             "auth.sign_in_failed A password check failed client=198.51.100.41 action=setup reason=setup_done",
@@ -288,6 +311,7 @@ mod tests {
             AuthError::NotSetUp,
             AuthError::SetupDone,
             AuthError::RateLimited,
+            AuthError::NoticeRequired,
         ] {
             assert!(!reason(&e).is_empty());
         }

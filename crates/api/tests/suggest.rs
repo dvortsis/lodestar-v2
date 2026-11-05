@@ -143,7 +143,7 @@ fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
 
 async fn session(f: &Fixture) -> String {
     let token = f.auth.setup_token().unwrap();
-    let body = json!({ "token": token, "password": PASSWORD });
+    let body = json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION });
     let req = Request::post("/api/v1/setup")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))

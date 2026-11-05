@@ -192,7 +192,7 @@ async fn signed_in(f: &Fixture) -> String {
         Method::POST,
         "/api/v1/setup",
         None,
-        json!({ "token": token, "password": PASSWORD }),
+        json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }),
     );
     req.extensions_mut().insert(ConnectInfo(fresh_ip()));
     let resp = f.app.clone().oneshot(req).await.unwrap();

@@ -1,6 +1,8 @@
-//! The auth endpoints (`/auth`, `/setup`, `/login`, `/logout` open;
+//! The auth endpoints (`/auth`, `/setup`, `/login`, `/logout` and
+//! `/legal/notice` open; `/legal/accept` behind a session only;
 //! `/password`, `/auth/proxy` and `/sessions/revoke-others` behind a
-//! session) and the session guard every protected route goes through.
+//! session and the Legal Notice gate) and the session guard every
+//! protected route goes through.
 
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
@@ -36,7 +38,9 @@ use crate::extract::{ClientIp, Json, peer_ip, same_origin_json};
     change_password,
     get_proxy,
     put_proxy,
-    revoke_other_sessions
+    revoke_other_sessions,
+    crate::legal::get_notice,
+    crate::legal::accept_notice
 ))]
 pub(crate) struct ApiDoc;
 
@@ -45,14 +49,20 @@ pub fn routes() -> Router<ApiState> {
         .route("/auth", get(auth_status))
         .route("/setup", post(setup))
         .route("/login", post(login))
-        .route("/logout", post(logout));
+        .route("/logout", post(logout))
+        .route("/legal/notice", get(crate::legal::get_notice));
+    // The one session route the notice gate lets through: accepting it.
+    let ungated = Router::new()
+        .route("/legal/accept", post(crate::legal::accept_notice))
+        .method_not_allowed_fallback(wrong_method)
+        .route_layer(middleware::from_fn(session_only));
     let session = protected(
         Router::new()
             .route("/password", post(change_password))
             .route("/auth/proxy", get(get_proxy).put(put_proxy))
             .route("/sessions/revoke-others", post(revoke_other_sessions)),
     );
-    open.merge(session)
+    open.merge(ungated).merge(session)
 }
 
 /// What the guards check against; [`crate::router`] puts it in every
@@ -111,6 +121,19 @@ async fn guard(req: Request, next: Next) -> Response {
     }
 }
 
+/// [`guard`] without the notice gate, for `/legal/accept` alone.
+async fn session_only(req: Request, next: Next) -> Response {
+    let Some(SessionAuth { auth, .. }) = req.extensions().get::<SessionAuth>().cloned() else {
+        return internal("a protected route was mounted without the session guard's state")
+            .into_response();
+    };
+    if logged_in(&auth, req.headers(), peer_ip(req.extensions())) {
+        next.run(req).await
+    } else {
+        login_required(&auth).into_response()
+    }
+}
+
 /// Middleware for routes outside [`crate::router`]: a valid session, or
 /// 401.
 pub async fn require_session(State(s): State<ApiState>, req: Request, next: Next) -> Response {
@@ -120,12 +143,28 @@ pub async fn require_session(State(s): State<ApiState>, req: Request, next: Next
     }
 }
 
+/// A session, and the current Legal Notice accepted: `401
+/// login_required` without the first, `409 notice_required` without the
+/// second.
 pub(super) fn check_session(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> ApiResult<()> {
-    if logged_in(auth, headers, peer) {
-        Ok(())
-    } else {
+    if !logged_in(auth, headers, peer) {
         Err(login_required(auth))
+    } else if auth.notice_pending() {
+        Err(notice_required())
+    } else {
+        Ok(())
     }
+}
+
+/// The 409 every session route answers until the admin accepts the
+/// current Legal Notice, and `/setup` and `/legal/accept` answer for a
+/// missing or stale version.
+pub(crate) fn notice_required() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "notice_required",
+        "Read and accept the current Legal Notice first.",
+    )
 }
 
 pub(super) fn login_required(auth: &Auth) -> ApiError {
@@ -178,6 +217,7 @@ pub(crate) fn auth_error(e: AuthError, password: &'static str) -> ApiError {
             "not_set_up",
             "This instance isn't set up yet.",
         ),
+        AuthError::NoticeRequired => notice_required(),
         AuthError::Storage(_) => internal(e),
     }
 }
@@ -200,14 +240,19 @@ pub(crate) async fn auth_status(
     headers: HeaderMap,
     req: axum::http::Extensions,
 ) -> axum::Json<AuthStatus> {
+    let logged_in = logged_in(&s.auth, &headers, peer_ip(&req));
     axum::Json(AuthStatus {
-        logged_in: logged_in(&s.auth, &headers, peer_ip(&req)),
+        logged_in,
+        // Only to the signed-in admin: nobody else learns whether it was
+        // accepted.
+        notice_required: logged_in && s.auth.notice_pending(),
         setup_required: s.auth.needs_setup(),
     })
 }
 
-/// Claims a fresh instance with the setup token from the logs and a new
-/// password; logs in.
+/// Claims a fresh instance with the setup token from the logs, a new
+/// password and the Legal Notice version the admin accepted (409
+/// `notice_required` when it's missing or not the current one); logs in.
 #[utoipa::path(
     operation_id = "setup",
     post,
@@ -230,10 +275,12 @@ pub(crate) async fn setup(
     same_origin_json(&headers)?;
     let auth = s.auth.clone();
     // Argon2 is deliberately slow; keep it off the async workers.
-    let cookie = tokio::task::spawn_blocking(move || auth.setup(ip, &body.token, &body.password))
-        .await
-        .map_err(internal)?
-        .map_err(|e| auth_error(e, "password"))?;
+    let cookie = tokio::task::spawn_blocking(move || {
+        auth.setup_with_notice(ip, &body.token, &body.password, body.notice_version)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| auth_error(e, "password"))?;
     Ok(with_cookie(cookie))
 }
 

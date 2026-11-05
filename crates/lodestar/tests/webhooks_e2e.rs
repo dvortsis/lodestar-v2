@@ -113,7 +113,10 @@ impl Server {
             });
             s.post(
                 "/api/v1/setup",
-                &format!(r#"{{"token":"{token}","password":"{PASSWORD}"}}"#),
+                &format!(
+                    r#"{{"token":"{token}","password":"{PASSWORD}","notice_version":{}}}"#,
+                    lodestar_api::legal::NOTICE_VERSION
+                ),
             )
         } else {
             s.post("/api/v1/login", &format!(r#"{{"password":"{PASSWORD}"}}"#))

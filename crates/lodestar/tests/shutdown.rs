@@ -117,7 +117,10 @@ impl Server {
         let r = s
             .request(
                 "POST /api/v1/setup HTTP/1.0\r\nContent-Type: application/json",
-                &format!(r#"{{"token":"{token}","password":"shutdown-test-password"}}"#),
+                &format!(
+            r#"{{"token":"{token}","password":"shutdown-test-password","notice_version":{v}}}"#,
+            v = lodestar_api::legal::NOTICE_VERSION
+        ),
             )
             .unwrap();
         assert!(r.starts_with("HTTP/1.0 200"), "{r}");

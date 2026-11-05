@@ -116,7 +116,10 @@ fn serves_status_and_stops_cleanly() {
     let setup = request(
         port,
         "POST /api/v1/setup HTTP/1.0\r\nContent-Type: application/json",
-        &format!(r#"{{"token":"{token}","password":"correct horse battery"}}"#),
+        &format!(
+            r#"{{"token":"{token}","password":"correct horse battery","notice_version":{v}}}"#,
+            v = lodestar_api::legal::NOTICE_VERSION
+        ),
     )
     .unwrap();
     assert!(setup.starts_with("HTTP/1.0 200"), "{setup}");

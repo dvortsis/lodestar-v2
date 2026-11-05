@@ -560,5 +560,7 @@
 	"settings_logging_ev_update_probation_passed_n": "New version confirmed",
 	"settings_logging_ev_update_probation_passed_h": "The new version ran well enough to be kept.",
 	"settings_logging_ev_update_probation_failed_n": "New version rolled back",
-	"settings_logging_ev_update_probation_failed_h": "The new version had problems, so the old one came back."
+	"settings_logging_ev_update_probation_failed_h": "The new version had problems, so the old one came back.",
+	"settings_logging_ev_auth_notice_accepted_n": "Legal Notice accepted",
+	"settings_logging_ev_auth_notice_accepted_h": "The admin accepted the Legal Notice at the sign-in gate; the line gives its version."
 }
