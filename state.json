@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T21:59Z",
+ "updated_at": "2026-11-05T22:11Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3259,15 +3259,15 @@
    "head": "ca2aa9d1"
   },
   "X-enr-page-flag": {
-   "status": "changes requested",
+   "status": "delta self-checked; merge on green",
    "session": "session_01MMjhn8MfsZf78SSbRHdDCm",
    "since": "2026-11-05T20:25Z",
    "brief": "briefs/X-enr-page-flag.md",
    "pr": 511,
-   "head": "e95caf81"
+   "head": "5d05b087"
   },
   "X-claim-store": {
-   "status": "in review",
+   "status": "MERGE verdict; merge on green",
    "session": "session_01MMjhnBxHKKJCVTB1LRUWQa",
    "since": "2026-11-05T20:53Z",
    "brief": "briefs/X-claim-store.md",
@@ -4912,6 +4912,12 @@
    "id": "runner-docs-enr45-pointer",
    "note": "Runner docs PR: add a pointer from the ENR-4/ENR-5 decisions bodies to the X-enr-page-flag decisions file (#511), which supersedes their stopgaps.",
    "added": "2026-11-05T21:39Z"
+  },
+  {
+   "id": "X-claim-store-polish",
+   "from": "#512 review",
+   "note": "P1 pipeline proptest for tracker_url/stored_trackers (fixed point, <=64, within room, no dups); P2 reword fuzz/fuzz_targets/verified_claims.rs:226-232 comment; P3 decisions clause on first-fit trade in near-full pack; P4 doc wrap unverified.rs:196-197. Carry into the next slice touching crates/pipeline/src/unverified.rs.",
+   "added": "2026-11-05T22:11Z"
   }
  ],
  "main_health": [
