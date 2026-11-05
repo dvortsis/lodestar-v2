@@ -4924,7 +4924,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T01:00Z",
+    "updated": "2026-11-05T01:04Z",
     "items": [
       {
         "slot": 1,
@@ -4949,14 +4949,6 @@
         "agent": "claude",
         "doing": "PR #411: fixing a cursor stall found in review, bringing main in; plugin stays off until the Internet Archive terms check is recorded.",
         "since": "2026-11-04T05:41:51Z"
-      },
-      {
-        "slot": 7,
-        "slice": "X-search-files-3",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #429 reviewed (merge): size-path improvement; 10M gate missed and tracked by X-search-files-4. Waiting for green CI.",
-        "since": "2026-11-04T17:43:00Z"
       }
     ]
   },
