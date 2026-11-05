@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T23:52Z",
+ "updated_at": "2026-11-05T23:58Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -5030,6 +5030,11 @@
    "id": "owner-flag-preaudit",
    "note": "Flag to owner (\u00a72.19): pre-audit M2 changes \"turning a source off applies at next start\" (SRC-11c/13b/14a decisions) to immediate stop; M1 re-checks holds/floor at send. Send at merge.",
    "added": "2026-11-05T23:51Z"
+  },
+  {
+   "id": "runner-dashboard-plans",
+   "note": "Owner 23:58Z: \"Update the dashboard to incorporate all the new plans\". As each planning PR merges (P-v07 #514, P-m8 #515, P-v06-companions #516, P-m6-audit #518, P-v06-workers, P-v052-manifest, P-v08): one runner PR adds its slices to slices.yaml with placement rules, replaces the one-step roadmap items, adds the ext conditions and gate entries in dashboard.yaml, then npm test. Also fix the G-v051 measure text and the soak roadmap label (r5 running, baseline ends 2026-11-06T13:12:25Z).",
+   "added": "2026-11-05T23:58Z"
   }
  ],
  "main_health": [
@@ -5693,12 +5698,12 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T23:51Z",
+  "updated": "2026-11-05T23:58Z",
   "items": [
    {
     "slot": 1,
     "slice": "P-v06-workers",
-    "role": "plan",
+    "role": "docs",
     "agent": "claude",
     "doing": "Plan: remote-workers epic into slices (docs only)",
     "since": "2026-11-05T23:37Z",
@@ -5725,7 +5730,7 @@
    {
     "slot": 4,
     "slice": "P-v06-companions",
-    "role": "plan",
+    "role": "docs",
     "agent": "claude",
     "doing": "Plan: companion-manager epic into slices (docs only)",
     "since": "2026-11-05T23:37Z",
@@ -5742,7 +5747,7 @@
    {
     "slot": 7,
     "slice": "P-m6-audit",
-    "role": "plan",
+    "role": "docs",
     "agent": "claude",
     "doing": "Plan: M6 packaging gap audit and slices (docs only)",
     "since": "2026-11-05T23:37Z",
@@ -5760,7 +5765,7 @@
    {
     "slot": 12,
     "slice": "P-v052-manifest",
-    "role": "plan",
+    "role": "docs",
     "agent": "claude",
     "doing": "Plan: v0.5.2 feature manifest, the freeze list (docs only)",
     "since": "2026-11-05T23:37Z",
@@ -5769,7 +5774,7 @@
    {
     "slot": 13,
     "slice": "P-m8",
-    "role": "plan",
+    "role": "docs",
     "agent": "claude",
     "doing": "Plan: M8 hardening to 1.0, slices and gates (docs only)",
     "since": "2026-11-05T23:37Z",
@@ -5778,7 +5783,7 @@
    {
     "slot": 14,
     "slice": "P-v08",
-    "role": "plan",
+    "role": "docs",
     "agent": "claude",
     "doing": "Plan: v0.8 slices (docs only)",
     "since": "2026-11-05T23:37Z",
