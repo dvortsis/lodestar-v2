@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T16:06Z",
+  "updated_at": "2026-11-05T16:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4745,7 +4745,9 @@
     "SRC-15b dialog note (from #493 review): SourceRow shows the running address list under \"Accepting covers exactly these addresses\" while a saved list is pending (restart_required); show the pending list or say a restart is needed. Fails closed today.",
     "owner-flag sent 15:40Z: ENR-1b NoQuery (#497 merged 2874b259).",
     "Owner ask (ENR-4/ENR-5): the Q2 terms and robots check for ThePornDB and StashDB APIs before either plugin is registered (HOLD in their decisions files, like SRC-10e).",
-    "Host wiring of adult enrichment (after ENR-4/ENR-5 and their owner terms check): set PipelineConfig::adult_enrichers to the plugin manifest ids (ENR-1c #502: the torrent cache is Kind::Enrichment too, so the set is explicit, empty by default); build AdultEnrichSource with Switches, StoreState; hand Interest to ENR-7 API."
+    "Host wiring of adult enrichment (after ENR-4/ENR-5 and their owner terms check): set PipelineConfig::adult_enrichers to the plugin manifest ids (ENR-1c #502: the torrent cache is Kind::Enrichment too, so the set is explicit, empty by default); build AdultEnrichSource with Switches, StoreState; hand Interest to ENR-7 API.",
+    "Runner docs PR: record owner 2026-11-05T16:15Z \"bring the slots down to 8, complete the existing slices\" in docs/owner-decisions.md (new §), and runner/slices.yaml limits.phase_total 12 -> 8 (then 4 at the cut).",
+    "ENR-5 (StashDB plugin) was next to launch; held by the 8-slot limit. Launch only when fewer than 8 are running (and before the 00:00Z cut to 4 only if still under the limit)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5406,7 +5408,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T15:56Z",
+    "updated": "2026-11-05T16:16Z",
     "items": [
       {
         "slot": 1,
@@ -5504,7 +5506,9 @@
         "doing": "Content safety: enrichment polish before the plugins land (fail-safe marks, one match test, no enricher is always-adult)",
         "since": "2026-11-05T15:40Z"
       }
-    ]
+    ],
+    "limit": 8,
+    "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies."
   },
   "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail."
 }
