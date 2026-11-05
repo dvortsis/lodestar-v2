@@ -27,7 +27,7 @@ pub mod strategy {
     pub const REFETCH: u8 = 200;
 }
 
-static MANIFEST: Manifest = Manifest {
+pub(crate) static MANIFEST: Manifest = Manifest {
     id: "dht",
     name: "Mainline DHT",
     version: env!("CARGO_PKG_VERSION"),

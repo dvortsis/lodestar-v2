@@ -70,7 +70,7 @@ pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
 pub use rollups::{Rollups, metric};
-pub use writer::WriterStats;
+pub use writer::{LIVE_FEEDS, WriterStats};
 
 /// `events.kind` codes. Persisted: append only.
 pub mod event {
@@ -619,6 +619,13 @@ impl Pipeline {
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
+        // The sources SP-3 counts, with a publisher or without (RP-4).
+        let flood = writer::Flooding::for_sources(
+            registered
+                .iter()
+                .zip(&plugins)
+                .map(|((id, ..), p)| (*id, p.manifest())),
+        );
         // The sources whose every find is classified adult (X-source-adult).
         let adult = source_adult::AdultSources::of(
             registered
@@ -1025,6 +1032,7 @@ impl Pipeline {
         let writer = writer::Writer {
             store: Some(store),
             adult,
+            flood,
             enrichers,
             backfill_after: 0,
             backfill_done: false,
