@@ -2956,7 +2956,7 @@
    "brief": "briefs/X-followups-1105.md"
   },
   "X-flakes-1105": {
-   "status": "building",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnC98Bdr5R2KxoxEoHs",
    "launched": "2026-11-05T06:16Z",
@@ -3477,7 +3477,8 @@
   "2026-11-05T06:48Z #465 RP-2 merged (605228f9), archived; RP-3 launched in slot 8 (small PackSwitch overlap with RP-UC in api/filters.rs; RP-UC merges first). RP-4 still waits on SRC-13b (writer.rs). #469 RP-UC review MERGE; one push asked (main merge, lazy description, telesync .TS fix, Linux ISO guard or note, hook doc, precision items, weight note).",
   "2026-11-05T06:58Z #470 D-sources-guide merged (9e3e5953), archived; D-v052-notes launched in slot 11.",
   "2026-11-05T07:19Z merged #471 runner plan PR (31afe2af) and #475 D-v052-notes (a3bbb95e); slot 11 idle with reason.",
-  "2026-11-05T07:21Z #468 X-search-files-4 merged (dfc91d2d); X-search-files-5 continues in the same session (slot 7)."
+  "2026-11-05T07:21Z #468 X-search-files-4 merged (dfc91d2d); X-search-files-5 continues in the same session (slot 7).",
+  "2026-11-05T08:01Z #476 X-flakes-1105 merged (d4d70d75), archived; X-test-hygiene-1105 launched in slot 4 (prompt-only brief, #476 review follow-ups)."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5208,7 +5209,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T07:22Z",
+  "updated": "2026-11-05T08:02Z",
   "items": [
    {
     "slot": 1,
@@ -5236,11 +5237,11 @@
    },
    {
     "slot": 4,
-    "slice": "X-flakes-1105",
+    "slice": "X-test-hygiene-1105",
     "role": "build",
     "agent": "claude",
-    "doing": "Test reliability: fixing the DHT restart deadline flake (Windows) and the magnetico NotQuiescent flake",
-    "since": "2026-11-05T06:16Z"
+    "doing": "Test hygiene: DHT test helpers off ephemeral ports; clearer advice for a stuck magneticod database",
+    "since": "2026-11-05T08:02Z"
    },
    {
     "slot": 5,
