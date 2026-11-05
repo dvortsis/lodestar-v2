@@ -1,5 +1,5 @@
 # ENR-8: Detail drawer, adult-enrichment section
-**Model:** Sonnet (display only). A fresh Opus reviewer follows. Runner brief, 2026-11-05T19:20Z.
+**Model:** Sonnet (display only). A fresh Opus reviewer follows. Runner brief, 2026-11-05T19:17Z.
 
 ## Why
 ENR-7 (#504, merged af4e9f7d) added the `adult_enrichment` section to `GET /torrents/{id}`. The API returns it only when "Show adult content" is on. When it's off, the field is absent, not empty. ENR-8 shows that section in the detail drawer and on `/t/[hash]`. It's on the ENR-G path.

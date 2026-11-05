@@ -3225,6 +3225,13 @@
       "since": "2026-11-05T18:56Z",
       "brief": "briefs/B13b.md",
       "note": "same session as X-search-files-5"
+    },
+    "ENR-8": {
+      "status": "running",
+      "session": "session_01MMjhn9V5QTSYZZjHdAFXcs",
+      "since": "2026-11-05T19:17Z",
+      "model": "sonnet",
+      "brief": "briefs/ENR-8.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5508,12 +5515,11 @@
       },
       {
         "slot": 3,
-        "slice": null,
+        "slice": "ENR-8",
         "role": "build",
         "agent": "claude",
-        "status": "idle",
-        "doing": "Kept free: the next ready slices wait on open PRs (RP-5 on #495, ENR-8 on #504; the canonical tracker store shares unverified.rs with #502; X-search-files-6 needs a runner design call). Filled when one merges.",
-        "since": "2026-11-05T18:59Z"
+        "doing": "Enrichment: the adult-enrichment section in the detail drawer (on-demand chunk)",
+        "since": "2026-11-05T19:17Z"
       },
       {
         "slot": 5,
