@@ -194,8 +194,8 @@ impl UnverifiedStats {
 /// whitespace and control characters: the `url` crate would repair those
 /// (`http:1.1` reads as `http://1.0.0.1/`, a tab is removed) rather than
 /// refuse them. The canonical form is held to the same limit, since it can
-/// be longer (IDNA, percent-encoding). Tracker
-/// URLs aren't names, so they aren't judged as text (runner, #383).
+/// be longer (IDNA, percent-encoding). Tracker URLs aren't names, so they
+/// aren't judged as text (runner, #383).
 ///
 /// The form is a fixed point: it maps to itself (X-claim-store).
 ///

@@ -264,3 +264,201 @@ fn a_tracker_that_grows_past_the_total_is_dropped_not_the_claims() {
         assert_eq!(c.files.len(), d.found.claims.as_ref().unwrap().files.len());
     }
 }
+
+/// First-fit in the room left: in a near-full pack, canonicalising can
+/// trade one tracker for another. Both fit the clamp's 35 raw bytes; the
+/// canonical forms take 36, so the earlier one is kept.
+#[test]
+fn first_fit_keeps_the_earlier_tracker_in_a_near_full_pack() {
+    let raw = ["http://t.example", "udp://u.example:1/a"].map(String::from);
+    assert_eq!(raw.iter().map(String::len).sum::<usize>(), 35);
+    assert_eq!(stored_trackers(&raw, 35), ["http://t.example/"]);
+    assert_eq!(
+        stored_trackers(&raw, 36),
+        ["http://t.example/", "udp://u.example:1/a"]
+    );
+}
+
+mod props {
+    //! Property tests over mixed spellings (X-claim-store-polish): the
+    //! pipeline's own check that what it stores is the guard's fixed
+    //! point, within every cap, once each and in the claim's order. The
+    //! `verified_claims` fuzz target checks the guard's fixed point on the
+    //! `torrent_cache` path; this checks the pipeline functions themselves.
+
+    use super::*;
+    use proptest::prelude::*;
+
+    /// A scheme, in any case; `wss` and `ftp` are always refused.
+    fn scheme() -> impl Strategy<Value = String> {
+        prop_oneof![
+            4 => Just("http"),
+            4 => Just("udp"),
+            3 => Just("https"),
+            1 => Just("HTTP"),
+            1 => Just("Udp"),
+            1 => Just("HTTPS"),
+            1 => Just("wss"),
+            1 => Just("ftp"),
+        ]
+        .prop_map(str::to_owned)
+    }
+
+    /// Hosts: public, non-public, IDNA (`ü`, `ⓛ`, the ideographic stop
+    /// `。`), percent-encoded, IP literals in and out of `[]`, and broken.
+    fn host() -> impl Strategy<Value = String> {
+        let label = prop_oneof![
+            4 => (0u16..1000).prop_map(|n| format!("t{n}")),
+            1 => Just("T".to_owned()),
+            1 => Just("Tracker".to_owned()),
+            1 => Just("bücher".to_owned()),
+            1 => Just("ⓛocalhost".to_owned()),
+            1 => Just("%74".to_owned()),
+            1 => Just("%6e%61%73".to_owned()),
+            1 => Just("x-1".to_owned()),
+            1 => Just("localhost".to_owned()),
+            1 => Just("nas".to_owned()),
+        ];
+        let tld = prop_oneof![
+            6 => Just(".example"),
+            1 => Just(".EXAMPLE"),
+            1 => Just("。example"),
+            1 => Just(".example."),
+            1 => Just(".local"),
+            1 => Just(".localhost"),
+            1 => Just(""),
+        ];
+        prop_oneof![
+            24 => (label, tld).prop_map(|(l, t)| format!("{l}{t}")),
+            1 => Just("93.184.215.14".to_owned()),
+            1 => Just("127.0.0.1".to_owned()),
+            1 => Just("192.168.1.1".to_owned()),
+            1 => Just("[2a00:1450:4001::1]".to_owned()),
+            1 => Just("[::1]".to_owned()),
+            1 => Just("[::ffff:127.0.0.1]".to_owned()),
+            1 => Just("[2a00:1450:4001::1".to_owned()),
+            1 => Just("2a00:1450:4001::1".to_owned()),
+            1 => Just("user@t.example".to_owned()),
+            1 => Just("t.example%".to_owned()),
+        ]
+    }
+
+    /// No port, or one from 0 to 70,000 (past the 65,535 limit).
+    fn port() -> impl Strategy<Value = String> {
+        prop_oneof![
+            4 => Just(String::new()),
+            1 => Just(":".to_owned()),
+            3 => (0u32..=70_000).prop_map(|p| format!(":{p}")),
+            1 => prop::sample::select(vec![80u32, 443, 6969, 65_535, 65_536])
+                .prop_map(|p| format!(":{p}")),
+        ]
+    }
+
+    /// Paths with the characters parsers treat specially, and sometimes
+    /// long enough to reach the 2,048-byte limit once encoded.
+    fn path() -> impl Strategy<Value = String> {
+        let piece = prop_oneof![
+            4 => Just("/"),
+            4 => Just("a"),
+            4 => Just("announce"),
+            1 => Just("@"),
+            1 => Just("?"),
+            1 => Just("#"),
+            1 => Just("\\"),
+            1 => Just("\""),
+            1 => Just("^"),
+            1 => Just(" "),
+            1 => Just("%"),
+            1 => Just("%41"),
+            1 => Just("["),
+            1 => Just("]"),
+            1 => Just("ü"),
+            1 => Just("@127.0.0.1"),
+        ];
+        prop_oneof![
+            // Most start with `/`; some run on into the authority.
+            8 => prop::collection::vec(piece.clone(), 0..8).prop_map(|p| format!("/{}", p.concat())),
+            2 => prop::collection::vec(piece, 0..4).prop_map(|p| p.concat()),
+            1 => (1usize..=700).prop_map(|n| format!("/{}", "\"".repeat(n))),
+            1 => (2_000usize..=2_100).prop_map(|n| format!("/{}", "a".repeat(n))),
+        ]
+    }
+
+    fn tracker() -> impl Strategy<Value = String> {
+        (scheme(), host(), port(), path()).prop_map(|(s, h, p, x)| format!("{s}://{h}{p}{x}"))
+    }
+
+    /// Spellings of one public tracker that canonicalise alike: scheme
+    /// and host case, a default port, an encoded host letter.
+    fn spelling(i: usize) -> String {
+        [
+            "http://t.example/a",
+            "HTTP://T.Example/a",
+            "http://t.example:80/a",
+            "http://%74.example/a",
+            "Http://t.EXAMPLE:80/a",
+            "udp://t.example:1/a",
+            "UDP://T.EXAMPLE:1/a",
+            "udp://%74.example:1/a",
+        ][i % 8]
+            .to_owned()
+    }
+
+    /// A claim's raw list: mixed trackers with 0–120 colliding spellings
+    /// spread through it.
+    fn claim() -> impl Strategy<Value = Vec<String>> {
+        (
+            prop::collection::vec(tracker(), 0..300),
+            prop::collection::vec((any::<prop::sample::Index>(), 0usize..8), 0..=120),
+        )
+            .prop_map(|(mut raw, dups)| {
+                for (at, which) in dups {
+                    let i = at.index(raw.len() + 1);
+                    raw.insert(i, spelling(which));
+                }
+                raw
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+        #[test]
+        fn a_kept_tracker_is_a_fixed_point_within_the_limit(raw in tracker()) {
+            if let Some(k) = tracker_url(&raw) {
+                prop_assert!(k.len() <= claims::MAX_TRACKER, "{raw:?} → {} bytes", k.len());
+                let again = tracker_url(&k);
+                prop_assert_eq!(again.as_deref(), Some(k.as_str()), "{:?}", raw);
+            }
+        }
+
+        #[test]
+        fn stored_trackers_are_capped_unique_fixed_and_in_order(
+            raw in claim(),
+            room in prop_oneof![3 => 0usize..=300, 1 => Just(MAX_TOTAL)],
+        ) {
+            // `room` up to 300 bytes for near-full packs; the whole total
+            // too, so the 64-entry cap is reached.
+            let out = stored_trackers(&raw, room);
+            prop_assert!(out.len() <= MAX_TRACKERS);
+            prop_assert!(out.iter().map(String::len).sum::<usize>() <= room);
+            let unique: std::collections::HashSet<_> = out.iter().collect();
+            prop_assert_eq!(unique.len(), out.len(), "a repeat in {:?}", out);
+            for k in &out {
+                prop_assert!(!k.is_empty() && k.len() <= claims::MAX_TRACKER);
+                let again = tracker_url(k);
+                prop_assert_eq!(again.as_deref(), Some(k.as_str()));
+            }
+            // The claim's order: each entry's first canonical spelling
+            // comes after the previous entry's.
+            let canon: Vec<Option<String>> = raw.iter().map(|t| tracker_url(t)).collect();
+            let mut last = None;
+            for k in &out {
+                let at = canon.iter().position(|c| c.as_deref() == Some(k.as_str()));
+                prop_assert!(at.is_some(), "{k} isn't the canonical form of a claimed tracker");
+                prop_assert!(at > last, "{k} is out of the claim's order in {out:?}");
+                last = at;
+            }
+        }
+    }
+}
