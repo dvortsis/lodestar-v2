@@ -49,3 +49,9 @@
 		{#if PackInfo}<PackInfo />{/if}
 	</details>
 </section>
+<!-- The per-pack panels (RP-6) load with this part, never with the first view. -->
+{#await import('./packs/PacksScreen.svelte') then { default: PackPanels }}
+	<PackPanels {o} {ask} />
+{:catch}
+	<p class="text-muted-text" data-testid="packs-part-failed">{m.filters_packs_part_failed()}</p>
+{/await}

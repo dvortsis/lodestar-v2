@@ -18,6 +18,7 @@
 //! do; the pool waits on prepare and prepare on the writer, which is the
 //! backpressure that keeps memory flat.
 
+pub mod adult_enrich;
 pub mod control;
 mod coordinator;
 mod dht;
@@ -585,6 +586,14 @@ impl Pipeline {
                 .zip(&plugins)
                 .map(|((id, ..), p)| (*id, p.manifest())),
         );
+        // The adult-enrichment sources (ENR-1b): only they may attach an
+        // enrichment section to a claim.
+        let enrichers = adult_enrich::EnrichSources::of(
+            registered
+                .iter()
+                .zip(&plugins)
+                .map(|((id, ..), p)| (*id, p.manifest())),
+        );
         lodestar_log::log_event!(
             log_events::STARTING,
             stored = have.len(),
@@ -847,6 +856,7 @@ impl Pipeline {
                 stats: intake_stats.clone(),
                 filter: config.filter.clone(),
                 held: held.clone(),
+                enrichers,
             },
             intake_shutdown,
         ));
@@ -961,6 +971,7 @@ impl Pipeline {
                 counted: flood_counted,
                 ..Default::default()
             },
+            enrichers,
             backfill_after: 0,
             backfill_done: false,
             backfill_backoff: Default::default(),
@@ -1323,6 +1334,8 @@ struct Intake {
     stats: Arc<IntakeStats>,
     filter: Arc<Handle>,
     held: Arc<HeldSet>,
+    /// The adult-enrichment sources: their matches aren't harvested keys.
+    enrichers: adult_enrich::EnrichSources,
 }
 
 /// The worker's intake: known keys go to the writer as rediscoveries; new
@@ -1344,13 +1357,17 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
         };
         if !retried {
             io.stats.received.fetch_add(1, Ordering::Relaxed);
-            io.rollups.add(
-                d.at,
-                metric::HARVESTED,
-                d.source,
-                i64::from(d.found.strategy),
-                1,
-            );
+            // An enrichment match (ENR-1b) is an answer about a stored
+            // torrent, not a key the source harvested.
+            if !adult_enrich::is_match(&d, io.enrichers) {
+                io.rollups.add(
+                    d.at,
+                    metric::HARVESTED,
+                    d.source,
+                    i64::from(d.found.strategy),
+                    1,
+                );
+            }
             // A key with claims is judged and stored by the writer, as an
             // unverified item or as claims on the torrent that holds it
             // (SRC-2), never fetched from here: verification fetches go

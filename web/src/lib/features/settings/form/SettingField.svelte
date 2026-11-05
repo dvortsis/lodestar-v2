@@ -13,7 +13,6 @@
 	import IconFile from '~icons/ph/file';
 	import IconInfo from '~icons/ph/info';
 	import IconLock from '~icons/ph/lock-simple';
-	import IconWarning from '~icons/ph/warning';
 	import Control from './Control.svelte';
 	import LazyControl from './LazyControl.svelte';
 	import { controlOf, lazyOf } from './controls.svelte';
@@ -130,14 +129,6 @@
 		); // no toast offline
 	}
 
-	function onMenu(id: string) {
-		if (id === 'reset') form.reset(key);
-		else if (id === 'link') {
-			const href = form.href(key);
-			void copy(new URL(href, location.href).href, 'link');
-		} else if (id === 'keys') showKeys = !showKeys;
-	}
-
 	// What a preview says loads with the preview's code, which every preview has loaded.
 	const Preview = lazyPart(() => import('./preview'), loadedPreview);
 	$effect(() => Preview.want(f.preview));
@@ -175,7 +166,8 @@
 				{#if menuParts}
 					<menuParts.FieldMenu
 						field={f}
-						onSelect={onMenu}
+						onSelect={(id) =>
+							menuParts?.selectMenu(id, form, key, copy, () => (showKeys = !showKeys))}
 						label={m.settings_form_menu_label({ label })}
 						bind:open={menuOpen}
 					/>
@@ -236,10 +228,7 @@
 	{/if}
 
 	{#if f.conflict && Edit.part}
-		<div class="flex flex-wrap items-center gap-2 text-small" data-testid="conflict">
-			<IconWarning class="size-(--icon-size-row) shrink-0 text-warning" aria-hidden="true" />
-			<Edit.part.FieldConflict {form} {key} />
-		</div>
+		<Edit.part.FieldConflict {form} {key} />
 	{/if}
 
 	{#if f.note}
@@ -250,10 +239,7 @@
 	{/if}
 
 	{#if f.pendingReset && Edit.part}
-		<p class="flex items-center gap-1 text-small text-muted-text">
-			<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-			<Edit.part.FieldSaved {form} {key} part="reset" />
-		</p>
+		<Edit.part.FieldSaved {form} {key} part="reset" />
 	{/if}
 
 	<!-- Status line: only what applies (§10.10.4). -->

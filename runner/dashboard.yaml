@@ -212,6 +212,7 @@ placement:
   - S-appearance
   - S-keys
   - M-auth
+  - X-settings-trim
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -261,9 +262,11 @@ placement:
   - X-log-url-redact-3
   - X-log-url-redact-4
   - X-flake-boot-shell
+  - X-flake-subs-stall
   - X-followups-1105
   - X-source-adult-2
   - X-flakes-1105
+  - X-fuzz-cache-1105
   - D-sources-guide
   - L4-followups
   - S-settings-reconcile

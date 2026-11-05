@@ -110,6 +110,9 @@ pub(crate) struct Writer {
     pub adult: AdultSources,
     /// SP-3's rate state (RP-4): judged here, at commit, in order.
     pub flood: Flooding,
+    /// The adult-enrichment sources: only they may attach an enrichment
+    /// section (`unverified::Ctx::enrichers`, ENR-1b).
+    pub enrichers: crate::adult_enrich::EnrichSources,
     /// The background enrichment pass: the last id it reached, and whether
     /// it has found nothing left to do.
     pub backfill_after: i64,
@@ -494,6 +497,36 @@ impl Writer {
         committing
     }
 
+    /// Marks for the backfill the enrichment matches on `ids`, rows this
+    /// commit found already stored, whose record it may have rewritten
+    /// without them (a partial import's upgrade; ENR-1b), and starts the
+    /// pass. A separate transaction after the commit: a crash between them
+    /// leaves the kind unpinned until the next rules or parser change.
+    async fn mark_rewritten(&mut self, ids: Vec<i64>) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut store = self.store.take().expect("store");
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let result = crate::enrich::mark_matched(&mut store, &ids);
+            (store, result)
+        })
+        .await
+        .expect("mark task");
+        self.store = Some(store);
+        match result {
+            Ok(marked) if !marked.is_empty() => self.reenrich.store(true, Ordering::Release),
+            Ok(_) => {}
+            Err(e) => {
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::ENRICHMENT_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
     /// Classifies as adult the stored torrents among `ids` that an
     /// always-adult source has just found ([`crate::enrich::adult_by_source`]),
     /// marking what it holds for intake before its write.
@@ -730,6 +763,7 @@ impl Writer {
                     sealer: sealer.as_deref(),
                     quarantine_secs,
                     adult,
+                    ..Default::default()
                 },
                 stats: &stats.unverified,
                 mark: &mark,
@@ -850,6 +884,14 @@ impl Writer {
             .iter()
             .filter(|(i, _, _, _)| committing[*i].results.source_adult)
             .map(|&(_, id, _, _)| id)
+            .collect();
+        // Rows already stored that this commit rewrote (a partial import's
+        // upgrade writes prepare's record, which knows no match: ENR-1b).
+        let rewritten: Vec<i64> = outcome
+            .stored
+            .iter()
+            .filter(|s| !s.2)
+            .map(|s| s.1)
             .collect();
         let committed_at = unix_now();
         let mut cache_stored = Vec::new();
@@ -1003,6 +1045,7 @@ impl Writer {
             return cache_stored;
         }
         self.adult_by_source(adult_ids).await;
+        self.mark_rewritten(rewritten).await;
         if self.have.is_full() {
             self.rebuild_have().await;
         }
@@ -1373,6 +1416,7 @@ impl Writer {
         let held = self.held.clone();
         let stats = self.stats.clone();
         let adult = self.adult;
+        let (enrichers, reenrich) = (self.enrichers, self.reenrich.clone());
         #[cfg(test)]
         let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
@@ -1390,6 +1434,9 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
                 adult,
+                enrichers,
+                filter: Some(&filter),
+                reenrich: Some(&reenrich),
             };
             let result = unverified::ingest(
                 &mut store,
@@ -1486,6 +1533,7 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
                 adult,
+                ..Default::default()
             };
             let result = unverified::refile_step(
                 &mut store,
@@ -1935,16 +1983,21 @@ impl Claimed {
 
 /// The sources SP-3 counts when no publisher is named
 /// ([`Flooding::counted`]), from the registered sources' manifests:
-/// every one but a peer finder (the DHT: it isn't a publisher, Q10) and
-/// an importer, which replays a dump's history in minutes, so its
-/// commit-time rate says nothing about how fast anyone published.
+/// every one but a peer finder (the DHT: it isn't a publisher, Q10), an
+/// importer, which replays a dump's history in minutes, so its
+/// commit-time rate says nothing about how fast anyone published, and an
+/// enrichment source (runner, #495), whose matches describe torrents
+/// others published and would only crowd real publishers out of
+/// [`Claimed`].
 pub(crate) fn flood_counted<'a>(
     sources: impl IntoIterator<Item = (SourceId, &'a lodestar_sources::Manifest)>,
 ) -> u64 {
     use lodestar_sources::Kind;
     sources
         .into_iter()
-        .filter(|(_, m)| !m.is(Kind::PeerFinder) && !m.is(Kind::Importer))
+        .filter(|(_, m)| {
+            !m.is(Kind::PeerFinder) && !m.is(Kind::Importer) && !m.is(Kind::Enrichment)
+        })
         .fold(0, |mask, (id, _)| mask | bit(id))
 }
 
@@ -2569,6 +2622,7 @@ mod tests {
             store: Some(store),
             adult: AdultSources::default(),
             flood: Default::default(),
+            enrichers: Default::default(),
             backfill_after: 0,
             backfill_done: true,
             backfill_backoff: Default::default(),
@@ -2735,6 +2789,62 @@ mod tests {
         assert_eq!(count(&gate), (1, 1, 1, 1));
         assert_eq!(w.stats.errors.load(Ordering::Relaxed), 1);
         assert_eq!(w.stats.stored.load(Ordering::Relaxed), 1);
+    }
+
+    /// A commit that finds its row already stored (a partial import's
+    /// upgrade rewrites it) marks the row's enrichment match for the
+    /// backfill and starts the pass (ENR-1b).
+    #[tokio::test]
+    async fn a_rewritten_match_is_marked_at_commit() {
+        use lodestar_store::claims::{AdultEnrichment, AdultKind, Claims};
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let enr = store.register_source("enr", "1", 1).unwrap();
+        let mut w = writer(store, coordinator.clone(), gate);
+        let (retry, _retry_rx) = mpsc::channel(4);
+        w.commit(
+            vec![leased(&coordinator, results())],
+            vec![],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        let store = w.store.as_mut().unwrap();
+        let id = store.find(&results().key).unwrap().unwrap();
+        let section = AdultEnrichment {
+            kind: Some(AdultKind::Vr),
+            ..AdultEnrichment::new("1")
+        };
+        let claims = Claims {
+            adult: Some(section),
+            ..Claims::default()
+        };
+        assert!(store.put_claims(id, enr, &claims, false).unwrap());
+        let current = |w: &Writer| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .enrichment(id)
+                .unwrap()
+                .unwrap()
+                .version
+                == lodestar_classify::ENRICHMENT_VERSION
+        };
+        assert!(current(&w));
+        assert!(!w.reenrich.load(Ordering::Acquire));
+        w.commit(
+            vec![leased(&coordinator, results())],
+            vec![],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        assert!(!current(&w), "marked for the backfill");
+        assert!(w.reenrich.load(Ordering::Acquire));
     }
 
     /// A refetch is never the network's and never the funnel's: one that
@@ -4709,8 +4819,8 @@ mod tests {
         assert!(flood.map.is_empty());
     }
 
-    /// The DHT (a peer finder) and importers never count without a
-    /// publisher; every other source does.
+    /// The DHT (a peer finder), importers and enrichment sources never
+    /// count without a publisher; every other source does.
     #[test]
     fn sp3_counts_neither_the_dht_nor_importers() {
         use lodestar_sources::Kind;
@@ -4730,9 +4840,36 @@ mod tests {
         let dht = m(&[Kind::Discovery, Kind::PeerFinder]);
         let feed = m(&[Kind::Discovery]);
         let import = m(&[Kind::Importer]);
+        let enrich = m(&[Kind::Enrichment]);
         let id = |n| SourceId::new(n).unwrap();
-        let mask = flood_counted([(id(0), &dht), (id(2), &feed), (id(5), &import)]);
+        let mask = flood_counted([
+            (id(0), &dht),
+            (id(2), &feed),
+            (id(5), &import),
+            (id(7), &enrich),
+        ]);
         assert_eq!(mask, 1 << 2);
+        // So an enrichment source's claims take no `Claimed` entry.
+        let mut flood = Flooding {
+            counted: mask,
+            ..Default::default()
+        };
+        let found: Vec<Discovery> = (0..100u8)
+            .map(|i| Discovery {
+                source: id(7),
+                found: lodestar_sources::Found::key(InfoHash([i; 20]), 0).with_claims(
+                    lodestar_sources::claims::Claims {
+                        name: Some("match".into()),
+                        publisher: Some("studio".into()),
+                        ..Default::default()
+                    },
+                ),
+                at: 0,
+                reply: false,
+            })
+            .collect();
+        flood.note_claims(&found);
+        assert!(flood.claimed.by_key.is_empty());
         assert_eq!(
             flood_counted([(id(0), &crate::dht::MANIFEST)]),
             0,
