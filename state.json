@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T22:34Z",
+ "updated_at": "2026-11-05T22:48Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3271,12 +3271,13 @@
    "head": "5d05b087"
   },
   "X-claim-store": {
-   "status": "MERGE verdict; merge on green",
+   "status": "merged",
    "session": "session_01MMjhnBxHKKJCVTB1LRUWQa",
    "since": "2026-11-05T20:53Z",
    "brief": "briefs/X-claim-store.md",
    "pr": 512,
-   "head": "fda7b341"
+   "head": "fda7b341",
+   "merge": "01d956f3"
   },
   "P-v07": {
    "status": "queued",
@@ -4933,6 +4934,11 @@
    "id": "runner-docs-g-v051-measure",
    "note": "dashboard.yaml G-v051 gate measure still reads \"Soak r3 running...\"; update to soak r5 (rc.4, baseline ends 2026-11-06T13:12:25Z; r4 ended 29.35 MiB/h) in the 00:00Z runner docs PR.",
    "added": "2026-11-05T22:18Z"
+  },
+  {
+   "id": "owner-flag-X-claim-store",
+   "note": "sent 22:49Z at merge",
+   "added": "2026-11-05T22:48Z"
   }
  ],
  "main_health": [
@@ -5595,7 +5601,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T22:34Z",
+  "updated": "2026-11-05T22:48Z",
   "items": [
    {
     "slot": 1,
@@ -5625,11 +5631,12 @@
    },
    {
     "slot": 4,
-    "slice": "X-claim-store",
+    "slice": null,
     "role": "build",
     "agent": "claude",
-    "doing": "Security: store claimed trackers in the canonical form the shared guard checked",
-    "since": "2026-11-05T20:53Z"
+    "doing": "Retired: X-claim-store merged (#512, 01d956f3).",
+    "since": "2026-11-05T22:48Z",
+    "status": "idle"
    },
    {
     "slot": 5,
