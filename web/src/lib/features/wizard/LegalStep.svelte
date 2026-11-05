@@ -52,7 +52,7 @@
 
 <div bind:this={root} class="flex flex-col gap-4" data-testid="legal-step">
 	<p class="text-body text-muted-text">{m.wizard_legal_intro()}</p>
-	<NoticeBox bind:notice />
+	<NoticeBox bind:notice level={3} />
 	<!-- Always drawn, so the notice arriving moves nothing; it can't be ticked before then. -->
 	<div class="flex flex-col gap-1">
 		<Checkbox

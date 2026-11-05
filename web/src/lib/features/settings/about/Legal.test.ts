@@ -23,7 +23,7 @@ it('shows the notice with its version', async () => {
 	const region = await screen.findByRole('region', { name: 'Legal Notice' });
 	expect(region.textContent).toContain('Who publishes Lodestar');
 	expect(screen.getByTestId('about-notice-version').textContent?.trim()).toBe('Version 2');
-	expect(screen.getByRole('heading', { level: 3, name: '1. Who publishes Lodestar' })).toBeTruthy();
+	expect(screen.getByRole('heading', { level: 4, name: '1. Who publishes Lodestar' })).toBeTruthy();
 });
 
 it('offers a retry when the notice cannot be loaded', async () => {

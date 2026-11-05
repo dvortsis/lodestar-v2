@@ -10,9 +10,11 @@
 	interface Props {
 		notice?: Notice | null;
 		scroll?: boolean;
+		/** See LegalNotice: 3 where a screen heading already names the notice. */
+		level?: 2 | 3;
 	}
 
-	let { notice = $bindable(null), scroll = true }: Props = $props();
+	let { notice = $bindable(null), scroll = true, level = 2 }: Props = $props();
 	let failed = $state(false);
 	let loading = false;
 
@@ -37,7 +39,7 @@
 </script>
 
 {#if notice}
-	<LegalNotice text={notice.text} label={m.auth_notice_label()} {scroll} />
+	<LegalNotice text={notice.text} label={m.auth_notice_label()} {scroll} {level} />
 {:else if failed}
 	<Banner kind="error">
 		{m.auth_notice_failed()}

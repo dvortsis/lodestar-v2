@@ -10,9 +10,11 @@
 		label: string;
 		/** Scroll inside a box (setup, sign-in) or flow with the page (About). */
 		scroll?: boolean;
+		/** The level the notice's own `#` heading takes, below the page's headings; `##` is one lower. */
+		level?: 2 | 3;
 	}
 
-	let { text, label, scroll = true }: Props = $props();
+	let { text, label, scroll = true, level = 2 }: Props = $props();
 	const blocks = $derived(parseBlocks(text));
 	const LINK = 'ls-focus break-all text-primary underline';
 </script>
@@ -46,10 +48,15 @@
 	]}
 >
 	{#each blocks as b, i (i)}
-		{#if b.t === 'heading' && b.level === 1}
+		{#if b.t === 'heading' && b.level === 1 && level === 2}
 			<h2 class="text-title font-semibold">{@render inlines(b.c)}</h2>
+		{:else if b.t === 'heading' && (b.level === 1 || level === 2)}
+			<!-- `#` under a screen heading, or `##` on its own page -->
+			<h3 class={b.level === 1 ? 'text-title font-semibold' : 'mt-2 font-semibold'}>
+				{@render inlines(b.c)}
+			</h3>
 		{:else if b.t === 'heading'}
-			<h3 class="mt-2 font-semibold">{@render inlines(b.c)}</h3>
+			<h4 class="mt-2 font-semibold">{@render inlines(b.c)}</h4>
 		{:else if b.t === 'ul'}
 			<ul class="flex list-disc flex-col gap-1 pl-5">
 				{#each b.items as item, j (j)}

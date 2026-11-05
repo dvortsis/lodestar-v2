@@ -1,18 +1,27 @@
 // The Legal Notice (owner decision §2.38): fetched from the server, which builds it in, once per
 // page load. Setup sends its version with the password; the sign-in gate accepts it.
-import { api } from '$lib/api/client';
+import { api, errorFromResponse } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
 
 export type LegalNotice = components['schemas']['LegalNotice'];
 
 let cached: Promise<LegalNotice> | undefined;
 
-/** The notice; a failed fetch isn't cached, so the next call tries again. */
+/**
+ * The notice; a failed fetch isn't cached, so the next call tries again. Fetched directly, not
+ * through `api`: it's open, so its answer proves nothing about the session, and `api` would mark
+ * the tab signed in (a signed-out visitor of /setup, or the sign-in gate before Accept).
+ */
 export function loadNotice(): Promise<LegalNotice> {
-	cached ??= api.get('/legal/notice').catch((e: unknown) => {
-		cached = undefined;
-		throw e;
-	});
+	cached ??= fetch('/api/v1/legal/notice', { headers: { Accept: 'application/json' } })
+		.then(async (r) => {
+			if (!r.ok) throw await errorFromResponse(r);
+			return (await r.json()) as LegalNotice;
+		})
+		.catch((e: unknown) => {
+			cached = undefined;
+			throw e;
+		});
 	return cached;
 }
 
@@ -28,13 +37,14 @@ export const FONT_WAIT_MS = 2000;
 export function fontsSettled(): Promise<void> {
 	const fonts = typeof document === 'undefined' ? undefined : document.fonts;
 	if (!fonts?.load) return Promise.resolve();
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	return Promise.race([
 		fonts.load('400 1em "Atkinson Hyperlegible Next"', 'Lodestar').then(
 			() => {},
 			() => {}
 		),
-		new Promise<void>((resolve) => setTimeout(resolve, FONT_WAIT_MS))
-	]);
+		new Promise<void>((resolve) => (timer = setTimeout(resolve, FONT_WAIT_MS)))
+	]).finally(() => clearTimeout(timer));
 }
 
 /** Records that the signed-in admin accepted `version`. */

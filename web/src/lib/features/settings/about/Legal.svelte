@@ -17,4 +17,4 @@
 	</p>
 {/if}
 <!-- On About the notice flows with the page instead of scrolling in a box. -->
-<NoticeBox bind:notice scroll={false} />
+<NoticeBox bind:notice scroll={false} level={3} />

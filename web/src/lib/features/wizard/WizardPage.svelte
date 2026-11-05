@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The first-run wizard's shell (§10.10.10): stepped progress, one primary action per step, Back
-	// and Skip on the optional ones. The first steps (`SETUP_STEPS`) are done in /setup; the rest load on demand, one
-	// chunk each, and share this frame. Progress sits in sessionStorage so a reload resumes, and
+	// and Skip on the optional ones. The first steps (`SETUP_STEPS`) are done in /setup; the rest
+	// load on demand, one chunk each, and share this frame. Progress sits in sessionStorage so a reload resumes, and
 	// nothing else in the app waits on it.
 	import { tick, type Component } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';

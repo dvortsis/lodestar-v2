@@ -240,7 +240,7 @@ No `rounded-full` on containers or primary buttons. Tailwind's default
 | `--compbar-gap` | 2px | Surface-coloured gap between composition segments. |
 | `--toast-width` | 384px | Toast region width from `large` up (full width minus gutters below). The toast fade reuses `--duration-banner` (0 under reduced motion). |
 | `--listbox-max-height` | 5 × `--row-height-comfortable` | Popup listboxes (Combobox, later Select/Menu) scroll beyond this. |
-| `--notice-max-height` | 50dvh | The height of the Legal Notice's scrolling box on the setup and sign-in screens (LEGAL-1r). A fixed height since LEGAL-1, the same while it loads, so the notice arriving moves nothing. |
+| `--notice-max-height` | 50svh | The height of the Legal Notice's scrolling box on the setup and sign-in screens (LEGAL-1r). A fixed height since LEGAL-1, the same while it loads, so the notice arriving moves nothing; `svh` so a phone's address bar showing or hiding doesn't resize it mid-read. |
 | `--art-height-large` | 240px | Illustration height at large (art above text). |
 | `--art-height-small` | 160px | Illustration height at medium/small; hidden when the viewport is < 600px tall. |
 

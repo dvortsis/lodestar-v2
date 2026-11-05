@@ -112,7 +112,7 @@ test('first-run setup: the Legal Notice, a token from a pasted log line, passwor
 	expect(stored).not.toContain('correct horse');
 });
 
-test('a wrong setup token returns to step 1 with a clear error, never echoing the token', async ({
+test('a wrong setup token returns to the token step with a clear error, never echoing the token', async ({
 	page,
 	go,
 	mock

@@ -10,6 +10,8 @@
 	const next = $derived(safeNext(page.url.searchParams.get('next'), page.url.origin));
 	// Signed in, but the Legal Notice must be accepted first (owner decision §2.38).
 	let notice = $state(false);
+	// Handed over by signing in: focus follows to the notice (not on first paint).
+	let handover = $state(false);
 	const title = $derived(notice ? m.auth_notice_title() : m.auth_login_title());
 </script>
 
@@ -18,9 +20,9 @@
 <AuthPage {title} lead={notice ? m.auth_notice_lead() : m.auth_login_lead()}>
 	<AuthGate page="login" {next} onstatus={(s) => (notice = s?.notice_required === true)}>
 		{#if notice}
-			<NoticeGate {next} />
+			<NoticeGate {next} focusOnLoad={handover} />
 		{:else}
-			<LoginForm {next} onnotice={() => (notice = true)} />
+			<LoginForm {next} onnotice={() => ((handover = true), (notice = true))} />
 		{/if}
 	</AuthGate>
 </AuthPage>

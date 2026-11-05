@@ -1162,8 +1162,9 @@ export default [
 	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
 	// About's diagnostics block and licence list (S-about): LIMIT_ABOUT_PARTS
 	entry('Settings about parts (on demand)', settingsAboutPartsLazy, '3.44 KB'),
-	// LEGAL-1: About → Legal, the notice's box and renderer. Measured 2.74 KB, limit = measured + ~10%.
-	entry('Settings about Legal Notice (on demand)', settingsAboutLegalLazy, '3 KB'),
+	// LEGAL-1: About → Legal, the notice's box, renderer and font wait. Measured 3.01 KB, limit =
+	// measured + ~10%.
+	entry('Settings about Legal Notice (on demand)', settingsAboutLegalLazy, '3.3 KB'),
 	entry('Settings about icon and purpose (on demand)', settingsAboutModulesLazy, '0.39 KB'),
 	// Updates' release notes and history (S-updates): measured + 10%.
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),

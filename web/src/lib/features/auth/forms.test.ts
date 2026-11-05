@@ -219,7 +219,9 @@ describe('SetupForm', () => {
 		const region = screen.getByRole('region', { name: 'Legal Notice' });
 		expect(region.getAttribute('tabindex')).toBe('0');
 		expect(region.className).toContain('overflow-y-auto');
-		expect(screen.getByRole('heading', { level: 3, name: '1. Who' })).toBeTruthy();
+		// Under the step's own h2: the notice's title is h3, its sections h4.
+		expect(screen.getByRole('heading', { level: 3, name: 'Lodestar Legal Notice' })).toBeTruthy();
+		expect(screen.getByRole('heading', { level: 4, name: '1. Who' })).toBeTruthy();
 		expect(region.querySelectorAll('li')).toHaveLength(2);
 		expect(region.querySelector('strong')!.textContent).toBe('Version 2 · 2026-11-04');
 		expect(readBox().checked).toBe(false);
@@ -376,6 +378,16 @@ describe('LoginForm and the Legal Notice', () => {
 
 describe('NoticeGate', () => {
 	const accept = () => screen.getByRole('button', { name: 'I have read it, continue' });
+
+	it('takes focus to the notice when sign-in handed over, and not on first paint', async () => {
+		const first = render(NoticeGate, { next: '/' });
+		const region = await screen.findByRole('region', { name: 'Legal Notice' });
+		expect(document.activeElement).not.toBe(region);
+		first.unmount();
+		render(NoticeGate, { next: '/', focusOnLoad: true });
+		const again = await screen.findByRole('region', { name: 'Legal Notice' });
+		await waitFor(() => expect(document.activeElement).toBe(again));
+	});
 
 	it('accepts the version it showed, then goes on to next', async () => {
 		render(NoticeGate, { next: '/search?q=a' });

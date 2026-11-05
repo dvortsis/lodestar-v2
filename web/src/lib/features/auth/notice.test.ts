@@ -1,6 +1,7 @@
 // The notice waits for the UI font so it never reflows on screen, but never longer than the cap.
 import { afterEach, expect, it, vi } from 'vitest';
-import { FONT_WAIT_MS, fontsSettled } from './notice';
+import { onSessionOk } from '$lib/api/client';
+import { FONT_WAIT_MS, fontsSettled, loadNotice, resetNoticeCache } from './notice';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -40,4 +41,18 @@ it('stops waiting after the cap when the font never arrives', async () => {
 it('shows the notice anyway when the font fails to load', async () => {
 	withFonts(() => Promise.reject(new Error('blocked')));
 	await expect(fontsSettled()).resolves.toBeUndefined();
+});
+
+it('loads the open notice without counting it as proof of a session', async () => {
+	resetNoticeCache();
+	const ok = vi.fn();
+	const off = onSessionOk(ok);
+	vi.stubGlobal(
+		'fetch',
+		vi.fn(async () => new Response(JSON.stringify({ version: 3, text: '# N' }), { status: 200 }))
+	);
+	await expect(loadNotice()).resolves.toEqual({ version: 3, text: '# N' });
+	expect(ok).not.toHaveBeenCalled();
+	off();
+	vi.unstubAllGlobals();
 });

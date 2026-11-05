@@ -1,6 +1,6 @@
 // The wizard's steps and its progress (§10.10.10). The first steps happen in /setup, before there's
-// a session (`SETUP_STEPS`); `STEPS` holds the rest. Step 6 (import from bitmagnet) is still a hidden slot (online import is deferred,
-// B-import-server-2): `SLOTS` names where it goes, so adding it is a new entry here and a new
+// a session (`SETUP_STEPS`); `STEPS` holds the rest. §10.10.10's import step (from bitmagnet) is
+// still a hidden slot (online import is deferred, B-import-server-2): `SLOTS` names where it goes, so adding it is a new entry here and a new
 // loader in the shell, nothing else (docs/decisions/2026-10-31-S-wizard.md).
 
 export type StepId =
