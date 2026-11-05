@@ -237,7 +237,7 @@ describe('SettingField', () => {
 	});
 
 	it('copies the absolute link to the field from the menu, once', async () => {
-		const writeText = vi.fn(async () => {});
+		const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
 		vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
 		show('crawler.timeout_secs');
 		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }));
