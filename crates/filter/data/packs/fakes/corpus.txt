@@ -51,6 +51,10 @@ match Example.Show.S01.1080p.WEB
   file 10M Example.Show.S01E01.1080p.WEB.mkv
   file 10M Example.Show.S01E02.1080p.WEB.mkv
   file 35M Example.Show.S01E03.1080p.WEB.mkv
+match Big Movie 2024 2160p WEB
+  file 30M Example Shorts S01E01 1080p WEB.mkv
+  file 30M Example Shorts S01E02 1080p WEB.mkv
+  file 30M Example Shorts S01E03 1080p WEB.mkv
 match Example Collection 1080p WEB
   file 30M Example.Show.S01E01.1080p.WEB.mkv
   file 30M Other.Show.S01E02.1080p.WEB.mkv

@@ -38,8 +38,8 @@ fn real_mw2(c: &PackCtx<'_>) -> bool {
 }
 
 /// The built-in manifest with MW-2 at version 1 only, the base these
-/// tests start from (the build ships MW-2@2 since RP-1b; what MW-2
-/// matches doesn't matter here, only its versions and action).
+/// tests start from (the build ships MW-2@2 since RP-1b): the version 1
+/// this build keeps.
 fn at_v1() -> Arc<Manifest> {
     let b = Manifest::builtin();
     let mut entries: Vec<RuleEntry> = PackRule::ALL
@@ -47,16 +47,8 @@ fn at_v1() -> Arc<Manifest> {
         .filter(|r| *r != PackRule::Mw2)
         .map(|r| b.entry(r).clone())
         .collect();
-    entries.push(RuleEntry::new(
-        PackRule::Mw2,
-        true,
-        vec![Version {
-            version: 1,
-            direction: Direction::Widens,
-            action: Action::Hide,
-            code: Some(Code::Fn(real_mw2)),
-        }],
-    ));
+    let v1 = b.entry(PackRule::Mw2).retained(1).expect("kept").clone();
+    entries.push(RuleEntry::new(PackRule::Mw2, true, vec![v1]));
     Arc::new(Manifest::new(entries).unwrap())
 }
 

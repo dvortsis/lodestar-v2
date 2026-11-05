@@ -628,12 +628,13 @@ mod tests {
         out
     }
 
-    /// Per rule, version and action, how many of [`golden_set`] it matches and a
-    /// hash of which, for every version whose code is kept. MW-2@2 and
-    /// FK-2@2 match the same as their version 1 here: the set has no
-    /// music-production or short-episode pack, which is what they pass. A change to what a rule matches fails this unless
-    /// its version is bumped (and the new version's golden added): the
-    /// golden of today's behaviour that RP-1's corpus takes over.
+    /// Per rule, version and action, how many of [`golden_set`] it matches
+    /// and a hash of which, for every version whose code is kept. MW-2@2
+    /// and FK-2@2 match the same as their version 1 here: the set has no
+    /// music-production or short-episode pack, which is what they pass. A
+    /// change to what a rule matches fails this unless its version is
+    /// bumped (and the new version's golden added): the golden of today's
+    /// behaviour that RP-1's corpus takes over.
     const GOLDEN: &[(&str, usize, u64)] = &[
         ("MW-4@1 drop", 16, 13510458297458882951),
         ("MW-1@1 hide", 318, 18405588938268816894),

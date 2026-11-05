@@ -593,17 +593,18 @@ const SAMPLE_DIRS: &[&str] = &[
     "percussion",
 ];
 
-/// At least this many sound files (audio and presets) in a
-/// music-production pack, and more of them than half its files.
+/// At least this many audio files in a music-production pack, and this
+/// many presets or samples in sample folders for its layout.
 const MIN_SOUNDS: usize = 2;
 
 /// FK-2@2's short-episode pack: at least this many episodes.
 const MIN_EPISODES: usize = 3;
 
-/// No episode of a short-episode pack is smaller than this: a real HD
-/// short of a minute or more is larger, and a fake is usually far
-/// smaller.
-const MIN_EPISODE_BYTES: u64 = 8 << 20;
+/// No episode of a short-episode pack is smaller than this. HD video at
+/// a typical web bitrate (about 2-6 Mbit/s) runs to 16 MiB in well under
+/// a minute; the smallest episode of the precision corpus is 18 MiB, and
+/// a fake is usually far smaller.
+const MIN_EPISODE_BYTES: u64 = 16 << 20;
 
 impl Ctx<'_> {
     /// Whether the torrent has more files than the rules read
@@ -623,10 +624,12 @@ impl Ctx<'_> {
     ///   [`MAX_INSTALLERS`]: any other program the pack ([`EXECUTABLE`]) or
     ///   the classifier ([`lodestar_classify::ext::is_dangerous`], which adds
     ///   `.com`) knows keeps it held;
-    /// - **sounds**: at least [`MIN_SOUNDS`] audio or [`PRESETS`] files,
-    ///   more than half the files and at least twice the installers;
-    /// - **a production layout**: a [`PRESETS`] file, or at least
-    ///   [`MIN_SOUNDS`] audio files inside a [`SAMPLE_DIRS`] folder.
+    /// - **sounds**: at least [`MIN_SOUNDS`] audio files, and the audio and
+    ///   [`PRESETS`] files together more than half the files and at least
+    ///   twice the installers;
+    /// - **a production layout**: at least [`MIN_SOUNDS`] [`PRESETS`]
+    ///   files, or at least [`MIN_SOUNDS`] audio files inside a
+    ///   [`SAMPLE_DIRS`] folder.
     ///
     /// Plug-in binaries (`.vst3`, `.dll`, …) never count as sounds or as
     /// the layout, so code beside one sample is still held. Folder and
@@ -636,7 +639,8 @@ impl Ctx<'_> {
         if self.facts.class.content_type != ContentType::Music || self.truncated() {
             return false;
         }
-        let (mut installers, mut sounds, mut presets, mut sampled) = (0usize, 0usize, 0, 0);
+        let (mut installers, mut sounds, mut audio, mut presets, mut sampled) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
         for (f, e) in &self.files {
             let e = e.as_ref().map_or("", |x| x.as_str());
             // What the pack reads as a program, or what the classifier
@@ -651,6 +655,7 @@ impl Ctx<'_> {
                 sounds += 1;
             } else if lodestar_classify::ext::category_of(e) == Category::Audio {
                 sounds += 1;
+                audio += 1;
                 let dirs = &f.path[..f.path.len().saturating_sub(1)];
                 if dirs
                     .iter()
@@ -661,17 +666,18 @@ impl Ctx<'_> {
             }
         }
         (1..=MAX_INSTALLERS).contains(&installers)
-            && sounds >= MIN_SOUNDS
+            && audio >= MIN_SOUNDS
             && sounds * 2 > self.files.len()
             && sounds >= 2 * installers
-            && (presets > 0 || sampled >= MIN_SOUNDS)
+            && (presets >= MIN_SOUNDS || sampled >= MIN_SOUNDS)
     }
 
     /// FK-2@2's guard (§20.6 "short-episode pack"): every video is an
     /// episode of one series, and they look like a season's worth. All of:
     /// - at least [`MIN_EPISODES`] video files;
     /// - each named `<series> SxxEyy …`, the same series words before the
-    ///   episode marker in every one, and no episode twice;
+    ///   episode marker in every one, the torrent's name starting with
+    ///   them, and no episode twice;
     /// - each at least [`MIN_EPISODE_BYTES`], and the largest at most twice
     ///   the smallest.
     ///
@@ -710,7 +716,13 @@ impl Ctx<'_> {
             small = small.min(f.size);
             large = large.max(f.size);
         }
-        seen.len() >= MIN_EPISODES && small >= MIN_EPISODE_BYTES && large <= small.saturating_mul(2)
+        let named = series
+            .as_ref()
+            .is_some_and(|s| self.name_words().starts_with(s));
+        named
+            && seen.len() >= MIN_EPISODES
+            && small >= MIN_EPISODE_BYTES
+            && large <= small.saturating_mul(2)
     }
 }
 
@@ -920,10 +932,28 @@ mod tests {
             ("02 - Song.wav", 30 * M),
             ("setup.exe", 2 * M),
         ]));
-        // A preset file is the layout on its own.
+        // One song and one preset beside an installer is held: the
+        // layout takes two presets, and two audio files are needed anyway.
+        assert!(mw2(&[
+            ("01 - Song.wav", 60 * M),
+            ("Bass.fxp", 40_000),
+            ("setup.exe", 2 * M),
+        ]));
+        assert!(
+            mw2(&[
+                ("01 - Song.wav", 60 * M),
+                ("Bass.fxp", 40_000),
+                ("Lead.fxp", 40_000),
+                ("Pad.fxp", 40_000),
+                ("setup.exe", 2 * M),
+            ]),
+            "presets don't stand in for audio"
+        );
         assert!(!mw2(&[
             ("01 - Song.wav", 30 * M),
+            ("02 - Song.wav", 30 * M),
             ("Bass.fxp", 40_000),
+            ("Lead.fxp", 40_000),
             ("setup.exe", 2 * M),
         ]));
         // Anything but a plain installer is held.
@@ -1011,10 +1041,25 @@ mod tests {
         assert!(fk2(&[(&e1, 30 * M)]), "one tiny HD file");
         assert!(fk2(&[(&e1, 30 * M), (&e2, 30 * M)]), "two episodes");
         // The floor and the spread.
-        assert!(!fk2(&[(&e1, 8 * M), (&e2, 8 * M), (&e3, 8 * M)]));
-        assert!(fk2(&[(&e1, 8 * M - 1), (&e2, 8 * M), (&e3, 8 * M)]));
-        assert!(!fk2(&[(&e1, 15 * M), (&e2, 30 * M), (&e3, 20 * M)]));
-        assert!(fk2(&[(&e1, 15 * M), (&e2, 30 * M + 1), (&e3, 20 * M)]));
+        assert!(!fk2(&[(&e1, 16 * M), (&e2, 16 * M), (&e3, 16 * M)]));
+        assert!(fk2(&[(&e1, 16 * M - 1), (&e2, 16 * M), (&e3, 16 * M)]));
+        assert!(!fk2(&[(&e1, 17 * M), (&e2, 34 * M), (&e3, 20 * M)]));
+        assert!(fk2(&[(&e1, 17 * M), (&e2, 34 * M + 1), (&e3, 20 * M)]));
+        // The torrent's name must start with the episodes' series.
+        assert!(
+            hit(
+                "Big Movie 2024 2160p",
+                &[(&e1, 30 * M), (&e2, 30 * M), (&e3, 30 * M)]
+            )
+            .contains(&"FK-2")
+        );
+        assert!(
+            !hit(
+                "Example.Shorts.S01.1080p",
+                &[(&e1, 30 * M), (&e2, 30 * M), (&e3, 30 * M)]
+            )
+            .contains(&"FK-2")
+        );
         // One series, no repeats, every video an episode.
         assert!(fk2(&[
             (&e1, 30 * M),
@@ -1649,6 +1694,21 @@ mod tests {
                     .filter(|r| masked.contains(r) || ["SP-1", "SP-2"].contains(r))
                     .collect();
                 prop_assert_eq!(&neutralized, &both);
+            }
+
+            /// `episode` never panics on any word, and reads back every
+            /// `sNNeNN` of one to three digits each, leading zeros or not.
+            #[test]
+            fn episode_markers_round_trip(
+                any_word in "\\PC{0,24}",
+                s in 0u16..1000,
+                e in 0u16..1000,
+                sw in 1usize..=3,
+                ew in 1usize..=3,
+            ) {
+                let _ = super::super::episode(&any_word);
+                let w = format!("s{s:0sw$}e{e:0ew$}");
+                prop_assert_eq!(super::super::episode(&w), Some((s, e)));
             }
         }
     }

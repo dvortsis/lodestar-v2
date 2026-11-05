@@ -4,7 +4,7 @@ One entry per rule version, newest first. Each names its direction against the v
 
 ## FK-2@2
 
-`narrows` against FK-2@1. Adds the short-episode guard §20.6 names ("short-episode pack"), which RP-1's precision corpus found missing. FK-2@1 still matches unless every video is an episode named `<series> SxxEyy`, there are at least three, all of one series with no episode twice, none is under 8 MiB and the largest is at most twice the smallest. A single tiny HD video is still matched. Action: flag.
+`narrows` against FK-2@1. Adds the short-episode guard §20.6 names ("short-episode pack"), which RP-1's precision corpus found missing. FK-2@1 still matches unless every video is an episode named `<series> SxxEyy`, there are at least three, all of one series with no episode twice, the torrent's name starts with that series, none is under 16 MiB and the largest is at most twice the smallest. A single tiny HD video is still matched. Action: flag.
 
 ## FK-1@1 (baseline)
 

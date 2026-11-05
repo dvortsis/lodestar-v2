@@ -4,12 +4,13 @@
 //!
 //! - **Lawful names:** every golden-corpus name, with the files a torrent
 //!   of its kind carries, is held by neither rule.
-//! - **The guards open no hole on real names:** with a lure added to each
-//!   one (an installer beside the media for MW-2, each video shrunk under
-//!   the 40 MiB tiny-video threshold for FK-2), version 2 holds exactly
-//!   what version 1 holds. The guards pass production packs and
-//!   short-episode packs, which real release names with those files
-//!   aren't.
+//! - **Version 1's part is unchanged on real names:** with a lure added
+//!   to each one (an installer beside the media for MW-2, each video
+//!   shrunk under the 40 MiB tiny-video threshold for FK-2), version 2
+//!   holds exactly what version 1 holds. This is by construction: the
+//!   corpus gives music names two tracks in the root and video names one
+//!   file, so neither guard can apply. The guards themselves are measured
+//!   by the pack corpora and the precision items.
 //! - **The pack corpora:** each rule's must-match examples are all held
 //!   and its must-not-match ones and precision items all pass.
 
