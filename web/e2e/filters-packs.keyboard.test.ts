@@ -1,6 +1,7 @@
 // RP-6, keyboard only: Settings → Filters & Safety → Packs. Accepting a pending weakening version
 // asks for the password and sends the previewed versions with it; a strengthening one does not ask.
-// A changelog is text. Every state is checked with axe.
+// A changelog is text. Axe checks the notice, both dialogs' states, the done state, the override
+// editor, paused / changed / unreadable overrides and the corpus badges.
 import { expectNoA11yViolations } from './a11y';
 import type { OpenApiMock } from './mock/openapi-mock';
 import { expect, test } from './support/test';
@@ -163,9 +164,12 @@ test('a weakening version asks for the password, which goes with the previewed v
 	expect(mock.calls('applyFilterChange')).toHaveLength(0);
 	await page.keyboard.type('keyboard-password');
 	await kbd.press('Enter');
-	await expect(page.getByText('What changed').first()).toBeVisible();
+	await expect(
+		page.getByTestId('change-dialog').getByText('The change was applied.')
+	).toBeVisible();
+	await expectNoA11yViolations(page);
+	await expect.poll(() => mock.calls('applyFilterChange').length).toBe(1);
 	const sent = mock.calls('applyFilterChange').map((r) => r.postDataJSON());
-	expect(sent).toHaveLength(1);
 	expect(sent[0].change).toEqual({
 		op: 'accept_pack_versions',
 		rules: ['MW-2'],
@@ -197,9 +201,105 @@ test('a strengthening version is accepted without a password', async ({ page, go
 	await expectNoA11yViolations(page);
 	await kbd.tabTo(page.getByTestId('change-apply'), 20);
 	await kbd.press('Enter');
-	await expect(page.getByText('What changed').first()).toBeVisible();
+	await expect(
+		page.getByTestId('change-dialog').getByText('The change was applied.')
+	).toBeVisible();
+	await expectNoA11yViolations(page);
+	await expect.poll(() => mock.calls('applyFilterChange').length).toBe(1);
 	const sent = mock.calls('applyFilterChange').map((r) => r.postDataJSON());
-	expect(sent).toHaveLength(1);
 	expect(sent[0].password).toBeUndefined();
 	expect(sent[0].change.versions).toEqual(['MW-2@2']);
+});
+
+test('overrides and corpus states have no axe violations; Quarantine is not offered', async ({
+	page,
+	go,
+	mock,
+	kbd
+}) => {
+	serve(mock, strengthening);
+	const base = {
+		id: 'MW-2',
+		on: true,
+		version: 2,
+		applied: 2,
+		pending: null,
+		action: 'hide',
+		base_action: 'hide',
+		base_changed: true
+	};
+	const ov = {
+		action: 'drop',
+		base: 1,
+		changed: true,
+		paused: false,
+		unless: null,
+		unreadable: false
+	};
+	const rule = (id: string, pack_override: object) => ({ ...base, id, pack_override });
+	mock.on('getFilters', {
+		allow: [],
+		core: [],
+		cs1_entries: 0,
+		exceptions: [],
+		ip_ranges: 0,
+		overrides: [],
+		pack_conditions: [],
+		packs: [
+			{
+				id: 'malware',
+				on: true,
+				version: 'MW-2@2',
+				changelog: '## MW-2@2\nText.',
+				rules: [
+					rule('MW-1', { ...ov, paused: true }),
+					rule('MW-2', ov),
+					rule('MW-3', { ...ov, unreadable: true, action: null, base: null })
+				]
+			},
+			{ id: 'lures', on: true, version: 'LU-1@1', changelog: '', rules: [] }
+		],
+		packs_seeded_over_rules: null,
+		pending_floor_removals: [],
+		pending_pack_versions: [],
+		quarantine: 0,
+		rules: [],
+		subscriptions: [],
+		version: 4
+	});
+	mock.on('getFilterFixtures', {
+		core: [],
+		packs: {
+			error: null,
+			failures: ['x'],
+			passes: false,
+			precision_failing: 0,
+			precision_items: 10,
+			rules: [
+				{
+					pack: 'malware',
+					rule: 'MW-2',
+					version: 2,
+					must_match: 5,
+					must_not_match: 5,
+					failing: 2,
+					gaps: 1,
+					direction_disagreements: 0
+				}
+			]
+		}
+	});
+	await go('/settings/filters');
+	await expect(page.getByTestId('pack-paused-MW-1')).toBeVisible();
+	await expect(page.getByTestId('pack-changed-MW-2')).toBeVisible();
+	await expect(page.getByTestId('pack-override-MW-3')).toContainText("can't be read");
+	await expect(page.getByTestId('pack-corpus-malware')).toContainText('2 to look at');
+	await expect(page.getByTestId('pack-corpus-global')).toBeVisible();
+	await expect(page.getByTestId('pack-corpus-lures')).toContainText('Not known');
+	await expect(page.getByTestId('pack-confirm-MW-1')).toBeVisible();
+	await page.getByTestId('pack-edit-MW-2').focus();
+	await kbd.press('Enter');
+	const options = await page.getByTestId('pack-action-MW-2').locator('option').allTextContents();
+	expect(options).toEqual(['Flag', 'Demote', 'Hide', 'Drop']);
+	await expectNoA11yViolations(page);
 });

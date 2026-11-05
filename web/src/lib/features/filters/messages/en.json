@@ -207,7 +207,7 @@
 	"filters_stale": "The filters couldn't be refreshed. What's shown may be out of date.",
 	"filters_packs_detail_heading": "Pack versions and overrides",
 	"filters_packs_version": "Version",
-	"filters_packs_changed_heading": "What changed",
+	"filters_packs_changelog": "Changelog",
 	"filters_packs_corpus": "Test examples",
 	"filters_packs_corpus_unknown": "Not known",
 	"filters_packs_corpus_error": "Couldn't be checked",
@@ -265,5 +265,9 @@
 	"filters_packs_act_hide": "Hide",
 	"filters_packs_act_quarantine": "Quarantine",
 	"filters_packs_act_drop": "Drop",
-	"filters_packs_act_unknown": "Unknown action"
+	"filters_packs_act_unknown": "Unknown action",
+	"filters_packs_corpus_notpass": "Not all examples pass",
+	"filters_packs_corpus_global": "Some of the pack test examples don't pass, so the packs may be less accurate than intended.",
+	"filters_packs_part_failed": "This part couldn't load.",
+	"filters_packs_impact_failed": "The effect of this acceptance couldn't load."
 }

@@ -288,3 +288,43 @@ describe('overrides', () => {
 		expect(screen.queryByTestId('pack-vs-MW-2')).toBeNull();
 	});
 });
+
+describe('review fixes', () => {
+	it('offers no Quarantine in the override editor, but still names it when it applies', async () => {
+		setup([rule({ action: 'quarantine', base_action: 'quarantine' })]);
+		const select = (await screen.findByTestId('pack-action-MW-2')) as HTMLSelectElement;
+		expect([...select.options].map((o) => o.textContent)).toEqual([
+			'Flag',
+			'Demote',
+			'Hide',
+			'Drop'
+		]);
+		expect(screen.getByTestId('pack-rule-MW-2').textContent).toContain('Quarantine');
+	});
+	it('keeps an unsaved edit across a reload that changes nothing stored', async () => {
+		setup([rule()]);
+		const unless = (await screen.findByTestId('pack-unless-MW-2')) as HTMLInputElement;
+		await fireEvent.input(unless, { target: { value: 'name:"draft"' } });
+		const a = strengthening();
+		job(a);
+		applied(a);
+		await fireEvent.click(screen.getByTestId('pack-rule-switch-MW-2'));
+		await fireEvent.click(await screen.findByTestId('change-apply'));
+		// The overview is read again after the apply.
+		await waitFor(() =>
+			expect(net.to('/filters').filter((r) => r.path === '/filters')).toHaveLength(2)
+		);
+		expect((screen.getByTestId('pack-unless-MW-2') as HTMLInputElement).value).toBe('name:"draft"');
+	});
+	it('shows Not known when the pack has no corpus rows, and a note when the corpus fails', async () => {
+		const c = corpus({ passes: false });
+		setup([rule()], [], { ...c, packs: { ...c.packs, rules: [] } });
+		await waitFor(() =>
+			expect(screen.getByTestId('pack-corpus-malware').textContent).toContain('Not known')
+		);
+		expect(screen.getByTestId('pack-corpus-malware').textContent).not.toContain(
+			'All examples pass'
+		);
+		await screen.findByTestId('pack-corpus-global');
+	});
+});

@@ -370,6 +370,10 @@
 					{@const rows = assessment?.pack_acceptance ?? []}
 					{#await import('../screens/packs/PackImpact.svelte') then { default: PackImpact }}
 						<PackImpact {rows} />
+					{:catch}
+						<p class="text-muted-text" data-testid="pack-impact-failed">
+							{m.filters_packs_impact_failed()}
+						</p>
 					{/await}
 				{/if}
 				{#if shadowing && change && canShadow(change)}

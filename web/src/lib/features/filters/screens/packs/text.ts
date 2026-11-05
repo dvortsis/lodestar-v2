@@ -10,7 +10,9 @@ const actions: Record<string, () => string> = {
 	quarantine: m.filters_packs_act_quarantine,
 	drop: m.filters_packs_act_drop
 };
-export const ACTIONS = ['flag', 'demote', 'hide', 'quarantine', 'drop'] as const;
+// What an override may set: the server refuses `quarantine` (pack_overrides::ACTIONS). `actionText`
+// still names it, for showing the action that applies now.
+export const ACTIONS = ['flag', 'demote', 'hide', 'drop'] as const;
 export const actionText = (a: string | null) =>
 	a && actions[a] ? actions[a]!() : m.filters_packs_act_unknown();
 

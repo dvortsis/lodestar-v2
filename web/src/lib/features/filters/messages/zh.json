@@ -207,7 +207,7 @@
 	"filters_flows_chosen": "{label}（已选）",
 	"filters_packs_detail_heading": "规则包版本与覆盖",
 	"filters_packs_version": "版本",
-	"filters_packs_changed_heading": "更新内容",
+	"filters_packs_changelog": "更新记录",
 	"filters_packs_corpus": "测试样例",
 	"filters_packs_corpus_unknown": "未知",
 	"filters_packs_corpus_error": "无法检查",
@@ -265,5 +265,9 @@
 	"filters_packs_act_hide": "隐藏",
 	"filters_packs_act_quarantine": "隔离",
 	"filters_packs_act_drop": "丢弃",
-	"filters_packs_act_unknown": "未知操作"
+	"filters_packs_act_unknown": "未知操作",
+	"filters_packs_corpus_notpass": "并非所有样例通过",
+	"filters_packs_corpus_global": "部分规则包测试样例未通过，规则包的准确度可能低于预期。",
+	"filters_packs_part_failed": "这一部分无法加载。",
+	"filters_packs_impact_failed": "此次接受的影响无法加载。"
 }

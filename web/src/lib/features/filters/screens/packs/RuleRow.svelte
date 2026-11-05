@@ -19,10 +19,13 @@
 	const ov = $derived(r.pack_override);
 	let action = $state<string>('');
 	let unless = $state('');
-	// The editor starts from the stored override, or the base action; it follows a reload.
+	// The editor starts from the stored override, or the base action. It is seeded again only when
+	// that stored value changes (compared by value), so a reload never discards an unsaved edit.
+	const seed = $derived(JSON.stringify([ov?.action ?? r.base_action, ov?.unless ?? '']));
 	$effect(() => {
-		action = ov?.action ?? r.base_action;
-		unless = ov?.unless ?? '';
+		const [a, u] = JSON.parse(seed) as [string, string];
+		action = (ACTIONS as readonly string[]).includes(a) ? a : 'hide';
+		unless = u;
 	});
 	const options = ACTIONS.map((a) => ({ value: a, label: actionText(a) }));
 </script>

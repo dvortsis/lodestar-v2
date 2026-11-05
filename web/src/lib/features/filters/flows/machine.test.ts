@@ -469,6 +469,51 @@ describe('assessmentDiffers', () => {
 	});
 });
 
+describe('pack acceptances and overrides', () => {
+	const accept: Change = { op: 'accept_pack_versions', rules: ['MW-2'] };
+	const set = { op: 'set_pack_override', rule: 'MW-2', action: 'hide' } as const;
+	const confirmOv = { op: 'confirm_pack_override', rule: 'MW-2' } as const;
+	const shown = weakening({ pack_versions: ['MW-2@2'], pack_base: 3 });
+
+	it('forApply sends the previewed pack_versions as versions', () => {
+		expect(forApply(accept, shown)).toEqual({ ...accept, versions: ['MW-2@2'] });
+		// Nothing previewed, nothing sent.
+		expect(forApply(accept, weakening())).toEqual(accept);
+	});
+	it('forApply sends the previewed pack_base as base, base 0 included', () => {
+		expect(forApply(set, shown)).toEqual({ ...set, base: 3 });
+		expect(forApply(confirmOv, shown)).toEqual({ ...confirmOv, base: 3 });
+		expect(forApply(confirmOv, weakening({ pack_base: 0 }))).toEqual({ ...confirmOv, base: 0 });
+		expect(forApply(confirmOv, weakening())).toEqual(confirmOv);
+	});
+	it('forApply leaves other changes alone', () => {
+		const other = coreSwitch('CS-2a', false);
+		expect(forApply(other, shown)).toEqual(other);
+	});
+	it('a different pack_versions or pack_base is a changed assessment', () => {
+		expect(assessmentDiffers(shown, weakening({ pack_versions: ['MW-2@3'], pack_base: 3 }))).toBe(
+			true
+		);
+		expect(assessmentDiffers(shown, weakening({ pack_versions: ['MW-2@2'], pack_base: 4 }))).toBe(
+			true
+		);
+		expect(assessmentDiffers(shown, weakening({ pack_versions: ['MW-2@2'], pack_base: 3 }))).toBe(
+			false
+		);
+	});
+	it('a 428 with other pack_versions asks again, with the changed notice', () => {
+		const ctx = run(previewed(shown, accept), { type: 'confirm', password: 'pw', now: T0 }).ctx;
+		const other = weakening({ pack_versions: ['MW-2@3'] });
+		const asked = run(ctx, {
+			type: 'apply_error',
+			seq: ctx.seq,
+			error: err(428, 'confirm_required', { assessment: other }),
+			now: T0
+		}).ctx;
+		expect(asked.state).toMatchObject({ kind: 'confirm', changed: true, assessment: other });
+	});
+});
+
 describe('the full state × event table', () => {
 	const doneCtx = () => {
 		const c = applying();

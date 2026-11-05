@@ -68,7 +68,7 @@
 							>
 						</div>
 						<ul class="flex flex-col gap-1 text-small">
-							{#each p.changelog as c (c.version)}
+							{#each p.changelog as c, i (i)}
 								<li>
 									<span class="font-semibold">@{c.version}</span> · {directionText(c.direction)}
 									<!-- Text, never HTML: a changelog is shown as the words it holds. -->
@@ -97,7 +97,7 @@
 
 	<details>
 		<summary class="cursor-pointer text-small" data-testid="pack-changelog-{pack.id}"
-			>{m.filters_packs_changed_heading()}</summary
+			>{m.filters_packs_changelog()}</summary
 		>
 		<pre
 			class="mt-2 whitespace-pre-wrap text-small text-muted-text"
@@ -106,7 +106,7 @@
 
 	<p class="flex flex-wrap items-center gap-2 text-small" data-testid="pack-corpus-{pack.id}">
 		<span class="text-muted-text">{m.filters_packs_corpus()}</span>
-		{#if corpus === null}
+		{#if corpus === null || (!corpus.error && mine.length === 0)}
 			<Badge>{m.filters_packs_corpus_unknown()}</Badge>
 		{:else if corpus.error}
 			<Badge variant="warning">{m.filters_packs_corpus_error()}</Badge>
@@ -114,6 +114,8 @@
 			<Badge variant="warning"
 				>{m.filters_packs_corpus_failing({ count: failing + disagree })}</Badge
 			>
+		{:else if !corpus.passes}
+			<Badge variant="warning">{m.filters_packs_corpus_notpass()}</Badge>
 		{:else}
 			<Badge variant="success">{m.filters_packs_corpus_ok()}</Badge>
 		{/if}

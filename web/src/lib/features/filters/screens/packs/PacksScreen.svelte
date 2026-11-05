@@ -4,6 +4,7 @@
 	// first view keeps within its budget.
 	import { onDestroy, onMount } from 'svelte';
 	import { api, isAbort } from '$lib/api/client';
+	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { Ask } from '../types';
 	import type { Overview } from '../model.svelte';
@@ -15,6 +16,8 @@
 	let corpus = $state.raw<PackCorpus | null>(null);
 	const ctl = new AbortController();
 	onMount(async () => {
+		// No packs, nothing to check (and no request).
+		if (!o.packs.length) return;
 		try {
 			corpus = (await api.get('/filters/fixtures', { signal: ctl.signal })).packs;
 		} catch (e) {
@@ -35,6 +38,11 @@
 		<h2 id="filters-packs-detail-h" class="text-small font-semibold">
 			{m.filters_packs_detail_heading()}
 		</h2>
+		{#if corpus && !corpus.error && !corpus.passes}
+			<div data-testid="pack-corpus-global">
+				<Banner kind="warning">{m.filters_packs_corpus_global()}</Banner>
+			</div>
+		{/if}
 		{#each o.packs as pack (pack.id)}
 			<PackPanel {pack} pending={pendingFor(pack.id)} {corpus} {ask} />
 		{/each}
