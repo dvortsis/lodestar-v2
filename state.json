@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T12:40Z",
+  "updated_at": "2026-11-05T12:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2981,11 +2981,13 @@
       "pr": 479
     },
     "ENR-1": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBwEorNQE51FrPWpnt",
       "launched": "2026-11-05T06:29Z",
-      "brief": "briefs/ENR-1.md"
+      "brief": "briefs/ENR-1.md",
+      "merge": "77cc0980",
+      "pr": 480
     },
     "RP-3": {
       "status": "merged",
@@ -3097,6 +3099,12 @@
       "since": "2026-11-05T12:33Z",
       "brief": "briefs/X-settings-trim.md",
       "model": "sonnet"
+    },
+    "ENR-1b": {
+      "status": "running",
+      "session": "session_01MMjhnBwEorNQE51FrPWpnt",
+      "since": "2026-11-05T12:50Z",
+      "brief": "briefs/ENR-1b.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4646,12 +4654,9 @@
     "Owner flag (\u00a72.19, \u00a72.26) from X-followups-1105 (#473): NAMES_TIMEOUT = 10 s (plugin listing timeout), next to NAMES_RETRY = 5 s. Minor: pack_override filter notes log rule 0 (pack ids are not numeric; Insights names the row). A later log-schema slice could add a label field for pack rule ids (they are fixed constants, safe to log).",
     "Owner flag (\u00a72.26) from SRC-17 (#474) after all cuts: Facet rail +831 B (17,696 B), Detail drawer +551 B (27,976 B), /t/[hash] +565 B (21,776 B), Detail sections on demand +1.04 kB (38,608 B, the lazy claim differences), Search cards +5 B (8,364 B).",
     "Owner flags (\u00a72.19) from SRC-13b (#479): SRC-13 politeness numbers confirmed unchanged (1 lookup/min per cache, 1 req/10 s per host, back-off 1 min to 6 h, 256-lookup lanes); consent is per host (a path change does not re-ask, a port change does); cache rows flagged IMPORTED; a stale Held is dropped unwritten. SRC-13c also: move SRC-4 FNV endpoint digest to SHA-256 or exact compare now that hosts come from user config.",
-    "New slice ENR-1b (Opus, /security-review), after #479 SRC-13b merges (writer.rs). Scope: a writer Ctx field so only Kind::Enrichment sources may attach adult sections; pass the generation/Handle and raise reenrich for deferred matches; mark a partial-upgrade refetch that has an adult claim for re-enrichment; pipeline/src/lib.rs intake must not count enrichment matches (strategy 202) as HARVESTED. Host wiring of AdultEnrichSource, Switches, StoreState and Interest joins the SRC-11c/ENR-7 wiring. Spec: docs/decisions/2026-11-05-ENR-1.md (#480).",
     "Owner flag (\u00a72.19) from ENR-1 (#480): stricter than plan: BEP 27 private torrents and FILES_PARTIAL imports are never sent for adult enrichment lookups.",
     "New slice B13b (Opus): use the title-identity key (exact keyword of the normalized title plus spans) that X-search-files-5 adds in search SCHEMA_VERSION 7, so short no-year titles (Up, Heat) find siblings beyond the 1,000-candidate window (docs/decisions/2026-10-22-B13.md Known limit). Launch after X-search-files-5 merges; only if the field made it into v7 (size cap 16 B/torrent).",
     "SRC-13c merge gates (from #479 review): (1) replace SRC-4 FNV consent digest with an exact compare (sorted host list stored in the acknowledgement); FNV-1a has a ~2^32 second-preimage once users write the list; (2) the consent dialog shows the full URL templates (per-user paths like /~user/ matter).",
-    "ENR-1b addition (from #480 review): pipeline ingest sends any adult section on a stored key down the matches path, skipping touched/adult, so an always-adult source attaching a section would bypass the X-source-adult mask; the Kind::Enrichment gate (or keeping always-adult sources on the normal path) must close it. Also fix the enrich.rs:325 generation race (apply_matches reads generation after the writer snapshot). ENR-7: rate-limit user-interest (opened) enrichment lookups.",
-    "ENR-1b also (runner call, \u00a72.33, stricter than Q2, flag to owner): the Display/Name query form returns NoQuery when the torrent name alone is ambiguous or uninformative (named.title.ambiguous or is_uninformative), e.g. New folder; it can never match, costs budget, and tells the service an adult item was viewed. Plus: a test that runs the backfill after a Pending refusal and asserts the item is eligible again; decisions note that a single-file torrent name is the file name (allowed, it is the display name). The runtime is inert until host wiring, so deferring is safe.",
     "X-ci-disk (#482) merged: test-job target 19G vs 41G+ before. Not yet proven on a 72G runner; the new disk step prints df every run. If a 72G runner still runs short, remove more preinstalled toolchains. Nits: continue-on-error on the diagnostic step; !cancelled() instead of always().",
     "Owner flag (\u00a72.26) from LEGAL-1 (#472) after main merge: CSS budget 19.65 \u2192 19.72 kB (under the \u00a710.1 20 kB cap), /t/[hash] 21,776 \u2192 21,840 B. The legal notice dropped the unauthorised-copy (planned) marker and its status line, still v3.",
     "After #479 merges: split a sync verify_body out of TorrentCache::ask (sources-plugins/src/torrent_cache.rs) so the torrent_cache fuzz target calls the real reply path and fuzzes Verified::claims (X-fuzz-1105, #484 decisions file). Next fuzz campaign: give more time to metainfo (~1k exec/s), rss, release, query and tokenizer.",
@@ -4662,7 +4667,8 @@
     "owner-flag \u00a72.26/\u00a72.19 (RP-6 #487): size-limit \"Filters packs list (on demand)\" 1.6 -> 1.85 kB (measured 1.79); new entries panels 9 kB, impact 2.4 kB; Filters first view unchanged at 31.01 kB.",
     "owner-flag \u00a72.19 (X-fuzz-cache-1105 #491): fuzzing found a tracker judged by its url-crate reading (public host) but stored as raw text with a loopback address in it (http:1.1/announce^udp://127.0.0.1...). Fixed: the checked, normalised URL is stored; non-canonical trackers are now stored in canonical form. Tightens SRC-13.",
     "Owner flags sent to the dashboard session 12:30Z: RP-1b MW-2@2 residual risk; RP-6 size raise; #491 canonical tracker storage.",
-    "X-claim-trackers (after #480; runner-approved tightening of SRC-13): one shared tracker host guard in pipeline store_claims (unverified.rs) and torrent_cache public_tracker: parse with url, store the serialised form, refuse literal private/loopback/link-local (incl. udp re-judgement) and localhost/*.localhost. Latent today: no magnet link or API emits claimed trackers (#491 review). Also correct docs/decisions/2026-11-05-X-fuzz-cache-1105.md: claim trackers are stored only, not shown in magnet links; url 2.5.8 leaves ^ unencoded."
+    "X-claim-trackers (after #480; runner-approved tightening of SRC-13): one shared tracker host guard in pipeline store_claims (unverified.rs) and torrent_cache public_tracker: parse with url, store the serialised form, refuse literal private/loopback/link-local (incl. udp re-judgement) and localhost/*.localhost. Latent today: no magnet link or API emits claimed trackers (#491 review). Also correct docs/decisions/2026-11-05-X-fuzz-cache-1105.md: claim trackers are stored only, not shown in magnet links; url 2.5.8 leaves ^ unencoded.",
+    "owner-flag \u00a72.19 (ENR-1b): the Display/Name query form returns NoQuery for ambiguous or uninformative torrent names; stricter than Q2."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5323,7 +5329,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T12:40Z",
+    "updated": "2026-11-05T12:50Z",
     "items": [
       {
         "slot": 1,
@@ -5400,7 +5406,7 @@
       {
         "slot": 10,
         "status": "idle",
-        "doing": "Held: no ready slice. ENR-1b waits on #480; RP-5 on RP-4; B13b on X-search-files-5; X-claim-trackers on #480 and #491's review"
+        "doing": "Held: X-claim-trackers waits for #491 (torrent_cache.rs) to merge; RP-5 on RP-4; B13b on X-search-files-5"
       },
       {
         "slot": 11,
@@ -5412,11 +5418,11 @@
       },
       {
         "slot": 12,
-        "slice": "ENR-1",
+        "slice": "ENR-1b",
         "role": "build",
         "agent": "claude",
-        "doing": "Adult enrichment runtime: what may be sent to ThePornDB/StashDB (never hashes or private items), caches, results through the content filters",
-        "since": "2026-11-05T06:29Z"
+        "doing": "Content safety: the enrichment gate, a race fix and no-query for vague names, before enrichment is switched on",
+        "since": "2026-11-05T12:50Z"
       }
     ]
   },
