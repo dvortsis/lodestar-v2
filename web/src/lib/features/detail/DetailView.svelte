@@ -36,6 +36,7 @@
 	let Contents = $state.raw<typeof import('./Contents.svelte').default>();
 	let Parsed = $state.raw<typeof import('./parsed/Parsed.svelte').default>();
 	let ErrorState = $state.raw<typeof import('./ErrorState.svelte').default>();
+	let Adult = $state.raw<typeof import('./adult/AdultEnrichment.svelte').default>();
 	let contentsAsked = false;
 	let parsedAsked = false;
 	function loadContents() {
@@ -55,9 +56,13 @@
 			loadParsed();
 		}
 	});
+	// ErrorState on an error; the adult-enrichment section only when the API sent it (admin, Show
+	// adult content on), so for everyone else its chunk never loads.
 	$effect(() => {
 		if (error && !ErrorState)
 			void import('./ErrorState.svelte').then((mod) => (ErrorState = mod.default));
+		if (detail?.adult_enrichment)
+			void import('./adult/AdultEnrichment.svelte').then((mod) => (Adult = mod.default));
 	});
 </script>
 
@@ -96,6 +101,7 @@
 		</div>
 		<Summary {detail} {hit} {level} />
 		<Provenance provenance={detail.provenance} {level} />
+		{#if Adult}<Adult {detail} {level} />{/if}
 		<section
 			class="ls-detail-section"
 			aria-labelledby="detail-h-contents"
