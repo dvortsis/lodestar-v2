@@ -174,15 +174,24 @@ github.open = [
   pr(25, 'X-a-2: Follow-up on a reused branch', 'slice/X-a', '', false),                 // title id only: one provisional node, not two
   pr(26, 'X-placed-1: A placement rule covers it', 'slice/X-placed-1', '', false),
   pr(27, 'X-done-1: Merged earlier, new PR', 'slice/X-done-1', '', false),
+  pr(28, 'Bump foo from 1 to 2', 'dependabot/foo', '', false),                           // no slice id anywhere: not "work in no slot"
 ];
-github.closed = [...savedClosed, pr(30, 'X-done-1: Merged', 'slice/X-done-1', '', true)];
-github.refs = [{ ref: 'refs/heads/slice/Q-branch-only' }, { ref: 'refs/heads/slice/X-bare' }];
+github.closed = [
+  ...savedClosed,
+  pr(1, 'B0: Split the API router', 'slice/B0', '', true),                            // B0 is merged, so its open follow-up is a follow-up
+  pr(30, 'X-done-1: Merged', 'slice/X-done-1', '', true),
+  pr(31, 'SRC-9b: Abandoned rework', 'slice/SRC-9', '', false),                        // closed, never merged: the branch's slice (SRC-9) is abandoned
+  { ...pr(32, 'Bump foo from 1 to 2', 'dependabot/foo', '', false) },
+];
+github.refs = [{ ref: 'refs/heads/slice/Q-branch-only' }, { ref: 'refs/heads/slice/X-bare' }, { ref: 'refs/heads/slice/SRC-9' }];
 github.state = { updated_at: 'x', slices: { 'X-both': { status: 'building', notes: 'in runner-state' } }, slots: { updated: new Date().toISOString(), items: [
   { slot: 1, slice: 'B0', doing: 'Follow-up on a merged slice.' },
   { slot: 2, slice: 'Y-1', doing: 'Named by its branch.' },
   { slot: 3, slice: 'X-brand-new', doing: 'Not in the plan files yet.' },
   { slot: 4, slice: 'Q-branch-only', doing: 'A branch and no PR yet.' },
   { slot: 5, slice: 'NOPE-9', doing: 'Nothing on GitHub at all.' },
+  { slot: 6, slice: 'constructor', doing: 'A name every object already has.' },
+  { slot: 7, slice: '__proto__', doing: 'And another.' },
 ] } };
 const ad = await toolR('plan_meta', 'o/r9');
 const adW = ad.filter((r) => r.key === 'warning').map((r) => r.label + ':' + r.value), adN = ad.filter((r) => r.key === 'note').map((r) => r.label + ':' + r.value);
@@ -197,7 +206,10 @@ const adNodes = await toolR('plan_nodes', 'o/r9'), brand = adNodes.find((n) => n
 assert.ok(brand && brand.state === 'active' && brand.pr === 20 && brand.level === 'slice' && brand.parent === 'ws-small', 'an X-* slice with an open PR appears in the default lane at once');
 const adSlots = await toolR('plan_slots', 'o/r9');
 assert.deepEqual(adSlots.slice(0, 4).map((x) => [x.slice, x.stage, x.pr]), [['B0', 'active', 21], ['Y-1', 'active', 22], ['X-brand-new', 'active', 20], ['Q-branch-only', 'active', 0]], 'rows show the live state and the open PR');
-assert.ok(!adNodes.some((n) => n.id === 'Y-1' || n.id === 'Q-branch-only'), 'only X-* slices get a tree node');
+assert.ok(!adNodes.some((n) => ['Y-1', 'Y-2', 'B0-2', 'Q-branch-only'].includes(n.id)), 'only X-* slices get a tree node');
+assert.notEqual(adNodes.find((n) => n.id === 'SRC-9').state, 'active', 'a branch whose only PR was closed unmerged (under another title id) is abandoned, not active');
+assert.ok(!openLoose.note.includes('#28') && !/Bump/.test(openLoose.note), 'an open PR with no slice id is not work in no slot');
+assert.equal(adSlots.find((x) => x.slot === 6)?.slice, 'constructor', 'a slot slice named like an Object property is handled, not a crash');
 assert.deepEqual(adNodes.filter((n) => n.id === 'X-both').map((n) => n.kind), ['round'], 'an id runner-state already lists is one node, not two');
 assert.deepEqual(adNodes.filter((n) => /^X-a/.test(n.id)).map((n) => n.id), ['X-a-2'], 'a follow-up PR on a reused branch is one provisional node, from its title id');
 assert.equal(adNodes.filter((n) => n.id === 'X-a-2').length, 1); assert.equal(ad.filter((r) => r.key === 'note' && r.label === 'Slice not in plan files yet' && r.value === 'X-a-2').length, 1, 'and one note');

@@ -69,8 +69,8 @@ export function buildPlan(inp: Inputs) {
   const mergedById: Record<string, { pr: number; agent: string }> = {};
   const mergedNums = new Set<number>();
   for (const p of inp.mergedPRs) { mergedNums.add(p.number); for (const id of sliceIdsOf(p)) mergedById[id] = { pr: p.number, agent: agentOf(p) }; }
-  const openById: Record<string, number> = {}, openPR: Record<string, PR> = {};
-  for (const p of inp.openPRs) for (const id of openIdsOf(p)) { openById[id] = p.number; openPR[id] = p; }
+  const openById: Record<string, number> = {}, openPR = new Map<string, PR>(); // a Map: a slot slice named `constructor` or `__proto__` must not find anything
+  for (const p of inp.openPRs) for (const id of openIdsOf(p)) { openById[id] = p.number; openPR.set(id, p); }
   // a branch that only has closed, unmerged PRs is abandoned work, not work in progress
   const abandoned = new Set<string>(); for (const p of inp.closedPRs || []) for (const id of openIdsOf(p)) abandoned.add(id);
   const started = new Set(inp.branches.filter((b) => !abandoned.has(b)));
@@ -144,7 +144,7 @@ export function buildPlan(inp: Inputs) {
   for (const p of inp.openPRs) for (const id of sliceIdsOf(p)) {
     if (provisional.has(id) || byid[id] || mergedById[id] || isRound(id, S[id]) || !/^X-[\w.-]+$/.test(id)) continue;
     provisional.add(id);
-    const pl = place(cfg, id), ws = wsIds.has(pl.ws) ? pl.ws : 'ws-small';
+    const pl = place(cfg, id), ws = wsIds.has(pl.ws) ? pl.ws : cfg.unplaced_workstream || 'ws-small';
     nodes.push({ id, parent: ws, level: 'slice', title: stripId(p.title) || id, agent: agentOf(p), kind: 'extra', model: '', state: 'active', pr: p.number, deps: '', why: '', unlocks: 0, note: 'Not in runner/slices.yaml yet' });
     notice('Slice not in plan files yet', id, 'PR #' + p.number + ' is for ' + id + ', which runner/slices.yaml does not list yet; it is shown as active until it does');
   }
@@ -227,7 +227,7 @@ export function buildPlan(inp: Inputs) {
       const slice = text(x.slice), doing = text(x.doing), since = text(x.since);
       const node = slice ? byId[slice] : undefined;
       // a slice with an open pull request (or a slice/<id> branch) is real work even when slices.yaml does not list it yet: a note, not an error
-      const livePR = slice ? openPR[slice] : undefined, live = !!slice && (!!livePR || started.has(slice));
+      const livePR = slice ? openPR.get(slice) : undefined, live = !!slice && (!!livePR || started.has(slice));
       if (slice && !node) {
         if (live) notice('Slot slice not in plan files yet', slice, 'slot ' + x.slot + ' names ' + slice + ', which runner/slices.yaml does not list, but ' + (livePR ? 'PR #' + livePR.number : 'branch slice/' + slice) + ' exists; add it to the plan files');
         else warn('Unknown slice', slice, 'slot ' + x.slot + ' in runner-state slots names a slice that is not in runner/slices.yaml, and has no open pull request or slice/ branch');
@@ -247,7 +247,7 @@ export function buildPlan(inp: Inputs) {
     else if (age > 24) warn('Slots list is stale', slotAsof, 'runner-state slots.updated is ' + Math.round(age) + ' h old; the runner should refresh it on the wake where a session starts, finishes or changes task');
     const listed = new Set(items.map((x: any) => text(x?.slice)).filter(Boolean));
     // a pull request is in a slot when the slot names any slice it stands for: its title id or the slice its branch is named after
-    const loose = inp.openPRs.filter((p) => !openIdsOf(p).some((id) => listed.has(id))).map((p) => sliceIdsOf(p)[0] || '#' + p.number);
+    const loose = inp.openPRs.filter((p) => openIdsOf(p).length && !openIdsOf(p).some((id) => listed.has(id))).map((p) => sliceIdsOf(p)[0] || '#' + p.number);
     if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner-state slots');
   } else if (inp.runnerState) warn('Slots not recorded', 'none', 'runner-state state.json has no slots key, so the dashboard cannot show what each slot is doing');
 
