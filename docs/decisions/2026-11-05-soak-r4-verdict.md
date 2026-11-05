@@ -20,6 +20,6 @@ Read-only `/proc` reads of the worker (relayed by the dashboard session, 2026-11
 - The glibc harness on `main` (10k torrents) showed glibc's mmapped-block count flat, which points away from a leak in C code and at the static musl build's C allocator, which never returns those mappings.
 
 ## What follows
-- **rc.4** (owner §2.40): X-thp-off, X-mem-gauges with X-mem-gauges-2, X-log-url-redact, and **X-mimalloc-override** (#448: mimalloc serves C allocations too on the musl build; its threaded harness shows the 128–512 KiB mappings outside the arena go to zero), plus `LEGAL-1r`. Brought onto `release/v0.5.1` by `R-rc4-cut`.
+- **rc.4** (owner §2.40): X-thp-off, X-mem-gauges with X-mem-gauges-2, and **X-mimalloc-override** (#448: mimalloc serves C allocations too on the musl build; its threaded harness shows the 128–512 KiB mappings outside the arena go to zero), plus `LEGAL-1r`, and the runner adds the X-log-url-redact security fix. Brought onto `release/v0.5.1` by `R-rc4-cut`.
 - **Soak r5** on the frozen rc.4 image, same protocol and bar. r4's evidence does not carry over. The gluetun leg and the Windows MSI check move to rc.4 as well.
 - On another fail, the same loop: fix on `main`, a new rc, a fresh frozen soak; never stitched.

@@ -512,8 +512,8 @@ conditions:
 roadmap:
   steps:
   - id: soak
-    label: Unraid memory test (r3 failed, r4 running)
-    plain: The 24-hour test of release candidate 2 failed on memory growth (1.88 MiB an hour, upper bound 2.33, bar 2.0). The fix is in release candidate 3, and its fresh test (r4) is running.
+    label: Unraid memory test (r3 and r4 failed, r5 next on rc.4)
+    plain: The 24-hour tests of release candidates 2 and 3 failed on memory growth (1.88 and 29.35 MiB an hour; bar 2.0). Release candidate 4 carries the allocator fix, and its fresh test (r5) runs next.
     col: 0
     row: 2
     members: []
@@ -932,7 +932,7 @@ notes:
   updated: '2026-11-05'
   now:
   - label: Release candidate 4 is being built
-    text: The 24-hour memory test of release candidate 3 failed (29.35 MiB an hour, bar 2.0). The growth was in memory the release build's C code takes from its own allocator, which never gives it back. Release candidate 4 adds that fix (mimalloc serves the C code too), the other memory fixes, the log redaction fix and the Legal Notice at setup, as you decided (§2.40). Rule packs on by default come in v0.5.2.
+    text: The 24-hour memory test of release candidate 3 failed (29.35 MiB an hour, bar 2.0). The growth was in memory the release build's C code takes from its own allocator, which never gives it back. Release candidate 4 adds that fix (mimalloc serves the C code too), the other memory fixes and the Legal Notice at setup, as you decided (§2.40); the runner adds the log redaction security fix. Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
       The live tests wait for an experiment host you name.
