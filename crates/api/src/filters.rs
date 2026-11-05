@@ -2373,7 +2373,7 @@ impl FiltersApi {
             packs: Pack::ALL
                 .iter()
                 .map(|p| PackState {
-                    changelog: pack_manifest::changelog(*p).to_owned(),
+                    changelog: packs::lf(pack_manifest::changelog(*p)),
                     id: p.as_str().to_string(),
                     on: engine.packs.on.contains(p),
                     version: packs::pack_version(manifest, *p),

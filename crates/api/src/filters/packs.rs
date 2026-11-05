@@ -306,6 +306,13 @@ pub(super) fn pack_version(manifest: &Manifest, pack: Pack) -> String {
         .join(" ")
 }
 
+/// Compiled-in text with LF line endings: a checkout with CRLF (Git on
+/// Windows) compiles the changelogs in with `\r\n`, and the API serves
+/// the same bytes on every host.
+pub(super) fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 /// The changelog entries after `from` up to `to`, newest first.
 fn changelog(
     manifest: &Manifest,
@@ -320,7 +327,7 @@ fn changelog(
         .filter(|v| v.version > from.unwrap_or(0) && v.version <= to)
         .map(|v| ChangelogEntry {
             direction: v.direction.as_str().to_owned(),
-            text: manifest::changelog_entry(rule, v.version).map(|t| t.trim().to_owned()),
+            text: manifest::changelog_entry(rule, v.version).map(|t| lf(t.trim())),
             version: v.version,
         })
         .collect();
@@ -861,6 +868,12 @@ fn run_corpus(manifest: &Arc<Manifest>) -> PackCorpus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn served_changelogs_use_lf_on_every_host() {
+        assert_eq!(lf("## A@1\r\n\r\nText.\r\n"), "## A@1\n\nText.\n");
+        assert_eq!(lf("no change\n"), "no change\n");
+    }
 
     #[test]
     fn the_review_row_is_capped_newest_first() {
