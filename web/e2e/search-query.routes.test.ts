@@ -308,7 +308,7 @@ test('a signed-out visitor is sent to sign-in by the first 401, with no interact
 	mock
 }) => {
 	mock.error('parseQuery', 401, 'login_required', 'Sign in first');
-	mock.on('getAuthStatus', { logged_in: false, setup_required: false });
+	mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: false });
 	await go('/search?q=bunny');
 	await expect(page).toHaveURL(/\/login\?next=/);
 	expect(new URL(page.url()).searchParams.get('next')).toMatch(/^\/search\?q=bunny(&|$)/);

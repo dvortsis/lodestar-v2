@@ -135,13 +135,15 @@ export const ROUTES: RouteCase[] = [
 		name: 'login',
 		path: '/login',
 		heading: 'Sign in',
-		mock: (m) => m.on('getAuthStatus', { logged_in: false, setup_required: false })
+		mock: (m) =>
+			m.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: false })
 	},
 	{
 		name: 'setup',
 		path: '/setup',
 		heading: 'Set up Lodestar',
-		mock: (m) => m.on('getAuthStatus', { logged_in: false, setup_required: true })
+		mock: (m) =>
+			m.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: true })
 	},
 	{
 		name: 'welcome',
@@ -149,7 +151,8 @@ export const ROUTES: RouteCase[] = [
 		heading: 'Setup complete',
 		key: true,
 		// Signed in with setup done, or the page redirects to sign-in (or setup) instead.
-		mock: (m) => m.on('getAuthStatus', { logged_in: true, setup_required: false })
+		mock: (m) =>
+			m.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false })
 	},
 	{ name: 'settings', path: '/settings/general', key: true },
 	{

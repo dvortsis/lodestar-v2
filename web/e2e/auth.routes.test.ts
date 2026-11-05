@@ -78,7 +78,7 @@ test('first-run setup: token from a pasted log line, password, then /welcome', a
 }) => {
 	mock.on('getAuthStatus', fresh);
 	mock.on('setup', () => {
-		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+		mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 		return { ok: true };
 	});
 	await go('/setup');
@@ -185,7 +185,7 @@ for (const evil of [
 }
 
 test('a signed-in visitor of /login goes straight to next', async ({ page, go, mock }) => {
-	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+	mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 	await go(`/login?next=${encodeURIComponent('/settings/general')}`);
 	await expect(page).toHaveURL(/\/settings\/general/);
 });
@@ -195,7 +195,7 @@ test('a signed-in visitor with a dot-segment next lands home, not stuck', async 
 	go,
 	mock
 }) => {
-	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+	mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 	await go(`/login?next=${encodeURIComponent('/.//evil.example/')}`);
 	await expect(page).toHaveURL(/\/search/);
 	expect(new URL(page.url()).hostname).toBe('localhost');
@@ -230,7 +230,7 @@ test('a session that expires mid-use goes to /login?next=… and back', async ({
 	let session = false;
 	mock.on('getAuthStatus', () => ({
 		status: 200,
-		body: { logged_in: session, setup_required: false }
+		body: { logged_in: session, notice_required: false, setup_required: false }
 	}));
 	mock.on('getFilters', () =>
 		session
