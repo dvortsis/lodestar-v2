@@ -4921,7 +4921,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T00:08Z",
+    "updated": "2026-11-05T00:34Z",
     "items": [
       {
         "slot": 1,
@@ -4932,28 +4932,12 @@
         "since": "2026-11-04T23:38Z"
       },
       {
-        "slot": 2,
-        "slice": "X-log-url-redact",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #432 round 4: closing the last cases where it shows a secret main hides, and keeping magnet links fully hidden.",
-        "since": "2026-11-04T18:46Z"
-      },
-      {
         "slot": 3,
         "slice": "ENR-0",
         "role": "build",
         "agent": "claude",
         "doing": "PR #444 reviewed (merge); two small polish fixes, then green CI.",
         "since": "2026-11-04T21:59Z"
-      },
-      {
-        "slot": 4,
-        "slice": "RP-1",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #437 reviewed (merge); polish checked; waiting for green CI.",
-        "since": "2026-11-04T19:28Z"
       },
       {
         "slot": 5,
