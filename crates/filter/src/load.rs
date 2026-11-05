@@ -8,12 +8,18 @@
 //! The pack versions this install applied are resolved here too
 //! ([`upgrade::PackVersions::resolve`], RP-0): lost or unreadable version
 //! rows fail closed the same way, and never seed again.
+//!
+//! So are your pack-rule overrides ([`overrides::PackOverrides::resolve`],
+//! RP-2), against the versions that apply: one whose row doesn't read
+//! keeps the stronger action and drops its `unless`, and one whose base
+//! changed is paused where it weakens.
 
 use lodestar_search::{Node, parse};
 use lodestar_store::RuleSet;
 
 use crate::core::Action;
 use crate::engine::{Engine, RuleRef};
+use crate::packs::overrides::{self, PackOverrides};
 use crate::packs::upgrade::{self, PackVersions, Rows};
 use crate::packs::{Pack, PackRule, PackSwitches};
 
@@ -115,16 +121,19 @@ pub enum RowKind {
     Exception,
     /// An *Always allow* entry.
     Allow,
+    /// Your override of a pack rule, by [`PackRule::index`] (RP-2).
+    PackOverride,
 }
 
 impl RowKind {
-    pub const ALL: [RowKind; 6] = [
+    pub const ALL: [RowKind; 7] = [
         RowKind::Rule,
         RowKind::Unless,
         RowKind::ClassRule,
         RowKind::Override,
         RowKind::Exception,
         RowKind::Allow,
+        RowKind::PackOverride,
     ];
 
     /// The `/metrics` label.
@@ -136,6 +145,7 @@ impl RowKind {
             RowKind::Override => "override",
             RowKind::Exception => "exception",
             RowKind::Allow => "allow",
+            RowKind::PackOverride => "pack_override",
         }
     }
 }
@@ -159,14 +169,23 @@ pub struct Unreadable {
 
 impl Unreadable {
     /// The id the Filters & Safety screens show: `U-3`, `O-4`, … A
-    /// display name only; it's never stored.
+    /// display name only; it's never stored. A pack-rule override is named
+    /// by its rule, `packs.override.MW-1` ([`overrides::label`]), as
+    /// `filter.stand_ins` records it.
     pub fn label(&self) -> String {
+        if self.kind == RowKind::PackOverride {
+            return PackRule::ALL
+                .into_iter()
+                .find(|r| r.index() as i64 == self.id)
+                .map_or_else(|| format!("packs.override.{}", self.id), overrides::label);
+        }
         let prefix = match self.kind {
             RowKind::Rule | RowKind::Unless => "U",
             RowKind::ClassRule => "C",
             RowKind::Override => "O",
             RowKind::Exception => "E",
             RowKind::Allow => "A",
+            RowKind::PackOverride => unreachable!("named above"),
         };
         format!("{prefix}-{}", self.id)
     }
@@ -239,7 +258,12 @@ impl StandIns {
     /// was found, and one that fails again after recovering starts afresh.
     pub fn reconcile(&self, unreadable: &[Unreadable], now: i64) -> (StandIns, Vec<StandIn>) {
         let mut current: Vec<StandIn> = Vec::new();
-        for u in unreadable.iter().filter(|u| u.fails_closed) {
+        // A pack-rule override's entry is the pack conditions' kind
+        // ([`StandIns::with_packs`]): it made no holds of its own to re-judge.
+        for u in unreadable
+            .iter()
+            .filter(|u| u.fails_closed && u.kind != RowKind::PackOverride)
+        {
             let label = u.label();
             let since = self
                 .0
@@ -425,6 +449,15 @@ impl Engine {
         // Never seeded yet: SC-2 starts with SC-1's switch and exceptions,
         // as seeding will copy them (upgrade::ensure_seeded).
         let unseeded = self.pack_versions.unseeded;
+        self.pack_overrides =
+            PackOverrides::resolve(&self.manifest, &self.pack_versions, &set.pack_overrides);
+        for o in self.pack_overrides.iter().filter(|o| o.unreadable()) {
+            found.push((RowKind::PackOverride, o.rule.index() as i64, true));
+            notes.push(format!(
+                "pack override {} fails closed: unreadable",
+                o.rule.id()
+            ));
+        }
         self.packs = if unseeded {
             pack_switches(&upgrade::copy_sc1_switch(&set.pack_switches))
         } else {
@@ -592,6 +625,7 @@ impl Engine {
                 RowKind::Override,
                 RowKind::Exception,
                 RowKind::Allow,
+                RowKind::PackOverride,
             ],
             found,
         );

@@ -31,6 +31,10 @@ use lodestar_filter::load::{
     KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, STAND_INS_KEY, StandIns, encode_match,
     stored_rule_reads,
 };
+use lodestar_filter::packs::manifest::Manifest;
+use lodestar_filter::packs::overrides::{
+    self as pack_overrides, Effect as OverrideEffect, PackOverride, PackOverrides,
+};
 use lodestar_filter::packs::upgrade::{self as pack_upgrade, Applied};
 use lodestar_filter::{
     Action, CoreRule, Doc, Engine, Exception, Facts, Fixture, Handle, HeldSet, Item,
@@ -48,8 +52,9 @@ use crate::dto::filters::{
     AllowEntry, ApplyResponse, ClassRule, ClassRuleAdded, ClassRuleRemoved, Classes, CoreRuleState,
     CorrectResponse, Decision, DecisionCount, Detection, DetectionExample, ExceptionEntry,
     FixtureCounts, Fixtures, JobPhase, JobProgress, JobStarted, JobState, JobStatus, OverrideEntry,
-    Overview, PackRuleState, PackState, PendingFloorEntry, QuarantineEntry, Queue, QueueQuery,
-    RuleEntry, Strictness, TestResponse, TestResult, TombstoneEntry, Tombstones, TombstonesQuery,
+    Overview, PackOverrideState, PackRuleState, PackState, PendingFloorEntry, QuarantineEntry,
+    Queue, QueueQuery, RuleEntry, Strictness, TestResponse, TestResult, TombstoneEntry, Tombstones,
+    TombstonesQuery,
 };
 pub use crate::dto::filters::{
     Assessment, Change, ChangeBody, ClassRuleBody, CorrectBody, IdBody, MatchInput, Preview,
@@ -653,6 +658,119 @@ fn pack_rules(id: &str) -> ApiResult<Vec<String>> {
         })
 }
 
+/// One pack rule by id (`MW-2`).
+fn pack_rule(id: &str) -> ApiResult<PackRule> {
+    PackRule::from_id(id).ok_or_else(|| {
+        bad("unknown_pack_rule", format!("There's no pack rule {id:?}.")).field("rule")
+    })
+}
+
+/// An override's action: one of [`pack_overrides::ACTIONS`].
+fn override_action(name: &str) -> ApiResult<Action> {
+    pack_overrides::action_named(name)
+        .filter(|a| pack_overrides::ACTIONS.contains(a))
+        .ok_or_else(|| {
+            bad(
+                "unknown_action",
+                "A pack rule's action can be flag, demote, hide or drop.",
+            )
+            .field("action")
+        })
+}
+
+/// What a pack-rule override change does to the rule as stored now (RP-2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OverrideChange {
+    rule: PackRule,
+    /// The override to write; `None` removes it.
+    set: Option<PackOverride>,
+    /// It lets more through, or holds more lightly, than what applies now.
+    weakening: bool,
+}
+
+/// Reads a pack-rule override change against the store, as the next load
+/// reads it: the engine can lag the store after an apply that failed
+/// part-way. In the preview and again under the lock in apply, so a
+/// change previewed as strengthening that weakens by then is refused
+/// (§20.7's `changed_since_preview`).
+///
+/// Setting weakens when it has an `unless`, or its action is lighter than
+/// what applies now (the rule's own, or a heavier override's). Removing
+/// weakens when the override applies an action heavier than the rule's
+/// own. A weakening override can't be set while the version this install
+/// applied is in doubt: it would be bound to nothing it could be checked
+/// against.
+fn override_change(
+    store: &Store,
+    manifest: &Manifest,
+    change: &Change,
+) -> ApiResult<OverrideChange> {
+    let set = store.rule_set().map_err(internal)?;
+    let versions = pack_upgrade::PackVersions::resolve(manifest, &pack_upgrade::Rows::of(&set));
+    let stored = PackOverrides::resolve(manifest, &versions, &set.pack_overrides);
+    let top = |rule: PackRule| {
+        let base = pack_overrides::base_action(manifest, &versions, rule);
+        match stored.get(rule).map(|l| &l.effect) {
+            Some(OverrideEffect::Replace(a, _)) => *a,
+            Some(OverrideEffect::AtLeast(a)) => (*a).max(base),
+            Some(OverrideEffect::None) | None => base,
+        }
+    };
+    match change {
+        Change::SetPackOverride {
+            rule,
+            action: act,
+            unless,
+            ..
+        } => {
+            let r = pack_rule(rule)?;
+            let action = override_action(act)?;
+            let unless = unless
+                .as_deref()
+                .filter(|u| !u.is_empty())
+                .map(|u| query(u).map(|n| n.to_query()))
+                .transpose()
+                .map_err(|e| e.field("unless"))?;
+            let weakening = pack_overrides::weakens(action, unless.is_some(), top(r));
+            let base = pack_overrides::current_base(&versions, r);
+            if weakening && base == pack_upgrade::UNKNOWN {
+                return Err(conflict(
+                    "pack_rule_in_doubt",
+                    format!(
+                        "The version of {rule} this install applied isn't known for sure, so an                          override that weakens it can't be checked against it. Accept its pending                          version first."
+                    ),
+                ));
+            }
+            Ok(OverrideChange {
+                rule: r,
+                set: Some(PackOverride {
+                    base,
+                    action,
+                    unless,
+                }),
+                weakening,
+            })
+        }
+        Change::RemovePackOverride { rule } => {
+            let r = pack_rule(rule)?;
+            if !set.pack_overrides.iter().any(|(id, _)| id == r.id()) {
+                return Err(not_found("entry_not_found", "There's no such entry."));
+            }
+            let base = pack_overrides::base_action(manifest, &versions, r);
+            let weakening = match stored.get(r).map(|l| &l.effect) {
+                Some(OverrideEffect::Replace(a, _) | OverrideEffect::AtLeast(a)) => *a > base,
+                Some(OverrideEffect::None) | None => false,
+            };
+            Ok(OverrideChange {
+                rule: r,
+                set: None,
+                weakening,
+            })
+        }
+        _ => Err(internal("not a pack-rule override change")),
+    }
+}
+
 fn override_entry(
     what: &MatchInput,
     neutralize: bool,
@@ -740,6 +858,25 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: 
             "Switching off {id} stops it hiding or dropping malware, lures, fakes, spam or scams \
              it would have caught. {n} Safer: an exception for the torrents it got wrong."
         ),
+        Change::SetPackOverride { rule, unless, .. } => {
+            let what = if unless.as_deref().is_some_and(|u| !u.is_empty()) {
+                format!(
+                    "Torrents your \"unless\" matches skip {rule} altogether, and the rest get the \
+                     action you chose"
+                )
+            } else {
+                format!("Torrents {rule} catches get a lighter action than it applies now")
+            };
+            format!(
+                "{what}, so it may stop hiding or dropping malware, lures, fakes, spam or scams it \
+                 would have caught. Other rules still check them. If a newer version of {rule} is \
+                 accepted, this override pauses until you confirm it again. {n} Safer: an \
+                 exception for the exact torrents it got wrong."
+            )
+        }
+        Change::RemovePackOverride { rule } => {
+            format!("Removing your override puts {rule} back to its own, lighter action. {n}")
+        }
         Change::UpdateRule { id, .. } | Change::RemoveRule { id } => format!(
             "This changes or removes your rule U-{id}, so it may stop catching what it caught. \
              {n} Safer: shadow the new version for a few days first."
@@ -932,6 +1069,14 @@ impl FiltersApi {
             Change::RemoveRule { id } => {
                 a.weakening = true;
                 a.preview = rules(vec![format!("U-{id}")]);
+            }
+            Change::SetPackOverride { .. } | Change::RemovePackOverride { .. } => {
+                let o = override_change(&self.store(), &engine.manifest, change)?;
+                a.pack_base = o.set.as_ref().map(|s| s.base);
+                if o.weakening {
+                    a.weakening = true;
+                    a.preview = rules(vec![o.rule.id().to_owned()]);
+                }
             }
             Change::AddOverride {
                 what,
@@ -1193,8 +1338,17 @@ impl FiltersApi {
         // can lag the store after an apply that failed part-way.
         let set = store.rule_set().map_err(internal)?;
         let manifest = self.engine.current().manifest.clone();
-        let labels =
-            pack_upgrade::PackVersions::resolve(&manifest, &pack_upgrade::Rows::of(&set)).labels();
+        let versions =
+            pack_upgrade::PackVersions::resolve(&manifest, &pack_upgrade::Rows::of(&set));
+        let mut labels = versions.labels();
+        // Overrides whose rows don't read (RP-2): they fail closed, and are
+        // listed until they read again or are removed.
+        labels.extend(
+            PackOverrides::resolve(&manifest, &versions, &set.pack_overrides)
+                .iter()
+                .filter(|o| o.unreadable())
+                .map(|o| pack_overrides::label(o.rule)),
+        );
         let text = store.setting_text(STAND_INS_KEY).map_err(internal)?;
         let before = text
             .as_deref()
@@ -1280,6 +1434,11 @@ impl FiltersApi {
                 "id": e.id, "rule": e.rule, "kind": e.kind, "value": hex(&e.value),
             })).collect::<Vec<_>>(),
             "allow": set.allow,
+            // As stored, readable or not: an unreadable row stays one.
+            "pack_overrides": set.pack_overrides.iter().map(|(rule, v)| match v {
+                Ok(t) => json!({"rule": rule, "text": t}),
+                Err(b) => json!({"rule": rule, "hex": hex(b)}),
+            }).collect::<Vec<_>>(),
             "core": switches,
             // Taken after RP-0's seeding: SC-2 has its own rows in it.
             "packs_seeded": true,
@@ -1342,6 +1501,18 @@ impl FiltersApi {
             allow: arr("allow")
                 .iter()
                 .filter_map(|a| Some((a[0].as_i64()?, a[1].as_str()?.to_owned())))
+                .collect(),
+            // A snapshot from before RP-2 has none, as that set had none.
+            pack_overrides: arr("pack_overrides")
+                .iter()
+                .filter_map(|o| {
+                    let rule = o["rule"].as_str()?.to_owned();
+                    let value = match o["text"].as_str() {
+                        Some(t) => Ok(t.to_owned()),
+                        None => Err(unhex(&o["hex"])),
+                    };
+                    Some((rule, value))
+                })
                 .collect(),
             // Never restored: Undo leaves the applied pack versions.
             ..RuleSet::default()
@@ -1441,6 +1612,8 @@ impl FiltersApi {
                 | Change::AddRule { .. }
                 | Change::UpdateRule { .. }
                 | Change::RemoveRule { .. }
+                | Change::SetPackOverride { .. }
+                | Change::RemovePackOverride { .. }
                 | Change::AddOverride { .. }
                 | Change::RemoveOverride { .. }
                 | Change::AddException { .. }
@@ -1506,6 +1679,28 @@ impl FiltersApi {
                 if !on {
                     out.released = Some(self.release_rules(store, &rules)?);
                 }
+            }
+            Change::SetPackOverride { .. } | Change::RemovePackOverride { .. } => {
+                // Read again under the lock: an accepted version or another
+                // override since the preview can make it weaken, or weaken
+                // against another version than the password confirmed.
+                let manifest = self.engine.current().manifest.clone();
+                let o = override_change(store, &manifest, change)?;
+                let bound = o.set.as_ref().map(|s| s.base);
+                let sent = match change {
+                    Change::SetPackOverride { base, .. } => *base,
+                    _ => None,
+                };
+                // The password confirmed the override against the version
+                // the client names back.
+                let base_moved = o.set.is_some() && sent != bound;
+                if o.weakening && (!out.assessment.confirm || base_moved) {
+                    return Err(changed_since_preview());
+                }
+                out.assessment.pack_base = bound;
+                store
+                    .set_pack_override(o.rule.id(), o.set.map(|s| s.encode()).as_deref())
+                    .map_err(internal)?;
             }
             Change::AddRule {
                 query: q,
@@ -1917,6 +2112,12 @@ impl FiltersApi {
         let pending = store.pending_floor().map_err(internal)?;
         let quarantine = store.quarantined(PREVIEW_ROWS).map_err(internal)?.len();
         let action_name = |code: u8| Action::from_code(code).map(|a| a.as_str().to_string());
+        // As stored, as the next load reads them.
+        let stored_overrides = PackOverrides::resolve(
+            &engine.manifest,
+            &pack_upgrade::PackVersions::resolve(&engine.manifest, &pack_upgrade::Rows::of(&set)),
+            &set.pack_overrides,
+        );
         Ok(Overview {
             allow: set
                 .allow
@@ -2014,6 +2215,14 @@ impl FiltersApi {
                             action: r.action().as_str().to_string(),
                             id: r.id().to_string(),
                             on: engine.packs.is_on(*r),
+                            pack_override: stored_overrides.get(*r).map(|o| PackOverrideState {
+                                action: o.decoded.action.map(|a| a.as_str().to_string()),
+                                base: o.decoded.base,
+                                changed: o.changed,
+                                paused: o.paused,
+                                unless: o.unless_text().map(str::to_owned),
+                                unreadable: o.unreadable(),
+                            }),
                         })
                         .collect(),
                 })
@@ -3205,6 +3414,14 @@ fn apply_change(
                         "Name the version to accept: send back the held_version the warning described as held.",
                     )
                     .field("held"));
+                }
+                // And an override's base: the version the warning was for.
+                if let Change::SetPackOverride { base: None, .. } = &body.change {
+                    return Err(bad(
+                        "pack_override_needs_base",
+                        "Name the version the override is for: send back the pack_base the warning was for as base.",
+                    )
+                    .field("base"));
                 }
                 auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?
             }

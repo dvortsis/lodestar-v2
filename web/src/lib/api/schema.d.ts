@@ -2454,6 +2454,14 @@ export interface components {
              */
             held_version?: string;
             neutralize: null | components["schemas"]["Preview"];
+            /**
+             * Format: int32
+             * @description For `set_pack_override`: the version of the rule the override is
+             *     bound to (0 while the version this install applied isn't known).
+             *     Send it back as `base` to confirm a weakening override with the
+             *     password.
+             */
+            pack_base?: number;
             preview: components["schemas"]["Preview"];
             /**
              * @description For a subscription change: how strict your lists would be after
@@ -2804,6 +2812,25 @@ export interface components {
             id: number;
             /** @enum {string} */
             op: "remove_rule";
+        } | {
+            /** @description `flag`, `demote`, `hide` or `drop`. */
+            action: string;
+            /**
+             * Format: int32
+             * @description The previewed `pack_base`, to confirm a weakening override.
+             */
+            base?: number | null;
+            /** @enum {string} */
+            op: "set_pack_override";
+            /** @example MW-2 */
+            rule: string;
+            /** @description An empty string means none. */
+            unless?: string | null;
+        } | {
+            /** @enum {string} */
+            op: "remove_pack_override";
+            /** @example MW-2 */
+            rule: string;
         } | (components["schemas"]["MatchInput"] & {
             /** Format: int32 */
             expires_days?: number | null;
@@ -5842,11 +5869,40 @@ export interface components {
              */
             updated_at: number;
         };
+        /** @description Your override of one pack rule, as stored and as it applies now. */
+        PackOverrideState: {
+            /** @description Null when the stored row doesn't read. */
+            action: string | null;
+            /**
+             * Format: int32
+             * @description The version it was made against (0: not known then); null when it
+             *     doesn't read.
+             */
+            base: number | null;
+            /**
+             * @description The base rule changed since it was set (§20.8): a newer version was
+             *     accepted, or the version state is in doubt.
+             */
+            changed: boolean;
+            /**
+             * @description Changed, and it would weaken the rule as it is now: the rule
+             *     applies as built until the override is set again with the password.
+             */
+            paused: boolean;
+            unless: string | null;
+            /**
+             * @description The stored row doesn't read: the stronger of its action and the
+             *     rule's applies, and its `unless` is dropped.
+             */
+            unreadable: boolean;
+        };
         PackRuleState: {
             action: string;
             /** @example MW-2 */
             id: string;
             on: boolean;
+            /** @description Your override of the rule (RP-2), when it has one. */
+            override?: components["schemas"]["PackOverrideState"];
         };
         PackState: {
             /** @example malware */
