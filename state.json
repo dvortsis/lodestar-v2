@@ -2809,11 +2809,13 @@
       "status": "running session_01MMjhnCQkmjmywGxSKFFdqM"
     },
     "R-rc4-cut": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhn8mf22UX2LbFAWGs3j",
       "launched": "2026-11-05T01:12Z",
-      "brief": "briefs/R-rc4-cut.md"
+      "brief": "briefs/R-rc4-cut.md",
+      "pr": 450,
+      "merge": "c1cf35ad"
     },
     "LEGAL-1r": {
       "status": "building",
@@ -5014,7 +5016,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T02:34Z",
+    "updated": "2026-11-05T02:40Z",
     "items": [
       {
         "slot": 1,
@@ -5037,8 +5039,9 @@
         "slice": "R-rc4-cut",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #450 into release/v0.5.1: memory and redaction fixes for rc.4; adding the allocator fix (#448) next.",
-        "since": "2026-11-05T01:12Z"
+        "doing": "Merged #450 (memory and redaction fixes on the release branch). Kept for the rc.4 release-notes PR after LEGAL-1r.",
+        "since": "2026-11-05T01:12Z",
+        "status": "idle"
       },
       {
         "slot": 4,
