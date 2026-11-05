@@ -974,14 +974,35 @@ pub fn scrub_text(text: &str) -> String {
     // argument, so the two together hide all that one does.
     only_more(
         &only_more(&scrub_text_floor(text), &wide),
-        &wide::redact_secrets(&wide),
+        &wide::redact_secrets(&ascii_separators(&wide)),
     )
+}
+
+/// `text` with the look-alikes of a credential's separators written in
+/// ASCII, for the credential rules' second reading only (X-log-url-redact-4,
+/// runner's review): the fullwidth `：` and `＝` as `:` and `=`, and a
+/// no-break space as a space (`Bearer\u{a0}<token>`). None of them is a
+/// word's character, so the words are the same.
+fn ascii_separators(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(['\u{ff1a}', '\u{ff1d}', '\u{a0}']) {
+        return text.into();
+    }
+    text.chars()
+        .map(|c| match c {
+            '\u{ff1a}' => ':',
+            '\u{ff1d}' => '=',
+            '\u{a0}' => ' ',
+            c => c,
+        })
+        .collect::<String>()
+        .into()
 }
 
 /// Whether the wide rules can add nothing to stage 1's output for `text`
 /// (X-log-url-redact-3's fast path): it holds none of `:`, `/`, `@`, `%`,
 /// `=` and `"`, and no `bearer`, `lsk_` or `lsf_` in any case (the rules
-/// match `lsk_` and `lsf_` in one case only: the rest is margin). Every wide
+/// match `lsk_` and `lsf_` in one case only: the rest is margin), and no
+/// fullwidth `：` or `＝` or no-break space (`ascii_separators`). Every wide
 /// rule needs one of them to fire, so on such a line both stages are
 /// [`hide_runs`] of the text, and `only_more` of two equal outputs is that
 /// output: the decisions file lists each rule's trigger, and
@@ -996,6 +1017,10 @@ fn plain_line(text: &str) -> bool {
         b':' | b'/' | b'@' | b'%' | b'=' | b'"' => true,
         b'b' | b'B' => keyword(k, b"bearer"),
         b'l' | b'L' => keyword(k, b"lsk_") || keyword(k, b"lsf_"),
+        // A no-break space, and the fullwidth `：` and `＝` (see
+        // `ascii_separators`).
+        0xc2 => b.get(k + 1) == Some(&0xa0),
+        0xef => keyword(k, "\u{ff1a}".as_bytes()) || keyword(k, "\u{ff1d}".as_bytes()),
         _ => false,
     })
 }
@@ -1448,7 +1473,10 @@ mod wide {
     impl AnyOf {
         /// One to three needles, each with whether it ignores case.
         fn new(needles: &[(&'static str, bool)]) -> AnyOf {
-            debug_assert!((1..=3).contains(&needles.len()));
+            assert!(
+                (1..=3).contains(&needles.len()),
+                "AnyOf takes 1 to 3 needles"
+            );
             let one = |k: usize| {
                 let (needle, ci) = needles[k.min(needles.len() - 1)];
                 Next::new(needle, ci)
@@ -3974,6 +4002,27 @@ pass:"S3CRET"#,
         }
     }
 
+    /// The fullwidth `：` and `＝` and a no-break space after `Bearer` still
+    /// mark a credential (X-log-url-redact-4, runner's review). Each showed
+    /// the secret on `main`.
+    #[test]
+    fn a_look_alike_separator_still_marks_a_credential() {
+        for text in [
+            "password：S3CRETxyz ok",
+            "token＝S3CRETxyz ok",
+            "x-api-key ： S3CRETxyz",
+            "Authorization: Bearer\u{a0}S3CRETxyz",
+            "Bearer\u{a0}S3CRETxyz",
+            r#"{"password"："S3CRETxyz"}"#,
+        ] {
+            assert!(!plain_line(text), "{text:?}");
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text:?}: {s}");
+        }
+        // Text around them is kept.
+        assert_eq!(scrub_text("時刻：12 ok"), "時刻：12 ok");
+    }
+
     /// The fast path (X-log-url-redact-3) gives exactly what both stages and
     /// `only_more` give, on 2,000,000 soups of 2 to 31 tokens. The tokens are
     /// near misses of every wide rule's trigger (names with no separator,
@@ -4064,7 +4113,8 @@ pass:"S3CRET"#,
             "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U",
         ];
         const TRIGGERS: &[&str] = &[
-            ":", "/", "@", "%", "=", "\"", "Bearer", "bEaReR", "lsk_", "lsf_", "LSF_",
+            ":", "/", "@", "%", "=", "\"", "Bearer", "bEaReR", "lsk_", "lsf_", "LSF_", "：", "＝",
+            "\u{a0}",
         ];
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut next = |n: usize| {
