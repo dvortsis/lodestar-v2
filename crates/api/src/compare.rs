@@ -13,8 +13,7 @@ use axum::{Json, Router};
 use lodestar_classify::Record;
 use lodestar_metainfo::{FileAttrs, InfoHash, Text};
 use lodestar_search::query::{NumField, TextField};
-use lodestar_search::tokenizer::{TokKind, tokenize};
-use lodestar_search::{CancelToken, Node, Sort};
+use lodestar_search::{CancelToken, Node, Sort, TitleIdentityParts, title_identity_parts};
 use lodestar_store::{Enriched, FileTree, Store, TorrentRow};
 use utoipa::OpenApi;
 
@@ -94,37 +93,31 @@ fn hit_row(row: &TorrentRow, score: f32, e: Option<Enriched>, swarm: Summary) ->
 
 // ---- siblings --------------------------------------------------------------
 
-/// The title's words as search's tokenizer folds them: its parts, so
-/// `Spider-Man`, `Spider Man` and `SpiderMan` are all `spider man`.
-fn title_words(title: &str) -> Vec<String> {
-    tokenize(title)
-        .into_iter()
-        .filter(|t| t.kind == TokKind::Part)
-        .map(|t| t.text)
-        .collect()
-}
-
-fn spans(r: &Record, key: &str) -> Vec<String> {
-    let mut v: Vec<String> = r.release_all(key).map(str::to_string).collect();
-    v.sort();
-    v.dedup();
-    v
-}
-
-/// A torrent's title identity (`docs/decisions/2026-10-22-B13.md`): `None` without a parsed title
-/// that has any words.
+/// A torrent's title identity (`docs/decisions/2026-10-22-B13.md`):
+/// the search crate's [`title_identity_parts`], the one definition its
+/// `title_identity` term hashes (B13b), so the two can't drift. `None`
+/// without a parsed title that has any words.
 fn identity(r: &Record) -> Option<TitleIdentity> {
-    let words = title_words(r.release("title")?);
-    if words.is_empty() {
-        return None;
-    }
-    Some(TitleIdentity {
-        absolute: spans(r, "absolute"),
-        episodes: spans(r, "episode"),
-        seasons: spans(r, "season"),
-        title_words: words,
-        years: spans(r, "year"),
+    title_identity_parts(r).map(|p| TitleIdentity {
+        absolute: p.absolute,
+        episodes: p.episodes,
+        seasons: p.seasons,
+        title_words: p.title_words,
+        years: p.years,
     })
+}
+
+/// The `title_identity` term of an identity: its parts, hashed as the
+/// index hashes them.
+fn identity_key(id: &TitleIdentity) -> u64 {
+    TitleIdentityParts {
+        title_words: id.title_words.clone(),
+        years: id.years.clone(),
+        seasons: id.seasons.clone(),
+        episodes: id.episodes.clone(),
+        absolute: id.absolute.clone(),
+    }
+    .key()
 }
 
 /// A span's bounds (`2008`, `1-10`).
@@ -230,9 +223,21 @@ fn other_versions(
     let node = shown(&candidates_query(identity), adult);
     // Never a `file:(…)` clause, but compiled under the token all the
     // same, so a clause added to `candidates_query` later stays stoppable.
-    let compiled = index
-        .query_cancelled(&node, unix_now(), 0, cancel)
+    // The identity's own term narrows the candidates to its versions
+    // (B13b): a short title with no year ("Up") matches too many longer
+    // ones for the window alone. Where the index can't answer the term
+    // (an older index, or a backfill of it running), the window does, as
+    // before; either way the stored records decide below.
+    let now = unix_now();
+    let by_identity = index
+        .query_title_identity(&node, identity_key(identity), now, 0, cancel)
         .map_err(search::search_error)?;
+    let compiled = match by_identity {
+        Some(c) => c,
+        None => index
+            .query_cancelled(&node, now, 0, cancel)
+            .map_err(search::search_error)?,
+    };
     cancel.check().map_err(search::search_error)?;
     // Relevance: the title field's BM25 ranks the exact title over
     // longer ones, and the swarm and freshness priors re-rank the first
@@ -599,23 +604,34 @@ mod tests {
         ))
     }
 
-    /// Five versions of one film, stored, classified and indexed; the
-    /// state, the first one's id and its title identity.
-    fn versions() -> (ApiState, i64, TitleIdentity, tempfile::TempDir) {
+    /// A torrent of the corpus: its name, store flags and whether it's
+    /// corrected to Adult.
+    struct Entry {
+        name: String,
+        flags: i64,
+        adult: bool,
+    }
+
+    fn entry(name: &str) -> Entry {
+        Entry {
+            name: name.to_owned(),
+            flags: 0,
+            adult: false,
+        }
+    }
+
+    /// A store of `entries`, enriched, and an index over it, built with
+    /// `generations` when given (a build shipping a new generation of a
+    /// field, so it's being backfilled).
+    fn corpus(
+        entries: &[Entry],
+        generations: Option<lodestar_search::Generations>,
+    ) -> (ApiState, Vec<i64>, tempfile::TempDir) {
         use lodestar_store::{NewTorrent, SourceId, StoreConfig};
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("t.db");
         let mut store = Store::open(&db, StoreConfig::default()).unwrap();
-        let raws: Vec<Vec<u8>> = [
-            "1080p.BluRay",
-            "720p.WEB-DL",
-            "2160p.WEB",
-            "480p.DVD",
-            "BDRip",
-        ]
-        .iter()
-        .map(|q| metainfo(&format!("The.Dark.Knight.2008.{q}.x264-GRP")))
-        .collect();
+        let raws: Vec<Vec<u8>> = entries.iter().map(|e| metainfo(&e.name)).collect();
         let infos: Vec<lodestar_metainfo::Info> = raws
             .iter()
             .map(|r| lodestar_metainfo::Info::parse(r).unwrap())
@@ -623,13 +639,14 @@ mod tests {
         let batch: Vec<NewTorrent<'_>> = infos
             .iter()
             .zip(&raws)
+            .zip(entries)
             .enumerate()
-            .map(|(i, (info, raw))| NewTorrent {
+            .map(|(i, ((info, raw), e))| NewTorrent {
                 info,
                 raw_info: Some(raw),
                 discovered_at: 1_700_000_000 + i as i64,
                 metadata_at: 1_700_000_001 + i as i64,
-                extra_flags: 0,
+                extra_flags: e.flags,
                 source: SourceId::new(0).unwrap(),
             })
             .collect();
@@ -640,26 +657,27 @@ mod tests {
             .map(|i| i.id())
             .collect();
         let mut enriched = Vec::new();
-        for id in &ids {
+        for (id, e) in ids.iter().zip(entries) {
             let row = store.torrent(*id).unwrap().unwrap();
             let tree = store.files(*id).unwrap().unwrap();
             let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
-            let (e, _) = lodestar_filter::reclassify::enrich_corrected(
-                &row.name,
-                &files,
-                lodestar_classify::Correction::default(),
-            );
-            enriched.push((*id, e));
+            let correction = lodestar_classify::Correction {
+                adult: e.adult.then_some(true),
+                ..Default::default()
+            };
+            let (en, _) =
+                lodestar_filter::reclassify::enrich_corrected(&row.name, &files, correction);
+            enriched.push((*id, en));
         }
         store.set_enrichments(&enriched).unwrap();
-        let identity = super::record(store.enrichment(ids[0]).unwrap().as_ref())
-            .as_ref()
-            .and_then(self::identity)
-            .expect("a title identity");
-        let index = lodestar_search::SearchIndex::in_memory().unwrap();
-        let mut w = index.writer(15 << 20).unwrap();
-        w.catch_up(&mut store, 1000).unwrap();
+        let mut index = lodestar_search::SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(30 << 20).unwrap();
+        while w.catch_up(&mut store, 1000).unwrap() > 0 {}
         w.commit().unwrap();
+        drop(w);
+        if let Some(g) = generations {
+            index = index.with_generations(g).unwrap();
+        }
         let state = ApiState {
             auth: Arc::new(crate::Auth::load(&dir.path().join("auth.json"), false).unwrap()),
             index: Some(index.into()),
@@ -675,6 +693,33 @@ mod tests {
             hot: None,
             events: None,
         };
+        (state, ids, dir)
+    }
+
+    /// `id`'s title identity, from its stored record.
+    fn identity_of(s: &ApiState, id: i64) -> TitleIdentity {
+        let store = s.reader.lock().unwrap();
+        super::record(store.enrichment(id).unwrap().as_ref())
+            .as_ref()
+            .and_then(self::identity)
+            .expect("a title identity")
+    }
+
+    /// Five versions of one film, stored, classified and indexed; the
+    /// state, the first one's id and its title identity.
+    fn versions() -> (ApiState, i64, TitleIdentity, tempfile::TempDir) {
+        let entries: Vec<Entry> = [
+            "1080p.BluRay",
+            "720p.WEB-DL",
+            "2160p.WEB",
+            "480p.DVD",
+            "BDRip",
+        ]
+        .iter()
+        .map(|q| entry(&format!("The.Dark.Knight.2008.{q}.x264-GRP")))
+        .collect();
+        let (state, ids, dir) = corpus(&entries, None);
+        let identity = identity_of(&state, ids[0]);
         (state, ids[0], identity, dir)
     }
 
@@ -685,6 +730,173 @@ mod tests {
         cancel: &CancelToken,
     ) -> ApiResult<HitGroup> {
         other_versions(s, s.index.as_ref().unwrap(), id, identity, false, cancel)
+    }
+
+    /// More decoys than the candidate window holds: the same one-word
+    /// title with a year (another work, by identity), indexed first, so
+    /// they tie with the versions on the title phrase and fill the window
+    /// ahead of them; then three versions with no year, one hidden by a
+    /// filter rule and one Adult when asked.
+    fn short_title(title: &str, withheld: bool) -> Vec<Entry> {
+        let mut entries: Vec<Entry> = (0..SIBLING_CANDIDATES + 100)
+            .map(|i| entry(&format!("{title}.2009.1080p.WEB.x264-D{i}")))
+            .collect();
+        for (q, flags, adult) in [
+            ("1080p.BluRay.x264", 0, false),
+            (
+                "720p.WEB-DL.x264",
+                if withheld {
+                    lodestar_store::flags::HIDDEN
+                } else {
+                    0
+                },
+                false,
+            ),
+            ("2160p.WEB.x265", 0, withheld),
+            ("480p.DVDRip.XviD", 0, false),
+        ] {
+            entries.push(Entry {
+                name: format!("{title}.{q}-GRP"),
+                flags,
+                adult,
+            });
+        }
+        entries
+    }
+
+    fn found(g: &HitGroup) -> Vec<String> {
+        let mut v: Vec<String> = g.hits.iter().map(|h| h.name.clone()).collect();
+        v.sort();
+        v
+    }
+
+    /// B13's known limit closed (B13b): "Up" and "Heat" with more decoys
+    /// than the window ("Up 2009", another work) still find their other
+    /// versions, by the title-identity term.
+    #[test]
+    fn short_titles_with_no_year_find_their_versions_past_the_window() {
+        for title in ["Up", "Heat"] {
+            let (s, ids, _dir) = corpus(&short_title(title, false), None);
+            let first = ids[SIBLING_CANDIDATES + 100];
+            let id = identity_of(&s, first);
+            assert_eq!(id.title_words, [title.to_lowercase()]);
+            assert!(id.years.is_empty(), "{id:?}");
+            assert_ne!(identity_of(&s, ids[0]), id, "a decoy is another work");
+            let got = run(&s, first, &id, &CancelToken::new()).unwrap();
+            assert_eq!(
+                found(&got),
+                [
+                    format!("{title}.2160p.WEB.x265-GRP"),
+                    format!("{title}.480p.DVDRip.XviD-GRP"),
+                    format!("{title}.720p.WEB-DL.x264-GRP"),
+                ],
+                "{title}"
+            );
+        }
+    }
+
+    /// Found by the term, a hidden or Adult version is still withheld
+    /// exactly as before: hidden always, Adult unless it's shown.
+    #[test]
+    fn withheld_versions_stay_withheld() {
+        let (s, ids, _dir) = corpus(&short_title("Up", true), None);
+        let first = ids[SIBLING_CANDIDATES + 100];
+        let id = identity_of(&s, first);
+        let index = s.index.as_ref().unwrap();
+        let hidden = other_versions(&s, index, first, &id, false, &CancelToken::new()).unwrap();
+        assert_eq!(found(&hidden), ["Up.480p.DVDRip.XviD-GRP"]);
+        let adult = other_versions(&s, index, first, &id, true, &CancelToken::new()).unwrap();
+        assert_eq!(
+            found(&adult),
+            ["Up.2160p.WEB.x265-GRP", "Up.480p.DVDRip.XviD-GRP"]
+        );
+    }
+
+    /// Where the index can't answer the term (a backfill of it running),
+    /// the window decides, as before B13b: never "no siblings" for an
+    /// unpopulated field. Within the window the versions are found; past
+    /// it, B13's known limit is back until the backfill completes.
+    #[test]
+    fn a_backfilling_index_falls_back_to_the_window() {
+        let backfill = || {
+            let g = lodestar_search::Generations::current();
+            let next = g.get("title_identity").unwrap() + 1;
+            Some(g.with("title_identity", next))
+        };
+        let entries: Vec<Entry> = ["1080p.BluRay", "720p.WEB-DL", "2160p.WEB"]
+            .iter()
+            .map(|q| entry(&format!("The.Dark.Knight.2008.{q}.x264-GRP")))
+            .collect();
+        let (s, ids, _dir) = corpus(&entries, backfill());
+        let index = s.index.as_ref().unwrap().index();
+        assert!(matches!(
+            index.availability("title_identity"),
+            lodestar_search::Availability::Backfilling { .. }
+        ));
+        let id = identity_of(&s, ids[0]);
+        assert_eq!(
+            run(&s, ids[0], &id, &CancelToken::new())
+                .unwrap()
+                .hits
+                .len(),
+            2
+        );
+        let (s, ids, _dir) = corpus(&short_title("Up", false), backfill());
+        let first = ids[SIBLING_CANDIDATES + 100];
+        let id = identity_of(&s, first);
+        let got = run(&s, first, &id, &CancelToken::new()).unwrap();
+        // The decoys were inserted first and score as the versions do,
+        // so they fill the window by doc order; were that tie-break to
+        // change, this side of the test is what would move, not B13b.
+        assert!(got.hits.len() < 3, "the window alone: {:?}", found(&got));
+    }
+
+    /// One identity rule (B13b): the identity compare shows and compares
+    /// is the search crate's, so equal identities are exactly equal
+    /// `title_identity` terms over a corpus of names, and the term of the
+    /// identity shown is the one indexed.
+    #[test]
+    fn the_shown_identity_and_the_indexed_term_agree() {
+        let names = [
+            "Spider-Man.2002.1080p.BluRay.x264-GRP",
+            "Spider.Man.2002.720p.WEB-DL-GRP",
+            "SpiderMan (2002) 2160p",
+            "Spider-Man.2.2004.1080p.BluRay-GRP",
+            "Spider-Man.1080p.WEB-GRP",
+            "Show.S01.1080p.WEB-GRP",
+            "Show.S01E01.1080p.WEB-GRP",
+            "Show.S01E01-E03.720p-GRP",
+            "Show.E02.1080p-GRP",
+            "Up.2009.1080p.BluRay-GRP",
+            "Up.1080p.BluRay-GRP",
+            "Up.720p.WEB-GRP",
+            "Heat.1995.1080p-GRP",
+            "Amélie.2001.1080p-GRP",
+            "Amelie.2001.720p-GRP",
+        ];
+        let entries: Vec<Entry> = names.iter().map(|n| entry(n)).collect();
+        let (s, ids, _dir) = corpus(&entries, None);
+        let records: Vec<Record> = {
+            let store = s.reader.lock().unwrap();
+            ids.iter()
+                .map(|id| super::record(store.enrichment(*id).unwrap().as_ref()).unwrap())
+                .collect()
+        };
+        // The term the indexer writes for a record: what `TorrentDoc`
+        // carries, built the way indexing builds it.
+        let indexed = |r: &Record| lodestar_search::DocEnrichment::new(r, None).title_identity;
+        for a in &records {
+            // The key Siblings query by is the key the index holds.
+            assert_eq!(identity(a).as_ref().map(identity_key), indexed(a), "{a:?}");
+            for b in &records {
+                // One identity, one term; two identities, two terms.
+                assert_eq!(
+                    identity(a) == identity(b),
+                    indexed(a) == indexed(b),
+                    "{a:?} / {b:?}"
+                );
+            }
+        }
     }
 
     fn is_cancelled(r: &ApiResult<HitGroup>) -> bool {
@@ -773,6 +985,11 @@ mod tests {
 
     #[test]
     fn title_words_fold_spelling_variants_together() {
+        let title_words = |t: &str| {
+            identity(&record(&[("title", t)]))
+                .map(|i| i.title_words)
+                .unwrap_or_default()
+        };
         let want = vec!["spider".to_string(), "man".to_string()];
         for t in [
             "Spider-Man",

@@ -1346,6 +1346,25 @@ mod tests {
             .unwrap();
     }
 
+    /// B13b: an index from before v7 has no `title_identity`, so the
+    /// identity term isn't offered there and the caller searches without
+    /// it, never reading the absent field as "no versions".
+    #[test]
+    fn an_index_without_the_identity_field_offers_no_identity_term() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("v6-t1");
+        create_old(&dir, &["title_identity"], &[]);
+        let (old, _) = SearchIndex::open_existing(&dir).unwrap().unwrap();
+        assert!(old.missing_fields().iter().any(|f| f == "title_identity"));
+        let node = crate::parse("up").unwrap();
+        let cancel = crate::CancelToken::new();
+        assert!(
+            old.query_title_identity(&node, 1, 0, 0, &cancel)
+                .unwrap()
+                .is_none()
+        );
+    }
+
     /// `doc` without the values of fields the index lacks.
     fn strip(doc: TantivyDocument) -> TantivyDocument {
         let mut out = TantivyDocument::new();
