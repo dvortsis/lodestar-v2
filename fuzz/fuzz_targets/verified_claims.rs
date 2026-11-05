@@ -15,15 +15,16 @@
 //! address as checked), in order, once each, within the caps, and none
 //! with a query, fragment, user name or another scheme, nor on a literal
 //! address `classify` doesn't call public or a `localhost` name, read
-//! again from the stored text (X-claim-trackers); nothing comes from a
-//! private dict; the comment is the file's, cut to
-//! the cap; and `creation date` is kept only within the believable range.
+//! again from the stored text (X-claim-trackers), and each the guard's
+//! own canonical form, which maps to itself (X-claim-store); nothing
+//! comes from a private dict; the comment is the file's, cut to the cap;
+//! and `creation date` is kept only within the believable range.
 #![no_main]
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use libfuzzer_sys::fuzz_target;
-use lodestar_integrations::net::{AddrClass, classify};
+use lodestar_integrations::net::{AddrClass, classify, public_tracker_url};
 use lodestar_metainfo::{Info, ParseOptions, TorrentFile};
 use lodestar_sources::claims::{self, Claims, Confidence};
 use lodestar_sources_plugins::torrent_cache::{
@@ -221,6 +222,13 @@ fuzz_target!(|data: &[u8]| {
                 .and_then(|u| u.host_str().map(str::to_owned)),
             Some(host),
             "a udp tracker was kept with a host other than the one judged"
+        );
+        // Guarded and canonical: the guard keeps the stored form as it
+        // is, so the pipeline stores it unchanged (X-claim-store).
+        assert_eq!(
+            public_tracker_url(tr).as_deref(),
+            Some(tr.as_str()),
+            "a kept tracker isn't the guard's own canonical form"
         );
     }
 

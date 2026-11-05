@@ -271,6 +271,7 @@ placement:
   - X-flakes-1105
   - X-fuzz-cache-1105
   - X-claim-trackers
+  - X-claim-store
   - X-adult-catalogue
   - D-sources-guide
   - L4-followups
