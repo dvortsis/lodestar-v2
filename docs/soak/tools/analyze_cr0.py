@@ -317,7 +317,9 @@ def summarize(rows, max_gap, intensity="balanced"):
         for name in GAUGES:
             if number(before.get(name)) and number(after.get(name)):
                 p["measurement_coverage"][name] += dt
-        for name in before["counters"].keys() & after["counters"].keys() - reset:
+        # Sorted: a set's order follows the hash seed, and the breakdowns and hourly
+        # tables keep this insertion order, so the report would vary run to run.
+        for name in sorted(before["counters"].keys() & after["counters"].keys() - reset):
             counter = p["counters"][name]
             counter["delta"] += sum(after["counters"][name].values()) - sum(before["counters"][name].values())
             counter["covered_seconds"] += dt

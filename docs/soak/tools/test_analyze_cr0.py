@@ -240,6 +240,33 @@ class AnalyzerTests(unittest.TestCase):
                          {"delta": 3, "covered_seconds": 60})
         self.assertNotIn("secret-name", json.dumps(report))
 
+    def test_report_is_byte_identical_whatever_the_hash_seed(self):
+        # r5 archives this report: set order (the hash seed) must not reorder it.
+        self.rows([sample(0), sample(60), sample(120)])
+        for i in range(3):
+            (self.root / "metrics" / f"{i:05d}.prom").write_text(
+                f'lodestar_fetch_failures_total{{kind="timed_out"}} {i * 2}\n'
+                f'lodestar_fetch_failures_total{{kind="refused"}} {i}\n'
+                f'lodestar_fetch_lost_total{{reason="evicted"}} {i * 3}\n'
+                f'lodestar_fetch_lost_total{{reason="gave_up"}} {i}\n'
+                f'lodestar_dht_peer_rejection_reasons_total{{reason="capacity"}} {i * 5}\n'
+                f'lodestar_fetch_evicted_service_total{{stage="lookup"}} {i * 7}\n'
+                f'lodestar_fetch_attempts_total {i * 11}\n', encoding="utf-8")
+        script = str(Path(__file__).with_name("analyze_cr0.py"))
+        outputs = set()
+        for seed in ("0", "1", "2", "3", "42", "12345"):
+            for fmt in ("markdown", "json"):
+                result = subprocess.run([sys.executable, "-I", script, str(self.root), "--format", fmt],
+                                        capture_output=True, text=True, env={"PYTHONHASHSEED": seed})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                outputs.add((fmt, result.stdout))
+        self.assertEqual(len(outputs), 2, "the report changed with PYTHONHASHSEED")
+        text = next(out for fmt, out in outputs if fmt == "markdown")
+        names = [line.removeprefix("Reason breakdown: ") for line in text.splitlines()
+                 if line.startswith("Reason breakdown: ")]
+        self.assertEqual(names, sorted(names))
+        self.assertEqual(len(names), 4)
+
     def test_short_endpoint_disk_and_sequence(self):
         self.rows([sample(0, sequence=0), sample(60, sequence=1)])
         (self.root / "disk.jsonl").write_text(json.dumps({

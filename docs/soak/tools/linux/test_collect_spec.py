@@ -274,7 +274,24 @@ class SpecRunTests(SpecBase):
             self.assertNotIn("build_target", run, system)
             self.assertIsNone(analyze_cr0.c_allocator(run)["c_allocator"])
         events = (self.root / "events.log").read_text()
-        self.assertIn("system API unavailable at start: build target not recorded", events)
+        self.assertIn("system API unavailable at start: build target retried on later samples", events)
+        self.assertNotIn("build target recorded", events)  # 404 throughout: never recorded
+
+    def test_build_target_is_retried_until_the_api_answers(self):
+        api = FakeAPI()
+        down = {"n": 0}
+
+        def slow(method, url, body, cookie):
+            if url.endswith("/system") and down["n"] < 3:
+                down["n"] += 1
+                return 503, {}, b""
+            return api(method, url, body, cookie)
+        self.spec_run(api=slow)
+        self.assertEqual(self.run_doc()["build_target"], "x86_64-unknown-linux-musl")
+        self.assertEqual(down["n"], 3)
+        # Once it has answered, /system isn't asked again.
+        self.assertEqual(sum(1 for _, path, _ in api.calls if path == "/system"), 1)
+        self.assertIn("build target recorded at elapsed", (self.root / "events.log").read_text())
 
     def cr0_run(self, *extra, api=None):
         write_cgroup(self.cgroup)

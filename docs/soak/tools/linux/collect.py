@@ -1232,6 +1232,7 @@ class Collector:
         self.ip = PublicIP(getattr(args, "ip_echo_url", DEFAULT_IP_ECHO), ip_lookup)
         self.api = (LodestarAPI(args.url, args.password_file, api_call)
                     if getattr(args, "password_file", None) else None)
+        self.target_pending = False  # run_json sets it when the first /system read fails
         self.run_command = run_command
         self.stop_flag = threading.Event()
         self.stop_signal = None
@@ -1378,11 +1379,15 @@ class Collector:
             "process_identity": inst.identity, "process_id": inst.process_id,
             "collector_process_id": os.getpid(), "settings": settings,
         }
+        # Retried on later samples until the API answers (as settings_api is), so a
+        # slow start doesn't leave the analyzer's C allocator unknown.
+        self.target_pending = False
         if self.api is not None:
             try:
                 run["build_target"] = self.api.build_target()
             except (OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
-                self.note("system API unavailable at start: build target not recorded")
+                self.target_pending = True
+                self.note("system API unavailable at start: build target retried on later samples")
         if inst.kind == "docker":
             run["cgroup_version"] = 2 if (Path(a.cgroup_root) / "cgroup.controllers").exists() else None
         if self.spec:
@@ -1598,6 +1603,18 @@ class Collector:
                 family = ip_family_counters(text) if metrics_ok else {}
                 if family:
                     row["ip_family_counters"] = family
+                if self.target_pending and metrics_ok:
+                    try:
+                        target = self.api.build_target()
+                    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                            http.client.HTTPException):
+                        pass
+                    else:  # it answered: kept if well formed, never asked again
+                        self.target_pending = False
+                        if target is not None:
+                            self.run["build_target"] = target
+                            self.save(self.run, self.root / "run.json")
+                            self.note(f"build target recorded at elapsed {round(elapsed, 1)} s")
                 if self.spec:
                     if health is None:
                         row.pop("health")

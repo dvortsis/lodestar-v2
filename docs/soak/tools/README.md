@@ -56,6 +56,12 @@ torrents, or peer addresses. Keep original process logs private.
   private ~ a + b*hours + c*stored, where b is time-only growth. Samples are not
   independent and the regressors are correlated: a hint, not a test. Without
   stored-torrent samples the block is skipped.
+- The "Memory attribution" block (`memory_attribution`) is informational and
+  never changes the memory gate. Its "other heap" subtracts SQLite only where
+  C's `malloc` is the C library's. Where it's mimalloc (musl builds, from
+  `run.json`'s `build_target`), SQLite is already inside mimalloc's bytes.
+  Without a recorded target the C allocator is unknown; `--c-allocator
+  mimalloc|libc` states it (`linux/README.md`, "Memory attribution").
 - Capacity equality is reported separately from exceeding a cap. These are
   sampled observations; they cannot prove that between-sample ownership was bounded.
 - `writer_stored_total` measures newly stored torrents. It does not prove
