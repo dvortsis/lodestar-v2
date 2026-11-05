@@ -10,6 +10,7 @@
 	import { showBidi } from '$lib/util/bidi';
 	import { isMagnet } from '$lib/util/magnet';
 	import { whenVisible } from './visible';
+	import Provenance from './provenance/Provenance.svelte';
 	import Summary from './summary/Summary.svelte';
 	import { resolvedVia } from './parsed/labels';
 	import type { DetailModel } from './model.svelte';
@@ -94,6 +95,7 @@
 			{/if}
 		</div>
 		<Summary {detail} {hit} {level} />
+		<Provenance provenance={detail.provenance} {level} />
 		<section
 			class="ls-detail-section"
 			aria-labelledby="detail-h-contents"
