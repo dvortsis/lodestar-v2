@@ -2818,11 +2818,13 @@
       "merge": "c1cf35ad"
     },
     "LEGAL-1r": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnCfjgKx3a1uKRGVh9g",
       "launched": "2026-11-05T01:12Z",
-      "brief": "briefs/LEGAL-1r.md"
+      "brief": "briefs/LEGAL-1r.md",
+      "pr": 457,
+      "merge": "5b840813"
     },
     "X-filter-budget-noise": {
       "status": "merged",
@@ -2917,6 +2919,13 @@
       "session": "session_01MMjhnD2bo5zh25i6jdSxqr",
       "launched": "2026-11-05T04:16Z",
       "brief": "briefs/X-source-adult.md"
+    },
+    "SRC-10c-2": {
+      "status": "building",
+      "model": "sonnet",
+      "session": "session_01MMjhn95ESuFDEKbZJEDMnV",
+      "launched": "2026-11-05T04:19Z",
+      "brief": "briefs/SRC-10c-2.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3370,7 +3379,8 @@
     "2026-11-05T02:31Z Launched SRC-13, SRC-15a, SRC-17 (owner: keep slots busy). Held: RP-2 (owns load.rs and api/filters.rs, which RP-DEF has), RP-1b (packs/mod.rs; after RP-DEF), SRC-11b (may slip to v0.7), SRC-10e and SRC-10c-2 (low value). R-rc3-cut done; SRC-10b dropped: mark in dashboard state_override in the next runner PR.",
     "2026-11-05T03:30Z rc.4 plan: tag after #457 merges and the release branch CI is green (~04:45Z); the release-notes docs PR does not block the tag. r5 start est. 05:15-05:30Z, baseline end est. 2026-11-06T11:45-12:00Z.",
     "2026-11-05T03:59Z #454 RP-DEF merged (dd6ce6e9). Launched RP-2 in slot 8 (most unlocks: RP-3, RP-4). RP-1b and RP-UC wait for RP-2 (shared packs/mod.rs; plan: filter-engine slices one at a time).",
-    "2026-11-05T04:16Z #456 merged (6cf0519c): r5 pins collector/analyzer at main 6cf0519c or later. Launched X-source-adult in slot 1."
+    "2026-11-05T04:16Z #456 merged (6cf0519c): r5 pins collector/analyzer at main 6cf0519c or later. Launched X-source-adult in slot 1.",
+    "2026-11-05T04:19Z #457 LEGAL-1r merged into release/v0.5.1 at 5b840813 (rc.4 candidate). Dispatched CI and E2E on release/v0.5.1; tag steps go to the owner when green. Launched SRC-10c-2 in slot 4."
   ],
   "owner_flags": [
     "2026-10-23 00:33 §2.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5059,7 +5069,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T04:16Z",
+    "updated": "2026-11-05T04:19Z",
     "items": [
       {
         "slot": 1,
@@ -5087,11 +5097,11 @@
       },
       {
         "slot": 4,
-        "slice": "LEGAL-1r",
+        "slice": "SRC-10c-2",
         "role": "build",
         "agent": "claude",
-        "doing": "Adding the Legal Notice to the release build: setup and login refuse until it is accepted (owner: in v0.5.1).",
-        "since": "2026-11-05T01:12Z"
+        "doing": "Internet Archive plugin follow-ups (resume edge cases); the plugin stays off until its terms check.",
+        "since": "2026-11-05T04:19Z"
       },
       {
         "slot": 5,
