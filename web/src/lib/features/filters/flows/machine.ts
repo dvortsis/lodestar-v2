@@ -141,6 +141,15 @@ export function forApply(change: Change, assessment: Assessment): Change {
 	// Accepting a held version names the version the warning described (S-blocklists, B-subscriptions-api).
 	if (change.op === 'resolve_held' && change.accept && assessment.held_version)
 		return { ...change, held: assessment.held_version };
+	// Pack acceptances and overrides name the versions and base the warning described (RP-3), so a
+	// pack that moved meanwhile is `changed_since_preview`, never confirmed by a password for another.
+	if (change.op === 'accept_pack_versions' && assessment.pack_versions)
+		return { ...change, versions: [...assessment.pack_versions] };
+	if (
+		(change.op === 'set_pack_override' || change.op === 'confirm_pack_override') &&
+		assessment.pack_base !== undefined
+	)
+		return { ...change, base: assessment.pack_base };
 	if (change.op !== 'resolve_floor_removal' || change.remove !== true) return change;
 	const rest = { ...change };
 	delete rest.hashes;
@@ -170,6 +179,8 @@ export function assessmentDiffers(a: Assessment, b: Assessment): boolean {
 	)
 		return true;
 	if (a.held_version !== b.held_version) return true;
+	if ((a.pack_versions ?? []).join() !== (b.pack_versions ?? []).join()) return true;
+	if (a.pack_base !== b.pack_base) return true;
 	return (a.floor_entries ?? []).join() !== (b.floor_entries ?? []).join();
 }
 

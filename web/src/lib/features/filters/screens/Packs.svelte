@@ -49,3 +49,7 @@
 		{#if PackInfo}<PackInfo />{/if}
 	</details>
 </section>
+<!-- The per-pack panels (RP-6) load with this part, never with the first view. -->
+{#await import('./packs/PacksScreen.svelte') then { default: PackPanels }}
+	<PackPanels {o} {ask} />
+{/await}
