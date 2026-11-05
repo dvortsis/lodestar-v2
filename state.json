@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T16:31Z",
+  "updated_at": "2026-11-05T16:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4758,7 +4758,11 @@
     "ENR-5 (StashDB plugin) was next to launch; held by the 8-slot limit. Launch only when fewer than 8 are running (and before the 00:00Z cut to 4 only if still under the limit).",
     "owner-flag §2.19/§2.26 (RP-4 #495, runner rulings 16:22Z): SP-3 counts against a source id with no publisher only for live-feed sources (allow-list); full scrape, clients, arr, archive_org, academic, prowlarr, torrent cache and enrichment count only with a named publisher. Publisher counts are per source. Second judgment on a flooded commit (+3.1 µs, about +21% of a feed commit, only from the 20th name of a flood) accepted.",
     "Follow-up (from ENR-7 #504): the adult-enrichment scene link is always null until ENR-1 carries one (Lookup::Match has no link; provenance.external_ref is never set). Host wiring adds .layer(Extension(DrawerInterest)).",
-    "Follow-up (from ENR-4 #503): sources-feeds tpdb Page should say whether it saw `data` (the plugin checks raw bytes today); ENR-4 blocklist contract test deferred to ENR-G/SRC-G."
+    "Follow-up (from ENR-4 #503): sources-feeds tpdb Page should say whether it saw `data` (the plugin checks raw bytes today); ENR-4 blocklist contract test deferred to ENR-G/SRC-G.",
+    "ENR-G brief (from #503 review I3): add \"the match text is judged through each enrichment plugin (blocklist applies)\" to ENR-G; ENR-4 deferred its blocklist contract test there.",
+    "Host-wiring notes (from #503 review P5): a 401 holds the ThePornDB host 6 h even after the key is fixed (clear the hold on a credential change); while a host is held, background lookups fail at once and spend the daily budget (skip budget on held host).",
+    "Follow-up (from #503 review P6, SRC-4 generic): consent::need accepts any non-egress credential name, so an Account plugin enables with no api_key stored; require the manifest-declared credential names.",
+    "Follow-up (from #502 review): host-wiring brief must list every registered Kind::Enrichment adult plugin in PipelineConfig::adult_enrichers; ENR-1c warns at start for an unlisted one."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
