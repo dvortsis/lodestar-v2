@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T12:30Z",
+  "updated_at": "2026-11-05T12:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2935,11 +2935,13 @@
       "brief": "briefs/RP-UC.md"
     },
     "LEGAL-1": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnCPhmxpaJb3JmtzPS1",
       "launched": "2026-11-05T04:38Z",
-      "brief": "briefs/LEGAL-1.md"
+      "brief": "briefs/LEGAL-1.md",
+      "merge": "ad921690",
+      "pr": 472
     },
     "X-flake-boot-shell": {
       "status": "merged",
@@ -3082,6 +3084,19 @@
       "status": "merged",
       "merge": "4e425d4e",
       "pr": 488
+    },
+    "LEGAL-2": {
+      "status": "running",
+      "session": "session_01MMjhn8RESwnJh5PoSbf5ii",
+      "since": "2026-11-05T12:33Z",
+      "brief": "briefs/LEGAL-2.md"
+    },
+    "X-settings-trim": {
+      "status": "running",
+      "session": "session_01MMjhnB99PRswaZHYHreTW3",
+      "since": "2026-11-05T12:33Z",
+      "brief": "briefs/X-settings-trim.md",
+      "model": "sonnet"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5308,7 +5323,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T12:30Z",
+    "updated": "2026-11-05T12:33Z",
     "items": [
       {
         "slot": 1,
@@ -5328,11 +5343,11 @@
       },
       {
         "slot": 3,
-        "slice": "LEGAL-1",
+        "slice": "LEGAL-2",
         "role": "build",
         "agent": "claude",
-        "doing": "Legal Notice on main: LEGAL-1r gate ported, plus the setup-wizard step (v0.5.2)",
-        "since": "2026-11-05T04:38Z"
+        "doing": "Legal: the crawler stays paused on a fresh install until setup is done",
+        "since": "2026-11-05T12:33Z"
       },
       {
         "slot": 4,
@@ -5352,8 +5367,11 @@
       },
       {
         "slot": 6,
-        "status": "idle",
-        "doing": "Held: no ready slice. ENR-1b waits on #480; LEGAL-2 and X-settings-trim on #472; RP-5 on RP-4; B13b on X-search-files-5; X-claim-trackers on #480 and #491's review"
+        "slice": "X-settings-trim",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Performance: the Settings bundle back under its 45 kB cap",
+        "since": "2026-11-05T12:33Z"
       },
       {
         "slot": 7,
@@ -5382,7 +5400,7 @@
       {
         "slot": 10,
         "status": "idle",
-        "doing": "Held: no ready slice. ENR-1b waits on #480; LEGAL-2 and X-settings-trim on #472; RP-5 on RP-4; B13b on X-search-files-5"
+        "doing": "Held: no ready slice. ENR-1b waits on #480; RP-5 on RP-4; B13b on X-search-files-5; X-claim-trackers on #480 and #491's review"
       },
       {
         "slot": 11,
