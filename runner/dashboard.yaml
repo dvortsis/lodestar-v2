@@ -213,6 +213,7 @@ placement:
   - S-keys
   - M-auth
   - X-settings-trim
+  - X-settings-followups
 - ws: ws-filters
   match:
   - M-filters-dialogs

@@ -1,6 +1,7 @@
 <script lang="ts">
 	// What the last save did to a field (§10.10.4's status line): "Saved" (or "applies after a
-	// restart"), or in instant mode "Changed" with its Undo; and a staged reset's line (the row `SettingField.svelte` leaves to it).
+	// restart"), or in instant mode "Changed" with its Undo; and a staged reset's line (the row
+	// `SettingField.svelte` leaves to it).
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconRestart from '~icons/ph/arrows-clockwise';
