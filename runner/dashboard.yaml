@@ -258,6 +258,11 @@ placement:
   - X-ci-health
   - X-log-url-redact
   - X-log-url-redact-2
+  - X-flake-boot-shell
+  - X-followups-1105
+  - X-source-adult-2
+  - X-flakes-1105
+  - D-sources-guide
   - L4-followups
   - S-settings-reconcile
 - ws: ws-cut
@@ -323,6 +328,7 @@ placement:
   - SRC-12
   - SRC-12b
   - SRC-13
+  - SRC-13b
   - X-source-adult
 - ws: ws-src-ui
   match:
@@ -352,6 +358,7 @@ placement:
   match:
   - X-search-files-3
   - X-search-files-4
+  - X-search-files-5
   - G-import-*
   - CR-3
   - G-rebuild-10M
