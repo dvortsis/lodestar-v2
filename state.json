@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T18:58Z",
+  "updated_at": "2026-11-05T18:59Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5484,7 +5484,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T18:58Z",
+    "updated": "2026-11-05T18:59Z",
     "items": [
       {
         "slot": 1,
@@ -5501,6 +5501,15 @@
         "agent": "claude",
         "doing": "Content safety: one compiled-in manifest list, so imports never miss an always-adult source",
         "since": "2026-11-05T18:50Z"
+      },
+      {
+        "slot": 3,
+        "slice": null,
+        "role": "build",
+        "agent": "claude",
+        "status": "idle",
+        "doing": "Kept free: the next ready slices wait on open PRs (RP-5 on #495, ENR-8 on #504; the canonical tracker store shares unverified.rs with #502; X-search-files-6 needs a runner design call). Filled when one merges.",
+        "since": "2026-11-05T18:59Z"
       },
       {
         "slot": 5,
