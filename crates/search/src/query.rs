@@ -16,6 +16,7 @@
 //! verified:no  verified:yes,no  source:nyaa,dht  network:bt   (§18.6)
 //! year:2019..2021  s:2  e:5  junk:<20  cat:video>=80%  bytes:video>90%
 //! file:(ext:flac size:>50MB)  file:"dark knight"   one file matching all
+//! file:(ext:jpg)       any file, hidden or uncovered ones too (as ext:)
 //! seeders:>=5  leechers:>0  trackers:>=3  dht:>100  seen:<24h
 //! time:22:00..02:00    discovered at that time of day (user's zone)
 //! ```
