@@ -984,6 +984,9 @@ async fn your_rules_mark_stored_torrents_and_shadow_rules_only_log() {
         .add_rule("telesync", hide, Some(i64::MAX), None)
         .unwrap();
     store.set_pack_switch("fakes", false).unwrap();
+    // UC-1 would hide the telesync rip on this fresh store: this is
+    // about your rules.
+    store.set_pack_switch("unauthorised-copy", false).unwrap();
     let (feed, feed_tx) = scripted("feed");
     let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
     for k in &keys {

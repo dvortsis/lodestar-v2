@@ -103,5 +103,7 @@
 	"wizard_pack_spam": "Spam",
 	"wizard_pack_spam_text": "Hides advertising and promotion stuffed into names.",
 	"wizard_pack_scams": "Scams",
-	"wizard_pack_scams_text": "Hides fake giveaways and \"password required\" tricks."
+	"wizard_pack_scams_text": "Hides fake giveaways and \"password required\" tricks.",
+	"wizard_pack_unauthorised_copy": "Unauthorised copies",
+	"wizard_pack_unauthorised_copy_text": "Hides films and shows named like unauthorised copies (camcorder and scene rips) and cracked software. It goes by the name and can't know who holds the rights: use Always allow to show something it hides."
 }

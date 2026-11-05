@@ -36,12 +36,16 @@ pub use content::ContentType;
 pub use effective::{Effective, ResolvedVia};
 pub use ext::Category;
 pub use junk::{ClaimedFile, Junk, JunkReason, claim_mismatch, lure_hits};
+/// The crack check MW-6 and UC-2 read (owner §2.39).
+pub mod crack {
+    pub use crate::junk::{CRACK_WORDS, crack_words_in, cracked, words};
+}
 pub use record::{ENRICHMENT_VERSION, Record, RecordError};
 pub use structure::Structure;
 
 /// Bumped whenever a change alters any classification, so stored
 /// results can be re-derived (§6 "Re-derivation without the raw dict").
-pub const CLASSIFY_VERSION: u32 = 3;
+pub const CLASSIFY_VERSION: u32 = 4;
 
 /// One file of a torrent, with its path decoded to text. A single-file
 /// torrent is one entry whose path is the torrent name.
@@ -228,7 +232,13 @@ pub fn classify_enriched(
     let junk = if fix.not_junk {
         Junk::default()
     } else {
-        junk::score(&title, &composition, structure, files)
+        let mut j = junk::score(&title, &composition, structure, files);
+        // Cracked software (owner §2.39): only a software release, so a
+        // game, a track or a film with the word is never read as one.
+        if content_type == ContentType::Software && junk::cracked(name, &title.release) {
+            j.add(JunkReason::Cracked);
+        }
+        j
     };
     Classification {
         composition,

@@ -656,6 +656,11 @@ pub fn current_record(manifest: &Manifest) -> Applied {
 /// 3. **A store that existed before** (neither marker): every pack without
 ///    a switch row gets an explicit **off** row and [`DEFAULTS_KEY`] is
 ///    set, so nothing flips and filtering is unchanged.
+/// 4. **A pack added since the defaults were applied** (RP-UC): `DEFAULTS_KEY`
+///    is set once, so on a store an earlier build already set up, a pack
+///    that build didn't know (`unauthorised-copy`) gets its explicit off
+///    row here, and [`KNOWN_KEY`] records the packs whose defaults are
+///    written ([`offer_new_packs`]).
 ///
 /// Returns what changed filtering: `Some` after step 1 (a default
 /// [`Seeded`]) or step 2, `None` when the store already had state.
@@ -665,6 +670,8 @@ pub fn ensure_seeded(
     now: i64,
 ) -> lodestar_store::Result<Option<Seeded>> {
     if seed_fresh(store, manifest)? {
+        // Every pack has a row now: this only records that they're known.
+        offer_new_packs(store)?;
         return Ok(Some(Seeded::default()));
     }
     let seeded = if Rows::read(store)?.exist() {
@@ -683,7 +690,71 @@ pub fn ensure_seeded(
     if matches!(store.setting_text(DEFAULTS_KEY), Ok(None)) {
         store.apply_pack_defaults(false, &pack_names(), None)?;
     }
+    offer_new_packs(store)?;
     Ok(seeded)
+}
+
+/// The settings row listing the packs whose defaults this store has
+/// written, space-separated (RP-UC). With no row, they're the packs the
+/// first build that set [`DEFAULTS_KEY`] knew ([`DEFAULTS_PACKS`]).
+pub const KNOWN_KEY: &str = "packs.known";
+
+/// The packs RP-DEF's build knew: the defaults step of a store with
+/// [`DEFAULTS_KEY`] and no [`KNOWN_KEY`] covered these and no others.
+pub const DEFAULTS_PACKS: &[Pack] = &[
+    Pack::Malware,
+    Pack::Lures,
+    Pack::Fakes,
+    Pack::Spam,
+    Pack::Scams,
+];
+
+/// Step 4 of [`ensure_seeded`]: once the defaults are applied (and the
+/// fresh marker is gone), every pack this build knows that the store's
+/// defaults didn't cover gets an explicit **off** row, unless it has a
+/// row (a choice, or a fresh store's on row), and [`KNOWN_KEY`] is
+/// written. It reads as off with no row anyway (`load::pack_switches`),
+/// so filtering doesn't change: the row makes the state explicit, and the
+/// wizard and the filters screen offer the pack. Returns the packs given
+/// an off row.
+///
+/// Done once per new pack: an Undo that later deletes the row leaves it
+/// off, as it reads, and isn't undone again. The row goes before the
+/// list, and each write is idempotent, so a crash between the two only
+/// repeats a write that changes nothing. Like [`seed_fresh`], it reads
+/// before it writes: every caller holds the store's one writing
+/// connection.
+pub fn offer_new_packs(store: &mut Store) -> lodestar_store::Result<Vec<Pack>> {
+    let all = pack_names().join(" ");
+    let known = match store.setting_text(KNOWN_KEY) {
+        Ok(Some(k)) if k == all => return Ok(Vec::new()),
+        Ok(Some(k)) => k,
+        // A row that won't read: the covered packs aren't known, so the
+        // first set is assumed. An off row only states what already reads.
+        Ok(None) | Err(_) => String::new(),
+    };
+    // Not set up yet (or the marker won't read): the steps above own it.
+    if !matches!(store.setting_text(DEFAULTS_KEY), Ok(Some(_)))
+        || !matches!(store.setting_text(FRESH_KEY), Ok(None))
+    {
+        return Ok(Vec::new());
+    }
+    let covered: Vec<&str> = if known.is_empty() {
+        DEFAULTS_PACKS.iter().map(|p| p.as_str()).collect()
+    } else {
+        known.split_whitespace().collect()
+    };
+    let set = store.rule_set()?;
+    let has_row = |p: Pack| set.pack_switches.iter().any(|(id, _)| id == p.as_str());
+    let new: Vec<Pack> = Pack::ALL
+        .into_iter()
+        .filter(|p| !covered.contains(&p.as_str()) && !has_row(*p))
+        .collect();
+    for p in &new {
+        store.set_pack_switch(p.as_str(), false)?;
+    }
+    store.update_settings_text(&[(KNOWN_KEY, &all)], &[])?;
+    Ok(new)
 }
 
 /// The settings rows of RP-DEF's markers.
@@ -927,7 +998,12 @@ mod tests {
     #[test]
     fn the_seed_has_every_baseline_rule_at_one() {
         let s = seed_record(&Manifest::builtin());
-        assert_eq!(s.0.len(), PackRule::COUNT);
+        let added = super::super::manifest::ADDED_AFTER_RP0;
+        assert_eq!(s.0.len(), PackRule::COUNT - added.len());
+        assert!(
+            added.iter().all(|r| s.get(*r).is_none()),
+            "never recorded by seeding"
+        );
         assert!(s.0.values().all(|v| *v == 1));
         assert_eq!(s.get(PackRule::Sc2), Some(1));
     }
@@ -946,10 +1022,30 @@ mod tests {
         };
         let seeded = PackVersions::resolve(&m, &rows);
         assert!(!seeded.unseeded && seeded.conditions.is_empty());
+        // Rules added after RP-0 never applied on a store seeded before
+        // them: nothing of theirs applies, and they're pending, in shadow.
+        let added = super::super::manifest::ADDED_AFTER_RP0;
         for r in PackRule::ALL {
-            assert!(none.state(r).plain && seeded.state(r).plain, "{}", r.id());
+            if added.contains(&r) {
+                for st in [none.state(r), seeded.state(r)] {
+                    assert!(st.apply.is_empty() && st.pending(), "{}", r.id());
+                    assert_eq!(st.direction, Some(Direction::Widens), "{}", r.id());
+                }
+            } else {
+                assert!(none.state(r).plain && seeded.state(r).plain, "{}", r.id());
+            }
         }
-        assert_eq!(seeded.pending().count(), 0);
+        assert_eq!(seeded.pending().count(), added.len());
+        // A fresh store's record has every rule at its current version.
+        let fresh = Rows {
+            applied: [
+                Some(Ok(current_record(&m).encode())),
+                Some(Ok(current_record(&m).encode())),
+            ],
+            marker: Some(Ok("1".into())),
+        };
+        let fresh = PackVersions::resolve(&m, &fresh);
+        assert!(PackRule::ALL.iter().all(|r| fresh.state(*r).plain));
     }
 
     #[test]
@@ -992,7 +1088,13 @@ mod tests {
         let off = s(&[], &[PackRule::Mw2]);
         assert_eq!(
             turned_on(&off, "malware", true),
-            [PackRule::Mw4, PackRule::Mw1, PackRule::Mw3, PackRule::Mw5]
+            [
+                PackRule::Mw4,
+                PackRule::Mw1,
+                PackRule::Mw3,
+                PackRule::Mw5,
+                PackRule::Mw6
+            ]
         );
         let on = s(&[Pack::Malware], &[PackRule::Mw2]);
         assert!(turned_on(&on, "malware", true).is_empty(), "on → on");

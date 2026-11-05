@@ -1,7 +1,8 @@
-//! The built-in rule packs (§20.6): malware, lures, fakes, spam and
-//! scams. Rules read the classifier's junk reasons and structure
-//! fingerprints, so the packs and the junk score never disagree, and each
-//! carries its false-positive guards.
+//! The built-in rule packs (§20.6): malware, lures, fakes, spam, scams and
+//! unauthorised-copy. Rules read the classifier's junk reasons, structure
+//! fingerprints and the release parser's fields, so the packs and the junk
+//! score never disagree, and each carries its false-positive guards. The
+//! unauthorised-copy pack and MW-6 are in [`unauthorised_copy`].
 //!
 //! Each rule has a version in the compiled-in [`manifest`], and the
 //! version this install applied is recorded and resolved by [`upgrade`]
@@ -13,7 +14,8 @@
 //! index of hidden items).
 //!
 //! A CSX-5 *Neutralize term* stops a word counting as evidence in the
-//! rules that read keyword lists (MW-3, LU-2, LU-4, SC-1, SC-2) and in LU-1's
+//! rules that read keyword lists (MW-3, MW-6, LU-2, LU-4, SC-1, SC-2, UC-1,
+//! UC-2) and in LU-1's
 //! lure notes (§20.5.5), as it does in the core and your rules. The
 //! words of a name or file the rules count are read with the neutralized
 //! ones blanked, positions kept ([`Ctx::evidence`], [`Ctx::live_lure`]). The guards that keep a rule from matching
@@ -22,6 +24,7 @@
 //! rule.
 
 pub mod manifest;
+pub mod unauthorised_copy;
 pub mod upgrade;
 
 use std::collections::BTreeSet;
@@ -39,15 +42,19 @@ pub enum Pack {
     Fakes,
     Spam,
     Scams,
+    /// Names that follow the conventions of unauthorised copies (owner
+    /// §2.39): UC-1 to UC-3.
+    UnauthorisedCopy,
 }
 
 impl Pack {
-    pub const ALL: [Pack; 5] = [
+    pub const ALL: [Pack; 6] = [
         Pack::Malware,
         Pack::Lures,
         Pack::Fakes,
         Pack::Spam,
         Pack::Scams,
+        Pack::UnauthorisedCopy,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -57,6 +64,7 @@ impl Pack {
             Pack::Fakes => "fakes",
             Pack::Spam => "spam",
             Pack::Scams => "scams",
+            Pack::UnauthorisedCopy => "unauthorised-copy",
         }
     }
 
@@ -86,16 +94,27 @@ pub enum PackRule {
     /// "Generator / hack" for online-game currencies or accounts, split
     /// out of SC-1 so it has its own switch (plan 2026-11-04 Q16).
     Sc2,
+    /// Cracked software (owner §2.39), in the malware pack so turning
+    /// `unauthorised-copy` off doesn't restore it. Added after RP-0, so
+    /// declared last: [`PackRule::index`] stays as it was for the others.
+    Mw6,
+    /// Camcorder, telesync, telecine and screener rips of films.
+    Uc1,
+    /// Cracked software, as MW-6 reads it.
+    Uc2,
+    /// Scene-style film and TV rips.
+    Uc3,
 }
 
 impl PackRule {
     /// In evaluation order: the strongest action within a pack first.
-    pub const ALL: [PackRule; 17] = [
+    pub const ALL: [PackRule; 21] = [
         PackRule::Mw4,
         PackRule::Mw1,
         PackRule::Mw2,
         PackRule::Mw3,
         PackRule::Mw5,
+        PackRule::Mw6,
         PackRule::Lu1,
         PackRule::Lu4,
         PackRule::Lu2,
@@ -108,6 +127,9 @@ impl PackRule {
         PackRule::Sp1,
         PackRule::Sc1,
         PackRule::Sc2,
+        PackRule::Uc1,
+        PackRule::Uc2,
+        PackRule::Uc3,
     ];
 
     /// How many rules there are.
@@ -137,6 +159,10 @@ impl PackRule {
             PackRule::Sp2 => "SP-2",
             PackRule::Sc1 => "SC-1",
             PackRule::Sc2 => "SC-2",
+            PackRule::Mw6 => "MW-6",
+            PackRule::Uc1 => "UC-1",
+            PackRule::Uc2 => "UC-2",
+            PackRule::Uc3 => "UC-3",
         }
     }
 
@@ -147,11 +173,12 @@ impl PackRule {
     pub fn pack(self) -> Pack {
         use PackRule::*;
         match self {
-            Mw1 | Mw2 | Mw3 | Mw4 | Mw5 => Pack::Malware,
+            Mw1 | Mw2 | Mw3 | Mw4 | Mw5 | Mw6 => Pack::Malware,
             Lu1 | Lu2 | Lu3 | Lu4 => Pack::Lures,
             Fk1 | Fk2 | Fk4 | Fk5 => Pack::Fakes,
             Sp1 | Sp2 => Pack::Spam,
             Sc1 | Sc2 => Pack::Scams,
+            Uc1 | Uc2 | Uc3 => Pack::UnauthorisedCopy,
         }
     }
 
@@ -160,7 +187,9 @@ impl PackRule {
         use PackRule::*;
         match self {
             Mw4 | Fk4 => Action::Drop,
-            Mw1 | Mw2 | Mw3 | Mw5 | Lu1 | Lu4 | Fk1 | Sp2 | Sc1 | Sc2 => Action::Hide,
+            Mw1 | Mw2 | Mw3 | Mw5 | Mw6 | Lu1 | Lu4 | Fk1 | Sp2 | Sc1 | Sc2 | Uc1 | Uc2 | Uc3 => {
+                Action::Hide
+            }
             Lu2 | Lu3 | Fk5 | Sp1 => Action::Demote,
             Fk2 => Action::Flag,
         }
@@ -188,10 +217,7 @@ impl PackSwitches {
 }
 
 fn words(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect()
+    lodestar_classify::crack::words(text)
 }
 
 fn ext(f: &FileInfo) -> Option<Ext> {
@@ -469,6 +495,9 @@ impl<'a> Ctx<'a> {
             Sp2 => stuffed(self.item.name) && !matches!(t, ContentType::Music),
             Sc1 => self.scam(|x| !GAMES.contains(&x)),
             Sc2 => self.scam(|x| GAMES.contains(&x)),
+            Mw6 | Uc2 => self.cracked_software(),
+            Uc1 => self.uc1(),
+            Uc3 => self.uc3(),
         }
     }
 
@@ -741,14 +770,23 @@ mod tests {
         assert!(
             !hit("Fortnite Trainer Offline Mod", &[("trainer.exe", 1 << 20)]).contains(&"SC-1")
         );
-        // A plain release passes every pack.
-        assert!(
+        // A plain scene release passes every pack but UC-3, which hides
+        // scene-style film rips (owner §2.39).
+        assert_eq!(
             hit(
                 "The.Matrix.1999.1080p.BluRay.x264-GRP",
                 &[
                     ("The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", 8 << 30),
                     ("grp.nfo", 4000)
                 ]
+            ),
+            ["UC-3"]
+        );
+        // Without a release group it isn't scene-style.
+        assert!(
+            hit(
+                "The Matrix 1999 1080p BluRay",
+                &[("The Matrix 1999 1080p BluRay.mkv", 8 << 30)]
             )
             .is_empty()
         );

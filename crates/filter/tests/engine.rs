@@ -208,7 +208,10 @@ fn your_rules_with_unless_and_shadow() {
     assert!(v.decision.is_none());
     assert_eq!(v.shadow[0].rule, RuleRef::User(3));
     e.rules[0].enabled = false;
-    assert!(judge(&e, "Movie 2023 CAM", VIDEO, 1000).shadow.is_empty());
+    // UC-1 is pending on a store never seeded (it was added after RP-0),
+    // so it's in shadow too; the switched-off rule isn't.
+    let v = judge(&e, "Movie 2023 CAM", VIDEO, 1000);
+    assert!(v.shadow.iter().all(|s| !matches!(s.rule, RuleRef::User(_))));
 }
 
 #[test]
@@ -286,9 +289,13 @@ fn prefetch_refusal_stays_conservative() {
     let _ = ContentType::Video;
 }
 
-/// §20.6 and the owner's decision (§2.8): a fresh store has no pack on.
+/// A store's rule set with no switch rows reads every pack as off
+/// (`load::pack_switches`). §2.8's "off until chosen" is superseded by
+/// §2.39: a fresh data directory gets an explicit on row for every pack
+/// when `packs::upgrade::ensure_seeded` runs at start (RP-DEF), which this
+/// in-memory store never does.
 #[test]
-fn a_fresh_store_loads_with_no_pack_on() {
+fn a_store_with_no_switch_rows_loads_with_no_pack_on() {
     let store =
         lodestar_store::Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
     let mut e = engine();

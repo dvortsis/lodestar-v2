@@ -217,15 +217,19 @@ fn seeding_keeps_every_rule_at_baseline_and_copies_sc1_to_sc2() {
     let e = load(&m, &s);
     assert!(!e.pack_versions.unseeded);
     assert!(e.pack_versions.conditions.is_empty());
+    // Only the rules added after RP-0 are pending, in shadow: seeding
+    // records what every install had, and they weren't part of it.
+    let pending: Vec<PackRule> = e.pack_versions.pending().map(|(r, _)| r).collect();
     assert_eq!(
-        e.pack_versions.pending().count(),
-        0,
-        "nothing pending or shadowed"
+        pending,
+        [PackRule::Mw6, PackRule::Uc1, PackRule::Uc2, PackRule::Uc3],
+        "nothing else pending or shadowed"
     );
     assert_eq!(e.packs, before.packs);
     assert_eq!(e.exceptions.len(), before.exceptions.len());
     for r in PackRule::ALL {
-        assert_eq!(e.pack_versions.state(r).apply, [1], "{}", r.id());
+        let want: &[u32] = if pending.contains(&r) { &[] } else { &[1] };
+        assert_eq!(e.pack_versions.state(r).apply, want, "{}", r.id());
     }
     // Seeding never runs again, and never copies twice.
     assert!(upgrade::ensure_seeded(&mut s, &m, 0).unwrap().is_none());
@@ -492,7 +496,17 @@ fn both_rows_lost_runs_the_interim_mode_and_keeps_what_was_accepted() {
         // Each interim rule shadows its current version alone, so the
         // acceptance preview has what accepting would change.
         let pending: Vec<PackRule> = e.pack_versions.pending().map(|(r, _)| r).collect();
-        assert_eq!(pending, [PackRule::Mw2, PackRule::Lu4]);
+        assert_eq!(
+            pending,
+            [
+                PackRule::Mw2,
+                PackRule::Mw6,
+                PackRule::Lu4,
+                PackRule::Uc1,
+                PackRule::Uc2,
+                PackRule::Uc3
+            ]
+        );
         assert_eq!(shadow_of(&e, A)[0].side(), Some(Side::Both));
         // Accepting is weakening (no record), and writes a fresh record.
         assert!(!acceptance_strengthens(
@@ -981,7 +995,14 @@ fn a_downgrade_applies_the_builds_version_and_the_upgrade_back_keeps_the_accepte
     upgrade::set_pack_switch(&mut s, &older, "malware", true, 0).unwrap();
     upgrade::accept(&mut s, &older, &[PackRule::Mw2], 0).unwrap();
     assert!(rows(&s)[0].as_deref().unwrap().contains("MW-2@2"));
-    assert_eq!(rows(&s)[0], accepted[0]);
+    // Turning malware on recorded MW-6, which the older build ships and
+    // the newer one's acceptance hadn't: the rest is as accepted.
+    let mut now = upgrade::Applied::decode(rows(&s)[0].as_deref().unwrap()).unwrap();
+    assert_eq!(now.0.remove("MW-6"), Some(1));
+    assert_eq!(
+        Some(now),
+        upgrade::Applied::decode(accepted[0].as_deref().unwrap())
+    );
     // The upgrade back.
     let e = load(&newer, &s);
     assert!(e.pack_versions.conditions.is_empty());
@@ -1001,7 +1022,11 @@ fn unknown_switches_and_versions_are_kept_and_ignored() {
     s.set_pack_switch("newpack", true).unwrap();
     let e = load(&m, &s);
     assert!(e.pack_versions.conditions.is_empty());
-    assert_eq!(e.pack_versions.pending().count(), 0);
+    assert!(
+        e.pack_versions
+            .pending()
+            .all(|(r, _)| lodestar_filter::packs::manifest::ADDED_AFTER_RP0.contains(&r))
+    );
     upgrade::set_pack_switch(&mut s, &m, "lures", true, 0).unwrap();
     upgrade::accept(&mut s, &m, &[PackRule::Mw1], 0).unwrap();
     for r in rows(&s) {

@@ -120,9 +120,23 @@ To update by hand:
    **Result:** The container starts, and the old data is intact.
 
 ## 3.6 Know what protects the content filters and API keys
-<!-- index: API keys; content filters; child-safety core -->
+<!-- index: API keys; content filters; child-safety core; rule packs; unauthorised-copy pack -->
 
 The child-safety core of the content filters is always on. A change that would weaken protection asks for your password and shows a plain-language warning first.
+
+Rule packs sit on top of the core. A rule pack is a set of rules that hides one kind of unwanted torrent. There are six: malware, lures, fakes, spam, scams and unauthorised copies. On a new install they are all on, and we recommend you leave them on.
+
+The **unauthorised-copy** pack hides torrents whose names follow the conventions of unauthorised copies:
+
+- camcorder, telesync, telecine and screener copies of films (names with `HDCAM`, `HDTS`, `DVDSCR` and similar);
+- film and TV releases named the way release groups name their copies, such as `Title.2019.1080p.BluRay.x264-GROUP`;
+- cracked software, such as a program sold with a `Keygen` or a `Crack`. A plain `Patch` or `Update` is never hidden.
+
+It reads only the name. It can't know who holds the rights to anything, so it may hide something you are allowed to have. Some public-domain and Creative Commons films are never hidden, such as *Big Buck Bunny* or *Night of the Living Dead* (1968). Items from the Internet Archive aren't hidden either. To show something else it hides, add the search to **Always allow** in **Settings → Filters & Safety**.
+
+Cracked software is also hidden by the malware pack, because cracks often carry malware. Turning the unauthorised-copy pack off doesn't show cracked software again while the malware pack is on.
+
+If you installed an earlier version, the unauthorised-copy pack starts off. Lodestar offers it in the setup wizard and in **Settings → Filters & Safety**, where turning it on shows what it would hide first.
 
 API keys, which let other apps such as Torznab clients talk to Lodestar, are **(planned)**. When they arrive, create one key per app and regenerate any key that leaks. Never use the admin password as a key.
 

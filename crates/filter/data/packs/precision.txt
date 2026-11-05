@@ -54,8 +54,9 @@ item Example Aquarium Screensaver v1.0
   file 8M Aquarium.scr
   guards MW-5
 
-# Scene RAR sets (LU-1, FK-1, FK-5: `.sfv`/`.nfo`, no password file).
-item Example.Movie.2019.1080p.BluRay.x264-GRP
+# Scene RAR sets (LU-1, FK-1, FK-5: `.sfv`/`.nfo`, no password file). A
+# public-domain film, so UC-3's allow list passes it too.
+item Night.of.the.Living.Dead.1968.1080p.BluRay.x264-GRP
   file 50M grp-example.rar
   file 50M grp-example.r00
   file 50M grp-example.r01
@@ -112,11 +113,8 @@ item Sample Band - Discography - Sample Band - Album 01 [FLAC] - Sample Band - A
   file 300M Album 03/01 - Third Song.flac
   guards SP-2
 
-# Offline software cracks (SC-1: offline software isn't covered).
-item Deezer Offline Music Player v3.0 Premium Activator
-  file 80M setup.exe
-  file 1M activator.exe
-  guards SC-1
+# Offline software (SC-1: offline software isn't a scam; an offline
+# crack is MW-6's, owner §2.39, so none is listed here).
 item Netflix Offline Downloader Premium v2.1
   file 30M setup.exe
   guards SC-1
@@ -128,3 +126,50 @@ item Fortnite Creative Aim Trainer Map Free
 item Fortnite Replay Mod Free
   file 2M replay-mod.zip
   guards SC-2
+
+# Lawful patches and updates (MW-6, UC-2: `patch` alone never counts, and
+# a crack word in the program's own title isn't a crack).
+item Example.Browser.120.0.1.Patch
+  file 50M update.exe
+  guards MW-6 UC-2
+item Example.Editor.v2.3.x64.Patch
+  file 40M update.exe
+  guards MW-6 UC-2
+item Crack Attack v1.2 x64 Patch
+  file 50M setup.exe
+  guards MW-6 UC-2
+item Example Wall Crack Repair Tutorial 2019 720p
+  file 300M tutorial.mp4
+  guards MW-6 UC-2
+
+# Weak source words as title words (UC-1: a weak marker counts only in
+# brackets or after the year).
+item Nanny Cam 1080p x264-GRP
+  file 2G Nanny Cam 1080p x264-GRP.mkv
+  guards UC-1
+item Little Ts 720p
+  file 900M Little Ts 720p.mkv
+  guards UC-1
+item Example Dash Cam 1080p
+  file 3G Example Dash Cam 1080p.mp4
+  guards UC-1
+
+# Public-domain and Creative Commons films, and Internet Archive items
+# (UC-3: the official-source exemption and the allow list).
+item Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP
+  file 900M Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP.mkv
+  guards UC-3
+item Sintel.2010.2160p.WEB-DL.x265-GRP
+  file 2G Sintel.2010.2160p.WEB-DL.x265-GRP.mkv
+  guards UC-3
+item Night.of.the.Living.Dead.1968.1080p.BluRay.x264-GRP
+  file 8G Night.of.the.Living.Dead.1968.1080p.BluRay.x264-GRP.mkv
+  guards UC-3
+item Example.Film.1950.DVDRip.XviD-GRP
+  file 700M Example.Film.1950.DVDRip.XviD-GRP.avi
+  file 2K example-film-1950_meta.xml
+  file 4K example-film-1950_files.xml
+  guards UC-3
+item ubuntu-24.04-desktop-amd64.iso
+  file 5G ubuntu-24.04-desktop-amd64.iso
+  guards UC-3

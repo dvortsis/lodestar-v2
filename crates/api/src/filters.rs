@@ -737,8 +737,9 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: 
              wrong, which keeps {rule} on for everything else."
         ),
         Change::PackSwitch { id, .. } => format!(
-            "Switching off {id} stops it hiding or dropping malware, lures, fakes, spam or scams \
-             it would have caught. {n} Safer: an exception for the torrents it got wrong."
+            "Switching off {id} stops it hiding or dropping malware, lures, fakes, spam, scams \
+             or unauthorised copies it would have caught. {n} Safer: an exception for the \
+             torrents it got wrong."
         ),
         Change::UpdateRule { id, .. } | Change::RemoveRule { id } => format!(
             "This changes or removes your rule U-{id}, so it may stop catching what it caught. \
@@ -779,7 +780,7 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: 
         ),
         Change::AddAllow { .. } => format!(
             "Everything this matches will skip your rules and the rule packs (malware, lures, \
-             fakes, spam, scams). The child-safety core still applies. {n} Safer: narrow it, \
+             fakes, spam, scams, unauthorised copies). The child-safety core still applies. {n} Safer: narrow it, \
              for example to one media type."
         ),
         Change::RemoveCs1 { .. } => format!(
