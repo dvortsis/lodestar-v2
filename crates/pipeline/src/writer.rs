@@ -2597,7 +2597,7 @@ mod tests {
 
     /// The commit hook's store errors (ENR-1c): a failed claims read marks
     /// every rewritten row for the backfill and starts the pass, and with no
-    /// enrichment source registered the hook does nothing.
+    /// adult-enrichment source listed the hook does nothing.
     #[tokio::test]
     async fn a_failed_match_read_marks_every_rewritten_row() {
         let funnel = Arc::new(FunnelCounts::default());
@@ -2634,12 +2634,12 @@ mod tests {
             .connection()
             .execute_batch("DROP TABLE torrent_claims")
             .unwrap();
-        // No enrichment source registered: the hook doesn't run.
+        // No adult-enrichment source listed: the hook doesn't run.
         w.commit(lease(&coordinator), vec![], vec![], vec![], &retry)
             .await;
         assert!(current(&w) && !w.reenrich.load(Ordering::Acquire));
         assert_eq!(w.stats.errors.load(Ordering::Relaxed), 0);
-        // Registered: the read fails, so every rewritten row is marked.
+        // Listed: the read fails, so every rewritten row is marked.
         w.enrichers = crate::adult_enrich::EnrichSources::listed(bit(enr));
         w.commit(lease(&coordinator), vec![], vec![], vec![], &retry)
             .await;

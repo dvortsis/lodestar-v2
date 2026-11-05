@@ -67,8 +67,22 @@ pub const STRATEGY: u8 = 202;
 /// part of it. Intake doesn't count an answer as harvested (ENR-1b);
 /// another source's discovery always is.
 pub fn is_match(d: &lodestar_sources::Discovery, enrichers: EnrichSources) -> bool {
-    (enrichers.has(d.source) || enrichers.of_kind(d.source))
-        && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
+    let Some(c) = d.found.claims.as_deref().filter(|c| c.adult.is_some()) else {
+        return false;
+    };
+    // A listed source's section is a match. From an unlisted enrichment
+    // source, only a section alone is refused; with other claims, they're
+    // stored as its find, and harvested.
+    enrichers.has(d.source) || (enrichers.of_kind(d.source) && section_only(c))
+}
+
+/// Claims holding nothing but an adult-enrichment section.
+fn section_only(c: &Claims) -> bool {
+    Claims {
+        adult: None,
+        ..c.clone()
+    }
+    .is_empty()
 }
 
 /// User-interest lookups waiting at most; more are dropped. Each takes a
@@ -88,10 +102,13 @@ pub const ROUND_REST_SECS: i64 = 86_400;
 /// ([`Config::idle`]).
 pub const IDLE: Duration = Duration::from_secs(60);
 
+/// The shortest [`Config::idle`] a host can set.
+pub const MIN_IDLE: Duration = Duration::from_millis(10);
+
 /// The pause between two background pages that held nothing adult.
 const SCAN_PAUSE: Duration = Duration::from_millis(50);
 
-/// The registered adult-enrichment sources, as bitsets over [`SourceId`]s
+/// The listed adult-enrichment sources, as bitsets over [`SourceId`]s
 /// (the same layout as a torrent's `sources`).
 ///
 /// - **Listed** ([`has`](Self::has)): the [`AdultEnrichSource`] plugins the
@@ -544,6 +561,8 @@ impl AdultEnrichSource {
             // Never above the owner's cap, whatever the host sets (Q15).
             config: Config {
                 per_day: config.per_day.min(BACKGROUND_PER_DAY),
+                // No busy loop, whatever the host sets.
+                idle: config.idle.max(MIN_IDLE),
                 ..config
             },
             stats: Arc::default(),
@@ -660,7 +679,10 @@ impl AdultEnrichSource {
         if !self.config.background || now < bg.resume_at || !self.switches.show_adult() {
             return Next::Idle;
         }
-        if Budget::load(state).await.left(now, self.config.per_day) == 0 {
+        if Budget::load(state, now)
+            .await
+            .is_none_or(|b| b.left(now, self.config.per_day) == 0)
+        {
             return Next::Idle;
         }
         let store = self.store.clone();
@@ -944,27 +966,46 @@ struct Budget {
 }
 
 impl Budget {
-    async fn load(state: &dyn PluginState) -> Budget {
-        let v = state
-            .get(BUDGET_KEY)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        Budget {
+    /// The stored budget, normalised to `now`'s UTC day. `None` when it
+    /// can't be read: a budget that can't be read is spent (fail closed).
+    ///
+    /// A stored day later than today (the clock was ahead, and stepped
+    /// back) becomes today with its count, and is written back at once,
+    /// whether or not a lookup is taken. So a budget spent on a future day
+    /// is never spent until that day: it's today's, and the next day starts
+    /// fresh (#502 review).
+    async fn load(state: &dyn PluginState, now: i64) -> Option<Budget> {
+        let v = state.get(BUDGET_KEY).await.ok()?.unwrap_or_default();
+        let today = now.div_euclid(86_400);
+        let b = Budget {
             day: i64_at(&v, 0).unwrap_or(i64::MIN),
             used: v
                 .get(8..12)
                 .and_then(|b| b.try_into().ok())
                 .map_or(0, u32::from_be_bytes),
+        };
+        if b.day <= today {
+            return Some(b);
         }
+        let b = Budget {
+            day: today,
+            used: b.used,
+        };
+        // Best effort: read again, it's normalised again.
+        let _ = state.set(BUDGET_KEY, b.encode()).await;
+        Some(b)
     }
 
-    /// What's left today. A stored day later than today (the clock stepped
-    /// back across UTC midnight) counts as today, so a step back can't hand
-    /// out a fresh budget; [`take`](Self::take) rewrites it as today.
+    fn encode(&self) -> Vec<u8> {
+        let mut v = self.day.to_be_bytes().to_vec();
+        v.extend(self.used.to_be_bytes());
+        v
+    }
+
+    /// What's left on `now`'s UTC day, of a budget [`load`](Self::load)
+    /// normalised.
     fn left(&self, now: i64, per_day: u32) -> u32 {
-        if self.day >= now.div_euclid(86_400) {
+        if self.day == now.div_euclid(86_400) {
             per_day.saturating_sub(self.used)
         } else {
             per_day
@@ -972,17 +1013,21 @@ impl Budget {
     }
 
     /// Takes one lookup from today's budget. False when it's spent, or the
-    /// count can't be written: a budget that can't be kept isn't spent.
+    /// count can't be read or written: then the lookup isn't made and the
+    /// caller holds the item (`Step::Spent`, fail closed).
     async fn take(state: &dyn PluginState, now: i64, per_day: u32) -> bool {
-        let b = Budget::load(state).await;
+        let Some(b) = Budget::load(state, now).await else {
+            return false;
+        };
         if b.left(now, per_day) == 0 {
             return false;
         }
         let day = now.div_euclid(86_400);
-        let used = if b.day >= day { b.used + 1 } else { 1 };
-        let mut v = day.to_be_bytes().to_vec();
-        v.extend(used.to_be_bytes());
-        state.set(BUDGET_KEY, v).await.is_ok()
+        let used = if b.day == day { b.used + 1 } else { 1 };
+        state
+            .set(BUDGET_KEY, Budget { day, used }.encode())
+            .await
+            .is_ok()
     }
 }
 
@@ -1108,6 +1153,17 @@ mod tests {
             kind: 1 << source.get(),
         };
         assert!(is_match(&m, unlisted));
+        // With other claims, the cache's claims are a find: harvested.
+        let with_name = Claims {
+            name: Some("n".into()),
+            ..section.clone()
+        };
+        let named_section = d(Found::key(key, STRATEGY).with_claims(with_name));
+        assert!(!is_match(&named_section, unlisted));
+        assert!(
+            is_match(&named_section, enr),
+            "a listed source's is a match"
+        );
         assert!(!is_match(
             &d(Found::key(key, STRATEGY).with_claims(named)),
             enr
@@ -1244,28 +1300,76 @@ mod tests {
         assert!(Budget::take(&s, day, 2).await);
         assert!(Budget::take(&s, day + 5, 2).await);
         assert!(!Budget::take(&s, day + 10, 2).await);
-        assert_eq!(Budget::load(&s).await.left(day + 10, 2), 0);
+        assert_eq!(
+            Budget::load(&s, day + 10).await.unwrap().left(day + 10, 2),
+            0
+        );
         assert!(Budget::take(&s, day + 86_400, 2).await);
-        assert_eq!(Budget::load(&s).await.left(day + 86_400, 2), 1);
+        assert_eq!(
+            Budget::load(&s, day + 86_400)
+                .await
+                .unwrap()
+                .left(day + 86_400, 2),
+            1
+        );
     }
 
     /// The clock stepping back across UTC midnight keeps the count: no
-    /// fresh budget, and the stored day is rewritten as today.
+    /// fresh budget on the day it's read, and the stored day becomes today.
     #[tokio::test]
     async fn a_clock_step_back_keeps_the_count() {
         let s = MemoryState::new();
         let day = 20_000 * 86_400;
         assert!(Budget::take(&s, day + 10, 2).await);
         assert!(Budget::take(&s, day + 20, 2).await);
-        // Back to yesterday: still spent.
-        assert_eq!(Budget::load(&s).await.left(day - 5, 2), 0);
+        // Back to yesterday: still spent, and the day is rewritten.
         assert!(!Budget::take(&s, day - 5, 2).await);
-        // With one left, a take stamps yesterday, so today goes on from it.
-        let s = MemoryState::new();
-        assert!(Budget::take(&s, day + 10, 2).await);
-        assert!(Budget::take(&s, day - 5, 2).await);
-        let b = Budget::load(&s).await;
+        let b = Budget::load(&s, day - 5).await.unwrap();
         assert_eq!((b.day, b.used), (day.div_euclid(86_400) - 1, 2));
-        assert_eq!(b.left(day + 30, 2), 2, "the stored day is the earlier one");
+    }
+
+    /// A budget spent on a far-future day isn't spent until that day: the
+    /// real next day starts fresh (#502 review).
+    #[tokio::test]
+    async fn a_future_day_never_holds_the_budget() {
+        let s = MemoryState::new();
+        let today = 20_000 * 86_400;
+        let future = today + 3_000 * 86_400;
+        assert!(Budget::take(&s, future, 2).await);
+        assert!(Budget::take(&s, future + 1, 2).await);
+        // Back to the real day: it's today's, so today's spent...
+        assert!(!Budget::take(&s, today + 10, 2).await);
+        // ...and the real next day has its whole cap.
+        let next = today + 86_400;
+        assert_eq!(Budget::load(&s, next).await.unwrap().left(next, 2), 2);
+        assert!(Budget::take(&s, next, 2).await);
+    }
+
+    /// A budget that can't be read is spent: nothing is looked up.
+    #[tokio::test]
+    async fn an_unreadable_budget_is_spent() {
+        #[derive(Debug)]
+        struct Broken;
+        impl PluginState for Broken {
+            fn get<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Option<Vec<u8>>, StateError>> {
+                Box::pin(async { Err(StateError::Store("down".into())) })
+            }
+            fn set<'a>(&'a self, _: &'a str, _: Vec<u8>) -> BoxFuture<'a, Result<(), StateError>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn remove<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<(), StateError>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn compare_and_set<'a>(
+                &'a self,
+                _: &'a str,
+                _: Option<&'a [u8]>,
+                _: Option<Vec<u8>>,
+            ) -> BoxFuture<'a, Result<bool, StateError>> {
+                Box::pin(async { Ok(true) })
+            }
+        }
+        assert!(Budget::load(&Broken, 0).await.is_none());
+        assert!(!Budget::take(&Broken, 0, 5).await);
     }
 }
