@@ -87,6 +87,37 @@ pub(crate) fn file_clauses(node: &Node, out: &mut Vec<Node>) {
     }
 }
 
+/// The extensions of a `file:(…)` clause that asks for nothing else
+/// (`file:(ext:mkv)`, `file:(ext:flac,mp3)`), which the torrent index
+/// answers: its `ext` holds every file's extension, so no file-index scan
+/// or join is needed (X-search-files-4, option (a), runner 2026-11-05).
+/// It differs from the file index only by coverage: smart coverage
+/// leaves small images and documents out of a large pack's file
+/// documents, and hidden files out of every torrent's, and the torrent's
+/// extensions keep them. A clause of two or more atoms still runs on the
+/// file index, since it asks about one file; alternatives of extensions
+/// alone (`file:(ext:a | ext:b)`) are one clause, `ext:a,b`.
+///
+/// Such a clause is still listed by [`file_clauses`], for its matched
+/// files; `files::compile` marks it so the search's file pass skips it.
+/// The torrent index has had `ext` since its first schema, so it's never
+/// `ABSENT` on an index that opens; one built without it (only tests do)
+/// matches nothing here, as any clause on a missing field does.
+pub(crate) fn file_exts(of: &Node) -> Option<Vec<String>> {
+    match of {
+        Node::Ext { any } => Some(any.clone()),
+        // `ext:a | ext:b` is `ext:a,b`.
+        Node::Or { of } if !of.is_empty() => {
+            let mut all = Vec::new();
+            for n in of {
+                all.extend(file_exts(n)?);
+            }
+            Some(all)
+        }
+        _ => None,
+    }
+}
+
 /// A compiled query in its parts.
 pub(crate) struct Parts {
     /// Selects the matches and gives the phase-1 score.
@@ -135,6 +166,11 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
         .chain(&checked)
         .map(|n| fast_range(n, f, now).expect("liftable"))
         .collect();
+    // Whether a clause other than a lone extension drives the query, for
+    // a lone extension's score below.
+    let lone_ext = |n: &&Node| matches!(n, Node::File { of } if file_exts(of).is_some());
+    let others_drive = rest.iter().any(|n| drives(n) && !lone_ext(n));
+    let mut scored_lone = false;
     let mut clauses = Vec::new();
     let mut boosts = Vec::new();
     for n in rest {
@@ -160,6 +196,25 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
             n if excludes_only(n) => {
                 for (field, t) in excluded(n, f) {
                     clauses.push((Occur::MustNot, term(field, t, IndexRecordOption::Basic)));
+                }
+            }
+            // `file:(ext:…)` at the top level scores as the id set it
+            // replaced did (X-search-files-4). Beside another clause that
+            // drives, that set was lifted into the collector's filters and
+            // added nothing: a constant in `text` would squeeze the
+            // re-ranker's text differences. With nothing else to drive,
+            // the first such set stayed in the query and scored 1.0
+            // (`IdsQuery`), the text the priors multiply, and the rest
+            // were lifted; all 0 would leave every hit at 0, unranked.
+            Node::File { of } if let Some(any) = file_exts(of) => {
+                if let Some(q) = compile_opt(&Node::Ext { any }, f, now) {
+                    let score = if others_drive || scored_lone {
+                        0.0
+                    } else {
+                        1.0
+                    };
+                    scored_lone = true;
+                    push_must(&mut clauses, Box::new(ConstScoreQuery::new(q, score)));
                 }
             }
             n => {
@@ -345,7 +400,9 @@ fn share_name(by: ShareBy, cat: &str) -> Option<String> {
 fn liftable(n: &Node) -> bool {
     match n {
         Node::Range { field, .. } => field.is_fast() || field.is_hot(),
-        Node::Date { .. } | Node::File { .. } | Node::TimeOfDay { .. } => true,
+        Node::Date { .. } | Node::TimeOfDay { .. } => true,
+        // `file:(ext:…)` is the torrent's extension terms, searched.
+        Node::File { of } => file_exts(of).is_none(),
         Node::Share { by, cat, .. } => share_name(*by, cat).is_some(),
         _ => false,
     }
@@ -424,7 +481,7 @@ fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
                 missing: (fld != ABSENT).then_some(0),
             }
         }
-        Node::File { of } => FastRange::Ids { ids: cx.ids(of) },
+        Node::File { of } if file_exts(of).is_none() => FastRange::Ids { ids: cx.ids(of) },
         _ => return None,
     })
 }
@@ -722,6 +779,11 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
                 (lo, hi) => range(lo, hi),
             }
         }
+        // A filter, scored as a file clause's id set is.
+        Node::File { of } if let Some(any) = file_exts(of) => Box::new(ConstScoreQuery::new(
+            compile_opt(&Node::Ext { any }, f, now)?,
+            1.0,
+        )),
         Node::File { of } => {
             let ids = f.ids(of);
             if ids.is_empty() {

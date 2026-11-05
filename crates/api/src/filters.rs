@@ -896,8 +896,9 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: 
              wrong, which keeps {rule} on for everything else."
         ),
         Change::PackSwitch { id, .. } => format!(
-            "Switching off {id} stops it hiding or dropping malware, lures, fakes, spam or scams \
-             it would have caught. {n} Safer: an exception for the torrents it got wrong."
+            "Switching off {id} stops it hiding or dropping malware, lures, fakes, spam, scams \
+             or unauthorised copies it would have caught. {n} Safer: an exception for the \
+             torrents it got wrong."
         ),
         Change::SetPackOverride { rule, unless, .. } => {
             let what = if unless.as_deref().is_some_and(|u| !u.is_empty()) {
@@ -964,7 +965,7 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: 
         ),
         Change::AddAllow { .. } => format!(
             "Everything this matches will skip your rules and the rule packs (malware, lures, \
-             fakes, spam, scams). The child-safety core still applies. {n} Safer: narrow it, \
+             fakes, spam, scams, unauthorised copies). The child-safety core still applies. {n} Safer: narrow it, \
              for example to one media type."
         ),
         Change::RemoveCs1 { .. } => format!(
@@ -2277,8 +2278,8 @@ impl FiltersApi {
                 .map(|o| pack_overrides::label(o.rule)),
         );
         let pending_on = packs::pending_on(&set, &versions);
-        if packs::shadow_unreadable(&store)? {
-            pack_conditions.push(packs::SHADOW_UNREADABLE.to_owned());
+        if packs::shadow_in_doubt(&store)? {
+            pack_conditions.push(packs::SHADOW_IN_DOUBT.to_owned());
         }
         if packs::review_unreadable(&store)? {
             pack_conditions.push(packs::REVIEW_UNREADABLE.to_owned());

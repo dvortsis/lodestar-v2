@@ -3547,15 +3547,20 @@ mod restart_wire {
         (actor, vec![SendSocket::Udp(socket)])
     }
 
-    /// `sample_infohashes` datagrams each peer has received since last asked.
-    fn samples_received(peers: &[std::net::UdpSocket]) -> Vec<usize> {
+    /// `sample_infohashes` datagrams each peer has received from `from`
+    /// since last asked. Only the actor under test counts: other tests in
+    /// this binary sample fixed loopback ports (`127.0.0.1:65530`, …) that
+    /// one of these ephemeral sockets can be handed, and their queries
+    /// say nothing about this actor.
+    fn samples_received(peers: &[std::net::UdpSocket], from: SocketAddr) -> Vec<usize> {
         let mut buf = [0u8; 2048];
         peers
             .iter()
             .map(|p| {
                 let mut n = 0;
-                while let Ok((len, _)) = p.recv_from(&mut buf) {
-                    if let Ok(m) = crate::krpc::parse(&buf[..len])
+                while let Ok((len, src)) = p.recv_from(&mut buf) {
+                    if src == from
+                        && let Ok(m) = crate::krpc::parse(&buf[..len])
                         && let Body::Query(q) = m.body
                         && matches!(q.method, Method::SampleInfohashes { .. })
                     {
@@ -3606,14 +3611,21 @@ mod restart_wire {
         // peer once and give each a different interval, 1 min to 6 h.
         let (mut a, sockets) = node(&root, &clock);
         turn(&mut a, &sockets, &peers);
-        assert!(samples_received(&peer_sockets).iter().all(|&n| n == 0));
+        let from = a.cfg.bind[0];
+        assert!(
+            samples_received(&peer_sockets, from)
+                .iter()
+                .all(|&n| n == 0)
+        );
         advance(sampler::MAX_INTERVAL + a.cfg.query_timeout).await;
         for _ in 0..20 {
             turn(&mut a, &sockets, &peers);
             advance(a.cfg.tick).await;
         }
         assert!(
-            samples_received(&peer_sockets).iter().all(|&n| n == 1),
+            samples_received(&peer_sockets, from)
+                .iter()
+                .all(|&n| n == 1),
             "each sampled once"
         );
         let tids: Vec<(u64, SocketAddr)> = a
@@ -3659,6 +3671,7 @@ mod restart_wire {
         // restriction held to the instant.
         advance(Duration::from_secs(60)).await;
         let (mut b, sockets) = node(&root, &clock);
+        let from = b.cfg.bind[0];
         b.maintain(&sockets);
         assert_eq!(b.proof.reason(), crate::restart::Reason::Resumed);
         let sealed = stop + sampler::MAX_INTERVAL + b.cfg.query_timeout;
@@ -3676,7 +3689,10 @@ mod restart_wire {
             }
             // Answer nothing: timed-out samples back off, which only
             // delays later ones.
-            for (i, n) in samples_received(&peer_sockets).into_iter().enumerate() {
+            for (i, n) in samples_received(&peer_sockets, from)
+                .into_iter()
+                .enumerate()
+            {
                 if n > 0 {
                     first_seen.entry(peers[i]).or_insert(Instant::now());
                 }

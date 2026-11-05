@@ -109,6 +109,10 @@ pub const GUARDED: &[PackRule] = &[
     PackRule::Sp2,
     PackRule::Sc1,
     PackRule::Sc2,
+    PackRule::Mw6,
+    PackRule::Uc1,
+    PackRule::Uc2,
+    PackRule::Uc3,
 ];
 
 /// The fewest items the precision corpus has (§20.8 gate).
@@ -147,6 +151,10 @@ pub fn pack_text(pack: Pack) -> (&'static str, &'static str) {
         Pack::Scams => (
             "crates/filter/data/packs/scams/corpus.txt",
             include_str!("../data/packs/scams/corpus.txt"),
+        ),
+        Pack::UnauthorisedCopy => (
+            "crates/filter/data/packs/unauthorised-copy/corpus.txt",
+            include_str!("../data/packs/unauthorised-copy/corpus.txt"),
         ),
     }
 }

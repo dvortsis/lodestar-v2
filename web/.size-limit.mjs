@@ -145,7 +145,7 @@ const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
-	/features\/detail\/(Contents|ErrorState|parsed\/Parsed)\.svelte$/,
+	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences)\.svelte$/,
 	// Clipboard failure is an interaction, not part of opening the detail view.
 	// Its UI and mount runtime remain included in the on-demand budget below.
 	/features\/detail\/manual-mount\.ts$/,
@@ -472,7 +472,13 @@ const aboutBody = /features\/settings\/about\/AboutScreen\.svelte$/;
 const updatesBody = /features\/settings\/updates\/UpdatesScreen\.svelte$/;
 // Filters & Safety (S-filters): the review queue loads from its body alone, so its import of the
 // body is of code already loaded.
-const filtersLater = [/features\/filters\/screens\/Queue\.svelte$/];
+const filtersLater = [
+	/features\/filters\/screens\/Queue\.svelte$/,
+	// What each rule pack hides, opened from the packs list (RP-UC, runner on #469).
+	/features\/filters\/screens\/PackInfo\.svelte$/,
+	// The packs list, loaded from the switches (RP-UC).
+	/features\/filters\/screens\/Packs\.svelte$/
+];
 const filtersBody = /features\/filters\/screens\/FiltersScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
@@ -718,8 +724,18 @@ const filtersDoorLazy = filtersLazy({
 });
 const filtersQueueLazy = filtersLazy({
 	name: 'Filters review queue (on demand)',
-	keys: filtersLater,
+	keys: [filtersLater[0]],
 	stop: filtersDialogs
+});
+const filtersPackInfoLazy = filtersLazy({
+	name: 'Filters pack descriptions (on demand)',
+	keys: [filtersLater[1]],
+	stop: filtersDialogs
+});
+const filtersPacksLazy = filtersLazy({
+	name: 'Filters packs list (on demand)',
+	keys: [filtersLater[2]],
+	stop: [...filtersDialogs, filtersLater[1]]
 });
 const settingsEditorLazy = requireMeasuredJs(
 	'Appearance theme editor (on demand)',
@@ -1204,6 +1220,8 @@ export default [
 	// there); Block dialog +1.4 KB. Was 34.4 KB.
 	entry('Filters dialogs (on demand)', filtersDialogsLazy, '35.9 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
+	entry('Filters pack descriptions (on demand)', filtersPackInfoLazy, '1.6 KB'), // measured 1.43 KB + 10%
+	entry('Filters packs list (on demand)', filtersPacksLazy, '1.6 KB'), // measured 1.27 KB + ~25% for later packs
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.
@@ -1287,7 +1305,8 @@ export default [
 	// Alerts -1.58 KB, drawer -0.23 KB).
 	entry('Search index-state banners (on demand)', indexStateLazy, '4.1 KB'),
 	entry('Search Block settle (on demand)', settleLazy, '0.6 KB'),
-	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
+	// runner §2.26, SRC-17: the Source facet and Show unverified (16,800 B → 17,696 B, the measured 831 B over rounded up to 64 B).
+	entry('Facet rail (lazy)', facetsLazy, '17696 B'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
@@ -1296,7 +1315,8 @@ export default [
 	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
 	entry('Search live banner (lazy)', liveLazy, '3.02 KB'),
 	// Raised by the runner (§2.26): +21 B from the chunk re-split when /logs was added (S-logs-1).
-	entry('Search cards (lazy)', cardsLazy, '8.3 KB'),
+	// runner §2.26, SRC-17: the Unverified badge on a card (8,300 B → 8,364 B; measured 5 B over).
+	entry('Search cards (lazy)', cardsLazy, '8364 B'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
@@ -1312,7 +1332,8 @@ export default [
 	// of detail.css, and don't import `$lib/state/events.svelte` or `$lib/keys` from the first view
 	// (visibility.ts and commands.ts are the only doors).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
-	entry('Detail drawer (own JS + CSS)', drawerView, '27.4 KB'),
+	// runner §2.26, SRC-17: "Found by" in the drawer (27,400 B → 27,976 B; measured 551 B over, rounded up to 64 B).
+	entry('Detail drawer (own JS + CSS)', drawerView, '27976 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1320,11 +1341,12 @@ export default [
 	// runner §2.26 2026-11-01: not /t code (#357 adds 0 B here). CI's build version carries the commit
 	// SHA, which changes the app id and chunk names /t imports; the same source measured 21,115–21,144 B
 	// across SHAs. 21.14 → 21.20 KB.
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.20 KB'),
+	// runner §2.26, SRC-17: "Found by" on the full page (21,200 B → 21,776 B; measured 565 B over, rounded up to 64 B).
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21776 B'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
-		'37.52 KB' // runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		'38608 B' // runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.

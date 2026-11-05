@@ -7,7 +7,7 @@
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_search::files::{bucket_floor, size_bucket};
-use lodestar_search::query::NumField;
+use lodestar_search::query::{NumField, TextField};
 use lodestar_search::{Node, SearchIndex};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 
@@ -213,9 +213,6 @@ fn nested_size_ranges_match_a_scan() {
     let sizes = boundary_sizes();
     let (index, _store) = corpus(&sizes);
     let n = sizes.len() as u64;
-    let ext = |e: &str| Node::Ext {
-        any: vec![e.to_owned()],
-    };
     for (lo, hi) in [
         (Some(4096), Some(6143)),
         (Some(4095), Some(6144)),
@@ -253,4 +250,154 @@ fn nested_size_ranges_match_a_scan() {
         want.dedup();
         assert_eq!(ids(&index, &either), want, "or {lo:?}..={hi:?}");
     }
+}
+
+/// A torrent of files `(path, length, attr)`.
+fn with_attrs(name: &str, files: &[(String, i64, &str)]) -> Vec<u8> {
+    let files = files
+        .iter()
+        .map(|(p, len, attr)| {
+            let mut e = vec![
+                ("length", OwnedValue::Int(*len)),
+                ("path", OwnedValue::List(p.split('/').map(b).collect())),
+            ];
+            if !attr.is_empty() {
+                e.push(("attr", b(attr)));
+            }
+            d(e)
+        })
+        .collect();
+    to_vec(&d(vec![
+        ("files", OwnedValue::List(files)),
+        ("name", b(name)),
+        ("piece length", OwnedValue::Int(1 << 16)),
+        ("pieces", OwnedValue::Bytes(vec![0; 20])),
+    ]))
+}
+
+fn ext(e: &str) -> Node {
+    Node::Ext {
+        any: vec![e.into()],
+    }
+}
+
+fn word(field: TextField, w: &str) -> Node {
+    Node::Word {
+        field,
+        word: w.into(),
+    }
+}
+
+/// One-atom `file:(ext:…)` clauses are answered from the torrent index
+/// (X-search-files-4, option (a), runner 2026-11-05): its extensions
+/// cover every file, while smart coverage leaves small images, documents
+/// and other files out of a large pack's file documents and hidden files
+/// out of every torrent's. So they gain those torrents (and a negation
+/// loses them). Clauses of two or more atoms, and words, still ask the
+/// file index; words differ from `path:` both ways, since the paths stop
+/// at `MAX_PATH_TOKENS` and the file index doesn't.
+#[test]
+fn one_atom_extension_clauses_cover_every_file_and_words_stay_on_the_file_index() {
+    const MIB: i64 = 1 << 20;
+    // 1: a photo pack past `SMART_ALL_FILES`, every image under
+    // `SMART_MIN_SIZE`, and a small readme.
+    let mut photos: Vec<(String, i64, &str)> = (0..1_200)
+        .map(|i| (format!("pics/p{i:04}.jpg"), 3 * MIB, ""))
+        .collect();
+    photos.push(("readme.txt".into(), 2_000, ""));
+    // 2: one cover image.
+    let cover = vec![("cover.jpg".to_owned(), MIB, "")];
+    // 3: its only video hidden (BEP 47).
+    let hidden = vec![
+        ("c.mkv".to_owned(), 700 * MIB, "h"),
+        ("c.txt".to_owned(), 10, ""),
+    ];
+    // 4: a pack whose paths pass `MAX_PATH_TOKENS` (18 words a name)
+    // before its last file, a video, which the file index keeps.
+    let mut deep: Vec<(String, i64, &str)> = (0..1_200)
+        .map(|i| {
+            (
+                format!("a b c d e f g h i j k l m n o p q {i}.flac"),
+                30 * MIB,
+                "",
+            )
+        })
+        .collect();
+    deep.push(("zebra.mkv".into(), 900 * MIB, ""));
+    let mut store = store_with(&[
+        with_attrs("photos", &photos),
+        with_attrs("cover", &cover),
+        with_attrs("hidden", &hidden),
+        with_attrs("deep", &deep),
+    ]);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(60 << 20).unwrap();
+    w.catch_up(&mut store, 10_000).unwrap();
+    w.commit().unwrap();
+    let none: Vec<u64> = Vec::new();
+    // One extension atom: what the torrent level finds.
+    assert_eq!(ids(&index, &file(ext("jpg"))), vec![1, 2]);
+    assert_eq!(ids(&index, &ext("jpg")), vec![1, 2]);
+    assert_eq!(ids(&index, &file(ext("mkv"))), vec![3, 4]);
+    assert_eq!(ids(&index, &file(ext("flac"))), vec![4]);
+    let either = Node::Ext {
+        any: vec!["jpg".into(), "flac".into()],
+    };
+    assert_eq!(ids(&index, &file(either)), vec![1, 2, 4]);
+    assert_eq!(
+        ids(
+            &index,
+            &Node::Not {
+                of: Box::new(file(ext("mkv")))
+            }
+        ),
+        vec![1, 2]
+    );
+    // Alternatives of extensions are one clause: `ext:jpg | ext:flac`
+    // is `ext:jpg,flac`.
+    let or = Node::Or {
+        of: vec![ext("jpg"), ext("flac")],
+    };
+    assert_eq!(ids(&index, &file(or)), vec![1, 2, 4]);
+    // Beside a word, a filter that adds nothing to the score.
+    let with_word = Node::And {
+        of: vec![word(TextField::Any, "photos"), file(ext("jpg"))],
+    };
+    assert_eq!(ids(&index, &with_word), vec![1]);
+    let scores = |n: &Node| -> Vec<(u64, f32)> {
+        let mut hits: Vec<(u64, f32)> = index
+            .search(&index.query(n, NOW), 10)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| (h.id, h.score))
+            .collect();
+        hits.sort_by_key(|h| h.0);
+        hits
+    };
+    let plain = word(TextField::Any, "photos");
+    assert_eq!(scores(&with_word), scores(&plain));
+    // Two atoms ask about one file: the file index, with its coverage.
+    let big_jpg = file(Node::And {
+        of: vec![ext("jpg"), range(Some(1), None)],
+    });
+    assert_eq!(ids(&index, &big_jpg), vec![2]);
+    // Matched files still come from the file index.
+    assert_eq!(
+        index.matched_files(&file(ext("jpg")), 2, 10).unwrap(),
+        vec![0]
+    );
+    assert_eq!(
+        index.matched_files(&file(ext("mkv")), 4, 10).unwrap(),
+        vec![1_200]
+    );
+    // Words: either can find what the other misses.
+    assert_eq!(ids(&index, &file(word(TextField::Any, "readme"))), none);
+    assert_eq!(ids(&index, &word(TextField::Path, "readme")), vec![1]);
+    assert_eq!(ids(&index, &file(word(TextField::Any, "zebra"))), vec![4]);
+    assert_eq!(ids(&index, &word(TextField::Path, "zebra")), none);
+    // Where coverage is whole (under `SMART_ALL_FILES` files, nothing
+    // hidden) they agree.
+    assert_eq!(ids(&index, &file(word(TextField::Any, "cover"))), vec![2]);
+    assert_eq!(ids(&index, &word(TextField::Path, "cover")), vec![2]);
 }

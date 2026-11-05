@@ -33,9 +33,12 @@ fn actor(target_prefixes: bool) -> (Actor, Vec<SendSocket>) {
     (actor, vec![SendSocket::Udp(socket)])
 }
 
-/// A listening node, offered to the sampler.
+/// A listening node, offered to the sampler. Connected to the actor, so
+/// it hears only the actor: other tests in this binary sample fixed
+/// loopback ports, and this ephemeral one can be one of them.
 fn peer(a: &mut Actor) -> std::net::UdpSocket {
     let p = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    p.connect(a.cfg.bind[0]).unwrap();
     p.set_read_timeout(Some(DEADLINE)).unwrap();
     let node = NodeInfo {
         id: NodeId([42; 20]),

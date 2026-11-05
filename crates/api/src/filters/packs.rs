@@ -50,11 +50,16 @@ const REVIEW_MAX: usize = 2 * PREVIEW_ROWS;
 /// Hits of one rule read for its shadow results at most.
 const HIT_ROWS: usize = 1_000_000;
 
-/// Where each pending version's shadow results start: one
-/// `RULE-ID@version <filter_hits id>` per line, the highest hit id when the
-/// API first saw that version pending. Hits after it were judged with the
-/// version in shadow; it survives restarts, and it's an id, not a time
-/// (§20.8). Entries for versions no longer pending are dropped.
+/// Where each pending version's shadow results start: one line per pending
+/// version, `RULE-ID@version <id>:<at>:<hash>` or `RULE-ID@version ?`.
+/// `<id>` is the highest `filter_hits` id when the API first saw that
+/// version pending, and `<at>` and `<hash>` (40 hex digits) are that hit
+/// row's own columns, copied so a later row under the same id is told
+/// apart ([`anchor`]); an empty table is `0:0:` and 40 zeros. They're the
+/// hit's, not when anyone did anything (§20.8). `?` means where it started
+/// can't be known any more. Hits after the id were judged with the version
+/// in shadow; it survives restarts. Entries for versions no longer pending
+/// are dropped.
 pub(crate) const SHADOW_SINCE_KEY: &str = "filter.packs.shadow_since";
 
 /// The rules whose stored switches are on, as the next load reads them
@@ -81,9 +86,9 @@ pub(super) fn pending_on(
 /// A pending version's entry in [`SHADOW_SINCE_KEY`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Since {
-    /// Its shadow started after the hit with this id, whose row had this
-    /// fingerprint ([`row_print`]; 0 for id 0, an empty table).
-    After(i64, u64),
+    /// Its shadow started after the hit with this id, whose row held this
+    /// `at` and hash ([`hit_row`]; 0, 0 and zeros for id 0, an empty table).
+    After(i64, i64, [u8; 20]),
     /// `?`: where it started can't be known any more (the row or a line
     /// didn't read, or the hit ids were reused). Acceptance is weakening
     /// until the version is accepted with the password or changes.
@@ -117,20 +122,30 @@ fn read_shadow_since(store: &Store) -> ApiResult<ShadowSince> {
             let since = match v {
                 "?" => Since::Doubt,
                 v => {
-                    let (id, print) = v.split_once(':')?;
-                    let id: i64 = id.parse().ok().filter(|id| *id >= 0)?;
-                    let print = u64::from_str_radix(print, 16).ok()?;
-                    Since::After(id, print)
+                    let mut parts = v.split(':');
+                    let id: i64 = parts.next()?.parse().ok().filter(|id| *id >= 0)?;
+                    let at: i64 = parts.next()?.parse().ok()?;
+                    let hash = super::hex20(parts.next()?).ok()?;
+                    if parts.next().is_some() {
+                        return None;
+                    }
+                    Since::After(id, at, hash)
                 }
             };
             Some((key.to_owned(), since))
         });
         match entry {
-            Some((key, since)) if !out.entries.contains_key(&key) => {
+            // A version listed twice fails closed: neither line is
+            // trusted, and the row is damaged, so it's written back.
+            Some((key, _)) if out.entries.contains_key(&key) => {
+                out.entries.insert(key, Since::Doubt);
+                out.damaged = true;
+            }
+            Some((key, since)) => {
                 out.entries.insert(key, since);
             }
-            // A line that doesn't read, or a version listed twice.
-            _ => out.damaged = true,
+            // A line that doesn't read.
+            None => out.damaged = true,
         }
     }
     Ok(out)
@@ -146,51 +161,30 @@ fn max_hit_id(store: &Store) -> ApiResult<i64> {
         .map_err(internal)
 }
 
-/// A fingerprint of one `filter_hits` row (FNV-1a over its columns), or
-/// `None` when there's no row with that id. It tells a row from another
-/// written later under the same id; it records nothing of its own.
-fn row_print(store: &Store, id: i64) -> ApiResult<Option<u64>> {
+/// One `filter_hits` row's `at` and hash, or `None` when there's no row
+/// with that id: what tells a row from another written later under the
+/// same id.
+fn hit_row(store: &Store, id: i64) -> ApiResult<Option<(i64, [u8; 20])>> {
     use lodestar_store::rusqlite::OptionalExtension;
     let row = store
         .connection()
         .query_row(
-            "SELECT hash, rule, action, at, evidence FROM filter_hits WHERE id = ?1",
+            "SELECT at, hash FROM filter_hits WHERE id = ?1",
             [id],
-            |r| {
-                Ok((
-                    r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, Vec<u8>>(4)?,
-                ))
-            },
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
         )
         .optional()
         .map_err(internal)?;
-    Ok(row.map(|(hash, rule, action, at, evidence)| {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        let mut eat = |bytes: &[u8]| {
-            for b in (bytes.len() as u64).to_le_bytes().iter().chain(bytes) {
-                h ^= u64::from(*b);
-                h = h.wrapping_mul(0x0100_0000_01b3);
-            }
-        };
-        eat(&id.to_le_bytes());
-        eat(&hash);
-        eat(rule.as_bytes());
-        eat(&action.to_le_bytes());
-        eat(&at.to_le_bytes());
-        eat(&evidence);
-        h
-    }))
+    // A hash that isn't 20 bytes can't match a recorded one: in doubt.
+    Ok(row.map(|(at, h)| (at, <[u8; 20]>::try_from(h.as_slice()).unwrap_or([0xff; 20]))))
 }
 
 /// The anchor for a version first seen pending now: the highest hit id and
-/// its row's fingerprint (0 and 0 for an empty table).
+/// its row's `at` and hash (0, 0 and zeros for an empty table).
 fn new_anchor(store: &Store) -> ApiResult<Since> {
     let id = max_hit_id(store)?;
-    Ok(Since::After(id, row_print(store, id)?.unwrap_or(0)))
+    let (at, hash) = hit_row(store, id)?.unwrap_or((0, [0; 20]));
+    Ok(Since::After(id, at, hash))
 }
 
 /// Where a pending version's evidence starts, read fail-closed:
@@ -206,9 +200,9 @@ fn new_anchor(store: &Store) -> ApiResult<Since> {
 ///   anchor that aged out takes every lower id with it).
 fn anchor(store: &Store, since: &ShadowSince, key: &str) -> ApiResult<Option<Option<i64>>> {
     Ok(match since.entries.get(key) {
-        Some(Since::After(0, _)) => Some(Some(0)),
-        Some(Since::After(id, print)) => match row_print(store, *id)? {
-            Some(p) if p == *print => Some(Some(*id)),
+        Some(Since::After(0, ..)) => Some(Some(0)),
+        Some(Since::After(id, at, hash)) => match hit_row(store, *id)? {
+            Some(row) if row == (*at, *hash) => Some(Some(*id)),
             Some(_) => None,
             None => {
                 let lower: bool = store
@@ -228,12 +222,14 @@ fn anchor(store: &Store, since: &ShadowSince, key: &str) -> ApiResult<Option<Opt
     })
 }
 
-/// The `pack_conditions` label of shadow evidence in doubt.
-pub(super) const SHADOW_UNREADABLE: &str = "packs.shadow-unreadable";
+/// The `pack_conditions` label of shadow evidence in doubt: a `?` entry
+/// (reused hit ids, a version listed twice) or a row or line that doesn't
+/// read.
+pub(super) const SHADOW_IN_DOUBT: &str = "packs.shadow-in-doubt";
 
 /// Whether any pending version's shadow evidence is in doubt, or the row
 /// didn't read: reported in `pack_conditions`.
-pub(super) fn shadow_unreadable(store: &Store) -> ApiResult<bool> {
+pub(super) fn shadow_in_doubt(store: &Store) -> ApiResult<bool> {
     let row = read_shadow_since(store)?;
     Ok(row.damaged || row.entries.values().any(|s| *s == Since::Doubt))
 }
@@ -271,7 +267,7 @@ pub(super) fn note_shadows(store: &mut Store, manifest: &Manifest) -> ApiResult<
     let mut lines: Vec<String> = after
         .iter()
         .map(|(k, s)| match s {
-            Since::After(id, print) => format!("{k} {id}:{print:016x}"),
+            Since::After(id, at, hash) => format!("{k} {id}:{at}:{}", hex(hash)),
             Since::Doubt => format!("{k} ?"),
         })
         .collect();

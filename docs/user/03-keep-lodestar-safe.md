@@ -120,9 +120,30 @@ To update by hand:
    **Result:** The container starts, and the old data is intact.
 
 ## 3.6 Know what protects the content filters and API keys
-<!-- index: API keys; content filters; child-safety core -->
+<!-- index: API keys; content filters; child-safety core; rule packs; unauthorised-copy pack -->
 
 The child-safety core of the content filters is always on. A change that would weaken protection asks for your password and shows a plain-language warning first.
+
+Rule packs sit on top of the core. A rule pack is a set of rules that hides one kind of unwanted torrent. There are six: malware, lures, fakes, spam, scams and unauthorised copies. On a new install they are all on, and we recommend you leave them on.
+
+The **unauthorised-copy** pack hides torrents whose names follow the conventions of unauthorised copies:
+
+- camcorder, telesync, telecine and screener copies of films (names with `HDCAM`, `HDTS`, `DVDSCR` and similar);
+- film and TV releases named the way release groups name their copies, such as `Title.2019.1080p.BluRay.x264-GROUP`;
+- cracked software, such as a program sold with a `Keygen` or a `Crack`. A plain `Patch` or `Update` is never hidden.
+
+It reads only the name. It can't know who holds the rights to anything, so it may hide something you are allowed to have.
+
+<details>
+<summary>What it lets through, and how to show something it hides</summary>
+
+A built-in list of public-domain and Creative Commons films, such as *Big Buck Bunny* or *Night of the Living Dead* (1968), passes its scene-style rule. So do items from the Internet Archive that carry the Archive's own file lists. To show anything else it hides, add the search to **Always allow** in **Settings → Filters & Safety**.
+
+</details>
+
+On a new install, the malware pack also hides cracked software, because cracks often carry malware. Turning the unauthorised-copy pack off then doesn't show cracked software again. If you also turn off the malware pack's cracked-software rule (MW-6), cracked software shows again but still ranks lower in search, as other junk does.
+
+If you installed an earlier version, the unauthorised-copy pack starts off. Lodestar offers it in the setup wizard and in **Settings → Filters & Safety**, where turning it on shows what it would hide first. We recommend you turn it on. The malware pack's new cracked-software rule waits for review on an upgraded install, so it hides nothing until a later version lets you accept it.
 
 API keys, which let other apps such as Torznab clients talk to Lodestar, are **(planned)**. When they arrive, create one key per app and regenerate any key that leaks. Never use the admin password as a key.
 

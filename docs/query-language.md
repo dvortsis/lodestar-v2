@@ -404,6 +404,7 @@ file:(files:>3) => file:(…) takes
 - Without brackets, `file:word` takes one word or one quoted phrase.
 - Results of a `file:` search list their **matched files**.
 - By default the file index is "smart": it covers every file of torrents with up to 1,000 files, and the larger files (5 MB or more) and non-"other" kinds of bigger packs. Small junk files in very large packs aren't searched here, though `path:` still covers them.
+- **An extension on its own is the exception.** `file:(ext:jpg)`, `file:(ext:jpg,png)` and `file:(ext:jpg | ext:png)` work like `ext:` and check every file, including hidden files and the small files the smart index leaves out. A torrent found only through such a file shows no matched files, and `-file:(ext:exe)` leaves out a torrent whose only `.exe` is hidden or one of those small files, too. Add a second condition, such as `file:(ext:jpg size:>1MB)`, and the clause asks about one file again, through the file index.
 
 ## Pasting a hash or magnet link
 

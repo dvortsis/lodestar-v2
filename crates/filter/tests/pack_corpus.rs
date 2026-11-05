@@ -137,6 +137,7 @@ fn the_precision_corpus_covers_every_guard() {
     let mut thin = c.clone();
     thin.precision
         .retain(|p| !p.guards.contains(&PackRule::Lu2));
+    thin.precision.truncate(MIN_PRECISION - 1);
     let failures = thin.run(&Manifest::builtin()).failures();
     assert!(
         failures
@@ -233,6 +234,32 @@ fn precision_items_reach_their_guards() {
                             SERVICES.contains(&x.as_str())
                                 || ["robux", "vbucks", "roblox", "fortnite"].contains(&x.as_str())
                         })
+                }
+                // The parser's flag or a crack word: the kind, or `patch`
+                // alone, is what keeps them from matching.
+                Mw6 | Uc2 => {
+                    class
+                        .title
+                        .release
+                        .flags
+                        .contains(&lodestar_release_parser::Flag::Cracked)
+                        || lodestar_classify::crack::crack_words_in(&w, &e.name) > 0
+                }
+                // The parser's source is a pre-release one: the marker
+                // rule is what keeps it from matching.
+                Uc1 => class.title.release.source.is_some_and(|s| {
+                    use lodestar_release_parser::Source::*;
+                    matches!(s, Cam | Telesync | Telecine | Screener)
+                }),
+                // A scene-style rip, or the name of one: the exemption or
+                // the allow list is what lets it pass.
+                Uc3 => {
+                    let r = &class.title.release;
+                    use lodestar_release_parser::Source::*;
+                    r.group.is_some()
+                        || r.source
+                            .is_some_and(|s| matches!(s, BluRay | Remux | Dvd | WebDl | WebRip))
+                        || class.content_type == lodestar_classify::ContentType::Software
                 }
                 other => panic!("no reach check for {}", other.id()),
             };

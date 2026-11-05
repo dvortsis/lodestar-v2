@@ -29,8 +29,10 @@
 		/** The existing polite region. */
 		announce: (text: string) => void;
 		hidden?: () => boolean;
+		/** The bar's text was already searched and not edited since (Enter beat this chunk's load). */
+		submitted?: () => boolean;
 	}
-	let { el, text, accept, announce, hidden }: Props = $props();
+	let { el, text, accept, announce, hidden, submitted }: Props = $props();
 
 	const uid = $props.id();
 	const LISTBOX = `search-assist-${uid}`;
@@ -162,7 +164,7 @@
 		el.addEventListener('input', oninput);
 		el.addEventListener('focus', onfocus);
 		el.addEventListener('blur', close);
-		if (document.activeElement === el) {
+		if (document.activeElement === el && !submitted?.()) {
 			if (text()) oninput();
 			else show();
 		}

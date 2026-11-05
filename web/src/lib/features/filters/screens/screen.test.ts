@@ -93,6 +93,26 @@ describe('locked floor', () => {
 	});
 });
 
+describe('what each pack hides', () => {
+	it('loads on demand, and says the unauthorised-copy pack goes by the name', async () => {
+		setup(false, {
+			packs: [
+				{ id: 'malware', on: true, rules: [] },
+				{ id: 'unauthorised-copy', on: true, rules: [] }
+			]
+		});
+		const about = await screen.findByTestId('packs-about');
+		expect(screen.queryByTestId('packs-info')).toBeNull();
+		const details = about.closest('details')!;
+		details.open = true;
+		await fireEvent(details, new Event('toggle'));
+		const text = await screen.findByTestId('pack-info-unauthorised-copy');
+		expect(text.textContent).toContain("can't know who holds the rights");
+		expect(text.textContent).toContain('Always allow');
+		expect(screen.getByTestId('pack-info-malware').textContent).toContain('MW-6');
+	});
+});
+
 describe('loosening actions and Cancel', () => {
 	const cases: [string, string][] = [
 		['core off', 'core-switch-CS-4a'],

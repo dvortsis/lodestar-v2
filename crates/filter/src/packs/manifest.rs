@@ -25,6 +25,14 @@ use std::sync::{Arc, OnceLock};
 use super::{Ctx, Pack, PackRule};
 use crate::core::Action;
 
+/// Rules added after RP-0 (owner §2.39, RP-UC): not part of any
+/// install's behaviour before, so seeding never records them. On a store
+/// seeded before they shipped they're pending, in shadow, until accepted
+/// or until their pack is turned on (which records them); a fresh store
+/// records every rule at its current version, so they apply there.
+pub const ADDED_AFTER_RP0: &[PackRule] =
+    &[PackRule::Mw6, PackRule::Uc1, PackRule::Uc2, PackRule::Uc3];
+
 /// What a version changed against the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -208,7 +216,7 @@ impl Manifest {
                     .map(|r| {
                         RuleEntry::new(
                             r,
-                            true,
+                            !ADDED_AFTER_RP0.contains(&r),
                             vec![Version {
                                 version: 1,
                                 direction: Direction::Widens,
@@ -290,6 +298,9 @@ pub fn changelog(pack: Pack) -> &'static str {
         Pack::Fakes => include_str!("../../data/packs/fakes/CHANGELOG.md"),
         Pack::Spam => include_str!("../../data/packs/spam/CHANGELOG.md"),
         Pack::Scams => include_str!("../../data/packs/scams/CHANGELOG.md"),
+        Pack::UnauthorisedCopy => {
+            include_str!("../../data/packs/unauthorised-copy/CHANGELOG.md")
+        }
     }
 }
 
@@ -324,7 +335,12 @@ mod tests {
         for r in PackRule::ALL {
             let e = m.entry(r);
             assert_eq!(e.rule, r);
-            assert!(e.baseline, "{} existed before RP-0", r.id());
+            assert_eq!(
+                e.baseline,
+                !ADDED_AFTER_RP0.contains(&r),
+                "{} existed before RP-0, or was added after it",
+                r.id()
+            );
             assert_eq!(e.current().action, r.action(), "{}", r.id());
             assert!(matches!(e.current().code, Some(Code::Current)));
             assert_eq!(e.direction(None, 1), Some(Direction::Widens));
@@ -559,6 +575,43 @@ mod tests {
             }
             out.push((name, f));
         }
+        // Names for the rules added after RP-0 (MW-6, UC-1 to UC-3), after
+        // the generated set, so the rules before them keep their golden.
+        const EXTRA: &[(&str, &[(&str, u64)])] = &[
+            ("Example Editor v2.1 x64 Crack", &[("setup.exe", 2 << 30)]),
+            ("Example.Suite.v16.0.Keygen-GRP", &[("setup.exe", 2 << 30)]),
+            (
+                "Example Tool v4.1 Pre-Activated",
+                &[("setup.exe", 80 << 20)],
+            ),
+            ("Example.Browser.120.0.1.Patch", &[("update.exe", 50 << 20)]),
+            ("Crack Attack v1.2 x64 Patch", &[("setup.exe", 50 << 20)]),
+            ("Example.Movie.2024.HDCAM.x264-GRP", &[("m.mkv", 1 << 30)]),
+            ("Example Movie (2024) [TS] 720p", &[("m.mkv", 1 << 30)]),
+            ("Example.Movie.2024.CAM.x264-GRP", &[("m.mkv", 1 << 30)]),
+            ("Nanny Cam 1080p x264-GRP", &[("m.mkv", 1 << 30)]),
+            ("Little Ts 720p", &[("m.mkv", 1 << 30)]),
+            (
+                "Example.Movie.2019.1080p.BluRay.x264-GRP",
+                &[("m.mkv", 8 << 30)],
+            ),
+            (
+                "Example.Show.S02E03.1080p.WEB-DL.H.264-GRP",
+                &[("m.mkv", 2 << 30)],
+            ),
+            (
+                "Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP",
+                &[("m.mkv", 1 << 30)],
+            ),
+            ("Example Movie 2019 1080p BluRay", &[("m.mkv", 8 << 30)]),
+        ];
+        for (name, files) in EXTRA {
+            let f = files
+                .iter()
+                .map(|(p, s)| FileInfo::new(vec![(*p).to_owned()], *s))
+                .collect();
+            out.push(((*name).to_owned(), f));
+        }
         out
     }
 
@@ -572,6 +625,7 @@ mod tests {
         ("MW-2@1 hide", 199, 5420927143327199823),
         ("MW-3@1 hide", 114, 17286647990777949854),
         ("MW-5@1 hide", 128, 624893996585892302),
+        ("MW-6@1 hide", 3, 8239104331045227003),
         ("LU-1@1 hide", 6, 5791013990083080710),
         ("LU-4@1 hide", 587, 15362597008036224271),
         ("LU-2@1 demote", 85, 18213498744997554530),
@@ -584,6 +638,9 @@ mod tests {
         ("SP-1@1 demote", 426, 419072724506069972),
         ("SC-1@1 hide", 351, 370022691562877752),
         ("SC-2@1 hide", 287, 15705590736820052948),
+        ("UC-1@1 hide", 3, 3719771000408991908),
+        ("UC-2@1 hide", 3, 8239104331045227003),
+        ("UC-3@1 hide", 2, 1690303002812331472),
     ];
 
     #[test]

@@ -1,0 +1,11 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"detail_provenance_found_by": "发现于：",
+	"detail_provenance_private": "私有",
+	"detail_provenance_withheld": "部分详情来自私有来源，未显示。",
+	"detail_provenance_differences": "不一致的声明",
+	"detail_provenance_difference": "{source}：{field}为 {claimed}；元数据为 {verified}",
+	"detail_provenance_difference_name": "{source}：名称为“{claimed}”；元数据为“{verified}”",
+	"detail_provenance_field_size": "大小",
+	"detail_provenance_field_files": "文件数"
+}

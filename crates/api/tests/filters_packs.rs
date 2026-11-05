@@ -313,7 +313,7 @@ async fn get_filters_lists_versions_changelogs_and_pending_versions() {
     assert_eq!(malware["id"], json!("malware"));
     assert_eq!(
         malware["version"],
-        json!("MW-4@1 MW-1@1 MW-2@2 MW-3@1 MW-5@1")
+        json!("MW-4@1 MW-1@1 MW-2@2 MW-3@1 MW-5@1 MW-6@1")
     );
     assert!(malware["changelog"].as_str().unwrap().contains("## MW-2@1"));
     let mw2 = rule_state(&o, "MW-2");
@@ -985,7 +985,8 @@ async fn a_batch_with_one_weakening_version_needs_the_password() {
         (Some(2), Some(2))
     );
     // Naming more than every pack and rule is refused.
-    let many: Vec<&str> = std::iter::repeat_n("MW-1", 23).collect();
+    let limit = lodestar_filter::Pack::ALL.len() + PackRule::ALL.len();
+    let many: Vec<&str> = std::iter::repeat_n("MW-1", limit + 1).collect();
     let (status, body) = apply(&f, &c, &accept(&many, None), None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], json!("too_many_rules"));
@@ -1118,7 +1119,7 @@ async fn reused_hit_ids_put_the_shadow_evidence_in_doubt() {
         }
         f.api.resume_requeues(now()).unwrap();
         let since = since_row(&f).unwrap();
-        assert!(since.starts_with("MW-2@2 5:"), "{since}");
+        assert_eq!(since.split(':').next(), Some("MW-2@2 5"), "{since}");
         assert_eq!(
             preview(&f, &c, &accept(&["MW-2"], None)).await["weakening"],
             json!(false)
@@ -1138,7 +1139,7 @@ async fn reused_hit_ids_put_the_shadow_evidence_in_doubt() {
             "refill {refill}"
         );
         let o = get(&f, &c, "/api/v1/filters").await;
-        assert_eq!(o["pack_conditions"], json!(["packs.shadow-unreadable"]));
+        assert_eq!(o["pack_conditions"], json!(["packs.shadow-in-doubt"]));
         needs_password(&f, &c, "reused ids").await;
         assert_eq!(since_row(&f), None, "accepted: nothing pending");
     }
@@ -1191,7 +1192,7 @@ async fn an_unreadable_shadow_since_fails_closed() {
         let o = get(&f, &c, "/api/v1/filters").await;
         assert_eq!(
             o["pack_conditions"],
-            json!(["packs.shadow-unreadable"]),
+            json!(["packs.shadow-in-doubt"]),
             "{bad}"
         );
         f.api.resume_requeues(now()).unwrap();
@@ -1231,4 +1232,114 @@ async fn a_new_pending_version_starts_its_own_evidence() {
     let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
     assert_eq!(p["pack_versions"], json!(["MW-2@3"]));
     assert_eq!(p["weakening"], json!(false), "{p}");
+}
+
+/// MW-6 as shipped (RP-UC): a rule added after RP-0, so an install seeded
+/// before it has it pending in shadow wherever the malware pack is on.
+/// Its first version widens, so accepting it while its shadow agrees
+/// needs no password; once version 1 holds something MW-6 doesn't, it
+/// does.
+#[tokio::test]
+async fn the_real_mw6_is_accepted_without_a_password_while_its_shadow_agrees() {
+    let f = fixture_with(Manifest::builtin(), &[PackRule::Mw6]);
+    let c = logged_in(&f).await;
+    assert!(
+        lodestar_filter::packs::manifest::ADDED_AFTER_RP0.contains(&PackRule::Mw6),
+        "MW-6 isn't a baseline rule"
+    );
+    let o = get(&f, &c, "/api/v1/filters").await;
+    let pending = o["pending_pack_versions"].as_array().unwrap();
+    let mw6 = pending.iter().find(|p| p["rule"] == "MW-6").unwrap();
+    assert_eq!(mw6["applied"], json!(null));
+    assert_eq!(mw6["direction"], json!("widens"));
+    assert_eq!(mw6["pack"], json!("malware"));
+    assert!(
+        mw6["changelog"][0]["text"]
+            .as_str()
+            .is_some_and(|t| !t.is_empty()),
+        "{mw6}"
+    );
+    f.api.resume_requeues(now()).unwrap();
+    hit(&f, "MW-6", 3, Action::Hide, true, 30);
+    let change = accept(&["MW-6"], None);
+    let p = preview(&f, &c, &change).await;
+    assert_eq!(p["weakening"], json!(false), "{p}");
+    assert_eq!(p["pack_versions"], json!(["MW-6@1"]));
+    assert_eq!(p["pack_acceptance"][0]["newly_held"], json!(1));
+    let (status, body) = apply(&f, &c, &change, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(applied(&f).get(PackRule::Mw6), Some(1));
+    assert!(
+        !f.api
+            .engine
+            .current()
+            .pack_versions
+            .state(PackRule::Mw6)
+            .pending()
+    );
+
+    // A new rule has no applied side, so an ordinary MW-6 hit can't come
+    // from an applied version. Read as "only the applied version holds
+    // it", it's a disagreement, so the acceptance fails closed.
+    let f = fixture_with(Manifest::builtin(), &[PackRule::Mw6]);
+    let c = logged_in(&f).await;
+    f.api.resume_requeues(now()).unwrap();
+    hit(&f, "MW-6", 4, Action::Hide, false, 30);
+    let p = preview(&f, &c, &accept(&["MW-6"], None)).await;
+    assert_eq!(p["weakening"], json!(true), "{p}");
+}
+
+/// Two more ways an anchor stops being trustworthy, each in doubt: new
+/// hits that refill exactly to the anchor's id (its row is another hit
+/// now), and a purge that takes the anchor's row but leaves a lower id.
+#[tokio::test]
+async fn an_anchor_refilled_exactly_or_purged_alone_is_in_doubt() {
+    for case in ["refill to the anchor", "anchor row purged"] {
+        let f = fixture(bumped(Direction::Widens, Action::Hide));
+        let c = logged_in(&f).await;
+        for n in 0..5 {
+            hit(&f, "MW-1", n, Action::Hide, false, 1_000);
+        }
+        f.api.resume_requeues(now()).unwrap();
+        if case == "refill to the anchor" {
+            clear_hits(&f);
+            for n in 0..5 {
+                hit(&f, "MW-1", 50 + n, Action::Hide, false, 10);
+            }
+        } else {
+            f.api
+                .store
+                .lock()
+                .unwrap()
+                .connection()
+                .execute("DELETE FROM filter_hits WHERE id = 5", [])
+                .unwrap();
+        }
+        let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+        assert_eq!(p["weakening"], json!(true), "{case}: {p}");
+        f.api.resume_requeues(now()).unwrap();
+        assert_eq!(since_row(&f).as_deref(), Some("MW-2@2 ?"), "{case}");
+    }
+}
+
+/// A version listed twice in `shadow_since` fails closed: neither line is
+/// trusted.
+#[tokio::test]
+async fn a_version_listed_twice_is_in_doubt() {
+    let f = fixture(bumped(Direction::Widens, Action::Hide));
+    let c = logged_in(&f).await;
+    f.api.resume_requeues(now()).unwrap();
+    let line = since_row(&f).unwrap();
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .set_settings_text(&[("filter.packs.shadow_since", &format!("{line}\n{line}"))])
+        .unwrap();
+    let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+    assert_eq!(p["weakening"], json!(true), "{p}");
+    let o = get(&f, &c, "/api/v1/filters").await;
+    assert_eq!(o["pack_conditions"], json!(["packs.shadow-in-doubt"]));
+    f.api.resume_requeues(now()).unwrap();
+    assert_eq!(since_row(&f).as_deref(), Some("MW-2@2 ?"));
 }

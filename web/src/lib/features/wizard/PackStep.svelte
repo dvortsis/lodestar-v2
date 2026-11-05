@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The rule-pack step (§20.6, owner §2.39, docs/decisions/2026-11-05-RP-DEF.md): rule packs are on
 	// by default and the user opts out. Each box shows what the server has now: on a fresh data
-	// directory every pack is on, so all five are checked. Continue sends only what the user changed:
+	// directory every pack is on, so all six are checked. Continue sends only what the user changed:
 	// - a pack checked that is off (an existing install) is turned on through the change flow's
 	//   preview → apply, which records its current rule versions;
 	// - a pack unchecked that is on is turned off through the weakening flow, in the Filters screen's
@@ -75,14 +75,16 @@
 		lures: () => m.wizard_pack_lures(),
 		fakes: () => m.wizard_pack_fakes(),
 		spam: () => m.wizard_pack_spam(),
-		scams: () => m.wizard_pack_scams()
+		scams: () => m.wizard_pack_scams(),
+		'unauthorised-copy': () => m.wizard_pack_unauthorised_copy()
 	};
 	const lines: Record<string, () => string> = {
 		malware: () => m.wizard_pack_malware_text(),
 		lures: () => m.wizard_pack_lures_text(),
 		fakes: () => m.wizard_pack_fakes_text(),
 		spam: () => m.wizard_pack_spam_text(),
-		scams: () => m.wizard_pack_scams_text()
+		scams: () => m.wizard_pack_scams_text(),
+		'unauthorised-copy': () => m.wizard_pack_unauthorised_copy_text()
 	};
 	const name = (id: string) => names[id]?.() ?? id;
 
