@@ -27,10 +27,10 @@
 		label={m.search_unverified_toggle()}
 		checked={on}
 		onchange={change}
-		aria-describedby="unverified-hint"
+		aria-describedby="unverified-hint{count ? ' unverified-count' : ''}"
 	/>
 	{#if count}
-		<span class="text-caption" data-testid="unverified-count"
+		<span class="text-caption" id="unverified-count" data-testid="unverified-count"
 			>{formatCount(count, currentLocale())}</span
 		>
 	{/if}

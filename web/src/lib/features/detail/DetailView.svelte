@@ -95,7 +95,7 @@
 			{/if}
 		</div>
 		<Summary {detail} {hit} {level} />
-		<Provenance provenance={detail.provenance} />
+		<Provenance provenance={detail.provenance} {level} />
 		<section
 			class="ls-detail-section"
 			aria-labelledby="detail-h-contents"

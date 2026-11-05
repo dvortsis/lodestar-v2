@@ -12,7 +12,7 @@
 	import UnverifiedBadge from '../../search/unverified/UnverifiedBadge.svelte';
 	import type { Provenance } from './types';
 
-	let { provenance }: { provenance: Provenance } = $props();
+	let { provenance, level = 3 }: { provenance: Provenance; level?: number } = $props();
 	const locale = $derived(currentLocale());
 	const differing = $derived(
 		provenance.sources.filter(
@@ -21,9 +21,9 @@
 	);
 </script>
 
-{#if provenance.sources.length > 0 || provenance.withheld}
+{#if provenance.sources.length > 0}
 	<p class="text-body" data-testid="detail-found-by">
-		<span class="text-base-content/70">{m.detail_provenance_found_by()}</span>
+		<span class="text-muted-text">{m.detail_provenance_found_by()}</span>
 		{#each provenance.sources as s, i (s.id)}
 			{#if i > 0}<span aria-hidden="true">&ensp;·&ensp;</span>{/if}<span
 				data-testid="detail-source-{s.plugin}"
@@ -32,14 +32,12 @@
 					<span class="text-caption">{m.detail_provenance_private()}</span>{/if}</span
 			>
 		{/each}
-		{#if provenance.withheld}
-			{#if provenance.sources.length > 0}<span aria-hidden="true">&ensp;·&ensp;</span>{/if}<span
-				data-testid="detail-sources-withheld"
-			>
-				<Lock class="inline size-4" aria-hidden="true" />
-				{m.detail_provenance_withheld()}
-			</span>
-		{/if}
+	</p>
+{/if}
+{#if provenance.withheld}
+	<p class="text-caption text-muted-text" data-testid="detail-sources-withheld">
+		<Lock class="inline size-4" aria-hidden="true" />
+		{m.detail_provenance_withheld()}
 	</p>
 {/if}
 {#if !provenance.verified}
@@ -47,38 +45,42 @@
 {/if}
 {#if differing.length > 0}
 	<section aria-labelledby="prov-diff" data-testid="detail-claim-differences">
-		<h3 id="prov-diff" class="text-body font-medium">{m.detail_provenance_differences()}</h3>
+		<div role="heading" aria-level={level} id="prov-diff" class="text-body font-medium">
+			{m.detail_provenance_differences()}
+		</div>
 		<ul class="text-body">
 			{#each differing as s (s.id)}
-				{@const c = s.claim!}
-				{#if c.name}
-					<li data-testid="detail-claim-name-{s.plugin}">
-						{m.detail_provenance_difference_name({
-							source: shortName(s.name),
-							claimed: c.name.claimed,
-							verified: c.name.verified
-						})}
-					</li>
-				{/if}
-				{#if c.size}
-					<li data-testid="detail-claim-size-{s.plugin}">
-						{m.detail_provenance_difference({
-							source: shortName(s.name),
-							field: m.detail_provenance_field_size(),
-							claimed: formatBytes({ value: c.size.claimed }, locale),
-							verified: formatBytes({ value: c.size.verified }, locale)
-						})}
-					</li>
-				{/if}
-				{#if c.file_count}
-					<li data-testid="detail-claim-files-{s.plugin}">
-						{m.detail_provenance_difference({
-							source: shortName(s.name),
-							field: m.detail_provenance_field_files(),
-							claimed: formatCount({ value: c.file_count.claimed }, locale),
-							verified: formatCount({ value: c.file_count.verified }, locale)
-						})}
-					</li>
+				{#if s.claim}
+					{@const c = s.claim}
+					{#if c.name}
+						<li data-testid="detail-claim-name-{s.plugin}">
+							{m.detail_provenance_difference_name({
+								source: shortName(s.name),
+								claimed: c.name.claimed,
+								verified: c.name.verified
+							})}
+						</li>
+					{/if}
+					{#if c.size}
+						<li data-testid="detail-claim-size-{s.plugin}">
+							{m.detail_provenance_difference({
+								source: shortName(s.name),
+								field: m.detail_provenance_field_size(),
+								claimed: formatBytes({ value: c.size.claimed }, locale),
+								verified: formatBytes({ value: c.size.verified }, locale)
+							})}
+						</li>
+					{/if}
+					{#if c.file_count}
+						<li data-testid="detail-claim-files-{s.plugin}">
+							{m.detail_provenance_difference({
+								source: shortName(s.name),
+								field: m.detail_provenance_field_files(),
+								claimed: formatCount({ value: c.file_count.claimed }, locale),
+								verified: formatCount({ value: c.file_count.verified }, locale)
+							})}
+						</li>
+					{/if}
 				{/if}
 			{/each}
 		</ul>

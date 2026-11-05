@@ -92,4 +92,31 @@ describe('Provenance', () => {
 		});
 		expect(screen.queryByTestId('detail-claim-differences')).toBeNull();
 	});
+	it('notes withheld details without adding a source, even with no sources', () => {
+		const { container } = render(Provenance, { provenance: { ...base, withheld: true } });
+		expect(screen.queryByTestId('detail-found-by')).toBeNull();
+		expect(screen.getByTestId('detail-sources-withheld').textContent).toContain('private sources');
+		expect(container.textContent).not.toContain('Found by');
+	});
+	it('lists differences from several sources and uses the given heading level', () => {
+		const claim = (n: number) => ({
+			matches: false,
+			name: null,
+			size: null,
+			file_count: { claimed: n, verified: 9 }
+		});
+		render(Provenance, {
+			level: 2,
+			provenance: {
+				...base,
+				sources: [
+					src({ id: 2, plugin: 'nyaa', name: 'Nyaa', claim: claim(1) }),
+					src({ id: 3, plugin: 'rss', name: 'RSS', claim: claim(2) })
+				]
+			}
+		});
+		expect(screen.getByTestId('detail-claim-files-nyaa')).toBeTruthy();
+		expect(screen.getByTestId('detail-claim-files-rss')).toBeTruthy();
+		expect(screen.getByRole('heading', { level: 2 }).textContent).toContain('Claims that differ');
+	});
 });

@@ -7,7 +7,7 @@
 	import type { Ast } from '$lib/state/search.svelte';
 	import TermGroup from '../facets/TermGroup.svelte';
 	import type { FacetsResponse } from '../facets/facets.svelte';
-	import { clearSources, shortName, toggleSource } from './source';
+	import { clearSources, fixedSources, shortName, toggleSource } from './source';
 	import UnverifiedToggle from './UnverifiedToggle.svelte';
 
 	interface Props {
@@ -30,6 +30,7 @@
 			facet={source}
 			labelOf={nameOf}
 			excludable={false}
+			fixed={fixedSources(ast)}
 			onvalue={(v) => onchange(toggleSource(ast, v))}
 			onclear={() => onchange(clearSources(ast))}
 		/>
@@ -43,5 +44,7 @@
 <UnverifiedToggle
 	{ast}
 	{onchange}
-	count={unverified ? { value: unverified.count, approx: source?.approx ?? false } : null}
+	count={unverified
+		? { value: unverified.count, approx: data.facets.verified?.approx ?? false }
+		: null}
 />

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/svelte';
+import type { Ast } from '$lib/state/search.svelte';
 import { response, term } from '../facets/fixtures';
 import SourceFacets from './SourceFacets.svelte';
 import UnverifiedBadge from './UnverifiedBadge.svelte';
@@ -92,5 +93,36 @@ describe('SourceFacets', () => {
 		render(SourceFacets, { data: d, ast: null, onchange: vi.fn() });
 		expect(screen.queryByTestId('facet-source-wrap')).toBeNull();
 		expect(screen.getByTestId('unverified-toggle')).toBeTruthy();
+	});
+	it('takes the ≈ on the toggle count from the verified facet, not the source facet', () => {
+		const d = data();
+		d.facets.verified = term(
+			[
+				['yes', 900, 'selected'],
+				['no', 12]
+			],
+			{ approx: true }
+		);
+		render(SourceFacets, { data: d, ast: null, onchange: vi.fn() });
+		expect(screen.getByTestId('unverified-count').textContent).toMatch(/^≈/);
+	});
+	it('shows a zero count as 0, not a dash', () => {
+		const d = data();
+		d.facets.verified = term([['no', 0]]);
+		render(SourceFacets, { data: d, ast: null, onchange: vi.fn() });
+		expect(screen.getByTestId('unverified-count').textContent).toBe('0');
+	});
+	it('disables a source set in a clause a click cannot rewrite', () => {
+		const ast: Ast = {
+			op: 'and',
+			of: [
+				{ op: 'source', any: ['dht'] },
+				{ op: 'source', any: ['nyaa'] }
+			]
+		};
+		render(SourceFacets, { data: data(), ast, onchange: vi.fn() });
+		expect((screen.getByRole('checkbox', { name: /Nyaa/ }) as HTMLInputElement).disabled).toBe(
+			true
+		);
 	});
 });

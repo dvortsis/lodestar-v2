@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Ast } from '$lib/state/search.svelte';
-import { clearSources, selectedSources, shortName, toggleSource } from './source';
+import { clearSources, fixedSources, selectedSources, shortName, toggleSource } from './source';
 
 const word: Ast = { op: 'word', field: 'any', word: 'dune' };
 describe('source facet edits', () => {
@@ -24,5 +24,29 @@ describe('source facet edits', () => {
 	it('shortens Mainline DHT only', () => {
 		expect(shortName('Mainline DHT')).toBe('DHT');
 		expect(shortName('Nyaa')).toBe('Nyaa');
+	});
+});
+
+describe('source facet: clauses a click must not rewrite', () => {
+	const dht: Ast = { op: 'source', any: ['dht'] };
+	const nyaa: Ast = { op: 'source', any: ['nyaa'] };
+	it('leaves a second positive clause alone (it is an AND) and disables its values', () => {
+		const ast: Ast = { op: 'and', of: [dht, nyaa] };
+		expect(selectedSources(ast)).toEqual(['dht']);
+		expect(fixedSources(ast)).toEqual(new Set(['nyaa']));
+		expect(toggleSource(ast, 'x')).toEqual({
+			op: 'and',
+			of: [{ op: 'source', any: ['dht', 'x'] }, nyaa]
+		});
+	});
+	it('leaves a negated clause alone and disables its values', () => {
+		const ast: Ast = { op: 'not', of: dht };
+		expect(selectedSources(ast)).toEqual([]);
+		expect(fixedSources(ast)).toEqual(new Set(['dht']));
+		expect(toggleSource(ast, 'nyaa')).toEqual({ op: 'and', of: [ast, nyaa] });
+	});
+	it('clears only the editable clause', () => {
+		const neg: Ast = { op: 'not', of: dht };
+		expect(clearSources({ op: 'and', of: [nyaa, neg] })).toEqual(neg);
 	});
 });

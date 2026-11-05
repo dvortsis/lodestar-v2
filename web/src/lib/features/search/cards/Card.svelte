@@ -8,6 +8,7 @@
 	import Warning from '~icons/ph/warning-bold';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import UnverifiedBadge from '../unverified/UnverifiedBadge.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import {
 		ADULT_LABELS as ADULT,
@@ -108,6 +109,9 @@
 				>
 			{/if}
 		</span>
+		{#if hit.verified === false}
+			<UnverifiedBadge />
+		{/if}
 		{#if hit.swarm_suspect}
 			<span class="cd-fact" data-testid="{id}-suspect">
 				<Warning aria-hidden="true" />{m.swarm_suspect()}
