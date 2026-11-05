@@ -1364,6 +1364,7 @@ impl Writer {
     /// a rediscovery (a feed's). A cache's claims on the torrent it has
     /// just stored aren't one (SRC-13b), so they skip that accounting.
     async fn ingest_found(&mut self, batch: Vec<Discovery>, rediscovery: bool) {
+        self.flood.note_claims(&batch);
         let store = self.store.take().expect("store");
         let filter = self.filter.clone();
         let sealer = self.sealer.clone();
@@ -1872,14 +1873,46 @@ pub(crate) struct Flooding {
     /// against the source when no publisher is named: every registered
     /// source but the peer finders (the DHT), which publish nothing.
     pub counted: u64,
+    /// Whom the claims the writer stored named, by key, so a commit
+    /// that promotes their item needn't read it ([`Flooding::who`]).
+    pub claimed: Claimed,
     /// The clock, for tests; Unix time otherwise.
     #[cfg(test)]
     pub clock: Option<i64>,
 }
 
-/// Whom SP-3 counts a commit against.
+/// Keys whose claims the writer handed to the store, at most
+/// [`Claimed::CAP`], the oldest forgotten first: per key, the flood map's
+/// key for the publisher the claims named, or the source that made them.
+/// Memory only. A key it doesn't hold (forgotten, or claimed before this
+/// start) costs the commit one read of its unverified item instead.
+#[derive(Debug, Default)]
+pub(crate) struct Claimed {
+    by_key: std::collections::HashMap<[u8; 20], Who>,
+    order: std::collections::VecDeque<[u8; 20]>,
+}
+
+impl Claimed {
+    /// About 40 bytes a key, so a few MB at the cap.
+    pub const CAP: usize = 65_536;
+
+    fn insert(&mut self, key: [u8; 20], who: Who) {
+        if self.by_key.insert(key, who).is_none() {
+            self.order.push_back(key);
+            if self.order.len() > Claimed::CAP
+                && let Some(old) = self.order.pop_front()
+            {
+                self.by_key.remove(&old);
+            }
+        }
+    }
+}
+
+/// Whom SP-3 counts a commit against: a publisher by its flood-map key
+/// ([`lodestar_filter::flood::Flood::key`]), or a source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Who {
-    Publisher(String),
+    Publisher(u64),
     Source(SourceId),
 }
 
@@ -1906,11 +1939,31 @@ impl Flooding {
         use lodestar_filter::flood::{Origin, signature};
         let who = self.who(store, c, unverified)?;
         let sig = signature(&c.results.class.title.release.title)?;
-        let origin = match &who {
-            Who::Publisher(p) => Origin::Publisher(p),
-            Who::Source(s) => Origin::Source(s.get()),
+        let key = match who {
+            Who::Publisher(p) => p,
+            Who::Source(s) => self.map.key(Origin::Source(s.get())),
         };
-        self.map.record(origin, sig, now)
+        self.map.record_key(key, sig, now)
+    }
+
+    /// Notes whom each of `batch`'s claims count against, as the writer
+    /// hands them to the store ([`Claimed`]). Only a source that counts
+    /// is noted: the others' finds count against no one.
+    fn note_claims(&mut self, batch: &[Discovery]) {
+        use lodestar_filter::flood::Origin;
+        for d in batch {
+            let Some(c) = d.found.claims.as_deref() else {
+                continue;
+            };
+            if self.counted & bit(d.source) == 0 {
+                continue;
+            }
+            let who = match c.publisher.as_deref().filter(|p| !p.is_empty()) {
+                Some(p) => Who::Publisher(self.map.key(Origin::Publisher(p))),
+                None => Who::Source(d.source),
+            };
+            self.claimed.insert(d.found.key.0, who);
+        }
     }
 
     /// The publisher a cache's claims name, or the claims of the
@@ -1924,20 +1977,33 @@ impl Flooding {
     /// item the DHT alone fetched, before any feed's sighting reached its
     /// lease, isn't counted.
     fn who(&self, store: &Store, c: &Committing, unverified: bool) -> Option<Who> {
-        let named = |p: Option<&str>| p.filter(|p| !p.is_empty()).map(str::to_owned);
+        use lodestar_filter::flood::Origin;
+        let named = |p: Option<&str>| {
+            p.filter(|p| !p.is_empty())
+                .map(|p| Who::Publisher(self.map.key(Origin::Publisher(p))))
+        };
         if let Some(p) = named(c.publisher.as_deref()) {
-            return Some(Who::Publisher(p));
+            return Some(p);
         }
         let counts = |s: SourceId| self.counted & bit(s) != 0;
         let finders = c.lease.sources | bit(c.lease.source) | c.results.sources;
         if unverified && finders & self.counted != 0 {
+            // Claims this start stored: no read.
+            if let Some(w) = c
+                .results
+                .torrent
+                .swarm_hashes()
+                .find_map(|h| self.claimed.by_key.get(&h.0))
+            {
+                return Some(*w);
+            }
             for h in c.results.torrent.swarm_hashes() {
                 let Ok(Some(item)) = store.unverified(Network::Bt, &h.0) else {
                     continue;
                 };
                 let claimed = item.claims.as_ref().and_then(|x| x.publisher.as_deref());
                 if let Some(p) = named(claimed) {
-                    return Some(Who::Publisher(p));
+                    return Some(p);
                 }
                 if counts(item.source) {
                     return Some(Who::Source(item.source));
@@ -4540,6 +4606,76 @@ mod tests {
         assert_eq!(flood.map.count(Origin::Source(feed.get()), sig, 10_000), 0);
     }
 
+    /// Claims the writer stored this start name their publisher without
+    /// a store read; a find of another key isn't counted against them.
+    #[test]
+    fn sp3_notes_the_claims_the_writer_stores() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        let feed = store.register_source("feed", "1", 0).unwrap();
+        let e = sp3_engine();
+        let mut flood = Flooding {
+            counted: bit(feed),
+            clock: Some(10_000),
+            ..Default::default()
+        };
+        let rs: Vec<Results> = (0..20).map(|i| results_named(&episode(i))).collect();
+        let found = |source, publisher: Option<&str>| -> Vec<Discovery> {
+            rs.iter()
+                .map(|r| Discovery {
+                    source,
+                    found: lodestar_sources::Found::key(r.key, 0).with_claims(
+                        lodestar_sources::claims::Claims {
+                            publisher: publisher.map(str::to_owned),
+                            ..Default::default()
+                        },
+                    ),
+                    at: 0,
+                    reply: false,
+                })
+                .collect()
+        };
+        // The DHT's are never noted.
+        flood.note_claims(&found(dht, Some("x")));
+        assert!(flood.claimed.by_key.is_empty());
+        flood.note_claims(&found(feed, Some("uploader")));
+        // A store with an unverified item (here another key's), so the
+        // commit looks; the note answers without reading.
+        use lodestar_store::unverified::NewUnverified;
+        let claims = lodestar_store::claims::Claims {
+            name: Some("x".into()),
+            ..Default::default()
+        };
+        store
+            .put_unverified(&[NewUnverified {
+                network: Network::Bt,
+                key: &[9; 20],
+                source: feed,
+                private_source: false,
+                claims: Some(&claims),
+                at: 0,
+            }])
+            .unwrap();
+        let cs = rs.into_iter().map(|r| committing(r, feed)).collect();
+        let got = sp3_of(&store, &e, &mut flood, cs);
+        assert_eq!(got[19], Some(Action::Flag));
+        let sig = lodestar_filter::flood::signature("Example Show").unwrap();
+        use lodestar_filter::flood::Origin;
+        assert_eq!(
+            flood.map.count(Origin::Publisher("uploader"), sig, 10_000),
+            20
+        );
+        assert_eq!(flood.map.count(Origin::Source(feed.get()), sig, 10_000), 0);
+        // Bounded.
+        for i in 0..Claimed::CAP as u32 + 10 {
+            let mut k = [0; 20];
+            k[..4].copy_from_slice(&i.to_le_bytes());
+            flood.claimed.insert(k, Who::Source(feed));
+        }
+        assert_eq!(flood.claimed.by_key.len(), Claimed::CAP);
+        assert_eq!(flood.claimed.order.len(), Claimed::CAP);
+    }
+
     /// SP-3's added cost per insert in the writer, measured apart from
     /// the engine's budget (RP-4 gate: at most 5% of the writer's
     /// per-insert cost). Run: `cargo test --release -p lodestar-pipeline
@@ -4556,7 +4692,9 @@ mod tests {
         const N: usize = 10_240;
         let mut cs: Vec<Committing> = (0..N)
             .map(|i| {
-                let name = format!("Crawled Title {} {} 1080p", i % 977, i % 13);
+                // A dozen titles in turn, fewer than a source's signature
+                // slots: their counts reach the levels.
+                let name = format!("Crawled Title {} 1080p", i % 12);
                 committing(results_named(&name), dht)
             })
             .collect();
@@ -4582,12 +4720,75 @@ mod tests {
                 .unwrap();
         }
         let insert = t.elapsed().as_nanos() as f64 / N as f64;
-        let mut time = |source: SourceId, publisher: Option<&str>| {
+        // A feed's find promotes the unverified item its claims made: the
+        // item is read and its claims judged again (`promote`), on top of
+        // the insert.
+        let claims: Vec<lodestar_store::claims::Claims> = cs
+            .iter()
+            .map(|c| lodestar_store::claims::Claims {
+                name: Some(c.results.torrent.name.clone()),
+                size: Some(900 << 20),
+                ..Default::default()
+            })
+            .collect();
+        // Under keys of their own: the store refuses an item for a key
+        // it holds a torrent under.
+        let other = |k: [u8; 20]| {
+            let mut k = k;
+            k[0] ^= 0xff;
+            k
+        };
+        let keys: Vec<[u8; 20]> = cs.iter().map(|c| other(c.results.key.0)).collect();
+        let items: Vec<lodestar_store::unverified::NewUnverified<'_>> = keys
+            .iter()
+            .zip(&claims)
+            .map(|(key, claims)| lodestar_store::unverified::NewUnverified {
+                network: Network::Bt,
+                key,
+                source: feed,
+                private_source: false,
+                claims: Some(claims),
+                at: 0,
+            })
+            .collect();
+        store.put_unverified(&items).unwrap();
+        let t = Instant::now();
+        for key in &keys {
+            let item = store.unverified(Network::Bt, key).unwrap().unwrap();
+            std::hint::black_box(unverified::judge(
+                &e,
+                *key,
+                item.claims.as_ref().unwrap(),
+                None,
+                false,
+                10_000,
+            ));
+        }
+        let promotion = t.elapsed().as_nanos() as f64 / N as f64;
+        // `noted`: the feed's claims came through this start's writer.
+        let mut time = |source: SourceId, publisher: Option<&str>, noted: bool| {
             let mut flood = Flooding {
                 counted: bit(feed),
                 clock: Some(10_000),
                 ..Default::default()
             };
+            if noted {
+                let found: Vec<Discovery> = cs
+                    .iter()
+                    .map(|c| Discovery {
+                        source: feed,
+                        found: lodestar_sources::Found::key(c.results.key, 0).with_claims(
+                            lodestar_sources::claims::Claims {
+                                name: Some("claimed".into()),
+                                ..Default::default()
+                            },
+                        ),
+                        at: 0,
+                        reply: false,
+                    })
+                    .collect();
+                flood.note_claims(&found);
+            }
             for c in &mut cs {
                 c.lease.source = source;
                 c.lease.sources = bit(source);
@@ -4600,9 +4801,11 @@ mod tests {
             }
             (t.elapsed().as_nanos() as f64 / N as f64, levels)
         };
-        let (dht_ns, dht_levels) = time(dht, None);
-        let (feed_ns, feed_levels) = time(feed, None);
-        let (pub_ns, _) = time(feed, Some("uploader"));
+        let (dht_ns, dht_levels) = time(dht, None, false);
+        let (feed_ns, feed_levels) = time(feed, None, false);
+        let (noted_ns, noted_levels) = time(feed, None, true);
+        let (pub_ns, _) = time(feed, Some("uploader"), false);
+        assert_eq!(noted_levels, feed_levels);
         assert_eq!(dht_levels, 0);
         assert!(feed_levels > 0);
         // A flooded commit's second judgment, as the writer makes it.
@@ -4618,19 +4821,26 @@ mod tests {
             ));
         }
         let rejudge_ns = t.elapsed().as_nanos() as f64 / flooded.len() as f64;
+        let promoted = insert + promotion;
         println!(
-            "per insert: {:.2} µs; SP-3: DHT find {:.3} µs ({:.2}%), feed find {:.2} µs ({:.1}%), \
-             named publisher {:.2} µs ({:.1}%); a flooded commit's second judgment {:.2} µs; \
+            "per insert: {:.2} µs (a feed's promoted find: {:.2} µs); SP-3: DHT find {:.3} µs \
+             ({:.2}% of an insert), feed find {:.2} µs ({:.1}% of its commit; {:.2} µs, {:.1}%, \
+             when its claims came this start), named publisher {:.2} µs ({:.1}%); a flooded \
+             commit's second judgment {:.2} µs; \
              {feed_levels} of {N} feed finds reached a level",
             insert / 1000.0,
+            promoted / 1000.0,
             dht_ns / 1000.0,
             100.0 * dht_ns / insert,
             feed_ns / 1000.0,
-            100.0 * feed_ns / insert,
+            100.0 * feed_ns / promoted,
+            noted_ns / 1000.0,
+            100.0 * noted_ns / promoted,
             pub_ns / 1000.0,
-            100.0 * pub_ns / insert,
+            100.0 * pub_ns / promoted,
             rejudge_ns / 1000.0,
         );
         assert!(dht_ns <= 0.05 * insert, "the crawl's commits");
+        assert!(noted_ns <= 0.05 * promoted, "a feed's commits");
     }
 }

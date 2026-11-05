@@ -229,7 +229,10 @@ impl Flood {
         self.cap
     }
 
-    fn key(&self, origin: Origin<'_>) -> u64 {
+    /// `origin`'s key in this map: a publisher hashed under this map's
+    /// keys. [`Flood::record_key`] takes it, so a caller can keep it in
+    /// place of the text.
+    pub fn key(&self, origin: Origin<'_>) -> u64 {
         let mut h = self.keys.build_hasher();
         match origin {
             Origin::Publisher(p) => {
@@ -248,7 +251,11 @@ impl Flood {
     /// seconds) and returns the level the near-duplicates it belongs to
     /// have reached, this one included.
     pub fn record(&mut self, origin: Origin<'_>, sig: Signature, now: i64) -> Option<Level> {
-        let key = self.key(origin);
+        self.record_key(self.key(origin), sig, now)
+    }
+
+    /// [`Flood::record`] by the origin's [`Flood::key`].
+    pub fn record_key(&mut self, key: u64, sig: Signature, now: i64) -> Option<Level> {
         let at = now.div_euclid(BUCKET_SECS);
         let i = match self.index.get(&key) {
             Some(&i) => {
