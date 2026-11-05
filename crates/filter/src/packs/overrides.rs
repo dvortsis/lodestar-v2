@@ -100,9 +100,14 @@ impl Decoded {
         let format = parts.next() == Some(FORMAT);
         let base = parts.next().and_then(|b| b.parse::<u32>().ok());
         let action = parts.next().and_then(action_named);
-        let unless = parts
-            .next()
-            .map(|u| rule_query(u).map(|n| (u.to_owned(), n)));
+        // An `unless` that matches every torrent (an empty one, as a
+        // trailing newline leaves) would switch the rule off: the API
+        // refuses it, so a stored one doesn't read and fails closed.
+        let unless = parts.next().map(|u| {
+            rule_query(u)
+                .filter(|n| *n != Node::All)
+                .map(|n| (u.to_owned(), n))
+        });
         // A format this build doesn't know: its fields may mean anything.
         if !format {
             return Decoded {
@@ -324,9 +329,12 @@ pub(crate) fn apply(
         Effect::Replace(action, unless) => {
             // Only against an unchanged base, which is never in doubt, and
             // every state with an unaccepted version is in doubt (RP-0).
-            debug_assert!(!capped, "an override replaces only an accepted version");
+            // Should that ever break, it fails closed: held at most at
+            // quarantine, as the version's own action is.
             if unless.as_ref().is_some_and(unless_matches) {
                 None
+            } else if capped {
+                Some((*action).min(Action::Quarantine))
             } else {
                 Some(*action)
             }
@@ -401,6 +409,14 @@ mod tests {
         let d = Decoded::read(&Err(vec![0xff]));
         assert!(!d.reads() && d.action.is_none());
         assert!(!Decoded::read(&text("")).reads());
+        // An `unless` that matches everything: unreadable, never the rule
+        // switched off.
+        for v in ["1\n1\nflag\n", "1\n1\nflag\n   "] {
+            let d = Decoded::read(&text(v));
+            assert!(!d.reads(), "{v:?}");
+            assert_eq!(d.unless, Some(None));
+            assert_eq!(d.action, Some(Action::Flag));
+        }
     }
 
     #[test]
@@ -480,6 +496,18 @@ mod tests {
         assert_eq!(
             apply(&at, Some(Action::Hide), false, |_| true),
             Some(Action::Drop)
+        );
+        // A Replace over a version no record accepted fails closed too.
+        let rep = Effect::Replace(Action::Drop, None);
+        assert_eq!(
+            apply(&rep, Some(Action::Hide), true, |_| false),
+            Some(Action::Quarantine)
+        );
+        let rep = Effect::Replace(Action::Flag, None);
+        assert_eq!(
+            apply(&rep, Some(Action::Hide), true, |_| false),
+            Some(Action::Flag),
+            "a lighter action isn't raised"
         );
     }
 

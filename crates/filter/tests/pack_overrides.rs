@@ -397,6 +397,19 @@ fn unreadable_rows_fail_closed_and_are_listed() {
         ),
         (Err(vec![0xff, 0]), Some(Action::Hide), Some(Action::Hide)),
         (Ok(String::new()), Some(Action::Hide), Some(Action::Hide)),
+        // An `unless` that matches everything (a trailing newline leaves an
+        // empty one): unreadable, so the stronger action applies everywhere
+        // rather than the rule switching off.
+        (
+            Ok("1\n1\nflag\n".into()),
+            Some(Action::Hide),
+            Some(Action::Hide),
+        ),
+        (
+            Ok("1\n1\ndrop\n".into()),
+            Some(Action::Drop),
+            Some(Action::Drop),
+        ),
     ];
     for (value, a, b) in cases {
         let (e, notes) = engine(&m, &with(value.clone()));
