@@ -1,5 +1,8 @@
 // Tests only: a `GET /sources` row and its pieces.
-import type { Source } from './sources';
+// Only the API types: the e2e typecheck imports this before the messages are compiled.
+import type { components } from '$lib/api/schema';
+
+type Source = components['schemas']['Source'];
 
 export const source = (over: Partial<Source> & { id: number; name: string }): Source => ({
 	agents: { count: 1, enforced: false, max: 1 },

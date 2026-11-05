@@ -9,7 +9,9 @@ import {
 	type MockLike
 } from '../src/lib/features/settings/form/testing/e2e-backend';
 import { dht, nyaa, prowlarr } from '../src/lib/features/sources/fixtures';
-import type { Source } from '../src/lib/features/sources/sources';
+import type { components } from '../src/lib/api/schema';
+
+type Source = components['schemas']['Source'];
 
 const expect = baseExpect.configure({ timeout: 10_000 });
 
