@@ -2835,7 +2835,7 @@
    "pr": 451
   },
   "X-search-files-4": {
-   "status": "building",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnBuYcaSNVCmZuFhZDV",
    "launched": "2026-11-05T01:17Z",
@@ -3001,6 +3001,13 @@
    "status": "merged",
    "session": "session_01MMjhnBj1rCh3LdWqYrs2nu",
    "brief": "briefs/D-v052-notes.md"
+  },
+  "X-search-files-5": {
+   "status": "building",
+   "model": "opus",
+   "session": "session_01MMjhnBuYcaSNVCmZuFhZDV",
+   "launched": "2026-11-05T07:22Z",
+   "brief": "briefs/X-search-files-5.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3469,7 +3476,8 @@
   "2026-11-05T06:47Z soak r5 started on rc.4 (dashboard relay). Baseline ends 2026-11-06T13:12:25Z. No verdict before the analyzer reports the window complete.",
   "2026-11-05T06:48Z #465 RP-2 merged (605228f9), archived; RP-3 launched in slot 8 (small PackSwitch overlap with RP-UC in api/filters.rs; RP-UC merges first). RP-4 still waits on SRC-13b (writer.rs). #469 RP-UC review MERGE; one push asked (main merge, lazy description, telesync .TS fix, Linux ISO guard or note, hook doc, precision items, weight note).",
   "2026-11-05T06:58Z #470 D-sources-guide merged (9e3e5953), archived; D-v052-notes launched in slot 11.",
-  "2026-11-05T07:19Z merged #471 runner plan PR (31afe2af) and #475 D-v052-notes (a3bbb95e); slot 11 idle with reason."
+  "2026-11-05T07:19Z merged #471 runner plan PR (31afe2af) and #475 D-v052-notes (a3bbb95e); slot 11 idle with reason.",
+  "2026-11-05T07:21Z #468 X-search-files-4 merged (dfc91d2d); X-search-files-5 continues in the same session (slot 7)."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5195,7 +5203,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T07:20Z",
+  "updated": "2026-11-05T07:22Z",
   "items": [
    {
     "slot": 1,
@@ -5247,11 +5255,11 @@
    },
    {
     "slot": 7,
-    "slice": "X-search-files-4",
+    "slice": "X-search-files-5",
     "role": "build",
     "agent": "claude",
-    "doing": "Performance: getting cold file search at 10M under 150 ms.",
-    "since": "2026-11-05T01:17Z"
+    "doing": "Performance: getting cold file search at 10M under 150 ms, continued (ext and size terms per torrent)",
+    "since": "2026-11-05T07:22Z"
    },
    {
     "slot": 8,
