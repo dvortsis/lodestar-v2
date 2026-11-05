@@ -107,7 +107,8 @@ pub(crate) type PluginNames = HashMap<String, PluginName>;
 
 /// How long a failed listing is kept before a request asks again, so a
 /// pipeline whose `sources()` keeps failing takes the writer's lock at
-/// most once per this, not once per request.
+/// most once per this, not once per request. Meanwhile every source
+/// shows by plugin id and counts as private (a public caller sees none).
 const NAMES_RETRY: Duration = Duration::from_secs(5);
 
 /// One pipeline's names: listed once, single-flight. Manifests are fixed
@@ -116,10 +117,10 @@ const NAMES_RETRY: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 struct NamesSlot {
     names: OnceCell<Arc<PluginNames>>,
-    /// When the last listing failed. Holding it is what makes the
-    /// listing single-flight: the requests that arrive meanwhile wait
-    /// for its answer rather than each listing again.
-    failed: tokio::sync::Mutex<Option<Instant>>,
+    /// When the last listing failed. The listing holds it until it has
+    /// an answer, so the requests that arrive meanwhile wait for that
+    /// answer rather than each listing again.
+    failed: Arc<tokio::sync::Mutex<Option<Instant>>>,
     retry: Duration,
 }
 
@@ -127,22 +128,22 @@ impl NamesSlot {
     fn new(retry: Duration) -> NamesSlot {
         NamesSlot {
             names: OnceCell::new(),
-            failed: tokio::sync::Mutex::new(None),
+            failed: Arc::new(tokio::sync::Mutex::new(None)),
             retry,
         }
     }
 
     /// The names, from `list` at most once at a time; empty while the
     /// last listing failed less than `retry` ago.
-    async fn get<F, Fut>(&self, list: F) -> Arc<PluginNames>
+    async fn get<F, Fut>(self: &Arc<Self>, list: F) -> Arc<PluginNames>
     where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Option<PluginNames>>,
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Option<PluginNames>> + Send + 'static,
     {
         if let Some(names) = self.names.get() {
             return names.clone();
         }
-        let mut failed = self.failed.lock().await;
+        let failed = self.failed.clone().lock_owned().await;
         // Listed while this request waited.
         if let Some(names) = self.names.get() {
             return names.clone();
@@ -150,20 +151,31 @@ impl NamesSlot {
         if failed.is_some_and(|at| at.elapsed() < self.retry) {
             return Arc::default();
         }
-        match list().await {
-            Some(names) => {
-                let names = Arc::new(names);
-                // Only the holder of `failed` sets it, so this can't
-                // race another set.
-                let _ = self.names.set(names.clone());
-                *failed = None;
-                names
+        // Detached, with the lock: a request dropped mid-listing (its
+        // client gone) leaves the listing running, `sources()`'s blocking
+        // job with it, and the next request waits for its answer instead
+        // of starting a second one beside it.
+        let slot = self.clone();
+        let listing = tokio::spawn(async move {
+            let mut failed = failed;
+            match list().await {
+                Some(names) => {
+                    let names = Arc::new(names);
+                    // Only the holder of `failed` sets it, so this can't
+                    // race another set.
+                    let _ = slot.names.set(names.clone());
+                    *failed = None;
+                    names
+                }
+                None => {
+                    *failed = Some(Instant::now());
+                    Arc::default()
+                }
             }
-            None => {
-                *failed = Some(Instant::now());
-                Arc::default()
-            }
-        }
+        });
+        // A listing that panicked left `failed` as it was: the next
+        // request asks again.
+        listing.await.unwrap_or_default()
     }
 }
 
@@ -175,9 +187,14 @@ static PLUGIN_NAMES: Mutex<NamesCache> = Mutex::new(Vec::new());
 /// served or it couldn't list them (then every source shows by id and
 /// counts as private, so a public caller sees none).
 pub(crate) async fn plugin_names(s: &ApiState) -> Arc<PluginNames> {
-    let Some(ops) = s.ops.clone() else {
-        return Arc::default();
-    };
+    match s.ops.clone() {
+        Some(ops) => names_for(ops).await,
+        None => Arc::default(),
+    }
+}
+
+/// [`plugin_names`] for the pipeline `ops`, from its slot.
+async fn names_for(ops: Arc<dyn OpsApi>) -> Arc<PluginNames> {
     let key = Arc::downgrade(&ops);
     let slot = {
         let mut cache = PLUGIN_NAMES.lock().unwrap_or_else(|e| e.into_inner());
@@ -191,7 +208,7 @@ pub(crate) async fn plugin_names(s: &ApiState) -> Arc<PluginNames> {
             }
         }
     };
-    slot.get(|| async {
+    slot.get(move || async move {
         let list = ops.sources().await.ok()?;
         Some(
             list.into_iter()
@@ -875,7 +892,7 @@ pub(crate) mod tests {
                 let (slot, calls, gate) = (slot.clone(), calls.clone(), gate.clone());
                 tokio::spawn(async move {
                     gate.wait().await;
-                    slot.get(|| async {
+                    slot.get(move || async move {
                         calls.fetch_add(1, Ordering::SeqCst);
                         // Let the other requests arrive while it lists.
                         for _ in 0..N {
@@ -907,7 +924,7 @@ pub(crate) mod tests {
             .map(|_| {
                 let (slot, calls) = (slot.clone(), calls.clone());
                 tokio::spawn(async move {
-                    slot.get(|| async {
+                    slot.get(move || async move {
                         calls.fetch_add(1, Ordering::SeqCst);
                         for _ in 0..N {
                             tokio::task::yield_now().await;
@@ -922,8 +939,9 @@ pub(crate) mod tests {
             assert!(t.await.unwrap().is_empty());
         }
         for _ in 0..N {
+            let calls = calls.clone();
             let names = slot
-                .get(|| async {
+                .get(move || async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     None
                 })
@@ -936,11 +954,140 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_failed_listing_is_retried_after_the_back_off() {
         // No back-off: the next request asks again, and a success is kept.
-        let slot = NamesSlot::new(Duration::ZERO);
+        let slot = Arc::new(NamesSlot::new(Duration::ZERO));
         assert!(slot.get(|| async { None }).await.is_empty());
         assert_eq!(slot.get(|| async { Some(names_of(1)) }).await.len(), 1);
         let kept = slot.get(|| async { panic!("listed after success") }).await;
         assert_eq!(kept.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_request_dropped_mid_listing_does_not_start_a_second() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let slot = Arc::new(NamesSlot::new(NAMES_RETRY));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started) = tokio::sync::oneshot::channel();
+        let (finish, finish_rx) = tokio::sync::oneshot::channel::<()>();
+        let first = {
+            let (slot, calls) = (slot.clone(), calls.clone());
+            tokio::spawn(async move {
+                slot.get(move || async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let _ = started_tx.send(());
+                    finish_rx.await.ok()?;
+                    Some(names_of(3))
+                })
+                .await
+            })
+        };
+        started.await.unwrap();
+        // Its client goes away while it lists.
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        let second = {
+            let (slot, calls) = (slot.clone(), calls.clone());
+            tokio::spawn(async move {
+                slot.get(move || async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Some(names_of(1))
+                })
+                .await
+            })
+        };
+        finish.send(()).unwrap();
+        // The first listing's answer, not a second listing's.
+        assert_eq!(second.await.unwrap().len(), 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A pipeline that counts its `sources()` calls; everything else is
+    /// unused.
+    #[derive(Debug, Default)]
+    struct CountingOps {
+        calls: std::sync::atomic::AtomicUsize,
+        fail: bool,
+    }
+
+    impl OpsApi for CountingOps {
+        fn crawler(&self) -> crate::ops::CrawlerRuntime {
+            unimplemented!()
+        }
+        fn sync_crawler(&self) -> crate::ops::BoxFuture<'_, ()> {
+            unimplemented!()
+        }
+        fn stats(&self) -> crate::ops::BoxFuture<'_, crate::ops::StatsResponse> {
+            unimplemented!()
+        }
+        fn sources(
+            &self,
+        ) -> crate::ops::BoxFuture<'_, Result<Vec<crate::ops::Source>, crate::ops::OpsError>>
+        {
+            Box::pin(async {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // Let the other requests arrive while it lists.
+                for _ in 0..16 {
+                    tokio::task::yield_now().await;
+                }
+                if self.fail {
+                    Err(crate::ops::OpsError::Internal("store busy".into()))
+                } else {
+                    Ok(Vec::new())
+                }
+            })
+        }
+        fn patch_source(
+            &self,
+            _: u8,
+            _: crate::ops::SourcePatch,
+            _: bool,
+        ) -> crate::ops::BoxFuture<'_, Result<crate::ops::Source, crate::ops::OpsError>> {
+            unimplemented!()
+        }
+        fn patch_source_credentials(
+            &self,
+            _: u8,
+            _: Vec<(String, Option<crate::ops::Secret>)>,
+        ) -> crate::ops::BoxFuture<'_, Result<crate::ops::Source, crate::ops::OpsError>> {
+            unimplemented!()
+        }
+        fn network(&self) -> crate::ops::NetworkCheck {
+            unimplemented!()
+        }
+        fn restart_network_check(&self) -> Result<crate::ops::NetworkCheck, crate::ops::OpsError> {
+            unimplemented!()
+        }
+    }
+
+    /// Through the per-pipeline cache: concurrent first requests, and
+    /// requests while the listing fails, each pipeline listing once.
+    #[tokio::test]
+    async fn each_pipeline_lists_once_through_the_cache() {
+        use std::sync::atomic::Ordering;
+        const N: usize = 16;
+        for fail in [false, true] {
+            let ops = Arc::new(CountingOps {
+                fail,
+                ..CountingOps::default()
+            });
+            let dyn_ops: Arc<dyn OpsApi> = ops.clone();
+            let gate = Arc::new(tokio::sync::Barrier::new(N));
+            let tasks: Vec<_> = (0..N)
+                .map(|_| {
+                    let (ops, gate) = (dyn_ops.clone(), gate.clone());
+                    tokio::spawn(async move {
+                        gate.wait().await;
+                        names_for(ops).await
+                    })
+                })
+                .collect();
+            for t in tasks {
+                assert!(t.await.unwrap().is_empty());
+            }
+            for _ in 0..N {
+                names_for(dyn_ops.clone()).await;
+            }
+            assert_eq!(ops.calls.load(Ordering::SeqCst), 1, "fail: {fail}");
+        }
     }
 
     #[test]
