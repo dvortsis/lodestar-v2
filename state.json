@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T15:26Z",
+  "updated_at": "2026-11-05T15:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3109,10 +3109,13 @@
       "pr": 496
     },
     "ENR-1b": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnBwEorNQE51FrPWpnt",
       "since": "2026-11-05T12:50Z",
-      "brief": "briefs/ENR-1b.md"
+      "brief": "briefs/ENR-1b.md",
+      "pr": 497,
+      "merge": "2874b259",
+      "done": "2026-11-05T15:40Z"
     },
     "X-claim-trackers": {
       "status": "running",
@@ -3141,6 +3144,12 @@
       "status": "running",
       "session": "session_01MMjhnCWeVRA68WzWeBjqbL",
       "since": "2026-11-05T15:25Z"
+    },
+    "ENR-1c": {
+      "status": "running",
+      "session": "session_01MMjhnBwEorNQE51FrPWpnt",
+      "since": "2026-11-05T15:40Z",
+      "note": "same session as ENR-1b; #497 review polish"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4716,7 +4725,8 @@
     "Follow-up after #497 and #500 merge (small, pipeline unverified.rs): store_claims should store the canonical tracker form via filter_map(public_tracker_url) instead of == Some(t), which drops valid claims like https://t.example:443/announce; fix tracker_url doc comment (no wss, not text-level).",
     "Handoff (from #490 review): the slice that opens /search or /facets to keys must, for Viewer::Public, reject or neutralise source: terms naming a non-public plugin (arr_webhooks, clients, prowlarr), and review withheld:true and discovered_at (a webhook grab time can be first_at). Not live while search/facets/detail are auth::protected.",
     "Owner question (low): open /metrics source_up / source_dropped_total reveal whether arr_webhooks, clients or prowlarr run (no torrent named). Leave or drop setup-revealing sources from open metrics?",
-    "SRC-15b dialog note (from #493 review): SourceRow shows the running address list under \"Accepting covers exactly these addresses\" while a saved list is pending (restart_required); show the pending list or say a restart is needed. Fails closed today."
+    "SRC-15b dialog note (from #493 review): SourceRow shows the running address list under \"Accepting covers exactly these addresses\" while a saved list is pending (restart_required); show the pending list or say a restart is needed. Fails closed today.",
+    "owner-flag sent 15:40Z: ENR-1b NoQuery (#497 merged 2874b259)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5377,7 +5387,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T15:26Z",
+    "updated": "2026-11-05T15:40Z",
     "items": [
       {
         "slot": 1,
@@ -5469,11 +5479,11 @@
       },
       {
         "slot": 12,
-        "slice": "ENR-1b",
+        "slice": "ENR-1c",
         "role": "build",
         "agent": "claude",
-        "doing": "Content safety: the enrichment gate, a race fix and no-query for vague names, before enrichment is switched on",
-        "since": "2026-11-05T12:50Z"
+        "doing": "Content safety: enrichment polish before the plugins land (fail-safe marks, one match test, no enricher is always-adult)",
+        "since": "2026-11-05T15:40Z"
       }
     ]
   },
