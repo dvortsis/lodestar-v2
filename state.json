@@ -3446,7 +3446,8 @@
   "2026-11-05T05:38Z rc.4 READY: Release dry run 41973157235 green on dba1a5c0 (mimalloc nm check passed on both tarballs; MSI built). Owner steps (tag v0.5.1-rc.4 on dba1a5c0, r5, R-win, gluetun, v0.5.1) sent via the dashboard session. #462 SRC-17a merged (29301e00), archived; SRC-17 told to bring main in. X-followups-1105 launched in slot 9.",
   "2026-11-05T05:47Z #466 X-flake-boot-shell merged (5fa277c7; boot-shell e2e flake fixed with unrouteAll ignoreErrors in afterEach); archived. Cite #466 if a PR still shows that flake.",
   "2026-11-05T06:22Z runner (\u00a72.33): X-log-url-redact-2 (#460) restructured to be monotone by construction. main scrubber is stage 1 unchanged; every new rule only adds redactions after it; the two over-redaction narrowings are dropped (runner withdraws its \u00a72.26 ask; possible X-log-url-redact-3 with its own proof). Reason: three fuzz rounds kept finding regressions where new heuristics changed main context.",
-  "2026-11-05T06:29Z #467 X-source-adult merged (b9c2057a), archived. SRC-13b (slot 5) and ENR-1 (slot 12) launched. Runner PR #471 opened (plan entries, deps). RP-4 and SRC-13b both need writer.rs: RP-4 waits for SRC-13b (it carries a content-safety crash-window fix)."
+  "2026-11-05T06:29Z #467 X-source-adult merged (b9c2057a), archived. SRC-13b (slot 5) and ENR-1 (slot 12) launched. Runner PR #471 opened (plan entries, deps). RP-4 and SRC-13b both need writer.rs: RP-4 waits for SRC-13b (it carries a content-safety crash-window fix).",
+  "2026-11-05T06:47Z soak r5 started on rc.4 (dashboard relay). Baseline ends 2026-11-06T13:12:25Z. No verdict before the analyzer reports the window complete."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5132,7 +5133,26 @@
   "2026-11-03T00:45Z plan approved (reviewed by Gemini and Codex): M1-exp then X-mmap-cache-prune; #377 merged 0acc5a37; runner docs PR in progress (owner-decisions \u00a72.31, soak-r3-verdict decisions file, Track R table, slices/dashboard).",
   "01:20Z #403 merged c8c39914 (owner-decisions \u00a72.31, soak-r3-verdict decisions file, Track R table, slices X-mmap-cache-prune/R-rc3-cut/CR-COL-4). Nit left: build-plan \u00a70.9 line ~319 \"X-strip-format-chars is already running\" (merged #373) - trim in next runner docs PR.",
   "04:05Z owner low on usage: plan pushed as docs/plan/2026-11-03-soak-r3-memory-fix.md in PR #404 (docs only; Opus review batched with CR-COL-4 review). CR-COL-4 helper running (slice/CR-COL-4). Decision sequence sent to X-mmap-cache-prune (briefs/X-mmap-cache-prune-decision-sequence.md). Be frugal: no extra agents beyond reviews.",
-  "2026-11-05T01:08Z r4 (rc.3) FAIL memory gate: private_bytes h12-24 OLS 29.35 MiB/h, 95% CI [28.75, 29.96], 719 samples, window complete; gate evidence yes; peak private 727.36 MiB; 0 restarts; clean shutdown. analyze_cr0.py sha256 7cf98b77...972b; stdout sha256 a89ca86b...fc70. Next: rc.4 (X-thp-off, X-mem-gauges+2, X-log-url-redact, X-mimalloc-override #448, LEGAL-1, RP-DEF, RP-UC), then soak r5. Owner: hold; Appdata Backup may be re-enabled now (disable again before r5); keep r4 evidence root, data dir may go."
+  "2026-11-05T01:08Z r4 (rc.3) FAIL memory gate: private_bytes h12-24 OLS 29.35 MiB/h, 95% CI [28.75, 29.96], 719 samples, window complete; gate evidence yes; peak private 727.36 MiB; 0 restarts; clean shutdown. analyze_cr0.py sha256 7cf98b77...972b; stdout sha256 a89ca86b...fc70. Next: rc.4 (X-thp-off, X-mem-gauges+2, X-log-url-redact, X-mimalloc-override #448, LEGAL-1, RP-DEF, RP-UC), then soak r5. Owner: hold; Appdata Backup may be re-enabled now (disable again before r5); keep r4 evidence root, data dir may go.",
+  {
+   "run": "r5",
+   "build": "v0.5.1-rc.4",
+   "tag_object": "fe07b0c1a60dd8e1afbca67e514a8986e1538827",
+   "commit": "dba1a5c0f94dddfe68e0965de54ac6f3c5ed1c41",
+   "release_run": 41978331349,
+   "image": "ghcr.io/dvortsis/lodestar-v2@sha256:4d9d611acd70bdda2f39cb52cb72571c7b9efa14f2762dc3392fde9e4b5cb6f3",
+   "collector_pin": "main 5fa277c7a64347401f7b4ce941ef0e5018105a25",
+   "collect_sha256": "fa718caa152c7035970d3eef6b3cbc846d2f1b7833934fd7daa42c2db0d0582f",
+   "analyze_sha256": "5260624808fbb4fe17f413e1439867ed02b2692089d881df7ec84f5585d618ab",
+   "lodestar_started": "2026-11-05T06:42:25Z",
+   "collector_started": "2026-11-05T06:44:28Z",
+   "settling_end": "2026-11-05T12:42:25Z",
+   "warmup_end": "2026-11-05T13:12:25Z",
+   "baseline_end": "2026-11-06T13:12:25Z",
+   "root": "/evidence/v051-rc4-main-r5",
+   "analyze": "--c-allocator mimalloc",
+   "note": "Container settings to be compared with r4 run.json by the dashboard session (read-only)."
+  }
  ],
  "limits": {
   "phase_total": 12,
