@@ -4668,7 +4668,9 @@
     "owner-flag \u00a72.19 (X-fuzz-cache-1105 #491): fuzzing found a tracker judged by its url-crate reading (public host) but stored as raw text with a loopback address in it (http:1.1/announce^udp://127.0.0.1...). Fixed: the checked, normalised URL is stored; non-canonical trackers are now stored in canonical form. Tightens SRC-13.",
     "Owner flags sent to the dashboard session 12:30Z: RP-1b MW-2@2 residual risk; RP-6 size raise; #491 canonical tracker storage.",
     "X-claim-trackers (after #480; runner-approved tightening of SRC-13): one shared tracker host guard in pipeline store_claims (unverified.rs) and torrent_cache public_tracker: parse with url, store the serialised form, refuse literal private/loopback/link-local (incl. udp re-judgement) and localhost/*.localhost. Latent today: no magnet link or API emits claimed trackers (#491 review). Also correct docs/decisions/2026-11-05-X-fuzz-cache-1105.md: claim trackers are stored only, not shown in magnet links; url 2.5.8 leaves ^ unencoded.",
-    "owner-flag \u00a72.19 (ENR-1b): the Display/Name query form returns NoQuery for ambiguous or uninformative torrent names; stricter than Q2."
+    "owner-flag \u00a72.19 (ENR-1b): the Display/Name query form returns NoQuery for ambiguous or uninformative torrent names; stricter than Q2.",
+    "owner-flag \u00a72.19 (SRC-13c #493): every External/Restricted/Overlay source acknowledged before this build turns off once at upgrade and asks again (old FNV acks fail closed); consent now covers full address templates, so a path change on the same host asks again. Release-note line requested.",
+    "SRC-15b brief: the consent dialog shows GET /sources endpoints exactly as returned (from #493)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
