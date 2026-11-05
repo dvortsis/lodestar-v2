@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T22:57Z",
+ "updated_at": "2026-11-05T23:24Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3281,9 +3281,11 @@
    "merge": "01d956f3"
   },
   "P-v07": {
-   "status": "queued",
+   "status": "running",
    "brief": "briefs/P-v07.md",
-   "note": "launch first after the 00:00Z usage reset"
+   "note": "launch first after the 00:00Z usage reset",
+   "session": "session_01MMjhnCcXx6GNpK4VimTstF",
+   "launched": "2026-11-05T23:24Z"
   },
   "X-search-files-6": {
    "status": "running",
@@ -4945,6 +4947,11 @@
    "id": "owner-flag-X-enr-page-flag",
    "note": "sent 22:57Z at merge",
    "added": "2026-11-05T22:57Z"
+  },
+  {
+   "id": "runner-docs-owner-usage-2325",
+   "note": "Record in the runner docs PR (owner-decisions): owner 2026-11-05T23:25Z, relayed by the dashboard session: \"Keep running. We have usage available.\" Lifts the usage hold; fill to 8 until 00:00Z.",
+   "added": "2026-11-05T23:24Z"
   }
  ],
  "main_health": [
@@ -5607,7 +5614,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T22:57Z",
+  "updated": "2026-11-05T23:24Z",
   "items": [
    {
     "slot": 1,
@@ -5620,12 +5627,12 @@
    },
    {
     "slot": 2,
-    "slice": null,
+    "slice": "P-v07",
     "role": "build",
     "agent": "claude",
-    "doing": "Kept free: P-v07 (expand E-M7, brief written) waits for the usage-limit reset at 2026-11-06T00:00Z, so the remaining budget goes to finishing the running slices (owner, 16:15Z). Launch it first after the reset, within the 4-slot limit.",
-    "since": "2026-11-05T21:33Z",
-    "status": "idle"
+    "doing": "Plan: expand E-M7 into the v0.7 slices (docs only)",
+    "since": "2026-11-05T23:24Z",
+    "session": "session_01MMjhnCcXx6GNpK4VimTstF"
    },
    {
     "slot": 3,
@@ -5682,7 +5689,7 @@
    }
   ],
   "limit": 8,
-  "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies."
+  "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged."
  },
  "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail."
 }
