@@ -1,0 +1,7 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"search_unverified_toggle": "显示未验证项",
+	"search_unverified_hint": "来源已报告但 Lodestar 尚未确认的条目。",
+	"search_unverified_badge": "未验证",
+	"search_unverified_badge_title": "来源报告了此条目,Lodestar 尚未确认其元数据。"
+}

@@ -1,0 +1,7 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"search_unverified_toggle": "Show unverified",
+	"search_unverified_hint": "Items a source reported that Lodestar hasn't confirmed yet.",
+	"search_unverified_badge": "Unverified",
+	"search_unverified_badge_title": "A source reported this; Lodestar hasn't confirmed its metadata yet."
+}

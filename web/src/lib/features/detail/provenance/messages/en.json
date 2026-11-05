@@ -1,0 +1,9 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"detail_provenance_found_by": "Found by:",
+	"detail_provenance_differences": "Claims that differ",
+	"detail_provenance_difference": "{field}: a source said {claimed}; the metadata says {verified}",
+	"detail_provenance_field_size": "Size",
+	"detail_provenance_field_files": "Files",
+	"detail_provenance_field_name": "Name"
+}

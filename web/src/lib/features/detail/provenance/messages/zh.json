@@ -1,0 +1,9 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"detail_provenance_found_by": "发现于:",
+	"detail_provenance_differences": "不一致的声明",
+	"detail_provenance_difference": "{field}:来源称 {claimed};元数据为 {verified}",
+	"detail_provenance_field_size": "大小",
+	"detail_provenance_field_files": "文件数",
+	"detail_provenance_field_name": "名称"
+}
