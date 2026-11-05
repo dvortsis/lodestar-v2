@@ -1,0 +1,1 @@
+{"query":"query SearchScene($term: String!, $limit: Int) { searchScene(term: $term, limit: $limit) { id title release_date studio { id name } performers { performer { name } } } }","variables":{"term":"Another.Example.Name","limit":1}}

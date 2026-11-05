@@ -1,0 +1,8 @@
+POST https://stashdb.org/graphql
+Accept: application/json
+Content-Type: application/json
+ApiKey: REDACTED
+
+HTTP 429
+Retry-After: 120
+Content-Type: application/json
