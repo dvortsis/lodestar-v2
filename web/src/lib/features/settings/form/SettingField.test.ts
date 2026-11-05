@@ -234,6 +234,20 @@ describe('SettingField', () => {
 		expect(items.map((i) => i.textContent?.trim())).toEqual(['Copy link to this setting']);
 	});
 
+	it('copies the absolute link to the field from the menu, once', async () => {
+		const writeText = vi.fn(async () => {});
+		vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+		show('crawler.timeout_secs');
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }));
+		await fireEvent.click(
+			await screen.findByRole('menuitem', { name: 'Copy link to this setting' })
+		);
+		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+		expect(writeText).toHaveBeenCalledWith(
+			new URL(form.href('crawler.timeout_secs'), location.href).href
+		);
+	});
+
 	it('shows config.toml key and variable on request', async () => {
 		show('crawler.timeout_secs');
 		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }));

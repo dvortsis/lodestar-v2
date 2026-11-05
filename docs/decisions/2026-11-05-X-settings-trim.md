@@ -19,9 +19,11 @@ Brief: win back the Settings chunk's headroom under the §10.1 45 kB cap, with n
 | Entry | Before | After | Limit before | Limit after |
 |---|---|---|---|---|
 | Settings section (own JS + CSS) | 45,070 B | 44,952 B | 45.07 KB | 45 KB |
-| Settings NotificationsScreen (first view) | 45,127 B | 44,988 B | 45.14 KB | 45 KB |
+| Settings NotificationsScreen (first view) | 45,127 B | 44,988 B | 45.14 KB | 45 KB (lowered) |
 | Settings overview (own JS + CSS) | 14,350 B | 14,350 B | 45 KB | 45 KB |
-| Settings controls (on demand) | not recorded | 33,460 B | 38 KB | 38 KB |
-| Settings edit chunk (on demand) | not recorded | 11,095 B | 11.3 KB | 11.3 KB |
+| Settings controls (on demand) | 33,393 B | 33,460 B | 38 KB | 38 KB |
+| Settings edit chunk (on demand) | 11,011 B | 11,095 B | 11.3 KB | 11.3 KB |
 
-No other entry moved. The Notifications and Section limits are back at the §10.1 cap, so there is no residue of the §2.26 raises left. The other hand-built Settings screens, Notifications and Detail were not touched and no limit was raised.
+Other entries also moved: controls (on demand) +67 B, edit chunk (on demand) +84 B, Wizard steps −107 B, and four other Settings screens about −110 B each. The NotificationsScreen limit was lowered, from 45.14 to 45 KB; the Section limit went from 45.07 to 45 KB. The Notifications and Section limits are back at the §10.1 cap, so there is no residue of the §2.26 raises left. Notifications detail and the other screens were not touched beyond that, and no limit was raised.
+
+Headroom: NotificationsScreen has 12 B left and Settings section 48 B under 45 KB. Each new registry entry adds about 65–85 B to both, so the next Settings screen needs a trim or a §2.26 raise.
