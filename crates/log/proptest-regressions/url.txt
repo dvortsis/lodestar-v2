@@ -24,3 +24,6 @@ cc ebd035619b909e3f2df136f41213bc32400e77d00e5e61f257defe8409072260 # shrinks to
 # X-log-url-redact-2, runner's review round: a credential value that held an
 # encoded magnet hid its marker from the second pass (fixed in the PR).
 cc cb6c05ec8e28e2052b7439cd8fb5d559d5604a8eb57c67fe0148ce3ea55e33d4 # shrinks to before = "pW:", scheme = "http", secret = "aAAa0a", ws = " ", tail = "", soft = "[", host = "aa.example"
+# X-log-url-redact-2, runner's review round: an encoded magnet in a URL's span
+# didn't extend it in the first pass (fixed in the PR).
+cc 54385977081fb36e03b5d423b6aa9f2bf8650a68010fa5b081332e4314e0157a # shrinks to before = "://", scheme = "http", secret = "aAaaa0", ws = "\t", tail = "", soft = "'", host = "aa.example"

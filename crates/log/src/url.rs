@@ -554,6 +554,8 @@ fn scrub_pass(text: &str, encoded: bool) -> String {
         true => magnets(),
         false => raw_magnets(),
     };
+    // The magnets that extend a URL's span (below).
+    let mut in_span = magnets();
     // A credential's name that ended the last span (see below).
     let mut carry: Option<String> = None;
     while pos < text.len() {
@@ -762,11 +764,14 @@ fn scrub_pass(text: &str, encoded: bool) -> String {
         // userinfo may run further than one inside it (review). One inside
         // another's span is that one's, so each byte is scanned once.
         let mut end = end;
-        let mut m = magnet.from(text, pos + i).map(|m| m - pos);
+        // Encoded ones count in either pass: a span only grows here, and
+        // the second pass would no longer see one the first hid in a URL
+        // (`://magnet%3A?…&dn=A'<s>`).
+        let mut m = in_span.from(text, pos + i).map(|m| m - pos);
         while let Some(at) = m.filter(|&at| url && at < end) {
             let span = magnet_span(text, pos, at, &mut scheme, &ats);
             end = end.max(span);
-            m = magnet.from(text, pos + span.max(at + 1)).map(|m| m - pos);
+            m = in_span.from(text, pos + span.max(at + 1)).map(|m| m - pos);
         }
         out.push_str(&lead(rest, start, i, carry.take(), whole.at(pos)));
         match value_in_userinfo {
@@ -1519,6 +1524,21 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
         // ran on past it (`password: Some("user:username:"<s>`, `path:
         // ">api_key%3D'magnet:…", Qz…`) still goes, though the value it
         // started in is replaced.
+        // A value that holds another field's name: one of the free-text
+        // rules' cuts may run on over that field (`path: "…pass:'path: "
+        // <s>`), whose value then goes whole too.
+        if let (None, Some(k)) = (url, inner) {
+            let mut bound = text.len().min(k + USERINFO_LOOKAHEAD);
+            while !text.is_char_boundary(bound) {
+                bound -= 1;
+            }
+            let far = secret_cuts(&text[from..bound])
+                .into_iter()
+                .filter(|&(a, b)| from + a <= k && from + b > k)
+                .map(|(_, b)| from + b)
+                .max();
+            hide_until = hide_until.max(far.unwrap_or(0));
+        }
         if url.is_none() && inner.is_none() && to > from {
             // The probe reads no further than the next field's name: the
             // loop reads that field (runner's review: `username: "user%3A",
