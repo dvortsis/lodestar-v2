@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T12:50Z",
+  "updated_at": "2026-11-05T13:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3078,9 +3078,11 @@
       "pr": 483
     },
     "X-fuzz-cache-1105": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnC1gwsQMnqDNH6xVCb",
-      "since": "2026-11-05T11:10Z"
+      "since": "2026-11-05T11:10Z",
+      "merge": "4b56fa86",
+      "pr": 491
     },
     "X-log-url-redact-4": {
       "status": "merged",
@@ -3105,6 +3107,12 @@
       "session": "session_01MMjhnBwEorNQE51FrPWpnt",
       "since": "2026-11-05T12:50Z",
       "brief": "briefs/ENR-1b.md"
+    },
+    "X-claim-trackers": {
+      "status": "running",
+      "session": "session_01MMjhn8zKGKAakVk6KjLDoV",
+      "since": "2026-11-05T13:13Z",
+      "brief": "briefs/X-claim-trackers.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4667,7 +4675,6 @@
     "owner-flag \u00a72.26/\u00a72.19 (RP-6 #487): size-limit \"Filters packs list (on demand)\" 1.6 -> 1.85 kB (measured 1.79); new entries panels 9 kB, impact 2.4 kB; Filters first view unchanged at 31.01 kB.",
     "owner-flag \u00a72.19 (X-fuzz-cache-1105 #491): fuzzing found a tracker judged by its url-crate reading (public host) but stored as raw text with a loopback address in it (http:1.1/announce^udp://127.0.0.1...). Fixed: the checked, normalised URL is stored; non-canonical trackers are now stored in canonical form. Tightens SRC-13.",
     "Owner flags sent to the dashboard session 12:30Z: RP-1b MW-2@2 residual risk; RP-6 size raise; #491 canonical tracker storage.",
-    "X-claim-trackers (after #480; runner-approved tightening of SRC-13): one shared tracker host guard in pipeline store_claims (unverified.rs) and torrent_cache public_tracker: parse with url, store the serialised form, refuse literal private/loopback/link-local (incl. udp re-judgement) and localhost/*.localhost. Latent today: no magnet link or API emits claimed trackers (#491 review). Also correct docs/decisions/2026-11-05-X-fuzz-cache-1105.md: claim trackers are stored only, not shown in magnet links; url 2.5.8 leaves ^ unencoded.",
     "owner-flag \u00a72.19 (ENR-1b): the Display/Name query form returns NoQuery for ambiguous or uninformative torrent names; stricter than Q2.",
     "owner-flag \u00a72.19 (SRC-13c #493): every External/Restricted/Overlay source acknowledged before this build turns off once at upgrade and asks again (old FNV acks fail closed); consent now covers full address templates, so a path change on the same host asks again. Release-note line requested.",
     "SRC-15b brief: the consent dialog shows GET /sources endpoints exactly as returned (from #493).",
@@ -4675,7 +4682,8 @@
     "Follow-up (gap 4, from #494): one shared always-adult manifest list used by both the pipeline and the import CLI, so they stay in step (the CLI lists Sukebei by hand today).",
     "owner-flag \u00a72.19/\u00a72.26 (RP-4 #495, plan Q10 refinements): importers and torrent-cache backlogs count toward SP-3 only when a publisher is named (replay and lookup traffic are not flooding); one rare writer path (feed key claimed before a restart) costs +16.5% per insert, with the common paths asserted <=5%.",
     "Follow-up: move RP-4 sp3_writer_cost (ignored test) into the bench/ gate.",
-    "Flake (runner to fix): crates/lodestar update::engine::tests::the_log_over_an_install_names_events_and_never_urls captures another test's address.confirm_needed log line in the full workspace run (seen on RP-4 locally); log capture is not isolated per test."
+    "Flake (runner to fix): crates/lodestar update::engine::tests::the_log_over_an_install_names_events_and_never_urls captures another test's address.confirm_needed log line in the full workspace run (seen on RP-4 locally); log capture is not isolated per test.",
+    "owner-flag \u00a72.19 (X-claim-trackers): tracker URLs from claims and caches are refused if they point at localhost, *.localhost or a private/loopback/link-local address (tightens SRC-13); latent today since nothing dials claimed trackers."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5336,15 +5344,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T12:50Z",
+    "updated": "2026-11-05T13:13Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-fuzz-cache-1105",
+        "slice": "X-claim-trackers",
         "role": "build",
         "agent": "claude",
-        "doing": "Security: fuzzing the torrent-cache parse directly, plus Verified::claims",
-        "since": "2026-11-05T11:10Z"
+        "doing": "Security: one guard so tracker addresses from claims and caches can never point at your own network",
+        "since": "2026-11-05T13:13Z"
       },
       {
         "slot": 2,
@@ -5413,7 +5421,7 @@
       {
         "slot": 10,
         "status": "idle",
-        "doing": "Held: X-claim-trackers waits for #491 (torrent_cache.rs) to merge; RP-5 on RP-4; B13b on X-search-files-5"
+        "doing": "Held: no ready slice. RP-5 waits on RP-4 (#495); B13b on X-search-files-5"
       },
       {
         "slot": 11,
