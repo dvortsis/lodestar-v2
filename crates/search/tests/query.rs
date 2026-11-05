@@ -598,3 +598,49 @@ fn relevance_pages_past_the_window_stay_consistent() {
     }
     assert_eq!(seen.len(), n, "every hit on some page");
 }
+
+/// A lone `file:(ext:…)` is answered from the torrent index
+/// (X-search-files-4) but ranks as the file index's id set did: driving
+/// the query alone it scores 1.0, so the priors order the hits, and
+/// beside a lifted range the same. Its two-atom form, which still goes
+/// through the file index, is the reference.
+#[test]
+fn a_lone_extension_clause_keeps_its_priors_order() {
+    let ix = hot_corpus();
+    let scored = |q: &str| -> Vec<(u64, f32)> {
+        let ast = parse(q).unwrap_or_else(|e| panic!("{q}: {e}"));
+        ix.search(&ix.query(&ast, NOW), 50)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| (h.id, h.score))
+            .collect()
+    };
+    for (lone, reference) in [
+        ("file:(ext:mkv,mp4,avi)", "file:(ext:mkv,mp4,avi size:>=0)"),
+        (
+            "file:(ext:mkv,mp4,avi) size:>100MB",
+            "file:(ext:mkv,mp4,avi size:>=0) size:>100MB",
+        ),
+        // A negation doesn't drive: the clause still does.
+        (
+            "-joker file:(ext:mkv,mp4,avi)",
+            "-joker file:(ext:mkv,mp4,avi size:>=0)",
+        ),
+        // Only lone extensions drive: the first scores, as the first id
+        // set kept in the query did.
+        (
+            "file:(ext:mkv,avi) file:(ext:mkv,mp4,avi)",
+            "file:(ext:mkv,avi size:>=0) file:(ext:mkv,mp4,avi size:>=0)",
+        ),
+        (
+            "file:(ext:mkv,mp4,avi) -file:(ext:exe) size:>100MB",
+            "file:(ext:mkv,mp4,avi size:>=0) -file:(ext:exe size:>=0) size:>100MB",
+        ),
+    ] {
+        let got = scored(lone);
+        assert!(got.len() >= 2, "{lone}: {got:?}");
+        assert!(got.iter().all(|(_, s)| *s > 0.0), "{lone}: {got:?}");
+        assert_eq!(got, scored(reference), "{lone}");
+    }
+}
