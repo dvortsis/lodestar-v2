@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T21:20Z",
+ "updated_at": "2026-11-05T21:33Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3226,10 +3226,12 @@
    "done": "2026-11-05T20:26Z"
   },
   "X-adult-catalogue": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhnC7AbvoZdGop4zLbGv",
    "since": "2026-11-05T18:50Z",
-   "brief": "briefs/X-adult-catalogue.md"
+   "brief": "briefs/X-adult-catalogue.md",
+   "pr": 507,
+   "merge": "e3f432ff"
   },
   "B13b": {
    "status": "running",
@@ -3265,6 +3267,11 @@
    "session": "session_01MMjhnBxHKKJCVTB1LRUWQa",
    "since": "2026-11-05T20:53Z",
    "brief": "briefs/X-claim-store.md"
+  },
+  "P-v07": {
+   "status": "queued",
+   "brief": "briefs/P-v07.md",
+   "note": "launch first after the 00:00Z usage reset"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5551,7 +5558,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T20:54Z",
+  "updated": "2026-11-05T21:33Z",
   "items": [
    {
     "slot": 1,
@@ -5563,11 +5570,12 @@
    },
    {
     "slot": 2,
-    "slice": "X-adult-catalogue",
+    "slice": null,
     "role": "build",
     "agent": "claude",
-    "doing": "Content safety: one compiled-in manifest list, so imports never miss an always-adult source",
-    "since": "2026-11-05T18:50Z"
+    "doing": "Kept free: P-v07 (expand E-M7, brief written) waits for the usage-limit reset at 2026-11-06T00:00Z, so the remaining budget goes to finishing the running slices (owner, 16:15Z). Launch it first after the reset, within the 4-slot limit.",
+    "since": "2026-11-05T21:33Z",
+    "status": "idle"
    },
    {
     "slot": 3,
@@ -5615,7 +5623,7 @@
     "role": "build",
     "agent": "claude",
     "status": "idle",
-    "doing": "Kept free: no ready slice without an owns overlap (ENR-G waits on ENR-8 #508 and owner Q1; X-search-files-6 needs a runner design call; RP-G waits on RP-5).",
+    "doing": "Kept free: nothing else is ready without an owns overlap (ENR-G waits on ENR-8 #508 and owner Q1; X-search-files-6 needs a runner design call; RP-G and the SP-4 follow-ups wait on RP-5 #510).",
     "since": "2026-11-05T20:54Z"
    }
   ],
