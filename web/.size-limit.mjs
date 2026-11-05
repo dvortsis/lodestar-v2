@@ -343,7 +343,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [
-	/features\/(?:settings\/(?:security|logging|about|updates)|filters|jobs|blocklists)\/body\.ts$/
+	/features\/(?:settings\/(?:security|logging|about|updates)|filters|jobs|blocklists|sources)\/body\.ts$/
 ];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
@@ -1173,6 +1173,7 @@ export default [
 	// icon; those now load after the first view, so every view has ≥ 1.3 KB headroom.
 	// runner §2.26, S-filters-2c: Filters & Safety keeps its −2.43 KB (the change flow loads on the
 	// first change, through the flows' door): measured 30.54 KB, limit = measured + ~10% of the cut.
+	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
@@ -1184,7 +1185,9 @@ export default [
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
 						? '30.4 KB'
-						: '45 KB'
+						: name === 'SourcesScreen'
+							? '30 KB'
+							: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
