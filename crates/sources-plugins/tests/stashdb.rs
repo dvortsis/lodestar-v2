@@ -285,7 +285,7 @@ fn answers_that_are_not_understood_are_errors() {
         format!(
             r#"{{"data":{{"findScene":{{"id":"{id1}","title":"A"}},"searchScene":[{{"id":"{id2}","title":"B"}}]}}}}"#
         ),
-        format!(r#"{{"data":{{"searchScene":[],"findScene":null}}}}"#),
+        r#"{"data":{"searchScene":[],"findScene":null}}"#.to_owned(),
         // Repeated keys must not read as a miss.
         r#"{"data":{"searchScene":{"id":"x"}},"data":{"searchScene":[]}}"#.to_owned(),
         r#"{"data":null,"data":{"searchScene":[]}}"#.to_owned(),
