@@ -971,7 +971,8 @@ pub fn scrub_text(text: &str) -> String {
 
 /// Whether the wide rules can add nothing to stage 1's output for `text`
 /// (X-log-url-redact-3's fast path): it holds none of `:`, `/`, `@`, `%`,
-/// `=` and `"`, and no `bearer` (any case), `lsk_` or `lsf_`. Every wide
+/// `=` and `"`, and no `bearer`, `lsk_` or `lsf_` in any case (the rules
+/// match `lsk_` and `lsf_` in one case only: the rest is margin). Every wide
 /// rule needs one of them to fire, so on such a line both stages are
 /// [`hide_runs`] of the text, and `only_more` of two equal outputs is that
 /// output: the decisions file lists each rule's trigger, and
@@ -1438,6 +1439,7 @@ mod wide {
     impl AnyOf {
         /// One to three needles, each with whether it ignores case.
         fn new(needles: &[(&'static str, bool)]) -> AnyOf {
+            debug_assert!((1..=3).contains(&needles.len()));
             let one = |k: usize| {
                 let (needle, ci) = needles[k.min(needles.len() - 1)];
                 Next::new(needle, ci)
@@ -3947,11 +3949,30 @@ pass:"S3CRET"#,
         assert!(scrub_text(&plain).contains(r#"path: "/a/b""#));
     }
 
+    /// Known gaps, on `main` too (X-log-url-redact-3's security review): once
+    /// the first pass drops a URL's query, a credential's name at the end of
+    /// its path (`/pass`, `/key`) takes the value after the quote, but only
+    /// the second pass would read it, and it runs only when the first pass's
+    /// output holds a form without `://`. Left for a follow-up slice.
+    #[test]
+    #[ignore = "known gap on main: a name the first pass leaves at a URL's end"]
+    fn a_name_left_at_a_url_s_end_keeps_its_value_hidden() {
+        for text in [
+            r#"https://h/pass?x": "x%3A%2F%2Fh/S3CRETxyz""#,
+            "https://h/key?a': x%3A%2F%2Fh/S3CRETxyz",
+            "https://h/apikey?a=1'=x%3A%2F%2Fh/S3CRETxyz",
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text:?}: {s}");
+        }
+    }
+
     /// The fast path (X-log-url-redact-3) gives exactly what both stages and
-    /// `only_more` give, on 2,000,000 token soups it accepts. The tokens are
+    /// `only_more` give, on 2,000,000 soups of 2 to 31 tokens. The tokens are
     /// near misses of every wide rule's trigger (names with no separator,
-    /// `Some(`, `magnet`, `bear`, `lsk`, hash-like runs, the markers) and a
-    /// few triggers, whose lines must be refused.
+    /// `Some(`, `magnet`, `bear`, `lsk`, hash-like runs, the markers), so a
+    /// soup's length is even across the range. A soup with a trigger
+    /// planted in it must be refused.
     #[test]
     fn the_fast_path_matches_both_stages() {
         const TOKENS: &[&str] = &[
@@ -4034,12 +4055,9 @@ pass:"S3CRET"#,
             "0123456789ABCDEF0123456789abcdef01234567",
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
             "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U",
-            ":",
-            "/",
-            "@",
-            "%",
-            "=",
-            "\"",
+        ];
+        const TRIGGERS: &[&str] = &[
+            ":", "/", "@", "%", "=", "\"", "Bearer", "bEaReR", "lsk_", "lsf_", "LSF_",
         ];
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut next = |n: usize| {
@@ -4048,19 +4066,28 @@ pass:"S3CRET"#,
             state ^= state << 17;
             (state % n as u64) as usize
         };
-        let (mut accepted, mut refused) = (0, 0);
-        while accepted < 2_000_000 {
+        let soup = |next: &mut dyn FnMut(usize) -> usize| -> Vec<&str> {
             let n = 2 + next(30);
-            let line: String = (0..n).map(|_| TOKENS[next(TOKENS.len())]).collect();
+            (0..n).map(|_| TOKENS[next(TOKENS.len())]).collect()
+        };
+        for _ in 0..2_000_000 {
+            let line = soup(&mut next).concat();
+            // Some soups spell a trigger across tokens (`bear` `er`): those
+            // must be refused, and are checked with the planted ones below.
             if !plain_line(&line) {
-                refused += 1;
                 continue;
             }
-            accepted += 1;
             let both = only_more(&scrub_text_floor(&line), &wide::scrub_text(&line));
             assert_eq!(scrub_text(&line), both, "{line:?}");
         }
-        assert!(refused > 100_000, "{refused}");
+        // A soup with any trigger planted in it is refused.
+        for _ in 0..200_000 {
+            let mut tokens = soup(&mut next);
+            let at = next(tokens.len() + 1);
+            tokens.insert(at, TRIGGERS[next(TRIGGERS.len())]);
+            let line = tokens.concat();
+            assert!(!plain_line(&line), "{line:?}");
+        }
         // Each trigger is refused on its own; near misses are accepted.
         for line in [
             "a:b", "a/b", "a@b", "a%b", "a=b", "a\"b", "Bearer x", "xBEARER", "lsk_1", "Lsf_",

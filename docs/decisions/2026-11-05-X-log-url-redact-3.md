@@ -1,16 +1,16 @@
-# X-log-url-redact-3 decisions
+# X-log-url-redact-3 decisions (#483)
 
 The follow-up slice named in `docs/decisions/2026-11-05-X-log-url-redact-2.md` ("Follow-up: X-log-url-redact-3"). It changes `crates/log/src/url.rs` only (architecture §12.1, B12, B-log1). Each item is its own commit, so the runner can drop any one. Every proof compares this branch with current `main` at 40c5c84 (#460's merged code), not with the old floor. The rule is still #460's: never too little, and nothing `main` hides may show.
 
 ## Outcome
 - **Kept:** the fast path, and `AnyOf` without a `Vec`.
 - **Dropped: both narrowings.** Each one showed planted secrets that `main` hides (see below). The over-redaction #460 accepted for them stays.
-- **Tried and reverted:** dropping the separator pass's credential-value guard. The fuzz passed, but `/security-review` found a secret it shows (see "Security review"). The branch keeps the commit and its revert, so the history shows both.
+- **Tried and reverted:** dropping the separator pass's credential-value guard. The fuzz passed, but `/security-review` found a secret it shows (see "Security review"). The branch keeps the commit and its revert, so the history shows both. The revert commit also holds the regression test, so keep it even if both are squashed.
 
 ## 1. Fast path (kept)
 - **The problem:** a plain short line cost 4 to 6 times `main`'s old time, because both stages ran on every line.
 - **The rule:** `scrub_text` returns stage 1's output alone (`scrub_text_floor`) for any line the fast path accepts (`plain_line`).
-  - **Accepted:** a line with none of `:` `/` `@` `%` `=` `"`, and no `bearer` (any case), `lsk_` or `lsf_`.
+  - **Accepted:** a line with none of `:` `/` `@` `%` `=` `"`, and no `bearer`, `lsk_` or `lsf_` in any case. The rules match `lsk_` and `lsf_` in one case only, so the other cases are margin.
   - **Safe by construction:** on the fast path the result is exactly `main`'s stage 1, so nothing stage 1 hides can show.
   - **The open question was only whether the fast path ever hides less than both stages would.** The proof below shows it doesn't.
 - **Why no wide rule can fire on such a line.** Each trigger, in the order `wide::scrub_text` reaches it:
@@ -32,10 +32,11 @@ The follow-up slice named in `docs/decisions/2026-11-05-X-log-url-redact-2.md` (
   - Stage 1 reaches the same triggers (`scrub_debug_forms`, `://`, `magnet:`, `redact_secrets`) and gives `hide_runs(text)` too. The two `hide_runs` are the same code.
   - **Why `only_more` changes nothing.** Given two equal outputs, it hides nothing: every word of one is in the other.
   - **`@` and `"` aren't needed for the proof.** They're in the list as margin, as the brief gave it. Taking them out would widen the fast path, and that would need this proof again.
-  - **`scrub` (typed URLs) has no fast path:** a typed URL always holds `/` or `:`.
+  - **`scrub` (typed URLs) has no fast path:** the brief measured only `scrub_text`, and a typed URL nearly always holds `/` or `:`.
 - **The differential test:** `the_fast_path_matches_both_stages` checks that `scrub_text` equals `only_more(scrub_text_floor, wide::scrub_text)` on 2,000,000 accepted token soups.
-  - Its tokens are near misses of every trigger (credential names with no separator, `Some(`, `magnet?xt`, `bear`, `lsk`, `LSK_`, hash-like runs, the markers), plus each trigger. A soup holding a trigger must be refused.
-  - It takes about 20 s at the test profile's `opt-level = 1`.
+  - Its tokens are near misses of every trigger (credential names with no separator, `Some(`, `magnet?xt`, `bear`, `lsk`, `LSK_`, hash-like runs, the markers). So the soups' lengths are even across 2 to 31 tokens. A soup that spells a trigger across tokens (`bear` `er`) is refused and skipped.
+  - A second loop plants a trigger in 200,000 soups and checks that each is refused.
+  - It takes about 7 s at the test profile's `opt-level = 1`.
 - **Speed in a release build** (this container, 2,000,000 calls each):
 
 | Line | `main` | This PR |
@@ -69,21 +70,22 @@ The follow-up slice named in `docs/decisions/2026-11-05-X-log-url-redact-2.md` (
   - **Why it looked redundant:** stage 1 never rewrites separators and hides that value whole, and `only_more` keeps what stage 1 hid. The fuzz agreed: 0 secrets shown that `main` hides in 2 × 1,200,000 soups, and about 1,500 more hidden per seed.
   - **Why it isn't redundant:** the guard reads its cuts from the first pass's output, not from the original text. That output can hold a credential's name that stage 1 never sees. See "Security review" below.
 - **Tried and kept as it was: `in_url`.** It stops the separator pass rewriting inside a word that already holds a raw `://`. Without it, the fuzz showed 1 secret `main` hides in 300,000 soups (`http:/y?,yBBQ0zhttp:/@`), so it does more than guard the old design.
-- **Left alone:** the other review-round guards in `secret_cuts` (values read again from their start) and in the Debug rules (`Hidden`). Many wide rules share them, and they also hide what the floor shows. Each would need its own fuzz round, and this slice has none to spare.
+- **Left alone:** the other review-round guards in `secret_cuts` (values read again from their start) and in the Debug rules (`Hidden`). They also hide what the floor shows, so they don't exist only to guard against regressions, and brief item 4 doesn't cover them. Many wide rules share them, too.
 
 ## Security review
 - **`/security-review` found one regression,** in the guard's removal. It's reverted, and the input is a case of `a_credential_s_value_is_never_split_into_a_url`, which fails without the guard.
 - **The input:** `https://h/pass?x": "x%3A%2F%2Fh/<s>" http:%2F%2Fa.b/`.
   - The first pass drops the URL's query, so its output reads `https://h/pass": "x%3A%2F%2Fh/<s>"`: a credential's name, then a value.
   - With the guard, the second pass leaves that value whole and hides it. Without it, the second pass reads the value as a URL and keeps its path, `<s>` included.
-  - Stage 1 shows `<s>`, so `only_more` keeps it too: the word is in the wide output.
+  - Without the guard, the wide output holds `<s>` too, and stage 1 shows it, so `only_more` has nothing to hide.
   - `main` gives `"[redacted]"`; without the guard, the output was `"[redacted]/<s>"`.
 - **Why the fuzz missed it:** a credential slot's name is never glued to the end of a URL's path, with a query and a quote between them. So a fuzz count of 0 is evidence, not proof, for a change inside `mod wide`.
-- **Gaps on `main` too, which the review also found** (the runner may want a slice for them):
+- **Confirmed leaks on `main`, which need a follow-up slice.** The review found them, and this head gives the same output as `main`. Each shows the secret in full. They're in `a_name_left_at_a_url_s_end_keeps_its_value_hidden`, marked `#[ignore]` until that slice fixes them:
   - the same input without the second URL: the second pass never runs, so the name is never read again;
   - `https://h/key?a': x%3A%2F%2Fh/<s>`;
   - `https://h/apikey?a=1'=x%3A%2F%2Fh/<s>`.
-  - A fix would read the first pass's output again for credentials, even when no second pass runs.
+  - The cause: once the first pass drops a URL's query, a credential's name at the end of its path (`/pass`, `/key`) takes the value after the quote. Only the second pass reads it as one, and the second pass runs only when the first pass's output holds a form without `://`.
+  - The fix this suggests: read the first pass's output again for credentials, even when no second pass runs.
 - **The fast path and `AnyOf`:** the review traced every trigger again and found both sound.
 
 ## Differential fuzz against `main` (40c5c84)
