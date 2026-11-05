@@ -912,3 +912,175 @@ async fn a_rule_that_is_off_has_nothing_pending() {
     assert_eq!(apply(&f, &c, &on, None).await.0, StatusCode::OK);
     assert_eq!(applied(&f).get(PackRule::Mw2), Some(2));
 }
+
+fn real_mw1(c: &PackCtx<'_>) -> bool {
+    c.matches(PackRule::Mw1)
+}
+
+/// MW-2 at version 2 widening, and MW-1 at version 2 narrowing.
+fn strong_and_weak() -> Arc<Manifest> {
+    let b = bumped(Direction::Widens, Action::Hide);
+    let entries = PackRule::ALL
+        .into_iter()
+        .map(|r| {
+            if r != PackRule::Mw1 {
+                return b.entry(r).clone();
+            }
+            let a = r.action();
+            RuleEntry::new(
+                r,
+                true,
+                vec![
+                    Version {
+                        version: 1,
+                        direction: Direction::Widens,
+                        action: a,
+                        code: Some(Code::Fn(real_mw1)),
+                    },
+                    Version {
+                        version: 2,
+                        direction: Direction::Narrows,
+                        action: a,
+                        code: Some(Code::Current),
+                    },
+                ],
+            )
+        })
+        .collect();
+    Arc::new(Manifest::new(entries).unwrap())
+}
+
+/// One acceptance of a strengthening and a weakening version is weakening
+/// as a whole, and accepts both once confirmed.
+#[tokio::test]
+async fn a_batch_with_one_weakening_version_needs_the_password() {
+    let f = fixture(strong_and_weak());
+    let c = logged_in(&f).await;
+    let change = accept(&["malware"], None);
+    let p = preview(&f, &c, &change).await;
+    assert_eq!(p["weakening"], json!(true), "{p}");
+    assert_eq!(p["pack_versions"], json!(["MW-1@2", "MW-2@2"]));
+    let by: Vec<(String, bool)> = p["pack_acceptance"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["rule"].as_str().unwrap().to_owned(),
+                i["strengthens"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(by, [("MW-1".into(), false), ("MW-2".into(), true)]);
+    assert!(p["warning"].as_str().unwrap().contains("MW-1@2"));
+    assert!(!p["warning"].as_str().unwrap().contains("MW-2@2"));
+    let (status, _) = apply(&f, &c, &change, None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    let named = accept(&["malware"], Some(&["MW-1@2", "MW-2@2"]));
+    let (status, body) = apply(&f, &c, &named, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rec = applied(&f);
+    assert_eq!(
+        (rec.get(PackRule::Mw1), rec.get(PackRule::Mw2)),
+        (Some(2), Some(2))
+    );
+    // Naming more than every pack and rule is refused.
+    let many: Vec<&str> = std::iter::repeat_n("MW-1", 23).collect();
+    let (status, body) = apply(&f, &c, &accept(&many, None), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], json!("too_many_rules"));
+}
+
+fn trigger(f: &Fixture, key: &str) {
+    let conn = f.api.store.lock().unwrap();
+    for when in ["INSERT", "UPDATE"] {
+        conn.connection()
+            .execute_batch(&format!(
+                "CREATE TRIGGER no_{when} BEFORE {when} ON settings WHEN NEW.key = '{key}'
+                 BEGIN SELECT RAISE(ABORT, 'refused'); END;"
+            ))
+            .unwrap();
+    }
+}
+
+fn untrigger(f: &Fixture) {
+    let conn = f.api.store.lock().unwrap();
+    conn.connection()
+        .execute_batch("DROP TRIGGER no_INSERT; DROP TRIGGER no_UPDATE;")
+        .unwrap();
+}
+
+fn review_row(f: &Fixture) -> Option<String> {
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .setting_text("filter.packs.review")
+        .unwrap()
+}
+
+/// The review marks and the acceptance land together or not at all: a
+/// review write that fails leaves nothing accepted, and an acceptance
+/// that fails puts the review row back.
+#[tokio::test]
+async fn a_failed_write_leaves_nothing_half_committed() {
+    let f = fixture(bumped(Direction::Narrows, Action::Hide));
+    let c = logged_in(&f).await;
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .connection()
+        .execute(
+            "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'MW-2', 1)",
+            [vec![4u8; 20]],
+        )
+        .unwrap();
+    let change = accept(&["MW-2"], Some(&["MW-2@2"]));
+    // The review row can't be written: nothing is accepted.
+    trigger(&f, "filter.packs.review");
+    let (status, body) = apply(&f, &c, &change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    untrigger(&f);
+    assert_eq!(applied(&f).get(PackRule::Mw2), Some(1));
+    assert_eq!(review_row(&f), None);
+    // The acceptance can't be written: the review row is put back.
+    trigger(&f, "filter.packs.applied");
+    let (status, body) = apply(&f, &c, &change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    untrigger(&f);
+    assert_eq!(applied(&f).get(PackRule::Mw2), Some(1));
+    assert_eq!(review_row(&f), None, "put back");
+    // Both written: accepted and marked.
+    let (status, body) = apply(&f, &c, &change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(applied(&f).get(PackRule::Mw2), Some(2));
+    assert_eq!(review_row(&f), Some(format!("MW-2 {}", "04".repeat(20))));
+}
+
+/// A line of the review row that doesn't read is reported, not dropped
+/// silently; the lines that read still mark their holds.
+#[tokio::test]
+async fn a_review_line_that_does_not_read_is_reported() {
+    let f = fixture(Manifest::builtin());
+    let c = logged_in(&f).await;
+    {
+        let mut store = f.api.store.lock().unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                 VALUES (?1, 'MW-2', NULL, 1, 9999999999)",
+                [vec![1u8; 20]],
+            )
+            .unwrap();
+        let text = format!("MW-2 {}\nnot a line", "01".repeat(20));
+        store
+            .set_settings_text(&[("filter.packs.review", &text)])
+            .unwrap();
+    }
+    let o = get(&f, &c, "/api/v1/filters").await;
+    assert_eq!(o["pack_conditions"], json!(["packs.review-unreadable"]));
+    let q = get(&f, &c, "/api/v1/filters/queue").await;
+    assert_eq!(q["quarantine"][0]["pack_review"], json!(true));
+}

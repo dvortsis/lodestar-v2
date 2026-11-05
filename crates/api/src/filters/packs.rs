@@ -302,7 +302,13 @@ pub(super) struct Acceptance {
     pub review: Vec<(PackRule, [u8; 20])>,
     /// Torrents the accepted versions hold in the replay window.
     pub caught: i64,
+    /// More holds exist than are read at once ([`PREVIEW_ROWS`] of each):
+    /// those past it aren't marked for review.
+    pub holds_truncated: bool,
 }
+
+/// Rules or versions one acceptance may name: every pack and every rule.
+pub(super) const MAX_NAMED: usize = Pack::ALL.len() + PackRule::COUNT;
 
 /// Reads an acceptance against the store as the next load reads it: in
 /// the preview and again under the store lock in apply, so one previewed
@@ -318,6 +324,13 @@ pub(super) fn acceptance(
         return Err(bad(
             "no_rules",
             "Name the pack rules or packs whose pending versions to accept.",
+        )
+        .field("rules"));
+    }
+    if ids.len() > MAX_NAMED {
+        return Err(bad(
+            "too_many_rules",
+            format!("Name at most {MAX_NAMED} packs or pack rules."),
         )
         .field("rules"));
     }
@@ -358,7 +371,10 @@ pub(super) fn acceptance(
     }
     let quarantine = store.quarantined(PREVIEW_ROWS).map_err(internal)?;
     let tombstones = store.tombstones(PREVIEW_ROWS).map_err(internal)?;
-    let mut a = Acceptance::default();
+    let mut a = Acceptance {
+        holds_truncated: quarantine.len() >= PREVIEW_ROWS || tombstones.len() >= PREVIEW_ROWS,
+        ..Acceptance::default()
+    };
     for r in &rules {
         let r = *r;
         let st = versions.state(r);
@@ -473,12 +489,20 @@ pub(super) fn warning(a: &Acceptance) -> String {
         .iter()
         .map(|i| i.review_quarantine + i.review_tombstones)
         .sum();
+    let more = if a.holds_truncated {
+        format!(
+            " There are more holds than can be read at once ({PREVIEW_ROWS} of each kind): \
+             those past them stay held but aren't marked."
+        )
+    } else {
+        String::new()
+    };
     format!(
         "Accepting {} may stop hiding or dropping malware, lures, fakes, spam or scams the \
          version you have now catches. Other rules still check them. Nothing held now is \
          released: {review} held items the new version may not hold stay held, marked for \
-         review in the review queue. Undo can't undo an acceptance. Safer: keep the version \
-         you have, and add an exception for anything it gets wrong.",
+         review in the review queue.{more} Undo can't undo an acceptance. Safer: keep the \
+         version you have, and add an exception for anything it gets wrong.",
         weak.join(", ")
     )
 }
@@ -506,9 +530,18 @@ fn review_row(store: &Store) -> ApiResult<ReviewRow> {
 /// The `pack_conditions` label of a review row that doesn't read.
 pub(super) const REVIEW_UNREADABLE: &str = "packs.review-unreadable";
 
-/// Whether the review row exists but doesn't read.
+/// Whether the review row exists but doesn't read, or has lines that
+/// don't (or more than [`REVIEW_MAX`]): what it can't mark is reported,
+/// never dropped silently.
 pub(super) fn review_unreadable(store: &Store) -> ApiResult<bool> {
-    Ok(matches!(review_row(store)?, ReviewRow::Unreadable))
+    Ok(match review_row(store)? {
+        ReviewRow::Absent => false,
+        ReviewRow::Unreadable => true,
+        ReviewRow::Text(t) => {
+            let lines = t.lines().count();
+            lines > REVIEW_MAX || parse_review(&t).len() < lines
+        }
+    })
 }
 
 /// The holds acceptances left for review, as stored: at most
@@ -532,16 +565,37 @@ fn parse_review(text: &str) -> HashSet<(String, [u8; 20])> {
         .collect()
 }
 
+/// The review row's value before an [`add_review`], to put back if the
+/// acceptance it was written for fails.
+pub(super) struct ReviewBefore(Option<Option<String>>);
+
+/// Puts the review row back as it was before [`add_review`]. A row that
+/// didn't read is left as rewritten: it marked nothing.
+pub(super) fn restore_review(store: &mut Store, before: ReviewBefore) -> ApiResult<()> {
+    match before.0 {
+        None => Ok(()),
+        Some(None) => store.update_settings_text(&[], &[REVIEW_KEY]),
+        Some(Some(t)) => store.set_settings_text(&[(REVIEW_KEY, &t)]),
+    }
+    .map_err(internal)
+}
+
 /// Adds holds to the review row, newest first, at most [`REVIEW_MAX`].
 /// Lines that don't read are dropped, and a row that doesn't read is
-/// replaced.
-pub(super) fn add_review(store: &mut Store, new: &[(PackRule, [u8; 20])]) -> ApiResult<()> {
+/// replaced. Written before the acceptance it's for, so the acceptance
+/// never lands without its marks; returns what to restore if the
+/// acceptance then fails.
+pub(super) fn add_review(
+    store: &mut Store,
+    new: &[(PackRule, [u8; 20])],
+) -> ApiResult<ReviewBefore> {
     if new.is_empty() {
-        return Ok(());
+        return Ok(ReviewBefore(None));
     }
-    let old = match review_row(store)? {
-        ReviewRow::Text(t) => Some(t),
-        ReviewRow::Absent | ReviewRow::Unreadable => None,
+    let (old, before) = match review_row(store)? {
+        ReviewRow::Text(t) => (Some(t.clone()), Some(Some(t))),
+        ReviewRow::Absent => (None, Some(None)),
+        ReviewRow::Unreadable => (None, None),
     };
     let mut seen = HashSet::new();
     let mut lines = Vec::new();
@@ -560,7 +614,8 @@ pub(super) fn add_review(store: &mut Store, new: &[(PackRule, [u8; 20])]) -> Api
     }
     store
         .set_settings_text(&[(REVIEW_KEY, &lines.join("\n"))])
-        .map_err(internal)
+        .map_err(internal)?;
+    Ok(ReviewBefore(before))
 }
 
 /// Drops review lines whose hold is gone (released, expired or purged), so
@@ -674,11 +729,11 @@ mod tests {
             h
         };
         let old: Vec<(PackRule, [u8; 20])> = (0..10).map(|n| (PackRule::Mw2, hash(n))).collect();
-        add_review(&mut store, &old).unwrap();
+        add_review(&mut store, &old).map(|_| ()).unwrap();
         let new: Vec<(PackRule, [u8; 20])> = (100..100 + REVIEW_MAX)
             .map(|n| (PackRule::Mw1, hash(n)))
             .collect();
-        add_review(&mut store, &new).unwrap();
+        add_review(&mut store, &new).map(|_| ()).unwrap();
         let set = review_set(&store).unwrap();
         assert_eq!(set.len(), REVIEW_MAX);
         assert!(set.contains(&("MW-1".to_owned(), hash(100))));

@@ -6118,6 +6118,11 @@ export interface components {
             rules: components["schemas"]["PackFixtureCounts"][];
         };
         PackFixtureCounts: {
+            /**
+             * @description Versions of the rule whose recorded direction the corpus doesn't
+             *     show (RP-1's direction checks).
+             */
+            direction_disagreements: number;
             /** @description Examples the rule gets wrong. */
             failing: number;
             /**

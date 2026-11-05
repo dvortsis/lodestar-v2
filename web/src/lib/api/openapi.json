@@ -16113,6 +16113,7 @@
       "PackFixtureCounts": {
         "type": "object",
         "required": [
+          "direction_disagreements",
           "failing",
           "gaps",
           "must_match",
@@ -16122,6 +16123,11 @@
           "version"
         ],
         "properties": {
+          "direction_disagreements": {
+            "type": "integer",
+            "description": "Versions of the rule whose recorded direction the corpus doesn't\nshow (RP-1's direction checks).",
+            "minimum": 0
+          },
           "failing": {
             "type": "integer",
             "description": "Examples the rule gets wrong.",

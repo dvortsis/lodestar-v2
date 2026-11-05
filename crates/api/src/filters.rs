@@ -1136,7 +1136,17 @@ impl FiltersApi {
                     a.preview = rules(vec![o.rule.id().to_owned()]);
                 }
             }
-            Change::AcceptPackVersions { rules: ids, .. } => {
+            Change::AcceptPackVersions {
+                rules: ids,
+                versions,
+            } => {
+                if versions
+                    .as_ref()
+                    .is_some_and(|v| v.len() > packs::MAX_NAMED)
+                {
+                    return Err(bad("too_many_versions", "That's more versions than exist.")
+                        .field("versions"));
+                }
                 let acc = packs::acceptance(&self.store(), &engine.manifest, ids, now)?;
                 // Nothing is released: the counts are what the accepted
                 // versions hold in the replay window, from their shadow.
@@ -1810,8 +1820,22 @@ impl FiltersApi {
                 if moved || (acc.weakening && (!out.assessment.confirm || versions.is_none())) {
                     return Err(changed_since_preview());
                 }
-                pack_upgrade::accept(store, &manifest, &acc.rules, now).map_err(internal)?;
-                packs::add_review(store, &acc.review)?;
+                if versions
+                    .as_ref()
+                    .is_some_and(|v| v.len() > packs::MAX_NAMED)
+                {
+                    return Err(bad("too_many_versions", "That's more versions than exist.")
+                        .field("versions"));
+                }
+                // The marks first, so an acceptance never lands without
+                // them; put back if the acceptance fails. (The acceptance
+                // writes in a transaction of its own, in the engine's
+                // crate.) Either way nothing is released.
+                let before = packs::add_review(store, &acc.review)?;
+                if let Err(e) = pack_upgrade::accept(store, &manifest, &acc.rules, now) {
+                    let _ = packs::restore_review(store, before);
+                    return Err(internal(e));
+                }
                 out.assessment.pack_versions = Some(acc.versions);
                 out.assessment.pack_acceptance = Some(acc.impact);
             }
@@ -2179,10 +2203,22 @@ impl FiltersApi {
         }
         self.reload(store)?;
         self.note_pack_conditions(store, now)?;
-        // Best effort, after what must be recorded: the row only marks
-        // holds, so one left unpruned until the next change marks a hold
-        // that's gone, which no page lists.
-        let _ = packs::prune_review(store);
+        // Best effort, after what must be recorded, and only after a
+        // change that can end holds (the start prunes too, for expiries
+        // and purges): the row only marks holds, so a line left over marks
+        // a hold that's gone, which no page lists.
+        if out.released.is_some()
+            || matches!(
+                change,
+                Change::Release { .. }
+                    | Change::FalsePositive { .. }
+                    | Change::Confirm { .. }
+                    | Change::AcceptPackVersions { .. }
+                    | Change::Undo
+            )
+        {
+            let _ = packs::prune_review(store);
+        }
         out.version = self.engine.current().version;
         let version = lodestar_log::Count(out.version);
         lodestar_log::log_event!(
