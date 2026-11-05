@@ -4379,7 +4379,8 @@
     "Owner flag (§2.19), RP-DEF #454: unchecking a pack in the setup wizard opens the Filters screen change dialog (effect warning + password) rather than an inline password field.",
     "RP-UC brief: packs.defaults is set once, so on stores RP-DEF already set up RP-UC must write unauthorised-copy explicit off row itself (it reads as off with no row anyway). Also: wizard/packs.svelte.ts header still says the wizard only turns packs ON (stale after RP-DEF).",
     "slices.yaml L3 owns has a split entry: \"packaging/windows/portable/Start\" and \"Lodestar.cmd\" (should be \"packaging/windows/portable/Start Lodestar.cmd\"). Fix in a runner PR.",
-    "After #456 (X-mimalloc-docs): soak READMEs document build_target, --c-allocator and CR-0 --password-file; docs/metrics.md drops \"ring\" from (SQLite, zstd, ring); metrics.rs # HELP for mimalloc committed no longer says only the Rust allocator. r5 steps: run analyzer with --c-allocator mimalloc (or record build_target) so attribution reads correctly; gate unaffected."
+    "After #456 (X-mimalloc-docs): soak READMEs document build_target, --c-allocator and CR-0 --password-file; docs/metrics.md drops \"ring\" from (SQLite, zstd, ring); metrics.rs # HELP for mimalloc committed no longer says only the Rust allocator. r5 steps: run analyzer with --c-allocator mimalloc (or record build_target) so attribution reads correctly; gate unaffected.",
+    "Flake: web/e2e/boot-shell.routes.test.ts:424 \"a failed navigation shows the error\" — route.fetch: Target page closed while running route callback (line 411). Seen on #454 (RP-DEF) 2026-11-05. Fix once in its own small slice: page.unrouteAll({ behavior: \"ignoreErrors\" }) at test end, or await the handler."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
