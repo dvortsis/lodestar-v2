@@ -1994,7 +1994,8 @@ pub(crate) struct Flooding {
 /// map's key for the publisher the claims named (with the source that
 /// named it), or the source that made them. Memory only. A key it doesn't
 /// hold (forgotten, or claimed before this start) costs the commit one
-/// read of its unverified item instead.
+/// read of its unverified item when a live feed is among its finders,
+/// and isn't counted otherwise ([`Flooding::who`]).
 #[derive(Debug, Default)]
 pub(crate) struct ClaimNotes {
     by_key: std::collections::HashMap<[u8; 20], Who>,
@@ -2134,6 +2135,9 @@ impl Flooding {
     /// ([`LIVE_FEEDS`]), that item's source or the lease's. A publisher
     /// is keyed with the source that named it. An empty publisher is
     /// none. A store read that fails reads as no item.
+    ///
+    /// A non-live source's claim is found only through its note: its item
+    /// is read only when a live feed is among the commit's finders.
     ///
     /// A claimed item the DHT alone fetched, before any feed's sighting
     /// reached its lease, isn't counted.
@@ -4845,6 +4849,83 @@ mod tests {
         assert_eq!(flood.map.count(Origin::Source(feed.get()), sig, 10_000), 0);
     }
 
+    /// A non-live source's claim without a note is never read, so it
+    /// never counts (runner, #495); the same items found by a live feed
+    /// too are read and count against the publisher.
+    #[test]
+    fn sp3_reads_a_non_live_claim_only_with_a_live_feed() {
+        use lodestar_filter::flood::Origin;
+        use lodestar_store::unverified::NewUnverified;
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let feed = store.register_source("feed", "1", 0).unwrap();
+        let scrape = store.register_source("full_scrape", "1", 0).unwrap();
+        let e = sp3_engine();
+        let flooding = || Flooding {
+            claims_from: bit(feed) | bit(scrape),
+            per_source: bit(feed),
+            clock: Some(10_000),
+            ..Default::default()
+        };
+        let claims = lodestar_store::claims::Claims {
+            name: Some("x".into()),
+            publisher: Some("uploader".into()),
+            ..Default::default()
+        };
+        let rs: Vec<Results> = (0..25).map(|i| results_named(&episode(i))).collect();
+        let items: Vec<NewUnverified<'_>> = rs
+            .iter()
+            .map(|r| NewUnverified {
+                network: Network::Bt,
+                key: &r.key.0,
+                source: scrape,
+                private_source: false,
+                claims: Some(&claims),
+                at: 0,
+            })
+            .collect();
+        store.put_unverified(&items).unwrap();
+        let sig = lodestar_filter::flood::signature("Example Show").unwrap();
+        let commits = |live: bool| -> Vec<Committing> {
+            (0..25)
+                .map(|i| {
+                    let mut c = committing(results_named(&episode(i)), scrape);
+                    // Only the full scrape saw it (`results_named` names
+                    // source 0, the feed, here).
+                    c.results.sources = bit(scrape);
+                    if live {
+                        c.lease.sources |= bit(feed);
+                    }
+                    c
+                })
+                .collect()
+        };
+        // Found by the full scrape alone, with no note: never read.
+        let mut flood = flooding();
+        let got = sp3_of(&store, &e, &mut flood, commits(false));
+        assert!(got.iter().all(Option::is_none), "{got:?}");
+        assert_eq!(
+            flood
+                .map
+                .count(Origin::Publisher(scrape.get(), "uploader"), sig, 10_000),
+            0
+        );
+        assert!(flood.map.is_empty());
+        // A live feed among the finders: the item is read and counts.
+        let mut flood = flooding();
+        let got = sp3_of(&store, &e, &mut flood, commits(true));
+        assert!(got[..19].iter().all(Option::is_none));
+        assert!(
+            got[19..].iter().all(|a| *a == Some(Action::Flag)),
+            "{got:?}"
+        );
+        assert_eq!(
+            flood
+                .map
+                .count(Origin::Publisher(scrape.get(), "uploader"), sig, 10_000),
+            25
+        );
+    }
+
     /// Only finds of torrents not stored yet count: a key already stored
     /// (a refetch, a cache's file offered again) is the same name, not a
     /// new one.
@@ -5022,53 +5103,52 @@ mod tests {
     fn sp3_off_counts_without_judging() {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
         let feed = store.register_source("feed", "1", 0).unwrap();
-        // A CSX-5 entry in shadow mode is logged beside a decision that
-        // stands. The prepared verdict (trusted as is) has none, so the
-        // entry shows only when the commit was judged again.
+        // Each name is also a site advert, which SP-1 demotes whether or
+        // not SP-3 is on. The prepared verdict, trusted as is, is empty,
+        // so SP-1's decision shows only when the commit is judged again.
         let mut e = sp3_engine();
-        e.overrides.push(lodestar_filter::Override {
-            id: 8,
-            what: lodestar_filter::Match::Keyword("example".into()),
-            strength: lodestar_filter::Strength::Override,
-            scope: None,
-            expires_at: None,
-            shadow_until: Some(i64::MAX),
-        });
-        let shadows = |e: &Engine, flood: &mut Flooding| -> usize {
-            let have = Have::new(1024);
-            (0..30)
-                .map(|i| {
-                    let mut r = results_named(&episode(i));
-                    r.worker = WorkerId::LOCAL;
-                    r.version = e.version;
-                    let c = committing(r, feed);
-                    let mut out = judge(
-                        &store,
-                        e,
-                        AdultSources::default(),
-                        None,
-                        flood,
-                        &have,
-                        vec![c],
-                    );
-                    let c = out.pop().unwrap();
-                    usize::from(c.shadow.iter().any(|d| d.rule == RuleRef::Override(8)))
-                })
-                .sum()
-        };
-        let flood = || Flooding {
+        let name = |i| format!("www.example-site.com - {}", episode(i));
+        let judged_again =
+            |e: &Engine, flood: &mut Flooding| -> usize {
+                let have = Have::new(1024);
+                (0..30)
+                    .map(|i| {
+                        let mut r = results_named(&name(i));
+                        r.worker = WorkerId::LOCAL;
+                        r.version = e.version;
+                        r.verdict = Verdict::default();
+                        let c = committing(r, feed);
+                        let mut out = judge(
+                            &store,
+                            e,
+                            AdultSources::default(),
+                            None,
+                            flood,
+                            &have,
+                            vec![c],
+                        );
+                        let c = out.pop().unwrap();
+                        usize::from(c.verdict.is_some_and(|d| {
+                            d.rule == RuleRef::Pack(lodestar_filter::PackRule::Sp1)
+                        }))
+                    })
+                    .sum()
+            };
+        let flooding = || Flooding {
             claims_from: bit(feed),
             per_source: bit(feed),
             clock: Some(10_000),
             ..Default::default()
         };
-        // On: the 20th to 30th are judged again.
-        assert_eq!(shadows(&e, &mut flood()), 11);
+        // On: the 20th to 30th are judged again (SP-1's demote outweighs
+        // SP-3's flag).
+        assert_eq!(judged_again(&e, &mut flooding()), 11);
         // Off: counted all the same, never judged again.
         e.packs.rules_off.insert(lodestar_filter::PackRule::Sp3);
-        let mut off = flood();
-        assert_eq!(shadows(&e, &mut off), 0);
-        let sig = lodestar_filter::flood::signature("Example Show").unwrap();
+        let mut off = flooding();
+        assert_eq!(judged_again(&e, &mut off), 0);
+        let title = results_named(&name(0)).class.title.release.title;
+        let sig = lodestar_filter::flood::signature(&title).unwrap();
         assert_eq!(
             off.map.count(
                 lodestar_filter::flood::Origin::Source(feed.get()),
