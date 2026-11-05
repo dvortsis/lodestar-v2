@@ -2329,6 +2329,75 @@ mod population_tests {
         assert!(index.bucket_terms_ready(Some(after)));
     }
 
+    /// B13b's identity term: it narrows to the torrents with that term
+    /// and leaves their scores as the query alone scores them, and it's
+    /// offered only once the field is complete, never mid-backfill.
+    #[test]
+    fn the_identity_term_narrows_without_rescoring_and_waits_for_the_field() {
+        let mut s = store(20);
+        let mut after = 0;
+        while let Some((last, _)) =
+            lodestar_pipeline::enrich::enrich_stored(&mut s, after, 100).unwrap()
+        {
+            after = last;
+        }
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut s, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        drop(w);
+        let cancel = crate::CancelToken::new();
+        let node = crate::parse("walk").unwrap();
+        let plain = index.query_cancelled(&node, 0, 0, &cancel).unwrap();
+        let all = index
+            .search_page(&plain, crate::Sort::Relevance, 100, 0)
+            .unwrap();
+        assert_eq!(all.hits.len(), 20);
+        let target = &all.hits[3];
+        let key = doc_enrichment(&mut s, target.id as i64)
+            .unwrap()
+            .title_identity
+            .expect("a title identity");
+        let narrowed = index
+            .query_title_identity(&node, key, 0, 0, &cancel)
+            .unwrap()
+            .expect("a complete field answers");
+        assert_ne!(narrowed.key, plain.key, "cached apart");
+        let got = index
+            .search_page(&narrowed, crate::Sort::Relevance, 100, 0)
+            .unwrap();
+        // Only the torrents with that identity, scored as before.
+        let want: Vec<Hit> = all
+            .hits
+            .iter()
+            .filter(|h| doc_enrichment(&mut s, h.id as i64).unwrap().title_identity == Some(key))
+            .cloned()
+            .collect();
+        assert!(!want.is_empty() && want.len() < 20, "{want:?}");
+        assert_eq!(got.hits, want);
+
+        // A build shipping a new generation of it: backfilling, so the
+        // caller searches without it until the walk completes.
+        let gens = Generations::current();
+        let next = gens.get("title_identity").unwrap() + 1;
+        let index = index
+            .with_generations(gens.with("title_identity", next))
+            .unwrap();
+        let ask = || {
+            index
+                .query_title_identity(&node, key, 0, 0, &cancel)
+                .unwrap()
+        };
+        assert!(ask().is_none(), "backfilling");
+        let mut w = index.writer(HEAP).unwrap();
+        w.catch_up(&mut s, 5).unwrap();
+        w.commit().unwrap();
+        assert!(ask().is_none(), "mid-walk");
+        while w.catch_up(&mut s, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        assert!(ask().is_some(), "the walk done");
+    }
+
     /// `store` fully indexed in RAM, then reopened by a build whose
     /// `payload_sig` producer has shipped: a walk over everything.
     fn shipped(store: &mut Store) -> SearchIndex {
