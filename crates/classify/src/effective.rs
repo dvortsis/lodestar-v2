@@ -47,6 +47,11 @@ pub struct Effective {
     pub ambiguous: bool,
     /// Set when an ambiguous name was resolved from the file tree.
     pub resolved: Option<ResolvedVia>,
+    /// The file or folder name `release` was parsed from, when it was
+    /// resolved from the file tree (`resolved` is set); with `None` it was
+    /// parsed from the torrent's name. The cracked check reads its crack
+    /// words from this text (RP-UC).
+    pub resolved_from: Option<String>,
     /// 0–100: how sure we are of the title. 100 for an informative name.
     pub confidence: u8,
     /// Some dominant file names carry season or episode numbers, so the
@@ -77,15 +82,16 @@ pub(crate) fn resolve(name: &str, files: &[FileInfo], comp: &Composition) -> Eff
             release,
             ambiguous,
             resolved: None,
+            resolved_from: None,
             confidence: 100,
             episodic_files,
         };
     }
 
-    let mut candidates: Vec<(Release, ResolvedVia)> = Vec::new();
+    let mut candidates: Vec<(Release, ResolvedVia, &str)> = Vec::new();
     for (i, r) in dominant.iter().zip(parsed) {
         if !is_uninformative(files[*i].name()) && !r.title.is_empty() {
-            candidates.push((r, ResolvedVia::File));
+            candidates.push((r, ResolvedVia::File, files[*i].name()));
         }
     }
     for (folder, via) in [
@@ -95,7 +101,7 @@ pub(crate) fn resolve(name: &str, files: &[FileInfo], comp: &Composition) -> Eff
         if let Some(f) = folder.filter(|f| !is_uninformative(f) && !f.eq_ignore_ascii_case(name)) {
             let r = parse(f);
             if !r.title.is_empty() {
-                candidates.push((r, via));
+                candidates.push((r, via, f));
             }
         }
     }
@@ -103,10 +109,10 @@ pub(crate) fn resolve(name: &str, files: &[FileInfo], comp: &Composition) -> Eff
     let best = candidates
         .into_iter()
         .enumerate()
-        .max_by_key(|(i, (r, _))| (r.informativeness(), std::cmp::Reverse(*i)))
+        .max_by_key(|(i, (r, _, _))| (r.informativeness(), std::cmp::Reverse(*i)))
         .map(|(_, c)| c);
     match best {
-        Some((mut release, via)) => {
+        Some((mut release, via, from)) => {
             // Several episode files: the torrent is the pack, not the
             // first episode.
             if via == ResolvedVia::File && several && release.episode.is_some() {
@@ -127,6 +133,7 @@ pub(crate) fn resolve(name: &str, files: &[FileInfo], comp: &Composition) -> Eff
                 release,
                 ambiguous,
                 resolved: Some(via),
+                resolved_from: Some(from.to_owned()),
                 confidence,
                 episodic_files,
             }
@@ -135,6 +142,7 @@ pub(crate) fn resolve(name: &str, files: &[FileInfo], comp: &Composition) -> Eff
             release: named,
             ambiguous,
             resolved: None,
+            resolved_from: None,
             confidence: 0,
             episodic_files,
         },

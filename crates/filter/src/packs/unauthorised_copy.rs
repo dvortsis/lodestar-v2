@@ -220,7 +220,15 @@ impl Ctx<'_> {
         // The title's words blanked the same way, so a neutralized word
         // in the title takes nothing away from another word's evidence.
         let in_title = crack::crack_words_in(&self.evidence(crack::words(title)), title);
-        crack::crack_words_in(self.name_evidence(), self.item.name) > in_title
+        // The text the release was parsed from, as the classifier read it:
+        // the name, or the file or folder an uninformative name was
+        // resolved from.
+        match f.class.title.resolved_from.as_deref() {
+            None => crack::crack_words_in(self.name_evidence(), self.item.name) > in_title,
+            Some(from) => {
+                crack::crack_words_in(&self.evidence(crack::words(from)), from) > in_title
+            }
+        }
     }
 
     /// UC-3 (module docs).

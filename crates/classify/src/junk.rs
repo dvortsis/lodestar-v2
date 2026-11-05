@@ -269,9 +269,10 @@ pub fn crack_words_in(words: &[String], name: &str) -> usize {
 /// `cracked` flag **and** a crack word the title doesn't account for. A
 /// title like `Crack Attack` names the program, not a crack, so its words
 /// are taken off; a crack word must remain after them. `name` must be the
-/// text `release` was parsed from: the caller passes the torrent's name
-/// only when the release came from it (`classify_enriched`, not for a name
-/// resolved from the file tree). The content type is the caller's to check.
+/// text `release` was parsed from: the torrent's name, or for an
+/// uninformative name the file or folder name it was resolved from
+/// (`Effective::resolved_from`), as `classify_enriched` passes it. The
+/// content type is the caller's to check.
 pub fn cracked(name: &str, release: &lodestar_release_parser::Release) -> bool {
     use lodestar_release_parser::Flag;
     if !release.flags.contains(&Flag::Cracked) {

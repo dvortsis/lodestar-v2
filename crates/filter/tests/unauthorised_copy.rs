@@ -256,6 +256,52 @@ fn mw6_is_in_shadow_on_an_upgraded_store_with_malware_on() {
 // ---------------------------------------------------------------------
 // Precision.
 
+/// An uninformative name resolved from its files: the crack words are read
+/// from the file the release was parsed from (runner, #469 review), so a
+/// cracked installer is held and a lawful update isn't.
+#[test]
+fn crack_words_come_from_the_text_the_release_was_parsed_from() {
+    let m = Manifest::builtin();
+    let held = |name: &str, paths: &[(&str, u64)], neutral: &[&str]| -> Vec<&'static str> {
+        let f = files(paths);
+        let class = classify(name, &f);
+        let facts = Facts {
+            class: &class,
+            size: 0,
+            piece_len: 0,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        };
+        let item = Item {
+            hashes: &[[0; 20]],
+            name,
+            files: &f,
+            content_type: class.content_type,
+        };
+        // A plain lowercase word is its own Neutralize key.
+        let keys: Vec<String> = neutral.iter().map(|w| (*w).to_owned()).collect();
+        let ctx = Ctx::new(&item, &facts, &keys);
+        [PackRule::Mw6, PackRule::Uc2]
+            .into_iter()
+            .filter(|r| m.entry(*r).current().matches(*r, &ctx) == Some(true))
+            .map(PackRule::id)
+            .collect()
+    };
+    let cracked = [("Photoshop.2024.Cracked.exe", 2u64 << 30)];
+    let class = classify("a1b2c3", &files(&cracked));
+    assert!(class.title.resolved.is_some(), "resolved from the file");
+    assert_eq!(held("a1b2c3", &cracked, &[]), ["MW-6", "UC-2"]);
+    // Neutralizing the file's crack word takes it away, as for a name.
+    assert!(held("a1b2c3", &cracked, &["cracked"]).is_empty());
+    let keygen = [("Photoshop.2024.v25.0.Keygen.exe", 2u64 << 30)];
+    assert_eq!(held("a1b2c3", &keygen, &[]), ["MW-6", "UC-2"]);
+    let update = [("Photoshop.2024.Update.exe", 2u64 << 30)];
+    assert!(held("a1b2c3", &update, &[]).is_empty());
+    // A crack word in the uninformative name alone isn't the parse's.
+    assert!(held("crack", &update, &[]).is_empty());
+}
+
 /// Names that must never be hidden: public-domain and Creative Commons
 /// films, Internet Archive items, Linux images, lawful patches and
 /// updates, and title words the parser reads as a weak source. Each with
