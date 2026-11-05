@@ -78,7 +78,7 @@ pub const PAGE_LIMITS: Limits = Limits {
     ..LIMITS
 };
 
-const MANIFEST: Manifest = Manifest {
+pub(crate) const MANIFEST: Manifest = Manifest {
     id: ID,
     name: "Nyaa",
     version: "1",
@@ -95,7 +95,7 @@ const MANIFEST: Manifest = Manifest {
     always_adult: false,
 };
 
-const SUKEBEI_MANIFEST: Manifest = Manifest {
+pub(crate) const SUKEBEI_MANIFEST: Manifest = Manifest {
     id: SUKEBEI_ID,
     name: "Sukebei",
     endpoints: &[Endpoint {

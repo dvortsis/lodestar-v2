@@ -804,15 +804,24 @@ fn sealer(config: &Config) -> Option<Sealer> {
 }
 
 /// The sources in the store whose plugin's manifest says `always_adult`
-/// (Sukebei). The import runs without the pipeline, so it reads the
-/// manifests compiled into this build; the store leaves a disabled or
-/// purged one's bit out, as the writer does (SRC-14b).
+/// (Sukebei today). The import runs without the pipeline, so it reads the
+/// manifests compiled into this build, from the plugins' catalogue, so a
+/// new always-adult plugin is masked here as in the pipeline
+/// (X-adult-catalogue). The store leaves a disabled or purged one's bit
+/// out, as the writer does (SRC-14b).
 fn adult_sources(
     store: &Store,
 ) -> lodestar_store::Result<lodestar_pipeline::source_adult::AdultSources> {
-    use lodestar_sources::SourcePlugin;
-    let sukebei = lodestar_sources_plugins::nyaa::Sukebei::new();
-    let manifests = [sukebei.manifest()];
+    adult_sources_of(store, lodestar_sources_plugins::catalogue::always_adult())
+}
+
+/// [`adult_sources`] over `manifests`: each registered row is matched to
+/// a manifest by plugin id; only an `always_adult` one sets its bit.
+fn adult_sources_of<'a>(
+    store: &Store,
+    manifests: impl IntoIterator<Item = &'a lodestar_sources::Manifest>,
+) -> lodestar_store::Result<lodestar_pipeline::source_adult::AdultSources> {
+    let manifests: Vec<_> = manifests.into_iter().collect();
     let rows = store.sources()?;
     Ok(lodestar_pipeline::source_adult::AdultSources::of(
         rows.iter().flat_map(|r| {

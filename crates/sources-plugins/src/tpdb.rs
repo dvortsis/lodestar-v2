@@ -65,7 +65,7 @@ pub const ANSWER_LIMITS: Limits = Limits {
     ..LIMITS
 };
 
-const MANIFEST: Manifest = Manifest {
+pub(crate) const MANIFEST: Manifest = Manifest {
     id: ID,
     name: "ThePornDB",
     version: "1",

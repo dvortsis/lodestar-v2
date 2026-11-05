@@ -477,48 +477,12 @@ async fn lookups_are_at_least_a_second_apart() {
     );
 }
 
-// ---- Every manifest in the crate (runner, ENR-1c) ----
+// ---- Its manifest's roles (runner, ENR-1c) ----
 
-/// The adult enrichers are picked by id (`PipelineConfig::adult_enrichers`)
-/// because the torrent cache is `Kind::Enrichment` too. So no shipped
-/// manifest may be both an enricher and always-adult: that would mix the
-/// two roles. The manifests are private consts, so this reads every
-/// `Manifest { … }` literal in `src/` and checks its `kinds` and
-/// `always_adult`; the count guards against the scan finding nothing.
+/// An enricher, never always-adult. `tests/manifests.rs` checks every
+/// manifest in the catalogue; this checks the one the plugin reports.
 #[test]
-fn no_manifest_is_both_enrichment_and_always_adult() {
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut literals = 0;
-    for entry in std::fs::read_dir(&src).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "rs") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        let mut parts = text.split("= Manifest {");
-        parts.next(); // before the first literal
-        for body in parts {
-            // The literal ends at its closing `};`.
-            let body = body.split("\n};").next().unwrap_or(body);
-            let body = body.split("\n    };").next().unwrap_or(body);
-            literals += 1;
-            let enrichment = body.contains("Kind::Enrichment");
-            let always_adult = body.contains("always_adult: true");
-            assert!(
-                !(enrichment && always_adult),
-                "{}: a manifest is both Enrichment and always_adult",
-                path.display()
-            );
-            assert!(
-                body.contains("always_adult:") || body.contains(".."),
-                "{}: the scan didn't find `always_adult`",
-                path.display()
-            );
-        }
-    }
-    assert!(literals >= 10, "only {literals} manifests found");
-
-    // This plugin, through its trait.
+fn the_manifest_is_an_enricher_and_not_always_adult() {
     let m = plugin().manifest().clone();
     assert!(m.is(Kind::Enrichment) && !m.always_adult);
 }

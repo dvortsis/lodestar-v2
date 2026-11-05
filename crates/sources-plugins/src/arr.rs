@@ -433,7 +433,7 @@ pub fn to_found(event: &Event) -> Option<Found> {
     Some(found)
 }
 
-const MANIFEST: Manifest = Manifest {
+pub(crate) const MANIFEST: Manifest = Manifest {
     id: ID,
     name: "Sonarr and Radarr webhooks",
     version: "1",

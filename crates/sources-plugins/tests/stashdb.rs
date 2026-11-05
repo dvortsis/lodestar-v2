@@ -539,9 +539,9 @@ async fn lookups_are_at_least_a_second_apart() {
 
 // ---- This plugin's side of the manifest rule (runner, ENR-1c) ----
 
-/// The crate-wide scan that no manifest is both Enrichment and always-adult
-/// lives in `tests/tpdb.rs` (ENR-4) and reads every `Manifest` literal in
-/// `src/`, this plugin's included. Here, only this plugin's own assertion.
+/// The crate-wide rule that no manifest is both Enrichment and always-adult
+/// is checked over the catalogue in `tests/manifests.rs`. Here, only this
+/// plugin's own assertion.
 #[test]
 fn this_manifest_is_an_enricher_and_not_always_adult() {
     let m = plugin().manifest().clone();

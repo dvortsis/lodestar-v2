@@ -169,6 +169,10 @@ pub struct UnverifiedStats {
     pub sweeps: AtomicU64,
     /// Keys the verification cursor handed to intake.
     pub verify_sent: AtomicU64,
+    /// Store failures while classifying enrichment matches again or marking
+    /// them for the backfill (ENR-1c), one per failed call: logged, and the
+    /// matches left for the next pass.
+    pub enrich_failed: AtomicU64,
     /// The promoted ids, published after each commit.
     pub promoted_hook: PromotedHook,
 }
@@ -523,11 +527,13 @@ pub struct Ctx<'a> {
     pub quarantine_secs: i64,
     /// The sources whose every find is adult ([`crate::source_adult`]).
     pub adult: AdultSources,
-    /// The adult-enrichment sources (`Kind::Enrichment`, ENR-1b): only
-    /// these may attach an adult-enrichment section. Any other source's
-    /// section is dropped and its other claims take the usual path, so an
-    /// always-adult source can't use one to skip its mask. Empty (the
-    /// default): no source may.
+    /// The adult-enrichment sources: only the listed ones (the
+    /// `AdultEnrichSource` plugins the host runs, ENR-1c) may attach an
+    /// adult-enrichment section. Any other source's section is dropped and
+    /// its other claims take the usual path, so an always-adult source can't
+    /// use one to skip its mask. A section-only claim is a bare sighting,
+    /// except from an unlisted enrichment source, whose answers aren't
+    /// finds: refused. Empty (the default): no source may.
     pub enrichers: crate::adult_enrich::EnrichSources,
     /// The live filter: an enrichment match is classified under its
     /// classification rules read *after* the generation, never under the
@@ -584,7 +590,9 @@ pub fn ingest(
 ) -> Result<Ingested, lodestar_store::Error> {
     let mut out = Ingested::default();
     UnverifiedStats::add(&stats.received, found.len());
-    let mut keep: Vec<(&Discovery, Claims)> = Vec::with_capacity(found.len());
+    // `None`: a bare sighting (a section, all a source that isn't an
+    // enrichment source claimed, dropped).
+    let mut keep: Vec<(&Discovery, Option<Claims>)> = Vec::with_capacity(found.len());
     // Enrichment matches, with the stored torrent they're on.
     let mut matches: Vec<(&Discovery, Claims, i64)> = Vec::new();
     let mut holds: Vec<Hold> = Vec::new();
@@ -601,16 +609,20 @@ pub fn ingest(
         if c.adult.is_some() && !ctx.enrichers.has(d.source) {
             c.adult = None;
             if c == Claims::default() {
-                // Nothing else was claimed. An always-adult source has
-                // still found the torrent stored under the key: its mask
-                // applies, as for a bare sighting.
-                if ctx.adult.has(d.source)
-                    && let Some(id) = store.find(&d.found.key)?
-                    && !out.adult.contains(&id)
-                {
-                    out.adult.push(id);
+                // An enrichment source that isn't listed (the torrent cache,
+                // or a plugin the host forgot to list): its answers aren't
+                // finds, so nothing is stored and it gains no bit (#502).
+                if ctx.enrichers.of_kind(d.source) {
+                    UnverifiedStats::add(&stats.refused, 1);
+                    continue;
                 }
-                UnverifiedStats::add(&stats.refused, 1);
+                // Nothing else was claimed: what's left is a bare sighting
+                // of the key, stored and counted as one (ENR-1c). On a
+                // stored torrent the source gains its bit (so an
+                // always-adult source's mask applies) and it's a
+                // rediscovery; a key nothing stores is refused, since the
+                // writer doesn't fetch.
+                keep.push((d, None));
                 continue;
             }
         }
@@ -638,7 +650,7 @@ pub fn ingest(
         else {
             match on {
                 Some((id, _)) => matches.push((d, c, id)),
-                None => keep.push((d, c)),
+                None => keep.push((d, Some(c))),
             }
             continue;
         };
@@ -682,7 +694,7 @@ pub fn ingest(
     sources.sort_unstable();
     sources.dedup();
     for source in sources {
-        let group: Vec<&(&Discovery, Claims)> =
+        let group: Vec<&(&Discovery, Option<Claims>)> =
             keep.iter().filter(|(d, _)| d.source == source).collect();
         let items: Vec<NewUnverified<'_>> = group
             .iter()
@@ -691,7 +703,7 @@ pub fn ingest(
                 key: &d.found.key.0,
                 source,
                 private_source: d.found.private_source,
-                claims: Some(c),
+                claims: c.as_ref(),
                 at: d.at,
             })
             .collect();
@@ -750,13 +762,14 @@ pub fn ingest(
             {
                 Ok(m) => !m.deferred.is_empty(),
                 // Marked if it can be; the flag starts a pass either way.
-                Err(_) => {
-                    let _ = store.mark_unenriched(&ids);
+                Err(e) => {
+                    enrich_failed(stats, &e);
+                    mark_for_backfill(store, &ids, stats);
                     true
                 }
             },
             None => {
-                let _ = store.mark_unenriched(&ids);
+                mark_for_backfill(store, &ids, stats);
                 true
             }
         };
@@ -765,6 +778,24 @@ pub fn ingest(
         }
     }
     Ok(out)
+}
+
+/// Marks `ids` for the backfill, logging and counting a failure. When the
+/// mark fails, the rows keep their kind until the next rules or parser
+/// change re-marks them: the crash window ENR-1b already accepts for a
+/// refinement that isn't a safety decision.
+fn mark_for_backfill(store: &mut Store, ids: &[i64], stats: &UnverifiedStats) {
+    if let Err(e) = store.mark_unenriched(ids) {
+        enrich_failed(stats, &e);
+    }
+}
+
+fn enrich_failed(stats: &UnverifiedStats, e: &lodestar_store::Error) {
+    UnverifiedStats::add(&stats.enrich_failed, 1);
+    lodestar_log::log_event!(
+        crate::log_events::ENRICHMENT_FAILED,
+        error = crate::log_events::store_error(e)
+    );
 }
 
 /// Removes what `source` claimed about `key`, holding nothing: the

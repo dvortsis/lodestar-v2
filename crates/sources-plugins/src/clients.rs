@@ -78,7 +78,7 @@ pub const MAX_EXPORT_TRIES: u32 = 60;
 /// The largest size claim believed: 1 PiB.
 pub const MAX_SIZE: u64 = 1 << 50;
 
-const MANIFEST: Manifest = Manifest {
+pub(crate) const MANIFEST: Manifest = Manifest {
     id: ID,
     name: "Your download clients",
     version: "1",

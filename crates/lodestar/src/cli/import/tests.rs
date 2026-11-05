@@ -687,6 +687,49 @@ fn the_import_marks_only_sukebeis_bit() {
     );
 }
 
+/// The mask comes from the manifests, not a list of names
+/// (X-adult-catalogue): a second always-adult plugin is masked too, and a
+/// registered plugin that isn't always adult never is.
+#[test]
+fn the_import_masks_any_always_adult_manifest() {
+    use lodestar_sources::SourcePlugin;
+    let nyaa = lodestar_sources_plugins::nyaa::Nyaa::new()
+        .manifest()
+        .clone();
+    let extra = lodestar_sources::Manifest {
+        id: "extra_adult",
+        always_adult: true,
+        ..nyaa.clone()
+    };
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let plain = store.register_source(nyaa.id, "1", 0).unwrap();
+    assert!(
+        adult_sources_of(&store, [&nyaa, &extra])
+            .unwrap()
+            .is_empty()
+    );
+    let id = store.register_source(extra.id, "1", 0).unwrap();
+    let mask = adult_sources_of(&store, [&nyaa, &extra]).unwrap();
+    assert_eq!(mask.0, 1u64 << id.get());
+    assert!(!mask.has(plain));
+}
+
+/// With every plugin in the catalogue registered, the import's mask is
+/// exactly the bits of the catalogue's always-adult ones.
+#[test]
+fn the_import_mask_is_the_catalogues_always_adult_set() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let mut want = 0u64;
+    for m in lodestar_sources_plugins::catalogue::manifests() {
+        let id = store.register_source(m.id, "1", 0).unwrap();
+        if m.always_adult {
+            want |= 1u64 << id.get();
+        }
+    }
+    assert_ne!(want, 0);
+    assert_eq!(adult_sources(&store).unwrap().0, want);
+}
+
 /// `lodestar import start` end to end (X-source-adult-2): a hash only an
 /// always-adult source (Sukebei) has claimed is stored Adult, with that
 /// source's bit; the dump's other records aren't affected. Only the CLI's
