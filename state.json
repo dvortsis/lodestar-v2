@@ -4406,7 +4406,8 @@
     "Flake: lodestar-sources-importers magnetico::tests::file_less_parents_stay_within_the_byte_budget (open: NotQuiescent) seen in #454 review local run; passed on re-run.",
     "Owner queue: SRC-13 torrent-cache suggestions stay empty until a cache terms check (§5 Q2, §2.28): owner checks iTorrents (https://itorrents.org/torrent/{HASH}.torrent) or names another cache. SRC-13 numbers accepted under §2.26 (1 lookup/min/cache, 10 s/host, back-off 60 s–6 h, 8 MiB/30 s/10 s caps). Runner rejected the refinement that an entered address counts as consent: the External acknowledgement must cover the configured host list so a new host re-asks on the server (owner Q3 kept).",
     "Runner PR: add SRC-11b to SRC-G deps in slices.yaml; SRC-G brief names the per-surface private_source leak test for webhooks. Host-wiring slice: register ArrWebhooks with the pipeline and add Webhooks::new(sink).layer() to the router in crates/lodestar. Owner flag (§2.19): SRC-11b numbers, burst 120 then 1/s per integration, 256 KiB body cap.",
-    "SRC-13b brief extras (from #458 delta review): wrap the 110-char doc line at crates/pipeline/src/torrent_cache.rs:15; when every cache is held, queued Interest lookups fail at once and are not retried — keep them queued until a cache is available."
+    "SRC-13b brief extras (from #458 delta review): wrap the 110-char doc line at crates/pipeline/src/torrent_cache.rs:15; when every cache is held, queued Interest lookups fail at once and are not retried — keep them queued until a cache is available.",
+    "Host-wiring slice (SRC-11b): give receiveWebhook its own webhookToken OpenAPI security scheme (today documented under session auth); 503 webhooks_unavailable is visible before auth (acceptable)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
