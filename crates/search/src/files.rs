@@ -2405,6 +2405,91 @@ mod tests {
         assert_eq!(names, ["big.jpg", "a.mp3"]);
     }
 
+    /// The torrent's bucket terms come from exactly the files
+    /// `file_docs` indexes: in a small torrent every real file, in a
+    /// large pack only the big and media ones, never padding, hidden
+    /// files or a file without a path; a file without an extension has a
+    /// bucket but no pair.
+    #[test]
+    fn covered_buckets_are_the_file_docs() {
+        let want = |t: &FileTree| {
+            let docs = file_docs(1, t);
+            let mut b: Vec<u64> = docs.iter().map(|d| size_bucket(d.size)).collect();
+            let mut p: Vec<String> = docs
+                .iter()
+                .filter_map(|d| {
+                    d.ext
+                        .as_ref()
+                        .map(|e| ext_bucket_term(e, size_bucket(d.size)))
+                })
+                .collect();
+            b.sort_unstable();
+            b.dedup();
+            p.sort_unstable();
+            p.dedup();
+            (b, p)
+        };
+        let small = tree(&[
+            ("a/movie.mkv", 4 << 30, FileAttrs::empty()),
+            ("a/movie.srt", 40_000, FileAttrs::empty()),
+            ("README", 900, FileAttrs::empty()),
+            ("pad", 1 << 20, FileAttrs::PADDING),
+            ("hidden.exe", 5 << 20, FileAttrs::HIDDEN),
+            ("", 7, FileAttrs::empty()),
+        ]);
+        let (b, p) = covered_buckets(&small);
+        assert_eq!((b.clone(), p.clone()), want(&small));
+        assert!(b.contains(&size_bucket(900)), "README has a bucket");
+        assert!(!p.iter().any(|t| t.starts_with("exe:")), "{p:?}");
+        let mut files: Vec<(String, u64)> = (0..SMART_ALL_FILES + 5)
+            .map(|i| (format!("pics/{i}.jpg"), 100_000 + i as u64))
+            .collect();
+        files.push(("pics/big.jpg".into(), SMART_MIN_SIZE));
+        files.push(("music/a.mp3".into(), 4 << 20));
+        files.push(("info.nfo".into(), 2_000));
+        files.push(("noext".into(), 3_000));
+        let refs: Vec<(&str, u64, FileAttrs)> = files
+            .iter()
+            .map(|(p, s)| (p.as_str(), *s, FileAttrs::empty()))
+            .collect();
+        let pack = tree(&refs);
+        let (b, p) = covered_buckets(&pack);
+        assert_eq!((b.clone(), p.clone()), want(&pack));
+        assert_eq!(
+            p,
+            [
+                ext_bucket_term("jpg", size_bucket(SMART_MIN_SIZE)),
+                ext_bucket_term("mp3", size_bucket(4 << 20)),
+            ]
+        );
+    }
+
+    /// A range splits into the buckets wholly inside it and its parts in
+    /// the (at most two) buckets it partly covers.
+    #[test]
+    fn a_range_splits_into_whole_buckets_and_edges() {
+        assert_eq!(split_range(5, 4), (vec![], vec![]));
+        // One bucket exactly: whole, no edges.
+        let (lo, hi) = (bucket_floor(20), bucket_floor(21) - 1);
+        assert_eq!(split_range(lo, hi), (vec![20], vec![]));
+        // Inside one bucket: an edge only.
+        assert_eq!(
+            split_range(lo + 1, hi - 1),
+            (vec![], vec![(lo + 1, hi - 1)])
+        );
+        // Across: edges at both ends, whole buckets between.
+        let (inner, edges) = split_range(lo + 1, bucket_floor(24) + 3);
+        assert_eq!(inner, [21, 22, 23]);
+        assert_eq!(
+            edges,
+            [(lo + 1, hi), (bucket_floor(24), bucket_floor(24) + 3)]
+        );
+        // Open at the top: bucket 127 runs to the end.
+        let (inner, edges) = split_range(bucket_floor(120), u64::MAX);
+        assert_eq!(inner, (120..=127).collect::<Vec<_>>());
+        assert!(edges.is_empty());
+    }
+
     #[test]
     fn file_clauses() {
         let ok = |q: &str| file_clause_ok(&crate::parse(q).unwrap());
