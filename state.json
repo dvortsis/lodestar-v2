@@ -2821,6 +2821,27 @@
       "session": "session_01MMjhnCfjgKx3a1uKRGVh9g",
       "launched": "2026-11-05T01:12Z",
       "brief": "briefs/LEGAL-1r.md"
+    },
+    "X-filter-budget-noise": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnBVTXWupjocxMLjpVe",
+      "launched": "2026-11-05T01:17Z",
+      "brief": "briefs/X-filter-budget-noise.md"
+    },
+    "X-search-files-4": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnBuYcaSNVCmZuFhZDV",
+      "launched": "2026-11-05T01:17Z",
+      "brief": "briefs/X-search-files-4.md"
+    },
+    "RP-DEF": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhn8ohYvc28hCgRNG7oC",
+      "launched": "2026-11-05T01:17Z",
+      "brief": "briefs/RP-DEF.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3268,7 +3289,8 @@
     "2026-11-04T23:10Z glibc harness on main 6861f02c (write+claims+index, one commit/torrent, 10k torrents): no per-torrent C allocation; hblks 1 flat; 128–512 KiB VMAs flat 24–25; sqlite_memory_used caps at 8.5 MB (~7k torrents, page caches); zstd keeps nothing. Code path cleared under glibc -> musl mallocng retention is the lead. musl harness run started (+ mimalloc override comparison).",
     "2026-11-04T23:38Z: musl harness: release C allocator is zig's SmpAllocator (64 KiB slabs never unmapped, per-CPU-slot freelists), not mallocng; single-threaded growth stops with SQLite; override moves C into mimalloc (outside-arena ~0.3 MiB). Lead: cross-thread freelist pile-up. Launched X-mimalloc-override (session_01MMjhn8MbfjxtzM7rZbDoV9).",
     "2026-11-04T23:38Z: OWNER (runner chat): legal-notice session's three slices (LEGAL-1, RP-DEF, RP-UC) go into v0.5.1 via rc.4; Colorado counsel review is advisory only, not a gate. Legal branch renumbers to §2.38/§2.39.",
-    "2026-11-05T01:12Z Owner (chat, ~01:15Z answer): rc.4 = memory fixes + release-branch Legal Notice (LEGAL-1r); RP-DEF and RP-UC (packs on by default, unauthorised-copy pack) move to v0.5.2; LEGAL-1 (main wizard step) after LEGAL-1r. Record as owner-decisions §2.40. Launched R-rc4-cut and LEGAL-1r."
+    "2026-11-05T01:12Z Owner (chat, ~01:15Z answer): rc.4 = memory fixes + release-branch Legal Notice (LEGAL-1r); RP-DEF and RP-UC (packs on by default, unauthorised-copy pack) move to v0.5.2; LEGAL-1 (main wizard step) after LEGAL-1r. Record as owner-decisions §2.40. Launched R-rc4-cut and LEGAL-1r.",
+    "2026-11-05T01:17Z Owner (via dashboard, ~01:20Z): prioritise memory/performance and getting r5 started; keep other slots busy. Launched X-filter-budget-noise, X-search-files-4, RP-DEF on main. Sent the Unraid reset steps (destructive steps marked)."
   ],
   "owner_flags": [
     "2026-10-23 00:33 §2.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4941,7 +4963,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T01:12Z",
+    "updated": "2026-11-05T01:17Z",
     "items": [
       {
         "slot": 1,
@@ -4982,6 +5004,30 @@
         "agent": "claude",
         "doing": "PR #411: fixing a cursor stall found in review, bringing main in; plugin stays off until the Internet Archive terms check is recorded.",
         "since": "2026-11-04T05:41:51Z"
+      },
+      {
+        "slot": 6,
+        "slice": "X-filter-budget-noise",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Making the filter speed check hold up on busy CI runners (owner number 50 µs unchanged).",
+        "since": "2026-11-05T01:17Z"
+      },
+      {
+        "slot": 7,
+        "slice": "X-search-files-4",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Performance: getting cold file search at 10M under 150 ms.",
+        "since": "2026-11-05T01:17Z"
+      },
+      {
+        "slot": 8,
+        "slice": "RP-DEF",
+        "role": "build",
+        "agent": "claude",
+        "doing": "v0.5.2: rule packs on by default on new installs; existing installs keep their settings.",
+        "since": "2026-11-05T01:17Z"
       }
     ]
   },
