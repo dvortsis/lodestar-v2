@@ -384,6 +384,7 @@ unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
   X-dashboard-adapts: ws-small
+  X-dashboard-idle-slots: ws-small
   X-filter-budget-noise: ws-small
   F-filter-standin-undo: ws-small
   X-overflow-links: ws-small
@@ -401,7 +402,7 @@ expanded:
 state_override:
   G-v051: active
   R-rc3-cut: done
-  SRC-10b: dropped
+  SRC-10b: closed
 conditions:
   owner-cr-spec:
     met: true
