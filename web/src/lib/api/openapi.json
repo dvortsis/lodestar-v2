@@ -7594,6 +7594,79 @@
           "restarting": false
         }
       },
+      "AdultEnrichment": {
+        "type": "object",
+        "description": "An adult-enrichment match on a torrent (architecture §20.9, plan\n2026-11-04 Q4): the scene's own fields and who matched it. Nothing\nelse is kept about the people named, and none of it is searchable.",
+        "required": [
+          "link",
+          "performers",
+          "performers_truncated",
+          "released",
+          "scene_title",
+          "source",
+          "studio"
+        ],
+        "properties": {
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The scene's page on the service: an `https` URL on one of the\nmatching source's own hosts. Null when it gave none, or one\nelsewhere."
+          },
+          "performers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names only, in the service's order."
+          },
+          "performers_truncated": {
+            "type": "boolean",
+            "description": "The service credits more performers than are listed."
+          },
+          "released": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY`, `YYYY-MM` or `YYYY-MM-DD`; null when not given."
+          },
+          "scene_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/EnrichmentSource",
+            "description": "The source that matched it: \"Matched by StashDB\"."
+          },
+          "studio": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The studio's name."
+          }
+        },
+        "example": {
+          "link": "https://stashdb.org/scenes/0b6e8a4e-2c1f-4a7e-9d3a-5f1e2b3c4d5e",
+          "performers": [
+            "Performer One",
+            "Performer Two"
+          ],
+          "performers_truncated": false,
+          "released": "2021-06",
+          "scene_title": "Garden Scene",
+          "source": {
+            "id": 5,
+            "name": "StashDB",
+            "plugin": "stashdb"
+          },
+          "studio": "Some Studio"
+        }
+      },
       "AlertRow": {
         "type": "object",
         "description": "One alert: a torrent a saved search matched once it became searchable.",
@@ -11619,6 +11692,30 @@
           "starttls",
           "none"
         ]
+      },
+      "EnrichmentSource": {
+        "type": "object",
+        "description": "The source behind an adult-enrichment match.",
+        "required": [
+          "id",
+          "name",
+          "plugin"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Its display name."
+          },
+          "plugin": {
+            "type": "string",
+            "description": "Its manifest id."
+          }
+        }
       },
       "ErrorBody": {
         "type": "object",
@@ -21608,6 +21705,10 @@
           "trackers_reporting"
         ],
         "properties": {
+          "adult_enrichment": {
+            "$ref": "#/components/schemas/AdultEnrichment",
+            "description": "What an adult-enrichment service (ThePornDB, StashDB) matched\n(§20.9). **Absent**, never null or empty, unless \"Show adult\ncontent\" is on and the signed-in admin asks: a caller can't tell\nfrom this field whether a match exists. Also absent for a hidden\nor held torrent and for a match that came through a private\nsource."
+          },
           "completed": {
             "type": [
               "integer",
