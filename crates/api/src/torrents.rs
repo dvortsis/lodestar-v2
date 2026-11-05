@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -15,7 +16,7 @@ use axum::{Json, Router};
 use lodestar_metainfo::{FileAttrs, InfoHash, Text};
 use lodestar_search::flag_names;
 use lodestar_search::query::Network;
-use lodestar_store::claims::{Claims, MAX_FILES, MAX_NAME};
+use lodestar_store::claims::{AdultEnrichment as StoredMatch, Claims, MAX_FILES, MAX_NAME};
 use lodestar_store::unverified::StoredClaims;
 use lodestar_store::{FileTree, MAX_SOURCES, SourceId, Store, TorrentRow, flags as store_flags};
 use tokio::sync::OnceCell;
@@ -26,11 +27,11 @@ use crate::dto::error::ErrorEnvelope;
 use crate::dto::ops::ConsentClass;
 use crate::dto::search::{HitSource, SearchHit};
 use crate::dto::torrents::{
-    ClaimDifferences, ClaimedNumber, ClaimedText, FileEntry, FilesPage, FilesQuery, Provenance,
-    ProvenanceSource, TorrentDetail,
+    AdultEnrichment, ClaimDifferences, ClaimedNumber, ClaimedText, EnrichmentSource, FileEntry,
+    FilesPage, FilesQuery, Provenance, ProvenanceSource, TorrentDetail,
 };
 use crate::error::{ApiError, ApiResult, internal};
-use crate::extract::{Path, Query};
+use crate::extract::{ClientIp, Path, Query};
 use crate::ops::OpsApi;
 use crate::swarm::{Detail, Summary};
 use crate::{ApiState, auth, swarm};
@@ -102,6 +103,9 @@ pub(crate) struct PluginName {
     /// private-tracker announces and your own clients are). Its results
     /// may be public.
     pub public: bool,
+    /// The hosts its manifest contacts, as `protocol://host`: the only
+    /// places an adult-enrichment link of its may point.
+    pub endpoints: Vec<String>,
 }
 
 /// Display names and privacy by manifest id.
@@ -238,6 +242,7 @@ async fn names_for(ops: Arc<dyn OpsApi>) -> Arc<PluginNames> {
                         PluginName {
                             name: src.name,
                             public,
+                            endpoints: src.endpoints,
                         },
                     )
                 })
@@ -520,9 +525,10 @@ fn file_entry(tree: &FileTree, f: &lodestar_metainfo::File) -> FileEntry {
 }
 
 /// Reads a torrent and its files by any swarm hash. An Adult torrent
-/// while "Show adult content" is off is a 404 `adult_hidden`, so a
-/// pasted hash doesn't get round the preference (§20.9).
-fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
+/// while "Show adult content" is off (`adult_shown`) is a 404
+/// `adult_hidden`, so a pasted hash doesn't get round the preference
+/// (§20.9).
+fn load(s: &ApiState, hash: &str, adult_shown: bool) -> ApiResult<(TorrentRow, FileTree)> {
     let hash = parse_hash(hash)?;
     let mut store = s.reader.lock().expect("reader lock");
     let not_found = || {
@@ -533,7 +539,7 @@ fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
         )
     };
     let id = store.find(&hash).map_err(internal)?.ok_or_else(not_found)?;
-    if !s.adult.shown()
+    if !adult_shown
         && store
             .enrichment(id)
             .map_err(internal)?
@@ -557,8 +563,10 @@ fn detail_of(
     swarm: Summary,
     more: Detail,
     provenance: Provenance,
+    adult_enrichment: Option<AdultEnrichment>,
 ) -> TorrentDetail {
     TorrentDetail {
+        adult_enrichment,
         completed: swarm.completed,
         dht_peers: more.dht_peers,
         dht_seeds: more.dht_seeds,
@@ -614,28 +622,57 @@ fn detail_of(
 pub(crate) async fn detail(
     State(s): State<ApiState>,
     access: Option<Extension<Access>>,
+    interest: Option<Extension<DrawerInterest>>,
+    ClientIp(client): ClientIp,
     Path(hash): Path<String>,
 ) -> ApiResult<Json<TorrentDetail>> {
     let viewer = Viewer::of(access.as_ref().map(|a| &a.0));
+    // Read once, so the 404, the section and the lookup agree.
+    let adult_shown = s.adult.shown();
     let names = plugin_names(&s).await;
-    tokio::task::spawn_blocking(move || {
-        let (row, tree) = load(&s, &hash)?;
+    let always_adult = interest.as_ref().map_or(0, |i| i.0.0.always_adult);
+    let (detail, wanted) = tokio::task::spawn_blocking(move || {
+        let (row, tree) = load(&s, &hash, adult_shown)?;
         // Opening a torrent is interest: scrape it soon (§15).
         if let Some(e) = &s.events {
             e.interest(row.id);
         }
-        let (summary, more, provenance) = {
-            let store = s.reader.lock().expect("reader lock");
-            let summary = swarm::summary(&store, s.hot.as_deref(), &row).map_err(internal)?;
-            let more = swarm::detail(&store, &summary, row.id).map_err(internal)?;
-            let catalogue = Catalogue::read(&store, &names).map_err(internal)?;
-            let claims = store.torrent_claims(row.id).map_err(internal)?;
-            (summary, more, catalogue.provenance(&row, &claims, viewer))
+        let store = s.reader.lock().expect("reader lock");
+        let summary = swarm::summary(&store, s.hot.as_deref(), &row).map_err(internal)?;
+        let more = swarm::detail(&store, &summary, row.id).map_err(internal)?;
+        let catalogue = Catalogue::read(&store, &names).map_err(internal)?;
+        let claims = store.torrent_claims(row.id).map_err(internal)?;
+        let provenance = catalogue.provenance(&row, &claims, viewer);
+        // Only for the admin with "Show adult content" on (§20.9), and
+        // never for a torrent a filter or the core holds back.
+        let (section, wanted) = if adult_shown
+            && viewer == Viewer::Admin
+            && !held_back(&store, &row).map_err(internal)?
+        {
+            let adult = store
+                .enrichment(row.id)
+                .map_err(internal)?
+                .is_some_and(|e| crate::search::is_adult(&e));
+            (
+                adult_section(&claims, &catalogue, &names),
+                lookup_wanted(&row, adult, always_adult),
+            )
+        } else {
+            (None, false)
         };
-        Ok(Json(detail_of(&row, &tree, summary, more, provenance)))
+        drop(store);
+        let id = row.id;
+        let detail = detail_of(&row, &tree, summary, more, provenance, section);
+        Ok::<_, ApiError>((detail, wanted.then_some(id)))
     })
     .await
-    .map_err(internal)?
+    .map_err(internal)??;
+    // After the answer is built, and the same whether it's taken or
+    // refused, so neither the body nor the timing says which.
+    if let (Some(id), Some(Extension(interest))) = (wanted, interest) {
+        interest.offer(client, id);
+    }
+    Ok(Json(detail))
 }
 
 /// A page of a torrent's file list.
@@ -659,7 +696,7 @@ pub(crate) async fn files(
     Query(p): Query<FilesQuery>,
 ) -> ApiResult<Json<FilesPage>> {
     tokio::task::spawn_blocking(move || {
-        let (_, tree) = load(&s, &hash)?;
+        let (_, tree) = load(&s, &hash, s.adult.shown())?;
         let limit = p.limit.unwrap_or(MAX_FILES_PAGE).clamp(1, MAX_FILES_PAGE);
         let files = tree
             .files
@@ -676,6 +713,322 @@ pub(crate) async fn files(
     })
     .await
     .map_err(internal)?
+}
+
+// ── Adult enrichment (ENR-7, §20.9) ─────────────────────────────────────
+
+/// A torrent the detail view shows but whose adult-enrichment section it
+/// never does, and which it never offers for a lookup: hidden by a
+/// filter rule, from a private source, or with a swarm hash the core or a
+/// filter holds (a tombstone or quarantine row).
+fn held_back(store: &Store, row: &TorrentRow) -> lodestar_store::Result<bool> {
+    if row.flags & (store_flags::HIDDEN | store_flags::PRIVATE_SOURCE) != 0 {
+        return Ok(true);
+    }
+    let hashes = store.torrent_swarm_hashes(row.id)?.unwrap_or_default();
+    Ok(store.held_among(&hashes)?.into_iter().any(|h| h))
+}
+
+/// Whether `row` could pass ENR-1's gate (`adult_enrich::check`) at all,
+/// from what the row says: classified Adult (`adult`) or found by an
+/// always-adult source, and not a BEP 27 private torrent or a partial
+/// import, which the gate never looks up. The gate still decides; this
+/// only keeps items it would surely refuse out of the queue.
+fn lookup_wanted(row: &TorrentRow, adult: bool, always_adult: u64) -> bool {
+    row.flags & (store_flags::PRIVATE | store_flags::FILES_PARTIAL) == 0
+        && (adult || always_adult & row.sources != 0)
+}
+
+/// The stored match the detail view shows, by ENR-1's rule so the drawer
+/// and the kind pin agree (`pipeline::enrich::stored_match`): the first,
+/// by source id, of the sections that name a kind; failing that, the
+/// first section.
+fn chosen_match(claims: &[StoredClaims]) -> Option<(&StoredClaims, &StoredMatch)> {
+    let mut found: Vec<(&StoredClaims, &StoredMatch)> = claims
+        .iter()
+        .filter_map(|c| Some((c, c.claims.as_ref()?.adult.as_ref()?)))
+        .collect();
+    found.sort_by_key(|(c, _)| c.source.get());
+    found
+        .iter()
+        .find(|(_, m)| m.kind.is_some())
+        .or(found.first())
+        .copied()
+}
+
+/// The adult-enrichment section of a torrent's detail, from its stored
+/// claims. `None` when there's no match, when the chosen match came
+/// through a private source (it isn't replaced by another), or when its
+/// source isn't registered.
+fn adult_section(
+    claims: &[StoredClaims],
+    catalogue: &Catalogue,
+    names: &PluginNames,
+) -> Option<AdultEnrichment> {
+    let (stored, m) = chosen_match(claims)?;
+    if stored.private_source {
+        return None;
+    }
+    let source = catalogue.get(stored.source.get())?;
+    let endpoints = names
+        .get(&source.plugin)
+        .map_or(&[][..], |n| &n.endpoints[..]);
+    let link = stored
+        .claims
+        .as_ref()
+        .and_then(|c| c.provenance.external_ref.as_deref())
+        .and_then(|url| scene_link(url, endpoints));
+    Some(AdultEnrichment {
+        link,
+        performers: m.performers.clone(),
+        performers_truncated: m.performers_truncated,
+        released: m.released.map(|d| d.to_string()),
+        scene_title: m.title.clone(),
+        source: EnrichmentSource {
+            id: source.id,
+            name: source.name.clone(),
+            plugin: source.plugin.clone(),
+        },
+        studio: m.studio.clone(),
+    })
+}
+
+/// The longest scene link shown.
+const MAX_LINK: usize = 2048;
+
+/// `url` when it's a plain `https` URL on one of `endpoints`' hosts
+/// (`https://host`, as a source's manifest lists them), exactly: no
+/// other scheme, no user info, no other host or port, nothing but
+/// printable ASCII that needs no quoting in HTML. `None` otherwise, and
+/// the section keeps the rest.
+fn scene_link(url: &str, endpoints: &[String]) -> Option<String> {
+    let safe = |b: u8| b.is_ascii_graphic() && !b"\"'<>\\^`{|}".contains(&b);
+    if url.len() > MAX_LINK || !url.bytes().all(safe) {
+        return None;
+    }
+    let rest = url.strip_prefix("https://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (host, tail) = rest.split_at(end);
+    if host.is_empty() || !(tail.is_empty() || tail.starts_with('/')) {
+        return None;
+    }
+    endpoints
+        .iter()
+        .filter_map(|e| e.strip_prefix("https://"))
+        .map(|h| h.trim_end_matches('/'))
+        .any(|h| !h.is_empty() && h.eq_ignore_ascii_case(host))
+        .then(|| url.to_owned())
+}
+
+/// A token bucket's size and refill: `burst` at once, then one every
+/// `every`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rate {
+    pub burst: u32,
+    pub every: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bucket {
+    tokens: u32,
+    /// When the tokens were last counted.
+    at: std::time::Instant,
+}
+
+impl Bucket {
+    fn full(rate: Rate, now: std::time::Instant) -> Bucket {
+        Bucket {
+            tokens: rate.burst,
+            at: now,
+        }
+    }
+
+    /// Adds the whole tokens earned since `at`, keeping the remainder.
+    fn refill(&mut self, rate: Rate, now: std::time::Instant) {
+        if self.tokens >= rate.burst {
+            self.tokens = rate.burst;
+            self.at = now;
+            return;
+        }
+        let every = rate.every.as_nanos().max(1);
+        let earned = now.saturating_duration_since(self.at).as_nanos() / every;
+        if earned == 0 {
+            return;
+        }
+        let tokens = u128::from(self.tokens) + earned;
+        if tokens >= u128::from(rate.burst) {
+            *self = Bucket::full(rate, now);
+        } else {
+            // `earned` < `burst` here, so it fits.
+            self.tokens = tokens as u32;
+            self.at += rate.every * earned as u32;
+        }
+    }
+
+    /// Full again: nothing to remember about its client.
+    fn is_full(&mut self, rate: Rate, now: std::time::Instant) -> bool {
+        self.refill(rate, now);
+        self.tokens >= rate.burst
+    }
+}
+
+#[derive(Debug)]
+struct Buckets {
+    per_client: Rate,
+    overall_rate: Rate,
+    /// Clients tracked at most.
+    max: usize,
+    clients: HashMap<IpAddr, Bucket>,
+    /// Shared by every newcomer while `clients` is full of clients still
+    /// spending.
+    overflow: Bucket,
+    overall: Bucket,
+}
+
+impl Buckets {
+    fn new(per_client: Rate, overall_rate: Rate, max: usize, now: std::time::Instant) -> Buckets {
+        Buckets {
+            per_client,
+            overall_rate,
+            max,
+            clients: HashMap::new(),
+            overflow: Bucket::full(per_client, now),
+            overall: Bucket::full(overall_rate, now),
+        }
+    }
+
+    /// Takes a token from `client`'s bucket and the overall one, or from
+    /// neither: false when either is empty.
+    fn take(&mut self, client: IpAddr, now: std::time::Instant) -> bool {
+        let Buckets {
+            per_client: per,
+            overall_rate,
+            max,
+            clients,
+            overflow,
+            overall,
+        } = self;
+        let (per, max) = (*per, *max);
+        overall.refill(*overall_rate, now);
+        if !clients.contains_key(&client) && clients.len() >= max {
+            clients.retain(|_, b| !b.is_full(per, now));
+        }
+        let bucket = if clients.contains_key(&client) || clients.len() < max {
+            clients.entry(client).or_insert(Bucket::full(per, now))
+        } else {
+            overflow
+        };
+        bucket.refill(per, now);
+        if bucket.tokens == 0 || overall.tokens == 0 {
+            return false;
+        }
+        bucket.tokens -= 1;
+        overall.tokens -= 1;
+        true
+    }
+}
+
+/// One client, as the limit counts it: an IPv4 address, or an IPv6
+/// address's /64 (one subscriber's usual allocation), so rotating
+/// addresses inside one network doesn't buy more lookups.
+fn client_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6((u128::from(v6) & !((1u128 << 64) - 1)).into()),
+        },
+    }
+}
+
+/// Where the detail view reports an opened drawer to the adult-enrichment
+/// runtime (ENR-1's `Interest::opened`), behind a rate limit per client
+/// and overall, so opening drawers in a loop can't keep a third-party
+/// service busy: user interest skips the runtime's daily cap.
+///
+/// The API offers an item only when "Show adult content" is on, the
+/// admin is asking, and the item isn't held back and could be adult; the
+/// runtime's gate still decides. A refused offer is dropped without a
+/// trace: the response is the same either way.
+///
+/// None is served until the host wires a plugin. The host mounts it on
+/// the router: `router(state).layer(Extension(interest))`.
+#[derive(Clone)]
+pub struct DrawerInterest(Arc<InterestInner>);
+
+struct InterestInner {
+    opened: Box<dyn Fn(i64) -> bool + Send + Sync>,
+    always_adult: u64,
+    clock: Box<dyn Fn() -> std::time::Instant + Send + Sync>,
+    buckets: Mutex<Buckets>,
+}
+
+impl std::fmt::Debug for DrawerInterest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DrawerInterest")
+            .field("always_adult", &self.0.always_adult)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DrawerInterest {
+    /// Per client: 10 at once, then one every 30 s (runner's choice,
+    /// `docs/decisions/2026-11-05-ENR-7.md`).
+    pub const PER_CLIENT: Rate = Rate {
+        burst: 10,
+        every: Duration::from_secs(30),
+    };
+    /// Every client together: 30 at once, then one every 20 s, so at
+    /// most 4,350 a day, under the runtime's background cap of 5,000.
+    pub const OVERALL: Rate = Rate {
+        burst: 30,
+        every: Duration::from_secs(20),
+    };
+    /// Clients tracked at once; past this, newcomers share one bucket.
+    pub const CLIENTS: usize = 1024;
+
+    /// `opened` hands an id to the runtime (`Interest::opened`);
+    /// `always_adult` is the registered always-adult sources' bitset
+    /// (`AdultSources`), so their finds count as possibly adult.
+    pub fn new(always_adult: u64, opened: impl Fn(i64) -> bool + Send + Sync + 'static) -> Self {
+        Self::with_clock(always_adult, opened, std::time::Instant::now)
+    }
+
+    /// [`DrawerInterest::new`] on a clock of the caller's (tests).
+    pub fn with_clock(
+        always_adult: u64,
+        opened: impl Fn(i64) -> bool + Send + Sync + 'static,
+        clock: impl Fn() -> std::time::Instant + Send + Sync + 'static,
+    ) -> Self {
+        let now = clock();
+        DrawerInterest(Arc::new(InterestInner {
+            opened: Box::new(opened),
+            always_adult,
+            clock: Box::new(clock),
+            buckets: Mutex::new(Buckets::new(
+                Self::PER_CLIENT,
+                Self::OVERALL,
+                Self::CLIENTS,
+                now,
+            )),
+        }))
+    }
+
+    /// Hands `id` on if `client` and everyone together are within their
+    /// limits; drops it otherwise.
+    fn offer(&self, client: IpAddr, id: i64) {
+        let now = (self.0.clock)();
+        let taken = self
+            .0
+            .buckets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take(client_key(client), now);
+        if taken {
+            // A full queue drops it too; the background gets to it.
+            let _ = (self.0.opened)(id);
+        }
+    }
 }
 
 pub(crate) fn percent_encode(s: &str) -> String {
@@ -883,6 +1236,102 @@ pub(crate) mod tests {
         assert_eq!(plugins(&admin), ["dht"]);
     }
 
+    #[test]
+    fn a_scene_link_must_be_https_on_the_sources_own_host() {
+        let hosts = [
+            "https://stashdb.org".to_string(),
+            "http://plain.example".into(),
+        ];
+        let ok = |u: &str| scene_link(u, &hosts).is_some();
+        assert!(ok("https://stashdb.org/scenes/abc-1"));
+        assert!(ok("https://StashDB.org/scenes/abc-1?x=1#y"));
+        assert!(ok("https://stashdb.org"));
+        for bad in [
+            "http://stashdb.org/scenes/a",
+            "https://plain.example/a",
+            "http://plain.example/a",
+            "https://stashdb.org.evil.example/a",
+            "https://evil.example/stashdb.org",
+            "https://user@stashdb.org/a",
+            "https://stashdb.org@evil.example/a",
+            "https://stashdb.org:8443/a",
+            "https://stashdb.org\\@evil.example/a",
+            "https://stashdb.org/a b",
+            "https://stashdb.org/a\"onclick",
+            "https://stashdb.org/<script>",
+            "javascript:alert(1)",
+            "//stashdb.org/a",
+            "https:///a",
+            "",
+        ] {
+            assert!(!ok(bad), "{bad}");
+        }
+        let long = format!("https://stashdb.org/{}", "a".repeat(MAX_LINK));
+        assert!(!ok(&long));
+        assert!(scene_link("https://stashdb.org/a", &[]).is_none());
+    }
+
+    #[test]
+    fn an_ipv6_client_is_its_64() {
+        let a: IpAddr = "2001:db8:0:1::5".parse().unwrap();
+        let b: IpAddr = "2001:db8:0:1:ffff::9".parse().unwrap();
+        let c: IpAddr = "2001:db8:0:2::5".parse().unwrap();
+        assert_eq!(client_key(a), client_key(b));
+        assert_ne!(client_key(a), client_key(c));
+        let mapped: IpAddr = "::ffff:10.1.2.3".parse().unwrap();
+        assert_eq!(client_key(mapped), IpAddr::from([10, 1, 2, 3]));
+    }
+
+    #[test]
+    fn a_bucket_never_holds_more_than_its_burst() {
+        let now = std::time::Instant::now();
+        let rate = DrawerInterest::PER_CLIENT;
+        let mut b = Bucket { tokens: 0, at: now };
+        b.refill(rate, now + rate.every * 1000);
+        assert_eq!(b.tokens, rate.burst);
+        // Part of a refill period is kept for the next token.
+        let mut b = Bucket { tokens: 0, at: now };
+        b.refill(rate, now + rate.every + rate.every / 2);
+        assert_eq!(b.tokens, 1);
+        b.refill(rate, now + rate.every * 2);
+        assert_eq!(b.tokens, 2);
+        // A clock that goes back earns nothing.
+        let mut b = Bucket {
+            tokens: 1,
+            at: now + rate.every,
+        };
+        b.refill(rate, now);
+        assert_eq!(b.tokens, 1);
+    }
+
+    #[test]
+    fn the_client_map_is_bounded_and_newcomers_share_the_overflow() {
+        let now = std::time::Instant::now();
+        let per = DrawerInterest::PER_CLIENT;
+        let unlimited = Rate {
+            burst: u32::MAX,
+            every: Duration::from_nanos(1),
+        };
+        const MAX: usize = 64;
+        let mut b = Buckets::new(per, unlimited, MAX, now);
+        let addr = |n: u32| IpAddr::from(n.to_be_bytes());
+        for n in 0..MAX as u32 {
+            assert!(b.take(addr(n), now));
+        }
+        assert_eq!(b.clients.len(), MAX);
+        // Every tracked client is still spending: newcomers share one
+        // bucket, so all of them together get one burst.
+        let extra = (0..per.burst * 3)
+            .filter(|i| b.take(addr(1 << 30 | i), now))
+            .count();
+        assert_eq!(extra, per.burst as usize);
+        assert_eq!(b.clients.len(), MAX);
+        // Once the tracked ones have recovered they're forgotten.
+        let later = now + per.every * per.burst;
+        assert!(b.take(addr(1 << 31), later));
+        assert_eq!(b.clients.len(), 1);
+    }
+
     /// `n` public plugins.
     fn names_of(n: usize) -> PluginNames {
         (0..n)
@@ -892,6 +1341,7 @@ pub(crate) mod tests {
                     PluginName {
                         name: format!("P{i}"),
                         public: true,
+                        endpoints: Vec::new(),
                     },
                 )
             })

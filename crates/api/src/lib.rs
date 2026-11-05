@@ -68,6 +68,7 @@ pub use extract::ClientIp;
 pub(crate) use search::unix_now;
 pub use search::{AdultVisibility, MATCHED_FILES, MAX_LIMIT, MAX_WINDOW};
 pub use swarm::{ApiEvents, INTEREST_TOP};
+pub use torrents::{DrawerInterest, Rate as InterestRate};
 
 #[derive(Clone, Debug)]
 pub struct ApiState {

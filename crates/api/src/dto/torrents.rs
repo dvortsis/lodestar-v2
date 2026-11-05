@@ -9,6 +9,15 @@ use utoipa::{IntoParams, ToSchema};
 /// A null swarm field is "never scraped" (or no estimate), never 0.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct TorrentDetail {
+    /// What an adult-enrichment service (ThePornDB, StashDB) matched
+    /// (§20.9). **Absent**, never null or empty, unless "Show adult
+    /// content" is on and the signed-in admin asks: a caller can't tell
+    /// from this field whether a match exists. Also absent for a hidden
+    /// or held torrent and for a match that came through a private
+    /// source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub adult_enrichment: Option<AdultEnrichment>,
     /// Null = never scraped.
     #[schema(required = true)]
     pub completed: Option<u32>,
@@ -70,6 +79,51 @@ pub struct TorrentDetail {
     /// Of those, trackers that reported anyone; null = never scraped.
     #[schema(required = true)]
     pub trackers_reporting: Option<u32>,
+}
+
+/// An adult-enrichment match on a torrent (architecture §20.9, plan
+/// 2026-11-04 Q4): the scene's own fields and who matched it. Nothing
+/// else is kept about the people named, and none of it is searchable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "link": "https://stashdb.org/scenes/0b6e8a4e-2c1f-4a7e-9d3a-5f1e2b3c4d5e",
+    "performers": ["Performer One", "Performer Two"],
+    "performers_truncated": false,
+    "released": "2021-06",
+    "scene_title": "Garden Scene",
+    "source": {"id": 5, "name": "StashDB", "plugin": "stashdb"},
+    "studio": "Some Studio"
+}))]
+pub struct AdultEnrichment {
+    /// The scene's page on the service: an `https` URL on one of the
+    /// matching source's own hosts. Null when it gave none, or one
+    /// elsewhere.
+    #[schema(required = true)]
+    pub link: Option<String>,
+    /// Names only, in the service's order.
+    pub performers: Vec<String>,
+    /// The service credits more performers than are listed.
+    pub performers_truncated: bool,
+    /// `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; null when not given.
+    #[schema(required = true)]
+    pub released: Option<String>,
+    #[schema(required = true)]
+    pub scene_title: Option<String>,
+    /// The source that matched it: "Matched by StashDB".
+    pub source: EnrichmentSource,
+    /// The studio's name.
+    #[schema(required = true)]
+    pub studio: Option<String>,
+}
+
+/// The source behind an adult-enrichment match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct EnrichmentSource {
+    pub id: u8,
+    /// Its display name.
+    pub name: String,
+    /// Its manifest id.
+    pub plugin: String,
 }
 
 /// A torrent's provenance (architecture §18.5, §18.6, §18.8).
