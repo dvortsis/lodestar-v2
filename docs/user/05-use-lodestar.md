@@ -7,6 +7,7 @@ Once you create the admin password, Lodestar opens to **Search** while the [DHT]
 > - Filter results with the facet rail or query tokens on **Search**.
 > - Inspect a torrent's file tree and copy its magnet link in the detail drawer.
 > - Browse newest discoveries on **Discover** and check pipeline health on **Insights**.
+> - Choose which sources Lodestar uses to find torrents in **Settings → Sources**.
 
 ## 5.1 Search and filter
 <!-- index: Search; facets; query syntax; composition bar -->
@@ -49,11 +50,66 @@ Select **Copy magnet** to copy the magnet URI to your clipboard, or **Open full 
   <img src="images/insights-light.png" alt="Lodestar Insights overview showing pipeline stage cards and status counters"></picture>
 *Figure 5.4: The Insights overview showing stage status cards, searchable torrent counts and attention items.*
 
+## 5.4 Choose where Lodestar finds torrents (Settings → Sources)
+<!-- index: sources; Settings → Sources; source status; source priority; yield bar -->
+
+A [**source**](glossary.md#lodestar-source) is a place Lodestar learns about torrents from. The [DHT](glossary.md#dht) is the one it uses out of the box. This version lists only **Mainline DHT**. More sources, such as a torrent site or an indexer app you already run, come in later versions. Lodestar still collects [metadata](glossary.md#metadata) only and never downloads torrent content.
+
+To see them, select **Settings**, then **Sources** under **Crawling**.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/sources-dark.png">
+  <img src="images/sources-light.png" alt="Lodestar Settings Sources screen listing Mainline DHT, Nyaa and Prowlarr in groups, each with a status, an On switch and a Priority menu"></picture>
+*Figure 5.5: The Sources screen, as an illustration. It includes sources that are not in this version. The outlined row is a source that needs setup.*
+
+**Groups.** Sources sit under the kind of work they do: **Discovery**, **Importers**, **Peer finders**, **Enrichment**, **Networks** and **Outputs**. A source with two kinds appears once, under the first.
+
+**Labels.** Each row shows a risk label: **Low risk**, **Medium risk** or **High risk**. Some rows also show a class label:
+- **External**: it contacts other sites.
+- **Account**: it needs your account details.
+- **Restricted** and **Overlay**: it needs your admin password each time you turn it on.
+
+**Status.** Each row has a status with an icon and words:
+
+| Status | What it means |
+|---|---|
+| **Running** | On, and working now. |
+| **On, not running now** | On, and waiting for its next turn. This is normal. |
+| **Stopped with an error** | On, but it stopped. The row says why. Lodestar keeps running. |
+| **Needs setup** | Off, and it can't be turned on yet. See below. |
+| **Paused** | Off, and held as paused. This screen can't pause a source, so you won't normally see it. |
+| **Off** | Off. |
+| **Purged** | Its data was removed (purge comes in a later version). |
+| **Purge unfinished** | A removal of its data didn't finish (purge comes in a later version). |
+
+**Turn a source on or off.** Use the **On** switch on its row.
+
+1. Select the switch. Lodestar saves the change at once, with no **Undo**.
+2. The row shows **Applies at next start**.
+3. The source starts or stops the next time Lodestar restarts. A restart can include the six-hour DHT wait; see [section 3.8](03-keep-lodestar-safe.md#38-restart-without-the-six-hour-wait).
+
+Until that restart, the status shows your saved choice, not what is running.
+
+**Needs setup.** Some sources must be set up before they can be turned on. Setup means reading and accepting what a source does, accepting the sites it contacts, adding account details, or typing your admin password. Their switch stays off and the row says what is missing. Setting these up is not on this screen yet. It is coming in a later version, so leave those sources off for now.
+
+**Priority.** The **Priority** menu (**Low**, **Normal**, **High** or **Maximum**) sets how much of Lodestar's fetch work a source gets compared with the others. Leave it on **Normal** unless one source is crowding out the rest.
+
+**The yield bar.** The [yield bar](glossary.md#yield-bar) under each row shows how much of what the source found Lodestar stored, over the last 24 hours. The words beside it give the counts: **unique finds**, which are torrents this source reported first, and **of them stored**.
+
+A short bar with a high find count is normal. Many torrents a source hears of never give their metadata, or are removed by the content filters.
+
+> [!IMPORTANT]
+> **Recommended:** leave sources that contact other sites (**External**) or need your account (**Account**) turned off unless you need them. Each one sends requests from your connection to a place outside the DHT.
+
+> [!NOTE]
+> Changes on this screen are saved at once, and unlike other settings there is no **Undo**. To reverse one, set the switch or menu back. **Priority** applies at once. **On** applies at the next restart.
+
 > [!TIP]
 > **Key takeaways**
 > - Combine text queries with facet checkboxes or `field:value` tokens on **Search**.
 > - Select any row to inspect its file list and copy a magnet link.
 > - Open **Insights** to check whether the DHT crawler and index are healthy.
+> - Leave **External** and **Account** sources off unless you need them. Source changes are saved at once with no **Undo**, and **On** applies at the next restart.
 
 <!-- nav:start -->
 ---

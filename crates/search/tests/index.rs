@@ -583,13 +583,15 @@ fn an_index_left_behind_catches_up_alone() {
         (index.watermark().unwrap(), index.files_watermark().unwrap()),
         (4, 0)
     );
-    assert!(ids(&index, "file:(ext:flac)").is_empty());
+    // Two atoms, so the file index answers (a lone `ext:` is the torrent
+    // index's, X-search-files-4).
+    assert!(ids(&index, "file:(ext:flac size:>1)").is_empty());
     let mut w = index.writer(30 << 20).unwrap();
     w.catch_up(&mut store, 100).unwrap();
     w.commit().unwrap();
     assert_eq!(index.num_docs(), 4);
     assert_eq!(index.num_files(), 9);
-    assert_eq!(ids(&index, "file:(ext:flac)"), [1]);
+    assert_eq!(ids(&index, "file:(ext:flac size:>1)"), [1]);
 }
 
 #[test]

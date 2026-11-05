@@ -1496,7 +1496,10 @@ mod tests {
         assert_eq!(found(&index, "res:1080p"), 0);
         assert_eq!(found(&index, "old show size:>1"), 0);
         assert_eq!(found(&index, "size:>1 | show"), 50);
-        assert_eq!(found(&index, "file:(ext:mkv)"), 0);
+        // The file index lacks `ext`; a one-atom `file:(ext:…)` is the
+        // torrent index's own `ext`, which this one has (X-search-files-4).
+        assert_eq!(found(&index, "file:(ext:mkv show)"), 0);
+        assert_eq!(found(&index, "file:(ext:mkv)"), 50);
         assert_eq!(found(&index, "file:(show)"), 50);
         // A sort on a missing field falls back to relevance.
         let by_size = crate::Sort::Size { desc: true };
