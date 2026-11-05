@@ -353,11 +353,30 @@ fn one_atom_extension_clauses_cover_every_file_and_words_stay_on_the_file_index(
         ),
         vec![1, 2]
     );
-    // Beside a word, a filter.
+    // Alternatives of extensions are one clause: `ext:jpg | ext:flac`
+    // is `ext:jpg,flac`.
+    let or = Node::Or {
+        of: vec![ext("jpg"), ext("flac")],
+    };
+    assert_eq!(ids(&index, &file(or)), vec![1, 2, 4]);
+    // Beside a word, a filter that adds nothing to the score.
     let with_word = Node::And {
         of: vec![word(TextField::Any, "photos"), file(ext("jpg"))],
     };
     assert_eq!(ids(&index, &with_word), vec![1]);
+    let scores = |n: &Node| -> Vec<(u64, f32)> {
+        let mut hits: Vec<(u64, f32)> = index
+            .search(&index.query(n, NOW), 10)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| (h.id, h.score))
+            .collect();
+        hits.sort_by_key(|h| h.0);
+        hits
+    };
+    let plain = word(TextField::Any, "photos");
+    assert_eq!(scores(&with_word), scores(&plain));
     // Two atoms ask about one file: the file index, with its coverage.
     let big_jpg = file(Node::And {
         of: vec![ext("jpg"), range(Some(1), None)],

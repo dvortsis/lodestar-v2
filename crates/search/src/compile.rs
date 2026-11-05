@@ -95,12 +95,21 @@ pub(crate) fn file_clauses(node: &Node, out: &mut Vec<Node>) {
 /// leaves small images and documents out of a large pack's file
 /// documents, and hidden files out of every torrent's, and the torrent's
 /// extensions keep them. A clause of two or more atoms still runs on the
-/// file index, since it asks about one file. Such a clause is still
+/// file index, since it asks about one file; alternatives of extensions
+/// alone (`file:(ext:a | ext:b)`) are one clause, `ext:a,b`. Such a clause is still
 /// listed by [`file_clauses`], for its matched files; `files::compile`
 /// marks it so the search's file pass skips it.
-pub(crate) fn file_exts(of: &Node) -> Option<&[String]> {
+pub(crate) fn file_exts(of: &Node) -> Option<Vec<String>> {
     match of {
-        Node::Ext { any } => Some(any),
+        Node::Ext { any } => Some(any.clone()),
+        // `ext:a | ext:b` is `ext:a,b`.
+        Node::Or { of } if !of.is_empty() => {
+            let mut all = Vec::new();
+            for n in of {
+                all.extend(file_exts(n)?);
+            }
+            Some(all)
+        }
         _ => None,
     }
 }
@@ -178,6 +187,16 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
             n if excludes_only(n) => {
                 for (field, t) in excluded(n, f) {
                     clauses.push((Occur::MustNot, term(field, t, IndexRecordOption::Basic)));
+                }
+            }
+            // `file:(ext:…)` at the top level is a filter that adds
+            // nothing to the score, as the lifted id set it replaced did
+            // (nested, it scores 1.0, as `IdsQuery` does): a constant in
+            // `text` would squeeze the re-ranker's text differences
+            // (X-search-files-4).
+            Node::File { of } if let Some(any) = file_exts(of) => {
+                if let Some(q) = compile_opt(&Node::Ext { any }, f, now) {
+                    push_must(&mut clauses, Box::new(ConstScoreQuery::new(q, 0.0)));
                 }
             }
             n => {
@@ -744,7 +763,7 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
         }
         // A filter, scored as a file clause's id set is.
         Node::File { of } if let Some(any) = file_exts(of) => Box::new(ConstScoreQuery::new(
-            compile_opt(&Node::Ext { any: any.to_vec() }, f, now)?,
+            compile_opt(&Node::Ext { any }, f, now)?,
             1.0,
         )),
         Node::File { of } => {

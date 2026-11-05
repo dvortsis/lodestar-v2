@@ -714,15 +714,24 @@ impl Clone for SizeChecked {
 /// the bucket union does, and the union's files must be decoded besides.
 const CHECK_RATIO: u64 = 4;
 
-impl Query for SizeChecked {
-    fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
-        Ok(Box::new(SizeCheckedWeight {
+impl SizeChecked {
+    fn checked_weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<SizeCheckedWeight> {
+        let lo = self.ranges.iter().map(|r| *r.range.start()).max();
+        let hi = self.ranges.iter().map(|r| *r.range.end()).min();
+        Ok(SizeCheckedWeight {
             rest: self.rest.weight(scoring)?,
             whole: self.whole.weight(scoring)?,
             ranges: self.ranges.clone(),
+            bounds: (lo.unwrap_or(0), hi.unwrap_or(u64::MAX)),
             ratio: self.ratio,
             columns: SegColumns::default(),
-        }))
+        })
+    }
+}
+
+impl Query for SizeChecked {
+    fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
+        Ok(Box::new(self.checked_weight(scoring)?))
     }
 }
 
@@ -730,6 +739,9 @@ struct SizeCheckedWeight {
     rest: Box<dyn Weight>,
     whole: Box<dyn Weight>,
     ranges: Vec<SizeRange>,
+    /// Every range's bounds at once: their intersection, `lo > hi` when
+    /// it's empty.
+    bounds: (u64, u64),
     ratio: u64,
     columns: SegColumns,
 }
@@ -770,7 +782,7 @@ impl Weight for SizeCheckedWeight {
         match self.checks(seg, rest.as_ref())? {
             None => self.whole.scorer(seg, boost),
             Some(None) => Ok(Box::new(tantivy::query::EmptyScorer)),
-            Some(Some(sizes)) => Ok(Box::new(CheckedScorer::new(rest, sizes, &self.ranges))),
+            Some(Some(sizes)) => Ok(Box::new(CheckedScorer::new(rest, sizes, self.bounds))),
         }
     }
 
@@ -788,25 +800,15 @@ struct CheckedScorer {
     /// it's empty.
     lo: u64,
     hi: u64,
-    vals: [Option<u64>; tantivy::COLLECT_BLOCK_BUFFER_LEN],
-    raw: [u64; tantivy::COLLECT_BLOCK_BUFFER_LEN],
 }
 
 impl CheckedScorer {
-    fn new(rest: Box<dyn Scorer>, sizes: Column<u64>, ranges: &[SizeRange]) -> CheckedScorer {
-        let lo = ranges.iter().map(|r| *r.range.start()).max().unwrap_or(0);
-        let hi = ranges
-            .iter()
-            .map(|r| *r.range.end())
-            .min()
-            .unwrap_or(u64::MAX);
+    fn new(rest: Box<dyn Scorer>, sizes: Column<u64>, (lo, hi): (u64, u64)) -> CheckedScorer {
         let mut scorer = CheckedScorer {
             rest,
             sizes,
             lo,
             hi,
-            vals: [None; tantivy::COLLECT_BLOCK_BUFFER_LEN],
-            raw: [0; tantivy::COLLECT_BLOCK_BUFFER_LEN],
         };
         scorer.settle();
         scorer
@@ -840,43 +842,9 @@ impl DocSet for CheckedScorer {
         self.settle()
     }
 
-    /// The other clauses' documents a block at a time, their sizes read
-    /// in one call. Never returns 0 before the end: the scan stops there.
-    fn fill_buffer(&mut self, buffer: &mut [DocId; tantivy::COLLECT_BLOCK_BUFFER_LEN]) -> usize {
-        loop {
-            let filled = self.rest.fill_buffer(buffer);
-            if filled == 0 {
-                return 0;
-            }
-            let (lo, hi) = (self.lo, self.hi);
-            let mut kept = 0;
-            if matches!(self.sizes.index, tantivy::columnar::ColumnIndex::Full) {
-                // Every file has a size (`FileDoc::to_document`).
-                let raw = &mut self.raw[..filled];
-                self.sizes.values.get_vals(&buffer[..filled], raw);
-                for i in 0..filled {
-                    buffer[kept] = buffer[i];
-                    kept += usize::from(lo <= raw[i] && raw[i] <= hi);
-                }
-            } else {
-                let vals = &mut self.vals[..filled];
-                vals.fill(None);
-                self.sizes.first_vals(&buffer[..filled], vals);
-                for i in 0..filled {
-                    if self.vals[i].is_some_and(|s| lo <= s && s <= hi) {
-                        buffer[kept] = buffer[i];
-                        kept += 1;
-                    }
-                }
-            }
-            // `rest` now stands past the block, maybe on a file too big
-            // or small.
-            self.settle();
-            if kept > 0 {
-                return kept;
-            }
-        }
-    }
+    // `fill_buffer` is Tantivy's own, a document at a time, which keeps
+    // its contract (a short buffer is the end). The scan reads `rest`
+    // itself, a block at a time within its piece (`Source::Checked`).
 
     fn doc(&self) -> DocId {
         self.rest.doc()
@@ -891,6 +859,39 @@ impl Scorer for CheckedScorer {
     fn score(&mut self) -> Score {
         self.rest.score()
     }
+}
+
+/// Keeps, at the front of `docs`, those whose size is in `[lo, hi]`, in
+/// order, and returns how many; their sizes are read in one call.
+fn keep_fitting(
+    sizes: &Column<u64>,
+    (lo, hi): (u64, u64),
+    docs: &mut [DocId],
+    raw: &mut [u64; tantivy::COLLECT_BLOCK_BUFFER_LEN],
+    vals: &mut [Option<u64>; tantivy::COLLECT_BLOCK_BUFFER_LEN],
+) -> usize {
+    let n = docs.len();
+    let mut kept = 0;
+    if matches!(sizes.index, tantivy::columnar::ColumnIndex::Full) {
+        // Every file has a size (`FileDoc::to_document`).
+        let raw = &mut raw[..n];
+        sizes.values.get_vals(docs, raw);
+        for i in 0..n {
+            docs[kept] = docs[i];
+            kept += usize::from(lo <= raw[i] && raw[i] <= hi);
+        }
+    } else {
+        let vals = &mut vals[..n];
+        vals.fill(None);
+        sizes.first_vals(docs, vals);
+        for i in 0..n {
+            if vals[i].is_some_and(|s| lo <= s && s <= hi) {
+                docs[kept] = docs[i];
+                kept += 1;
+            }
+        }
+    }
+    kept
 }
 
 /// One edge bucket of a [`SizeRange`]: its postings, less the files
@@ -1400,22 +1401,27 @@ fn torrent_ids_in_pieces(
     if !missed.is_empty() {
         cancel.check()?;
         let size = query.downcast_ref::<SizeRange>();
-        let union = match size {
-            Some(_) => None,
-            None => TermUnion::of(query),
-        };
         let scoring = EnableScoring::disabled_from_searcher(searcher);
-        // The weight of the clause itself, or of a term union's exclusions.
-        let weight = match (size, &union) {
-            (Some(_), _) => None,
-            (None, Some(u)) => u.exclude.as_ref().map(|q| q.weight(scoring)).transpose()?,
-            (None, None) => Some(query.weight(scoring)?),
+        let checked = query
+            .downcast_ref::<SizeChecked>()
+            .map(|c| c.checked_weight(scoring))
+            .transpose()?;
+        let union = match (size, &checked) {
+            (None, None) => TermUnion::of(query),
+            _ => None,
         };
-        let source = match (size, &union, &weight) {
-            (Some(r), _, _) => Source::Size(r),
-            (None, Some(u), w) => Source::Terms(u, w.as_deref()),
-            (None, None, Some(w)) => Source::Weight(w.as_ref()),
-            (None, None, None) => unreachable!("a weight is built for every other query"),
+        // The weight of the clause itself, or of a term union's exclusions.
+        let weight = match (size, &checked, &union) {
+            (Some(_), _, _) | (None, Some(_), _) => None,
+            (None, None, Some(u)) => u.exclude.as_ref().map(|q| q.weight(scoring)).transpose()?,
+            (None, None, None) => Some(query.weight(scoring)?),
+        };
+        let source = match (size, &checked, &union, &weight) {
+            (Some(r), _, _, _) => Source::Size(r),
+            (None, Some(c), _, _) => Source::Checked(c),
+            (None, None, Some(u), w) => Source::Terms(u, w.as_deref()),
+            (None, None, None, Some(w)) => Source::Weight(w.as_ref()),
+            (None, None, None, None) => unreachable!("a weight is built for every other query"),
         };
         // One segment's failure stops its siblings: they see `failed` at
         // their next check and give up, and the first real error is the
@@ -1549,12 +1555,18 @@ impl Gather {
                 }
                 Gather::Bits { lo, words }
             }
+            // Pieces sized apart can differ in form (a short last piece
+            // can fall under the bitset's threshold): the list goes into
+            // the bitset, rather than the bitset into a list to sort.
+            (mut bits @ Gather::Bits { .. }, Gather::List(ids))
+            | (Gather::List(ids), mut bits @ Gather::Bits { .. }) => {
+                for id in ids {
+                    bits.push(id);
+                }
+                bits
+            }
             (Gather::List(mut ids), b) => {
                 b.for_each(|id| ids.push(id));
-                Gather::List(ids)
-            }
-            (a, Gather::List(mut ids)) => {
-                a.for_each(|id| ids.push(id));
                 Gather::List(ids)
             }
             (a, b) => {
@@ -1596,6 +1608,10 @@ enum Source<'a> {
     /// Any of some terms (`file:mkv`, `file:(ext:mkv,mp4)`), less what
     /// `exclude` matches (`-path:sample`): see [`TermUnion`].
     Terms(&'a TermUnion, Option<&'a dyn Weight>),
+    /// A conjunction with a size check ([`SizeChecked`]): where it checks
+    /// the column, the other clauses' documents a block at a time within
+    /// the piece, their sizes checked in one call.
+    Checked(&'a SizeCheckedWeight),
 }
 
 /// A clause that is any of some terms, perhaps less some others'
@@ -1741,31 +1757,51 @@ fn scan_segment(
             }
         }
     };
+    // A scorer's documents within the piece, a block at a time, those of
+    // a size outside `check`'s bounds left out.
+    let mut scan_scorer = |mut scorer: Box<dyn Scorer>,
+                           check: Option<(&Column<u64>, (u64, u64))>|
+     -> tantivy::Result<Gather> {
+        const CHECK_BLOCKS: u32 = crate::cancel::CHECK_EVERY / 2 / BLOCK as u32;
+        const _: () = assert!(CHECK_BLOCKS > 0);
+        let mut gather = gather_for(scorer.size_hint());
+        if scorer.doc() < lo {
+            scorer.seek(lo);
+        }
+        let mut docs = [0 as DocId; BLOCK];
+        let mut raw = [0u64; BLOCK];
+        let mut vals = [None; BLOCK];
+        let mut blocks = 0u32;
+        loop {
+            if blocks.is_multiple_of(CHECK_BLOCKS) {
+                stopped()?;
+            }
+            blocks = blocks.wrapping_add(1);
+            let filled = scorer.fill_buffer(&mut docs);
+            // Docs come in order; those from `hi` on are the next piece's.
+            let n = docs[..filled].partition_point(|d| *d < hi);
+            let keep = match check {
+                Some((sizes, bounds)) => {
+                    keep_fitting(sizes, bounds, &mut docs[..n], &mut raw, &mut vals)
+                }
+                None => n,
+            };
+            add(&docs[..keep], &mut gather);
+            if n < filled || filled == 0 {
+                break;
+            }
+        }
+        Ok(gather)
+    };
     let gather = match source {
-        Source::Weight(weight) => {
-            const CHECK_BLOCKS: u32 = crate::cancel::CHECK_EVERY / 2 / BLOCK as u32;
-            const _: () = assert!(CHECK_BLOCKS > 0);
-            let mut scorer = weight.scorer(seg, 1.0)?;
-            let mut gather = gather_for(scorer.size_hint());
-            if scorer.doc() < lo {
-                scorer.seek(lo);
+        Source::Weight(weight) => scan_scorer(weight.scorer(seg, 1.0)?, None)?,
+        Source::Checked(w) => {
+            let rest = w.rest.scorer(seg, 1.0)?;
+            match w.checks(seg, rest.as_ref())? {
+                None => scan_scorer(w.whole.scorer(seg, 1.0)?, None)?,
+                Some(None) => gather_for(0),
+                Some(Some(sizes)) => scan_scorer(rest, Some((&sizes, w.bounds)))?,
             }
-            let mut docs = [0 as DocId; BLOCK];
-            let mut blocks = 0u32;
-            loop {
-                if blocks.is_multiple_of(CHECK_BLOCKS) {
-                    stopped()?;
-                }
-                blocks = blocks.wrapping_add(1);
-                let filled = scorer.fill_buffer(&mut docs);
-                // Docs come in order; those from `hi` on are the next piece's.
-                let n = docs[..filled].partition_point(|d| *d < hi);
-                add(&docs[..n], &mut gather);
-                if n < filled || filled == 0 {
-                    break;
-                }
-            }
-            gather
         }
         Source::Terms(union, exclude) => {
             let gather = scan_terms(
@@ -3336,6 +3372,72 @@ mod bucket_props {
                     ratio,
                 };
                 prop_assert_eq!(&ids(&searcher, &forced, piece_docs), &with_ext, "ratio {}", ratio);
+                // Its scorer (not the scan's own reading) wherever it's
+                // nested: negated, in an alternative, beside a torrent's
+                // term as matched files ask, and collected whole, which
+                // takes a short buffer for the end.
+                let not_fit: Vec<u64> = segments
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(i, files)| (i as u64 + 1, files))
+                    .filter(|(id, files)| {
+                        *id != 2 && files.iter().any(|s| s % 3 == 0 || !r.contains(s))
+                    })
+                    .map(|(id, _)| id)
+                    .collect();
+                let negated = BooleanQuery::new(vec![
+                    (Occur::Must, Box::new(AllQuery) as Q),
+                    (Occur::MustNot, Box::new(forced.clone()) as Q),
+                ]);
+                prop_assert_eq!(&ids(&searcher, &negated, piece_docs), &not_fit, "not, ratio {}", ratio);
+                let mut or_one = with_ext.clone();
+                or_one.push(1);
+                or_one.sort_unstable();
+                or_one.dedup();
+                let or = BooleanQuery::new(vec![
+                    (Occur::Should, Box::new(forced.clone()) as Q),
+                    (
+                        Occur::Should,
+                        Box::new(TermQuery::new(
+                            Term::from_field_u64(f.torrent, 1),
+                            IndexRecordOption::Basic,
+                        )) as Q,
+                    ),
+                ]);
+                prop_assert_eq!(&ids(&searcher, &or, piece_docs), &or_one, "or, ratio {}", ratio);
+                let fitting: Vec<(u64, u64)> = segments
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                    .flat_map(|(i, files)| {
+                        files.iter().enumerate().map(move |(at, s)| (i as u64 + 1, at as u64, *s))
+                    })
+                    .filter(|(id, _, s)| *id != 2 && s % 3 != 0 && r.contains(s))
+                    .map(|(id, at, _)| (id, at))
+                    .collect();
+                prop_assert_eq!(
+                    searcher.search(&forced, &tantivy::collector::Count).unwrap(),
+                    fitting.len(),
+                    "count, ratio {}", ratio
+                );
+                let first = BooleanQuery::new(vec![
+                    (Occur::Must, Box::new(forced.clone()) as Q),
+                    (
+                        Occur::Must,
+                        Box::new(TermQuery::new(
+                            Term::from_field_u64(f.torrent, 1),
+                            IndexRecordOption::Basic,
+                        )) as Q,
+                    ),
+                ]);
+                let want_files: Vec<u64> =
+                    fitting.iter().filter(|(id, _)| *id == 1).map(|(_, at)| *at).collect();
+                prop_assert_eq!(
+                    searcher.search(&first, &FileIndexes).unwrap(),
+                    want_files,
+                    "matched files, ratio {}", ratio
+                );
             }
             let not = compile(&Node::Not { of: Box::new(node) }, &f).unwrap();
             prop_assert_eq!(&ids(&searcher, not.as_ref(), piece_docs), &outside, "negated");
@@ -3428,6 +3530,68 @@ mod bucket_props {
         };
         assert!(Weight::explain(&edge, seg, 0).is_err());
         assert!(Weight::explain(&edge, seg, 1).is_ok());
+    }
+
+    /// The size check where some files have no size (never written by
+    /// the indexer, which gives every file one): the column with gaps
+    /// takes the optional path, and a file without a size never fits.
+    #[test]
+    fn the_size_check_skips_files_without_a_size() {
+        let (schema, f) = schema();
+        let index = ram(schema);
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        // Torrent t has one `bin` file, of size 10 * t, sized when t is
+        // even.
+        for t in 1..=300u64 {
+            let mut d = TantivyDocument::new();
+            d.add_u64(f.torrent, t);
+            d.add_u64(f.index, 0);
+            d.add_text(f.ext, "bin");
+            if t % 2 == 0 {
+                d.add_u64(f.size, t * 10);
+            }
+            writer.add_document(d).unwrap();
+        }
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let seg = &searcher.segment_readers()[0];
+        assert!(!matches!(
+            seg.fast_fields().u64("size").unwrap().index,
+            tantivy::columnar::ColumnIndex::Full
+        ));
+        let ext_q = compile_node(
+            &Node::Ext {
+                any: vec!["bin".into()],
+            },
+            &f,
+        )
+        .unwrap();
+        let range = SizeRange {
+            field: f.size,
+            bucket: ABSENT,
+            range: 1_000..=2_000,
+        };
+        let forced = SizeChecked {
+            rest: Box::new(BooleanQuery::new(vec![(Occur::Must, ext_q.box_clone())])),
+            ranges: vec![range.clone()],
+            whole: Box::new(BooleanQuery::new(vec![
+                (Occur::Must, ext_q),
+                (Occur::Must, Box::new(range) as Q),
+            ])),
+            ratio: u64::MAX,
+        };
+        let want: Vec<u64> = (100..=200).filter(|t| t % 2 == 0).collect();
+        for piece_docs in [7, PIECE_DOCS] {
+            assert_eq!(ids(&searcher, &forced, piece_docs), want, "{piece_docs}");
+        }
+        assert_eq!(
+            searcher
+                .search(&forced, &tantivy::collector::Count)
+                .unwrap(),
+            want.len()
+        );
     }
 
     /// A clause the torrent index answers scans nothing and caches
