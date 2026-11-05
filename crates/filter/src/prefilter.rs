@@ -303,7 +303,7 @@ pub(crate) struct DocKeys {
     /// The two-character pairs the texts have, made on first use.
     char_pairs: OnceCell<CharPairs>,
     /// [`DocKeys::by_chars`].
-    by_chars: OnceCell<(Vec<u32>, Vec<u32>)>,
+    by_chars: OnceCell<ByChars>,
     /// [`DocKeys::length_windows`].
     lengths: OnceCell<[[u64; LENGTHS]; 2]>,
 }
@@ -434,15 +434,7 @@ impl DocKeys {
             for (n, &u) in self.by_length().iter().enumerate() {
                 by[n.min(LENGTHS - 1)] |= u;
             }
-            let mut w = [[0u64; LENGTHS]; 2];
-            for (d, window) in w.iter_mut().enumerate() {
-                for (n, slot) in window.iter_mut().enumerate() {
-                    let lo = n.saturating_sub(d + 1);
-                    let hi = (n + d + 2).min(LENGTHS);
-                    *slot = by[lo..hi].iter().fold(0, |u, &x| u | x);
-                }
-            }
-            w
+            windows_of(&by)
         })
     }
 
@@ -531,25 +523,32 @@ impl DocKeys {
         distance: usize,
     ) -> impl Iterator<Item = &str> {
         let v = &self.vocabulary;
-        let (order, starts) = self.by_chars();
+        let ByChars {
+            order,
+            has: order_has,
+            starts,
+        } = self.by_chars();
         // Only the lengths within the distance.
         let lo = starts.get(chars.saturating_sub(distance)).copied();
         let hi = starts.get(chars + distance + 1).copied();
         let run = match (lo, hi) {
-            (Some(lo), hi) => &order[lo as usize..hi.map_or(order.len(), |h| h as usize)],
-            (None, _) => &[],
+            (Some(lo), hi) => lo as usize..hi.map_or(order.len(), |h| h as usize),
+            (None, _) => 0..0,
         };
         crate::work::tick(run.len() + 1);
-        run.iter()
-            .map(|&i| &v.words[i as usize])
-            .filter(move |w| ((w.has ^ has).count_ones() as usize) <= 2 * distance)
-            .map(|w| v.text(w))
+        // The characters read in a row, beside the order: the test reads
+        // no entry it turns away.
+        order[run.clone()]
+            .iter()
+            .zip(&order_has[run])
+            .filter(move |&(_, &h)| bits_at_most(h ^ has, 2 * distance))
+            .map(|(&i, _)| v.text(&v.words[i as usize]))
     }
 
     /// The vocabulary in order of length, and where each length starts
     /// in it, made on first use.
-    fn by_chars(&self) -> (&[u32], &[u32]) {
-        let (order, starts) = self.by_chars.get_or_init(|| {
+    fn by_chars(&self) -> &ByChars {
+        self.by_chars.get_or_init(|| {
             let v = &self.vocabulary;
             crate::work::tick(v.words.len());
             // A counting sort: lengths are few and small.
@@ -563,14 +562,15 @@ impl DocKeys {
             }
             let mut next = starts.clone();
             let mut order = vec![0u32; v.words.len()];
+            let mut has = vec![0u64; v.words.len()];
             for (i, w) in v.words.iter().enumerate() {
                 let at = &mut next[w.chars as usize];
                 order[*at as usize] = i as u32;
+                has[*at as usize] = w.has;
                 *at += 1;
             }
-            (order, starts)
-        });
-        (order, starts)
+            ByChars { order, has, starts }
+        })
     }
 
     /// Whether some token text could start with the text [`start_key`]
@@ -1193,15 +1193,36 @@ fn start_index(prefix: &str) -> usize {
 /// The vocabulary's texts by the key of their first `n + 2` characters.
 fn sorted_starts(v: &Vocabulary, n: usize) -> Vec<(u64, u32)> {
     crate::work::tick(v.words.len());
-    let mut s: Vec<(u64, u32)> = v
-        .words
-        .iter()
-        .enumerate()
-        .filter(|(_, w)| w.chars as usize >= n + 2)
-        .map(|(i, w)| (w.starts[n], i as u32))
-        .collect();
+    let mut s: Vec<(u64, u32)> = Vec::with_capacity(v.words.len());
+    s.extend(
+        v.words
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.chars as usize >= n + 2)
+            .map(|(i, w)| (w.starts[n], i as u32)),
+    );
     s.sort_unstable();
     s
+}
+
+/// [`DocKeys::by_chars`]: the vocabulary's entries in order of length,
+/// their [`char_set`]s in the same order, and where each length starts.
+#[derive(Debug, Default)]
+struct ByChars {
+    order: Vec<u32>,
+    has: Vec<u64>,
+    starts: Vec<u32>,
+}
+
+/// Whether `x` has at most `n` bits set: `count_ones() <= n`, by clearing
+/// the lowest bit `n` times, which the baseline x86-64 target does in a
+/// few instructions where `count_ones` takes a dozen.
+#[inline]
+fn bits_at_most(mut x: u64, n: usize) -> bool {
+    for _ in 0..n {
+        x &= x.wrapping_sub(1);
+    }
+    x == 0
 }
 
 /// A text's [`start_key`]s of its first two, three and four characters,
@@ -1761,6 +1782,22 @@ impl FuzzyGate {
     }
 }
 
+/// [`DocKeys::length_windows`] from the characters of the texts of each
+/// length (`by`): for each length `n`, the characters of the lengths
+/// `n - 1..=n + 1` (`[0]`) and `n - 2..=n + 2` (`[1]`), within the table.
+/// The wider window is the narrow one either side of `n`.
+fn windows_of(by: &[u64; LENGTHS]) -> [[u64; LENGTHS]; 2] {
+    let last = LENGTHS - 1;
+    let mut w = [[0u64; LENGTHS]; 2];
+    for n in 0..LENGTHS {
+        w[0][n] = by[n.saturating_sub(1)] | by[n] | by[(n + 1).min(last)];
+    }
+    for n in 0..LENGTHS {
+        w[1][n] = w[0][n.saturating_sub(1)] | w[0][(n + 1).min(last)];
+    }
+    w
+}
+
 /// Your rules, indexed by what they need. Rebuilt whenever the list is
 /// changed (any mutable access), so it never goes stale.
 #[derive(Debug, Clone, Default)]
@@ -1989,6 +2026,28 @@ mod tests {
     }
 
     proptest! {
+        /// The windows read from the narrow ones are those folded from
+        /// each length's characters, as they were before X-filter-perf-1105.
+        #[test]
+        fn windows_are_the_folds(by in prop::collection::vec(any::<u64>(), LENGTHS)) {
+            let all: [u64; LENGTHS] = by.try_into().unwrap();
+            let w = windows_of(&all);
+            for (d, window) in w.iter().enumerate() {
+                for (n, &got) in window.iter().enumerate() {
+                    let lo = n.saturating_sub(d + 1);
+                    let hi = (n + d + 2).min(LENGTHS);
+                    prop_assert_eq!(got, all[lo..hi].iter().fold(0, |u, &x| u | x));
+                }
+            }
+        }
+
+        /// Clearing the lowest bit `n` times leaves nothing exactly when
+        /// at most `n` bits are set.
+        #[test]
+        fn bits_at_most_counts(x in any::<u64>(), n in 0usize..70) {
+            prop_assert_eq!(bits_at_most(x, n), x.count_ones() as usize <= n);
+        }
+
         /// The byte scan produces exactly the tokenizer's token texts.
         #[test]
         fn ascii_keys_are_the_tokenizers(text in "[ -~]{0,120}") {

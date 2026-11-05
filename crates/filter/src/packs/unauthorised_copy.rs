@@ -114,21 +114,38 @@ pub fn title_key(title: &str) -> String {
 }
 
 /// Whether a parsed title and year are on [`ALLOW`]. Word by word, as
-/// [`title_key`] reads the title, without building the key: UC-3 asks it
-/// of every scene-style film it would hide.
+/// [`title_key`] reads the title: its words, each lowercased by
+/// character, one space apart, are read once and compared with each key
+/// whole. A title longer than every key is on none of them, so it stops
+/// reading there. UC-3 asks it of every scene-style film it would hide.
 pub fn allowed(title: &str, year: Option<u16>) -> bool {
-    let same = |key: &str| {
-        let mut words = title
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| !w.is_empty());
-        key.split(' ').all(|k| {
-            words
-                .next()
-                .is_some_and(|w| w.chars().flat_map(char::to_lowercase).eq(k.chars()))
-        }) && words.next().is_none()
+    // The longest key, in bytes.
+    const LONGEST: usize = {
+        let mut n = 0;
+        let mut i = 0;
+        while i < ALLOW.len() {
+            if ALLOW[i].0.len() > n {
+                n = ALLOW[i].0.len();
+            }
+            i += 1;
+        }
+        n
     };
+    let mut key = String::with_capacity(LONGEST + 1);
+    for w in title
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
+        if !key.is_empty() {
+            key.push(' ');
+        }
+        key.extend(w.chars().flat_map(char::to_lowercase));
+        if key.len() > LONGEST {
+            return false;
+        }
+    }
     ALLOW.iter().any(|(t, y)| {
-        same(t)
+        *t == key
             && match (y, year) {
                 (None, _) => true,
                 (Some(want), Some(got)) => *want == got,
@@ -336,6 +353,63 @@ mod tests {
         let many: Vec<String> = (0..1_000).map(|i| format!("{i}_meta.xml")).collect();
         let refs: Vec<&str> = many.iter().map(String::as_str).collect();
         assert!(!ia(&refs));
+    }
+
+    /// [`allowed`] as it was before X-filter-perf-1105, key by key.
+    fn allowed_by_key(title: &str, year: Option<u16>) -> bool {
+        let same = |key: &str| {
+            let mut words = title
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty());
+            key.split(' ').all(|k| {
+                words
+                    .next()
+                    .is_some_and(|w| w.chars().flat_map(char::to_lowercase).eq(k.chars()))
+            }) && words.next().is_none()
+        };
+        ALLOW.iter().any(|(t, y)| {
+            same(t)
+                && match (y, year) {
+                    (None, _) => true,
+                    (Some(want), Some(got)) => *want == got,
+                    (Some(_), None) => false,
+                }
+        })
+    }
+
+    proptest::proptest! {
+        /// Reading the title once answers as reading it per key did.
+        #[test]
+        fn allowed_reads_as_it_did(
+            title in "(\\PC{0,8}|[Bb]ig|BUCK|bunny|the|Kid|D|o|a|İ|Σ|[ .\\-_]{1,2}){0,9}",
+            year in proptest::option::of(1900u16..2030),
+        ) {
+            proptest::prop_assert_eq!(allowed(&title, year), allowed_by_key(&title, year));
+        }
+    }
+
+    #[test]
+    fn allowed_reads_every_key_as_it_did() {
+        for (t, y) in ALLOW {
+            for title in [
+                t.to_string(),
+                t.to_uppercase(),
+                t.replace(' ', "."),
+                format!("  {}--", t.replace(' ', "_")),
+                format!("{t} x"),
+                format!("x {t}"),
+                t[..t.len() - 1].to_owned(),
+            ] {
+                for year in [None, *y, y.map(|y| y + 1)] {
+                    assert_eq!(
+                        allowed(&title, year),
+                        allowed_by_key(&title, year),
+                        "{title:?} {year:?}"
+                    );
+                }
+            }
+        }
+        assert!(allowed("The Cabinet of Dr. Caligari", Some(1920)));
     }
 
     #[test]

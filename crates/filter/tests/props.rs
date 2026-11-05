@@ -1243,7 +1243,9 @@ fn budget() {
 
 /// One judgment of each of the budget's torrents, for callgrind, whose
 /// instruction counts don't move with the runner (§20.8). `LODESTAR_PROFILE`
-/// picks the case: `core`, `mixed` (the default) or `neutralized`. A
+/// picks the case: `core`, `mixed` (the default), `neutralized`, or one
+/// shape at 10% ([`shape_rules`]): `near`, `negation`, `fuzzy`, `prefix` or
+/// `title`. A
 /// warm-up pass first, so the counts are a judgment's, not the index
 /// build's:
 /// `valgrind --tool=callgrind --toggle-collect='*profile_pass*' target/release/deps/props-* --ignored --exact profile`.
@@ -1281,7 +1283,14 @@ fn profile() {
     let mut engine = lodestar_filter::Engine::new(shipped());
     if case != "core" {
         engine.packs = lodestar_filter::PackSwitches::all();
-        engine.rules = mixed_rules().into();
+        let shape = Shape::ALL
+            .into_iter()
+            .find(|s| format!("{s:?}").eq_ignore_ascii_case(&case));
+        engine.rules = match shape {
+            Some(shape) => shape_rules(shape),
+            None => mixed_rules(),
+        }
+        .into();
     }
     if case == "neutralized" {
         engine.overrides = ["web", "webrip", "hevc", "mkv", "sample"]
