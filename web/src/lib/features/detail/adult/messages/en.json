@@ -1,0 +1,12 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"detail_adult_enrichment_title": "Scene details",
+	"detail_adult_enrichment_studio": "Studio",
+	"detail_adult_enrichment_released": "Released",
+	"detail_adult_enrichment_scene": "Scene",
+	"detail_adult_enrichment_performers": "Performers",
+	"detail_adult_enrichment_performers_more": "The service lists more performers than these.",
+	"detail_adult_enrichment_source": "Matched by {source}",
+	"detail_adult_enrichment_link": "Open the scene page",
+	"detail_adult_enrichment_link_external": "(opens in a new tab)"
+}
