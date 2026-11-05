@@ -32,6 +32,7 @@ use lodestar_pipeline::adult_enrich::{
 use lodestar_pipeline::enrich::{enrich_with_rule, file_infos};
 use lodestar_pipeline::source_adult::AdultSources;
 use lodestar_pipeline::unverified::{self, Ctx, Phase, UnverifiedStats};
+use lodestar_sources::PluginState as _;
 use lodestar_sources::claims::{AdultEnrichment, AdultKind as Kind2};
 use lodestar_sources::enrich::{AdultEnricher, Lookup, Query, QueryForm};
 use lodestar_sources::{
@@ -311,13 +312,32 @@ fn run(
     source: SourceId,
     config: Config,
 ) -> Running {
-    let (src, interest) = AdultEnrichSource::new(plugin, store, filter, adult, switches, config);
+    let state = Arc::new(MemoryState::new());
+    run_with_state(
+        plugin, store, filter, adult, switches, source, config, state,
+    )
+}
+
+/// [`run`], with the plugin's `source_state` in `state`.
+#[allow(clippy::too_many_arguments)]
+fn run_with_state(
+    plugin: Arc<Recorder>,
+    store: Arc<Mutex<Store>>,
+    filter: Arc<Handle>,
+    adult: AdultSources,
+    switches: Arc<Flags>,
+    source: SourceId,
+    config: Config,
+    state: Arc<MemoryState>,
+) -> Running {
+    let (src, interest) =
+        AdultEnrichSource::new(plugin, store, filter, adult, switches, config).unwrap();
     let stats = src.stats();
     let (tx, found) = mpsc::channel(64);
     let (stop, shutdown) = Shutdown::new();
     let wire = Arc::new(Wire::default());
     let kit = Kit::with_limiter(
-        Arc::new(MemoryState::new()),
+        state,
         wire.clone(),
         HostLimiter::new(Policy::STRICT.limits(&Default::default())),
     );
@@ -343,7 +363,7 @@ fn run(
 /// Fast pacing, no background: only what the test asks for is looked up.
 fn interest_only() -> Config {
     Config {
-        per_day: 0,
+        background: false,
         interval: Duration::ZERO,
         ..Config::default()
     }
@@ -769,7 +789,7 @@ async fn the_plugin_stops_after_shutdown() {
 fn ingest(s: &mut Store, engine: &Engine, d: &Discovery) -> unverified::Ingested {
     // The discovery's source is an enrichment source, as the runtime's is.
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << d.source.get()),
+        enrichers: EnrichSources::listed(1 << d.source.get()),
         ..Ctx::default()
     };
     ingest_with(s, engine, ctx, d)
@@ -1119,7 +1139,8 @@ async fn the_plugin_cannot_reach_the_runtimes_state() {
         AdultSources::default(),
         on(),
         interest_only(),
-    );
+    )
+    .unwrap();
     let stats = src.stats();
     let (tx, _found) = mpsc::channel(4);
     let (stop, shutdown) = Shutdown::new();
@@ -1235,7 +1256,7 @@ fn an_always_adult_source_cannot_skip_its_mask_with_a_section() {
     let engine = stand_in().current();
     let ctx = Ctx {
         adult: AdultSources(1 << sukebei.get()),
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         ..Ctx::default()
     };
     let claims = lodestar_sources::Claims {
@@ -1259,26 +1280,91 @@ fn an_always_adult_source_cannot_skip_its_mask_with_a_section() {
         "no section kept"
     );
 
-    // A section alone from the always-adult source: nothing is stored, but
-    // its mask still applies to the torrent it found.
+    // A section alone from the always-adult source is a bare sighting of
+    // the key (ENR-1c): no claims stored, the source gains its bit, so its
+    // mask really applies, and it's counted as a rediscovery.
     let (other, other_key) = put(&mut s, "Garden Tour 2023", dht, 0, false);
     let d = matched(sukebei, other_key, section(Some(Kind2::Scene), "Garden"));
     let done = ingest_with(&mut s, &engine, ctx, &d);
     assert!(done.matched.is_empty());
     assert_eq!(done.adult, vec![other], "the mask applies");
+    assert_eq!(
+        done.touched.len(),
+        1,
+        "a rediscovery, as a bare sighting is"
+    );
     assert!(s.torrent_claims(other).unwrap().is_empty());
+    let row = s.torrent(other).unwrap().unwrap();
+    assert!(
+        AdultSources(1 << sukebei.get()).any(row.sources),
+        "its bit is set"
+    );
 
-    // A section alone, from a source that isn't an enrichment source,
-    // stores nothing.
+    // A section alone, from a source that isn't an enrichment source, is a
+    // bare sighting too: no claims stored, no match.
     let d = matched(dht, key, section(Some(Kind2::Scene), "Garden"));
     let done = ingest_with(&mut s, &engine, ctx, &d);
-    assert!(done.matched.is_empty() && done.touched.is_empty());
+    assert!(done.matched.is_empty() && done.adult.is_empty());
+    assert_eq!(done.touched.len(), 1);
     assert!(
         !s.torrent_claims(id)
             .unwrap()
             .iter()
             .any(|c| c.source == dht)
     );
+    // On a key nothing stores, it's refused: the writer doesn't fetch.
+    let stats = UnverifiedStats::default();
+    let d = matched(
+        dht,
+        InfoHash([8; 20]),
+        section(Some(Kind2::Scene), "Garden"),
+    );
+    unverified::ingest(
+        &mut s,
+        &engine,
+        ctx,
+        std::slice::from_ref(&d),
+        &stats,
+        T,
+        &|_, _| {},
+    )
+    .unwrap();
+    assert_eq!(stats.refused.load(Ordering::Relaxed), 1);
+    assert_eq!(s.unverified(Net::Bt, &[8; 20]).unwrap(), None);
+}
+
+/// A failed mark for the backfill is logged and counted (ENR-1c), and the
+/// flag still starts a pass.
+#[test]
+fn a_failed_backfill_mark_is_counted() {
+    let (mut s, dht, enr) = store();
+    let (_, key) = put(&mut s, "Garden Scene", dht, 0, true);
+    let engine = stand_in().current();
+    // Marking fails: the table it writes is gone.
+    s.connection()
+        .execute_batch("DROP TABLE torrent_parsed")
+        .unwrap();
+    let flag = std::sync::atomic::AtomicBool::new(false);
+    let ctx = Ctx {
+        enrichers: EnrichSources::listed(1 << enr.get()),
+        reenrich: Some(&flag),
+        ..Ctx::default()
+    };
+    let stats = UnverifiedStats::default();
+    let d = matched(enr, key, section(Some(Kind2::Scene), "Garden"));
+    let done = unverified::ingest(
+        &mut s,
+        &engine,
+        ctx,
+        std::slice::from_ref(&d),
+        &stats,
+        T,
+        &|_, _| {},
+    )
+    .unwrap();
+    assert_eq!(done.matched.len(), 1, "the claim is stored");
+    assert_eq!(stats.enrich_failed.load(Ordering::Relaxed), 1);
+    assert!(flag.load(Ordering::SeqCst));
 }
 
 /// The generation race (ENR-1b): a classification-rule change that lands
@@ -1305,7 +1391,7 @@ fn a_rules_change_under_a_match_is_not_overwritten() {
         );
     });
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         filter: Some(&filter),
         ..Ctx::default()
     };
@@ -1336,7 +1422,7 @@ fn deferred_matches_raise_the_backfill_flag() {
     let engine = stand_in().current();
     let flag = std::sync::atomic::AtomicBool::new(false);
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         reenrich: Some(&flag),
         ..Ctx::default()
     };
@@ -1356,7 +1442,7 @@ fn deferred_matches_raise_the_backfill_flag() {
     let (id, key) = put(&mut s, "Garden Scene", dht, 0, true);
     let flag = std::sync::atomic::AtomicBool::new(false);
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         reenrich: Some(&flag),
         ..Ctx::default()
     };
@@ -1515,6 +1601,7 @@ async fn a_match_is_not_counted_as_harvested() {
     let config = lodestar_pipeline::PipelineConfig {
         flush_every: Duration::from_millis(100),
         filter: stand_in(),
+        adult_enrichers: vec!["test-enricher"],
         ..lodestar_pipeline::PipelineConfig::default()
     };
     let pipeline = lodestar_pipeline::Pipeline::start(
@@ -1566,4 +1653,374 @@ async fn a_match_is_not_counted_as_harvested() {
     }
     let store = pipeline.shutdown().await.unwrap();
     assert_eq!(harvested(&store), 1, "only the feed's discovery");
+}
+
+/// An always-adult plugin can't run as an adult-enrichment source: its
+/// answers aren't finds, so its mask would never apply (ENR-1c).
+#[test]
+fn an_always_adult_plugin_is_refused() {
+    struct Both;
+    static BOTH: Manifest = Manifest {
+        id: "both",
+        always_adult: true,
+        ..MANIFEST
+    };
+    impl AdultEnricher for Both {
+        fn manifest(&self) -> &Manifest {
+            &BOTH
+        }
+        fn query_form(&self) -> QueryForm {
+            QueryForm::Name
+        }
+        fn lookup<'a>(
+            &'a self,
+            _kit: &'a Kit,
+            _query: &'a Query,
+        ) -> BoxFuture<'a, Result<Lookup, PluginError>> {
+            Box::pin(async { Ok(Lookup::NoMatch) })
+        }
+    }
+    let (s, _, _) = store();
+    let got = AdultEnrichSource::new(
+        Arc::new(Both),
+        Arc::new(Mutex::new(s)),
+        stand_in(),
+        AdultSources::default(),
+        on(),
+        interest_only(),
+    );
+    assert_eq!(got.err(), Some(adult_enrich::NotAdmitted));
+}
+
+/// A section-only claim on a key an unverified item holds is that item's
+/// sighting (ENR-1c), as any claim from the source would be: the item gains
+/// the source and its time, a public one clears the item's private mark,
+/// and a private one never does. No section is stored on it.
+#[test]
+fn a_section_only_claim_on_an_unverified_item_is_its_sighting() {
+    let (mut s, dht, enr) = store();
+    let feed = s.register_source("feed", "1", 0).unwrap();
+    let engine = stand_in().current();
+    let ctx = Ctx {
+        enrichers: EnrichSources::listed(1 << enr.get()),
+        ..Ctx::default()
+    };
+    let key = [5; 20];
+    let c = Claims {
+        name: Some("Garden Walk".into()),
+        ..Claims::default()
+    };
+    s.put_unverified(&[NewUnverified {
+        network: Net::Bt,
+        key: &key,
+        source: dht,
+        private_source: true,
+        claims: Some(&c),
+        at: T,
+    }])
+    .unwrap();
+    let item = |s: &Store| s.unverified(Net::Bt, &key).unwrap().unwrap();
+    assert!(item(&s).private_source);
+    // A private source's section-only claim: its bit, never public.
+    let mut d = matched(feed, InfoHash(key), section(Some(Kind2::Scene), "Garden"));
+    d.found.private_source = true;
+    d.at = T + 10;
+    let done = ingest_with(&mut s, &engine, ctx, &d);
+    assert!(done.matched.is_empty() && done.touched.is_empty());
+    let i = item(&s);
+    assert!(i.private_source, "a private sighting never clears it");
+    assert_ne!(i.sources & (1 << feed.get()), 0);
+    // A public one clears the private mark, as any public sighting does.
+    let mut d = matched(feed, InfoHash(key), section(Some(Kind2::Scene), "Garden"));
+    d.at = T + 20;
+    ingest_with(&mut s, &engine, ctx, &d);
+    let i = item(&s);
+    assert!(!i.private_source);
+    let claims = i.claims.unwrap();
+    assert!(claims.adult.is_none(), "no section kept");
+    assert_eq!(
+        claims.name.as_deref(),
+        Some("Garden Walk"),
+        "its own claims stay"
+    );
+}
+
+/// An enrichment source that isn't listed (the torrent cache, or a plugin
+/// the host forgot to list) has its section-only answers refused: nothing
+/// stored, and no bit on the torrent (#502 review).
+#[test]
+fn an_unlisted_enrichment_sources_answer_is_refused() {
+    let (mut s, dht, enr) = store();
+    let (id, key) = put(&mut s, "Garden Scene", dht, 0, true);
+    let engine = stand_in().current();
+    // Of the kind, not listed.
+    let ctx = Ctx {
+        enrichers: EnrichSources {
+            listed: 0,
+            kind: 1 << enr.get(),
+        },
+        ..Ctx::default()
+    };
+    let stats = UnverifiedStats::default();
+    let d = matched(enr, key, section(Some(Kind2::Scene), "Garden"));
+    let done = unverified::ingest(
+        &mut s,
+        &engine,
+        ctx,
+        std::slice::from_ref(&d),
+        &stats,
+        T,
+        &|_, _| {},
+    )
+    .unwrap();
+    assert!(done.matched.is_empty() && done.touched.is_empty() && done.adult.is_empty());
+    assert_eq!(stats.refused.load(Ordering::Relaxed), 1);
+    assert!(s.torrent_claims(id).unwrap().is_empty());
+    let row = s.torrent(id).unwrap().unwrap();
+    assert_eq!(row.sources & (1 << enr.get()), 0, "no bit for an answer");
+}
+
+/// Through a running pipeline with the default config: a source of the
+/// torrent cache's kind that isn't listed can't attach a section, and its
+/// section-only claim leaves the stored torrent untouched (#502 review).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_torrent_caches_kind_cannot_attach_a_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let key = {
+        let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+        let dht = s.register_source("dht", "1", 0).unwrap();
+        put(&mut s, "Garden Scene", dht, 0, true).1
+    };
+    let (cache, cache_tx) = scripted("test-cache", &[Kind::Enrichment]);
+    let (feed, feed_tx) = scripted("test-feed", &[Kind::Discovery]);
+    let config = lodestar_pipeline::PipelineConfig {
+        flush_every: Duration::from_millis(100),
+        filter: stand_in(),
+        ..lodestar_pipeline::PipelineConfig::default()
+    };
+    let pipeline = lodestar_pipeline::Pipeline::start(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![cache, feed],
+    )
+    .await
+    .unwrap();
+    let cache_id = pipeline
+        .sources()
+        .iter()
+        .find(|s| s.plugin == "test-cache")
+        .unwrap()
+        .id;
+    let claims = lodestar_sources::Claims {
+        adult: Some(section(Some(Kind2::Scene), "Garden")),
+        ..Default::default()
+    };
+    cache_tx
+        .send(lodestar_sources::Found::key(key, STRATEGY).with_claims(claims))
+        .await
+        .unwrap();
+    // A feed's claim after it, through the same writer: once that's
+    // stored, the cache's has been judged.
+    let named = lodestar_sources::Claims {
+        name: Some("Other Release 2024".into()),
+        ..Default::default()
+    };
+    let other = InfoHash([7; 20]);
+    feed_tx
+        .send(lodestar_sources::Found::key(other, 0).with_claims(named))
+        .await
+        .unwrap();
+    let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    // Each source forwards from its own task, so wait for both: the feed's
+    // item, and the cache's claim refused.
+    let refused = || {
+        pipeline
+            .writer_stats()
+            .unverified
+            .refused
+            .load(Ordering::Relaxed)
+    };
+    while reader.unverified(Net::Bt, &other.0).unwrap().is_none() || refused() < 1 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the feed"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&key).unwrap().unwrap();
+    assert!(
+        store.torrent_claims(id).unwrap().is_empty(),
+        "no section stored"
+    );
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(
+        row.sources & (1 << cache_id.get()),
+        0,
+        "no bit for the cache"
+    );
+}
+
+/// One cap for interest and background (plan Q15, ENR-1c): opened items
+/// jump the queue, but no UTC day sees more lookups than the cap, and an
+/// opened item past it waits first in line instead of being asked.
+#[tokio::test]
+async fn interest_and_background_share_one_daily_cap() {
+    let (mut s, dht, enr) = store();
+    let ids: Vec<i64> = (0..6)
+        .map(|i| put(&mut s, &format!("Garden Scene {i}"), dht, 0, true).0)
+        .collect();
+    let plugin = Recorder::new(None);
+    let config = Config {
+        per_day: 3,
+        interval: Duration::ZERO,
+        ..Config::default()
+    };
+    let r = run(
+        plugin.clone(),
+        Arc::new(Mutex::new(s)),
+        stand_in(),
+        AdultSources::default(),
+        on(),
+        enr,
+        config,
+    );
+    // Opened before the background reaches them: asked first.
+    for &id in &ids[4..] {
+        assert!(r.interest.opened(id));
+    }
+    until("the cap", || r.stats.looked_up.load(Ordering::SeqCst) == 3).await;
+    // One more item reaches the spent budget and waits, never asked.
+    until("a wait", || r.stats.done.load(Ordering::SeqCst) >= 4).await;
+    let _ = r.stop.send(true);
+    r.task.await.unwrap().unwrap();
+    let names = plugin.names();
+    assert_eq!(names.len(), 3, "never past the cap in one day: {names:?}");
+    assert_eq!(
+        &names[..2],
+        ["Garden Scene 4", "Garden Scene 5"],
+        "interest first"
+    );
+}
+
+/// The day's budget, as the runtime keeps it: the UTC day and the count.
+fn budget(day: i64, used: u32) -> Vec<u8> {
+    let mut v = day.to_be_bytes().to_vec();
+    v.extend(used.to_be_bytes());
+    v
+}
+
+fn today() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        / 86_400
+}
+
+/// An opened item that meets a spent budget waits first in line, and is
+/// asked once a new day's budget allows it (Q15's one cap, ENR-1c). Opened
+/// and held while Show adult content goes off, it's never asked.
+#[tokio::test]
+async fn an_opened_item_waits_for_the_budget() {
+    for show_adult_stays_on in [true, false] {
+        let (mut s, dht, enr) = store();
+        let (first, _) = put(&mut s, "Garden Scene", dht, 0, true);
+        let (second, _) = put(&mut s, "Other Scene", dht, 0, true);
+        let state = Arc::new(MemoryState::new());
+        state.set("enr1/budget", budget(today(), 2)).await.unwrap();
+        let flags = on();
+        let plugin = Recorder::new(None);
+        let config = Config {
+            per_day: 2,
+            idle: Duration::from_millis(20),
+            ..interest_only()
+        };
+        let r = run_with_state(
+            plugin.clone(),
+            Arc::new(Mutex::new(s)),
+            stand_in(),
+            AdultSources::default(),
+            flags.clone(),
+            enr,
+            config,
+            state.clone(),
+        );
+        assert!(r.interest.opened(first));
+        assert!(r.interest.opened(second));
+        until("the spent budget", || {
+            r.stats.done.load(Ordering::SeqCst) >= 1
+        })
+        .await;
+        assert!(
+            plugin.queries.lock().unwrap().is_empty(),
+            "not asked while spent"
+        );
+        if !show_adult_stays_on {
+            flags.show_adult.store(false, Ordering::SeqCst);
+        }
+        // A new day.
+        state
+            .set("enr1/budget", budget(today() - 1, 2))
+            .await
+            .unwrap();
+        if show_adult_stays_on {
+            until("both asked", || plugin.queries.lock().unwrap().len() == 2).await;
+            assert_eq!(
+                plugin.names(),
+                ["Garden Scene", "Other Scene"],
+                "the held item first"
+            );
+        } else {
+            // Tried again and dropped: Show adult content is off.
+            until("the retry", || {
+                r.stats.ineligible.load(Ordering::SeqCst) >= 1
+            })
+            .await;
+            assert!(plugin.queries.lock().unwrap().is_empty(), "never asked");
+        }
+        let _ = r.stop.send(true);
+        r.task.await.unwrap().unwrap();
+    }
+}
+
+/// A host can't set the daily cap above the owner's (Q15).
+#[tokio::test]
+async fn the_daily_cap_is_clamped() {
+    let (mut s, dht, enr) = store();
+    let (id, _) = put(&mut s, "Garden Scene", dht, 0, true);
+    let state = Arc::new(MemoryState::new());
+    let cap = lodestar_sources::enrich::BACKGROUND_PER_DAY;
+    state
+        .set("enr1/budget", budget(today(), cap))
+        .await
+        .unwrap();
+    let plugin = Recorder::new(None);
+    let config = Config {
+        per_day: u32::MAX,
+        ..interest_only()
+    };
+    let r = run_with_state(
+        plugin.clone(),
+        Arc::new(Mutex::new(s)),
+        stand_in(),
+        AdultSources::default(),
+        on(),
+        enr,
+        config,
+        state,
+    );
+    assert!(r.interest.opened(id));
+    until("the spent budget", || {
+        r.stats.done.load(Ordering::SeqCst) >= 1
+    })
+    .await;
+    assert!(
+        plugin.queries.lock().unwrap().is_empty(),
+        "capped at the owner's"
+    );
+    let _ = r.stop.send(true);
+    r.task.await.unwrap().unwrap();
 }

@@ -237,9 +237,8 @@ pub fn match_of(a: &AdultEnrichment) -> Option<EnrichmentMatch> {
 
 /// The enrichment match stored on torrent `id`: the first, by source, of
 /// its claims' adult sections that names a kind. `unverified::ingest`
-/// keeps a section only on a stored torrent and never through a private
-/// source; it doesn't yet check that the source is an enrichment plugin
-/// (`docs/decisions/2026-11-05-ENR-1.md`).
+/// keeps a section only from an enrichment source (`Ctx::enrichers`,
+/// ENR-1b), only on a stored torrent and never through a private source.
 pub fn stored_match(
     store: &Store,
     id: i64,
