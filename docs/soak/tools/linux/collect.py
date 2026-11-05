@@ -1083,6 +1083,16 @@ class LodestarAPI:
         out["restart_pending"] = bool(pending) if isinstance(pending, list) else None
         return out
 
+    def build_target(self):
+        """The build's target triple from GET /system (`build.target`), or None.
+
+        It tells the analyzer who serves C's malloc: mimalloc in musl builds
+        (X-mimalloc-override), the C library elsewhere. Only a well-formed
+        triple is kept; nothing else from /system is recorded."""
+        build = self.get("/system").get("build")
+        target = build.get("target") if isinstance(build, dict) else None
+        return target if isinstance(target, str) and TARGET.fullmatch(target) else None
+
     def imports(self, from_unix, to_unix):
         """Counts of import, pause and preset annotations in the range; no job details."""
         doc = self.get(f"/insights/events?from={int(from_unix)}&to={int(to_unix)}")
@@ -1091,6 +1101,10 @@ class LodestarAPI:
                 "import_started": kinds["import_started"], "import_finished": kinds["import_finished"],
                 "intensity_changes": kinds["intensity"], "paused": kinds["paused"] + len(doc.get("paused") or []),
                 "truncated": bool(doc.get("truncated"))}
+
+
+# A Rust target triple, e.g. x86_64-unknown-linux-musl (analyze_cr0.py's TARGET).
+TARGET = re.compile(r"[a-z0-9_]{1,16}(?:-[a-z0-9_.]{1,24}){1,4}")
 
 
 def api_request(method, url, body, cookie, timeout=10):
@@ -1218,6 +1232,7 @@ class Collector:
         self.ip = PublicIP(getattr(args, "ip_echo_url", DEFAULT_IP_ECHO), ip_lookup)
         self.api = (LodestarAPI(args.url, args.password_file, api_call)
                     if getattr(args, "password_file", None) else None)
+        self.target_pending = False  # run_json sets it when the first /system read fails
         self.run_command = run_command
         self.stop_flag = threading.Event()
         self.stop_signal = None
@@ -1270,6 +1285,16 @@ class Collector:
             raise SystemExit("Use a plain http://host:port URL without credentials or path.")
         if not COMMIT.fullmatch(a.commit):
             raise SystemExit("--commit must be a lowercase hex commit id (7 to 40 characters).")
+        # Any run that logs in (a CR-SPEC run always; a CR-0 run when given one,
+        # to record the build target): the same two guards on the password.
+        if getattr(a, "password_file", None):
+            if not Path(a.password_file).is_file():
+                raise SystemExit("--password-file must name a readable file.")
+            if host_class(parsed.hostname) not in ("loopback", "private"):
+                raise SystemExit("--password-file sends the admin password over plain http: "
+                                 "use a loopback or private --url.")
+            if os.stat(a.password_file).st_mode & 0o077:
+                raise SystemExit("--password-file must be readable by its owner only (chmod 600).")
         if self.root.exists() and (not self.root.is_dir() or any(self.root.iterdir())):
             raise SystemExit("Run directory is not empty; use a fresh directory.")
         if (a.stop and self.instance.kind == "native" and self.instance.real_signals
@@ -1316,11 +1341,6 @@ class Collector:
         else:
             if not a.password_file or not Path(a.password_file).is_file():
                 raise SystemExit("--password-file is required: the settings and Insights checks need a login.")
-            if host_class(urllib.parse.urlsplit(a.url).hostname) not in ("loopback", "private"):
-                raise SystemExit("--password-file sends the admin password over plain http: "
-                                 "use a loopback or private --url.")
-            if os.stat(a.password_file).st_mode & 0o077:
-                raise SystemExit("--password-file must be readable by its owner only (chmod 600).")
         if not a.spec_commit or not COMMIT.fullmatch(a.spec_commit):
             raise SystemExit("--spec-commit must name the commit whose CR-SPEC governs this run (rule 7.2).")
         self.checklist = parse_checklist(a.checklist, a.next_run)
@@ -1359,6 +1379,15 @@ class Collector:
             "process_identity": inst.identity, "process_id": inst.process_id,
             "collector_process_id": os.getpid(), "settings": settings,
         }
+        # Retried on later samples until the API answers (as settings_api is), so a
+        # slow start doesn't leave the analyzer's C allocator unknown.
+        self.target_pending = False
+        if self.api is not None:
+            try:
+                run["build_target"] = self.api.build_target()
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
+                self.target_pending = True
+                self.note("system API unavailable at start: build target retried on later samples")
         if inst.kind == "docker":
             run["cgroup_version"] = 2 if (Path(a.cgroup_root) / "cgroup.controllers").exists() else None
         if self.spec:
@@ -1574,6 +1603,18 @@ class Collector:
                 family = ip_family_counters(text) if metrics_ok else {}
                 if family:
                     row["ip_family_counters"] = family
+                if self.target_pending and metrics_ok:
+                    try:
+                        target = self.api.build_target()
+                    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                            http.client.HTTPException):
+                        pass
+                    else:  # it answered: kept if well formed, never asked again
+                        self.target_pending = False
+                        if target is not None:
+                            self.run["build_target"] = target
+                            self.save(self.run, self.root / "run.json")
+                            self.note(f"build target recorded at elapsed {round(elapsed, 1)} s")
                 if self.spec:
                     if health is None:
                         row.pop("health")

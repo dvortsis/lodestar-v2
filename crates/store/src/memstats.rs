@@ -1,10 +1,17 @@
 //! SQLite's own heap, for the memory attribution gauges (X-mem-gauges).
 //!
-//! The bundled SQLite allocates through the C library's `malloc` (musl's
-//! mallocng in the Docker image), not through the Rust global allocator,
-//! so mimalloc's counters never see it. SQLite counts its own bytes
-//! (`SQLITE_DEFAULT_MEMSTATUS` is on in the bundled build): these read
-//! those process-wide counters.
+//! The bundled SQLite allocates through the C library's `malloc`, not
+//! through the Rust global allocator. What serves that `malloc` depends on
+//! the build (`docs/metrics.md`, "Memory attribution"):
+//! - **musl builds** (the release builds: the Docker image and the
+//!   tarballs): mimalloc, through its `override` feature
+//!   (X-mimalloc-override). SQLite's bytes are then part of mimalloc's
+//!   committed bytes, not beside them.
+//! - **Every other build** (Windows, glibc): the C library's own heap,
+//!   which mimalloc's counters never see.
+//!
+//! Either way SQLite counts its own bytes (`SQLITE_DEFAULT_MEMSTATUS` is on
+//! in the bundled build): these read those process-wide counters.
 //!
 //! **Cost:** each call takes SQLite's memory-statistics mutex for a load
 //! of one integer, the same mutex every SQLite allocation already takes

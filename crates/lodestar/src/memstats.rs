@@ -2,19 +2,31 @@
 //! anonymous memory is in, so a soak's memory verdict can say where a ramp
 //! is.
 //!
-//! - **mimalloc**, the Rust global allocator (not `override`): its own
-//!   committed bytes, from `mi_stats_get_json` through the `mimalloc`
-//!   crate's safe `MiMalloc::stats_json` (`extended` feature).
+//! - **mimalloc**, the Rust global allocator, and in musl builds the C
+//!   library's `malloc` too (below): its own committed bytes, from
+//!   `mi_stats_get_json` through the `mimalloc` crate's safe
+//!   `MiMalloc::stats_json` (`extended` feature).
 //! - **SQLite**, which counts its own heap: `sqlite3_memory_used` and its
 //!   high-water mark, through `lodestar_store::memstats`.
 //! - **The kernel's view** (Linux only): `RssAnon` and `RssFile` from
 //!   `/proc/self/status`, and `AnonHugePages` from
 //!   `/proc/self/smaps_rollup`.
 //!
-//! C code (SQLite, zstd) allocates through the C library's `malloc`, which
-//! mimalloc doesn't count. `RssAnon` minus mimalloc's committed bytes and
-//! SQLite's own approximates the rest, which the analyzer reports as "other
-//! heap". It's neither an upper nor a lower bound:
+//! Where C code (SQLite, zstd) allocates depends on the build
+//! (`docs/metrics.md`, "Memory attribution"):
+//! - **musl builds** (the release builds: the Docker image and the
+//!   tarballs): mimalloc's `override` feature makes it the C library's
+//!   `malloc` as well (X-mimalloc-override, `Cargo.toml`). Its committed
+//!   bytes then include C allocations, and SQLite's count is part of them,
+//!   not beside them. `RssAnon` minus mimalloc's committed bytes
+//!   approximates the rest.
+//! - **Every other build** (Windows, glibc): C code allocates through the C
+//!   library's own `malloc`, which mimalloc doesn't count. `RssAnon` minus
+//!   mimalloc's committed bytes and SQLite's own approximates the rest.
+//!
+//! The analyzer reports that rest as "other heap", choosing the formula by
+//! the build target the collector records. It's neither an upper nor a
+//! lower bound:
 //! - it also holds thread stacks and every other anonymous mapping;
 //! - transparent huge pages can fault whole 2 MiB pages into mimalloc's
 //!   arenas beyond the slices mimalloc counts, which lands here (read it
