@@ -766,6 +766,16 @@ impl SearchIndex {
         })
     }
 
+    /// Live segments in each index's current searcher (torrent index,
+    /// file index), for `/metrics`. Loads each reader's current searcher:
+    /// an atomic pointer load and an `Arc` clone, no lock.
+    pub fn segment_counts(&self) -> [u64; 2] {
+        [
+            self.reader.searcher().segment_readers().len() as u64,
+            self.files.reader.searcher().segment_readers().len() as u64,
+        ]
+    }
+
     /// Turns the prune after each commit off (or back on), for every clone
     /// of this index. Only the regression test and M1-exp's control arm
     /// turn it off.
