@@ -1,7 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"sources_title": "Sources",
-	"sources_purpose": "Where Lodestar finds torrents besides the DHT. Each source can be turned on or off and given a share of the fetch work. A change to on or off takes effect at the next start.",
+	"sources_purpose": "Where Lodestar finds torrents: the DHT and the other sources. Each source can be turned on or off and given a share of the fetch work. Turning one on or off takes effect at the next start.",
 	"sources_loading": "Loading your sources…",
 	"sources_load_failed": "Couldn't load the sources. Nothing was changed.",
 	"sources_retry": "Try again",
@@ -35,11 +35,20 @@
 	"sources_setup_credentials": "Needs setup before it can be turned on: it needs your account details first. Setup is not available on this screen yet.",
 	"sources_setup_password": "Needs setup before it can be turned on: it asks for your password. Setup is not available on this screen yet.",
 	"sources_last_error": "It last stopped because: {error}",
-	"sources_found": "{count} found in 24 h",
-	"sources_stored": "{count} stored",
-	"sources_yield_label": "Last 24 hours: {found} found, {stored} of them stored",
+	"sources_found": "{count} unique finds in 24 h",
+	"sources_stored": "{count} of them stored",
 	"sources_error_network": "Couldn't reach Lodestar. Nothing was changed.",
 	"sources_error_needs_setup": "This source needs setup before it can be turned on. Nothing was changed.",
 	"sources_error_purge_running": "A purge is running for this source. Nothing was changed.",
-	"sources_error_code": "The change was refused ({code}). Nothing was changed."
+	"sources_error_code": "The change was refused ({code}). Nothing was changed.",
+	"sources_toggle_name": "{name}: on",
+	"sources_priority_name": "{name}: priority",
+	"sources_saved": "{name} updated.",
+	"sources_risk_low": "Low risk",
+	"sources_risk_medium": "Medium risk",
+	"sources_risk_high": "High risk",
+	"sources_consent_external": "External",
+	"sources_consent_account": "Account",
+	"sources_consent_restricted": "Restricted",
+	"sources_consent_overlay": "Overlay"
 }

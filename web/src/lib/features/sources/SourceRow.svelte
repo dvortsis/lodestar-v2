@@ -1,7 +1,9 @@
 <script lang="ts">
-	// One source (§18.8): name, status, enable toggle, priority and the 24 h yield. The toggle never
-	// asks the server to turn on a source that still needs setup (consent, credentials, password):
-	// the dialogs for those are SRC-15b, and the server's gate (§18.7) stays the only judge.
+	// One source (§18.8): name, status, risk and consent class, enable toggle, priority and the 24 h
+	// yield. The toggle never asks the server to turn on a source that still needs setup (consent,
+	// credentials, password): the dialogs for those are SRC-15b, and the server's gate (§18.7) stays
+	// the only judge. While a change is in flight the controls stay focusable (a disabled control
+	// would drop the keyboard user's place) and simply ignore input.
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -11,8 +13,10 @@
 	import StatusPill from './StatusPill.svelte';
 	import YieldBar from './YieldBar.svelte';
 	import {
+		consentText,
 		PRIORITIES,
 		priorityText,
+		riskText,
 		setupNeed,
 		setupText,
 		statusOf,
@@ -23,8 +27,9 @@
 	interface Props {
 		source: Source;
 		busy: boolean;
-		onenable: (enabled: boolean) => void;
-		onpriority: (priority: Priority) => void;
+		/** Resolves to whether the server took the change. */
+		onenable: (enabled: boolean) => Promise<boolean>;
+		onpriority: (priority: Priority) => Promise<boolean>;
 	}
 	let { source: s, busy, onenable, onpriority }: Props = $props();
 
@@ -34,9 +39,34 @@
 	const locale = () => currentLocale();
 	const options = $derived(PRIORITIES.map((p) => ({ value: p, label: priorityText(p) })));
 	const canPrioritise = $derived(s.editable.includes('priority'));
-	const canEnable = $derived(s.editable.includes('enabled') && s.state !== 'purged');
+	const canEnable = $derived(
+		s.editable.includes('enabled') && s.state !== 'purged' && !s.purge_pending
+	);
 	const found = $derived(formatCount(s.health.harvested_24h, locale()));
 	const stored = $derived(formatCount(s.health.stored_24h, locale()));
+	const consent = $derived(consentText(s.consent));
+
+	async function toggled(e: Event & { currentTarget: HTMLInputElement }) {
+		const el = e.currentTarget;
+		const want = el.checked;
+		// Turning on is the server's gate; a source that needs setup, or a change already in
+		// flight, never reaches it.
+		if (busy || (want && need !== null)) {
+			el.checked = !want;
+			return;
+		}
+		if (!(await onenable(want))) el.checked = !want;
+	}
+
+	async function prioritised(e: Event & { currentTarget: HTMLSelectElement }) {
+		const el = e.currentTarget;
+		const was = s.priority;
+		if (busy) {
+			el.value = was;
+			return;
+		}
+		if (!(await onpriority(el.value as Priority))) el.value = was;
+	}
 </script>
 
 <li class="flex flex-col gap-2 rounded-box border border-field-border p-4" data-testid={id}>
@@ -46,35 +76,39 @@
 		{#if s.restart_required}
 			<Badge variant="info"><span data-testid="{id}-restart">{m.sources_restart()}</span></Badge>
 		{/if}
+		<Badge variant={s.risk === 'high' ? 'warning' : 'neutral'}
+			><span data-testid="{id}-risk">{riskText(s.risk)}</span></Badge
+		>
+		{#if consent}<Badge><span data-testid="{id}-consent">{consent}</span></Badge>{/if}
 		<div class="ms-auto flex flex-wrap items-center gap-x-4 gap-y-2">
 			<Toggle
 				label={m.sources_enable()}
+				aria-label={m.sources_toggle_name({ name: s.name })}
 				checked={s.enabled}
-				disabled={busy || !canEnable || (need !== null && !s.enabled)}
+				disabled={!canEnable || (need !== null && !s.enabled)}
+				aria-busy={busy}
 				aria-describedby={need !== null ? `${id}-need` : undefined}
-				onchange={(e) => {
-					// Turning on is the server's gate; a source that needs setup never asks it.
-					if (e.currentTarget.checked && need !== null) e.currentTarget.checked = false;
-					else onenable(e.currentTarget.checked);
-				}}
+				onchange={toggled}
 				data-testid="{id}-toggle"
 			/>
 			<label class="flex items-center gap-2 text-small">
-				<span>{m.sources_priority()}</span>
+				<span aria-hidden="true">{m.sources_priority()}</span>
 				<Select
 					dense
 					class="w-auto"
 					{options}
 					value={s.priority}
-					disabled={busy || !canPrioritise}
-					onchange={(e) => onpriority(e.currentTarget.value as Priority)}
+					disabled={!canPrioritise}
+					aria-label={m.sources_priority_name({ name: s.name })}
+					aria-busy={busy}
+					onchange={prioritised}
 					data-testid="{id}-priority"
 				/>
 			</label>
 		</div>
 	</div>
 	{#if need !== null}
-		<p class="text-small text-warning-content" id="{id}-need" data-testid="{id}-need">
+		<p class="text-small" id="{id}-need" data-testid="{id}-need">
 			{setupText(need)}
 		</p>
 	{/if}
@@ -84,12 +118,7 @@
 		</p>
 	{/if}
 	<div class="flex flex-wrap items-center gap-2 text-small text-muted-text">
-		<YieldBar
-			found={s.health.harvested_24h}
-			stored={s.health.stored_24h}
-			label={m.sources_yield_label({ found, stored })}
-			testid="{id}-yield"
-		/>
+		<YieldBar found={s.health.harvested_24h} stored={s.health.stored_24h} testid="{id}-yield" />
 		<span data-testid="{id}-found">{m.sources_found({ count: found })}</span>
 		<span aria-hidden="true">·</span>
 		<span data-testid="{id}-stored">{m.sources_stored({ count: stored })}</span>

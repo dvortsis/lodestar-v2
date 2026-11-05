@@ -22,17 +22,23 @@
 	let sources = $state.raw<Source[] | null>(null);
 	let failed = $state(false);
 	let problem = $state('');
+	let announce = $state('');
 	let busy = $state.raw<readonly number[]>([]);
 	let ctl: AbortController | undefined;
 	let destroyed = false;
+	// Counts the PATCH replies taken in: a list read that started before the latest reply is older
+	// than it, so its answer is dropped instead of undoing that change.
+	let replies = 0;
 
 	const groups = $derived(sources ? group(sources) : []);
 
 	async function load() {
 		ctl?.abort();
 		const mine = (ctl = new AbortController());
+		const seen = replies;
 		try {
-			sources = (await api.get('/sources', { signal: mine.signal })).sources;
+			const list = (await api.get('/sources', { signal: mine.signal })).sources;
+			if (seen === replies) sources = list;
 			failed = false;
 		} catch (e) {
 			if (!isAbort(e)) failed = true;
@@ -42,19 +48,24 @@
 	const mark = (id: number, on: boolean) =>
 		(busy = on ? [...busy, id] : busy.filter((x) => x !== id));
 
-	/** Sends one change; the reply replaces the row. A refusal is shown and the list reloads. */
-	async function change(s: Source, body: SourcePatch) {
-		if (busy.includes(s.id)) return;
+	/** Sends one change; the reply replaces the row. Resolves to whether the server took it. */
+	async function change(s: Source, body: SourcePatch): Promise<boolean> {
+		if (busy.includes(s.id)) return false;
 		problem = '';
+		announce = '';
 		mark(s.id, true);
 		try {
 			const updated = await api.patch('/sources/{id}', { path: { id: s.id }, body });
-			if (destroyed) return;
+			if (destroyed) return true;
+			replies++;
 			sources = sources!.map((x) => (x.id === s.id ? updated : x));
+			announce = m.sources_saved({ name: s.name });
+			return true;
 		} catch (e) {
-			if (destroyed) return;
+			if (destroyed) return false;
 			problem = refusalText(e);
 			await load();
+			return false;
 		} finally {
 			mark(s.id, false);
 		}
@@ -69,9 +80,10 @@
 
 <h1 class="text-title font-semibold" tabindex="-1">{m.sources_title()}</h1>
 <p class="text-muted-text">{m.sources_purpose()}</p>
+<p class="sr-only" role="status" data-testid="sources-announce">{announce}</p>
 
 {#if problem}
-	<div role="alert" data-testid="sources-problem"><Banner kind="error">{problem}</Banner></div>
+	<div data-testid="sources-problem"><Banner kind="error">{problem}</Banner></div>
 {/if}
 
 {#if sources}
@@ -112,7 +124,7 @@
 		</div>
 	{/if}
 {:else if failed}
-	<div role="alert" data-testid="sources-failed">
+	<div data-testid="sources-failed">
 		<Banner kind="error">
 			{m.sources_load_failed()}
 			{#snippet action()}<Button dense onclick={load}>{m.sources_retry()}</Button>{/snippet}

@@ -6,10 +6,9 @@
 	interface Props {
 		found: number;
 		stored: number;
-		label: string;
 		testid?: string;
 	}
-	let { found, stored, label, testid = 'yield-bar' }: Props = $props();
+	let { found, stored, testid = 'yield-bar' }: Props = $props();
 
 	const W = 64;
 	const part = $derived(
@@ -20,8 +19,7 @@
 <svg
 	class="h-2 w-(--compbar-min-width) shrink-0"
 	viewBox="0 0 {W} 4"
-	role="img"
-	aria-label={label}
+	aria-hidden="true"
 	data-testid={testid}
 	data-stored={stored}
 	data-found={found}

@@ -52,6 +52,12 @@ export const nyaa = source({
 	needs: 'endpoints_ack',
 	endpoints: ['https://nyaa.example']
 });
+// Acknowledged earlier, then turned off: `needs` is null, `consent_required` stays true (a class fact).
+export const nyaaAcked = source({
+	...nyaa,
+	needs: null,
+	state: 'disabled'
+});
 export const prowlarr = source({
 	id: 2,
 	name: 'Prowlarr',

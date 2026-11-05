@@ -1,7 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"sources_title": "来源",
-	"sources_purpose": "除 DHT 外，Lodestar 发现种子的途径。每个来源都可以开启或关闭，并分得一部分获取任务。开启或关闭会在下次启动时生效。",
+	"sources_purpose": "Lodestar 发现种子的途径：DHT 和其他来源。每个来源都可以开启或关闭，并分得一部分获取任务。开启或关闭会在下次启动时生效。",
 	"sources_loading": "正在加载来源…",
 	"sources_load_failed": "无法加载来源。未做任何更改。",
 	"sources_retry": "重试",
@@ -35,11 +35,20 @@
 	"sources_setup_credentials": "开启前需要先设置：它需要你的账户信息。此屏幕暂不提供设置。",
 	"sources_setup_password": "开启前需要先设置：它会要求输入你的密码。此屏幕暂不提供设置。",
 	"sources_last_error": "上次停止的原因：{error}",
-	"sources_found": "24 小时内发现 {count} 个",
-	"sources_stored": "已存储 {count} 个",
-	"sources_yield_label": "过去 24 小时：发现 {found} 个，其中 {stored} 个已存储",
+	"sources_found": "24 小时内独立发现 {count} 个",
+	"sources_stored": "其中已存储 {count} 个",
 	"sources_error_network": "无法连接 Lodestar。未做任何更改。",
 	"sources_error_needs_setup": "此来源需要先完成设置才能开启。未做任何更改。",
 	"sources_error_purge_running": "此来源正在清除。未做任何更改。",
-	"sources_error_code": "更改被拒绝（{code}）。未做任何更改。"
+	"sources_error_code": "更改被拒绝（{code}）。未做任何更改。",
+	"sources_toggle_name": "{name}：开启",
+	"sources_priority_name": "{name}：优先级",
+	"sources_saved": "{name} 已更新。",
+	"sources_risk_low": "低风险",
+	"sources_risk_medium": "中风险",
+	"sources_risk_high": "高风险",
+	"sources_consent_external": "外部",
+	"sources_consent_account": "账户",
+	"sources_consent_restricted": "受限",
+	"sources_consent_overlay": "叠加"
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '$lib/api/client';
-import { dht, nyaa, prowlarr, source } from './fixtures';
+import { dht, nyaa, nyaaAcked, prowlarr, source } from './fixtures';
 import { group, refusalText, setupNeed, statusOf } from './sources';
 
 describe('grouping', () => {
@@ -28,17 +28,24 @@ describe('status', () => {
 		expect(statusOf(source({ id: 5, name: 'a', purge_pending: true }))).toBe('purge_pending');
 	});
 
-	it('names what setup a disabled source still needs', () => {
+	it('names what setup a disabled source still needs, from the API `needs`', () => {
 		expect(setupNeed(nyaa)).toBe('endpoints');
 		expect(setupNeed(source({ id: 6, name: 'a', needs: 'credentials' }))).toBe('credentials');
+		// `needs` is the server's word: stored credentials do not clear it here.
+		expect(setupNeed(source({ id: 6, name: 'a', needs: 'credentials', credentials: ['k'] }))).toBe(
+			'credentials'
+		);
 		expect(setupNeed(source({ id: 6, name: 'a', needs: 'consent', consent_required: true }))).toBe(
 			'consent'
 		);
 		expect(setupNeed(source({ id: 6, name: 'a', password_required: true }))).toBe('password');
-		expect(
-			setupNeed(source({ id: 6, name: 'a', needs: 'credentials', credentials: ['k'] }))
-		).toBeNull();
 		expect(setupNeed(dht)).toBeNull();
+	});
+
+	it('lets a source acknowledged earlier toggle back on, though its class still needs consent', () => {
+		expect(nyaaAcked.consent_required).toBe(true);
+		expect(setupNeed(nyaaAcked)).toBeNull();
+		expect(statusOf(nyaaAcked)).toBe('off');
 	});
 });
 
@@ -46,7 +53,7 @@ describe('refusals', () => {
 	it('reads the gate codes plainly and falls back to the server text', () => {
 		expect(refusalText(new ApiError(409, 'consent_required', 'x'))).toContain('needs setup');
 		expect(refusalText(new ApiError(409, 'purge_running', 'x'))).toContain('purge');
-		expect(refusalText(new ApiError(400, 'other', 'Server words'))).toBe('Server words');
+		expect(refusalText(new ApiError(400, 'other', 'Server words'))).toContain('(other)');
 		expect(refusalText(new Error('x'))).toContain('Nothing was changed');
 	});
 });

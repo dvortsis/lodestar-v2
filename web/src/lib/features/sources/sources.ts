@@ -44,15 +44,16 @@ export type Status =
 
 /**
  * What a user must still do before the server lets this source on; null when enabling is a
- * toggle. Mirrors `needs` / `consent_required` / `password_required` from the API, so the
- * consent gate stays the server's: when this says null the PATCH is still checked there.
+ * toggle. `needs` is the server's own answer (null once the class's condition holds, so a source
+ * acknowledged earlier toggles back on); `password_required` (restricted and overlay) asks every
+ * time, and that prompt is SRC-15b. The server's gate still judges every PATCH.
  */
 export function setupNeed(s: Source): 'consent' | 'endpoints' | 'credentials' | 'password' | null {
 	if (s.enabled) return null;
-	if (s.needs === 'credentials' && s.credentials.length === 0) return 'credentials';
-	if (s.consent_required) return s.needs === 'endpoints_ack' ? 'endpoints' : 'consent';
-	if (s.password_required) return 'password';
-	return null;
+	if (s.needs === 'credentials') return 'credentials';
+	if (s.needs === 'endpoints_ack') return 'endpoints';
+	if (s.needs === 'consent') return 'consent';
+	return s.password_required ? 'password' : null;
 }
 
 export function statusOf(s: Source): Status {
@@ -129,6 +130,19 @@ export function refusalText(e: unknown): string {
 		case 'purge_running':
 			return m.sources_error_purge_running();
 		default:
-			return e.message.trim() || m.sources_error_code({ code: e.code });
+			return m.sources_error_code({ code: e.code });
 	}
 }
+
+export const riskText = (r: Source['risk']): string =>
+	({ low: m.sources_risk_low, medium: m.sources_risk_medium, high: m.sources_risk_high })[r]();
+
+export const consentText = (c: Source['consent']): string | null =>
+	c === 'none'
+		? null
+		: {
+				external: m.sources_consent_external,
+				account: m.sources_consent_account,
+				restricted: m.sources_consent_restricted,
+				overlay: m.sources_consent_overlay
+			}[c]();
