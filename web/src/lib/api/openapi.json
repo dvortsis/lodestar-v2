@@ -9448,6 +9448,91 @@
           }
         }
       },
+      "ClaimDifferences": {
+        "type": "object",
+        "description": "What a source claimed that the verified metadata contradicts\n(§18.5). A field is null when the source didn't state it or it\nagrees; claimed file lists themselves are never returned. Names are\ncompared byte for byte, so a feed's tidied title differs: show it as\ninformation, not a warning.",
+        "required": [
+          "file_count",
+          "matches",
+          "name",
+          "size"
+        ],
+        "properties": {
+          "file_count": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimedNumber",
+                "description": "Files claimed against files in the info dictionary (padding\nexcluded)."
+              }
+            ]
+          },
+          "matches": {
+            "type": "boolean",
+            "description": "Every stated field agrees."
+          },
+          "name": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimedText",
+                "description": "Both names are cut to 1,024 bytes."
+              }
+            ]
+          },
+          "size": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimedNumber",
+                "description": "Bytes."
+              }
+            ]
+          }
+        }
+      },
+      "ClaimedNumber": {
+        "type": "object",
+        "description": "A claimed number and the verified one.",
+        "required": [
+          "claimed",
+          "verified"
+        ],
+        "properties": {
+          "claimed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "verified": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ClaimedText": {
+        "type": "object",
+        "description": "A claimed text and the verified one.",
+        "required": [
+          "claimed",
+          "verified"
+        ],
+        "properties": {
+          "claimed": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "string"
+          }
+        }
+      },
       "ClassRule": {
         "type": "object",
         "required": [
@@ -12009,6 +12094,7 @@
           "histograms",
           "sample_rate",
           "sampled",
+          "source_names",
           "took_ms",
           "total",
           "total_approx",
@@ -12033,7 +12119,7 @@
           },
           "facets": {
             "type": "object",
-            "description": "Term facets by name: `type`, `ext`, `res`, `category`, `lang`,\n`group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,\n`ambiguous`, `imported`, `backfill`, and `adult` when there are\nadult subtypes to list.",
+            "description": "Term facets by name: `type`, `ext`, `res`, `category`, `lang`,\n`group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,\n`ambiguous`, `imported`, `backfill`, `network`, `source`,\n`verified`, and `adult` when there are adult subtypes to list.\n\n`verified` counts `no` even while the search hides unverified\nitems, since its default `verified:yes` is the facet's own\nselection; `source` lists plugin ids (names in `source_names`),\nand never a private source's to anyone but the admin session\n(§18.7).",
             "additionalProperties": {
               "$ref": "#/components/schemas/TermFacet"
             },
@@ -12062,6 +12148,19 @@
           "sampled": {
             "type": "boolean",
             "description": "Some group was computed on a sample (above 1,000,000 matches, or\n300,000 when a segment holds more than 300,000 torrents)."
+          },
+          "source_names": {
+            "type": "object",
+            "description": "The display name of each plugin id the `source` facet lists.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "example": {
+              "dht": "Mainline DHT"
+            }
           },
           "took_ms": {
             "type": "number",
@@ -12934,6 +13033,22 @@
           "truncated": {
             "type": "boolean",
             "description": "More matched than the group lists."
+          }
+        }
+      },
+      "HitSource": {
+        "type": "object",
+        "description": "A hit's source: the display name, and the id `source:` takes.",
+        "required": [
+          "name",
+          "plugin"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "plugin": {
+            "type": "string"
           }
         }
       },
@@ -16151,6 +16266,126 @@
           "query_logging": false
         }
       },
+      "Provenance": {
+        "type": "object",
+        "description": "A torrent's provenance (architecture §18.5, §18.6, §18.8).\n\n**Private sources (§18.7):** a source with the account consent class\n(Prowlarr, Jackett, private-tracker announces, your own download\nclients), claims that came through a private source, and every\nsource of a `private_source` torrent are shown only to the signed-in\nadmin session. Any other caller (an API key, once these routes take\none) gets them left out (a public source with a private claim keeps\nits name, with `claim` null) and `withheld` set.",
+        "required": [
+          "network",
+          "sources",
+          "verified",
+          "withheld"
+        ],
+        "properties": {
+          "network": {
+            "type": "string",
+            "description": "The network tier (§18.6): `bt` for every stored torrent."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceSource"
+            },
+            "description": "The sources that found it: the first one first, then by id.\nEmpty for a torrent stored before provenance was recorded."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "It has verified metadata (§18.5). Always true here: a torrent's\ndetail is its BEP 9 info dictionary."
+          },
+          "withheld": {
+            "type": "boolean",
+            "description": "Sources or claims were left out because they're private and this\ncaller isn't the admin session."
+          }
+        },
+        "example": {
+          "network": "bt",
+          "sources": [
+            {
+              "claim": null,
+              "first": true,
+              "first_seen_at": 1792677600,
+              "id": 0,
+              "name": "Mainline DHT",
+              "plugin": "dht",
+              "private": false
+            },
+            {
+              "claim": {
+                "file_count": {
+                  "claimed": 3,
+                  "verified": 4
+                },
+                "matches": false,
+                "name": null,
+                "size": null
+              },
+              "first": false,
+              "first_seen_at": null,
+              "id": 2,
+              "name": "Nyaa",
+              "plugin": "nyaa",
+              "private": false
+            }
+          ],
+          "verified": true,
+          "withheld": false
+        }
+      },
+      "ProvenanceSource": {
+        "type": "object",
+        "description": "One source that found a torrent.",
+        "required": [
+          "claim",
+          "first",
+          "first_seen_at",
+          "id",
+          "name",
+          "plugin",
+          "private"
+        ],
+        "properties": {
+          "claim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimDifferences",
+                "description": "How what it claimed compares with the verified metadata; null when\nit made no claims about this torrent."
+              }
+            ]
+          },
+          "first": {
+            "type": "boolean",
+            "description": "It found the torrent first."
+          },
+          "first_seen_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When it first found the torrent: the torrent's discovery time for\nthe first source; null for the others, whose first sighting isn't\nrecorded."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The source's id, as `GET /sources` lists it.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The plugin's display name; its manifest id when this build doesn't\nrun that plugin."
+          },
+          "plugin": {
+            "type": "string",
+            "description": "The manifest id, as `source:` takes it."
+          },
+          "private": {
+            "type": "boolean",
+            "description": "A private source, or its claims came through one (§18.7). Only the\nadmin session ever sees one."
+          }
+        }
+      },
       "ProxySettings": {
         "type": "object",
         "description": "`GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.",
@@ -17403,6 +17638,10 @@
             "format": "int64",
             "minimum": 0
           },
+          "source": {
+            "$ref": "#/components/schemas/HitSource",
+            "description": "The source that found it first, or the first one this caller may\nsee (§18.7: a private source is shown only to the admin session).\nOn `/search` hits only, and absent when none is known or visible."
+          },
           "swarm_suspect": {
             "type": "boolean",
             "description": "One tracker reports a swarm nothing else sees (§8): fake seeding."
@@ -17431,6 +17670,10 @@
             "format": "int32",
             "description": "Of those, trackers that reported anyone; null = never scraped.",
             "minimum": 0
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "It has verified metadata (§18.5, the \"Unverified\" badge when\nfalse). On `/search` hits only."
           }
         }
       },
@@ -20442,6 +20685,7 @@
           "approx",
           "distinct",
           "other",
+          "partial",
           "values"
         ],
         "properties": {
@@ -20460,6 +20704,10 @@
             "format": "int64",
             "description": "The counts of the values not listed, summed (a torrent with two\nsuch values counts twice).",
             "minimum": 0
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "The field is still being backfilled after an index upgrade, so the\ncounts are low (only `source`): show them as partial."
           },
           "values": {
             "type": "array",
@@ -20680,6 +20928,7 @@
           "metadata_at",
           "name",
           "piece_len",
+          "provenance",
           "seeders",
           "seeders_approx",
           "size",
@@ -20796,6 +21045,10 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/Provenance",
+            "description": "Where it came from (§18.5, §18.8): \"Found by: DHT · Nyaa\"."
           },
           "seeders": {
             "type": [

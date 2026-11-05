@@ -446,6 +446,12 @@ pub struct SearchHit {
     /// No tracker reported: the counts are the DHT's estimate (show ≈).
     pub seeders_approx: bool,
     pub size: u64,
+    /// The source that found it first, or the first one this caller may
+    /// see (§18.7: a private source is shown only to the admin session).
+    /// On `/search` hits only, and absent when none is known or visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub source: Option<HitSource>,
     /// One tracker reports a swarm nothing else sees (§8): fake seeding.
     pub swarm_suspect: bool,
     /// The resolved title; null = not resolved.
@@ -458,6 +464,18 @@ pub struct SearchHit {
     /// Of those, trackers that reported anyone; null = never scraped.
     #[schema(required = true)]
     pub trackers_reporting: Option<u32>,
+    /// It has verified metadata (§18.5, the "Unverified" badge when
+    /// false). On `/search` hits only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub verified: Option<bool>,
+}
+
+/// A hit's source: the display name, and the id `source:` takes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct HitSource {
+    pub name: String,
+    pub plugin: String,
 }
 
 /// How a first page was ranked (`?explain=1`, architecture §8). Field

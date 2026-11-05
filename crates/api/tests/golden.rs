@@ -32,7 +32,9 @@ use lodestar_filter::lists::SharedIps;
 use lodestar_filter::{Action, Core, CsList, Engine, Handle, HeldSet, Lists, Sealer, Switches};
 use lodestar_metainfo::Info;
 use lodestar_search::SearchIndex;
-use lodestar_store::{Filtered, Held, NewTorrent, SourceId, Store, StoreConfig, WriteBatch};
+use lodestar_store::claims::{ClaimedFile, Claims};
+use lodestar_store::unverified::{Network, NewUnverified};
+use lodestar_store::{Filtered, Held, NewTorrent, Store, StoreConfig, WriteBatch};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -150,6 +152,10 @@ fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    // Provenance (SRC-17a): the DHT found everything; a feed found the
+    // first torrent too, and claimed a little differently.
+    let dht = store.register_source("dht", "1", 1_700_000_000).unwrap();
+    let feed = store.register_source("nyaa", "1", 1_700_000_000).unwrap();
     let raws = [
         torrent(
             "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
@@ -173,10 +179,36 @@ fn fixture() -> Fixture {
             discovered_at: 1_700_000_000,
             metadata_at: 1_700_000_001,
             extra_flags: 0,
-            source: SourceId::new(0).unwrap(),
+            source: dht,
         })
         .collect();
     store.insert(&batch).unwrap();
+    let claims = Claims {
+        name: Some("The Dark Knight (2008) 1080p".into()),
+        size: Some(8 << 30),
+        files: vec![
+            ClaimedFile {
+                path: "The.Dark.Knight.2008.1080p.mkv".into(),
+                size: Some(8 << 30),
+            },
+            ClaimedFile {
+                path: "Subs/English.srt".into(),
+                size: None,
+            },
+        ],
+        ..Claims::default()
+    };
+    let key = infos[0].primary_hash().0;
+    store
+        .put_unverified(&[NewUnverified {
+            network: Network::Bt,
+            key: &key,
+            source: feed,
+            private_source: false,
+            claims: Some(&claims),
+            at: 1_700_000_100,
+        }])
+        .unwrap();
     // Classified, as the pipeline would have.
     let ids = store
         .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 100)
