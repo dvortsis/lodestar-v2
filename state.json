@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T18:15Z",
+  "updated_at": "2026-11-05T18:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3193,6 +3193,13 @@
       "brief": "briefs/ENR-4.md",
       "pr": 503,
       "head": "a4922b17"
+    },
+    "ENR-5": {
+      "status": "running",
+      "session": "session_01MMjhnAJ3uKHzBZaj1KJAcz",
+      "since": "2026-11-05T18:15Z",
+      "model": "sonnet",
+      "brief": "briefs/ENR-5.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4773,7 +4780,6 @@
     "Owner ask (ENR-4/ENR-5): the Q2 terms and robots check for ThePornDB and StashDB APIs before either plugin is registered (HOLD in their decisions files, like SRC-10e).",
     "Host wiring of adult enrichment (after ENR-4/ENR-5 and their owner terms check): set PipelineConfig::adult_enrichers to the plugin manifest ids (ENR-1c #502: the torrent cache is Kind::Enrichment too, so the set is explicit, empty by default); build AdultEnrichSource with Switches, StoreState; hand Interest to ENR-7 API.",
     "Runner docs PR: record owner 2026-11-05T16:15Z \"bring the slots down to 8, complete the existing slices\" in docs/owner-decisions.md (new §), and runner/slices.yaml limits.phase_total 12 -> 8 (then 4 at the cut).",
-    "ENR-5 (StashDB plugin) was next to launch; held by the 8-slot limit. Launch only when fewer than 8 are running (and before the 00:00Z cut to 4 only if still under the limit).",
     "owner-flag §2.19/§2.26 (RP-4 #495, runner rulings 16:22Z): SP-3 counts against a source id with no publisher only for live-feed sources (allow-list); full scrape, clients, arr, archive_org, academic, prowlarr, torrent cache and enrichment count only with a named publisher. Publisher counts are per source. Second judgment on a flooded commit (+3.1 µs, about +21% of a feed commit, only from the 20th name of a flood) accepted.",
     "Follow-up (from ENR-7 #504): the adult-enrichment scene link is always null until ENR-1 carries one (Lookup::Match has no link; provenance.external_ref is never set). Host wiring adds .layer(Extension(DrawerInterest)).",
     "Follow-up (from ENR-4 #503): sources-feeds tpdb Page should say whether it saw `data` (the plugin checks raw bytes today); ENR-4 blocklist contract test deferred to ENR-G/SRC-G.",
@@ -5455,8 +5461,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T18:15Z",
+    "updated": "2026-11-05T18:16Z",
     "items": [
+      {
+        "slot": 1,
+        "slice": "ENR-5",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Enrichment: the StashDB plugin, built but not registered until the terms check",
+        "since": "2026-11-05T18:15Z"
+      },
       {
         "slot": 2,
         "slice": "ENR-4",

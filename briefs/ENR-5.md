@@ -1,5 +1,5 @@
 # ENR-5: the StashDB plugin (Account class, off by default, not registered)
-**Model:** Sonnet (glue over Opus-built parts). `/security-review`, then a fresh Opus reviewer. Runner brief, 2026-11-05T18:17Z.
+**Model:** Sonnet (glue over Opus-built parts). `/security-review`, then a fresh Opus reviewer. Runner brief, 2026-11-05T18:15Z.
 
 ## Why
 This is the StashDB twin of ENR-4 (#503, ThePornDB). The runtime (ENR-1, ENR-1b, ENR-1c) and the bounded StashDB GraphQL parser (ENR-3, #438) are already built. ENR-5 is the plugin that sits between them, on the ENR-G path.
