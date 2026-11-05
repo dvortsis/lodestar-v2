@@ -605,40 +605,91 @@ const ENGINE_SPEED: &[EngineSpeed] = &[
 /// that the skew may need re-deriving. It only warns: the table decides.
 const MODEL_DRIFT: f64 = 0.20;
 
-/// A case's median pass, and how far it is above the fastest pass, as a
-/// share. A shared host's neighbours can slow most of one case's passes
-/// while the calibrations either side run clean; then the median isn't
-/// the engine's time, and the spread shows it. A slower engine slows
-/// every pass alike, so its spread stays small.
-fn spread(mut passes: Vec<f64>) -> (f64, f64) {
+/// One case's seven passes, read for the gate.
+#[derive(Debug, Clone, Copy)]
+struct Timing {
+    /// The third-fastest pass: the time the gate decides on. Noise only
+    /// adds time, so it can't read faster than the engine; it takes three
+    /// passes that fast, so one lucky pass can't set it either; and up to
+    /// four slowed passes of seven leave it alone, where the median moves
+    /// once the fourth is slowed (#429's job 126950288443).
+    at: f64,
+    /// How far `at` is above the fastest pass, as a share. A shared host's
+    /// neighbours can slow most of a case's passes while the calibrations
+    /// either side run clean; then `at` isn't the engine's time, and this
+    /// shows it. A slower engine slows every pass alike, so it stays small.
+    spread: f64,
+    /// How far the slowest pass is above the fastest, as a share: a sign
+    /// the host was busy during the case, even when `at` wasn't touched.
+    jitter: f64,
+}
+
+fn timing(mut passes: Vec<f64>) -> Timing {
     passes.sort_by(f64::total_cmp);
-    let median = passes[passes.len() / 2];
-    (median, median / passes[0] - 1.0)
+    let fastest = passes[0];
+    let at = passes[passes.len() / 3];
+    Timing {
+        at,
+        spread: at / fastest - 1.0,
+        jitter: passes[passes.len() - 1] / fastest - 1.0,
+    }
 }
 
 #[test]
 fn a_case_disturbed_mid_run_has_a_wide_spread() {
-    // This slice's dispatch on a 7763 (job 124112699853): the mixed set
-    // while the host was busy, and the neutralized case right after.
-    let (median, wide) = spread(vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6]);
-    assert_eq!(median, 51.1);
-    assert!(wide > 0.15, "{wide}");
-    let (median, narrow) = spread(vec![43.6, 43.2, 43.2, 43.3, 43.8, 43.4, 43.2]);
-    assert_eq!(median, 43.3);
-    assert!(narrow < 0.01, "{narrow}");
+    // X-filter-budget-8573C's dispatch on a 7763 (job 124112699853): the
+    // mixed set while the host was busy, and the neutralized case right
+    // after. Five of seven passes slowed: `at` moves, and the spread says so.
+    let t = timing(vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6]);
+    assert_eq!(t.at, 49.6);
+    assert!(t.spread > 0.15, "{t:?}");
+    let t = timing(vec![43.6, 43.2, 43.2, 43.3, 43.8, 43.4, 43.2]);
+    assert_eq!(t.at, 43.2);
+    assert!(t.spread < 0.01 && t.jitter < 0.02, "{t:?}");
 }
 
-/// A slower or faster engine scales every pass alike: the median scales
+#[test]
+fn a_few_slowed_passes_leave_the_time_alone_and_show_as_jitter() {
+    // #429's job 126950288443 (an EPYC 9V74): three passes near 60 µs and
+    // two a little slow. The median read 37.9 µs, the fourth pass, and the
+    // gate failed at 50.8 µs; the clean passes are 36.4-37.2 µs.
+    let t = timing(vec![37.2, 36.4, 59.8, 37.9, 63.9, 60.9, 36.4]);
+    assert_eq!(t.at, 37.2);
+    assert!(t.spread < 0.03, "{t:?}");
+    assert!(t.jitter > 0.15, "{t:?}");
+}
+
+/// A slower or faster engine scales every pass alike: the time scales
 /// with it and the spread doesn't move, so a slower runner can't read as
 /// a disturbed one.
 #[test]
 fn a_uniformly_slower_engine_keeps_its_spread() {
     let passes = vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6];
-    let (median, base) = spread(passes.clone());
+    let base = timing(passes.clone());
     for k in [0.25, 0.5, 2.0, 3.93, 10.0] {
-        let (m, s) = spread(passes.iter().map(|p| p * k).collect());
-        assert!((m - median * k).abs() < 1e-9 * k, "×{k}: median {m}");
-        assert!((s - base).abs() < 1e-12, "×{k}: spread {s} vs {base}");
+        let t = timing(passes.iter().map(|p| p * k).collect());
+        assert!((t.at - base.at * k).abs() < 1e-9 * k, "×{k}: {t:?}");
+        assert!((t.spread - base.spread).abs() < 1e-12, "×{k}: {t:?}");
+        assert!((t.jitter - base.jitter).abs() < 1e-12, "×{k}: {t:?}");
+    }
+}
+
+proptest! {
+    /// Noise only adds time: adding any non-negative delay to any passes
+    /// never makes the gate's time read faster, so noise can only make the
+    /// gate stricter. A slower engine slows every pass, and the time
+    /// rises at least by the smallest slowdown.
+    #[test]
+    fn noise_never_makes_a_case_read_faster(
+        passes in prop::collection::vec(1.0f64..100.0, 7),
+        noise in prop::collection::vec(0.0f64..100.0, 7),
+        slower in 1.0f64..2.0,
+    ) {
+        let clean = timing(passes.clone());
+        let noisy = timing(passes.iter().zip(&noise).map(|(p, n)| p + n).collect());
+        prop_assert!(noisy.at >= clean.at, "{clean:?} → {noisy:?}");
+        let slow = timing(passes.iter().map(|p| p * slower).collect());
+        prop_assert!(slow.at >= clean.at * slower * (1.0 - 1e-12), "{clean:?} → {slow:?}");
     }
 }
 
@@ -821,12 +872,16 @@ fn a_provisional_skew_still_scales_and_warns() {
 /// by how much slower than [`CALIB_REF_NS`] that pass ran.
 /// [`calibrate`] runs either way, before any filter code runs and again
 /// once the engine is gone, to catch a runner whose speed changes under
-/// the test; a held case whose median pass is more than 15% over its
-/// fastest ([`spread`]) is caught the same way, and either measures
+/// the test; a held case whose third-fastest pass is more than 15% over
+/// its fastest ([`Timing`]) is caught the same way, and either measures
 /// again. Where it scales, it never runs beside filter state, so a
 /// regression can't slow it and hide itself, and noise only adds time, so
-/// its fastest pass can only make the gate stricter. Raw times, the
-/// divisor and where it came from are printed too.
+/// its fastest pass can only make the gate stricter. Each case decides on
+/// its third-fastest pass of seven, which noise can't make faster either
+/// (`docs/decisions/2026-11-05-X-filter-budget-noise.md`). An attempt over
+/// budget while a held case had a pass more than 15% over its fastest
+/// measures again; a steady one fails. Raw passes, the divisor and where
+/// it came from are printed too.
 ///
 /// This is a budget gate, not a regression gate: a slowdown that keeps a
 /// case under 50 µs passes (about +40% at 10% on today's code).
@@ -841,7 +896,7 @@ fn budget() {
     const SPEED: std::ops::RangeInclusive<f64> = 0.4..=2.0;
     // The fastest calibration passes before and after must agree this
     // closely, or the runner's speed changed under the test; and so must
-    // a held case's median pass and its fastest ([`spread`]).
+    // a held case's third-fastest pass and its fastest ([`Timing`]).
     const DRIFT: f64 = 0.15;
     // Attempts at a measurement the drift doesn't spoil.
     const ATTEMPTS: usize = 3;
@@ -915,14 +970,14 @@ fn budget() {
             .join(" ")
     };
     // A warm-up pass (the first judgment also builds the rule index),
-    // then seven passes over the set. The median decides, so one noisy
-    // pass on a shared runner doesn't; with how far it is above the
-    // fastest pass, so a run of them is caught.
+    // then seven passes over the set. The third-fastest decides
+    // ([`Timing`]), so slowed passes on a shared runner don't; with how far
+    // it is above the fastest pass, so a run of them is caught.
     let time = |what: &str, f: &dyn Fn(usize)| {
         pass(f);
         let passes: Vec<f64> = (0..7).map(|_| pass(f)).collect();
         println!("{what}: passes {} µs", show(&passes));
-        spread(passes)
+        timing(passes)
     };
     // The fastest of seven calibration passes, after a warm-up.
     let calibration = |when: &str| {
@@ -936,16 +991,20 @@ fn budget() {
     // neighbours), which the calibrations before and after catch, or
     // during one case, which that case's spread catches. Such a run
     // measures again rather than failing, up to three times; only a
-    // trusted attempt decides, and only drift on every attempt fails.
+    // trusted attempt decides, and only drift on every attempt fails. A
+    // trusted attempt over budget whose held cases show the host was busy
+    // (a pass more than DRIFT over the fastest) measures again too: noise
+    // only adds time, so a later attempt can only pass if the engine is
+    // under budget. A steady attempt over budget fails at once.
     let mut drifted = Vec::new();
     for attempt in 1..=ATTEMPTS {
         println!("attempt {attempt} of {ATTEMPTS}");
         let before = calibration("before");
         let core = shipped();
-        let (per, spread) = time("core", &|i| {
+        let t = time("core", &|i| {
             std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
         });
-        let mut cases = vec![("core".to_owned(), per, true, spread)];
+        let mut cases = vec![("core".to_owned(), t, true)];
 
         // The whole engine: the core, every pack, and 10,000 of your rules,
         // reading the classification as ingest does.
@@ -979,7 +1038,7 @@ fn budget() {
                 met as f64 / items.len() as f64,
                 full as f64 / items.len() as f64
             );
-            let (per, spread) = time(&what, &|i| {
+            let t = time(&what, &|i| {
                 let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
                 assert!(
                     v.decision
@@ -989,7 +1048,7 @@ fn budget() {
                     v.decision
                 );
             });
-            cases.push((what, per, held, spread));
+            cases.push((what, t, held));
         }
         // The mixed set again with common words neutralized (CSX-5
         // *Neutralize term*): every keyword entry reads the name and
@@ -1008,10 +1067,10 @@ fn budget() {
             })
             .collect();
         let what = "engine, packs on, 10,000 rules, mixed, 5 common words neutralized";
-        let (per, spread) = time(what, &|i| {
+        let t = time(what, &|i| {
             std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
         });
-        cases.push((what.to_owned(), per, true, spread));
+        cases.push((what.to_owned(), t, true));
         drop(engine);
         let after = calibration("after");
 
@@ -1036,9 +1095,12 @@ fn budget() {
         }
         let unsteady: Vec<_> = cases
             .iter()
-            .filter(|(_, _, held, spread)| *held && *spread > DRIFT)
-            .map(|(what, _, _, spread)| {
-                format!("{what}: median {:.0}% over the fastest", spread * 100.0)
+            .filter(|(_, t, held)| *held && t.spread > DRIFT)
+            .map(|(what, t, _)| {
+                format!(
+                    "{what}: third-fastest pass {:.0}% over the fastest",
+                    t.spread * 100.0
+                )
             })
             .collect();
         if !unsteady.is_empty() {
@@ -1056,17 +1118,29 @@ fn budget() {
             .iter()
             .find(|(what, ..)| what.contains("mixed ("))
             .expect("the mixed case")
-            .1;
+            .1
+            .at;
         let Scaling { speed, how, notes } = scaling(&cpu, calib_us, mixed);
         for note in notes {
             println!("{note}");
         }
+        let busy: Vec<_> = cases
+            .iter()
+            .filter(|(_, t, held)| *held && t.jitter > DRIFT)
+            .map(|(what, t, _)| {
+                format!(
+                    "{what}: slowest pass {:.0}% over the fastest",
+                    t.jitter * 100.0
+                )
+            })
+            .collect();
         let mut over = Vec::new();
-        for (what, raw, held, _) in cases {
+        for (what, t, held) in cases {
+            let raw = t.at;
             let per = raw / speed;
             println!(
-                "{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here \
-                 ÷ {speed:.3}, {how})"
+                "{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here, \
+                 the third-fastest pass, ÷ {speed:.3}, {how})"
             );
             if per >= BUDGET_US {
                 if held {
@@ -1075,6 +1149,15 @@ fn budget() {
                     println!("{what}: over {BUDGET_US} µs (reported, not held)");
                 }
             }
+        }
+        if !over.is_empty() && !busy.is_empty() && attempt < ATTEMPTS {
+            let note = format!("attempt {attempt}: over budget while busy: {over:?}, {busy:?}");
+            println!(
+                "{note}: the host was busy during a held case, so measuring again (only an \
+                 attempt under budget passes)"
+            );
+            drifted.push(note);
+            continue;
         }
         assert!(
             over.is_empty(),
