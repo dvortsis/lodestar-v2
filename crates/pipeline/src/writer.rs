@@ -2034,6 +2034,13 @@ impl Flooding {
         if let Some(p) = named(c.publisher.as_deref()) {
             return Some(p);
         }
+        // A torrent cache's file counts only against a publisher its
+        // claims name (runner, #495): a cache's backfill is lookup
+        // traffic, not a stream from one uploader, so like an importer it
+        // never counts against its source.
+        if !c.leased {
+            return None;
+        }
         let counts = |s: SourceId| self.counted & bit(s) != 0;
         let finders = c.lease.sources | bit(c.lease.source) | c.results.sources;
         if finders & self.counted != 0 && unverified() {
@@ -4609,6 +4616,22 @@ mod tests {
         };
         let got = sp3_of(&store, &e, &mut flood, named("uploader", 20));
         assert_eq!(got[19], Some(Action::Flag));
+        // A cache's file naming no publisher counts against no one, even
+        // from a source that counts.
+        let cache: Vec<Committing> = (0..120)
+            .map(|i| {
+                let mut c = committing(results_named(&episode(i)), feed);
+                c.leased = false;
+                c
+            })
+            .collect();
+        let before = flood.map.len();
+        assert!(
+            sp3_of(&store, &e, &mut flood, cache)
+                .iter()
+                .all(Option::is_none)
+        );
+        assert_eq!(flood.map.len(), before);
         assert_eq!(
             sp3_of(&store, &e, &mut flood, named("someone", 1)),
             [None],
