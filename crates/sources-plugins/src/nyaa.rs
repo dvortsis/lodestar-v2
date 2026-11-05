@@ -22,6 +22,17 @@
 //! and downloads are not kept: [`Claims`] has no field for them, and a
 //! swarm count from a feed is stale by the time it's read (the crawler
 //! measures swarms itself).
+//!
+//! **Sukebei** ([`Sukebei`], SRC-10e) is the same plugin on Nyaa's adult
+//! sister site, as its own plugin id with its own manifest: off by
+//! default, External consent, the same 5-minute poll. Every item is forced
+//! into the Adult category at mapping time ([`to_found_adult`]): the feed's
+//! own category is kept only as the `nyaa-category` claim, and the content
+//! type claim is always `adult` (architecture §20.9: the source's own
+//! category is a strong signal). The search layer hides Adult unless "Show
+//! adult content" is on; the plugin does not decide visibility. The filter
+//! pipeline applies to its finds exactly as to any other (child-safety core
+//! and floor before storage).
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -42,6 +53,13 @@ pub const STRATEGY_RSS: u8 = 1;
 pub const FEED_URL: &str = "https://nyaa.si/?page=rss";
 /// The host the manifest declares and egress is narrowed to.
 pub const HOST: &str = "nyaa.si";
+
+/// The plugin's id in the store for the adult variant. Never rename.
+pub const SUKEBEI_ID: &str = "sukebei";
+/// Sukebei's feed. Fixed, like [`FEED_URL`].
+pub const SUKEBEI_FEED_URL: &str = "https://sukebei.nyaa.si/?page=rss";
+/// The host the Sukebei manifest declares.
+pub const SUKEBEI_HOST: &str = "sukebei.nyaa.si";
 
 /// The largest size claim believed: 1 PiB.
 pub const MAX_SIZE: u64 = 1 << 50;
@@ -72,6 +90,16 @@ const MANIFEST: Manifest = Manifest {
     consent: Consent::External,
     default_priority: Priority::Normal,
     enabled_by_default: false,
+};
+
+const SUKEBEI_MANIFEST: Manifest = Manifest {
+    id: SUKEBEI_ID,
+    name: "Sukebei",
+    endpoints: &[Endpoint {
+        protocol: "https",
+        host: SUKEBEI_HOST,
+    }],
+    ..MANIFEST
 };
 
 /// No settings: the endpoint is fixed.
@@ -127,11 +155,41 @@ impl SourcePlugin for Nyaa {
     }
 
     fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
-        Box::pin(run(ctx))
+        Box::pin(run(ctx, FEED_URL, false))
     }
 }
 
-async fn run(ctx: SourceCtx) -> Result<(), PluginError> {
+/// The Sukebei plugin (SRC-10e): Nyaa's adult sister site. Off by default,
+/// External consent, every item forced into the Adult category.
+#[derive(Debug, Default)]
+pub struct Sukebei;
+
+impl Sukebei {
+    pub fn new() -> Sukebei {
+        Sukebei
+    }
+
+    /// Where the plugin's egress may send requests: `sukebei.nyaa.si` only.
+    pub fn endpoints(&self) -> Endpoints {
+        Endpoints::manifest(SUKEBEI_MANIFEST.endpoints)
+    }
+}
+
+impl SourcePlugin for Sukebei {
+    fn manifest(&self) -> &Manifest {
+        &SUKEBEI_MANIFEST
+    }
+
+    fn policy(&self) -> &Policy {
+        &POLICY
+    }
+
+    fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        Box::pin(run(ctx, SUKEBEI_FEED_URL, true))
+    }
+}
+
+async fn run(ctx: SourceCtx, feed: &'static str, adult: bool) -> Result<(), PluginError> {
     let SourceCtx {
         emitter,
         mut shutdown,
@@ -142,7 +200,7 @@ async fn run(ctx: SourceCtx) -> Result<(), PluginError> {
     loop {
         let polled = tokio::select! {
             _ = shutdown.requested() => return Ok(()),
-            r = poll(&http, &emitter) => r,
+            r = poll(&http, &emitter, feed, adult) => r,
         };
         // Any failure is tried again at the next poll; the limiter's
         // back-off covers 429 and 5xx. Only a closed pipeline ends the run.
@@ -158,8 +216,8 @@ enum Poll {
     Closed,
 }
 
-async fn poll(http: &Client, emitter: &Emitter) -> Poll {
-    let req = Request::get(FEED_URL).header("Accept", "application/rss+xml, application/xml;q=0.9");
+async fn poll(http: &Client, emitter: &Emitter, feed: &str, adult: bool) -> Poll {
+    let req = Request::get(feed).header("Accept", "application/rss+xml, application/xml;q=0.9");
     let body = match http.poll("feed", &req).await {
         Ok(res) if res.status == 200 => res.body,
         _ => return Poll::Done,
@@ -168,7 +226,12 @@ async fn poll(http: &Client, emitter: &Emitter) -> Poll {
     let mut found = Vec::new();
     rss::parse_each(&body, &PAGE_LIMITS, |item| {
         // A repeated item in one page is one find.
-        if let Some(f) = to_found(item, now)
+        let f = if adult {
+            to_found_adult(item, now)
+        } else {
+            to_found(item, now)
+        };
+        if let Some(f) = f
             && seen.insert(f.key)
         {
             found.push(f);
@@ -260,3 +323,28 @@ pub fn to_found(item: Item, now: i64) -> Option<Found> {
             }),
     )
 }
+
+/// One Sukebei feed item as a discovery, **forced into the Adult
+/// category** whatever the feed says (SRC-10e, owner Q7; §20.9).
+///
+/// It is [`to_found`] with the content-type claim replaced: any
+/// `content-type` the feed's category would give is dropped and
+/// `content-type:adult` is the only one. The feed's own category stays as
+/// the `nyaa-category` claim. Everything else (the key, the bounds, Low
+/// confidence, no uploader, no `.torrent` link) is unchanged. The find
+/// carries no flag that skips the filter: the child-safety core and floor
+/// judge it before storage like any other.
+pub fn to_found_adult(item: Item, now: i64) -> Option<Found> {
+    let mut found = to_found(item, now)?;
+    if let Some(claims) = found.claims.as_deref_mut() {
+        claims.ids.retain(|i| i.scheme != "content-type");
+        claims.ids.push(ExternalId {
+            scheme: "content-type".to_owned(),
+            value: ADULT.to_owned(),
+        });
+    }
+    Some(found)
+}
+
+/// `ContentType::Adult.as_str()` (`lodestar-classify`).
+pub const ADULT: &str = "adult";

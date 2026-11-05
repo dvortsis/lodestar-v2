@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:nyaa="https://nyaa.si/xmlns/nyaa" version="2.0">
+	<channel>
+		<title>Sukebei - Home - Torrent File RSS</title>
+		<description>RSS Feed for Home</description>
+		<link>https://sukebei.nyaa.si/</link>
+		<atom:link href="https://sukebei.nyaa.si/?page=rss" rel="self" type="application/rss+xml" />
+		<item>
+			<title>Big Buck Bunny (2008) [1080p] [ABCD1234].mkv</title>
+			<link>https://sukebei.nyaa.si/download/2000001.torrent</link>
+			<guid isPermaLink="true">https://sukebei.nyaa.si/view/2000001</guid>
+			<pubDate>Mon, 02 Nov 2026 10:00:00 -0000</pubDate>
+			<nyaa:seeders>12</nyaa:seeders>
+			<nyaa:leechers>3</nyaa:leechers>
+			<nyaa:downloads>40</nyaa:downloads>
+			<nyaa:infoHash>1f2e3d4c5b6a79880123456789abcdeffedcba98</nyaa:infoHash>
+			<nyaa:categoryId>1_2</nyaa:categoryId>
+			<nyaa:category>Category</nyaa:category>
+			<nyaa:size>1.4 GiB</nyaa:size>
+			<nyaa:comments>0</nyaa:comments>
+			<nyaa:trusted>Yes</nyaa:trusted>
+			<nyaa:remake>No</nyaa:remake>
+			<description><![CDATA[#2000001 | Big Buck Bunny (2008) [1080p] [ABCD1234].mkv]]></description>
+		</item>
+		<item>
+			<title>Sintel Soundtrack (FLAC)</title>
+			<link>https://sukebei.nyaa.si/download/2000002.torrent</link>
+			<guid isPermaLink="true">https://sukebei.nyaa.si/view/2000002</guid>
+			<pubDate>Sun, 01 Nov 2026 23:59:59 -0000</pubDate>
+			<nyaa:seeders>12</nyaa:seeders>
+			<nyaa:leechers>3</nyaa:leechers>
+			<nyaa:downloads>40</nyaa:downloads>
+			<nyaa:infoHash>00112233445566778899aabbccddeeff00112233</nyaa:infoHash>
+			<nyaa:categoryId>2_2</nyaa:categoryId>
+			<nyaa:category>Category</nyaa:category>
+			<nyaa:size>512.0 MiB</nyaa:size>
+			<nyaa:comments>0</nyaa:comments>
+			<nyaa:trusted>No</nyaa:trusted>
+			<nyaa:remake>Yes</nyaa:remake>
+			<description><![CDATA[#2000002 | Sintel Soundtrack (FLAC)]]></description>
+		</item>
+		<item>
+			<title>Elephants Dream Raw (Sample)</title>
+			<link>https://sukebei.nyaa.si/download/2000003.torrent</link>
+			<guid isPermaLink="true">https://sukebei.nyaa.si/view/2000003</guid>
+			<pubDate>Wed, 01 Jan 1997 00:00:00 -0000</pubDate>
+			<nyaa:seeders>12</nyaa:seeders>
+			<nyaa:leechers>3</nyaa:leechers>
+			<nyaa:downloads>40</nyaa:downloads>
+			<nyaa:infoHash>aabbccddeeff00112233445566778899aabbccdd</nyaa:infoHash>
+			<nyaa:categoryId>9_9</nyaa:categoryId>
+			<nyaa:category>Category</nyaa:category>
+			<nyaa:size>0 Bytes</nyaa:size>
+			<nyaa:comments>0</nyaa:comments>
+			<nyaa:trusted>No</nyaa:trusted>
+			<nyaa:remake>No</nyaa:remake>
+			<description><![CDATA[#2000003 | Elephants Dream Raw (Sample)]]></description>
+		</item>
+	</channel>
+</rss>
