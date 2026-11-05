@@ -220,7 +220,8 @@ pub fn default_filter() -> Handle {
 
 /// What the filter is built from in the store: CS-1 entries, CS-8
 /// signatures and your switches ([`FilterState`]), packs and your rules,
-/// and your classification rules. The floor's config files and the
+/// your classification rules, and SP-4's signature rows (RP-5). The
+/// floor's config files and the
 /// subscribed lists are synced into the store and applied before this
 /// (the binary does that, at the server's start and in `lodestar import`).
 #[derive(Debug, Clone)]
@@ -228,6 +229,9 @@ pub struct StoreFilter {
     pub state: FilterState,
     pub rules: RuleSet,
     pub class_rules: Vec<(i64, String, bool)>,
+    /// SP-4's signature rows, as stored: a row that isn't text is kept as
+    /// its bytes, so it's reported as unreadable and spoils no other.
+    pub spam_sigs: Vec<lodestar_store::RawSetting>,
 }
 
 impl StoreFilter {
@@ -236,6 +240,7 @@ impl StoreFilter {
             state: store.filter_state()?,
             rules: store.rule_set()?,
             class_rules: store.class_rules()?,
+            spam_sigs: store.settings_with_prefix_raw(lodestar_filter::spam_sigs::PREFIX)?,
         })
     }
 }
@@ -270,6 +275,7 @@ pub fn load_filter(filter: &Handle, from: &StoreFilter) -> Vec<String> {
     filter.update_engine(|e| {
         let mut notes = e.load_rules(&from.rules);
         notes.extend(e.load_class_rules(&from.class_rules));
+        notes.extend(e.load_spam_sigs(&from.spam_sigs));
         notes
     })
 }

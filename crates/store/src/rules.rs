@@ -129,7 +129,7 @@ fn stored_text(conn: &rusqlite::Connection, key: &str) -> Result<StoredText> {
 }
 
 /// A stored value as [`StoredText`] reads it.
-fn text_or_bytes(v: ValueRef<'_>) -> std::result::Result<String, Vec<u8>> {
+pub(crate) fn text_or_bytes(v: ValueRef<'_>) -> std::result::Result<String, Vec<u8>> {
     match v {
         ValueRef::Text(b) => {
             std::str::from_utf8(b).map_or_else(|_| Err(b.to_vec()), |t| Ok(t.to_owned()))

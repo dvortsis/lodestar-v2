@@ -1441,6 +1441,8 @@ impl FiltersApi {
                 .filter(|o| o.unreadable())
                 .map(|o| pack_overrides::label(o.rule)),
         );
+        // SP-4's signature rows that didn't read at start (RP-5).
+        labels.extend(self.engine.current().spam_sig_labels());
         let text = store.setting_text(STAND_INS_KEY).map_err(internal)?;
         let before = text
             .as_deref()
@@ -1646,10 +1648,55 @@ impl FiltersApi {
         store.save_previous(&replaced).map_err(internal)
     }
 
+    /// Releases `hash`: its quarantine or tombstone, and, as the release
+    /// hook (SP-4, RP-5), its payload signature if it's a stored torrent
+    /// a spam rule hid, so its clones follow it. Returns whether there was
+    /// anything to release.
     fn release(&self, store: &mut Store, hash: [u8; 20]) -> ApiResult<bool> {
         let had = store.release(&hash).map_err(internal)?;
         self.unhold(store, &[hash])?;
-        Ok(had)
+        let followed = self.release_clones(store, &[hash], None)?;
+        Ok(had || followed > 0)
+    }
+
+    /// SP-4's release hook (RP-5): removes from the signature set the
+    /// payload signatures of the stored torrents among `hashes`, so the
+    /// clones of an original that's released or excepted follow it. With
+    /// `rule`, only a signature that rule added (an exception to SP-2
+    /// leaves what SP-3 hid). A hash that isn't stored, or whose payload
+    /// isn't specific, has none. Returns how many were in the set.
+    fn release_clones(
+        &self,
+        store: &mut Store,
+        hashes: &[[u8; 20]],
+        rule: Option<PackRule>,
+    ) -> ApiResult<usize> {
+        let engine = self.engine.current();
+        if engine.spam_sigs.is_empty() {
+            return Ok(0);
+        }
+        let mut sigs = Vec::new();
+        for h in hashes {
+            let Some(id) = store
+                .find(&lodestar_metainfo::InfoHash(*h))
+                .map_err(internal)?
+            else {
+                continue;
+            };
+            if let Some(tree) = store.files(id).map_err(internal)? {
+                let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+                sigs.extend(lodestar_filter::spam_sigs::usable(
+                    lodestar_filter::payload_sig(&files),
+                ));
+            }
+        }
+        if sigs.is_empty() {
+            return Ok(0);
+        }
+        engine
+            .spam_sigs
+            .release(store, &sigs, rule)
+            .map_err(internal)
     }
 
     /// Tells intake to fetch again those of `hashes` the store no longer
@@ -1668,7 +1715,8 @@ impl FiltersApi {
     /// WAL scrub in the store, not one per hash.
     fn release_many(&self, store: &mut Store, hashes: &[[u8; 20]]) -> ApiResult<()> {
         store.release_many(hashes).map_err(internal)?;
-        self.unhold(store, hashes)
+        self.unhold(store, hashes)?;
+        self.release_clones(store, hashes, None).map(|_| ())
     }
 
     /// Releases everything `rules` hold, quarantine and tombstones: they
@@ -1966,6 +2014,25 @@ impl FiltersApi {
                     .add_exception(&e.rule.id(), kind, &value)
                     .map_err(internal)?;
                 out.id = Some(id);
+                // SP-4's release hook (RP-5): an exception for an original
+                // removes its signature, so its clones follow. One for a
+                // payload covers its clones directly; one by name or query
+                // covers the clones it matches, at judging.
+                if let RuleRef::Pack(r @ (PackRule::Sp2 | PackRule::Sp3)) = e.rule {
+                    match &e.what {
+                        Match::Hashes(hs) => {
+                            self.release_clones(store, hs, Some(r))?;
+                        }
+                        Match::Payload(sig) => {
+                            self.engine
+                                .current()
+                                .spam_sigs
+                                .release(store, &[*sig], Some(r))
+                                .map_err(internal)?;
+                        }
+                        Match::Keyword(_) | Match::Query(_) => {}
+                    }
+                }
             }
             Change::RemoveException { id } => {
                 if !store.remove_exception(*id).map_err(internal)? {
@@ -2282,6 +2349,8 @@ impl FiltersApi {
                 .filter(|o| o.unreadable())
                 .map(|o| pack_overrides::label(o.rule)),
         );
+        // SP-4's signature rows that didn't read at start (RP-5).
+        pack_conditions.extend(self.engine.current().spam_sig_labels());
         let pending_on = packs::pending_on(&set, &versions);
         if packs::shadow_in_doubt(&store)? {
             pack_conditions.push(packs::SHADOW_IN_DOUBT.to_owned());
@@ -3722,6 +3791,107 @@ mod tests {
             shutdown: Default::default(),
             adult_sources: 0,
         }
+    }
+
+    /// SP-4's release hook (RP-5): an exception for a stored original SP-2
+    /// hid, by its hash or its payload, or its release, removes its
+    /// signature, in memory and in the store, so its clones follow. An
+    /// exception to another rule leaves it.
+    #[test]
+    fn sp4_clones_follow_an_exception_or_a_release_of_the_original() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        use lodestar_filter::spam_sigs::{Original, PREFIX, SpamSigs, usable};
+        for how in ["hashes", "payload", "release", "another rule"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
+            let raw = to_vec(&OwnedValue::Dict(
+                [
+                    (b"length".to_vec(), OwnedValue::Int(1_234_567_891)),
+                    (b"name".to_vec(), OwnedValue::Bytes(b"spam.mkv".to_vec())),
+                    (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                    (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+                ]
+                .into_iter()
+                .collect(),
+            ));
+            let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+            store
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: Some(&raw),
+                    discovered_at: 1,
+                    metadata_at: 1,
+                    extra_flags: 0,
+                    source: lodestar_store::SourceId::new(0).unwrap(),
+                }])
+                .unwrap();
+            let hash = info.primary_hash().0;
+            let files = lodestar_classify::file_infos(&info.files, info.path_encoding);
+            let sig = usable(lodestar_filter::payload_sig(&files)).unwrap();
+            let api = test_api(store);
+            let sigs = api.engine.current().spam_sigs.clone();
+            // As the writer added it when SP-2 hid the original.
+            sigs.add(
+                sig,
+                Original {
+                    rule: PackRule::Sp2,
+                    action: lodestar_filter::Action::Hide,
+                },
+            );
+            sigs.flush(&mut api.store()).unwrap();
+            let exception = |rule: &str, what: MatchInput| Change::AddException {
+                rule: rule.into(),
+                what,
+            };
+            let by_hash = || MatchInput {
+                hashes: Some(vec![hex(&hash)]),
+                ..MatchInput::default()
+            };
+            match how {
+                "hashes" => apply_change(&api, exception("SP-2", by_hash())),
+                "payload" => apply_change(
+                    &api,
+                    exception(
+                        "SP-2",
+                        MatchInput {
+                            payload: Some(format!("{sig:016x}")),
+                            ..MatchInput::default()
+                        },
+                    ),
+                ),
+                "release" => apply_change(&api, Change::Release { hash: hex(&hash) }),
+                _ => apply_change(&api, exception("SP-3", by_hash())),
+            }
+            let kept = how == "another rule";
+            assert_eq!(sigs.get(sig).is_some(), kept, "{how}");
+            // Written: a restart reads the same.
+            let again = SpamSigs::default();
+            again.load(&api.store().settings_with_prefix_raw(PREFIX).unwrap());
+            assert_eq!(again.get(sig).is_some(), kept, "{how} after a restart");
+        }
+    }
+
+    /// A row of SP-4's set that didn't read at start is listed with the
+    /// pack conditions, in `filter.stand_ins` and the overview (RP-5).
+    #[test]
+    fn an_unreadable_sp4_row_is_listed_with_the_pack_conditions() {
+        let api = test_api(Store::open_in_memory(Default::default()).unwrap());
+        let rows = vec![(
+            format!("{}3", lodestar_filter::spam_sigs::PREFIX),
+            Ok("not a row".to_owned()),
+        )];
+        assert_eq!(api.engine.current().load_spam_sigs(&rows).len(), 1);
+        api.start_packs(500).unwrap();
+        let record = api.store().setting_text(STAND_INS_KEY).unwrap().unwrap();
+        assert!(record.contains("packs.sp4.row.3@500"), "{record}");
+        let overview = api.overview().unwrap();
+        assert!(
+            overview
+                .pack_conditions
+                .contains(&"packs.sp4.row.3".to_owned()),
+            "{:?}",
+            overview.pack_conditions
+        );
     }
 
     fn apply_change(api: &FiltersApi, change: Change) {

@@ -245,6 +245,7 @@ fn seeding_keeps_every_rule_at_baseline_and_copies_sc1_to_sc2() {
         [
             PackRule::Mw6,
             PackRule::Sp3,
+            PackRule::Sp4,
             PackRule::Uc1,
             PackRule::Uc2,
             PackRule::Uc3
@@ -529,6 +530,7 @@ fn both_rows_lost_runs_the_interim_mode_and_keeps_what_was_accepted() {
                 PackRule::Mw6,
                 PackRule::Lu4,
                 PackRule::Sp3,
+                PackRule::Sp4,
                 PackRule::Uc1,
                 PackRule::Uc2,
                 PackRule::Uc3
