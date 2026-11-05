@@ -3248,6 +3248,12 @@
       "since": "2026-11-05T19:21Z",
       "brief": "briefs/RP-5.md",
       "note": "fresh session (RP-4 session declined a new branch); handoff in brief"
+    },
+    "X-enr-page-flag": {
+      "status": "running",
+      "session": "session_01MMjhn8MfsZf78SSbRHdDCm",
+      "since": "2026-11-05T20:25Z",
+      "brief": "briefs/X-enr-page-flag.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5517,6 +5523,14 @@
     "updated": "2026-11-05T20:26Z",
     "items": [
       {
+        "slot": 1,
+        "slice": "X-enr-page-flag",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Enrichment: the parsers report the answer's shape, replacing the plugins' stopgap checks (registration precondition)",
+        "since": "2026-11-05T20:25Z"
+      },
+      {
         "slot": 2,
         "slice": "X-adult-catalogue",
         "role": "build",
@@ -5538,7 +5552,7 @@
         "role": "build",
         "agent": "claude",
         "status": "idle",
-        "doing": "Kept free: the canonical tracker store shares unverified.rs with ENR-1c (#502, near merge); X-search-files-6 needs a runner design call. Filled when #502 merges.",
+        "doing": "Kept free: the canonical tracker store shares unverified.rs with #502 (merging); X-search-files-6 needs a runner design call (the -path:sample clause dominates p95 and stays on the file index by ruling). Filled when #502 merges.",
         "since": "2026-11-05T19:19Z"
       },
       {

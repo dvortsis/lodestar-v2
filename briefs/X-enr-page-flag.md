@@ -1,5 +1,5 @@
 # X-enr-page-flag: the enrichment parsers report what they saw, replacing the plugins' stopgap checks
-**Model:** Opus (untrusted-input parsers). `/security-review`, then a fresh Opus reviewer. Runner brief, 2026-11-05T20:30Z.
+**Model:** Opus (untrusted-input parsers). `/security-review`, then a fresh Opus reviewer. Runner brief, 2026-11-05T20:25Z.
 
 ## Why
 ENR-4 (#503) and ENR-5 (#506) shipped with a HOLD: neither plugin may be registered until the bounded parsers in `crates/sources-feeds` report the shape of the answer they read.
