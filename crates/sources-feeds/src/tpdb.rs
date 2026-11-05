@@ -18,6 +18,18 @@
 //!   error object such as `{"message": "…"}`, which give no match and no
 //!   stop.
 //!
+//! [`Page`] says what the root held, so a caller can tell a real miss from
+//! an error object without a second read of the body: the first `data`
+//! key's kind ([`Page::data`]), whether another `data` followed
+//! ([`Page::data_repeated`]), how many other root keys there were
+//! ([`Page::others`]) and whether bytes followed the root value
+//! ([`Page::trailing`]). Root keys are compared unescaped, so
+//! `"d\u0061ta"` is `data`.
+//!
+//! Past [`Limits::max_items`] the parser reads on to the end of the
+//! document without decoding another item, so a fault, a repeated key or
+//! trailing bytes after the cap are still reported.
+//!
 //! **What it keeps is only what the enrichment claims can store** (plan
 //! `docs/plan/2026-11-04-v06-rulepacks.md`, ENR-0): the item's kind, id,
 //! title, studio (`site.name`) and release date, and each performer's
@@ -50,7 +62,8 @@ pub struct Limits {
     pub max_depth: usize,
     /// Values in the document, containers included ([`Stop::Elements`]).
     pub max_values: usize,
-    /// Items in `data`, kept or skipped ([`Stop::Items`]).
+    /// Items in `data`, kept or skipped ([`Stop::Items`]). Items past it
+    /// are read past undecoded, and the rest of the document is still read.
     pub max_items: usize,
     /// Elements in one array inside an item; over it the item is skipped.
     pub max_array: usize,
@@ -158,14 +171,51 @@ impl Skipped {
     }
 }
 
+/// What a key's value was, as far as the parser read it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Seen {
+    /// No such key (or the root isn't an object).
+    #[default]
+    Absent,
+    List,
+    Object,
+    Null,
+    /// A string, number or boolean.
+    Other,
+}
+
+impl Seen {
+    fn of(next: Option<u8>) -> Seen {
+        match next {
+            Some(b'[') => Seen::List,
+            Some(b'{') => Seen::Object,
+            Some(b'n') => Seen::Null,
+            _ => Seen::Other,
+        }
+    }
+}
+
 /// How a parse went.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Page {
     pub kept: u32,
     pub skipped: Skipped,
+    /// The first fault. [`Stop::Items`] means the document was read to
+    /// its end and only the item cap was reached: a structural fault after
+    /// the cap replaces it.
     pub stop: Option<Stop>,
     /// A search page's `meta.total`.
     pub total: Option<u64>,
+    /// The root's first `data` key: its kind. Only that one is read.
+    pub data: Seen,
+    /// The root has more than one `data` key. The repeats aren't read.
+    pub data_repeated: bool,
+    /// Root keys other than `data` and `meta` (such as `links`, or an
+    /// error object's `message`), read past.
+    pub others: u32,
+    /// Something other than whitespace followed the root value. The stop
+    /// is then [`Stop::Malformed`], or the byte or UTF-8 stop that came first.
+    pub trailing: bool,
 }
 
 /// Every kept match and how the parse went.
@@ -208,7 +258,10 @@ pub fn parse_each(body: &[u8], limits: &Limits, mut emit: impl FnMut(Found)) -> 
     // Every read propagates its `Stop` with `?`: after one, the reader's
     // cursor sits mid-token and nothing more may be read.
     if let Err(stop) = p.document(&mut emit) {
-        p.page.stop.get_or_insert(stop);
+        // A structural fault outranks the item cap: the answer isn't whole.
+        if p.page.stop.is_none_or(|s| s == Stop::Items) {
+            p.page.stop = Some(stop);
+        }
     }
     p.page
 }
@@ -312,12 +365,17 @@ impl Parser<'_, '_> {
     fn document(&mut self, emit: &mut dyn FnMut(Found)) -> R<()> {
         if self.j.peek() == Some(b'{') {
             let (mut data, mut meta) = (false, false);
-            self.object(|p, k| match k {
-                "data" if !data => {
+            self.object(|p, k| match &*unescaped(k) {
+                "data" if data => {
+                    p.page.data_repeated = true;
+                    p.j.skip().map(drop)
+                }
+                "data" => {
                     data = true;
-                    match p.j.peek() {
-                        Some(b'[') => p.array(|p, _| p.item(emit)),
-                        Some(b'{') => p.item(emit),
+                    p.page.data = Seen::of(p.j.peek());
+                    match p.page.data {
+                        Seen::List => p.array(|p, _| p.item(emit)),
+                        Seen::Object => p.item(emit),
                         _ => p.j.skip().map(drop),
                     }
                 }
@@ -333,12 +391,18 @@ impl Parser<'_, '_> {
                         _ => p.j.skip().map(drop),
                     })
                 }
-                _ => p.j.skip().map(drop),
+                "meta" => p.j.skip().map(drop),
+                _ => {
+                    p.page.others = p.page.others.saturating_add(1);
+                    p.j.skip().map(drop)
+                }
             })?;
         } else {
             self.j.skip()?;
         }
-        self.j.end()
+        let end = self.j.end();
+        self.page.trailing = end.is_err();
+        end
     }
 
     /// A count: a JSON number of up to 20 digits that fits a `u64`.
@@ -357,7 +421,9 @@ impl Parser<'_, '_> {
     fn item(&mut self, emit: &mut dyn FnMut(Found)) -> R<()> {
         self.items += 1;
         if self.items > self.l.max_items {
-            return Err(Stop::Items);
+            // Read past, so the rest of the document is still checked.
+            self.page.stop.get_or_insert(Stop::Items);
+            return self.j.skip().map(drop);
         }
         if self.j.peek() != Some(b'{') {
             self.j.skip()?;
@@ -492,6 +558,15 @@ impl Draft {
             },
             performers: self.performers.unwrap_or_default(),
         })
+    }
+}
+
+/// A key without its escapes; one that doesn't decode stays as written.
+fn unescaped(k: &str) -> std::borrow::Cow<'_, str> {
+    if k.contains('\\') {
+        json::decode(k).map_or(std::borrow::Cow::Borrowed(k), std::borrow::Cow::Owned)
+    } else {
+        std::borrow::Cow::Borrowed(k)
     }
 }
 

@@ -522,3 +522,108 @@ fn no_manifest_is_both_enrichment_and_always_adult() {
     let m = plugin().manifest().clone();
     assert!(m.is(Kind::Enrichment) && !m.always_adult);
 }
+
+/// The decisions read the parser's own report of what it saw (X-enr-page-flag):
+/// a repeated `data`, a cut or trailing body, and a fault after the top
+/// result are errors, never a miss or a match.
+#[test]
+fn the_parser_s_report_decides_and_only_a_whole_answer_counts() {
+    for body in [
+        // A repeated `data`, either way round (escaped repeats: below).
+        &br#"{"data":[],"data":[{"id":"good-1"}]}"#[..],
+        br#"{"data":[{"id":"good-1"}],"data":[]}"#,
+        br#"{"data":null,"data":null}"#,
+        // Trailing bytes after a match or a miss.
+        br#"{"data":[{"id":"good-1"}]} x"#,
+        br#"{"data":[{"id":"good-1"}]}{}"#,
+        br#"{"data":[]} x"#,
+        br#"{"data":null},"#,
+        // Cut after the top result, inside or outside the list.
+        br#"{"data":[{"id":"good-1"}"#,
+        br#"{"data":[{"id":"good-1"},"#,
+        br#"{"data":[{"id":"good-1"},{"id":"#,
+        br#"{"data":[{"id":"good-1"}]"#,
+        br#"{"data":{"id":"good-1"}"#,
+        br#"{"data":[{"id":"good-1"}],"meta":{"total":"#,
+        // A structural fault after the top result.
+        br#"{"data":[{"id":"good-1"},{"id":"b","title":tru}]}"#,
+        br#"{"data":[{"id":"good-1"},[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]}"#,
+        br#"{"data":[{"id":"good-1"}],"links":{"next":"x\q"}}"#,
+        // An empty object is an item without an id, not a miss.
+        br#"{"data":{}}"#,
+        br#"{"data":true}"#,
+        br#"{"meta":{"total":0}}"#,
+    ] {
+        assert!(
+            tpdb::parse_answer(body).is_err(),
+            "{}",
+            String::from_utf8_lossy(body)
+        );
+    }
+    for body in [
+        // The real page's other keys don't matter.
+        &br#"{"data":[],"links":{"next":null},"meta":{"total":0}}"#[..],
+        br#"{"meta":{"total":0},"meta":5,"data":null}"#,
+    ] {
+        assert_eq!(
+            tpdb::parse_answer(body).unwrap(),
+            Lookup::NoMatch,
+            "{}",
+            String::from_utf8_lossy(body)
+        );
+    }
+    // Past the top result, only the document's structure is checked: a
+    // second item the parser would skip doesn't spoil the first.
+    for body in [
+        &br#"{"data":[{"id":"good-1"},{"id":"bad id!"}],"meta":{"total":2}}"#[..],
+        br#"{"data":[{"id":"good-1"},"x",{"id":"good-3"}]}"#,
+        br#"{"links":{},"data":{"id":"good-1"}}"#,
+    ] {
+        let Ok(Lookup::Match(s)) = tpdb::parse_answer(body) else {
+            panic!("a match: {}", String::from_utf8_lossy(body))
+        };
+        assert_eq!(s.scene_id, "good-1");
+    }
+}
+
+/// Root keys are compared unescaped, so an escaped `data` is `data`, and an
+/// escaped repeat is still a repeat. `~` stands for a backslash, built at
+/// run time.
+#[test]
+fn an_escaped_root_key_is_its_name() {
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    for body in [
+        r#"{"data":[],"d~u0061ta":[{"id":"good-1"}]}"#,
+        r#"{"d~u0061ta":[{"id":"good-1"}],"data":[]}"#,
+        r#"{"~u0064ata":null,"data":null}"#,
+    ] {
+        let body = esc(body);
+        assert!(tpdb::parse_answer(body.as_bytes()).is_err(), "{body}");
+    }
+    let miss = esc(r#"{"d~u0061ta":[],"m~u0065ta":{"total":0}}"#);
+    assert_eq!(
+        tpdb::parse_answer(miss.as_bytes()).unwrap(),
+        Lookup::NoMatch
+    );
+    let one = esc(r#"{"d~u0061ta":{"id":"good-1"}}"#);
+    let Ok(Lookup::Match(s)) = tpdb::parse_answer(one.as_bytes()) else {
+        panic!("a match: {one}")
+    };
+    assert_eq!(s.scene_id, "good-1");
+}
+
+/// Inside the top item, ENR-2b's house rule stands: the first of a
+/// repeated field is used and the repeat is read past (StashDB's parser
+/// spoils the scene instead; both are one reader, so neither is read two
+/// ways).
+#[test]
+fn a_repeated_field_in_the_top_item_keeps_the_first() {
+    let body = br#"{"data":[{"id":"good-1","title":"First","id":"other","title":"Second"}]}"#;
+    let Lookup::Match(s) = tpdb::parse_answer(body).unwrap() else {
+        panic!("a match")
+    };
+    assert_eq!(
+        (s.scene_id.as_str(), s.title.as_deref()),
+        ("good-1", Some("First"))
+    );
+}

@@ -6,9 +6,11 @@
 
 use libfuzzer_sys::fuzz_target;
 use lodestar_metainfo::hidden_char;
+use lodestar_sources::enrich::Lookup;
 use lodestar_sources_feeds::stashdb::{
-    self, ID_LEN, Kind, LIMITS, Limits, MAX_NAME, MAX_TITLE, SCENES,
+    self, ID_LEN, Kind, LIMITS, Limits, MAX_NAME, MAX_TITLE, SCENES, Seen, Stop,
 };
+use lodestar_sources_plugins::stashdb as plugin;
 
 fn uuid(s: &str) -> bool {
     s.len() == ID_LEN
@@ -63,5 +65,24 @@ fuzz_target!(|data: &[u8]| {
         });
         assert_eq!(page.kept as usize, kept);
         assert!(kept + page.skipped.total() as usize <= limits.max_items);
+        // What the page says it saw agrees with what it kept.
+        assert!(!page.trailing || page.stop.is_some());
+        let items = kept + page.skipped.total() as usize;
+        assert!(items == 0 || page.search == Seen::List || page.find);
+    }
+    // The plugin decides on those flags alone: never a miss or a match
+    // beside GraphQL errors, a `findScene`, a repeated key, or an answer
+    // that isn't whole.
+    let page = stashdb::parse_each(body, &plugin::ANSWER_LIMITS, drop);
+    if let Ok(found) = plugin::parse_answer(body) {
+        assert!(matches!(page.stop, None | Some(Stop::Items)));
+        assert!(!page.trailing && !page.repeated && !page.find);
+        assert_eq!(page.errors, 0);
+        assert_eq!(page.search, Seen::List);
+        assert_eq!(page.skipped.total(), 0);
+        match found {
+            Lookup::NoMatch => assert_eq!((page.kept, page.stop), (0, None)),
+            Lookup::Match(_) => assert_eq!(page.kept, 1),
+        }
     }
 });

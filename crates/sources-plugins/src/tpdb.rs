@@ -18,7 +18,8 @@
 //! 2. sends it with the API key in an `Authorization` header (never in the
 //!    URL), through the kit's client, the only way it may send anything;
 //! 3. reads the answer with ENR-2b's bounded parser and maps the first
-//!    match to ENR-0's section.
+//!    match to ENR-0's section, deciding match, miss or error only on what
+//!    the parser reports it saw.
 //!
 //! **Errors read the HTTP status only.** A 401 or 403 is a bad key, a 429
 //! backs the host off, and the service's message text is never kept, read
@@ -38,7 +39,7 @@ use lodestar_sources::{
     Backoff, BoxFuture, Caps, Consent, Endpoint, Endpoints, HostRate, HttpError, Kind, Kit,
     Manifest, Network, PluginError, Policy, Priority, Request, Risk,
 };
-use lodestar_sources_feeds::tpdb::{self, Found, LIMITS, Limits};
+use lodestar_sources_feeds::tpdb::{self, Found, LIMITS, Limits, Seen, Stop};
 
 use crate::Credentials;
 
@@ -228,72 +229,28 @@ fn answer(res: Result<lodestar_sources::Response, HttpError>) -> Result<Lookup, 
 /// Maps a 200's body: the first kept match, no match for an answer that
 /// understood to nothing, and an error for one that wasn't understood, so a
 /// broken answer is never cached as a miss.
+///
+/// Every decision is made on what the parser saw ([`tpdb::Page`]), never on
+/// a second read of the body. The answer must be one whole document: the
+/// parser read it to its end (stopping, if at all, only at the item cap
+/// after the top result), with no trailing bytes and one `data` key.
 pub fn parse_answer(body: &[u8]) -> Result<Lookup, PluginError> {
-    // The root must be an object: `data` is the answer, an array root is
-    // not one.
-    let root = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
-    if root.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
-        return Err(fail(BAD_ANSWER));
-    }
-    let mut found = Vec::new();
-    let page = tpdb::parse_each(root, &ANSWER_LIMITS, |f| {
-        if found.is_empty() {
-            found.push(f);
-        }
+    let mut found = None;
+    let page = tpdb::parse_each(body, &ANSWER_LIMITS, |f| {
+        found.get_or_insert(f);
     });
-    // A second item ends the read (`Stop::Items`) after the first was kept;
-    // that's expected. An unreadable first item leaves nothing here.
-    if let Some(f) = found.into_iter().next() {
-        return Ok(to_lookup(f));
-    }
-    if page.stop.is_some() || page.skipped.total() > 0 {
+    let whole = matches!(page.stop, None | Some(Stop::Items)) && !page.trailing;
+    if !whole || page.data_repeated || page.skipped.total() > 0 {
         return Err(fail(BAD_ANSWER));
     }
-    // The parser doesn't say whether it saw the root's `data`, so this does:
-    // a miss is `data` as an empty list or `null`, and nothing else. An error
-    // object on a 200, or a `data` of another type, is not a miss.
-    if !matches!(data_start(root), Some(b'[' | b'{' | b'n')) {
-        return Err(fail(BAD_ANSWER));
+    match (found, page.data) {
+        // `max_items` is 1, so a kept match is the top result.
+        (Some(f), Seen::List | Seen::Object) => Ok(to_lookup(f)),
+        // A miss is `data` as an empty list or `null`, and nothing else: an
+        // error object on a 200, or a `data` of another type, is not a miss.
+        (None, Seen::List | Seen::Null) if page.stop.is_none() => Ok(Lookup::NoMatch),
+        _ => Err(fail(BAD_ANSWER)),
     }
-    Ok(Lookup::NoMatch)
-}
-
-/// The first byte of the value of the root object's `data` key, if it has
-/// one (the first such key, as the parser reads it). Strings and nesting are
-/// tracked, so `"data"` inside a value or a nested object doesn't count.
-/// A stopgap until `sources-feeds` reports whether the parser saw `data`.
-fn data_start(root: &[u8]) -> Option<u8> {
-    let (mut i, mut depth, mut key) = (0, 0usize, false);
-    while i < root.len() {
-        match root[i] {
-            b'"' => {
-                let start = i + 1;
-                i = start;
-                while i < root.len() && root[i] != b'"' {
-                    i += if root[i] == b'\\' { 2 } else { 1 };
-                }
-                if depth == 1 && key {
-                    key = false;
-                    if root.get(start..i) == Some(b"data") {
-                        let mut rest = root
-                            .get(i + 1..)?
-                            .iter()
-                            .filter(|b| !b.is_ascii_whitespace());
-                        return (rest.next()? == &b':').then(|| rest.next().copied())?;
-                    }
-                }
-            }
-            b'{' | b'[' => {
-                depth += 1;
-                key = depth == 1 && root[i] == b'{';
-            }
-            b'}' | b']' => depth = depth.saturating_sub(1),
-            b',' if depth == 1 => key = true,
-            _ => {}
-        }
-        i += 1;
-    }
-    None
 }
 
 /// ENR-0's section from one match. A scene id the section refuses is no

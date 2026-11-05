@@ -35,6 +35,24 @@
 //! The shape is GraphQL's: `{"data": {"searchScene": [scene, …]}}` or
 //! `{"data": {"findScene": scene | null}}`, with an optional `errors`
 //! array, which is counted and never read.
+//!
+//! [`Page`] says what the envelope held, so a caller can tell this query's
+//! answer from another's, a real miss from an error, and a whole answer
+//! from a cut one without a second read of the body: the first
+//! `data.searchScene`'s kind ([`Page::search`]), whether `data` had a
+//! `findScene` key at all ([`Page::find`]), the `errors` entries wherever
+//! the root has them ([`Page::errors`]), a key repeated in the root or in
+//! `data` ([`Page::repeated`]), and bytes after the root value
+//! ([`Page::trailing`]). Envelope keys are compared unescaped, so
+//! `"d\u0061ta"` is `data`. As inside a scene, the first of a repeated
+//! key is the one read.
+//!
+//! Past [`Limits::max_items`] the parser reads on to the end of the
+//! document without decoding another scene, so `errors`, a fault, a
+//! repeated key or trailing bytes after the cap are still reported.
+
+use std::borrow::Cow;
+use std::collections::HashSet;
 
 use crate::common::{self, Bad, days_in_month, prepare, small, unsafe_char};
 pub use crate::common::{MAX_NAME, MAX_TITLE, Stop};
@@ -73,7 +91,8 @@ pub struct Limits {
     /// Values in the document, containers included ([`Stop::Elements`]).
     pub max_values: usize,
     /// Scenes, kept or skipped ([`Stop::Items`]). A `null` `findScene` is
-    /// no scene.
+    /// no scene. Scenes past it are read past undecoded, and the rest of the
+    /// document is still read.
     pub max_items: usize,
     /// Performers kept in one scene; later ones are left out
     /// ([`Scene::performers_truncated`]).
@@ -189,15 +208,54 @@ impl Skipped {
     }
 }
 
+/// What a key's value was, as far as the parser read it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Seen {
+    /// No such key (or its parent isn't an object).
+    #[default]
+    Absent,
+    List,
+    Object,
+    Null,
+    /// A string, number or boolean.
+    Other,
+}
+
+impl Seen {
+    fn of(next: Option<u8>) -> Seen {
+        match next {
+            Some(b'[') => Seen::List,
+            Some(b'{') => Seen::Object,
+            Some(b'n') => Seen::Null,
+            _ => Seen::Other,
+        }
+    }
+}
+
 /// How a parse went.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Page {
     pub kept: u32,
     pub skipped: Skipped,
+    /// The first fault. [`Stop::Items`] means the document was read to
+    /// its end and only the item cap was reached: a structural fault after
+    /// the cap replaces it.
     pub stop: Option<Stop>,
-    /// Entries in the answer's GraphQL `errors` (1 if it isn't a list).
-    /// Their messages are the server's text and aren't kept.
+    /// Entries in the answer's GraphQL `errors` (1 if it isn't a list or
+    /// `null`), summed over every root `errors` key, before or after
+    /// `data`. Their messages are the server's text and aren't kept.
     pub errors: u32,
+    /// The first `data.searchScene`: its kind. Only a list is read.
+    pub search: Seen,
+    /// `data` has a `findScene` key, whatever its value (`null` too).
+    pub find: bool,
+    /// A key appears twice in the root or in `data`, compared unescaped (a
+    /// key that doesn't decode is compared as written). Only the first is
+    /// read (`errors` excepted: every one is counted).
+    pub repeated: bool,
+    /// Something other than whitespace followed the root value. The stop
+    /// is then [`Stop::Malformed`], or the byte or UTF-8 stop that came first.
+    pub trailing: bool,
 }
 
 /// Every kept scene and the page.
@@ -238,7 +296,10 @@ pub fn parse_each(body: &[u8], limits: &Limits, mut emit: impl FnMut(Scene)) -> 
         },
     };
     if let Err(stop) = p.document(&mut emit) {
-        p.page.stop.get_or_insert(stop);
+        // A structural fault outranks the item cap: the answer isn't whole.
+        if p.page.stop.is_none_or(|s| s == Stop::Items) {
+            p.page.stop = Some(stop);
+        }
     }
     p.page
 }
@@ -388,22 +449,23 @@ impl Parser<'_, '_> {
 
     fn document(&mut self, emit: &mut dyn FnMut(Scene)) -> R<()> {
         if self.j.peek() == Some(b'{') {
-            let (mut data, mut errors) = (false, false);
-            self.object(|p, k| match k {
-                "data" if !data => {
-                    data = true;
-                    p.data(emit)
+            let mut keys = Keys::default();
+            self.object(|p, k| {
+                let k = unescaped(k);
+                let first = keys.first(&mut p.page, k.clone());
+                match &*k {
+                    "data" if first => p.data(emit),
+                    // Every `errors` is counted: a repeat mustn't hide one.
+                    "errors" => p.errors(),
+                    _ => p.j.skip().map(drop),
                 }
-                "errors" if !errors => {
-                    errors = true;
-                    p.errors()
-                }
-                _ => p.j.skip().map(drop),
             })?;
         } else {
             self.j.skip()?;
         }
-        self.j.end()
+        let end = self.j.end();
+        self.page.trailing = end.is_err();
+        end
     }
 
     /// GraphQL's `errors`: counted, never read.
@@ -427,24 +489,38 @@ impl Parser<'_, '_> {
         if self.j.peek() != Some(b'{') {
             return self.j.skip().map(drop);
         }
-        let (mut search, mut find) = (false, false);
-        self.object(|p, k| match k {
-            "searchScene" if !search && p.j.peek() == Some(b'[') => {
-                search = true;
-                p.array(|p, _| p.scene(emit))
+        let mut keys = Keys::default();
+        self.object(|p, k| {
+            let k = unescaped(k);
+            let first = keys.first(&mut p.page, k.clone());
+            match &*k {
+                "searchScene" if first => {
+                    p.page.search = Seen::of(p.j.peek());
+                    if p.page.search == Seen::List {
+                        p.array(|p, _| p.scene(emit))
+                    } else {
+                        p.j.skip().map(drop)
+                    }
+                }
+                "findScene" => {
+                    p.page.find = true;
+                    if first && p.j.peek() != Some(b'n') {
+                        p.scene(emit)
+                    } else {
+                        p.j.skip().map(drop)
+                    }
+                }
+                _ => p.j.skip().map(drop),
             }
-            "findScene" if !find && p.j.peek() != Some(b'n') => {
-                find = true;
-                p.scene(emit)
-            }
-            _ => p.j.skip().map(drop),
         })
     }
 
     fn scene(&mut self, emit: &mut dyn FnMut(Scene)) -> R<()> {
         self.items += 1;
         if self.items > self.l.max_items {
-            return Err(Stop::Items);
+            // Read past, so the rest of the document is still checked.
+            self.page.stop.get_or_insert(Stop::Items);
+            return self.j.skip().map(drop);
         }
         let mut d = Draft::default();
         if self.j.peek() == Some(b'{') {
@@ -584,6 +660,28 @@ impl Parser<'_, '_> {
         Ok(name
             .filter(|_| e.bad.is_none())
             .map(|name| Performer { name }))
+    }
+}
+
+/// The keys of one envelope object, unescaped, to spot a repeat.
+#[derive(Default)]
+struct Keys<'a>(HashSet<Cow<'a, str>>);
+
+impl<'a> Keys<'a> {
+    /// True the first time `k` is seen; a repeat sets [`Page::repeated`].
+    fn first(&mut self, page: &mut Page, k: Cow<'a, str>) -> bool {
+        let first = self.0.insert(k);
+        page.repeated |= !first;
+        first
+    }
+}
+
+/// A key without its escapes; one that doesn't decode stays as written.
+fn unescaped(k: &str) -> Cow<'_, str> {
+    if k.contains('\\') {
+        json::decode(k).map_or(Cow::Borrowed(k), Cow::Owned)
+    } else {
+        Cow::Borrowed(k)
     }
 }
 

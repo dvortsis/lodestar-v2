@@ -8,7 +8,7 @@
 use lodestar_metainfo::hidden_char;
 use lodestar_sources_feeds::tpdb::{
     Answer, Found, Kind, LIMITS, Limits, MAX_ID, MAX_NAME, MAX_TITLE, Match, Performer, Performers,
-    Skipped, Stop, parse, parse_each,
+    Seen, Skipped, Stop, parse, parse_each,
 };
 use proptest::prelude::*;
 
@@ -41,6 +41,12 @@ fn check(a: &Answer, limits: &Limits) {
     let p = &a.page;
     assert_eq!(p.kept as usize, a.found.len());
     assert!((p.kept + p.skipped.total()) as usize <= limits.max_items);
+    // What the page says it saw agrees with what it kept (X-enr-page-flag).
+    assert!(!p.trailing || p.stop.is_some());
+    let items = p.kept + p.skipped.total();
+    assert!(items == 0 || matches!(p.data, Seen::List | Seen::Object));
+    assert!(p.data != Seen::Object || items <= 1);
+    assert!(!p.data_repeated || p.data != Seen::Absent);
     for f in &a.found {
         let m = &f.matched;
         assert!(is_id(&m.id));
@@ -976,4 +982,137 @@ fn mutated_corpus() {
     // The mutations leave many answers whole enough to reach the items.
     eprintln!("kept {kept} matches with {performers} performers");
     assert!(kept > 5_000 && performers > 5_000, "{kept} {performers}");
+}
+
+// --- What the parser saw (X-enr-page-flag) ----------------------------------
+
+/// The page reports the root's `data` kind, a repeated `data`, the other
+/// root keys and trailing bytes, so a caller needs no second read.
+#[test]
+fn the_page_reports_the_root() {
+    let page = |b: &str| parse(b.as_bytes()).page;
+    for (body, data) in [
+        (r#"{"data":[]}"#, Seen::List),
+        (r#"{"data":{"id":"a"}}"#, Seen::Object),
+        (r#"{"data":null}"#, Seen::Null),
+        (r#"{"data":"x"}"#, Seen::Other),
+        (r#"{"data":5}"#, Seen::Other),
+        (r#"{"data":false}"#, Seen::Other),
+        (r#"{"message":"data"}"#, Seen::Absent),
+        (r#"{"meta":{"data":[]}}"#, Seen::Absent),
+        (r#"[{"data":[]}]"#, Seen::Absent),
+        (r#""data""#, Seen::Absent),
+    ] {
+        assert_eq!(page(body).data, data, "{body}");
+    }
+    // The first `data` is read; a repeat is reported, not used.
+    let a = parse(br#"{"data":[],"data":[{"id":"a"}]}"#);
+    assert_eq!(
+        (a.page.data, a.page.data_repeated, a.found.len()),
+        (Seen::List, true, 0)
+    );
+    let a = parse(br#"{"data":null,"data":{"id":"a"}}"#);
+    assert_eq!(
+        (a.page.data, a.page.data_repeated, a.found.len()),
+        (Seen::Null, true, 0)
+    );
+    // Root keys are compared unescaped (`~` stands for a backslash here).
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    let p = parse(esc(r#"{"d~u0061ta":[]}"#).as_bytes()).page;
+    assert_eq!((p.data, p.others), (Seen::List, 0));
+    let a = parse(esc(r#"{"data":null,"d~u0061ta":{"id":"a"}}"#).as_bytes());
+    assert_eq!(
+        (a.page.data, a.page.data_repeated, a.found.len()),
+        (Seen::Null, true, 0)
+    );
+    let p = parse(esc(r#"{"m~u0065ta":5,"~u0064ata":[]}"#).as_bytes()).page;
+    assert_eq!((p.data, p.others, p.data_repeated), (Seen::List, 0, false));
+    // A key that doesn't decode stays as written: never `data`.
+    let p = parse(esc(r#"{"~ud800":[],"data":null}"#).as_bytes()).page;
+    assert_eq!((p.data, p.others, p.data_repeated), (Seen::Null, 1, false));
+    assert!(!page(r#"{"data":[],"meta":{},"meta":{}}"#).data_repeated);
+    // Other root keys are counted; `meta` isn't one, whatever its type.
+    assert_eq!(
+        page(r#"{"data":[],"links":{},"meta":{"total":1}}"#).others,
+        1
+    );
+    assert_eq!(page(r#"{"message":"x","error":1,"meta":5}"#).others, 2);
+    assert_eq!(page(r#"{"data":[]}"#).others, 0);
+    // Trailing bytes.
+    for (body, trailing) in [
+        (r#"{"data":[]} x"#, true),
+        (r#"{"data":[]}{}"#, true),
+        ("{\"data\":[]} \n\t", false),
+        (r#"{"data":[]"#, false),
+        (r#"null 1"#, true),
+    ] {
+        let p = page(body);
+        assert_eq!(p.trailing, trailing, "{body}");
+        if trailing {
+            assert_eq!(p.stop, Some(Stop::Malformed), "{body}");
+        }
+    }
+    // Bytes after the root of a body cut at its first bad UTF-8 byte: the
+    // earlier stop stays (found by the fuzz target).
+    let p = parse(b"0t\xbb").page;
+    assert_eq!((p.trailing, p.stop), (true, Some(Stop::NotUtf8)));
+    // A well-formed answer reports only what it is.
+    let p = parse(&fixture("scenes_search.json")).page;
+    assert_eq!(
+        (p.data, p.data_repeated, p.trailing),
+        (Seen::List, false, false)
+    );
+}
+
+/// Past the item cap, the rest of the document is still read: a later
+/// fault, repeat or trailing byte is reported, and a fault replaces the
+/// cap's stop.
+#[test]
+fn the_rest_is_read_past_the_item_cap() {
+    let one = Limits {
+        max_items: 1,
+        ..WIDE
+    };
+    let at = |b: &str| with(b.as_bytes(), &one);
+    let a = at(r#"{"data":[{"id":"a"},{"id":"bad id!"},{"id":"c"}],"meta":{"total":3}}"#);
+    assert_eq!((a.page.stop, ids(&a)), (Some(Stop::Items), vec!["a"]));
+    assert_eq!((a.page.skipped.total(), a.page.total), (0, Some(3)));
+    let a = at(r#"{"data":[{"id":"a"},{"id":"b"}],"data":[]}"#);
+    assert_eq!(
+        (a.page.stop, a.page.data_repeated),
+        (Some(Stop::Items), true)
+    );
+    let a = at(r#"{"data":[{"id":"a"},{"id":"b"}]} x"#);
+    assert_eq!(
+        (a.page.stop, a.page.trailing),
+        (Some(Stop::Malformed), true)
+    );
+    for cut in [
+        r#"{"data":[{"id":"a"},{"id":"b"}"#,
+        r#"{"data":[{"id":"a"},{"id":tru}]}"#,
+        r#"{"data":[{"id":"a"},{"id":"b"}],"links":{"x":"\q"}}"#,
+    ] {
+        let a = at(cut);
+        assert_eq!(
+            (a.page.stop, ids(&a)),
+            (Some(Stop::Malformed), vec!["a"]),
+            "{cut}"
+        );
+    }
+    let deep = format!(
+        r#"{{"data":[{{"id":"a"}},{}1{}]}}"#,
+        "[".repeat(20),
+        "]".repeat(20)
+    );
+    assert_eq!(at(&deep).page.stop, Some(Stop::Depth));
+    // A byte cap stays the stop, whatever follows.
+    let body = br#"{"data":[{"id":"a"},{"id":"b"}]}"#;
+    let cut = with(
+        body,
+        &Limits {
+            max_bytes: body.len() - 3,
+            ..one
+        },
+    );
+    assert_eq!(cut.page.stop, Some(Stop::Bytes));
 }

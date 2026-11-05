@@ -622,3 +622,109 @@ async fn a_distinctive_key_reaches_no_error_debug_or_log_in_any_outcome() {
         assert!(!format!("{p:?}{k:?}").contains("DISTINCTIVE"));
     }
 }
+
+/// The decisions read the parser's own report of what it saw (X-enr-page-flag):
+/// `findScene` in any form, a key repeated at any level, `errors` anywhere,
+/// a cut or trailing body, and a fault after the top scene are errors,
+/// never a miss or a match.
+#[test]
+fn the_parser_s_report_decides_and_only_a_whole_answer_counts() {
+    let a1 = "00000000-0000-4000-8000-0000000000a1";
+    let a2 = "00000000-0000-4000-8000-0000000000a2";
+    let top = format!(r#"{{"id":"{a1}","title":"A"}}"#);
+    let next = format!(r#"{{"id":"{a2}","title":"B"}}"#);
+    let bad: Vec<String> = vec![
+        // `findScene`: any value, before or after, repeated (escaped: below).
+        r#"{"data":{"searchScene":[],"findScene":5}}"#.into(),
+        r#"{"data":{"searchScene":[],"findScene":[]}}"#.into(),
+        r#"{"data":{"searchScene":[],"findScene":{}}}"#.into(),
+        r#"{"data":{"findScene":null,"searchScene":[]}}"#.into(),
+        format!(r#"{{"data":{{"searchScene":[{top}],"findScene":null}}}}"#),
+        format!(r#"{{"data":{{"searchScene":[{top},{next}],"findScene":null}}}}"#),
+        format!(r#"{{"data":{{"findScene":null,"findScene":{top},"searchScene":[]}}}}"#),
+        // A key repeated in the root, in `data` or in the top scene,
+        // whatever the key (escaped repeats: below).
+        r#"{"data":{"searchScene":[]},"errors":[],"errors":[]}"#.into(),
+        r#"{"extensions":1,"extensions":2,"data":{"searchScene":[]}}"#.into(),
+        r#"{"data":{"searchScene":[],"other":1,"other":2}}"#.into(),
+        format!(r#"{{"data":{{"searchScene":[],"searchScene":[{top}]}}}}"#),
+        format!(r#"{{"data":{{"searchScene":[{top}],"searchScene":[]}}}}"#),
+        format!(r#"{{"data":{{"searchScene":[{{"id":"{a1}","id":"{a1}"}}]}}}}"#),
+        format!(r#"{{"data":{{"searchScene":[{{"id":"{a1}","title":"A","title":"B"}}]}}}}"#),
+        // `errors` after the top scene, before `data`, not a list, or in a
+        // repeat of the key.
+        format!(r#"{{"data":{{"searchScene":[{top}]}},"errors":[{{}}]}}"#),
+        format!(r#"{{"data":{{"searchScene":[{top},{next}]}},"errors":{{}}}}"#),
+        format!(r#"{{"data":{{"searchScene":[{top},{next}]}},"errors":"x"}}"#),
+        format!(r#"{{"errors":[null],"data":{{"searchScene":[{top}]}}}}"#),
+        r#"{"errors":[],"data":{"searchScene":[]},"errors":[{}]}"#.into(),
+        // Trailing bytes after a match or a miss.
+        format!(r#"{{"data":{{"searchScene":[{top},{next}]}}}} x"#),
+        r#"{"data":{"searchScene":[]}} x"#.into(),
+        r#"{"data":{"searchScene":[]}}{}"#.into(),
+        // Cut after the top scene.
+        format!(r#"{{"data":{{"searchScene":[{top}"#),
+        format!(r#"{{"data":{{"searchScene":[{top},"#),
+        format!(r#"{{"data":{{"searchScene":[{top},{{"id":"#),
+        format!(r#"{{"data":{{"searchScene":[{top},{next}]"#),
+        format!(r#"{{"data":{{"searchScene":[{top},{next}]}}"#),
+        format!(r#"{{"data":{{"searchScene":[{top}]}},"errors":["#),
+        // A structural fault after the top scene.
+        format!(r#"{{"data":{{"searchScene":[{top},{{"id":tru}}]}}}}"#),
+        format!(
+            r#"{{"data":{{"searchScene":[{top},[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]}}}}"#
+        ),
+        format!(r#"{{"data":{{"searchScene":[{top}]}},"extensions":{{"x":"a\q"}}}}"#),
+    ];
+    for body in &bad {
+        assert!(stashdb::parse_answer(body.as_bytes()).is_err(), "{body}");
+    }
+    for body in [
+        r#"{"data":{"searchScene":[]},"errors":[]}"#,
+        r#"{"errors":null,"data":{"searchScene":[]}}"#,
+        r#"{"data":{"searchScene":[]}}"#,
+        r#"{"data":{"searchScene":[],"other":{"findScene":1}},"extensions":{"data":1}}"#,
+    ] {
+        assert_eq!(
+            stashdb::parse_answer(body.as_bytes()).unwrap(),
+            Lookup::NoMatch,
+            "{body}"
+        );
+    }
+    // Past the top scene, only the document's structure is checked: a
+    // second entry the parser would skip doesn't spoil the first.
+    for body in [
+        format!(r#"{{"data":{{"searchScene":[{top},{{"title":"no id"}}]}}}}"#),
+        format!(r#"{{"data":{{"searchScene":[{top},"x"]}},"errors":[]}}"#),
+    ] {
+        let Ok(Lookup::Match(s)) = stashdb::parse_answer(body.as_bytes()) else {
+            panic!("a match: {body}")
+        };
+        assert_eq!(s.scene_id, a1);
+    }
+}
+
+/// Envelope keys are compared unescaped: an escaped `findScene`, `errors`
+/// or repeat is seen, and an escaped `data` is `data`. `~` stands for a
+/// backslash, built at run time.
+#[test]
+fn an_escaped_envelope_key_is_its_name() {
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    let a1 = "00000000-0000-4000-8000-0000000000a1";
+    for body in [
+        r#"{"data":{"searchScene":[],"f~u0069ndScene":null}}"#.to_owned(),
+        r#"{"data":{"searchScene":[]},"~u0065rrors":[{}]}"#.to_owned(),
+        r#"{"data":{"searchScene":[]},"d~u0061ta":{"searchScene":[]}}"#.to_owned(),
+        r#"{"data":{"searchScene":[],"s~u0065archScene":[]}}"#.to_owned(),
+        r#"{"data":{"searchScene":[]},"x":1,"~u0078":2}"#.to_owned(),
+        format!(r#"{{"data":{{"searchScene":[],"searchSc~u0065ne":[{{"id":"{a1}"}}]}}}}"#),
+    ] {
+        let body = esc(&body);
+        assert!(stashdb::parse_answer(body.as_bytes()).is_err(), "{body}");
+    }
+    let miss = esc(r#"{"d~u0061ta":{"s~u0065archScene":[]}}"#);
+    assert_eq!(
+        stashdb::parse_answer(miss.as_bytes()).unwrap(),
+        Lookup::NoMatch
+    );
+}

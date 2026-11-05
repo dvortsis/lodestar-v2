@@ -6,7 +6,9 @@
 
 use libfuzzer_sys::fuzz_target;
 use lodestar_metainfo::hidden_char;
-use lodestar_sources_feeds::tpdb::{self, LIMITS, Limits, MAX_ID, MAX_NAME, MAX_TITLE};
+use lodestar_sources::enrich::Lookup;
+use lodestar_sources_feeds::tpdb::{self, LIMITS, Limits, MAX_ID, MAX_NAME, MAX_TITLE, Seen, Stop};
+use lodestar_sources_plugins::tpdb as plugin;
 
 fn is_id(s: &str) -> bool {
     (1..=MAX_ID).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
@@ -43,5 +45,30 @@ fuzz_target!(|data: &[u8]| {
         });
         assert_eq!(page.kept as usize, kept);
         assert!(kept + page.skipped.total() as usize <= limits.max_items);
+        // What the page says it saw agrees with what it kept.
+        assert!(!page.trailing || page.stop.is_some());
+        let items = kept + page.skipped.total() as usize;
+        assert!(items == 0 || matches!(page.data, Seen::List | Seen::Object));
+        assert!(page.data != Seen::Object || items <= 1);
+        assert!(!page.data_repeated || page.data != Seen::Absent);
+    }
+    // The plugin decides on those flags alone, and never takes a miss or a
+    // match from an answer that isn't whole and plain.
+    let page = tpdb::parse_each(body, &plugin::ANSWER_LIMITS, drop);
+    if let Ok(found) = plugin::parse_answer(body) {
+        assert!(matches!(page.stop, None | Some(Stop::Items)));
+        assert!(!page.trailing && !page.data_repeated);
+        assert_eq!(page.skipped.total(), 0);
+        match found {
+            Lookup::NoMatch if page.kept == 0 => {
+                assert_eq!(page.stop, None);
+                assert!(matches!(page.data, Seen::List | Seen::Null));
+            }
+            // A kept match whose id the section refuses is no match too.
+            Lookup::NoMatch | Lookup::Match(_) => {
+                assert_eq!(page.kept, 1);
+                assert!(matches!(page.data, Seen::List | Seen::Object));
+            }
+        }
     }
 });
