@@ -3026,7 +3026,7 @@
   "X-ci-disk": {
    "status": "building",
    "model": "sonnet",
-   "session": "pending",
+   "session": "session_01MMjhnCZyQhdneC8JFVu72D",
    "launched": "2026-11-05T09:00Z",
    "brief": "prompt-only"
   }
