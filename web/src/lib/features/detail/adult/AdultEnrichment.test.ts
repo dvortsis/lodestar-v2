@@ -31,9 +31,9 @@ const text = (id: string) => screen.getByTestId(id).textContent!.replace(/\s+/g,
 describe('AdultEnrichment', () => {
 	it('renders every field and names the source', () => {
 		show(section());
-		expect(text('detail-adult-studio')).toBe('Studio Example Studio');
-		expect(text('detail-adult-released')).toBe('Released 2021-03-04');
-		expect(text('detail-adult-scene')).toBe('Scene A Scene');
+		expect(text('detail-adult-studio')).toBe('Example Studio');
+		expect(text('detail-adult-released')).toBe('2021-03-04');
+		expect(text('detail-adult-scene')).toBe('A Scene');
 		const names = [...screen.getByTestId('detail-adult-performers').querySelectorAll('li')];
 		expect(names.map((n) => n.textContent)).toEqual(['Ada Example', 'Bo Sample']);
 		expect(text('detail-adult-source')).toBe('Matched by ThePornDB');
@@ -44,6 +44,38 @@ describe('AdultEnrichment', () => {
 		for (const k of ['studio', 'released', 'scene', 'performers'])
 			expect(screen.queryByTestId(`detail-adult-${k}`)).toBeNull();
 		expect(screen.getByTestId('detail-adult-source')).toBeTruthy();
+	});
+	it('wraps long unbroken text in the shared facts grid', () => {
+		const long = 'x'.repeat(200);
+		show(section({ studio: long, scene_title: long, performers: [long] }));
+		expect(text('detail-adult-studio')).toBe(long);
+		const dl = screen.getByTestId('detail-adult-studio').closest('dl');
+		expect(dl?.classList.contains('ls-detail-facts')).toBe(true);
+	});
+	it('makes bidi controls visible instead of acting on them', () => {
+		const rlo = 'invoice\u202Efdp.exe';
+		show(
+			section({
+				studio: rlo,
+				scene_title: rlo,
+				performers: [rlo],
+				source: { id: 1, name: rlo, plugin: 'x' }
+			})
+		);
+		for (const id of [
+			'detail-adult-studio',
+			'detail-adult-scene',
+			'detail-adult-performers',
+			'detail-adult-source'
+		]) {
+			expect(text(id)).not.toContain('\u202E');
+			expect(text(id)).toContain('<U+202E>');
+		}
+	});
+	it('notes truncation even with no names, and skips blank names', () => {
+		show(section({ performers: ['', '  '], performers_truncated: true }));
+		expect(screen.queryByTestId('detail-adult-performers')).toBeNull();
+		expect(screen.getByTestId('detail-adult-performers-more')).toBeTruthy();
 	});
 	it('notes truncation', () => {
 		show(section({ performers_truncated: true }));
@@ -65,6 +97,15 @@ describe('AdultEnrichment', () => {
 	});
 	it('has no link when it is null', () => {
 		show(section({ link: null }));
+		expect(screen.queryByTestId('detail-adult-link')).toBeNull();
+	});
+	it.each([
+		'https://user:pw@example.com/s',
+		'https://user@example.com/s',
+		'https://example.com/\u202Es',
+		'https://exa\u0000mple.com/s'
+	])('has no link for user info or control characters: %j', (link) => {
+		show(section({ link }));
 		expect(screen.queryByTestId('detail-adult-link')).toBeNull();
 	});
 	it.each(['http://example.com/s', 'javascript:alert(1)', 'data:text/html,x', '//example.com', ''])(
