@@ -2706,7 +2706,7 @@
       "note": "AnimeTosho stopped ingesting 2026-05; dropped in #417"
     },
     "SRC-10c": {
-      "status": "in_review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01MMjhn941mv7MQLX1VrkAxq",
       "launched": "2026-11-04T05:42:00Z",
@@ -4964,7 +4964,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T01:35Z",
+    "updated": "2026-11-05T01:40Z",
     "items": [
       {
         "slot": 1,
@@ -4989,14 +4989,6 @@
         "agent": "claude",
         "doing": "Adding the Legal Notice to the release build: setup and login refuse until it is accepted (owner: in v0.5.1).",
         "since": "2026-11-05T01:12Z"
-      },
-      {
-        "slot": 5,
-        "slice": "SRC-10c",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #411: fixing a cursor stall found in review, bringing main in; plugin stays off until the Internet Archive terms check is recorded.",
-        "since": "2026-11-04T05:41:51Z"
       },
       {
         "slot": 6,
