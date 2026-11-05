@@ -360,6 +360,12 @@ impl TitleIdentityParts {
     /// The identity as one term (v7's `title_identity`): FNV-1a over the
     /// words and each span set in turn, so it's the same in every build.
     /// A collision only over-matches; the parts decide.
+    ///
+    /// Changing what this hashes, or how, changes every indexed term:
+    /// bump `population::GENERATIONS["title_identity"]` in the same
+    /// change, so indexes backfill and Siblings use the window meanwhile
+    /// instead of narrowing by stale terms (B13b). The pinned values in
+    /// `title_identity_follows_b13s_rule` catch such a change.
     pub fn key(&self) -> u64 {
         let mut key = self.title_words.join(" ");
         for spans in [&self.years, &self.seasons, &self.episodes, &self.absolute] {
@@ -540,6 +546,30 @@ mod tests {
         assert_eq!(id(&[("title", "--")]), None);
         // FNV-1a of "show\x1f\x1f\x1f\x1f": a build can't change it.
         assert_eq!(id(&[("title", "Show")]), Some(0xf42e_4ea2_e59f_9558));
+        // With spans, each set sorted and joined by `,` in its own slot
+        // (B13b: Siblings narrow by this term, so a changed encoding
+        // must bump the field's generation, or versions go unfound).
+        // FNV-1a of "spider man\x1f2002\x1f\x1f\x1f".
+        assert_eq!(
+            id(&[("title", "Spider-Man"), ("year", "2002")]),
+            Some(0xb200_e236_36b4_b7e0)
+        );
+        // "show\x1f\x1f1\x1f1-3,5\x1f": a season and a multi-value
+        // episode set, given out of order.
+        assert_eq!(
+            id(&[
+                ("title", "Show"),
+                ("season", "1"),
+                ("episode", "5"),
+                ("episode", "1-3")
+            ]),
+            Some(0x1ebd_7def_f83f_e767)
+        );
+        // "show\x1f\x1f\x1f\x1f12": absolute numbering in the last slot.
+        assert_eq!(
+            id(&[("title", "Show"), ("absolute", "12")]),
+            Some(0x1e2d_98f2_72dc_ea3b)
+        );
     }
 
     use super::*;
