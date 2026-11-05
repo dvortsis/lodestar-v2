@@ -919,7 +919,9 @@ impl SizeCheckedWeight {
     }
 
     /// The files `terms` hold in `seg` (deleted ones included), from the
-    /// term dictionary: an upper bound, as a union's size hint is.
+    /// term dictionary: their sum, at least the union's size and no less
+    /// than Tantivy's estimate of it, so the plan leans towards the plain
+    /// conjunction. Either plan gives the same files.
     fn term_files(&self, seg: &SegmentReader, terms: &[Term]) -> tantivy::Result<u64> {
         let mut n = 0u64;
         for t in terms {

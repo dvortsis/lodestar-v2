@@ -1366,6 +1366,11 @@ impl SearchIndex {
         if compile::has_time_of_day(node) {
             key.push_str(&format!("@tz{utc_offset}"));
         }
+        // A bucket clause is a different query with the bucket terms than
+        // without them (X-search-files-5).
+        if buckets {
+            key.push_str("@buckets");
+        }
         cancel.check()?;
         Ok(Compiled {
             query,
