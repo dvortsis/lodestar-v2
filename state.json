@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T11:10Z",
+  "updated_at": "2026-11-05T11:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4632,7 +4632,9 @@
     "Owner flag (\u00a72.26) from LEGAL-1 (#472) after main merge: CSS budget 19.65 \u2192 19.72 kB (under the \u00a710.1 20 kB cap), /t/[hash] 21,776 \u2192 21,840 B. The legal notice dropped the unauthorised-copy (planned) marker and its status line, still v3.",
     "After #479 merges: split a sync verify_body out of TorrentCache::ask (sources-plugins/src/torrent_cache.rs) so the torrent_cache fuzz target calls the real reply path and fuzzes Verified::claims (X-fuzz-1105, #484 decisions file). Next fuzz campaign: give more time to metainfo (~1k exec/s), rss, release, query and tokenizer.",
     "owner-flag \u00a72.19 (RP-1b #485): MW-2@2 narrows a malware rule; residual: one .exe in a Music torrent with two samples in a sample folder passes MW-2, only MW-1 can hold it. Flag with the PR merge.",
-    "Flake: crates/lodestar subscriptions::tests::a_stalled_download_is_cut_off_at_the_time_limit hung #480's ubuntu job 2h (run 41995084843); runner fix on slice/X-flake-subs-stall."
+    "Flake: crates/lodestar subscriptions::tests::a_stalled_download_is_cut_off_at_the_time_limit hung #480's ubuntu job 2h (run 41995084843); runner fix on slice/X-flake-subs-stall.",
+    "Docs: CLAUDE.md and web/e2e/README.md name PW_CHROMIUM_PATH chromium-1243, but this container image has only /opt/pw-browsers/chromium-1194 (RP-6 reviewer, 11:50Z). Check the image and correct in the next runner docs PR.",
+    "X-log-url-redact-5 (same session, after #488): NBSP/ideographic-space cut after a separator, Bearer NBSP+space, CJK space by fullwidth colon, other look-alike separators and spaces if cheap."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
