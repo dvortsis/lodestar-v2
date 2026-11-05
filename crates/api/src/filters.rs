@@ -1808,6 +1808,13 @@ impl FiltersApi {
                 // Read again under the lock: a shadow result that disagrees,
                 // or another version pending, since the preview. The
                 // password confirmed the versions the client names back.
+                if versions
+                    .as_ref()
+                    .is_some_and(|v| v.len() > packs::MAX_NAMED)
+                {
+                    return Err(bad("too_many_versions", "That's more versions than exist.")
+                        .field("versions"));
+                }
                 let manifest = self.engine.current().manifest.clone();
                 let acc = packs::acceptance(store, &manifest, ids, now)?;
                 let moved = versions.as_ref().is_some_and(|v| {
@@ -1819,13 +1826,6 @@ impl FiltersApi {
                 });
                 if moved || (acc.weakening && (!out.assessment.confirm || versions.is_none())) {
                     return Err(changed_since_preview());
-                }
-                if versions
-                    .as_ref()
-                    .is_some_and(|v| v.len() > packs::MAX_NAMED)
-                {
-                    return Err(bad("too_many_versions", "That's more versions than exist.")
-                        .field("versions"));
                 }
                 // The marks first, so an acceptance never lands without
                 // them; put back if the acceptance fails. (The acceptance
@@ -2277,6 +2277,9 @@ impl FiltersApi {
                 .map(|o| pack_overrides::label(o.rule)),
         );
         let pending_on = packs::pending_on(&set, &versions);
+        if packs::shadow_unreadable(&store)? {
+            pack_conditions.push(packs::SHADOW_UNREADABLE.to_owned());
+        }
         if packs::review_unreadable(&store)? {
             pack_conditions.push(packs::REVIEW_UNREADABLE.to_owned());
         }

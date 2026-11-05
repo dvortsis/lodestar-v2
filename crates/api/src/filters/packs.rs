@@ -78,62 +78,203 @@ pub(super) fn pending_on(
         .collect()
 }
 
-fn read_shadow_since(store: &Store) -> ApiResult<HashMap<String, i64>> {
-    let text = match store.setting_text(SHADOW_SINCE_KEY) {
-        Ok(t) => t,
-        // A row that doesn't read is replaced; meanwhile every hit counts.
-        Err(lodestar_store::Error::Corrupt(_)) => None,
-        Err(e) => return Err(internal(e)),
-    };
-    Ok(text
-        .as_deref()
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| {
-            let (key, id) = l.split_once(' ')?;
-            Some((key.to_owned(), id.parse().ok()?))
-        })
-        .collect())
+/// A pending version's entry in [`SHADOW_SINCE_KEY`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Since {
+    /// Its shadow started after the hit with this id, whose row had this
+    /// fingerprint ([`row_print`]; 0 for id 0, an empty table).
+    After(i64, u64),
+    /// `?`: where it started can't be known any more (the row or a line
+    /// didn't read, or the hit ids were reused). Acceptance is weakening
+    /// until the version is accepted with the password or changes.
+    Doubt,
 }
 
-/// Records where the shadow of each newly pending version starts, and
-/// drops the entries of versions no longer pending. Run at start and after
-/// every change, under the store lock.
+/// The stored [`SHADOW_SINCE_KEY`] row.
+#[derive(Debug, Default)]
+struct ShadowSince {
+    entries: HashMap<String, Since>,
+    /// The row, or a line of it, didn't read: a pending version without
+    /// an entry may have lost one.
+    damaged: bool,
+}
+
+fn read_shadow_since(store: &Store) -> ApiResult<ShadowSince> {
+    let text = match store.setting_text(SHADOW_SINCE_KEY) {
+        Ok(None) => return Ok(ShadowSince::default()),
+        Ok(Some(t)) => t,
+        Err(lodestar_store::Error::Corrupt(_)) => {
+            return Ok(ShadowSince {
+                damaged: true,
+                ..ShadowSince::default()
+            });
+        }
+        Err(e) => return Err(internal(e)),
+    };
+    let mut out = ShadowSince::default();
+    for l in text.lines() {
+        let entry = l.split_once(' ').and_then(|(key, v)| {
+            let since = match v {
+                "?" => Since::Doubt,
+                v => {
+                    let (id, print) = v.split_once(':')?;
+                    let id: i64 = id.parse().ok().filter(|id| *id >= 0)?;
+                    let print = u64::from_str_radix(print, 16).ok()?;
+                    Since::After(id, print)
+                }
+            };
+            Some((key.to_owned(), since))
+        });
+        match entry {
+            Some((key, since)) if !out.entries.contains_key(&key) => {
+                out.entries.insert(key, since);
+            }
+            // A line that doesn't read, or a version listed twice.
+            _ => out.damaged = true,
+        }
+    }
+    Ok(out)
+}
+
+/// The highest `filter_hits` id, 0 when the table is empty.
+fn max_hit_id(store: &Store) -> ApiResult<i64> {
+    store
+        .connection()
+        .query_row("SELECT coalesce(max(id), 0) FROM filter_hits", [], |r| {
+            r.get(0)
+        })
+        .map_err(internal)
+}
+
+/// A fingerprint of one `filter_hits` row (FNV-1a over its columns), or
+/// `None` when there's no row with that id. It tells a row from another
+/// written later under the same id; it records nothing of its own.
+fn row_print(store: &Store, id: i64) -> ApiResult<Option<u64>> {
+    use lodestar_store::rusqlite::OptionalExtension;
+    let row = store
+        .connection()
+        .query_row(
+            "SELECT hash, rule, action, at, evidence FROM filter_hits WHERE id = ?1",
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(internal)?;
+    Ok(row.map(|(hash, rule, action, at, evidence)| {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |bytes: &[u8]| {
+            for b in (bytes.len() as u64).to_le_bytes().iter().chain(bytes) {
+                h ^= u64::from(*b);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        eat(&id.to_le_bytes());
+        eat(&hash);
+        eat(rule.as_bytes());
+        eat(&action.to_le_bytes());
+        eat(&at.to_le_bytes());
+        eat(&evidence);
+        h
+    }))
+}
+
+/// The anchor for a version first seen pending now: the highest hit id and
+/// its row's fingerprint (0 and 0 for an empty table).
+fn new_anchor(store: &Store) -> ApiResult<Since> {
+    let id = max_hit_id(store)?;
+    Ok(Since::After(id, row_print(store, id)?.unwrap_or(0)))
+}
+
+/// Where a pending version's evidence starts, read fail-closed:
+/// - `Some(Some(id))`: hits after `id`;
+/// - `Some(None)`: no entry yet (a version first seen now), so every hit
+///   in the window counts;
+/// - `None`: in doubt. Its entry is `?`; the row is damaged and it has no
+///   entry; or the hit ids were reused. `filter_hits.id` isn't
+///   AUTOINCREMENT, so once the table empties (the 30-day purge on an idle
+///   store) new hits reuse ids from 1, and `id > anchor` would drop them.
+///   Reuse shows as the anchor's row holding another hit than the one
+///   recorded, or as the anchor's row gone while lower ids are there (an
+///   anchor that aged out takes every lower id with it).
+fn anchor(store: &Store, since: &ShadowSince, key: &str) -> ApiResult<Option<Option<i64>>> {
+    Ok(match since.entries.get(key) {
+        Some(Since::After(0, _)) => Some(Some(0)),
+        Some(Since::After(id, print)) => match row_print(store, *id)? {
+            Some(p) if p == *print => Some(Some(*id)),
+            Some(_) => None,
+            None => {
+                let lower: bool = store
+                    .connection()
+                    .query_row(
+                        "SELECT EXISTS (SELECT 1 FROM filter_hits WHERE id < ?1)",
+                        [*id],
+                        |r| r.get(0),
+                    )
+                    .map_err(internal)?;
+                (!lower).then_some(Some(*id))
+            }
+        },
+        Some(Since::Doubt) => None,
+        None if since.damaged => None,
+        None => Some(None),
+    })
+}
+
+/// The `pack_conditions` label of shadow evidence in doubt.
+pub(super) const SHADOW_UNREADABLE: &str = "packs.shadow-unreadable";
+
+/// Whether any pending version's shadow evidence is in doubt, or the row
+/// didn't read: reported in `pack_conditions`.
+pub(super) fn shadow_unreadable(store: &Store) -> ApiResult<bool> {
+    let row = read_shadow_since(store)?;
+    Ok(row.damaged || row.entries.values().any(|s| *s == Since::Doubt))
+}
+
+/// Records where the shadow of each newly pending version starts, marks
+/// the ones whose evidence can't be trusted any more as `?` ([`anchor`]),
+/// and drops the entries of versions no longer pending. Run at start and
+/// after every change, under the store lock.
 pub(super) fn note_shadows(store: &mut Store, manifest: &Manifest) -> ApiResult<()> {
     let set = store.rule_set().map_err(internal)?;
     let versions = PackVersions::resolve(manifest, &pack_upgrade::Rows::of(&set));
     let pending = pending_on(&set, &versions);
     let before = read_shadow_since(store)?;
-    let unreadable = matches!(
-        store.setting_text(SHADOW_SINCE_KEY),
-        Err(lodestar_store::Error::Corrupt(_))
-    );
     let mut after = HashMap::new();
-    let mut last = None;
+    let mut fresh = None;
     for (r, v) in pending {
         let key = format!("{}@{v}", r.id());
-        let id = match before.get(&key) {
-            Some(id) => *id,
-            None => match last {
-                Some(id) => id,
+        let since = match anchor(store, &before, &key)? {
+            Some(Some(_)) => before.entries[&key],
+            Some(None) => match fresh {
+                Some(s) => s,
                 None => {
-                    let id: i64 = store
-                        .connection()
-                        .query_row("SELECT coalesce(max(id), 0) FROM filter_hits", [], |r| {
-                            r.get(0)
-                        })
-                        .map_err(internal)?;
-                    last = Some(id);
-                    id
+                    let s = new_anchor(store)?;
+                    fresh = Some(s);
+                    s
                 }
             },
+            None => Since::Doubt,
         };
-        after.insert(key, id);
+        after.insert(key, since);
     }
-    if after == before && !unreadable {
+    if after == before.entries && !before.damaged {
         return Ok(());
     }
-    let mut lines: Vec<String> = after.iter().map(|(k, id)| format!("{k} {id}")).collect();
+    let mut lines: Vec<String> = after
+        .iter()
+        .map(|(k, s)| match s {
+            Since::After(id, print) => format!("{k} {id}:{print:016x}"),
+            Since::Doubt => format!("{k} ?"),
+        })
+        .collect();
     lines.sort();
     if lines.is_empty() {
         store.update_settings_text(&[], &[SHADOW_SINCE_KEY])
@@ -394,8 +535,13 @@ pub(super) fn acceptance(
                 }
             })
             .collect();
-        let after = since.get(&format!("{}@{version}", r.id())).copied();
-        let sides = sides(store, r, now, after, &applied)?;
+        let key = format!("{}@{version}", r.id());
+        let (after, evidence_doubt) = match anchor(store, &since, &key)? {
+            Some(after) => (after, false),
+            None => (None, true),
+        };
+        let mut sides = sides(store, r, now, after, &applied)?;
+        sides.doubt |= evidence_doubt;
         let shadows: Vec<PackShadow> = sides
             .by_hash
             .values()

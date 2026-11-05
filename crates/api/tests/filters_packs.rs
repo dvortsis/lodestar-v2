@@ -1084,3 +1084,151 @@ async fn a_review_line_that_does_not_read_is_reported() {
     let q = get(&f, &c, "/api/v1/filters/queue").await;
     assert_eq!(q["quarantine"][0]["pack_review"], json!(true));
 }
+
+fn since_row(f: &Fixture) -> Option<String> {
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .setting_text("filter.packs.shadow_since")
+        .unwrap()
+}
+
+fn clear_hits(f: &Fixture) {
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .connection()
+        .execute("DELETE FROM filter_hits", [])
+        .unwrap();
+}
+
+/// `filter_hits.id` is reused once the table empties (the 30-day purge on
+/// an idle store): a recorded anchor then can't be trusted, so acceptance
+/// is weakening until confirmed, whether the new ids stay under the
+/// anchor or pass it.
+#[tokio::test]
+async fn reused_hit_ids_put_the_shadow_evidence_in_doubt() {
+    for refill in [2u8, 12] {
+        let f = fixture(bumped(Direction::Widens, Action::Hide));
+        let c = logged_in(&f).await;
+        for n in 0..5 {
+            hit(&f, "MW-1", n, Action::Hide, false, 1_000);
+        }
+        f.api.resume_requeues(now()).unwrap();
+        let since = since_row(&f).unwrap();
+        assert!(since.starts_with("MW-2@2 5:"), "{since}");
+        assert_eq!(
+            preview(&f, &c, &accept(&["MW-2"], None)).await["weakening"],
+            json!(false)
+        );
+        // Purged, then new hits reuse ids from 1.
+        clear_hits(&f);
+        for n in 0..refill {
+            hit(&f, "MW-1", 100 + n, Action::Hide, false, 10);
+        }
+        let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+        assert_eq!(p["weakening"], json!(true), "refill {refill}: {p}");
+        // The next start marks it, and it stays in doubt.
+        f.api.resume_requeues(now()).unwrap();
+        assert_eq!(
+            since_row(&f).as_deref(),
+            Some("MW-2@2 ?"),
+            "refill {refill}"
+        );
+        let o = get(&f, &c, "/api/v1/filters").await;
+        assert_eq!(o["pack_conditions"], json!(["packs.shadow-unreadable"]));
+        needs_password(&f, &c, "reused ids").await;
+        assert_eq!(since_row(&f), None, "accepted: nothing pending");
+    }
+}
+
+/// An anchor that aged out with every hit before it is no doubt: the
+/// table just moved on.
+#[tokio::test]
+async fn an_anchor_that_aged_out_is_still_trusted() {
+    let f = fixture(bumped(Direction::Widens, Action::Hide));
+    let c = logged_in(&f).await;
+    for n in 0..5 {
+        hit(&f, "MW-1", n, Action::Hide, false, 1_000);
+    }
+    f.api.resume_requeues(now()).unwrap();
+    hit(&f, "MW-2", 9, Action::Hide, true, 10);
+    // The purge takes every hit up to the anchor.
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .connection()
+        .execute("DELETE FROM filter_hits WHERE id <= 5", [])
+        .unwrap();
+    let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+    assert_eq!(p["weakening"], json!(false), "{p}");
+}
+
+/// A `shadow_since` row or line that doesn't read fails closed: the
+/// pending versions it may have held are in doubt, reported, and stay so.
+#[tokio::test]
+async fn an_unreadable_shadow_since_fails_closed() {
+    for bad in ["x'00ff'", "'MW-2@2 nonsense'", "'garbage'"] {
+        let f = fixture(bumped(Direction::Widens, Action::Hide));
+        let c = logged_in(&f).await;
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .connection()
+            .execute(
+                &format!(
+                    "INSERT INTO settings (key, value) VALUES ('filter.packs.shadow_since', {bad})"
+                ),
+                [],
+            )
+            .unwrap();
+        let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+        assert_eq!(p["weakening"], json!(true), "{bad}: {p}");
+        let o = get(&f, &c, "/api/v1/filters").await;
+        assert_eq!(
+            o["pack_conditions"],
+            json!(["packs.shadow-unreadable"]),
+            "{bad}"
+        );
+        f.api.resume_requeues(now()).unwrap();
+        assert_eq!(since_row(&f).as_deref(), Some("MW-2@2 ?"), "{bad}");
+        let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+        assert_eq!(p["weakening"], json!(true), "{bad}: still in doubt");
+    }
+}
+
+/// A build that changes the pending version starts its evidence afresh:
+/// the older version's results never count as the newer one's.
+#[tokio::test]
+async fn a_new_pending_version_starts_its_own_evidence() {
+    let f = fixture(bumped(Direction::Widens, Action::Hide));
+    let c = logged_in(&f).await;
+    f.api.resume_requeues(now()).unwrap();
+    assert!(since_row(&f).unwrap().starts_with("MW-2@2 "));
+    // While MW-2@2 waited, version 1 held a torrent @2 didn't.
+    hit(&f, "MW-2", 2, Action::Hide, false, 10);
+    assert_eq!(
+        preview(&f, &c, &accept(&["MW-2"], None)).await["weakening"],
+        json!(true)
+    );
+    // A build with MW-2@3 (widening) replaces it.
+    let three = mw2(&[
+        (1, Direction::Widens, Action::Hide),
+        (2, Direction::Widens, Action::Hide),
+        (3, Direction::Widens, Action::Hide),
+    ]);
+    f.api.engine.update_engine(|e| e.manifest = three);
+    f.api.resume_requeues(now()).unwrap();
+    let since = since_row(&f).unwrap();
+    assert!(
+        since.starts_with("MW-2@3 ") && !since.contains("MW-2@2"),
+        "{since}"
+    );
+    let p = preview(&f, &c, &accept(&["MW-2"], None)).await;
+    assert_eq!(p["pack_versions"], json!(["MW-2@3"]));
+    assert_eq!(p["weakening"], json!(false), "{p}");
+}
