@@ -1244,6 +1244,7 @@ dependencies = [
  "lodestar-classify",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-release-parser",
  "lodestar-search",
  "lodestar-store",
  "unicode-normalization",
@@ -1263,6 +1264,7 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-release-parser",
  "lodestar-search",
+ "lodestar-sources",
  "lodestar-sources-feeds",
  "lodestar-sources-importers",
  "lodestar-sources-plugins",
@@ -1273,6 +1275,7 @@ dependencies = [
  "semver",
  "serde_json",
  "sha2",
+ "url",
 ]
 
 [[package]]

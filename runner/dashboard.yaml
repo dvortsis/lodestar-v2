@@ -264,6 +264,7 @@ placement:
   - X-followups-1105
   - X-source-adult-2
   - X-flakes-1105
+  - X-fuzz-cache-1105
   - D-sources-guide
   - L4-followups
   - S-settings-reconcile
