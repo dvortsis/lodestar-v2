@@ -7,7 +7,7 @@ use lodestar_metainfo::InfoHash;
 use lodestar_pipeline::unverified::{store_claims, stored_trackers, tracker_url};
 use lodestar_sources::{Discovery, Found, claims};
 use lodestar_store::SourceId;
-use lodestar_store::claims::MAX_TRACKERS;
+use lodestar_store::claims::{MAX_PATH, MAX_TOTAL, MAX_TRACKERS};
 
 fn kept(raw: &str) -> Option<String> {
     let k = tracker_url(raw);
@@ -155,7 +155,7 @@ fn two_spellings_of_one_tracker_are_stored_once() {
     .map(String::from)
     .to_vec();
     assert_eq!(
-        stored_trackers(&raw),
+        stored_trackers(&raw, MAX_TOTAL),
         [
             "udp://t.example:6969/a",
             "https://t.example/announce",
@@ -172,7 +172,7 @@ fn the_cap_applies_after_the_dedup() {
         .map(|_| "HTTP://T.Example/a".to_owned())
         .collect();
     raw.extend((0..MAX_TRACKERS + 3).map(|i| format!("http://t{i}.example/a")));
-    let out = stored_trackers(&raw);
+    let out = stored_trackers(&raw, MAX_TOTAL);
     assert_eq!(out.len(), MAX_TRACKERS);
     assert_eq!(out[0], "http://t.example/a");
     assert_eq!(out[1], "http://t0.example/a");
@@ -210,4 +210,57 @@ fn store_claims_stores_the_canonical_trackers() {
         c.check().is_ok(),
         "the stored claims are within every limit"
     );
+}
+
+/// A discovery whose claims leave exactly `room` bytes under the total
+/// for trackers, with `trackers` claimed.
+fn near_full(room: usize, trackers: &[&str]) -> Discovery {
+    let name = "Pack";
+    let mut left = MAX_TOTAL - name.len() - room;
+    let mut files = Vec::new();
+    while left > 0 {
+        let n = left.min(MAX_PATH);
+        files.push(claims::ClaimedFile {
+            path: format!("{}", files.len() % 10).repeat(n),
+            size: Some(1),
+        });
+        left -= n;
+    }
+    let mut found = Found::key(InfoHash([9; 20]), 0);
+    found.claims = Some(Box::new(claims::Claims {
+        name: Some(name.into()),
+        files,
+        trackers: trackers.iter().map(|t| (*t).to_owned()).collect(),
+        ..claims::Claims::default()
+    }));
+    Discovery {
+        source: SourceId::new(1).unwrap(),
+        found,
+        at: 0,
+        reply: false,
+    }
+}
+
+/// The canonical form can be longer than the raw text the emitter's clamp
+/// measured: a tracker that would take the claims over the total is
+/// dropped, and the rest of the claims are still stored.
+#[test]
+fn a_tracker_that_grows_past_the_total_is_dropped_not_the_claims() {
+    // `http://t.example` (16 bytes) is stored as `http://t.example/` (17).
+    // `http://u.ex` (11) as `http://u.ex/` (12): a later, shorter one
+    // still fits.
+    for (room, want) in [
+        (11, vec![]),
+        (16, vec!["http://u.ex/"]),
+        (17, vec!["http://t.example/"]),
+        (17 + 11, vec!["http://t.example/"]),
+        (17 + 12, vec!["http://t.example/", "http://u.ex/"]),
+    ] {
+        let d = near_full(room, &["http://t.example", "http://u.ex"]);
+        let c = store_claims(&d).expect("claims");
+        assert_eq!(c.trackers, want, "room {room}");
+        assert!(c.text_len() <= MAX_TOTAL);
+        assert!(c.check().is_ok(), "room {room}: the claims are stored");
+        assert_eq!(c.files.len(), d.found.claims.as_ref().unwrap().files.len());
+    }
 }

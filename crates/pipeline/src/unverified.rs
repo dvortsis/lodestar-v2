@@ -214,12 +214,24 @@ pub fn tracker_url(t: &str) -> Option<String> {
 
 /// The trackers stored for a claim: each in its [`tracker_url`] form, the
 /// dropped ones left out, once each after canonicalising (the first
-/// spelling's place), in the claim's order, and at most the claims' limit.
-pub fn stored_trackers(raw: &[String]) -> Vec<String> {
+/// spelling's place), in the claim's order, at most the claims' limit, and
+/// at most `room` bytes in all. The canonical form can be longer than the
+/// raw text the emitter's clamp measured, so a tracker that would take the
+/// claims over [`claims::MAX_TOTAL`] is dropped rather than the store
+/// refusing the whole claim set; later, shorter ones may still fit.
+pub fn stored_trackers(raw: &[String], room: usize) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
+    let mut left = room;
     raw.iter()
         .filter_map(|t| tracker_url(t))
         .filter(|t| seen.insert(t.clone()))
+        .filter(|t| {
+            let fits = t.len() <= left;
+            if fits {
+                left -= t.len();
+            }
+            fits
+        })
         .take(claims::MAX_TRACKERS)
         .collect()
 }
@@ -229,7 +241,7 @@ pub fn stored_trackers(raw: &[String]) -> Vec<String> {
 pub fn store_claims(d: &Discovery) -> Option<Claims> {
     let c = d.found.claims.as_deref()?;
     let p = d.found.provenance.as_deref();
-    Some(Claims {
+    let mut out = Claims {
         name: c.name.clone(),
         size: c.size,
         files: c
@@ -240,7 +252,7 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
                 size: f.size,
             })
             .collect(),
-        trackers: stored_trackers(&c.trackers),
+        trackers: Vec::new(),
         ids: c
             .ids
             .iter()
@@ -262,7 +274,11 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         },
         // Judged, as extra evidence, before it's stored ([`judge_in`]).
         adult: c.adult.clone(),
-    })
+    };
+    // The trackers last, in the room the rest leaves under the total.
+    let room = claims::MAX_TOTAL.saturating_sub(out.text_len());
+    out.trackers = stored_trackers(&c.trackers, room);
+    Some(out)
 }
 
 /// A claim a rule holds back. No name in the clear: only the sealed one,
