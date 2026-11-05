@@ -23,8 +23,9 @@
 //! Prints a CSV row every 1,000 torrents: torrents, `RssAnon`, mimalloc's
 //! committed bytes, SQLite's own count, the anonymous memory in and outside
 //! mimalloc's arena (`Anonymous`, and `Private_Dirty` outside), and the
-//! count of the outside mappings by size. Then commit and search latency,
-//! p50 and p99, and the arena runs' spans. Linux only (it reads `/proc`).
+//! count and `Private_Dirty` of the outside mappings by size. Then commit
+//! and search latency, p50 and p99, and the arena runs' spans. Linux only
+//! (it reads `/proc`).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -78,8 +79,9 @@ struct Maps {
     outside_dirty: u64,
     /// Outside mappings holding any anonymous memory, by size bucket.
     counts: [u64; BUCKETS.len()],
-    /// `Anonymous` of those mappings per bucket, bytes.
+    /// `Anonymous` and `Private_Dirty` of those mappings per bucket, bytes.
     bytes: [u64; BUCKETS.len()],
+    dirty: [u64; BUCKETS.len()],
 }
 
 /// The anonymous mappings in `/proc/self/smaps`, in address order.
@@ -154,6 +156,7 @@ fn maps() -> Maps {
                 .unwrap_or(BUCKETS.len() - 1);
             m.counts[b] += 1;
             m.bytes[b] += v.anon;
+            m.dirty[b] += v.dirty;
         }
     }
     m
@@ -193,16 +196,17 @@ fn mib(b: u64) -> f64 {
 fn row(n: u64) {
     let m = maps();
     let counts: Vec<String> = m.counts.iter().map(u64::to_string).collect();
+    let dirty: Vec<String> = m.dirty.iter().map(|d| format!("{:.1}", mib(*d))).collect();
     println!(
-        "{n},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{}",
+        "{n},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{},{}",
         mib(status("RssAnon")),
         mib(mimalloc_committed()),
-        // `u64` today, `Option<u64>` once X-mem-gauges-2 (#442) lands.
-        mib(Option::<u64>::from(lodestar_store::memstats::sqlite_memory_used()).unwrap_or(0)),
+        mib(lodestar_store::memstats::sqlite_memory_used().unwrap_or(0)),
         mib(m.arena),
         mib(m.outside),
         mib(m.outside_dirty),
         counts.join(","),
+        dirty.join(","),
     );
 }
 
@@ -319,8 +323,11 @@ async fn main() {
     }
 
     println!(
-        "torrents,rss_anon_mib,mimalloc_committed_mib,sqlite_mib,arena_anon_mib,outside_anon_mib,outside_dirty_mib,{}",
-        BUCKETS.map(|(_, name)| name).join(",")
+        "torrents,rss_anon_mib,mimalloc_committed_mib,sqlite_mib,arena_anon_mib,outside_anon_mib,outside_dirty_mib,{},{}",
+        BUCKETS.map(|(_, name)| name).join(","),
+        BUCKETS
+            .map(|(_, name)| format!("{name}_dirty_mib"))
+            .join(",")
     );
     row(0);
     let started = Instant::now();
@@ -376,9 +383,10 @@ async fn main() {
     println!("# arena runs (MiB of address space): {}", spans.join(", "));
     for (i, (_, name)) in BUCKETS.iter().enumerate() {
         println!(
-            "# outside the arena, {name}: {} mappings, {:.1} MiB",
+            "# outside the arena, {name}: {} mappings, {:.1} MiB anonymous, {:.1} MiB dirty",
             m.counts[i],
-            mib(m.bytes[i])
+            mib(m.bytes[i]),
+            mib(m.dirty[i])
         );
     }
 }
