@@ -67,9 +67,10 @@ button.link { background: none; color: var(--primary-ink); padding: 0; }
 <main>
   <h1>Lodestar</h1>
   <p class="meta" id="meta">Loading…</p>
+  <p class="meta" id="crawler" hidden></p>
 
   <div class="auth" id="setup" hidden>
-    <p>First run: <a href="/setup">set up Lodestar</a> with the setup token from the server log. Setup shows the Legal Notice first.</p>
+    <p>First run: <a href="/setup">set up Lodestar</a> with the setup token from the server log. Setup shows the Legal Notice first. The crawler doesn't connect to the network until setup is done.</p>
   </div>
   <div class="auth" id="notice" hidden>
     <p>Read and accept the Legal Notice to continue: <a href="/login">open the Legal Notice</a>.</p>
@@ -173,6 +174,9 @@ async function refresh() {
     const s = await r.json();
     const up = Math.max(1, s.now - s.started_at);
     $("meta").textContent = "v" + s.version + " · up " + Math.floor(up / 3600) + " h " + Math.floor(up % 3600 / 60) + " min";
+    const why = s.crawler && s.crawler.paused ? (s.crawler.reason === "setup" ? "Crawler paused: waiting for setup." : "Crawler paused.") : "";
+    $("crawler").textContent = why;
+    $("crawler").hidden = !why;
     $("torrents").textContent = fmt.format(s.torrents);
     $("rate").textContent = fmt.format(Math.round(s.writer.stored * 3600 / up));
     $("pending").textContent = fmt.format(s.fetch.pending);

@@ -2410,6 +2410,46 @@ export interface components {
              */
             restarting: boolean;
         };
+        /**
+         * @description An adult-enrichment match on a torrent (architecture §20.9, plan
+         *     2026-11-04 Q4): the scene's own fields and who matched it. Nothing
+         *     else is kept about the people named, and none of it is searchable.
+         * @example {
+         *       "link": "https://stashdb.org/scenes/0b6e8a4e-2c1f-4a7e-9d3a-5f1e2b3c4d5e",
+         *       "performers": [
+         *         "Performer One",
+         *         "Performer Two"
+         *       ],
+         *       "performers_truncated": false,
+         *       "released": "2021-06",
+         *       "scene_title": "Garden Scene",
+         *       "source": {
+         *         "id": 5,
+         *         "name": "StashDB",
+         *         "plugin": "stashdb"
+         *       },
+         *       "studio": "Some Studio"
+         *     }
+         */
+        AdultEnrichment: {
+            /**
+             * @description The scene's page on the service: an `https` URL on one of the
+             *     matching source's own hosts. Null when it gave none, or one
+             *     elsewhere.
+             */
+            link: string | null;
+            /** @description Names only, in the service's order. */
+            performers: string[];
+            /** @description The service credits more performers than are listed. */
+            performers_truncated: boolean;
+            /** @description `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; null when not given. */
+            released: string | null;
+            scene_title: string | null;
+            /** @description The source that matched it: "Matched by StashDB". */
+            source: components["schemas"]["EnrichmentSource"];
+            /** @description The studio's name. */
+            studio: string | null;
+        };
         /** @description One alert: a torrent a saved search matched once it became searchable. */
         AlertRow: {
             /**
@@ -4085,6 +4125,15 @@ export interface components {
          * @enum {string}
          */
         EmailSecurity: "tls" | "starttls" | "none";
+        /** @description The source behind an adult-enrichment match. */
+        EnrichmentSource: {
+            /** Format: int32 */
+            id: number;
+            /** @description Its display name. */
+            name: string;
+            /** @description Its manifest id. */
+            plugin: string;
+        };
         ErrorBody: {
             /**
              * @description A stable snake_case identifier to branch on.
@@ -9073,6 +9122,15 @@ export interface components {
          *     A null swarm field is "never scraped" (or no estimate), never 0.
          */
         TorrentDetail: {
+            /**
+             * @description What an adult-enrichment service (ThePornDB, StashDB) matched
+             *     (§20.9). **Absent**, never null or empty, unless "Show adult
+             *     content" is on and the signed-in admin asks: a caller can't tell
+             *     from this field whether a match exists. Also absent for a hidden
+             *     or held torrent and for a match that came through a private
+             *     source.
+             */
+            adult_enrichment?: components["schemas"]["AdultEnrichment"];
             /**
              * Format: int32
              * @description Null = never scraped.

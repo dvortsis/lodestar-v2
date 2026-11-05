@@ -29,6 +29,7 @@ mod have;
 pub mod health;
 pub mod log_events;
 mod rollups;
+mod setup_hold;
 pub mod source_adult;
 pub mod torrent_cache;
 pub mod unverified;
@@ -69,7 +70,7 @@ pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
 pub use rollups::{Rollups, metric};
-pub use writer::WriterStats;
+pub use writer::{LIVE_FEEDS, WriterStats};
 
 /// `events.kind` codes. Persisted: append only.
 pub mod event {
@@ -156,6 +157,10 @@ pub struct PipelineConfig {
     /// registered and enabled, [`Pipeline::torrent_cache_feed`] takes its
     /// verified files to be judged and stored. `None`: no feed.
     pub torrent_cache: Option<&'static str>,
+    /// The setup hold (LEGAL-2, [`setup_hold`]): reads `true` once the
+    /// instance is set up. While it reads `false`, no plugin starts, the
+    /// scrape scheduler waits and the pool starts paused. `None`: no hold.
+    pub setup_done: Option<watch::Receiver<bool>>,
 }
 
 /// How often a running plugin's non-direct route is probed, so a route
@@ -198,6 +203,7 @@ impl Default for PipelineConfig {
             verify_unverified: false,
             egress: None,
             torrent_cache: None,
+            setup_done: None,
         }
     }
 }
@@ -384,6 +390,8 @@ pub struct Monitor {
     hot: Option<Arc<HotColumns>>,
     rollups: Arc<Rollups>,
     gate: Arc<gate::GateStats>,
+    /// [`PipelineConfig::setup_done`], for [`Control`] to lift the hold.
+    setup_done: Option<watch::Receiver<bool>>,
 }
 
 impl std::fmt::Debug for Monitor {
@@ -466,6 +474,11 @@ impl Monitor {
     /// Unix seconds.
     pub fn started_at(&self) -> i64 {
         self.started_at
+    }
+
+    /// The setup hold this pipeline started with ([`setup_hold`]).
+    pub fn setup_done(&self) -> Option<&watch::Receiver<bool>> {
+        self.setup_done.as_ref()
     }
 
     /// The scrape scheduler, when scraping is on.
@@ -606,6 +619,13 @@ impl Pipeline {
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
+        // The sources SP-3 counts, with a publisher or without (RP-4).
+        let flood = writer::Flooding::for_sources(
+            registered
+                .iter()
+                .zip(&plugins)
+                .map(|((id, ..), p)| (*id, p.manifest())),
+        );
         // The sources whose every find is classified adult (X-source-adult).
         let adult = source_adult::AdultSources::of(
             registered
@@ -817,7 +837,21 @@ impl Pipeline {
             let running = Arc::new(AtomicBool::new(true));
             let flag = running.clone();
             let last_error = Arc::clone(&error);
+            let hold = config.setup_done.clone();
             let task = tokio::spawn(async move {
+                // Held until setup (LEGAL-2): a stop while waiting ends
+                // the plugin without ever running it.
+                if let Some(hold) = hold {
+                    let mut stop = ctx.shutdown.clone();
+                    tokio::select! {
+                        biased;
+                        () = stop.requested() => {
+                            flag.store(false, Ordering::Relaxed);
+                            return Ok(());
+                        }
+                        () = setup_hold::released(hold) => {}
+                    }
+                }
                 let result = p.run(ctx).await;
                 flag.store(false, Ordering::Relaxed);
                 if let Err(e) = &result {
@@ -848,8 +882,11 @@ impl Pipeline {
         drop(emit_tx);
         egress::warn_proxy_env(&sources_egress_routes(&sources));
 
+        // Held until setup, the pool starts paused; `Control` lifts it.
+        let mut pool_config = config.pool.clone();
+        pool_config.paused |= setup_hold::held(config.setup_done.as_ref());
         let (pool, pool_task) = pool::spawn(
-            config.pool.clone(),
+            pool_config,
             fetcher,
             PoolIo {
                 discoveries: pool_rx,
@@ -963,6 +1000,7 @@ impl Pipeline {
                     out: swarm_tx,
                     rollups: rollups.clone(),
                     shutdown,
+                    setup_done: config.setup_done.clone(),
                 });
                 (Some(handle), Some((stop, task)))
             }
@@ -994,6 +1032,7 @@ impl Pipeline {
         let writer = writer::Writer {
             store: Some(store),
             adult,
+            flood,
             enrichers,
             backfill_after: 0,
             backfill_done: false,
@@ -1058,6 +1097,7 @@ impl Pipeline {
                 hot: config.hot.clone(),
                 rollups: rollups_handle,
                 gate,
+                setup_done: config.setup_done.clone(),
             },
             tasks,
             egress_tasks,

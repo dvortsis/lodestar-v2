@@ -127,8 +127,9 @@ pub(crate) fn totals_with(
 fn total(lease: &Lease, node: &Node, deadline: &CancelToken, policy: Policy) -> Result<Total> {
     let index = lease.index();
     let searcher = lease.searcher();
+    let at = Some(searcher.generation().generation_id());
     let compile =
-        |stems| index.compile_cancelled(node, lease.now(), lease.utc_offset(), stems, deadline);
+        |stems| index.compile_at(node, lease.now(), lease.utc_offset(), stems, deadline, at);
     let mut best = count::total_with(searcher, &compile(false)?, deadline, policy)?;
     if best.value < STEM_FALLBACK_BELOW && has_stem_alternative(node) {
         let wider = count::total_with(searcher, &compile(true)?, deadline, policy)?;

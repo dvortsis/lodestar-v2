@@ -242,7 +242,13 @@ fn seeding_keeps_every_rule_at_baseline_and_copies_sc1_to_sc2() {
     let pending: Vec<PackRule> = e.pack_versions.pending().map(|(r, _)| r).collect();
     assert_eq!(
         pending,
-        [PackRule::Mw6, PackRule::Uc1, PackRule::Uc2, PackRule::Uc3],
+        [
+            PackRule::Mw6,
+            PackRule::Sp3,
+            PackRule::Uc1,
+            PackRule::Uc2,
+            PackRule::Uc3
+        ],
         "nothing else pending or shadowed"
     );
     assert_eq!(e.packs, before.packs);
@@ -522,6 +528,7 @@ fn both_rows_lost_runs_the_interim_mode_and_keeps_what_was_accepted() {
                 PackRule::Mw2,
                 PackRule::Mw6,
                 PackRule::Lu4,
+                PackRule::Sp3,
                 PackRule::Uc1,
                 PackRule::Uc2,
                 PackRule::Uc3

@@ -9,9 +9,9 @@
 //! (RP-0, §20.6 "signed, versioned", §20.10).
 //!
 //! Not yet built, because they need data that doesn't exist yet: FK-3
-//! (pre-release fakes need a TMDB release date), SP-3 (flooding needs
-//! per-publisher rates) and SP-4 (clones of hidden spam need a signature
-//! index of hidden items).
+//! (pre-release fakes need a TMDB release date) and SP-4 (clones of
+//! hidden spam need a signature index of hidden items). SP-3, flooding,
+//! is judged in the writer from per-publisher rates ([`sp3`]).
 //!
 //! A CSX-5 *Neutralize term* stops a word counting as evidence in the
 //! rules that read keyword lists (MW-3, MW-6, LU-2, LU-4, SC-1, SC-2, UC-1,
@@ -25,6 +25,7 @@
 
 pub mod manifest;
 pub mod overrides;
+pub mod sp3;
 pub mod unauthorised_copy;
 pub mod upgrade;
 
@@ -105,11 +106,14 @@ pub enum PackRule {
     Uc2,
     /// Scene-style film and TV rips.
     Uc3,
+    /// Flooding: near-duplicate names from one publisher above a rate,
+    /// judged in the writer ([`sp3`], RP-4). Added after RP-0.
+    Sp3,
 }
 
 impl PackRule {
     /// In evaluation order: the strongest action within a pack first.
-    pub const ALL: [PackRule; 21] = [
+    pub const ALL: [PackRule; 22] = [
         PackRule::Mw4,
         PackRule::Mw1,
         PackRule::Mw2,
@@ -126,6 +130,7 @@ impl PackRule {
         PackRule::Fk2,
         PackRule::Sp2,
         PackRule::Sp1,
+        PackRule::Sp3,
         PackRule::Sc1,
         PackRule::Sc2,
         PackRule::Uc1,
@@ -164,6 +169,7 @@ impl PackRule {
             PackRule::Uc1 => "UC-1",
             PackRule::Uc2 => "UC-2",
             PackRule::Uc3 => "UC-3",
+            PackRule::Sp3 => "SP-3",
         }
     }
 
@@ -177,7 +183,7 @@ impl PackRule {
             Mw1 | Mw2 | Mw3 | Mw4 | Mw5 | Mw6 => Pack::Malware,
             Lu1 | Lu2 | Lu3 | Lu4 => Pack::Lures,
             Fk1 | Fk2 | Fk4 | Fk5 => Pack::Fakes,
-            Sp1 | Sp2 => Pack::Spam,
+            Sp1 | Sp2 | Sp3 => Pack::Spam,
             Sc1 | Sc2 => Pack::Scams,
             Uc1 | Uc2 | Uc3 => Pack::UnauthorisedCopy,
         }
@@ -191,7 +197,7 @@ impl PackRule {
             Mw1 | Mw2 | Mw3 | Mw5 | Mw6 | Lu1 | Lu4 | Fk1 | Sp2 | Sc1 | Sc2 | Uc1 | Uc2 | Uc3 => {
                 Action::Hide
             }
-            Lu2 | Lu3 | Fk5 | Sp1 => Action::Demote,
+            Lu2 | Lu3 | Fk5 | Sp1 | Sp3 => Action::Demote,
             Fk2 => Action::Flag,
         }
     }
@@ -294,6 +300,9 @@ pub struct Ctx<'a> {
     files: Vec<(&'a FileInfo, Option<Ext>)>,
     name_words: std::cell::OnceCell<Vec<String>>,
     name_evidence: std::cell::OnceCell<Vec<String>>,
+    /// SP-3's level, from the writer's count ([`sp3`]): `None` in
+    /// prepare and wherever the writer counted nothing.
+    flood: Option<crate::flood::Level>,
 }
 
 impl std::fmt::Debug for Ctx<'_> {
@@ -326,6 +335,7 @@ impl<'a> Ctx<'a> {
             files,
             name_words: std::cell::OnceCell::new(),
             name_evidence: std::cell::OnceCell::new(),
+            flood: None,
         }
     }
 
@@ -502,6 +512,7 @@ impl<'a> Ctx<'a> {
             Mw6 | Uc2 => self.cracked_software(),
             Uc1 => self.uc1(),
             Uc3 => self.uc3(),
+            Sp3 => self.sp3(),
         }
     }
 
