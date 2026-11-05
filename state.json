@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T13:32Z",
+  "updated_at": "2026-11-05T13:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3118,6 +3118,12 @@
       "status": "merged",
       "merge": "cd2fa186",
       "pr": 489
+    },
+    "X-flake-update-log": {
+      "status": "running",
+      "session": "session_01MMjhn9jusE8U5BnvTWfJJX",
+      "since": "2026-11-05T13:34Z",
+      "model": "sonnet"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4686,7 +4692,6 @@
     "Follow-up (gap 4, from #494): one shared always-adult manifest list used by both the pipeline and the import CLI, so they stay in step (the CLI lists Sukebei by hand today).",
     "owner-flag \u00a72.19/\u00a72.26 (RP-4 #495, plan Q10 refinements): importers and torrent-cache backlogs count toward SP-3 only when a publisher is named (replay and lookup traffic are not flooding); one rare writer path (feed key claimed before a restart) costs +16.5% per insert, with the common paths asserted <=5%.",
     "Follow-up: move RP-4 sp3_writer_cost (ignored test) into the bench/ gate.",
-    "Flake (runner to fix): crates/lodestar update::engine::tests::the_log_over_an_install_names_events_and_never_urls captures another test's address.confirm_needed log line in the full workspace run (seen on RP-4 locally); log capture is not isolated per test.",
     "owner-flag \u00a72.19 (X-claim-trackers): tracker URLs from claims and caches are refused if they point at localhost, *.localhost or a private/loopback/link-local address (tightens SRC-13); latent today since nothing dials claimed trackers."
   ],
   "main_health": [
@@ -5348,7 +5353,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T13:13Z",
+    "updated": "2026-11-05T13:34Z",
     "items": [
       {
         "slot": 1,
@@ -5424,8 +5429,11 @@
       },
       {
         "slot": 10,
-        "status": "idle",
-        "doing": "Held: no ready slice. RP-5 waits on RP-4 (#495); B13b on X-search-files-5"
+        "slice": "X-flake-update-log",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Test reliability: an update test that catches another test's log line",
+        "since": "2026-11-05T13:34Z"
       },
       {
         "slot": 11,
