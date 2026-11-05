@@ -219,9 +219,18 @@ mod item {
     pub const PRIVATE_ITEM: usize = 8;
     /// Adult and matched, a BEP 27 private torrent.
     pub const BEP27: usize = 9;
+    /// Matched, then classified Not adult.
+    pub const NOT_ADULT: usize = 10;
+    /// Found by an always-adult source, not classified Adult, matched.
+    pub const ALWAYS_ADULT: usize = 11;
+    /// Adult and matched, a partial import.
+    pub const PARTIAL: usize = 12;
+    /// Adult; the first match with a kind came through a private source,
+    /// a later public one has a kind too.
+    pub const SHADOWED: usize = 13;
 }
 
-const NAMES: [&str; 10] = [
+const NAMES: [&str; 14] = [
     "Garden.Scene.XXX.1080p.mp4",
     "Foreign.Link.XXX.1080p.mp4",
     "Private.Claim.XXX.1080p.mp4",
@@ -232,7 +241,14 @@ const NAMES: [&str; 10] = [
     "Two.Matches.XXX.1080p.mp4",
     "Private.Item.XXX.1080p.mp4",
     "Bep27.Item.XXX.1080p.mp4",
+    "Garden.Party.2020.1080p.mkv",
+    "Clip.Collection.2020.1080p.mkv",
+    "Partial.Import.XXX.1080p.mp4",
+    "Shadowed.Scene.XXX.1080p.mp4",
 ];
+
+/// Source 4 is always adult.
+const ALWAYS_ADULT_MASK: u64 = 1 << 4;
 
 /// The drawer, as a test sees it.
 #[derive(Clone, Default)]
@@ -319,15 +335,19 @@ fn fixture(interest: bool) -> Fixture {
         .register_source("prowlarr", "1", 1_700_000_000)
         .unwrap();
     let tpdb = store.register_source("tpdb", "1", 1_700_000_000).unwrap();
+    let adult_site = store
+        .register_source("adultsite", "1", 1_700_000_000)
+        .unwrap();
     assert_eq!(
-        [dht, stash, prowlarr, tpdb].map(SourceId::get),
-        [0, 1, 2, 3]
+        [dht, stash, prowlarr, tpdb, adult_site].map(SourceId::get),
+        [0, 1, 2, 3, 4]
     );
     let raws: Vec<Vec<u8>> = NAMES.iter().map(|n| raw(n)).collect();
     let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
     for (i, (info, raw)) in infos.iter().zip(&raws).enumerate() {
         let (source, extra_flags) = match i {
             item::PRIVATE_ITEM => (prowlarr, flags::PRIVATE_SOURCE),
+            item::ALWAYS_ADULT => (adult_site, 0),
             _ => (dht, 0),
         };
         store
@@ -345,13 +365,13 @@ fn fixture(interest: bool) -> Fixture {
         .iter()
         .map(|i| store.find(&i.primary_hash()).unwrap().unwrap())
         .collect();
-    // Classified, as the pipeline would have: everything but PLAIN adult.
+    // Classified, as the pipeline would have.
     for (i, id) in ids.iter().enumerate() {
         let row = store.torrent(*id).unwrap().unwrap();
         let tree = store.files(*id).unwrap().unwrap();
         let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
         let fix = Correction {
-            adult: Some(i != item::PLAIN),
+            adult: Some(![item::PLAIN, item::NOT_ADULT, item::ALWAYS_ADULT].contains(&i)),
             not_junk: false,
         };
         let (e, _) = lodestar_filter::reclassify::enrich_corrected(&row.name, &files, fix);
@@ -423,11 +443,57 @@ fn fixture(interest: bool) -> Fixture {
             claims_of(section("scene-9"), own_link.clone()),
             false,
         ),
+        (
+            item::NOT_ADULT,
+            stash,
+            claims_of(section("scene-10"), own_link.clone()),
+            false,
+        ),
+        (
+            item::ALWAYS_ADULT,
+            stash,
+            claims_of(section("scene-11"), own_link.clone()),
+            false,
+        ),
+        (
+            item::PARTIAL,
+            stash,
+            claims_of(section("scene-12"), own_link.clone()),
+            false,
+        ),
+        (
+            item::SHADOWED,
+            prowlarr,
+            claims_of(
+                AdultEnrichment {
+                    kind: Some(AdultKind::Scene),
+                    ..section("scene-13")
+                },
+                own_link.clone(),
+            ),
+            true,
+        ),
+        (
+            item::SHADOWED,
+            tpdb,
+            claims_of(
+                AdultEnrichment {
+                    kind: Some(AdultKind::Movie),
+                    ..section("movie-13")
+                },
+                None,
+            ),
+            false,
+        ),
     ] {
         assert!(store.put_claims(ids[i], src, &claims, private).unwrap());
     }
     let conn = store.connection();
-    for (i, flag) in [(item::HIDDEN, flags::HIDDEN), (item::BEP27, flags::PRIVATE)] {
+    for (i, flag) in [
+        (item::HIDDEN, flags::HIDDEN),
+        (item::BEP27, flags::PRIVATE),
+        (item::PARTIAL, flags::FILES_PARTIAL),
+    ] {
         conn.execute(
             "UPDATE torrents SET flags = flags | ?1 WHERE id = ?2",
             (flag, ids[i]),
@@ -469,7 +535,7 @@ fn fixture(interest: bool) -> Fixture {
         let sink = opened.clone();
         let c = clock.clone();
         app = app.layer(Extension(DrawerInterest::with_clock(
-            0,
+            ALWAYS_ADULT_MASK,
             move |id| {
                 sink.0.lock().unwrap().push(id);
                 true
@@ -584,7 +650,13 @@ async fn the_section_is_there_only_with_show_adult_content_on() {
         assert!(!r.text.contains("adult_enrichment"), "{}", r.text);
         assert!(!r.text.contains("Garden Scene"), "{}", r.text);
     }
-    assert!(absent(&ok(&f, &cookie, item::PLAIN, ip(1)).await));
+    // Matched torrents the 404 doesn't cover: not classified Adult. The
+    // key is still missing.
+    for i in [item::PLAIN, item::NOT_ADULT, item::ALWAYS_ADULT] {
+        let body = ok(&f, &cookie, i, ip(1)).await;
+        assert!(absent(&body), "{i}: {body}");
+        assert!(!body.to_string().contains("Garden Scene"), "{i}: {body}");
+    }
 
     f.show.send(true).unwrap();
     let body = ok(&f, &cookie, item::MATCHED, ip(1)).await;
@@ -605,6 +677,13 @@ async fn the_section_is_there_only_with_show_adult_content_on() {
     assert!(!text.contains(&f.hashes[item::MATCHED]));
     assert!(absent(&ok(&f, &cookie, item::UNMATCHED, ip(1)).await));
     assert!(absent(&ok(&f, &cookie, item::PLAIN, ip(1)).await));
+    // Not adult: an old match isn't shown.
+    assert!(absent(&ok(&f, &cookie, item::NOT_ADULT, ip(1)).await));
+    // Found by an always-adult source: it is.
+    let s = ok(&f, &cookie, item::ALWAYS_ADULT, ip(1)).await["adult_enrichment"].clone();
+    assert_eq!(s["source"]["plugin"], "stashdb", "{s}");
+    // A partial import's stored match is shown; it isn't looked up again.
+    assert!(!absent(&ok(&f, &cookie, item::PARTIAL, ip(1)).await));
 
     // Off again: the next request follows it.
     f.show.send(false).unwrap();
@@ -623,6 +702,9 @@ async fn hidden_held_and_private_items_and_private_claims_get_no_section() {
         item::HIDDEN,
         item::HELD,
         item::PRIVATE_ITEM,
+        // The first match with a kind is private: no other is shown in
+        // its place, which would disagree with the kind pin.
+        item::SHADOWED,
     ] {
         let body = ok(&f, &cookie, i, ip(2)).await;
         assert!(absent(&body), "{i}: {body}");
@@ -714,14 +796,17 @@ async fn interest_is_offered_only_with_show_adult_content_on() {
     for i in 0..NAMES.len() {
         let _ = detail(&f, &cookie, i, ip(6)).await;
     }
-    // Only adult items the gate could pass: not hidden, held, private,
-    // BEP 27 private, or not adult. With or without a match.
+    // Only items the gate could pass: adult or from an always-adult
+    // source, and not hidden, held, private, BEP 27 private or a partial
+    // import. With or without a match.
     let want: Vec<i64> = [
         item::MATCHED,
         item::FOREIGN_LINK,
         item::PRIVATE_CLAIM,
         item::UNMATCHED,
         item::TWO,
+        item::ALWAYS_ADULT,
+        item::SHADOWED,
     ]
     .iter()
     .map(|&i| f.ids[i])

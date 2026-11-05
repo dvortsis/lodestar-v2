@@ -643,20 +643,23 @@ pub(crate) async fn detail(
         let catalogue = Catalogue::read(&store, &names).map_err(internal)?;
         let claims = store.torrent_claims(row.id).map_err(internal)?;
         let provenance = catalogue.provenance(&row, &claims, viewer);
-        // Only for the admin with "Show adult content" on (§20.9), and
-        // never for a torrent a filter or the core holds back.
-        let (section, wanted) = if adult_shown
-            && viewer == Viewer::Admin
-            && !held_back(&store, &row).map_err(internal)?
-        {
+        // Only for the admin with "Show adult content" on (§20.9), only
+        // for a torrent that could be adult, and never for one a filter or
+        // the core holds back.
+        let (section, wanted) = if adult_asked(adult_shown, viewer) {
             let adult = store
                 .enrichment(row.id)
                 .map_err(internal)?
-                .is_some_and(|e| crate::search::is_adult(&e));
-            (
-                adult_section(&claims, &catalogue, &names),
-                lookup_wanted(&row, adult, always_adult),
-            )
+                .is_some_and(|e| crate::search::is_adult(&e))
+                || always_adult & row.sources != 0;
+            if adult && !held_back(&store, &row).map_err(internal)? {
+                (
+                    adult_section(&claims, &catalogue, &names),
+                    lookup_wanted(&row),
+                )
+            } else {
+                (None, false)
+            }
         } else {
             (None, false)
         };
@@ -729,14 +732,20 @@ fn held_back(store: &Store, row: &TorrentRow) -> lodestar_store::Result<bool> {
     Ok(store.held_among(&hashes)?.into_iter().any(|h| h))
 }
 
-/// Whether `row` could pass ENR-1's gate (`adult_enrich::check`) at all,
-/// from what the row says: classified Adult (`adult`) or found by an
-/// always-adult source, and not a BEP 27 private torrent or a partial
-/// import, which the gate never looks up. The gate still decides; this
-/// only keeps items it would surely refuse out of the queue.
-fn lookup_wanted(row: &TorrentRow, adult: bool, always_adult: u64) -> bool {
+/// Whether this request may see adult enrichment at all: "Show adult
+/// content" on and the admin session asking. A public caller (an API key
+/// or feed token) never does: the sources behind a match are Account
+/// class, which §18.7 withholds from it.
+fn adult_asked(adult_shown: bool, viewer: Viewer) -> bool {
+    adult_shown && viewer == Viewer::Admin
+}
+
+/// Whether an adult torrent that isn't held back could pass ENR-1's gate
+/// (`adult_enrich::check`) at all: not a BEP 27 private torrent or a
+/// partial import, which the gate never looks up. The gate still decides;
+/// this only keeps items it would surely refuse out of the queue.
+fn lookup_wanted(row: &TorrentRow) -> bool {
     row.flags & (store_flags::PRIVATE | store_flags::FILES_PARTIAL) == 0
-        && (adult || always_adult & row.sources != 0)
 }
 
 /// The stored match the detail view shows, by ENR-1's rule so the drawer
@@ -978,8 +987,9 @@ impl DrawerInterest {
         burst: 10,
         every: Duration::from_secs(30),
     };
-    /// Every client together: 30 at once, then one every 20 s, so at
-    /// most 4,350 a day, under the runtime's background cap of 5,000.
+    /// Every client together: 30 at once, then one every 20 s: at most
+    /// 4,350 a day. These come on top of the runtime's background cap of
+    /// 5,000 a day, so a service sees at most about 9,350.
     pub const OVERALL: Rate = Rate {
         burst: 30,
         every: Duration::from_secs(20),
@@ -1017,13 +1027,12 @@ impl DrawerInterest {
     /// Hands `id` on if `client` and everyone together are within their
     /// limits; drops it otherwise.
     fn offer(&self, client: IpAddr, id: i64) {
-        let now = (self.0.clock)();
-        let taken = self
-            .0
-            .buckets
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take(client_key(client), now);
+        let taken = {
+            let mut buckets = self.0.buckets.lock().unwrap_or_else(|e| e.into_inner());
+            // Read under the lock, so the buckets see time in order.
+            let now = (self.0.clock)();
+            buckets.take(client_key(client), now)
+        };
         if taken {
             // A full queue drops it too; the background gets to it.
             let _ = (self.0.opened)(id);
@@ -1269,6 +1278,27 @@ pub(crate) mod tests {
         let long = format!("https://stashdb.org/{}", "a".repeat(MAX_LINK));
         assert!(!ok(&long));
         assert!(scene_link("https://stashdb.org/a", &[]).is_none());
+    }
+
+    #[test]
+    fn only_the_admin_with_the_preference_on_asks_for_adult_enrichment() {
+        assert!(adult_asked(true, Viewer::Admin));
+        assert!(!adult_asked(false, Viewer::Admin));
+        assert!(!adult_asked(true, Viewer::Public));
+        assert!(!adult_asked(false, Viewer::Public));
+        // A key or feed token is public, whatever the preference.
+        for a in [
+            Access::Key {
+                id: 1,
+                scopes: u32::MAX,
+            },
+            Access::Feed {
+                id: 1,
+                saved_search_id: None,
+            },
+        ] {
+            assert!(!adult_asked(true, Viewer::of(Some(&a))));
+        }
     }
 
     #[test]
