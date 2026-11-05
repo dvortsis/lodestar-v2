@@ -806,40 +806,56 @@ mod tests {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        // Held until the poke below, so the port can't pass to another
+        // test's server in between.
+        let hold = listener.try_clone().unwrap();
         let url = format!("http://{addr}/list");
         // The server never fails and never waits forever: on a loaded
-        // runner the 300 ms limit can fire before the client connects or
-        // sends, and the test must not depend on which happened.
+        // runner the limit can fire before the client connects or sends,
+        // and the test must not hang on which happened. It reports whether
+        // it sent the headers, so a run that never reached the stalled
+        // body says so.
         let server = std::thread::spawn(move || {
             let Ok((mut sock, _)) = listener.accept() else {
-                return;
+                return false;
             };
-            let _ = sock.set_read_timeout(Some(Duration::from_secs(30)));
+            let _ = sock.set_read_timeout(Some(Duration::from_secs(20)));
             let mut buf = [0u8; 4096];
-            let _ = sock.read(&mut buf);
-            let _ =
-                sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n10.0.0.0/8\n");
-            // Hold the body open until the client gives up and hangs up.
+            if !sock.read(&mut buf).is_ok_and(|n| n > 0) {
+                return false;
+            }
+            let sent = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n10.0.0.0/8\n")
+                .is_ok();
+            // Hold the body open until the client hangs up, or for the
+            // read timeout at most.
             while sock.read(&mut buf).is_ok_and(|n| n > 0) {}
+            sent
         });
         let (store, filter, ips, mut limits) = setup(vec![list(&url, ListKind::Ip, false)]);
-        limits.fetch_timeout = Duration::from_millis(300);
+        limits.fetch_timeout = Duration::from_secs(1);
         let agent = client(&limits).unwrap();
         refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
         drop(agent);
         // If the client gave up before connecting, the server is still in
         // `accept`: this connection releases it (and is otherwise unused).
         drop(std::net::TcpStream::connect(addr));
-        // Join off the runtime thread, so the client's connection task can
-        // still run and close its socket, which ends the server's loop.
-        tokio::time::timeout(
-            Duration::from_secs(60),
-            tokio::task::spawn_blocking(move || server.join()),
-        )
-        .await
-        .expect("the test server ends once both connections close")
-        .unwrap()
-        .unwrap();
+        drop(hold);
+        // Wait without blocking the runtime, so the client's connection
+        // task can still run and close its socket. The server ends within
+        // its two 20 s reads; on a miss the thread is left detached, so
+        // the deadline really bounds the test.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        while !server.is_finished() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the test server ends once both connections close"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        if !server.join().unwrap() {
+            eprintln!("note: the time limit fired before the headers were sent");
+        }
         let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
         assert!(sub.error.unwrap().contains("time limit"));
         assert!(ips.current().is_empty());
