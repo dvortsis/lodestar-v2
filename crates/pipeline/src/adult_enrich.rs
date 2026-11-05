@@ -18,9 +18,10 @@
 //!   parser's site, date and title, whichever the plugin asks for. The info
 //!   hash, files and trackers stay here: a [`Query`] has no field for them.
 //! - **Order** (Q15): user interest first ([`Interest::opened`], the detail
-//!   drawer), then a background backfill over stored torrents, at most
-//!   [`BACKGROUND_PER_DAY`] a day, every lookup at least [`MIN_INTERVAL`]
-//!   apart.
+//!   drawer), then a background backfill over stored torrents, within one
+//!   cap for both: at most [`BACKGROUND_PER_DAY`] lookups a UTC day, every
+//!   lookup at least [`MIN_INTERVAL`] apart. With the day's budget spent,
+//!   an opened item waits first in line.
 //! - **Results** are emitted as claims under the plugin's own source id, so
 //!   they go through SRC-2's filter-before-storage path in the writer
 //!   (`unverified::ingest`): the child-safety core judges the enrichment
@@ -417,7 +418,7 @@ pub fn check(
 /// The runtime's limits (plan Q15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
-    /// Background lookups a day.
+    /// Lookups a UTC day, user interest and background together (Q15).
     pub per_day: u32,
     /// The least time between two lookups.
     pub interval: Duration,
@@ -425,6 +426,8 @@ pub struct Config {
     pub page: usize,
     /// The rest after a full background round, in seconds.
     pub rest_secs: i64,
+    /// Run the background backfill. Off: opened items only.
+    pub background: bool,
 }
 
 impl Default for Config {
@@ -434,6 +437,7 @@ impl Default for Config {
             interval: MIN_INTERVAL,
             page: PAGE,
             rest_secs: ROUND_REST_SECS,
+            background: true,
         }
     }
 }
@@ -592,15 +596,21 @@ impl AdultEnrichSource {
                     },
                 },
             };
-            match self.one(&mut ctx, &kit, &*state, id, user).await {
+            match self.one(&mut ctx, &kit, &*state, id).await {
                 Step::Asked => last = Some(Instant::now()),
                 Step::Skipped => {}
-                Step::Wait => {
-                    // Nothing can go now (a plugin-wide condition, or the
-                    // day's budget): a background item goes back to the
-                    // front of the queue, not past the cursor.
+                step @ (Step::Wait | Step::Spent) => {
+                    // Nothing can go now. No background item loses its
+                    // place: it goes back to the front of the queue, not
+                    // past the cursor. An opened item stays first in line
+                    // only for the day's budget (Q15's one cap, ENR-1c);
+                    // one opened while a plugin-wide condition fails (Show
+                    // adult content off, the kill switch, the source off or
+                    // unconsented) is dropped, never sent later.
                     if !user {
                         background.queue.push_front(id);
+                    } else if matches!(step, Step::Spent) {
+                        waiting = Some(id);
                     }
                     bump(&self.stats.done);
                     tokio::select! {
@@ -634,7 +644,7 @@ impl AdultEnrichSource {
         if let Some(id) = bg.queue.pop_front() {
             return Next::Item(id);
         }
-        if now < bg.resume_at || !self.switches.show_adult() {
+        if !self.config.background || now < bg.resume_at || !self.switches.show_adult() {
             return Next::Idle;
         }
         if Budget::load(state).await.left(now, self.config.per_day) == 0 {
@@ -681,14 +691,7 @@ impl AdultEnrichSource {
     }
 
     /// One item: the cache, the gate, the budget, then the plugin.
-    async fn one(
-        &self,
-        ctx: &mut SourceCtx,
-        kit: &Kit,
-        state: &dyn PluginState,
-        id: i64,
-        user: bool,
-    ) -> Step {
+    async fn one(&self, ctx: &mut SourceCtx, kit: &Kit, state: &dyn PluginState, id: i64) -> Step {
         let now = crate::unix_now();
         if Cache::fresh(state, id, now).await {
             bump(&self.stats.cached);
@@ -731,8 +734,10 @@ impl AdultEnrichSource {
                 return Step::Wait;
             }
         };
-        if !user && !Budget::take(state, now, self.config.per_day).await {
-            return Step::Wait;
+        // One cap for both (plan Q15): an opened item jumps the queue, but
+        // within the same day's budget (ENR-1c).
+        if !Budget::take(state, now, self.config.per_day).await {
+            return Step::Spent;
         }
         bump(&self.stats.looked_up);
         let lookup = tokio::select! {
@@ -784,8 +789,10 @@ enum Step {
     Asked,
     /// This item isn't looked up.
     Skipped,
-    /// Nothing may be looked up now: wait, keeping the item's place.
+    /// Nothing may be looked up now (a plugin-wide condition): wait.
     Wait,
+    /// The day's budget is spent: wait, keeping the item's place.
+    Spent,
     Shutdown,
 }
 

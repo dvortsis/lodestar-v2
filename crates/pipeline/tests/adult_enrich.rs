@@ -344,7 +344,7 @@ fn run(
 /// Fast pacing, no background: only what the test asks for is looked up.
 fn interest_only() -> Config {
     Config {
-        per_day: 0,
+        background: false,
         interval: Duration::ZERO,
         ..Config::default()
     }
@@ -1832,5 +1832,47 @@ async fn the_torrent_caches_kind_cannot_attach_a_section() {
         row.sources & (1 << cache_id.get()),
         0,
         "no bit for the cache"
+    );
+}
+
+/// One cap for interest and background (plan Q15, ENR-1c): opened items
+/// jump the queue, but no UTC day sees more lookups than the cap, and an
+/// opened item past it waits first in line instead of being asked.
+#[tokio::test]
+async fn interest_and_background_share_one_daily_cap() {
+    let (mut s, dht, enr) = store();
+    let ids: Vec<i64> = (0..6)
+        .map(|i| put(&mut s, &format!("Garden Scene {i}"), dht, 0, true).0)
+        .collect();
+    let plugin = Recorder::new(None);
+    let config = Config {
+        per_day: 3,
+        interval: Duration::ZERO,
+        ..Config::default()
+    };
+    let r = run(
+        plugin.clone(),
+        Arc::new(Mutex::new(s)),
+        stand_in(),
+        AdultSources::default(),
+        on(),
+        enr,
+        config,
+    );
+    // Opened before the background reaches them: asked first.
+    for &id in &ids[4..] {
+        assert!(r.interest.opened(id));
+    }
+    until("the cap", || r.stats.looked_up.load(Ordering::SeqCst) == 3).await;
+    // One more item reaches the spent budget and waits, never asked.
+    until("a wait", || r.stats.done.load(Ordering::SeqCst) >= 4).await;
+    let _ = r.stop.send(true);
+    r.task.await.unwrap().unwrap();
+    let names = plugin.names();
+    assert_eq!(names.len(), 3, "never past the cap in one day: {names:?}");
+    assert_eq!(
+        &names[..2],
+        ["Garden Scene 4", "Garden Scene 5"],
+        "interest first"
     );
 }
