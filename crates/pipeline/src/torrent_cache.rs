@@ -9,7 +9,10 @@
 //!   plugin's `Lookup::new`, which refuses a private key too.
 //! - **What a cached file becomes** ([`judge`]): a `.torrent` whose info
 //!   dict hashes to the key is verified metadata (Q8), with provenance
-//!   [`PROVENANCE`]. It still goes through the full filter pipeline
+//!   [`PROVENANCE`]. It's judged from the info dict's raw bytes, parsed
+//!   with no encoding hint, exactly as BEP 9 delivers it: the file's
+//!   top-level `encoding` key isn't covered by the hash, so a cache can't
+//!   choose how a name decodes to slip it past the name rules. It still goes through the full filter pipeline
 //!   before storage, exactly as a BEP 9 fetch does on the worker
 //!   (`worker::prepare_one`): the floor's hash list first, then
 //!   enrichment, then the name and files through the locked floor, the
@@ -105,7 +108,8 @@ pub enum Refusal {
     Mismatch,
     /// The key is on the floor's hash list.
     Blocked,
-    /// Hashes to the key but the store can't prepare it.
+    /// Doesn't parse as an info dict, or hashes to the key but the store
+    /// can't prepare it.
     Invalid,
 }
 
@@ -144,13 +148,22 @@ pub enum Judged {
 /// Judges a cached file's info dict for `key` as the worker judges a
 /// fetched one: the hash check, the floor's hash list, preparing,
 /// enrichment, then the full filter with your classification rules.
+///
+/// `raw_info` is the info dict's bytes exactly as the file holds them
+/// (the plugin's `Verified::info_raw`). They're parsed here with no
+/// encoding hint and kept for the store as a BEP 9 fetch's are.
 pub fn judge(
     engine: &Engine,
     preparer: &mut Preparer,
     key: InfoHash,
-    info: &Info,
+    raw_info: &[u8],
     now: i64,
 ) -> Judged {
+    // Hint-free, as `worker::prepare_one` parses a fetched dict.
+    let Ok(info) = Info::parse(raw_info) else {
+        return Judged::Refused(Refusal::Invalid);
+    };
+    let info = &info;
     let v2 = info.v2.map(|h| h.truncated());
     if info.v1 != Some(key) && v2 != Some(key) {
         return Judged::Refused(Refusal::Mismatch);
@@ -159,9 +172,7 @@ pub fn judge(
     if engine.blocked_hash(&swarm).is_some() || engine.blocked_hash(&[key.0]).is_some() {
         return Judged::Refused(Refusal::Blocked);
     }
-    // The raw dict isn't archived: the cache's file is the only copy
-    // (importers do the same).
-    let Ok(mut prepared) = preparer.prepare(info, None) else {
+    let Ok(mut prepared) = preparer.prepare(info, Some(raw_info)) else {
         return Judged::Refused(Refusal::Invalid);
     };
     let files = crate::enrich::file_infos(&info.files, info.path_encoding);

@@ -9,11 +9,12 @@
 //! **Each lookup tells the cache which hash you're interested in** (Q3),
 //! so the plugin is held tight:
 //! - **Off by default, External consent** (§18.7): the server refuses to
-//!   turn it on until its consent is acknowledged (SRC-4). The manifest
-//!   lists no endpoints of its own, so the acknowledgement covers the
-//!   class's text; each cache address the user enters is their consent to
-//!   that host, as with `full_scrape` and `prowlarr`. Asking again when
-//!   the list changes is the settings form's (SRC-15b).
+//!   turn it on until its consent is acknowledged (SRC-4). That
+//!   acknowledgement must cover the configured cache hosts, so adding or
+//!   changing one asks again. SRC-4 digests only the manifest's built-in
+//!   endpoints, which are empty here, so **the plugin isn't registered**
+//!   until SRC-13b makes the acknowledgement cover the configured list
+//!   (`docs/decisions/2026-11-05-SRC-13.md`).
 //! - **The cache list is the user's** and starts empty. [`SUGGESTED`] is
 //!   shown beside it in the settings form, never enabled for them.
 //!
@@ -39,26 +40,29 @@
 //! Redirects aren't followed.
 //!
 //! **The reply is untrusted.** It's parsed by `lodestar-metainfo` (fuzzed)
-//! within [`LIMITS`], and used only when its info dict's SHA-1, or its
+//! within [`LIMITS`]. The info dict is read from its raw span with no
+//! encoding hint ([`TorrentFile::raw_info`]), as BEP 9 delivers it: the
+//! file's top-level `encoding` key isn't covered by the hash, so a cache
+//! can't choose how a name decodes. It's used only when its SHA-1, or its
 //! truncated SHA-256 for a v2 key, is the key. A file that hashes to
 //! anything else is refused and counted ([`Stats::mismatched`]), and the
 //! next cache is asked. A [`Verified`] can only be made here, after that
 //! check. It still goes through the full filter pipeline before storage
 //! (the pipeline's `torrent_cache::judge`, SRC-2's path).
 //!
-//! **Host wiring** (the sources wiring slice): the host builds the
-//! plugin from the saved config with a [`Queue`] it feeds from the
-//! pipeline's cursor and from user interest, and takes each [`Verified`]
-//! to the pipeline's judge.
+//! **Host wiring** (SRC-13b): the host builds the plugin from the saved
+//! config with a [`Queue`] it feeds from the pipeline's cursor and from
+//! user interest, with each key's `private_source` taken from the store,
+//! and takes each [`Verified`]'s raw info dict to the pipeline's judge.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_integrations::net::{self, NetPolicy};
-use lodestar_metainfo::{InfoHash, Limits, TorrentFile};
+use lodestar_metainfo::{Info, InfoHash, Limits, ParseOptions, TorrentFile};
 use lodestar_sources::claims::{self, Claims, Confidence, Provenance};
-use lodestar_sources::http::{StreamLimits, host_key};
+use lodestar_sources::http::{HostState, StreamLimits, host_key};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Client, Consent, Distribution, Endpoints, HostRate, HttpError, Kind,
     Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx, SourcePlugin,
@@ -100,10 +104,13 @@ pub const STREAM: StreamLimits = StreamLimits {
     idle: Duration::from_secs(10),
 };
 
-/// `lodestar-metainfo`'s limits with the whole file held to [`STREAM`]'s
-/// byte cap.
+/// `lodestar-metainfo`'s limits for a cache's reply: the whole file held
+/// to [`STREAM`]'s byte cap, and half the default bencode values and
+/// files, which still fits any torrent an 8 MiB file can hold.
 pub const LIMITS: Limits = Limits {
     max_torrent_bytes: STREAM.max_bytes as usize,
+    max_items: 1_000_000,
+    max_files: 100_000,
     ..Limits::DEFAULT
 };
 
@@ -409,6 +416,8 @@ pub struct Stats {
     pub failed: AtomicU64,
     /// Lookups no cache had.
     pub missed: AtomicU64,
+    /// Caches passed over because they were backing off or blocked.
+    pub skipped: AtomicU64,
     /// Lookups dropped because their lane was full.
     pub dropped: AtomicU64,
 }
@@ -419,7 +428,10 @@ pub struct Stats {
 #[derive(Clone)]
 pub struct Verified {
     lookup: Lookup,
+    /// Its `info` is parsed from `info_raw` with no encoding hint.
     torrent: TorrentFile,
+    /// The info dict's bytes as the file holds them: what the hash covers.
+    info_raw: Vec<u8>,
     v2: bool,
     host: String,
 }
@@ -442,13 +454,20 @@ impl Verified {
         self.lookup.why
     }
 
-    /// The parsed file; its info dict is the verified metadata.
+    /// The parsed file. Its `info` is the verified metadata, parsed from
+    /// [`info_raw`](Self::info_raw) with no encoding hint.
     pub fn torrent(&self) -> &TorrentFile {
         &self.torrent
     }
 
     pub fn into_torrent(self) -> TorrentFile {
         self.torrent
+    }
+
+    /// The info dict's raw bytes, exactly as hashed: what the pipeline's
+    /// judge parses and stores.
+    pub fn info_raw(&self) -> &[u8] {
+        &self.info_raw
     }
 
     /// The key is the info dict's truncated SHA-256 (a v2 swarm), not its
@@ -463,12 +482,13 @@ impl Verified {
     }
 
     /// The fields outside the info dict, as claims: the trackers and the
-    /// comment. Trackers are kept only for a torrent that isn't marked
-    /// `private`, and only those with no user name, query or
-    /// passkey-shaped part, since a private tracker's address holds the
-    /// uploader's passkey, and none on a literal LAN, loopback or
-    /// link-local address: the file is a third party's. Web seeds and `created by` have no claim field
-    /// yet (`docs/decisions/2026-11-05-SRC-13.md`).
+    /// comment. Neither is kept for a torrent marked `private`: a private
+    /// tracker's address holds the uploader's passkey, and its comment
+    /// often names the tracker. Otherwise only trackers with no user name,
+    /// query or passkey-shaped part are kept, and none on a literal LAN,
+    /// loopback or link-local address: the file is a third party's. Web
+    /// seeds and `created by` have no claim field yet
+    /// (`docs/decisions/2026-11-05-SRC-13.md`).
     pub fn claims(&self) -> Claims {
         let trackers = if self.torrent.info.private {
             Vec::new()
@@ -486,7 +506,11 @@ impl Verified {
         };
         let mut c = Claims {
             trackers,
-            description: self.torrent.comment.clone().filter(|c| !c.is_empty()),
+            description: self
+                .torrent
+                .comment
+                .clone()
+                .filter(|c| !c.is_empty() && !self.torrent.info.private),
             ..Claims::default()
         };
         c.clamp();
@@ -625,6 +649,18 @@ impl TorrentCache {
     pub async fn lookup(&self, http: &Client, lookup: &Lookup) -> Result<Verified, Miss> {
         let mut last = Miss::NotFound;
         for cache in &self.config.caches {
+            // A cache backing off or blocked is passed over, not waited
+            // out: one cache's six-hour back-off mustn't hold up every
+            // lookup behind it. Its poll interval is still waited out.
+            let now = tokio::time::Instant::now();
+            let held = |s: HostState| !matches!(s, HostState::Ready);
+            if held(http.limiter().state(&cache.host, now))
+                || held(http.limiter().unit_state(&cache.host, now))
+            {
+                self.stats.skipped.fetch_add(1, Ordering::Relaxed);
+                last = Miss::Failed;
+                continue;
+            }
             match self.ask(http, cache, lookup).await {
                 Ok(v) => return Ok(v),
                 Err(Miss::EgressDown) => return Err(Miss::EgressDown),
@@ -666,7 +702,22 @@ impl TorrentCache {
                 Err(_) => return Err(fail(Miss::Failed)),
             }
         }
-        let torrent = TorrentFile::parse_with(&body, &LIMITS).map_err(|_| fail(Miss::Invalid))?;
+        let mut torrent =
+            TorrentFile::parse_with(&body, &LIMITS).map_err(|_| fail(Miss::Invalid))?;
+        // The info dict as BEP 9 would deliver it: its own bytes, no hint
+        // from the file's unhashed `encoding` key.
+        let info_raw = TorrentFile::raw_info(&body, &LIMITS)
+            .map_err(|_| fail(Miss::Invalid))?
+            .to_vec();
+        drop(body);
+        torrent.info = Info::parse_with(
+            &info_raw,
+            &ParseOptions {
+                limits: LIMITS,
+                encoding_hint: None,
+            },
+        )
+        .map_err(|_| fail(Miss::Invalid))?;
         let v2 = match verify(&torrent, &lookup.key) {
             Some(v2) => v2,
             None => return Err(fail(Miss::Mismatch)),
@@ -674,6 +725,7 @@ impl TorrentCache {
         Ok(Verified {
             lookup: *lookup,
             torrent,
+            info_raw,
             v2,
             host: cache.host.clone(),
         })

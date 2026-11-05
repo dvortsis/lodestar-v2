@@ -24,6 +24,37 @@ impl TorrentFile {
         TorrentFile::parse_with(bytes, &Limits::DEFAULT)
     }
 
+    /// The info dictionary's raw bytes inside a whole `.torrent`, exactly
+    /// as they appear: the span the info hash is taken over. Parse it with
+    /// [`Info::parse_with`] and no encoding hint to judge the info dict as
+    /// BEP 9 delivers it, since the top-level `encoding` key isn't covered
+    /// by the hash and a file's sender can choose it.
+    pub fn raw_info<'a>(bytes: &'a [u8], limits: &Limits) -> Result<&'a [u8], Error> {
+        if bytes.len() > limits.max_torrent_bytes {
+            return Err(Error::TooLarge {
+                size: bytes.len(),
+                limit: limits.max_torrent_bytes,
+            });
+        }
+        let value = bencode::decode_with(
+            bytes,
+            &DecodeOptions::lenient().with_limits(limits.bencode()),
+        )?;
+        let top = value.as_dict().ok_or(Error::WrongType {
+            field: "torrent",
+            expected: "dictionary",
+        })?;
+        Ok(top
+            .get(b"info")
+            .ok_or(Error::MissingField("info"))?
+            .as_dict()
+            .ok_or(Error::WrongType {
+                field: "info",
+                expected: "dictionary",
+            })?
+            .raw())
+    }
+
     pub fn parse_with(bytes: &[u8], limits: &Limits) -> Result<TorrentFile, Error> {
         if bytes.len() > limits.max_torrent_bytes {
             return Err(Error::TooLarge {

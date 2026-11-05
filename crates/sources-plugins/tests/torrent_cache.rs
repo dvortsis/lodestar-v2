@@ -68,6 +68,17 @@ fn torrent_of(info: &[u8], announce: &str) -> Vec<u8> {
     v
 }
 
+/// `file` with a top-level `comment` (keys stay sorted: `comment`
+/// comes before `info`... and after `announce`).
+fn with_comment(file: &[u8], comment: &str) -> Vec<u8> {
+    let at = file.windows(6).position(|w| w == b"4:info").unwrap();
+    let mut v = file[..at].to_vec();
+    v.extend_from_slice(b"7:comment");
+    v.extend(bytes(comment.as_bytes()));
+    v.extend_from_slice(&file[at..]);
+    v
+}
+
 /// The key `info` hashes to, from metainfo's own parser.
 fn key_for(info: &[u8]) -> InfoHash {
     lodestar_metainfo::Info::parse(info).unwrap().v1.unwrap()
@@ -85,6 +96,8 @@ enum Answer {
     },
     /// Headers at once, then a body that never comes.
     Stall,
+    /// A 301 to this address.
+    Redirect(String),
 }
 
 /// Answers by host, and records every request with its clock time.
@@ -167,6 +180,7 @@ impl Fetch for FakeCache {
             match a {
                 Answer::File(b) => Ok(response(200, &[], b)),
                 Answer::Status(s) => Ok(response(s, &[], Vec::new())),
+                Answer::Redirect(to) => Ok(response(301, &[("Location", to)], Vec::new())),
                 Answer::Huge { .. } | Answer::Stall => {
                     Err(HttpError::Transport("streamed only".into()))
                 }
@@ -191,6 +205,11 @@ impl Fetch for FakeCache {
             match a {
                 Answer::File(b) => Ok(StreamResponse::buffered(response(200, &[], b))),
                 Answer::Status(s) => Ok(StreamResponse::buffered(response(s, &[], Vec::new()))),
+                Answer::Redirect(to) => Ok(StreamResponse::buffered(response(
+                    301,
+                    &[("Location", to)],
+                    Vec::new(),
+                ))),
                 Answer::Huge { declared: true } => streamed(
                     vec![("Content-Length".into(), (9u64 << 20).to_string())],
                     Box::new(Endless),
@@ -526,26 +545,115 @@ async fn a_private_torrents_trackers_are_not_kept() {
     let key = key_for(&raw);
     let fake = FakeCache::new(&[(
         "c.example",
-        Answer::File(torrent_of(&raw, "https://tracker.example/announce")),
+        Answer::File(with_comment(
+            &torrent_of(&raw, "https://tracker.example/announce"),
+            "Uploaded to PrivateTracker",
+        )),
     )]);
     let mut run = start(&["https://c.example/{hash}"], fake, &[unverified(key)]);
     let v = run.verified.recv().await.unwrap();
     assert!(v.claims().trackers.is_empty());
+    assert!(
+        v.claims().description.is_none(),
+        "a private torrent's comment was kept"
+    );
     run.running.stop_within().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_full_lane_drops_and_counts() {
-    let fake = FakeCache::new(&[]);
+    // The plugin is running but stuck on its first lookup (a stalled
+    // reply), so nothing drains the lane behind it.
+    let fake = FakeCache::new(&[("c.example", Answer::Stall)]);
     let (plugin, queue, _rx) =
         TorrentCache::new(Config::new(&["https://c.example/{hash}"]).unwrap());
-    // Not running: nothing drains the lane.
+    let plugin = Arc::new(plugin);
+    let mut ctx = FakeCtx::with_fetch(&*plugin, SourceId::new(9).unwrap(), fake.clone());
+    let running = ctx.start(plugin.clone());
+    assert!(queue.push(unverified(InfoHash([0xee; 20]))));
+    wait_for("the first lookup's request", || fake.urls().len() == 1).await;
     for i in 0..torrent_cache::QUEUE {
         assert!(queue.push(unverified(InfoHash([i as u8; 20]))));
     }
     assert!(!queue.push(unverified(InfoHash([0xff; 20]))));
     assert_eq!(n(&plugin.stats().dropped), 1);
-    assert!(fake.urls().is_empty());
+    // Interest has its own lane, which still has room.
+    assert!(queue.push(Lookup::new(InfoHash([0xfe; 20]), Why::Interest, false).unwrap()));
+    assert_eq!(fake.urls().len(), 1);
+    running.stop_within().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_redirect_is_refused_not_followed() {
+    let key = InfoHash([0x12; 20]);
+    let fake = FakeCache::new(&[(
+        "c.example",
+        Answer::Redirect(format!("https://mirror.example/{key}")),
+    )]);
+    let run = start(
+        &["https://c.example/{hash}"],
+        fake.clone(),
+        &[unverified(key)],
+    );
+    wait_for("the redirect to fail", || {
+        n(&run.plugin.stats().failed) == 1
+    })
+    .await;
+    assert_eq!(fake.urls(), [format!("https://c.example/{key}")]);
+    assert_eq!(n(&run.plugin.stats().verified), 0);
+    run.running.stop_within().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cache_backing_off_is_passed_over_not_waited_for() {
+    let raw = info("Tears of Steel", false);
+    let good = key_for(&raw);
+    let fake = FakeCache::new(&[
+        ("down.example", Answer::Status(503)),
+        (
+            "up.example",
+            Answer::File(torrent_of(&raw, "udp://t.example:1/a")),
+        ),
+    ]);
+    let mut run = start(
+        &["https://down.example/{hash}", "https://up.example/{hash}"],
+        fake.clone(),
+        &[unverified(InfoHash([0x13; 20])), unverified(good)],
+    );
+    let v = run.verified.recv().await.unwrap();
+    assert_eq!(v.key(), good);
+    // down.example failed once and was skipped for the second lookup.
+    let down = fake
+        .urls()
+        .iter()
+        .filter(|u| u.starts_with("https://down.example/"))
+        .count();
+    assert_eq!(down, 1, "{:?}", fake.urls());
+    assert!(n(&run.plugin.stats().skipped) >= 1);
+    run.running.stop_within().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_files_encoding_key_doesnt_decide_the_name() {
+    // A GBK name, and a top-level `encoding` the hash doesn't cover.
+    let mut raw = b"d6:lengthi1048576e4:name4:".to_vec();
+    raw.extend_from_slice(&[0xd6, 0xd0, 0xce, 0xc4]);
+    raw.extend_from_slice(b"12:piece lengthi262144e6:pieces");
+    raw.extend(bytes(&[7u8; 80]));
+    raw.push(b'e');
+    let key = key_for(&raw);
+    let mut file = b"d8:encoding12:windows-12524:info".to_vec();
+    file.extend_from_slice(&raw);
+    file.push(b'e');
+    let fake = FakeCache::new(&[("c.example", Answer::File(file))]);
+    let mut run = start(&["https://c.example/{hash}"], fake, &[unverified(key)]);
+    let v = run.verified.recv().await.unwrap();
+    assert_eq!(v.info_raw(), &raw[..]);
+    assert_eq!(
+        v.torrent().info,
+        lodestar_metainfo::Info::parse(&raw).unwrap()
+    );
+    run.running.stop_within().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]

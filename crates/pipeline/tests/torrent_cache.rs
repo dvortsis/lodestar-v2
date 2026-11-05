@@ -59,11 +59,11 @@ fn info_bytes(name: &str) -> Vec<u8> {
 }
 
 fn judge(filter: &Handle, name: &str) -> (InfoHash, Judged) {
-    let info = Info::parse(&info_bytes(name)).unwrap();
-    let key = info.primary_hash();
+    let raw = info_bytes(name);
+    let key = Info::parse(&raw).unwrap().primary_hash();
     let store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let mut preparer = store.preparer();
-    let j = torrent_cache::judge(&filter.current(), &mut preparer, key, &info, T);
+    let j = torrent_cache::judge(&filter.current(), &mut preparer, key, &raw, T);
     (key, j)
 }
 
@@ -116,13 +116,13 @@ fn a_name_your_rules_drop_is_held() {
 
 #[test]
 fn a_file_for_another_key_is_refused() {
-    let info = Info::parse(&info_bytes("Sintel.mkv")).unwrap();
+    let raw = info_bytes("Sintel.mkv");
     let store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let j = torrent_cache::judge(
         &stand_in().current(),
         &mut store.preparer(),
         InfoHash([9; 20]),
-        &info,
+        &raw,
         T,
     );
     assert!(matches!(j, Judged::Refused(Refusal::Mismatch)));
@@ -177,8 +177,8 @@ fn the_cursor_never_offers_a_private_source_key() {
 
 #[test]
 fn a_key_on_the_floors_hash_list_is_refused_before_preparing() {
-    let info = Info::parse(&info_bytes("Sintel.mkv")).unwrap();
-    let key = info.primary_hash();
+    let raw = info_bytes("Sintel.mkv");
+    let key = Info::parse(&raw).unwrap().primary_hash();
     let mut cs = CsList::default();
     cs.add_hash(key.0, lodestar_filter::Origin::Imported);
     let lists = Lists {
@@ -188,27 +188,73 @@ fn a_key_on_the_floors_hash_list_is_refused_before_preparing() {
     };
     let engine = Engine::new(Core::new(lists, cs, Switches::default()));
     let store = Store::open_in_memory(StoreConfig::default()).unwrap();
-    let j = torrent_cache::judge(&engine, &mut store.preparer(), key, &info, T);
+    let j = torrent_cache::judge(&engine, &mut store.preparer(), key, &raw, T);
     assert!(matches!(j, Judged::Refused(Refusal::Blocked)));
 }
 
 /// The plugin's recorded cache reply, judged whole: the file the
 /// plugin's contract test verifies is the file the filter judges.
-fn fixture_file() -> lodestar_metainfo::TorrentFile {
+fn fixture_info() -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../sources-plugins/fixtures/torrent_cache/hit/002.body");
-    lodestar_metainfo::TorrentFile::parse(&std::fs::read(path).unwrap()).unwrap()
+    let file = std::fs::read(path).unwrap();
+    lodestar_metainfo::TorrentFile::raw_info(&file, &lodestar_metainfo::Limits::DEFAULT)
+        .unwrap()
+        .to_vec()
 }
 
 #[test]
 fn the_recorded_file_is_admitted_and_a_rule_on_its_name_holds_it() {
-    let file = fixture_file();
+    let raw = fixture_info();
     let key: InfoHash = "695b0b3debb14473d741f7a3a86561e42009d6dc".parse().unwrap();
     let store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let filter = stand_in();
-    let j = torrent_cache::judge(&filter.current(), &mut store.preparer(), key, &file.info, T);
+    let j = torrent_cache::judge(&filter.current(), &mut store.preparer(), key, &raw, T);
     assert!(matches!(j, Judged::Store(_)), "{j:?}");
     rule(&filter, "sintel", Action::Drop);
-    let j = torrent_cache::judge(&filter.current(), &mut store.preparer(), key, &file.info, T);
+    let j = torrent_cache::judge(&filter.current(), &mut store.preparer(), key, &raw, T);
+    assert!(matches!(j, Judged::Held { .. }), "{j:?}");
+}
+
+/// The same GBK name in a file whose unhashed `encoding` key says
+/// windows-1252: judged from the raw span with no hint, the name decodes
+/// as the hint-free bytes do, and a rule on that name still holds it.
+#[test]
+fn the_files_encoding_key_cant_change_how_the_name_is_judged() {
+    let gbk = [0xd6, 0xd0, 0xce, 0xc4]; // GBK for a two-character word
+    let raw = [
+        &b"d6:lengthi944766976e4:name4:"[..],
+        &gbk,
+        b"12:piece lengthi1048576e6:pieces",
+        format!("{}:", 20 * 901).as_bytes(),
+        &vec![0u8; 20 * 901],
+        b"e",
+    ]
+    .concat();
+    let key = Info::parse(&raw).unwrap().primary_hash();
+    let hint_free = Info::parse(&raw).unwrap().name.decode().into_owned();
+    let lied = [&b"d8:encoding12:windows-12524:info"[..], &raw, b"e"].concat();
+    let span = lodestar_metainfo::TorrentFile::raw_info(&lied, &lodestar_metainfo::Limits::DEFAULT)
+        .unwrap();
+    assert_eq!(span, &raw[..]);
+    // The whole-file parse would have taken the lie.
+    let hinted = lodestar_metainfo::TorrentFile::parse(&lied)
+        .unwrap()
+        .info
+        .name
+        .decode()
+        .into_owned();
+    assert_ne!(hinted, hint_free);
+
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let Judged::Store(a) =
+        torrent_cache::judge(&stand_in().current(), &mut store.preparer(), key, span, T)
+    else {
+        panic!("a clean name wasn't admitted");
+    };
+    assert_eq!(a.torrent.name, hint_free);
+    let filter = stand_in();
+    rule(&filter, &hint_free, Action::Drop);
+    let j = torrent_cache::judge(&filter.current(), &mut store.preparer(), key, span, T);
     assert!(matches!(j, Judged::Held { .. }), "{j:?}");
 }
