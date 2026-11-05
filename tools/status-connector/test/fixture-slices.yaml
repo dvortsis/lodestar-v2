@@ -11,13 +11,13 @@ external:
   v-tagged:
     check: The release is tagged
 slices:
-  - { id: B0, title: Split the API router, kind: core, model: opus, deps: [] }
+  - { id: B0, title: Split the API router, kind: core, model: opus, deps: [], owns: ["area/api/**"] }
   - { id: SRC-0, title: Plugin contract v2, kind: core, model: opus, deps: [] }
   - { id: SRC-4, title: Consent framework, kind: core, model: opus, deps: [SRC-0] }
   - { id: SRC-5, title: Per-plugin egress, kind: core, model: opus, deps: [SRC-0] }
-  - { id: SRC-6, title: Torznab parser, kind: core, model: opus, deps: [] }
+  - { id: SRC-6, title: Torznab parser, kind: core, model: opus, deps: [], owns: ["area/api/torznab.rs"] }
   - { id: SRC-7, title: Prowlarr plugin, kind: core, model: opus, deps: [SRC-4, SRC-5, SRC-6, "ext:owner-q2", "ext:owner-q15"] }
-  - { id: SRC-8, title: RSS parser, kind: core, model: opus, deps: [] }
+  - { id: SRC-8, title: RSS parser, kind: core, model: opus, deps: [], owns: ["area/feeds/rss.rs"] }
   - { id: SRC-9, title: Internet Archive parser, kind: core, model: opus, deps: [SRC-6] }
   - { id: SRC-12, title: BEP 48 scrape, kind: core, model: opus, deps: [] }
   - { id: ZZ-new, title: A slice no placement rule covers, kind: helper, model: sonnet, deps: [] }

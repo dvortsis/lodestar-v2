@@ -220,6 +220,20 @@ github.open = [pr(23, 'B0: Reopened', 'slice/B0', '', false)]; github.state = { 
 assert.ok(!(await toolR('plan_nodes', 'o/r10')).some((n) => n.kind === 'extra'), 'nothing provisional without an X-* id');
 github.open = savedOpen; github.refs = savedRefs; github.closed = savedClosed;
 github.state = stateBefore;
+
+// free slots while work is ready: counted against the limit, and a slice that overlaps a running slice's `owns` is not offered
+github.open = [pr(40, 'B0: Running', 'slice/B0', '', false)];
+github.state = { updated_at: 'x', slots: { updated: new Date().toISOString(), items: [{ slot: 1, slice: 'B0', doing: 'Running.' }] } };
+const idleRow = async (repo) => (await metaOf(repo)).find((r) => r.key === 'idle');
+const fr = await idleRow('o/r11');
+assert.ok(fr && fr.value.startsWith('3 free, '), 'one running slice of four leaves three free while work is ready');
+assert.ok(fr.note.includes('SRC-8') && !fr.note.includes('SRC-6') && !/\bB0\b/.test(fr.note), 'a slice whose owns overlap a running slice is not offered, and nor is the running one');
+github.state = { updated_at: 'x', slots: { updated: new Date().toISOString(), items: [1, 2, 3, 4].map((n) => ({ slot: n, slice: ['B0', 'SRC-0', 'SRC-12', 'SRC-9'][n - 1], doing: 'busy' })) } };
+github.open = [];
+assert.equal(await idleRow('o/r12'), undefined, 'no alarm when every slot is busy');
+github.state = { updated_at: 'x', slots: { updated: new Date().toISOString(), items: [] } };
+assert.ok((await idleRow('o/r13')).value.startsWith('4 free'), 'an empty list is four free');
+github.open = savedOpen; github.state = stateBefore;
 github.fail = true; // a GitHub failure is reported to the caller, not hidden
 const failed = (await (await worker.fetch(new Request('https://x/mcp/' + SECRET + '', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'plan_meta' } }) }), { ...env, CACHE_SECONDS: '0' })).json()).result;
 assert.equal(failed.isError, true); assert.match(failed.content[0].text, /Could not read GitHub/);

@@ -201,7 +201,7 @@ export function buildPlan(inp: Inputs) {
   // worker slots: the runner records who works on what in runner-state's state.json (`slots`), pushed on the wake where a session
   // starts, finishes, is archived or changes task, with no PR. GitHub supplies each slice's title, state and PR. The number of slots
   // is the owner's limit in runner/slices.yaml (limits.phase_total), not a second copy. Anything out of step is reported, not hidden.
-  const slots: any[] = [];
+  const slots: any[] = [], idle: { label: string; value: string; note: string }[] = [];
   const sl = inp.runnerState && inp.runnerState.slots ? inp.runnerState.slots : null;
   const text = (v: any): string => (typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : '').slice(0, 300);
   const MAX_SLOTS = 64;
@@ -249,6 +249,17 @@ export function buildPlan(inp: Inputs) {
     // a pull request is in a slot when the slot names any slice it stands for: its title id or the slice its branch is named after
     const loose = inp.openPRs.filter((p) => openIdsOf(p).length && !openIdsOf(p).some((id) => listed.has(id))).map((p) => sliceIdsOf(p)[0] || '#' + p.number);
     if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner-state slots');
+    // free slots while work is ready: a slot is free when fewer than `limit` sessions run, and a slice is ready when it has no unmet
+    // dependency and its `owns` do not overlap a running slice's. Reported as an `idle` row, apart from the plan-file warnings.
+    const running = new Set<string>([...listed, ...Object.keys(openById)]);
+    const stem = (g: string) => { const i = g.indexOf('*'); return (i < 0 ? g : g.slice(0, i)).replace(/\/+$/, ''); };
+    const clash = (a: string[], b: string[]) => a.some((x) => b.some((y) => { const p = stem(x), q = stem(y); return p === q || p.startsWith(q + '/') || q.startsWith(p + '/') || !p || !q; }));
+    const busyOwns = SL.filter((x) => running.has(x.id)).flatMap((x) => (Array.isArray(x.owns) ? x.owns.map(String) : []));
+    const busyCount = slots.filter((r) => r.status !== 'idle').length;
+    const free = cap ? Math.max(0, cap - busyCount) : 0;
+    const fits = SL.filter((x) => state[x.id] === 'ready' && x.kind !== 'epic' && !running.has(x.id) && !clash(Array.isArray(x.owns) ? x.owns.map(String) : [], busyOwns))
+      .map((x) => ({ id: x.id, unlocks: nodes.find((n) => n.id === x.id)?.unlocks || 0 })).sort((a, b) => b.unlocks - a.unlocks || (a.id < b.id ? -1 : 1));
+    if (free > 0 && fits.length) idle.push({ label: 'Free slots, work ready', value: free + ' free, ' + fits.length + ' ready', note: 'Ready with no overlap with a running slice: ' + fits.slice(0, 6).map((f) => f.id + (f.unlocks ? ' (unlocks ' + f.unlocks + ')' : '')).join(', ') + (fits.length > 6 ? ', …' : '') });
   } else if (inp.runnerState) warn('Slots not recorded', 'none', 'runner-state state.json has no slots key, so the dashboard cannot show what each slot is doing');
 
   if (inp.historyIncomplete) warn('Merge history incomplete', 'yes', 'GitHub did not answer for some older pages of closed pull requests, so some finished slices may show as not yet merged until it does');
@@ -260,6 +271,7 @@ export function buildPlan(inp: Inputs) {
     { key: 'built', label: 'Built at', value: inp.now.slice(0, 16).replace('T', ' ') + ' UTC', note: 'live, by the status connector' },
     ...warnings.map((w) => ({ key: 'warning', label: w.label, value: w.value, note: w.note })),
     ...notices.map((w) => ({ key: 'note', label: w.label, value: w.value, note: w.note })),
+    ...idle.map((w) => ({ key: 'idle', label: w.label, value: w.value, note: w.note })),
   ];
   return { nodes, road, edges, activity, recent, meta: metaRows, gates, owner, ext, notes, crawler, soak, slots };
 }
