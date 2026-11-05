@@ -1374,7 +1374,9 @@ export default [
 	// (visibility.ts and commands.ts are the only doors).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
 	// runner §2.26, SRC-17: "Found by" in the drawer (27,400 B → 27,976 B; measured 551 B over, rounded up to 64 B).
-	entry('Detail drawer (own JS + CSS)', drawerView, '27976 B'),
+	// RP-6: +4 B after merging main (measured 27,980 B; nothing of the drawer's changed, so the chunk
+	// hashes in its imports moved by a few bytes). Runner to confirm.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28000 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
