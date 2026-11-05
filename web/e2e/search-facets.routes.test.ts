@@ -29,6 +29,7 @@ const term = (ast: Ast, key: string, values: [string, number][], over: Partial<T
 	const { inc, exc } = chosen(ast, key);
 	return {
 		approx: false,
+		partial: false,
 		distinct: values.length,
 		other: 0,
 		values: values.map(([value, count]) => ({
@@ -91,6 +92,7 @@ function facetsFor(ast: Ast, limits: Record<string, number>): Facets {
 		},
 		sample_rate: null,
 		sampled: false,
+		source_names: {},
 		took_ms: 1,
 		total: 1284 - 400 * filters,
 		total_approx: false,
