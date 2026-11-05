@@ -2894,6 +2894,13 @@
       "session": "session_01MMjhnC9v41Szk1iokKnnJC",
       "launched": "2026-11-05T02:34Z",
       "brief": "briefs/SRC-11b.md"
+    },
+    "SRC-10e": {
+      "status": "building",
+      "model": "sonnet",
+      "session": "session_01MMjhnAT2ti26jvv86Z6pDP",
+      "launched": "2026-11-05T03:22Z",
+      "brief": "briefs/SRC-10e.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5069,12 +5076,11 @@
       },
       {
         "slot": 6,
-        "slice": "",
+        "slice": "SRC-10e",
         "role": "build",
         "agent": "claude",
-        "doing": "Free: next candidates SRC-10e (ready) or SRC-10c-2; RP-2, RP-1b, RP-UC wait for RP-DEF (#454) to merge (owns overlap).",
-        "since": "2026-11-05T03:22Z",
-        "status": "idle"
+        "doing": "Sukebei (adult) feed as a Nyaa variant: off by default, every item forced Adult, hidden unless Show adult content is on.",
+        "since": "2026-11-05T03:22Z"
       },
       {
         "slot": 7,
