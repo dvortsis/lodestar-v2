@@ -711,3 +711,185 @@ fn a_job_stopped_elsewhere_at_the_end_is_reported_not_running() {
 fn rows_n(n: u32) -> Vec<TorrentRow> {
     rows(1..=n)
 }
+
+/// A child-role and a sexual stand-in ten words apart: only the Adult-only
+/// CS-5a (window 12) catches them, and only on an adult item.
+const SPREAD: &str = "Studiox Rolea one two three four five six seven eight nine Lexa";
+
+fn stand_in() -> Engine {
+    Engine::new(Core::new(
+        Lists {
+            sexual: lodestar_filter::TermSet::of(&["lexa"]),
+            child_roles: lodestar_filter::TermSet::of(&["rolea"]),
+            codes: lodestar_filter::TermSet::of(&["codex"]),
+        },
+        CsList::default(),
+        Switches::default(),
+    ))
+}
+
+/// An always-adult source ("sukebei") registered in `store`, with its mark
+/// set on the connection as the CLI sets it.
+fn adult_source(store: &mut Store) -> (SourceId, lodestar_pipeline::source_adult::AdultSources) {
+    let s = store.register_source("sukebei", "1", NOW).unwrap();
+    let mask = lodestar_pipeline::source_adult::AdultSources(1 << s.get());
+    store.set_adult_mark(mask.store_mark());
+    (s, mask)
+}
+
+/// The always-adult source's claims under `hash(seed)`, as an unverified
+/// item.
+fn claim(store: &mut Store, source: SourceId, seed: u32) {
+    let c = lodestar_store::claims::Claims {
+        name: Some(format!("claimed {seed}")),
+        ..Default::default()
+    };
+    let put = store
+        .put_unverified(&[lodestar_store::unverified::NewUnverified {
+            network: lodestar_store::unverified::Network::Bt,
+            key: &hash(seed),
+            source,
+            private_source: false,
+            claims: Some(&c),
+            at: NOW,
+        }])
+        .unwrap();
+    assert!(matches!(put[0], lodestar_store::unverified::Put::New(_)));
+}
+
+fn adult_code() -> Option<u8> {
+    Some(lodestar_classify::ContentType::Adult.code())
+}
+
+fn stored(store: &Store, seed: u32) -> Option<(i64, u64, Option<u8>)> {
+    let id = store
+        .find(&lodestar_metainfo::InfoHash(hash(seed)))
+        .unwrap()?;
+    let row = store.torrent(id).unwrap().unwrap();
+    Some((id, row.sources, store.content_type(id).unwrap()))
+}
+
+/// A dump holding a hash only an always-adult source has claimed: the
+/// record is stored Adult, with that source's bit, so the backfill keeps
+/// it adult; it's judged as adult too, so the Adult-only core holds a name
+/// only that reading meets. An unclaimed record isn't affected
+/// (X-source-adult-2).
+#[test]
+fn a_dump_holding_a_hash_an_always_adult_source_claims_is_stored_adult() {
+    let dir = tempfile::tempdir().unwrap();
+    let rows = [
+        named(1, "Garden.Tour.2022.1080p"),
+        named(2, SPREAD),
+        named(3, SPREAD),
+        named(4, "Lake.Walk.2021.1080p"),
+    ];
+    let path = fixture(dir.path(), "a.sqlite3", &rows);
+    let (mut store, source) = mem();
+    let (adult, mask) = adult_source(&mut store);
+    claim(&mut store, adult, 1);
+    claim(&mut store, adult, 2);
+    let engine = stand_in();
+    let stop = AtomicBool::new(false);
+    let mut a = adapter(&path);
+    let id = create(&mut store, &a);
+    let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop))).unwrap();
+    assert_eq!(r.ended, Ended::Exhausted);
+
+    // Claimed: Adult with the source's bit, and not left for the backfill.
+    let (t1, sources, class) = stored(&store, 1).expect("stored");
+    assert_eq!(class, adult_code());
+    assert!(mask.any(sources) && sources & (1 << source.get()) != 0);
+    assert!(
+        !store
+            .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+            .unwrap()
+            .contains(&t1)
+    );
+    // Claimed, and only the adult reading meets CS-5a: held.
+    assert!(stored(&store, 2).is_none());
+    assert_eq!(r.counters.quarantined, 1);
+    // Unclaimed: the dump's own classification.
+    let (_, sources, class) = stored(&store, 3).expect("unclaimed is stored");
+    assert!(!mask.any(sources));
+    assert_ne!(class, adult_code());
+    assert_ne!(stored(&store, 4).unwrap().2, adult_code());
+
+    // The backfill keeps it adult.
+    let filter = lodestar_filter::Handle::new(stand_in());
+    let ctx = lodestar_pipeline::enrich::Backfill {
+        filter: Some(&filter),
+        adult: mask,
+        ..Default::default()
+    };
+    store.mark_unenriched(&[t1]).unwrap();
+    while lodestar_pipeline::enrich::enrich_stored_with(&mut store, 0, 10, &ctx)
+        .unwrap()
+        .is_some()
+    {}
+    assert_eq!(stored(&store, 1).unwrap().2, adult_code());
+}
+
+/// The claim lands between the driver's read and the commit (another
+/// connection, mid-run): the driver judged the record plain, but the
+/// commit's own transaction gives the row the source's bit and marks it
+/// for the backfill, which then classifies it Adult. Nothing between the
+/// two steps can leave it un-adult with no retry.
+#[test]
+fn a_claim_landing_before_the_commit_is_marked_and_the_backfill_makes_it_adult() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fixture(
+        dir.path(),
+        "a.sqlite3",
+        &[named(1, "Garden.Tour.2022.1080p")],
+    );
+    let db = dir.path().join("lodestar.db");
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let source = store.register_source(magnetico::ADAPTER, "1", NOW).unwrap();
+    let (adult, mask) = adult_source(&mut store);
+    let engine = engine();
+    let stop = AtomicBool::new(false);
+    let mut a = adapter(&path);
+    let id = create(&mut store, &a);
+    let other = db.clone();
+    HOOK.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move |at, n| {
+            if (at, n) == (Fault::BeforeCommit, 1) {
+                let mut s = Store::open(&other, StoreConfig::default()).unwrap();
+                claim(&mut s, adult, 1);
+            }
+        }))
+    });
+    let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop)));
+    HOOK.with(|h| *h.borrow_mut() = None);
+    assert_eq!(r.unwrap().ended, Ended::Exhausted);
+
+    // Stored as the driver judged it, with the bit and the retry mark.
+    let (t, sources, class) = stored(&store, 1).expect("stored");
+    assert_ne!(class, adult_code());
+    assert!(mask.any(sources));
+    assert!(
+        store
+            .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+            .unwrap()
+            .contains(&t)
+    );
+
+    // The backfill (after a restart, say) finds the mark.
+    let filter = lodestar_filter::Handle::new(engine);
+    let ctx = lodestar_pipeline::enrich::Backfill {
+        filter: Some(&filter),
+        adult: mask,
+        ..Default::default()
+    };
+    while lodestar_pipeline::enrich::enrich_stored_with(&mut store, 0, 10, &ctx)
+        .unwrap()
+        .is_some()
+    {}
+    assert_eq!(stored(&store, 1).unwrap().2, adult_code());
+    assert!(
+        !store
+            .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+            .unwrap()
+            .contains(&t)
+    );
+}

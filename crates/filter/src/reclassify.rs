@@ -153,6 +153,65 @@ pub fn source_adult(own: Correction, sources: u64, adult: u64) -> Correction {
     }
 }
 
+/// What filtering makes of an item an always-adult source found, and the
+/// fix to store with it: `Some(true)` when detection didn't call it adult,
+/// else `None` (a Not adult rule never applies to it).
+///
+/// The engine's verdict with your classification rules
+/// ([`Engine::judge_classified`]), and, unless that already judged the
+/// adult reading, the adult reading too; the stricter of the two stands.
+/// The floor's hit comes back alone, as it does from the engine.
+pub fn judge_source_adult(
+    engine: &Engine,
+    item: &Item<'_>,
+    facts: &Facts<'_>,
+    now: i64,
+) -> (Verdict, Option<bool>) {
+    let (v, says) = engine.judge_classified(item, Some(facts), now);
+    let detected = facts.class.content_type == ContentType::Adult;
+    let fix = (!detected).then_some(true);
+    // The engine judged it as adult already: detection or an Is adult
+    // rule said so.
+    // (`item.content_type` is `facts.class`'s, so `detected` covers it.)
+    if detected || says == Some(true) {
+        return (v, fix);
+    }
+    // A floor hit is final, as the engine returns it.
+    if v.decision
+        .as_ref()
+        .is_some_and(|d| matches!(d.rule, RuleRef::Core(r) if r.floor()))
+    {
+        return (v, fix);
+    }
+    let adult_class = facts.class.as_adult();
+    let adult_facts = Facts {
+        class: &adult_class,
+        ..*facts
+    };
+    let adult_item = Item {
+        content_type: ContentType::Adult,
+        ..*item
+    };
+    let as_adult = engine.judge(&adult_item, Some(&adult_facts), now);
+    (stricter(v, as_adult), fix)
+}
+
+/// The heavier decision of two verdicts (a tie keeps `a`'s), and both
+/// verdicts' shadow decisions: the engine's own rule for two readings.
+pub fn stricter(a: Verdict, b: Verdict) -> Verdict {
+    let decision = match (a.decision, b.decision) {
+        (Some(x), Some(y)) => Some(if y.action > x.action { y } else { x }),
+        (x, y) => x.or(y),
+    };
+    let mut shadow = a.shadow;
+    for d in b.shadow {
+        if !shadow.contains(&d) {
+            shadow.push(d);
+        }
+    }
+    Verdict { decision, shadow }
+}
+
 /// What a classification rule's say changes: Is adult (`true`) or Not
 /// adult (`false`) where it differs from detection, else nothing.
 pub fn rule_fix(says: Option<bool>, class: &Classification) -> Option<bool> {
