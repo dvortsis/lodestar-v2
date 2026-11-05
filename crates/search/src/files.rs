@@ -25,7 +25,9 @@ use lodestar_metainfo::{File, FileAttrs, Text};
 use lodestar_store::FileTree;
 use tantivy::collector::{Collector, SegmentCollector};
 use tantivy::columnar::Column;
+use tantivy::index::InvertedIndexReader;
 use tantivy::index::SegmentId;
+use tantivy::postings::SegmentPostings;
 use tantivy::query::{
     AllQuery, BitSetDocSet, BooleanQuery, ConstScorer, EmptyQuery, EnableScoring, Explanation,
     FuzzyTermQuery, Occur, Query, RangeQuery, RegexQuery, Scorer, TermQuery, Weight,
@@ -37,7 +39,7 @@ use tantivy::schema::{
 use tantivy::store::{Compressor, ZstdCompressor};
 use tantivy::{
     BitSet, DocId, DocSet, IndexSettings, Score, Searcher, SegmentOrdinal, SegmentReader,
-    TantivyDocument, Term,
+    TERMINATED, TantivyDocument, Term,
 };
 
 use crate::compile::{ABSENT, folded_word, parts_query, regex_escape, units, word_query};
@@ -163,6 +165,7 @@ impl FileDoc {
             d.add_text(f.ext, e);
         }
         d.add_u64(f.size, self.size);
+        // Exactly one bucket a file: `SizeRange::bucketed` relies on it.
         d.add_u64(f.size_bucket, size_bucket(self.size));
         d.add_text(f.category, self.category.as_str());
         if let Some(root) = &self.pieces_root {
@@ -176,6 +179,10 @@ impl FileDoc {
 /// the one below it), so each spans at most half its lowest size and
 /// there are at most 128. Sizes below 2 share bucket 0 and 1. Monotonic:
 /// a larger size never has a smaller bucket.
+///
+/// Changing it needs a new field name (or a generation check in
+/// `SizeRange::bucketed`): that check finds files without a bucket, not
+/// files with one from an older definition (X-search-files-3).
 pub fn size_bucket(size: u64) -> u64 {
     if size < 2 {
         return size;
@@ -430,6 +437,7 @@ pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
             }
             Box::new(SizeRange {
                 field: f.size,
+                bucket: f.size_bucket,
                 range,
             })
         }
@@ -439,21 +447,234 @@ pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
     })
 }
 
-/// A `size:` range: Tantivy's fast-field range query, keeping its bounds
-/// so a scan in pieces can read each piece's documents straight from
-/// the column. Tantivy's range doc set searches from document 0 for its
-/// first match when it's made, before any seek, so each piece of a
-/// sparse range would read the segment's head again.
+/// A `size:` range. Where a segment's documents all carry a
+/// [`size_bucket`], it reads the postings of the buckets the range
+/// covers and checks the `size` column only in its (at most two) edge
+/// buckets, so it never reads every file's size (X-search-files-3).
+/// Elsewhere (an older index without the field, or a segment a backfill
+/// hasn't finished) it's Tantivy's fast-field range over the column.
+///
+/// It keeps its bounds so a scan in pieces can read each piece's
+/// documents straight from the postings or the column: Tantivy's range
+/// doc set searches from document 0 for its first match when it's made,
+/// before any seek, so each piece of a sparse range would read the
+/// segment's head again.
 #[derive(Debug, Clone)]
 pub(crate) struct SizeRange {
     field: Field,
+    /// `size_bucket`, or [`ABSENT`] on an index without it.
+    bucket: Field,
     range: std::ops::RangeInclusive<u64>,
+}
+
+/// The largest size in `bucket`.
+fn bucket_ceil(bucket: u64) -> u64 {
+    if bucket >= 127 {
+        u64::MAX
+    } else {
+        bucket_floor(bucket + 1) - 1
+    }
+}
+
+impl SizeRange {
+    /// The buckets the range touches, each with whether its files need
+    /// the column check (an edge bucket the range only partly covers).
+    /// Only the first and the last can be partial.
+    fn buckets(&self) -> impl Iterator<Item = (u64, bool)> + '_ {
+        let (lo, hi) = (*self.range.start(), *self.range.end());
+        (size_bucket(lo)..=size_bucket(hi))
+            .map(move |b| (b, bucket_floor(b) < lo || bucket_ceil(b) > hi))
+    }
+
+    /// Whether every document of `seg`, deleted ones included, has a
+    /// bucket, so the buckets answer for the whole segment. A document
+    /// has exactly one (`FileDoc::to_document`), so their postings'
+    /// lengths sum to `max_doc` exactly when none is missing; a document
+    /// a backfill hasn't reached, or one from before the field, makes it
+    /// short. This reads the segment itself, so it holds for the
+    /// snapshot being searched whatever the population record says.
+    fn bucketed(&self, seg: &SegmentReader) -> tantivy::Result<Option<Arc<InvertedIndexReader>>> {
+        if self.bucket == ABSENT
+            || seg
+                .schema()
+                .get_field_entry(self.bucket)
+                .field_type()
+                .get_index_record_option()
+                .is_none()
+        {
+            return Ok(None);
+        }
+        let inv = seg.inverted_index(self.bucket)?;
+        let mut stream = inv.terms().stream()?;
+        let mut docs = 0u64;
+        while stream.advance() {
+            docs += u64::from(stream.value().doc_freq);
+        }
+        Ok((docs == u64::from(seg.max_doc())).then_some(inv))
+    }
 }
 
 impl Query for SizeRange {
     fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
         let bound = |v: u64| Bound::Included(Term::from_field_u64(self.field, v));
-        RangeQuery::new(bound(*self.range.start()), bound(*self.range.end())).weight(scoring)
+        let column = RangeQuery::new(bound(*self.range.start()), bound(*self.range.end()))
+            .weight(scoring)?;
+        let buckets = match self.bucket {
+            ABSENT => None,
+            _ => {
+                let clauses: Vec<(Occur, Q)> = self
+                    .buckets()
+                    .map(|(b, edge)| {
+                        let term = Term::from_field_u64(self.bucket, b);
+                        let q: Q = if edge {
+                            Box::new(EdgeBucket {
+                                term,
+                                size: self.field,
+                                range: self.range.clone(),
+                            })
+                        } else {
+                            Box::new(TermQuery::new(term, IndexRecordOption::Basic))
+                        };
+                        (Occur::Should, q)
+                    })
+                    .collect();
+                Some(BooleanQuery::new(clauses).weight(scoring)?)
+            }
+        };
+        Ok(Box::new(SizeWeight {
+            range: self.clone(),
+            column,
+            buckets,
+        }))
+    }
+}
+
+/// [`SizeRange`] under a boolean: the union of its buckets' postings in
+/// a segment that has them all, else the column range.
+struct SizeWeight {
+    range: SizeRange,
+    column: Box<dyn Weight>,
+    buckets: Option<Box<dyn Weight>>,
+}
+
+impl SizeWeight {
+    fn pick(&self, seg: &SegmentReader) -> tantivy::Result<&dyn Weight> {
+        Ok(match &self.buckets {
+            Some(b) if self.range.bucketed(seg)?.is_some() => b.as_ref(),
+            _ => self.column.as_ref(),
+        })
+    }
+}
+
+impl Weight for SizeWeight {
+    fn scorer(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
+        self.pick(seg)?.scorer(seg, boost)
+    }
+
+    fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
+        self.pick(seg)?.explain(seg, doc)
+    }
+}
+
+/// One edge bucket of a [`SizeRange`]: its postings, less the files
+/// whose size is outside the range.
+#[derive(Debug, Clone)]
+struct EdgeBucket {
+    term: Term,
+    size: Field,
+    range: std::ops::RangeInclusive<u64>,
+}
+
+impl Query for EdgeBucket {
+    fn weight(&self, _: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
+        Ok(Box::new(self.clone()))
+    }
+}
+
+impl Weight for EdgeBucket {
+    fn scorer(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
+        let inv = seg.inverted_index(self.term.field())?;
+        let sizes = seg
+            .fast_fields()
+            .column_opt::<u64>(seg.schema().get_field_name(self.size))?;
+        let (Some(postings), Some(sizes)) = (
+            inv.read_postings(&self.term, IndexRecordOption::Basic)?,
+            sizes,
+        ) else {
+            return Ok(Box::new(tantivy::query::EmptyScorer));
+        };
+        let mut scorer = EdgeScorer {
+            postings,
+            sizes,
+            range: self.range.clone(),
+            boost,
+        };
+        scorer.settle();
+        Ok(Box::new(scorer))
+    }
+
+    fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
+        // The scorer starts on its first match: one past `doc` means
+        // `doc` doesn't match, and seeking back isn't allowed.
+        let mut s = self.scorer(seg, 1.0)?;
+        if s.doc() <= doc && s.seek(doc) == doc {
+            Ok(Explanation::new("size in an edge bucket", 1.0))
+        } else {
+            Err(tantivy::TantivyError::InvalidArgument(format!(
+                "document {doc} doesn't match"
+            )))
+        }
+    }
+}
+
+struct EdgeScorer {
+    postings: SegmentPostings,
+    sizes: Column<u64>,
+    range: std::ops::RangeInclusive<u64>,
+    boost: Score,
+}
+
+impl EdgeScorer {
+    /// Moves to the first document from here whose size is in range.
+    fn settle(&mut self) -> DocId {
+        loop {
+            let doc = self.postings.doc();
+            if doc == TERMINATED
+                || self
+                    .sizes
+                    .first(doc)
+                    .is_some_and(|s| self.range.contains(&s))
+            {
+                return doc;
+            }
+            self.postings.advance();
+        }
+    }
+}
+
+impl DocSet for EdgeScorer {
+    fn advance(&mut self) -> DocId {
+        self.postings.advance();
+        self.settle()
+    }
+
+    fn seek(&mut self, target: DocId) -> DocId {
+        self.postings.seek(target);
+        self.settle()
+    }
+
+    fn doc(&self) -> DocId {
+        self.postings.doc()
+    }
+
+    fn size_hint(&self) -> u32 {
+        self.postings.size_hint()
+    }
+}
+
+impl Scorer for EdgeScorer {
+    fn score(&mut self) -> Score {
+        self.boost
     }
 }
 
@@ -975,7 +1196,9 @@ impl Gather {
 enum Source<'a> {
     /// The clause's scorer, seeked to the piece's start.
     Weight(&'a dyn Weight),
-    /// A bare `size:` range, read from the column a block at a time.
+    /// A bare `size:` range, read from its buckets' postings, or from the
+    /// column a block at a time where the segment's buckets are
+    /// incomplete.
     Size(&'a SizeRange),
 }
 
@@ -1001,8 +1224,9 @@ fn scan_segment(
     let span = column.max_value().saturating_sub(column.min_value()) / 64 + 1;
     // `hint` is the scorer's estimate of matching files. Tantivy 0.27's
     // range doc set gives `num_docs / 10` (an upstream TODO), and a bare
-    // `size:` range uses the same, so the form chosen for those can be
-    // the costlier one; either is correct.
+    // `size:` range on the column fallback uses the same, so the form
+    // chosen for those can be the costlier one; either is correct. The
+    // bucket path passes its postings' lengths instead.
     let gather_for = |hint: u32| {
         if seg.max_doc() > 0 && u64::from(hint) >= span {
             Gather::Bits {
@@ -1058,21 +1282,44 @@ fn scan_segment(
             gather
         }
         Source::Size(range) => {
-            let mut gather = gather_for(seg.num_docs() / 10);
             // A segment without sizes matches none, as Tantivy's range does.
             let Some(sizes) = seg
                 .fast_fields()
                 .column_opt::<u64>(seg.schema().get_field_name(range.field))?
             else {
-                return Ok(gather);
+                return Ok(gather_for(0));
             };
+            if let Some(inv) = range.bucketed(seg)? {
+                let gather = scan_buckets(
+                    range,
+                    &inv,
+                    &sizes,
+                    (lo, hi),
+                    &stopped,
+                    gather_for,
+                    &mut add,
+                )?;
+                stopped()?;
+                return Ok(gather);
+            }
+            let mut gather = gather_for(seg.num_docs() / 10);
+            // The column's range search assumes bounds within its values
+            // (Tantivy's own range query clamps them first): unclamped, a
+            // range wholly below the segment's sizes, or a segment of one
+            // distinct size, gets documents outside it.
+            let (min, max) = (sizes.min_value(), sizes.max_value());
+            let (start, end) = (*range.range.start(), *range.range.end());
+            if end < min || start > max {
+                return Ok(gather);
+            }
+            let clamped = start.max(min)..=end.min(max);
             let mut docs = Vec::with_capacity(BLOCK);
             let mut at = lo;
             while at < hi {
                 stopped()?;
                 let end = at.saturating_add(crate::cancel::CHECK_EVERY).min(hi);
                 docs.clear();
-                sizes.get_docids_for_value_range(range.range.clone(), at..end, &mut docs);
+                sizes.get_docids_for_value_range(clamped.clone(), at..end, &mut docs);
                 add(&docs, &mut gather);
                 at = end;
             }
@@ -1080,6 +1327,73 @@ fn scan_segment(
         }
     };
     stopped()?;
+    Ok(gather)
+}
+
+/// A bare `size:` range over one piece of a segment whose documents all
+/// have a bucket: each bucket's postings from `lo`, the edge buckets'
+/// filtered by the column. Buckets are read one after another, so ids
+/// come in runs; the gather doesn't need them in order. Its form follows
+/// the buckets' postings lengths, which count the files matched (edge
+/// buckets' whole), rather than the range's guessed tenth.
+fn scan_buckets(
+    range: &SizeRange,
+    inv: &InvertedIndexReader,
+    sizes: &Column<u64>,
+    (lo, hi): (DocId, DocId),
+    stopped: &dyn Fn() -> tantivy::Result<()>,
+    gather_for: impl Fn(u32) -> Gather,
+    mut add: impl FnMut(&[DocId], &mut Gather),
+) -> tantivy::Result<Gather> {
+    const BLOCK: usize = tantivy::COLLECT_BLOCK_BUFFER_LEN;
+    const CHECK_BLOCKS: u32 = crate::cancel::CHECK_EVERY / 2 / BLOCK as u32;
+    let mut lists = Vec::new();
+    let mut expected = 0u32;
+    for (b, edge) in range.buckets() {
+        let term = Term::from_field_u64(range.bucket, b);
+        if let Some(info) = inv.get_term_info(&term)? {
+            expected = expected.saturating_add(info.doc_freq);
+            lists.push((info, edge));
+        }
+    }
+    let mut gather = gather_for(expected);
+    let mut docs = [0 as DocId; BLOCK];
+    let mut vals = [None; BLOCK];
+    let mut kept = Vec::with_capacity(BLOCK);
+    let mut blocks = 0u32;
+    for (info, edge) in lists {
+        let mut postings = inv.read_postings_from_terminfo(&info, IndexRecordOption::Basic)?;
+        if postings.doc() < lo {
+            postings.seek(lo);
+        }
+        loop {
+            if blocks.is_multiple_of(CHECK_BLOCKS) {
+                stopped()?;
+            }
+            blocks = blocks.wrapping_add(1);
+            let filled = postings.fill_buffer(&mut docs);
+            let n = docs[..filled].partition_point(|d| *d < hi);
+            if edge {
+                let vals = &mut vals[..n];
+                vals.fill(None);
+                sizes.first_vals(&docs[..n], vals);
+                kept.clear();
+                kept.extend(
+                    docs[..n]
+                        .iter()
+                        .zip(vals.iter())
+                        .filter(|(_, v)| v.is_some_and(|v| range.range.contains(&v)))
+                        .map(|(d, _)| *d),
+                );
+                add(&kept, &mut gather);
+            } else {
+                add(&docs[..n], &mut gather);
+            }
+            if n < filled || filled == 0 {
+                break;
+            }
+        }
+    }
     Ok(gather)
 }
 
@@ -1119,27 +1433,39 @@ impl IdsWeight {
     fn matches(&self, reader: &SegmentReader) -> tantivy::Result<BitSet> {
         let column = reader.fast_fields().u64("id")?;
         let mut set = BitSet::with_max_value(reader.max_doc());
-        match self.0.union() {
-            Some(ids) => {
-                let max = ids.max_value();
-                for doc in 0..reader.max_doc() {
-                    if column
-                        .first(doc)
-                        .is_some_and(|id| id < u64::from(max) && ids.contains(id as u32))
-                    {
-                        set.insert(doc);
-                    }
-                }
-            }
+        if self.0.is_empty() {
+            return Ok(set);
+        }
+        let union = self.0.union();
+        let hit = |id: u64| match union {
+            Some(ids) => id < u64::from(ids.max_value()) && ids.contains(id as u32),
             // Ids past 4 billion: slower, but still right.
-            None if !self.0.is_empty() => {
-                for doc in 0..reader.max_doc() {
-                    if column.first(doc).is_some_and(|id| self.0.contains(id)) {
-                        set.insert(doc);
+            None => self.0.contains(id),
+        };
+        // Every torrent has one id, so the column is normally full: read
+        // its values a block at a time rather than one lookup a document
+        // (at 10M, the per-document lookups were most of the join,
+        // X-search-files-3).
+        const JOIN_BLOCK: usize = 1024;
+        if matches!(column.index, tantivy::columnar::ColumnIndex::Full) {
+            let mut vals = [0u64; JOIN_BLOCK];
+            let mut at = 0u32;
+            while at < reader.max_doc() {
+                let n = (reader.max_doc() - at).min(JOIN_BLOCK as u32) as usize;
+                column.values.get_range(u64::from(at), &mut vals[..n]);
+                for (i, id) in vals[..n].iter().enumerate() {
+                    if hit(*id) {
+                        set.insert(at + i as u32);
                     }
                 }
+                at += n as u32;
             }
-            None => {}
+        } else {
+            for doc in 0..reader.max_doc() {
+                if column.first(doc).is_some_and(hit) {
+                    set.insert(doc);
+                }
+            }
         }
         Ok(set)
     }
@@ -1812,8 +2138,10 @@ mod scan_tests {
         writer.commit().unwrap();
         let searcher = index.reader().unwrap().searcher();
         let token = crate::CancelToken::new();
+        // No `size_bucket` here: the column path.
         let sized = |lo: u64, hi: u64| SizeRange {
             field: size,
+            bucket: ABSENT,
             range: lo..=hi,
         };
         let few: Q = Box::new(BooleanQuery::new(
@@ -1883,6 +2211,44 @@ mod scan_tests {
                 assert_eq!(cut, whole, "{key} in pieces of {piece_docs}");
             }
         }
+    }
+
+    /// The join reads the torrent index's id column a block at a time:
+    /// across block edges, with a partial last block, it marks exactly
+    /// the documents whose id is in the set.
+    #[test]
+    fn the_join_marks_each_document_whose_id_is_in_the_set() {
+        let mut builder = Schema::builder();
+        let id = builder.add_u64_field("id", FAST);
+        let index = tantivy::Index::create_in_ram(builder.build());
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        // 2,500 documents (two full blocks and a partial one), ids out of
+        // order, as a merged segment's runs are.
+        let ids: Vec<u64> = (0..2_500u64).map(|d| (d * 7_919) % 10_007).collect();
+        for i in &ids {
+            let mut doc = TantivyDocument::new();
+            doc.add_u64(id, *i);
+            writer.add_document(doc).unwrap();
+        }
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let seg = &searcher.segment_readers()[0];
+        let wanted: Vec<u64> = (0..10_007).filter(|i| i % 3 == 0).collect();
+        let set = IdSet {
+            parts: vec![Arc::new(IdPart::from_sorted(wanted))],
+            union: OnceLock::new(),
+        };
+        let weight = IdsWeight(Arc::new(set), crate::filter::SegmentSets::default());
+        let got = weight.matches(seg).unwrap();
+        for (doc, i) in ids.iter().enumerate() {
+            assert_eq!(got.contains(doc as u32), i % 3 == 0, "doc {doc} id {i}");
+        }
+        assert_eq!(got.len(), ids.iter().filter(|i| *i % 3 == 0).count());
+        // An empty set marks nothing.
+        let none = IdsWeight(Arc::default(), crate::filter::SegmentSets::default());
+        assert_eq!(none.matches(seg).unwrap().len(), 0);
     }
 
     /// One segment's scan fails while its siblings are mid-scan: the
@@ -1994,5 +2360,313 @@ mod scan_tests {
         fn score(&mut self) -> Score {
             1.0
         }
+    }
+}
+
+#[cfg(test)]
+mod bucket_props {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Sizes that sit on, just below and just above bucket floors, the
+    /// extremes, and anything else.
+    fn size() -> impl Strategy<Value = u64> {
+        prop_oneof![
+            (0u64..128, -2i64..=2).prop_map(|(b, d)| bucket_floor(b).saturating_add_signed(d)),
+            Just(0u64),
+            Just(u64::MAX),
+            0u64..10_000,
+            any::<u64>(),
+        ]
+    }
+
+    /// The file index's own schema, in RAM, a segment per entry of
+    /// `segments` (a torrent's file sizes each). In segments listed in
+    /// `unbucketed`, every other file is written without its bucket, as
+    /// a document a backfill hasn't reached.
+    fn index(segments: &[Vec<Vec<u64>>], unbucketed: &[usize]) -> (Searcher, FileFields) {
+        let (schema, f) = schema();
+        let mut index = ram(schema);
+        index.set_multithread_executor(2).unwrap();
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        let mut torrent = 0u64;
+        for (s, seg) in segments.iter().enumerate() {
+            for files in seg {
+                torrent += 1;
+                for (i, size) in files.iter().enumerate() {
+                    let doc = FileDoc {
+                        torrent,
+                        index: i as u64,
+                        name: "f.bin".into(),
+                        dirs: Vec::new(),
+                        ext: Some("bin".into()),
+                        size: *size,
+                        category: Category::Other,
+                        pieces_root: None,
+                    };
+                    let mut d = doc.to_document(&f);
+                    if unbucketed.contains(&s) && i % 2 == 0 {
+                        d = TantivyDocument::new();
+                        d.add_u64(f.torrent, torrent);
+                        d.add_u64(f.index, i as u64);
+                        d.add_u64(f.size, *size);
+                    }
+                    writer.add_document(d).unwrap();
+                }
+            }
+            writer.commit().unwrap();
+        }
+        // Torrent 2's files are deleted (still in the postings).
+        writer.delete_term(Term::from_field_u64(f.torrent, 2));
+        writer.commit().unwrap();
+        (index.reader().unwrap().searcher(), f)
+    }
+
+    fn ram(schema: Schema) -> tantivy::Index {
+        let index = tantivy::Index::create_in_ram(schema);
+        index
+            .tokenizers()
+            .register(NAME_TOKENIZER, tokenizer::NameTokenizer::default());
+        index
+    }
+
+    fn ids(searcher: &Searcher, q: &dyn Query, piece_docs: DocId) -> Vec<u64> {
+        let set = torrent_ids_in_pieces(
+            searcher,
+            q,
+            "q",
+            &FileSetCache::default(),
+            &crate::CancelToken::new(),
+            piece_docs,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        for p in &set.parts {
+            p.for_each(|id| out.push(id));
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Bucketed and scanned, bare and under a boolean, whole and in
+        /// pieces, a size range finds exactly the torrents a scan of
+        /// every size does, and a segment with files lacking a bucket
+        /// falls back to the scan.
+        #[test]
+        fn bucketed_and_scanned_results_agree(
+            segments in prop::collection::vec(
+                prop::collection::vec(prop::collection::vec(size(), 1..4), 1..40),
+                1..4,
+            ),
+            unbucketed in prop::collection::vec(0usize..4, 0..2),
+            lo in prop::option::of(size()),
+            hi in prop::option::of(size()),
+            piece_docs in prop_oneof![Just(PIECE_DOCS), 1u32..20],
+        ) {
+            let (searcher, f) = index(&segments, &unbucketed);
+            let r = lo.unwrap_or(0)..=hi.unwrap_or(u64::MAX);
+            let want: Vec<u64> = segments
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, files)| (i as u64 + 1, files))
+                .filter(|(id, files)| *id != 2 && files.iter().any(|s| r.contains(s)))
+                .map(|(id, _)| id)
+                .collect();
+            let node = Node::Range { field: NumField::Size, lo, hi };
+            let q = compile(&node, &f).unwrap();
+            let scan = SizeRange { field: f.size, bucket: ABSENT, range: r.clone() };
+            let nested = |q: Q| -> Q {
+                Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, q),
+                    (Occur::Must, Box::new(AllQuery) as Q),
+                ]))
+            };
+            prop_assert_eq!(&ids(&searcher, q.as_ref(), piece_docs), &want, "bucketed");
+            prop_assert_eq!(&ids(&searcher, &scan, piece_docs), &want, "scanned");
+            prop_assert_eq!(&ids(&searcher, nested(q.box_clone()).as_ref(), piece_docs), &want, "nested");
+            prop_assert_eq!(
+                &ids(&searcher, nested(Box::new(scan.clone())).as_ref(), piece_docs),
+                &want,
+                "nested scan"
+            );
+            // A file outside the range: the complement, per file.
+            let outside: Vec<u64> = segments
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, files)| (i as u64 + 1, files))
+                .filter(|(id, files)| *id != 2 && files.iter().any(|s| !r.contains(s)))
+                .map(|(id, _)| id)
+                .collect();
+            let not = compile(&Node::Not { of: Box::new(node) }, &f).unwrap();
+            prop_assert_eq!(&ids(&searcher, not.as_ref(), piece_docs), &outside, "negated");
+        }
+    }
+
+    /// Which buckets a range reads, and which of them it checks.
+    #[test]
+    fn only_edge_buckets_are_checked() {
+        let r = |lo: u64, hi: u64| SizeRange {
+            field: ABSENT,
+            bucket: ABSENT,
+            range: lo..=hi,
+        };
+        let got = |s: SizeRange| s.buckets().collect::<Vec<_>>();
+        // [4096, 8191] is buckets 24 and 25 whole.
+        assert_eq!(got(r(4096, 8191)), [(24, false), (25, false)]);
+        // One past each end: both edges partial, the middle whole.
+        assert_eq!(
+            got(r(4095, 8192)),
+            [(23, true), (24, false), (25, false), (26, true)]
+        );
+        // Inside one bucket.
+        assert_eq!(got(r(4097, 4098)), [(24, true)]);
+        // Open at the top: the last bucket ends at the largest size.
+        let top: Vec<_> = got(r(1 << 62, u64::MAX));
+        assert_eq!(top.first(), Some(&(124, false)));
+        assert_eq!(top.last(), Some(&(127, false)));
+        assert!(top.iter().all(|(_, edge)| !edge));
+        assert_eq!(got(r(0, 0)), [(0, false)]);
+        assert_eq!(got(r(0, u64::MAX)).len(), 128);
+        assert!(got(r(0, u64::MAX)).iter().all(|(_, e)| !e));
+    }
+
+    /// The bare path never reads the column for a bucket wholly inside:
+    /// a segment whose sizes column disagrees with its buckets shows
+    /// which was read.
+    #[test]
+    fn inner_buckets_come_from_postings() {
+        let (schema, f) = schema();
+        let index = ram(schema);
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        // Bucket 25 ([6144, 8191]) but a stored size of 1.
+        let mut d = TantivyDocument::new();
+        d.add_u64(f.torrent, 1);
+        d.add_u64(f.index, 0);
+        d.add_u64(f.size, 1);
+        d.add_u64(f.size_bucket, 25);
+        writer.add_document(d).unwrap();
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let bucketed = SizeRange {
+            field: f.size,
+            bucket: f.size_bucket,
+            range: 4096..=8191,
+        };
+        assert_eq!(ids(&searcher, &bucketed, PIECE_DOCS), [1]);
+        let scan = SizeRange {
+            bucket: ABSENT,
+            ..bucketed.clone()
+        };
+        assert!(ids(&searcher, &scan, PIECE_DOCS).is_empty());
+        // Under a boolean, the same: the nested weight reads the bucket.
+        let nested = |q: Q| -> Q {
+            Box::new(BooleanQuery::new(vec![
+                (Occur::Must, q),
+                (Occur::Must, Box::new(AllQuery) as Q),
+            ]))
+        };
+        assert_eq!(
+            ids(&searcher, nested(Box::new(bucketed)).as_ref(), PIECE_DOCS),
+            [1]
+        );
+        assert!(ids(&searcher, nested(Box::new(scan)).as_ref(), PIECE_DOCS).is_empty());
+    }
+
+    /// An edge bucket explains a file before its first match (no seek
+    /// back) and its match: 4,097 and 5,000 bytes share bucket 24, which
+    /// `4500..` only partly covers.
+    #[test]
+    fn an_edge_bucket_explains_without_seeking_back() {
+        let (searcher, f) = index(&[vec![vec![4097], vec![5000]]], &[]);
+        let seg = &searcher.segment_readers()[0];
+        let edge = EdgeBucket {
+            term: Term::from_field_u64(f.size_bucket, size_bucket(4500)),
+            size: f.size,
+            range: 4500..=8191,
+        };
+        assert!(Weight::explain(&edge, seg, 0).is_err());
+        assert!(Weight::explain(&edge, seg, 1).is_ok());
+    }
+
+    /// The column fallback clamps its bounds to the segment's values: a
+    /// range wholly below them, or a segment of one distinct size, used
+    /// to match files outside the range.
+    #[test]
+    fn the_column_fallback_matches_nothing_outside_the_segments_sizes() {
+        for (sizes, range) in [
+            (vec![5u64, 9], 0..=3u64),
+            (vec![u64::MAX], 0..=0),
+            (vec![7, 7, 7], 8..=100),
+            (vec![7, 7, 7], 0..=6),
+        ] {
+            let segments = vec![sizes.iter().map(|s| vec![*s]).collect::<Vec<_>>()];
+            // Every file without a bucket, so even the bucketed range scans.
+            let (searcher, f) = index(&segments, &[]);
+            let scan = SizeRange {
+                field: f.size,
+                bucket: ABSENT,
+                range: range.clone(),
+            };
+            assert!(
+                ids(&searcher, &scan, PIECE_DOCS).is_empty(),
+                "{sizes:?} {range:?}"
+            );
+        }
+    }
+
+    /// A bucket scan checks its stop at least every `CHECK_EVERY` files,
+    /// counted across buckets, and gives up when told.
+    #[test]
+    fn a_bucket_scan_stops_when_cancelled() {
+        let n = crate::cancel::CHECK_EVERY as usize * 3;
+        let sizes: Vec<Vec<u64>> = (0..n).map(|i| vec![4096 + (i as u64 % 4096)]).collect();
+        let (searcher, f) = index(&[sizes], &[]);
+        let seg = &searcher.segment_readers()[0];
+        let range = SizeRange {
+            field: f.size,
+            bucket: f.size_bucket,
+            range: 4000..=u64::MAX,
+        };
+        let inv = range
+            .bucketed(seg)
+            .unwrap()
+            .expect("every file has a bucket");
+        let sizes = seg.fast_fields().u64("size").unwrap();
+        let checks = std::cell::Cell::new(0u32);
+        let stopped = || {
+            checks.set(checks.get() + 1);
+            if checks.get() >= 2 {
+                Err(crate::cancel::interrupted())
+            } else {
+                Ok(())
+            }
+        };
+        let mut visited = 0usize;
+        let got = scan_buckets(
+            &range,
+            &inv,
+            &sizes,
+            (0, seg.max_doc()),
+            &stopped,
+            |_| Gather::List(Vec::new()),
+            |docs: &[DocId], _: &mut Gather| visited += docs.len(),
+        );
+        assert!(got.is_err());
+        assert_eq!(checks.get(), 2);
+        assert!(
+            visited > 0 && visited <= crate::cancel::CHECK_EVERY as usize,
+            "{visited}"
+        );
     }
 }
