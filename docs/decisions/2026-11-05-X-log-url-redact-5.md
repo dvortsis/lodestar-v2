@@ -1,4 +1,4 @@
-# X-log-url-redact-5 decisions (PR to be numbered)
+# X-log-url-redact-5 decisions (#492)
 
 A security fix in `crates/log/src/url.rs` (architecture §12.1, B12, B-log1).
 - **Who decided:** the runner made this slice from its review of #488 (X-log-url-redact-4), and set its rules: monotone through `only_more`, fuzz against `main`, a linear sweep and a security review.
