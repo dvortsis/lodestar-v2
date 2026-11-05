@@ -12,14 +12,29 @@ external:
     check: The release is tagged
 slices:
   - { id: B0, title: Split the API router, kind: core, model: opus, deps: [], owns: ["area/api/**"] }
-  - { id: SRC-0, title: Plugin contract v2, kind: core, model: opus, deps: [] }
+  - { id: SRC-0, title: Plugin contract v2, kind: core, model: opus, deps: [], owns: ["area/auth*.rs"] }
   - { id: SRC-4, title: Consent framework, kind: core, model: opus, deps: [SRC-0] }
   - { id: SRC-5, title: Per-plugin egress, kind: core, model: opus, deps: [SRC-0] }
   - { id: SRC-6, title: Torznab parser, kind: core, model: opus, deps: [], owns: ["area/api/torznab.rs"] }
-  - { id: SRC-7, title: Prowlarr plugin, kind: core, model: opus, deps: [SRC-4, SRC-5, SRC-6, "ext:owner-q2", "ext:owner-q15"] }
+  - { id: SRC-7, title: Prowlarr plugin, kind: core, model: opus, deps: [SRC-4, SRC-5, SRC-6, "ext:owner-q2", "ext:owner-q15"], owns: ["area/y/**"] }
   - { id: SRC-8, title: RSS parser, kind: core, model: opus, deps: [], owns: ["area/feeds/rss.rs"] }
   - { id: SRC-9, title: Internet Archive parser, kind: core, model: opus, deps: [SRC-6] }
-  - { id: SRC-12, title: BEP 48 scrape, kind: core, model: opus, deps: [] }
+  - { id: SRC-12, title: BEP 48 scrape, kind: core, model: opus, deps: [], owns: ["area/auth_session.rs"] }
   - { id: ZZ-new, title: A slice no placement rule covers, kind: helper, model: sonnet, deps: [] }
-  - { id: SRC-13, title: Torrent caches, kind: core, model: opus, deps: ["ext:undeclared"] }
+  - { id: SRC-13, title: Torrent caches, kind: core, model: opus, deps: ["ext:undeclared"], owns: ["area/w/**"] }
   - { id: SRC-AUTO, title: Needs the tagged release, kind: core, model: opus, deps: ["ext:v-tagged"] }
+  - { id: QQ-slotonly, title: Owns a dir, kind: helper, model: sonnet, deps: [], owns: ["area/s/**"] }
+  - { id: QQ-slotclash, title: Inside it, kind: helper, model: sonnet, deps: [], owns: ["area/s/x.rs"] }
+  - { id: QQ-pronly, title: Owns a dir, kind: helper, model: sonnet, deps: [], owns: ["area/p/**"] }
+  - { id: QQ-pclash, title: Inside it, kind: helper, model: sonnet, deps: [], owns: ["area/p/y.rs"] }
+  - { id: QQ-brace, title: Brace set, kind: helper, model: sonnet, deps: [], owns: ["area/notify/{discord,ntfy}.rs"] }
+  - { id: QQ-brace2, title: One of the set, kind: helper, model: sonnet, deps: [], owns: ["area/notify/ntfy.rs"] }
+  - { id: QQ-q, title: Question mark, kind: helper, model: sonnet, deps: [], owns: ["area/q?.rs"] }
+  - { id: QQ-q2, title: Matches it, kind: helper, model: sonnet, deps: [], owns: ["area/qa.rs"] }
+  - { id: QQ-br, title: Bracket dir, kind: helper, model: sonnet, deps: [], owns: ["area/[stage]/a.rs"] }
+  - { id: QQ-br2, title: Same bracket dir, kind: helper, model: sonnet, deps: [], owns: ["area/[stage]/b.rs"] }
+  - { id: QQ-star, title: Starts with a wildcard, kind: helper, model: sonnet, deps: [], owns: ["*.md"] }
+  - { id: QQ-md, title: A markdown file, kind: helper, model: sonnet, deps: [], owns: ["docs/readme.md"] }
+  - { id: QQ-noowns, title: Owns nothing, kind: helper, model: sonnet, deps: [] }
+  - { id: QQ-held, title: Held, kind: helper, model: sonnet, deps: [], owns: ["area/held/h.rs"] }
+  - { id: QQ-badowns, title: Owns is not a list, kind: helper, model: sonnet, deps: [], owns: "notalist" }

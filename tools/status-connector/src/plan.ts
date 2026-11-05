@@ -201,7 +201,7 @@ export function buildPlan(inp: Inputs) {
   // worker slots: the runner records who works on what in runner-state's state.json (`slots`), pushed on the wake where a session
   // starts, finishes, is archived or changes task, with no PR. GitHub supplies each slice's title, state and PR. The number of slots
   // is the owner's limit in runner/slices.yaml (limits.phase_total), not a second copy. Anything out of step is reported, not hidden.
-  const slots: any[] = [], idle: { label: string; value: string; note: string }[] = [];
+  const slots: any[] = [], idle: { label: string; value: string; note: string; ids: string }[] = [];
   const sl = inp.runnerState && inp.runnerState.slots ? inp.runnerState.slots : null;
   const text = (v: any): string => (typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : '').slice(0, 300);
   const MAX_SLOTS = 64;
@@ -251,15 +251,24 @@ export function buildPlan(inp: Inputs) {
     if (loose.length) warn('Open work in no slot', String(loose.length), 'Open pull requests for ' + loose.slice(0, 8).join(', ') + (loose.length > 8 ? ', …' : '') + ' are not in any slot in runner-state slots');
     // free slots while work is ready: a slot is free when fewer than `limit` sessions run, and a slice is ready when it has no unmet
     // dependency and its `owns` do not overlap a running slice's. Reported as an `idle` row, apart from the plan-file warnings.
+    // Not shown when the slot list itself cannot be trusted (malformed, undated or stale), because then "free" is a guess.
+    const untrusted = warnings.some((w) => ['Slots malformed', 'Slots list is stale', 'Slots date missing', 'Slots date invalid', 'Slot limit unknown'].includes(w.label));
+    const ownsOf = (x: any): string[] => (Array.isArray(x.owns) ? x.owns.map(String) : []);
+    for (const x of SL) if (x.owns !== undefined && !Array.isArray(x.owns)) warn('Bad owns', x.id, 'owns: in runner/slices.yaml must be a list of paths; it is not, so the dashboard treats ' + x.id + ' as owning nothing');
     const running = new Set<string>([...listed, ...Object.keys(openById)]);
-    const stem = (g: string) => { const i = g.indexOf('*'); return (i < 0 ? g : g.slice(0, i)).replace(/\/+$/, ''); };
-    const clash = (a: string[], b: string[]) => a.some((x) => b.some((y) => { const p = stem(x), q = stem(y); return p === q || p.startsWith(q + '/') || q.startsWith(p + '/') || !p || !q; }));
-    const busyOwns = SL.filter((x) => running.has(x.id)).flatMap((x) => (Array.isArray(x.owns) ? x.owns.map(String) : []));
+    // a path is cut at its first wildcard (* ? [ {): a cut pattern overlaps anything that shares its plain prefix, with no / boundary
+    // (auth*.rs vs auth_session.rs, {a,b}.rs vs a.rs), and two plain paths overlap when equal or one contains the other
+    const stem = (g: string) => { const i = g.search(/[*?[{]/); return i < 0 ? { t: g.replace(/\/+$/, ''), cut: false } : { t: g.slice(0, i), cut: true }; };
+    const clash = (a: string[], b: string[]) => a.some((x) => b.some((y) => {
+      const p = stem(x), q = stem(y);
+      return p.cut || q.cut ? p.t.startsWith(q.t) || q.t.startsWith(p.t) : p.t === q.t || p.t.startsWith(q.t + '/') || q.t.startsWith(p.t + '/');
+    }));
+    const busyOwns = SL.filter((x) => running.has(x.id)).flatMap(ownsOf);
     const busyCount = slots.filter((r) => r.status !== 'idle').length;
     const free = cap ? Math.max(0, cap - busyCount) : 0;
-    const fits = SL.filter((x) => state[x.id] === 'ready' && x.kind !== 'epic' && !running.has(x.id) && !clash(Array.isArray(x.owns) ? x.owns.map(String) : [], busyOwns))
+    const fits = SL.filter((x) => state[x.id] === 'ready' && x.kind !== 'epic' && !running.has(x.id) && !clash(ownsOf(x), busyOwns))
       .map((x) => ({ id: x.id, unlocks: nodes.find((n) => n.id === x.id)?.unlocks || 0 })).sort((a, b) => b.unlocks - a.unlocks || (a.id < b.id ? -1 : 1));
-    if (free > 0 && fits.length) idle.push({ label: 'Free slots, work ready', value: free + ' free, ' + fits.length + ' ready', note: 'Ready with no overlap with a running slice: ' + fits.slice(0, 6).map((f) => f.id + (f.unlocks ? ' (unlocks ' + f.unlocks + ')' : '')).join(', ') + (fits.length > 6 ? ', …' : '') });
+    if (!untrusted && free > 0 && fits.length) idle.push({ label: 'Free slots, work ready', value: free + ' free, ' + fits.length + ' ready', note: 'Ready with no overlap with a running slice: ' + fits.slice(0, 6).map((f) => f.id + (f.unlocks ? ' (unlocks ' + f.unlocks + ')' : '')).join(', ') + (fits.length > 6 ? ', …' : ''), ids: fits.slice(0, 64).map((f) => f.id).join(',') });
   } else if (inp.runnerState) warn('Slots not recorded', 'none', 'runner-state state.json has no slots key, so the dashboard cannot show what each slot is doing');
 
   if (inp.historyIncomplete) warn('Merge history incomplete', 'yes', 'GitHub did not answer for some older pages of closed pull requests, so some finished slices may show as not yet merged until it does');
@@ -271,7 +280,7 @@ export function buildPlan(inp: Inputs) {
     { key: 'built', label: 'Built at', value: inp.now.slice(0, 16).replace('T', ' ') + ' UTC', note: 'live, by the status connector' },
     ...warnings.map((w) => ({ key: 'warning', label: w.label, value: w.value, note: w.note })),
     ...notices.map((w) => ({ key: 'note', label: w.label, value: w.value, note: w.note })),
-    ...idle.map((w) => ({ key: 'idle', label: w.label, value: w.value, note: w.note })),
+    ...idle.map((w) => ({ key: 'idle', label: w.label, value: w.value, note: w.note, ids: w.ids })),
   ];
   return { nodes, road, edges, activity, recent, meta: metaRows, gates, owner, ext, notes, crawler, soak, slots };
 }

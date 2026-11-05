@@ -221,18 +221,35 @@ assert.ok(!(await toolR('plan_nodes', 'o/r10')).some((n) => n.kind === 'extra'),
 github.open = savedOpen; github.refs = savedRefs; github.closed = savedClosed;
 github.state = stateBefore;
 
-// free slots while work is ready: counted against the limit, and a slice that overlaps a running slice's `owns` is not offered
-github.open = [pr(40, 'B0: Running', 'slice/B0', '', false)];
-github.state = { updated_at: 'x', slots: { updated: new Date().toISOString(), items: [{ slot: 1, slice: 'B0', doing: 'Running.' }] } };
-const idleRow = async (repo) => (await metaOf(repo)).find((r) => r.key === 'idle');
-const fr = await idleRow('o/r11');
-assert.ok(fr && fr.value.startsWith('3 free, '), 'one running slice of four leaves three free while work is ready');
-assert.ok(fr.note.includes('SRC-8') && !fr.note.includes('SRC-6') && !/\bB0\b/.test(fr.note), 'a slice whose owns overlap a running slice is not offered, and nor is the running one');
-github.state = { updated_at: 'x', slots: { updated: new Date().toISOString(), items: [1, 2, 3, 4].map((n) => ({ slot: n, slice: ['B0', 'SRC-0', 'SRC-12', 'SRC-9'][n - 1], doing: 'busy' })) } };
-github.open = [];
-assert.equal(await idleRow('o/r12'), undefined, 'no alarm when every slot is busy');
-github.state = { updated_at: 'x', slots: { updated: new Date().toISOString(), items: [] } };
-assert.ok((await idleRow('o/r13')).value.startsWith('4 free'), 'an empty list is four free');
+// free slots while work is ready: counted against the limit, and a slice whose `owns` overlap a running one is not offered
+const ask = async (repo, slotSlices, prSlices = [], extra = {}) => {
+  github.open = prSlices.map((id, n) => pr(60 + n, id + ': Running', 'slice/' + id, '', false));
+  github.state = { updated_at: 'x', slots: { updated: extra.updated || new Date().toISOString(), items: extra.items || slotSlices.map((slice, n) => ({ slot: n + 1, slice, doing: 'busy' })) } };
+  const m = await metaOf(repo), idle = m.find((r) => r.key === 'idle');
+  return { idle, ids: idle ? idle.ids.split(',') : [], warn: m.filter((r) => r.key === 'warning').map((r) => r.label + ':' + r.value) };
+};
+// 1: one free slot (the boundary) with three running; overlaps by directory glob, mid-name star and brace set; a PR with no slot also blocks
+let a1 = await ask('o/r11', ['B0', 'SRC-0', 'QQ-brace'], ['QQ-pronly']);
+assert.ok(a1.idle && a1.idle.value.startsWith('1 free, '), 'one free slot is enough for the row');
+for (const id of ['SRC-6', 'SRC-12', 'QQ-brace2', 'QQ-pclash']) assert.ok(!a1.ids.includes(id), id + ' overlaps something running (directory glob, auth*.rs vs auth_session.rs, brace set, a PR in no slot)');
+for (const id of ['B0', 'SRC-0', 'QQ-brace', 'QQ-pronly']) assert.ok(!a1.ids.includes(id), id + ' is running, so it is not offered');
+for (const id of ['SRC-13', 'SRC-7', 'QQ-held', 'SRC-9']) assert.ok(!a1.ids.includes(id), id + ' is waiting, held or for the owner, so it is not ready');
+assert.ok(a1.ids.includes('SRC-8') && a1.ids.includes('QQ-md'), 'ready slices that overlap nothing are offered');
+// 2: a slot with no PR blocks, a slice that owns nothing is never blocked but is not offered while it runs; ? wildcard
+let a2 = await ask('o/r12', ['QQ-slotonly', 'QQ-noowns', 'QQ-q']);
+assert.ok(!a2.ids.includes('QQ-slotclash') && !a2.ids.includes('QQ-q2'), 'a slot with no PR and no branch still blocks its owns (directory and ?)');
+assert.ok(!a2.ids.includes('QQ-noowns') && !a2.ids.includes('QQ-slotonly') && !a2.ids.includes('QQ-q'), 'a running slice is not offered even when it owns nothing');
+// 3: bracket directories (SvelteKit routes) count as possible overlaps; a pattern that starts with a wildcard overlaps everything
+let a3 = await ask('o/r13', ['QQ-br', 'QQ-md']);
+assert.ok(!a3.ids.includes('QQ-br2') && !a3.ids.includes('QQ-star'), 'bracket directories and a leading wildcard are treated as possible overlaps');
+// 4: nothing running offers a slice that owns nothing, and an explicit idle item is a free slot
+let a4 = await ask('o/r14', [], [], { items: [{ slot: 1, status: 'idle', doing: 'kept but empty' }] });
+assert.ok(a4.idle.value.startsWith('4 free') && a4.ids.includes('QQ-noowns'), 'an idle item is free, and owns: [] is offered');
+assert.ok(a4.warn.includes('Bad owns:QQ-badowns'), 'owns that is not a list is reported');
+// 5: every slot busy gives no row; a list that cannot be trusted gives no row
+assert.equal((await ask('o/r15', ['B0', 'SRC-0', 'SRC-12', 'SRC-9'])).idle, undefined, 'no alarm when every slot is busy');
+assert.equal((await ask('o/r16', [], [], { updated: '2020-01-01T00:00:00Z' })).idle, undefined, 'a stale list says nothing about free slots');
+assert.equal((await ask('o/r17', [], [], { items: 'not a list' })).idle, undefined, 'a malformed list says nothing about free slots');
 github.open = savedOpen; github.state = stateBefore;
 github.fail = true; // a GitHub failure is reported to the caller, not hidden
 const failed = (await (await worker.fetch(new Request('https://x/mcp/' + SECRET + '', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'plan_meta' } }) }), { ...env, CACHE_SECONDS: '0' })).json()).result;
