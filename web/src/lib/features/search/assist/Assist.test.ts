@@ -26,8 +26,9 @@ const ITEMS = [
 	}
 ];
 
-function mount() {
+function mount(extra: { submitted?: () => boolean } = {}) {
 	render(Assist, {
+		...extra,
 		el,
 		text: () => el.textContent ?? '',
 		accept: (t: string, run: boolean) => accepted.push([t, run]),
@@ -69,6 +70,27 @@ afterEach(() => {
 });
 
 describe('Assist combobox', () => {
+	it('mounting after Enter searched the text asks for no suggestions and stays closed', async () => {
+		el.textContent = 'lantern';
+		el.focus();
+		mount({ submitted: () => true });
+		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS * 3);
+		expect(calls).toHaveLength(0);
+		expect(screen.queryByRole('listbox')).toBeNull();
+		expect(el.getAttribute('aria-expanded')).toBe('false');
+		// The next real edit starts suggesting again.
+		await type('lanterns');
+		expect(calls).toHaveLength(1);
+	});
+
+	it('mounting on typed, unsubmitted text still suggests', async () => {
+		el.textContent = 'lantern';
+		el.focus();
+		mount({ submitted: () => false });
+		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS);
+		expect(calls).toHaveLength(1);
+	});
+
 	it('debounces: one request for a burst of keys, with the caret in characters', async () => {
 		mount();
 		el.textContent = 'r';
