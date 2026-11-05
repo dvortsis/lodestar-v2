@@ -2856,6 +2856,27 @@
       "session": "session_01MMjhnAgrquL8it3PiuejSu",
       "launched": "2026-11-05T01:52Z",
       "brief": "briefs/X-log-url-redact-2.md"
+    },
+    "SRC-13": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhn9pMm9wcyjgH2hcRuB",
+      "launched": "2026-11-05T02:31Z",
+      "brief": "briefs/SRC-13.md"
+    },
+    "SRC-15a": {
+      "status": "building",
+      "model": "sonnet",
+      "session": "session_01MMjhn8e3ryLBCjNCBinA4u",
+      "launched": "2026-11-05T02:31Z",
+      "brief": "briefs/SRC-15a.md"
+    },
+    "SRC-17": {
+      "status": "building",
+      "model": "sonnet",
+      "session": "session_01MMjhnAGda52EmvBYwzgPKJ",
+      "launched": "2026-11-05T02:31Z",
+      "brief": "briefs/SRC-17.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3305,7 +3326,8 @@
     "2026-11-04T23:38Z: OWNER (runner chat): legal-notice session's three slices (LEGAL-1, RP-DEF, RP-UC) go into v0.5.1 via rc.4; Colorado counsel review is advisory only, not a gate. Legal branch renumbers to §2.38/§2.39.",
     "2026-11-05T01:12Z Owner (chat, ~01:15Z answer): rc.4 = memory fixes + release-branch Legal Notice (LEGAL-1r); RP-DEF and RP-UC (packs on by default, unauthorised-copy pack) move to v0.5.2; LEGAL-1 (main wizard step) after LEGAL-1r. Record as owner-decisions §2.40. Launched R-rc4-cut and LEGAL-1r.",
     "2026-11-05T01:17Z Owner (via dashboard, ~01:20Z): prioritise memory/performance and getting r5 started; keep other slots busy. Launched X-filter-budget-noise, X-search-files-4, RP-DEF on main. Sent the Unraid reset steps (destructive steps marked).",
-    "2026-11-05T01:25Z Owner (via dashboard): Appdata Backup stays disabled until all soaks are done (no re-enable step in r5 steps; runner says when). Temporary SSH key lodestar-soak-temp stays for read-only checks during r5; revoke only when owner says Unraid work is finished. Unraid Part 1 read-only check matched; owner running Part 2 (remove r4 containers, delete lodestar-r4, create empty lodestar-r5). r2/r3 containers, data dirs and rc.1/rc.2 images left alone."
+    "2026-11-05T01:25Z Owner (via dashboard): Appdata Backup stays disabled until all soaks are done (no re-enable step in r5 steps; runner says when). Temporary SSH key lodestar-soak-temp stays for read-only checks during r5; revoke only when owner says Unraid work is finished. Unraid Part 1 read-only check matched; owner running Part 2 (remove r4 containers, delete lodestar-r4, create empty lodestar-r5). r2/r3 containers, data dirs and rc.1/rc.2 images left alone.",
+    "2026-11-05T02:31Z Launched SRC-13, SRC-15a, SRC-17 (owner: keep slots busy). Held: RP-2 (owns load.rs and api/filters.rs, which RP-DEF has), RP-1b (packs/mod.rs; after RP-DEF), SRC-11b (may slip to v0.7), SRC-10e and SRC-10c-2 (low value). R-rc3-cut done; SRC-10b dropped: mark in dashboard state_override in the next runner PR."
   ],
   "owner_flags": [
     "2026-10-23 00:33 §2.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4978,7 +5000,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T01:52Z",
+    "updated": "2026-11-05T02:31Z",
     "items": [
       {
         "slot": 1,
@@ -5013,6 +5035,14 @@
         "since": "2026-11-05T01:12Z"
       },
       {
+        "slot": 5,
+        "slice": "SRC-13",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Sources: fetching a torrent file from a cache you choose, used only if its hash matches; never for private sources.",
+        "since": "2026-11-05T02:31Z"
+      },
+      {
         "slot": 6,
         "slice": "X-filter-budget-noise",
         "role": "build",
@@ -5035,6 +5065,22 @@
         "agent": "claude",
         "doing": "v0.5.2: rule packs on by default on new installs; existing installs keep their settings.",
         "since": "2026-11-05T01:17Z"
+      },
+      {
+        "slot": 9,
+        "slice": "SRC-15a",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Settings → Sources screen: rows, status, on/off, priority and a yield graph.",
+        "since": "2026-11-05T02:31Z"
+      },
+      {
+        "slot": 10,
+        "slice": "SRC-17",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Showing where each item was found, plus a Show unverified toggle and badge.",
+        "since": "2026-11-05T02:31Z"
       }
     ]
   },
