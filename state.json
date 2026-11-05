@@ -4661,8 +4661,8 @@
     "X-filter-perf-1105 follow-ups: re-derive REFERENCE_RATIO from 7763 runs on main; doc.rs tag hunk (~1.3% mixed instructions) after X-search-files-5 merges.",
     "owner-flag \u00a72.26/\u00a72.19 (RP-6 #487): size-limit \"Filters packs list (on demand)\" 1.6 -> 1.85 kB (measured 1.79); new entries panels 9 kB, impact 2.4 kB; Filters first view unchanged at 31.01 kB.",
     "owner-flag \u00a72.19 (X-fuzz-cache-1105 #491): fuzzing found a tracker judged by its url-crate reading (public host) but stored as raw text with a loopback address in it (http:1.1/announce^udp://127.0.0.1...). Fixed: the checked, normalised URL is stored; non-canonical trackers are now stored in canonical form. Tightens SRC-13.",
-    "Candidate slice X-claim-trackers (after #480, owns crates/store unverified.rs / pipeline tracker_url): claim trackers from feeds and plugins are stored and put into magnet links without canonicalisation or a public-host check; a loopback or LAN tracker could make the user's own client dial their LAN. Pending #491 reviewer confirmation.",
-    "Owner flags sent to the dashboard session 12:30Z: RP-1b MW-2@2 residual risk; RP-6 size raise; #491 canonical tracker storage."
+    "Owner flags sent to the dashboard session 12:30Z: RP-1b MW-2@2 residual risk; RP-6 size raise; #491 canonical tracker storage.",
+    "X-claim-trackers (after #480; runner-approved tightening of SRC-13): one shared tracker host guard in pipeline store_claims (unverified.rs) and torrent_cache public_tracker: parse with url, store the serialised form, refuse literal private/loopback/link-local (incl. udp re-judgement) and localhost/*.localhost. Latent today: no magnet link or API emits claimed trackers (#491 review). Also correct docs/decisions/2026-11-05-X-fuzz-cache-1105.md: claim trackers are stored only, not shown in magnet links; url 2.5.8 leaves ^ unencoded."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
