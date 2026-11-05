@@ -1,5 +1,5 @@
 # ENR-7: Detail API, the adult-enrichment section only when Show adult content is on, and the rate limit on drawer-opened lookups
-**Model:** Opus (content-safety core). `/security-review` and a fresh Opus reviewer follow. Runner brief, 2026-11-05T15:45Z. Ships in v0.5.2 or later (the runtime stays unwired until ENR-4/ENR-5).
+**Model:** Opus (content-safety core). `/security-review` and a fresh Opus reviewer follow. Runner brief, 2026-11-05T15:25Z. Ships in v0.5.2 or later (the runtime stays unwired until ENR-4/ENR-5).
 
 ## Why
 ENR-1 (#480) built the adult-enrichment runtime; ENR-1b (#497, in review) closes its gate and race. ENR-7 is the API side: the drawer shows a match only when the viewer's "Show adult content" is on, and opening a drawer feeds `Interest::opened` without letting a script keep a third-party service busy. It's on the ENR-G path (ENR-7 → ENR-8 → ENR-G).
