@@ -664,8 +664,9 @@ fn a_case_disturbed_mid_run_has_a_wide_spread() {
 #[test]
 fn a_few_slowed_passes_leave_the_time_alone_and_show_as_jitter() {
     // #429's job 126950288443 (an EPYC 9V74): three passes near 60 µs and
-    // two a little slow. The median read 37.9 µs, the fourth pass, and the
-    // gate failed at 50.8 µs; the clean passes are 36.4-37.2 µs.
+    // two a little slow (37.2 and 37.9). The median read 37.9 µs, the
+    // fourth pass, and the gate failed at 50.8 µs. The third-fastest is
+    // 37.2 µs, 2% over the fastest: slowed passes can only raise it.
     let t = timing(vec![37.2, 36.4, 59.8, 37.9, 63.9, 60.9, 36.4]);
     assert_eq!(t.at, 37.2);
     assert!(t.spread < 0.03, "{t:?}");
@@ -812,7 +813,8 @@ fn an_unlisted_model_scales_by_the_calibration() {
 
 #[test]
 fn a_listed_model_scales_by_its_calibration_and_skew() {
-    // #210's job 124095631213: calibration 9.86 µs, mixed 43.4 µs.
+    // #210's job 124095631213, as fixed inputs: calibration 9.86 µs, mixed
+    // 43.4 µs (its median pass, as the gate read it then).
     // 9.86 ÷ 10.59 × 1.097 = 1.021381.
     let s = scaling("INTEL(R) XEON(R) PLATINUM 8573C", 9.86, 43.4);
     assert!((s.speed - 1.021381).abs() < 1e-6, "{}", s.speed);
@@ -888,12 +890,14 @@ fn a_provisional_skew_still_scales_and_warns() {
 /// the test; a held case whose third-fastest pass is more than 15% over
 /// its fastest ([`Timing`]) is caught the same way, and either measures
 /// again. Where it scales, it never runs beside filter state, so a
-/// regression can't slow it and hide itself, and noise only adds time, so
-/// its fastest pass can only make the gate stricter. Each case decides on
-/// its third-fastest pass of seven, which noise can't make faster either
-/// (`docs/decisions/2026-11-05-X-filter-budget-noise.md`). An attempt over
-/// budget while a held case had a pass more than 15% over its fastest
-/// measures again; a steady one fails. Raw passes, the divisor and where
+/// regression can't slow it and hide itself. Noise that slows the
+/// calibration makes a scaled runner read faster than it is, so it takes
+/// the fastest of 14 passes, and the 15% drift bound limits what noise on
+/// one side can hide. Each case decides on its third-fastest pass of
+/// seven, which noise can't make faster
+/// (`docs/decisions/2026-11-05-X-filter-budget-noise.md`). An attempt
+/// where every held case over budget had a pass more than 15% over its own
+/// fastest measures again; one with a steady case over budget fails. Raw passes, the divisor and where
 /// it came from are printed too.
 ///
 /// This is a budget gate, not a regression gate: a slowdown that keeps a
@@ -1005,10 +1009,11 @@ fn budget() {
     // during one case, which that case's spread catches. Such a run
     // measures again rather than failing, up to three times; only a
     // trusted attempt decides, and only drift on every attempt fails. A
-    // trusted attempt over budget whose held cases show the host was busy
-    // (a pass more than DRIFT over the fastest) measures again too: noise
-    // only adds time, so a later attempt can only pass if the engine is
-    // under budget. A steady attempt over budget fails at once.
+    // trusted attempt whose every held case over budget shows the host
+    // was busy (a pass more than DRIFT over its fastest) measures again
+    // too: noise only adds time to a case, so a later attempt passes only
+    // if the engine reads under budget. A steady case over budget fails
+    // at once.
     let mut drifted = Vec::new();
     for attempt in 1..=ATTEMPTS {
         println!("attempt {attempt} of {ATTEMPTS}");
@@ -1137,17 +1142,11 @@ fn budget() {
         for note in notes {
             println!("{note}");
         }
-        let busy: Vec<_> = cases
-            .iter()
-            .filter(|(_, t, held)| *held && t.jitter > DRIFT)
-            .map(|(what, t, _)| {
-                format!(
-                    "{what}: slowest pass {:.0}% over the fastest",
-                    t.jitter * 100.0
-                )
-            })
-            .collect();
         let mut over = Vec::new();
+        // Whether every held case over budget had a pass more than DRIFT
+        // over its own fastest: noise in another case doesn't count, so a
+        // steady case over budget always fails at once.
+        let mut all_busy = true;
         for (what, t, held) in cases {
             let raw = t.at;
             let per = raw / speed;
@@ -1157,17 +1156,22 @@ fn budget() {
             );
             if per >= BUDGET_US {
                 if held {
-                    over.push(format!("{what}: {per:.1} µs ({raw:.1} µs here)"));
+                    all_busy &= t.jitter > DRIFT;
+                    over.push(format!(
+                        "{what}: {per:.1} µs ({raw:.1} µs here, slowest pass {:.0}% over the \
+                         fastest)",
+                        t.jitter * 100.0
+                    ));
                 } else {
                     println!("{what}: over {BUDGET_US} µs (reported, not held)");
                 }
             }
         }
-        if !over.is_empty() && !busy.is_empty() && attempt < ATTEMPTS {
-            let note = format!("attempt {attempt}: over budget while busy: {over:?}, {busy:?}");
+        if !over.is_empty() && all_busy && attempt < ATTEMPTS {
+            let note = format!("attempt {attempt}: over budget while busy: {over:?}");
             println!(
-                "{note}: the host was busy during a held case, so measuring again (only an \
-                 attempt under budget passes)"
+                "{note}: the host was busy during each case over budget, so measuring again \
+                 (only an attempt under budget passes)"
             );
             drifted.push(note);
             continue;
@@ -1180,9 +1184,9 @@ fn budget() {
         return;
     }
     panic!(
-        "the runner's speed changed under the test on all {ATTEMPTS} attempts, or the \
-         engine's time varies between passes, so the measurement can't be trusted: \
-         {drifted:?}"
+        "no attempt of {ATTEMPTS} could decide: the runner's speed changed under the test, \
+         the engine's time varied between passes, or the host was busy during a case over \
+         budget, so the measurement can't be trusted: {drifted:?}"
     );
 }
 

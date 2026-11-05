@@ -24,7 +24,7 @@ Both are in `crates/filter/tests/props.rs`, as separate commits. This supersedes
 - **A second failure isn't noise: the scaling constants are stale.** Run 41908317816, job 126848927600, EPYC 9V45 (slice/ENR-6), failed the neutralized case at 50.2 µs.
   - **Its passes were steady:** 25.0–26.2 µs.
   - **The cause:** 7763 hosts calibrate in two bands, about 10.45–10.6 µs and 10.97–11.14 µs, at the same engine time:
-    - the mixed set ran 42.3–44.6 µs raw in both bands;
+    - the mixed set ran 42.3–44.6 µs raw in both bands (the 46.0 µs in the table below is one host outside both, calibrating at 11.92 µs, on 2026-10-31);
     - `CALIB_TYPICAL_NS` (11.09 µs) was the median of 29 jobs on 2026-10-29..30, mostly in the slower band;
     - by 2026-11-04 all 14 7763 jobs were in the faster band (10.46–10.69 µs).
   - **What it did:** the 7763 reads raw, so its own results didn't move, but listed models' hosts read slower than they ran. Their calibrations sped up the same way while their engine times didn't, and every listed model read about 2–10% above the 7763 at the same code.
@@ -53,13 +53,13 @@ Both are in `crates/filter/tests/props.rs`, as separate commits. This supersedes
   - **The rule:** a held case whose third-fastest pass is more than `DRIFT` (15%) above its fastest is a disturbed attempt, measured again.
   - **When it fires:** now only when five or more passes slowed. X-filter-budget-8573C's job 124112699853 still trips it, at 15.6%.
 - **New: an attempt over budget while busy measures again.**
-  - **The rule:** if a held case is over budget and any held case had a pass more than `DRIFT` over its fastest (`jitter`), the host was busy during the attempt. The gate measures again, within the same three attempts.
+  - **The rule:** if every held case over budget had a pass more than `DRIFT` over its own fastest (`jitter`), the host was busy during those cases. The gate measures again, within the same three attempts. Noise in some other case doesn't count: a steady case over budget fails the attempt at once.
   - **What still fails:**
-    - a steady attempt over budget, at once, as before;
+    - any steady held case over budget, at once, as before;
     - the last attempt over budget, busy or not;
     - drift on every attempt.
-  - **Why it can't pass a slow engine:** only an attempt under budget passes, and noise only adds time. A slower engine fails every attempt.
-- **Replayed on the 72 jobs, under change 2's constants:** every held case is under 50 µs. #429's job reads 47.2 µs (third-fastest 37.2 µs ÷ 9.06 ÷ 10.59 × 0.922 = 0.789). The 9V45 job reads 45.4 µs (25.6 µs ÷ 0.564).
+  - **Why it can't pass a slow engine:** only an attempt under budget passes, and noise only adds time to a case. A slower engine slows every pass, so its case is steady and fails at once. The calibration is the one place noise loosens: a slowed calibration makes a scaled model read faster. The gate takes the fastest of its 14 passes per attempt, and the 15% drift check bounds what noise on one side can hide. Each extra attempt draws a new calibration under the same rule. That was true before this slice, and the 7763 reads raw, so it has no calibration in its verdict.
+- **Replayed on the 72 jobs, under change 2's constants (in-sample: the same jobs derive the constants):** every held case is under 50 µs. #429's job reads 47.2 µs (its third-fastest pass, 37.2 µs, ÷ the divisor 9.06 ÷ 10.59 × 0.922 = 0.789). The 9V45 job reads 45.4 µs (25.6 µs ÷ 0.564).
 
 ## Change 2: re-derived constants
 **The method:** the formula from `2026-10-30-X-filter-budget-8573C.md`, over all 72 jobs, on the third-fastest pass the gate now uses.
@@ -80,7 +80,18 @@ Both are in `crates/filter/tests/props.rs`, as separate commits. This supersedes
 
 Each `ENGINE_SPEED` entry and `REFERENCE` lists its run IDs, dates and the first and last job's head.
 
-- **Replayed on the same jobs** (reference µs, third-fastest pass). Every listed model now reads within about 1–2 µs of the 7763's raw time:
+- **Replayed on the same jobs** (reference µs, third-fastest pass). This is in-sample. Three jobs ran after the window closed (2026-11-05T01:05Z), and they are the only independent check so far:
+
+  | Job | CPU | R | Old gate, mixed / neutralized | New gate |
+  |---|---|---|---|---|
+  | 126986469384 | 7763 | 4.01 | 42.0 / 42.7 | 41.8 / 42.6 |
+  | 126991634314 | 7763 | 4.04 | 42.4 / 42.5 | 42.4 / 42.4 |
+  | 126993334096 | 9V45 | 3.27 | 40.6 / 42.3 | 36.7 / 38.1 |
+
+  - **The 9V45 job reads 13% below the 7763.** Its R (3.27) is far below the 9V45's in-sample 3.71–3.90, so its engine ran fast for its calibration. That is a 9V45 host spread of about ±9%, which no single skew can follow. It is under `MODEL_DRIFT`, so it doesn't warn.
+  - **What that costs:** on such a host, a regression up to about 13% would read no higher than the 7763 does today. Under the old constants the same job read 3% low, but the old constants failed steady 9V45 hosts like job 126848927600.
+  - **Why it's still the better trade:** the skew is the documented median, and a median skew reads half a model's hosts low and half high by construction. The 7763 reads raw and decides most jobs, so a regression on it fails whatever the 9V45 reads.
+  - **Next step (runner):** check the first ten or so 9V45 jobs after merge, and re-derive in its own PR if their R settles away from 3.79. Every listed model now reads within about 1–2 µs of the 7763's raw time:
 
   | CPU (jobs) | Mixed | Neutralized |
   |---|---|---|
@@ -94,9 +105,9 @@ Each `ENGINE_SPEED` entry and `REFERENCE` lists its run IDs, dates and the first
   - The 7763 reads raw before and after, so the reference's verdict doesn't change.
   - **What the change does:** listed models get about 2–9% looser, back toward the 7763's raw reading at the same code. The 8573C and 9V74 move 1–3%.
   - **Unlisted models** get 2.4% looser through `CALIB_REF_NS`.
-- **Not listed: the Xeon 6973P-C,** which has one job (run 41212909255). It is still scaled by the calibration alone. Its R gives a skew of 1.18, so it reads high: mixed 49.7 µs under the new constants, 51.1 µs under the old ones.
-  - **Next step (runner):** a later re-derivation should list it once it has a few jobs.
-- **No warning for a 7763 calibration off `CALIB_TYPICAL_NS`.** I considered warning when a 7763 job's calibration is more than 5% off. The two bands are about 5% apart, so it would fire on whichever band is the minority. It stays out.
+- **Not listed: the Xeon 6973P-C,** which has one job (run 41212909255). It is still scaled by the calibration alone. Its R gives a skew of 1.18, so it reads high: mixed 49.7 µs under the new constants, 51.1 µs under the old ones. That is 0.6% from failing on a hosted model, and it is the next flake this gate is likely to hand an unrelated PR.
+  - **Next step (runner's queue):** list it, provisional, once it has a few jobs. Until then a 6973P-C failure close to 50 µs is this gap, not the PR's code.
+- **Considered and declined: a warning when a 7763 job's calibration is more than 5% off `CALIB_TYPICAL_NS`.** The two bands are about 5% apart, so it would fire on whichever band is the minority.
   - **What tells instead:** every job prints its `calibration:` line and its mixed ÷ calibration.
   - **What the bands mean:** they are a weakness of a std-only calibration as a speed probe on the 7763, which this slice doesn't change. If the fleet swings back to the 11.0 band for good, listed models read about 4% low until the next re-derivation.
 
