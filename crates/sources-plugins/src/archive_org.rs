@@ -26,7 +26,9 @@
 //! (the pipeline already drops keys it has). A first run, or an
 //! unreadable cursor, starts [`FIRST_WINDOW`] back: the plugin follows
 //! what is new and never backfills the Archive. A full page is followed at
-//! once by the next, at most [`MAX_PAGES`] a poll.
+//! once by the next, at most [`MAX_PAGES`] a poll. A poll that ends on the
+//! page cap saves a resume point ([`RESUME_KEY`]) so the next carries on
+//! past its rows instead of re-reading them.
 //!
 //! **Pace.** One poll an hour ([`POLICY`]); the follow-up pages of one
 //! poll go through `Client::send`, so the per-host rate (one request a
@@ -58,6 +60,13 @@ pub const STRATEGY_SEARCH: u8 = 1;
 pub const HOST: &str = "archive.org";
 /// The plugin-state key holding the cursor (decimal Unix seconds).
 pub const CURSOR_KEY: &str = "since";
+/// The plugin-state key holding the resume point (decimal Unix seconds):
+/// set when a poll reads [`MAX_PAGES`] full pages and so may have left rows
+/// behind. The next poll starts there, inclusive and without the lookback,
+/// until one ends on a short page. Without it, a window of 10,000 or more
+/// rows (a bulk ingest) would be read from its start at every poll and the
+/// cursor would never get past it.
+pub const RESUME_KEY: &str = "resume";
 /// Rows asked for per page. Under the parser's item cap.
 pub const ROWS: u32 = 500;
 /// Pages followed in one poll: at most 10,000 items.
@@ -203,15 +212,23 @@ enum Poll {
 }
 
 async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn() -> i64) -> Poll {
-    let saved = load_cursor(state, now()).await;
-    // The query starts a lookback before the cursor (see `LOOKBACK`), or a
-    // day back on a first run, and stays put while its pages are read.
-    let from = match saved {
-        Some(c) => (c - LOOKBACK).max(MIN_PUBLISHED),
-        None => (now() - FIRST_WINDOW).max(MIN_PUBLISHED),
+    let saved = load_time(state, CURSOR_KEY, now()).await;
+    let resume = load_time(state, RESUME_KEY, now()).await;
+    // The query starts at the resume point if the last poll ran out of
+    // pages (see `RESUME_KEY`); else a lookback before the cursor (see
+    // `LOOKBACK`); else, on a first run, a day back. It stays put while
+    // its pages are read.
+    let from = match (resume, saved) {
+        (Some(r), _) => r,
+        (None, Some(c)) => (c - LOOKBACK).max(MIN_PUBLISHED),
+        (None, None) => (now() - FIRST_WINDOW).max(MIN_PUBLISHED),
     };
     let mut cursor = saved.unwrap_or(0);
+    // The newest date this poll read: rows come oldest first, so it is the
+    // last row's.
+    let mut tail: Option<i64> = None;
     let mut seen = HashSet::new();
+    let mut ran_out = false;
     for page in 1..=MAX_PAGES {
         let req = Request::get(search_url(from, page)).header("Accept", "application/json");
         let sent = if page == 1 {
@@ -225,8 +242,12 @@ async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn
         };
         let (at, mut found, mut newest) = (now(), Vec::new(), cursor);
         let info = archive_org::parse_each(&body, &PAGE_LIMITS, |item| {
+            // A date up to a day ahead is believed, but never moves the
+            // cursor past the page's own time.
             if let Some(t) = item.published.filter(|t| plausible(*t, at)) {
+                let t = t.min(at);
                 newest = newest.max(t);
+                tail = Some(tail.map_or(t, |x| x.max(t)));
             }
             // A repeated item is one find.
             if let Some(f) = to_found(item, at)
@@ -244,11 +265,24 @@ async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn
         // worst, and never skips one.
         if newest > cursor {
             cursor = newest;
-            save_cursor(state, cursor).await;
+            save_time(state, CURSOR_KEY, cursor).await;
         }
         if info.summary.kept + info.summary.skipped.total() < ROWS {
             break;
         }
+        ran_out = page == MAX_PAGES;
+    }
+    if ran_out {
+        // Every page was full and more may follow. The cursor minus the
+        // lookback could lie before this poll's rows again, so the next
+        // poll carries on from the last row instead. It moves at least a
+        // second, so it can't repeat a poll that read only one second.
+        if let Some(t) = tail {
+            save_time(state, RESUME_KEY, t.max(from + 1)).await;
+        }
+    } else if resume.is_some() {
+        // Caught up: back to the cursor and its lookback.
+        let _ = state.remove(RESUME_KEY).await;
     }
     Poll::Done
 }
@@ -263,10 +297,10 @@ fn plausible(t: i64, now: i64) -> bool {
     (MIN_PUBLISHED..=now.saturating_add(MAX_FUTURE)).contains(&t)
 }
 
-/// The saved cursor, or `None` when there is none or it is unreadable or
-/// implausible.
-async fn load_cursor(state: &dyn PluginState, now: i64) -> Option<i64> {
-    match state.get(CURSOR_KEY).await {
+/// A saved time under `key`, or `None` when there is none or it is
+/// unreadable or implausible.
+async fn load_time(state: &dyn PluginState, key: &str, now: i64) -> Option<i64> {
+    match state.get(key).await {
         Ok(Some(v)) => parse_cursor(&v, now),
         _ => None,
     }
@@ -281,9 +315,9 @@ fn parse_cursor(v: &[u8], now: i64) -> Option<i64> {
     plausible(t, now).then_some(t)
 }
 
-async fn save_cursor(state: &dyn PluginState, since: i64) {
-    // A failed save only means the next poll repeats a page.
-    let _ = state.set(CURSOR_KEY, since.to_string().into_bytes()).await;
+async fn save_time(state: &dyn PluginState, key: &str, t: i64) {
+    // A failed save only means the next poll repeats a window.
+    let _ = state.set(key, t.to_string().into_bytes()).await;
 }
 
 /// The search request for items published from `since` (Unix seconds, inclusive), page `page` (from 1):

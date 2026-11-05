@@ -23,8 +23,8 @@ use lodestar_sources::{
 };
 use lodestar_sources_feeds::archive_org::{File, Hashes, Item};
 use lodestar_sources_plugins::archive_org::{
-    self, ArchiveOrg, CURSOR_KEY, FIRST_WINDOW, LOOKBACK, MAX_PAGES, MAX_SIZE, ROWS, content_type,
-    search_url, to_found,
+    self, ArchiveOrg, CURSOR_KEY, FIRST_WINDOW, LOOKBACK, MAX_PAGES, MAX_SIZE, RESUME_KEY, ROWS,
+    content_type, search_url, to_found,
 };
 use lodestar_store::SourceId;
 use proptest::prelude::*;
@@ -60,12 +60,16 @@ fn id(scheme: &str, value: &str) -> ExternalId {
 /// replayer has seen `requests` requests and the plugin has sent `finds`
 /// discoveries. Returns the finds, the replayer and the cursor left in
 /// the plugin's state.
-async fn replay_with(
+async fn replay_state(
     dir: &Path,
     seed: Option<&[u8]>,
     requests: usize,
     finds: usize,
-) -> (Vec<Discovery>, Arc<Replayer>, Option<Vec<u8>>) {
+) -> (
+    Vec<Discovery>,
+    Arc<Replayer>,
+    Arc<lodestar_sources::MemoryState>,
+) {
     let p = Arc::new(ArchiveOrg::with_clock(clock));
     let replayer = Arc::new(Replayer::load(dir).unwrap());
     let mut ctx = FakeCtx::with_fetch(&*p, SourceId::new(7).unwrap(), replayer.clone());
@@ -93,6 +97,16 @@ async fn replay_with(
     assert_eq!(got.len(), finds, "{got:#?}");
     assert_eq!(replayer.requests().len(), requests);
     replayer.finish().unwrap();
+    (got, replayer, state)
+}
+
+async fn replay_with(
+    dir: &Path,
+    seed: Option<&[u8]>,
+    requests: usize,
+    finds: usize,
+) -> (Vec<Discovery>, Arc<Replayer>, Option<Vec<u8>>) {
+    let (got, replayer, state) = replay_state(dir, seed, requests, finds).await;
     let cursor = state.get(CURSOR_KEY).await.unwrap();
     (got, replayer, cursor)
 }
@@ -596,30 +610,55 @@ async fn a_full_page_of_skipped_items_does_not_stall_the_poll() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_poll_reads_at_most_max_pages_pages() {
+async fn a_poll_reads_at_most_max_pages_pages_and_the_next_carries_on() {
+    // A window of exactly MAX_PAGES full pages. The first poll reads them
+    // all and saves a resume point; the second starts there (not at the
+    // cursor minus the lookback, which lies before these rows) and finds
+    // the rest, which clears it.
     let dir = scratch("max_pages");
     let n = ROWS as usize;
     let start = 1_793_664_000;
+    let from = NOW - FIRST_WINDOW;
     for p in 1..=MAX_PAGES {
         let first = (p as usize - 1) * n;
         write_exchange(
             &dir,
             p as usize,
-            NOW - FIRST_WINDOW,
+            from,
             p,
             &docs(first, n, start + first as i64),
         );
     }
     let total = MAX_PAGES as usize * n;
-    let (got, replayer, cursor) = replay_with(&dir, None, MAX_PAGES as usize, total).await;
-    assert_eq!(got.len(), total);
-    // The next page waits for the next poll, which starts closer to the
-    // saved cursor.
-    assert_eq!(replayer.requests().len(), MAX_PAGES as usize);
+    let last = start + total as i64 - 1;
+    write_exchange(&dir, total / n + 1, last, 1, &docs(total, 3, last + 1));
+    let (got, replayer, state) = replay_state(&dir, None, MAX_PAGES as usize + 1, total + 3).await;
+    assert_eq!(got.len(), total + 3);
+    let urls: Vec<_> = replayer
+        .requests()
+        .into_iter()
+        .map(|(_, r)| r.url)
+        .collect();
+    assert_eq!(urls.len(), MAX_PAGES as usize + 1);
+    assert_eq!(urls[MAX_PAGES as usize], search_url(last, 1));
     assert_eq!(
-        cursor.as_deref(),
-        Some((start + total as i64 - 1).to_string().as_bytes())
+        state.get(CURSOR_KEY).await.unwrap().as_deref(),
+        Some((last + 3).to_string().as_bytes())
     );
+    assert_eq!(state.get(RESUME_KEY).await.unwrap(), None, "caught up");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cursor_never_runs_ahead_of_the_page_time() {
+    // An item dated 20 hours ahead (believed, up to a day) must not push
+    // the next query past now.
+    let dir = scratch("future");
+    let body = r#"{"response":{"docs":[{"identifier":"f1","btih":"0123456789abcdef0123456789abcdef01234567","publicdate":"2026-11-04T08:00:00Z"}]}}"#;
+    write_exchange(&dir, 1, NOW - FIRST_WINDOW, 1, body);
+    write_exchange(&dir, 2, NOW - LOOKBACK, 1, r#"{"response":{"docs":[]}}"#);
+    let (got, _, cursor) = replay_with(&dir, None, 2, 1).await;
+    assert_eq!(got.len(), 1);
+    assert_eq!(cursor.as_deref(), Some(NOW.to_string().as_bytes()));
 }
 
 #[tokio::test(start_paused = true)]
