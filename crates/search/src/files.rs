@@ -619,6 +619,34 @@ impl Weight for SizeWeight {
     }
 }
 
+/// Fast-field columns opened once per query and segment, shared by the
+/// segment's pieces and scorers. Opening a blockwise-linear column reads
+/// its whole block table (a few bytes per 512 documents): at 10M
+/// torrents, opened once a piece and once an edge scorer, that was about
+/// a tenth of a size clause (X-search-files-4).
+#[derive(Default)]
+pub(crate) struct SegColumns(Mutex<HashMap<(SegmentId, Field), Arc<ColumnCell>>>);
+
+type ColumnCell = OnceLock<tantivy::Result<Option<Column<u64>>>>;
+
+impl SegColumns {
+    /// `field`'s column in `seg`, `None` if the segment has none.
+    fn get(&self, seg: &SegmentReader, field: Field) -> tantivy::Result<Option<Column<u64>>> {
+        let cell = self
+            .0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry((seg.segment_id(), field))
+            .or_default()
+            .clone();
+        cell.get_or_init(|| {
+            seg.fast_fields()
+                .column_opt::<u64>(seg.schema().get_field_name(field))
+        })
+        .clone()
+    }
+}
+
 /// A conjunction's clauses as a query: [`SizeChecked`] when a required
 /// `size:` range sits beside another required clause, else the plain
 /// boolean.
@@ -693,6 +721,7 @@ impl Query for SizeChecked {
             whole: self.whole.weight(scoring)?,
             ranges: self.ranges.clone(),
             ratio: self.ratio,
+            columns: SegColumns::default(),
         }))
     }
 }
@@ -702,6 +731,7 @@ struct SizeCheckedWeight {
     whole: Box<dyn Weight>,
     ranges: Vec<SizeRange>,
     ratio: u64,
+    columns: SegColumns,
 }
 
 impl SizeCheckedWeight {
@@ -714,10 +744,7 @@ impl SizeCheckedWeight {
     ) -> tantivy::Result<Option<Option<Column<u64>>>> {
         let field = self.ranges[0].field;
         // A segment without sizes matches none, as the range would.
-        let Some(sizes) = seg
-            .fast_fields()
-            .column_opt::<u64>(seg.schema().get_field_name(field))?
-        else {
+        let Some(sizes) = self.columns.get(seg, field)? else {
             return Ok(Some(None));
         };
         // The fewest files any range's buckets hold. Without buckets a
@@ -743,16 +770,7 @@ impl Weight for SizeCheckedWeight {
         match self.checks(seg, rest.as_ref())? {
             None => self.whole.scorer(seg, boost),
             Some(None) => Ok(Box::new(tantivy::query::EmptyScorer)),
-            Some(Some(sizes)) => {
-                let mut scorer = CheckedScorer {
-                    rest,
-                    sizes,
-                    ranges: self.ranges.iter().map(|r| r.range.clone()).collect(),
-                    vals: [None; tantivy::COLLECT_BLOCK_BUFFER_LEN],
-                };
-                scorer.settle();
-                Ok(Box::new(scorer))
-            }
+            Some(Some(sizes)) => Ok(Box::new(CheckedScorer::new(rest, sizes, &self.ranges))),
         }
     }
 
@@ -766,13 +784,37 @@ impl Weight for SizeCheckedWeight {
 struct CheckedScorer {
     rest: Box<dyn Scorer>,
     sizes: Column<u64>,
-    ranges: Vec<std::ops::RangeInclusive<u64>>,
+    /// Every range's bounds at once: their intersection, `lo > hi` when
+    /// it's empty.
+    lo: u64,
+    hi: u64,
     vals: [Option<u64>; tantivy::COLLECT_BLOCK_BUFFER_LEN],
+    raw: [u64; tantivy::COLLECT_BLOCK_BUFFER_LEN],
 }
 
 impl CheckedScorer {
+    fn new(rest: Box<dyn Scorer>, sizes: Column<u64>, ranges: &[SizeRange]) -> CheckedScorer {
+        let lo = ranges.iter().map(|r| *r.range.start()).max().unwrap_or(0);
+        let hi = ranges
+            .iter()
+            .map(|r| *r.range.end())
+            .min()
+            .unwrap_or(u64::MAX);
+        let mut scorer = CheckedScorer {
+            rest,
+            sizes,
+            lo,
+            hi,
+            vals: [None; tantivy::COLLECT_BLOCK_BUFFER_LEN],
+            raw: [0; tantivy::COLLECT_BLOCK_BUFFER_LEN],
+        };
+        scorer.settle();
+        scorer
+    }
+
+    #[inline(always)]
     fn fits(&self, size: Option<u64>) -> bool {
-        size.is_some_and(|s| self.ranges.iter().all(|r| r.contains(&s)))
+        size.is_some_and(|s| self.lo <= s && s <= self.hi)
     }
 
     /// Moves to the first document from here whose size fits.
@@ -806,15 +848,25 @@ impl DocSet for CheckedScorer {
             if filled == 0 {
                 return 0;
             }
-            let vals = &mut self.vals[..filled];
-            vals.fill(None);
-            self.sizes.first_vals(&buffer[..filled], vals);
+            let (lo, hi) = (self.lo, self.hi);
             let mut kept = 0;
-            for i in 0..filled {
-                let size = self.vals[i];
-                if size.is_some_and(|s| self.ranges.iter().all(|r| r.contains(&s))) {
+            if matches!(self.sizes.index, tantivy::columnar::ColumnIndex::Full) {
+                // Every file has a size (`FileDoc::to_document`).
+                let raw = &mut self.raw[..filled];
+                self.sizes.values.get_vals(&buffer[..filled], raw);
+                for i in 0..filled {
                     buffer[kept] = buffer[i];
-                    kept += 1;
+                    kept += usize::from(lo <= raw[i] && raw[i] <= hi);
+                }
+            } else {
+                let vals = &mut self.vals[..filled];
+                vals.fill(None);
+                self.sizes.first_vals(&buffer[..filled], vals);
+                for i in 0..filled {
+                    if self.vals[i].is_some_and(|s| lo <= s && s <= hi) {
+                        buffer[kept] = buffer[i];
+                        kept += 1;
+                    }
                 }
             }
             // `rest` now stands past the block, maybe on a file too big
@@ -1348,14 +1400,22 @@ fn torrent_ids_in_pieces(
     if !missed.is_empty() {
         cancel.check()?;
         let size = query.downcast_ref::<SizeRange>();
-        let weight = match size {
+        let union = match size {
             Some(_) => None,
-            None => Some(query.weight(EnableScoring::disabled_from_searcher(searcher))?),
+            None => TermUnion::of(query),
         };
-        let source = match (size, &weight) {
-            (Some(r), _) => Source::Size(r),
-            (None, Some(w)) => Source::Weight(w.as_ref()),
-            (None, None) => unreachable!("a weight is built for every other query"),
+        let scoring = EnableScoring::disabled_from_searcher(searcher);
+        // The weight of the clause itself, or of a term union's exclusions.
+        let weight = match (size, &union) {
+            (Some(_), _) => None,
+            (None, Some(u)) => u.exclude.as_ref().map(|q| q.weight(scoring)).transpose()?,
+            (None, None) => Some(query.weight(scoring)?),
+        };
+        let source = match (size, &union, &weight) {
+            (Some(r), _, _) => Source::Size(r),
+            (None, Some(u), w) => Source::Terms(u, w.as_deref()),
+            (None, None, Some(w)) => Source::Weight(w.as_ref()),
+            (None, None, None) => unreachable!("a weight is built for every other query"),
         };
         // One segment's failure stops its siblings: they see `failed` at
         // their next check and give up, and the first real error is the
@@ -1373,6 +1433,8 @@ fn torrent_ids_in_pieces(
         // torrents' files was several milliseconds a piece.
         let columns: Vec<OnceLock<tantivy::Result<Column<u64>>>> =
             segs.iter().map(|_| OnceLock::new()).collect();
+        // A bare size range's `size` columns, likewise.
+        let sizes = SegColumns::default();
         let scanned = searcher
             .index()
             .search_executor()
@@ -1383,7 +1445,15 @@ fn torrent_ids_in_pieces(
                         .clone();
                     column
                         .and_then(|column| {
-                            scan_segment(&source, &segs[i], &column, (lo, hi), cancel, &failed)
+                            scan_segment(
+                                &source,
+                                &segs[i],
+                                &column,
+                                &sizes,
+                                (lo, hi),
+                                cancel,
+                                &failed,
+                            )
                         })
                         .map_err(|e| {
                             // A stop by the token or by a sibling is not this
@@ -1523,6 +1593,70 @@ enum Source<'a> {
     /// column a block at a time where the segment's buckets are
     /// incomplete.
     Size(&'a SizeRange),
+    /// Any of some terms (`file:mkv`, `file:(ext:mkv,mp4)`), less what
+    /// `exclude` matches (`-path:sample`): see [`TermUnion`].
+    Terms(&'a TermUnion, Option<&'a dyn Weight>),
+}
+
+/// A clause that is any of some terms, perhaps less some others'
+/// matches. The scan reads each term's postings in turn instead of
+/// merging them through Tantivy's union, which sorts documents the
+/// gather doesn't need sorted: at 10M torrents the merge was over a
+/// third of `ext:mkv,mp4,avi -path:sample` (X-search-files-4). The
+/// excluded documents of each piece are read into a bitset first.
+pub(crate) struct TermUnion {
+    terms: Vec<Term>,
+    exclude: Option<Q>,
+}
+
+impl TermUnion {
+    /// The terms of a query that is one term, or `Should`-only
+    /// alternatives that are each such a query.
+    fn terms(q: &dyn Query, out: &mut Vec<Term>) -> bool {
+        if let Some(t) = q.downcast_ref::<TermQuery>() {
+            out.push(t.term().clone());
+            return true;
+        }
+        match q.downcast_ref::<BooleanQuery>() {
+            Some(b) if !b.clauses().is_empty() => b
+                .clauses()
+                .iter()
+                .all(|(o, c)| *o == Occur::Should && TermUnion::terms(c.as_ref(), out)),
+            _ => false,
+        }
+    }
+
+    /// `q` as a union of terms with exclusions, if it's one: a term
+    /// union alone, or one required term union and only `MustNot`
+    /// clauses beside it.
+    fn of(q: &dyn Query) -> Option<TermUnion> {
+        let mut terms = Vec::new();
+        if TermUnion::terms(q, &mut terms) {
+            return Some(TermUnion {
+                terms,
+                exclude: None,
+            });
+        }
+        let b = q.downcast_ref::<BooleanQuery>()?;
+        let mut exclude = Vec::new();
+        let mut must = 0;
+        for (o, c) in b.clauses() {
+            match o {
+                Occur::Must => {
+                    must += 1;
+                    if must > 1 || !TermUnion::terms(c.as_ref(), &mut terms) {
+                        return None;
+                    }
+                }
+                Occur::MustNot => exclude.push((Occur::Should, c.box_clone())),
+                Occur::Should => return None,
+            }
+        }
+        (must == 1).then(|| TermUnion {
+            terms,
+            exclude: (!exclude.is_empty()).then(|| Box::new(BooleanQuery::new(exclude)) as Q),
+        })
+    }
 }
 
 /// The torrent ids of one file-index segment's documents in `[lo, hi)`.
@@ -1531,6 +1665,7 @@ fn scan_segment(
     source: &Source<'_>,
     seg: &SegmentReader,
     column: &Column<u64>,
+    sizes: &SegColumns,
     (lo, hi): (DocId, DocId),
     cancel: &crate::CancelToken,
     failed: &AtomicBool,
@@ -1569,11 +1704,12 @@ fn scan_segment(
     let mut ids = [None; BLOCK];
     let mut raw = [0u64; BLOCK];
     let full = matches!(column.index, tantivy::columnar::ColumnIndex::Full);
-    // A clause's own scorer gives a torrent's matching files together, so
+    // A clause's scorer, or one term's postings, gives a torrent's
+    // matching files together, so
     // a run of one id is pushed once; a size range's buckets give them
     // bucket by bucket, where runs are rare and the check costs more than
     // it saves.
-    let runs = matches!(source, Source::Weight(_));
+    let runs = !matches!(source, Source::Size(_));
     let mut add = |docs: &[DocId], gather: &mut Gather| {
         for docs in docs.chunks(BLOCK) {
             if full {
@@ -1631,15 +1767,25 @@ fn scan_segment(
             }
             gather
         }
+        Source::Terms(union, exclude) => {
+            let gather = scan_terms(
+                seg,
+                union,
+                *exclude,
+                (lo, hi),
+                &stopped,
+                gather_for,
+                &mut add,
+            )?;
+            stopped()?;
+            return Ok(gather);
+        }
         Source::Size(range) => {
             // A segment without sizes matches none, as Tantivy's range does.
             // Belt and braces: every file document is written with a size
             // (`FileDoc::to_document`), so only a foreign index lacks the
             // column. The clamp below is the guard results depend on.
-            let Some(sizes) = seg
-                .fast_fields()
-                .column_opt::<u64>(seg.schema().get_field_name(range.field))?
-            else {
+            let Some(sizes) = sizes.get(seg, range.field)? else {
                 return Ok(gather_for(0));
             };
             if let Some(inv) = range.bucketed(seg)? {
@@ -1680,6 +1826,98 @@ fn scan_segment(
         }
     };
     stopped()?;
+    Ok(gather)
+}
+
+/// A [`TermUnion`] over one piece of a segment: each term's postings from
+/// `lo` in turn, less the documents `exclude` matches in the piece. Ids
+/// come in runs, one a term; the gather doesn't need them in order. Its
+/// form follows the terms' postings lengths.
+fn scan_terms(
+    seg: &SegmentReader,
+    union: &TermUnion,
+    exclude: Option<&dyn Weight>,
+    (lo, hi): (DocId, DocId),
+    stopped: &dyn Fn() -> tantivy::Result<()>,
+    gather_for: impl Fn(u32) -> Gather,
+    mut add: impl FnMut(&[DocId], &mut Gather),
+) -> tantivy::Result<Gather> {
+    const BLOCK: usize = tantivy::COLLECT_BLOCK_BUFFER_LEN;
+    const CHECK_BLOCKS: u32 = crate::cancel::CHECK_EVERY / 2 / BLOCK as u32;
+    let mut docs = [0 as DocId; BLOCK];
+    let mut blocks = 0u32;
+    // The piece's excluded documents, `doc - lo` in the bitset.
+    let excluded = match exclude {
+        None => None,
+        Some(w) => {
+            let mut set = BitSet::with_max_value(hi.saturating_sub(lo).max(1));
+            let mut scorer = w.scorer(seg, 1.0)?;
+            if scorer.doc() < lo {
+                scorer.seek(lo);
+            }
+            loop {
+                if blocks.is_multiple_of(CHECK_BLOCKS) {
+                    stopped()?;
+                }
+                blocks = blocks.wrapping_add(1);
+                let filled = scorer.fill_buffer(&mut docs);
+                let n = docs[..filled].partition_point(|d| *d < hi);
+                for d in &docs[..n] {
+                    set.insert(d - lo);
+                }
+                if n < filled || filled == 0 {
+                    break;
+                }
+            }
+            Some(set)
+        }
+    };
+    let mut lists = Vec::with_capacity(union.terms.len());
+    let mut expected = 0u32;
+    for term in &union.terms {
+        // A field the segment's schema doesn't index matches nothing.
+        if seg
+            .schema()
+            .get_field_entry(term.field())
+            .field_type()
+            .get_index_record_option()
+            .is_none()
+        {
+            continue;
+        }
+        let inv = seg.inverted_index(term.field())?;
+        if let Some(info) = inv.get_term_info(term)? {
+            expected = expected.saturating_add(info.doc_freq);
+            lists.push((inv, info));
+        }
+    }
+    let mut gather = gather_for(expected);
+    let mut kept = Vec::with_capacity(BLOCK);
+    for (inv, info) in lists {
+        let mut postings = inv.read_postings_from_terminfo(&info, IndexRecordOption::Basic)?;
+        if postings.doc() < lo {
+            postings.seek(lo);
+        }
+        loop {
+            if blocks.is_multiple_of(CHECK_BLOCKS) {
+                stopped()?;
+            }
+            blocks = blocks.wrapping_add(1);
+            let filled = postings.fill_buffer(&mut docs);
+            let n = docs[..filled].partition_point(|d| *d < hi);
+            match &excluded {
+                Some(set) => {
+                    kept.clear();
+                    kept.extend(docs[..n].iter().filter(|d| !set.contains(**d - lo)));
+                    add(&kept, &mut gather);
+                }
+                None => add(&docs[..n], &mut gather),
+            }
+            if n < filled || filled == 0 {
+                break;
+            }
+        }
+    }
     Ok(gather)
 }
 
@@ -2544,6 +2782,7 @@ mod scan_tests {
                     &source,
                     seg,
                     &seg.fast_fields().u64("torrent").unwrap(),
+                    &SegColumns::default(),
                     (0, seg.max_doc()),
                     &token,
                     &AtomicBool::new(false),
@@ -2563,6 +2802,116 @@ mod scan_tests {
                     torrent_ids_in_pieces(&searcher, q.as_ref(), key, &cache, &token, piece_docs)
                         .unwrap();
                 assert_eq!(cut, whole, "{key} in pieces of {piece_docs}");
+            }
+        }
+    }
+
+    /// A query `TermUnion::of` doesn't recognise, so the scan runs its
+    /// scorer: the reference for the term-union path.
+    #[derive(Debug, Clone)]
+    struct Opaque(Arc<dyn Query>);
+
+    impl Query for Opaque {
+        fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
+            self.0.weight(scoring)
+        }
+    }
+
+    /// A union of terms, alone or less some exclusions, read term by
+    /// term finds what its scorer does: whole and in pieces, across
+    /// segments, with a deleted torrent and a term absent from a
+    /// segment. Shapes it mustn't take (a second required clause, a
+    /// `Should` beside a `Must`) keep the scorer.
+    #[test]
+    fn a_term_union_scan_finds_what_its_scorer_does() {
+        let mut builder = Schema::builder();
+        let torrent = builder.add_u64_field(
+            "torrent",
+            NumericOptions::default().set_indexed().set_fast(),
+        );
+        let ext = builder.add_text_field("ext", tantivy::schema::STRING);
+        let mut index = tantivy::Index::create_in_ram(builder.build());
+        index.set_multithread_executor(3).unwrap();
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        let exts = ["mkv", "mp4", "avi", "srt", "nfo"];
+        // `avi` only in the first segment.
+        for ids in [0..400u64, 400..1_000] {
+            for id in ids.clone() {
+                for f in 0..(1 + id % 4) {
+                    let e = exts[((id * 3 + f) % 5) as usize];
+                    if e == "avi" && id >= 400 {
+                        continue;
+                    }
+                    let mut doc = TantivyDocument::new();
+                    doc.add_u64(torrent, id);
+                    doc.add_text(ext, e);
+                    writer.add_document(doc).unwrap();
+                }
+            }
+            writer.commit().unwrap();
+        }
+        writer.delete_term(Term::from_field_u64(torrent, 401));
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let token = crate::CancelToken::new();
+        let t = |e: &str| -> Q {
+            Box::new(TermQuery::new(
+                Term::from_field_text(ext, e),
+                IndexRecordOption::Basic,
+            ))
+        };
+        let any = |es: &[&str]| -> Q {
+            Box::new(BooleanQuery::new(
+                es.iter().map(|e| (Occur::Should, t(e))).collect(),
+            ))
+        };
+        let queries: Vec<(Q, bool)> = vec![
+            (t("mkv"), true),
+            (any(&["mkv", "mp4", "avi"]), true),
+            (any(&["avi", "nothing"]), true),
+            (
+                Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, any(&["mkv", "mp4", "avi"])),
+                    (Occur::MustNot, t("srt")),
+                    (Occur::MustNot, t("nfo")),
+                ])),
+                true,
+            ),
+            (
+                Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, any(&["mkv", "avi"])),
+                    (Occur::Must, t("mp4")),
+                ])),
+                false,
+            ),
+            (
+                Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, t("mkv")),
+                    (Occur::Should, t("mp4")),
+                ])),
+                false,
+            ),
+        ];
+        for (i, (q, union)) in queries.iter().enumerate() {
+            assert_eq!(TermUnion::of(q.as_ref()).is_some(), *union, "query {i}");
+            let opaque = Opaque(Arc::from(q.box_clone()));
+            let want =
+                torrent_ids(&searcher, &opaque, "o", &FileSetCache::default(), &token).unwrap();
+            assert!(!want.contains(401));
+            for piece_docs in [1, 300, 500, PIECE_DOCS] {
+                let got = torrent_ids_in_pieces(
+                    &searcher,
+                    q.as_ref(),
+                    "q",
+                    &FileSetCache::default(),
+                    &token,
+                    piece_docs,
+                )
+                .unwrap();
+                assert_eq!(got, want, "query {i} in pieces of {piece_docs}");
             }
         }
     }
