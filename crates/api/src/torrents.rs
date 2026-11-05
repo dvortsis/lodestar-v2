@@ -2,7 +2,9 @@
 //! data comes from SQLite, not the index (§8).
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
@@ -14,6 +16,7 @@ use lodestar_search::query::Network;
 use lodestar_store::claims::{Claims, MAX_FILES, MAX_NAME};
 use lodestar_store::unverified::StoredClaims;
 use lodestar_store::{FileTree, MAX_SOURCES, SourceId, Store, TorrentRow, flags as store_flags};
+use tokio::sync::OnceCell;
 use utoipa::OpenApi;
 
 use crate::auth::Access;
@@ -102,10 +105,70 @@ pub(crate) struct PluginName {
 /// Display names and privacy by manifest id.
 pub(crate) type PluginNames = HashMap<String, PluginName>;
 
-/// Manifests are fixed for the life of the process, so each pipeline's
-/// list is read once (it takes the writer's lock) and kept while that
-/// pipeline lives.
-type NamesCache = Vec<(Weak<dyn OpsApi>, Arc<PluginNames>)>;
+/// How long a failed listing is kept before a request asks again, so a
+/// pipeline whose `sources()` keeps failing takes the writer's lock at
+/// most once per this, not once per request.
+const NAMES_RETRY: Duration = Duration::from_secs(5);
+
+/// One pipeline's names: listed once, single-flight. Manifests are fixed
+/// for the life of the process, so a listing that succeeds is kept for
+/// good; one that fails is retried after `retry`.
+#[derive(Debug)]
+struct NamesSlot {
+    names: OnceCell<Arc<PluginNames>>,
+    /// When the last listing failed. Holding it is what makes the
+    /// listing single-flight: the requests that arrive meanwhile wait
+    /// for its answer rather than each listing again.
+    failed: tokio::sync::Mutex<Option<Instant>>,
+    retry: Duration,
+}
+
+impl NamesSlot {
+    fn new(retry: Duration) -> NamesSlot {
+        NamesSlot {
+            names: OnceCell::new(),
+            failed: tokio::sync::Mutex::new(None),
+            retry,
+        }
+    }
+
+    /// The names, from `list` at most once at a time; empty while the
+    /// last listing failed less than `retry` ago.
+    async fn get<F, Fut>(&self, list: F) -> Arc<PluginNames>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Option<PluginNames>>,
+    {
+        if let Some(names) = self.names.get() {
+            return names.clone();
+        }
+        let mut failed = self.failed.lock().await;
+        // Listed while this request waited.
+        if let Some(names) = self.names.get() {
+            return names.clone();
+        }
+        if failed.is_some_and(|at| at.elapsed() < self.retry) {
+            return Arc::default();
+        }
+        match list().await {
+            Some(names) => {
+                let names = Arc::new(names);
+                // Only the holder of `failed` sets it, so this can't
+                // race another set.
+                let _ = self.names.set(names.clone());
+                *failed = None;
+                names
+            }
+            None => {
+                *failed = Some(Instant::now());
+                Arc::default()
+            }
+        }
+    }
+}
+
+/// Each live pipeline's slot, by pointer.
+type NamesCache = Vec<(Weak<dyn OpsApi>, Arc<NamesSlot>)>;
 static PLUGIN_NAMES: Mutex<NamesCache> = Mutex::new(Vec::new());
 
 /// The plugins of this build by manifest id; empty when no pipeline is
@@ -116,36 +179,36 @@ pub(crate) async fn plugin_names(s: &ApiState) -> Arc<PluginNames> {
         return Arc::default();
     };
     let key = Arc::downgrade(&ops);
-    {
+    let slot = {
         let mut cache = PLUGIN_NAMES.lock().unwrap_or_else(|e| e.into_inner());
         cache.retain(|(w, _)| w.strong_count() > 0);
-        if let Some((_, names)) = cache.iter().find(|(w, _)| Weak::ptr_eq(w, &key)) {
-            return names.clone();
+        match cache.iter().find(|(w, _)| Weak::ptr_eq(w, &key)) {
+            Some((_, slot)) => slot.clone(),
+            None => {
+                let slot = Arc::new(NamesSlot::new(NAMES_RETRY));
+                cache.push((key, slot.clone()));
+                slot
+            }
         }
-    }
-    let Ok(list) = ops.sources().await else {
-        // Not kept: the next request asks again.
-        return Arc::default();
     };
-    let names: Arc<PluginNames> = Arc::new(
-        list.into_iter()
-            .map(|src| {
-                let public = src.consent != ConsentClass::Account;
-                (
-                    src.plugin,
-                    PluginName {
-                        name: src.name,
-                        public,
-                    },
-                )
-            })
-            .collect(),
-    );
-    let mut cache = PLUGIN_NAMES.lock().unwrap_or_else(|e| e.into_inner());
-    if !cache.iter().any(|(w, _)| Weak::ptr_eq(w, &key)) {
-        cache.push((key, names.clone()));
-    }
-    names
+    slot.get(|| async {
+        let list = ops.sources().await.ok()?;
+        Some(
+            list.into_iter()
+                .map(|src| {
+                    let public = src.consent != ConsentClass::Account;
+                    (
+                        src.plugin,
+                        PluginName {
+                            name: src.name,
+                            public,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    })
+    .await
 }
 
 /// One registered source, as provenance shows it.
@@ -782,6 +845,102 @@ pub(crate) mod tests {
         assert!(c.provenance(&r, &stored, Viewer::Public).withheld);
         let admin = c.provenance(&r, &stored, Viewer::Admin);
         assert_eq!(plugins(&admin), ["dht"]);
+    }
+
+    /// `n` public plugins.
+    fn names_of(n: usize) -> PluginNames {
+        (0..n)
+            .map(|i| {
+                (
+                    format!("p{i}"),
+                    PluginName {
+                        name: format!("P{i}"),
+                        public: true,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_requests_list_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const N: usize = 16;
+        let slot = Arc::new(NamesSlot::new(NAMES_RETRY));
+        let calls = Arc::new(AtomicUsize::new(0));
+        // Every request starts before the listing may answer.
+        let gate = Arc::new(tokio::sync::Barrier::new(N));
+        let tasks: Vec<_> = (0..N)
+            .map(|_| {
+                let (slot, calls, gate) = (slot.clone(), calls.clone(), gate.clone());
+                tokio::spawn(async move {
+                    gate.wait().await;
+                    slot.get(|| async {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        // Let the other requests arrive while it lists.
+                        for _ in 0..N {
+                            tokio::task::yield_now().await;
+                        }
+                        Some(names_of(2))
+                    })
+                    .await
+                })
+            })
+            .collect();
+        for t in tasks {
+            assert_eq!(t.await.unwrap().len(), 2);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Kept: later requests don't list again.
+        let again = slot.get(|| async { panic!("listed twice") }).await;
+        assert_eq!(again.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failing_listing_is_not_retried_per_request() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const N: usize = 16;
+        let slot = Arc::new(NamesSlot::new(Duration::from_secs(3600)));
+        let calls = Arc::new(AtomicUsize::new(0));
+        // Concurrent requests while it fails, then requests after.
+        let tasks: Vec<_> = (0..N)
+            .map(|_| {
+                let (slot, calls) = (slot.clone(), calls.clone());
+                tokio::spawn(async move {
+                    slot.get(|| async {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        for _ in 0..N {
+                            tokio::task::yield_now().await;
+                        }
+                        None
+                    })
+                    .await
+                })
+            })
+            .collect();
+        for t in tasks {
+            assert!(t.await.unwrap().is_empty());
+        }
+        for _ in 0..N {
+            let names = slot
+                .get(|| async {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    None
+                })
+                .await;
+            assert!(names.is_empty());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_listing_is_retried_after_the_back_off() {
+        // No back-off: the next request asks again, and a success is kept.
+        let slot = NamesSlot::new(Duration::ZERO);
+        assert!(slot.get(|| async { None }).await.is_empty());
+        assert_eq!(slot.get(|| async { Some(names_of(1)) }).await.len(), 1);
+        let kept = slot.get(|| async { panic!("listed after success") }).await;
+        assert_eq!(kept.len(), 1);
     }
 
     #[test]

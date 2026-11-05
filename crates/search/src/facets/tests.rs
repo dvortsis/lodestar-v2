@@ -1090,6 +1090,26 @@ fn provenance_facets_count_the_default_as_the_rest() {
     assert_eq!(got.matches, 200 - no);
 }
 
+/// While `source` is backfilled (a build shipping a new generation of
+/// it), documents the walk hasn't reached count under no source, so the
+/// facet says it's partial. `verified` and `network` count the rest as
+/// their default and never are.
+#[test]
+fn the_source_facet_is_partial_while_it_is_backfilled() {
+    let docs = corpus(50);
+    let index = SearchIndex::in_memory().unwrap();
+    add(&index, &docs, 1);
+    let next = crate::population::Generations::current();
+    let next = next.clone().with("source", next.get("source").unwrap() + 1);
+    let index = Arc::new(index.with_generations(next).unwrap());
+    assert!(!index.availability("source").complete());
+    let (_, l, got) = run(&index, "", &all_values());
+    assert!(!index.availability_in("source", &l).complete());
+    assert!(got.term(Facet::Source).unwrap().partial);
+    assert!(!got.term(Facet::Verified).unwrap().partial);
+    assert!(!got.term(Facet::Network).unwrap().partial);
+}
+
 mod rebuild {
     //! The schema bump: an index of the previous version serves (without
     //! the year histogram) while this build's is built, then facets come
