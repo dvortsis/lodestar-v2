@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T17:40Z",
+  "updated_at": "2026-11-05T18:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3054,9 +3054,13 @@
       "done": "2026-11-05T15:26Z"
     },
     "X-source-adult-2": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnBYijZp8P3ZD6kxHSg",
-      "since": "2026-11-05T10:20Z"
+      "since": "2026-11-05T10:20Z",
+      "pr": 494,
+      "merge": "d3906e36",
+      "archived": true,
+      "done": "2026-11-05T18:12Z"
     },
     "RP-4": {
       "status": "running",
@@ -4779,7 +4783,8 @@
     "owner-flag §2.19 (RP-4 #495): with no plugin setting a publisher yet, SP-3 counts per source for Nyaa and Sukebei only; a busy release day (20+ same-title uploads in an hour across groups) can flag (never hide) a legitimate title, per Q10 as written.",
     "owner flag sent 17:40Z: SRC-13c consent (#493 merged 3ac92464).",
     "Host-wiring note (from #502 delta review): stats.done grows on every 60 s retry of a held interest (~1,440 per held item per spent day); fix the metric when wiring.",
-    "owner-flag §2.19 (ENR-1c #502): user-interest enrichment lookups count against the 5,000/day cap (owner Q15 restored; ENR-1 had exempted them); an unlisted enrichment plugin's answers are refused."
+    "owner-flag §2.19 (ENR-1c #502): user-interest enrichment lookups count against the 5,000/day cap (owner Q15 restored; ENR-1 had exempted them); an unlisted enrichment plugin's answers are refused.",
+    "owner flag sent 18:12Z: X-source-adult-2 gap 3 (#494 merged d3906e36). CI note: GitHub left finished jobs shown in_progress (ubuntu test, e2e-ok); verified via job steps before merge."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5440,7 +5445,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T17:40Z",
+    "updated": "2026-11-05T18:12Z",
     "items": [
       {
         "slot": 1,
@@ -5465,14 +5470,6 @@
         "agent": "claude",
         "doing": "Legal: the crawler stays paused on a fresh install until setup is done",
         "since": "2026-11-05T12:33Z"
-      },
-      {
-        "slot": 4,
-        "slice": "X-source-adult-2",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Content safety: the always-adult mask, part 2 (after RP-3)",
-        "since": "2026-11-05T10:20Z"
       },
       {
         "slot": 5,
