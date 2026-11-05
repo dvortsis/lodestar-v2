@@ -27,6 +27,7 @@ lodestar-update = { path = "../crates/update", features = ["testing"] }
 base64 = "=0.22.1"
 semver = "=1.0.28"
 serde_json = "1.0.154"
+sha1 = "0.11"
 sha2 = "0.11"
 lodestar-utp = { path = "../crates/utp" }
 
@@ -202,6 +203,13 @@ bench = false
 [[bin]]
 name = "stashdb"
 path = "fuzz_targets/stashdb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "torrent_cache"
+path = "fuzz_targets/torrent_cache.rs"
 test = false
 doc = false
 bench = false
