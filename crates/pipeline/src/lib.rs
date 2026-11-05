@@ -28,6 +28,7 @@ mod have;
 pub mod health;
 pub mod log_events;
 mod rollups;
+pub mod torrent_cache;
 pub mod unverified;
 mod worker;
 mod writer;
