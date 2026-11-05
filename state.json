@@ -2848,11 +2848,12 @@
       "pr": 454
     },
     "X-mimalloc-docs": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBNGBqwHtoDuNj9t9F",
       "launched": "2026-11-05T01:52Z",
-      "brief": "briefs/X-mimalloc-docs.md"
+      "brief": "briefs/X-mimalloc-docs.md",
+      "pr": 456
     },
     "X-log-url-redact-2": {
       "status": "building",
@@ -5050,15 +5051,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T03:59Z",
+    "updated": "2026-11-05T04:15Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-mimalloc-docs",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Fixing the soak analyzer and docs after the allocator fix, before soak r5.",
-        "since": "2026-11-05T01:52Z"
+        "slice": "",
+        "status": "idle",
+        "doing": "Free: next is X-source-adult (brief being written) or SRC-10c-2; RP-1b and RP-UC wait for RP-2 (packs/mod.rs).",
+        "since": "2026-11-05T04:15Z"
       },
       {
         "slot": 2,
