@@ -1195,6 +1195,10 @@ export default [
 	// first change, through the flows' door): measured 30.54 KB, limit = measured + ~10% of the cut.
 	// SRC-15a (runner §2.26): FiltersScreen and NotificationsScreen +64 B each for the Sources registry
 	// entry in the shared chunk (measured residue 56 and 59 B, rounded up to 64 B).
+	// LEGAL-1 (runner §2.26): FiltersScreen and NotificationsScreen +64 B each again, for the Legal
+	// Notice gate in the shared API and events clients (a 409 notice_required goes to the sign-in
+	// gate): measured 31.08 KB and 45.09 KB, residue 11 and 25 B, rounded up to 64 B. That takes
+	// NotificationsScreen past the §10.1 45 KB route cap; the runner flags it to the owner (§2.19).
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
 	...settingsHandBuilt.map(({ name, files }) =>
@@ -1202,7 +1206,7 @@ export default [
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31.07 KB'
+				? '31.14 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
@@ -1210,7 +1214,7 @@ export default [
 						: name === 'SourcesScreen'
 							? '30 KB'
 							: name === 'NotificationsScreen'
-								? '45.07 KB'
+								? '45.14 KB'
 								: '45 KB'
 		)
 	),
@@ -1343,7 +1347,9 @@ export default [
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
-		'37.52 KB' // runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		// LEGAL-1 (runner §2.26): +64 B for the Legal Notice gate in the shared events client,
+		// measured 37.54 KB (residue 17 B, rounded up to 64 B).
+		'37.59 KB' // runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.

@@ -246,7 +246,7 @@ The crawler starts at once. The library fills slowly at first while the DHT rout
 
 To read the notice again later, open **Settings** → **About** and select **Show the Legal Notice** in the **Legal** section.
 
-If your copy of Lodestar was set up before it showed the notice, it shows the notice once, the next time you sign in. Read it and select **I have read it, continue**. It shows again only when a later version changes the notice in substance. Apps that use an API key or a feed link keep working meanwhile.
+Some updates change the notice in substance, such as the update from 0.5.1. After one, Lodestar shows the new notice once, the next time you sign in. It does the same if your copy was set up before it showed the notice. Read it and select **I have read it, continue**. Apps that use an API key, a feed link or a webhook keep working meanwhile.
 
 > [!NOTE]
 > **Worked example**

@@ -365,6 +365,70 @@ async fn an_install_from_before_the_notice_sees_it_once() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// The upgrade from v0.5.1 (LEGAL-1r stored `notice_version: 2`): this
+/// build's notice 3 shows once at sign-in, a stale accept of 2 is
+/// refused, and after accepting 3 a fresh sign-in passes straight
+/// through, after a restart too.
+#[tokio::test]
+async fn a_v0_5_1_install_sees_the_new_notice_once_at_login() {
+    assert_eq!(NOTICE_VERSION, 3);
+    let dir = tempfile::tempdir().unwrap();
+    let a = app(dir.path(), NOTICE_VERSION);
+    let (status, body, _) = send(
+        &a,
+        post("/api/v1/setup", None, setup_body(&a, Some(NOTICE_VERSION))),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    drop(a);
+    let path = dir.path().join("auth.json");
+    let mut file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    file["notice_version"] = json!(2);
+    std::fs::write(&path, file.to_string()).unwrap();
+
+    let a = app(dir.path(), NOTICE_VERSION);
+    let cookie = login(&a).await;
+    assert_eq!(status_of(&a, &cookie).await, (true, true));
+    let (status, body, _) = send(&a, get("/api/v1/keys", Some(&cookie)), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, _, _) = send(
+        &a,
+        post(
+            "/api/v1/legal/accept",
+            Some(&cookie),
+            json!({ "version": 2 }),
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "the v0.5.1 copy accepts nothing"
+    );
+    let (status, _, _) = send(
+        &a,
+        post(
+            "/api/v1/legal/accept",
+            Some(&cookie),
+            json!({ "version": 3 }),
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    drop(a);
+
+    let a = app(dir.path(), NOTICE_VERSION);
+    let cookie = login(&a).await;
+    assert_eq!(status_of(&a, &cookie).await, (true, false), "shown once");
+    let (status, _, _) = send(&a, get("/api/v1/keys", Some(&cookie)), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(file["notice_version"], 3);
+}
+
 /// API keys aren't browsers: a connected app keeps working through an
 /// upgrade that raises the version, before the admin signs in.
 #[tokio::test]
@@ -579,4 +643,64 @@ fn a_malformed_notice_version_fails_closed() {
             assert_eq!(e.kind(), std::io::ErrorKind::InvalidData, "{bad}");
         }
     }
+}
+
+/// Sonarr and Radarr's webhook calls (SRC-11b) carry their own token,
+/// like API keys: a raised version doesn't stop them, while the token
+/// routes, which need a session, meet the gate.
+#[tokio::test]
+async fn webhooks_are_not_gated() {
+    use lodestar_api::webhooks::{Delivered, Integration, WebhookSink, Webhooks};
+
+    struct Found;
+    impl WebhookSink for Found {
+        fn deliver(&self, _: Integration, _: &[u8]) -> Delivered {
+            Delivered::Found
+        }
+    }
+    let with_hook = |a: &mut App| {
+        a.app = Router::new().nest(
+            "/api/v1",
+            router(a.state.clone()).layer(Webhooks::new(Arc::new(Found)).layer()),
+        );
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = app(dir.path(), NOTICE_VERSION);
+    with_hook(&mut a);
+    let (status, body, cookie) = send(
+        &a,
+        post("/api/v1/setup", None, setup_body(&a, Some(NOTICE_VERSION))),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body, _) = send(
+        &a,
+        post(
+            "/api/v1/webhooks/sonarr/token",
+            Some(&cookie),
+            json!({ "password": PASSWORD }),
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let token = body["token"].as_str().unwrap().to_owned();
+    drop(a);
+
+    let mut a = app(dir.path(), NOTICE_VERSION + 1);
+    with_hook(&mut a);
+    let call = Request::post("/api/v1/webhooks/sonarr")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(r#"{"eventType":"Grab"}"#))
+        .unwrap();
+    let (status, body, _) = send(&a, call, None).await;
+    assert_eq!(status, StatusCode::OK, "a delivery isn't gated: {body}");
+
+    let cookie = login(&a).await;
+    let (status, body, _) = send(&a, get("/api/v1/webhooks", Some(&cookie)), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "notice_required");
 }

@@ -38,7 +38,7 @@ test('keyboard: first-run setup from the Legal Notice to /welcome', async ({
 	expect(mock.calls('setup')[0]!.postDataJSON()).toEqual({
 		token: 'AB12-CD34-EF56-7890',
 		password: 'correct horse battery',
-		notice_version: 2
+		notice_version: 3
 	});
 });
 
