@@ -23,8 +23,8 @@ use lodestar_sources::{
 };
 use lodestar_sources_feeds::archive_org::{File, Hashes, Item};
 use lodestar_sources_plugins::archive_org::{
-    self, ArchiveOrg, CURSOR_KEY, FIRST_WINDOW, LOOKBACK, MAX_PAGES, MAX_SIZE, RESUME_KEY, ROWS,
-    content_type, search_url, to_found,
+    self, ArchiveOrg, CURSOR_KEY, FIRST_WINDOW, FLOOR_KEY, LOOKBACK, MAX_PAGES, MAX_SIZE,
+    RESUME_KEY, ROWS, content_type, search_url, to_found,
 };
 use lodestar_store::SourceId;
 use proptest::prelude::*;
@@ -674,5 +674,134 @@ async fn a_429_on_a_follow_up_page_keeps_the_finds_so_far_and_the_cursor() {
     assert_eq!(
         cursor.as_deref(),
         Some((start + n as i64 - 1).to_string().as_bytes())
+    );
+}
+
+/// `n` made-up docs, all dated `t`.
+fn same_second(first: usize, n: usize, t: i64) -> String {
+    let docs: Vec<String> = (0..n)
+        .map(|i| {
+            format!(
+                r#"{{"identifier":"item-{k}","btih":"{:040x}","publicdate":"{}"}}"#,
+                first + i + 1,
+                rfc3339(t),
+                k = first + i
+            )
+        })
+        .collect();
+    format!(r#"{{"response":{{"docs":[{}]}}}}"#, docs.join(","))
+}
+
+#[tokio::test(start_paused = true)]
+async fn twenty_full_pages_in_one_second_resume_one_second_later() {
+    // Every row is dated exactly at the query's start. The last row's date
+    // is not past it, so the resume point must move on by a second
+    // (`t.max(from + 1)`), or the next poll would repeat this one.
+    let dir = scratch("one_second");
+    let n = ROWS as usize;
+    let cursor: i64 = 1_793_692_800;
+    let from = cursor - LOOKBACK;
+    for p in 1..=MAX_PAGES {
+        write_exchange(
+            &dir,
+            p as usize,
+            from,
+            p,
+            &same_second((p as usize - 1) * n, n, from),
+        );
+    }
+    write_exchange(
+        &dir,
+        MAX_PAGES as usize + 1,
+        from + 1,
+        1,
+        r#"{"response":{"docs":[]}}"#,
+    );
+    let total = MAX_PAGES as usize * n;
+    let (got, replayer, _) = replay_state(
+        &dir,
+        Some(cursor.to_string().as_bytes()),
+        MAX_PAGES as usize + 1,
+        total,
+    )
+    .await;
+    assert_eq!(got.len(), total);
+    let last = replayer.requests().pop().unwrap().1.url;
+    assert_eq!(last, search_url(from + 1, 1));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_lookback_after_a_resume_run_starts_no_earlier_than_the_run_ended() {
+    // As the max-pages case, then a third poll: it must start at the end
+    // of the resume run (`last + 3`), not at the cursor minus the lookback.
+    let dir = scratch("floor");
+    let n = ROWS as usize;
+    let start = 1_793_664_000;
+    let from = NOW - FIRST_WINDOW;
+    for p in 1..=MAX_PAGES {
+        let first = (p as usize - 1) * n;
+        write_exchange(
+            &dir,
+            p as usize,
+            from,
+            p,
+            &docs(first, n, start + first as i64),
+        );
+    }
+    let total = MAX_PAGES as usize * n;
+    let last = start + total as i64 - 1;
+    write_exchange(
+        &dir,
+        MAX_PAGES as usize + 1,
+        last,
+        1,
+        &docs(total, 3, last + 1),
+    );
+    write_exchange(
+        &dir,
+        MAX_PAGES as usize + 2,
+        last + 3,
+        1,
+        r#"{"response":{"docs":[]}}"#,
+    );
+    let (_, replayer, state) = replay_state(&dir, None, MAX_PAGES as usize + 2, total + 3).await;
+    let urls: Vec<_> = replayer
+        .requests()
+        .into_iter()
+        .map(|(_, r)| r.url)
+        .collect();
+    assert_eq!(urls[MAX_PAGES as usize + 1], search_url(last + 3, 1));
+    assert_eq!(state.get(RESUME_KEY).await.unwrap(), None);
+    assert!(state.get(FLOOR_KEY).await.unwrap().is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn skipped_rows_still_move_the_cursor() {
+    // A page of rows with a date but no hash: nothing is kept, yet the
+    // window moves past them.
+    let dir = scratch("skipped_dates");
+    let t = 1_793_664_000;
+    let d: Vec<String> = (0..ROWS as i64)
+        .map(|i| {
+            format!(
+                r#"{{"identifier":"s{i}","publicdate":"{}"}}"#,
+                rfc3339(t + i)
+            )
+        })
+        .collect();
+    let page = format!(r#"{{"response":{{"docs":[{}]}}}}"#, d.join(","));
+    write_exchange(&dir, 1, NOW - FIRST_WINDOW, 1, &page);
+    write_exchange(
+        &dir,
+        2,
+        NOW - FIRST_WINDOW,
+        2,
+        r#"{"response":{"docs":[]}}"#,
+    );
+    let (got, _, cursor) = replay_with(&dir, None, 2, 0).await;
+    assert!(got.is_empty());
+    assert_eq!(
+        cursor.as_deref(),
+        Some((t + ROWS as i64 - 1).to_string().as_bytes())
     );
 }

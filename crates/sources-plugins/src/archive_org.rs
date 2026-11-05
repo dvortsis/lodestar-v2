@@ -28,7 +28,9 @@
 //! what is new and never backfills the Archive. A full page is followed at
 //! once by the next, at most [`MAX_PAGES`] a poll. A poll that ends on the
 //! page cap saves a resume point ([`RESUME_KEY`]) so the next carries on
-//! past its rows instead of re-reading them.
+//! past its rows instead of re-reading them. When a resume run catches up,
+//! the next lookback starts no earlier than the run's end ([`FLOOR_KEY`]).
+//! A skipped row (no or a bad hash) still moves the window by its date.
 //!
 //! **Pace.** One poll an hour ([`POLICY`]); the follow-up pages of one
 //! poll go through `Client::send`, so the per-host rate (one request a
@@ -67,6 +69,12 @@ pub const CURSOR_KEY: &str = "since";
 /// rows (a bulk ingest) would be read from its start at every poll and the
 /// cursor would never get past it.
 pub const RESUME_KEY: &str = "resume";
+/// The plugin-state key holding the floor (decimal Unix seconds): where the
+/// last resume run ended. The lookback that follows a run's catch-up never
+/// starts before it, so it can't re-read the bulk the run just worked off
+/// and set the resume point back inside it. Once the cursor's own lookback
+/// has passed it, it has no effect.
+pub const FLOOR_KEY: &str = "floor";
 /// Rows asked for per page. Under the parser's item cap.
 pub const ROWS: u32 = 500;
 /// Pages followed in one poll: at most 10,000 items.
@@ -214,13 +222,14 @@ enum Poll {
 async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn() -> i64) -> Poll {
     let saved = load_time(state, CURSOR_KEY, now()).await;
     let resume = load_time(state, RESUME_KEY, now()).await;
+    let floor = load_time(state, FLOOR_KEY, now()).await;
     // The query starts at the resume point if the last poll ran out of
     // pages (see `RESUME_KEY`); else a lookback before the cursor (see
     // `LOOKBACK`); else, on a first run, a day back. It stays put while
     // its pages are read.
     let from = match (resume, saved) {
         (Some(r), _) => r,
-        (None, Some(c)) => (c - LOOKBACK).max(MIN_PUBLISHED),
+        (None, Some(c)) => (c - LOOKBACK).max(floor.unwrap_or(0)).max(MIN_PUBLISHED),
         (None, None) => (now() - FIRST_WINDOW).max(MIN_PUBLISHED),
     };
     let mut cursor = saved.unwrap_or(0);
@@ -261,6 +270,13 @@ async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn
                 return Poll::Closed;
             }
         }
+        // Skipped rows (no or a bad hash) still moved the window: their
+        // newest date counts like a kept row's.
+        if let Some(t) = info.skipped_newest.filter(|t| plausible(*t, at)) {
+            let t = t.min(at);
+            newest = newest.max(t);
+            tail = Some(tail.map_or(t, |x| x.max(t)));
+        }
         // Saved after the finds are sent: a restart repeats a page at
         // worst, and never skips one.
         if newest > cursor {
@@ -281,7 +297,9 @@ async fn poll(http: &Client, state: &dyn PluginState, emitter: &Emitter, now: fn
             save_time(state, RESUME_KEY, t.max(from + 1)).await;
         }
     } else if resume.is_some() {
-        // Caught up: back to the cursor and its lookback.
+        // Caught up: back to the cursor and its lookback, which starts no
+        // earlier than where this run ended (see `FLOOR_KEY`).
+        save_time(state, FLOOR_KEY, tail.map_or(from, |t| t.max(from))).await;
         let _ = state.remove(RESUME_KEY).await;
     }
     Poll::Done
