@@ -352,8 +352,12 @@ const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal
 // buttons are pressed, and its navigation icon and purpose line (for the filter) on demand; gated on
 // their own below. The parts only load from About's body.
 const settingsAboutModules = [/features\/settings\/about\/(icon|about)\.ts$/];
+// About → Legal (LEGAL-1): the Legal Notice with its renderer, loaded by "Show the Legal Notice";
+// gated on its own below, so About's other parts keep their budget.
+const settingsAboutLegal = [/features\/settings\/about\/Legal\.svelte$/];
 const settingsAboutParts = [
 	/features\/settings\/about\/(Diagnostics|Licences)\.svelte$/,
+	...settingsAboutLegal,
 	...settingsAboutModules
 ];
 // Updates (S-updates): the release notes and history load after the first view, and its navigation
@@ -599,8 +603,21 @@ const settingsAboutPartsLazy = requireMeasuredJs('Settings about parts (on deman
 			.filter(
 				(key) =>
 					settingsAboutParts.some((re) => re.test(key)) &&
-					!settingsAboutModules.some((re) => re.test(key))
+					!settingsAboutModules.some((re) => re.test(key)) &&
+					!settingsAboutLegal.some((re) => re.test(key))
 			)
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...aboutFirstView
+				])
+			)
+	)
+]);
+const settingsAboutLegalLazy = requireMeasuredJs('Settings about Legal Notice (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsAboutLegal.some((re) => re.test(key)))
 			.flatMap((key) =>
 				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
 					...settingsShellView,
@@ -1098,7 +1115,9 @@ if (flowsCarried.length)
 
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
-	entry('CSS', search.css, '19.65 KB'),
+	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice's box and its token (measured 19.67 KB on
+	// the tree with main merged, residue 16 B, rounded up to 64 B). Still under the §10.1 20 KB.
+	entry('CSS', search.css, '19.72 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
 		: []),
@@ -1158,8 +1177,8 @@ export default [
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
 		'45 KB'
 	),
-	// SRC-15a (runner §2.26): +64 B for the Sources registry entry (measured residue 16 B, rounded up).
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45.07 KB'),
+	// X-settings-trim: back at the §10.1 cap (44.95 kB measured) after the SRC-15a/LEGAL-1 raises.
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1177,6 +1196,9 @@ export default [
 	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
 	// About's diagnostics block and licence list (S-about): LIMIT_ABOUT_PARTS
 	entry('Settings about parts (on demand)', settingsAboutPartsLazy, '3.44 KB'),
+	// LEGAL-1: About → Legal, the notice's box, renderer and font wait. Measured 3.01 KB, limit =
+	// measured + ~10%.
+	entry('Settings about Legal Notice (on demand)', settingsAboutLegalLazy, '3.3 KB'),
 	entry('Settings about icon and purpose (on demand)', settingsAboutModulesLazy, '0.39 KB'),
 	// Updates' release notes and history (S-updates): measured + 10%.
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
@@ -1208,6 +1230,9 @@ export default [
 	// first change, through the flows' door): measured 30.54 KB, limit = measured + ~10% of the cut.
 	// SRC-15a (runner §2.26): FiltersScreen and NotificationsScreen +64 B each for the Sources registry
 	// entry in the shared chunk (measured residue 56 and 59 B, rounded up to 64 B).
+	// LEGAL-1 (runner §2.26): FiltersScreen +64 B again, for the Legal Notice gate in the shared API
+	// and events clients (measured 31.08 KB). X-settings-trim brought NotificationsScreen (44.99 KB
+	// measured) back under the §10.1 45 KB route cap, so it has the default limit again.
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
 	...settingsHandBuilt.map(({ name, files }) =>
@@ -1215,16 +1240,14 @@ export default [
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31.07 KB'
+				? '31.14 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
 						? '30.4 KB'
 						: name === 'SourcesScreen'
 							? '30 KB'
-							: name === 'NotificationsScreen'
-								? '45.07 KB'
-								: '45 KB'
+							: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
@@ -1360,7 +1383,9 @@ export default [
 	// SHA, which changes the app id and chunk names /t imports; the same source measured 21,115–21,144 B
 	// across SHAs. 21.14 → 21.20 KB.
 	// runner §2.26, SRC-17: "Found by" on the full page (21,200 B → 21,776 B; measured 565 B over, rounded up to 64 B).
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21776 B'),
+	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice gate in the shared clients (measured
+	// 21,795 B, residue 19 B, rounded up to 64 B).
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21840 B'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],

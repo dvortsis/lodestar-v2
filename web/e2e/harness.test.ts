@@ -19,10 +19,10 @@ test.describe('OpenAPI mock', () => {
 	});
 
 	test('answers an operation with a typed override', async ({ page, mock }) => {
-		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+		mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 		const res = await fetchJson(page, '/api/v1/auth');
 		expect(res.status).toBe(200);
-		expect(res.body).toEqual({ logged_in: true, setup_required: false });
+		expect(res.body).toEqual({ logged_in: true, notice_required: false, setup_required: false });
 		expect(mock.calls('getAuthStatus')).toHaveLength(1);
 	});
 

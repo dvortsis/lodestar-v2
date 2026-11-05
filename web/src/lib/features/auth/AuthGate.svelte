@@ -2,17 +2,19 @@
 	// Runs the load check, then either redirects or shows the page's form.
 	import { onMount, type Snippet } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { checkAuth, redirectFor } from './gate';
+	import { checkAuth, redirectFor, type AuthStatus } from './gate';
 	import { toLogin, toNext, toSetup } from './nav';
 
 	interface Props {
 		page: 'login' | 'setup';
 		/** Where a signed-in visitor of the sign-in page goes. */
 		next?: string;
+		/** What the load check found, before the page shows its form. */
+		onstatus?: (status: AuthStatus | null) => void;
 		children: Snippet;
 	}
 
-	let { page, next = '/', children }: Props = $props();
+	let { page, next = '/', onstatus, children }: Props = $props();
 	let ready = $state(false);
 
 	onMount(() => {
@@ -23,7 +25,10 @@
 			if (to === '/setup') await toSetup();
 			else if (to === '/login') await toLogin();
 			else if (to) await toNext(to);
-			else ready = true;
+			else {
+				onstatus?.(status);
+				ready = true;
+			}
 		});
 		return () => (live = false);
 	});

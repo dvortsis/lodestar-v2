@@ -18,6 +18,7 @@
 //! do; the pool waits on prepare and prepare on the writer, which is the
 //! backpressure that keeps memory flat.
 
+pub mod adult_enrich;
 pub mod control;
 mod coordinator;
 mod dht;
@@ -151,6 +152,10 @@ pub struct PipelineConfig {
     /// (§18.4, §18.7). `None` (tests): plugins get no egress at all
     /// ([`lodestar_sources::NoEgress`]), so nothing leaves the machine.
     pub egress: Option<lodestar_sources::EgressFactory>,
+    /// The torrent-cache plugin's manifest id (SRC-13b): while it's
+    /// registered and enabled, [`Pipeline::torrent_cache_feed`] takes its
+    /// verified files to be judged and stored. `None`: no feed.
+    pub torrent_cache: Option<&'static str>,
 }
 
 /// How often a running plugin's non-direct route is probed, so a route
@@ -192,6 +197,7 @@ impl Default for PipelineConfig {
             gate_follows_index: false,
             verify_unverified: false,
             egress: None,
+            torrent_cache: None,
         }
     }
 }
@@ -327,6 +333,9 @@ pub struct SourceStatus {
     /// Its egress as it runs: `None` when it isn't running or has no
     /// egress configured.
     pub egress: Option<EgressLive>,
+    /// Who resolves names for it on a SOCKS5 route left on `auto`
+    /// ([`egress::auto_dns`]).
+    pub auto_dns: lodestar_sources::SocksDns,
 }
 
 /// A running plugin's egress: its kill switch's view, the route it was
@@ -495,6 +504,7 @@ impl Monitor {
                         route: b.route.clone(),
                         setting: b.setting.clone(),
                     }),
+                auto_dns: egress::auto_dns(&*s.plugin),
             })
             .collect()
     }
@@ -517,6 +527,8 @@ pub struct Pipeline {
     writer: JoinHandle<Store>,
     /// The scrape scheduler, stopped first.
     health: Option<(watch::Sender<bool>, JoinHandle<Store>)>,
+    /// The torrent-cache feed and its judge task (SRC-13b).
+    torrent_cache: Option<(torrent_cache::Feed, JoinHandle<()>)>,
 }
 
 impl std::fmt::Debug for Pipeline {
@@ -625,6 +637,17 @@ impl Pipeline {
             leases.insert(q.info_hash, token);
         }
         let preparer = store.preparer();
+        // The torrent-cache plugin's source, while it runs (SRC-13b).
+        let cache_source = config.torrent_cache.and_then(|plugin| {
+            registered
+                .iter()
+                .zip(&plugins)
+                .find(|((_, state, ..), p)| {
+                    p.manifest().id == plugin && *state == SourceState::Enabled
+                })
+                .map(|((id, ..), _)| *id)
+        });
+        let cache_preparer = cache_source.map(|_| store.preparer());
 
         let (stop_plugins, plugin_shutdown) = Shutdown::new();
         let (stop_intake, intake_shutdown) = Shutdown::new();
@@ -662,12 +685,7 @@ impl Pipeline {
                 }
                 let (factory, plugin, setting, id) =
                     (factory.clone(), plugin.clone(), setting.clone(), *id);
-                set.spawn(async move {
-                    (
-                        id,
-                        egress::build(&factory, plugin.manifest(), &setting).await,
-                    )
-                });
+                set.spawn(async move { (id, egress::build(&factory, &*plugin, &setting).await) });
             }
             while let Some(done) = set.join_next().await {
                 let (id, b) = done.map_err(Error::Join)?;
@@ -911,6 +929,23 @@ impl Pipeline {
             }
         };
 
+        // Torrent-cache files: judged off the writer, then committed by it
+        // through its lease-free entry (SRC-13b).
+        let (cache_tx, cache_rx) = mpsc::channel(16);
+        let torrent_cache = cache_source.zip(cache_preparer).map(|(source, preparer)| {
+            let (feed, fetched) = torrent_cache::feed();
+            let task = tokio::spawn(torrent_cache::judge_task(
+                fetched,
+                cache_tx.clone(),
+                preparer,
+                config.filter.clone(),
+                config.sealer.clone(),
+                source,
+                writer_stats.clone(),
+            ));
+            (feed, task)
+        });
+        drop(cache_tx);
         let lease_stats = coordinator.stats.clone();
         let rollups_handle = rollups.clone();
         let writer = writer::Writer {
@@ -950,6 +985,8 @@ impl Pipeline {
             between: None,
             #[cfg(test)]
             marked: None,
+            #[cfg(test)]
+            crash_before_adult: false,
         };
         drop(pool_tx);
         let writer = tokio::spawn(writer.run(writer::WriterIo {
@@ -960,6 +997,7 @@ impl Pipeline {
             finish: finish_rx,
             swarm: swarm_rx,
             claims: claims_rx,
+            cache: cache_rx,
         }));
 
         Ok(Pipeline {
@@ -990,7 +1028,15 @@ impl Pipeline {
             finish: finish_tx,
             writer,
             health: health_task,
+            torrent_cache,
         })
+    }
+
+    /// Where the host hands the torrent-cache plugin's verified files
+    /// (SRC-13b): `None` unless [`PipelineConfig::torrent_cache`] names a
+    /// plugin that's registered and enabled at this start.
+    pub fn torrent_cache_feed(&self) -> Option<torrent_cache::Feed> {
+        self.torrent_cache.as_ref().map(|(feed, _)| feed.clone())
     }
 
     pub fn monitor(&self) -> Monitor {
@@ -1046,6 +1092,11 @@ impl Pipeline {
                     task.abort();
                 }
             }
+        }
+        // The plugins have stopped: nothing more comes from a cache. What
+        // it handed over and wasn't judged is looked up again next round.
+        if let Some((_, task)) = self.torrent_cache {
+            task.abort();
         }
         // The egress monitors end at the same signal.
         for mut task in self.egress_tasks {

@@ -233,7 +233,16 @@ pub const CRACK_WORDS: &[&[&str]] = &[
 pub fn words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
+        // An ASCII word lowercases the same either way; the ASCII form
+        // skips the per-character Unicode lookup (the filter's packs read
+        // every torrent's name this way).
+        .map(|w| {
+            if w.is_ascii() {
+                w.to_ascii_lowercase()
+            } else {
+                w.to_lowercase()
+            }
+        })
         .collect()
 }
 

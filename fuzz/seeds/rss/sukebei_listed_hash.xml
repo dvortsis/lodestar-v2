@@ -1,0 +1,40 @@
+<<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:nyaa="https://sukebei.nyaa.si/xmlns/nyaa" version="2.0">
+	<channel>
+		<title>Sukebei - Home - Torrent File RSS</title>
+		<description>RSS Feed for Home</description>
+		<link>https://sukebei.nyaa.si/</link>
+		<item>
+			<title>Synthetic Blocklisted Sample</title>
+			<link>https://sukebei.nyaa.si/download/3000001.torrent</link>
+			<guid isPermaLink="true">https://sukebei.nyaa.si/view/3000001</guid>
+			<pubDate>Mon, 02 Nov 2026 10:00:00 -0000</pubDate>
+			<nyaa:seeders>1</nyaa:seeders>
+			<nyaa:leechers>1</nyaa:leechers>
+			<nyaa:downloads>1</nyaa:downloads>
+			<nyaa:infoHash>b10c4ed0b10c4ed0b10c4ed0b10c4ed0b10c4ed0</nyaa:infoHash>
+			<nyaa:categoryId>1_5</nyaa:categoryId>
+			<nyaa:category>Category</nyaa:category>
+			<nyaa:size>10.0 MiB</nyaa:size>
+			<nyaa:comments>0</nyaa:comments>
+			<nyaa:trusted>No</nyaa:trusted>
+			<nyaa:remake>No</nyaa:remake>
+		</item>
+		<item>
+			<title>Synthetic Ordinary Sample</title>
+			<link>https://sukebei.nyaa.si/download/3000002.torrent</link>
+			<guid isPermaLink="true">https://sukebei.nyaa.si/view/3000002</guid>
+			<pubDate>Mon, 02 Nov 2026 10:00:00 -0000</pubDate>
+			<nyaa:seeders>1</nyaa:seeders>
+			<nyaa:leechers>1</nyaa:leechers>
+			<nyaa:downloads>1</nyaa:downloads>
+			<nyaa:infoHash>0123456789abcdef0123456789abcdef01234567</nyaa:infoHash>
+			<nyaa:categoryId>1_5</nyaa:categoryId>
+			<nyaa:category>Category</nyaa:category>
+			<nyaa:size>10.0 MiB</nyaa:size>
+			<nyaa:comments>0</nyaa:comments>
+			<nyaa:trusted>No</nyaa:trusted>
+			<nyaa:remake>No</nyaa:remake>
+		</item>
+	</channel>
+</rss>

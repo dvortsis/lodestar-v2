@@ -204,7 +204,7 @@ async fn logged_in(f: &Fixture) -> String {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": "correct horse battery" }),
+            json!({ "token": token, "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;
@@ -216,7 +216,10 @@ async fn logged_in(f: &Fixture) -> String {
 async fn setup_login_and_protection() {
     let f = fixture();
     let (_, _, body) = call(&f.app, get("/api/v1/auth", None)).await;
-    assert_eq!(body, json!({ "setup_required": true, "logged_in": false }));
+    assert_eq!(
+        body,
+        json!({ "setup_required": true, "logged_in": false, "notice_required": false })
+    );
     let (status, _, body) = call(&f.app, get("/api/v1/search?q=knight", None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["setup_required"], json!(true));
@@ -225,7 +228,7 @@ async fn setup_login_and_protection() {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": "nope", "password": "correct horse battery" }),
+            json!({ "token": "nope", "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;
@@ -233,7 +236,10 @@ async fn setup_login_and_protection() {
 
     let cookie = logged_in(&f).await;
     let (_, _, body) = call(&f.app, get("/api/v1/auth", Some(&cookie))).await;
-    assert_eq!(body, json!({ "setup_required": false, "logged_in": true }));
+    assert_eq!(
+        body,
+        json!({ "setup_required": false, "logged_in": true, "notice_required": false })
+    );
     let (status, _, _) = call(&f.app, get("/api/v1/search?q=knight", Some(&cookie))).await;
     assert_eq!(status, StatusCode::OK);
 

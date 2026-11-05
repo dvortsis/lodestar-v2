@@ -779,3 +779,173 @@ fn debug_never_shows_the_key() {
     let shown = format!("{:?}", unverified(key));
     assert!(!shown.contains(&key.to_string()), "{shown}");
 }
+
+// ---- consent covers the listed hosts (SRC-13b) ----
+
+fn built(templates: &[&str]) -> TorrentCache {
+    TorrentCache::new(Config::new(templates).unwrap()).0
+}
+
+#[test]
+fn the_manifest_lists_the_configured_hosts_as_https_endpoints() {
+    let p = built(&[
+        "https://b.example/t/{hash}.torrent",
+        "https://a.example:8443/get?h={HASH}",
+        "https://b.example/other/{hash}",
+    ]);
+    let hosts: Vec<(&str, &str)> = p
+        .manifest()
+        .endpoints
+        .iter()
+        .map(|e| (e.protocol, e.host))
+        .collect();
+    assert_eq!(
+        hosts,
+        [("https", "a.example:8443"), ("https", "b.example")],
+        "sorted, once each"
+    );
+    assert_eq!(p.manifest().id, torrent_cache::ID);
+    assert_eq!(p.manifest().consent, Consent::External);
+}
+
+/// An acknowledgement is bound to the hosts it was shown: adding or
+/// changing a cache host asks again, and an unchanged list doesn't, as the
+/// pipeline's start checks it (`consent::need_in`) for a plugin rebuilt
+/// from its saved settings.
+#[test]
+fn a_new_or_changed_host_asks_again_and_an_unchanged_list_doesnt() {
+    let shown = built(&["https://a.example/t/{hash}.torrent"]);
+    let ack = Ack::of(shown.manifest());
+    let need = |p: &TorrentCache| consent::need(p.manifest(), Some(&ack), &[]);
+    // The next start, the same settings: no question.
+    assert_eq!(need(&built(&["https://a.example/t/{hash}.torrent"])), None);
+    // The same host under another path: the same hosts are contacted.
+    assert_eq!(need(&built(&["https://a.example/x?h={HASH}"])), None);
+    // A host added, a host changed, the list emptied: asked again.
+    for changed in [
+        &[
+            "https://a.example/t/{hash}.torrent",
+            "https://b.example/{hash}",
+        ][..],
+        &["https://b.example/t/{hash}.torrent"][..],
+        &["https://a.example:8443/t/{hash}.torrent"][..],
+        &[][..],
+    ] {
+        assert_eq!(need(&built(changed)), Some(Need::Endpoints), "{changed:?}");
+    }
+    // An acknowledgement given before any cache was listed covers none.
+    let empty = Ack::of(built(&[]).manifest());
+    assert_eq!(
+        consent::need(
+            built(&["https://a.example/{hash}"]).manifest(),
+            Some(&empty),
+            &[]
+        ),
+        Some(Need::Endpoints)
+    );
+}
+
+#[test]
+fn the_egress_reaches_only_the_listed_hosts_through_the_plugin_trait() {
+    let none = built(&[]);
+    assert!(
+        SourcePlugin::endpoints(&none).is_none(),
+        "nothing reachable"
+    );
+    let p = built(&["https://a.example/{hash}"]);
+    assert!(SourcePlugin::endpoints(&p).is_some());
+}
+
+#[test]
+fn the_queue_says_how_much_room_each_lane_has() {
+    let (_p, queue, _rx) = TorrentCache::new(Config::default());
+    assert_eq!(queue.room(Why::Unverified), torrent_cache::QUEUE);
+    assert!(queue.push(unverified(InfoHash([1; 20]))));
+    assert_eq!(queue.room(Why::Unverified), torrent_cache::QUEUE - 1);
+    assert_eq!(queue.room(Why::Interest), torrent_cache::QUEUE);
+}
+
+// ---- the sync check is the async path's (X-fuzz-cache-1105) ----
+
+/// The `torrent_cache` fuzz target's seeds, each a key-picking byte and a
+/// body.
+fn fuzz_seeds() -> Vec<(String, u8, Vec<u8>)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/seeds/torrent_cache");
+    let mut out: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            let data = std::fs::read(e.path()).unwrap();
+            let name = e.file_name().into_string().unwrap();
+            (name, data[0], data[1..].to_vec())
+        })
+        .collect();
+    out.sort();
+    assert!(out.len() >= 20, "the seeds are missing");
+    out
+}
+
+/// The key the fuzz target picks for `body`: its v1 hash, its truncated
+/// v2 hash, or 20 bytes from the input.
+fn picked(pick: u8, body: &[u8]) -> InfoHash {
+    let hashes = lodestar_metainfo::TorrentFile::raw_info(body, &torrent_cache::LIMITS)
+        .ok()
+        .and_then(|raw| lodestar_metainfo::Info::parse(raw).ok())
+        .map(|i| (i.v1, i.v2.map(|h| h.truncated())));
+    match (pick % 3, hashes) {
+        (0, Some((v1, v2))) => v1.or(v2).unwrap(),
+        (1, Some((v1, v2))) => v2.or(v1).unwrap(),
+        _ => {
+            let mut k = [0u8; 20];
+            let n = body.len().min(20);
+            k[..n].copy_from_slice(&body[..n]);
+            InfoHash(k)
+        }
+    }
+}
+
+/// The plugin's async lookup, with one cache serving `body`, gives what
+/// `verify_body` gives on the same bytes: the same file, raw dict, claims
+/// and provenance, or the same miss, counted once.
+#[tokio::test(start_paused = true)]
+async fn the_async_lookup_and_verify_body_agree_on_the_fuzz_seeds() {
+    let (mut hits, mut misses) = (0, 0);
+    for (name, pick, body) in fuzz_seeds() {
+        let lookup = unverified(picked(pick, &body));
+        let sync = torrent_cache::verify_body(body.clone(), &lookup, "c.example");
+        let fake = FakeCache::new(&[("c.example", Answer::File(body))]);
+        let mut run = start(&["https://c.example/{hash}"], fake, &[lookup]);
+        let stats = run.plugin.stats();
+        match sync {
+            Ok(want) => {
+                hits += 1;
+                let got = run.verified.recv().await.unwrap();
+                assert_eq!(got.key(), want.key(), "{name}");
+                assert_eq!(got.why(), want.why(), "{name}");
+                assert_eq!(got.is_v2(), want.is_v2(), "{name}");
+                assert_eq!(got.host(), want.host(), "{name}");
+                assert_eq!(got.torrent(), want.torrent(), "{name}");
+                assert_eq!(got.info_raw(), want.info_raw(), "{name}");
+                assert_eq!(got.claims(), want.claims(), "{name}");
+                assert_eq!(got.provenance(), want.provenance(), "{name}");
+                assert_eq!(n(&stats.verified), 1, "{name}");
+            }
+            Err(miss) => {
+                misses += 1;
+                wait_for("the miss to be counted", || {
+                    n(&stats.mismatched) + n(&stats.invalid) == 1
+                })
+                .await;
+                let (mismatched, invalid) = (n(&stats.mismatched), n(&stats.invalid));
+                match miss {
+                    Miss::Mismatch => assert_eq!((mismatched, invalid), (1, 0), "{name}"),
+                    Miss::Invalid => assert_eq!((mismatched, invalid), (0, 1), "{name}"),
+                    other => panic!("{name}: verify_body said {other:?}"),
+                }
+                assert!(run.verified.try_recv().is_err(), "{name}");
+            }
+        }
+        run.running.stop_within().await.unwrap();
+    }
+    assert!(hits > 0 && misses > 0, "{hits} hits, {misses} misses");
+}

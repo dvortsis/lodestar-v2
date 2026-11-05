@@ -38,6 +38,7 @@ pub mod filters;
 pub mod insights;
 pub mod jobs;
 pub mod keys;
+pub mod legal;
 pub mod log_events;
 pub mod logs;
 pub mod openapi;
