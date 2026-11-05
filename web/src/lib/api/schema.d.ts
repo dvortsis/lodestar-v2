@@ -546,7 +546,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The core rules' hashed examples, run against the rules as they are. */
+        /**
+         * The core rules' hashed examples, run against the rules as they are,
+         *     and the pack corpora with counts and disagreements per rule.
+         */
         get: operations["getFilterFixtures"];
         put?: never;
         post?: never;
@@ -2515,6 +2518,11 @@ export interface components {
             held_version?: string;
             neutralize: null | components["schemas"]["Preview"];
             /**
+             * @description For `accept_pack_versions`: what accepting each version does, from
+             *     its shadow results in the replay window and the review queue.
+             */
+            pack_acceptance?: components["schemas"]["PackAcceptance"][];
+            /**
              * Format: int32
              * @description For `set_pack_override`: the version of the rule the override is
              *     bound to (0 while the version this install applied isn't known).
@@ -2522,6 +2530,11 @@ export interface components {
              *     password.
              */
             pack_base?: number;
+            /**
+             * @description For `accept_pack_versions`: the versions it accepts, `RULE@version`.
+             *     Send them back as `versions` to confirm with the password.
+             */
+            pack_versions?: string[];
             preview: components["schemas"]["Preview"];
             /**
              * @description For a subscription change: how strict your lists would be after
@@ -2891,6 +2904,31 @@ export interface components {
             op: "remove_pack_override";
             /** @example MW-2 */
             rule: string;
+        } | {
+            /**
+             * Format: int32
+             * @description The previewed `pack_base`, to confirm a weakening override.
+             */
+            base?: number | null;
+            /** @enum {string} */
+            op: "confirm_pack_override";
+            /** @example MW-2 */
+            rule: string;
+        } | {
+            /** @enum {string} */
+            op: "accept_pack_versions";
+            /**
+             * @example [
+             *       "MW-2"
+             *     ]
+             */
+            rules: string[];
+            /**
+             * @description The previewed `pack_versions` (`RULE@version`), to confirm a
+             *     weakening acceptance. When sent, apply accepts only exactly
+             *     these.
+             */
+            versions?: string[] | null;
         } | (components["schemas"]["MatchInput"] & {
             /** Format: int32 */
             expires_days?: number | null;
@@ -3016,6 +3054,18 @@ export interface components {
              * @enum {string}
              */
             source: "default" | "file" | "db" | "env";
+        };
+        /** @description One version's changelog entry. */
+        ChangelogEntry: {
+            /**
+             * @description `widens`, `narrows`, `action-heavier`, `action-lighter` or `mixed`
+             *     against the version before, as recorded.
+             */
+            direction: string;
+            /** @description The entry's text (Markdown); null when the changelog has none. */
+            text: string | null;
+            /** Format: int32 */
+            version: number;
         };
         /**
          * @description A range of characters (Unicode scalar values) in the query, end
@@ -4579,10 +4629,11 @@ export interface components {
         };
         /**
          * @description `GET /filters/fixtures`: the core rules' hashed examples, run against
-         *     the rules as they are (§20.8).
+         *     the rules as they are, and the pack corpora (§20.8).
          */
         Fixtures: {
             core: components["schemas"]["FixtureCounts"][];
+            packs: components["schemas"]["PackCorpus"];
         };
         /** @description One discovery cohort (or a UTC day of them) in the funnel (§10.9.3). */
         FunnelCohort: {
@@ -5918,12 +5969,27 @@ export interface components {
             /** @description Ranges in the IP lists. */
             ip_ranges: number;
             overrides: components["schemas"]["OverrideEntry"][];
+            /**
+             * @description Conditions of the pack-version state for the Filters & Safety
+             *     notice (`packs.lost`, `packs.differ`, `packs.skipped.MW-2`, …);
+             *     empty when there's nothing to report.
+             */
+            pack_conditions: string[];
             packs: components["schemas"]["PackState"][];
+            /**
+             * Format: int64
+             * @description Pack versions were first recorded at this time on a store that
+             *     already had rules (an upgrade from before versions existed, or
+             *     every version row lost): worth a notice.
+             */
+            packs_seeded_over_rules: number | null;
             /**
              * @description Entries a config file or a floor-marked list dropped, still blocked
              *     until you settle them (§2.7).
              */
             pending_floor_removals: components["schemas"]["PendingFloorEntry"][];
+            /** @description Pack-rule versions waiting to be accepted, with their changelogs. */
+            pending_pack_versions: components["schemas"]["PendingPackVersion"][];
             /** @description Items in quarantine. */
             quarantine: number;
             rules: components["schemas"]["RuleEntry"][];
@@ -5980,6 +6046,97 @@ export interface components {
              */
             updated_at: number;
         };
+        /**
+         * @description What accepting one pending pack-rule version does (RP-3). Torrent
+         *     counts are distinct torrents in the replay window whose shadow result
+         *     (the pending version beside the applied one) was recorded.
+         */
+        PackAcceptance: {
+            /**
+             * Format: int32
+             * @description The version this install applied; null when it isn't known, or it
+             *     never applied the rule (a new rule).
+             */
+            applied: number | null;
+            /**
+             * @description The recorded direction from `applied` to `version`, every step
+             *     combined: `widens`, `narrows`, `action-heavier`, `action-lighter`
+             *     or `mixed`; null when there's no record.
+             */
+            direction: string | null;
+            /** @description Torrents whose shadow result contradicts the recorded direction. */
+            disagreements: number;
+            /** @description Torrents both versions hold, the new one with a heavier action. */
+            heavier: number;
+            /**
+             * @description The version state is in doubt for this rule (a Filters & Safety
+             *     notice about pack versions): accepting is weakening.
+             */
+            in_doubt: boolean;
+            /** @description Torrents both versions hold, the new one with a lighter action. */
+            lighter: number;
+            /** @description Torrents only the new version holds. */
+            newly_held: number;
+            /** @description Torrents only the applied version holds. */
+            no_longer_held: number;
+            /**
+             * @description Holds of this rule acceptance leaves for review: in quarantine, and
+             *     dropped. Nothing is released.
+             */
+            review_quarantine: number;
+            review_tombstones: number;
+            /** @example MW-2 */
+            rule: string;
+            /** @description Accepting this version strengthens filtering. */
+            strengthens: boolean;
+            /**
+             * Format: int32
+             * @description The version accepted: the one this build ships.
+             */
+            version: number;
+        };
+        /**
+         * @description The pack corpora this build ships, run against its pack rules, each
+         *     rule on its own (RP-1): the same pass or fail CI enforces.
+         */
+        PackCorpus: {
+            /** @description The corpus didn't load: why. Nothing else is reported then. */
+            error: string | null;
+            /**
+             * @description Each failure, readable: a wrong example, too few examples, a
+             *     recorded direction the corpus doesn't show.
+             */
+            failures: string[];
+            /** @description Everything passed (known gaps don't fail it). */
+            passes: boolean;
+            /**
+             * @description Precision items (legitimate torrents each guard exists for) held by
+             *     a rule they shouldn't be, known gaps aside.
+             */
+            precision_failing: number;
+            precision_items: number;
+            rules: components["schemas"]["PackFixtureCounts"][];
+        };
+        PackFixtureCounts: {
+            /** @description Examples the rule gets wrong. */
+            failing: number;
+            /**
+             * @description Precision items the rule holds because a guard it should have
+             *     isn't built yet (a known over-filter, not a pass).
+             */
+            gaps: number;
+            must_match: number;
+            must_not_match: number;
+            /** @example malware */
+            pack: string;
+            /** @example MW-2 */
+            rule: string;
+            /**
+             * Format: int32
+             * @description The version judged: the one this build ships.
+             */
+            version: number;
+        };
         /** @description Your override of one pack rule, as stored and as it applies now. */
         PackOverrideState: {
             /** @description Null when the stored row doesn't read. */
@@ -6008,18 +6165,55 @@ export interface components {
             unreadable: boolean;
         };
         PackRuleState: {
+            /**
+             * @description The action that applies now: the base action, or your override's
+             *     where it applies.
+             */
             action: string;
+            /**
+             * Format: int32
+             * @description The version this install accepted; null when it isn't known, or it
+             *     never applied the rule (a new rule waiting to be accepted).
+             */
+            applied: number | null;
+            /** @description The rule's own action as the versions that apply now take it. */
+            base_action: string;
+            /** @description Your override's base changed since you set it (§20.8). */
+            base_changed: boolean;
             /** @example MW-2 */
             id: string;
             on: boolean;
-            /** @description Your override of the rule (RP-2), when it has one. */
-            override?: components["schemas"]["PackOverrideState"];
+            /**
+             * @description Your override of the rule (RP-2), when it has one. Not one of the
+             *     Override entries (`overrides`), which skip rules altogether.
+             */
+            pack_override?: components["schemas"]["PackOverrideState"];
+            /**
+             * Format: int32
+             * @description The version waiting to be accepted, run in shadow meanwhile.
+             */
+            pending: number | null;
+            /**
+             * Format: int32
+             * @description The rule's version as this build ships it.
+             */
+            version: number;
         };
         PackState: {
+            /**
+             * @description The pack's changelog as this build ships it (Markdown, one
+             *     `## RULE@version` entry per version, newest first).
+             */
+            changelog: string;
             /** @example malware */
             id: string;
             on: boolean;
             rules: components["schemas"]["PackRuleState"][];
+            /**
+             * @description The pack's version: its rules' versions as this build ships them.
+             * @example MW-1@1 MW-2@1 MW-3@1 MW-4@1 MW-5@1
+             */
+            version: string;
         };
         /** @description `GET /parse`: the AST and the canonical text it prints as. */
         ParseResponse: {
@@ -6077,6 +6271,34 @@ export interface components {
             /** @description `install` or `restored`. */
             kind: string;
             version: string;
+        };
+        /**
+         * @description A pack-rule version waiting to be accepted (RP-0, §20.10): it runs in
+         *     shadow until `accept_pack_versions` accepts it.
+         */
+        PendingPackVersion: {
+            /**
+             * Format: int32
+             * @description The version this install applied; null when it isn't known, or it
+             *     never applied the rule.
+             */
+            applied: number | null;
+            /**
+             * @description The changelog entries from `applied` (exclusive) to `version`,
+             *     newest first.
+             */
+            changelog: components["schemas"]["ChangelogEntry"][];
+            /**
+             * @description The recorded direction from `applied`, every step combined; null
+             *     when there's no record.
+             */
+            direction: string | null;
+            /** @example malware */
+            pack: string;
+            /** @example MW-2 */
+            rule: string;
+            /** Format: int32 */
+            version: number;
         };
         /** @description The policy in effect, as the settings and the clock make it. */
         Policy: {
@@ -6450,6 +6672,11 @@ export interface components {
              */
             expires_at: number;
             hash: string;
+            /**
+             * @description An acceptance of a newer version of its pack rule left it for
+             *     review: the version that applies now may not hold it (RP-3).
+             */
+            pack_review: boolean;
             rule: string;
             /** @description A sealed name is kept (see `reveal_name`). */
             sealed: boolean;
@@ -8707,6 +8934,11 @@ export interface components {
             /** Format: int64 */
             at: number;
             hash: string;
+            /**
+             * @description An acceptance of a newer version of its pack rule left it for
+             *     review: the version that applies now may not hold it (RP-3).
+             */
+            pack_review: boolean;
             rule: string;
         };
         /**
