@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T16:16Z",
+  "updated_at": "2026-11-05T16:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3129,10 +3129,14 @@
       "pr": 489
     },
     "X-flake-update-log": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhn9jusE8U5BnvTWfJJX",
       "since": "2026-11-05T13:34Z",
-      "model": "sonnet"
+      "model": "sonnet",
+      "pr": 498,
+      "merge": "5df0c612",
+      "archived": true,
+      "done": "2026-11-05T16:20Z"
     },
     "X-settings-followups": {
       "status": "running",
@@ -5408,7 +5412,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T16:16Z",
+    "updated": "2026-11-05T16:20Z",
     "items": [
       {
         "slot": 1,
@@ -5481,14 +5485,6 @@
         "agent": "claude",
         "doing": "Sources: wiring the Sonarr/Radarr webhooks into the app",
         "since": "2026-11-05T10:55Z"
-      },
-      {
-        "slot": 10,
-        "slice": "X-flake-update-log",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Test reliability: an update test that catches another test's log line",
-        "since": "2026-11-05T13:34Z"
       },
       {
         "slot": 11,
