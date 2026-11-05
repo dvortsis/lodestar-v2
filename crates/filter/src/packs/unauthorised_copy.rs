@@ -113,11 +113,22 @@ pub fn title_key(title: &str) -> String {
     crack::words(title).join(" ")
 }
 
-/// Whether a parsed title and year are on [`ALLOW`].
+/// Whether a parsed title and year are on [`ALLOW`]. Word by word, as
+/// [`title_key`] reads the title, without building the key: UC-3 asks it
+/// of every scene-style film it would hide.
 pub fn allowed(title: &str, year: Option<u16>) -> bool {
-    let key = title_key(title);
+    let same = |key: &str| {
+        let mut words = title
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty());
+        key.split(' ').all(|k| {
+            words
+                .next()
+                .is_some_and(|w| w.chars().flat_map(char::to_lowercase).eq(k.chars()))
+        }) && words.next().is_none()
+    };
     ALLOW.iter().any(|(t, y)| {
-        *t == key
+        same(t)
             && match (y, year) {
                 (None, _) => true,
                 (Some(want), Some(got)) => *want == got,
@@ -175,10 +186,15 @@ impl Ctx<'_> {
             .year
             .map(|y| y.first.to_string())
             .and_then(|y| words.iter().position(|w| *w == y));
-        // A name ending `.ts` is an MPEG transport stream (a broadcast or
-        // DVB recording) named with its extension, not a telesync: the
-        // parser doesn't strip `ts` as one, so that last word never counts.
-        let ts_extension = self.item.name.to_ascii_lowercase().ends_with(".ts");
+        // A name ending `.ts` that is the name of an MPEG transport stream
+        // in the torrent (a broadcast or DVB recording) is its extension,
+        // not a telesync: the parser doesn't strip `ts` as one. Only then is
+        // that last word skipped, so `Movie.2024.TS` still counts.
+        let ts_extension = self.item.name.to_ascii_lowercase().ends_with(".ts")
+            && self
+                .files
+                .iter()
+                .any(|(_, e)| e.as_ref().is_some_and(|e| e.as_str() == "ts"));
         let last = words.len().saturating_sub(1);
         words.iter().enumerate().any(|(i, w)| {
             WEAK_MARKERS.contains(&w.as_str())

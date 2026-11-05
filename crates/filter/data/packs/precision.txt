@@ -141,6 +141,22 @@ item Crack Attack v1.2 x64 Patch
 item Example Wall Crack Repair Tutorial 2019 720p
   file 300M tutorial.mp4
   guards MW-6 UC-2
+# A crack word, but not software: the kind keeps MW-6 and UC-2 off.
+item Example.Movie.2019.Cracked.1080p.WEB
+  file 4G Example.Movie.2019.Cracked.1080p.WEB.mkv
+  guards MW-6 UC-2
+item Example Band - Cracked Keygen (2020) FLAC
+  file 30M 01 - Cracked.flac
+  file 30M 02 - Keygen.flac
+  guards MW-6 UC-2
+item Example Author - The Keygen Crack (2019) EPUB
+  file 2M Example Author - The Keygen Crack.epub
+  guards MW-6 UC-2
+# Physical damage, not a crack (`cracked` before a screen word).
+item Example.OS.ISO.cracked.screen.fix.v1.2
+  file 3G example-os.iso
+  file 2M fix.exe
+  guards MW-6 UC-2
 
 # Weak source words as title words (UC-1: a weak marker counts only in
 # brackets or after the year).

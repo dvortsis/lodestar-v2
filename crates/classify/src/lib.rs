@@ -235,7 +235,14 @@ pub fn classify_enriched(
         let mut j = junk::score(&title, &composition, structure, files);
         // Cracked software (owner §2.39): only a software release, so a
         // game, a track or a film with the word is never read as one.
-        if content_type == ContentType::Software && junk::cracked(name, &title.release) {
+        // The crack words are read from the text the release was parsed
+        // from: the name, unless an uninformative name was resolved from
+        // the file tree, when no crack word of the name speaks for the
+        // parse and none counts.
+        if content_type == ContentType::Software
+            && title.resolved.is_none()
+            && junk::cracked(name, &title.release)
+        {
             j.add(JunkReason::Cracked);
         }
         j

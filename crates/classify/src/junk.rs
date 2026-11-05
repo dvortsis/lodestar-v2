@@ -237,9 +237,16 @@ pub fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Words that, right after `crack` or `cracked`, make it physical damage
+/// (`Linux.ISO.cracked.screen.fix`, a phone repair guide), not a software
+/// crack. Narrow on purpose: `Crack.Fix`, a scene fix for a crack, stays a
+/// crack.
+const DAMAGE: &[&str] = &["screen", "screens", "glass", "display", "lcd", "phone"];
+
 /// How many crack words ([`CRACK_WORDS`]) `words` holds, each phrase
 /// counted where it starts. `k ed` counts only when `name` spells `k'ed`
-/// (either apostrophe).
+/// (either apostrophe); `crack` or `cracked` followed by a damage word
+/// ([`DAMAGE`]) doesn't count.
 pub fn crack_words_in(words: &[String], name: &str) -> usize {
     let low = name.to_lowercase();
     let spelled = low.contains("k'ed") || low.contains("k\u{2019}ed");
@@ -249,6 +256,10 @@ pub fn crack_words_in(words: &[String], name: &str) -> usize {
                 words.len() - i >= p.len()
                     && p.iter().zip(&words[i..]).all(|(a, b)| a == b)
                     && (p != &["k", "ed"] || spelled)
+                    && !(matches!(p, [w] if *w == "crack" || *w == "cracked")
+                        && words
+                            .get(i + 1)
+                            .is_some_and(|n| DAMAGE.contains(&n.as_str())))
             })
         })
         .count()
@@ -257,8 +268,10 @@ pub fn crack_words_in(words: &[String], name: &str) -> usize {
 /// Whether a software release is cracked (MW-6, UC-2): the parser's
 /// `cracked` flag **and** a crack word the title doesn't account for. A
 /// title like `Crack Attack` names the program, not a crack, so its words
-/// are taken off; a crack word must remain after them. `name` is the text
-/// the release was parsed from. The content type is the caller's to check.
+/// are taken off; a crack word must remain after them. `name` must be the
+/// text `release` was parsed from: the caller passes the torrent's name
+/// only when the release came from it (`classify_enriched`, not for a name
+/// resolved from the file tree). The content type is the caller's to check.
 pub fn cracked(name: &str, release: &lodestar_release_parser::Release) -> bool {
     use lodestar_release_parser::Flag;
     if !release.flags.contains(&Flag::Cracked) {

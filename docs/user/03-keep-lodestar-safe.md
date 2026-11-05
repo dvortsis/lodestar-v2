@@ -141,7 +141,7 @@ A built-in list of public-domain and Creative Commons films, such as *Big Buck B
 
 </details>
 
-On a new install, the malware pack also hides cracked software, because cracks often carry malware. Turning the unauthorised-copy pack off then doesn't show cracked software again.
+On a new install, the malware pack also hides cracked software, because cracks often carry malware. Turning the unauthorised-copy pack off then doesn't show cracked software again. If you also turn off the malware pack's cracked-software rule (MW-6), cracked software shows again but still ranks lower in search, as other junk does.
 
 If you installed an earlier version, the unauthorised-copy pack starts off. Lodestar offers it in the setup wizard and in **Settings → Filters & Safety**, where turning it on shows what it would hide first. We recommend you turn it on. The malware pack's new cracked-software rule waits for review on an upgraded install, so it hides nothing until a later version lets you accept it.
 

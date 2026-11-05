@@ -267,6 +267,10 @@ const LAWFUL: &[(&str, &[(&str, u64)])] = &[
     ),
     ("Little Ts 720p", &[("Little Ts 720p.mkv", 900 << 20)]),
     ("Example.Film.2019.ts", &[("Example.Film.2019.ts", 2 << 30)]),
+    (
+        "Linux.ISO.cracked.screen.fix",
+        &[("linux.iso", 3 << 30), ("screen-fix.exe", 2 << 20)],
+    ),
     ("Dash Cam Footage 2019 1080p", &[("dashcam.mp4", 3 << 30)]),
     ("The Cam Girl Next Door 1080p WEB", &[("film.mkv", 2 << 30)]),
     (

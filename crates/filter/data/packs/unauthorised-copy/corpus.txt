@@ -14,12 +14,18 @@ match Example Movie 2024 DVDSCR x264
   file 1G Example Movie 2024 DVDSCR x264.mkv
 match Example.Movie.2024.CAM.x264-GRP
   file 1G Example.Movie.2024.CAM.x264-GRP.mkv
+match Example.Movie.2024.TS
+  file 1G Example.Movie.2024.TS.mkv
+match Example.Movie.2024.720p.TS
+  file 1G Example.Movie.2024.720p.TS.mkv
 miss Nanny Cam 1080p x264-GRP
   file 2G Nanny Cam 1080p x264-GRP.mkv
 miss Little Ts 720p
   file 900M Little Ts 720p.mkv
 miss Example.Movie.2024.1080p.BluRay.x264-GRP
   file 8G Example.Movie.2024.1080p.BluRay.x264-GRP.mkv
+miss Example.Film.2019.ts
+  file 2G Example.Film.2019.ts
 miss Example.Show.S01E01.HDTS.x264-GRP
   file 400M Example.Show.S01E01.HDTS.x264-GRP.mkv
 
