@@ -2960,6 +2960,30 @@ export interface components {
              */
             state: "idle" | "checking" | "ok" | "failed";
         };
+        /**
+         * @description What a source claimed that the verified metadata contradicts
+         *     (§18.5). A field is null when the source didn't state it or it
+         *     agrees; claimed file lists themselves are never returned.
+         */
+        ClaimDifferences: {
+            file_count: null | components["schemas"]["ClaimedNumber"];
+            /** @description Every stated field agrees. */
+            matches: boolean;
+            name: null | components["schemas"]["ClaimedText"];
+            size: null | components["schemas"]["ClaimedNumber"];
+        };
+        /** @description A claimed number and the verified one. */
+        ClaimedNumber: {
+            /** Format: int64 */
+            claimed: number;
+            /** Format: int64 */
+            verified: number;
+        };
+        /** @description A claimed text and the verified one. */
+        ClaimedText: {
+            claimed: string;
+            verified: string;
+        };
         ClassRule: {
             adult: boolean;
             /** Format: int64 */
@@ -4225,8 +4249,14 @@ export interface components {
             /**
              * @description Term facets by name: `type`, `ext`, `res`, `category`, `lang`,
              *     `group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,
-             *     `ambiguous`, `imported`, `backfill`, and `adult` when there are
-             *     adult subtypes to list.
+             *     `ambiguous`, `imported`, `backfill`, `network`, `source`,
+             *     `verified`, and `adult` when there are adult subtypes to list.
+             *
+             *     `verified` counts `no` even while the search hides unverified
+             *     items, since its default `verified:yes` is the facet's own
+             *     selection; `source` lists plugin ids (names in `source_names`),
+             *     and never a private source's to anyone but the admin session
+             *     (§18.7).
              */
             facets: {
                 [key: string]: components["schemas"]["TermFacet"];
@@ -4246,6 +4276,15 @@ export interface components {
              *     300,000 when a segment holds more than 300,000 torrents).
              */
             sampled: boolean;
+            /**
+             * @description The display name of each plugin id the `source` facet lists.
+             * @example {
+             *       "dht": "Mainline DHT"
+             *     }
+             */
+            source_names: {
+                [key: string]: string;
+            };
             /** Format: double */
             took_ms: number;
             /** @description The search's result count, as `/search` reports it. */
@@ -4602,6 +4641,11 @@ export interface components {
             status: components["schemas"]["GroupStatus"];
             /** @description More matched than the group lists. */
             truncated: boolean;
+        };
+        /** @description A hit's source: the display name, and the id `source:` takes. */
+        HitSource: {
+            name: string;
+            plugin: string;
         };
         /** @description The machine Lodestar runs on. */
         HostInfo: {
@@ -6081,6 +6125,98 @@ export interface components {
             query_logging: boolean;
         };
         /**
+         * @description A torrent's provenance (architecture §18.5, §18.6, §18.8).
+         *
+         *     **Private sources (§18.7):** a source with the account consent class
+         *     (Prowlarr, Jackett, private-tracker announces, your own download
+         *     clients), claims that came through a private source, and every
+         *     source of a `private_source` torrent are shown only to the signed-in
+         *     admin session. Any other caller (an API key, once these routes take
+         *     one) gets them left out and `withheld` set.
+         * @example {
+         *       "network": "bt",
+         *       "sources": [
+         *         {
+         *           "claim": null,
+         *           "first": true,
+         *           "first_seen_at": 1792677600,
+         *           "id": 0,
+         *           "name": "Mainline DHT",
+         *           "plugin": "dht",
+         *           "private": false
+         *         },
+         *         {
+         *           "claim": {
+         *             "file_count": {
+         *               "claimed": 3,
+         *               "verified": 4
+         *             },
+         *             "matches": false,
+         *             "name": null,
+         *             "size": null
+         *           },
+         *           "first": false,
+         *           "first_seen_at": null,
+         *           "id": 2,
+         *           "name": "Nyaa",
+         *           "plugin": "nyaa",
+         *           "private": false
+         *         }
+         *       ],
+         *       "verified": true,
+         *       "withheld": false
+         *     }
+         */
+        Provenance: {
+            /** @description The network tier (§18.6): `bt` for every stored torrent. */
+            network: string;
+            /**
+             * @description The sources that found it: the first one first, then by id.
+             *     Empty for a torrent stored before provenance was recorded.
+             */
+            sources: components["schemas"]["ProvenanceSource"][];
+            /**
+             * @description It has verified metadata (§18.5). Always true here: a torrent's
+             *     detail is its BEP 9 info dictionary.
+             */
+            verified: boolean;
+            /**
+             * @description Sources or claims were left out because they're private and this
+             *     caller isn't the admin session.
+             */
+            withheld: boolean;
+        };
+        /** @description One source that found a torrent. */
+        ProvenanceSource: {
+            claim: null | components["schemas"]["ClaimDifferences"];
+            /** @description It found the torrent first. */
+            first: boolean;
+            /**
+             * Format: int64
+             * @description When it first found the torrent: the torrent's discovery time for
+             *     the first source; null for the others, whose first sighting isn't
+             *     recorded.
+             */
+            first_seen_at: number | null;
+            /**
+             * Format: int32
+             * @description The source's id, as `GET /sources` lists it.
+             */
+            id: number;
+            /**
+             * @description The plugin's display name; its manifest id when this build doesn't
+             *     run that plugin.
+             */
+            name: string;
+            /** @description The manifest id, as `source:` takes it. */
+            plugin: string;
+            /**
+             * @description A private source, or its claims came through one (§18.7). Only the
+             *     admin session ever sees one.
+             */
+            private: boolean;
+        };
+        /**
          * @description `GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.
          * @example {
          *       "allowed_users": [],
@@ -6733,6 +6869,12 @@ export interface components {
             seeders_approx: boolean;
             /** Format: int64 */
             size: number;
+            /**
+             * @description The source that found it first, or the first one this caller may
+             *     see (§18.7: a private source is shown only to the admin session).
+             *     On `/search` hits only, and absent when none is known or visible.
+             */
+            source?: components["schemas"]["HitSource"];
             /** @description One tracker reports a swarm nothing else sees (§8): fake seeding. */
             swarm_suspect: boolean;
             /** @description The resolved title; null = not resolved. */
@@ -6748,6 +6890,11 @@ export interface components {
              * @description Of those, trackers that reported anyone; null = never scraped.
              */
             trackers_reporting: number | null;
+            /**
+             * @description It has verified metadata (§18.5, the "Unverified" badge when
+             *     false). On `/search` hits only.
+             */
+            verified?: boolean;
         };
         /**
          * @description `GET /search/state`: the index's size, growth and rebuild, for the
@@ -8382,6 +8529,11 @@ export interface components {
              */
             other: number;
             /**
+             * @description The field is still being backfilled after an index upgrade, so the
+             *     counts are low (only `source`): show them as partial.
+             */
+            partial: boolean;
+            /**
              * @description The top values by count (ties by value), then any value the query
              *     selects or excludes that isn't among them. Flags list `yes` and
              *     `no`.
@@ -8505,6 +8657,8 @@ export interface components {
             name: string;
             /** Format: int64 */
             piece_len: number;
+            /** @description Where it came from (§18.5, §18.8): "Found by: DHT · Nyaa". */
+            provenance: components["schemas"]["Provenance"];
             /**
              * Format: int32
              * @description Null = never scraped.

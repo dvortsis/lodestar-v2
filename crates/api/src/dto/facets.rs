@@ -53,8 +53,14 @@ pub struct FacetsResponse {
     pub canonical: String,
     /// Term facets by name: `type`, `ext`, `res`, `category`, `lang`,
     /// `group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,
-    /// `ambiguous`, `imported`, `backfill`, and `adult` when there are
-    /// adult subtypes to list.
+    /// `ambiguous`, `imported`, `backfill`, `network`, `source`,
+    /// `verified`, and `adult` when there are adult subtypes to list.
+    ///
+    /// `verified` counts `no` even while the search hides unverified
+    /// items, since its default `verified:yes` is the facet's own
+    /// selection; `source` lists plugin ids (names in `source_names`),
+    /// and never a private source's to anyone but the admin session
+    /// (§18.7).
     pub facets: BTreeMap<String, TermFacet>,
     /// `size`, `discovered` and `year`.
     pub histograms: BTreeMap<String, Histogram>,
@@ -65,6 +71,9 @@ pub struct FacetsResponse {
     /// Some group was computed on a sample (above 1,000,000 matches, or
     /// 300,000 when a segment holds more than 300,000 torrents).
     pub sampled: bool,
+    /// The display name of each plugin id the `source` facet lists.
+    #[schema(example = json!({"dht": "Mainline DHT"}))]
+    pub source_names: BTreeMap<String, String>,
     pub took_ms: f64,
     /// The search's result count, as `/search` reports it.
     pub total: usize,
@@ -94,6 +103,9 @@ pub struct TermFacet {
     /// The counts of the values not listed, summed (a torrent with two
     /// such values counts twice).
     pub other: u64,
+    /// The field is still being backfilled after an index upgrade, so the
+    /// counts are low (only `source`): show them as partial.
+    pub partial: bool,
     /// The top values by count (ties by value), then any value the query
     /// selects or excludes that isn't among them. Flags list `yes` and
     /// `no`.
