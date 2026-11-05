@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T22:48Z",
+ "updated_at": "2026-11-05T22:57Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3263,12 +3263,13 @@
    "head": "ca2aa9d1"
   },
   "X-enr-page-flag": {
-   "status": "delta self-checked; merge on green",
+   "status": "merged",
    "session": "session_01MMjhn8MfsZf78SSbRHdDCm",
    "since": "2026-11-05T20:25Z",
    "brief": "briefs/X-enr-page-flag.md",
    "pr": 511,
-   "head": "5d05b087"
+   "head": "5d05b087",
+   "merge": "63a2c6df"
   },
   "X-claim-store": {
    "status": "merged",
@@ -4939,6 +4940,11 @@
    "id": "owner-flag-X-claim-store",
    "note": "sent 22:49Z at merge",
    "added": "2026-11-05T22:48Z"
+  },
+  {
+   "id": "owner-flag-X-enr-page-flag",
+   "note": "sent 22:57Z at merge",
+   "added": "2026-11-05T22:57Z"
   }
  ],
  "main_health": [
@@ -5601,15 +5607,16 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T22:48Z",
+  "updated": "2026-11-05T22:57Z",
   "items": [
    {
     "slot": 1,
-    "slice": "X-enr-page-flag",
+    "slice": null,
     "role": "build",
     "agent": "claude",
-    "doing": "Enrichment: parser page flags replace the plugin stopgaps; PR #511 in review",
-    "since": "2026-11-05T20:25Z"
+    "doing": "Retired: X-enr-page-flag merged (#511, 63a2c6df).",
+    "since": "2026-11-05T22:57Z",
+    "status": "idle"
    },
    {
     "slot": 2,
