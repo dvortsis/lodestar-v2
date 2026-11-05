@@ -2825,11 +2825,12 @@
       "brief": "briefs/LEGAL-1r.md"
     },
     "X-filter-budget-noise": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBVTXWupjocxMLjpVe",
       "launched": "2026-11-05T01:17Z",
-      "brief": "briefs/X-filter-budget-noise.md"
+      "brief": "briefs/X-filter-budget-noise.md",
+      "pr": 451
     },
     "X-search-files-4": {
       "status": "building",
@@ -4381,7 +4382,8 @@
     "slices.yaml L3 owns has a split entry: \"packaging/windows/portable/Start\" and \"Lodestar.cmd\" (should be \"packaging/windows/portable/Start Lodestar.cmd\"). Fix in a runner PR.",
     "After #456 (X-mimalloc-docs): soak READMEs document build_target, --c-allocator and CR-0 --password-file; docs/metrics.md drops \"ring\" from (SQLite, zstd, ring); metrics.rs # HELP for mimalloc committed no longer says only the Rust allocator. r5 steps: run analyzer with --c-allocator mimalloc (or record build_target) so attribution reads correctly; gate unaffected.",
     "Flake: web/e2e/boot-shell.routes.test.ts:424 \"a failed navigation shows the error\" — route.fetch: Target page closed while running route callback (line 411). Seen on #454 (RP-DEF) 2026-11-05. Fix once in its own small slice: page.unrouteAll({ behavior: \"ignoreErrors\" }) at test end, or await the handler.",
-    "Flake (Windows): lodestar-dht node::actor::restart_wire::no_restored_peer_is_sampled_before_its_deadline (crates/dht/src/node/actor.rs:3609, samples_received(..).all(n == 0) failed) on #454 test (windows-latest) 2026-11-05; passed on Linux. Timing-sensitive deadline test; Opus fix slice (DHT core) if it recurs."
+    "Flake (Windows): lodestar-dht node::actor::restart_wire::no_restored_peer_is_sampled_before_its_deadline (crates/dht/src/node/actor.rs:3609, samples_received(..).all(n == 0) failed) on #454 test (windows-latest) 2026-11-05; passed on Linux. Timing-sensitive deadline test; Opus fix slice (DHT core) if it recurs.",
+    "Post-merge #451 (2026-11-05): watch the first ~10 filter budget jobs on AMD EPYC 9V45 runners; if any reads more than ~10% below the 7763 at the same code, re-derive its skew with the pooled window."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5022,7 +5024,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T02:40Z",
+    "updated": "2026-11-05T03:22Z",
     "items": [
       {
         "slot": 1,
@@ -5067,11 +5069,12 @@
       },
       {
         "slot": 6,
-        "slice": "X-filter-budget-noise",
+        "slice": "",
         "role": "build",
         "agent": "claude",
-        "doing": "Making the filter speed check hold up on busy CI runners (owner number 50 µs unchanged).",
-        "since": "2026-11-05T01:17Z"
+        "doing": "Free: next candidates SRC-10e (ready) or SRC-10c-2; RP-2, RP-1b, RP-UC wait for RP-DEF (#454) to merge (owns overlap).",
+        "since": "2026-11-05T03:22Z",
+        "status": "idle"
       },
       {
         "slot": 7,
