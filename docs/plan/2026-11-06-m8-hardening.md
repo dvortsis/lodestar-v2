@@ -1,0 +1,210 @@
+# M8 hardening to 1.0: the sliced plan (E-M8)
+
+Planning slice P-m8, 2026-11-06, for the build runner. It turns build-plan P7 ("M8 hardening → 1.0") into `M8-*` build slices and `G-v1-*` gates. Docs only: nothing here writes code, and nothing edits `runner/slices.yaml` or `runner/dashboard.yaml` (§4.1 holds the entries ready to paste).
+
+**Authority:** `docs/owner-decisions.md` §1.4, §1.6, §1.8, §2.14, §2.18, §2.19, §2.22, §2.24–§2.26, §2.35, §2.36; architecture §3, §10.1, §10.17, §17, §18.9, §19.8, §20.8; build-plan §0.4, §0.6 and P7. Where they're silent the plan says so (**silent**) and puts the question in §5. It decides nothing that belongs to the owner.
+
+## 1. Fixed constraints
+- **1.0 ships when every §17 gate is green** (build-plan P7). This plan adds no product feature. Anything a gate finds is fixed in its own slice (§4.4), never inside a gate slice.
+- **The budgets are the owner's** (owner §1.6; architecture §3, §10.1). A gate that misses one goes to the owner with what drives it (§2.26 lets the runner decide performance and UX changes to owner-set numbers, but not to drop a gate). No threshold in this plan loosens one.
+- **Politeness and network guardrails are never relaxed to pass a gate** (build-plan §0.6).
+- **The 50M numbers are the owner's to approve** (owner §2.25, `ext:owner-50m-approval`). `G-import-50M` already exists; this plan only depends on it.
+- **The repo is public** (owner-decisions §3). A real torrent name, an owner hash or an unfixed vulnerability's detail is never committed (§5 OQ2, OQ6).
+- **Model policy** (CLAUDE.md): Opus for parsers, untrusted input, on-disk formats, concurrency, security and search; Sonnet for CI workflows, docs and scaffolding that follows a pattern. Every review is Opus.
+- **No migration.** No slice here changes `crates/store/src/schema.rs`.
+- **Building waits** for the v0.5.1 soak verdict (r5; baseline ends 2026-11-06T13:12Z) and, per `runner/slices.yaml`, for E-M8's deps (E-M7, E-M6, E-v08). §5 RQ1 asks the runner to pull the tooling slices forward. Slots: at most 4 from 2026-11-06T00:00Z, shared with every other track.
+
+## 2. Inventory: what exists against what 1.0 needs
+"Exists" means merged on `main` at `63a2c6df`.
+
+| §17 / P7 item | What exists (paths) | What 1.0 still needs | Slices |
+|---|---|---|---|
+| **Relevance, NDCG@10** | `bench/src/bin/relevance.rs`; `bench/relevance/{corpus,judgments,baseline}.txt` (≈140 invented torrents, 189 queries; NDCG@10 **0.9186**, MRR 0.9247, recall@50 0.9278); CI job `relevance (§8)` in `.github/workflows/ci.yml`, inside `ci-ok`, regression-only (tolerance 0.001) | A set with real-world names (build-plan §0.6: the synthetic set "says nothing about ranking on pilot data"); a held-out run on pilot data; an explicit 1.0 bar; `docs/relevance.md` (architecture §13 lists it; it doesn't exist) | M8-REL-1, M8-REL-2, M8-DOC-1, G-v1-relevance |
+| **10M performance** | `bench/src/bin/search-bench.rs` (CI at 200k, `search latency (§3)`); 10M runs done by hand in 4-core cloud containers (`docs/decisions/2026-11-05-X-search-files-4.md`, `-5.md`). File-level row **missed**: cold p95 228.4 ms against 150 ms; X-search-files-6 is on it | A dedicated, repeatable machine (§3's "4 cores, NVMe"); a persisted 10M dataset; steady-state RSS, new-torrent-to-searchable and cold start at 10M; the coordinator-ingest benchmark (§19.8, ≥ 1,000/s) | M8-PERF-1, M8-PERF-2, M8-PERF-3, G-v1-10m |
+| **10M size** | `bench/src/bin/size-report.rs` (`--gate` on 50k in CI); 10M index bytes in X-search-files-5 (torrent index 391.0 B, file index 757 B a torrent) | The all-in figure (≈2.3 KB a torrent, owner §1.6) measured at 10M on the dedicated machine with every 1.0 field populated | M8-PERF-1, G-v1-10m |
+| **50M import scale** | `G-import-smoke`, `G-import-1M`, `G-import-10M`, `G-rebuild-10M`, `G-import-50M` in `runner/slices.yaml`; `docs/operations/imports/pilots/` | Nothing new; 1.0 depends on `G-import-50M` and the owner's approval. Re-measure only per §5 RQ3 | — |
+| **Crawler gate on the RC** | `G-v06-crawler` (24 h mean ≥ 100/min, no hour < 70/min, p95 discovery-to-searchable ≤ 10 min); collector and analyzer `docs/soak/tools/linux/`, `analyze_cr.py` | The same run, same thresholds and CR-SPEC, on the 1.0 release candidate | G-v1-crawler |
+| **Windows soak** | MSI service mode 7 h 10 m PASS on v0.5.1 rc.2 (build-plan §0.1); `docs/soak/tools/cr0-soak.ps1`, `cr0-common.ps1`, `analyze_cr0.py`, `smoke_windows.ps1`; CI MSI install + `/healthz` (`release.yml` `package-windows`); `crates/lodestar/tests/windows_service.rs` | A defined 1.0 Windows soak (**silent** on length and gate) with the Linux memory rule; a runbook | M8-WIN-1, G-v1-windows |
+| **Full security review** | Per-slice `/security-review` (standards §7; recorded in each decisions file, e.g. `docs/decisions/2026-11-05-RP-1b.md`, `-X-log-url-redact-*.md`); v0.5 reviews in `docs/code-review/` (Codex areas 1–3, light A/B, Bugbot); 27 fuzz targets in `fuzz/fuzz_targets/` (short runs in CI `fuzz`). No `SECURITY.md` | A whole-system review by surface, a disclosure policy, a long fuzz campaign, and an RC delta review | M8-SEC-0..8, G-v1-security |
+| **Chaos gates** (§19.8) | `crates/cluster` (CA, mTLS, join tokens, protocol, fencing, leases; library only) with `tests/{leases_props,transport}.rs`; `crates/crawler-sim` (deterministic DHT and fetch simulator, goldens). **No chaos test and no worker mode yet** (E-v06-workers) | The multi-worker harness and every §19.8 test: exactly-once, fencing, politeness, placement, revocation, re-verification, spool replay, version skew, single-machine parity | M8-CHAOS-1..4, G-v1-chaos |
+| **In-process DHT network** (§17: ~50 nodes, harvest → searchable within 5 s) | `crawler-sim` covers the DHT and fetch, not store, index and `/search` | One end-to-end test through the real store and index | M8-NET-E2E |
+| **Politeness and purge audits** (§18.9) | Plugin tests in `crates/sources-plugins/tests/` (12 plugins), `crates/sources/tests/{contract,pool}.rs`, `crates/api/tests/provenance.rs`; `SRC-G` (planned) covers blocklist, `private_source`, consent, no-profiles for v0.6 | One audit over every plugin shipped in 1.0 (v0.7 and v0.8 add more), cap by cap and purge path by purge path | M8-POL, M8-PURGE, G-v1-audits |
+| **Other §17 UI gates** | `e2e.yml`: PR run (Riverstone light/dark × 7 breakpoints × 2 densities, rotating themes, axe everywhere), Lighthouse CI, `size-limit`; G-m5 analytics-validation and design review (`docs/review/2026-11-01-m5-design-review.md`) | A design review of the full 1.0 UI (M6–v0.8 screens are new); analytics-validation and the reporting overhead re-run on the RC | G-v1-design, G-v1-ui |
+| **48 themes on a schedule** | `e2e.yml` job `all-themes` (nightly 03:17Z and on demand: axe on every route in 48 themes plus key-route baselines); on failure it only uploads a report | A failure that someone sees, and a gate that reads the nightly record | M8-THEME, G-v1-ui |
+| **CI wiring** | `ci-ok` aggregator; nightly `reporting-overhead`; short fuzz runs | A scheduled long-run workflow (fuzz campaign, chaos seeds, relevance sets) and one gate summary | M8-CI |
+| **Docs** | `docs/query-language.md` (585 lines), `docs/themes.md` (801), `docs/user/` (6 chapters, appendices, glossary, screenshots), `README.md` (horizontal lockup only), `docs/releases/v0.5.*.md` | `docs/relevance.md` (new); query language and themes brought to 1.0; the user guide for M6–v0.8; README with the §10.19 lockups; 1.0 release notes | M8-DOC-1..4 |
+
+## 3. Store impact: none
+No slice writes a migration or changes an on-disk format. M8-PERF-1's persisted dataset is a bench artefact (keyed by the generator's version), never a user's data directory.
+
+## 4. Slices
+Sizes are changed-line estimates. **SR** = runs `/security-review` (standards §7). Gates are `kind: gate`: they measure and record evidence under `docs/gates/v1/<gate>/`, and edit no code.
+
+| Id | Title | Model | Size | Deps | SR |
+|---|---|---|---:|---|:-:|
+| M8-REL-1 | `relevance` takes external sets: `--set <dir>`, a hash-keyed judgments format, `--held-out` (prints aggregates only) | opus | ~700 | — | |
+| M8-REL-2 | Public real-name judgment set from openly licensed sources, its baseline, in CI | opus | ~1,200 | M8-REL-1, ext:owner-m8-q2 | |
+| M8-PERF-1 | 10M bench mode: persisted dataset, steady-state RSS, new-to-searchable, cold start, all-in size, JSON report | opus | ~900 | — | |
+| M8-PERF-2 | Coordinator-ingest benchmark with N local workers (≥ 1,000/s, grant p95) | opus | ~600 | E-v06-workers | ✓ |
+| M8-PERF-3 | `bench-10m.yml` on the dedicated runner (main only, never pull requests) and its setup page | sonnet | ~350 | M8-PERF-1, ext:owner-m8-q1 | ✓ |
+| M8-NET-E2E | §17 in-process DHT network: ~50 nodes, harvest → fetch → store → index → search within 5 s | opus | ~600 | — | |
+| M8-CHAOS-1 | Chaos harness: coordinator plus N workers on the simulator, fault injector, funnel reconciliation | opus | ~1,000 | E-v06-workers | ✓ |
+| M8-CHAOS-2 | Exactly-once, fencing, spool replay, version skew under kills, partitions and restarts | opus | ~700 | M8-CHAOS-1 | ✓ |
+| M8-CHAOS-3 | Fleet-wide politeness caps, placement failover, revocation, re-verification sampling | opus | ~800 | M8-CHAOS-1 | ✓ |
+| M8-CHAOS-4 | Single-machine parity: built-in local worker matches the pre-cluster pipeline and benches | opus | ~400 | M8-CHAOS-1, M8-NET-E2E | |
+| M8-POL | Politeness audit: every 1.0 plugin's manifest caps, per-host limiter, back-off, schedule windows | opus | ~700 | E-v06-sources, E-M7, E-v08 | ✓ |
+| M8-PURGE | Purge and isolation audit: every source kind, claims, rollups, snapshot purge, secure delete, outputs | opus | ~700 | E-v06-sources, E-M7, E-v08 | ✓ |
+| M8-THEME | Nightly all-themes failure opens or updates one tracking issue; run summary kept | sonnet | ~200 | — | |
+| M8-CI | `gates-v1.yml`: weekly long fuzz campaign, chaos seeds, relevance sets; one gate summary | sonnet | ~450 | M8-CHAOS-1, M8-REL-1 | ✓ |
+| M8-WIN-1 | Windows 1.0 soak runbook, collector and analyzer judge the Linux memory rule | sonnet | ~400 | ext:owner-m8-q3 | |
+| M8-SEC-0 | `SECURITY.md` and the review method: surfaces, severity, how unfixed findings are held | opus | ~250 | ext:owner-m8-q6 | ✓ |
+| M8-SEC-1 | Review: network parsers and the crawler (bencode, KRPC, metainfo, peer wire, MSE, uTP, tracker scrape, network policy) | opus | ~500 | M8-SEC-0, G-v06-crawler | ✓ |
+| M8-SEC-2 | Review: API, auth, sessions, setup, outputs (Torznab, Stremio, export), the web UI and its headers | opus | ~500 | M8-SEC-0, E-M7, E-v08 | ✓ |
+| M8-SEC-3 | Review: sources, feeds, importers, plugin egress, credentials, consent | opus | ~500 | M8-SEC-0, E-v06-sources, E-M7 | ✓ |
+| M8-SEC-4 | Review: content safety (filter engine, child-safety core, packs, classify, enrichment, weakening path) | opus | ~500 | M8-SEC-0, RP-G, ENR-G, E-M7 | ✓ |
+| M8-SEC-5 | Review: update engine, signing and key chain, release workflows, actions pinning, dependencies and licences | opus | ~400 | M8-SEC-0, E-M6 | ✓ |
+| M8-SEC-6 | Review: cluster (mTLS, join tokens, revocation, fencing), worker mode, companion manager | opus | ~500 | M8-SEC-0, E-v06-workers, E-v06-companions, E-v08 | ✓ |
+| M8-SEC-7 | Review: integrations (download clients, notifiers, email, webhooks), log redaction, metrics, privacy (no-profiles) | opus | ~400 | M8-SEC-0, E-M7 | ✓ |
+| M8-SEC-8 | Review: store and host (secure delete, snapshots, backups, permissions, secrets), packaging (Docker, Unraid, Windows service, systemd, privdrop), every `unsafe` | opus | ~500 | M8-SEC-0, E-M6, E-M7 | ✓ |
+| M8-DOC-1 | `docs/relevance.md` (new) and `docs/query-language.md` at 1.0 | sonnet | ~900 | M8-REL-2, E-M7 | |
+| M8-DOC-2 | `docs/themes.md` at 1.0 | sonnet | ~400 | — | |
+| M8-DOC-3a | User guide for 1.0: chapters 1–3 and screenshots | sonnet | ~1,200 | E-M6, E-M7, E-v08 | |
+| M8-DOC-3b | User guide for 1.0: chapters 4–6, appendices, glossary, revisions | sonnet | ~1,200 | M8-DOC-3a | |
+| M8-DOC-4 | README with the §10.19 lockups; 1.0 release notes | sonnet | ~400 | M8-DOC-3b, G-v1-rc | |
+
+**Gates:**
+
+| Id | Checks | Hands or host | Deps |
+|---|---|---|---|
+| G-v1-rc | Release branch `release/v1.0` cut from `main` once every build slice above and E-M6, E-M7, E-v08, E-v06-workers, E-v06-companions are merged and every blocking or important security finding is fixed; the owner tags rc.1 | **owner** tags | the build slices, M8-SEC-1..8 fixes |
+| G-v1-relevance | Committed sets pass the §5 RQ2 bar on the RC; held-out pilot-data run reported to the owner | **import host** (held-out run) | M8-REL-2, G-v1-rc |
+| G-v1-10m | §3 p95 table, size budget all-in, RSS < 1 GB, new-to-searchable < 5 s, coordinator ingest, low-resource mode, at 10M on the dedicated runner, on the RC | **dedicated runner** | M8-PERF-1..3, X-search-files-6, G-v1-rc |
+| G-v1-crawler | `G-v06-crawler`'s thresholds and CR-SPEC, rerun on the RC | **experiment host** | G-v06-crawler, G-v1-rc |
+| G-v1-windows | The §5 OQ3 soak on the RC MSI in service mode | **owner's Windows PC** | M8-WIN-1, G-v1-rc |
+| G-v1-soak-linux | 24 h Linux Docker soak on the RC under the v0.5.1 rules (§5 OQ4) | **owner's Unraid host** | G-v1-rc |
+| G-v1-chaos | Every §19.8 test green on the RC, long seeds included; NET-E2E green | — | M8-CHAOS-2..4, M8-NET-E2E, M8-CI, G-v1-rc |
+| G-v1-audits | M8-POL and M8-PURGE tables complete with no gap on the RC; `SRC-G`, `RP-G`, `ENR-G` re-run | — | M8-POL, M8-PURGE, SRC-G, RP-G, ENR-G, G-v1-rc |
+| G-v1-security | Delta review of `main` at the last review → RC; zero open blocking or important findings; fuzz campaign clean | optional second-vendor pass (§5 OQ5) | M8-SEC-1..8, M8-CI, G-v1-rc |
+| G-v1-design | `design-review` across the 1.0 UI with no blocking findings | — | G-v1-rc |
+| G-v1-ui | Analytics-validation matrix and reporting overhead on the RC; three consecutive green `all-themes` nightlies on the RC head; Lighthouse and `size-limit` green | — | M8-THEME, G-v1-rc |
+| G-v1 | Every `G-v1-*` gate green, `G-import-50M` approved; the owner tags `v1.0.0` | **owner** tags | all of the above, G-import-50M, ext:owner-50m-approval |
+
+### 4.1 Ready to paste into `runner/slices.yaml`
+```yaml
+  # ── E-M8: hardening to 1.0, sliced by P-m8 (docs/plan/2026-11-06-m8-hardening.md) ──
+  # No migration. Gate evidence lives under docs/gates/v1/<gate>/. Fixes for what a review or gate finds are X-* slices the runner adds (plan §4.4).
+  - {id: M8-REL-1, title: "relevance takes external judgment sets: --set, hash-keyed judgments, --held-out aggregates only", kind: core, model: opus, deps: [], owns: ["bench/src/bin/relevance.rs", "bench/src/bin/relevance/**", "bench/tests/relevance_sets.rs"], spec: ["§8", "§17", "build-plan §0.6"], notes: "The committed synthetic set and its baseline must score identically before and after. --held-out never prints a name, hash or per-query line"}
+  - {id: M8-REL-2, title: "Public real-name judgment set from openly licensed sources, baseline, in the CI relevance job", kind: core, model: opus, deps: [M8-REL-1, "ext:owner-m8-q2"], owns: ["bench/relevance/real/**", ".github/workflows/ci.yml"], spec: ["§8", "§17"], notes: "Judged from the ideal, never from today's ranking (decisions/2026-10-22-R-relevance.md). Only names whose source licence allows redistribution; no adult, no copyrighted release names. ci.yml: one step in the relevance job only"}
+  - {id: M8-PERF-1, title: "10M bench mode: persisted dataset, steady-state RSS, new-to-searchable, cold start, all-in size, JSON report", kind: core, model: opus, deps: [], owns: ["bench/src/bin/search-bench.rs", "bench/src/bin/size-report.rs", "bench/src/dataset.rs", "bench/src/lib.rs", "bench/README.md", "bench/tests/dataset.rs"], spec: ["§3", "§17", "docs/owner-decisions.md §1.6"], notes: "The 200k CI gates stay as they are. The dataset is keyed by generator version and refused if it doesn't match"}
+  - {id: M8-PERF-2, title: "Coordinator-ingest benchmark with N local workers: >= 1,000 new verified torrents/s, grant p95 < 50 ms", kind: core, model: opus, deps: [E-v06-workers], owns: ["bench/src/bin/ingest-bench.rs", "bench/Cargo.toml"], spec: ["§19.8", "§3"], notes: "/security-review (cluster credentials in a bench)"}
+  - {id: M8-PERF-3, title: "bench-10m.yml on the dedicated self-hosted runner, main only, never pull requests; setup page", kind: helper, model: sonnet, deps: [M8-PERF-1, "ext:owner-m8-q1"], owns: [".github/workflows/bench-10m.yml", "docs/operations/bench-runner.md"], spec: ["§3", "§17"], notes: "/security-review: schedule and workflow_dispatch on main only, no secrets, ephemeral runner, contents: read (plan §5 OQ1)"}
+  - {id: M8-NET-E2E, title: "In-process DHT network: ~50 nodes and fake peers, harvest -> fetch -> store -> index -> search within 5 s", kind: core, model: opus, deps: [], owns: ["crates/crawler-sim/tests/e2e_search.rs", "crates/crawler-sim/tests/e2e/**", "crates/crawler-sim/Cargo.toml"], spec: ["§17"], notes: "Waits on a condition with a deadline, never a fixed sleep (CLAUDE.md)"}
+  - {id: M8-CHAOS-1, title: "Chaos harness: coordinator plus N workers on the simulator, fault injector, funnel reconciliation", kind: core, model: opus, deps: [E-v06-workers], owns: ["crates/crawler-sim/tests/chaos/**", "crates/crawler-sim/tests/chaos_smoke.rs"], spec: ["§19.8"], notes: "/security-review. Seeded and deterministic; a short seed set runs in cargo test, long seeds in M8-CI. The harness is frozen after this slice: later chaos targets add their own helper files by #[path]"}
+  - {id: M8-CHAOS-2, title: "Exactly-once, fencing, spool replay and version skew under kills, partitions and coordinator restarts", kind: core, model: opus, deps: [M8-CHAOS-1], owns: ["crates/crawler-sim/tests/chaos_exactly_once.rs", "crates/crawler-sim/tests/chaos_x2/**"], spec: ["§19.8"], notes: "/security-review"}
+  - {id: M8-CHAOS-3, title: "Fleet-wide politeness caps, placement failover, revocation within one heartbeat, re-verification sampling", kind: core, model: opus, deps: [M8-CHAOS-1], owns: ["crates/crawler-sim/tests/chaos_fleet.rs", "crates/crawler-sim/tests/chaos_x3/**"], spec: ["§19.8", "§18.9"], notes: "/security-review"}
+  - {id: M8-CHAOS-4, title: "Single-machine parity: the built-in local worker matches the pre-cluster pipeline and its benches", kind: core, model: opus, deps: [M8-CHAOS-1, M8-NET-E2E], owns: ["crates/crawler-sim/tests/chaos_parity.rs"], spec: ["§19.8"]}
+  - {id: M8-POL, title: "Politeness audit: every 1.0 plugin's manifest caps, per-host limiter, back-off and schedule windows, tested", kind: core, model: opus, deps: [E-v06-sources, E-M7, E-v08], owns: ["crates/sources-plugins/tests/politeness_audit.rs", "docs/gates/v1/audits/politeness.md"], spec: ["§18.1", "§18.9"], notes: "/security-review. One row per plugin and cap; a plugin with no test for a cap is a gap"}
+  - {id: M8-PURGE, title: "Purge and isolation audit: every source kind, claims, rollups, snapshot purge, secure delete, Torznab/Stremio/export", kind: core, model: opus, deps: [E-v06-sources, E-M7, E-v08], owns: ["crates/api/tests/purge_audit.rs", "docs/gates/v1/audits/purge.md"], spec: ["§18.1", "§18.9", "docs/owner-decisions.md §2.17", "docs/owner-decisions.md §2.21"], notes: "/security-review"}
+  - {id: M8-THEME, title: "Nightly all-themes failure opens or updates one tracking issue; run summary kept", kind: helper, model: sonnet, deps: [], owns: [".github/workflows/e2e.yml"], spec: ["§10.17", "§17"], notes: "Edits only the all-themes job; issues: write on that job alone"}
+  - {id: M8-CI, title: "gates-v1.yml: weekly long fuzz campaign, chaos seeds, relevance sets, one gate summary", kind: helper, model: sonnet, deps: [M8-CHAOS-1, M8-REL-1], owns: [".github/workflows/gates-v1.yml", ".github/scripts/gates_v1.py", ".github/scripts/test_gates_v1.py"], spec: ["§17"], notes: "/security-review (workflow permissions). Not a pull-request job and not in ci-ok"}
+  - {id: M8-WIN-1, title: "Windows 1.0 soak: runbook, collector and analyzer judge the Linux memory rule", kind: helper, model: sonnet, deps: ["ext:owner-m8-q3"], owns: ["docs/soak/tools/cr0-soak.ps1", "docs/soak/tools/cr0-common.ps1", "docs/soak/tools/analyze_cr0.py", "docs/soak/tools/test_analyze_cr0.py", "docs/soak/v1-windows.md"], spec: ["docs/decisions/2026-10-30-CR-0-acceptance.md"]}
+  - {id: M8-SEC-0, title: "SECURITY.md and the 1.0 review method: surfaces, severity, how unfixed findings are held", kind: docs, model: opus, deps: ["ext:owner-m8-q6"], owns: ["SECURITY.md", "docs/security/v1/README.md"], spec: ["runner/standards.md §5", "runner/standards.md §7"], notes: "/security-review"}
+  - {id: M8-SEC-1, title: "Security review: network parsers and the crawler", kind: docs, model: opus, deps: [M8-SEC-0, G-v06-crawler], owns: ["docs/security/v1/1-network.md"], spec: ["§5", "§6", "§17"], notes: "Read-only review; findings held per M8-SEC-0; fixes are X-* slices"}
+  - {id: M8-SEC-2, title: "Security review: API, auth, sessions, setup, outputs, the web UI and its headers", kind: docs, model: opus, deps: [M8-SEC-0, E-M7, E-v08], owns: ["docs/security/v1/2-api-web.md"], spec: ["§9", "§10", "§18.6"], notes: "Read-only review; findings held per M8-SEC-0"}
+  - {id: M8-SEC-3, title: "Security review: sources, feeds, importers, plugin egress, credentials, consent", kind: docs, model: opus, deps: [M8-SEC-0, E-v06-sources, E-M7], owns: ["docs/security/v1/3-sources.md"], spec: ["§18"], notes: "Read-only review; findings held per M8-SEC-0"}
+  - {id: M8-SEC-4, title: "Security review: content safety (filter engine, child-safety core, packs, classify, enrichment, weakening)", kind: docs, model: opus, deps: [M8-SEC-0, RP-G, ENR-G, E-M7], owns: ["docs/security/v1/4-content-safety.md"], spec: ["§20", "docs/owner-decisions.md §1.8"], notes: "Read-only review; findings held per M8-SEC-0"}
+  - {id: M8-SEC-5, title: "Security review: update engine, signing, key chain, release workflows, actions pinning, dependencies", kind: docs, model: opus, deps: [M8-SEC-0, E-M6], owns: ["docs/security/v1/5-update-supply-chain.md"], spec: ["§12"], notes: "Read-only review; findings held per M8-SEC-0"}
+  - {id: M8-SEC-6, title: "Security review: cluster, worker mode, companion manager", kind: docs, model: opus, deps: [M8-SEC-0, E-v06-workers, E-v06-companions, E-v08], owns: ["docs/security/v1/6-cluster.md"], spec: ["§18.10", "§19"], notes: "Read-only review; findings held per M8-SEC-0"}
+  - {id: M8-SEC-7, title: "Security review: integrations, log redaction, metrics, privacy", kind: docs, model: opus, deps: [M8-SEC-0, E-M7], owns: ["docs/security/v1/7-integrations-privacy.md"], spec: ["§8", "§18.9"], notes: "Read-only review; findings held per M8-SEC-0"}
+  - {id: M8-SEC-8, title: "Security review: store and host, packaging, every unsafe block", kind: docs, model: opus, deps: [M8-SEC-0, E-M6, E-M7], owns: ["docs/security/v1/8-store-host.md"], spec: ["§7", "§11", "docs/owner-decisions.md §2.17"], notes: "Read-only review; findings held per M8-SEC-0"}
+  - {id: M8-DOC-1, title: "docs/relevance.md (new) and docs/query-language.md at 1.0", kind: helper, model: sonnet, deps: [M8-REL-2, E-M7], owns: ["docs/relevance.md", "docs/query-language.md"], spec: ["§8", "§13"]}
+  - {id: M8-DOC-2, title: "docs/themes.md at 1.0", kind: helper, model: sonnet, deps: [], owns: ["docs/themes.md"], spec: ["§10.18"]}
+  - {id: M8-DOC-3a, title: "User guide for 1.0: chapters 1-3 and their screenshots", kind: helper, model: sonnet, deps: [E-M6, E-M7, E-v08], owns: ["docs/user/01-*.md", "docs/user/02-*.md", "docs/user/03-*.md", "docs/user/images/**"], spec: ["docs/owner-decisions.md §2.14"], notes: "user-docs skill"}
+  - {id: M8-DOC-3b, title: "User guide for 1.0: chapters 4-6, appendices, glossary, index, revisions", kind: helper, model: sonnet, deps: [M8-DOC-3a], owns: ["docs/user/04-*.md", "docs/user/05-*.md", "docs/user/06-*.md", "docs/user/appendix-*.md", "docs/user/glossary.md", "docs/user/index.md", "docs/user/README.md", "docs/user/revisions.md", "docs/user/images/**"], spec: ["docs/owner-decisions.md §2.14"], notes: "user-docs skill"}
+  - {id: M8-DOC-4, title: "README with the brand lockups; 1.0 release notes", kind: helper, model: sonnet, deps: [M8-DOC-3b, G-v1-rc], owns: ["README.md", "docs/releases/v1.0.0.md"], spec: ["§10.19"], notes: "material-composer for the release notes"}
+  - {id: G-v1-rc, title: "1.0 release candidate: release/v1.0 cut, rc.1 tagged by the owner", kind: gate, model: opus, deps: [M8-REL-2, M8-PERF-2, M8-PERF-3, M8-CHAOS-2, M8-CHAOS-3, M8-CHAOS-4, M8-POL, M8-PURGE, M8-THEME, M8-CI, M8-WIN-1, M8-SEC-1, M8-SEC-2, M8-SEC-3, M8-SEC-4, M8-SEC-5, M8-SEC-6, M8-SEC-7, M8-SEC-8, M8-DOC-1, M8-DOC-2, M8-DOC-3b, E-M6, E-M7, E-v08, E-v06-workers, E-v06-companions, "ext:owner-v1-rc"], owns: ["docs/gates/v1/rc/**"], notes: "Every blocking and important finding from M8-SEC-1..8 and the audits fixed first (plan §4.4). After the cut, the v0.5.1 delta rule applies (plan §5 RQ4)"}
+  - {id: G-v1-relevance, title: "1.0 relevance gate on the RC: committed sets at the plan's bar, held-out pilot run reported", kind: gate, model: opus, deps: [M8-REL-2, G-v1-rc, "ext:import-host"], owns: ["docs/gates/v1/relevance/**"], checks: ["§17", "plan §5 RQ2"]}
+  - {id: G-v1-10m, title: "1.0 10M gate on the dedicated runner: §3 p95 table, size all-in, RSS, new-to-searchable, coordinator ingest, low-resource mode", kind: gate, model: opus, deps: [M8-PERF-1, M8-PERF-2, M8-PERF-3, X-search-files-6, G-v1-rc, "ext:bench-runner"], owns: ["docs/gates/v1/10m/**"], checks: ["§3", "§10.1", "docs/owner-decisions.md §1.6"], notes: "A missed owner-set number goes to the owner with what drives it (§2.26)"}
+  - {id: G-v1-crawler, title: "Crawler gate re-measured on the 1.0 RC, G-v06-crawler's thresholds and CR-SPEC", kind: gate, model: opus, deps: [G-v06-crawler, G-v1-rc, "ext:experiment-host"], owns: ["docs/gates/v1/crawler/**"], checks: ["build-plan §0.6"]}
+  - {id: G-v1-windows, title: "Windows soak on the 1.0 RC MSI in service mode", kind: gate, model: opus, deps: [M8-WIN-1, G-v1-rc, "ext:windows-soak-host"], owns: ["docs/gates/v1/windows/**"], checks: ["plan §5 OQ3"]}
+  - {id: G-v1-soak-linux, title: "24 h Linux Docker soak on the 1.0 RC under the v0.5.1 rules", kind: gate, model: opus, deps: [G-v1-rc, "ext:owner-m8-q4"], owns: ["docs/gates/v1/soak-linux/**"], checks: ["docs/decisions/2026-10-30-CR-0-acceptance.md"]}
+  - {id: G-v1-chaos, title: "Chaos gates on the 1.0 RC: every §19.8 test, long seeds, in-process network", kind: gate, model: opus, deps: [M8-CHAOS-2, M8-CHAOS-3, M8-CHAOS-4, M8-NET-E2E, M8-CI, G-v1-rc], owns: ["docs/gates/v1/chaos/**"], checks: ["§19.8", "§17"]}
+  - {id: G-v1-audits, title: "Politeness and purge audits complete on the RC; SRC-G, RP-G, ENR-G re-run", kind: gate, model: opus, deps: [M8-POL, M8-PURGE, SRC-G, RP-G, ENR-G, G-v1-rc], owns: ["docs/gates/v1/audits-rc/**"], checks: ["§18.9", "§20.8"]}
+  - {id: G-v1-security, title: "Security delta review to the RC; zero open blocking or important findings; fuzz campaign clean", kind: gate, model: opus, deps: [M8-SEC-1, M8-SEC-2, M8-SEC-3, M8-SEC-4, M8-SEC-5, M8-SEC-6, M8-SEC-7, M8-SEC-8, M8-CI, G-v1-rc], owns: ["docs/gates/v1/security/**"], checks: ["runner/standards.md §7"]}
+  - {id: G-v1-design, title: "design-review across the 1.0 UI with no blocking findings", kind: gate, model: opus, deps: [G-v1-rc], owns: ["docs/gates/v1/design/**"], checks: ["§10.17", "§17"]}
+  - {id: G-v1-ui, title: "UI gates on the RC: analytics-validation, reporting overhead, three green all-themes nightlies, Lighthouse, size-limit", kind: gate, model: opus, deps: [M8-THEME, G-v1-rc], owns: ["docs/gates/v1/ui/**"], checks: ["§10.17", "§17", "§3"]}
+  - {id: G-v1, title: "1.0: every G-v1 gate green, 50M approved; the owner tags v1.0.0", kind: gate, model: opus, deps: [G-v1-relevance, G-v1-10m, G-v1-crawler, G-v1-windows, G-v1-soak-linux, G-v1-chaos, G-v1-audits, G-v1-security, G-v1-design, G-v1-ui, G-import-50M, "ext:owner-50m-approval", "ext:owner-v1-tag"], owns: ["docs/gates/v1/README.md"]}
+```
+
+New `ext:` conditions for the runner to add to `external` and `dashboard.yaml`:
+- `owner-m8-q1`..`owner-m8-q6`: "the owner has answered plan 2026-11-06 Q<N> (recorded in docs/owner-decisions.md or a decisions file)". Q5 gates no slice.
+- `bench-runner`: "the dedicated self-hosted runner is registered with the label the owner approved under Q1, and a manual `bench-10m` run on `main` passed its smoke step".
+- `windows-soak-host`: "the owner has named the Windows host for G-v1-windows, and it isn't the experiment host during a crawler run".
+- `owner-v1-rc`, `owner-v1-tag`: "the owner has tagged `v1.0.0-rc.<n>` / `v1.0.0`".
+
+Every dep names an id in `runner/slices.yaml` or above, except `X-search-files-6`: it's running (branch `slice/X-search-files-6`, runner-state slot 3) and the runner adds its entry. E-M8's own entry keeps its deps; the runner may record a `pull_forward` for the tooling slices (§5 RQ1).
+
+### 4.2 Owned paths and shared edits
+- Every pair that can run at once has disjoint owns. The pairs that would touch the same file are chained: M8-DOC-3a → M8-DOC-3b (both may add screenshots under `docs/user/images/**`); M8-CHAOS-1 → M8-CHAOS-2/3/4 (the harness).
+- **`crates/crawler-sim/Cargo.toml`** belongs to M8-NET-E2E. The chaos slices need the cluster crate as a dev-dependency; if M8-NET-E2E hasn't added it, M8-CHAOS-1 asks the runner, who adds it to M8-CHAOS-1's owns while M8-NET-E2E isn't running.
+- **`.github/workflows/ci.yml`** is shared by many tracks: M8-REL-2 adds one step to the `relevance` job and nothing else. Every other M8 workflow is a new file or a single job (`e2e.yml` `all-themes`).
+- **`bench/Cargo.toml`** belongs to M8-PERF-2 (a new bin and the cluster dev-dependency). M8-PERF-1 and M8-REL-1 add no dependency; if one needs one, it asks the runner.
+- **Gate slices own only `docs/gates/v1/<gate>/**`** and edit no code.
+- **Review slices own only their report.** A finding is never fixed inside a review slice.
+
+### 4.3 What each slice must do (spec and gates)
+- **M8-REL-1:** `--set <dir>` reads a `corpus.txt`/`judgments.txt`/`baseline.txt` triple in the existing format, or judgments keyed by info hash over an existing store and index (`--data-dir`, read-only, refused while a server holds the writer). `--held-out` prints NDCG@10, MRR, recall@50 and the query count, never a name, hash or per-query line, and writes no file into the repo. The committed set's numbers stay byte-identical.
+- **M8-REL-2:** ≈ 300 torrents and ≈ 150 queries with real names from sources whose licence allows redistribution (Internet Archive public-domain items, openly licensed datasets, Linux and BSD images, Creative Commons media), in the same hard-case families as the synthetic set. No adult content, no copyrighted release names, no owner data. Judged from the ideal. Baseline written; CI gates both sets.
+- **M8-PERF-1:** `--data-dir` persists the generated 10M store and index and reuses it when the generator version matches. Adds steady-state RSS (after warm-up, sampled), new-torrent-to-searchable p95 under a background ingest, cold start to first query, and the all-in bytes a torrent (store, both indexes, hot columns) against ≈ 2.3 KB. `--json` writes one report with the machine's cores, memory, disk and kernel. No CI gate changes.
+- **M8-PERF-2:** an in-process coordinator with N workers on loopback mTLS, fed by the synthetic generator; reports sustained commit-and-index rate, grant latency p95, worker RSS and bytes a torrent on the wire against §19.8.
+- **M8-PERF-3:** runs on `schedule` (weekly) and `workflow_dispatch` on `main` only, never `pull_request` or a fork; `permissions: contents: read`; no secrets; uploads the JSON report. `docs/operations/bench-runner.md` tells the owner how to register an ephemeral runner with that label, on a machine with ≥ 4 cores, NVMe and ≥ 100 GB free (10M store, both indexes and a rebuild's 2×).
+- **M8-NET-E2E:** ~50 simulated nodes plus fake peers serving known info dicts, through the real pipeline, store and index; asserts each known torrent is returned by `search` within 5 s of its harvest, with deadlines, no fixed sleeps.
+- **M8-CHAOS-1..4:** each §19.8 test named there, seeded; failures print the seed. The funnel invariant (harvested = Σ terminal outcomes + in flight) is checked after every fault. Short seeds in `cargo test`; long seeds weekly in M8-CI.
+- **M8-POL / M8-PURGE:** a table in the report, one row per plugin (and per cap, or per purge path), naming the test that proves it. A row without a test is a gap and becomes an X-* slice before G-v1-rc. M8-PURGE also checks that `private_source` items never reach Torznab, Stremio or export, and that rollups reconcile after a purge.
+- **M8-THEME:** on a failed `all-themes` run, open one issue titled "Nightly all-themes failing" or comment on the open one, with the run link; close it on the next green run.
+- **M8-CI:** a weekly workflow running each fuzz target for a fixed time (the runner sets it, RQ6), the long chaos seeds and both relevance sets; `gates_v1.py` reads the latest run of each gate job and prints one summary table. Unit-tested.
+- **M8-WIN-1:** the analyzer judges `private_bytes` with the Linux rule (upper 95 % bound of the slope over baseline hours 12–24 ≤ 2.0 MiB/h, `docs/decisions/2026-10-30-CR-0-acceptance.md`) plus no crash, no service restart, an upgrade from the last release, and a clean uninstall; the runbook is for the owner.
+- **M8-SEC-0:** `SECURITY.md` with the owner's chosen contact and process (OQ6); `docs/security/v1/README.md` with the eight surfaces, severity as standards §5, and the rule that an unfixed blocking or important finding's detail is held outside the public repo until its fix ships.
+- **M8-SEC-1..8:** each a fresh Opus reviewer over its surface's code at the head it names, using `/security-review` plus a manual threat model (assets, entry points, trust boundaries). M8-SEC-1 also runs each parser's fuzz target for at least an hour. The report lists findings by severity; fixed ones in full, unfixed ones by id and severity only.
+- **M8-DOC-1..4:** per the `user-docs` skill (DOC-3a/3b, DOC-4) or as contract docs (DOC-1, DOC-2). DOC-4's README shows the horizontal lockup in light and dark (already there) and adds the stacked lockup and wordmark where §10.19 places them.
+
+### 4.4 What happens to findings
+Each blocking or important finding from a review, audit or gate becomes an `X-*` slice the runner adds, with its own owns and model (Opus for anything security-relevant). Polish findings go to the backlog. The runner should budget about one fix slice per review surface; G-v1-rc waits for all blocking and important ones.
+
+## 5. Owner and runner questions
+**Owner** (each needs the owner's hands or host, or touches security, content safety or a number the owner set):
+
+- **OQ1. A dedicated benchmark runner.** §3 says the 10M gates are "enforced as CI benchmark gates" on 4 cores and NVMe; GitHub's hosted runners are 4-core with small disks, and the 10M runs so far used cloud containers that varied by ±50 % between PRs (X-search-files-5). A self-hosted runner on a **public** repo can run code from anyone's pull request unless it's locked down. *Recommendation:* a machine of the owner's (not the soak PC, not the experiment host during a run), registered as an ephemeral runner, used only by `bench-10m.yml` on `schedule` and `workflow_dispatch` from `main`, with no secrets. Alternative: a paid GitHub larger runner. Gates M8-PERF-3 and G-v1-10m.
+- **OQ2. Relevance on real data.** The synthetic set invents every name on purpose. *Recommendation:* (a) commit a second set with real names from openly licensed sources only (M8-REL-2), gated in CI; (b) run a held-out set on the import host against the 10M pilot data, judged there, and commit only its aggregate scores. Never commit names or hashes from the owner's corpus. Gates M8-REL-2 and the held-out half of G-v1-relevance.
+- **OQ3. The Windows soak.** P7 names it but nothing sets its length or bar (**silent**). *Recommendation:* 24 h in MSI service mode on the RC, the Linux memory rule (upper 95 % bound ≤ 2.0 MiB/h over hours 12–24), no crash or service restart, an upgrade from the last public release and a clean uninstall; on the owner's Windows PC. Gates M8-WIN-1 and G-v1-windows.
+- **OQ4. A Linux Docker soak on the RC as well.** P7 doesn't list one; v0.5.1 needed one, and 1.0 adds workers, companions and v0.7–v0.8 code. *Recommendation:* yes, 24 h on the Unraid host under the v0.5.1 rules, alongside the Windows soak. Gates G-v1-soak-linux.
+- **OQ5. A second-vendor security pass.** v0.5 had the owner's Codex reviews (`docs/code-review/`). *Recommendation:* optional, on the two highest-risk surfaces (SEC-1 network parsers, SEC-2 API and auth), run by the owner and recorded beside the Opus reports. Gates nothing.
+- **OQ6. Disclosure and `SECURITY.md`.** The repo is public and v0.5.1 is released, so a committed report with an unfixed finding's detail discloses it. *Recommendation:* GitHub private vulnerability reporting switched on (owner's settings), a contact the owner names in `SECURITY.md`, unfixed blocking or important details kept in draft security advisories the owner opens (Claude can't create them here), and fix PRs that describe the fix without a proof of concept until the release ships. Gates M8-SEC-0 and, through it, the reviews.
+
+**Runner** (UX, performance and process calls under §2.19 and §2.26, flagged to the owner):
+
+- **RQ1. Pull the tooling forward.** M8-REL-1, M8-PERF-1, M8-NET-E2E, M8-THEME and M8-DOC-2 change no product code and have no dep. *Recommendation:* record them as `pull_forward` once the r5 verdict is in, to fill a slot the higher tracks leave empty. Reviews and audits wait for their surfaces' epics, so they review code that won't change before the RC.
+- **RQ2. The 1.0 relevance bar.** §17 says "NDCG@10 against the stored baseline": regression only, no absolute figure (**silent**). *Recommendation:* both committed sets keep the regression gate (tolerance 0.001) and the "no forbidden result" rule; the synthetic set must also be ≥ 0.90 at the RC (it is 0.9186 now); the real-name set's first baseline is recorded as its floor; the held-out score is reported to the owner, not gated.
+- **RQ3. The 50M numbers on the RC.** *Recommendation:* no fresh 50M import for 1.0. Re-measure only if the store or index format, or the populated feature set named in the approval, changed after it (build-plan §0.6); if so, the new numbers go back to the owner.
+- **RQ4. Changes after the RC.** *Recommendation:* the v0.5.1 delta rule (build-plan §0.4): a change on `release/v1.0` re-runs every gate it can affect; a class-A change (crawler lifecycle, sampler, endpoint policy, memory) re-runs the soaks and the crawler gate.
+- **RQ5. The theme gate.** *Recommendation:* three consecutive green `all-themes` nightlies on the RC head, with M8-THEME's issue closed.
+- **RQ6. The fuzz campaign's length.** *Recommendation:* 10 minutes a target weekly in M8-CI (27 targets, about 4.5 h of runner time), and one hour a parser target once in M8-SEC-1.
+- **RQ7. If the 10M file-level row still misses.** X-search-files-6 is closing the 150 ms row. *Recommendation:* G-v1-10m doesn't pass on a near miss; if X-search-files-6 can't close it, the runner takes the measured number and its cause to the owner, since the budget is the owner's (§1.6).
+
+## 6. Order and parallelism
+The waves are upper bounds: with 4 slots shared by M6, M7, v0.6 and v0.8, higher rungs of the build-plan §0.2 ladder go first. Nothing starts before the r5 verdict.
+
+| Wave | Runs at once | Why |
+|---|---|---|
+| 0 (pull-forward, RQ1) | M8-REL-1, M8-PERF-1, M8-NET-E2E, M8-THEME, M8-DOC-2 | No deps; disjoint owns; tooling only |
+| 1 | M8-REL-2 (OQ2), M8-PERF-3 (OQ1), M8-WIN-1 (OQ3), M8-SEC-0 (OQ6) | Each waits on an owner answer, not on code |
+| 2 (after E-v06-workers) | M8-CHAOS-1, M8-PERF-2 | Need worker mode |
+| 3 | M8-CHAOS-2, M8-CHAOS-3, M8-CHAOS-4, M8-CI | After the harness |
+| 4 (surfaces settled) | M8-SEC-1..8, four at a time; M8-POL, M8-PURGE; M8-DOC-1 | Each review after its surface's epics; audits after the last plugins land |
+| 5 | Fix slices (§4.4); M8-DOC-3a then M8-DOC-3b | The guide describes the finished product |
+| 6 | G-v1-rc; then M8-DOC-4 and, in parallel, every `G-v1-*` gate | Host gates run at once on four different machines |
+| 7 | G-v1 | Owner tags 1.0 |
+
+**Critical path:** E-v06-workers → E-v08 → M8-SEC-6 and M8-CHAOS-1 → M8-CHAOS-2/3 → fixes → G-v1-rc → the 24 h host gates (crawler, Windows, Linux, 10M) → G-v1. The longest stretch after the RC is the owner's hosts: four machines for about a day each, and a failed soak costs a new RC and a rerun. Asking OQ1, OQ3 and OQ4 early lets the owner line the hosts up before the RC.
+
+**Owner's hands and hosts, in one list:** the dedicated bench runner (OQ1, G-v1-10m); the import host (held-out relevance, and `G-import-50M` already); the experiment host (G-v1-crawler); the Windows PC (G-v1-windows); the Unraid host (G-v1-soak-linux); private vulnerability reporting and advisories (OQ6); an optional second-vendor review (OQ5); tagging rc.1 and `v1.0.0`, and approving the release environment.
