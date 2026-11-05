@@ -244,7 +244,7 @@ An import copies the torrents another crawler already found into Lodestar, so a 
 
 **Before you start:**
 1. **Back up first, while Lodestar still runs:** `lodestar backup`. On Unraid, open the terminal and run `docker exec Lodestar /lodestar backup`. A backup is the safe undo; you can also take an import back (below).
-2. **Stop the other crawler,** or import a copy of its database. A database that's still being written is refused. If a Magnetico database is still refused after magneticod has stopped, its `-wal` file holds changes it couldn't write in: see [section 6.2 of the user guide](user/06-troubleshooting.md#62-fix-a-magnetico-import-refused-as-in-use).
+2. **Stop the other crawler.** A database that's still being written is refused. For Magnetico, a copy works only if you copy its `-wal` file with it and checkpoint the copy first; if it's still refused after magneticod has stopped, see [section 6.2 of the user guide](user/06-troubleshooting.md#62-fix-a-magnetico-import-refused-as-in-use).
 3. **Stop Lodestar.** Imports run while the server is stopped. If it's running, `lodestar import start` refuses and changes nothing.
 
 **On Unraid (or any Docker install),** a stopped container can't run commands. Instead, start a one-off container from the same image, with the same data folder, and with the folder that holds the Magnetico database:

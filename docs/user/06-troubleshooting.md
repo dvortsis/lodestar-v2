@@ -33,7 +33,7 @@ To fix it:
 3. Start magneticod, wait until it's running, then stop it.
    **Result:** magneticod writes the changes into the database, and the `-wal` file is gone or empty. Run the import again.
 
-If you can't run magneticod again, write the changes in on a copy with the `sqlite3` tool instead:
+If you can't run magneticod again, write the changes in on a copy with the `sqlite3` tool instead. This is for a leftover `-wal` file only. A `-journal` file means a change was cut off part-way; steps 1 to 3 undo it when magneticod opens the database again.
 
 1. Copy `database.sqlite3` and `database.sqlite3-wal` together to a folder with free space. The database file alone is missing the newest torrents and can be damaged.
 2. Open a terminal in that folder (on Unraid, the terminal button at the top of the web page, then `cd` to the folder) and paste:
