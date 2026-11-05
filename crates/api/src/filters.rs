@@ -1681,8 +1681,12 @@ impl FiltersApi {
     /// that's gone puts back the signature of the stored original it
     /// released, if that original is still hidden (or, for SP-3, demoted),
     /// so its clones are held again; one that's back removes it again.
-    /// The action comes from the original's stored mark. One by payload
-    /// that's gone can't be put back: the original isn't known.
+    /// Only an original that rule decided: its newest stored hit
+    /// (`filter_hits`) names the rule with an action that feeds the set,
+    /// and its mark is still on. A torrent your rule, or another pack
+    /// rule, hid is never made an original by an exception that came and
+    /// went. A signature already in the set is left as it is. One by
+    /// payload that's gone can't be put back: the original isn't known.
     fn follow_exceptions(
         &self,
         store: &mut Store,
@@ -1704,22 +1708,32 @@ impl FiltersApi {
             let Some(row) = store.torrent(id).map_err(internal)? else {
                 continue;
             };
-            let action = if row.flags & lodestar_store::flags::HIDDEN != 0 {
-                lodestar_filter::Action::Hide
-            } else if row.flags & lodestar_store::flags::DEMOTED != 0 {
-                lodestar_filter::Action::Demote
-            } else {
+            // What the rule decided, as ingest recorded it.
+            let Some(hit) = store.latest_hit(hash).map_err(internal)? else {
                 continue;
             };
-            let Some(original) = lodestar_filter::spam_sigs::Original::of(*rule, action) else {
+            let decided = (hit.rule == rule.id())
+                .then(|| lodestar_filter::Action::from_code(hit.action))
+                .flatten()
+                .and_then(|a| lodestar_filter::spam_sigs::Original::of(*rule, a));
+            let Some(original) = decided else {
                 continue;
             };
+            // Its mark still on: nothing has refiled it since.
+            let mark = match original.action {
+                lodestar_filter::Action::Hide => lodestar_store::flags::HIDDEN,
+                _ => lodestar_store::flags::DEMOTED,
+            };
+            if row.flags & mark == 0 {
+                continue;
+            }
             let Some(tree) = store.files(id).map_err(internal)? else {
                 continue;
             };
             let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
             if let Some(sig) =
                 lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(&files))
+                && engine.spam_sigs.get(sig).is_none()
             {
                 engine.spam_sigs.add(sig, original);
                 restored = true;
@@ -1736,7 +1750,9 @@ impl FiltersApi {
     /// clones of an original that's released or excepted follow it. With
     /// `rule`, only a signature that rule added (an exception to SP-2
     /// leaves what SP-3 hid). A hash that isn't stored, or whose payload
-    /// isn't specific, has none. Returns how many were in the set.
+    /// isn't specific, has none. A clone (its own newest hit is SP-4's)
+    /// releases only itself, through its own mark: its family stays
+    /// held. Returns how many were in the set.
     fn release_clones(
         &self,
         store: &mut Store,
@@ -1755,12 +1771,26 @@ impl FiltersApi {
             else {
                 continue;
             };
-            if let Some(tree) = store.files(id).map_err(internal)? {
-                let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
-                sigs.extend(lodestar_filter::spam_sigs::usable(
-                    lodestar_filter::payload_sig(&files),
-                ));
+            let Some(tree) = store.files(id).map_err(internal)? else {
+                continue;
+            };
+            let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+            let Some(sig) =
+                lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(&files))
+            else {
+                continue;
+            };
+            // Read only when the signature is in the set: it scans
+            // `filter_hits`.
+            if engine.spam_sigs.get(sig).is_some()
+                && store
+                    .latest_hit(h)
+                    .map_err(internal)?
+                    .is_some_and(|hit| hit.rule == PackRule::Sp4.id())
+            {
+                continue;
             }
+            sigs.push(sig);
         }
         if sigs.is_empty() {
             return Ok(0);
@@ -3876,94 +3906,121 @@ mod tests {
         }
     }
 
+    /// A stored torrent whose newest filter hit is `rule`'s `action`, its
+    /// mark on, and, with `in_set`, its signature in SP-4's set as the
+    /// writer would have added it. Returns the API, its hash and its
+    /// signature.
+    fn sp4_stored(
+        rule: &str,
+        action: lodestar_filter::Action,
+        in_set: Option<lodestar_filter::spam_sigs::Original>,
+    ) -> (tempfile::TempDir, FiltersApi, [u8; 20], u64) {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
+        let raw = to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(1_234_567_891)),
+                (b"name".to_vec(), OwnedValue::Bytes(b"spam.mkv".to_vec())),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let mark = match action {
+            lodestar_filter::Action::Hide => lodestar_store::flags::HIDDEN,
+            _ => lodestar_store::flags::DEMOTED,
+        };
+        store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: mark,
+                source: lodestar_store::SourceId::new(0).unwrap(),
+            }])
+            .unwrap();
+        let hash = info.primary_hash().0;
+        store
+            .write(&lodestar_store::WriteBatch {
+                filtered: &[lodestar_store::Filtered {
+                    hashes: &[hash],
+                    rule,
+                    action: action.code(),
+                    held: None,
+                    sealed: None,
+                    evidence: &[],
+                    at: 1,
+                    expires_at: 0,
+                    adult_hold: false,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let files = lodestar_classify::file_infos(&info.files, info.path_encoding);
+        let sig = lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(&files)).unwrap();
+        let api = test_api(store);
+        if let Some(o) = in_set {
+            let sigs = api.engine.current().spam_sigs.clone();
+            sigs.add(sig, o);
+            sigs.flush(&mut api.store()).unwrap();
+        }
+        (dir, api, hash, sig)
+    }
+
+    fn sp4_exception(rule: &str, hash: &[u8; 20]) -> Change {
+        Change::AddException {
+            rule: rule.into(),
+            what: MatchInput {
+                hashes: Some(vec![hex(hash)]),
+                ..MatchInput::default()
+            },
+        }
+    }
+
     /// SP-4's release hook (RP-5): an exception for a stored original SP-2
     /// hid, by its hash or its payload, or its release, removes its
     /// signature, in memory and in the store, so its clones follow. An
-    /// exception to another rule leaves it.
+    /// exception to another rule leaves it. Undo puts it back, and redo
+    /// removes it again.
     #[test]
     fn sp4_clones_follow_an_exception_or_a_release_of_the_original() {
-        use lodestar_bencode::{OwnedValue, to_vec};
-        use lodestar_filter::spam_sigs::{Original, PREFIX, SpamSigs, usable};
+        use lodestar_filter::Action;
+        use lodestar_filter::spam_sigs::{Original, PREFIX, SpamSigs};
+        const HID: Original = Original {
+            rule: PackRule::Sp2,
+            action: Action::Hide,
+        };
         for how in ["hashes", "payload", "release", "another rule", "undo"] {
-            let dir = tempfile::tempdir().unwrap();
-            let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
-            let raw = to_vec(&OwnedValue::Dict(
-                [
-                    (b"length".to_vec(), OwnedValue::Int(1_234_567_891)),
-                    (b"name".to_vec(), OwnedValue::Bytes(b"spam.mkv".to_vec())),
-                    (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
-                    (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
-                ]
-                .into_iter()
-                .collect(),
-            ));
-            let info = lodestar_metainfo::Info::parse(&raw).unwrap();
-            store
-                .insert(&[lodestar_store::NewTorrent {
-                    info: &info,
-                    raw_info: Some(&raw),
-                    discovered_at: 1,
-                    metadata_at: 1,
-                    // As SP-2's hide stored it.
-                    extra_flags: lodestar_store::flags::HIDDEN,
-                    source: lodestar_store::SourceId::new(0).unwrap(),
-                }])
-                .unwrap();
-            let hash = info.primary_hash().0;
-            let files = lodestar_classify::file_infos(&info.files, info.path_encoding);
-            let sig = usable(lodestar_filter::payload_sig(&files)).unwrap();
-            let api = test_api(store);
+            let (_dir, api, hash, sig) = sp4_stored("SP-2", Action::Hide, Some(HID));
             let sigs = api.engine.current().spam_sigs.clone();
-            // As the writer added it when SP-2 hid the original.
-            sigs.add(
-                sig,
-                Original {
-                    rule: PackRule::Sp2,
-                    action: lodestar_filter::Action::Hide,
-                },
-            );
-            sigs.flush(&mut api.store()).unwrap();
-            let exception = |rule: &str, what: MatchInput| Change::AddException {
-                rule: rule.into(),
-                what,
-            };
-            let by_hash = || MatchInput {
-                hashes: Some(vec![hex(&hash)]),
-                ..MatchInput::default()
-            };
             match how {
-                "hashes" => apply_change(&api, exception("SP-2", by_hash())),
+                "hashes" => apply_change(&api, sp4_exception("SP-2", &hash)),
                 "payload" => apply_change(
                     &api,
-                    exception(
-                        "SP-2",
-                        MatchInput {
+                    Change::AddException {
+                        rule: "SP-2".into(),
+                        what: MatchInput {
                             payload: Some(format!("{sig:016x}")),
                             ..MatchInput::default()
                         },
-                    ),
+                    },
                 ),
                 "release" => apply_change(&api, Change::Release { hash: hex(&hash) }),
                 "undo" => {
-                    // Excepted, then undone: the signature is back, as the
-                    // still-hidden original's. Undone again (redo): gone.
-                    apply_change(&api, exception("SP-2", by_hash()));
+                    apply_change(&api, sp4_exception("SP-2", &hash));
                     assert!(sigs.get(sig).is_none());
                     apply_change(&api, Change::Undo);
-                    assert_eq!(
-                        sigs.get(sig),
-                        Some(Original {
-                            rule: PackRule::Sp2,
-                            action: lodestar_filter::Action::Hide,
-                        }),
-                        "undone"
-                    );
+                    assert_eq!(sigs.get(sig), Some(HID), "undone");
                     let again = SpamSigs::default();
                     again.load(&api.store().settings_with_prefix_raw(PREFIX).unwrap());
                     assert!(again.get(sig).is_some(), "undone, after a restart");
                     apply_change(&api, Change::Undo);
                 }
-                _ => apply_change(&api, exception("SP-3", by_hash())),
+                _ => apply_change(&api, sp4_exception("SP-3", &hash)),
             }
             let kept = how == "another rule";
             assert_eq!(sigs.get(sig).is_some(), kept, "{how}");
@@ -3971,6 +4028,63 @@ mod tests {
             let again = SpamSigs::default();
             again.load(&api.store().settings_with_prefix_raw(PREFIX).unwrap());
             assert_eq!(again.get(sig).is_some(), kept, "{how} after a restart");
+        }
+    }
+
+    /// An exception that comes and goes never makes an original of a
+    /// torrent SP-2 didn't hide (your rule hid it), and never overwrites
+    /// a signature another original added (SP-3's demote stays SP-3's).
+    #[test]
+    fn sp4_undo_restores_only_what_the_rule_decided() {
+        use lodestar_filter::Action;
+        use lodestar_filter::spam_sigs::Original;
+        // Hidden by your rule U-1: not an SP-2 original.
+        let (_dir, api, hash, sig) = sp4_stored("U-1", Action::Hide, None);
+        apply_change(&api, sp4_exception("SP-2", &hash));
+        apply_change(&api, Change::Undo);
+        assert_eq!(api.engine.current().spam_sigs.get(sig), None);
+        // A genuine SP-2 original, its payload already in the set as an
+        // SP-3 demote: the exception to SP-2 leaves SP-3's entry, and so
+        // does its Undo.
+        let sp3 = Original {
+            rule: PackRule::Sp3,
+            action: Action::Demote,
+        };
+        let (_dir, api, hash, sig) = sp4_stored("SP-2", Action::Hide, Some(sp3));
+        apply_change(&api, sp4_exception("SP-2", &hash));
+        assert_eq!(api.engine.current().spam_sigs.get(sig), Some(sp3));
+        apply_change(&api, Change::Undo);
+        assert_eq!(api.engine.current().spam_sigs.get(sig), Some(sp3));
+    }
+
+    /// Releasing a clone, or excepting it by hash, frees only the clone:
+    /// its own newest hit is SP-4's, so its original's signature stays and
+    /// the rest of its family stays held.
+    #[test]
+    fn sp4_releasing_a_clone_keeps_its_family_held() {
+        use lodestar_filter::Action;
+        use lodestar_filter::spam_sigs::Original;
+        let original = Original {
+            rule: PackRule::Sp2,
+            action: Action::Hide,
+        };
+        for change in ["release", "exception"] {
+            let (_dir, api, hash, sig) = sp4_stored("SP-4", Action::Hide, Some(original));
+            match change {
+                // Nothing held and nothing of its own to release: gone.
+                "release" => {
+                    let c = Change::Release { hash: hex(&hash) };
+                    if let Ok(a) = api.assess(&c, 1_000) {
+                        assert!(api.apply(&c, a, 1_000).is_err());
+                    }
+                }
+                _ => apply_change(&api, sp4_exception("SP-2", &hash)),
+            }
+            assert_eq!(
+                api.engine.current().spam_sigs.get(sig),
+                Some(original),
+                "{change}"
+            );
         }
     }
 

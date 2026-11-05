@@ -803,6 +803,28 @@ impl Store {
         Ok(free)
     }
 
+    /// The newest applied filter hit on `hash` (not a shadow one), if
+    /// `filter_hits` still holds one: the decision ingest last recorded
+    /// for it. There's no index on `hash`, so this scans the table: for
+    /// rare paths (SP-4's Undo, RP-5), not ingest.
+    pub fn latest_hit(&self, hash: &[u8; 20]) -> Result<Option<FilterHit>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT rule, action, at, evidence FROM filter_hits
+             WHERE hash = ?1 AND action & ?2 = 0 ORDER BY at DESC, id DESC LIMIT 1",
+        )?;
+        Ok(stmt
+            .query_row(params![&hash[..], i64::from(SHADOW)], |r| {
+                Ok(FilterHit {
+                    hash: *hash,
+                    rule: r.get(0)?,
+                    action: r.get(1)?,
+                    at: r.get(2)?,
+                    evidence: r.get(3)?,
+                })
+            })
+            .optional()?)
+    }
+
     /// Filter hits since `since`, oldest first.
     pub fn filter_hits(&self, since: i64) -> Result<Vec<FilterHit>> {
         let mut stmt = self.conn.prepare_cached(
@@ -839,6 +861,27 @@ mod tests {
 
     /// The adult-hold mark is a suffix on the stored rule id; reads strip
     /// it. Pinned because no migration records it (§20.7).
+    #[test]
+    fn the_latest_hit_is_the_newest_applied_one() {
+        let s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        assert_eq!(s.latest_hit(&[8; 20]).unwrap(), None);
+        s.conn
+            .execute(
+                "INSERT INTO filter_hits (hash, rule, action, at, evidence)
+                 VALUES (?1, 'SP-2', 2, 21, x''), (?1, 'SP-3', 1, 22, x''),
+                        (?1, 'SP-4', 130, 23, x''), (?2, 'U-1', 2, 30, x'')",
+                params![&[8u8; 20][..], &[9u8; 20][..]],
+            )
+            .unwrap();
+        let h = s.latest_hit(&[8; 20]).unwrap().unwrap();
+        assert_eq!(
+            (h.rule.as_str(), h.action, h.at),
+            ("SP-3", 1, 22),
+            "not the shadow one"
+        );
+        assert_eq!(s.latest_hit(&[9; 20]).unwrap().unwrap().rule, "U-1");
+    }
+
     #[test]
     fn the_adult_hold_mark_is_a_rule_suffix() {
         let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();

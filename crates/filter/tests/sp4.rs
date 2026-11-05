@@ -967,6 +967,60 @@ proptest! {
     }
 }
 
+/// The review's cases (#510): a key just below the index's bound, and a
+/// readable row just below the band rows are numbered in. The first is a
+/// lost key that never sets where numbering starts. After the second the
+/// numbers run out: the set stops growing and says so, and never starts
+/// a row a restart wouldn't read. Either way a restart reads back
+/// everything written, and nothing new is lost.
+#[test]
+fn keys_near_the_bound_never_break_a_restart() {
+    for n in [spam_sigs::MAX_ROW - 1, spam_sigs::ROW_BAND - 1] {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let near = format!("{PREFIX}{n}");
+        store
+            .update_settings_raw(&[(&near, &[spam_sigs::FORMAT][..])], &[])
+            .unwrap();
+        let s = SpamSigs::default();
+        let lost = s.load(&rows(&store)).lost;
+        let stray = n == spam_sigs::MAX_ROW - 1;
+        assert_eq!(
+            lost,
+            if stray {
+                vec![format!("key-{n}")]
+            } else {
+                vec![]
+            }
+        );
+        for i in 0..(ROW_ENTRIES as u64 * 3) {
+            s.add(sig(i), HID);
+        }
+        s.flush(&mut store).unwrap();
+        if stray {
+            assert!(
+                snapshot(&store)[&near] == [spam_sigs::FORMAT],
+                "{n}: left alone"
+            );
+            assert_eq!(s.len(), ROW_ENTRIES * 3);
+        } else {
+            // The one row left is filled, then the set stops: listed.
+            assert_eq!(s.len(), ROW_ENTRIES);
+            assert_eq!(s.labels(), ["packs.sp4.row.numbers"]);
+        }
+        let again = SpamSigs::default();
+        let loaded = again.load(&rows(&store));
+        assert_eq!(loaded.lost, lost, "{n}: nothing new lost");
+        assert_eq!(again.len(), s.len(), "{n}");
+        for i in 0..(ROW_ENTRIES as u64 * 3) {
+            assert_eq!(
+                again.get(sig(i)).is_some(),
+                s.get(sig(i)).is_some(),
+                "{n}: {i}"
+            );
+        }
+    }
+}
+
 /// A key past the row numbers this build uses (corrupted, or another
 /// build's numbering) is listed and left alone: it never sets where new
 /// rows start, so they can't wrap or land on it.

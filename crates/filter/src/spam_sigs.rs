@@ -37,7 +37,7 @@
 //! # Fail closed
 //! A row that doesn't read (not a blob of this format: a newer version's
 //! row after a rollback, or a corrupted one; or a key that isn't a row
-//! number below [`MAX_ROW`]) loses only its own
+//! number below [`ROW_BAND`]) loses only its own
 //! signatures. It's left as it is, never written over, and listed
 //! ([`SpamSigs::labels`]) in `filter.stand_ins` and the Filters & Safety
 //! notice, as RP-0 lists lost version state. New rows are numbered past
@@ -76,9 +76,18 @@ pub const ROW_BYTES: usize = 4 << 10;
 pub const FORMAT: u8 = 1;
 /// Entries in a full row: 511.
 pub const ROW_ENTRIES: usize = (ROW_BYTES - 1) / 8;
-/// Row numbers are below this; a key past it isn't one of this build's
-/// rows (and the index packs a row number in 45 bits).
+/// The index packs a row number in 45 bits; rows stay well below.
 pub const MAX_ROW: u64 = 1 << 40;
+/// Row numbers are below this, read or written: a key at or past it is
+/// listed as a lost key and never sets where numbering starts, and no
+/// row is started there. Reaching it from row 0 takes 2^39 rows of 511
+/// hides; only a stray key near it can bring it close. Then, once the
+/// numbers run out, the set stops growing and says so
+/// ([`SpamSigs::labels`]: `packs.sp4.row.numbers`), rather than write a
+/// row a restart wouldn't read.
+pub const ROW_BAND: u64 = MAX_ROW / 2;
+/// The label suffix when the row numbers ran out ([`ROW_BAND`]).
+const OUT_OF_NUMBERS: &str = "numbers";
 /// The `filter.stand_ins` label prefix of a row that doesn't read.
 pub const LABEL_PREFIX: &str = "packs.sp4.row.";
 
@@ -200,6 +209,8 @@ struct Inner {
     /// Rows to write and rows to delete at the next flush.
     dirty: BTreeSet<u64>,
     gone: BTreeSet<u64>,
+    /// A row couldn't be started: the numbers ran out ([`ROW_BAND`]).
+    out_of_numbers: bool,
 }
 
 impl Inner {
@@ -216,12 +227,14 @@ impl Inner {
             oldest: (0, 0),
             dirty: BTreeSet::new(),
             gone: BTreeSet::new(),
+            out_of_numbers: false,
         }
     }
 
     /// Appends `entry` to the open row, starting one if needed. Returns
-    /// where it went.
-    fn append(&mut self, entry: u64) -> (u64, usize) {
+    /// where it went, or `None` when no row can be started (at
+    /// [`ROW_BAND`]).
+    fn append(&mut self, entry: u64) -> Option<(u64, usize)> {
         let open = self.tail.filter(|t| {
             self.rows
                 .get(t)
@@ -231,9 +244,11 @@ impl Inner {
             Some(n) => n,
             None => {
                 let n = self.next;
-                // Below MAX_ROW: one row per 511 adds would take longer
-                // than anything runs to reach it.
-                self.next = n.saturating_add(1);
+                if n >= ROW_BAND {
+                    self.out_of_numbers = true;
+                    return None;
+                }
+                self.next = n + 1;
                 self.rows.insert(n, Row::default());
                 self.tail = Some(n);
                 n
@@ -242,7 +257,7 @@ impl Inner {
         let row = self.rows.get_mut(&n).expect("open row");
         row.entries.push(entry);
         self.dirty.insert(n);
-        (n, row.entries.len() - 1)
+        Some((n, row.entries.len() - 1))
     }
 
     /// Counts a stored add of `k` that no longer lives.
@@ -270,13 +285,16 @@ impl Inner {
 
     fn add(&mut self, sig: u64, o: Original) {
         let k = key(sig);
+        let flags = o.flags();
+        // Out of row numbers (never, in practice): the set stays as it is.
+        let Some((n, i)) = self.append(k | flags) else {
+            return;
+        };
         let mut touched = BTreeSet::new();
         if let Some(old) = self.live.remove(&k) {
             self.kill(old.row(), &mut touched);
             self.went_stale(k);
         }
-        let flags = o.flags();
-        let (n, i) = self.append(k | flags);
         self.live.insert(k, Loc::new(n, i, flags));
         while self.live.len() > self.cap && self.evict(&mut touched) {}
         self.compact(touched);
@@ -289,9 +307,10 @@ impl Inner {
             // load (the module docs): a removal cancels it. Only entries
             // before the eviction point can be such adds; that's at most
             // a quarter of a row and rows that hold only removals.
-            if self.dropped_add(k, rule) {
+            if self.dropped_add(k, rule)
+                && let Some((n, _)) = self.append(k | REMOVED)
+            {
                 let mut touched = BTreeSet::new();
-                let (n, _) = self.append(k | REMOVED);
                 self.kill(n, &mut touched);
                 self.compact(touched);
             }
@@ -300,11 +319,14 @@ impl Inner {
         if rule.is_some_and(|r| Original::from_flags(loc.flags()).rule != r) {
             return false;
         }
+        // Out of row numbers (never, in practice): kept, as it's stored.
+        let Some((n, _)) = self.append(k | REMOVED) else {
+            return false;
+        };
         self.live.remove(&k);
         self.went_stale(k);
         let mut touched = BTreeSet::new();
         self.kill(loc.row(), &mut touched);
-        let (n, _) = self.append(k | REMOVED);
         self.kill(n, &mut touched);
         self.compact(touched);
         true
@@ -724,21 +746,23 @@ impl SpamSigs {
 }
 
 impl Inner {
-    /// The rows that don't read, by number, then the other keys.
+    /// The rows that don't read, by number, then the other keys, then
+    /// whether the row numbers ran out.
     fn lost_names(&self) -> Vec<String> {
         self.lost_rows
             .iter()
             .map(u64::to_string)
             .chain(self.lost_other.iter().cloned())
+            .chain(self.out_of_numbers.then(|| OUT_OF_NUMBERS.to_owned()))
             .collect()
     }
 }
 
 /// A row number as written: decimal, no sign, no leading zeros, below
-/// [`MAX_ROW`].
+/// [`ROW_BAND`].
 fn canonical(s: &str) -> Option<u64> {
     let n: u64 = s.parse().ok()?;
-    (n.to_string() == s && n < MAX_ROW).then_some(n)
+    (n.to_string() == s && n < ROW_BAND).then_some(n)
 }
 
 /// A key suffix that isn't a row number, as a label can carry it.
@@ -819,8 +843,9 @@ mod tests {
         assert_eq!(canonical("+1"), None);
         assert_eq!(sanitize("a b@c~"), "abc");
         assert_eq!(sanitize("+1"), "key-1", "never a row's label");
-        assert_eq!(canonical(&MAX_ROW.to_string()), None);
-        assert_eq!(canonical(&(MAX_ROW - 1).to_string()), Some(MAX_ROW - 1));
+        assert_eq!(canonical(&ROW_BAND.to_string()), None);
+        assert_eq!(canonical(&(MAX_ROW - 1).to_string()), None);
+        assert_eq!(canonical(&(ROW_BAND - 1).to_string()), Some(ROW_BAND - 1));
     }
 
     #[test]

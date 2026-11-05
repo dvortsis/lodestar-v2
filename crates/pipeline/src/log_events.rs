@@ -109,7 +109,8 @@ lodestar_log::catalogue! {
         fields: { stored: Size, queued: Size },
     }
     /// A stored filter rule was skipped: `what` (`rule`, `override`,
-    /// `exception`, `always_allow`, `class_rule`) and its id, never its
+    /// `exception`, `always_allow`, `class_rule`, `pack_override`, or
+    /// `sp4_row` for a row of SP-4's signature set) and its id, never its
     /// terms.
     FILTER_RULE_SKIPPED {
         id: "pipeline.filter_rule_skipped",
