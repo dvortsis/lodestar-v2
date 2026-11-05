@@ -9,7 +9,7 @@ use lodestar_classify::{
     MatchKind, Record, classify_enriched,
 };
 use lodestar_filter::reclassify::{Reclassified, reclassify_row};
-use lodestar_filter::{Engine, Handle, Sealer};
+use lodestar_filter::{Handle, Sealer};
 use lodestar_metainfo::{File, TextEncoding};
 use lodestar_store::claims::{AdultEnrichment, AdultKind};
 use lodestar_store::{Enriched, Store, TorrentRow};
@@ -283,6 +283,24 @@ fn with_match(
     ))))
 }
 
+/// Marks for the backfill those of the stored torrents `ids` whose claims
+/// hold an adult-enrichment section, so their match is applied again.
+/// For a commit that rewrote a torrent's classification without reading
+/// its claims: a partial import's upgrade writes prepare's record, which
+/// knows no match (ENR-1b). Returns the ids marked.
+pub fn mark_matched(store: &mut Store, ids: &[i64]) -> Result<Vec<i64>, lodestar_store::Error> {
+    let mut marked = Vec::new();
+    for &id in ids {
+        if !marked.contains(&id) && stored_match(store, id)?.is_some() {
+            marked.push(id);
+        }
+    }
+    if !marked.is_empty() {
+        store.mark_unenriched(&marked)?;
+    }
+    Ok(marked)
+}
+
 /// A classification in the form the store keeps.
 fn enriched_of(c: &Classification) -> Enriched {
     Enriched {
@@ -318,11 +336,20 @@ pub struct Matched {
 pub fn apply_matches(
     store: &mut Store,
     ids: &[i64],
-    engine: &Engine,
+    filter: &Handle,
     adult: AdultSources,
     now: i64,
 ) -> Result<Matched, lodestar_store::Error> {
+    // The generation first, then the rules (as the backfill reads them):
+    // rules read after a change are never older than the generation they're
+    // written under, so a write can't clear a mark a rules change set.
     let generation = store.class_gen()?;
+    #[cfg(test)]
+    if let Some(between) = tests::BETWEEN_READS.with(|b| b.borrow_mut().take()) {
+        between(store);
+    }
+    let engine = filter.current();
+    let engine = &*engine;
     let mut batch: Vec<(i64, Enriched)> = Vec::new();
     let mut deferred = Vec::new();
     for &id in ids {
@@ -570,6 +597,92 @@ mod tests {
     use super::*;
     use lodestar_classify::{ContentType, Record};
     use lodestar_metainfo::FileAttrs;
+
+    type Between = Box<dyn FnOnce(&mut Store)>;
+
+    thread_local! {
+        /// Runs once inside `apply_matches`, between its generation read
+        /// and its rules read: the race the order closes.
+        pub(super) static BETWEEN_READS: std::cell::RefCell<Option<Between>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// A rules change that lands between `apply_matches`'s two reads, in
+    /// the API's order (the live rules, then the generation and the mark),
+    /// isn't written over: the match is classified under the new rules, so
+    /// the row stays marked. With the reads swapped it would be classified
+    /// under the old rules and written under the new generation, clearing
+    /// the mark.
+    #[test]
+    fn a_rules_change_between_the_reads_is_not_written_over() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        use lodestar_store::claims::{AdultEnrichment, AdultKind, Claims};
+        use lodestar_store::{NewTorrent, StoreConfig};
+        let name = "Studiox Garden Scene XXX 1080p";
+        let raw = to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                (b"name".to_vec(), OwnedValue::from(name)),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20 * 900])),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        let enr = store.register_source("enr", "1", 0).unwrap();
+        let id = store
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 0,
+                metadata_at: 0,
+                extra_flags: 0,
+                source: dht,
+            }])
+            .unwrap()[0]
+            .id();
+        let files = file_infos(&info.files, info.path_encoding);
+        store
+            .set_enrichments(&[(id, enrich_infos(name, &files).0)])
+            .unwrap();
+        assert_eq!(
+            store.content_type(id).unwrap(),
+            Some(ContentType::Adult.code())
+        );
+        let section = AdultEnrichment {
+            kind: Some(AdultKind::Vr),
+            ..AdultEnrichment::new("1")
+        };
+        let claims = Claims {
+            adult: Some(section),
+            ..Claims::default()
+        };
+        assert!(store.put_claims(id, enr, &claims, false).unwrap());
+        let filter = std::sync::Arc::new(crate::default_filter());
+        let live = filter.clone();
+        BETWEEN_READS.with(|b| {
+            *b.borrow_mut() = Some(Box::new(move |store: &mut Store| {
+                let rule = store.add_class_rule("garden", false).unwrap();
+                live.update_engine(|e| {
+                    assert!(
+                        e.load_class_rules(&[(rule, "garden".into(), false)])
+                            .is_empty()
+                    );
+                });
+                store.bump_class_gen().unwrap();
+                store.mark_unenriched(&[id]).unwrap();
+            }))
+        });
+        apply_matches(&mut store, &[id], &filter, AdultSources::default(), 0).unwrap();
+        assert!(BETWEEN_READS.with(|b| b.borrow().is_none()), "the hook ran");
+        let e = store.enrichment(id).unwrap().unwrap();
+        assert_ne!(e.version, ENRICHMENT_VERSION, "still marked");
+        let r = Record::decode(&e.data).unwrap();
+        assert_ne!(r.adult_kind, Some(lodestar_classify::AdultKind::Vr));
+    }
 
     fn file(path: &[&[u8]], size: u64) -> File {
         File {

@@ -2,7 +2,8 @@
 
 | Version | Date | Change |
 |---|---|---|
-| 1.9 | 2026-11-05 | Added section 5.5 on connecting Sonarr and Radarr, a glossary entry, and corrected the list of sources in section 5.4. |
+| 1.10 | 2026-11-05 | Added section 5.5 on connecting Sonarr and Radarr, a glossary entry, and corrected the list of sources in section 5.4. |
+| 1.9 | 2026-11-05 | Added a section in 3.6 on pack versions, why a new version asks for your password, what "in doubt" means and overrides. |
 | 1.8 | 2026-11-05 | Section 2.5: setup opens on the Legal Notice; reading it again in Settings → About; the one-time showing at sign-in. Section 1.2 no longer marks the setup step planned. |
 | 1.7 | 2026-11-05 | Added section 6.2 on a Magnetico import refused as in use, and a row for it in section 6.1. |
 | 1.6 | 2026-11-05 | Added section 5.4 on Settings → Sources, its rows in Appendix B, and two glossary entries. |
