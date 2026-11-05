@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T19:19Z",
+  "updated_at": "2026-11-05T19:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3065,9 +3065,12 @@
       "done": "2026-11-05T18:12Z"
     },
     "RP-4": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnAx3emoPDFaFTYmbJi",
-      "since": "2026-11-05T10:55Z"
+      "since": "2026-11-05T10:55Z",
+      "pr": 495,
+      "merge": "85179f32",
+      "done": "2026-11-05T19:21Z"
     },
     "SRC-11c": {
       "status": "running",
@@ -3232,6 +3235,13 @@
       "since": "2026-11-05T19:17Z",
       "model": "sonnet",
       "brief": "briefs/ENR-8.md"
+    },
+    "RP-5": {
+      "status": "running",
+      "session": "session_01MMjhnAx3emoPDFaFTYmbJi",
+      "since": "2026-11-05T19:21Z",
+      "brief": "briefs/RP-5.md",
+      "note": "same session as RP-4"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4834,7 +4844,8 @@
     "owner flag sent 18:15Z: X-claim-trackers tightenings (#500 merged c98be2d6). Canonical tracker store follow-up (store_claims via public_tracker_url) is now unblocked; held by the 8-slot drain.",
     "owner flag sent 18:56Z: X-search-files-5 v7 numbers and cost (#505 merged a1e0d849).",
     "owner flag sent 18:58Z: LEGAL-2 hold (#499 merged e163e323).",
-    "owner flag sent 19:18Z: ENR-7 (#504 merged af4e9f7d). ENR-8 (drawer section, Sonnet) is now ready."
+    "owner flag sent 19:18Z: ENR-7 (#504 merged af4e9f7d). ENR-8 (drawer section, Sonnet) is now ready.",
+    "owner flag sent 19:21Z: RP-4 SP-3 refinements (#495 merged 85179f32)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5495,7 +5506,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T19:19Z",
+    "updated": "2026-11-05T19:21Z",
     "items": [
       {
         "slot": 1,
@@ -5532,11 +5543,11 @@
       },
       {
         "slot": 5,
-        "slice": "RP-4",
+        "slice": "RP-5",
         "role": "build",
         "agent": "claude",
-        "doing": "Rule packs: SP-3 flooding, a bounded per-publisher near-duplicate rate judged in the writer",
-        "since": "2026-11-05T10:55Z"
+        "doing": "Rule packs: SP-4, clones of hidden spam inherit the original's action",
+        "since": "2026-11-05T19:21Z"
       },
       {
         "slot": 7,

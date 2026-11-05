@@ -1,5 +1,5 @@
 # RP-5: SP-4, clones of hidden spam (payload-signature set, inherited action, release follows the original)
-**Model:** Opus (filter and content-safety core). `/security-review` and a fresh Opus reviewer follow. Runner brief, 2026-11-05T19:22Z. Runs in the same session as RP-4.
+**Model:** Opus (filter and content-safety core). `/security-review` and a fresh Opus reviewer follow. Runner brief, 2026-11-05T19:20Z. Runs in the same session as RP-4.
 
 ## Why
 RP-4 (#495, merged 85179f32) added SP-3 flooding. SP-4 is the last spam rule. When an original is hidden by SP-2, or by SP-3 at demote or above, its payload signature joins a capped set. A later torrent with the same payload signature then inherits the original's action. The spec is in `docs/plan/2026-11-04-v06-rulepacks.md`: §4.3 "RP-5", line 47 (storage), and Q12 (the runner's call: 1M signatures, 8 MB, oldest dropped first, in append-only 64 KB `settings` chunks). This is the gate before RP-G.
