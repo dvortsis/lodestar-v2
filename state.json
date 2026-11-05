@@ -3380,7 +3380,8 @@
   "2026-11-05T03:30Z rc.4 plan: tag after #457 merges and the release branch CI is green (~04:45Z); the release-notes docs PR does not block the tag. r5 start est. 05:15-05:30Z, baseline end est. 2026-11-06T11:45-12:00Z.",
   "2026-11-05T03:59Z #454 RP-DEF merged (dd6ce6e9). Launched RP-2 in slot 8 (most unlocks: RP-3, RP-4). RP-1b and RP-UC wait for RP-2 (shared packs/mod.rs; plan: filter-engine slices one at a time).",
   "2026-11-05T04:16Z #456 merged (6cf0519c): r5 pins collector/analyzer at main 6cf0519c or later. Launched X-source-adult in slot 1.",
-  "2026-11-05T04:19Z #457 LEGAL-1r merged into release/v0.5.1 at 5b840813 (rc.4 candidate). Dispatched CI and E2E on release/v0.5.1; tag steps go to the owner when green. Launched SRC-10c-2 in slot 4."
+  "2026-11-05T04:19Z #457 LEGAL-1r merged into release/v0.5.1 at 5b840813 (rc.4 candidate). Dispatched CI and E2E on release/v0.5.1; tag steps go to the owner when green. Launched SRC-10c-2 in slot 4.",
+  "2026-11-05T04:37Z #463 merged into release/v0.5.1 (dba1a5c0, docs only, on 5b840813). rc.4 tag goes on dba1a5c0 once CI+E2E are green on 5b840813 (the code tree is identical). R-rc4-cut session archived; LEGAL-1 launched in slot 3 (session_01MMjhnCPhmxpaJb3JmtzPS1)."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5071,7 +5072,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T04:19Z",
+  "updated": "2026-11-05T04:39Z",
   "items": [
    {
     "slot": 1,
@@ -5091,11 +5092,11 @@
    },
    {
     "slot": 3,
-    "slice": "R-rc4-cut",
-    "role": "build",
+    "slice": "LEGAL-1",
+    "role": "slice",
     "agent": "claude",
-    "doing": "Writing the rc.4 release notes and delta report (docs only, lands during soak r5).",
-    "since": "2026-11-05T03:30Z"
+    "doing": "Legal Notice on main: LEGAL-1r gate ported, plus the setup-wizard step (v0.5.2)",
+    "since": "2026-11-05T04:38Z"
    },
    {
     "slot": 4,
