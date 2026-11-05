@@ -2459,8 +2459,8 @@ mod tests {
 
     /// The port for test nodes nothing listens on. Below 1024, so it is
     /// outside every OS's ephemeral range (Linux 32768–60999, Windows and
-    /// macOS 49152–65535, FreeBSD 10000–65535 by default; none ever start
-    /// below 1024), and no test binds a fixed port. A routing-table entry
+    /// macOS 49152–65535, FreeBSD 10000–65535; none start below 1024 by
+    /// default), and no test binds a fixed port. A routing-table entry
     /// at a port like 65530 could be handed to another test's `:0` socket,
     /// which then hears this actor's queries (the #476 flakes).
     pub(super) const UNBOUND: u16 = 9;

@@ -23,15 +23,15 @@ This chapter lists common problems with fixes, explains a Magnetico import that 
 
 `lodestar import` refuses a Magnetico database with `source_not_quiescent` while magneticod may still be writing to it. The sign is a `database.sqlite3-wal` file that isn't empty, or a `database.sqlite3-journal` file, beside the database. The refusal changes nothing, and it stays even after magneticod stops if those files still hold changes.
 
-The `-wal` file holds changes [SQLite](glossary.md#sqlite) hasn't written into the database file yet. magneticod writes them in, and empties the file, when it stops cleanly. When that fails, for example because the disk is full, the `-wal` file keeps torrents that aren't in the database file.
+The `-wal` file holds changes [SQLite](glossary.md#sqlite) hasn't written into the database file yet. magneticod writes them in, and removes or empties the file, when it stops cleanly. When that fails, for example because the disk is full, the `-wal` file keeps torrents that aren't in the database file.
 
 To fix it:
 
-1. If magneticod is running, stop it. Run the import again.
+1. If magneticod is running, stop it. Run the import again, as [the import guide](../operations.md#importing-from-magnetico-or-bitmagnet) shows.
    **Result:** The import starts. If it's still refused, go on to step 2.
 2. Free some disk space on the drive that holds the database. Writing the changes in needs room.
 3. Start magneticod, wait until it's running, then stop it.
-   **Result:** magneticod writes the changes into the database and empties the `-wal` file. Run the import again.
+   **Result:** magneticod writes the changes into the database, and the `-wal` file is gone or empty. Run the import again.
 
 If you can't run magneticod again, write the changes in on a copy with the `sqlite3` tool instead:
 
@@ -40,8 +40,8 @@ If you can't run magneticod again, write the changes in on a copy with the `sqli
    ```bash
    sqlite3 database.sqlite3 'PRAGMA wal_checkpoint(TRUNCATE);'
    ```
-   **Result:** It prints `0|0|0`, and the `-wal` file is now empty. A first number of `1` means another program still has the copy open.
-3. Import the copy: point `--path` at it, and in Docker mount its folder instead.
+   **Result:** It prints `0|0|0`, and the `-wal` file is gone or empty. A first number of `1` means another program still has the copy open. If the terminal says `sqlite3: command not found`, copy the folder to a computer that has the `sqlite3` tool from [sqlite.org](https://sqlite.org/download.html), and run the command there.
+3. Import the copy: point `--path` at it, and in Docker mount its folder instead ([the import guide](../operations.md#importing-from-magnetico-or-bitmagnet)).
 
 > [!WARNING]
 > Never delete the `-wal` file: that loses the torrents in it. Write its changes in instead, with magneticod or `sqlite3` as above. A copy with its leftover `-wal` file beside it is refused like the original. Run step 2 on the copy before you import it.

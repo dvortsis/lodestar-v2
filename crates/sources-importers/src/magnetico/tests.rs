@@ -612,8 +612,8 @@ fn assert_not_quiescent_advice(err: &Refusal) {
         "free some disk space",
         "start and stop magneticod once",
         "sqlite3 database.sqlite3 'PRAGMA wal_checkpoint(TRUNCATE);'",
-        // Copying the leftover -wal along doesn't help.
-        "A copy with a leftover -wal beside it is refused",
+        // Copying the leftover -wal along doesn't help on its own.
+        "Importing that copy before the checkpoint is refused",
     ] {
         assert!(text.contains(step), "missing {step:?} in {text:?}");
     }
