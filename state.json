@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T21:38Z",
+ "updated_at": "2026-11-05T21:39Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3259,10 +3259,12 @@
    "head": "ca2aa9d1"
   },
   "X-enr-page-flag": {
-   "status": "running",
+   "status": "in review",
    "session": "session_01MMjhn8MfsZf78SSbRHdDCm",
    "since": "2026-11-05T20:25Z",
-   "brief": "briefs/X-enr-page-flag.md"
+   "brief": "briefs/X-enr-page-flag.md",
+   "pr": 511,
+   "head": "e95caf81"
   },
   "X-claim-store": {
    "status": "running",
@@ -3663,7 +3665,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-05T18:39Z",
+ "last_heartbeat": "2026-11-05T21:39Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -4903,6 +4905,11 @@
    "id": "owner-flag-ENR-8",
    "note": "sent 21:40Z at merge",
    "added": "2026-11-05T21:38Z"
+  },
+  {
+   "id": "runner-docs-enr45-pointer",
+   "note": "Runner docs PR: add a pointer from the ENR-4/ENR-5 decisions bodies to the X-enr-page-flag decisions file (#511), which supersedes their stopgaps.",
+   "added": "2026-11-05T21:39Z"
   }
  ],
  "main_health": [
@@ -5565,14 +5572,14 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T21:38Z",
+  "updated": "2026-11-05T21:39Z",
   "items": [
    {
     "slot": 1,
     "slice": "X-enr-page-flag",
     "role": "build",
     "agent": "claude",
-    "doing": "Enrichment: the parsers report the answer's shape, replacing the plugins' stopgap checks (registration precondition)",
+    "doing": "Enrichment: parser page flags replace the plugin stopgaps; PR #511 in review",
     "since": "2026-11-05T20:25Z"
    },
    {
