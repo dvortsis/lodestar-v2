@@ -2991,7 +2991,7 @@
    "brief": "briefs/RP-3.md"
   },
   "X-flake-search-keyboard": {
-   "status": "building",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01MMjhnCAdiVGJVoABeaW595",
    "launched": "2026-11-05T06:52Z",
@@ -3479,7 +3479,8 @@
   "2026-11-05T07:19Z merged #471 runner plan PR (31afe2af) and #475 D-v052-notes (a3bbb95e); slot 11 idle with reason.",
   "2026-11-05T07:21Z #468 X-search-files-4 merged (dfc91d2d); X-search-files-5 continues in the same session (slot 7).",
   "2026-11-05T08:01Z #476 X-flakes-1105 merged (d4d70d75), archived; X-test-hygiene-1105 launched in slot 4 (prompt-only brief, #476 review follow-ups).",
-  "2026-11-05T08:33Z #474 SRC-17 merged (040567e4), archived; slot 10 idle with recorded reason."
+  "2026-11-05T08:33Z #474 SRC-17 merged (040567e4), archived; slot 10 idle with recorded reason.",
+  "2026-11-05T08:36Z #477 X-flake-search-keyboard merged (ea01beb2; Assist late-mount fix), archived; X-fuzz-1105 launched in slot 1. Slots 10, 11 idle (recorded reason)."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5215,15 +5216,15 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T08:34Z",
+  "updated": "2026-11-05T08:37Z",
   "items": [
    {
     "slot": 1,
-    "slice": "X-flake-search-keyboard",
+    "slice": "X-fuzz-1105",
     "role": "build",
     "agent": "claude",
-    "doing": "Test reliability: the search-results keyboard e2e focus race (seen on #469 and #306)",
-    "since": "2026-11-05T06:52Z"
+    "doing": "Security: a longer fuzz campaign on the untrusted-input parsers merged this week (webhooks, feeds, scrape, cache)",
+    "since": "2026-11-05T08:37Z"
    },
    {
     "slot": 2,
