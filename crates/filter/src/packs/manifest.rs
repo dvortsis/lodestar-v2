@@ -30,8 +30,13 @@ use crate::core::Action;
 /// seeded before they shipped they're pending, in shadow, until accepted
 /// or until their pack is turned on (which records them); a fresh store
 /// records every rule at its current version, so they apply there.
-pub const ADDED_AFTER_RP0: &[PackRule] =
-    &[PackRule::Mw6, PackRule::Uc1, PackRule::Uc2, PackRule::Uc3];
+pub const ADDED_AFTER_RP0: &[PackRule] = &[
+    PackRule::Mw6,
+    PackRule::Uc1,
+    PackRule::Uc2,
+    PackRule::Uc3,
+    PackRule::Sp3,
+];
 
 /// What a version changed against the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -636,6 +641,8 @@ mod tests {
         ("FK-2@1 flag", 16, 1128617146480757237),
         ("SP-2@1 hide", 162, 11973947260632497437),
         ("SP-1@1 demote", 426, 419072724506069972),
+        // Every other item of the set, those marked flooded.
+        ("SP-3@1 demote", 1507, 2971618462628662722),
         ("SC-1@1 hide", 351, 370022691562877752),
         ("SC-2@1 hide", 287, 15705590736820052948),
         ("UC-1@1 hide", 3, 3719771000408991908),
@@ -678,7 +685,10 @@ mod tests {
                 files,
                 content_type: class.content_type,
             };
-            let ctx = Ctx::new(&item, &facts, &[]);
+            // SP-3 matches where the writer counted a flood: every other
+            // item here, which leaves every other rule as it is.
+            let flood = (i % 2 == 0).then_some(crate::flood::Level::Flag);
+            let ctx = Ctx::new(&item, &facts, &[]).with_flood(flood);
             // SC-1 ∪ SC-2 is SC-1 as it was before RP-0 split them.
             assert_eq!(
                 ctx.scam(|_| true),

@@ -108,6 +108,8 @@ pub(crate) struct Writer {
     pub store: Option<Store>,
     /// The sources whose every find is adult ([`crate::source_adult`]).
     pub adult: AdultSources,
+    /// SP-3's rate state (RP-4): judged here, at commit, in order.
+    pub flood: Flooding,
     /// The background enrichment pass: the last id it reached, and whether
     /// it has found nothing left to do.
     pub backfill_after: i64,
@@ -254,6 +256,9 @@ struct Committing {
     /// What rules in shadow mode would have done (logged only).
     shadow: Vec<Decision>,
     sealed: Option<Vec<u8>>,
+    /// The publisher a torrent cache's claims name for this file (SP-3);
+    /// a fetched torrent's is read from its unverified item at commit.
+    publisher: Option<String>,
 }
 
 impl Committing {
@@ -296,6 +301,7 @@ impl Committing {
             verdict: None,
             shadow: Vec::new(),
             sealed: None,
+            publisher: None,
         }
     }
 }
@@ -468,13 +474,22 @@ impl Writer {
         let store = self.store.take().expect("store");
         let engine = self.filter.current();
         let (adult, sealer) = (self.adult, self.sealer.clone());
-        let (store, committing) = tokio::task::spawn_blocking(move || {
-            let committing = judge(&store, &engine, adult, sealer.as_deref(), committing);
-            (store, committing)
+        let mut flood = std::mem::take(&mut self.flood);
+        let (store, flood, committing) = tokio::task::spawn_blocking(move || {
+            let committing = judge(
+                &store,
+                &engine,
+                adult,
+                sealer.as_deref(),
+                &mut flood,
+                committing,
+            );
+            (store, flood, committing)
         })
         .await
         .expect("judge task");
         self.store = Some(store);
+        self.flood = flood;
         committing
     }
 
@@ -631,6 +646,7 @@ impl Writer {
                     verdict: None,
                     shadow: Vec::new(),
                     sealed: None,
+                    publisher: None,
                 })
             })
             .collect();
@@ -1026,6 +1042,7 @@ impl Writer {
         for t in batch {
             match t.judged {
                 Judged::Store(a) => {
+                    let publisher = t.claims.publisher.clone();
                     let found = lodestar_sources::Found::key(a.key, 0)
                         .with_claims(t.claims)
                         .with_provenance(t.provenance);
@@ -1035,7 +1052,9 @@ impl Writer {
                         at: t.at,
                         reply: false,
                     });
-                    admitted.push(Committing::lease_free(*a, t.source, t.at));
+                    let mut c = Committing::lease_free(*a, t.source, t.at);
+                    c.publisher = publisher;
+                    admitted.push(c);
                 }
                 Judged::Held {
                     hashes,
@@ -1705,11 +1724,15 @@ fn judge(
     engine: &Engine,
     adult: AdultSources,
     sealer: Option<&Sealer>,
+    flood: &mut Flooding,
     mut committing: Vec<Committing>,
 ) -> Vec<Committing> {
-    // One read per batch, and none while no always-adult source is
-    // registered. A read error counts as having items: stricter.
-    let unverified = !adult.is_empty() && store.has_unverified().unwrap_or(true);
+    // One read per batch. A read error counts as having items: stricter
+    // for the adult check, and SP-3's publisher lookup only reads.
+    let any_unverified = store.has_unverified().unwrap_or(true);
+    // None while no always-adult source is registered.
+    let unverified = !adult.is_empty() && any_unverified;
+    let now = flood.now();
     for c in &mut committing {
         // A cache's file was looked up as public. Whether a private
         // source has stored the key since is read here, so the commit
@@ -1723,19 +1746,25 @@ fn judge(
         let newly_adult = !c.results.source_adult && source_adult(store, adult, c, unverified);
         let r = &mut c.results;
         r.source_adult |= newly_adult;
-        let verdict = if r.worker == WorkerId::LOCAL && r.version == engine.version && !newly_adult
-        {
-            std::mem::take(&mut r.verdict)
-        } else {
-            rejudge(engine, r, c.lease.discovered_at, unix_now())
-        };
+        let mut verdict =
+            if r.worker == WorkerId::LOCAL && r.version == engine.version && !newly_adult {
+                std::mem::take(&mut r.verdict)
+            } else {
+                rejudge(engine, r, c.lease.discovered_at, unix_now())
+            };
+        // SP-3 (RP-4): prepare's verdict leaves it out; it's counted and
+        // added here, in commit order.
+        if let Some(level) = flood.count(store, c, any_unverified, now) {
+            let flooded = judge_flooded(engine, &c.results, c.lease.discovered_at, level, now);
+            verdict = crate::source_adult::stricter(verdict, flooded);
+        }
         c.verdict = verdict.decision;
         c.shadow = verdict.shadow;
         if c.verdict
             .as_ref()
             .is_some_and(|h| h.action == Action::Quarantine)
         {
-            c.sealed = sealer.and_then(|s| s.seal(&r.torrent.name).ok());
+            c.sealed = sealer.and_then(|s| s.seal(&c.results.torrent.name).ok());
         }
     }
     committing
@@ -1832,6 +1861,118 @@ pub(crate) fn rejudge(engine: &Engine, r: &mut Results, discovered_at: i64, now:
         r.fix = fix;
     }
     verdict
+}
+
+/// SP-3's state in the writer (RP-4, plan 2026-11-04 Q10): the rate map,
+/// and which sources count when they name no publisher.
+#[derive(Debug, Default)]
+pub(crate) struct Flooding {
+    pub map: lodestar_filter::flood::Flood,
+    /// The sources, a bitset over [`SourceId`]s, whose finds count
+    /// against the source when no publisher is named: every registered
+    /// source but the peer finders (the DHT), which publish nothing.
+    pub counted: u64,
+    /// The clock, for tests; Unix time otherwise.
+    #[cfg(test)]
+    pub clock: Option<i64>,
+}
+
+/// Whom SP-3 counts a commit against.
+enum Who {
+    Publisher(String),
+    Source(SourceId),
+}
+
+impl Flooding {
+    fn now(&self) -> i64 {
+        #[cfg(test)]
+        if let Some(t) = self.clock {
+            return t;
+        }
+        unix_now()
+    }
+
+    /// Counts `c`'s name against its publisher, or else its source
+    /// ([`Flooding::who`]), and returns the level the near-duplicates
+    /// have reached. `None` for a find that counts against no one, or a
+    /// name with no title. Blocking: it may read the store.
+    fn count(
+        &mut self,
+        store: &Store,
+        c: &Committing,
+        unverified: bool,
+        now: i64,
+    ) -> Option<lodestar_filter::flood::Level> {
+        use lodestar_filter::flood::{Origin, signature};
+        let who = self.who(store, c, unverified)?;
+        let sig = signature(&c.results.class.title.release.title)?;
+        let origin = match &who {
+            Who::Publisher(p) => Origin::Publisher(p),
+            Who::Source(s) => Origin::Source(s.get()),
+        };
+        self.map.record(origin, sig, now)
+    }
+
+    /// The publisher a cache's claims name, or the claims of the
+    /// unverified item the commit promotes; else that item's source or
+    /// the lease's, when it counts ([`Flooding::counted`]). An empty
+    /// publisher is none. A store read that fails reads as no item.
+    ///
+    /// The item is read only when a source that counts is among the
+    /// commit's finders: a find only the DHT made (the crawl's usual
+    /// commit) reads nothing, so SP-3 costs it a bit test. A claimed
+    /// item the DHT alone fetched, before any feed's sighting reached its
+    /// lease, isn't counted.
+    fn who(&self, store: &Store, c: &Committing, unverified: bool) -> Option<Who> {
+        let named = |p: Option<&str>| p.filter(|p| !p.is_empty()).map(str::to_owned);
+        if let Some(p) = named(c.publisher.as_deref()) {
+            return Some(Who::Publisher(p));
+        }
+        let counts = |s: SourceId| self.counted & bit(s) != 0;
+        let finders = c.lease.sources | bit(c.lease.source) | c.results.sources;
+        if unverified && finders & self.counted != 0 {
+            for h in c.results.torrent.swarm_hashes() {
+                let Ok(Some(item)) = store.unverified(Network::Bt, &h.0) else {
+                    continue;
+                };
+                let claimed = item.claims.as_ref().and_then(|x| x.publisher.as_deref());
+                if let Some(p) = named(claimed) {
+                    return Some(Who::Publisher(p));
+                }
+                if counts(item.source) {
+                    return Some(Who::Source(item.source));
+                }
+            }
+        }
+        counts(c.lease.source).then_some(Who::Source(c.lease.source))
+    }
+}
+
+/// A commit judged again with SP-3 at `level` ([`Engine::judge_flooded`]),
+/// as [`rejudge`] judges it, an always-adult source's find as adult too.
+fn judge_flooded(
+    engine: &Engine,
+    r: &Results,
+    discovered_at: i64,
+    level: lodestar_filter::flood::Level,
+    now: i64,
+) -> Verdict {
+    let hashes: Vec<[u8; 20]> = r.torrent.swarm_hashes().map(|h| h.0).collect();
+    let facts = Facts {
+        class: &r.class,
+        size: r.torrent.size,
+        piece_len: r.torrent.piece_len,
+        flags: r.torrent.flags,
+        discovered_at,
+        now,
+    };
+    let item = Item {
+        hashes: &hashes,
+        name: &r.torrent.name,
+        files: &r.files,
+        content_type: r.class.content_type,
+    };
+    engine.judge_flooded(&item, &facts, now, level, r.source_adult)
 }
 
 /// Torrents enriched per background step.
@@ -2305,6 +2446,7 @@ mod tests {
         Writer {
             store: Some(store),
             adult: AdultSources::default(),
+            flood: Default::default(),
             backfill_after: 0,
             backfill_done: true,
             backfill_backoff: Default::default(),
@@ -2387,6 +2529,7 @@ mod tests {
             verdict: None,
             shadow: Vec::new(),
             sealed: None,
+            publisher: None,
         };
         // Not stored yet, and only the DHT found it: not adult.
         assert!(!source_adult(w.store.as_ref().unwrap(), w.adult, &c, false));
@@ -4232,5 +4375,262 @@ mod tests {
         let claims = w.store.as_ref().unwrap().torrent_claims(id).unwrap();
         let mine = claims.iter().find(|c| c.source == cache).expect("claims");
         assert!(mine.private_source);
+    }
+
+    // -----------------------------------------------------------------
+    // SP-3 (RP-4): flooding, counted and judged at commit.
+
+    /// An engine with every pack on and every rule applied, SP-3
+    /// included, as on a fresh store.
+    fn sp3_engine() -> Engine {
+        use lodestar_filter::packs::manifest::Manifest;
+        use lodestar_filter::packs::upgrade::{self, PackVersions, Rows};
+        let mut e = engine();
+        e.packs = lodestar_filter::PackSwitches::all();
+        let record = upgrade::current_record(&Manifest::builtin()).encode();
+        let rows = Rows {
+            applied: [Some(Ok(record.clone())), Some(Ok(record))],
+            marker: Some(Ok("1".into())),
+        };
+        e.pack_versions = PackVersions::resolve(&Manifest::builtin(), &rows);
+        assert!(e.pack_versions.state(lodestar_filter::PackRule::Sp3).plain);
+        e
+    }
+
+    /// The `n`th near-duplicate: episode, quality and group differ.
+    fn episode(n: usize) -> String {
+        let q = ["720p", "1080p", "480p"][n % 3];
+        format!("Example Show S01E{:02} {q} HDTV x264-G{n}", n % 90 + 1)
+    }
+
+    fn committing(r: Results, source: SourceId) -> Committing {
+        Committing {
+            results: r,
+            lease: Lease {
+                holder: WorkerId::LOCAL,
+                token: Token(0),
+                cohort: 0,
+                source,
+                sources: bit(source),
+                strategy: 0,
+                discovered_at: 0,
+            },
+            leased: true,
+            verdict: None,
+            shadow: Vec::new(),
+            sealed: None,
+            publisher: None,
+        }
+    }
+
+    /// The SP-3 decision each of `cs` gets, committed one by one.
+    fn sp3_of(
+        store: &Store,
+        e: &Engine,
+        flood: &mut Flooding,
+        cs: Vec<Committing>,
+    ) -> Vec<Option<Action>> {
+        cs.into_iter()
+            .map(|c| {
+                let mut out = judge(store, e, AdultSources::default(), None, flood, vec![c]);
+                let c = out.pop().unwrap();
+                c.verdict
+                    .filter(|d| d.rule == RuleRef::Pack(lodestar_filter::PackRule::Sp3))
+                    .map(|d| d.action)
+            })
+            .collect()
+    }
+
+    /// A feed's finds count against the feed; the DHT's never do; a
+    /// publisher its claims name counts on its own, whichever source.
+    #[test]
+    fn sp3_counts_at_commit_per_publisher_else_per_non_dht_source() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        let feed = store.register_source("feed", "1", 0).unwrap();
+        let other = store.register_source("other", "1", 0).unwrap();
+        let e = sp3_engine();
+        let mut flood = Flooding {
+            counted: bit(feed) | bit(other),
+            clock: Some(10_000),
+            ..Default::default()
+        };
+        let batch = |source, n: usize| -> Vec<Committing> {
+            (0..n)
+                .map(|i| committing(results_named(&episode(i)), source))
+                .collect()
+        };
+        // The DHT: never.
+        let got = sp3_of(&store, &e, &mut flood, batch(dht, 120));
+        assert!(got.iter().all(Option::is_none));
+        // A feed with no publisher: flagged from the 20th, demoted from
+        // the 100th.
+        let got = sp3_of(&store, &e, &mut flood, batch(feed, 120));
+        assert!(got[..19].iter().all(Option::is_none), "{got:?}");
+        assert!(got[19..99].iter().all(|a| *a == Some(Action::Flag)));
+        assert!(got[99..].iter().all(|a| *a == Some(Action::Demote)));
+        // Another source, its own count.
+        let got = sp3_of(&store, &e, &mut flood, batch(other, 19));
+        assert!(got.iter().all(Option::is_none));
+        // A cache's publisher counts against the publisher, not the
+        // source: the same source's 20th with another publisher passes.
+        let named = |p: &str, n: usize| -> Vec<Committing> {
+            (0..n)
+                .map(|i| {
+                    let mut c = committing(results_named(&episode(i)), other);
+                    c.publisher = Some(p.into());
+                    c
+                })
+                .collect()
+        };
+        let got = sp3_of(&store, &e, &mut flood, named("uploader", 20));
+        assert_eq!(got[19], Some(Action::Flag));
+        assert_eq!(
+            sp3_of(&store, &e, &mut flood, named("someone", 1)),
+            [None],
+            "another publisher"
+        );
+        // An hour on (the injected clock): forgotten.
+        flood.clock = Some(10_000 + lodestar_filter::flood::WINDOW_SECS);
+        assert_eq!(sp3_of(&store, &e, &mut flood, batch(feed, 1)), [None]);
+    }
+
+    /// A fetched torrent whose unverified item holds a feed's claims
+    /// counts against the publisher those claims name.
+    #[test]
+    fn sp3_reads_the_publisher_from_the_unverified_item() {
+        use lodestar_store::unverified::NewUnverified;
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let feed = store.register_source("feed", "1", 0).unwrap();
+        let e = sp3_engine();
+        let mut flood = Flooding {
+            counted: bit(feed),
+            clock: Some(10_000),
+            ..Default::default()
+        };
+        let claims = lodestar_store::claims::Claims {
+            name: Some("x".into()),
+            publisher: Some("uploader".into()),
+            ..Default::default()
+        };
+        let rs: Vec<Results> = (0..25).map(|i| results_named(&episode(i))).collect();
+        let items: Vec<NewUnverified<'_>> = rs
+            .iter()
+            .map(|r| NewUnverified {
+                network: Network::Bt,
+                key: &r.key.0,
+                source: feed,
+                private_source: false,
+                claims: Some(&claims),
+                at: 0,
+            })
+            .collect();
+        store.put_unverified(&items).unwrap();
+        let cs = rs.into_iter().map(|r| committing(r, feed)).collect();
+        let got = sp3_of(&store, &e, &mut flood, cs);
+        assert!(got[..19].iter().all(Option::is_none));
+        assert!(got[19..].iter().all(|a| *a == Some(Action::Flag)));
+        // Counted against the publisher, not the feed.
+        let sig = lodestar_filter::flood::signature("Example Show").unwrap();
+        use lodestar_filter::flood::Origin;
+        assert_eq!(
+            flood.map.count(Origin::Publisher("uploader"), sig, 10_000),
+            25
+        );
+        assert_eq!(flood.map.count(Origin::Source(feed.get()), sig, 10_000), 0);
+    }
+
+    /// SP-3's added cost per insert in the writer, measured apart from
+    /// the engine's budget (RP-4 gate: at most 5% of the writer's
+    /// per-insert cost). Run: `cargo test --release -p lodestar-pipeline
+    /// --lib sp3_writer_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement"]
+    fn sp3_writer_cost() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        let feed = store.register_source("feed", "1", 0).unwrap();
+        let e = sp3_engine();
+        const N: usize = 10_240;
+        let mut cs: Vec<Committing> = (0..N)
+            .map(|i| {
+                let name = format!("Crawled Title {} {} 1080p", i % 977, i % 13);
+                committing(results_named(&name), dht)
+            })
+            .collect();
+        // The insert SP-3 is added to: batches of 256.
+        let t = Instant::now();
+        for batch in cs.chunks(256) {
+            let pts: Vec<PreparedTorrent<'_>> = batch
+                .iter()
+                .map(|c| PreparedTorrent {
+                    torrent: &c.results.torrent,
+                    discovered_at: 0,
+                    metadata_at: 0,
+                    extra_flags: 0,
+                    source: dht,
+                    verified: true,
+                })
+                .collect();
+            store
+                .write(&WriteBatch {
+                    prepared: &pts,
+                    ..WriteBatch::default()
+                })
+                .unwrap();
+        }
+        let insert = t.elapsed().as_nanos() as f64 / N as f64;
+        let mut time = |source: SourceId, publisher: Option<&str>| {
+            let mut flood = Flooding {
+                counted: bit(feed),
+                clock: Some(10_000),
+                ..Default::default()
+            };
+            for c in &mut cs {
+                c.lease.source = source;
+                c.lease.sources = bit(source);
+                c.publisher = publisher.map(str::to_owned);
+            }
+            let t = Instant::now();
+            let mut levels = 0;
+            for c in &cs {
+                levels += usize::from(flood.count(&store, c, true, 10_000).is_some());
+            }
+            (t.elapsed().as_nanos() as f64 / N as f64, levels)
+        };
+        let (dht_ns, dht_levels) = time(dht, None);
+        let (feed_ns, feed_levels) = time(feed, None);
+        let (pub_ns, _) = time(feed, Some("uploader"));
+        assert_eq!(dht_levels, 0);
+        assert!(feed_levels > 0);
+        // A flooded commit's second judgment, as the writer makes it.
+        let flooded: Vec<&Results> = cs.iter().take(2_000).map(|c| &c.results).collect();
+        let t = Instant::now();
+        for r in &flooded {
+            std::hint::black_box(judge_flooded(
+                &e,
+                r,
+                0,
+                lodestar_filter::flood::Level::Flag,
+                10_000,
+            ));
+        }
+        let rejudge_ns = t.elapsed().as_nanos() as f64 / flooded.len() as f64;
+        println!(
+            "per insert: {:.2} µs; SP-3: DHT find {:.3} µs ({:.2}%), feed find {:.2} µs ({:.1}%), \
+             named publisher {:.2} µs ({:.1}%); a flooded commit's second judgment {:.2} µs; \
+             {feed_levels} of {N} feed finds reached a level",
+            insert / 1000.0,
+            dht_ns / 1000.0,
+            100.0 * dht_ns / insert,
+            feed_ns / 1000.0,
+            100.0 * feed_ns / insert,
+            pub_ns / 1000.0,
+            100.0 * pub_ns / insert,
+            rejudge_ns / 1000.0,
+        );
+        assert!(dht_ns <= 0.05 * insert, "the crawl's commits");
     }
 }

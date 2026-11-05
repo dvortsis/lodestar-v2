@@ -571,6 +571,13 @@ impl Pipeline {
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
+        // SP-3 counts a source's finds when they name no publisher, but
+        // never a peer finder's: the DHT isn't a publisher (RP-4, Q10).
+        let flood_counted = registered
+            .iter()
+            .zip(&plugins)
+            .filter(|(_, p)| !p.manifest().is(Kind::PeerFinder))
+            .fold(0u64, |m, ((id, ..), _)| m | 1u64 << id.get());
         // The sources whose every find is classified adult (X-source-adult).
         let adult = source_adult::AdultSources::of(
             registered
@@ -950,6 +957,10 @@ impl Pipeline {
         let writer = writer::Writer {
             store: Some(store),
             adult,
+            flood: writer::Flooding {
+                counted: flood_counted,
+                ..Default::default()
+            },
             backfill_after: 0,
             backfill_done: false,
             backfill_backoff: Default::default(),

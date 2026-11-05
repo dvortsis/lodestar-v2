@@ -2,6 +2,10 @@
 
 One entry per rule version, newest first. Each names its direction against the version before (`widens`, `narrows`, `action-heavier`, `action-lighter` or `mixed`); a first version widens. A release that changes a rule adds an entry here and bumps the version in `crates/filter/src/packs/manifest.rs`.
 
+## SP-3@1
+
+First version, `widens` (against nothing). Matches flooding: 20 or more near-duplicate names from one publisher within an hour, or from one source that names no publisher (never the DHT). A near-duplicate has the same title once episode, quality and group are left out. Judged when a torrent is stored, in order, never before. Added after RP-0 (RP-4), so a store seeded before it has it pending, in shadow, until it's accepted. Action: flag from 20, demote from 100.
+
 ## SP-1@1 (baseline)
 
 First version, `widens` (against nothing). Matches a site advert before or after the title (`www.site.com - Title`, `[site.org]`). Action: demote.
