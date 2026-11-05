@@ -717,6 +717,11 @@ impl Store {
             crate::insights::count_promoted(&tx, id, at, codes)?;
             Promoted::Kept(id)
         };
+        // Found by an always-adult source and not stored adult yet: marked
+        // in this transaction, so the reclassification after it is retried.
+        if let Promoted::Kept(t) | Promoted::Merged(t) = out {
+            crate::mark_adult_found(&tx, self.adult_mark, t)?;
+        }
         // A promotion isn't a deletion: nothing is journalled.
         delete_item(&tx, id, false)?;
         tx.commit()?;

@@ -1025,3 +1025,102 @@ fn a_relabelled_torrent_held_back_leaves_no_trace_on_disk() {
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
+
+/// X-source-adult's crash window (SRC-13b): a write marks, in its own
+/// transaction, each row it stores or touches that an always-adult source
+/// has found and that isn't stored adult, so the backfill classifies it if
+/// the pipeline's second transaction never commits.
+#[test]
+fn a_write_marks_rows_an_always_adult_source_found() {
+    const ADULT_CODE: u8 = 9;
+    let mut store = mem();
+    let adult = SourceId::new(3).unwrap();
+    let mark = lodestar_store::AdultMark {
+        sources: 1 << adult.get(),
+        content_type: ADULT_CODE,
+    };
+    let stored = |store: &mut Store, name: &str, content_type: u8| {
+        let raw = season(name, 1);
+        let info = Info::parse(&raw).unwrap();
+        let mut p = store.preparer().prepare(&info, Some(&raw)).unwrap();
+        p.enrichment = Some(lodestar_store::Enriched {
+            content_type,
+            ..enriched(7, 0)
+        });
+        let id = commit(store, &p).stored().unwrap();
+        (id, info.primary_hash())
+    };
+    let (plain, plain_hash) = stored(&mut store, "Plain", 1);
+    let (already, already_hash) = stored(&mut store, "Already", ADULT_CODE);
+    let (untouched, _) = stored(&mut store, "Untouched", 1);
+    let touch = |hash, source: SourceId| lodestar_store::Touch {
+        hash,
+        sources: 1 << source.get(),
+        at: 0,
+        public: true,
+    };
+    // No mask set: an always-adult sighting marks nothing.
+    store
+        .write(&WriteBatch {
+            touches: &[touch(plain_hash, adult)],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert!(store.unenriched(0, 7, 10).unwrap().is_empty());
+
+    store.set_adult_mark(mark);
+    let dht_only = stored(&mut store, "Dht.Only", 1).0;
+    store
+        .write(&WriteBatch {
+            touches: &[touch(plain_hash, adult), touch(already_hash, adult)],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    // The sighting's row is marked by the write itself; one stored adult,
+    // one only the DHT found and one not in the batch aren't.
+    let marked = store.unenriched(0, 7, 10).unwrap();
+    assert_eq!(marked, vec![plain]);
+    for id in [already, untouched, dht_only] {
+        assert!(!marked.contains(&id));
+    }
+
+    // A prepared insert by the always-adult source is marked too, unless
+    // it's stored adult.
+    let by_adult = {
+        let raw = season("By.Adult", 1);
+        let info = Info::parse(&raw).unwrap();
+        let mut p = store.preparer().prepare(&info, Some(&raw)).unwrap();
+        p.enrichment = Some(enriched(7, 0));
+        let w = store
+            .write(&WriteBatch {
+                prepared: &[PreparedTorrent {
+                    source: adult,
+                    ..prepared(&p)
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+        w.prepared[0].stored().unwrap()
+    };
+    assert_eq!(store.unenriched(0, 7, 10).unwrap(), vec![plain, by_adult]);
+
+    // Your own Not adult correction wins (X-source-adult), so its row is
+    // never marked: nothing would clear the mark.
+    let (corrected, corrected_hash) = stored(&mut store, "Corrected", 1);
+    store
+        .set_correction(
+            corrected,
+            lodestar_store::ClassCorrection {
+                adult: Some(false),
+                not_junk: false,
+            },
+        )
+        .unwrap();
+    store
+        .write(&WriteBatch {
+            touches: &[touch(corrected_hash, adult)],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert!(!store.unenriched(0, 7, 10).unwrap().contains(&corrected));
+}
