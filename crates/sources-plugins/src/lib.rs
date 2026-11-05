@@ -28,6 +28,7 @@ pub mod nyaa;
 pub mod prowlarr;
 pub mod stashdb;
 pub mod torrent_cache;
+pub mod tpdb;
 
 /// Where a plugin reads its stored credentials (SRC-4's per-source
 /// store). Asked when the plugin starts, never per request.
