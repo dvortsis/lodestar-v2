@@ -76,6 +76,35 @@ pub enum Change {
         #[schema(example = "MW-2")]
         rule: String,
     },
+    /// Confirms again your override of one pack rule whose base changed
+    /// since you set it (RP-3, §20.8): the same action and `unless`, bound
+    /// to the version that applies now. Confirming one that weakens the
+    /// rule as it is now (a paused one, among them) needs the password and
+    /// the assessment's [`Assessment::pack_base`] sent back as `base`.
+    ConfirmPackOverride {
+        #[schema(example = "MW-2")]
+        rule: String,
+        /// The previewed `pack_base`, to confirm a weakening override.
+        base: Option<u32>,
+    },
+    /// Accepts the pending versions of pack rules (RP-3, §20.10): each
+    /// named rule (`MW-2`), or every pending rule of a named pack
+    /// (`malware`), switches to the version this build ships. Nothing is
+    /// released: holds the new version wouldn't make stay for review.
+    ///
+    /// It strengthens filtering only when every accepted version's
+    /// recorded direction is `widens` or `action-heavier` and the shadow
+    /// results agree. Anything else weakens it: confirm with the password
+    /// and send back the assessment's [`Assessment::pack_versions`] as
+    /// `versions`. Undo never undoes an acceptance.
+    AcceptPackVersions {
+        #[schema(example = json!(["MW-2"]))]
+        rules: Vec<String>,
+        /// The previewed `pack_versions` (`RULE@version`), to confirm a
+        /// weakening acceptance. When sent, apply accepts only exactly
+        /// these.
+        versions: Option<Vec<String>>,
+    },
     AddOverride {
         #[serde(flatten)]
         what: MatchInput,
@@ -270,9 +299,58 @@ pub struct Assessment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub pack_base: Option<u32>,
+    /// For `accept_pack_versions`: the versions it accepts, `RULE@version`.
+    /// Send them back as `versions` to confirm with the password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub pack_versions: Option<Vec<String>>,
+    /// For `accept_pack_versions`: what accepting each version does, from
+    /// its shadow results in the replay window and the review queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub pack_acceptance: Option<Vec<PackAcceptance>>,
     /// All of them, for applying.
     #[serde(skip)]
     pub(crate) settles: Option<Vec<[u8; 20]>>,
+}
+
+/// What accepting one pending pack-rule version does (RP-3). Torrent
+/// counts are distinct torrents in the replay window whose shadow result
+/// (the pending version beside the applied one) was recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PackAcceptance {
+    /// The version this install applied; null when it isn't known, or it
+    /// never applied the rule (a new rule).
+    #[schema(required = true)]
+    pub applied: Option<u32>,
+    /// The recorded direction from `applied` to `version`, every step
+    /// combined: `widens`, `narrows`, `action-heavier`, `action-lighter`
+    /// or `mixed`; null when there's no record.
+    #[schema(required = true)]
+    pub direction: Option<String>,
+    /// Torrents whose shadow result contradicts the recorded direction.
+    pub disagreements: usize,
+    /// Torrents both versions hold, the new one with a heavier action.
+    pub heavier: usize,
+    /// The version state is in doubt for this rule (a Filters & Safety
+    /// notice about pack versions): accepting is weakening.
+    pub in_doubt: bool,
+    /// Torrents both versions hold, the new one with a lighter action.
+    pub lighter: usize,
+    /// Torrents only the new version holds.
+    pub newly_held: usize,
+    /// Torrents only the applied version holds.
+    pub no_longer_held: usize,
+    /// Holds of this rule acceptance leaves for review: in quarantine, and
+    /// dropped. Nothing is released.
+    pub review_quarantine: usize,
+    pub review_tombstones: usize,
+    #[schema(example = "MW-2")]
+    pub rule: String,
+    /// Accepting this version strengthens filtering.
+    pub strengthens: bool,
+    /// The version accepted: the one this build ships.
+    pub version: u32,
 }
 
 /// `POST /filters/apply`: the change took effect.
@@ -387,7 +465,18 @@ pub struct Overview {
     /// Ranges in the IP lists.
     pub ip_ranges: usize,
     pub overrides: Vec<OverrideEntry>,
+    /// Conditions of the pack-version state for the Filters & Safety
+    /// notice (`packs.lost`, `packs.differ`, `packs.skipped.MW-2`, …);
+    /// empty when there's nothing to report.
+    pub pack_conditions: Vec<String>,
     pub packs: Vec<PackState>,
+    /// Pack versions were first recorded at this time on a store that
+    /// already had rules (an upgrade from before versions existed, or
+    /// every version row lost): worth a notice.
+    #[schema(required = true)]
+    pub packs_seeded_over_rules: Option<i64>,
+    /// Pack-rule versions waiting to be accepted, with their changelogs.
+    pub pending_pack_versions: Vec<PendingPackVersion>,
     /// Entries a config file or a floor-marked list dropped, still blocked
     /// until you settle them (§2.7).
     pub pending_floor_removals: Vec<PendingFloorEntry>,
@@ -416,22 +505,78 @@ pub struct CoreRuleState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct PackState {
+    /// The pack's changelog as this build ships it (Markdown, one
+    /// `## RULE@version` entry per version, newest first).
+    pub changelog: String,
     #[schema(example = "malware")]
     pub id: String,
     pub on: bool,
     pub rules: Vec<PackRuleState>,
+    /// The pack's version: its rules' versions as this build ships them.
+    #[schema(example = "MW-1@1 MW-2@1 MW-3@1 MW-4@1 MW-5@1")]
+    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct PackRuleState {
+    /// The action that applies now: the base action, or your override's
+    /// where it applies.
     pub action: String,
+    /// The version this install accepted; null when it isn't known, or it
+    /// never applied the rule (a new rule waiting to be accepted).
+    #[schema(required = true)]
+    pub applied: Option<u32>,
+    /// The rule's own action as the versions that apply now take it.
+    pub base_action: String,
+    /// Your override's base changed since you set it (§20.8).
+    pub base_changed: bool,
     #[schema(example = "MW-2")]
     pub id: String,
     pub on: bool,
-    /// Your override of the rule (RP-2), when it has one.
-    #[serde(rename = "override", default, skip_serializing_if = "Option::is_none")]
+    /// Your override of the rule (RP-2), when it has one. Not one of the
+    /// Override entries (`overrides`), which skip rules altogether.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub pack_override: Option<PackOverrideState>,
+    /// The version waiting to be accepted, run in shadow meanwhile.
+    #[schema(required = true)]
+    pub pending: Option<u32>,
+    /// The rule's version as this build ships it.
+    pub version: u32,
+}
+
+/// A pack-rule version waiting to be accepted (RP-0, §20.10): it runs in
+/// shadow until `accept_pack_versions` accepts it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PendingPackVersion {
+    /// The version this install applied; null when it isn't known, or it
+    /// never applied the rule.
+    #[schema(required = true)]
+    pub applied: Option<u32>,
+    /// The changelog entries from `applied` (exclusive) to `version`,
+    /// newest first.
+    pub changelog: Vec<ChangelogEntry>,
+    /// The recorded direction from `applied`, every step combined; null
+    /// when there's no record.
+    #[schema(required = true)]
+    pub direction: Option<String>,
+    #[schema(example = "malware")]
+    pub pack: String,
+    #[schema(example = "MW-2")]
+    pub rule: String,
+    pub version: u32,
+}
+
+/// One version's changelog entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ChangelogEntry {
+    /// `widens`, `narrows`, `action-heavier`, `action-lighter` or `mixed`
+    /// against the version before, as recorded.
+    pub direction: String,
+    /// The entry's text (Markdown); null when the changelog has none.
+    #[schema(required = true)]
+    pub text: Option<String>,
+    pub version: u32,
 }
 
 /// Your override of one pack rule, as stored and as it applies now.
@@ -703,6 +848,9 @@ pub struct TombstoneEntry {
     pub adult_hold: bool,
     pub at: i64,
     pub hash: String,
+    /// An acceptance of a newer version of its pack rule left it for
+    /// review: the version that applies now may not hold it (RP-3).
+    pub pack_review: bool,
     pub rule: String,
 }
 
@@ -737,16 +885,59 @@ pub struct QuarantineEntry {
     /// When its sealed name is deleted and its quarantine ends.
     pub expires_at: i64,
     pub hash: String,
+    /// An acceptance of a newer version of its pack rule left it for
+    /// review: the version that applies now may not hold it (RP-3).
+    pub pack_review: bool,
     pub rule: String,
     /// A sealed name is kept (see `reveal_name`).
     pub sealed: bool,
 }
 
 /// `GET /filters/fixtures`: the core rules' hashed examples, run against
-/// the rules as they are (§20.8).
+/// the rules as they are, and the pack corpora (§20.8).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Fixtures {
     pub core: Vec<FixtureCounts>,
+    pub packs: PackCorpus,
+}
+
+/// The pack corpora this build ships, run against its pack rules, each
+/// rule on its own (RP-1): the same pass or fail CI enforces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PackCorpus {
+    /// The corpus didn't load: why. Nothing else is reported then.
+    #[schema(required = true)]
+    pub error: Option<String>,
+    /// Each failure, readable: a wrong example, too few examples, a
+    /// recorded direction the corpus doesn't show.
+    pub failures: Vec<String>,
+    /// Everything passed (known gaps don't fail it).
+    pub passes: bool,
+    /// Precision items (legitimate torrents each guard exists for) held by
+    /// a rule they shouldn't be, known gaps aside.
+    pub precision_failing: usize,
+    pub precision_items: usize,
+    pub rules: Vec<PackFixtureCounts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PackFixtureCounts {
+    /// Versions of the rule whose recorded direction the corpus doesn't
+    /// show (RP-1's direction checks).
+    pub direction_disagreements: usize,
+    /// Examples the rule gets wrong.
+    pub failing: usize,
+    /// Precision items the rule holds because a guard it should have
+    /// isn't built yet (a known over-filter, not a pass).
+    pub gaps: usize,
+    pub must_match: usize,
+    pub must_not_match: usize,
+    #[schema(example = "malware")]
+    pub pack: String,
+    #[schema(example = "MW-2")]
+    pub rule: String,
+    /// The version judged: the one this build ships.
+    pub version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
