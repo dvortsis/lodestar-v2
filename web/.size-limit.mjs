@@ -220,7 +220,9 @@ const bodyMaps = {
 	// Jobs reads no settings section.
 	JobsScreen: [],
 	// Blocklist subscriptions (S-blocklists) reads none either.
-	BlocklistsScreen: []
+	BlocklistsScreen: [],
+	// Sources (SRC-15a) reads none either.
+	SourcesScreen: []
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
