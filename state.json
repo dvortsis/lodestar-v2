@@ -2954,6 +2954,20 @@
    "session": "session_01MMjhnB1hAwM3KWzebWAnhU",
    "launched": "2026-11-05T05:38Z",
    "brief": "briefs/X-followups-1105.md"
+  },
+  "X-flakes-1105": {
+   "status": "building",
+   "model": "opus",
+   "session": "session_01MMjhnC98Bdr5R2KxoxEoHs",
+   "launched": "2026-11-05T06:16Z",
+   "brief": "briefs/X-flakes-1105.md"
+  },
+  "D-sources-guide": {
+   "status": "building",
+   "model": "sonnet",
+   "session": "session_01MMjhn8NZTPNwLTmXNuHfaF",
+   "launched": "2026-11-05T06:16Z",
+   "brief": "briefs/D-sources-guide.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5114,7 +5128,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T06:16Z",
+  "updated": "2026-11-05T06:20Z",
   "items": [
    {
     "slot": 1,
@@ -5142,13 +5156,16 @@
    },
    {
     "slot": 4,
-    "status": "idle",
-    "doing": "Held: no ready slice without an owns overlap (see slot 12); re-checked at each merge"
+    "slice": "X-flakes-1105",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Test reliability: fixing the DHT restart deadline flake (Windows) and the magnetico NotQuiescent flake",
+    "since": "2026-11-05T06:16Z"
    },
    {
     "slot": 5,
     "status": "idle",
-    "doing": "Held: same reason as slot 12; SRC-13b and ENR-1 launch when #467 X-source-adult merges"
+    "doing": "Reserved for SRC-13b and ENR-1, which launch when #467 X-source-adult merges (CI running)"
    },
    {
     "slot": 6,
@@ -5192,13 +5209,16 @@
    },
    {
     "slot": 11,
-    "status": "idle",
-    "doing": "Held: same reason as slot 12 (every ready slice overlaps a running one or waits on the owner)"
+    "slice": "D-sources-guide",
+    "role": "docs",
+    "agent": "claude",
+    "doing": "User guide: Settings \u2192 Sources (what each source and status means, safe defaults)",
+    "since": "2026-11-05T06:16Z"
    },
    {
     "slot": 12,
     "status": "idle",
-    "doing": "Held: every ready slice overlaps a running one (RP-1b/RP-UC packs/mod.rs; ENR-1 and SRC-13b/X-source-adult pipeline; RP-4 waits on RP-2 review #465) or waits on the owner (SRC-15b q1, Track C experiment host, imports host)"
+    "doing": "Reserved for SRC-13b and ENR-1, which launch when #467 X-source-adult merges (CI running)"
    }
   ]
  },
