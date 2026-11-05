@@ -198,6 +198,7 @@ export function buildPlan(inp: Inputs) {
   const crawler = (cfg.crawler || []).map((c: any) => ({ label: c.label, value: c.value, kind: c.kind, note: c.note || '' }));
   const soak = (cfg.soak || []).map((x: any) => ({ stage: x.stage, label: x.label, start: x.start, end: x.end }));
 
+  for (const x of SL) if (x.owns !== undefined && !Array.isArray(x.owns)) warn('Bad owns', x.id, 'owns: in runner/slices.yaml must be a list of paths; it is not, so the dashboard treats ' + x.id + ' as owning nothing');
   // worker slots: the runner records who works on what in runner-state's state.json (`slots`), pushed on the wake where a session
   // starts, finishes, is archived or changes task, with no PR. GitHub supplies each slice's title, state and PR. The number of slots
   // is the owner's limit in runner/slices.yaml (limits.phase_total), not a second copy. Anything out of step is reported, not hidden.
@@ -252,10 +253,10 @@ export function buildPlan(inp: Inputs) {
     // free slots while work is ready: a slot is free when fewer than `limit` sessions run, and a slice is ready when it has no unmet
     // dependency and its `owns` do not overlap a running slice's. Reported as an `idle` row, apart from the plan-file warnings.
     // Not shown when the slot list itself cannot be trusted (malformed, undated or stale), because then "free" is a guess.
-    const untrusted = warnings.some((w) => ['Slots malformed', 'Slots list is stale', 'Slots date missing', 'Slots date invalid', 'Slot limit unknown'].includes(w.label));
+    const untrusted = warnings.some((w) => ['Slots malformed', 'Slots list is stale', 'Slots date missing', 'Slots date invalid'].includes(w.label));
     const ownsOf = (x: any): string[] => (Array.isArray(x.owns) ? x.owns.map(String) : []);
-    for (const x of SL) if (x.owns !== undefined && !Array.isArray(x.owns)) warn('Bad owns', x.id, 'owns: in runner/slices.yaml must be a list of paths; it is not, so the dashboard treats ' + x.id + ' as owning nothing');
-    const running = new Set<string>([...listed, ...Object.keys(openById)]);
+    // running: named in a slot, or active on GitHub (an open PR, or only a slice/<id> branch): the conservative side for the overlap check
+    const running = new Set<string>([...listed, ...SL.filter((x) => state[x.id] === 'active').map((x) => x.id)]);
     // a path is cut at its first wildcard (* ? [ {): a cut pattern overlaps anything that shares its plain prefix, with no / boundary
     // (auth*.rs vs auth_session.rs, {a,b}.rs vs a.rs), and two plain paths overlap when equal or one contains the other
     const stem = (g: string) => { const i = g.search(/[*?[{]/); return i < 0 ? { t: g.replace(/\/+$/, ''), cut: false } : { t: g.slice(0, i), cut: true }; };

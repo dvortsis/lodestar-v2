@@ -38,3 +38,8 @@ slices:
   - { id: QQ-noowns, title: Owns nothing, kind: helper, model: sonnet, deps: [] }
   - { id: QQ-held, title: Held, kind: helper, model: sonnet, deps: [], owns: ["area/held/h.rs"] }
   - { id: QQ-badowns, title: Owns is not a list, kind: helper, model: sonnet, deps: [], owns: "notalist" }
+  - { id: QQ-authsess, title: A file the star pattern matches, kind: helper, model: sonnet, deps: [], owns: ["area/auth_session.rs"] }
+  - { id: QQ-pill, title: Component family, kind: helper, model: sonnet, deps: [], owns: ["web/StatusPill*"] }
+  - { id: QQ-pill2, title: One component, kind: helper, model: sonnet, deps: [], owns: ["web/StatusPill.svelte"] }
+  - { id: QQ-branchonly, title: Active only through a branch, kind: helper, model: sonnet, deps: [], owns: ["area/br/**"] }
+  - { id: QQ-brclash, title: Inside it, kind: helper, model: sonnet, deps: [], owns: ["area/br/z.rs"] }
