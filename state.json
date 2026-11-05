@@ -2884,6 +2884,13 @@
       "session": "session_01MMjhnCcPGT7YJ9GgmhTMGP",
       "launched": "2026-11-05T02:32Z",
       "brief": "briefs/SRC-17a.md"
+    },
+    "SRC-11b": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnC9v41Szk1iokKnnJC",
+      "launched": "2026-11-05T02:34Z",
+      "brief": "briefs/SRC-11b.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4994,7 +5001,7 @@
   ],
   "limits": {
     "phase_total": 12,
-    "note": "owner §2.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). §2.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded."
+    "note": "owner §2.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). §2.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded. Owner 2026-11-05 ~02:45Z (§2.41): until 2026-11-06T00:00Z, launch the next ready slice whenever a slot is free (critical path, then unlocks); a slot stays empty only for a recorded reason (status idle, reason in doing); hourly check from the dashboard session."
   },
   "owner_instructions": [
     {
@@ -5007,7 +5014,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T02:32Z",
+    "updated": "2026-11-05T02:34Z",
     "items": [
       {
         "slot": 1,
@@ -5096,6 +5103,14 @@
         "agent": "claude",
         "doing": "Adding the API fields the provenance and Unverified badge need (where an item was found, verified or not).",
         "since": "2026-11-05T02:32Z"
+      },
+      {
+        "slot": 12,
+        "slice": "SRC-11b",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Sonarr/Radarr webhooks: a token-protected, size-capped endpoint; finds stay private.",
+        "since": "2026-11-05T02:34Z"
       }
     ]
   },
