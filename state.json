@@ -4964,11 +4964,8 @@
     "2026-11-05T01:08Z r4 (rc.3) FAIL memory gate: private_bytes h12-24 OLS 29.35 MiB/h, 95% CI [28.75, 29.96], 719 samples, window complete; gate evidence yes; peak private 727.36 MiB; 0 restarts; clean shutdown. analyze_cr0.py sha256 7cf98b77...972b; stdout sha256 a89ca86b...fc70. Next: rc.4 (X-thp-off, X-mem-gauges+2, X-log-url-redact, X-mimalloc-override #448, LEGAL-1, RP-DEF, RP-UC), then soak r5. Owner: hold; Appdata Backup may be re-enabled now (disable again before r5); keep r4 evidence root, data dir may go."
   ],
   "limits": {
-    "phase_total": 8,
-    "phase_total_note": "2026-11-02T15:06:47Z owner (runner session): approaching weekly usage limit; bring worker slots down to two as tasks complete. No new launches until running count < 2. Supersedes the 4-slot rule (§2.24/§2.25 cap) until the owner says otherwise.",
-    "launch_paused": true,
-    "launch_paused_note": "2026-11-02T20:53:52Z owner: once active sessions are pushed, pause starting further sessions until the soak r3 results are in. Runner reports the verdict and resumes launches only on the owner's word. Existing sessions may still push and be merged (SRC-14b-2 #400; R-mem-triage fix PR after the verdict).",
-    "note": "owner 2026-11-04: up to 8 slots, and auto-approve plans and normal decisions that follow UX/performance best practice (to record as §2.33). 7 running; slot 8 fills when E-M7 is expanded or r4 unholds the epics."
+    "phase_total": 12,
+    "note": "owner §2.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). §2.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded."
   },
   "owner_instructions": [
     {
