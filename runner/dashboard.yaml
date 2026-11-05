@@ -260,6 +260,7 @@ placement:
   - X-log-url-redact-2
   - X-log-url-redact-3
   - X-flake-boot-shell
+  - X-flake-subs-stall
   - X-followups-1105
   - X-source-adult-2
   - X-flakes-1105
