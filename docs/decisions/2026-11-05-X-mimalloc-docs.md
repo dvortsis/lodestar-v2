@@ -14,6 +14,7 @@ Runner brief X-mimalloc-docs, 2026-11-05. Follows `2026-11-05-X-mimalloc-overrid
 
 ## Comments and the release check
 - **`crates/lodestar/src/memstats.rs`:** the module doc now gives both builds. musl: mimalloc is also C's `malloc`, and SQLite is part of its bytes. Elsewhere: C allocates outside mimalloc. No `C_MALLOC_IS_MIMALLOC` constant: nothing in the binary reads it, and the analyzer takes the build from `/system`.
+- **`crates/store/src/memstats.rs`** (added to this slice by the runner, 2026-11-05): its module doc said SQLite allocates from "musl's mallocng in the Docker image". The release build's C `malloc` was zig's, and since #448 it's mimalloc. The doc now gives both builds, as above.
 - **`crates/lodestar/src/thp.rs`:** `MIMALLOC_ALLOW_THP` covers mimalloc's arenas. In musl builds those hold the C heaps too. Elsewhere only `PR_SET_THP_DISABLE` covers them.
 - **`.github/workflows/release.yml`, "Check malloc is mimalloc's":** the step also fails if `nm` lists any symbol containing `SmpAllocator` or `c.malloc.`, zig's own `malloc` and the allocator under it. That would be a second C heap linked beside mimalloc. It matches fixed strings, dots included, so no `mi_*` or Rust-mangled name can match. It reads `nm`'s output from a file, not a pipe. The comment now names the four symbols the step checks.
 - **ring isn't a C allocator.** Its C and assembly code never calls `malloc`. The step comment and `crates/lodestar/Cargo.toml`'s comment drop it from the list of C code moved onto mimalloc.
