@@ -6,6 +6,11 @@ import type { Page } from '@playwright/test';
 import type { components } from '../../src/lib/api/schema';
 import { discoverResponse, showAdultSettings } from '../../src/lib/features/discover/testing';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
+import { dht, nyaa, prowlarr } from '../../src/lib/features/sources/fixtures';
+import {
+	SettingsBackend,
+	type MockLike
+} from '../../src/lib/features/settings/form/testing/e2e-backend';
 import { body, expect, hits, server } from '../search-results.fixtures';
 import { test } from '../support/test';
 import { capture, freeze } from './capture';
@@ -137,6 +142,19 @@ for (const mode of ['light', 'dark'] as const) {
 			await expect(page.getByRole('heading', { name: 'Insights' })).toBeVisible();
 			await ready(page);
 			await capture(page, `insights-${mode}`, undefined, { fullPage: false });
+		});
+
+		test(`sources-${mode}`, async ({ page, go, mock }) => {
+			new SettingsBackend().attach(mock as unknown as MockLike);
+			(mock.on.bind(mock) as (id: string, f: unknown) => unknown)('listSources', () => ({
+				status: 200,
+				body: { sources: [dht, nyaa, prowlarr] }
+			}));
+			await go('/settings/sources');
+			await expect(page.getByRole('heading', { level: 1, name: 'Sources' })).toBeVisible();
+			await expect(page.getByTestId('source-1-status')).toContainText('Needs setup');
+			await ready(page);
+			await capture(page, `sources-${mode}`, page.getByTestId('source-1'));
 		});
 	});
 }

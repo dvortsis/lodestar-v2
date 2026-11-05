@@ -16,6 +16,16 @@ Every field in the Lodestar Unraid template in one table. The recommended value 
 | Intensity | Crawler effort (`LODESTAR_INTENSITY`) | `balanced` | `aggressive` can overload home routers. |
 | DHT port | Gluetun template only (`LODESTAR_DHT_PORT`) | `6881` | Match the port your VPN provider forwards. |
 
+## Settings → Sources
+
+These are in the web app, under **Settings → Sources**, not in the template. Each source has its own row. See [section 5.4](05-use-lodestar.md#54-choose-where-lodestar-finds-torrents-settings--sources).
+
+| Setting | What it does | Recommended | Notes |
+|---|---|---|---|
+| On | Turns the source on or off | On for **Mainline DHT**; off for **External** and **Account** sources unless you need them | Applies at once, with no Undo. **Applies at next start** means the source starts or stops at the next restart. |
+| Priority | Share of fetch work (**Low**, **Normal**, **High**, **Maximum**) | `Normal` | Applies at once, with no Undo. |
+| Setup | Accepting the sites a source contacts, or adding account details | Not available yet | A source marked **Needs setup** stays off. |
+
 The templates do not include a Log level field. You can optionally add a custom
 container variable with key `LODESTAR_LOG` to set how much Lodestar logs on every output
 (`error`, `warn`, `info` or `debug`). While it is set, Logging verbosity in Settings can't be changed.
