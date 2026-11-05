@@ -1,7 +1,8 @@
 //! Every plugin compiled into this crate, by its manifest
 //! (X-adult-catalogue, `docs/decisions/2026-11-05-X-adult-catalogue.md`).
 //!
-//! Registered or not: ThePornDB, which is on hold, is listed too. Code
+//! Registered or not: ThePornDB and StashDB, which are on hold, are
+//! listed too. Code
 //! that can't ask the running plugins, such as `lodestar import`, reads
 //! a manifest's fixed fields (`id`, `kinds`, `always_adult`) here, so a
 //! new plugin is seen everywhere once it's listed below, and a unit test
@@ -19,7 +20,7 @@
 use lodestar_sources::Manifest;
 
 use crate::{
-    academic, archive_org, arr, clients, full_scrape, nyaa, prowlarr, torrent_cache, tpdb,
+    academic, archive_org, arr, clients, full_scrape, nyaa, prowlarr, stashdb, torrent_cache, tpdb,
 };
 
 /// `(module, manifest)` for every plugin, in `lib.rs` order. A module
@@ -33,6 +34,7 @@ const PLUGINS: &[(&str, &Manifest)] = &[
     ("nyaa", &nyaa::MANIFEST),
     ("nyaa", &nyaa::SUKEBEI_MANIFEST),
     ("prowlarr", &prowlarr::MANIFEST),
+    ("stashdb", &stashdb::MANIFEST),
     ("torrent_cache", &torrent_cache::MANIFEST),
     ("tpdb", &tpdb::MANIFEST),
 ];
