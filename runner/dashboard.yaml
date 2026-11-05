@@ -257,6 +257,7 @@ placement:
   - F-*
   - X-ci-health
   - X-log-url-redact
+  - X-log-url-redact-2
   - L4-followups
   - S-settings-reconcile
 - ws: ws-cut
@@ -330,6 +331,7 @@ placement:
   - SRC-15*
   - SRC-16
   - SRC-17
+  - SRC-17a
   - SRC-G
   - X-egress-copy
   - D-egress-note
@@ -382,6 +384,7 @@ unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
   X-dashboard-adapts: ws-small
+  X-dashboard-idle-slots: ws-small
   X-filter-budget-noise: ws-small
   F-filter-standin-undo: ws-small
   X-overflow-links: ws-small
@@ -398,6 +401,8 @@ expanded:
 - E-v06-sources
 state_override:
   G-v051: active
+  R-rc3-cut: done
+  SRC-10b: closed
 conditions:
   owner-cr-spec:
     met: true
