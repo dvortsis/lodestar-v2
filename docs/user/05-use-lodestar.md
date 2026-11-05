@@ -153,7 +153,7 @@ Result: after the restart, its row says **Running**.
 
 Result: Lodestar answers with the integration and a token starting `lsw_`. Copy the token. Lodestar shows it only this once and keeps only a fingerprint of it. Making a new token replaces the old one at once.
 
-If it fails with error 401, the password was wrong. Error 429 means too many wrong tries; wait a minute and try again.
+If it fails with error 401, the password was wrong. Error 429 means too many wrong tries; wait a minute and try again. Error 409 means an update changed the Legal Notice: sign in to Lodestar in your browser, read and accept it, then run the commands again.
 
 **Step 3: add the connection in Sonarr or Radarr.**
 

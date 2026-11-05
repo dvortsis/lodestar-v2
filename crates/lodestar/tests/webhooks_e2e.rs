@@ -238,6 +238,8 @@ fn a_grab_with_the_token_reaches_the_store_private_and_a_wrong_one_never_does() 
         .expect("the webhooks source is registered")
         .clone();
     assert_eq!(source["enabled"], false, "{source}");
+    // Its finds reflect your own setup: never named to a public viewer.
+    assert_eq!(source["finds_private"], true, "{source}");
     let id = source["id"].as_u64().unwrap();
 
     // A token, made with the password and shown once.
