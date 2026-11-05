@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T13:34Z",
+  "updated_at": "2026-11-05T13:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3096,11 +3096,13 @@
       "brief": "briefs/LEGAL-2.md"
     },
     "X-settings-trim": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnB99PRswaZHYHreTW3",
       "since": "2026-11-05T12:33Z",
       "brief": "briefs/X-settings-trim.md",
-      "model": "sonnet"
+      "model": "sonnet",
+      "merge": "05ae7814",
+      "pr": 496
     },
     "ENR-1b": {
       "status": "running",
@@ -4692,7 +4694,9 @@
     "Follow-up (gap 4, from #494): one shared always-adult manifest list used by both the pipeline and the import CLI, so they stay in step (the CLI lists Sukebei by hand today).",
     "owner-flag \u00a72.19/\u00a72.26 (RP-4 #495, plan Q10 refinements): importers and torrent-cache backlogs count toward SP-3 only when a publisher is named (replay and lookup traffic are not flooding); one rare writer path (feed key claimed before a restart) costs +16.5% per insert, with the common paths asserted <=5%.",
     "Follow-up: move RP-4 sp3_writer_cost (ignored test) into the bench/ gate.",
-    "owner-flag \u00a72.19 (X-claim-trackers): tracker URLs from claims and caches are refused if they point at localhost, *.localhost or a private/loopback/link-local address (tightens SRC-13); latent today since nothing dials claimed trackers."
+    "owner-flag \u00a72.19 (X-claim-trackers): tracker URLs from claims and caches are refused if they point at localhost, *.localhost or a private/loopback/link-local address (tightens SRC-13); latent today since nothing dials claimed trackers.",
+    "Settings size headroom is thin after #496: NotificationsScreen 12 B, Settings section 48 B under 45 KB; the next Settings screen (~65-85 B each) needs another trim or a \u00a72.26 raise.",
+    "Small follow-ups from #496 review: vitest for the field menu \"Copy link\" (menu.ts:16, writeText gets the absolute URL); correct docs/decisions/2026-11-05-X-settings-trim.md lines 24-27 (Notifications limit was lowered; controls +67 B, edit chunk +84 B, before values 33,393 and 11,011 B)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5353,7 +5357,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T13:34Z",
+    "updated": "2026-11-05T13:50Z",
     "items": [
       {
         "slot": 1,
@@ -5397,11 +5401,8 @@
       },
       {
         "slot": 6,
-        "slice": "X-settings-trim",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Performance: the Settings bundle back under its 45 kB cap",
-        "since": "2026-11-05T12:33Z"
+        "status": "idle",
+        "doing": "Held: no ready slice. RP-5 waits on RP-4 (#495); B13b on X-search-files-5; the shared always-adult list on #494"
       },
       {
         "slot": 7,
