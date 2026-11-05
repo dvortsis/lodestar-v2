@@ -404,12 +404,13 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 }
 
 /// [`calibrate`]'s fastest pass per torrent on the reference runner, in
-/// nanoseconds: an AMD EPYC 7763, the most common hosted runner (10.7 µs,
-/// the lowest of jobs 120136591749, 120136592052, 120136592177 and
-/// 120136592216). The budget holds on hardware like users run, not only
-/// on the fastest runners (owner, 2026-10-23: "Go with whatever makes for
-/// the best user experience"); a runner as fast as the Xeon 6973P-C
-/// (7.2 µs) reads its times about 1.5× higher.
+/// nanoseconds: an AMD EPYC 7763, the most common hosted runner (10.45 µs,
+/// the lowest of the 37 jobs listed in [`REFERENCE`], 2026-10-31..11-05;
+/// it was 10.7 µs from four jobs on 2026-10-22). The budget holds on
+/// hardware like users run, not only on the fastest runners (owner,
+/// 2026-10-23: "Go with whatever makes for the best user experience"); a
+/// runner as fast as the Xeon 6973P-C (7.2 µs) reads its times about 1.5×
+/// higher.
 ///
 /// To derive it for a runner type, run the budget test on a runner of
 /// that type (the log's CPU line names it) and take the `calibration:`
@@ -418,25 +419,30 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 /// toolchain isn't pinned, and the calibration is all std: SipHash, the
 /// hash set, `sort_unstable`), or a change to [`calibrate`], [`torrents`]
 /// or [`COMMON`]. The test prints `rustc --version` to tell.
-const CALIB_REF_NS: f64 = 10_700.0;
+const CALIB_REF_NS: f64 = 10_450.0;
 
 /// [`calibrate`]'s fastest pass per torrent on a typical reference
-/// runner, in nanoseconds: the median over the 29 EPYC 7763 jobs listed
-/// in [`REFERENCE`] (9.83-11.34 µs). The reference reads its raw times,
-/// which is what a typical 7763 host runs, so a listed model's host is
-/// measured against the typical 7763's calibration, not the fastest's
-/// ([`CALIB_REF_NS`], which stays the fallback for unlisted models).
-/// Re-derive it on the same triggers as [`CALIB_REF_NS`]; its jobs ran
-/// rustc 1.99.1.
-const CALIB_TYPICAL_NS: f64 = 11_090.0;
+/// runner, in nanoseconds: the median over the 37 EPYC 7763 jobs listed
+/// in [`REFERENCE`] (10.45-11.92 µs; it was 11.09 µs over 29 jobs on
+/// 2026-10-29..30). 7763 hosts calibrate in two bands, about 10.5 and 11.0
+/// µs, at the same engine time, and by 2026-11-04 nearly every job drew the
+/// faster one (`docs/decisions/2026-11-05-X-filter-budget-noise.md`). The
+/// reference reads its raw times, which is what a typical 7763 host runs,
+/// so a listed model's host is measured against the typical 7763's
+/// calibration, not the fastest's ([`CALIB_REF_NS`], which stays the
+/// fallback for unlisted models).
+/// Re-derive it on the same triggers as [`CALIB_REF_NS`], and when the
+/// 7763's `calibration:` lines move off it for good; its jobs ran rustc
+/// 1.99.1.
+const CALIB_TYPICAL_NS: f64 = 10_590.0;
 
 /// How a hosted runner model runs the engine compared with the
 /// calibration, as a share of the same on the reference runner.
 struct EngineSpeed {
     /// Matched against the CPU line's model name.
     model: &'static str,
-    /// The median over the model's jobs of the mixed set's raw time ÷ the
-    /// calibration's, ÷ the same on the 7763 at the same code.
+    /// The median over the model's jobs of the mixed set's raw time (its
+    /// third-fastest pass) ÷ the calibration's, ÷ the same on the 7763.
     skew: f64,
     /// The `filter budget` jobs it's derived from (run IDs), when they
     /// ran, and the code they ran.
@@ -456,53 +462,62 @@ impl EngineSpeed {
 /// The reference runner, read raw: its times are the budget's
 /// microseconds. Its jobs set [`CALIB_TYPICAL_NS`] and the mixed set's
 /// time ÷ the calibration's that every [`ENGINE_SPEED`] skew is measured
-/// against: 4.09 µs per calibration µs at `2d5e761d..f2ee0951` before
-/// #196 (24 jobs), 3.93 after (5 jobs).
+/// against: 4.02 µs per calibration µs over these jobs (3.82-4.20; it was
+/// 3.93 over five jobs on 2026-10-30). The code range is the first and
+/// last job's head, across branches.
 const REFERENCE: EngineSpeed = EngineSpeed {
     model: "EPYC 7763",
     skew: 1.0,
     runs: &[
-        41060388132,
-        41055449266,
-        41054094982,
-        41049498646,
-        41044878037,
-        41044132796,
-        41043907080,
-        41041666063,
-        41040631957,
-        41040270140,
-        41035649874,
-        41032038396,
-        41029625857,
-        41027904941,
-        41024264027,
-        41022335477,
-        41018406044,
-        41018370367,
-        41016853875,
-        41016836536,
-        41016556547,
-        41013719520,
-        41011318136,
-        41010444426,
-        41009227540,
-        41008256126,
-        41005542890,
-        41004752665,
-        40845396409,
+        41945426619,
+        41942305919,
+        41940903202,
+        41935549308,
+        41935241853,
+        41933423478,
+        41932987039,
+        41922199112,
+        41920437564,
+        41919199999,
+        41915886307,
+        41912491340,
+        41908869737,
+        41903017195,
+        41532566763,
+        41489296472,
+        41473555316,
+        41466645299,
+        41458033765,
+        41451433046,
+        41431099240,
+        41359684569,
+        41356515182,
+        41345438561,
+        41330895188,
+        41305628508,
+        41301948554,
+        41246113451,
+        41236509974,
+        41231734520,
+        41222848579,
+        41221310305,
+        41220229135,
+        41210184355,
+        41208775894,
+        41200425685,
+        41194830646,
     ],
-    dates: "2026-10-29..30",
-    code: "2d5e761d..2b61d89d, before and after #196",
+    dates: "2026-10-31..11-05",
+    code: "a3243b7d..e481c6df",
 };
 
 /// The mixed set's raw time ÷ the calibration's on the reference, at the
-/// code the gate runs: the median of [`REFERENCE`]'s jobs since #196.
+/// code the gate runs: the median of [`REFERENCE`]'s jobs.
 /// Only the drift warning reads it: the skews are ratios taken at the same
 /// code, so an engine change moves them alike. Re-derive it when the
 /// engine's speed changes much (the test prints the ratio on every job),
 /// and on the same triggers as [`CALIB_REF_NS`].
-const REFERENCE_RATIO: f64 = 3.93;
+const REFERENCE_RATIO: f64 = 4.02;
 
 /// The engine's speed on each other hosted runner model seen. A job on a
 /// listed model is scaled by its own calibration against
@@ -519,8 +534,8 @@ const REFERENCE_RATIO: f64 = 3.93;
 /// (`docs/decisions/2026-10-30-X-filter-budget-8573C.md`).
 ///
 /// To add a model, take its jobs' raw `mixed` µs ÷ `calibration:` µs and
-/// divide each by the reference's median at the same code (the eras
-/// above, 4.09 and 3.93); the skew is the median over all its eligible
+/// divide each by the reference's median at the same code
+/// ([`REFERENCE_RATIO`]); the skew is the median over all its eligible
 /// jobs. Re-deriving uses the same formula over all eligible jobs, in a
 /// PR with its own decisions file. Re-derive them all when the toolchain
 /// or the calibration changes: the test prints each job's ratio, and
@@ -531,72 +546,70 @@ const REFERENCE_RATIO: f64 = 3.93;
 /// runs and the arithmetic (runner, 2026-10-30): the table never moves to
 /// make a run pass.
 const ENGINE_SPEED: &[EngineSpeed] = &[
-    // 1.112-1.181 over its jobs.
+    // 1.070-1.143 over its jobs.
     EngineSpeed {
         model: "8573C",
-        skew: 1.126,
+        skew: 1.097,
         runs: &[
-            41065412960,
-            41038382885,
-            41036553722,
-            41015045891,
-            41014951807,
-            41008099448,
-            41006514676,
-            41005580320,
-            41005421892,
+            41919270308,
+            41904747201,
+            41439674586,
+            41433116185,
+            41339386827,
         ],
-        dates: "2026-10-30",
-        code: "e8f50d58..6c7bcef3, before and after #196",
+        dates: "2026-11-01..11-04",
+        code: "38789bcb..5bebdb89",
     },
-    // 0.861-0.945.
+    // 0.892-0.965 over its jobs.
     EngineSpeed {
         model: "EPYC 9V45",
-        skew: 0.894,
+        skew: 0.944,
         runs: &[
-            41055481261,
-            41054208363,
-            41051280541,
-            41048269928,
-            41035050970,
-            41029959417,
-            41028071535,
-            41025649623,
-            41024152492,
-            41014655186,
-            41013412376,
-            41006310085,
-            40660530001,
+            41945810509,
+            41939178877,
+            41920858097,
+            41911139684,
+            41908317816,
+            41517600122,
+            41315681318,
+            41206854675,
         ],
-        dates: "2026-10-28..30",
-        code: "2d5e761d..f2ee0951, before and after #196",
+        dates: "2026-10-31..11-05",
+        code: "29201097..b08e161f",
     },
-    // 0.905-0.934.
+    // 0.877-0.995 over its jobs.
     EngineSpeed {
         model: "EPYC 9V74",
-        skew: 0.913,
+        skew: 0.922,
         runs: &[
-            41062154866,
-            41059977277,
-            41057808450,
-            41057663596,
-            41046740404,
-            41046258692,
-            41041114029,
-            41040381547,
-            41028659383,
-            41008473155,
+            41937126100,
+            41935234631,
+            41930504493,
+            41925822797,
+            41916664314,
+            41913257284,
+            41904743381,
+            41465630405,
+            41361833457,
+            41354931099,
+            41352406885,
+            41342560026,
+            41296743871,
+            41253319480,
+            41228842689,
+            41217026016,
+            41204310448,
         ],
-        dates: "2026-10-30",
-        code: "926e0529..00da08a4, before and after #196",
+        dates: "2026-10-31..11-05",
+        code: "5f012f2b..e2f578e8",
     },
-    // 1.022-1.110; provisional, from 3 jobs.
+    // 1.033-1.048 over its jobs; provisional, from 4 jobs.
     EngineSpeed {
         model: "8370C",
-        skew: 1.034,
-        runs: &[41047639541, 41033584211, 41014261444],
-        dates: "2026-10-30",
-        code: "47fe54e0..5c88c659, before and after #196",
+        skew: 1.038,
+        runs: &[41937536173, 41931557263, 41914687461, 41908571127],
+        dates: "2026-11-04..11-05",
+        code: "38fd9309..7e02eacd",
     },
 ];
 
@@ -605,40 +618,92 @@ const ENGINE_SPEED: &[EngineSpeed] = &[
 /// that the skew may need re-deriving. It only warns: the table decides.
 const MODEL_DRIFT: f64 = 0.20;
 
-/// A case's median pass, and how far it is above the fastest pass, as a
-/// share. A shared host's neighbours can slow most of one case's passes
-/// while the calibrations either side run clean; then the median isn't
-/// the engine's time, and the spread shows it. A slower engine slows
-/// every pass alike, so its spread stays small.
-fn spread(mut passes: Vec<f64>) -> (f64, f64) {
+/// One case's seven passes, read for the gate.
+#[derive(Debug, Clone, Copy)]
+struct Timing {
+    /// The third-fastest pass: the time the gate decides on. Noise only
+    /// adds time, so it can't read faster than the engine; it takes three
+    /// passes that fast, so one lucky pass can't set it either; and up to
+    /// four slowed passes of seven leave it alone, where the median moves
+    /// once the fourth is slowed (#429's job 126950288443).
+    at: f64,
+    /// How far `at` is above the fastest pass, as a share. A shared host's
+    /// neighbours can slow most of a case's passes while the calibrations
+    /// either side run clean; then `at` isn't the engine's time, and this
+    /// shows it. A slower engine slows every pass alike, so it stays small.
+    spread: f64,
+    /// How far the slowest pass is above the fastest, as a share: a sign
+    /// the host was busy during the case, even when `at` wasn't touched.
+    jitter: f64,
+}
+
+fn timing(mut passes: Vec<f64>) -> Timing {
     passes.sort_by(f64::total_cmp);
-    let median = passes[passes.len() / 2];
-    (median, median / passes[0] - 1.0)
+    let fastest = passes[0];
+    let at = passes[passes.len() / 3];
+    Timing {
+        at,
+        spread: at / fastest - 1.0,
+        jitter: passes[passes.len() - 1] / fastest - 1.0,
+    }
 }
 
 #[test]
 fn a_case_disturbed_mid_run_has_a_wide_spread() {
-    // This slice's dispatch on a 7763 (job 124112699853): the mixed set
-    // while the host was busy, and the neutralized case right after.
-    let (median, wide) = spread(vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6]);
-    assert_eq!(median, 51.1);
-    assert!(wide > 0.15, "{wide}");
-    let (median, narrow) = spread(vec![43.6, 43.2, 43.2, 43.3, 43.8, 43.4, 43.2]);
-    assert_eq!(median, 43.3);
-    assert!(narrow < 0.01, "{narrow}");
+    // X-filter-budget-8573C's dispatch on a 7763 (job 124112699853): the
+    // mixed set while the host was busy, and the neutralized case right
+    // after. Five of seven passes slowed: `at` moves, and the spread says so.
+    let t = timing(vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6]);
+    assert_eq!(t.at, 49.6);
+    assert!(t.spread > 0.15, "{t:?}");
+    let t = timing(vec![43.6, 43.2, 43.2, 43.3, 43.8, 43.4, 43.2]);
+    assert_eq!(t.at, 43.2);
+    assert!(t.spread < 0.01 && t.jitter < 0.02, "{t:?}");
 }
 
-/// A slower or faster engine scales every pass alike: the median scales
+#[test]
+fn a_few_slowed_passes_leave_the_time_alone_and_show_as_jitter() {
+    // #429's job 126950288443 (an EPYC 9V74): three passes near 60 µs and
+    // two a little slow (37.2 and 37.9). The median read 37.9 µs, the
+    // fourth pass, and the gate failed at 50.8 µs. The third-fastest is
+    // 37.2 µs, 2% over the fastest: slowed passes can only raise it.
+    let t = timing(vec![37.2, 36.4, 59.8, 37.9, 63.9, 60.9, 36.4]);
+    assert_eq!(t.at, 37.2);
+    assert!(t.spread < 0.03, "{t:?}");
+    assert!(t.jitter > 0.15, "{t:?}");
+}
+
+/// A slower or faster engine scales every pass alike: the time scales
 /// with it and the spread doesn't move, so a slower runner can't read as
 /// a disturbed one.
 #[test]
 fn a_uniformly_slower_engine_keeps_its_spread() {
     let passes = vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6];
-    let (median, base) = spread(passes.clone());
+    let base = timing(passes.clone());
     for k in [0.25, 0.5, 2.0, 3.93, 10.0] {
-        let (m, s) = spread(passes.iter().map(|p| p * k).collect());
-        assert!((m - median * k).abs() < 1e-9 * k, "×{k}: median {m}");
-        assert!((s - base).abs() < 1e-12, "×{k}: spread {s} vs {base}");
+        let t = timing(passes.iter().map(|p| p * k).collect());
+        assert!((t.at - base.at * k).abs() < 1e-9 * k, "×{k}: {t:?}");
+        assert!((t.spread - base.spread).abs() < 1e-12, "×{k}: {t:?}");
+        assert!((t.jitter - base.jitter).abs() < 1e-12, "×{k}: {t:?}");
+    }
+}
+
+proptest! {
+    /// Noise only adds time: adding any non-negative delay to any passes
+    /// never makes the gate's time read faster, so noise can only make the
+    /// gate stricter. A slower engine slows every pass, and the time
+    /// rises at least by the smallest slowdown.
+    #[test]
+    fn noise_never_makes_a_case_read_faster(
+        passes in prop::collection::vec(1.0f64..100.0, 7),
+        noise in prop::collection::vec(0.0f64..100.0, 7),
+        slower in 1.0f64..2.0,
+    ) {
+        let clean = timing(passes.clone());
+        let noisy = timing(passes.iter().zip(&noise).map(|(p, n)| p + n).collect());
+        prop_assert!(noisy.at >= clean.at, "{clean:?} → {noisy:?}");
+        let slow = timing(passes.iter().map(|p| p * slower).collect());
+        prop_assert!(slow.at >= clean.at * slower * (1.0 - 1e-12), "{clean:?} → {slow:?}");
     }
 }
 
@@ -740,20 +805,21 @@ fn the_reference_reads_raw() {
 
 #[test]
 fn an_unlisted_model_scales_by_the_calibration() {
-    let s = scaling("AMD EPYC 9999 Processor", 8.56, 40.0);
+    let s = scaling("AMD EPYC 9999 Processor", 8.36, 40.0);
     assert!((s.speed - 0.8).abs() < 1e-9, "{}", s.speed);
-    assert_eq!(s.speed, 8.56e3 / CALIB_REF_NS);
+    assert_eq!(s.speed, 8.36e3 / CALIB_REF_NS);
     assert!(s.notes.iter().any(|n| n.contains("isn't in ENGINE_SPEED")));
 }
 
 #[test]
 fn a_listed_model_scales_by_its_calibration_and_skew() {
-    // #210's job 124095631213: calibration 9.86 µs, mixed 43.4 µs.
-    // 9.86 ÷ 11.09 × 1.126 = 1.001115.
+    // #210's job 124095631213, as fixed inputs: calibration 9.86 µs, mixed
+    // 43.4 µs (its median pass, as the gate read it then).
+    // 9.86 ÷ 10.59 × 1.097 = 1.021381.
     let s = scaling("INTEL(R) XEON(R) PLATINUM 8573C", 9.86, 43.4);
-    assert!((s.speed - 1.001115).abs() < 1e-6, "{}", s.speed);
-    assert!((48.0 / s.speed - 47.95).abs() < 0.01);
-    // Its skew (43.4 ÷ 9.86 ÷ 3.93 = 1.120) is within MODEL_DRIFT.
+    assert!((s.speed - 1.021381).abs() < 1e-6, "{}", s.speed);
+    assert!((48.0 / s.speed - 47.00).abs() < 0.01);
+    // Its skew (43.4 ÷ 9.86 ÷ 4.02 = 1.095) is within MODEL_DRIFT.
     assert!(s.notes.iter().all(|n| !n.starts_with("::warning::")));
 }
 
@@ -821,11 +887,19 @@ fn a_provisional_skew_still_scales_and_warns() {
 /// by how much slower than [`CALIB_REF_NS`] that pass ran.
 /// [`calibrate`] runs either way, before any filter code runs and again
 /// once the engine is gone, to catch a runner whose speed changes under
-/// the test; a held case whose median pass is more than 15% over its
-/// fastest ([`spread`]) is caught the same way, and either measures
+/// the test; a held case whose third-fastest pass is more than 15% over
+/// its fastest ([`Timing`]) is caught the same way, and either measures
 /// again. Where it scales, it never runs beside filter state, so a
-/// regression can't slow it and hide itself, and noise only adds time, so
-/// its fastest pass can only make the gate stricter. Raw times, the
+/// regression can't slow it and hide itself. Noise that slows the
+/// calibration makes a scaled runner read faster than it is, so it takes
+/// the fastest of 14 passes, and the 15% drift bound limits what noise on
+/// one side can hide. Each case decides on its third-fastest pass of
+/// seven, which noise can't make faster
+/// (`docs/decisions/2026-11-05-X-filter-budget-noise.md`). An attempt
+/// where every held case over budget had a pass more than 15% over its own
+/// fastest measures again; one with a steady case over budget fails. From
+/// then on, a scaled model is scaled by the fastest calibration of any
+/// attempt, the strictest, so a fresh draw can't loosen it. Raw passes, the
 /// divisor and where it came from are printed too.
 ///
 /// This is a budget gate, not a regression gate: a slowdown that keeps a
@@ -841,7 +915,7 @@ fn budget() {
     const SPEED: std::ops::RangeInclusive<f64> = 0.4..=2.0;
     // The fastest calibration passes before and after must agree this
     // closely, or the runner's speed changed under the test; and so must
-    // a held case's median pass and its fastest ([`spread`]).
+    // a held case's third-fastest pass and its fastest ([`Timing`]).
     const DRIFT: f64 = 0.15;
     // Attempts at a measurement the drift doesn't spoil.
     const ATTEMPTS: usize = 3;
@@ -915,14 +989,14 @@ fn budget() {
             .join(" ")
     };
     // A warm-up pass (the first judgment also builds the rule index),
-    // then seven passes over the set. The median decides, so one noisy
-    // pass on a shared runner doesn't; with how far it is above the
-    // fastest pass, so a run of them is caught.
+    // then seven passes over the set. The third-fastest decides
+    // ([`Timing`]), so slowed passes on a shared runner don't; with how far
+    // it is above the fastest pass, so a run of them is caught.
     let time = |what: &str, f: &dyn Fn(usize)| {
         pass(f);
         let passes: Vec<f64> = (0..7).map(|_| pass(f)).collect();
         println!("{what}: passes {} µs", show(&passes));
-        spread(passes)
+        timing(passes)
     };
     // The fastest of seven calibration passes, after a warm-up.
     let calibration = |when: &str| {
@@ -936,16 +1010,27 @@ fn budget() {
     // neighbours), which the calibrations before and after catch, or
     // during one case, which that case's spread catches. Such a run
     // measures again rather than failing, up to three times; only a
-    // trusted attempt decides, and only drift on every attempt fails.
+    // trusted attempt decides, and only drift on every attempt fails. A
+    // trusted attempt whose every held case over budget shows the host
+    // was busy (a pass more than DRIFT over its fastest) measures again
+    // too: noise only adds time to a case, so a later attempt passes only
+    // if the engine reads under budget. A steady case over budget fails
+    // at once.
     let mut drifted = Vec::new();
+    // The fastest calibration of any attempt so far, and whether a busy
+    // attempt over budget has measured again: from then on that fastest
+    // calibration scales, so a failing scaled run can't pass on a slower
+    // calibration draw. Noise can't make a calibration faster.
+    let mut fastest_calib = f64::INFINITY;
+    let mut busy_retried = false;
     for attempt in 1..=ATTEMPTS {
         println!("attempt {attempt} of {ATTEMPTS}");
         let before = calibration("before");
         let core = shipped();
-        let (per, spread) = time("core", &|i| {
+        let t = time("core", &|i| {
             std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
         });
-        let mut cases = vec![("core".to_owned(), per, true, spread)];
+        let mut cases = vec![("core".to_owned(), t, true)];
 
         // The whole engine: the core, every pack, and 10,000 of your rules,
         // reading the classification as ingest does.
@@ -979,7 +1064,7 @@ fn budget() {
                 met as f64 / items.len() as f64,
                 full as f64 / items.len() as f64
             );
-            let (per, spread) = time(&what, &|i| {
+            let t = time(&what, &|i| {
                 let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
                 assert!(
                     v.decision
@@ -989,7 +1074,7 @@ fn budget() {
                     v.decision
                 );
             });
-            cases.push((what, per, held, spread));
+            cases.push((what, t, held));
         }
         // The mixed set again with common words neutralized (CSX-5
         // *Neutralize term*): every keyword entry reads the name and
@@ -1008,14 +1093,15 @@ fn budget() {
             })
             .collect();
         let what = "engine, packs on, 10,000 rules, mixed, 5 common words neutralized";
-        let (per, spread) = time(what, &|i| {
+        let t = time(what, &|i| {
             std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
         });
-        cases.push((what.to_owned(), per, true, spread));
+        cases.push((what.to_owned(), t, true));
         drop(engine);
         let after = calibration("after");
 
         let calib_us = before.min(after);
+        fastest_calib = fastest_calib.min(calib_us);
         // How many times the reference's time this runner takes, by the
         // calibration.
         let calibrated = calib_us * 1e3 / CALIB_REF_NS;
@@ -1036,9 +1122,12 @@ fn budget() {
         }
         let unsteady: Vec<_> = cases
             .iter()
-            .filter(|(_, _, held, spread)| *held && *spread > DRIFT)
-            .map(|(what, _, _, spread)| {
-                format!("{what}: median {:.0}% over the fastest", spread * 100.0)
+            .filter(|(_, t, held)| *held && t.spread > DRIFT)
+            .map(|(what, t, _)| {
+                format!(
+                    "{what}: third-fastest pass {:.0}% over the fastest",
+                    t.spread * 100.0
+                )
             })
             .collect();
         if !unsteady.is_empty() {
@@ -1056,25 +1145,57 @@ fn budget() {
             .iter()
             .find(|(what, ..)| what.contains("mixed ("))
             .expect("the mixed case")
-            .1;
-        let Scaling { speed, how, notes } = scaling(&cpu, calib_us, mixed);
+            .1
+            .at;
+        let scale_us = if busy_retried {
+            fastest_calib
+        } else {
+            calib_us
+        };
+        if scale_us < calib_us {
+            println!(
+                "after a busy attempt, scaling by the fastest calibration of any attempt, \
+                 {scale_us:.2} µs, not this attempt's {calib_us:.2} µs"
+            );
+        }
+        let Scaling { speed, how, notes } = scaling(&cpu, scale_us, mixed);
         for note in notes {
             println!("{note}");
         }
         let mut over = Vec::new();
-        for (what, raw, held, _) in cases {
+        // Whether every held case over budget had a pass more than DRIFT
+        // over its own fastest: noise in another case doesn't count, so a
+        // steady case over budget always fails at once.
+        let mut all_busy = true;
+        for (what, t, held) in cases {
+            let raw = t.at;
             let per = raw / speed;
             println!(
-                "{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here \
-                 ÷ {speed:.3}, {how})"
+                "{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here, \
+                 the third-fastest pass, ÷ {speed:.3}, {how})"
             );
             if per >= BUDGET_US {
                 if held {
-                    over.push(format!("{what}: {per:.1} µs ({raw:.1} µs here)"));
+                    all_busy &= t.jitter > DRIFT;
+                    over.push(format!(
+                        "{what}: {per:.1} µs ({raw:.1} µs here, slowest pass {:.0}% over the \
+                         fastest)",
+                        t.jitter * 100.0
+                    ));
                 } else {
                     println!("{what}: over {BUDGET_US} µs (reported, not held)");
                 }
             }
+        }
+        if !over.is_empty() && all_busy && attempt < ATTEMPTS {
+            let note = format!("attempt {attempt}: over budget while busy: {over:?}");
+            println!(
+                "{note}: the host was busy during each case over budget, so measuring again \
+                 (only an attempt under budget passes)"
+            );
+            drifted.push(note);
+            busy_retried = true;
+            continue;
         }
         assert!(
             over.is_empty(),
@@ -1084,9 +1205,9 @@ fn budget() {
         return;
     }
     panic!(
-        "the runner's speed changed under the test on all {ATTEMPTS} attempts, or the \
-         engine's time varies between passes, so the measurement can't be trusted: \
-         {drifted:?}"
+        "no attempt of {ATTEMPTS} could decide: the runner's speed changed under the test, \
+         the engine's time varied between passes, or the host was busy during a case over \
+         budget, so the measurement can't be trusted: {drifted:?}"
     );
 }
 
