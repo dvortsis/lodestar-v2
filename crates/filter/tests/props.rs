@@ -404,12 +404,13 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 }
 
 /// [`calibrate`]'s fastest pass per torrent on the reference runner, in
-/// nanoseconds: an AMD EPYC 7763, the most common hosted runner (10.7 µs,
-/// the lowest of jobs 120136591749, 120136592052, 120136592177 and
-/// 120136592216). The budget holds on hardware like users run, not only
-/// on the fastest runners (owner, 2026-10-23: "Go with whatever makes for
-/// the best user experience"); a runner as fast as the Xeon 6973P-C
-/// (7.2 µs) reads its times about 1.5× higher.
+/// nanoseconds: an AMD EPYC 7763, the most common hosted runner (10.45 µs,
+/// the lowest of the 37 jobs listed in [`REFERENCE`], 2026-10-31..11-05;
+/// it was 10.7 µs from four jobs on 2026-10-22). The budget holds on
+/// hardware like users run, not only on the fastest runners (owner,
+/// 2026-10-23: "Go with whatever makes for the best user experience"); a
+/// runner as fast as the Xeon 6973P-C (7.2 µs) reads its times about 1.5×
+/// higher.
 ///
 /// To derive it for a runner type, run the budget test on a runner of
 /// that type (the log's CPU line names it) and take the `calibration:`
@@ -418,25 +419,30 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 /// toolchain isn't pinned, and the calibration is all std: SipHash, the
 /// hash set, `sort_unstable`), or a change to [`calibrate`], [`torrents`]
 /// or [`COMMON`]. The test prints `rustc --version` to tell.
-const CALIB_REF_NS: f64 = 10_700.0;
+const CALIB_REF_NS: f64 = 10_450.0;
 
 /// [`calibrate`]'s fastest pass per torrent on a typical reference
-/// runner, in nanoseconds: the median over the 29 EPYC 7763 jobs listed
-/// in [`REFERENCE`] (9.83-11.34 µs). The reference reads its raw times,
-/// which is what a typical 7763 host runs, so a listed model's host is
-/// measured against the typical 7763's calibration, not the fastest's
-/// ([`CALIB_REF_NS`], which stays the fallback for unlisted models).
-/// Re-derive it on the same triggers as [`CALIB_REF_NS`]; its jobs ran
-/// rustc 1.99.1.
-const CALIB_TYPICAL_NS: f64 = 11_090.0;
+/// runner, in nanoseconds: the median over the 37 EPYC 7763 jobs listed
+/// in [`REFERENCE`] (10.45-11.92 µs; it was 11.09 µs over 29 jobs on
+/// 2026-10-29..30). 7763 hosts calibrate in two bands, about 10.5 and 11.0
+/// µs, at the same engine time, and by 2026-11-04 nearly every job drew the
+/// faster one (`docs/decisions/2026-11-05-X-filter-budget-noise.md`). The
+/// reference reads its raw times, which is what a typical 7763 host runs,
+/// so a listed model's host is measured against the typical 7763's
+/// calibration, not the fastest's ([`CALIB_REF_NS`], which stays the
+/// fallback for unlisted models).
+/// Re-derive it on the same triggers as [`CALIB_REF_NS`], and when the
+/// 7763's `calibration:` lines move off it for good; its jobs ran rustc
+/// 1.99.1.
+const CALIB_TYPICAL_NS: f64 = 10_590.0;
 
 /// How a hosted runner model runs the engine compared with the
 /// calibration, as a share of the same on the reference runner.
 struct EngineSpeed {
     /// Matched against the CPU line's model name.
     model: &'static str,
-    /// The median over the model's jobs of the mixed set's raw time ÷ the
-    /// calibration's, ÷ the same on the 7763 at the same code.
+    /// The median over the model's jobs of the mixed set's raw time (its
+    /// third-fastest pass) ÷ the calibration's, ÷ the same on the 7763.
     skew: f64,
     /// The `filter budget` jobs it's derived from (run IDs), when they
     /// ran, and the code they ran.
@@ -456,53 +462,62 @@ impl EngineSpeed {
 /// The reference runner, read raw: its times are the budget's
 /// microseconds. Its jobs set [`CALIB_TYPICAL_NS`] and the mixed set's
 /// time ÷ the calibration's that every [`ENGINE_SPEED`] skew is measured
-/// against: 4.09 µs per calibration µs at `2d5e761d..f2ee0951` before
-/// #196 (24 jobs), 3.93 after (5 jobs).
+/// against: 4.02 µs per calibration µs over these jobs (3.82-4.20; it was
+/// 3.93 over five jobs on 2026-10-30). The code range is the first and
+/// last job's head, across branches.
 const REFERENCE: EngineSpeed = EngineSpeed {
     model: "EPYC 7763",
     skew: 1.0,
     runs: &[
-        41060388132,
-        41055449266,
-        41054094982,
-        41049498646,
-        41044878037,
-        41044132796,
-        41043907080,
-        41041666063,
-        41040631957,
-        41040270140,
-        41035649874,
-        41032038396,
-        41029625857,
-        41027904941,
-        41024264027,
-        41022335477,
-        41018406044,
-        41018370367,
-        41016853875,
-        41016836536,
-        41016556547,
-        41013719520,
-        41011318136,
-        41010444426,
-        41009227540,
-        41008256126,
-        41005542890,
-        41004752665,
-        40845396409,
+        41945426619,
+        41942305919,
+        41940903202,
+        41935549308,
+        41935241853,
+        41933423478,
+        41932987039,
+        41922199112,
+        41920437564,
+        41919199999,
+        41915886307,
+        41912491340,
+        41908869737,
+        41903017195,
+        41532566763,
+        41489296472,
+        41473555316,
+        41466645299,
+        41458033765,
+        41451433046,
+        41431099240,
+        41359684569,
+        41356515182,
+        41345438561,
+        41330895188,
+        41305628508,
+        41301948554,
+        41246113451,
+        41236509974,
+        41231734520,
+        41222848579,
+        41221310305,
+        41220229135,
+        41210184355,
+        41208775894,
+        41200425685,
+        41194830646,
     ],
-    dates: "2026-10-29..30",
-    code: "2d5e761d..2b61d89d, before and after #196",
+    dates: "2026-10-31..11-05",
+    code: "a3243b7d..e481c6df",
 };
 
 /// The mixed set's raw time ÷ the calibration's on the reference, at the
-/// code the gate runs: the median of [`REFERENCE`]'s jobs since #196.
+/// code the gate runs: the median of [`REFERENCE`]'s jobs.
 /// Only the drift warning reads it: the skews are ratios taken at the same
 /// code, so an engine change moves them alike. Re-derive it when the
 /// engine's speed changes much (the test prints the ratio on every job),
 /// and on the same triggers as [`CALIB_REF_NS`].
-const REFERENCE_RATIO: f64 = 3.93;
+const REFERENCE_RATIO: f64 = 4.02;
 
 /// The engine's speed on each other hosted runner model seen. A job on a
 /// listed model is scaled by its own calibration against
@@ -519,8 +534,8 @@ const REFERENCE_RATIO: f64 = 3.93;
 /// (`docs/decisions/2026-10-30-X-filter-budget-8573C.md`).
 ///
 /// To add a model, take its jobs' raw `mixed` µs ÷ `calibration:` µs and
-/// divide each by the reference's median at the same code (the eras
-/// above, 4.09 and 3.93); the skew is the median over all its eligible
+/// divide each by the reference's median at the same code
+/// ([`REFERENCE_RATIO`]); the skew is the median over all its eligible
 /// jobs. Re-deriving uses the same formula over all eligible jobs, in a
 /// PR with its own decisions file. Re-derive them all when the toolchain
 /// or the calibration changes: the test prints each job's ratio, and
@@ -531,72 +546,70 @@ const REFERENCE_RATIO: f64 = 3.93;
 /// runs and the arithmetic (runner, 2026-10-30): the table never moves to
 /// make a run pass.
 const ENGINE_SPEED: &[EngineSpeed] = &[
-    // 1.112-1.181 over its jobs.
+    // 1.070-1.143 over its jobs.
     EngineSpeed {
         model: "8573C",
-        skew: 1.126,
+        skew: 1.097,
         runs: &[
-            41065412960,
-            41038382885,
-            41036553722,
-            41015045891,
-            41014951807,
-            41008099448,
-            41006514676,
-            41005580320,
-            41005421892,
+            41919270308,
+            41904747201,
+            41439674586,
+            41433116185,
+            41339386827,
         ],
-        dates: "2026-10-30",
-        code: "e8f50d58..6c7bcef3, before and after #196",
+        dates: "2026-11-01..11-04",
+        code: "38789bcb..5bebdb89",
     },
-    // 0.861-0.945.
+    // 0.892-0.965 over its jobs.
     EngineSpeed {
         model: "EPYC 9V45",
-        skew: 0.894,
+        skew: 0.944,
         runs: &[
-            41055481261,
-            41054208363,
-            41051280541,
-            41048269928,
-            41035050970,
-            41029959417,
-            41028071535,
-            41025649623,
-            41024152492,
-            41014655186,
-            41013412376,
-            41006310085,
-            40660530001,
+            41945810509,
+            41939178877,
+            41920858097,
+            41911139684,
+            41908317816,
+            41517600122,
+            41315681318,
+            41206854675,
         ],
-        dates: "2026-10-28..30",
-        code: "2d5e761d..f2ee0951, before and after #196",
+        dates: "2026-10-31..11-05",
+        code: "29201097..b08e161f",
     },
-    // 0.905-0.934.
+    // 0.877-0.995 over its jobs.
     EngineSpeed {
         model: "EPYC 9V74",
-        skew: 0.913,
+        skew: 0.922,
         runs: &[
-            41062154866,
-            41059977277,
-            41057808450,
-            41057663596,
-            41046740404,
-            41046258692,
-            41041114029,
-            41040381547,
-            41028659383,
-            41008473155,
+            41937126100,
+            41935234631,
+            41930504493,
+            41925822797,
+            41916664314,
+            41913257284,
+            41904743381,
+            41465630405,
+            41361833457,
+            41354931099,
+            41352406885,
+            41342560026,
+            41296743871,
+            41253319480,
+            41228842689,
+            41217026016,
+            41204310448,
         ],
-        dates: "2026-10-30",
-        code: "926e0529..00da08a4, before and after #196",
+        dates: "2026-10-31..11-05",
+        code: "5f012f2b..e2f578e8",
     },
-    // 1.022-1.110; provisional, from 3 jobs.
+    // 1.033-1.048 over its jobs; provisional, from 4 jobs.
     EngineSpeed {
         model: "8370C",
-        skew: 1.034,
-        runs: &[41047639541, 41033584211, 41014261444],
-        dates: "2026-10-30",
-        code: "47fe54e0..5c88c659, before and after #196",
+        skew: 1.038,
+        runs: &[41937536173, 41931557263, 41914687461, 41908571127],
+        dates: "2026-11-04..11-05",
+        code: "38fd9309..7e02eacd",
     },
 ];
 
@@ -791,20 +804,20 @@ fn the_reference_reads_raw() {
 
 #[test]
 fn an_unlisted_model_scales_by_the_calibration() {
-    let s = scaling("AMD EPYC 9999 Processor", 8.56, 40.0);
+    let s = scaling("AMD EPYC 9999 Processor", 8.36, 40.0);
     assert!((s.speed - 0.8).abs() < 1e-9, "{}", s.speed);
-    assert_eq!(s.speed, 8.56e3 / CALIB_REF_NS);
+    assert_eq!(s.speed, 8.36e3 / CALIB_REF_NS);
     assert!(s.notes.iter().any(|n| n.contains("isn't in ENGINE_SPEED")));
 }
 
 #[test]
 fn a_listed_model_scales_by_its_calibration_and_skew() {
     // #210's job 124095631213: calibration 9.86 µs, mixed 43.4 µs.
-    // 9.86 ÷ 11.09 × 1.126 = 1.001115.
+    // 9.86 ÷ 10.59 × 1.097 = 1.021381.
     let s = scaling("INTEL(R) XEON(R) PLATINUM 8573C", 9.86, 43.4);
-    assert!((s.speed - 1.001115).abs() < 1e-6, "{}", s.speed);
-    assert!((48.0 / s.speed - 47.95).abs() < 0.01);
-    // Its skew (43.4 ÷ 9.86 ÷ 3.93 = 1.120) is within MODEL_DRIFT.
+    assert!((s.speed - 1.021381).abs() < 1e-6, "{}", s.speed);
+    assert!((48.0 / s.speed - 47.00).abs() < 0.01);
+    // Its skew (43.4 ÷ 9.86 ÷ 4.02 = 1.095) is within MODEL_DRIFT.
     assert!(s.notes.iter().all(|n| !n.starts_with("::warning::")));
 }
 
