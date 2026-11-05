@@ -1,4 +1,4 @@
-# X-source-adult-2 decisions (always-adult mask on corrections and imports)
+# X-source-adult-2 decisions (#494): always-adult mask on corrections and imports
 
 Slice X-source-adult-2 (runner brief, 2026-11-05T10:20Z). It closes the first two of the gaps that `2026-11-05-X-source-adult.md` says must close before Sukebei is registered: **`crates/api` corrections** and **imports**. This file supersedes those two bullets. That file is left as it is, as `docs/decisions/README.md` asks. The other two gaps there are still open: stopped and purged sources (the runner's call), and the plugin's registration.
 
