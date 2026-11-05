@@ -22,25 +22,40 @@ Runner brief X-mimalloc-override, 2026-11-04 (an rc.4 candidate; auto-approved u
 - **`sqlite3_memory_used` still reports.** SQLite keeps its own count whatever `malloc` is: 9.2 MiB after 10k torrents in both arms below.
 
 ## Measurement (musl via cargo-zigbuild 0.24.0, zig 0.17.0, x86_64, 4 vCPUs, 2026-11-05)
-`mem-cheap 10000 6`: 10k torrents at one commit each, 6 reader tasks, 34 threads at the end. "Outside" is anonymous memory outside mimalloc's arena (anonymous regions under 256 MiB, adjacent mappings merged).
+`mem-cheap 10000 6`: 10k torrents at one commit each, 6 reader tasks, 35 threads at the end, on an otherwise idle machine, `override` on first. Counts are the kernel's own anonymous mappings from `/proc/self/smaps`, as r4 counted them. "Outside" means outside mimalloc's arena. Adjacent mappings are merged only to find the arena: one run of 1024.0 MiB in both arms, so no neighbour was counted as arena.
 
-Pair 2 ran on an otherwise idle machine, `override` on first. Pair 1 ran `override` off first, and a workspace clippy build ran alongside the first half of its off arm, so only pair 2's latency is quoted.
+The 128-512 KiB bucket outside the arena, which holds r4's growth, and all of the outside memory, every 1,000 torrents:
 
-| After 10k torrents | Off, pair 2 | On, pair 2 | Off, pair 1 | On, pair 1 |
-| --- | --- | --- | --- | --- |
-| Outside the arena, start → end | 5.2 → 18.2 MiB | 0.3 → 0.8 MiB | 5.2 → 35.0 MiB | 0.3 → 0.8 MiB |
-| Outside mappings < 128 KiB, start → end | 1 → 150 | 1 → 1 | 2 → 232 | 1 → 1 |
-| Outside mappings 128-512 KiB, start → end | 5 → 44 | 0 → 0 | 6 → 131 | 0 → 0 |
-| `RssAnon` at 5k / 10k | 266.9 / 302.5 MiB | 298.0 / 300.7 MiB | 254.8 / 290.4 MiB | 310.6 / 307.8 MiB |
-| mimalloc committed at 10k | 370.8 MiB | 384.2 MiB | 320.2 MiB | 384.3 MiB |
-| SQLite's own count at 10k | 9.2 MiB | 9.2 MiB | 9.2 MiB | 9.2 MiB |
-| Store write (one transaction) p50 / p99 | 0.27 / 6.51 ms | 0.26 / 6.54 ms | | |
-| Index commit p50 / p99 | 28.13 / 59.82 ms | 27.37 / 59.59 ms | | |
-| Search plus row and file reads p50 / p99 | 0.54 / 3.45 ms | 0.56 / 3.53 ms | | |
+| Torrents | Off: mappings | Off: Private_Dirty | Off: all outside, dirty | On: mappings | On: Private_Dirty | On: all outside, dirty |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 6 | 1.1 MiB | 5.2 MiB | 0 | 0.0 MiB | 0.3 MiB |
+| 1,000 | 20 | 2.6 MiB | 9.2 MiB | 0 | 0.0 MiB | 0.7 MiB |
+| 2,000 | 22 | 2.8 MiB | 11.3 MiB | 0 | 0.0 MiB | 0.7 MiB |
+| 3,000 | 26 | 3.1 MiB | 12.2 MiB | 0 | 0.0 MiB | 0.7 MiB |
+| 4,000 | 26 | 3.1 MiB | 10.8 MiB | 0 | 0.0 MiB | 0.8 MiB |
+| 5,000 | 31 | 3.6 MiB | 11.7 MiB | 0 | 0.0 MiB | 0.8 MiB |
+| 6,000 | 38 | 4.6 MiB | 13.7 MiB | 0 | 0.0 MiB | 0.8 MiB |
+| 7,000 | 40 | 4.8 MiB | 16.2 MiB | 0 | 0.0 MiB | 0.8 MiB |
+| 8,000 | 49 | 5.9 MiB | 18.1 MiB | 0 | 0.0 MiB | 0.8 MiB |
+| 9,000 | 56 | 6.8 MiB | 19.7 MiB | 0 | 0.0 MiB | 0.8 MiB |
+| 10,000 | 63 | 7.8 MiB | 20.6 MiB | 0 | 0.0 MiB | 0.8 MiB |
 
-- **The outside-arena climb is gone.** Without `override`, the C heap's mappings keep multiplying in r4's 128-512 KiB pattern, and their memory grows the whole run. That's 13 MiB over 10k torrents idle, and 30 MiB with more threads busy. With it, nothing is left outside the arena but thread stacks: no 128-512 KiB mapping, and 0.8 MiB flat from the first thousand torrents on.
-- **The bytes move into the arena,** as expected: mimalloc's committed bytes end 13-64 MiB higher. In this harness the total `RssAnon` is dominated by the search indexer's working memory inside the arena, which swings 270-325 MiB from sample to sample. So 10k torrents can't show whether the total stops climbing. Its outside-arena part does. The soak (r5) is the test of the total.
-- **No latency cost:** every p50 and p99 is within 4% between the arms.
+| At 10k torrents | `override` off | `override` on |
+| --- | --- | --- |
+| Outside mappings < 128 KiB (start → end) | 3 → 166, 7.0 MiB | 3 → 3, 0.1 MiB |
+| Outside mappings 512 KiB-2 MiB / 2-16 MiB | 3 / 34, 5.8 MiB | 0 / 34, 0.7 MiB (thread stacks) |
+| `RssAnon` | 265.6 MiB | 271.1 MiB |
+| mimalloc committed | 352.3 MiB | 384.2 MiB |
+| SQLite's own count | 9.1 MiB | 9.2 MiB |
+| Store write (one transaction) p50 / p99 | 0.27 / 6.70 ms | 0.26 / 6.81 ms |
+| Index commit p50 / p99 | 27.83 / 59.86 ms | 26.71 / 57.95 ms |
+| Search plus row and file reads p50 / p99 | 0.55 / 3.50 ms | 0.55 / 3.32 ms |
+
+- **With `override`, the 128-512 KiB bucket stays at 0 the whole run,** and everything outside the arena stays at 0.7-0.8 MiB from the first thousand torrents on. That's thread stacks, not C heap. So there's no sign of a leak in C code (SQLite, zstd contexts): their memory is now in mimalloc's arena, where it's reused.
+- **Without it, the bucket grows steadily,** from 6 to 63 mappings and from 1.1 to 7.8 MiB dirty. That's about 125 KiB dirty per mapping, the same shape as r4's about 120 kB. Smaller mappings grow too (3 → 166). Outside memory goes from 5.2 to 20.6 MiB. The rate, about 0.006 new 128-512 KiB mappings per torrent, is far below r4's about 0.2. The harness has far less than production's per-torrent C work (no DHT, peer wire, claims or 33 long-lived threads). So it shows the mechanism, not production's slope.
+- **Two earlier pairs** with the first version of the harness agreed. That version merged adjacent mappings before counting, so its counts aren't r4's measure. With `override` it found no 128-512 KiB region in either pair. Without it, outside memory grew 13 MiB and 30 MiB; the 30 MiB pair ran beside a clippy build, so more threads were busy.
+- **The bytes move into the arena,** as expected: mimalloc's committed bytes end about 32 MiB higher. Total `RssAnon` is dominated by the search indexer's working memory inside the arena, which swings 240-300 MiB from sample to sample. So 10k torrents can't show whether the total stops climbing; the outside-arena part does. The soak (r5) is the test of the total.
+- **No latency cost:** every p50 and p99 is within 6% between the arms.
 
 ## Follow-ups (not in this PR)
 - **The soak analyzer** (`docs/soak/tools/analyze_cr0.py`, owned by X-mem-gauges-2 until #442 merges) computes other heap as `RssAnon − mimalloc − SQLite` whenever SQLite is present. With `override` that subtracts SQLite twice, so the release builds' other heap reads about `mem_sqlite_bytes` too low. It needs to subtract SQLite only for builds without `override`, or always label the musl figure "RssAnon − mimalloc". Listed for the runner.
