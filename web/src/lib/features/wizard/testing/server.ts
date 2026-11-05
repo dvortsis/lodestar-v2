@@ -5,7 +5,7 @@ import type { components } from '$lib/api/schema';
 import { applied, finished, strengthening, weakening } from '../../filters/flows/testing/fixtures';
 import { WIZARD_INDEX, wizardValues } from './fixtures';
 
-export const PACK_IDS = ['malware', 'lures', 'fakes', 'spam', 'scams'];
+export const PACK_IDS = ['malware', 'lures', 'fakes', 'spam', 'scams', 'unauthorised-copy'];
 /** The admin password the fake server accepts for a weakening change. */
 export const PASSWORD = 'correct horse';
 type Assessment = ReturnType<typeof strengthening>;

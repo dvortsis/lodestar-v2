@@ -1197,10 +1197,6 @@ mod tests {
         .unwrap()
     }
 
-    /// The id sequence starts after every id torrents has ever used,
-    /// including deleted ones.
-    /// Migrations apply above the newest recorded one, so a gap (a
-    /// number merged out of order) would be skipped forever.
     fn fresh_marker(conn: &Connection) -> Option<String> {
         conn.query_row(
             "SELECT value FROM settings WHERE key = ?1",
@@ -1254,6 +1250,8 @@ mod tests {
         assert_eq!(tables, 0);
     }
 
+    /// Migrations apply above the newest recorded one, so a gap (a
+    /// number merged out of order) would be skipped forever.
     #[test]
     fn versions_are_contiguous() {
         for (i, (v, _)) in MIGRATIONS.iter().enumerate() {
@@ -1261,6 +1259,8 @@ mod tests {
         }
     }
 
+    /// The id sequence starts after every id torrents has ever used,
+    /// including deleted ones.
     #[test]
     fn v2_seeds_the_id_sequence_from_existing_ids() {
         let mut conn = Connection::open_in_memory().unwrap();

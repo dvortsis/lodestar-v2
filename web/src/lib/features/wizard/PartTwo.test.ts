@@ -164,7 +164,8 @@ describe('rule-pack step, fresh install (RP-DEF): every pack on, opt out', () =>
 		expect(server.packs.filter((p) => p.on).map((p) => p.id)).toEqual([
 			'malware',
 			'lures',
-			'fakes'
+			'fakes',
+			'unauthorised-copy'
 		]);
 	});
 
@@ -211,9 +212,9 @@ describe('rule-pack step, existing install with packs off: offered, not flipped'
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Blocklists');
 		const bodies = applies().map((c) => c.body as { change: { on: boolean }; password?: string });
-		expect(bodies).toHaveLength(4);
+		expect(bodies).toHaveLength(5);
 		expect(bodies.every((b) => b.change.on === true && !('password' in b))).toBe(true);
-		expect(posts().filter((c) => c.path === '/filters/preview/jobs')).toHaveLength(4);
+		expect(posts().filter((c) => c.path === '/filters/preview/jobs')).toHaveLength(5);
 		expect(server.packs.find((p) => p.id === 'spam')!.on).toBe(false);
 		expect(progress().done).toContain('packs');
 	});
@@ -244,7 +245,7 @@ describe('rule-pack step, existing install with packs off: offered, not flipped'
 		);
 		expect((await box('malware')).checked).toBe(true);
 		expect(applies()).toHaveLength(2);
-		expect(server.packs.map((p) => p.on)).toEqual([true, false, false, false, false]);
+		expect(server.packs.map((p) => p.on)).toEqual([true, false, false, false, false, false]);
 		// The user's choice for the others is kept, so Continue tries them again.
 		for (const id of PACK_IDS.slice(1)) expect((await box(id)).checked).toBe(true);
 	});
@@ -294,7 +295,7 @@ describe('rule-pack step, existing install with packs off: offered, not flipped'
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Blocklists');
 		const bodies = applies().map((c) => c.body as { change: { id: string; on: boolean } });
-		expect(bodies).toHaveLength(6);
+		expect(bodies).toHaveLength(7);
 		expect(bodies.every((b) => b.change.on === true)).toBe(true);
 		expect(server.packs.every((p) => p.on)).toBe(true);
 	});
