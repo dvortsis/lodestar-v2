@@ -838,6 +838,14 @@ impl Writer {
             .filter(|(i, _, _, _)| committing[*i].results.source_adult)
             .map(|&(_, id, _, _)| id)
             .collect();
+        // Rows already stored that this commit rewrote (a partial import's
+        // upgrade writes prepare's record, which knows no match: ENR-1b).
+        let rewritten: Vec<i64> = outcome
+            .stored
+            .iter()
+            .filter(|s| !s.2)
+            .map(|s| s.1)
+            .collect();
         let committed_at = unix_now();
         let mut cache_stored = Vec::new();
         for (i, id, new, _) in outcome.stored {
@@ -990,6 +998,13 @@ impl Writer {
             return cache_stored;
         }
         self.adult_by_source(adult_ids).await;
+        // A few point reads, and only for refetches: the backfill applies
+        // the stored match again.
+        if let Some(store) = self.store.as_mut()
+            && crate::enrich::mark_matched(store, &rewritten).is_ok_and(|m| !m.is_empty())
+        {
+            self.reenrich.store(true, Ordering::Release);
+        }
         if self.have.is_full() {
             self.rebuild_have().await;
         }
