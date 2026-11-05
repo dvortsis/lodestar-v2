@@ -4921,7 +4921,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T00:34Z",
+    "updated": "2026-11-05T00:35Z",
     "items": [
       {
         "slot": 1,
@@ -4946,14 +4946,6 @@
         "agent": "claude",
         "doing": "Building the Internet Archive source. Pull request open.",
         "since": "2026-11-04T05:41:51Z"
-      },
-      {
-        "slot": 6,
-        "slice": "X-mem-gauges-2",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #442: three small gauge and soak-report fixes before soak r5 (on reused branch slice/X-mem-gauges).",
-        "since": "2026-11-04T20:55Z"
       },
       {
         "slot": 7,
