@@ -71,6 +71,7 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
   - [5.2 Inspect a torrent](05-use-lodestar.md#52-inspect-a-torrent)
   - [5.3 Browse Discover and Insights](05-use-lodestar.md#53-browse-discover-and-insights)
   - [5.4 Choose where Lodestar finds torrents (Settings → Sources)](05-use-lodestar.md#54-choose-where-lodestar-finds-torrents-settings--sources)
+  - [5.5 Connect Sonarr and Radarr](05-use-lodestar.md#55-connect-sonarr-and-radarr)
 - [Chapter 6: Troubleshooting](06-troubleshooting.md)
   - [6.1 Common problems](06-troubleshooting.md#61-common-problems)
   - [6.2 Fix a Magnetico import refused as in use](06-troubleshooting.md#62-fix-a-magnetico-import-refused-as-in-use)

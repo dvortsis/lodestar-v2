@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 1.8 | 2026-11-05 | Added section 5.5 on connecting Sonarr and Radarr, a glossary entry, and corrected the list of sources in section 5.4. |
 | 1.7 | 2026-11-05 | Added section 6.2 on a Magnetico import refused as in use, and a row for it in section 6.1. |
 | 1.6 | 2026-11-05 | Added section 5.4 on Settings → Sources, its rows in Appendix B, and two glossary entries. |
 | 1.5 | 2026-11-04 | Added the lawful-use note and the Legal Notice link to section 1.2, and qualified the traffic takeaway. |
