@@ -4964,22 +4964,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T01:40Z",
+    "updated": "2026-11-05T01:52Z",
     "items": [
-      {
-        "slot": 1,
-        "slice": "X-mimalloc-override",
-        "role": "build",
-        "agent": "claude",
-        "doing": "PR #448 in review: mimalloc override on the musl release build; harness shows the 128-512 KiB outside-arena mappings go to zero.",
-        "since": "2026-11-04T23:38Z"
-      },
       {
         "slot": 3,
         "slice": "R-rc4-cut",
         "role": "build",
         "agent": "claude",
-        "doing": "Bringing the memory and log-redaction fixes onto the release branch for rc.4 (soak r4 failed its memory gate).",
+        "doing": "PR #450 into release/v0.5.1: memory and redaction fixes for rc.4; adding the allocator fix (#448) next.",
         "since": "2026-11-05T01:12Z"
       },
       {
