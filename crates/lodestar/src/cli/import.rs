@@ -804,9 +804,9 @@ fn sealer(config: &Config) -> Option<Sealer> {
 }
 
 /// The sources in the store whose plugin's manifest says `always_adult`
-/// (Sukebei), whatever their state: a stopped one's claims still mark what
-/// it found as adult. The import runs without the pipeline, so it reads
-/// the manifests compiled into this build.
+/// (Sukebei). The import runs without the pipeline, so it reads the
+/// manifests compiled into this build; the store leaves a disabled or
+/// purged one's bit out, as the writer does (SRC-14b).
 fn adult_sources(
     store: &Store,
 ) -> lodestar_store::Result<lodestar_pipeline::source_adult::AdultSources> {

@@ -659,3 +659,30 @@ async fn a_store_imported_into_before_serving_is_seeded_fresh_and_served_with_pa
         Some("1")
     );
 }
+
+/// The import's always-adult mask (X-source-adult-2): Sukebei's bit only,
+/// matched by its manifest id, with the Adult content-type code the store
+/// marks against; nothing while Sukebei isn't registered.
+#[test]
+fn the_import_marks_only_sukebeis_bit() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    store.register_source("magnetico", "1", 0).unwrap();
+    assert!(adult_sources(&store).unwrap().is_empty());
+    let sukebei = store
+        .register_source_as(
+            lodestar_sources_plugins::nyaa::SUKEBEI_ID,
+            "1",
+            lodestar_store::SourceState::Disabled,
+            0,
+        )
+        .unwrap();
+    store.register_source("nyaa", "1", 0).unwrap();
+    let mask = adult_sources(&store).unwrap();
+    assert_eq!(mask.0, 1u64 << sukebei.get());
+    let mark = mask.store_mark();
+    assert_eq!(mark.sources, 1u64 << sukebei.get());
+    assert_eq!(
+        mark.content_type,
+        lodestar_classify::ContentType::Adult.code()
+    );
+}

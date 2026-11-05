@@ -438,3 +438,66 @@ impl Refiling {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::CoreRule;
+
+    #[test]
+    fn source_adult_adds_is_adult_unless_you_said_not_adult() {
+        let mask = 1 << 4;
+        let c = |adult, not_junk| Correction { adult, not_junk };
+        // Cleared, or Not junk only: Is adult added.
+        assert_eq!(
+            source_adult(c(None, false), 1 << 4 | 1, mask),
+            c(Some(true), false)
+        );
+        assert_eq!(
+            source_adult(c(None, true), 1 << 4, mask),
+            c(Some(true), true)
+        );
+        // Yours stands either way.
+        assert_eq!(
+            source_adult(c(Some(false), true), 1 << 4, mask),
+            c(Some(false), true)
+        );
+        assert_eq!(
+            source_adult(c(Some(true), false), 1 << 4, mask),
+            c(Some(true), false)
+        );
+        // Not found by an always-adult source, or none registered.
+        assert_eq!(source_adult(c(None, false), 1, mask), c(None, false));
+        assert_eq!(source_adult(c(None, false), 1 << 4, 0), c(None, false));
+    }
+
+    #[test]
+    fn stricter_keeps_the_heavier_decision_and_every_shadow() {
+        let d = |action| Decision {
+            rule: RuleRef::Core(CoreRule::Cs5a),
+            action,
+            evidence: vec![],
+        };
+        let s = stricter(
+            Verdict {
+                decision: Some(d(Action::Flag)),
+                shadow: vec![d(Action::Hide)],
+            },
+            Verdict {
+                decision: Some(d(Action::Quarantine)),
+                shadow: vec![d(Action::Hide), d(Action::Drop)],
+            },
+        );
+        assert_eq!(s.decision.unwrap().action, Action::Quarantine);
+        assert_eq!(s.shadow.len(), 2);
+        // A tie keeps the first's.
+        let tie = stricter(
+            Verdict {
+                decision: Some(d(Action::Flag)),
+                shadow: vec![],
+            },
+            Verdict::default(),
+        );
+        assert_eq!(tie.decision.unwrap().action, Action::Flag);
+    }
+}

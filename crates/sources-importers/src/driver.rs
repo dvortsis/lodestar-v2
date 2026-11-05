@@ -676,12 +676,12 @@ fn judge_torrent(
         files: &files,
         content_type: class.content_type,
     };
-    // A hash on the floor's or a dropping list first, either way (and the
-    // record is held, so what's stored doesn't matter); a Not adult rule
-    // never un-adults a claimed one.
-    let (verdict, fix) = match filter.engine.blocked_hash(item.hashes) {
-        None if adult => reclassify::judge_source_adult(filter.engine, &item, &facts, now),
-        _ => reclassify::judge_with_rules(filter.engine, &item, &class, &facts, now),
+    let (verdict, fix) = if adult {
+        // The floor's hit comes back alone, and a dropping list's drop wins
+        // the stricter verdict; a Not adult rule never un-adults it.
+        reclassify::judge_source_adult(filter.engine, &item, &facts, now)
+    } else {
+        reclassify::judge_with_rules(filter.engine, &item, &class, &facts, now)
     };
     // Your classification rule, or the source, changes what's stored
     // (§20.9).

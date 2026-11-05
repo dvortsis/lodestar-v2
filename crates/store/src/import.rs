@@ -1609,7 +1609,9 @@ fn candidate_privacy(tx: &Transaction<'_>, hashes: &[InfoHash]) -> Result<Option
 }
 
 /// The always-adult sources in `mark` among the finders of unverified
-/// items under `hashes`, as a bitset.
+/// items under `hashes`, as a bitset. A disabled or purged source's bit is
+/// left out, as `Store::write` and `Store::promote` leave it out (SRC-14b;
+/// the X-source-adult decisions leave that question to the runner).
 fn adult_finders(conn: &Connection, mark: AdultMark, hashes: &[InfoHash]) -> Result<u64> {
     if mark.sources == 0 {
         return Ok(0);
@@ -1626,7 +1628,11 @@ fn adult_finders(conn: &Connection, mark: AdultMark, hashes: &[InfoHash]) -> Res
             .optional()?;
         bits |= found.unwrap_or(0) as u64;
     }
-    Ok(bits & mark.sources)
+    let bits = bits & mark.sources;
+    if bits == 0 {
+        return Ok(0);
+    }
+    Ok(bits & !crate::sources::stopped_mask(conn)?)
 }
 
 /// A torrent an always-adult source has claimed, as an unverified item
@@ -1665,13 +1671,15 @@ fn commit_torrent(
         return Ok(held_outcome(held));
     }
     if let Some(id) = find_any(tx, hashes.iter().copied())? {
+        // A claim under any of the record's hashes concerns the stored row,
+        // whatever becomes of this record.
+        adult_claimed(tx, id, &hashes, adult_mark)?;
         // The stored row's own filter state stands (§20.9 refiles stored
         // torrents); a held decision only keeps this record out.
         if let Some(held) = t.decision.held() {
             return Ok(held_outcome(held));
         }
         merge(tx, id, batch, t.privacy)?;
-        adult_claimed(tx, id, &hashes, adult_mark)?;
         return Ok(RecordOutcome::Merged(id));
     }
     filter::write(tx, t.decision.hits)?;
@@ -2413,6 +2421,12 @@ mod tests {
             store.adult_finders(&[b.info_hash, a.info_hash]).unwrap(),
             adult.bit() as u64
         );
+        // A disabled source's bit is left out, as the writer leaves it out.
+        store
+            .set_source_state(adult, crate::SourceState::Disabled)
+            .unwrap();
+        assert_eq!(store.adult_finders(&[a.info_hash]).unwrap(), 0);
+        store.enable_source(adult, None).unwrap();
         let torrent = |p| {
             ImportRecord::Torrent(ImportTorrent {
                 torrent: p,
