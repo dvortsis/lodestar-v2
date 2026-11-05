@@ -1245,9 +1245,8 @@ fn budget() {
 /// instruction counts don't move with the runner (§20.8). `LODESTAR_PROFILE`
 /// picks the case: `core`, `mixed` (the default), `neutralized`, or one
 /// shape at 10% ([`shape_rules`]): `near`, `negation`, `fuzzy`, `prefix` or
-/// `title`. A
-/// warm-up pass first, so the counts are a judgment's, not the index
-/// build's:
+/// `title`. A warm-up pass first, so the counts are a judgment's, not the
+/// index build's:
 /// `valgrind --tool=callgrind --toggle-collect='*profile_pass*' target/release/deps/props-* --ignored --exact profile`.
 #[test]
 #[ignore]

@@ -323,7 +323,7 @@ pub fn changelog_entry(rule: PackRule, version: u32) -> Option<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::core::Item;
     use crate::matcher::Facts;
@@ -491,7 +491,7 @@ mod tests {
     /// A deterministic set of torrents over every pack rule's evidence and
     /// guards: the per-rule golden below hashes which of them each rule
     /// matches.
-    fn golden_set() -> Vec<(String, Vec<FileInfo>)> {
+    pub(crate) fn golden_set() -> Vec<(String, Vec<FileInfo>)> {
         const NAME: &[&str] = &[
             "movie",
             "2019",

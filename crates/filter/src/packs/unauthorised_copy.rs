@@ -428,6 +428,9 @@ mod tests {
         assert!(!allowed("Spring", None), "a common title needs its year");
         assert!(!allowed("Big Buck Bunny Returns", None));
         for (t, _) in ALLOW {
+            // `allowed` compares the title's key whole, which reads as the
+            // word-by-word match only for keys that aren't empty.
+            assert!(!t.is_empty());
             assert_eq!(title_key(t), *t, "{t} is written as its key");
         }
     }
