@@ -441,7 +441,7 @@ pub struct Stats {
 }
 
 /// A cached `.torrent` whose info dict hashes to its lookup's key. Made
-/// only by [`TorrentCache::lookup`], after that check. Its `Debug` shows
+/// only by [`verify_body`], after that check. Its `Debug` shows
 /// neither the key nor the file.
 #[derive(Clone)]
 pub struct Verified {
@@ -504,7 +504,10 @@ impl Verified {
     /// tracker's address holds the uploader's passkey, and its comment
     /// often names the tracker. Otherwise only trackers with no user name,
     /// query or passkey-shaped part are kept, and none on a literal LAN,
-    /// loopback or link-local address: the file is a third party's. Web
+    /// loopback or link-local address: the file is a third party's. A kept
+    /// tracker is the address as checked (the `url` crate's form), never
+    /// the file's own text, which a looser parser could read as another
+    /// host (X-fuzz-cache-1105). Web
     /// seeds and `created by` have no claim field yet
     /// (`docs/decisions/2026-11-05-SRC-13.md`).
     pub fn claims(&self) -> Claims {
@@ -516,8 +519,10 @@ impl Verified {
                 if out.len() >= claims::MAX_TRACKERS {
                     break;
                 }
-                if public_tracker(url) && !out.contains(url) {
-                    out.push(url.clone());
+                if let Some(url) = public_tracker(url)
+                    && !out.contains(&url)
+                {
+                    out.push(url);
                 }
             }
             out
@@ -550,16 +555,16 @@ impl Verified {
     }
 }
 
-fn public_tracker(raw: &str) -> bool {
+/// `raw` as the address that was checked, when it's a public tracker: no
+/// user name, query, fragment or passkey-shaped path segment, and not on
+/// a literal LAN, loopback or link-local address. The normalised form is
+/// what's kept, so what's stored is what was judged.
+fn public_tracker(raw: &str) -> Option<String> {
     if raw.len() > MAX_TRACKER_URL {
-        return false;
+        return None;
     }
-    let Ok(url) = url::Url::parse(raw) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
+    let url = url::Url::parse(raw).ok()?;
+    let host = url.host_str()?;
     // `check_url` takes http(s) only: a UDP tracker's host is checked as
     // the same host over http.
     let public = match url.scheme() {
@@ -568,7 +573,7 @@ fn public_tracker(raw: &str) -> bool {
             .is_ok_and(|u| net::check_url(&u, NetPolicy::notification(false)).is_ok()),
         _ => false,
     };
-    public
+    let kept = public
         && url.username().is_empty()
         && url.password().is_none()
         && url.query().is_none()
@@ -578,6 +583,8 @@ fn public_tracker(raw: &str) -> bool {
             .into_iter()
             .flatten()
             .any(|s| s.len() >= PASSKEY_MIN && s.bytes().all(|b| b.is_ascii_alphanumeric()))
+        && url.as_str().len() <= MAX_TRACKER_URL;
+    kept.then(|| url.into())
 }
 
 /// Why one cache didn't give a verified file.
@@ -732,34 +739,52 @@ impl TorrentCache {
                 Err(_) => return Err(fail(Miss::Failed)),
             }
         }
-        let mut torrent =
-            TorrentFile::parse_with(&body, &LIMITS).map_err(|_| fail(Miss::Invalid))?;
-        // The info dict as BEP 9 would deliver it: its own bytes, no hint
-        // from the file's unhashed `encoding` key.
-        let info_raw = TorrentFile::raw_info(&body, &LIMITS)
-            .map_err(|_| fail(Miss::Invalid))?
-            .to_vec();
-        drop(body);
-        torrent.info = Info::parse_with(
-            &info_raw,
-            &ParseOptions {
-                limits: LIMITS,
-                encoding_hint: None,
-            },
-        )
-        .map_err(|_| fail(Miss::Invalid))?;
-        let v2 = match verify(&torrent, &lookup.key) {
-            Some(v2) => v2,
-            None => return Err(fail(Miss::Mismatch)),
-        };
-        Ok(Verified {
-            lookup: *lookup,
-            torrent,
-            info_raw,
-            v2,
-            host: cache.host.clone(),
-        })
+        verify_body(body, lookup, &cache.host).map_err(fail)
     }
+}
+
+/// A cache's reply body, checked: parsed as a `.torrent` within
+/// [`LIMITS`], its info dict re-parsed from its raw span with no encoding
+/// hint ([`TorrentFile::raw_info`]; the file's top-level `encoding` key
+/// isn't covered by the hash), and kept only when that dict hashes to
+/// `lookup`'s key ([`verify`]). `host` is the cache it came from.
+///
+/// Sync and free of I/O, so it's fuzzed directly (`fuzz/fuzz_targets/
+/// torrent_cache.rs`); [`TorrentCache::lookup`] calls it on each body it
+/// fetches. The body is taken by value and dropped once the raw dict is
+/// copied out, so a file near the 8 MiB cap isn't held while its dict is
+/// parsed again.
+///
+/// # Errors
+/// [`Miss::Invalid`] when either parse fails, [`Miss::Mismatch`] when
+/// the dict hashes to another key. Nothing is counted here: the caller
+/// counts the miss.
+pub fn verify_body(body: Vec<u8>, lookup: &Lookup, host: &str) -> Result<Verified, Miss> {
+    let mut torrent = TorrentFile::parse_with(&body, &LIMITS).map_err(|_| Miss::Invalid)?;
+    // The info dict as BEP 9 would deliver it: its own bytes, no hint
+    // from the file's unhashed `encoding` key.
+    let info_raw = TorrentFile::raw_info(&body, &LIMITS)
+        .map_err(|_| Miss::Invalid)?
+        .to_vec();
+    drop(body);
+    torrent.info = Info::parse_with(
+        &info_raw,
+        &ParseOptions {
+            limits: LIMITS,
+            encoding_hint: None,
+        },
+    )
+    .map_err(|_| Miss::Invalid)?;
+    let Some(v2) = verify(&torrent, &lookup.key) else {
+        return Err(Miss::Mismatch);
+    };
+    Ok(Verified {
+        lookup: *lookup,
+        torrent,
+        info_raw,
+        v2,
+        host: host.to_owned(),
+    })
 }
 
 /// `config`'s hosts as manifest endpoints (`host`, or `host:port` for a
@@ -892,7 +917,7 @@ mod tests {
             "udp://tracker.example:1337/announce",
             "https://tracker.example/announce",
         ] {
-            assert!(public_tracker(ok), "{ok}");
+            assert_eq!(public_tracker(ok).as_deref(), Some(ok));
         }
         for bad in [
             "http://192.168.1.1/announce",
@@ -904,8 +929,24 @@ mod tests {
             "wss://t.example/announce",
             "https://user@t.example/announce",
         ] {
-            assert!(!public_tracker(bad), "{bad}");
+            assert_eq!(public_tracker(bad), None, "{bad}");
         }
+    }
+
+    /// The `verified_claims` fuzz target's first find (X-fuzz-cache-1105):
+    /// `http:1.1/…` is read as `http://1.0.0.1/…`, a public host, while a
+    /// looser parser could read the loopback address later in the text.
+    /// What's kept is the address as checked, never the file's text.
+    #[test]
+    fn a_tracker_is_kept_as_checked_not_as_written() {
+        let raw = "http:1.1/announce^udp://127.0.0.1:6969/announce";
+        let kept = public_tracker(raw).unwrap();
+        assert!(kept.starts_with("http://1.0.0.1/"), "{kept}");
+        assert_eq!(public_tracker(&kept).as_deref(), Some(kept.as_str()));
+        assert_eq!(
+            public_tracker("HTTPS://Tracker.Example:443/announce").as_deref(),
+            Some("https://tracker.example/announce")
+        );
     }
 
     #[test]
