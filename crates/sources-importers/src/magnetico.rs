@@ -122,8 +122,13 @@ impl fmt::Display for Refusal {
                 f.write_str("the network path isn't an approved import root")
             }
             Refusal::NotQuiescent => f.write_str(
-                "the database is in use or wasn't closed cleanly (a -wal or -journal file is \
-                 beside it): stop magneticod, or import a consistent copy",
+                "the database is in use, or changes are still waiting in the -wal or -journal \
+                 file beside it. If magneticod is running, stop it. If it has stopped, free \
+                 some disk space, then start and stop magneticod once so it writes those \
+                 changes into the database; or copy the database with its -wal file to a \
+                 folder with room and run sqlite3 database.sqlite3 \
+                 'PRAGMA wal_checkpoint(TRUNCATE);' there. A copy with a leftover -wal beside \
+                 it is refused the same way",
             ),
             Refusal::Unavailable(why @ "folder_not_writable") => write!(
                 f,
