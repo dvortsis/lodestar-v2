@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T19:48Z",
+  "updated_at": "2026-11-05T20:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3212,11 +3212,15 @@
       "done": "2026-11-05T18:50Z"
     },
     "ENR-5": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnAJ3uKHzBZaj1KJAcz",
       "since": "2026-11-05T18:15Z",
       "model": "sonnet",
-      "brief": "briefs/ENR-5.md"
+      "brief": "briefs/ENR-5.md",
+      "pr": 506,
+      "merge": "05bf6e83",
+      "archived": true,
+      "done": "2026-11-05T20:26Z"
     },
     "X-adult-catalogue": {
       "status": "running",
@@ -5510,16 +5514,8 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T19:21Z",
+    "updated": "2026-11-05T20:26Z",
     "items": [
-      {
-        "slot": 1,
-        "slice": "ENR-5",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Enrichment: the StashDB plugin, built but not registered until the terms check",
-        "since": "2026-11-05T18:15Z"
-      },
       {
         "slot": 2,
         "slice": "X-adult-catalogue",
