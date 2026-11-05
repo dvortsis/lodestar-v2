@@ -2872,7 +2872,7 @@
    "brief": "briefs/SRC-13.md"
   },
   "SRC-15a": {
-   "status": "building",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01MMjhn8e3ryLBCjNCBinA4u",
    "launched": "2026-11-05T02:31Z",
@@ -2893,7 +2893,7 @@
    "brief": "briefs/SRC-17a.md"
   },
   "SRC-11b": {
-   "status": "building",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnC9v41Szk1iokKnnJC",
    "launched": "2026-11-05T02:34Z",
@@ -3405,7 +3405,8 @@
   "2026-11-05T04:37Z #463 merged into release/v0.5.1 (dba1a5c0, docs only, on 5b840813). rc.4 tag goes on dba1a5c0 once CI+E2E are green on 5b840813 (the code tree is identical). R-rc4-cut session archived; LEGAL-1 launched in slot 3 (session_01MMjhnCPhmxpaJb3JmtzPS1).",
   "2026-11-05T04:41Z runner: LEGAL-1 raises NOTICE_VERSION to 3 for v0.5.2. Main notice adds packs on by default, magnet hand-off, encrypted integration credentials, notification channels and Diagnostics/query log, all changes to what is stored or sent (X-legal-docs rule). v0.5.1 users see it once on upgrade. Tell the owner in the next summary.",
   "2026-11-05T04:58Z #461 SRC-10e merged (0eee459b), session archived; RP-UC launched in slot 6 (one-line packs/mod.rs overlap with RP-2 accepted; the later PR brings main in).",
-  "2026-11-05T05:00Z #458 SRC-13 merged (201d554b), session archived. SRC-13b (host wiring) held until X-source-adult merges: both need crates/pipeline/src/writer.rs (concurrency core; never two at once). Slot 5 went to X-flake-boot-shell (Sonnet)."
+  "2026-11-05T05:00Z #458 SRC-13 merged (201d554b), session archived. SRC-13b (host wiring) held until X-source-adult merges: both need crates/pipeline/src/writer.rs (concurrency core; never two at once). Slot 5 went to X-flake-boot-shell (Sonnet).",
+  "2026-11-05T05:15Z merged #459 SRC-11b (7196d721) and #455 SRC-15a (901a1065); both sessions archived. SRC-15a nits go to SRC-15b: role=status on the loading div; let a purged source be enabled (needs still guards) or record why not; name the user-docs how-to follow-up; .size-limit SourcesScreen comment (29,612 B); YieldBar track opacity -> token; announce re-read when the same source changes twice."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5100,7 +5101,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T05:01Z",
+  "updated": "2026-11-05T05:20Z",
   "items": [
    {
     "slot": 1,
@@ -5168,11 +5169,8 @@
    },
    {
     "slot": 9,
-    "slice": "SRC-15a",
-    "role": "build",
-    "agent": "claude",
-    "doing": "Settings \u2192 Sources screen: rows, status, on/off, priority and a yield graph.",
-    "since": "2026-11-05T02:31Z"
+    "status": "idle",
+    "doing": "Waiting for #462 to merge, then X-followups-1105 (brief written)"
    },
    {
     "slot": 10,
@@ -5192,11 +5190,8 @@
    },
    {
     "slot": 12,
-    "slice": "SRC-11b",
-    "role": "build",
-    "agent": "claude",
-    "doing": "Sonarr/Radarr webhooks: a token-protected, size-capped endpoint; finds stay private.",
-    "since": "2026-11-05T02:34Z"
+    "status": "idle",
+    "doing": "Held: every ready slice overlaps a running one (RP-1b/RP-UC packs/mod.rs; ENR-1 and SRC-13b/X-source-adult pipeline; RP-4 waits on RP-2 review #465) or waits on the owner (SRC-15b q1, Track C experiment host, imports host)"
    }
   ]
  },
