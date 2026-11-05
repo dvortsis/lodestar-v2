@@ -123,8 +123,8 @@ fn read() -> Snapshot {
     Snapshot {
         mimalloc_committed,
         mimalloc_peak_committed,
-        sqlite: Some(lodestar_store::memstats::sqlite_memory_used()),
-        sqlite_highwater: Some(lodestar_store::memstats::sqlite_memory_highwater()),
+        sqlite: lodestar_store::memstats::sqlite_memory_used(),
+        sqlite_highwater: lodestar_store::memstats::sqlite_memory_highwater(),
         rss_anon,
         rss_file,
         anon_huge,
