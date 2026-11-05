@@ -10,11 +10,15 @@
 //! so the plugin is held tight:
 //! - **Off by default, External consent** (§18.7): the server refuses to
 //!   turn it on until its consent is acknowledged (SRC-4). That
-//!   acknowledgement covers the configured cache hosts, so adding or
-//!   changing one asks again: each plugin's manifest lists its own
-//!   config's hosts as its endpoints ([`TorrentCache::manifest`]), and
-//!   SRC-4's consent version digests the manifest's endpoints
-//!   (`docs/decisions/2026-11-05-SRC-13b.md`).
+//!   acknowledgement covers the configured cache addresses exactly, path
+//!   and query included, so adding or changing one asks again: each
+//!   plugin's manifest lists its own config's templates as its endpoints
+//!   ([`TorrentCache::manifest`]), and the consent version holds the
+//!   manifest's endpoints and is compared exactly
+//!   (`docs/decisions/2026-11-05-SRC-13b.md`, `2026-11-05-SRC-13c.md`).
+//! - **Settings are written through the API** (`PATCH /sources/{id}`'s
+//!   `config`, SRC-13c), checked by [`Config::from_json`] and saved as
+//!   [`Config::to_json`]. They apply at the next start.
 //! - **The cache list is the user's** and starts empty. [`SUGGESTED`] is
 //!   shown beside it in the settings form, never enabled for them.
 //!
@@ -65,9 +69,9 @@ use lodestar_metainfo::{Info, InfoHash, Limits, ParseOptions, TorrentFile};
 use lodestar_sources::claims::{self, Claims, Confidence, Provenance};
 use lodestar_sources::http::{HostState, StreamLimits, host_key};
 use lodestar_sources::{
-    Backoff, BoxFuture, Caps, Client, Consent, Distribution, Endpoint, Endpoints, HostRate,
-    HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx,
-    SourcePlugin,
+    Backoff, BoxFuture, Caps, Client, ConfigRefusal, Consent, Distribution, Endpoint, Endpoints,
+    HostRate, HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk,
+    SourceCtx, SourcePlugin,
 };
 use serde::Deserialize;
 use tokio::sync::{Mutex, mpsc};
@@ -183,14 +187,23 @@ pub struct Cache {
     upper: bool,
     /// The limiter's, the poll unit's and the egress host list's key.
     host: String,
-    /// The port, when it isn't https's own: part of what the consent
-    /// acknowledgement covers ([`TorrentCache::manifest`]).
-    port: Option<u16>,
+    /// The template as entered, trimmed: what's saved, what the consent
+    /// dialog shows and what an acknowledgement covers
+    /// ([`TorrentCache::manifest`]).
+    template: String,
+    /// The address as sent, host in lower case, and the placeholder's
+    /// case: two templates that send the same requests are one cache.
+    same: (String, bool),
 }
 
 impl Cache {
     pub fn host(&self) -> &str {
         &self.host
+    }
+
+    /// The address template, as saved and shown.
+    pub fn template(&self) -> &str {
+        &self.template
     }
 
     /// The address for `key`.
@@ -233,11 +246,22 @@ impl Config {
     /// Checks each template:
     /// - at most [`MAX_TEMPLATE`] bytes, and exactly one placeholder,
     ///   [`HASH`] or [`HASH_UPPER`], after the host;
+    /// - printable ASCII only, starting `https://`: the consent dialog
+    ///   shows it as written, so it can't hide a part behind a control,
+    ///   bidirectional or look-alike character (a non-ASCII host is
+    ///   written in its `xn--` form), and with no `\`, which the URL
+    ///   parser reads as `/`;
+    /// - the address as written is the address requested: no `%`, no `.`
+    ///   or `..` path segment, nothing the parser rewrites, and the host
+    ///   as the host contacted: no percent-encoding,
+    ///   no numeric form the parser rewrites (`0x08080808`), and no
+    ///   explicit `:443`;
     /// - https, with a host, no user name or password and no fragment: a
     ///   lookup over plain http would show the hash to the whole path;
     /// - not a literal LAN, loopback or link-local address: these are
     ///   public caches;
-    /// - at most [`MAX_CACHES`], none repeated.
+    /// - at most [`MAX_CACHES`], none repeated (two that send the same
+    ///   requests, such as `A.example` and `a.example`, are one).
     ///
     /// An empty list is valid: it's where the list starts.
     pub fn new<S: AsRef<str>>(templates: &[S]) -> Result<Config, ConfigError> {
@@ -247,7 +271,7 @@ impl Config {
         let mut caches: Vec<Cache> = Vec::with_capacity(templates.len());
         for t in templates {
             let c = cache(t.as_ref().trim())?;
-            if caches.contains(&c) {
+            if caches.iter().any(|d| d.same == c.same) {
                 return Err(ConfigError("a cache is listed twice"));
             }
             caches.push(c);
@@ -265,11 +289,38 @@ impl Config {
     pub fn caches(&self) -> &[Cache] {
         &self.caches
     }
+
+    /// The settings as they're saved: `{"caches":[...]}`, each template
+    /// trimmed. [`Config::from_json`] reads it back to the same config.
+    pub fn to_json(&self) -> String {
+        let caches: Vec<&str> = self.caches.iter().map(|c| c.template.as_str()).collect();
+        serde_json::json!({ "caches": caches }).to_string()
+    }
 }
 
 fn cache(raw: &str) -> Result<Cache, ConfigError> {
     if raw.len() > MAX_TEMPLATE {
         return Err(ConfigError("a cache address is too long"));
+    }
+    if !raw.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(ConfigError(
+            "a cache address is plain ASCII with no spaces: write a non-ASCII host in its xn-- form",
+        ));
+    }
+    // The URL parser reads `\` as `/`, so `https://a.example\@b.example/`
+    // would show one host and reach another.
+    // A `%` is refused anywhere: the shown text must be what's sent, and
+    // a server can decode `%2F` or `%2e` into a path it never showed.
+    if raw.contains('%') {
+        return Err(ConfigError(
+            "a cache address can't hold a %: write it without percent-encoding",
+        ));
+    }
+    if raw.contains('\\') {
+        return Err(ConfigError("a cache address can't hold a backslash"));
+    }
+    if !raw.starts_with("https://") {
+        return Err(ConfigError("a cache address must start with https://"));
     }
     let lower = raw.matches(HASH).count();
     let upper = raw.matches(HASH_UPPER).count();
@@ -306,8 +357,34 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
     let authority_end = head
         .find("://")
         .and_then(|s| head[s + 3..].find(['/', '?']).map(|e| s + 3 + e));
-    if authority_end.is_none() {
+    let Some(authority_end) = authority_end else {
         return Err(ConfigError("{hash} must be in the path or the query"));
+    };
+    // The host as written must be the host contacted: the consent list
+    // shows the template as typed, while the parser decodes `%2E`, maps
+    // full-width dots and reads `0x08080808` as 8.8.8.8. So the authority
+    // must already be in the parser's plain form (any case).
+    let written = &head["https://".len()..authority_end];
+    let parsed = match (url.host_str(), url.port()) {
+        (Some(h), Some(p)) => format!("{h}:{p}"),
+        (Some(h), None) => h.to_owned(),
+        (None, _) => return Err(ConfigError("a cache address has no host")),
+    };
+    if !written.eq_ignore_ascii_case(&parsed) {
+        return Err(ConfigError(
+            "write a cache address's host in its plain form, with no encoding, and no port 443",
+        ));
+    }
+    // The path and query as written must be what's requested: the parser
+    // resolves `.` and `..` segments (`/~alice/../~bob/` requests
+    // `/~bob/`, a different party on a per-user host) and may encode
+    // characters. Only the host's case may differ.
+    let rest = &probe["https://".len() + written.len()..];
+    if url.as_str() != format!("https://{parsed}{rest}") {
+        return Err(ConfigError(
+            "write a cache address as it's sent: no . or .. path segments, and nothing the \
+             browser would rewrite",
+        ));
     }
     net::check_url(&url, NetPolicy::notification(false))
         .map_err(|_| ConfigError("a cache address isn't a public one"))?;
@@ -317,7 +394,8 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
         tail: tail.to_owned(),
         upper: is_upper,
         host,
-        port: url.port(),
+        template: raw.to_owned(),
+        same: (url.as_str().to_owned(), is_upper),
     })
 }
 
@@ -787,29 +865,29 @@ pub fn verify_body(body: Vec<u8>, lookup: &Lookup, host: &str) -> Result<Verifie
     })
 }
 
-/// `config`'s hosts as manifest endpoints (`host`, or `host:port` for a
-/// port other than 443), sorted and once each. The manifest's list is
-/// `&'static`, so it's leaked: a few bytes per host, at most
-/// [`MAX_CACHES`], once per plugin built (once per start).
+/// `config`'s templates as manifest endpoints: `https` and the template
+/// after `https://`, sorted and once each, so the consent dialog shows,
+/// and an acknowledgement covers, each full address, path and query
+/// included (SRC-13c: a host with per-user paths, such as `/~user/`, is a
+/// different party per path). The manifest's list is `&'static`, so it's
+/// leaked: at most [`MAX_CACHES`] short strings, once per plugin built
+/// (once per start).
 fn endpoints_of(config: &Config) -> &'static [Endpoint] {
-    let mut hosts: Vec<String> = config
+    let mut list: Vec<&str> = config
         .caches
         .iter()
-        .map(|c| match c.port {
-            Some(p) => format!("{}:{p}", c.host),
-            None => c.host.clone(),
-        })
+        .map(|c| c.template.strip_prefix("https://").unwrap_or(&c.template))
         .collect();
-    hosts.sort_unstable();
-    hosts.dedup();
-    if hosts.is_empty() {
+    list.sort_unstable();
+    list.dedup();
+    if list.is_empty() {
         return &[];
     }
-    let list: Vec<Endpoint> = hosts
+    let list: Vec<Endpoint> = list
         .into_iter()
-        .map(|h| Endpoint {
+        .map(|t| Endpoint {
             protocol: "https",
-            host: Box::leak(h.into_boxed_str()),
+            host: Box::leak(t.to_owned().into_boxed_str()),
         })
         .collect();
     Box::leak(list.into_boxed_slice())
@@ -830,11 +908,27 @@ pub fn verify(torrent: &TorrentFile, key: &InfoHash) -> Option<bool> {
 }
 
 impl SourcePlugin for TorrentCache {
-    /// [`MANIFEST`] with each listed cache's host as an `https` endpoint:
-    /// SRC-4's consent version digests them, so the acknowledgement covers
-    /// exactly these hosts, and adding or changing one asks again.
+    /// [`MANIFEST`] with each listed cache's address template as an
+    /// `https` endpoint: the consent version holds them exactly, so the
+    /// acknowledgement covers exactly these addresses, and adding or
+    /// changing one asks again.
     fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    fn config_editable(&self) -> bool {
+        true
+    }
+
+    fn config_json(&self) -> Option<String> {
+        Some(self.config.to_json())
+    }
+
+    /// [`Config::from_json`]'s rules; what's saved is [`Config::to_json`].
+    fn check_config(&self, json: &str) -> Result<String, ConfigRefusal> {
+        Config::from_json(json)
+            .map(|c| c.to_json())
+            .map_err(|e| ConfigRefusal(e.0))
     }
 
     fn policy(&self) -> &Policy {

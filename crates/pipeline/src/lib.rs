@@ -336,6 +336,9 @@ pub struct SourceStatus {
     /// Who resolves names for it on a SOCKS5 route left on `auto`
     /// ([`egress::auto_dns`]).
     pub auto_dns: lodestar_sources::SocksDns,
+    /// Its settings can be written through the API
+    /// (`SourcePlugin::config_editable`).
+    pub config_editable: bool,
 }
 
 /// A running plugin's egress: its kill switch's view, the route it was
@@ -505,8 +508,37 @@ impl Monitor {
                         setting: b.setting.clone(),
                     }),
                 auto_dns: egress::auto_dns(&*s.plugin),
+                config_editable: s.plugin.config_editable(),
             })
             .collect()
+    }
+
+    /// The settings source `id` was built with at this start, in its saved
+    /// form (`SourcePlugin::config_json`); `None` when it has none.
+    pub fn running_config(&self, id: SourceId) -> Option<String> {
+        self.sources
+            .iter()
+            .find(|s| s.id == id)?
+            .plugin
+            .config_json()
+    }
+
+    /// Source `id`'s settings checked by its plugin
+    /// (`SourcePlugin::check_config`): the form to save, or why not.
+    /// `None` for a source this build doesn't have.
+    pub fn check_config(
+        &self,
+        id: SourceId,
+        json: &str,
+    ) -> Option<Result<String, lodestar_sources::ConfigRefusal>> {
+        let s = self.sources.iter().find(|s| s.id == id)?;
+        Some(if s.plugin.config_editable() {
+            s.plugin.check_config(json)
+        } else {
+            Err(lodestar_sources::ConfigRefusal(
+                "this source has no settings to change",
+            ))
+        })
     }
 }
 

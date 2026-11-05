@@ -34,8 +34,20 @@ use crate::settings::crawler::Crawler;
 /// `PATCH /sources/{id}/credentials`.
 const EDITABLE: [&str; 5] = ["agents", "egress", "enabled", "priority", "schedule"];
 const NOT_YET_EDITABLE: [&str; 1] = ["purge"];
+
+/// [`EDITABLE`], plus `config` for a source whose settings can be written,
+/// in order.
+fn editable(config: bool) -> Vec<String> {
+    let mut out: Vec<String> = EDITABLE.map(String::from).to_vec();
+    if config {
+        out.push("config".into());
+        out.sort_unstable();
+    }
+    out
+}
 // The API's input bound and the stored bound are one number.
 const _: () = assert!(lodestar_api::ops::MAX_WINDOWS == control::MAX_WINDOWS);
+const _: () = assert!(lodestar_api::ops::MAX_CONFIG_BYTES == control::MAX_CONFIG_BYTES);
 /// How long the data directory's size is reused before it's measured
 /// again (it walks the directory).
 const SIZE_TTL: Duration = Duration::from_secs(30);
@@ -338,18 +350,15 @@ fn source(v: SourceView) -> Source {
         consent_required: consent_rules::needs_ack(m.consent),
         consent_version: v.consent_version.clone(),
         credentials: v.credentials.clone(),
-        editable: EDITABLE.map(String::from).to_vec(),
+        editable: editable(v.status.config_editable),
         egress: SourceEgress {
             live: v.status.egress.as_ref().map(egress_live),
             setting: v.settings.egress.as_ref().ok().map(egress_setting),
             warnings: v.egress_warnings.iter().map(|w| w.to_string()).collect(),
         },
         enabled,
-        endpoints: m
-            .endpoints
-            .iter()
-            .map(|e| format!("{}://{}", e.protocol, e.host))
-            .collect(),
+        // Exactly what an acknowledgement covers.
+        endpoints: consent_rules::addresses(m),
         health: SourceHealth {
             harvested_24h: v.harvested_24h,
             last_error: v.status.last_error.clone(),
@@ -395,7 +404,7 @@ fn source(v: SourceView) -> Source {
         plugin: m.id.to_string(),
         purge_pending: v.purge_pending,
         priority: priority(v.priority),
-        restart_required: enabled != v.status.enabled,
+        restart_required: enabled != v.status.enabled || v.config_pending,
         risk: match m.risk {
             Risk::Low => RiskLevel::Low,
             Risk::Medium => RiskLevel::Medium,
@@ -432,6 +441,7 @@ fn source_error(e: SourceError) -> OpsError {
                 Some("agents") => "invalid_agents",
                 Some("schedule") => "invalid_schedule",
                 Some("egress") => "invalid_egress",
+                Some("config") => "invalid_config",
                 _ => "invalid_setting",
             },
             field,
@@ -546,6 +556,7 @@ impl OpsApi for Ops {
                     })
                     .transpose()?,
                 agents: patch.agents,
+                config: patch.config.map(|v| v.to_string()),
             };
             self.control
                 .update_source(id, change)
