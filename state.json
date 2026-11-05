@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T22:18Z",
+ "updated_at": "2026-11-05T22:34Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3236,11 +3236,13 @@
    "merge": "e3f432ff"
   },
   "B13b": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhnAAagVf6NaiSZgPGh6",
    "since": "2026-11-05T18:56Z",
    "brief": "briefs/B13b.md",
-   "note": "fresh session; applies the X-search-files-5 session patch (briefs/B13b.patch)"
+   "note": "fresh session; applies the X-search-files-5 session patch (briefs/B13b.patch)",
+   "pr": 509,
+   "merge": "9522242c"
   },
   "ENR-8": {
    "status": "merged",
@@ -5593,7 +5595,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T22:18Z",
+  "updated": "2026-11-05T22:34Z",
   "items": [
    {
     "slot": 1,
@@ -5639,11 +5641,12 @@
    },
    {
     "slot": 7,
-    "slice": "B13b",
+    "slice": null,
     "role": "build",
     "agent": "claude",
-    "doing": "Search: siblings for short no-year titles (Up, Heat) via the title-identity key",
-    "since": "2026-11-05T18:56Z"
+    "doing": "Retired: B13b merged (#509, 9522242c).",
+    "since": "2026-11-05T22:34Z",
+    "status": "idle"
    },
    {
     "slot": 9,
