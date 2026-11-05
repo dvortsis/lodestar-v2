@@ -2251,6 +2251,9 @@ impl FiltersApi {
                 .filter(|o| o.unreadable())
                 .map(|o| pack_overrides::label(o.rule)),
         );
+        if packs::review_unreadable(&store)? {
+            pack_conditions.push(packs::REVIEW_UNREADABLE.to_owned());
+        }
         Ok(Overview {
             allow: set
                 .allow

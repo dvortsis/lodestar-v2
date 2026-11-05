@@ -41,8 +41,11 @@ use crate::error::{ApiResult, internal};
 /// The holds an acceptance left for review: one `RULE-ID <40 hex>` per
 /// line. Not part of Undo; no time, author or reason (§20.8).
 pub(crate) const REVIEW_KEY: &str = "filter.packs.review";
-/// Lines the review row keeps at most, newest first.
-const REVIEW_MAX: usize = 10_000;
+/// Lines the review row keeps at most, newest first: as many holds as an
+/// acceptance reads (quarantine and tombstones, [`PREVIEW_ROWS`] each), so
+/// one acceptance never loses a line to the cap. Pruning keeps it to holds
+/// that still exist.
+const REVIEW_MAX: usize = 2 * PREVIEW_ROWS;
 /// Hits of one rule read for its shadow results at most.
 const HIT_ROWS: usize = 1_000_000;
 
@@ -363,14 +366,47 @@ pub(super) fn warning(a: &Acceptance) -> String {
     )
 }
 
-/// The holds acceptances left for review, as stored.
+/// The review row as stored.
+enum ReviewRow {
+    Absent,
+    Text(String),
+    /// Not text: it fails closed. Nothing is marked for review from it,
+    /// it never blocks a change or a page, and every hold stays held
+    /// (the row only ever marks holds, never releases them). The next
+    /// acceptance that leaves holds for review replaces it.
+    Unreadable,
+}
+
+fn review_row(store: &Store) -> ApiResult<ReviewRow> {
+    match store.setting_text(REVIEW_KEY) {
+        Ok(None) => Ok(ReviewRow::Absent),
+        Ok(Some(t)) => Ok(ReviewRow::Text(t)),
+        Err(lodestar_store::Error::Corrupt(_)) => Ok(ReviewRow::Unreadable),
+        Err(e) => Err(internal(e)),
+    }
+}
+
+/// The `pack_conditions` label of a review row that doesn't read.
+pub(super) const REVIEW_UNREADABLE: &str = "packs.review-unreadable";
+
+/// Whether the review row exists but doesn't read.
+pub(super) fn review_unreadable(store: &Store) -> ApiResult<bool> {
+    Ok(matches!(review_row(store)?, ReviewRow::Unreadable))
+}
+
+/// The holds acceptances left for review, as stored: at most
+/// [`REVIEW_MAX`] of them, whatever the row holds; none when it doesn't
+/// read.
 pub(super) fn review_set(store: &Store) -> ApiResult<HashSet<(String, [u8; 20])>> {
-    let text = store.setting_text(REVIEW_KEY).map_err(internal)?;
-    Ok(text.as_deref().map(parse_review).unwrap_or_default())
+    Ok(match review_row(store)? {
+        ReviewRow::Text(t) => parse_review(&t),
+        ReviewRow::Absent | ReviewRow::Unreadable => HashSet::new(),
+    })
 }
 
 fn parse_review(text: &str) -> HashSet<(String, [u8; 20])> {
     text.lines()
+        .take(REVIEW_MAX)
         .filter_map(|l| {
             let (rule, h) = l.split_once(' ')?;
             let h = super::hex20(h).ok()?;
@@ -380,12 +416,16 @@ fn parse_review(text: &str) -> HashSet<(String, [u8; 20])> {
 }
 
 /// Adds holds to the review row, newest first, at most [`REVIEW_MAX`].
-/// Lines that don't read are dropped.
+/// Lines that don't read are dropped, and a row that doesn't read is
+/// replaced.
 pub(super) fn add_review(store: &mut Store, new: &[(PackRule, [u8; 20])]) -> ApiResult<()> {
     if new.is_empty() {
         return Ok(());
     }
-    let old = store.setting_text(REVIEW_KEY).map_err(internal)?;
+    let old = match review_row(store)? {
+        ReviewRow::Text(t) => Some(t),
+        ReviewRow::Absent | ReviewRow::Unreadable => None,
+    };
     let mut seen = HashSet::new();
     let mut lines = Vec::new();
     let new = new.iter().map(|(r, h)| (r.id().to_owned(), *h));
@@ -408,9 +448,10 @@ pub(super) fn add_review(store: &mut Store, new: &[(PackRule, [u8; 20])]) -> Api
 
 /// Drops review lines whose hold is gone (released, expired or purged), so
 /// the row never keeps the hash of a torrent nothing holds. Skipped when
-/// the holds can't all be read at once.
+/// the holds can't all be read at once, and left alone when the row
+/// doesn't read (it marks nothing then).
 pub(super) fn prune_review(store: &mut Store) -> ApiResult<()> {
-    let Some(text) = store.setting_text(REVIEW_KEY).map_err(internal)? else {
+    let ReviewRow::Text(text) = review_row(store)? else {
         return Ok(());
     };
     let quarantine = store.quarantined(PREVIEW_ROWS).map_err(internal)?;
@@ -500,5 +541,40 @@ pub(super) fn corpus(manifest: &Arc<Manifest>) -> PackCorpus {
                 version: r.version,
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_review_row_is_capped_newest_first() {
+        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        let hash = |n: usize| {
+            let mut h = [0u8; 20];
+            h[..8].copy_from_slice(&(n as u64).to_be_bytes());
+            h
+        };
+        let old: Vec<(PackRule, [u8; 20])> = (0..10).map(|n| (PackRule::Mw2, hash(n))).collect();
+        add_review(&mut store, &old).unwrap();
+        let new: Vec<(PackRule, [u8; 20])> = (100..100 + REVIEW_MAX)
+            .map(|n| (PackRule::Mw1, hash(n)))
+            .collect();
+        add_review(&mut store, &new).unwrap();
+        let set = review_set(&store).unwrap();
+        assert_eq!(set.len(), REVIEW_MAX);
+        assert!(set.contains(&("MW-1".to_owned(), hash(100))));
+        assert!(
+            !set.contains(&("MW-2".to_owned(), hash(0))),
+            "the oldest go first"
+        );
+        // A longer row, however it was written, reads at most the cap.
+        let text = (0..REVIEW_MAX + 5)
+            .map(|n| format!("MW-3 {}", hex(&hash(n))))
+            .collect::<Vec<_>>()
+            .join("\n");
+        store.set_settings_text(&[(REVIEW_KEY, &text)]).unwrap();
+        assert_eq!(review_set(&store).unwrap().len(), REVIEW_MAX);
     }
 }

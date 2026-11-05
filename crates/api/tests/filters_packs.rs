@@ -772,3 +772,72 @@ async fn fixtures_report_the_pack_corpora_per_rule() {
     // The core part is as it was.
     assert!(fx["core"].as_array().is_some_and(|c| !c.is_empty()));
 }
+
+/// A review row that doesn't read fails closed: it marks nothing, never
+/// blocks a page or a change, releases nothing, is reported, and the next
+/// acceptance that leaves holds for review replaces it.
+#[tokio::test]
+async fn an_unreadable_review_row_fails_closed() {
+    let f = fixture(bumped(Direction::Narrows, Action::Hide));
+    let c = logged_in(&f).await;
+    {
+        let store = f.api.store.lock().unwrap();
+        let conn = store.connection();
+        conn.execute(
+            "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+             VALUES (?1, 'MW-2', NULL, 1, 9999999999)",
+            [vec![1u8; 20]],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('filter.packs.review', x'00ff')",
+            [],
+        )
+        .unwrap();
+    }
+    let q = get(&f, &c, "/api/v1/filters/queue").await;
+    assert_eq!(q["quarantine"][0]["pack_review"], json!(false));
+    let t = get(&f, &c, "/api/v1/filters/tombstones").await;
+    assert_eq!(t["tombstones"], json!([]));
+    let o = get(&f, &c, "/api/v1/filters").await;
+    assert_eq!(o["pack_conditions"], json!(["packs.review-unreadable"]));
+    // A change still applies, and the hold stays held.
+    let (status, body) = apply(
+        &f,
+        &c,
+        &json!({"op": "pack_switch", "id": "spam", "on": true}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let held = || -> i64 {
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .connection()
+            .query_row("SELECT count(*) FROM quarantine", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(held(), 1);
+    // The next acceptance that leaves holds for review replaces it.
+    let (status, body) = apply(
+        &f,
+        &c,
+        &accept(&["MW-2"], Some(&["MW-2@2"])),
+        Some(PASSWORD),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(held(), 1, "nothing released");
+    let q = get(&f, &c, "/api/v1/filters/queue").await;
+    assert_eq!(q["quarantine"][0]["pack_review"], json!(true));
+    let o = get(&f, &c, "/api/v1/filters").await;
+    assert!(
+        !o["pack_conditions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "packs.review-unreadable")
+    );
+}
