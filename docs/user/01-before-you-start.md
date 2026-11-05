@@ -25,7 +25,7 @@ flowchart LR
 The diagram in words: Lodestar discovers torrents on the DHT and fetches their descriptions from peers. It works out what each one contains and adds it to the index. Then it serves the index to your browser.
 
 ## 1.2 Know what Lodestar never does
-<!-- index: metadata only; offline by default; telemetry -->
+<!-- index: metadata only; offline by default; telemetry; lawful use; Legal Notice -->
 
 Lodestar never downloads the content of a torrent. It fetches only the small description a torrent publishes about itself, so no movies, music or software land on your disk.
 
@@ -34,6 +34,9 @@ Three more facts hold today:
 - Lodestar sends no telemetry.
 - Updates are off until you choose them, because checking for updates contacts GitHub.
 - The child-safety core of the content filters is always on.
+
+> [!IMPORTANT]
+> **Lodestar is made for lawful use.** You run your own copy. You decide what it connects to, and anything you do with what it finds is your sole responsibility. The laws on peer-to-peer networks differ by country and by state. Read the [Legal Notice and Network Risks](../legal/legal-notice.md) before you install. It explains what Lodestar does on your network and what it finds. Showing it at first-run setup is **(planned)**.
 
 <details>
 <summary>What the crawler still shares with the network</summary>
@@ -73,7 +76,7 @@ You don't need an account, a licence key or an open port on your router.
 > [!TIP]
 > **Key takeaways**
 > - Lodestar stores torrent descriptions only and never downloads content.
-> - It sends no telemetry. The DHT crawl is its only regular traffic.
+> - It sends no telemetry. Its regular traffic is the DHT crawl and swarm counts from public trackers.
 > - Put the data folder on fast local storage.
 
 <!-- nav:start -->

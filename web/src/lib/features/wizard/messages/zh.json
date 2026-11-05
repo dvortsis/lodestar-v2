@@ -52,7 +52,7 @@
 	"wizard_how_index": "建立索引",
 	"wizard_how_index_text": "获得的信息会写入这台机器上的本地搜索索引。",
 	"wizard_how_search": "搜索",
-	"wizard_how_search_text": "你搜索的是自己的索引。关于搜索的任何信息都不会离开这台机器。",
+	"wizard_how_search_text": "你搜索的是自己的索引。除非你开启了会搜索其他网站的来源，否则关于搜索的任何信息都不会离开这台机器。",
 	"wizard_how_cold": "索引需要数天乃至数周才能增长，而不是几小时。起初搜索结果很少；随着抓取器运行会逐渐增多。",
 	"wizard_intensity_lead": "Lodestar 应该抓取得多积极？较低对网络和路由器更温和；较高则更快发现种子。",
 	"wizard_storage_lead": "Lodestar 如何存储所发现的内容。默认值适合大多数机器。",
