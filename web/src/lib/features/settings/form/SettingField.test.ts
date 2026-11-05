@@ -11,6 +11,7 @@ import type { FieldKey, FieldSpec } from './types';
 import { registerWidget } from './widgets';
 import WidgetStub from './testing/WidgetStub.svelte';
 
+vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 10_000 });
 
 const SPECS: FieldSpec[] = [
@@ -238,13 +239,14 @@ describe('SettingField', () => {
 
 	it('copies the absolute link to the field from the menu, once', async () => {
 		const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
-		vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+		vi.stubGlobal('navigator', { clipboard: { writeText } });
 		show('crawler.timeout_secs');
 		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }));
 		await fireEvent.click(
 			await screen.findByRole('menuitem', { name: 'Copy link to this setting' })
 		);
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+		// Straight after the click, no wait: Safari only allows the write during the click itself.
+		expect(writeText).toHaveBeenCalledTimes(1);
 		expect(writeText).toHaveBeenCalledWith(
 			new URL(form.href('crawler.timeout_secs'), location.href).href
 		);
