@@ -591,7 +591,7 @@ fn a_live_source_is_refused() {
     let err = open(&path, &OpenPolicy::default()).unwrap_err();
     assert_eq!(err, Refusal::NotQuiescent);
     assert_eq!(err.job_reason(), Some(Reason::SourceUnavailable));
-    assert!(err.to_string().contains("stop magneticod"));
+    assert_not_quiescent_advice(&err);
     std::fs::write(sibling(&path, "-wal"), b"").unwrap();
     open_ok(&path);
     std::fs::write(sibling(&path, "-journal"), b"").unwrap();
@@ -599,6 +599,64 @@ fn a_live_source_is_refused() {
         open(&path, &OpenPolicy::default()).unwrap_err(),
         Refusal::NotQuiescent
     );
+}
+
+/// The refusal's advice must still work when magneticod has already
+/// stopped, for example after a checkpoint failed on a full disk.
+fn assert_not_quiescent_advice(err: &Refusal) {
+    let text = err.to_string();
+    for step in [
+        // Running: stop it.
+        "stop it",
+        // Stopped, WAL left behind: room for the checkpoint, then one.
+        "free some disk space",
+        "start and stop magneticod once",
+        "sqlite3 database.sqlite3 'PRAGMA wal_checkpoint(TRUNCATE);'",
+        // Copying the leftover -wal along doesn't help on its own.
+        "Importing that copy before the checkpoint is refused",
+    ] {
+        assert!(text.contains(step), "missing {step:?} in {text:?}");
+    }
+    assert!(
+        !text.contains("consistent copy"),
+        "a copy alone isn't the fix: {text:?}"
+    );
+}
+
+#[test]
+fn a_wal_left_after_magneticod_stopped_is_refused_with_checkpoint_advice() {
+    // What a checkpoint that failed on a full disk leaves: magneticod has
+    // exited, and its last commits are only in the -wal. Copying both
+    // files while the writer still holds them open leaves exactly that.
+    let dir = tempfile::tempdir().unwrap();
+    let path = fixture(dir.path(), "v3", Layout::V3, &rows(3));
+    let left = tempfile::tempdir().unwrap();
+    let copied = left.path().join("database.sqlite3");
+    {
+        let mut w = rusqlite::Connection::open(&path).unwrap();
+        w.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        super::fixtures::insert(&mut w, &[TorrentRow::good(9_999, &[("a", 1)])]);
+        std::fs::copy(&path, &copied).unwrap();
+        std::fs::copy(sibling(&path, "-wal"), sibling(&copied, "-wal")).unwrap();
+    }
+    assert!(std::fs::metadata(sibling(&copied, "-wal")).unwrap().len() > 0);
+    let err = open(&copied, &OpenPolicy::default()).unwrap_err();
+    assert_eq!(err, Refusal::NotQuiescent, "the refusal stays");
+    assert_not_quiescent_advice(&err);
+
+    // The advice works: a checkpoint on the copy makes it importable, with
+    // the -wal's commit in it.
+    let c = rusqlite::Connection::open(&copied).unwrap();
+    let busy: i64 = c
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(busy, 0, "the checkpoint completed");
+    let n: i64 = c
+        .query_row("SELECT count(*) FROM torrents", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 4, "the -wal's commit is in the database");
+    drop(c);
+    open_ok(&copied);
 }
 
 #[test]

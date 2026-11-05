@@ -128,7 +128,7 @@ pub struct SourceArgs {
     #[arg(long, value_enum)]
     pub source: SourceKind,
     /// Magnetico: the database file (database.sqlite3); stop magneticod
-    /// first, or point at a copy
+    /// first. A copy needs its -wal checkpointed before it's imported
     #[arg(long, value_name = "PATH")]
     pub path: Option<PathBuf>,
     /// Magnetico: a network share the database may be on, like
