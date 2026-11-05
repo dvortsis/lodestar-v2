@@ -27,3 +27,4 @@ cc cb6c05ec8e28e2052b7439cd8fb5d559d5604a8eb57c67fe0148ce3ea55e33d4 # shrinks to
 # X-log-url-redact-2, runner's review round: an encoded magnet in a URL's span
 # didn't extend it in the first pass (fixed in the PR).
 cc 54385977081fb36e03b5d423b6aa9f2bf8650a68010fa5b081332e4314e0157a # shrinks to before = "://", scheme = "http", secret = "aAaaa0", ws = "\t", tail = "", soft = "'", host = "aa.example"
+cc ad60776a06c4759d562f4c0302b083e1ff34bd261cd1b4f371a59d7bda4dda34 # shrinks to before = "PW:", after = "", scheme = "http", secret = "AA0aaA", syntax = " ", bare = "/", sep = "://" (X-log-url-redact-5: `PW: //u: <s>@h`, from #489's Windows CI)
