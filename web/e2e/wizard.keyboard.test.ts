@@ -9,7 +9,8 @@ import {
 import {
 	applied,
 	finished,
-	strengthening
+	strengthening,
+	weakening
 } from '../src/lib/features/filters/flows/testing/fixtures';
 import { expectNoA11yViolations } from './a11y';
 import { expect as baseExpect, test } from './support/test';
@@ -27,8 +28,9 @@ test.describe('first-run wizard', () => {
 	test.beforeEach(async ({ mock }) => {
 		backend = new SettingsBackend(WIZARD_INDEX, wizardValues()).attach(mock);
 		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
-		// The filters API the pack step drives: packs start off, a preview job, then apply.
-		for (const id of PACKS) packs.set(id, false);
+		// The filters API the pack step drives: packs start on, as on a fresh data directory
+		// (RP-DEF); turning one off previews as weakening and applies only with the password.
+		for (const id of PACKS) packs.set(id, true);
 		applyBodies.length = 0;
 		mock.on('getFilters', (() => ({
 			status: 200,
@@ -74,13 +76,31 @@ test.describe('first-run wizard', () => {
 				unknown: []
 			}
 		} as never);
-		mock.on('startFilterPreviewJob', { job: 1 } as never);
-		mock.on('getFilterPreviewJob', finished(strengthening()) as never);
-		mock.on('applyFilterChange', ((r: { postDataJSON(): { change: { id: string } } }) => {
+		let turningOff = false;
+		const offAssessment = weakening({ warning: 'Turning off Spam shows what it hid.' });
+		mock.on('startFilterPreviewJob', ((r: { postDataJSON(): { change: { on: boolean } } }) => {
+			turningOff = r.postDataJSON().change.on === false;
+			return { status: 200, body: { job: 1 } };
+		}) as never);
+		mock.on('getFilterPreviewJob', (() => ({
+			status: 200,
+			body: finished(turningOff ? offAssessment : strengthening())
+		})) as never);
+		mock.on('applyFilterChange', ((r: {
+			postDataJSON(): { change: { id: string; on: boolean }; password?: string };
+		}) => {
 			const body = r.postDataJSON();
 			applyBodies.push(body);
-			packs.set(body.change.id, true);
-			return { status: 200, body: applied(strengthening()) };
+			if (body.change.on === false && body.password !== 'correct horse')
+				return {
+					status: 401,
+					body: { error: { code: 'bad_password', message: 'Wrong password.' } }
+				};
+			packs.set(body.change.id, body.change.on);
+			return {
+				status: 200,
+				body: applied(body.change.on ? strengthening() : offAssessment)
+			};
 		}) as never);
 	});
 
@@ -121,14 +141,25 @@ test.describe('first-run wizard', () => {
 		await kbd.tabTo(page.getByRole('button', { name: 'Skip this step' }));
 		await kbd.press('Enter');
 
-		// Rule packs: all five checked; uncheck one by keyboard; Continue turns the other four on.
+		// Rule packs: all five on and checked (a fresh install); uncheck one by keyboard; Continue
+		// turns it off through the weakening flow: the effect warning, then the password.
 		await expect(h2(page, 'Rule packs')).toBeFocused();
-		await expect(page.getByTestId('wizard-pack-malware')).toBeChecked();
+		for (const id of PACKS) await expect(page.getByTestId(`wizard-pack-${id}`)).toBeChecked();
 		await expectNoA11yViolations(page);
 		await kbd.tabTo(page.getByTestId('wizard-pack-spam'));
 		await kbd.press('Space');
 		await expect(page.getByTestId('wizard-pack-spam')).not.toBeChecked();
 		await kbd.tabTo(page.getByRole('button', { name: 'Save and continue' }));
+		await kbd.press('Enter');
+		const dialog = page.getByRole('dialog', { name: 'Turn off Spam' });
+		await expect(dialog.getByTestId('effect-warning-text')).toContainText('shows what it hid');
+		// Focus goes to the password field, as the server asks for it.
+		await expect(dialog.getByTestId('change-password')).toBeFocused();
+		await expectNoA11yViolations(page);
+		await page.keyboard.type('correct horse');
+		await kbd.press('Enter');
+		await expect(dialog.getByTestId('change-cancel')).toHaveText('Close');
+		await kbd.tabTo(dialog.getByTestId('change-cancel'));
 		await kbd.press('Enter');
 		// Blocklists: off by default, nothing pre-checked; Skip sends nothing.
 		await expect(h2(page, 'Blocklists')).toBeFocused();
@@ -137,11 +168,10 @@ test.describe('first-run wizard', () => {
 		await kbd.tabTo(page.getByRole('button', { name: 'Skip this step' }));
 		await kbd.press('Enter');
 		await expect(h2(page, 'Updates')).toBeFocused();
-		expect(applyBodies).toEqual(
-			['malware', 'lures', 'fakes', 'scams'].map((id) => ({
-				change: { op: 'pack_switch', id, on: true }
-			}))
-		);
+		expect(applyBodies).toEqual([
+			{ change: { op: 'pack_switch', id: 'spam', on: false }, password: 'correct horse' }
+		]);
+		expect([...packs].filter(([, on]) => !on).map(([id]) => id)).toEqual(['spam']);
 		expect(backend.patches).toHaveLength(1);
 		await expect(page.getByRole('radio', { name: 'Off' })).toBeChecked();
 		await expect(page.getByTestId('wizard-updates-github')).toContainText('GitHub');
