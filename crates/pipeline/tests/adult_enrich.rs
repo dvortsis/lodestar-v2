@@ -64,12 +64,16 @@ static MANIFEST: Manifest = Manifest {
 };
 
 fn info_dict(name: &str) -> Vec<u8> {
-    let file = format!("{}.mp4", name.replace(' ', "."));
+    info_with_file(name, &format!("{}.mp4", name.replace(' ', ".")))
+}
+
+/// An info dict named `name` holding one file called `file`.
+fn info_with_file(name: &str, file: &str) -> Vec<u8> {
     let mut f = BTreeMap::new();
     f.insert(b"length".to_vec(), OwnedValue::Int(900 << 20));
     f.insert(
         b"path".to_vec(),
-        OwnedValue::List(vec![OwnedValue::from(file.as_str())]),
+        OwnedValue::List(vec![OwnedValue::from(file)]),
     );
     let mut d = BTreeMap::new();
     d.insert(
@@ -91,7 +95,18 @@ fn put(
     extra: i64,
     adult: bool,
 ) -> (i64, InfoHash) {
-    let raw = info_dict(name);
+    put_raw(store, name, &info_dict(name), source, extra, adult)
+}
+
+fn put_raw(
+    store: &mut Store,
+    name: &str,
+    raw: &[u8],
+    source: SourceId,
+    extra: i64,
+    adult: bool,
+) -> (i64, InfoHash) {
+    let raw = raw.to_vec();
     let info = Info::parse(&raw).unwrap();
     let id = store
         .insert(&[NewTorrent {
@@ -445,6 +460,11 @@ proptest! {
                         claims: Some(&c), at: T,
                     }]).unwrap();
                     let lodestar_store::unverified::Put::New(id) = put[0] else { panic!("new") };
+                    // Items take their ids from the torrents' sequence, so
+                    // this is a real id an opened drawer could send, held
+                    // by an item and by no torrent.
+                    assert!(s.torrent(id).unwrap().is_none());
+                    assert_eq!(s.unverified(Net::Bt, &key).unwrap().map(|i| i.id), Some(id));
                     ids.push(id);
                     continue;
                 }
@@ -1110,5 +1130,74 @@ fn the_policy_is_capped_at_one_request_a_second() {
     assert_eq!(
         adult_enrich::capped(Policy::STRICT).caps.per_host.interval,
         Policy::STRICT.caps.per_host.interval
+    );
+}
+
+/// Q2's "never the files": an uninformative name whose title would come
+/// from a file sends nothing in the parsed form, and the name form sends
+/// the torrent's own name.
+#[test]
+fn a_file_name_is_never_sent() {
+    let (mut s, dht, enr) = store();
+    let raw = info_with_file("New folder", "Secretfile.Garden.Walk.2024.03.05.1080p.mp4");
+    let (vague, _) = put_raw(&mut s, "New folder", &raw, dht, 0, true);
+    let raw = info_with_file(
+        "Studiox 2024.03.05 Garden Walk",
+        "Secretfile.Other.Name.mp4",
+    );
+    let (named, _) = put_raw(&mut s, "Studiox 2024.03.05 Garden Walk", &raw, dht, 0, true);
+    let engine = stand_in().current();
+    let flags = on();
+    let ctx = |form| GateCtx {
+        manifest: &MANIFEST,
+        source: enr,
+        form,
+        adult: AdultSources::default(),
+        switches: &*flags,
+    };
+    assert_eq!(
+        adult_enrich::check(&mut s, &engine, ctx(QueryForm::Parsed), vague, T).unwrap(),
+        Err(Ineligible::NoQuery)
+    );
+    let got = adult_enrich::check(&mut s, &engine, ctx(QueryForm::Name), vague, T)
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.query, Query::name("New folder").unwrap());
+    for form in [QueryForm::Parsed, QueryForm::Name] {
+        let got = adult_enrich::check(&mut s, &engine, ctx(form), named, T)
+            .unwrap()
+            .unwrap();
+        let text = got.query.text().join(" ");
+        assert!(
+            !text.contains("Secretfile") && !text.contains("Other"),
+            "{form:?}"
+        );
+    }
+}
+
+/// A torrent marked to be classified again waits until the backfill has
+/// redone it: its stored type may be stale.
+#[test]
+fn a_torrent_pending_reclassification_waits() {
+    let (mut s, dht, enr) = store();
+    let (id, _) = put(&mut s, "Garden Scene", dht, 0, true);
+    let engine = stand_in().current();
+    let flags = on();
+    let ctx = GateCtx {
+        manifest: &MANIFEST,
+        source: enr,
+        form: QueryForm::Name,
+        adult: AdultSources::default(),
+        switches: &*flags,
+    };
+    assert!(
+        adult_enrich::check(&mut s, &engine, ctx, id, T)
+            .unwrap()
+            .is_ok()
+    );
+    s.mark_unenriched(&[id]).unwrap();
+    assert_eq!(
+        adult_enrich::check(&mut s, &engine, ctx, id, T).unwrap(),
+        Err(Ineligible::Pending)
     );
 }

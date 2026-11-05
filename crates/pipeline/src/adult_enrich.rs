@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_classify::{ContentType, Correction, Record, classify_corrected};
+use lodestar_classify::{ContentType, Correction, ENRICHMENT_VERSION, Record, classify_corrected};
 use lodestar_filter::{Action, Engine, Facts, Handle, Item};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::claims::ReleaseDate;
@@ -114,6 +114,10 @@ pub struct Gate {
     /// Classified Adult, or found by an always-adult source (and you
     /// haven't said Not adult).
     pub adult: bool,
+    /// Its stored classification is marked to be redone (a rules change,
+    /// or a newer parser): until the backfill reaches it, its type may be
+    /// stale, so it waits.
+    pub pending: bool,
 }
 
 /// Why an item may not be looked up.
@@ -128,6 +132,7 @@ pub enum Ineligible {
     Filtered,
     PrivateSource,
     NotAdult,
+    Pending,
     /// Eligible, but there's nothing to send in the plugin's form (no
     /// name, or no parsed title).
     NoQuery,
@@ -146,6 +151,7 @@ pub fn eligible(g: &Gate) -> Result<(), Ineligible> {
         (g.filtered, Ineligible::Filtered),
         (g.private_source, Ineligible::PrivateSource),
         (!g.adult, Ineligible::NotAdult),
+        (g.pending, Ineligible::Pending),
     ];
     match checks.into_iter().find(|(fails, _)| *fails) {
         Some((_, why)) => Err(why),
@@ -239,6 +245,9 @@ pub fn check(
     let not_adult = own.is_some_and(|c| c.adult == Some(false));
     g.adult = stored_adult || (ctx.adult.any(row.sources) && !not_adult);
     g.filtered = row.flags & flags::HIDDEN != 0;
+    g.pending = store
+        .enrichment(id)?
+        .is_none_or(|e| e.version != ENRICHMENT_VERSION);
     // Cheap reasons first: the judgement below is only for an item that
     // could otherwise go.
     if let Err(why) = eligible(&g) {
@@ -274,9 +283,17 @@ pub fn check(
         return Ok(Err(why));
     }
     let query = match ctx.form {
+        // The torrent's own name, never a file's.
         QueryForm::Name => Query::name(&row.name),
         QueryForm::Parsed => {
-            let r = Record::new(&class);
+            // From the torrent's name alone: with no files, the parse can't
+            // take a title from a file or folder name (Q2: never the
+            // files). A name that says nothing useful sends nothing.
+            let named = classify_corrected(&row.name, &[], Correction::default());
+            if named.title.ambiguous || named.title.resolved.is_some() {
+                return Ok(Err(Ineligible::NoQuery));
+            }
+            let r = Record::new(&named);
             r.release("title").and_then(|title| {
                 Query::parsed(
                     r.release("site"),
@@ -891,7 +908,7 @@ mod tests {
     use proptest::prelude::*;
 
     fn gate() -> impl Strategy<Value = Gate> {
-        proptest::collection::vec(any::<bool>(), 9).prop_map(|b| Gate {
+        proptest::collection::vec(any::<bool>(), 10).prop_map(|b| Gate {
             show_adult: b[0],
             kill_switch_tripped: b[1],
             source_enabled: b[2],
@@ -901,6 +918,7 @@ mod tests {
             filtered: b[6],
             private_source: b[7],
             adult: b[8],
+            pending: b[9],
         })
     }
 
@@ -917,7 +935,8 @@ mod tests {
                 && !g.held
                 && !g.filtered
                 && !g.private_source
-                && g.adult;
+                && g.adult
+                && !g.pending;
             prop_assert_eq!(eligible(&g).is_ok(), all);
         }
     }
