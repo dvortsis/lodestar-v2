@@ -102,7 +102,7 @@ item Example.Movie.2019.1080p.WEB
   guards FK-2
 
 # Short-episode packs (FK-2@2's short-episode guard: three or more
-# `SxxEyy` episodes of one series, none under 8 MiB, the largest at most
+# `SxxEyy` episodes of one series, none under 16 MiB, the largest at most
 # twice the smallest).
 item Example Shorts S01 1080p WEB
   file 35M Example Shorts S01E01 1080p WEB.mkv

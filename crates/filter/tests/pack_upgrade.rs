@@ -20,8 +20,6 @@ use lodestar_filter::{
 };
 use lodestar_store::{RuleSet, Store, StoreConfig};
 
-/// A store as an earlier build left it: created before RP-DEF, so
-/// without the fresh marker its creating migration now writes.
 /// The built-in manifest with every rule at its first version: MW-2 and
 /// FK-2 cut back to the version 1 this build keeps (RP-1b ships their
 /// version 2). These tests are about how versions are recorded, seeded
@@ -42,6 +40,8 @@ fn baseline() -> Arc<Manifest> {
     Arc::new(Manifest::new(entries).unwrap())
 }
 
+/// A store as an earlier build left it: created before RP-DEF, so
+/// without the fresh marker its creating migration now writes.
 fn store() -> Store {
     let mut s = fresh_store();
     s.update_settings_text(&[], &[FRESH_KEY]).unwrap();
@@ -1055,4 +1055,80 @@ fn unknown_switches_and_versions_are_kept_and_ignored() {
     let set = s.rule_set().unwrap();
     assert!(set.pack_switches.contains(&("ZZ-9".into(), true)));
     assert!(set.pack_switches.contains(&("newpack".into(), true)));
+}
+
+/// A music-production pack MW-2@1 hides and MW-2@2 passes (RP-1b).
+const DRUMS: (&str, &[(&str, u64)]) = (
+    "Example Drum Samples Vol 3 WAV",
+    &[
+        ("Kicks/Kick 01.wav", 30 << 20),
+        ("Snares/Snare 01.wav", 30 << 20),
+        ("Installer.exe", 2 << 20),
+    ],
+);
+/// A short-episode pack FK-2@1 flags and FK-2@2 passes (RP-1b).
+const SHORTS: (&str, &[(&str, u64)]) = (
+    "Example Shorts S01 1080p WEB",
+    &[
+        ("Example Shorts S01E01 1080p WEB.mkv", 35 << 20),
+        ("Example Shorts S01E02 1080p WEB.mkv", 35 << 20),
+        ("Example Shorts S01E03 1080p WEB.mkv", 35 << 20),
+        ("Example Shorts S01E04 1080p WEB.mkv", 35 << 20),
+    ],
+);
+
+/// RP-1b on the real build: an install that applied every rule at
+/// version 1 keeps filtering with MW-2@1 and FK-2@1, with version 2 in
+/// shadow as a narrowing whose acceptance is weakening (the password),
+/// until it's accepted; a fresh store applies version 2 with nothing
+/// pending.
+#[test]
+fn a_version_1_install_keeps_mw2_and_fk2_at_1_until_accepted() {
+    let m = Manifest::builtin();
+    let mut s = store();
+    s.set_pack_switch("fakes", true).unwrap();
+    seeded_with_malware(&mut s, &m);
+    let e = load(&m, &s);
+    for r in [PackRule::Mw2, PackRule::Fk2] {
+        let st = e.pack_versions.state(r);
+        assert_eq!(
+            (st.applied, st.apply.clone(), st.shadow),
+            (Some(1), vec![1], Some(2)),
+            "{}",
+            r.id()
+        );
+        assert_eq!(st.direction, Some(Direction::Narrows), "{}", r.id());
+    }
+    // Version 1 still decides, and the shadow shows only it holds them.
+    assert_eq!(decide(&e, DRUMS), Some((MW2, Action::Hide)));
+    let fk2 = RuleRef::Pack(PackRule::Fk2);
+    assert_eq!(decide(&e, SHORTS), Some((fk2, Action::Flag)));
+    for (t, rule) in [(DRUMS, PackRule::Mw2), (SHORTS, PackRule::Fk2)] {
+        let sh = shadow_of(&e, t);
+        assert_eq!(sh.len(), 1, "{}", t.0);
+        assert_eq!(sh[0].side(), Some(Side::AppliedOnly), "{}", t.0);
+        assert!(!acceptance_strengthens(&e.pack_versions, rule, &sh));
+    }
+    // Accepted (the route asks for the password first): both pass.
+    upgrade::accept(&mut s, &m, &[PackRule::Mw2, PackRule::Fk2], 0).unwrap();
+    let e = load(&m, &s);
+    for r in [PackRule::Mw2, PackRule::Fk2] {
+        let st = e.pack_versions.state(r);
+        assert_eq!(st.apply, [2], "{}", r.id());
+        assert!(!st.pending() && st.plain, "{}", r.id());
+    }
+    assert_eq!(decide(&e, DRUMS), None);
+    assert_eq!(decide(&e, SHORTS), None);
+    assert!(shadow_of(&e, DRUMS).is_empty() && shadow_of(&e, SHORTS).is_empty());
+    // A fresh store applies version 2, with nothing pending.
+    let mut fresh = fresh_store();
+    assert!(upgrade::ensure_seeded(&mut fresh, &m, 0).unwrap().is_some());
+    let e = load(&m, &fresh);
+    for r in [PackRule::Mw2, PackRule::Fk2] {
+        let st = e.pack_versions.state(r);
+        assert_eq!(st.apply, [2], "{}", r.id());
+        assert!(!st.pending(), "{}", r.id());
+    }
+    assert_eq!(decide(&e, DRUMS), None);
+    assert_eq!(decide(&e, SHORTS), None);
 }

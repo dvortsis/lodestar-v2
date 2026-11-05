@@ -33,6 +33,25 @@ struct Fixture {
     _dir: tempfile::TempDir,
 }
 
+/// The built-in manifest with every rule at its first version: MW-2 and
+/// FK-2 cut back to the version 1 this build keeps (RP-1b ships their
+/// version 2). These are RP-3's acceptance tests, which start from an
+/// install that applied every rule at version 1; the shipped manifest's
+/// own corpus report is checked with [`Manifest::builtin`].
+fn baseline() -> Arc<Manifest> {
+    let b = Manifest::builtin();
+    let entries = PackRule::ALL
+        .into_iter()
+        .map(|r| {
+            let e = b.entry(r);
+            let first = e.versions()[0].clone();
+            assert!(first.code.is_some(), "{} keeps its version 1", r.id());
+            RuleEntry::new(r, e.baseline, vec![first])
+        })
+        .collect();
+    Arc::new(Manifest::new(entries).unwrap())
+}
+
 fn real_mw2(c: &PackCtx<'_>) -> bool {
     c.matches(PackRule::Mw2)
 }
@@ -40,7 +59,7 @@ fn real_mw2(c: &PackCtx<'_>) -> bool {
 /// The built-in manifest with MW-2's versions replaced by `versions`
 /// (number, direction, action), each matching as MW-2 does today.
 fn mw2(versions: &[(u32, Direction, Action)]) -> Arc<Manifest> {
-    let b = Manifest::builtin();
+    let b = baseline();
     let mut entries: Vec<RuleEntry> = PackRule::ALL
         .into_iter()
         .filter(|r| *r != PackRule::Mw2)
@@ -76,7 +95,7 @@ fn bumped(direction: Direction, action: Action) -> Arc<Manifest> {
 /// The built-in manifest with MW-5 as a rule added after RP-0, as MW-6 is:
 /// an install that never applied it has it pending at version 1.
 fn new_rule() -> Arc<Manifest> {
-    let b = Manifest::builtin();
+    let b = baseline();
     let entries = PackRule::ALL
         .into_iter()
         .map(|r| {
@@ -98,7 +117,7 @@ fn fixture_with(manifest: Arc<Manifest>, missing: &[PackRule]) -> Fixture {
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
     store.update_settings_text(&[], &[FRESH_KEY]).unwrap();
-    let mut record = upgrade::current_record(&Manifest::builtin());
+    let mut record = upgrade::current_record(&baseline());
     for r in missing {
         record.0.remove(r.id());
     }
@@ -332,7 +351,12 @@ async fn get_filters_lists_versions_changelogs_and_pending_versions() {
         json!([{
             "applied": 1, "direction": "widens", "pack": "malware", "rule": "MW-2",
             "version": 2,
-            "changelog": [{"direction": "widens", "text": null, "version": 2}],
+            // The test's MW-2@2 widens; its text is the shipped MW-2@2's.
+            "changelog": [{
+                "direction": "widens",
+                "text": lodestar_filter::packs::manifest::changelog_entry(PackRule::Mw2, 2),
+                "version": 2,
+            }],
         }])
     );
     assert_eq!(o["pack_conditions"], json!([]));
@@ -484,7 +508,7 @@ async fn every_weakening_acceptance_needs_the_password() {
     let c = logged_in(&f).await;
     {
         let mut store = f.api.store.lock().unwrap();
-        let mut rec = upgrade::current_record(&Manifest::builtin());
+        let mut rec = upgrade::current_record(&baseline());
         rec.0.insert("MW-2".into(), 2);
         let t = rec.encode();
         store
@@ -535,7 +559,7 @@ async fn a_version_state_in_doubt_makes_acceptance_weakening() {
     // The rows differ: MW-1 recorded at 1 by one, missing from the other.
     {
         let mut store = f.api.store.lock().unwrap();
-        let a = upgrade::current_record(&Manifest::builtin());
+        let a = upgrade::current_record(&baseline());
         let mut b = a.clone();
         b.0.insert("XX-1".into(), 1);
         let (a, b) = (a.encode(), b.encode());
@@ -766,16 +790,15 @@ async fn fixtures_report_the_pack_corpora_per_rule() {
         assert!(r["must_not_match"].as_u64().unwrap() >= 3, "{r}");
         assert_eq!(r["failing"], json!(0), "{r}");
         assert_eq!(r["direction_disagreements"], json!(0), "{r}");
-        assert_eq!(r["version"], json!(1));
+        let id = PackRule::from_id(r["rule"].as_str().unwrap()).unwrap();
+        let shipped = Manifest::builtin().entry(id).current().version;
+        assert_eq!(r["version"], json!(shipped), "{r}");
     }
-    // RP-1's known gaps show per rule, so they never read as a clean pass.
-    let gaps = |id: &str| {
-        rules.iter().find(|r| r["rule"] == id).unwrap()["gaps"]
-            .as_u64()
-            .unwrap()
-    };
-    assert!(gaps("MW-2") >= 1 && gaps("FK-2") >= 1);
-    assert_eq!(gaps("MW-1"), 0);
+    // RP-1's known gaps showed per rule, so they never read as a clean
+    // pass; RP-1b built the last two guards, so none is left.
+    for r in rules {
+        assert_eq!(r["gaps"], json!(0), "{r}");
+    }
     // The core part is as it was.
     assert!(fx["core"].as_array().is_some_and(|c| !c.is_empty()));
 }
@@ -1063,7 +1086,7 @@ async fn a_failed_write_leaves_nothing_half_committed() {
 /// silently; the lines that read still mark their holds.
 #[tokio::test]
 async fn a_review_line_that_does_not_read_is_reported() {
-    let f = fixture(Manifest::builtin());
+    let f = fixture(baseline());
     let c = logged_in(&f).await;
     {
         let mut store = f.api.store.lock().unwrap();
@@ -1241,7 +1264,7 @@ async fn a_new_pending_version_starts_its_own_evidence() {
 /// does.
 #[tokio::test]
 async fn the_real_mw6_is_accepted_without_a_password_while_its_shadow_agrees() {
-    let f = fixture_with(Manifest::builtin(), &[PackRule::Mw6]);
+    let f = fixture_with(baseline(), &[PackRule::Mw6]);
     let c = logged_in(&f).await;
     assert!(
         lodestar_filter::packs::manifest::ADDED_AFTER_RP0.contains(&PackRule::Mw6),
@@ -1281,7 +1304,7 @@ async fn the_real_mw6_is_accepted_without_a_password_while_its_shadow_agrees() {
     // A new rule has no applied side, so an ordinary MW-6 hit can't come
     // from an applied version. Read as "only the applied version holds
     // it", it's a disagreement, so the acceptance fails closed.
-    let f = fixture_with(Manifest::builtin(), &[PackRule::Mw6]);
+    let f = fixture_with(baseline(), &[PackRule::Mw6]);
     let c = logged_in(&f).await;
     f.api.resume_requeues(now()).unwrap();
     hit(&f, "MW-6", 4, Action::Hide, false, 30);

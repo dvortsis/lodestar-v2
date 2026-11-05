@@ -3,7 +3,8 @@
 //! corpora. The numbers are printed (`--nocapture`) for the PR.
 //!
 //! - **Lawful names:** every golden-corpus name, with the files a torrent
-//!   of its kind carries, is held by neither rule.
+//!   of its kind carries, is held by neither rule. Version 1 holds none
+//!   either, so this shows neither over-filters, not what the guards do.
 //! - **Version 1's part is unchanged on real names:** with a lure added
 //!   to each one (an installer beside the media for MW-2, each video
 //!   shrunk under the 40 MiB tiny-video threshold for FK-2), version 2
