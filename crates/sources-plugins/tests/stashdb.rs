@@ -1,4 +1,4 @@
-//! Contract tests for the StashDB plugin (ENR-4, §18.9), on hand-written
+//! Contract tests for the StashDB plugin (ENR-5, §18.9), on hand-written
 //! fixtures in `fixtures/stashdb/`, with no network. `README.md` is the
 //! pattern they follow (SRC-7's).
 
@@ -268,6 +268,10 @@ fn answers_that_are_not_understood_are_errors() {
         ),
         // GraphQL errors beside an otherwise empty answer.
         r#"{"errors":[{"message":"x"}],"data":{"searchScene":[]}}"#.to_owned(),
+        // An error beside a readable top scene: part of it may be missing.
+        format!(
+            r#"{{"errors":[{{"message":"x"}}],"data":{{"searchScene":[{{"id":"{id1}","title":"T","performers":null}}]}}}}"#
+        ),
         // Cut off.
         format!(r#"{{"data":{{"searchScene":[{{"id":"{id1}","title":"#),
         // Every item skipped.

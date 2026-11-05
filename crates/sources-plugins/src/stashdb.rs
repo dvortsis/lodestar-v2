@@ -264,12 +264,17 @@ pub fn parse_answer(body: &[u8]) -> Result<Lookup, PluginError> {
     });
     // A second item ends the read (`Stop::Items`) after the first was kept;
     // that's expected. An unreadable first item leaves nothing here.
-    if let Some(s) = found.into_iter().next() {
-        return Ok(to_lookup(s));
+    // GraphQL errors, even beside a readable scene, mean part of the answer
+    // may be missing (a failed performers resolver, say): not understood.
+    if page.errors > 0 {
+        return Err(fail(BAD_ANSWER));
     }
-    // GraphQL errors (even beside partial data) and any cut or skipped
-    // item mean the answer wasn't understood, not that nothing matched.
-    if page.stop.is_some() || page.skipped.total() > 0 || page.errors > 0 {
+    if let Some(s) = found.into_iter().next() {
+        return to_lookup(s);
+    }
+    // A cut or skipped item means the answer wasn't understood, not that
+    // nothing matched.
+    if page.stop.is_some() || page.skipped.total() > 0 {
         return Err(fail(BAD_ANSWER));
     }
     // The parser doesn't say whether it saw `searchScene`, so this does:
@@ -295,17 +300,19 @@ fn empty_search(body: &[u8]) -> bool {
     )
 }
 
-/// ENR-0's section from one scene. A scene id the section refuses is no
-/// match: a cut id would point at another scene. Performers are names
+/// ENR-0's section from one scene. A scene id the section refuses is an
+/// error: a cut id would point at another scene. Performers are names
 /// only (Q4); the parser keeps no performer id and no personal field (Q5).
-pub fn to_lookup(s: Scene) -> Lookup {
+pub fn to_lookup(s: Scene) -> Result<Lookup, PluginError> {
     let Scene {
         matched,
         performers,
         performers_truncated,
     } = s;
+    // Can't happen (the parser keeps UUIDs), but if it did, a non-empty
+    // answer must not be cached as a miss.
     if !scene_id_ok(&matched.id) {
-        return Lookup::NoMatch;
+        return Err(fail(BAD_ANSWER));
     }
     let mut section = AdultEnrichment::new(matched.id);
     // Stash-box has scenes only (VR is a tag, which isn't read).
@@ -326,7 +333,7 @@ pub fn to_lookup(s: Scene) -> Lookup {
         .take(MAX_PERFORMERS)
         .collect();
     section.performers_truncated = performers_truncated || section.performers.len() < before;
-    Lookup::Match(section)
+    Ok(Lookup::Match(section))
 }
 
 /// ENR-0's rule for a scene id: 1 to `MAX_SCENE_ID` ASCII letters, digits
