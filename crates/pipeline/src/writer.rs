@@ -108,6 +108,9 @@ pub(crate) struct Writer {
     pub store: Option<Store>,
     /// The sources whose every find is adult ([`crate::source_adult`]).
     pub adult: AdultSources,
+    /// The adult-enrichment sources: only they may attach an enrichment
+    /// section (`unverified::Ctx::enrichers`, ENR-1b).
+    pub enrichers: crate::adult_enrich::EnrichSources,
     /// The background enrichment pass: the last id it reached, and whether
     /// it has found nothing left to do.
     pub backfill_after: i64,
@@ -478,6 +481,36 @@ impl Writer {
         committing
     }
 
+    /// Marks for the backfill the enrichment matches on `ids`, rows this
+    /// commit found already stored, whose record it may have rewritten
+    /// without them (a partial import's upgrade; ENR-1b), and starts the
+    /// pass. A separate transaction after the commit: a crash between them
+    /// leaves the kind unpinned until the next rules or parser change.
+    async fn mark_rewritten(&mut self, ids: Vec<i64>) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut store = self.store.take().expect("store");
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let result = crate::enrich::mark_matched(&mut store, &ids);
+            (store, result)
+        })
+        .await
+        .expect("mark task");
+        self.store = Some(store);
+        match result {
+            Ok(marked) if !marked.is_empty() => self.reenrich.store(true, Ordering::Release),
+            Ok(_) => {}
+            Err(e) => {
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::ENRICHMENT_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
     /// Classifies as adult the stored torrents among `ids` that an
     /// always-adult source has just found ([`crate::enrich::adult_by_source`]),
     /// marking what it holds for intake before its write.
@@ -713,6 +746,7 @@ impl Writer {
                     sealer: sealer.as_deref(),
                     quarantine_secs,
                     adult,
+                    ..Default::default()
                 },
                 stats: &stats.unverified,
                 mark: &mark,
@@ -833,6 +867,14 @@ impl Writer {
             .iter()
             .filter(|(i, _, _, _)| committing[*i].results.source_adult)
             .map(|&(_, id, _, _)| id)
+            .collect();
+        // Rows already stored that this commit rewrote (a partial import's
+        // upgrade writes prepare's record, which knows no match: ENR-1b).
+        let rewritten: Vec<i64> = outcome
+            .stored
+            .iter()
+            .filter(|s| !s.2)
+            .map(|s| s.1)
             .collect();
         let committed_at = unix_now();
         let mut cache_stored = Vec::new();
@@ -986,6 +1028,7 @@ impl Writer {
             return cache_stored;
         }
         self.adult_by_source(adult_ids).await;
+        self.mark_rewritten(rewritten).await;
         if self.have.is_full() {
             self.rebuild_have().await;
         }
@@ -1352,6 +1395,7 @@ impl Writer {
         let held = self.held.clone();
         let stats = self.stats.clone();
         let adult = self.adult;
+        let (enrichers, reenrich) = (self.enrichers, self.reenrich.clone());
         #[cfg(test)]
         let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
@@ -1369,6 +1413,9 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
                 adult,
+                enrichers,
+                filter: Some(&filter),
+                reenrich: Some(&reenrich),
             };
             let result = unverified::ingest(
                 &mut store,
@@ -1465,6 +1512,7 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
                 adult,
+                ..Default::default()
             };
             let result = unverified::refile_step(
                 &mut store,
@@ -2305,6 +2353,7 @@ mod tests {
         Writer {
             store: Some(store),
             adult: AdultSources::default(),
+            enrichers: Default::default(),
             backfill_after: 0,
             backfill_done: true,
             backfill_backoff: Default::default(),
@@ -2470,6 +2519,62 @@ mod tests {
         assert_eq!(count(&gate), (1, 1, 1, 1));
         assert_eq!(w.stats.errors.load(Ordering::Relaxed), 1);
         assert_eq!(w.stats.stored.load(Ordering::Relaxed), 1);
+    }
+
+    /// A commit that finds its row already stored (a partial import's
+    /// upgrade rewrites it) marks the row's enrichment match for the
+    /// backfill and starts the pass (ENR-1b).
+    #[tokio::test]
+    async fn a_rewritten_match_is_marked_at_commit() {
+        use lodestar_store::claims::{AdultEnrichment, AdultKind, Claims};
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let enr = store.register_source("enr", "1", 1).unwrap();
+        let mut w = writer(store, coordinator.clone(), gate);
+        let (retry, _retry_rx) = mpsc::channel(4);
+        w.commit(
+            vec![leased(&coordinator, results())],
+            vec![],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        let store = w.store.as_mut().unwrap();
+        let id = store.find(&results().key).unwrap().unwrap();
+        let section = AdultEnrichment {
+            kind: Some(AdultKind::Vr),
+            ..AdultEnrichment::new("1")
+        };
+        let claims = Claims {
+            adult: Some(section),
+            ..Claims::default()
+        };
+        assert!(store.put_claims(id, enr, &claims, false).unwrap());
+        let current = |w: &Writer| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .enrichment(id)
+                .unwrap()
+                .unwrap()
+                .version
+                == lodestar_classify::ENRICHMENT_VERSION
+        };
+        assert!(current(&w));
+        assert!(!w.reenrich.load(Ordering::Acquire));
+        w.commit(
+            vec![leased(&coordinator, results())],
+            vec![],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        assert!(!current(&w), "marked for the backfill");
+        assert!(w.reenrich.load(Ordering::Acquire));
     }
 
     /// A refetch is never the network's and never the funnel's: one that

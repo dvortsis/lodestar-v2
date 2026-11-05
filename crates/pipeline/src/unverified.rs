@@ -31,7 +31,7 @@
 //! Nothing here logs or returns a claim's text: holds carry rule ids,
 //! evidence codes and sealed names only.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use lodestar_classify::{Correction, FileInfo, Record, classify_corrected};
 use lodestar_filter::reclassify::{adult_hold, judge_with_rules};
@@ -522,6 +522,19 @@ pub struct Ctx<'a> {
     pub quarantine_secs: i64,
     /// The sources whose every find is adult ([`crate::source_adult`]).
     pub adult: AdultSources,
+    /// The adult-enrichment sources (`Kind::Enrichment`, ENR-1b): only
+    /// these may attach an adult-enrichment section. Any other source's
+    /// section is dropped and its other claims take the usual path, so an
+    /// always-adult source can't use one to skip its mask. Empty (the
+    /// default): no source may.
+    pub enrichers: crate::adult_enrich::EnrichSources,
+    /// The live filter: an enrichment match is classified under its
+    /// classification rules read *after* the generation, never under the
+    /// engine the batch was judged with (ENR-1b). Without it, matches are
+    /// left for the backfill.
+    pub filter: Option<&'a Handle>,
+    /// Raised when matches were left for the backfill, so it runs.
+    pub reenrich: Option<&'a AtomicBool>,
 }
 
 impl std::fmt::Debug for Ctx<'_> {
@@ -530,7 +543,9 @@ impl std::fmt::Debug for Ctx<'_> {
             .field("sealer", &self.sealer.is_some())
             .field("quarantine_secs", &self.quarantine_secs)
             .field("adult", &self.adult)
-            .finish()
+            .field("enrichers", &self.enrichers)
+            .field("filter", &self.filter.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -573,10 +588,30 @@ pub fn ingest(
     let mut matches: Vec<(&Discovery, Claims, i64)> = Vec::new();
     let mut holds: Vec<Hold> = Vec::new();
     for d in found {
-        let Some(c) = store_claims(d) else { continue };
+        let Some(mut c) = store_claims(d) else {
+            continue;
+        };
         if c.check().is_err() {
             UnverifiedStats::add(&stats.invalid, 1);
             continue;
+        }
+        // Only an enrichment source may attach an adult section (ENR-1b).
+        // Any other source's claims go on without it, by the usual path.
+        if c.adult.is_some() && !ctx.enrichers.has(d.source) {
+            c.adult = None;
+            if c == Claims::default() {
+                // Nothing else was claimed. An always-adult source has
+                // still found the torrent stored under the key: its mask
+                // applies, as for a bare sighting.
+                if ctx.adult.has(d.source)
+                    && let Some(id) = store.find(&d.found.key)?
+                    && !out.adult.contains(&id)
+                {
+                    out.adult.push(id);
+                }
+                UnverifiedStats::add(&stats.refused, 1);
+                continue;
+            }
         }
         let adult = ctx.adult.has(d.source);
         // An adult-enrichment match (ENR-1) is only ever about a stored,
@@ -706,10 +741,26 @@ pub fn ingest(
     }
     if !out.matched.is_empty() {
         // The kind is a refinement, never a safety decision: if classifying
-        // fails here, the backfill applies the match instead.
+        // fails here, or there's no live filter to classify under, the
+        // backfill applies the match instead.
         let ids = out.matched.clone();
-        if crate::enrich::apply_matches(store, &ids, engine, ctx.adult, now).is_err() {
-            let _ = store.mark_unenriched(&ids);
+        let deferred = match ctx.filter {
+            Some(filter) => match crate::enrich::apply_matches(store, &ids, filter, ctx.adult, now)
+            {
+                Ok(m) => !m.deferred.is_empty(),
+                // Marked if it can be; the flag starts a pass either way.
+                Err(_) => {
+                    let _ = store.mark_unenriched(&ids);
+                    true
+                }
+            },
+            None => {
+                let _ = store.mark_unenriched(&ids);
+                true
+            }
+        };
+        if deferred && let Some(flag) = ctx.reenrich {
+            flag.store(true, Ordering::Release);
         }
     }
     Ok(out)

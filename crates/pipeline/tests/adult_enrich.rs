@@ -26,7 +26,8 @@ use lodestar_filter::{
 };
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_pipeline::adult_enrich::{
-    self, AdultEnrichSource, Config, GateCtx, Ineligible, Interest, STRATEGY, Switches,
+    self, AdultEnrichSource, Config, EnrichSources, GateCtx, Ineligible, Interest, STRATEGY,
+    Switches,
 };
 use lodestar_pipeline::enrich::{enrich_with_rule, file_infos};
 use lodestar_pipeline::source_adult::AdultSources;
@@ -766,11 +767,31 @@ async fn the_plugin_stops_after_shutdown() {
 /// The writer's side: what one emitted match becomes, through SRC-2's
 /// filter-before-storage path.
 fn ingest(s: &mut Store, engine: &Engine, d: &Discovery) -> unverified::Ingested {
+    // The discovery's source is an enrichment source, as the runtime's is.
+    let ctx = Ctx {
+        enrichers: EnrichSources(1 << d.source.get()),
+        ..Ctx::default()
+    };
+    ingest_with(s, engine, ctx, d)
+}
+
+/// [`ingest`] with `ctx`, under a live filter holding `engine`.
+fn ingest_with(
+    s: &mut Store,
+    engine: &Engine,
+    ctx: Ctx<'_>,
+    d: &Discovery,
+) -> unverified::Ingested {
     let stats = UnverifiedStats::default();
+    let filter = Handle::new(engine.clone());
+    let ctx = Ctx {
+        filter: ctx.filter.or(Some(&filter)),
+        ..ctx
+    };
     unverified::ingest(
         s,
         engine,
-        Ctx::default(),
+        ctx,
         std::slice::from_ref(d),
         &stats,
         T,
@@ -1134,8 +1155,8 @@ fn the_policy_is_capped_at_one_request_a_second() {
 }
 
 /// Q2's "never the files": an uninformative name whose title would come
-/// from a file sends nothing in the parsed form, and the name form sends
-/// the torrent's own name.
+/// from a file sends nothing in either form, and an informative name sends
+/// none of a file's name.
 #[test]
 fn a_file_name_is_never_sent() {
     let (mut s, dht, enr) = store();
@@ -1159,10 +1180,11 @@ fn a_file_name_is_never_sent() {
         adult_enrich::check(&mut s, &engine, ctx(QueryForm::Parsed), vague, T).unwrap(),
         Err(Ineligible::NoQuery)
     );
-    let got = adult_enrich::check(&mut s, &engine, ctx(QueryForm::Name), vague, T)
-        .unwrap()
-        .unwrap();
-    assert_eq!(got.query, Query::name("New folder").unwrap());
+    // A vague name sends nothing in the name form either (ENR-1b).
+    assert_eq!(
+        adult_enrich::check(&mut s, &engine, ctx(QueryForm::Name), vague, T).unwrap(),
+        Err(Ineligible::NoQuery)
+    );
     for form in [QueryForm::Parsed, QueryForm::Name] {
         let got = adult_enrich::check(&mut s, &engine, ctx(form), named, T)
             .unwrap()
@@ -1200,4 +1222,348 @@ fn a_torrent_pending_reclassification_waits() {
         adult_enrich::check(&mut s, &engine, ctx, id, T).unwrap(),
         Err(Ineligible::Pending)
     );
+}
+
+/// The mask can't be skipped (ENR-1b): an always-adult source that isn't an
+/// enrichment source attaching a section has it dropped, and its claims
+/// take the usual path, so the writer still classifies the torrent adult.
+#[test]
+fn an_always_adult_source_cannot_skip_its_mask_with_a_section() {
+    let (mut s, dht, enr) = store();
+    let sukebei = s.register_source("sukebei", "1", 0).unwrap();
+    let (id, key) = put(&mut s, "Garden Tour 2022", dht, 0, false);
+    let engine = stand_in().current();
+    let ctx = Ctx {
+        adult: AdultSources(1 << sukebei.get()),
+        enrichers: EnrichSources(1 << enr.get()),
+        ..Ctx::default()
+    };
+    let claims = lodestar_sources::Claims {
+        name: Some("Garden Tour 2022".into()),
+        adult: Some(section(Some(Kind2::Scene), "Garden")),
+        ..Default::default()
+    };
+    let d = Discovery {
+        source: sukebei,
+        found: lodestar_sources::Found::key(key, 0).with_claims(claims),
+        at: T,
+        reply: false,
+    };
+    let done = ingest_with(&mut s, &engine, ctx, &d);
+    assert!(done.matched.is_empty(), "not the matches path");
+    assert_eq!(done.adult, vec![id], "the mask applies");
+    let stored = s.torrent_claims(id).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert!(
+        stored[0].claims.as_ref().unwrap().adult.is_none(),
+        "no section kept"
+    );
+
+    // A section alone from the always-adult source: nothing is stored, but
+    // its mask still applies to the torrent it found.
+    let (other, other_key) = put(&mut s, "Garden Tour 2023", dht, 0, false);
+    let d = matched(sukebei, other_key, section(Some(Kind2::Scene), "Garden"));
+    let done = ingest_with(&mut s, &engine, ctx, &d);
+    assert!(done.matched.is_empty());
+    assert_eq!(done.adult, vec![other], "the mask applies");
+    assert!(s.torrent_claims(other).unwrap().is_empty());
+
+    // A section alone, from a source that isn't an enrichment source,
+    // stores nothing.
+    let d = matched(dht, key, section(Some(Kind2::Scene), "Garden"));
+    let done = ingest_with(&mut s, &engine, ctx, &d);
+    assert!(done.matched.is_empty() && done.touched.is_empty());
+    assert!(
+        !s.torrent_claims(id)
+            .unwrap()
+            .iter()
+            .any(|c| c.source == dht)
+    );
+}
+
+/// The generation race (ENR-1b): a classification-rule change that lands
+/// after the writer took its engine and before the match is classified
+/// can't be overwritten. The match is classified under the live rules read
+/// after the generation, so a new Not adult rule keeps the row marked for
+/// the backfill instead of writing the stale adult reading over the mark.
+#[test]
+fn a_rules_change_under_a_match_is_not_overwritten() {
+    let (mut s, dht, enr) = store();
+    let (id, key) = put(&mut s, "Studiox Garden Scene XXX 1080p", dht, 0, false);
+    let filter = stand_in();
+    // The writer's snapshot, taken before the batch.
+    let stale = filter.current();
+    // The rules change in between, as the API makes it: a Not adult rule,
+    // a new generation, the rows marked, the live filter updated.
+    let rule = s.add_class_rule("garden", false).unwrap();
+    s.bump_class_gen().unwrap();
+    s.mark_unenriched(&[id]).unwrap();
+    filter.update_engine(|e| {
+        assert!(
+            e.load_class_rules(&[(rule, "garden".into(), false)])
+                .is_empty()
+        );
+    });
+    let ctx = Ctx {
+        enrichers: EnrichSources(1 << enr.get()),
+        filter: Some(&filter),
+        ..Ctx::default()
+    };
+    let done = ingest_with(
+        &mut s,
+        &stale,
+        ctx,
+        &matched(enr, key, section(Some(Kind2::Vr), "Garden")),
+    );
+    assert_eq!(done.matched, vec![id], "the claim is stored");
+    let e = s.enrichment(id).unwrap().unwrap();
+    assert_ne!(
+        e.version,
+        lodestar_classify::ENRICHMENT_VERSION,
+        "still marked"
+    );
+    let r = Record::decode(&e.data).unwrap();
+    assert_ne!(r.adult_kind, Some(AdultKind::Vr), "no stale pin written");
+}
+
+/// Matches left for the backfill raise its flag, and with no live filter
+/// they're all left for it.
+#[test]
+fn deferred_matches_raise_the_backfill_flag() {
+    let (mut s, dht, enr) = store();
+    // Not stored as adult: becoming adult needs the backfill's judgement.
+    let (id, key) = put(&mut s, "Garden Tour 2022", dht, 0, false);
+    let engine = stand_in().current();
+    let flag = std::sync::atomic::AtomicBool::new(false);
+    let ctx = Ctx {
+        enrichers: EnrichSources(1 << enr.get()),
+        reenrich: Some(&flag),
+        ..Ctx::default()
+    };
+    ingest_with(
+        &mut s,
+        &engine,
+        ctx,
+        &matched(enr, key, section(Some(Kind2::Scene), "Garden")),
+    );
+    assert!(flag.load(Ordering::SeqCst));
+    assert_ne!(
+        s.enrichment(id).unwrap().unwrap().version,
+        lodestar_classify::ENRICHMENT_VERSION
+    );
+
+    // No filter: left for the backfill too.
+    let (id, key) = put(&mut s, "Garden Scene", dht, 0, true);
+    let flag = std::sync::atomic::AtomicBool::new(false);
+    let ctx = Ctx {
+        enrichers: EnrichSources(1 << enr.get()),
+        reenrich: Some(&flag),
+        ..Ctx::default()
+    };
+    let stats = UnverifiedStats::default();
+    let d = matched(enr, key, section(Some(Kind2::Scene), "Garden"));
+    unverified::ingest(
+        &mut s,
+        &engine,
+        ctx,
+        std::slice::from_ref(&d),
+        &stats,
+        T,
+        &|_, _| {},
+    )
+    .unwrap();
+    assert!(flag.load(Ordering::SeqCst));
+    assert_ne!(
+        s.enrichment(id).unwrap().unwrap().version,
+        lodestar_classify::ENRICHMENT_VERSION
+    );
+}
+
+/// A torrent refused as pending is eligible again once the backfill has
+/// classified it again.
+#[test]
+fn the_backfill_makes_a_pending_torrent_eligible_again() {
+    let (mut s, dht, enr) = store();
+    let (id, _) = put(&mut s, "Studiox Garden Scene XXX 1080p", dht, 0, false);
+    let filter = stand_in();
+    let flags = on();
+    let ctx = GateCtx {
+        manifest: &MANIFEST,
+        source: enr,
+        form: QueryForm::Name,
+        adult: AdultSources::default(),
+        switches: &*flags,
+    };
+    s.mark_unenriched(&[id]).unwrap();
+    assert_eq!(
+        adult_enrich::check(&mut s, &filter.current(), ctx, id, T).unwrap(),
+        Err(Ineligible::Pending)
+    );
+    let backfill = lodestar_pipeline::enrich::Backfill {
+        filter: Some(&filter),
+        ..Default::default()
+    };
+    lodestar_pipeline::enrich::enrich_stored_with(&mut s, 0, 100, &backfill).unwrap();
+    assert!(
+        adult_enrich::check(&mut s, &filter.current(), ctx, id, T)
+            .unwrap()
+            .is_ok()
+    );
+}
+
+/// A commit that rewrote a matched torrent's record without its claims (a
+/// partial import's upgrade) is marked so the backfill applies the match
+/// again; a torrent without a match isn't touched.
+#[test]
+fn a_rewritten_match_is_marked_and_applied_again() {
+    let (mut s, dht, enr) = store();
+    let (with, key) = put(&mut s, "Studiox Garden Scene XXX 1080p", dht, 0, false);
+    let (without, _) = put(&mut s, "Studiox Other Scene XXX 1080p", dht, 0, false);
+    let filter = stand_in();
+    let engine = filter.current();
+    ingest(
+        &mut s,
+        &engine,
+        &matched(enr, key, section(Some(Kind2::Vr), "Garden")),
+    );
+    // The upgrade writes prepare's record, which knows no match.
+    let raw = info_dict("Studiox Garden Scene XXX 1080p");
+    let info = Info::parse(&raw).unwrap();
+    let files = file_infos(&info.files, info.path_encoding);
+    let plain = enrich_with_rule("Studiox Garden Scene XXX 1080p", &files, None);
+    s.set_enrichments(&[(with, plain)]).unwrap();
+    let kind = |s: &Store, id| {
+        Record::decode(&s.enrichment(id).unwrap().unwrap().data)
+            .unwrap()
+            .adult_kind
+    };
+    assert_ne!(kind(&s, with), Some(AdultKind::Vr));
+    let marked = lodestar_pipeline::enrich::mark_matched(&mut s, &[with, without]).unwrap();
+    assert_eq!(marked, vec![with]);
+    assert_eq!(
+        s.enrichment(without).unwrap().unwrap().version,
+        lodestar_classify::ENRICHMENT_VERSION
+    );
+    let backfill = lodestar_pipeline::enrich::Backfill {
+        filter: Some(&filter),
+        ..Default::default()
+    };
+    lodestar_pipeline::enrich::enrich_stored_with(&mut s, 0, 100, &backfill).unwrap();
+    assert_eq!(kind(&s, with), Some(AdultKind::Vr));
+}
+
+/// A source the test drives through a channel, with its own manifest.
+struct Scripted {
+    manifest: Manifest,
+    rx: Mutex<Option<mpsc::Receiver<lodestar_sources::Found>>>,
+}
+
+impl SourcePlugin for Scripted {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        let mut rx = self.rx.lock().unwrap().take().expect("run once");
+        Box::pin(async move {
+            loop {
+                tokio::select! {
+                    _ = ctx.shutdown.requested() => return Ok(()),
+                    Some(f) = rx.recv() => {
+                        ctx.emitter.emit(f).await.map_err(|_| PluginError("closed".into()))?;
+                    }
+                }
+            }
+        })
+    }
+}
+
+fn scripted(
+    id: &'static str,
+    kinds: &'static [Kind],
+) -> (Arc<Scripted>, mpsc::Sender<lodestar_sources::Found>) {
+    let (tx, rx) = mpsc::channel(8);
+    let manifest = Manifest {
+        id,
+        name: id,
+        kinds,
+        consent: Consent::None,
+        enabled_by_default: true,
+        ..MANIFEST.clone()
+    };
+    let s = Scripted {
+        manifest,
+        rx: Mutex::new(Some(rx)),
+    };
+    (Arc::new(s), tx)
+}
+
+/// Intake counts a feed's discovery as harvested, never an enrichment
+/// source's match on a stored torrent (ENR-1b), and the match is still
+/// stored through the writer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_match_is_not_counted_as_harvested() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let key = {
+        let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+        let dht = s.register_source("dht", "1", 0).unwrap();
+        put(&mut s, "Garden Scene", dht, 0, true).1
+    };
+    let (enricher, enrich_tx) = scripted("test-enricher", &[Kind::Enrichment]);
+    let (feed, feed_tx) = scripted("test-feed", &[Kind::Discovery]);
+    let config = lodestar_pipeline::PipelineConfig {
+        flush_every: Duration::from_millis(100),
+        filter: stand_in(),
+        ..lodestar_pipeline::PipelineConfig::default()
+    };
+    let pipeline = lodestar_pipeline::Pipeline::start(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![enricher, feed],
+    )
+    .await
+    .unwrap();
+    let claims = lodestar_sources::Claims {
+        adult: Some(section(Some(Kind2::Scene), "Garden")),
+        ..Default::default()
+    };
+    enrich_tx
+        .send(lodestar_sources::Found::key(key, STRATEGY).with_claims(claims))
+        .await
+        .unwrap();
+    let named = lodestar_sources::Claims {
+        name: Some("Other Release 2024".into()),
+        ..Default::default()
+    };
+    let other = InfoHash([7; 20]);
+    feed_tx
+        .send(lodestar_sources::Found::key(other, 0).with_claims(named))
+        .await
+        .unwrap();
+    let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let harvested = |r: &Store| -> i64 {
+        r.rollup(lodestar_pipeline::metric::HARVESTED, 0, i64::MAX)
+            .unwrap()
+            .iter()
+            .map(|c| c.value)
+            .sum()
+    };
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    loop {
+        let id = reader.find(&key).unwrap().unwrap();
+        let stored = !reader.torrent_claims(id).unwrap().is_empty()
+            && reader.unverified(Net::Bt, &other.0).unwrap().is_some()
+            && harvested(&reader) >= 1;
+        if stored {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for both"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let store = pipeline.shutdown().await.unwrap();
+    assert_eq!(harvested(&store), 1, "only the feed's discovery");
 }
