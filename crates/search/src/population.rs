@@ -61,7 +61,7 @@ const FILE_PREFIX: &str = "file.";
 /// existing index then backfills that field, and its acceptance tests
 /// run SB-6 → import → producer on an existing database, including a
 /// restart mid-backfill.
-pub const GENERATIONS: [(&str, u32); 12] = [
+pub const GENERATIONS: [(&str, u32); 13] = [
     // SRC-3 (§18.6): every torrent's provenance.
     ("verified", 1),
     ("source", 1),
@@ -76,6 +76,7 @@ pub const GENERATIONS: [(&str, u32); 12] = [
     // X-search-files-5 (v7): filled by the rebuild that makes v7.
     ("file_bucket", 1),
     ("file_ext_bucket", 1),
+    ("title_identity", 1),
 ];
 
 /// The generations an index is built to: [`GENERATIONS`], or another

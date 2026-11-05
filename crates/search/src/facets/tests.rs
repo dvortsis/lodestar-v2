@@ -104,6 +104,7 @@ fn doc(i: u64) -> TorrentDoc {
             junk: i % 100,
             ambiguous: i.is_multiple_of(8),
             shares,
+            title_identity: None,
         },
         provenance: provenance(i),
         file_buckets: Vec::new(),

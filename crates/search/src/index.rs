@@ -338,6 +338,7 @@ fn resolve_fields(f: &Fields, r: &Resolver<'_>) -> Fields {
         name_trigram: m(f.name_trigram),
         file_bucket: m(f.file_bucket),
         file_ext_bucket: m(f.file_ext_bucket),
+        title_identity: m(f.title_identity),
     }
 }
 
@@ -930,7 +931,7 @@ impl SearchIndex {
     /// serving during the rebuild lacks them, and a backfill of them
     /// isn't complete until it is: either way the file index answers.
     pub(crate) fn bucket_terms_ready(&self) -> bool {
-        schema::V7_FIELDS
+        ["file_bucket", "file_ext_bucket"]
             .iter()
             .all(|f| self.availability(f) == Availability::Ready)
     }
