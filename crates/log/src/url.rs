@@ -122,12 +122,34 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
         let scrubbed = scrub_with(&format!("x:{url}"), Form::Absolute, drop_query);
         return scrubbed["x:".len()..].to_string();
     }
-    // A magnet link is all torrent: never shown.
-    if url
-        .get(..7)
-        .is_some_and(|s| s.eq_ignore_ascii_case("magnet:"))
-    {
+    // A magnet link is all torrent: never shown, percent-encoded too.
+    if starts_magnet(url) {
         return format!("magnet:{REDACTED}");
+    }
+    // A magnet glued to the authority (`http://[::1]magnet%3A…`, B-log1):
+    // it and all after it go, and with an `@` after it the rest goes too,
+    // since the URL rules would have hidden what's before that `@`. One in
+    // the path or query is `finish`'s.
+    let in_authority = |m: usize| {
+        form == Form::Absolute
+            && url[..m]
+                .find("://")
+                .is_some_and(|s| !url[s + 3..m].contains(['/', '?', '#']))
+    };
+    if let Some(m) = magnets().from(url, 1).filter(|&m| in_authority(m)) {
+        if url[m..].contains('@') {
+            return match url[..m].find("://") {
+                Some(s) if form == Form::Absolute => {
+                    format!("{}://{REDACTED}", redact_runs(&redact_secrets(&url[..s])))
+                }
+                _ if url.starts_with('/') => format!("/{REDACTED}"),
+                _ => REDACTED.to_string(),
+            };
+        }
+        let mut out = scrub_with(&url[..glued_run_start(url, m)], form, drop_query);
+        out.push_str("magnet:");
+        out.push_str(REDACTED);
+        return out;
     }
     let mut out = String::with_capacity(url.len());
     // The authority, userinfo included, comes off the raw URL first: a
@@ -137,8 +159,8 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
             Some((scheme, rest)) => {
                 // Free text's scheme may be the tail of what came before
                 // (`/dl/<passkey>.torrent://`): a real one is never
-                // passkey-like.
-                out.push_str(&redact_runs(scheme));
+                // passkey-like, nor a credential's value (`token:<t>://`).
+                out.push_str(&redact_runs(&redact_secrets(scheme)));
                 out.push_str("://");
                 let (at, end) = userinfo(rest);
                 let (authority, rest) = rest.split_at(end);
@@ -168,6 +190,26 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
                 };
                 // A host with its query or fragment and no path.
                 let host_end = authority.find(['?', '#']).unwrap_or(authority.len());
+                // No host holds a `%` outside an IPv6 literal: it's an
+                // encoded password (`u%3A<secret>%40h`), hidden whole. An
+                // IPv6 literal is one `[…]` and a port number at most.
+                let h = &authority[..host_end];
+                let odd = match h.strip_prefix('[') {
+                    Some(inner) => inner.split_once(']').is_none_or(|(literal, port)| {
+                        !literal
+                            .bytes()
+                            .all(|b| b.is_ascii_hexdigit() || matches!(b, b':' | b'.' | b'%'))
+                            || !(port.is_empty()
+                                || port
+                                    .strip_prefix(':')
+                                    .is_some_and(|p| p.bytes().all(|b| b.is_ascii_digit())))
+                    }),
+                    None => h.contains('%'),
+                };
+                if odd {
+                    out.push_str(REDACTED);
+                    return out;
+                }
                 // A `:` with no port number after it, and no `@` found,
                 // is a password whose `@` wasn't found (`u:<secret>/x`).
                 if at.is_none() {
@@ -200,13 +242,11 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
     finish(out, rest, drop_query)
 }
 
-/// A query value holding a URL, raw or form-encoded (`https://…`,
-/// `https%3A%2F%2F…`, `https%3A//…`), whose userinfo would otherwise stay.
+/// A query value holding a URL, raw or encoded in any mix (`https://…`,
+/// `https%3A%2F%2F…`, `https:%2F%2F…`, `https:\/\/…`), whose userinfo
+/// would otherwise stay, or a magnet link (B-log1).
 fn holds_url(value: &str) -> bool {
-    value.contains("://")
-        || [b"%3a%2f%2f".as_slice(), b"%3a//"]
-            .iter()
-            .any(|n| find_ci_bytes(value.as_bytes(), n).is_some())
+    normalize_separators(value).contains("://") || holds_magnet(value)
 }
 
 /// `rest` (a path, query and fragment) appended to `out`, scrubbed.
@@ -216,11 +256,20 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
         Some((p, q)) => (p, Some(q)),
         None => (rest, None),
     };
+    let whole_path = path;
+    // A magnet in the path (B-log1): it and all after it go, with the run
+    // it's glued to (`/<passkey>magnet:`), which the passkey rules would
+    // otherwise see only in part.
+    let (path, query) = match magnets().from(path, 0) {
+        Some(m) => (&path[..glued_run_start(path, m)], None),
+        None => (path, query),
+    };
+    let magnet = path.len() < whole_path.len();
     // An `@` in the path, after the authority came off, may be a URL's
     // userinfo that an earlier `@` hid (`http://a@h/r/http://u:p@h2/`, or
     // `://@http://u:p@h/` in free text): the path goes whole, its query
     // too, as the authority rules hide an `@` in a path: never too little.
-    if path.contains('@') {
+    if whole_path.contains('@') {
         if path.starts_with('/') {
             out.push('/');
         }
@@ -234,6 +283,11 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
         // `name=value` credentials too (`/dl/passkey=<k>`).
         out.push_str(&redact_runs(&redact_secrets(segment)));
     }
+    if magnet {
+        out.push_str("magnet:");
+        out.push_str(REDACTED);
+        return out;
+    }
     if let Some(query) = query {
         if drop_query {
             return out;
@@ -244,6 +298,16 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
         while !rest.is_empty() {
             let end = rest.find(['&', ';']).unwrap_or(rest.len());
             let pair = &rest[..end];
+            // A magnet in the query (`?uri=magnet:?xt=…&dn=…`, B-log1):
+            // its own pairs follow it, so all from it on goes.
+            if holds_magnet(pair) {
+                if let Some((name, _)) = pair.split_once('=').filter(|(n, _)| !holds_magnet(n)) {
+                    out.push_str(name);
+                    out.push('=');
+                }
+                out.push_str(REDACTED);
+                return out;
+            }
             match pair.split_once('=') {
                 // A credential's value, or a URL in a value (`?u=https://
                 // u:p@h/`), whose userinfo would otherwise stay.
@@ -255,11 +319,12 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
                 Some((name, value)) => {
                     out.push_str(name);
                     out.push('=');
-                    out.push_str(&redact_runs(value));
+                    out.push_str(&redact_runs(&redact_secrets(value)));
                 }
                 // A URL in a pair with no `=` (`?a&https://u:p@h/`).
                 None if holds_url(pair) => out.push_str(REDACTED),
-                None => out.push_str(&redact_runs(pair)),
+                // A credential glued on with `:` or `%3D` (`?passkey%3D<k>`).
+                None => out.push_str(&redact_runs(&redact_secrets(pair))),
             }
             out.push_str(&rest[end..(end + 1).min(rest.len())]);
             rest = &rest[(end + 1).min(rest.len())..];
@@ -298,12 +363,16 @@ fn url_char(c: char) -> bool {
 pub const USERINFO_LOOKAHEAD: usize = 512;
 
 /// The next match of `needle` at or after `from`, remembered so each
-/// byte is searched once however many times it's asked.
+/// byte is searched once however many times it's asked. The answer is
+/// right for any `from`, in any order: one before the last search's
+/// start searches again (X-log-url-redact-2; a span that ends past a
+/// magnet asks again from the magnet).
 struct Next {
     needle: &'static str,
     ci: bool,
+    /// The last search's start, and the first match at or after it.
+    base: Option<usize>,
     at: Option<usize>,
-    searched: usize,
 }
 
 impl Next {
@@ -311,27 +380,105 @@ impl Next {
         Next {
             needle,
             ci,
+            base: None,
             at: None,
-            searched: 0,
         }
     }
 
     fn from(&mut self, text: &str, from: usize) -> Option<usize> {
-        if self.at.is_some_and(|at| at >= from) {
-            return self.at;
+        if self.base.is_some_and(|base| base <= from) {
+            match self.at {
+                Some(at) if at >= from => return Some(at),
+                // Nothing at or after the base, so nothing after `from`.
+                None => return None,
+                Some(_) => {}
+            }
         }
-        if self.at.is_none() && self.searched > from {
-            // Searched past `from` already and found nothing.
-            return None;
-        }
-        let hay = &text.as_bytes()[from..];
+        // The needles are ASCII, so a byte search finds only whole
+        // characters, from any `from`.
+        let hay = text.as_bytes().get(from..).unwrap_or_default();
+        let needle = self.needle.as_bytes();
         let found = match self.ci {
-            true => find_ci_bytes(hay, self.needle.as_bytes()),
-            false => text[from..].find(self.needle),
+            true => find_ci_bytes(hay, needle),
+            false => hay.windows(needle.len()).position(|w| w == needle),
         };
+        self.base = Some(from);
         self.at = found.map(|j| from + j);
-        self.searched = text.len();
         self.at
+    }
+}
+
+/// The first match of any of several needles at or after `from`.
+struct AnyOf<const N: usize>([Next; N]);
+
+impl<const N: usize> AnyOf<N> {
+    fn from(&mut self, text: &str, from: usize) -> Option<usize> {
+        self.0.iter_mut().filter_map(|n| n.from(text, from)).min()
+    }
+}
+
+/// The ways a magnet link starts: raw, or percent-encoded once or twice
+/// (`magnet%3A%3Fxt=…`).
+fn magnets() -> AnyOf<3> {
+    AnyOf([
+        Next::new("magnet:", true),
+        Next::new("magnet%3a", true),
+        Next::new("magnet%253a", true),
+    ])
+}
+
+/// Whether `s` starts with a magnet link, raw or percent-encoded.
+fn starts_magnet(s: &str) -> bool {
+    ["magnet:", "magnet%3a", "magnet%253a"]
+        .iter()
+        .any(|m| s.get(..m.len()).is_some_and(|p| p.eq_ignore_ascii_case(m)))
+}
+
+/// Where the run of letters, digits, `-` and `_` that ends at `k` in `s`
+/// starts.
+fn glued_run_start(s: &str, k: usize) -> usize {
+    k - s[..k].bytes().rev().take_while(|&b| name_char(b)).count()
+}
+
+/// Whether `s` holds a magnet link anywhere.
+fn holds_magnet(s: &str) -> bool {
+    magnets().from(s, 0).is_some()
+}
+
+/// Where each `@` is, so the userinfo's look-ahead finds the last one in
+/// its window in constant time, however many `://` it crosses.
+struct Ats(Vec<u32>);
+
+impl Ats {
+    /// `last[k]` is one past the last `@` before `k`, or 0.
+    fn new(text: &str) -> Ats {
+        if !text.contains('@') || text.len() >= u32::MAX as usize {
+            return Ats(Vec::new());
+        }
+        let mut last = Vec::with_capacity(text.len() + 1);
+        let mut seen = 0u32;
+        last.push(0);
+        for (k, b) in text.bytes().enumerate() {
+            if b == b'@' {
+                seen = k as u32 + 1;
+            }
+            last.push(seen);
+        }
+        Ats(last)
+    }
+
+    /// The last `@` in `from..to`.
+    fn last_in(&self, text: &str, from: usize, to: usize) -> Option<usize> {
+        if self.0.is_empty() {
+            // Built empty: no `@` at all, or text too long to index (then
+            // search directly).
+            return text
+                .get(from..to)
+                .and_then(|w| w.rfind('@'))
+                .map(|j| from + j);
+        }
+        let seen = self.0[to.min(self.0.len() - 1)] as usize;
+        (seen > from).then(|| seen - 1)
     }
 }
 
@@ -345,11 +492,15 @@ impl Next {
 /// repeats costs time in proportion to its length.
 pub fn scrub_text(text: &str) -> String {
     let debug = scrub_debug_forms(text);
-    let text: &str = &debug;
+    // URL forms without a raw `://` (`http:%2F%2F`, `http:/`, `//u:p@h`)
+    // are written with one, so the rules below find them.
+    let separated = normalize_separators(&debug);
+    let text: &str = &separated;
+    let ats = Ats::new(text);
     let mut out = String::with_capacity(text.len());
     let mut pos = 0;
     let mut scheme = Next::new("://", false);
-    let mut magnet = Next::new("magnet:", true);
+    let mut magnet = magnets();
     while pos < text.len() {
         let Some(i) = [scheme.from(text, pos), magnet.from(text, pos)]
             .into_iter()
@@ -360,34 +511,38 @@ pub fn scrub_text(text: &str) -> String {
         };
         let rest = &text[pos..];
         let i = i - pos;
+        let url = rest[i..].starts_with("://");
         // Back up over the scheme.
-        let start = if rest[i..].starts_with("://") {
-            rest[..i]
+        let start = match url {
+            true => rest[..i]
                 .char_indices()
                 .rev()
                 .take_while(|&(_, c)| scheme_char(c))
                 .last()
-                .map_or(i, |(j, _)| j)
-        } else {
-            i
+                .map_or(i, |(j, _)| j),
+            false => i,
         };
         let mut from = i;
         // Where the next `://` starts in `rest`, if there's one after this
-        // URL's own.
+        // URL's own userinfo.
         let mut nested = None;
-        if rest[i..].starts_with("://") {
+        if url {
             nested = scheme.from(text, pos + i + 3).map(|n| n - pos);
             let next = nested.unwrap_or(rest.len()) - (i + 3);
-            let at = userinfo_in_text(&rest[i + 3..], next);
-            if let Some(at) = at {
+            if let Some(at) = userinfo_in_text(text, pos + i + 3, next, &ats) {
                 from = i + 3 + at + 1;
+                // A look-ahead that ran over later `://`s: they're in this
+                // URL's userinfo, and the next one is after it.
+                if nested.is_some_and(|n| n < from) {
+                    nested = scheme.from(text, pos + from).map(|n| n - pos);
+                }
             }
         }
         // An IPv6 literal host (`http://[::1]:6969/…`): its `]` doesn't end
         // the URL.
         let mut scan = from;
         let host = if from == i { i + 3 } else { from };
-        if rest[i..].starts_with("://") {
+        if url {
             let past = past_ipv6(rest, host);
             if past != host {
                 scan = past;
@@ -408,41 +563,8 @@ pub fn scrub_text(text: &str) -> String {
         // next URL starts at the `://` itself. The first scan stops at
         // that `://`, so a line of them stays linear.
         let end = match nested {
-            // A magnet link (B-log1: never shown) ends only at a hard stop,
-            // never at a soft end or an IPv6 `]` (`dn=Name,2020`,
-            // `tr=udp://[::1]:6969/`). A URL glued to it stays in it, and
-            // the magnet runs on to that URL's end, past its userinfo.
-            None if !rest[i..].starts_with("://") => {
-                let magnet_end = |from: usize| {
-                    rest[from..]
-                        .char_indices()
-                        .find(|(_, c)| hard_stop(*c))
-                        .map_or(rest.len(), |(j, _)| from + j)
-                };
-                let end = magnet_end(scan);
-                match scheme.from(text, pos + i).map(|n| n - pos) {
-                    // Each `://` it runs over gets its userinfo searched,
-                    // and a scan never covers bytes an earlier one did.
-                    Some(mut n) if n >= i + 7 && n < end => {
-                        let mut end = end;
-                        loop {
-                            let next = scheme.from(text, pos + n + 3).map(|m| m - pos);
-                            let bound = next.unwrap_or(rest.len()) - (n + 3);
-                            if let Some(at) = userinfo_in_text(&rest[n + 3..], bound) {
-                                let after = n + 3 + at + 1;
-                                if after >= end {
-                                    end = magnet_end(after);
-                                }
-                            }
-                            match next {
-                                Some(m) if m < end => n = m,
-                                _ => break end,
-                            }
-                        }
-                    }
-                    _ => end,
-                }
-            }
+            // A magnet link (B-log1: never shown); see `magnet_span`.
+            _ if !url => magnet_span(text, pos, i, &mut scheme, &ats),
             None => url_end(scan),
             Some(nested) => match url_end_before(rest, scan, nested) {
                 // Ended by a hard stop, or with userinfo or a query before
@@ -455,24 +577,25 @@ pub fn scrub_text(text: &str) -> String {
                     end
                 }
                 // In the query or fragment: this URL runs on over each later
-                // `://`, and each still gets its own bounded userinfo
-                // search, so a raw space in its password can't end the
-                // span early.
+                // `://`, and each still gets its own userinfo search, so a
+                // raw space in its password can't end the span early.
                 None if rest[host..nested].contains(['?', '#']) => {
                     let mut cur = nested;
+                    // The furthest any of those userinfo searches reached.
+                    let mut reach = 0;
                     loop {
                         let next = scheme.from(text, pos + cur + 3).map(|n| n - pos);
                         let bound = next.unwrap_or(rest.len()) - (cur + 3);
-                        let scan = userinfo_in_text(&rest[cur + 3..], bound)
+                        let scan = userinfo_in_text(text, pos + cur + 3, bound, &ats)
                             .map_or(cur + 3, |at| cur + 3 + at + 1);
                         // An IPv6 host's `]` doesn't end it here either.
-                        let scan = past_ipv6(rest, scan);
+                        reach = reach.max(past_ipv6(rest, scan));
                         match next {
-                            Some(n) => match url_end_before(rest, scan, n) {
+                            Some(n) => match url_end_before(rest, reach, n) {
                                 Some(end) => break end,
                                 None => cur = n,
                             },
-                            None => break url_end(scan),
+                            None => break url_end(reach),
                         }
                     }
                 }
@@ -508,15 +631,28 @@ pub fn scrub_text(text: &str) -> String {
                 }
                 Some(_) | None => {
                     let scheme_start = scheme_start(rest, scan, nested);
-                    // After `=` it's a value (`@passkey=<k>://`): it stays
-                    // with this URL, whose host and path rules see the
-                    // name, and the next URL has no scheme.
-                    match rest[..scheme_start].ends_with('=') {
+                    // After `=` (or `:`, `%3D`) it's a value
+                    // (`@passkey=<k>://`): it stays with this URL, whose
+                    // host and path rules see the name, and the next URL
+                    // has no scheme.
+                    let before = &rest[..scheme_start];
+                    let value = before.ends_with(['=', ':'])
+                        || before
+                            .get(before.len().saturating_sub(3)..)
+                            .is_some_and(|s| s.eq_ignore_ascii_case("%3d"));
+                    match value {
                         true => nested,
                         false => scheme_start.max(scan),
                     }
                 }
             },
+        };
+        // A magnet in this URL's span (`/add?uri=magnet:?xt=…&dn=Name,2020`)
+        // ends only where the magnet does (B-log1), never at this URL's
+        // soft end.
+        let end = match magnet.from(text, pos + i).map(|m| m - pos) {
+            Some(m) if url && m < end => end.max(magnet_span(text, pos, m, &mut scheme, &ats)),
+            _ => end,
         };
         out.push_str(&lead(rest, start, i));
         out.push_str(&scrub_with(&rest[i..end.max(i)], Form::Absolute, true));
@@ -533,6 +669,234 @@ pub fn scrub_text(text: &str) -> String {
     }
     out.push_str(&hide_runs(&redact_secrets(&text[pos..])));
     out
+}
+
+/// Where the magnet link at `k` in `text[pos..]` ends. It ends only at a
+/// hard stop (see [`magnet_end`]), never at a soft end or an IPv6 `]`
+/// (`dn=Name,2020`, `tr=udp://[::1]:6969/`). A URL glued to it stays in
+/// it, and the magnet runs on to that URL's end, past its userinfo: each
+/// `://` it runs over gets its userinfo searched.
+fn magnet_span(text: &str, pos: usize, k: usize, scheme: &mut Next, ats: &Ats) -> usize {
+    let rest = &text[pos..];
+    let mut end = magnet_end(rest, k);
+    let Some(mut n) = scheme
+        .from(text, pos + k)
+        .map(|n| n - pos)
+        .filter(|&n| n < end)
+    else {
+        return end;
+    };
+    loop {
+        let next = scheme.from(text, pos + n + 3).map(|m| m - pos);
+        let bound = next.unwrap_or(rest.len()) - (n + 3);
+        if let Some(at) = userinfo_in_text(text, pos + n + 3, bound, ats) {
+            let after = n + 3 + at + 1;
+            if after >= end {
+                end = magnet_end(rest, after);
+            }
+        }
+        match next {
+            Some(m) if m < end => n = m,
+            _ => return end,
+        }
+    }
+}
+
+/// Magnet parameters (BEP 9 and the common extras), to tell a word that
+/// carries a magnet on past a raw space (`dn=a b&tr=…`).
+const MAGNET_KEYS: &[&str] = &[
+    "xt", "dn", "tr", "xl", "ws", "as", "xs", "kt", "mt", "so", "x.pe",
+];
+
+/// Where a magnet link, or the rest of one from `from`, ends in `rest`:
+/// at a hard stop, past `\`-escaped characters (a `Debug` string's `\"`).
+/// A display name or keywords (`dn`, `kt`) may hold raw spaces and line
+/// breaks, so when the stop falls in one of those, the magnet runs to the
+/// text's end; and a later word that carries a magnet parameter
+/// (`a&tr=…`) carries the magnet on. Never too little.
+fn magnet_end(rest: &str, from: usize) -> usize {
+    let mut k = from;
+    // Where the parameter the scan is in starts.
+    let mut param = from;
+    loop {
+        while let Some(c) = rest[k..].chars().next() {
+            if c == '\\' {
+                k += 1;
+                k += rest[k..].chars().next().map_or(0, char::len_utf8);
+                continue;
+            }
+            if hard_stop(c) {
+                break;
+            }
+            if matches!(c, '?' | '&' | ';') {
+                param = k + 1;
+            } else if c == '%' && ["%26", "%3f"].iter().any(|e| starts_ci(&rest[k..], e)) {
+                param = k + 3;
+            }
+            k += c.len_utf8();
+        }
+        if k >= rest.len() {
+            return rest.len();
+        }
+        let value = &rest[param..k];
+        let name_end = value
+            .find('=')
+            .into_iter()
+            .chain(find_ci_bytes(value.as_bytes(), b"%3d"))
+            .min()
+            .unwrap_or(value.len());
+        if ["dn", "kt"]
+            .iter()
+            .any(|n| value[..name_end].eq_ignore_ascii_case(n))
+        {
+            return rest.len();
+        }
+        let word = k + rest[k..]
+            .find(|c: char| !hard_stop(c))
+            .unwrap_or(rest.len() - k);
+        let word_end = word + rest[word..].find(hard_stop).unwrap_or(rest.len() - word);
+        if !carries_magnet_param(&rest[word..word_end]) {
+            return k;
+        }
+        k = word;
+        param = word;
+    }
+}
+
+/// Whether `word` holds `&<key>=` (or `%26<key>%3D`) for a magnet key.
+fn carries_magnet_param(word: &str) -> bool {
+    let b = word.as_bytes();
+    (0..b.len()).any(|j| {
+        let after = match b[j] {
+            b'&' => j + 1,
+            b'%' if starts_ci(&word[j..], "%26") => j + 3,
+            _ => return false,
+        };
+        MAGNET_KEYS.iter().any(|key| {
+            word.get(after..after + key.len())
+                .is_some_and(|k| k.eq_ignore_ascii_case(key))
+                && (word[after + key.len()..].starts_with('=')
+                    || starts_ci(&word[after + key.len()..], "%3d"))
+        })
+    })
+}
+
+/// Whether `s` starts with `prefix`, ignoring ASCII case.
+fn starts_ci(s: &str, prefix: &str) -> bool {
+    s.as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
+/// `text` with URL forms that lack a raw `://` written with one, so
+/// [`scrub_text`] finds them (X-log-url-redact-2):
+/// - a `:` and two `/`, any of them percent-encoded once or twice or the
+///   `/` JSON-escaped (`http:%2F%2F`, `http%3A%2F%2F`, `http%3A//`,
+///   `http:\/\/`, `http:%2F/`);
+/// - a known scheme and a single `/` (`http:/u:p@h`), `file` aside;
+/// - a network-path reference at a word's start (`//u:p@h`) with an `@`
+///   after it on the same line.
+///
+/// The URL then shows with a plain `://`, whatever it was written with.
+fn normalize_separators(text: &str) -> std::borrow::Cow<'_, str> {
+    let b = text.as_bytes();
+    if !b.contains(&b'/')
+        && find_ci_bytes(b, b"%2f").is_none()
+        && find_ci_bytes(b, b"%252f").is_none()
+    {
+        return text.into();
+    }
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut at = Next::new("@", false);
+    let mut line = AnyOf([Next::new("\n", false), Next::new("\r", false)]);
+    let mut k = 0;
+    while k < b.len() {
+        // (what's replaced, what it becomes)
+        let found = match b[k] {
+            b':' | b'%' => separator_len(text, k).map(|len| (len, "://")),
+            b'/' if b.get(k + 1) == Some(&b'/') => {
+                let word_start = k == 0
+                    || b[k - 1].is_ascii_whitespace()
+                    || matches!(
+                        b[k - 1],
+                        b'"' | b'\'' | b'(' | b'<' | b'[' | b'{' | b'=' | b','
+                    );
+                let host_next = b
+                    .get(k + 2)
+                    .is_some_and(|&c| c != b'/' && !c.is_ascii_whitespace());
+                // On the same line, or a `:` right after it (`//u:\n<s>@h`).
+                let colon = text[k + 2..]
+                    .find(|c: char| matches!(c, ':' | '/') || c.is_whitespace())
+                    .is_some_and(|j| text[k + 2 + j..].starts_with(':'));
+                let at_after = word_start
+                    && host_next
+                    && at.from(text, k + 2).is_some_and(|a| {
+                        a - k <= USERINFO_LOOKAHEAD
+                            && (colon || line.from(text, k).is_none_or(|l| l > a))
+                    });
+                at_after.then_some((2, "://"))
+            }
+            _ => None,
+        };
+        match found {
+            Some((len, with)) => {
+                out.push_str(&text[copied..k]);
+                out.push_str(with);
+                k += len;
+                copied = k;
+            }
+            None => k += 1,
+        }
+    }
+    if copied == 0 {
+        return text.into();
+    }
+    out.push_str(&text[copied..]);
+    out.into()
+}
+
+/// How long the URL separator written another way at `k` in `text` is
+/// (see [`normalize_separators`]), if there is one there.
+fn separator_len(text: &str, k: usize) -> Option<usize> {
+    let s = &text[k..];
+    let colon = [":", "%3a", "%253a"]
+        .iter()
+        .find(|c| starts_ci(s, c))
+        .map(|c| c.len())?;
+    let slash = |from: usize| {
+        ["/", "%2f", "%252f", "\\/"]
+            .iter()
+            .find(|c| starts_ci(&s[from..], c))
+            .map(|c| c.len())
+    };
+    match slash(colon) {
+        Some(one) => match slash(colon + one) {
+            // A raw `://` is left as it is.
+            Some(two) if !(colon == 1 && one == 1 && two == 1) => Some(colon + one + two),
+            Some(_) => None,
+            // A known scheme and a single raw `/` (`http:/u:p@h`), even
+            // glued to what's before it (`%2Fftp:/`).
+            None if colon == 1
+                && one == 1
+                && k > 0
+                && text.as_bytes()[k - 1].is_ascii_alphanumeric() =>
+            {
+                KNOWN_SCHEMES
+                    .iter()
+                    .chain(OTHER_SCHEMES)
+                    .filter(|&&known| known != "file")
+                    .any(|known| {
+                        k >= known.len()
+                            && text.is_char_boundary(k - known.len())
+                            && text[k - known.len()..k].eq_ignore_ascii_case(known)
+                    })
+                    .then_some(2)
+            }
+            None => None,
+        },
+        None => None,
+    }
 }
 
 /// The text before a URL in `rest`, its scheme (`start..i`) included,
@@ -564,7 +928,12 @@ fn past_ipv6(rest: &str, host: usize) -> usize {
         .find(|c: char| !(c.is_ascii_hexdigit() || matches!(c, ':' | '.' | '%')))
         .filter(|&k| literal[k..].starts_with(']'))
     {
-        Some(close) => host + 1 + close + 1,
+        // A malformed literal's extra `]` (`[::1]]:80/<passkey>`) doesn't
+        // end the URL either.
+        Some(close) => {
+            let past = host + 1 + close + 1;
+            past + rest[past..].bytes().take_while(|&b| b == b']').count()
+        }
         None => host,
     }
 }
@@ -575,6 +944,38 @@ fn past_ipv6(rest: &str, host: usize) -> usize {
 const KNOWN_SCHEMES: &[&str] = &[
     "http", "https", "ws", "wss", "udp", "tcp", "ftp", "ftps", "sftp", "socks4", "socks4a",
     "socks5", "socks5h", "file",
+];
+
+/// More schemes that take credentials, for a URL written with one `/`
+/// (`ssh:/u:p@h`); never split at, unlike [`KNOWN_SCHEMES`].
+const OTHER_SCHEMES: &[&str] = &[
+    "ssh",
+    "git",
+    "svn",
+    "smb",
+    "s3",
+    "ldap",
+    "ldaps",
+    "redis",
+    "rediss",
+    "mongodb",
+    "postgres",
+    "postgresql",
+    "mysql",
+    "amqp",
+    "amqps",
+    "mqtt",
+    "mqtts",
+    "rtsp",
+    "irc",
+    "ircs",
+    "imap",
+    "imaps",
+    "pop3",
+    "smtp",
+    "smtps",
+    "nntp",
+    "telnet",
 ];
 
 fn known_scheme(scheme: &str) -> bool {
@@ -612,42 +1013,96 @@ fn url_end_before(rest: &str, scan: usize, limit: usize) -> Option<usize> {
 }
 
 /// Where the userinfo's `@` is in what follows `scheme://` in free text,
-/// if there is one. `next` is where the next `://` starts in `after` (or
-/// its length): no search goes past it, so each byte is searched for one
-/// URL only. Two rules, the wider wins ("never too little"):
-/// - up to a hard stop, the URL rules' [`userinfo`] (a raw `,`, `'` or
-///   `)` stays inside the password, however long, and a `/` before the
-///   `@` makes the URL ambiguous, so it's hidden whole);
-/// - within [`USERINFO_LOOKAHEAD`] bytes on the same line, the last `@`
-///   before any `/`, so a raw space, `"`, `<`, `>` or backtick in a
-///   password goes too. `see https://a.example and me@x` loses `a.example
-///   and me` with it: over-redaction is accepted.
-fn userinfo_in_text(after: &str, next: usize) -> Option<usize> {
-    let after = &after[..next];
+/// if there is one: `text[base..]` is what follows, and `next` is where
+/// the next `://` starts in it (or its length). Two rules, the wider wins
+/// ("never too little"):
+/// - up to a hard stop and the next `://`, the URL rules' [`userinfo`] (a
+///   raw `,`, `'` or `)` stays inside the password, however long, and a
+///   `/` before the `@` makes the URL ambiguous, so it's hidden whole);
+/// - within [`USERINFO_LOOKAHEAD`] bytes, the last `@`, so a raw space,
+///   `"`, `<`, `>`, backtick or `/` in a password goes too. `see
+///   https://a.example/p and me@x` loses `a.example/p and me` with it:
+///   over-redaction is accepted. With no sign of userinfo, that window
+///   ends at a line break and at the next `://`; with one (see
+///   [`marks_userinfo`]) it runs over both, since a raw password may hold
+///   either (`u:\n<secret>@h`, `u:@<secret>"://@h`). [`Ats`] finds that
+///   `@` without a scan, so the text stays linear however many `://` the
+///   window crosses.
+fn userinfo_in_text(text: &str, base: usize, next: usize, ats: &Ats) -> Option<usize> {
+    let after = &text[base..base + next];
     let hard = after.find(hard_stop).unwrap_or(after.len());
     let narrow = after[..hard].rfind('@');
-    let mut bound = after.len().min(USERINFO_LOOKAHEAD);
-    while !after.is_char_boundary(bound) {
-        bound -= 1;
-    }
-    // One scan: the window ends at the first line break, and at the first
-    // `/` unless there's userinfo: an `@` before the first hard stop, or a
-    // `:` with no port number after it (`u:/p"@h/`). Its password may hold
-    // `/` and a hard stop (`u:@/p"@h/`).
-    let window = &after[..bound];
-    let authority = &after[..after.find(['/', '?', '#']).unwrap_or(after.len()).min(hard)];
-    let no_port = !authority.starts_with('[')
-        && authority
-            .rsplit_once(':')
-            .is_some_and(|(_, port)| port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()));
-    let ends: &[char] = match (narrow.is_some(), no_port) {
-        (true, _) => &[],
-        (false, true) => &['\n', '\r'],
-        (false, false) => &['/', '\n', '\r'],
+    let authority_end = after.find(['/', '?', '#']).unwrap_or(after.len());
+    let authority = &after[..authority_end.min(hard)];
+    // A `://` with no scheme before it is no URL's own: it may be inside
+    // a raw password (`u:://<secret>@h`), as may a `://` the authority
+    // runs straight into (`u://<secret>@h`, whose `:` is the password's).
+    let no_scheme = base < 3 || !text[..base - 3].ends_with(scheme_char);
+    let runs_into_next = authority.len() == after.len() && base + next < text.len();
+    // Only `file` has an empty authority (`ftp:///\n<secret>@h`).
+    let file = base >= 7
+        && text[..base - 3].is_char_boundary(base - 7)
+        && text[base - 7..base - 3].eq_ignore_ascii_case("file");
+    let marked = narrow.is_some()
+        || no_scheme
+        || runs_into_next
+        || (authority.is_empty() && !file)
+        || marks_userinfo(authority, hard < authority_end);
+    let wide = match marked {
+        true => {
+            let to = text.len().min(base + USERINFO_LOOKAHEAD);
+            ats.last_in(text, base, to).map(|at| at - base)
+        }
+        false => {
+            let mut bound = after.len().min(USERINFO_LOOKAHEAD);
+            while !after.is_char_boundary(bound) {
+                bound -= 1;
+            }
+            let window = &after[..bound];
+            let window = &window[..window.find(['\n', '\r']).unwrap_or(window.len())];
+            window.rfind('@')
+        }
     };
-    let window = &window[..window.find(ends).unwrap_or(window.len())];
-    let wide = window.rfind('@');
     narrow.max(wide)
+}
+
+/// Whether an authority with no `@` (what follows `scheme://` up to the
+/// first `/`, `?`, `#` or hard stop) still shows userinfo: a `:` with no
+/// port number after it (`u:<secret>`), a character no host holds (`%`,
+/// `'`, `,`, `=`…: `u%3A<secret>`), or nothing at all before a hard stop
+/// (`ssh://\n<secret>@h`).
+fn marks_userinfo(authority: &str, hard_stop_first: bool) -> bool {
+    if authority.is_empty() {
+        return hard_stop_first;
+    }
+    let (host, port) = match authority.strip_prefix('[') {
+        // An IPv6 literal, then an optional port.
+        Some(inner) => match inner.find(']') {
+            Some(close) => {
+                let literal = &inner[..close];
+                if !literal
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() || matches!(b, b':' | b'.' | b'%'))
+                {
+                    return true;
+                }
+                ("", &inner[close + 1..])
+            }
+            None => return true,
+        },
+        None => match authority.rsplit_once(':') {
+            Some((host, _)) => (host, &authority[host.len()..]),
+            None => (authority, ""),
+        },
+    };
+    let port_ok = port.is_empty()
+        || port
+            .strip_prefix(':')
+            .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    !port_ok
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
 /// The `Debug` forms of `url::Url` (and `reqwest::Url`, the same type)
@@ -739,8 +1194,11 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
         let inner = (from..to).find(|&k| field_at(k));
         match path {
             _ if to == from => {}
-            // An `@` hides the path, as the URL rules do (`finish`).
-            true if text[from..to].contains('@') => out.push_str(REDACTED),
+            // An `@` hides the path, as the URL rules do (`finish`), and so
+            // does a magnet (B-log1), whose `dn` the rules below would show.
+            true if text[from..to].contains('@') || holds_magnet(&text[from..to]) => {
+                out.push_str(REDACTED)
+            }
             true => {
                 let mut scrubbed = String::new();
                 for (k, segment) in text[from..to].split('/').enumerate() {
@@ -769,8 +1227,14 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
     out.into()
 }
 
+/// A bearer token's characters, and `%` and `:`, so a credential glued
+/// on behind one goes with it (`Bearer passkey%3D<k>`).
 fn token_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'~' | b'+' | b'/' | b'=')
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'_' | b'-' | b'.' | b'~' | b'+' | b'/' | b'=' | b'%' | b':'
+        )
 }
 
 fn name_char(b: u8) -> bool {
@@ -795,6 +1259,11 @@ fn redact_secrets(text: &str) -> String {
     // Byte ranges to replace, in order; every bound is next to ASCII, so
     // each is a char boundary.
     let mut cuts: Vec<(usize, usize)> = Vec::new();
+    // Cuts come in order of their start; one inside the last widens it.
+    let mut cut = |from: usize, to: usize| match cuts.last_mut() {
+        Some(last) if from <= last.1 => last.1 = last.1.max(to),
+        _ => cuts.push((from, to)),
+    };
     let mut i = 0;
     while i < b.len() {
         let at_word = i == 0 || !name_char(b[i - 1]);
@@ -804,7 +1273,7 @@ fn redact_secrets(text: &str) -> String {
         }
         let name_end = (i..b.len()).find(|&j| !name_char(b[j])).unwrap_or(b.len());
         if b[i..].starts_with(b"lsk_") || b[i..].starts_with(b"lsf_") {
-            cuts.push((i, name_end));
+            cut(i, name_end);
             i = name_end;
             continue;
         }
@@ -817,9 +1286,12 @@ fn redact_secrets(text: &str) -> String {
                 .find(|&j| !token_char(b[j]))
                 .unwrap_or(b.len());
             if end > start {
-                cuts.push((start, end));
+                cut(start, end);
             }
-            i = end.max(start);
+            // The token is read again from its start, so a credential's
+            // name inside it (`Bearer %3Apassword: "…"`) still has its own
+            // value hidden.
+            i = start.max(i + 1);
             continue;
         }
         // The name's closing quote (`"x-api-key": …`), then the separator,
@@ -848,7 +1320,7 @@ fn redact_secrets(text: &str) -> String {
             {
                 j = skip_space(b, j + 5);
             }
-            let (j, end) = match b.get(j) {
+            let (j, end, quoted) = match b.get(j) {
                 // A quoted value runs to its closing quote, past escaped
                 // ones (`"a\"b"`).
                 Some(&q @ (b'"' | b'\'')) => {
@@ -857,7 +1329,7 @@ fn redact_secrets(text: &str) -> String {
                     while to < b.len() && b[to] != q {
                         to += if b[to] == b'\\' { 2 } else { 1 };
                     }
-                    (from, to.min(b.len()))
+                    (from, to.min(b.len()), true)
                 }
                 _ => {
                     let mut end = stop(j);
@@ -880,13 +1352,20 @@ fn redact_secrets(text: &str) -> String {
                             end = stop(next);
                         }
                     }
-                    (j, end)
+                    (j, end, false)
                 }
             };
             if end > j {
-                cuts.push((j, end));
+                cut(j, end);
             }
-            i = end.max(sep + sep_len);
+            // A quoted value is read again from its start: its closing
+            // quote may open the next field's value (`password: Some("
+            // username: "<secret>"`), whose name is inside it. It ends at
+            // the next quote of its kind, so the reading stays linear.
+            i = match quoted {
+                true => j,
+                false => end.max(sep + sep_len),
+            };
             continue;
         }
         i = name_end;
@@ -1211,10 +1690,21 @@ mod tests {
             scrub_text("see https://a.example and me@x.org"),
             "see https://[redacted]@x.org"
         );
-        // A `/` before the `@` ends the wide rule: the path stays.
+        // X-log-url-redact-2: a `/` no longer ends the wide rule, since a
+        // raw password may hold `/` and a hard stop with nothing marking
+        // the userinfo (`http://<secret>/"@h/`). Over-redaction is
+        // accepted; a line break still ends it with no sign of userinfo.
         assert_eq!(
             scrub_text("see https://a.example/p and me@x"),
-            "see https://a.example/p and me@x"
+            "see https://[redacted]"
+        );
+        assert_eq!(
+            scrub_text(
+                "see https://a.example/p
+me@x"
+            ),
+            "see https://a.example/p
+me@x"
         );
     }
 
@@ -1280,6 +1770,21 @@ mod tests {
             "://@",
             "://@http://u:p@h/",
             "?://u:p q",
+            // X-log-url-redact-2: look-aheads that cross `://`, magnets
+            // that run on, forms without `://`.
+            "://u:x",
+            "://u:@x\n",
+            "x magnet:?dn=a ",
+            "magnet:?xt=a b&tr=c ",
+            " //a@",
+            "a%3A%2F%2F",
+            "http:/",
+            "[::1]]",
+            "\\\"",
+            "token: \"",
+            "Bearer token=",
+            "password: Some(\"username: \"",
+            "a: 'b: \"",
         ] {
             let [small, large] = times_for(unit, 256 << 10, 4 << 20);
             let small = small.max(std::time::Duration::from_micros(50));
@@ -1298,7 +1803,10 @@ mod tests {
         // was never searched.
         let s = scrub_text("://@http://u:a00aa0@host.example/x");
         assert!(!s.contains("a00aa0"), "{s}");
-        assert_eq!(s, "://[redacted]://[redacted]@host.example/x");
+        // X-log-url-redact-2: a `://` with no scheme, or an `@` before the
+        // first hard stop, marks userinfo, whose look-ahead then runs over
+        // later `://`s to the last `@`: the host goes too.
+        assert_eq!(s, "://[redacted]");
         for (text, secret) in [
             ("x://@http://u:S3cr3t@h/x", "S3cr3t"),
             ("://@://@https://u:S3cr3t@h/x", "S3cr3t"),
@@ -1371,10 +1879,12 @@ mod tests {
             let s = scrub_text(text);
             assert!(!s.contains(secret), "{text} -> {s}");
         }
-        // Each URL keeps what it would keep alone.
+        // Each URL keeps what it would keep alone, but a `://` with an `@`
+        // after it marks userinfo that may run over the next `://`
+        // (X-log-url-redact-2), so the second URL's host goes too.
         assert_eq!(
             scrub_text("see http://h/a then://@https://u:p@h2/b"),
-            "see http://h/a then://[redacted]://[redacted]@h2/b"
+            "see http://h/a then://[redacted]"
         );
         // With no userinfo before it, all up to the next `://` goes: it
         // may be a password holding one.
@@ -1382,9 +1892,11 @@ mod tests {
             scrub_text("go http://h/r/https://h2/b?token=t"),
             "go http://[redacted]://h2/b"
         );
+        // The userinfo's look-ahead runs over the `://` in the password
+        // (X-log-url-redact-2), so the host goes with it.
         assert_eq!(
             scrub_text("http://user:hunter2://x@h/ ok"),
-            "http://[redacted]://[redacted]@h/ ok"
+            "http://[redacted] ok"
         );
         // A URL in the query or fragment is dropped with it.
         assert_eq!(
@@ -1447,9 +1959,16 @@ mod tests {
             "magnet:?xt=urn:btih:abc&tr=udp://[::1]:6969/announce&dn=Secret.Name",
         ] {
             assert_eq!(scrub_text(text), "magnet:[redacted]", "{text}");
+            // X-log-url-redact-2: a magnet whose `dn` comes last may run on
+            // past a space, so the rest of the text goes with it.
+            let dn_last = text
+                .rsplit('&')
+                .next()
+                .is_some_and(|p| p.starts_with("dn="));
+            let after = if dn_last { "" } else { " ok" };
             assert_eq!(
                 scrub_text(&format!("got {text} ok")),
-                "got magnet:[redacted] ok",
+                format!("got magnet:[redacted]{after}"),
                 "{text}"
             );
         }
@@ -1491,6 +2010,254 @@ mod tests {
         // A glued URL's userinfo stays inside the magnet.
         let s = scrub_text("magnet:?xt=urn:btih:abc&tr=http://u:pa ss@t.example/a ok");
         assert_eq!(s, "magnet:[redacted] ok");
+    }
+
+    #[test]
+    fn a_raw_password_with_url_syntax_goes_whole() {
+        // X-log-url-redact-2, class 1: each leaks on `main` with the URL
+        // standing alone.
+        for text in [
+            // `://` after the secret, and before it.
+            "udp://h/xudp://u:@S3CRET\"://@h/x",
+            "udp://u:@S3CRET\"://@h/x",
+            "ssh://u:://@S3CRET\"@h/",
+            "http://u://S3CRET\n@h/x",
+            // A raw line break, with no userinfo `@` before it.
+            "ssh://u:\nS3CRET@h",
+            "wss://u%3AS3CRET\n@h",
+            "ssh://u:\r\nS3CRET@h",
+            "ftp:///\nS3CRET@h",
+            // A `/` and a hard stop with nothing marking the userinfo.
+            "http://S3CRET/\"@h/",
+            "http://u%3AS3CRET/\"@h/",
+            "see http://S3CRET/ x@h/ ok",
+        ] {
+            for line in [text.to_string(), format!("got {text} ok")] {
+                let s = scrub_text(&line);
+                assert!(!s.contains("S3CRET"), "{line:?} -> {s:?}");
+            }
+        }
+        // A `:` with no port, or `%3A`, marks it: the look-ahead crosses
+        // the line break. With no sign of userinfo it doesn't.
+        assert_eq!(scrub_text("ssh://u:\nS3CRET@h ok"), "ssh://[redacted]@h ok");
+        assert_eq!(
+            scrub_text("see https://h.example:8080/x\nme@x"),
+            "see https://h.example:8080/x\nme@x"
+        );
+        // An encoded password with no raw `@`: no host holds a `%`.
+        assert_eq!(
+            scrub("wss://u%3AS3CRET%40h/x", Form::Absolute),
+            "wss://[redacted]"
+        );
+        // A malformed IPv6 literal is no host.
+        assert_eq!(
+            scrub("http://[::1]x/a", Form::Absolute),
+            "http://[redacted]"
+        );
+        assert_eq!(
+            scrub("http://[::1]:80/a", Form::Absolute),
+            "http://[::1]:80/a"
+        );
+    }
+
+    #[test]
+    fn a_magnet_runs_on_past_a_space_in_its_name() {
+        // X-log-url-redact-2, classes 2 and 5 (B-log1).
+        for text in [
+            "magnet:?xt=urn:btih:abc&dn=Some S3CRET&tr=udp://t.example/a",
+            "magnet:?xt=urn:btih:abc&dn=Some\nS3CRET",
+            "magnet:?xt=urn:btih:abc&dn=Some\tS3CRET Name",
+            "magnet:?xt=urn:btih:abc&kt=a S3CRET",
+            "magnet:?xt=urn:btih:abc&tr=http://t.example/a S3CRET&dn=x",
+            "magnet:?xt=urn:btih:abc&dn=x&tr=http://t.example/a S3CRET&tr=udp://t/b",
+            r#"msg: "see magnet:?xt=urn:btih:abc&dn=a\"S3CRET\" ok""#,
+            r#"Custom("magnet:?xt=urn:btih:abc&tr=udp://t/a\"S3CRET\" b")"#,
+        ] {
+            for line in [text.to_string(), format!("got {text} ok")] {
+                let s = scrub_text(&line);
+                assert!(
+                    !s.contains("S3CRET") && !s.contains("t.example"),
+                    "{line:?} -> {s:?}"
+                );
+            }
+        }
+        // A name that comes last takes the rest of the text with it; one
+        // followed by another parameter ends at the next hard stop.
+        assert_eq!(
+            scrub_text("add magnet:?xt=urn:btih:abc&dn=Some Name to queue"),
+            "add magnet:[redacted]"
+        );
+        assert_eq!(
+            scrub_text("add magnet:?xt=urn:btih:abc&dn=Name&tr=udp://t/a to queue"),
+            "add magnet:[redacted] to queue"
+        );
+    }
+
+    #[test]
+    fn a_magnet_inside_a_url_is_never_shown() {
+        // X-log-url-redact-2, class 3: the outer URL's soft end once ended
+        // the magnet (B-log1).
+        for text in [
+            "GET http://lodestar:8080/api/add?uri=magnet:?xt=urn:btih:abc&dn=Some.Movie,S3CRET ok",
+            "see http://h/x?m=magnet:?xt=urn:btih:abc&tr=udp://t.example/a,S3CRET ok",
+            "see http://h/x#magnet:?xt=urn:btih:abc&dn=A)S3CRET ok",
+            "see http://h/magnet:?xt=urn:btih:abc&dn=A]S3CRET ok",
+            "see http://[::1]magnet%3A%3Fxt%3Durn%3Abtih%3Aabc%26dn%3DS3CRET ok",
+        ] {
+            let s = scrub_text(text);
+            assert!(
+                !s.contains("S3CRET") && !s.contains("t.example"),
+                "{text:?} -> {s:?}"
+            );
+        }
+        assert!(
+            scrub_text("GET http://lodestar:8080/api/add?uri=magnet:?xt=urn:btih:abc&dn=M,2020")
+                .starts_with("GET http://lodestar:8080/api/add")
+        );
+        // The typed rules: a magnet in a query value takes the rest of the
+        // query (its own pairs follow it), and one in the path goes too.
+        assert_eq!(
+            scrub(
+                "http://h/api/add?cat=1&uri=magnet:?xt=urn:btih:abc&dn=Some.Movie&tr=udp://t/a",
+                Form::Absolute
+            ),
+            "http://h/api/add?cat=1&uri=[redacted]"
+        );
+        assert_eq!(
+            scrub(
+                "/api/add?uri=magnet%3A%3Fxt%3Durn%3Abtih%3Aabc",
+                Form::Request
+            ),
+            "/api/add?uri=[redacted]"
+        );
+        assert_eq!(
+            scrub(
+                "http://h/x/magnet:?xt=urn:btih:abc&dn=S3CRET",
+                Form::Absolute
+            ),
+            "http://h/x/magnet:[redacted]"
+        );
+    }
+
+    #[test]
+    fn a_percent_encoded_magnet_is_a_magnet() {
+        // X-log-url-redact-2, class 4.
+        for (text, shown) in [
+            // Its `dn` comes last, so the rest goes with it.
+            (
+                "see magnet%3A%3Fxt%3Durn%3Abtih%3Aabc%26dn%3DS3CRET ok",
+                "see magnet:[redacted]",
+            ),
+            (
+                "see magnet%3A?xt=urn:btih:abc&dn=S3CRET&tr=x ok",
+                "see magnet:[redacted] ok",
+            ),
+            (
+                "see MAGNET%253A%253Fxt%253DS3CRET ok",
+                "see magnet:[redacted] ok",
+            ),
+        ] {
+            assert_eq!(scrub_text(text), shown, "{text}");
+        }
+        assert_eq!(
+            scrub("magnet%3A%3Fxt%3Dabc", Form::Absolute),
+            "magnet:[redacted]"
+        );
+    }
+
+    #[test]
+    fn a_malformed_ipv6_host_never_ends_the_url_early() {
+        // X-log-url-redact-2, class 6.
+        for text in [
+            "x http://h/x?u=http://[::1]]:80/ann/Zq0123456789abcdef0123/announce y",
+            "x http://[::1]]/ann/Zq0123456789abcdef0123/announce y",
+            "x http://[::1]]]:6969/Zq0123456789abcdef0123 y",
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("0123456789"), "{text} -> {s}");
+            assert!(s.ends_with(" y"), "{text} -> {s}");
+        }
+    }
+
+    #[test]
+    fn url_forms_without_a_raw_scheme_separator_lose_their_secrets() {
+        // X-log-url-redact-2, class 7: none is found on `main`.
+        for text in [
+            "see //u:S3CRET@h/x ok",
+            "see (//u:S3CRET@h/x) ok",
+            "see //u:\nS3CRET@h/x ok",
+            "see http:/u:S3CRET@h/x ok",
+            "see ssh:/u:S3CRET@h/x ok",
+            "see http:%2F%2Fu:S3CRET@h/x ok",
+            "see http:%2F/u:S3CRET@h/x ok",
+            "see http%3A%2F%2Fu%3AS3CRET%40h/x ok",
+            "see http%3A//u:S3CRET@h/x ok",
+            r#"{"url":"http:\/\/u:S3CRET@h\/x"}"#,
+            "see http%253A%252F%252Fu%253AS3CRET%2540h ok",
+            "GET /login?next=https%3A%2F%2Fu%3AS3CRET%40h%2Fx HTTP/1.1",
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text:?} -> {s:?}");
+        }
+        assert_eq!(
+            scrub_text("see http:/u:S3CRET@h/x ok"),
+            "see http://[redacted]@h/x ok"
+        );
+        assert_eq!(
+            scrub_text("see //u:S3CRET@h/x ok"),
+            "see ://[redacted]@h/x ok"
+        );
+        // Ordinary text keeps its slashes: a comment, a protocol-relative
+        // URL with no `@`, a Windows path, `file:/`.
+        for text in [
+            "a // comment",
+            "load //cdn.example/x.js",
+            "open C:/Users/x",
+            "open file:/tmp/x",
+            "a//b@c",
+        ] {
+            assert_eq!(scrub_text(text), text);
+        }
+        // A query value holding one, encoded in any mix.
+        for value in [
+            "http:%2F%2Fu:S3CRET@h",
+            "http:\\/\\/u:S3CRET@h",
+            "http%3A/%2Fu:S3CRET@h",
+        ] {
+            let s = scrub(&format!("/x?u={value}&n=1"), Form::Request);
+            assert_eq!(s, "/x?u=[redacted]&n=1", "{value}");
+        }
+    }
+
+    #[test]
+    fn a_credential_glued_on_with_a_colon_or_an_encoded_equals_goes() {
+        // X-log-url-redact-2, class 7: in a query pair with no raw `=`, or
+        // before a `://`.
+        for (url, form) in [
+            ("https://h/x?passkey%3DS3CRET", Form::Absolute),
+            ("https://h/x?a=1&token:S3CRET&b=2", Form::Absolute),
+            ("https://h/x?a=1&passkey%3dS3CRET", Form::Absolute),
+            ("/x?u=a&passkey%3DS3CRET", Form::Request),
+            ("token:S3CRET://h/x", Form::Absolute),
+            ("passkey%3DS3CRET://h/x", Form::Absolute),
+            ("https://h/x?u=passkey%3DS3CRET", Form::Absolute),
+        ] {
+            let s = scrub(url, form);
+            assert!(!s.contains("S3CRET"), "{url} {form:?} -> {s}");
+        }
+        for text in [
+            "Bearer passkey%3DS3CRET://h/x",
+            "Bearer token:S3CRET://h/x",
+            r#"Bearer %3Apassword: Some("S3CRET")"#,
+            // A quoted value is read again: its closing quote opened the
+            // next field's (fuzz, against `main`).
+            r#"Bearer password: Some("username: "udp:%2F%2Fu:S3CRET]?%3A@10.0.0.1:8080/x"#,
+            r#"password: Some("username: "S3CRET"#,
+            r#"x: "token: "S3CRET""#,
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text} -> {s}");
+        }
     }
 
     #[test]
@@ -1557,7 +2324,14 @@ mod tests {
 
     #[test]
     fn scrub_text_on_a_mebibyte_of_stray_separators_is_quick() {
-        for unit in ["://@", "://@http://u:p@h/", "a://@?"] {
+        for unit in [
+            "://@",
+            "://@http://u:p@h/",
+            "a://@?",
+            "://u:x",
+            "magnet:?xt=a b&tr=c ",
+            " //a@",
+        ] {
             let text = unit.repeat((1 << 20) / unit.len());
             // The best of three, so a burst of load on the runner doesn't
             // count; linear work takes well under 0.1 s here.
@@ -1598,15 +2372,24 @@ mod tests {
             scheme in "(https?|udp|ftp)",
             secret in "[A-Za-z0-9]{6,20}",
             // URL syntax inside a raw password (review): one kind at a
-            // time, or a `/` and a hard stop after a `:` or `@`. A space
-            // with a `://` after it is a known gap (the look-ahead stops at
-            // the `://`; decisions file).
+            // time, or a `/` and a hard stop after a `:` or `@`, and
+            // (X-log-url-redact-2) a hard stop or line break with a `://`
+            // before or after it.
             syntax in proptest::prop_oneof![
                 "[:/@?#,')\\[\\]]{1,4}",
                 "[:/@?#]{0,3}://[a-z:/@]{0,4}",
                 "[ \"<>`]{1,3}",
                 "[:@]{1,2}/[ \"<>`]{1,2}",
+                "[ \"<>`\n\r\t]{1,3}(://)?[@ ]{0,2}",
+                "(://)?[\n\r]{1,2}[:/@ ]{0,2}",
+                "[@:]{0,2}://[ \"\n]{1,2}",
             ],
+            // With nothing marking the userinfo: no line break (a URL at a
+            // line's end with an address on the next can't be told apart;
+            // decisions file).
+            bare in "[/ \"<>`,')\\]?#]{1,3}",
+            // URL forms without a raw `://`.
+            sep in "(://|:%2F%2F|%3A%2F%2F|%3a//|:\\\\/\\\\/|:%2F/|%253A%252F%252F)",
         ) {
             let passkey = format!("Zq{secret}90{secret}");
             let secret = format!("Zq{secret}9");
@@ -1621,6 +2404,11 @@ mod tests {
                 (format!("{before}{scheme}://u:{secret}{syntax}@host.example/x{after}"), &secret),
                 (format!("{before}{scheme}://u:{syntax}{secret}@host.example/x{after}"), &secret),
                 (format!("{before}{scheme}://u:{syntax}{secret}{syntax}@host.example/x{after}"), &secret),
+                (format!("{before}{scheme}://u%3A{syntax}{secret}{syntax}@host.example/x{after}"), &secret),
+                (format!("{before}{scheme}://{bare}{secret}{bare}@host.example/x{after}"), &secret),
+                (format!("{before}{scheme}{sep}u:{secret}@host.example/x{after}"), &secret),
+                (format!("{before} //u:{syntax}{secret}@host.example/x{after}"), &secret),
+                (format!("{before} {scheme}:/u:{secret}@host.example/x{after}"), &secret),
             ] {
                 let s = scrub_text(&text);
                 proptest::prop_assert!(!s.contains(secret.as_str()), "{} -> {}", text, s);
@@ -1645,6 +2433,41 @@ mod tests {
             );
             let s = scrub_text(&magnet);
             proptest::prop_assert_eq!(&s, "x magnet:[redacted] y", "{}", magnet);
+        }
+
+        #[test]
+        fn magnets_keep_no_secret(
+            before in "[ -~]{0,20}",
+            scheme in "(https?|udp|ftp)",
+            secret in "[A-Za-z0-9]{6,20}",
+            // A raw space or line break in a magnet (X-log-url-redact-2).
+            ws in "[ \t\n\r]{1,2}",
+            tail in "(| ok|&tr=udp://trk.invalid/a ok|&tr=http://u:p@trk.invalid/a ok)",
+            soft in "[,)\\]'}(\\[]",
+            host in "([a-z]{2,8}\\.example|\\[::1\\]\\]?)(:[0-9]{2,5})?",
+        ) {
+            let secret = format!("Zq{secret}9");
+            for text in [
+                format!("{before}magnet:?xt=urn:btih:abc&dn=A{ws}{secret}{tail}"),
+                format!("{before}magnet:?xt=urn:btih:abc&tr={scheme}://trk.invalid/a{ws}{secret}&dn=x{tail}"),
+                format!("{before}magnet:?xt=urn:btih:abc&kt=a{ws}{secret}{tail}"),
+                // Inside a `://` URL, ended there by a soft end.
+                format!("{before}{scheme}://{host}/add?uri=magnet:?xt=urn:btih:abc&dn=A{soft}{secret}{tail}"),
+                format!("{before}{scheme}://{host}/x{soft}magnet:?xt=urn:btih:abc&dn=A{soft}{secret}{tail}"),
+                // Percent-encoded, and escaped in a `Debug` string.
+                format!("{before}magnet%3A%3Fxt%3Durn%3Abtih%3Aabc%26dn%3D{secret}{tail}"),
+                format!("{before}magnet%3A?xt=urn:btih:abc&dn=A{soft}{secret}{tail}"),
+                format!(r#"{before}Custom("magnet:?xt=urn:btih:abc&dn=a\"{secret}\" b"){tail}"#),
+            ] {
+                let s = scrub_text(&text);
+                proptest::prop_assert!(!s.contains(&secret), "{:?} -> {:?}", text, s);
+                proptest::prop_assert!(!s.contains("trk.invalid"), "{:?} -> {:?}", text, s);
+            }
+            // A malformed IPv6 literal before a passkey.
+            let passkey = format!("{secret}0{secret}x");
+            let text = format!("{before}{scheme}://h/x?u={scheme}://[::1]]:80/ann/{passkey}/announce y");
+            let s = scrub_text(&text);
+            proptest::prop_assert!(!s.contains(&passkey), "{:?} -> {:?}", text, s);
         }
 
         #[test]

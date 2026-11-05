@@ -10,3 +10,7 @@ cc d2ed94e4fef3af8d67f1dbf3af295a0ec0ec3a641af72c2033b4ef6e5dccab1b # shrinks to
 # for every property in url.rs, and on the unfixed code it also fails
 # planted_secrets_never_get_through, which shrinks it to before = "://@",
 # scheme = "http": a stray `://@` hid the next URL's userinfo.
+cc 36fe0ee1759e74f525c0d5d8d697446a8d96328ce1422dabf2823d52cab15d63 # shrinks to text = ""
+# X-log-url-redact-2 (2026-11-05): saved by scrub_text_never_panics while the
+# magnet cut in scrub_with searched an empty URL from byte 1. Fixed before the
+# PR; kept as a cheap replay.
