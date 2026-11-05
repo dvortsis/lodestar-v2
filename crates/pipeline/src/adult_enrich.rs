@@ -18,9 +18,10 @@
 //!   parser's site, date and title, whichever the plugin asks for. The info
 //!   hash, files and trackers stay here: a [`Query`] has no field for them.
 //! - **Order** (Q15): user interest first ([`Interest::opened`], the detail
-//!   drawer), then a background backfill over stored torrents, at most
-//!   [`BACKGROUND_PER_DAY`] a day, every lookup at least [`MIN_INTERVAL`]
-//!   apart.
+//!   drawer), then a background backfill over stored torrents, within one
+//!   cap for both: at most [`BACKGROUND_PER_DAY`] lookups a UTC day, every
+//!   lookup at least [`MIN_INTERVAL`] apart. With the day's budget spent,
+//!   an opened item waits first in line.
 //! - **Results** are emitted as claims under the plugin's own source id, so
 //!   they go through SRC-2's filter-before-storage path in the writer
 //!   (`unverified::ingest`): the child-safety core judges the enrichment
@@ -59,14 +60,29 @@ use crate::source_adult::AdultSources;
 /// DHT's and verification's (`unverified::VERIFY_STRATEGY`).
 pub const STRATEGY: u8 = 202;
 
-/// Whether `d` is an enrichment match the runtime emitted: from an
-/// enrichment source, with its strategy code and an adult-enrichment
-/// section, the same test the writer's gate makes. Intake doesn't count it
-/// as harvested (ENR-1b); another source's discovery always is.
+/// Whether `d` is an enrichment answer: an adult-enrichment section from
+/// an enrichment source, listed or not. The writer keeps one only from a
+/// listed source and refuses a section-only one from an unlisted source
+/// (`unverified::ingest`), so neither is a find. The strategy code isn't
+/// part of it. Intake doesn't count an answer as harvested (ENR-1b);
+/// another source's discovery always is.
 pub fn is_match(d: &lodestar_sources::Discovery, enrichers: EnrichSources) -> bool {
-    enrichers.has(d.source)
-        && d.found.strategy == STRATEGY
-        && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
+    let Some(c) = d.found.claims.as_deref().filter(|c| c.adult.is_some()) else {
+        return false;
+    };
+    // A listed source's section is a match. From an unlisted enrichment
+    // source, only a section alone is refused; with other claims, they're
+    // stored as its find, and harvested.
+    enrichers.has(d.source) || (enrichers.of_kind(d.source) && section_only(c))
+}
+
+/// Claims holding nothing but an adult-enrichment section.
+fn section_only(c: &Claims) -> bool {
+    Claims {
+        adult: None,
+        ..c.clone()
+    }
+    .is_empty()
 }
 
 /// User-interest lookups waiting at most; more are dropped. Each takes a
@@ -82,33 +98,99 @@ pub const PAGE: usize = 1024;
 pub const ROUND_REST_SECS: i64 = 86_400;
 
 /// How long the runtime waits for user interest when it has nothing else
-/// to do, before looking at the background again.
-const IDLE: Duration = Duration::from_secs(60);
+/// to do, or nothing may be looked up, before trying again
+/// ([`Config::idle`]).
+pub const IDLE: Duration = Duration::from_secs(60);
+
+/// The shortest [`Config::idle`] a host can set.
+pub const MIN_IDLE: Duration = Duration::from_millis(10);
 
 /// The pause between two background pages that held nothing adult.
 const SCAN_PAUSE: Duration = Duration::from_millis(50);
 
-/// The registered adult-enrichment sources (manifests with
-/// [`Kind::Enrichment`](lodestar_sources::Kind::Enrichment)), as a bitset
-/// over [`SourceId`]s. Only these may attach an adult-enrichment section to
-/// a claim (`unverified::Ctx::enrichers`, ENR-1b). Empty: none may.
+/// The listed adult-enrichment sources, as bitsets over [`SourceId`]s
+/// (the same layout as a torrent's `sources`).
+///
+/// - **Listed** ([`has`](Self::has)): the [`AdultEnrichSource`] plugins the
+///   host runs (`PipelineConfig::adult_enrichers`, ENR-1c). Only these may
+///   attach an adult-enrichment section to a claim
+///   (`unverified::Ctx::enrichers`). Empty: none may.
+/// - **Of the kind** ([`of_kind`](Self::of_kind)): every registered
+///   `Kind::Enrichment` source, listed or not (the torrent cache is one). A
+///   section-only claim from one that isn't listed is refused, never stored
+///   as a find, since its answers aren't finds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct EnrichSources(pub u64);
+pub struct EnrichSources {
+    pub listed: u64,
+    pub kind: u64,
+}
 
 impl EnrichSources {
-    /// The enrichment sources among registered `(id, manifest)` pairs.
-    pub fn of<'a>(registered: impl IntoIterator<Item = (SourceId, &'a Manifest)>) -> EnrichSources {
-        EnrichSources(
-            registered
-                .into_iter()
-                .filter(|(_, m)| m.is(lodestar_sources::Kind::Enrichment))
-                .fold(0, |bits, (id, _)| bits | source_bit(id)),
-        )
+    /// The adult-enrichment sources among registered `(id, manifest)`
+    /// pairs: those whose manifest id the host listed as an
+    /// [`AdultEnrichSource`] (`PipelineConfig::adult_enrichers`), of kind
+    /// `Enrichment`. The kind alone isn't enough: the torrent cache is that
+    /// kind too, and it must not attach adult sections (ENR-1c).
+    ///
+    /// **An adult-enrichment source is never always adult.** Its matches
+    /// are answers about stored torrents, not finds, so they never set its
+    /// bit on a torrent and its mask would never apply.
+    /// [`AdultEnrichSource::new`] refuses such a plugin, so none can run; a
+    /// listed manifest that claims both is refused here too, and is a bug in
+    /// debug builds.
+    pub fn of<'a>(
+        registered: impl IntoIterator<Item = (SourceId, &'a Manifest)>,
+        listed: &[&str],
+    ) -> EnrichSources {
+        registered
+            .into_iter()
+            .filter(|(_, m)| {
+                debug_assert!(
+                    !(listed.contains(&m.id) && m.always_adult),
+                    "an adult-enrichment source can't be always adult: {}",
+                    m.id
+                );
+                m.is(lodestar_sources::Kind::Enrichment)
+            })
+            .fold(EnrichSources::default(), |set, (id, m)| EnrichSources {
+                listed: set.listed
+                    | if listed.contains(&m.id) && admitted(m) {
+                        source_bit(id)
+                    } else {
+                        0
+                    },
+                kind: set.kind | source_bit(id),
+            })
     }
 
-    pub fn has(self, source: SourceId) -> bool {
-        self.0 & source_bit(source) != 0
+    /// `bits` listed (and so of the kind).
+    pub fn listed(bits: u64) -> EnrichSources {
+        EnrichSources {
+            listed: bits,
+            kind: bits,
+        }
     }
+
+    /// A listed adult-enrichment source: it may attach sections.
+    pub fn has(self, source: SourceId) -> bool {
+        self.listed & source_bit(source) != 0
+    }
+
+    /// A registered `Kind::Enrichment` source, listed or not.
+    pub fn of_kind(self, source: SourceId) -> bool {
+        self.kind & source_bit(source) != 0
+    }
+
+    /// No adult-enrichment source is listed.
+    pub fn is_empty(self) -> bool {
+        self.listed == 0
+    }
+}
+
+/// A manifest whose source may attach adult sections: an enrichment
+/// source that isn't always adult.
+pub(crate) fn admitted(m: &Manifest) -> bool {
+    m.is(lodestar_sources::Kind::Enrichment) && !m.always_adult
 }
 
 fn source_bit(source: SourceId) -> u64 {
@@ -356,7 +438,7 @@ pub fn check(
 /// The runtime's limits (plan Q15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
-    /// Background lookups a day.
+    /// Lookups a UTC day, user interest and background together (Q15).
     pub per_day: u32,
     /// The least time between two lookups.
     pub interval: Duration,
@@ -364,6 +446,11 @@ pub struct Config {
     pub page: usize,
     /// The rest after a full background round, in seconds.
     pub rest_secs: i64,
+    /// Run the background backfill. Off: opened items only.
+    pub background: bool,
+    /// The wait before trying again when there's nothing to do, or nothing
+    /// may be looked up.
+    pub idle: Duration,
 }
 
 impl Default for Config {
@@ -373,6 +460,8 @@ impl Default for Config {
             interval: MIN_INTERVAL,
             page: PAGE,
             rest_secs: ROUND_REST_SECS,
+            background: true,
+            idle: IDLE,
         }
     }
 }
@@ -411,6 +500,11 @@ impl Interest {
     }
 }
 
+/// [`AdultEnrichSource::new`] refused a plugin: its manifest isn't an
+/// enrichment source, or says it's always adult.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotAdmitted;
+
 /// An adult-enrichment plugin, run as a source of its own: the pipeline
 /// registers, enables and stops it like any other, gives it its kit (the
 /// client behind its egress and kill switch, and its `source_state`) and
@@ -448,7 +542,12 @@ impl AdultEnrichSource {
         adult: AdultSources,
         switches: Arc<dyn Switches>,
         config: Config,
-    ) -> (AdultEnrichSource, Interest) {
+    ) -> Result<(AdultEnrichSource, Interest), NotAdmitted> {
+        // Its answers aren't finds, so an always-adult mask on it would
+        // never apply (ENR-1c).
+        if !admitted(plugin.manifest()) {
+            return Err(NotAdmitted);
+        }
         let (tx, rx) = mpsc::channel(INTEREST_QUEUE);
         let policy = capped(*plugin.policy());
         let source = AdultEnrichSource {
@@ -459,10 +558,16 @@ impl AdultEnrichSource {
             adult,
             switches,
             interest: tokio::sync::Mutex::new(rx),
-            config,
+            // Never above the owner's cap, whatever the host sets (Q15).
+            config: Config {
+                per_day: config.per_day.min(BACKGROUND_PER_DAY),
+                // No busy loop, whatever the host sets.
+                idle: config.idle.max(MIN_IDLE),
+                ..config
+            },
             stats: Arc::default(),
         };
-        (source, Interest(tx))
+        Ok((source, Interest(tx)))
     }
 
     pub fn stats(&self) -> Arc<EnrichStats> {
@@ -517,26 +622,34 @@ impl AdultEnrichSource {
                         biased;
                         _ = ctx.shutdown.requested() => return Ok(()),
                         Some(id) = interest.recv() => (id, true),
-                        _ = tokio::time::sleep(IDLE) => continue,
+                        _ = tokio::time::sleep(self.config.idle) => continue,
                     },
                 },
             };
-            match self.one(&mut ctx, &kit, &*state, id, user).await {
+            match self.one(&mut ctx, &kit, &*state, id).await {
                 Step::Asked => last = Some(Instant::now()),
                 Step::Skipped => {}
-                Step::Wait => {
-                    // Nothing can go now (a plugin-wide condition, or the
-                    // day's budget): a background item goes back to the
-                    // front of the queue, not past the cursor.
+                step @ (Step::Wait | Step::Spent) => {
+                    // Nothing can go now. No background item loses its
+                    // place: it goes back to the front of the queue, not
+                    // past the cursor. An opened item stays first in line
+                    // only for the day's budget (Q15's one cap, ENR-1c), and
+                    // is checked against every condition again when it's
+                    // tried. One opened while a plugin-wide condition fails
+                    // (Show adult content off, the kill switch, the source
+                    // off or unconsented) or while the store can't answer is
+                    // dropped, never sent later.
                     if !user {
                         background.queue.push_front(id);
+                    } else if matches!(step, Step::Spent) {
+                        waiting = Some(id);
                     }
                     bump(&self.stats.done);
                     tokio::select! {
                         biased;
                         _ = ctx.shutdown.requested() => return Ok(()),
                         Some(id) = interest.recv(), if waiting.is_none() => waiting = Some(id),
-                        _ = tokio::time::sleep(IDLE) => {}
+                        _ = tokio::time::sleep(self.config.idle) => {}
                     }
                     continue;
                 }
@@ -563,10 +676,13 @@ impl AdultEnrichSource {
         if let Some(id) = bg.queue.pop_front() {
             return Next::Item(id);
         }
-        if now < bg.resume_at || !self.switches.show_adult() {
+        if !self.config.background || now < bg.resume_at || !self.switches.show_adult() {
             return Next::Idle;
         }
-        if Budget::load(state).await.left(now, self.config.per_day) == 0 {
+        if Budget::load(state, now)
+            .await
+            .is_none_or(|b| b.left(now, self.config.per_day) == 0)
+        {
             return Next::Idle;
         }
         let store = self.store.clone();
@@ -610,14 +726,7 @@ impl AdultEnrichSource {
     }
 
     /// One item: the cache, the gate, the budget, then the plugin.
-    async fn one(
-        &self,
-        ctx: &mut SourceCtx,
-        kit: &Kit,
-        state: &dyn PluginState,
-        id: i64,
-        user: bool,
-    ) -> Step {
+    async fn one(&self, ctx: &mut SourceCtx, kit: &Kit, state: &dyn PluginState, id: i64) -> Step {
         let now = crate::unix_now();
         if Cache::fresh(state, id, now).await {
             bump(&self.stats.cached);
@@ -660,8 +769,10 @@ impl AdultEnrichSource {
                 return Step::Wait;
             }
         };
-        if !user && !Budget::take(state, now, self.config.per_day).await {
-            return Step::Wait;
+        // One cap for both (plan Q15): an opened item jumps the queue, but
+        // within the same day's budget (ENR-1c).
+        if !Budget::take(state, now, self.config.per_day).await {
+            return Step::Spent;
         }
         bump(&self.stats.looked_up);
         let lookup = tokio::select! {
@@ -713,8 +824,12 @@ enum Step {
     Asked,
     /// This item isn't looked up.
     Skipped,
-    /// Nothing may be looked up now: wait, keeping the item's place.
+    /// Nothing may be looked up now (a plugin-wide condition, or the store
+    /// can't answer): wait. An opened item is dropped.
     Wait,
+    /// The day's budget is spent, or its count can't be written (fail
+    /// closed): wait, keeping the item's place, an opened one included.
+    Spent,
     Shutdown,
 }
 
@@ -843,29 +958,52 @@ impl Background {
     }
 }
 
-/// The day's background lookups (Q15), counted per UTC day.
+/// The day's lookups (Q15), counted per UTC day: every lookup, user
+/// interest and background alike.
 struct Budget {
     day: i64,
     used: u32,
 }
 
 impl Budget {
-    async fn load(state: &dyn PluginState) -> Budget {
-        let v = state
-            .get(BUDGET_KEY)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        Budget {
+    /// The stored budget, normalised to `now`'s UTC day. `None` when it
+    /// can't be read: a budget that can't be read is spent (fail closed).
+    ///
+    /// A stored day later than today (the clock was ahead, and stepped
+    /// back) becomes today with its count, and is written back at once,
+    /// whether or not a lookup is taken. So a budget spent on a future day
+    /// is never spent until that day: it's today's, and the next day starts
+    /// fresh (#502 review).
+    async fn load(state: &dyn PluginState, now: i64) -> Option<Budget> {
+        let v = state.get(BUDGET_KEY).await.ok()?.unwrap_or_default();
+        let today = now.div_euclid(86_400);
+        let b = Budget {
             day: i64_at(&v, 0).unwrap_or(i64::MIN),
             used: v
                 .get(8..12)
                 .and_then(|b| b.try_into().ok())
                 .map_or(0, u32::from_be_bytes),
+        };
+        if b.day <= today {
+            return Some(b);
         }
+        let b = Budget {
+            day: today,
+            used: b.used,
+        };
+        // Best effort: read again, it's normalised again.
+        let _ = state.set(BUDGET_KEY, b.encode()).await;
+        Some(b)
     }
 
+    fn encode(&self) -> Vec<u8> {
+        let mut v = self.day.to_be_bytes().to_vec();
+        v.extend(self.used.to_be_bytes());
+        v
+    }
+
+    /// What's left on `now`'s UTC day, of a budget [`load`](Self::load)
+    /// normalised.
     fn left(&self, now: i64, per_day: u32) -> u32 {
         if self.day == now.div_euclid(86_400) {
             per_day.saturating_sub(self.used)
@@ -875,17 +1013,21 @@ impl Budget {
     }
 
     /// Takes one lookup from today's budget. False when it's spent, or the
-    /// count can't be written: a budget that can't be kept isn't spent.
+    /// count can't be read or written: then the lookup isn't made and the
+    /// caller holds the item (`Step::Spent`, fail closed).
     async fn take(state: &dyn PluginState, now: i64, per_day: u32) -> bool {
-        let b = Budget::load(state).await;
+        let Some(b) = Budget::load(state, now).await else {
+            return false;
+        };
         if b.left(now, per_day) == 0 {
             return false;
         }
         let day = now.div_euclid(86_400);
         let used = if b.day == day { b.used + 1 } else { 1 };
-        let mut v = day.to_be_bytes().to_vec();
-        v.extend(used.to_be_bytes());
-        state.set(BUDGET_KEY, v).await.is_ok()
+        state
+            .set(BUDGET_KEY, Budget { day, used }.encode())
+            .await
+            .is_ok()
     }
 }
 
@@ -1000,21 +1142,42 @@ mod tests {
             name: Some("n".into()),
             ..Claims::default()
         };
-        let enr = EnrichSources(1 << source.get());
+        let enr = EnrichSources::listed(1 << source.get());
         let m = d(Found::key(key, STRATEGY).with_claims(section.clone()));
         assert!(is_match(&m, enr));
-        // Another source using the same strategy code is still harvested.
+        // Another source sending a section is still harvested.
         assert!(!is_match(&m, EnrichSources::default()));
+        // An unlisted enrichment source's answer isn't a find either.
+        let unlisted = EnrichSources {
+            listed: 0,
+            kind: 1 << source.get(),
+        };
+        assert!(is_match(&m, unlisted));
+        // With other claims, the cache's claims are a find: harvested.
+        let with_name = Claims {
+            name: Some("n".into()),
+            ..section.clone()
+        };
+        let named_section = d(Found::key(key, STRATEGY).with_claims(with_name));
+        assert!(!is_match(&named_section, unlisted));
+        assert!(
+            is_match(&named_section, enr),
+            "a listed source's is a match"
+        );
         assert!(!is_match(
             &d(Found::key(key, STRATEGY).with_claims(named)),
             enr
         ));
         assert!(!is_match(&d(Found::key(key, STRATEGY)), enr));
-        assert!(!is_match(&d(Found::key(key, 0).with_claims(section)), enr));
+        // The writer's gate doesn't read the strategy code, so neither does
+        // this: a section from a listed adult-enrichment source is a match.
+        assert!(is_match(&d(Found::key(key, 0).with_claims(section)), enr));
     }
 
+    /// Only listed adult-enrichment plugins are enrichment sources: an
+    /// unlisted source of the same kind (the torrent cache) isn't.
     #[test]
-    fn enrichment_sources_are_those_of_that_kind() {
+    fn enrichment_sources_are_the_listed_adult_enrichers() {
         let mut m = lodestar_sources::Manifest {
             id: "x",
             name: "x",
@@ -1036,9 +1199,46 @@ mod tests {
             ..m.clone()
         };
         m.id = "y";
-        let set = EnrichSources::of([(a, &m), (b, &feed)]);
-        assert!(set.has(a) && !set.has(b));
+        let c = SourceId::new(7).unwrap();
+        let cache = lodestar_sources::Manifest {
+            id: "torrent-cache",
+            ..m.clone()
+        };
+        let set = EnrichSources::of([(a, &m), (b, &feed), (c, &cache)], &["y", "x"]);
+        assert!(set.has(a) && !set.has(b), "listed and of the kind");
+        assert!(!set.has(c), "the kind alone isn't enough");
+        assert!(set.of_kind(a) && set.of_kind(c) && !set.of_kind(b));
+        // Listing a feed doesn't make it one either.
+        assert!(!EnrichSources::of([(b, &feed)], &["y"]).has(b));
+        assert!(!EnrichSources::of([(a, &m)], &[]).has(a), "none listed");
         assert!(!EnrichSources::default().has(a));
+        // Enrichment and always adult together is refused.
+        let both = lodestar_sources::Manifest {
+            always_adult: true,
+            ..m.clone()
+        };
+        assert!(admitted(&m) && !admitted(&both) && !admitted(&feed));
+    }
+
+    /// Registering an enrichment source that's always adult is a bug.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "can't be always adult")]
+    fn an_always_adult_enrichment_source_is_a_bug() {
+        let m = lodestar_sources::Manifest {
+            id: "both",
+            name: "both",
+            version: "1",
+            kinds: &[lodestar_sources::Kind::Enrichment],
+            networks: &[],
+            endpoints: &[],
+            risk: lodestar_sources::Risk::Low,
+            consent: lodestar_sources::Consent::Account,
+            default_priority: lodestar_sources::Priority::Normal,
+            enabled_by_default: false,
+            always_adult: true,
+        };
+        let _ = EnrichSources::of([(SourceId::new(2).unwrap(), &m)], &["both"]);
     }
 
     #[test]
@@ -1101,8 +1301,76 @@ mod tests {
         assert!(Budget::take(&s, day, 2).await);
         assert!(Budget::take(&s, day + 5, 2).await);
         assert!(!Budget::take(&s, day + 10, 2).await);
-        assert_eq!(Budget::load(&s).await.left(day + 10, 2), 0);
+        assert_eq!(
+            Budget::load(&s, day + 10).await.unwrap().left(day + 10, 2),
+            0
+        );
         assert!(Budget::take(&s, day + 86_400, 2).await);
-        assert_eq!(Budget::load(&s).await.left(day + 86_400, 2), 1);
+        assert_eq!(
+            Budget::load(&s, day + 86_400)
+                .await
+                .unwrap()
+                .left(day + 86_400, 2),
+            1
+        );
+    }
+
+    /// The clock stepping back across UTC midnight keeps the count: no
+    /// fresh budget on the day it's read, and the stored day becomes today.
+    #[tokio::test]
+    async fn a_clock_step_back_keeps_the_count() {
+        let s = MemoryState::new();
+        let day = 20_000 * 86_400;
+        assert!(Budget::take(&s, day + 10, 2).await);
+        assert!(Budget::take(&s, day + 20, 2).await);
+        // Back to yesterday: still spent, and the day is rewritten.
+        assert!(!Budget::take(&s, day - 5, 2).await);
+        let b = Budget::load(&s, day - 5).await.unwrap();
+        assert_eq!((b.day, b.used), (day.div_euclid(86_400) - 1, 2));
+    }
+
+    /// A budget spent on a far-future day isn't spent until that day: the
+    /// real next day starts fresh (#502 review).
+    #[tokio::test]
+    async fn a_future_day_never_holds_the_budget() {
+        let s = MemoryState::new();
+        let today = 20_000 * 86_400;
+        let future = today + 3_000 * 86_400;
+        assert!(Budget::take(&s, future, 2).await);
+        assert!(Budget::take(&s, future + 1, 2).await);
+        // Back to the real day: it's today's, so today's spent...
+        assert!(!Budget::take(&s, today + 10, 2).await);
+        // ...and the real next day has its whole cap.
+        let next = today + 86_400;
+        assert_eq!(Budget::load(&s, next).await.unwrap().left(next, 2), 2);
+        assert!(Budget::take(&s, next, 2).await);
+    }
+
+    /// A budget that can't be read is spent: nothing is looked up.
+    #[tokio::test]
+    async fn an_unreadable_budget_is_spent() {
+        #[derive(Debug)]
+        struct Broken;
+        impl PluginState for Broken {
+            fn get<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Option<Vec<u8>>, StateError>> {
+                Box::pin(async { Err(StateError::Store("down".into())) })
+            }
+            fn set<'a>(&'a self, _: &'a str, _: Vec<u8>) -> BoxFuture<'a, Result<(), StateError>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn remove<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<(), StateError>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn compare_and_set<'a>(
+                &'a self,
+                _: &'a str,
+                _: Option<&'a [u8]>,
+                _: Option<Vec<u8>>,
+            ) -> BoxFuture<'a, Result<bool, StateError>> {
+                Box::pin(async { Ok(true) })
+            }
+        }
+        assert!(Budget::load(&Broken, 0).await.is_none());
+        assert!(!Budget::take(&Broken, 0, 5).await);
     }
 }

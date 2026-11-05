@@ -37,9 +37,10 @@ use crate::manifest::{Manifest, Policy};
 use crate::plugin::{BoxFuture, Kit, PluginError};
 use crate::state::{PluginState, StateError, check};
 
-/// Background lookups one service may make a day (plan Q15). Lookups for
-/// user interest (an opened detail drawer) jump the queue and aren't
-/// counted here, but share the same pacing ([`MIN_INTERVAL`]).
+/// Lookups one service may make a UTC day (plan Q15). User interest (an
+/// opened detail drawer) jumps the queue but counts against the same cap,
+/// with the same pacing ([`MIN_INTERVAL`]); the name is kept for its
+/// callers.
 pub const BACKGROUND_PER_DAY: u32 = 5_000;
 /// The least time between two lookups to one service (Q15: at most one
 /// request a second).

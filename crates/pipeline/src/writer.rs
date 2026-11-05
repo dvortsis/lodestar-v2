@@ -503,17 +503,34 @@ impl Writer {
     /// pass. A separate transaction after the commit: a crash between them
     /// leaves the kind unpinned until the next rules or parser change.
     async fn mark_rewritten(&mut self, ids: Vec<i64>) {
-        if ids.is_empty() {
+        // Skipped while no adult-enrichment source is listed (ENR-1c). A
+        // match stored in an earlier run under a source no longer listed
+        // isn't re-marked then; it keeps its kind until the next rules or
+        // parser change (decisions file).
+        if ids.is_empty() || self.enrichers.is_empty() {
             return;
         }
         let mut store = self.store.take().expect("store");
-        let (store, result) = tokio::task::spawn_blocking(move || {
+        let (store, result, fallback) = tokio::task::spawn_blocking(move || {
             let result = crate::enrich::mark_matched(&mut store, &ids);
-            (store, result)
+            // Failed (a busy claims read): mark them all, as
+            // `adult_by_source` does, so the backfill finds out (ENR-1c).
+            let fallback = result.is_err().then(|| store.mark_unenriched(&ids));
+            (store, result, fallback)
         })
         .await
         .expect("mark task");
         self.store = Some(store);
+        match fallback {
+            Some(Ok(_)) => self.reenrich.store(true, Ordering::Release),
+            // Both failed: the rows keep their kind until the next rules or
+            // parser change re-marks them.
+            Some(Err(e)) => lodestar_log::log_event!(
+                crate::log_events::ENRICHMENT_FAILED,
+                error = crate::log_events::store_error(&e)
+            ),
+            None => {}
+        }
         match result {
             Ok(marked) if !marked.is_empty() => self.reenrich.store(true, Ordering::Release),
             Ok(_) => {}
@@ -2849,6 +2866,7 @@ mod tests {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
         let enr = store.register_source("enr", "1", 1).unwrap();
         let mut w = writer(store, coordinator.clone(), gate);
+        w.enrichers = crate::adult_enrich::EnrichSources::listed(bit(enr));
         let (retry, _retry_rx) = mpsc::channel(4);
         w.commit(
             vec![leased(&coordinator, results())],
@@ -2891,6 +2909,59 @@ mod tests {
         .await;
         assert!(!current(&w), "marked for the backfill");
         assert!(w.reenrich.load(Ordering::Acquire));
+    }
+
+    /// The commit hook's store errors (ENR-1c): a failed claims read marks
+    /// every rewritten row for the backfill and starts the pass, and with no
+    /// adult-enrichment source listed the hook does nothing.
+    #[tokio::test]
+    async fn a_failed_match_read_marks_every_rewritten_row() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let enr = store.register_source("enr", "1", 1).unwrap();
+        let mut w = writer(store, coordinator.clone(), gate);
+        let (retry, _retry_rx) = mpsc::channel(4);
+        let lease = |c: &Coordinator| vec![leased(c, results())];
+        w.commit(lease(&coordinator), vec![], vec![], vec![], &retry)
+            .await;
+        let id = w
+            .store
+            .as_ref()
+            .unwrap()
+            .find(&results().key)
+            .unwrap()
+            .unwrap();
+        let current = |w: &Writer| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .enrichment(id)
+                .unwrap()
+                .unwrap()
+                .version
+                == lodestar_classify::ENRICHMENT_VERSION
+        };
+        // The claims read fails: its table is gone.
+        w.store
+            .as_ref()
+            .unwrap()
+            .connection()
+            .execute_batch("DROP TABLE torrent_claims")
+            .unwrap();
+        // No adult-enrichment source listed: the hook doesn't run.
+        w.commit(lease(&coordinator), vec![], vec![], vec![], &retry)
+            .await;
+        assert!(current(&w) && !w.reenrich.load(Ordering::Acquire));
+        assert_eq!(w.stats.errors.load(Ordering::Relaxed), 0);
+        // Listed: the read fails, so every rewritten row is marked.
+        w.enrichers = crate::adult_enrich::EnrichSources::listed(bit(enr));
+        w.commit(lease(&coordinator), vec![], vec![], vec![], &retry)
+            .await;
+        assert!(!current(&w), "marked for the backfill");
+        assert!(w.reenrich.load(Ordering::Acquire));
+        assert_eq!(w.stats.errors.load(Ordering::Relaxed), 1);
     }
 
     /// A refetch is never the network's and never the funnel's: one that
