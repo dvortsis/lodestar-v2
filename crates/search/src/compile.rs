@@ -166,9 +166,11 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
         .chain(&checked)
         .map(|n| fast_range(n, f, now).expect("liftable"))
         .collect();
-    // How many clauses would drive the query, for a lone extension's
-    // score below.
-    let driving = rest.iter().filter(|n| drives(n)).count();
+    // Whether a clause other than a lone extension drives the query, for
+    // a lone extension's score below.
+    let lone_ext = |n: &&Node| matches!(n, Node::File { of } if file_exts(of).is_some());
+    let others_drive = rest.iter().any(|n| drives(n) && !lone_ext(n));
+    let mut scored_lone = false;
     let mut clauses = Vec::new();
     let mut boosts = Vec::new();
     for n in rest {
@@ -200,12 +202,18 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
             // replaced did (X-search-files-4). Beside another clause that
             // drives, that set was lifted into the collector's filters and
             // added nothing: a constant in `text` would squeeze the
-            // re-ranker's text differences. Driving alone, it stayed in
-            // the query and scored 1.0 (`IdsQuery`), the text the priors
-            // multiply; 0 there would leave every hit at 0, unranked.
+            // re-ranker's text differences. With nothing else to drive,
+            // the first such set stayed in the query and scored 1.0
+            // (`IdsQuery`), the text the priors multiply, and the rest
+            // were lifted; all 0 would leave every hit at 0, unranked.
             Node::File { of } if let Some(any) = file_exts(of) => {
                 if let Some(q) = compile_opt(&Node::Ext { any }, f, now) {
-                    let score = if driving > 1 { 0.0 } else { 1.0 };
+                    let score = if others_drive || scored_lone {
+                        0.0
+                    } else {
+                        1.0
+                    };
+                    scored_lone = true;
                     push_must(&mut clauses, Box::new(ConstScoreQuery::new(q, score)));
                 }
             }

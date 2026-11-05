@@ -627,9 +627,19 @@ fn a_lone_extension_clause_keeps_its_priors_order() {
             "-joker file:(ext:mkv,mp4,avi)",
             "-joker file:(ext:mkv,mp4,avi size:>=0)",
         ),
+        // Only lone extensions drive: the first scores, as the first id
+        // set kept in the query did.
+        (
+            "file:(ext:mkv,avi) file:(ext:mkv,mp4,avi)",
+            "file:(ext:mkv,avi size:>=0) file:(ext:mkv,mp4,avi size:>=0)",
+        ),
+        (
+            "file:(ext:mkv,mp4,avi) -file:(ext:exe) size:>100MB",
+            "file:(ext:mkv,mp4,avi size:>=0) -file:(ext:exe size:>=0) size:>100MB",
+        ),
     ] {
         let got = scored(lone);
-        assert!(got.len() >= 3, "{lone}: {got:?}");
+        assert!(got.len() >= 2, "{lone}: {got:?}");
         assert!(got.iter().all(|(_, s)| *s > 0.0), "{lone}: {got:?}");
         assert_eq!(got, scored(reference), "{lone}");
     }
