@@ -447,6 +447,7 @@ const MANIFEST: Manifest = Manifest {
     consent: Consent::None,
     default_priority: Priority::Normal,
     enabled_by_default: false,
+    always_adult: false,
 };
 
 /// No settings of its own: each integration's token is made under

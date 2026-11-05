@@ -216,6 +216,7 @@ fn stored_torrents_relabelled_adult_meet_the_adult_only_core() {
         filter: Some(&filter),
         sealer: Some(&sealer),
         quarantine_secs: 86_400,
+        ..Backfill::default()
     };
     let b = enrich_stored_with(&mut store, 0, 10, &ctx)
         .unwrap()
@@ -321,6 +322,7 @@ fn a_newer_parser_detecting_adult_meets_the_adult_only_core() {
         filter: Some(&filter),
         sealer: Some(&sealer),
         quarantine_secs: 86_400,
+        ..Backfill::default()
     };
     let b = enrich_stored_with(&mut store, 0, 10, &ctx)
         .unwrap()
@@ -434,6 +436,7 @@ fn a_hold_any_type_would_meet_is_released_normally() {
         filter: Some(&filter),
         sealer: Some(&sealer),
         quarantine_secs: 86_400,
+        ..Backfill::default()
     };
     enrich_stored_with(&mut store, 0, 10, &ctx).unwrap();
     let q = store.quarantined(10).unwrap();

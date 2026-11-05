@@ -88,6 +88,13 @@ pub struct Manifest {
     pub default_priority: Priority,
     /// Only the Mainline DHT is on out of the box (§18.1).
     pub enabled_by_default: bool,
+    /// Everything this source finds is adult content (owner Q7, Sukebei):
+    /// the pipeline classifies each of its items Adult, as an Is adult
+    /// correction does, whatever its name or claims say. It's a property of
+    /// the plugin's code, never of what its feed returns, so a feed can't
+    /// turn it off; it only ever makes an item adult, never non-adult
+    /// (`docs/decisions/2026-11-05-X-source-adult.md`).
+    pub always_adult: bool,
 }
 
 impl Manifest {

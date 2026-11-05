@@ -116,7 +116,7 @@ async fn every_item_is_found_as_adult_whatever_its_feed_category() {
     assert_eq!(
         first.found.claims.as_deref().unwrap().ids,
         [
-            id("nyaa-category", "1_2"),
+            id("sukebei-category", "1_2"),
             id("nyaa-flag", "trusted"),
             id("content-type", "adult"),
         ]
@@ -127,7 +127,7 @@ async fn every_item_is_found_as_adult_whatever_its_feed_category() {
         .unwrap();
     assert_eq!(
         odd.found.claims.as_deref().unwrap().ids,
-        [id("nyaa-category", "9_9"), id("content-type", "adult")]
+        [id("sukebei-category", "9_9"), id("content-type", "adult")]
     );
 }
 
@@ -138,7 +138,7 @@ async fn a_blocklisted_hash_is_an_ordinary_find_for_the_filter_to_judge() {
     // no flag that would let it past the child-safety core or the floor,
     // and the pipeline holds it before storage (`crates/pipeline/tests/
     // unverified.rs`; SRC-G runs the cross-plugin injection test).
-    let (got, _) = replay("sukebei_blocked", 2, 4).await;
+    let (got, _) = replay("sukebei_listed_hash", 2, 4).await;
     let blocked = hash("b10c4ed0b10c4ed0b10c4ed0b10c4ed0b10c4ed0");
     let hits: Vec<_> = got.iter().filter(|d| d.found.key == blocked).collect();
     assert_eq!(hits.len(), 2);
@@ -189,6 +189,9 @@ fn manifest_and_policy() {
     assert_ne!(m.id, Nyaa::new().manifest().id);
     assert_eq!(m.consent, Consent::External);
     assert!(!m.enabled_by_default, "off by default");
+    // Owner Q7: every find is adult. The manifest says so, not the feed.
+    assert!(m.always_adult);
+    assert!(!Nyaa::new().manifest().always_adult);
     assert_eq!(m.endpoints.len(), 1);
     assert_eq!(
         (m.endpoints[0].protocol, m.endpoints[0].host),

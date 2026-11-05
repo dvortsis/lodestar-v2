@@ -323,6 +323,7 @@ placement:
   - SRC-12
   - SRC-12b
   - SRC-13
+  - X-source-adult
 - ws: ws-src-ui
   match:
   - SRC-14

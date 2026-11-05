@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_classify::{Classification, FileInfo};
+
+use crate::source_adult::AdultSources;
 use lodestar_cluster::{Token, WorkerId};
 use lodestar_filter::{Engine, Facts, Handle, Item, Verdict};
 use lodestar_metainfo::{Info, InfoHash};
@@ -145,6 +147,9 @@ pub(crate) struct Results {
     pub fix: Option<bool>,
     /// Only private sources reported the key.
     pub private_source: bool,
+    /// An always-adult source found it (X-source-adult): stored adult and
+    /// judged as adult too, whatever the classification rules say.
+    pub source_adult: bool,
 }
 
 pub(crate) struct PrepareStage {
@@ -154,6 +159,8 @@ pub(crate) struct PrepareStage {
     pub leases: Arc<WorkerLeases>,
     pub stats: Arc<WriterStats>,
     pub gate: Arc<GateStats>,
+    /// The sources whose every find is adult.
+    pub adult: AdultSources,
     pub batch_max: usize,
     pub batch_wait: Duration,
 }
@@ -170,12 +177,14 @@ impl PrepareStage {
             let batch = collect(first, &mut fetched, self.batch_max, self.batch_wait).await;
             let preparer = self.preparer;
             let engine = self.filter.current();
+            let adult = self.adult;
             let (preparer, done) = tokio::task::spawn_blocking(move || {
                 let mut preparer = preparer;
                 let done: Vec<_> = batch
                     .into_iter()
                     .map(|fk| {
-                        let r = prepare_one(&mut preparer, &engine, &fk);
+                        let source_adult = adult.any(fk.sources);
+                        let r = prepare_one(&mut preparer, &engine, &fk, source_adult);
                         (fk, r)
                     })
                     .collect();
@@ -208,6 +217,7 @@ impl PrepareStage {
                             version: done.version,
                             fix: done.fix,
                             private_source: fk.private_source,
+                            source_adult: done.source_adult,
                         };
                         if out.send(r).await.is_err() {
                             return;
@@ -237,12 +247,20 @@ struct Done {
     verdict: Verdict,
     version: u64,
     fix: Option<bool>,
+    source_adult: bool,
 }
 
 /// Parses, prepares, enriches and judges one fetched info dict. A key in
 /// the floor's hash list is refused before parsing; every other verdict
 /// goes to the writer, which records it and re-checks it (§19.4).
-fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Result<Done, Loss> {
+/// `source_adult`: an always-adult source found it, so it's stored adult
+/// and judged as adult too ([`crate::source_adult`]).
+fn prepare_one(
+    preparer: &mut Preparer,
+    engine: &Engine,
+    fk: &FetchedKey,
+    source_adult: bool,
+) -> Result<Done, Loss> {
     if engine.blocked_hash(&[fk.key.0]).is_some() {
         return Err(Loss::Blocked);
     }
@@ -279,9 +297,9 @@ fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Res
         content_type: class.content_type,
     };
     // Your classification rules change what's stored; an Is adult one
-    // also makes the torrent meet the Adult-only core (§20.9).
-    let (verdict, says) = engine.judge_classified(&item, Some(&facts), now);
-    let fix = crate::enrich::rule_fix(says, &class);
+    // also makes the torrent meet the Adult-only core (§20.9). So does an
+    // always-adult source, which no Not adult rule undoes.
+    let (verdict, fix) = crate::source_adult::judge_maybe(engine, &item, &facts, source_adult, now);
     if fix.is_some() {
         prepared.enrichment = Some(crate::enrich::enrich_with_rule(&prepared.name, &files, fix));
     }
@@ -292,6 +310,7 @@ fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Res
         verdict,
         version: engine.version,
         fix,
+        source_adult,
     })
 }
 
@@ -381,6 +400,7 @@ mod tests {
             leases,
             stats: Arc::default(),
             gate: gate.clone(),
+            adult: AdultSources::default(),
             batch_max: 8,
             batch_wait: Duration::from_millis(1),
         };
@@ -415,6 +435,54 @@ mod tests {
         assert_eq!(gate.excluded(Excluded::InvalidMetainfo), 1);
         assert_eq!(gate.excluded(Excluded::FailedVerification), 0);
         assert_eq!(gate.new_verified(Origin::Network), 0);
+    }
+
+    /// A fetch an always-adult source found is stored adult, as an Is
+    /// adult correction makes it, and says so to the writer; the same
+    /// torrent from another source is detection's.
+    #[test]
+    fn a_fetch_an_always_adult_source_found_is_prepared_adult() {
+        use lodestar_classify::{ContentType, Record};
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let mut preparer = store.preparer();
+        let engine = crate::default_filter().current();
+        let raw = info("Garden.Tour.2022.1080p.mkv");
+        let key = InfoHash(lodestar_peer_wire::testing::Seed::v1(raw.clone()).info_hash);
+        let source = SourceId::new(2).unwrap();
+        let fk = FetchedKey {
+            key,
+            fetched: Fetched {
+                info: raw,
+                v2: false,
+                encrypted: false,
+                pex: Vec::new(),
+                client: None,
+            },
+            source,
+            sources: 1 << source.get(),
+            cohort: 0,
+            strategy: 0,
+            discovered_at: 0,
+            private_source: false,
+        };
+        let stored = |d: &Done| {
+            let e = d.torrent.enrichment.as_ref().unwrap();
+            let r = Record::decode(&e.data).unwrap();
+            (ContentType::from_code(e.content_type), r.content_type)
+        };
+        let plain = prepare_one(&mut preparer, &engine, &fk, false).unwrap();
+        assert_ne!(plain.class.content_type, ContentType::Adult);
+        assert_ne!(stored(&plain).0, Some(ContentType::Adult));
+        assert!(!plain.source_adult && plain.fix.is_none());
+        let adult = prepare_one(&mut preparer, &engine, &fk, true).unwrap();
+        assert_eq!(
+            stored(&adult),
+            (Some(ContentType::Adult), ContentType::Adult)
+        );
+        assert!(adult.source_adult);
+        assert_eq!(adult.fix, Some(true));
+        // Detection's own reading is kept for filtering beside it.
+        assert_eq!(adult.class.content_type, plain.class.content_type);
     }
 
     /// The pool's terminal loss to data that didn't hash to the key counts

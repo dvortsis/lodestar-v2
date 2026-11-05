@@ -32,6 +32,7 @@ use crate::gate::{Excluded, GateStats, Origin};
 use crate::have::{Bloom, Have, capacity_for};
 use crate::health::HealthHandle;
 use crate::rollups::{Rollups, metric};
+use crate::source_adult::AdultSources;
 use crate::unverified::{self, UnverifiedStats};
 use crate::worker::{Results, collect};
 use crate::{event, unix_now};
@@ -100,6 +101,8 @@ pub(crate) struct WriterIo {
 
 pub(crate) struct Writer {
     pub store: Option<Store>,
+    /// The sources whose every find is adult ([`crate::source_adult`]).
+    pub adult: AdultSources,
     /// The background enrichment pass: the last id it reached, and whether
     /// it has found nothing left to do.
     pub backfill_after: i64,
@@ -379,13 +382,26 @@ impl Writer {
     /// judged again. Quarantined names are sealed here.
     fn judge(&self, mut committing: Vec<Committing>) -> Vec<Committing> {
         let engine = self.filter.current();
+        // One read per batch, and none while no always-adult source is
+        // registered. A read error counts as having items: stricter.
+        let unverified = !self.adult.is_empty()
+            && self
+                .store
+                .as_ref()
+                .is_some_and(|s| s.has_unverified().unwrap_or(true));
         for c in &mut committing {
+            // Found by an always-adult source the worker didn't see: the
+            // lease's, or the source of an unverified item it promotes.
+            // Judged again as adult before anything is stored.
+            let newly_adult = !c.results.source_adult && self.source_adult(c, unverified);
             let r = &mut c.results;
-            let verdict = if r.worker == WorkerId::LOCAL && r.version == engine.version {
-                std::mem::take(&mut r.verdict)
-            } else {
-                rejudge(&engine, r, c.lease.discovered_at, unix_now())
-            };
+            r.source_adult |= newly_adult;
+            let verdict =
+                if r.worker == WorkerId::LOCAL && r.version == engine.version && !newly_adult {
+                    std::mem::take(&mut r.verdict)
+                } else {
+                    rejudge(&engine, r, c.lease.discovered_at, unix_now())
+                };
             c.verdict = verdict.decision;
             c.shadow = verdict.shadow;
             if c.verdict
@@ -399,6 +415,108 @@ impl Writer {
             }
         }
         committing
+    }
+
+    /// Whether an always-adult source found what `c` commits, besides the
+    /// sources its worker saw: the lease's, a stored torrent's under one of
+    /// its swarm hashes (a partial import being upgraded), or any finder of
+    /// an unverified item under one (the one promotion stores it as).
+    /// Costs nothing while no such source is registered.
+    fn source_adult(&self, c: &Committing, unverified: bool) -> bool {
+        if self.adult.is_empty() {
+            return false;
+        }
+        let r = &c.results;
+        if self
+            .adult
+            .any(r.sources | c.lease.sources | bit(c.lease.source))
+        {
+            return true;
+        }
+        let Some(store) = self.store.as_ref() else {
+            return false;
+        };
+        // Already stored and found by one before: a refetch of a partial
+        // import (its lease is the peer finder's) upgrades that row, so
+        // the row's own finders count too. A read error counts as adult.
+        let stored = r.torrent.swarm_hashes().any(|h| match store.find(&h) {
+            Ok(None) => false,
+            Ok(Some(id)) => store
+                .torrent(id)
+                .map_or(true, |t| t.is_some_and(|t| self.adult.any(t.sources))),
+            Err(_) => true,
+        });
+        if stored {
+            return true;
+        }
+        if !unverified {
+            return false;
+        }
+        r.torrent.swarm_hashes().any(|h| {
+            // A read error counts as adult: stricter, and the commit's
+            // own reads will fail the same way.
+            store.unverified(Network::Bt, &h.0).map_or(true, |i| {
+                i.is_some_and(|i| self.adult.any(i.sources) || self.adult.has(i.source))
+            })
+        })
+    }
+
+    /// Classifies as adult the stored torrents among `ids` that an
+    /// always-adult source has just found ([`crate::enrich::adult_by_source`]),
+    /// marking what it holds for intake before its write.
+    async fn adult_by_source(&mut self, ids: Vec<i64>) {
+        if ids.is_empty() || self.adult.is_empty() {
+            return;
+        }
+        let store = self.store.take().expect("store");
+        let filter = self.filter.clone();
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let held = self.held.clone();
+        let adult = self.adult;
+        let (store, result, marked) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let ctx = crate::enrich::Backfill {
+                filter: Some(&filter),
+                sealer: sealer.as_deref(),
+                quarantine_secs,
+                adult,
+            };
+            let pending = std::cell::RefCell::new(None);
+            let mark = |_st: &Store, hs: &[[u8; 20]]| {
+                *pending.borrow_mut() = Some(held.pend(hs));
+            };
+            let result = crate::enrich::adult_by_source(&mut store, &ids, &ctx, &mark);
+            hold_committed(&store, pending.into_inner(), false);
+            // Failed: the backfill applies the same once it reaches them.
+            // If even the mark fails, the next sighting tries again.
+            let marked = result.is_err() && store.mark_unenriched(&ids).is_ok();
+            (store, result, marked)
+        })
+        .await
+        .expect("source adult task");
+        self.store = Some(store);
+        if marked {
+            self.reenrich.store(true, Ordering::Release);
+        }
+        match result {
+            Ok(b) => {
+                if b.rejected {
+                    // Marked for the backfill, which applies the same.
+                    self.reenrich.store(true, Ordering::Release);
+                }
+                self.stats
+                    .enriched
+                    .fetch_add(b.enriched as u64, Ordering::Relaxed);
+            }
+            Err(e) => {
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::ENRICHMENT_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
     }
 
     /// Removes expired quarantine (its keys become fetchable again, except
@@ -523,6 +641,7 @@ impl Writer {
         let engine = self.filter.current();
         let sealer = self.sealer.clone();
         let quarantine_secs = self.cfg.quarantine_secs;
+        let adult = self.adult;
         #[cfg(test)]
         let (between, marked, filter) = (self.between, self.marked, self.filter.clone());
         let (store, committing, touches, swarm, result) = tokio::task::spawn_blocking(move || {
@@ -554,6 +673,7 @@ impl Writer {
                 ctx: unverified::Ctx {
                     sealer: sealer.as_deref(),
                     quarantine_secs,
+                    adult,
                 },
                 stats: &stats.unverified,
                 mark: &mark,
@@ -652,6 +772,14 @@ impl Writer {
             })
             .collect();
         self.stats.unverified.promoted_hook.publish(&kept);
+        // Stored torrents an always-adult source found that may not be
+        // stored as adult yet: merged into, or seen again.
+        let mut adult_ids: Vec<i64> = outcome
+            .stored
+            .iter()
+            .filter(|(i, _, _, _)| committing[*i].results.source_adult)
+            .map(|&(_, id, _, _)| id)
+            .collect();
         let committed_at = unix_now();
         for (i, id, new, _) in outcome.stored {
             let c = &committing[i];
@@ -740,6 +868,9 @@ impl Writer {
         );
         for (d, id) in touches.into_iter().zip(outcome.touched) {
             if let Some(id) = id {
+                if self.adult.has(d.source) {
+                    adult_ids.push(id);
+                }
                 if let Some(hot) = &self.hot {
                     hot.touch(id as u64, d.at.clamp(0, i64::from(u32::MAX - 1)) as u32);
                 }
@@ -762,6 +893,7 @@ impl Writer {
                 }
             }
         }
+        self.adult_by_source(adult_ids).await;
         if self.have.is_full() {
             self.rebuild_have().await;
         }
@@ -783,6 +915,7 @@ impl Writer {
         let sealer = self.sealer.clone();
         let quarantine_secs = self.cfg.quarantine_secs;
         let held = self.held.clone();
+        let adult = self.adult;
         #[cfg(test)]
         let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
@@ -791,6 +924,7 @@ impl Writer {
                 filter: Some(&filter),
                 sealer: sealer.as_deref(),
                 quarantine_secs,
+                adult,
             };
             let pending = std::cell::RefCell::new(None);
             let mark = |_st: &Store, hs: &[[u8; 20]]| {
@@ -873,6 +1007,7 @@ impl Writer {
         let quarantine_secs = self.cfg.quarantine_secs;
         let held = self.held.clone();
         let stats = self.stats.clone();
+        let adult = self.adult;
         #[cfg(test)]
         let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
@@ -889,6 +1024,7 @@ impl Writer {
             let ctx = unverified::Ctx {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
+                adult,
             };
             let result = unverified::ingest(
                 &mut store,
@@ -912,8 +1048,9 @@ impl Writer {
         .expect("claims task");
         self.store = Some(store);
         match result {
-            Ok(done) => {
+            Ok(mut done) => {
                 self.stats.transactions.fetch_add(1, Ordering::Relaxed);
+                let adult_ids = std::mem::take(&mut done.adult);
                 // A feed's sighting of a stored torrent is a rediscovery, as
                 // a bare one is in `commit`.
                 for (id, at, source, strategy) in done.touched {
@@ -928,6 +1065,7 @@ impl Writer {
                     self.rollups
                         .add(at, metric::REDISCOVERED, source, i64::from(strategy), 1);
                 }
+                self.adult_by_source(adult_ids).await;
             }
             Err(e) => {
                 // The batch is lost; its sources send their items again.
@@ -957,6 +1095,7 @@ impl Writer {
         let sealer = self.sealer.clone();
         let quarantine_secs = self.cfg.quarantine_secs;
         let held = self.held.clone();
+        let adult = self.adult;
         #[cfg(test)]
         let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
@@ -972,6 +1111,7 @@ impl Writer {
             let ctx = unverified::Ctx {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
+                adult,
             };
             let result = unverified::refile_step(
                 &mut store,
@@ -1097,6 +1237,7 @@ impl Writer {
                 filter: None,
                 sealer: sealer.as_deref(),
                 quarantine_secs,
+                adult: Default::default(),
             };
             let pending = std::cell::RefCell::new(None);
             let mark = |_st: &Store, hs: &[[u8; 20]]| {
@@ -1202,9 +1343,10 @@ impl Writer {
     }
 }
 
-/// Judges a torrent again at commit (a remote worker's, or one prepared
-/// under an older rule set), and stores what the classification rules say
-/// now if they changed since prepare (§20.9).
+/// Judges a torrent again at commit (a remote worker's, one prepared
+/// under an older rule set, or one an always-adult source found that its
+/// worker didn't see), and stores what the classification rules (and the
+/// source) say now if they changed since prepare (§20.9).
 pub(crate) fn rejudge(engine: &Engine, r: &mut Results, discovered_at: i64, now: i64) -> Verdict {
     let hashes: Vec<[u8; 20]> = r.torrent.swarm_hashes().map(|h| h.0).collect();
     let facts = Facts {
@@ -1221,8 +1363,9 @@ pub(crate) fn rejudge(engine: &Engine, r: &mut Results, discovered_at: i64, now:
         files: &r.files,
         content_type: r.class.content_type,
     };
-    let (verdict, says) = engine.judge_classified(&item, Some(&facts), now);
-    let fix = crate::enrich::rule_fix(says, &r.class);
+    // An always-adult source found it: adult whatever the rules say.
+    let (verdict, fix) =
+        crate::source_adult::judge_maybe(engine, &item, &facts, r.source_adult, now);
     if fix != r.fix {
         r.torrent.enrichment = Some(crate::enrich::enrich_with_rule(
             &r.torrent.name,
@@ -1518,7 +1661,10 @@ fn promote(
         // rule added since they were stored, which the sweep hasn't
         // reached yet, must not let them be promoted.
         let hold = match &item.claims {
-            Some(c) => unverified::judge(promo.engine, h.0, c, promo.ctx.sealer, now),
+            Some(c) => {
+                let adult = promo.ctx.adult.any(item.sources) || promo.ctx.adult.has(item.source);
+                unverified::judge(promo.engine, h.0, c, promo.ctx.sealer, adult, now)
+            }
             None => None,
         };
         match hold {
@@ -1672,12 +1818,14 @@ mod tests {
             version: 0,
             fix: None,
             private_source: false,
+            source_adult: false,
         }
     }
 
     fn writer(store: Store, coordinator: Arc<Coordinator>, gate: Arc<GateStats>) -> Writer {
         Writer {
             store: Some(store),
+            adult: AdultSources::default(),
             backfill_after: 0,
             backfill_done: true,
             backfill_backoff: Default::default(),
@@ -1727,6 +1875,57 @@ mod tests {
         };
         r.token = token;
         r
+    }
+
+    /// A refetch the peer finder leased (a partial import's upgrade) of a
+    /// torrent an always-adult source found before counts as that source's:
+    /// the stored row's finders are read, not only the lease's.
+    #[test]
+    fn a_stored_rows_always_adult_finder_counts_at_commit() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 1).unwrap();
+        let adult = store.register_source("adult", "1", 1).unwrap();
+        let r = results();
+        let lease = Lease {
+            holder: WorkerId::LOCAL,
+            token: Token(1),
+            cohort: 0,
+            source: dht,
+            sources: bit(dht),
+            strategy: 0,
+            discovered_at: 0,
+        };
+        let mut w = writer(store, coordinator, gate);
+        w.adult = AdultSources(bit(adult));
+        let c = Committing {
+            results: r,
+            lease,
+            verdict: None,
+            shadow: Vec::new(),
+            sealed: None,
+        };
+        // Not stored yet, and only the DHT found it: not adult.
+        assert!(!w.source_adult(&c, false));
+        let store = w.store.as_mut().unwrap();
+        store
+            .write(&WriteBatch {
+                prepared: &[PreparedTorrent {
+                    torrent: &c.results.torrent,
+                    discovered_at: 0,
+                    metadata_at: 0,
+                    extra_flags: 0,
+                    source: adult,
+                    verified: true,
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+        assert!(w.source_adult(&c, false), "the stored row's finder");
+        w.adult = AdultSources::default();
+        assert!(!w.source_adult(&c, false), "none registered");
     }
 
     /// The gate at the writer's commit: new once, then already stored; a
@@ -1833,6 +2032,30 @@ mod tests {
     fn stored_type(r: &Results) -> ContentType {
         let e = r.torrent.enrichment.as_ref().unwrap();
         Record::decode(&e.data).unwrap().content_type
+    }
+
+    /// An always-adult source's result re-judged at commit (a remote
+    /// worker's, an older rule set's) is stored adult and judged as adult,
+    /// and no Not adult classification rule takes that away.
+    #[test]
+    fn rejudging_keeps_an_always_adult_sources_result_adult() {
+        let mut r = results();
+        let detected = classify(&r.torrent.name, &r.files).content_type;
+        assert_ne!(detected, ContentType::Adult);
+        r.source_adult = true;
+        let mut e = engine();
+        let d = rejudge(&e, &mut r, 0, 1000).decision.expect("held");
+        assert_eq!(d.rule, RuleRef::Core(CoreRule::Cs5a));
+        assert_eq!((r.fix, stored_type(&r)), (Some(true), ContentType::Adult));
+        // A Not adult rule on its name: still adult, still held.
+        e.load_class_rules(&[(1, "studiox".into(), false)]);
+        let d = rejudge(&e, &mut r, 0, 1000).decision.expect("held");
+        assert_eq!(d.rule, RuleRef::Core(CoreRule::Cs5a));
+        assert_eq!((r.fix, stored_type(&r)), (Some(true), ContentType::Adult));
+        // The same result from a source that isn't: detection's, unheld.
+        r.source_adult = false;
+        assert_eq!(rejudge(&e, &mut r, 0, 1000).decision, None);
+        assert_ne!(stored_type(&r), ContentType::Adult);
     }
 
     #[test]

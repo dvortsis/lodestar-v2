@@ -114,6 +114,7 @@ const MANIFEST: Manifest = Manifest {
     consent: Consent::None,
     default_priority: Priority::Low,
     enabled_by_default: false,
+    always_adult: false,
 };
 
 /// The settings form (§10.10).

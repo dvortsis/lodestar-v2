@@ -2312,6 +2312,7 @@ async fn an_is_adult_rule_takes_a_held_torrent_out_of_search() {
             filter: Some(&f.api.engine),
             sealer: f.api.sealer.as_deref(),
             quarantine_secs: f.api.quarantine_secs,
+            ..Backfill::default()
         };
         let b = enrich_stored_with(&mut store, 0, 100, &ctx)
             .unwrap()
