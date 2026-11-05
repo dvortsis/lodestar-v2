@@ -1,0 +1,20 @@
+{
+  "movie": {"id": 3, "title": "Sintel", "year": 2010, "releaseDate": "2010-09-27", "folderPath": "/movies/Sintel (2010)", "tmdbId": 45745, "imdbId": "tt1727587", "overview": "A Blender open movie.", "genres": ["Animation"], "images": [], "tags": []},
+  "remoteMovie": {"tmdbId": 45745, "imdbId": "tt1727587", "title": "Sintel", "year": 2010},
+  "release": {
+    "quality": "Bluray-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "BLENDER",
+    "releaseTitle": "Sintel.2010.1080p.BluRay.x264-BLENDER",
+    "indexer": "Open Indexer",
+    "size": 1288490188,
+    "customFormatScore": 0,
+    "customFormats": []
+  },
+  "downloadClient": "Transmission",
+  "downloadClientType": "Transmission",
+  "downloadId": "6CD8BAE816112560C859C22A04238D8F22C552DF",
+  "eventType": "Grab",
+  "instanceName": "Radarr",
+  "applicationUrl": ""
+}

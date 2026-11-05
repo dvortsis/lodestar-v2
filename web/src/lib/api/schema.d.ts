@@ -2247,6 +2247,66 @@ export interface paths {
         patch: operations["patchUserItem"];
         trace?: never;
     };
+    "/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lists the integrations: whether each has a token, and its counts. */
+        get: operations["listWebhooks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/{integration}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receives a Sonarr or Radarr webhook call. Authenticated by the
+         *     integration's token (Basic auth's password, or Bearer), not a session;
+         *     every failure to authenticate is the same `401 login_required`.
+         */
+        post: operations["receiveWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/{integration}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Makes the integration's token, replacing any old one at once. Needs
+         *     the password (428 `confirm_required` without it). The token is in this
+         *     response only.
+         */
+        post: operations["createWebhookToken"];
+        /** Removes the integration's token: its calls are refused from now on. */
+        delete: operations["deleteWebhookToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5036,6 +5096,11 @@ export interface components {
              */
             when: "now" | "window";
         };
+        /**
+         * @description An app that can call in.
+         * @enum {string}
+         */
+        Integration: "sonarr" | "radarr";
         /** @enum {string} */
         JobPhase: "reading" | "quarantine" | "tombstones" | "done";
         JobProgress: {
@@ -8964,6 +9029,57 @@ export interface components {
             allow_private?: boolean;
             /** @description Where the JSON is posted; without it, the saved one. */
             url?: string;
+        };
+        /**
+         * @description One integration. The counts are since start, zero when webhooks
+         *     aren't wired.
+         */
+        WebhookInfo: {
+            /**
+             * Format: int64
+             * @description Calls that found a key.
+             */
+            found: number;
+            /**
+             * Format: int64
+             * @description Valid calls with nothing to find (Test, other events).
+             */
+            ignored: number;
+            integration: components["schemas"]["Integration"];
+            /**
+             * Format: int64
+             * @description Bodies that weren't an event, dropped.
+             */
+            malformed: number;
+            /** @description The path the app calls, under `/api/v1`. */
+            path: string;
+            /**
+             * Format: int64
+             * @description Calls dropped: over the rate, the source off, or the pipeline full.
+             */
+            refused: number;
+            /** @description A token is made. It can't be shown again; make a new one instead. */
+            token_set: boolean;
+        };
+        /** @description `GET /webhooks`. */
+        WebhookList: {
+            integrations: components["schemas"]["WebhookInfo"][];
+        };
+        /** @description An accepted call. */
+        WebhookReceipt: {
+            /**
+             * @description The call was dropped: over the integration's rate, the source
+             *     turned off, or the pipeline full. Counted in `refused`.
+             */
+            dropped: boolean;
+            /** @description The event named a torrent, which went to the pipeline. */
+            found: boolean;
+        };
+        /** @description `POST /webhooks/{integration}/token`: the new token, this once. */
+        WebhookToken: {
+            integration: components["schemas"]["Integration"];
+            /** @description Paste it into the app's webhook connection as the Password. */
+            token: string;
         };
     };
     responses: {
@@ -13453,6 +13569,153 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWebhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Both integrations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    receiveWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `sonarr` or `radarr`. */
+                integration: components["schemas"]["Integration"];
+            };
+            cookie?: never;
+        };
+        /** @description The app's webhook event, at most 256 KiB. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Taken: a Grab or Download found a key, or the event had nothing to find; or a real event dropped (`dropped`: over the integration's rate, the source off, the pipeline full). Dropped events still answer 200 so the app doesn't back its notifications off. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookReceipt"];
+                };
+            };
+            /** @description `malformed_webhook`: not an event, dropped and counted; or `webhook_unreadable`: the connection failed while the body was read. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `login_required`: no valid token, however it failed. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `webhook_too_large`. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many failed tokens from this address, with `Retry-After`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `webhooks_unavailable` (not wired, or the store can't be read), or `source_off` for the app's Test call while the source is off. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createWebhookToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `sonarr` or `radarr`. */
+                integration: components["schemas"]["Integration"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Made; `token` is shown this once. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookToken"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteWebhookToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `sonarr` or `radarr`. */
+                integration: components["schemas"]["Integration"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed, or there was none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
                 };
             };
             default: components["responses"]["Error"];
