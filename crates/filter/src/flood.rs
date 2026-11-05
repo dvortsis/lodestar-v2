@@ -317,6 +317,11 @@ impl Flood {
             tick: 0,
         };
         let i = if self.slots.len() < self.cap {
+            // Grown by doubling, but never past the cap.
+            if self.slots.len() == self.slots.capacity() {
+                let more = self.slots.len().max(64).min(self.cap - self.slots.len());
+                self.slots.reserve_exact(more);
+            }
             self.slots.push(fresh);
             (self.slots.len() - 1) as u32
         } else {
