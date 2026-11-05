@@ -32,6 +32,7 @@ use lodestar_pipeline::adult_enrich::{
 use lodestar_pipeline::enrich::{enrich_with_rule, file_infos};
 use lodestar_pipeline::source_adult::AdultSources;
 use lodestar_pipeline::unverified::{self, Ctx, Phase, UnverifiedStats};
+use lodestar_sources::PluginState as _;
 use lodestar_sources::claims::{AdultEnrichment, AdultKind as Kind2};
 use lodestar_sources::enrich::{AdultEnricher, Lookup, Query, QueryForm};
 use lodestar_sources::{
@@ -311,6 +312,24 @@ fn run(
     source: SourceId,
     config: Config,
 ) -> Running {
+    let state = Arc::new(MemoryState::new());
+    run_with_state(
+        plugin, store, filter, adult, switches, source, config, state,
+    )
+}
+
+/// [`run`], with the plugin's `source_state` in `state`.
+#[allow(clippy::too_many_arguments)]
+fn run_with_state(
+    plugin: Arc<Recorder>,
+    store: Arc<Mutex<Store>>,
+    filter: Arc<Handle>,
+    adult: AdultSources,
+    switches: Arc<Flags>,
+    source: SourceId,
+    config: Config,
+    state: Arc<MemoryState>,
+) -> Running {
     let (src, interest) =
         AdultEnrichSource::new(plugin, store, filter, adult, switches, config).unwrap();
     let stats = src.stats();
@@ -318,7 +337,7 @@ fn run(
     let (stop, shutdown) = Shutdown::new();
     let wire = Arc::new(Wire::default());
     let kit = Kit::with_limiter(
-        Arc::new(MemoryState::new()),
+        state,
         wire.clone(),
         HostLimiter::new(Policy::STRICT.limits(&Default::default())),
     );
@@ -1814,7 +1833,16 @@ async fn the_torrent_caches_kind_cannot_attach_a_section() {
         .unwrap();
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let deadline = tokio::time::Instant::now() + DEADLINE;
-    while reader.unverified(Net::Bt, &other.0).unwrap().is_none() {
+    // Each source forwards from its own task, so wait for both: the feed's
+    // item, and the cache's claim refused.
+    let refused = || {
+        pipeline
+            .writer_stats()
+            .unverified
+            .refused
+            .load(Ordering::Relaxed)
+    };
+    while reader.unverified(Net::Bt, &other.0).unwrap().is_none() || refused() < 1 {
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for the feed"
@@ -1875,4 +1903,124 @@ async fn interest_and_background_share_one_daily_cap() {
         ["Garden Scene 4", "Garden Scene 5"],
         "interest first"
     );
+}
+
+/// The day's budget, as the runtime keeps it: the UTC day and the count.
+fn budget(day: i64, used: u32) -> Vec<u8> {
+    let mut v = day.to_be_bytes().to_vec();
+    v.extend(used.to_be_bytes());
+    v
+}
+
+fn today() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        / 86_400
+}
+
+/// An opened item that meets a spent budget waits first in line, and is
+/// asked once a new day's budget allows it (Q15's one cap, ENR-1c). Opened
+/// and held while Show adult content goes off, it's never asked.
+#[tokio::test]
+async fn an_opened_item_waits_for_the_budget() {
+    for show_adult_stays_on in [true, false] {
+        let (mut s, dht, enr) = store();
+        let (first, _) = put(&mut s, "Garden Scene", dht, 0, true);
+        let (second, _) = put(&mut s, "Other Scene", dht, 0, true);
+        let state = Arc::new(MemoryState::new());
+        state.set("enr1/budget", budget(today(), 2)).await.unwrap();
+        let flags = on();
+        let plugin = Recorder::new(None);
+        let config = Config {
+            per_day: 2,
+            idle: Duration::from_millis(20),
+            ..interest_only()
+        };
+        let r = run_with_state(
+            plugin.clone(),
+            Arc::new(Mutex::new(s)),
+            stand_in(),
+            AdultSources::default(),
+            flags.clone(),
+            enr,
+            config,
+            state.clone(),
+        );
+        assert!(r.interest.opened(first));
+        assert!(r.interest.opened(second));
+        until("the spent budget", || {
+            r.stats.done.load(Ordering::SeqCst) >= 1
+        })
+        .await;
+        assert!(
+            plugin.queries.lock().unwrap().is_empty(),
+            "not asked while spent"
+        );
+        if !show_adult_stays_on {
+            flags.show_adult.store(false, Ordering::SeqCst);
+        }
+        // A new day.
+        state
+            .set("enr1/budget", budget(today() - 1, 2))
+            .await
+            .unwrap();
+        if show_adult_stays_on {
+            until("both asked", || plugin.queries.lock().unwrap().len() == 2).await;
+            assert_eq!(
+                plugin.names(),
+                ["Garden Scene", "Other Scene"],
+                "the held item first"
+            );
+        } else {
+            // Tried again and dropped: Show adult content is off.
+            until("the retry", || {
+                r.stats.ineligible.load(Ordering::SeqCst) >= 1
+            })
+            .await;
+            assert!(plugin.queries.lock().unwrap().is_empty(), "never asked");
+        }
+        let _ = r.stop.send(true);
+        r.task.await.unwrap().unwrap();
+    }
+}
+
+/// A host can't set the daily cap above the owner's (Q15).
+#[tokio::test]
+async fn the_daily_cap_is_clamped() {
+    let (mut s, dht, enr) = store();
+    let (id, _) = put(&mut s, "Garden Scene", dht, 0, true);
+    let state = Arc::new(MemoryState::new());
+    let cap = lodestar_sources::enrich::BACKGROUND_PER_DAY;
+    state
+        .set("enr1/budget", budget(today(), cap))
+        .await
+        .unwrap();
+    let plugin = Recorder::new(None);
+    let config = Config {
+        per_day: u32::MAX,
+        ..interest_only()
+    };
+    let r = run_with_state(
+        plugin.clone(),
+        Arc::new(Mutex::new(s)),
+        stand_in(),
+        AdultSources::default(),
+        on(),
+        enr,
+        config,
+        state,
+    );
+    assert!(r.interest.opened(id));
+    until("the spent budget", || {
+        r.stats.done.load(Ordering::SeqCst) >= 1
+    })
+    .await;
+    assert!(
+        plugin.queries.lock().unwrap().is_empty(),
+        "capped at the owner's"
+    );
+    let _ = r.stop.send(true);
+    r.task.await.unwrap().unwrap();
 }

@@ -60,13 +60,15 @@ use crate::source_adult::AdultSources;
 /// DHT's and verification's (`unverified::VERIFY_STRATEGY`).
 pub const STRATEGY: u8 = 202;
 
-/// Whether `d` is an enrichment match: an adult-enrichment section from an
-/// enrichment source. It's the writer's gate exactly
-/// (`unverified::ingest` keeps a section only from such a source), so the
-/// strategy code isn't part of it. Intake doesn't count a match as
-/// harvested (ENR-1b); another source's discovery always is.
+/// Whether `d` is an enrichment answer: an adult-enrichment section from
+/// an enrichment source, listed or not. The writer keeps one only from a
+/// listed source and refuses a section-only one from an unlisted source
+/// (`unverified::ingest`), so neither is a find. The strategy code isn't
+/// part of it. Intake doesn't count an answer as harvested (ENR-1b);
+/// another source's discovery always is.
 pub fn is_match(d: &lodestar_sources::Discovery, enrichers: EnrichSources) -> bool {
-    enrichers.has(d.source) && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
+    (enrichers.has(d.source) || enrichers.of_kind(d.source))
+        && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
 }
 
 /// User-interest lookups waiting at most; more are dropped. Each takes a
@@ -82,8 +84,9 @@ pub const PAGE: usize = 1024;
 pub const ROUND_REST_SECS: i64 = 86_400;
 
 /// How long the runtime waits for user interest when it has nothing else
-/// to do, before looking at the background again.
-const IDLE: Duration = Duration::from_secs(60);
+/// to do, or nothing may be looked up, before trying again
+/// ([`Config::idle`]).
+pub const IDLE: Duration = Duration::from_secs(60);
 
 /// The pause between two background pages that held nothing adult.
 const SCAN_PAUSE: Duration = Duration::from_millis(50);
@@ -428,6 +431,9 @@ pub struct Config {
     pub rest_secs: i64,
     /// Run the background backfill. Off: opened items only.
     pub background: bool,
+    /// The wait before trying again when there's nothing to do, or nothing
+    /// may be looked up.
+    pub idle: Duration,
 }
 
 impl Default for Config {
@@ -438,6 +444,7 @@ impl Default for Config {
             page: PAGE,
             rest_secs: ROUND_REST_SECS,
             background: true,
+            idle: IDLE,
         }
     }
 }
@@ -534,7 +541,11 @@ impl AdultEnrichSource {
             adult,
             switches,
             interest: tokio::sync::Mutex::new(rx),
-            config,
+            // Never above the owner's cap, whatever the host sets (Q15).
+            config: Config {
+                per_day: config.per_day.min(BACKGROUND_PER_DAY),
+                ..config
+            },
             stats: Arc::default(),
         };
         Ok((source, Interest(tx)))
@@ -592,7 +603,7 @@ impl AdultEnrichSource {
                         biased;
                         _ = ctx.shutdown.requested() => return Ok(()),
                         Some(id) = interest.recv() => (id, true),
-                        _ = tokio::time::sleep(IDLE) => continue,
+                        _ = tokio::time::sleep(self.config.idle) => continue,
                     },
                 },
             };
@@ -603,10 +614,12 @@ impl AdultEnrichSource {
                     // Nothing can go now. No background item loses its
                     // place: it goes back to the front of the queue, not
                     // past the cursor. An opened item stays first in line
-                    // only for the day's budget (Q15's one cap, ENR-1c);
-                    // one opened while a plugin-wide condition fails (Show
-                    // adult content off, the kill switch, the source off or
-                    // unconsented) is dropped, never sent later.
+                    // only for the day's budget (Q15's one cap, ENR-1c), and
+                    // is checked against every condition again when it's
+                    // tried. One opened while a plugin-wide condition fails
+                    // (Show adult content off, the kill switch, the source
+                    // off or unconsented) or while the store can't answer is
+                    // dropped, never sent later.
                     if !user {
                         background.queue.push_front(id);
                     } else if matches!(step, Step::Spent) {
@@ -617,7 +630,7 @@ impl AdultEnrichSource {
                         biased;
                         _ = ctx.shutdown.requested() => return Ok(()),
                         Some(id) = interest.recv(), if waiting.is_none() => waiting = Some(id),
-                        _ = tokio::time::sleep(IDLE) => {}
+                        _ = tokio::time::sleep(self.config.idle) => {}
                     }
                     continue;
                 }
@@ -789,9 +802,11 @@ enum Step {
     Asked,
     /// This item isn't looked up.
     Skipped,
-    /// Nothing may be looked up now (a plugin-wide condition): wait.
+    /// Nothing may be looked up now (a plugin-wide condition, or the store
+    /// can't answer): wait. An opened item is dropped.
     Wait,
-    /// The day's budget is spent: wait, keeping the item's place.
+    /// The day's budget is spent, or its count can't be written (fail
+    /// closed): wait, keeping the item's place, an opened one included.
     Spent,
     Shutdown,
 }
@@ -921,7 +936,8 @@ impl Background {
     }
 }
 
-/// The day's background lookups (Q15), counted per UTC day.
+/// The day's lookups (Q15), counted per UTC day: every lookup, user
+/// interest and background alike.
 struct Budget {
     day: i64,
     used: u32,
@@ -944,8 +960,11 @@ impl Budget {
         }
     }
 
+    /// What's left today. A stored day later than today (the clock stepped
+    /// back across UTC midnight) counts as today, so a step back can't hand
+    /// out a fresh budget; [`take`](Self::take) rewrites it as today.
     fn left(&self, now: i64, per_day: u32) -> u32 {
-        if self.day == now.div_euclid(86_400) {
+        if self.day >= now.div_euclid(86_400) {
             per_day.saturating_sub(self.used)
         } else {
             per_day
@@ -960,7 +979,7 @@ impl Budget {
             return false;
         }
         let day = now.div_euclid(86_400);
-        let used = if b.day == day { b.used + 1 } else { 1 };
+        let used = if b.day >= day { b.used + 1 } else { 1 };
         let mut v = day.to_be_bytes().to_vec();
         v.extend(used.to_be_bytes());
         state.set(BUDGET_KEY, v).await.is_ok()
@@ -1083,6 +1102,12 @@ mod tests {
         assert!(is_match(&m, enr));
         // Another source sending a section is still harvested.
         assert!(!is_match(&m, EnrichSources::default()));
+        // An unlisted enrichment source's answer isn't a find either.
+        let unlisted = EnrichSources {
+            listed: 0,
+            kind: 1 << source.get(),
+        };
+        assert!(is_match(&m, unlisted));
         assert!(!is_match(
             &d(Found::key(key, STRATEGY).with_claims(named)),
             enr
@@ -1222,5 +1247,25 @@ mod tests {
         assert_eq!(Budget::load(&s).await.left(day + 10, 2), 0);
         assert!(Budget::take(&s, day + 86_400, 2).await);
         assert_eq!(Budget::load(&s).await.left(day + 86_400, 2), 1);
+    }
+
+    /// The clock stepping back across UTC midnight keeps the count: no
+    /// fresh budget, and the stored day is rewritten as today.
+    #[tokio::test]
+    async fn a_clock_step_back_keeps_the_count() {
+        let s = MemoryState::new();
+        let day = 20_000 * 86_400;
+        assert!(Budget::take(&s, day + 10, 2).await);
+        assert!(Budget::take(&s, day + 20, 2).await);
+        // Back to yesterday: still spent.
+        assert_eq!(Budget::load(&s).await.left(day - 5, 2), 0);
+        assert!(!Budget::take(&s, day - 5, 2).await);
+        // With one left, a take stamps yesterday, so today goes on from it.
+        let s = MemoryState::new();
+        assert!(Budget::take(&s, day + 10, 2).await);
+        assert!(Budget::take(&s, day - 5, 2).await);
+        let b = Budget::load(&s).await;
+        assert_eq!((b.day, b.used), (day.div_euclid(86_400) - 1, 2));
+        assert_eq!(b.left(day + 30, 2), 2, "the stored day is the earlier one");
     }
 }
