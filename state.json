@@ -2877,6 +2877,13 @@
       "session": "session_01MMjhnAGda52EmvBYwzgPKJ",
       "launched": "2026-11-05T02:31Z",
       "brief": "briefs/SRC-17.md"
+    },
+    "SRC-17a": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnCcPGT7YJ9GgmhTMGP",
+      "launched": "2026-11-05T02:32Z",
+      "brief": "briefs/SRC-17a.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5000,7 +5007,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T02:31Z",
+    "updated": "2026-11-05T02:32Z",
     "items": [
       {
         "slot": 1,
@@ -5079,8 +5086,16 @@
         "slice": "SRC-17",
         "role": "build",
         "agent": "claude",
-        "doing": "Showing where each item was found, plus a Show unverified toggle and badge.",
+        "doing": "Building the provenance and Unverified UI; waits for SRC-17a API fields before its PR.",
         "since": "2026-11-05T02:31Z"
+      },
+      {
+        "slot": 11,
+        "slice": "SRC-17a",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Adding the API fields the provenance and Unverified badge need (where an item was found, verified or not).",
+        "since": "2026-11-05T02:32Z"
       }
     ]
   },
