@@ -153,6 +153,29 @@ fn an_upgraded_store_has_unauthorised_copy_off_until_turned_on() {
     assert!(!load(&s).packs.is_on(PackRule::Uc1));
 }
 
+/// A newer build's longer list is kept after a downgrade: the union is
+/// written, and a list that covers this build's packs isn't rewritten.
+#[test]
+fn a_newer_builds_known_list_is_kept() {
+    let m = Manifest::builtin();
+    let mut s = rp_def_store(&[]);
+    s.update_settings_text(
+        &[(KNOWN_KEY, "malware lures fakes spam scams future-pack")],
+        &[],
+    )
+    .unwrap();
+    upgrade::ensure_seeded(&mut s, &m, 0).unwrap();
+    let known = s.setting_text(KNOWN_KEY).unwrap().unwrap();
+    assert!(
+        known.contains("future-pack") && known.contains("unauthorised-copy"),
+        "{known}"
+    );
+    assert_eq!(pack_row(&s, "unauthorised-copy"), Some(false));
+    let again = known.clone();
+    upgrade::ensure_seeded(&mut s, &m, 0).unwrap();
+    assert_eq!(s.setting_text(KNOWN_KEY).unwrap().unwrap(), again);
+}
+
 /// A row the user already has is a choice: the step never changes it.
 #[test]
 fn a_row_already_there_is_kept() {
@@ -243,6 +266,7 @@ const LAWFUL: &[(&str, &[(&str, u64)])] = &[
         &[("Nanny Cam 1080p x264-GRP.mkv", 2 << 30)],
     ),
     ("Little Ts 720p", &[("Little Ts 720p.mkv", 900 << 20)]),
+    ("Example.Film.2019.ts", &[("Example.Film.2019.ts", 2 << 30)]),
     ("Dash Cam Footage 2019 1080p", &[("dashcam.mp4", 3 << 30)]),
     ("The Cam Girl Next Door 1080p WEB", &[("film.mkv", 2 << 30)]),
     (

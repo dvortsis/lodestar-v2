@@ -867,6 +867,36 @@ mod tests {
             ),
             ("SC-1", "Free Robux", vec![("robux.exe", 1 << 20)], "robux"),
             ("SC-1", "Free Robux", vec![("robux.exe", 1 << 20)], "FREE"),
+            (
+                "MW-6",
+                "Example Tool v1.0 Keygen",
+                vec![("setup.exe", 80 << 20)],
+                "keygen",
+            ),
+            (
+                "UC-2",
+                "Example Tool v1.0 Keygen",
+                vec![("setup.exe", 80 << 20)],
+                "keygen",
+            ),
+            (
+                "MW-6",
+                "Example Disk Tool v4.1 K'ed",
+                vec![("setup.exe", 80 << 20)],
+                "ed",
+            ),
+            (
+                "UC-1",
+                "Example.Movie.2024.HDCAM.x264-GRP",
+                vec![("Example.Movie.2024.mkv", 1 << 30)],
+                "hdcam",
+            ),
+            (
+                "UC-1",
+                "Example Movie (2024) [TS] 720p",
+                vec![("Example.Movie.2024.mkv", 1 << 30)],
+                "ts",
+            ),
         ];
         for (rule, name, paths, word) in cases {
             assert!(hit(name, paths).contains(rule), "{rule} {name} {paths:?}");
@@ -932,6 +962,27 @@ mod tests {
                 "Free Robux Spotify",
                 vec![("a.exe", 1 << 20)],
                 &["robux"],
+            ),
+            // A neutralized crack word in the program's title takes
+            // nothing from the crack word after it.
+            (
+                "MW-6",
+                "Crack Attack v1.2 Keygen",
+                vec![("setup.exe", 50 << 20)],
+                &["crack"],
+            ),
+            (
+                "UC-2",
+                "Crack Attack v1.2 Keygen",
+                vec![("setup.exe", 50 << 20)],
+                &["crack"],
+            ),
+            // Another marker still counts.
+            (
+                "UC-1",
+                "Example.Movie.2024.HDCAM.TS.x264-GRP",
+                vec![("Example.Movie.2024.mkv", 1 << 30)],
+                &["hdcam"],
             ),
         ];
         for (rule, name, paths, words) in cases {

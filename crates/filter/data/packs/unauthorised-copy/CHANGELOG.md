@@ -6,7 +6,7 @@ The pack hides names that follow the conventions of unauthorised copies. It read
 
 ## UC-1@1
 
-First version, `widens` (against nothing). Matches a film the parser reads as a camcorder, telesync, telecine or screener rip, when the name carries a strong source marker (`HDCAM`, `CAMRip`, `HDTS`, `TELESYNC`, `HDTC`, `TELECINE`, `DVDSCR`, `screener`) or a weak one (`CAM`, `TS`, `TC`, `SCR`) in brackets or after the year. A weak marker on its own, as in `Nanny Cam 1080p x264-GRP`, doesn't match. Action: hide.
+First version, `widens` (against nothing). Matches a film the parser reads as a camcorder, telesync, telecine or screener rip, when the name carries a strong source marker (`HDCAM`, `CAMRip`, `HD CAM`, `HDTS`, `HD TS`, `TELESYNC`, `PDVD`, `HDTC`, `TELECINE`, `DVDSCR`, `BDSCR`, `WEBSCR`, `screener`) or a weak one (`CAM`, `TS`, `TC`, `SCR`) in brackets or after the year. A weak marker on its own, as in `Nanny Cam 1080p x264-GRP`, doesn't match, nor does a name ending in the `.ts` file extension. Action: hide.
 
 ## UC-2@1
 

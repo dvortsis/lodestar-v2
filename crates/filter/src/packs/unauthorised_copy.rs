@@ -61,8 +61,9 @@ const DISC_OR_WEB: &[Source] = &[
 
 /// The built-in allow list (UC-3): public-domain and Creative Commons
 /// films, by title as [`title_key`] reads it, and the year when the title
-/// alone is too common to trust (`None`: any year, or none). A year
-/// within one of it counts, since release years differ by a year.
+/// alone is too common to trust (`None`: any year, or none), which must
+/// then match exactly, so a commercial film of the same title a year
+/// apart isn't let through.
 pub const ALLOW: &[(&str, Option<u16>)] = &[
     // Blender Studio's open films (Creative Commons Attribution).
     ("big buck bunny", None),
@@ -86,7 +87,7 @@ pub const ALLOW: &[(&str, Option<u16>)] = &[
     ("night of the living dead", Some(1968)),
     ("plan 9 from outer space", None),
     ("nosferatu", Some(1922)),
-    ("the cabinet of dr caligari", None),
+    ("the cabinet of dr caligari", Some(1920)),
     ("a trip to the moon", Some(1902)),
     ("metropolis", Some(1927)),
     ("the general", Some(1926)),
@@ -119,7 +120,7 @@ pub fn allowed(title: &str, year: Option<u16>) -> bool {
         *t == key
             && match (y, year) {
                 (None, _) => true,
-                (Some(want), Some(got)) => want.abs_diff(got) <= 1,
+                (Some(want), Some(got)) => *want == got,
                 (Some(_), None) => false,
             }
     })
@@ -163,7 +164,9 @@ impl Ctx<'_> {
         }
         let words = self.name_evidence();
         if words.iter().any(|w| STRONG_MARKERS.contains(&w.as_str()))
-            || words.windows(2).any(|p| p == ["hd", "cam"])
+            || words
+                .windows(2)
+                .any(|p| p == ["hd", "cam"] || p == ["hd", "ts"])
         {
             return true;
         }
@@ -172,8 +175,14 @@ impl Ctx<'_> {
             .year
             .map(|y| y.first.to_string())
             .and_then(|y| words.iter().position(|w| *w == y));
+        // A name ending `.ts` is an MPEG transport stream (a broadcast or
+        // DVB recording) named with its extension, not a telesync: the
+        // parser doesn't strip `ts` as one, so that last word never counts.
+        let ts_extension = self.item.name.to_ascii_lowercase().ends_with(".ts");
+        let last = words.len().saturating_sub(1);
         words.iter().enumerate().any(|(i, w)| {
             WEAK_MARKERS.contains(&w.as_str())
+                && !(ts_extension && i == last && w == "ts")
                 && (brackets.get(i).copied().unwrap_or(false) || year.is_some_and(|y| i > y))
         })
     }
@@ -192,7 +201,9 @@ impl Ctx<'_> {
             return true;
         }
         let title = &f.class.title.release.title;
-        let in_title = crack::crack_words_in(&crack::words(title), title);
+        // The title's words blanked the same way, so a neutralized word
+        // in the title takes nothing away from another word's evidence.
+        let in_title = crack::crack_words_in(&self.evidence(crack::words(title)), title);
         crack::crack_words_in(self.name_evidence(), self.item.name) > in_title
     }
 
@@ -308,7 +319,10 @@ mod tests {
         assert!(allowed("Big Buck Bunny", None));
         assert!(allowed("Big.Buck Bunny", Some(2008)));
         assert!(allowed("Night of the Living Dead", Some(1968)));
-        assert!(allowed("Night of the Living Dead", Some(1969)));
+        assert!(
+            !allowed("Night of the Living Dead", Some(1969)),
+            "exact year"
+        );
         assert!(
             !allowed("Night of the Living Dead", Some(1990)),
             "the remake"

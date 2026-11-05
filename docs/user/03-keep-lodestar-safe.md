@@ -132,11 +132,18 @@ The **unauthorised-copy** pack hides torrents whose names follow the conventions
 - film and TV releases named the way release groups name their copies, such as `Title.2019.1080p.BluRay.x264-GROUP`;
 - cracked software, such as a program sold with a `Keygen` or a `Crack`. A plain `Patch` or `Update` is never hidden.
 
-It reads only the name. It can't know who holds the rights to anything, so it may hide something you are allowed to have. Some public-domain and Creative Commons films are never hidden, such as *Big Buck Bunny* or *Night of the Living Dead* (1968). Items from the Internet Archive aren't hidden either. To show something else it hides, add the search to **Always allow** in **Settings → Filters & Safety**.
+It reads only the name. It can't know who holds the rights to anything, so it may hide something you are allowed to have.
 
-Cracked software is also hidden by the malware pack, because cracks often carry malware. Turning the unauthorised-copy pack off doesn't show cracked software again while the malware pack is on.
+<details>
+<summary>What it lets through, and how to show something it hides</summary>
 
-If you installed an earlier version, the unauthorised-copy pack starts off. Lodestar offers it in the setup wizard and in **Settings → Filters & Safety**, where turning it on shows what it would hide first.
+A built-in list of public-domain and Creative Commons films, such as *Big Buck Bunny* or *Night of the Living Dead* (1968), passes its scene-style rule. So do items from the Internet Archive that carry the Archive's own file lists. To show anything else it hides, add the search to **Always allow** in **Settings → Filters & Safety**.
+
+</details>
+
+On a new install, the malware pack also hides cracked software, because cracks often carry malware. Turning the unauthorised-copy pack off then doesn't show cracked software again.
+
+If you installed an earlier version, the unauthorised-copy pack starts off. Lodestar offers it in the setup wizard and in **Settings → Filters & Safety**, where turning it on shows what it would hide first. We recommend you turn it on. The malware pack's new cracked-software rule waits for review on an upgraded install, so it hides nothing until a later version lets you accept it.
 
 API keys, which let other apps such as Torznab clients talk to Lodestar, are **(planned)**. When they arrive, create one key per app and regenerate any key that leaks. Never use the admin password as a key.
 

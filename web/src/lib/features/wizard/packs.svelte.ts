@@ -2,7 +2,8 @@
 // `pack_switch` change, previewed first like any other. This only turns packs ON (an existing
 // install's packs that are off), and only applies what the server says needs no confirmation;
 // anything else (a warning, a password) stops here and is left to Settings → Filters & Safety.
-// Turning a pack OFF is the pack step's own, through the weakening flow (RP-DEF, owner §2.39). The flows are passed in, loaded on demand
+// Turning a pack OFF is the pack step's own, through the weakening flow
+// (RP-DEF, owner §2.39). The flows are passed in, loaded on demand
 // by the pack step, so none of this is in the wizard's first view.
 import type { FlowState } from '../filters/flows/machine';
 import type { ChangeFlow } from '../filters/flows/flow.svelte';

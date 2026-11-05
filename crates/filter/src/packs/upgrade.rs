@@ -725,9 +725,16 @@ pub const DEFAULTS_PACKS: &[Pack] = &[
 /// before it writes: every caller holds the store's one writing
 /// connection.
 pub fn offer_new_packs(store: &mut Store) -> lodestar_store::Result<Vec<Pack>> {
-    let all = pack_names().join(" ");
     let known = match store.setting_text(KNOWN_KEY) {
-        Ok(Some(k)) if k == all => return Ok(Vec::new()),
+        // Every pack this build knows is covered already (a newer build's
+        // longer list included).
+        Ok(Some(k))
+            if pack_names()
+                .iter()
+                .all(|p| k.split_whitespace().any(|w| w == *p)) =>
+        {
+            return Ok(Vec::new());
+        }
         Ok(Some(k)) => k,
         // A row that won't read: the covered packs aren't known, so the
         // first set is assumed. An off row only states what already reads.
@@ -753,7 +760,15 @@ pub fn offer_new_packs(store: &mut Store) -> lodestar_store::Result<Vec<Pack>> {
     for p in &new {
         store.set_pack_switch(p.as_str(), false)?;
     }
-    store.update_settings_text(&[(KNOWN_KEY, &all)], &[])?;
+    // The union: a pack a newer build recorded stays recorded after a
+    // downgrade, so its upgrade back doesn't take it for new.
+    let mut known: Vec<&str> = covered;
+    for p in pack_names() {
+        if !known.contains(&p) {
+            known.push(p);
+        }
+    }
+    store.update_settings_text(&[(KNOWN_KEY, &known.join(" "))], &[])?;
     Ok(new)
 }
 

@@ -211,7 +211,8 @@ fn your_rules_with_unless_and_shadow() {
     // UC-1 is pending on a store never seeded (it was added after RP-0),
     // so it's in shadow too; the switched-off rule isn't.
     let v = judge(&e, "Movie 2023 CAM", VIDEO, 1000);
-    assert!(v.shadow.iter().all(|s| !matches!(s.rule, RuleRef::User(_))));
+    let shadow: Vec<RuleRef> = v.shadow.iter().map(|s| s.rule).collect();
+    assert_eq!(shadow, [RuleRef::Pack(PackRule::Uc1)]);
 }
 
 #[test]
