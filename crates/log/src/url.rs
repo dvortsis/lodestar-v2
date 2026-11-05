@@ -1404,9 +1404,9 @@ mod wide {
     }
 
     /// The first match of any of several needles at or after `from`.
-    struct AnyOf<const N: usize>([Next; N]);
+    struct AnyOf(Vec<Next>);
 
-    impl<const N: usize> AnyOf<N> {
+    impl AnyOf {
         fn from(&mut self, text: &str, from: usize) -> Option<usize> {
             self.0.iter_mut().filter_map(|n| n.from(text, from)).min()
         }
@@ -1414,8 +1414,8 @@ mod wide {
 
     /// The ways a magnet link starts: raw, or percent-encoded once or twice
     /// (`magnet%3A%3Fxt=…`).
-    fn magnets() -> AnyOf<3> {
-        AnyOf([
+    fn magnets() -> AnyOf {
+        AnyOf(vec![
             Next::new("magnet:", true),
             Next::new("magnet%3a", true),
             Next::new("magnet%253a", true),
@@ -1424,12 +1424,8 @@ mod wide {
 
     /// A raw magnet link only, as `main` found them (see [`scrub_text`]'s
     /// first pass).
-    fn raw_magnets() -> AnyOf<3> {
-        AnyOf([
-            Next::new("magnet:", true),
-            Next::new("magnet:", true),
-            Next::new("magnet:", true),
-        ])
+    fn raw_magnets() -> AnyOf {
+        AnyOf(vec![Next::new("magnet:", true)])
     }
 
     /// Where the first percent-encoded magnet (`magnet%3A`, `magnet%253A`)
@@ -2041,7 +2037,7 @@ mod wide {
         let mut out = String::new();
         let mut copied = 0;
         let mut at = Next::new("@", false);
-        let mut line = AnyOf([Next::new("\n", false), Next::new("\r", false)]);
+        let mut line = AnyOf(vec![Next::new("\n", false), Next::new("\r", false)]);
         let mut k = 0;
         // Whether `k` is in a word that holds a raw `://` already: a form inside
         // a URL is that URL's rules' (`https://h/{//u@<s>` keeps its path `@`).

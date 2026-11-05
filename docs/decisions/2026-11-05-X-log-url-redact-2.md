@@ -100,7 +100,8 @@ Its own differential harness found secrets this PR showed that `main` hid: 310 i
 - **A magnet whose `dn` or `kt` holds the stop takes the rest of the text.** `add magnet:?xt=…&dn=Some Name to queue` shows as `add magnet:[redacted] [redacted] [redacted] [redacted]`.
 - **A magnet in a typed URL's query loses every pair after it.**
 - **Encoded URLs in free text lose what follows their scheme.**
-- **A word the wide rules hid is hidden wherever it shows in stage 1's output,** including where they kept it. For example, a host that's also part of a hidden password.
+- **A word of stage 1's output that's nowhere in the wide rules' output is hidden wherever it shows,** since `only_more` looks words up, not places. A word the wide output holds anywhere is kept everywhere (see the gap list).
+- **A Debug field's name the wide rules hid with a value** goes in stage 1's output too: `password: "…"` after a run-on value can show as `[redacted]: "[redacted]"`.
 
 ## Known gaps left
 Each one leaks on `main` too.
@@ -120,6 +121,7 @@ Each one leaks on `main` too.
 - **The runner withdrew its two narrowings (§2.26) when it chose the two-stage design: security first.** They might come back in a slice of their own, with its own proof:
   - the unmarked userinfo window ending at the later of the first `/` and the first whitespace;
   - a magnet whose `dn` or `kt` holds a space ending at a later parameter's word.
+- **A fast path:** a line with no `://`, `magnet`, `@`, `%` or Debug field could skip the wide rules, since they'd hide nothing more there. The runner left it for that slice: a shortcut on the security path needs its own proof.
 
 ## Cost
 - **Both stages run on every line,** and the wide rules run twice on a line with a form without `://` or an encoded magnet. In a release build that's about 3 to 6 times `main`'s time on the adversarial units (`a://` 3.3×, `http:/` 5.3×). `only_more` keeps a set of the wide output's words, so it's linear.
