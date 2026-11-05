@@ -805,13 +805,20 @@ mod tests {
     async fn a_stalled_download_is_cut_off_at_the_time_limit() {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/list", listener.local_addr().unwrap());
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}/list");
+        // The server never fails and never waits forever: on a loaded
+        // runner the 300 ms limit can fire before the client connects or
+        // sends, and the test must not depend on which happened.
         let server = std::thread::spawn(move || {
-            let (mut sock, _) = listener.accept().unwrap();
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            let _ = sock.set_read_timeout(Some(Duration::from_secs(30)));
             let mut buf = [0u8; 4096];
-            let _ = sock.read(&mut buf).unwrap();
-            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n10.0.0.0/8\n")
-                .unwrap();
+            let _ = sock.read(&mut buf);
+            let _ =
+                sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n10.0.0.0/8\n");
             // Hold the body open until the client gives up and hangs up.
             while sock.read(&mut buf).is_ok_and(|n| n > 0) {}
         });
@@ -819,7 +826,20 @@ mod tests {
         limits.fetch_timeout = Duration::from_millis(300);
         let agent = client(&limits).unwrap();
         refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
-        server.join().unwrap();
+        drop(agent);
+        // If the client gave up before connecting, the server is still in
+        // `accept`: this connection releases it (and is otherwise unused).
+        drop(std::net::TcpStream::connect(addr));
+        // Join off the runtime thread, so the client's connection task can
+        // still run and close its socket, which ends the server's loop.
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            tokio::task::spawn_blocking(move || server.join()),
+        )
+        .await
+        .expect("the test server ends once both connections close")
+        .unwrap()
+        .unwrap();
         let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
         assert!(sub.error.unwrap().contains("time limit"));
         assert!(ips.current().is_empty());
