@@ -77,13 +77,14 @@ pub(crate) enum Viewer {
 }
 
 impl Viewer {
-    /// From the request's [`Access`]: a route behind [`auth::protected`]
-    /// has none and is session-only, so it's the admin; a route behind
-    /// [`auth::key_or_session`] says who came.
+    /// From the request's [`Access`], which [`auth::protected`] and
+    /// [`auth::key_or_session`] both put there. A request without one
+    /// (a handler called as a function, or mounted without a guard)
+    /// fails closed: it's public.
     pub(crate) fn of(access: Option<&Access>) -> Viewer {
         match access {
-            None | Some(Access::Session) => Viewer::Admin,
-            Some(Access::Key { .. } | Access::Feed { .. }) => Viewer::Public,
+            Some(Access::Session) => Viewer::Admin,
+            None | Some(Access::Key { .. } | Access::Feed { .. }) => Viewer::Public,
         }
     }
 }
@@ -219,10 +220,14 @@ impl Catalogue {
 
     /// `row`'s sources `viewer` may see, the first first, and whether
     /// any was left out. A `private_source` torrent's are all private.
+    ///
+    /// Whether a source's name is shown depends on the torrent and the
+    /// source's class only, so a hit and the detail view always agree; a
+    /// private claim from a public source is withheld on its own
+    /// ([`Catalogue::provenance`]).
     fn visible<'a>(
         &'a self,
         row: &TorrentRow,
-        private_claims: impl Fn(u8) -> bool,
         viewer: Viewer,
     ) -> (Vec<(&'a SourceEntry, bool)>, bool) {
         let private_item = row.flags & store_flags::PRIVATE_SOURCE != 0;
@@ -232,7 +237,7 @@ impl Catalogue {
             // A bit with no source row isn't one the store wrote.
             let Some(e) = self.get(id) else { continue };
             // Known to be private, which the admin is told.
-            let private = private_item || e.public == Some(false) || private_claims(id);
+            let private = private_item || e.public == Some(false);
             if (private || e.public.is_none()) && viewer == Viewer::Public {
                 withheld = true;
             } else {
@@ -244,9 +249,7 @@ impl Catalogue {
 
     /// A hit's source: the first one `viewer` may see.
     pub(crate) fn hit_source(&self, row: &TorrentRow, viewer: Viewer) -> Option<HitSource> {
-        // Claims aren't read for a hit: a public source's own bit is
-        // public, and a private source isn't `public` anyway.
-        let (shown, _) = self.visible(row, |_| false, viewer);
+        let (shown, _) = self.visible(row, viewer);
         shown.first().map(|(e, _)| HitSource {
             name: e.name.clone(),
             plugin: e.plugin.clone(),
@@ -261,26 +264,31 @@ impl Catalogue {
         viewer: Viewer,
     ) -> Provenance {
         let claim_of = |id: u8| claims.iter().find(|c| c.source.get() == id);
-        let (shown, mut withheld) = self.visible(
-            row,
-            |id| claim_of(id).is_some_and(|c| c.private_source),
-            viewer,
-        );
+        let (shown, mut withheld) = self.visible(row, viewer);
         let first = row.first_source.map(SourceId::get);
-        let sources = shown
-            .into_iter()
-            .map(|(e, private)| ProvenanceSource {
-                claim: claim_of(e.id)
+        let mut sources = Vec::with_capacity(shown.len());
+        for (e, private) in shown {
+            let stored = claim_of(e.id);
+            let private_claim = stored.is_some_and(|c| c.private_source);
+            // A public source's name stays; its private claim doesn't.
+            let claim = if private_claim && viewer == Viewer::Public {
+                withheld = true;
+                None
+            } else {
+                stored
                     .and_then(|c| c.claims.as_ref())
-                    .map(|c| differences(row, c)),
+                    .map(|c| differences(row, c))
+            };
+            sources.push(ProvenanceSource {
+                claim,
                 first: first == Some(e.id),
                 first_seen_at: (first == Some(e.id)).then_some(row.discovered_at),
                 id: e.id,
                 name: e.name.clone(),
                 plugin: e.plugin.clone(),
-                private,
-            })
-            .collect();
+                private: private || private_claim,
+            });
+        }
         // Claims from a source that's no longer in the bitset (purged
         // since) aren't shown; to a public caller, nor is their existence.
         if viewer == Viewer::Public && claims.iter().any(|c| c.private_source) {
@@ -645,7 +653,8 @@ pub(crate) mod tests {
 
     #[test]
     fn the_viewer_is_the_admin_only_with_a_session() {
-        assert_eq!(Viewer::of(None), Viewer::Admin);
+        // No guard said who it is: fail closed.
+        assert_eq!(Viewer::of(None), Viewer::Public);
         assert_eq!(Viewer::of(Some(&Access::Session)), Viewer::Admin);
         assert_eq!(
             Viewer::of(Some(&Access::Key {
@@ -707,16 +716,47 @@ pub(crate) mod tests {
         assert!(!admin.withheld);
         assert!(admin.sources[2].claim.as_ref().unwrap().name.is_some());
 
+        // Nyaa is a public source: its name stays, its private claim
+        // doesn't.
         let public = c.provenance(&r, &stored, Viewer::Public);
-        assert_eq!(plugins(&public), ["dht"]);
+        assert_eq!(plugins(&public), ["dht", "nyaa"]);
         assert!(public.withheld);
+        assert!(
+            public
+                .sources
+                .iter()
+                .all(|s| s.claim.is_none() && !s.private)
+        );
         let text = serde_json::to_string(&public).unwrap();
-        for hidden in ["prowlarr", "Prowlarr", "nyaa", "leaked", "gone"] {
+        for hidden in ["prowlarr", "Prowlarr", "leaked", "gone"] {
             assert!(!text.contains(hidden), "{hidden} in {text}");
         }
         // Its hit shows the first source the caller may see.
         assert_eq!(c.hit_source(&r, Viewer::Admin).unwrap().plugin, "prowlarr");
         assert_eq!(c.hit_source(&r, Viewer::Public).unwrap().plugin, "dht");
+    }
+
+    #[test]
+    fn a_hit_and_the_detail_agree_on_a_public_source_with_a_private_claim() {
+        let c = catalogue();
+        // Prowlarr found it first; Nyaa's claims came through a private
+        // source. No DHT bit.
+        let r = row(0b110, Some(1), 0);
+        let stored = [claims(
+            2,
+            true,
+            Claims {
+                name: Some("leaked".into()),
+                ..Claims::default()
+            },
+        )];
+        let hit = c.hit_source(&r, Viewer::Public).unwrap();
+        let detail = c.provenance(&r, &stored, Viewer::Public);
+        assert_eq!(plugins(&detail), [hit.plugin.as_str()]);
+        assert_eq!(hit.plugin, "nyaa");
+        assert!(detail.withheld && detail.sources[0].claim.is_none());
+        let admin = c.provenance(&r, &stored, Viewer::Admin);
+        assert!(admin.sources[1].private && admin.sources[1].claim.is_some());
     }
 
     #[test]

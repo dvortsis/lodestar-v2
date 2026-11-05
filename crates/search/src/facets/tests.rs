@@ -835,7 +835,15 @@ fn large_counts_are_sampled_within_tolerance() {
         ..all_values()
     };
     let exact = all_values();
-    for q in ["", "common res:1080p", "third", "lang:fr | lang:de"] {
+    for q in [
+        "",
+        "common res:1080p",
+        "third",
+        "lang:fr | lang:de",
+        // The `no`-only pass merged with a sampled shared one.
+        "verified:yes",
+        "common verified:yes",
+    ] {
         let (_, _, est) = run(&index, q, &sampled);
         let (_, _, want) = run(&index, q, &exact);
         assert!(want.sample_rate.is_none(), "{q}: exact below the threshold");
@@ -1004,6 +1012,47 @@ fn unavailable_groups_are_named_not_zeroed() {
         Facet::ALL.map(Some)
     );
     assert_eq!(Facet::from_name("seeders"), None);
+}
+
+/// Documents indexed before SRC-3 carry no `verified`, `network` or
+/// `source` value, and every one is a verified `bt` torrent: the
+/// defaults count them, as `compile.rs`'s `provenance` reads them.
+#[test]
+fn documents_without_provenance_fields_count_as_the_defaults() {
+    let mut docs = corpus(300);
+    let index = SearchIndex::in_memory().unwrap();
+    let f = *index.fields();
+    let (raw, reader) = index.raw();
+    let mut w: tantivy::IndexWriter = raw.writer_with_num_threads(1, 50 << 20).unwrap();
+    for (i, d) in docs.iter_mut().enumerate() {
+        let doc = d.to_document(&f);
+        if i % 3 != 0 {
+            w.add_document(doc).unwrap();
+            continue;
+        }
+        // The shape a pre-SRC-3 build wrote.
+        d.provenance = crate::doc::DocProvenance::stored_torrent();
+        let mut old = tantivy::TantivyDocument::new();
+        for (field, v) in doc.field_values() {
+            if ![f.verified, f.network, f.source].contains(&field) {
+                old.add_field_value(field, v);
+            }
+        }
+        w.add_document(old).unwrap();
+    }
+    w.commit().unwrap();
+    reader.reload().unwrap();
+    let index = Arc::new(index);
+    for q in [
+        "",
+        "verified:yes",
+        "verified:no",
+        "network:bt common",
+        "-network:bt",
+        "source:dht",
+    ] {
+        validate(&docs, &index, q);
+    }
 }
 
 #[test]

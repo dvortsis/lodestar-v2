@@ -283,8 +283,8 @@ fn response(
     let (catalogue, viewer) = who;
     let term = |f: Facet, t: &lodestar_search::TermCounts| {
         // §18.7: a private source's name only to the admin session. A
-        // withheld listed value comes off `distinct` too; one outside the
-        // top is already only a number in `other` and `distinct`.
+        // withheld value counts as one not listed, wherever it ranked: in
+        // `other` and `distinct`, a number without a name.
         let shown = |v: &&lodestar_search::ValueCount| {
             f != Facet::Source || catalogue.shows_plugin(&v.value, viewer)
         };
@@ -299,11 +299,11 @@ fn response(
                 value: v.value.clone(),
             })
             .collect();
-        let withheld = (t.values.len() - values.len()) as u64;
+        let withheld: u64 = t.values.iter().filter(|v| !shown(v)).map(|v| v.count).sum();
         TermFacet {
             approx: t.approx,
-            distinct: t.distinct.saturating_sub(withheld),
-            other: t.other,
+            distinct: t.distinct,
+            other: t.other + withheld,
             partial: t.partial,
             values,
         }
@@ -450,8 +450,10 @@ mod tests {
             0.0,
         );
         assert_eq!(listed(&r, "source"), ["dht", "nyaa"]);
-        assert_eq!(r.facets["source"].distinct, 4);
-        assert_eq!(r.facets["source"].other, 2);
+        // Withheld values count as unlisted ones: in `other` and
+        // `distinct`, without a name.
+        assert_eq!(r.facets["source"].distinct, 6);
+        assert_eq!(r.facets["source"].other, 2 + 5 + 1);
         let text = serde_json::to_string(&r).unwrap();
         for hidden in ["prowlarr", "Prowlarr", "gone"] {
             assert!(!text.contains(hidden), "{hidden} in {text}");
