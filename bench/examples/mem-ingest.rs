@@ -56,6 +56,7 @@ static MANIFEST: Manifest = Manifest {
     consent: Consent::None,
     default_priority: Priority::Normal,
     enabled_by_default: true,
+    always_adult: false,
 };
 
 /// Emits `total` synthetic keys at `per_sec`, each with one (fake) peer.

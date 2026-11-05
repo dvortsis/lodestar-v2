@@ -258,6 +258,11 @@ placement:
   - X-ci-health
   - X-log-url-redact
   - X-log-url-redact-2
+  - X-flake-boot-shell
+  - X-followups-1105
+  - X-source-adult-2
+  - X-flakes-1105
+  - D-sources-guide
   - L4-followups
   - S-settings-reconcile
 - ws: ws-cut
@@ -323,6 +328,8 @@ placement:
   - SRC-12
   - SRC-12b
   - SRC-13
+  - SRC-13b
+  - X-source-adult
 - ws: ws-src-ui
   match:
   - SRC-14
@@ -351,6 +358,7 @@ placement:
   match:
   - X-search-files-3
   - X-search-files-4
+  - X-search-files-5
   - G-import-*
   - CR-3
   - G-rebuild-10M
@@ -914,30 +922,30 @@ crawler:
   note: 24 h mean, no hour below 70. Stretch goal 1,000 a minute, served by remote workers.
 soak:
 - stage: Settling
-  label: 'First 6 hours: sampling is suppressed (soak r4 on release candidate 3)'
-  start: '2026-11-03T18:25:30Z'
-  end: '2026-11-04T00:25:30Z'
+  label: 'First 6 hours: sampling is suppressed (soak r5 on release candidate 4)'
+  start: '2026-11-05T06:42:25Z'
+  end: '2026-11-05T12:42:25Z'
 - stage: Warm-up
   label: 30 minutes of warm-up
-  start: '2026-11-04T00:25:30Z'
-  end: '2026-11-04T00:55:30Z'
+  start: '2026-11-05T12:42:25Z'
+  end: '2026-11-05T13:12:25Z'
 - stage: Measured
   label: 24 hours of measurement; hours 12 to 24 decide the memory gate
-  start: '2026-11-04T00:55:30Z'
-  end: '2026-11-05T00:55:30Z'
+  start: '2026-11-05T13:12:25Z'
+  end: '2026-11-06T13:12:25Z'
 - stage: Event
-  label: Hour 12 begins; the deciding window opens (the nightly backup is switched off for this run)
-  start: '2026-11-04T12:55:30Z'
-  end: '2026-11-04T12:55:30Z'
+  label: Hour 12 begins; the deciding window opens (Appdata Backup stays off for every soak)
+  start: '2026-11-06T01:12:25Z'
+  end: '2026-11-06T01:12:25Z'
 - stage: Verdict
-  label: 'Verdict: failed the memory gate, 29.35 MiB/h, 95% CI [28.75, 29.96] (bar: upper bound at most 2.0). Soak r5 runs on release candidate 4'
-  start: '2026-11-05T00:55:30Z'
-  end: '2026-11-05T00:55:30Z'
+  label: 'Verdict after the analyzer runs on the complete window (bar: upper 95% bound of the memory slope at most 2.0 MiB/h). Soak r4 on release candidate 3 failed at 29.35 MiB/h'
+  start: '2026-11-06T13:12:25Z'
+  end: '2026-11-06T13:12:25Z'
 notes:
   updated: '2026-11-05'
   now:
-  - label: Release candidate 4 is being built
-    text: The 24-hour memory test of release candidate 3 failed (29.35 MiB an hour, bar 2.0). The growth was in memory the release build's C code takes from its own allocator, which never gives it back. Release candidate 4 adds that fix (mimalloc serves the C code too), the other memory fixes and the Legal Notice at setup, as you decided (§2.40); the runner adds the log redaction security fix. Rule packs on by default come in v0.5.2.
+  - label: Soak r5 is running on release candidate 4
+    text: Release candidate 4 is tagged and its 24-hour memory test started at 06:42 UTC on 5 November; the deciding window ends about 13:12 UTC on 6 November. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
       The live tests wait for an experiment host you name.

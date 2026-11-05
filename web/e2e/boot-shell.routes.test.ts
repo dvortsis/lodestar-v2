@@ -413,6 +413,12 @@ test('Ctrl/Cmd+K as the very first key is taken from the browser, not just repla
 });
 
 test.describe('the error screen when its chunk cannot load', () => {
+	// A handler still awaiting route.fetch() when the test ends would throw ("Target page, context
+	// or browser has been closed") and fail a test that already passed.
+	test.afterEach(async ({ page }) => {
+		await page.unrouteAll({ behavior: 'ignoreErrors' });
+	});
+
 	// The screen and its parts are the only shared chunks that carry these strings; the stub
 	// (nodes/1) with its fallback is left alone.
 	const abortErrorView = (page: Page) =>

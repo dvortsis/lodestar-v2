@@ -1969,6 +1969,7 @@ mod tests {
             consent: Consent::None,
             default_priority: Priority::Normal,
             enabled_by_default: false,
+            always_adult: false,
         };
         let status =
             |plugin: &'static str, route, state, egress: bool| lodestar_pipeline::SourceStatus {
