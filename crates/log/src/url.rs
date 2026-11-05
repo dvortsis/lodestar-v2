@@ -963,7 +963,31 @@ pub fn scrub(url: &str, form: Form) -> String {
 /// [`scrub_text_floor`]. Stage 1's output, with what the wide rules hide
 /// hidden in it too.
 pub fn scrub_text(text: &str) -> String {
+    if plain_line(text) {
+        return scrub_text_floor(text);
+    }
     only_more(&scrub_text_floor(text), &wide::scrub_text(text))
+}
+
+/// Whether the wide rules can add nothing to stage 1's output for `text`
+/// (X-log-url-redact-3's fast path): it holds none of `:`, `/`, `@`, `%`,
+/// `=` and `"`, and no `bearer` (any case), `lsk_` or `lsf_`. Every wide
+/// rule needs one of them to fire, so on such a line both stages are
+/// [`hide_runs`] of the text, and `only_more` of two equal outputs is that
+/// output: the decisions file lists each rule's trigger, and
+/// `the_fast_path_matches_both_stages` checks it.
+fn plain_line(text: &str) -> bool {
+    let b = text.as_bytes();
+    let keyword = |k: usize, w: &[u8]| {
+        b.get(k..k + w.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(w))
+    };
+    !b.iter().enumerate().any(|(k, &c)| match c {
+        b':' | b'/' | b'@' | b'%' | b'=' | b'"' => true,
+        b'b' | b'B' => keyword(k, b"bearer"),
+        b'l' | b'L' => keyword(k, b"lsk_") || keyword(k, b"lsf_"),
+        _ => false,
+    })
 }
 
 /// `floor` with each word in it (a run of letters, digits and `_`) that
@@ -3897,6 +3921,139 @@ pass:"S3CRET"#,
         // A plain path still keeps its words.
         let plain = format!("{:?}", ::url::Url::parse("https://h/a/b").unwrap());
         assert!(scrub_text(&plain).contains(r#"path: "/a/b""#));
+    }
+
+    /// The fast path (X-log-url-redact-3) gives exactly what both stages and
+    /// `only_more` give, on 2,000,000 token soups it accepts. The tokens are
+    /// near misses of every wide rule's trigger (names with no separator,
+    /// `Some(`, `magnet`, `bear`, `lsk`, hash-like runs, the markers) and a
+    /// few triggers, whose lines must be refused.
+    #[test]
+    fn the_fast_path_matches_both_stages() {
+        const TOKENS: &[&str] = &[
+            "a",
+            "x",
+            "ok",
+            "h",
+            "0",
+            "42",
+            "_",
+            "-",
+            ".",
+            ",",
+            ";",
+            "'",
+            "?",
+            "&",
+            "#",
+            "(",
+            ")",
+            "[",
+            "]",
+            "{",
+            "}",
+            "<",
+            ">",
+            "\\",
+            "\\'",
+            "+",
+            "~",
+            "*",
+            "!",
+            "$",
+            "|",
+            "`",
+            " ",
+            " ",
+            "\n",
+            "\t",
+            "\r",
+            "é",
+            "日本",
+            "🦀",
+            "Some(",
+            "Some('",
+            "token",
+            "password",
+            "passkey",
+            "apikey",
+            "Authorization",
+            "Basic ",
+            "bear",
+            "Bear",
+            "bearer",
+            "BEARER ",
+            "Bearer ",
+            "lsk",
+            "lsk_",
+            "lsf_",
+            "ls_",
+            "LSK_",
+            "magnet",
+            "magnet?xt",
+            "dn",
+            "kt",
+            "xt",
+            "tr",
+            "urn",
+            "btih",
+            "http",
+            "https",
+            "www",
+            "Url { scheme ",
+            "username ",
+            "path ",
+            "query Some(",
+            "[hidden]",
+            "[redacted]",
+            "0123456789abcdef0123456789abcdef",
+            "0123456789ABCDEF0123456789abcdef01234567",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+            "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U",
+            ":",
+            "/",
+            "@",
+            "%",
+            "=",
+            "\"",
+        ];
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as usize
+        };
+        let (mut accepted, mut refused) = (0, 0);
+        while accepted < 2_000_000 {
+            let n = 2 + next(30);
+            let line: String = (0..n).map(|_| TOKENS[next(TOKENS.len())]).collect();
+            if !plain_line(&line) {
+                refused += 1;
+                continue;
+            }
+            accepted += 1;
+            let both = only_more(&scrub_text_floor(&line), &wide::scrub_text(&line));
+            assert_eq!(scrub_text(&line), both, "{line:?}");
+        }
+        assert!(refused > 100_000, "{refused}");
+        // Each trigger is refused on its own; near misses are accepted.
+        for line in [
+            "a:b", "a/b", "a@b", "a%b", "a=b", "a\"b", "Bearer x", "xBEARER", "lsk_1", "Lsf_",
+        ] {
+            assert!(!plain_line(line), "{line:?}");
+        }
+        for line in [
+            "",
+            "bear er",
+            "ls k_",
+            "lsk",
+            "token x",
+            "magnet?xt",
+            "日本 🦀",
+        ] {
+            assert!(plain_line(line), "{line:?}");
+        }
     }
 
     #[test]
