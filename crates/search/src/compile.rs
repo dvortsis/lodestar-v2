@@ -87,6 +87,24 @@ pub(crate) fn file_clauses(node: &Node, out: &mut Vec<Node>) {
     }
 }
 
+/// The extensions of a `file:(…)` clause that asks for nothing else
+/// (`file:(ext:mkv)`, `file:(ext:flac,mp3)`), which the torrent index
+/// answers: its `ext` holds every file's extension, so no file-index scan
+/// or join is needed (X-search-files-4, option (a), runner 2026-11-05).
+/// It differs from the file index only by coverage: smart coverage
+/// leaves small images and documents out of a large pack's file
+/// documents, and hidden files out of every torrent's, and the torrent's
+/// extensions keep them. A clause of two or more atoms still runs on the
+/// file index, since it asks about one file. Such a clause is still
+/// listed by [`file_clauses`], for its matched files; `files::compile`
+/// marks it so the search's file pass skips it.
+pub(crate) fn file_exts(of: &Node) -> Option<&[String]> {
+    match of {
+        Node::Ext { any } => Some(any),
+        _ => None,
+    }
+}
+
 /// A compiled query in its parts.
 pub(crate) struct Parts {
     /// Selects the matches and gives the phase-1 score.
@@ -345,7 +363,9 @@ fn share_name(by: ShareBy, cat: &str) -> Option<String> {
 fn liftable(n: &Node) -> bool {
     match n {
         Node::Range { field, .. } => field.is_fast() || field.is_hot(),
-        Node::Date { .. } | Node::File { .. } | Node::TimeOfDay { .. } => true,
+        Node::Date { .. } | Node::TimeOfDay { .. } => true,
+        // `file:(ext:…)` is the torrent's extension terms, searched.
+        Node::File { of } => file_exts(of).is_none(),
         Node::Share { by, cat, .. } => share_name(*by, cat).is_some(),
         _ => false,
     }
@@ -424,7 +444,7 @@ fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
                 missing: (fld != ABSENT).then_some(0),
             }
         }
-        Node::File { of } => FastRange::Ids { ids: cx.ids(of) },
+        Node::File { of } if file_exts(of).is_none() => FastRange::Ids { ids: cx.ids(of) },
         _ => return None,
     })
 }
@@ -722,6 +742,11 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
                 (lo, hi) => range(lo, hi),
             }
         }
+        // A filter, scored as a file clause's id set is.
+        Node::File { of } if let Some(any) = file_exts(of) => Box::new(ConstScoreQuery::new(
+            compile_opt(&Node::Ext { any: any.to_vec() }, f, now)?,
+            1.0,
+        )),
         Node::File { of } => {
             let ids = f.ids(of);
             if ids.is_empty() {

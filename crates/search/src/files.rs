@@ -310,8 +310,37 @@ fn any_of(targets: Vec<(Field, bool)>, build: impl Fn(Field, bool) -> Q) -> Q {
 }
 
 /// The inner clause of `file:(…)` as a file-index query. `None` for a
-/// clause that constrains nothing.
+/// clause that constrains nothing. A clause the torrent index answers
+/// ([`crate::compile::file_exts`]) comes back as [`TorrentLevel`]: its
+/// matched files are still read here, but its torrents aren't.
 pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
+    let q = compile_node(node, f)?;
+    Some(match crate::compile::file_exts(node) {
+        Some(_) => Box::new(TorrentLevel(q)),
+        None => q,
+    })
+}
+
+/// A `file:(…)` clause the torrent index answers. [`torrent_ids`] gives
+/// no set for it, and so scans nothing, since the torrent query never
+/// reads one; as a query it's the clause itself, for a result's matched
+/// files.
+#[derive(Debug)]
+pub struct TorrentLevel(Q);
+
+impl Clone for TorrentLevel {
+    fn clone(&self) -> Self {
+        TorrentLevel(self.0.box_clone())
+    }
+}
+
+impl Query for TorrentLevel {
+    fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
+        self.0.weight(scoring)
+    }
+}
+
+fn compile_node(node: &Node, f: &FileFields) -> Option<Q> {
     Some(match node {
         Node::All => Box::new(AllQuery),
         Node::And { of } => {
@@ -319,12 +348,12 @@ pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
             for n in of {
                 match n {
                     Node::Not { of } => {
-                        if let Some(q) = compile(of, f) {
+                        if let Some(q) = compile_node(of, f) {
                             clauses.push((Occur::MustNot, q));
                         }
                     }
                     n => {
-                        if let Some(q) = compile(n, f) {
+                        if let Some(q) = compile_node(n, f) {
                             clauses.push((Occur::Must, q));
                         }
                     }
@@ -338,7 +367,7 @@ pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
         Node::Or { of } => {
             let clauses: Vec<(Occur, Q)> = of
                 .iter()
-                .filter_map(|n| compile(n, f))
+                .filter_map(|n| compile_node(n, f))
                 .map(|q| (Occur::Should, q))
                 .collect();
             if clauses.is_empty() {
@@ -347,7 +376,7 @@ pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
             Box::new(BooleanQuery::new(clauses))
         }
         Node::Not { of } => {
-            let q = compile(of, f)?;
+            let q = compile_node(of, f)?;
             Box::new(BooleanQuery::new(vec![
                 (Occur::Must, Box::new(AllQuery) as Q),
                 (Occur::MustNot, q),
@@ -1306,6 +1335,9 @@ fn torrent_ids_in_pieces(
     piece_docs: DocId,
 ) -> crate::index::Result<IdSet> {
     cancel.check()?;
+    if query.downcast_ref::<TorrentLevel>().is_some() {
+        return Ok(IdSet::default());
+    }
     let segs = searcher.segment_readers();
     let keys: Vec<CacheKey> = segs
         .iter()
@@ -2942,7 +2974,7 @@ mod bucket_props {
             );
             prop_assert_eq!(&ids(&searcher, compiled.as_ref(), piece_docs), &with_ext, "with ext");
             for ratio in [0, u64::MAX] {
-                let ext_q = compile(&ext, &f).unwrap();
+                let ext_q = compile_node(&ext, &f).unwrap();
                 let range = q.downcast_ref::<SizeRange>().cloned();
                 let Some(range) = range else { break };
                 let forced = SizeChecked {
@@ -3047,6 +3079,43 @@ mod bucket_props {
         };
         assert!(Weight::explain(&edge, seg, 0).is_err());
         assert!(Weight::explain(&edge, seg, 1).is_ok());
+    }
+
+    /// A clause the torrent index answers scans nothing and caches
+    /// nothing: the search's file pass gives it no set.
+    #[test]
+    fn a_torrent_level_clause_is_not_scanned() {
+        let (searcher, f) = index(&[vec![vec![7], vec![5]]], &[]);
+        let ext = Node::Ext {
+            any: vec!["bin".into()],
+        };
+        let q = compile(&ext, &f).unwrap();
+        assert!(q.downcast_ref::<TorrentLevel>().is_some());
+        let cache = FileSetCache::default();
+        let set = torrent_ids(
+            &searcher,
+            q.as_ref(),
+            "q",
+            &cache,
+            &crate::CancelToken::new(),
+        )
+        .unwrap();
+        assert!(set.is_empty());
+        assert_eq!(cache.usage().0, 0);
+        // Inside a conjunction it's a file-index clause like any other.
+        let and = Node::And {
+            of: vec![
+                ext,
+                Node::Range {
+                    field: NumField::Size,
+                    lo: Some(6),
+                    hi: None,
+                },
+            ],
+        };
+        let q = compile(&and, &f).unwrap();
+        assert!(q.downcast_ref::<TorrentLevel>().is_none());
+        assert_eq!(ids(&searcher, q.as_ref(), PIECE_DOCS), vec![1]);
     }
 
     /// The column fallback clamps its bounds to the segment's values: a

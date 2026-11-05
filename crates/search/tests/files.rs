@@ -288,16 +288,16 @@ fn word(field: TextField, w: &str) -> Node {
     }
 }
 
-/// Where a one-atom file clause and its torrent-level form disagree
-/// today: the evidence for answering one from the torrent index
-/// (X-search-files-4, option (a)). Smart coverage leaves small images,
-/// documents and other files out of a pack's file documents, and hidden
-/// files out of every torrent's, while the torrent's extensions and paths
-/// keep them; the paths, though, stop at `MAX_PATH_TOKENS`, which the
-/// file index doesn't. If one-atom clauses move to the torrent index,
-/// this test is the one to change.
+/// One-atom `file:(ext:…)` clauses are answered from the torrent index
+/// (X-search-files-4, option (a), runner 2026-11-05): its extensions
+/// cover every file, while smart coverage leaves small images, documents
+/// and other files out of a large pack's file documents and hidden files
+/// out of every torrent's. So they gain those torrents (and a negation
+/// loses them). Clauses of two or more atoms, and words, still ask the
+/// file index; words differ from `path:` both ways, since the paths stop
+/// at `MAX_PATH_TOKENS` and the file index doesn't.
 #[test]
-fn one_atom_file_clauses_and_their_torrent_level_forms_differ_only_by_coverage() {
+fn one_atom_extension_clauses_cover_every_file_and_words_stay_on_the_file_index() {
     const MIB: i64 = 1 << 20;
     // 1: a photo pack past `SMART_ALL_FILES`, every image under
     // `SMART_MIN_SIZE`, and a small readme.
@@ -334,26 +334,51 @@ fn one_atom_file_clauses_and_their_torrent_level_forms_differ_only_by_coverage()
     let mut w = index.writer(60 << 20).unwrap();
     w.catch_up(&mut store, 10_000).unwrap();
     w.commit().unwrap();
-    // Extensions: the torrent level finds more, never less.
-    assert_eq!(ids(&index, &file(ext("jpg"))), vec![2]);
+    let none: Vec<u64> = Vec::new();
+    // One extension atom: what the torrent level finds.
+    assert_eq!(ids(&index, &file(ext("jpg"))), vec![1, 2]);
     assert_eq!(ids(&index, &ext("jpg")), vec![1, 2]);
-    assert_eq!(ids(&index, &file(ext("mkv"))), vec![4]);
-    assert_eq!(ids(&index, &ext("mkv")), vec![3, 4]);
+    assert_eq!(ids(&index, &file(ext("mkv"))), vec![3, 4]);
     assert_eq!(ids(&index, &file(ext("flac"))), vec![4]);
-    assert_eq!(ids(&index, &ext("flac")), vec![4]);
-    // Words: either can find what the other misses.
+    let either = Node::Ext {
+        any: vec!["jpg".into(), "flac".into()],
+    };
+    assert_eq!(ids(&index, &file(either)), vec![1, 2, 4]);
     assert_eq!(
-        ids(&index, &file(word(TextField::Any, "readme"))),
-        vec![] as Vec<u64>
+        ids(
+            &index,
+            &Node::Not {
+                of: Box::new(file(ext("mkv")))
+            }
+        ),
+        vec![1, 2]
     );
+    // Beside a word, a filter.
+    let with_word = Node::And {
+        of: vec![word(TextField::Any, "photos"), file(ext("jpg"))],
+    };
+    assert_eq!(ids(&index, &with_word), vec![1]);
+    // Two atoms ask about one file: the file index, with its coverage.
+    let big_jpg = file(Node::And {
+        of: vec![ext("jpg"), range(Some(1), None)],
+    });
+    assert_eq!(ids(&index, &big_jpg), vec![2]);
+    // Matched files still come from the file index.
+    assert_eq!(
+        index.matched_files(&file(ext("jpg")), 2, 10).unwrap(),
+        vec![0]
+    );
+    assert_eq!(
+        index.matched_files(&file(ext("mkv")), 4, 10).unwrap(),
+        vec![1_200]
+    );
+    // Words: either can find what the other misses.
+    assert_eq!(ids(&index, &file(word(TextField::Any, "readme"))), none);
     assert_eq!(ids(&index, &word(TextField::Path, "readme")), vec![1]);
     assert_eq!(ids(&index, &file(word(TextField::Any, "zebra"))), vec![4]);
-    assert_eq!(
-        ids(&index, &word(TextField::Path, "zebra")),
-        vec![] as Vec<u64>
-    );
-    // Where coverage is whole (every torrent under `SMART_ALL_FILES`
-    // files, nothing hidden) the two agree.
+    assert_eq!(ids(&index, &word(TextField::Path, "zebra")), none);
+    // Where coverage is whole (under `SMART_ALL_FILES` files, nothing
+    // hidden) they agree.
     assert_eq!(ids(&index, &file(word(TextField::Any, "cover"))), vec![2]);
     assert_eq!(ids(&index, &word(TextField::Path, "cover")), vec![2]);
 }
