@@ -246,7 +246,8 @@ impl Config {
     /// - printable ASCII only, starting `https://`: the consent dialog
     ///   shows it as written, so it can't hide a part behind a control,
     ///   bidirectional or look-alike character (a non-ASCII host is
-    ///   written in its `xn--` form);
+    ///   written in its `xn--` form), and with no `\`, which the URL
+    ///   parser reads as `/`;
     /// - https, with a host, no user name or password and no fragment: a
     ///   lookup over plain http would show the hash to the whole path;
     /// - not a literal LAN, loopback or link-local address: these are
@@ -296,6 +297,11 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
         return Err(ConfigError(
             "a cache address is plain ASCII with no spaces: write a non-ASCII host in its xn-- form",
         ));
+    }
+    // The URL parser reads `\` as `/`, so `https://a.example\@b.example/`
+    // would show one host and reach another.
+    if raw.contains('\\') {
+        return Err(ConfigError("a cache address can't hold a backslash"));
     }
     if !raw.starts_with("https://") {
         return Err(ConfigError("a cache address must start with https://"));

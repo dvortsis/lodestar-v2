@@ -493,6 +493,7 @@ fn config_refusals_name_the_rule() {
         ("HTTPS://c.example/{hash}", "start with https://"),
         ("https:c.example/{hash}", "start with https://"),
         ("https://[{hash}]/x", "valid address"),
+        ("https://c.example\\@d.example/{hash}", "backslash"),
     ];
     for (t, rule) in bad {
         let e = Config::new(&[t]).unwrap_err();
