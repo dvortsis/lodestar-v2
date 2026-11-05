@@ -3557,6 +3557,41 @@ mod bucket_props {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// The torrent's codes and the file index's edges answer a range
+        /// exactly: every size inside it is in a whole code or an edge,
+        /// none outside is in either, an edge is never also a whole code,
+        /// and edges are inside the range, each within one bucket, at
+        /// most two (X-search-files-5).
+        #[test]
+        fn a_code_plan_covers_exactly_its_range(lo in size(), hi in size(), probes in prop::collection::vec(size(), 0..40)) {
+            let (codes, edges) = code_plan(lo, hi);
+            prop_assert!(edges.len() <= 2);
+            for &(a, b) in &edges {
+                prop_assert!(lo <= a && a <= b && b <= hi, "{a}..={b} outside {lo}..={hi}");
+                prop_assert_eq!(size_bucket(a), size_bucket(b));
+            }
+            let near = |x: u64| [x.saturating_sub(1), x, x.saturating_add(1)];
+            let mut sizes: Vec<u64> = probes;
+            sizes.extend(near(lo).into_iter().chain(near(hi)));
+            for &(a, b) in &edges {
+                sizes.extend(near(a).into_iter().chain(near(b)));
+            }
+            for &c in &codes {
+                let f = bucket_floor(c / 2);
+                sizes.extend(near(f).into_iter().chain(near(bucket_ceil(c / 2))));
+            }
+            for s in sizes {
+                let coded = codes.binary_search(&size_code(s)).is_ok();
+                let edged = edges.iter().any(|&(a, b)| (a..=b).contains(&s));
+                prop_assert!(!(coded && edged), "{s} in a code and an edge");
+                prop_assert_eq!(coded || edged, lo <= s && s <= hi, "{} for {}..={}", s, lo, hi);
+            }
+        }
+    }
+
+    proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
         /// Bucketed and scanned, bare and under a boolean, whole and in

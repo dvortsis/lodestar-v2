@@ -446,6 +446,13 @@ fn lone_extension(n: &Node) -> bool {
     }
 }
 
+/// Hits by id, for comparing sets whose ties may order differently.
+fn by_id(hits: &[(u64, f32)]) -> Vec<(u64, f32)> {
+    let mut v = hits.to_vec();
+    v.sort_by_key(|h| h.0);
+    v
+}
+
 /// Every hit's id and score, in result order.
 fn ranked(index: &SearchIndex, node: &Node) -> Vec<(u64, f32)> {
     index
@@ -604,4 +611,103 @@ fn bucket_terms_answer_as_the_file_index_does() {
         }
     }
     assert!(checked > 1_000, "{checked}");
+}
+
+/// While the bucket terms are backfilled (a build shipping a new
+/// generation of `file_bucket`), every bucket clause runs on the file
+/// index, so a document the walk hasn't reached can't be missed; once
+/// the walk completes they answer again, the same. A lease taken
+/// mid-walk and paged after it keeps the answer it was compiled for.
+#[test]
+fn bucket_clauses_fall_back_while_their_terms_are_backfilled() {
+    use lodestar_search::{Availability, CancelToken, Generations, Lease, Sort, Start};
+    let sizes: Vec<u64> = boundary_sizes()
+        .into_iter()
+        .filter(|s| *s < 1 << 40)
+        .collect();
+    let torrents: Vec<Vec<u8>> = sizes
+        .iter()
+        .enumerate()
+        .map(|(i, s)| sized(&format!("torrent {i}"), &[(format!("f{i}.bin"), *s as i64)]))
+        .collect();
+    let mut store = store_with(&torrents);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(60 << 20).unwrap();
+    w.catch_up(&mut store, 100_000).unwrap();
+    w.commit().unwrap();
+    drop(w);
+    let gens = Generations::current();
+    let next = gens.get("file_bucket").unwrap() + 1;
+    let index = std::sync::Arc::new(
+        index
+            .with_generations(gens.with("file_bucket", next))
+            .unwrap(),
+    );
+    let queries: Vec<Node> = [
+        (Some((1u64 << 30) + 1), None),
+        (None, Some(1 << 20)),
+        (Some(bucket_floor(30)), Some(bucket_floor(40) - 1)),
+        (Some(100 << 20), None),
+    ]
+    .iter()
+    .flat_map(|&(lo, hi)| {
+        [
+            file(range(lo, hi)),
+            file(Node::And {
+                of: vec![ext("bin"), range(lo, hi)],
+            }),
+        ]
+    })
+    .collect();
+    let want: Vec<Vec<(u64, f32)>> = queries
+        .iter()
+        .map(|q| ranked(&index, &on_the_file_index(q)))
+        .collect();
+    assert!(want.iter().all(|w| !w.is_empty()));
+    // A third of the walk done.
+    let mut w = index.writer(60 << 20).unwrap();
+    w.catch_up(&mut store, sizes.len() / 3).unwrap();
+    w.commit().unwrap();
+    assert!(matches!(
+        index.availability("file_bucket"),
+        Availability::Backfilling { .. }
+    ));
+    // The same as the file index at this moment (ties order by document,
+    // and the walk rewrites documents), and the same torrents as before.
+    for (q, want) in queries.iter().zip(&want) {
+        let got = ranked(&index, q);
+        assert_eq!(got, ranked(&index, &on_the_file_index(q)), "mid-walk {q:?}");
+        assert_eq!(by_id(&got), by_id(want), "mid-walk {q:?}");
+    }
+    let lease = Lease::new(
+        index.clone(),
+        &queries[0],
+        NOW,
+        Sort::Relevance,
+        &CancelToken::new(),
+    )
+    .unwrap();
+    // The walk done: the terms answer, the same.
+    while w.catch_up(&mut store, 100_000).unwrap() > 0 {}
+    w.commit().unwrap();
+    assert_eq!(index.availability("file_bucket"), Availability::Ready);
+    // The same as the file index at this moment (ties order by document,
+    // and the walk rewrites documents), and the same torrents as before.
+    for (q, want) in queries.iter().zip(&want) {
+        let got = ranked(&index, q);
+        assert_eq!(
+            got,
+            ranked(&index, &on_the_file_index(q)),
+            "after the walk {q:?}"
+        );
+        assert_eq!(by_id(&got), by_id(want), "after the walk {q:?}");
+    }
+    let page = lease
+        .page(Start::Offset(0), 10_000, &CancelToken::new())
+        .unwrap();
+    let mut got: Vec<u64> = page.hits.iter().map(|h| h.id).collect();
+    let mut expect: Vec<u64> = want[0].iter().map(|h| h.0).collect();
+    got.sort_unstable();
+    expect.sort_unstable();
+    assert_eq!(got, expect, "the mid-walk lease");
 }

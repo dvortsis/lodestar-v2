@@ -927,13 +927,16 @@ impl SearchIndex {
     }
 
     /// Whether the v7 bucket terms answer `file:(size:…)` here: both are
-    /// in this index and complete ([`crate::population`]). An older index
+    /// in this index and complete ([`crate::population`]) in the snapshot
+    /// the query runs on (`snapshot`, a searcher's generation; `None` for
+    /// the latest, which a search without a lease reads). An older index
     /// serving during the rebuild lacks them, and a backfill of them
-    /// isn't complete until it is: either way the file index answers.
-    pub(crate) fn bucket_terms_ready(&self) -> bool {
+    /// isn't complete until it is, in that snapshot: either way the file
+    /// index answers.
+    pub(crate) fn bucket_terms_ready(&self, snapshot: Option<u64>) -> bool {
         ["file_bucket", "file_ext_bucket"]
             .iter()
-            .all(|f| self.availability(f) == Availability::Ready)
+            .all(|f| self.availability_at(f, snapshot) == Availability::Ready)
     }
 
     /// How much of `field` this index can answer for (file-index fields
@@ -1035,7 +1038,16 @@ impl SearchIndex {
     /// mid-backfill keeps its "partial" notice). File-index fields
     /// follow the latest commit.
     pub fn availability_in(&self, field: &str, lease: &crate::Lease) -> Availability {
+        self.availability_at(field, Some(lease.searcher().generation().generation_id()))
+    }
+
+    /// [`SearchIndex::availability`] as of the snapshot of generation
+    /// `snapshot` (`None`: the latest).
+    fn availability_at(&self, field: &str, snapshot: Option<u64>) -> Availability {
         let now = self.availability(field);
+        let Some(seen) = snapshot else {
+            return now;
+        };
         if now != Availability::Ready || field.starts_with("file.") {
             return now;
         }
@@ -1043,7 +1055,6 @@ impl SearchIndex {
             .population
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        let seen = lease.searcher().generation().generation_id();
         match view.ready_since.get(field) {
             Some(&(since, before)) if seen < since => before,
             _ => now,
@@ -1296,10 +1307,25 @@ impl SearchIndex {
         stems: bool,
         cancel: &crate::CancelToken,
     ) -> Result<Compiled> {
+        self.compile_at(node, now, utc_offset, stems, cancel, None)
+    }
+
+    /// [`SearchIndex::compile_cancelled`] for a query that runs on the
+    /// snapshot of generation `snapshot` (a lease's): what it may read
+    /// is decided as of that snapshot, not the latest commit.
+    pub(crate) fn compile_at(
+        &self,
+        node: &Node,
+        now: i64,
+        utc_offset: i32,
+        stems: bool,
+        cancel: &crate::CancelToken,
+        snapshot: Option<u64>,
+    ) -> Result<Compiled> {
         cancel.check()?;
         // `file:(…)` clauses run on the file index first, but for what
         // the torrent index's bucket terms answer (X-search-files-5).
-        let buckets = self.bucket_terms_ready();
+        let buckets = self.bucket_terms_ready(snapshot);
         let mut clauses = Vec::new();
         compile::search_file_clauses(node, buckets, &mut clauses);
         let mut sets = compile::FileSets::new();
@@ -2223,6 +2249,48 @@ mod population_tests {
                 .unwrap();
         }
         store
+    }
+
+    /// The bucket terms answer a query only when they're complete in the
+    /// snapshot it runs on (X-search-files-5): not while they're
+    /// backfilled, and not on a snapshot from before the walk completed,
+    /// though the latest has them (a lease taken mid-walk).
+    #[test]
+    fn bucket_clauses_are_decided_by_the_snapshot_they_run_on() {
+        let mut s = store(20);
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut s, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        drop(w);
+        assert!(index.bucket_terms_ready(None));
+        let gens = Generations::current();
+        let next = gens.get("file_bucket").unwrap() + 1;
+        let index = index
+            .with_generations(gens.with("file_bucket", next))
+            .unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        w.catch_up(&mut s, 5).unwrap();
+        w.commit().unwrap();
+        assert!(!index.bucket_terms_ready(None), "mid-walk");
+        let node = crate::parse("file:(size:>1MB)").unwrap();
+        let cancel = crate::CancelToken::new();
+        let key = |snapshot| {
+            index
+                .compile_at(&node, 0, 0, false, &cancel, snapshot)
+                .unwrap()
+                .key
+        };
+        assert!(!key(None).contains("@buckets"));
+        let before = index.searcher().generation().generation_id();
+        while w.catch_up(&mut s, 100).unwrap() > 0 {}
+        w.commit().unwrap();
+        assert!(index.bucket_terms_ready(None), "the walk done");
+        assert!(key(None).contains("@buckets"));
+        assert!(!index.bucket_terms_ready(Some(before)), "an older snapshot");
+        assert!(!key(Some(before)).contains("@buckets"));
+        let after = index.searcher().generation().generation_id();
+        assert!(index.bucket_terms_ready(Some(after)));
     }
 
     /// `store` fully indexed in RAM, then reopened by a build whose

@@ -131,11 +131,14 @@ impl Lease {
         cancel: &CancelToken,
     ) -> Result<Lease> {
         let searcher = index.searcher();
-        let exact = index.compile_cancelled(node, now, utc_offset, false, cancel)?;
+        // Compiled for this snapshot: a field completed after it isn't
+        // read from it (X-search-files-5).
+        let at = Some(searcher.generation().generation_id());
+        let exact = index.compile_at(node, now, utc_offset, false, cancel, at)?;
         let mut total = count::total(&searcher, &exact, cancel)?;
         let (mut compiled, mut stemmed) = (exact, false);
         if total.value < STEM_FALLBACK_BELOW && crate::compile::has_stem_alternative(node) {
-            let wide = index.compile_cancelled(node, now, utc_offset, true, cancel)?;
+            let wide = index.compile_at(node, now, utc_offset, true, cancel, at)?;
             let wider = count::total(&searcher, &wide, cancel)?;
             if wider.value > total.value {
                 (compiled, stemmed, total) = (wide, true, wider);
