@@ -647,11 +647,18 @@ pub(crate) async fn detail(
         // for a torrent that could be adult, and never for one a filter or
         // the core holds back.
         let (section, wanted) = if adult_asked(adult_shown, viewer) {
-            let adult = store
+            // As ENR-1's gate reads it: stored as Adult, or found by an
+            // always-adult source unless you said Not adult.
+            let stored_adult = store
                 .enrichment(row.id)
                 .map_err(internal)?
-                .is_some_and(|e| crate::search::is_adult(&e))
-                || always_adult & row.sources != 0;
+                .is_some_and(|e| crate::search::is_adult(&e));
+            let adult = stored_adult
+                || (always_adult & row.sources != 0
+                    && !store
+                        .correction(row.id)
+                        .map_err(internal)?
+                        .is_some_and(|c| c.adult == Some(false)));
             if adult && !held_back(&store, &row).map_err(internal)? {
                 (
                     adult_section(&claims, &catalogue, &names),
@@ -988,8 +995,8 @@ impl DrawerInterest {
         every: Duration::from_secs(30),
     };
     /// Every client together: 30 at once, then one every 20 s: at most
-    /// 4,350 a day. These come on top of the runtime's background cap of
-    /// 5,000 a day, so a service sees at most about 9,350.
+    /// 4,350 a day. A second bound on how fast drawers can spend the
+    /// runtime's daily cap (Q15), which interest is to count against.
     pub const OVERALL: Rate = Rate {
         burst: 30,
         every: Duration::from_secs(20),
@@ -999,7 +1006,10 @@ impl DrawerInterest {
 
     /// `opened` hands an id to the runtime (`Interest::opened`);
     /// `always_adult` is the registered always-adult sources' bitset
-    /// (`AdultSources`), so their finds count as possibly adult.
+    /// (`AdultSources`), so their finds count as possibly adult unless
+    /// you said Not adult. The host must always pass it: without it, a
+    /// torrent adult only through its source shows no section and isn't
+    /// offered (fails closed).
     pub fn new(always_adult: u64, opened: impl Fn(i64) -> bool + Send + Sync + 'static) -> Self {
         Self::with_clock(always_adult, opened, std::time::Instant::now)
     }

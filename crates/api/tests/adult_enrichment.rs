@@ -24,7 +24,7 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::Correction;
 use lodestar_metainfo::Info;
 use lodestar_store::claims::{AdultEnrichment, AdultKind, Claims, Provenance, ReleaseDate};
-use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, flags};
+use lodestar_store::{ClassCorrection, NewTorrent, SourceId, Store, StoreConfig, flags};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tower::ServiceExt;
@@ -228,9 +228,12 @@ mod item {
     /// Adult; the first match with a kind came through a private source,
     /// a later public one has a kind too.
     pub const SHADOWED: usize = 13;
+    /// Found by an always-adult source and matched, then you said Not
+    /// adult (a `class_corrections` row).
+    pub const ALWAYS_ADULT_NOT_ADULT: usize = 14;
 }
 
-const NAMES: [&str; 14] = [
+const NAMES: [&str; 15] = [
     "Garden.Scene.XXX.1080p.mp4",
     "Foreign.Link.XXX.1080p.mp4",
     "Private.Claim.XXX.1080p.mp4",
@@ -245,6 +248,7 @@ const NAMES: [&str; 14] = [
     "Clip.Collection.2020.1080p.mkv",
     "Partial.Import.XXX.1080p.mp4",
     "Shadowed.Scene.XXX.1080p.mp4",
+    "Holiday.Photos.2020.1080p.mkv",
 ];
 
 /// Source 4 is always adult.
@@ -347,7 +351,7 @@ fn fixture(interest: bool) -> Fixture {
     for (i, (info, raw)) in infos.iter().zip(&raws).enumerate() {
         let (source, extra_flags) = match i {
             item::PRIVATE_ITEM => (prowlarr, flags::PRIVATE_SOURCE),
-            item::ALWAYS_ADULT => (adult_site, 0),
+            item::ALWAYS_ADULT | item::ALWAYS_ADULT_NOT_ADULT => (adult_site, 0),
             _ => (dht, 0),
         };
         store
@@ -371,7 +375,15 @@ fn fixture(interest: bool) -> Fixture {
         let tree = store.files(*id).unwrap().unwrap();
         let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
         let fix = Correction {
-            adult: Some(![item::PLAIN, item::NOT_ADULT, item::ALWAYS_ADULT].contains(&i)),
+            adult: Some(
+                ![
+                    item::PLAIN,
+                    item::NOT_ADULT,
+                    item::ALWAYS_ADULT,
+                    item::ALWAYS_ADULT_NOT_ADULT,
+                ]
+                .contains(&i),
+            ),
             not_junk: false,
         };
         let (e, _) = lodestar_filter::reclassify::enrich_corrected(&row.name, &files, fix);
@@ -450,6 +462,12 @@ fn fixture(interest: bool) -> Fixture {
             false,
         ),
         (
+            item::ALWAYS_ADULT_NOT_ADULT,
+            stash,
+            claims_of(section("scene-14"), own_link.clone()),
+            false,
+        ),
+        (
             item::ALWAYS_ADULT,
             stash,
             claims_of(section("scene-11"), own_link.clone()),
@@ -488,6 +506,18 @@ fn fixture(interest: bool) -> Fixture {
     ] {
         assert!(store.put_claims(ids[i], src, &claims, private).unwrap());
     }
+    // You said Not adult, as `/classify/correct` stores it.
+    assert!(
+        store
+            .set_correction(
+                ids[item::ALWAYS_ADULT_NOT_ADULT],
+                ClassCorrection {
+                    adult: Some(false),
+                    not_junk: false,
+                },
+            )
+            .unwrap()
+    );
     let conn = store.connection();
     for (i, flag) in [
         (item::HIDDEN, flags::HIDDEN),
@@ -652,7 +682,12 @@ async fn the_section_is_there_only_with_show_adult_content_on() {
     }
     // Matched torrents the 404 doesn't cover: not classified Adult. The
     // key is still missing.
-    for i in [item::PLAIN, item::NOT_ADULT, item::ALWAYS_ADULT] {
+    for i in [
+        item::PLAIN,
+        item::NOT_ADULT,
+        item::ALWAYS_ADULT,
+        item::ALWAYS_ADULT_NOT_ADULT,
+    ] {
         let body = ok(&f, &cookie, i, ip(1)).await;
         assert!(absent(&body), "{i}: {body}");
         assert!(!body.to_string().contains("Garden Scene"), "{i}: {body}");
@@ -677,8 +712,11 @@ async fn the_section_is_there_only_with_show_adult_content_on() {
     assert!(!text.contains(&f.hashes[item::MATCHED]));
     assert!(absent(&ok(&f, &cookie, item::UNMATCHED, ip(1)).await));
     assert!(absent(&ok(&f, &cookie, item::PLAIN, ip(1)).await));
-    // Not adult: an old match isn't shown.
+    // Not adult: an old match isn't shown, also when an always-adult
+    // source found it and you said Not adult.
     assert!(absent(&ok(&f, &cookie, item::NOT_ADULT, ip(1)).await));
+    let body = ok(&f, &cookie, item::ALWAYS_ADULT_NOT_ADULT, ip(1)).await;
+    assert!(absent(&body), "{body}");
     // Found by an always-adult source: it is.
     let s = ok(&f, &cookie, item::ALWAYS_ADULT, ip(1)).await["adult_enrichment"].clone();
     assert_eq!(s["source"]["plugin"], "stashdb", "{s}");
