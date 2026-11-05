@@ -5168,7 +5168,8 @@
    "baseline_end": "2026-11-06T13:12:25Z",
    "root": "/evidence/v051-rc4-main-r5",
    "analyze": "--c-allocator mimalloc",
-   "note": "Container settings to be compared with r4 run.json by the dashboard session (read-only)."
+   "note": "Container settings to be compared with r4 run.json by the dashboard session (read-only).",
+   "settings_check": "2026-11-05T07:08Z read-only r4 vs r5 run.json + docker inspect: container settings identical (user 0:0, ports, env, log opts, no THP env); expected diffs only (commit, root, mounts, collector script, image, identities, times); one other: user_timezone America/Denver (r4) vs UTC (r5), labels only, accepted (\u00a72.35). r4 run.json d074cb56\u2026ae31b, r5 run.json 728a9ee4\u2026f59."
   }
  ],
  "limits": {
