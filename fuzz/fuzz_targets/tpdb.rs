@@ -18,6 +18,42 @@ fn clean(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.chars().any(hidden_char) && s.trim() == s
 }
 
+/// A second, independent reader of the same bytes (`serde_json`), for a
+/// differential check of what the plugin accepted. It refuses two things
+/// ENR-2b's reader accepts in values it reads past: a lone surrogate escape
+/// and a number out of `f64` range; `None` then.
+fn second_reader(body: &[u8]) -> Option<serde_json::Value> {
+    let root = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
+    match serde_json::from_slice(root) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            let msg = e.to_string();
+            let surrogate = root.windows(3).any(|w| {
+                w[0] == b'u'
+                    && matches!(w[1], b'd' | b'D')
+                    && matches!(w[2], b'8'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
+            });
+            assert!(
+                msg.starts_with("number out of range")
+                    || (surrogate
+                        && (msg.starts_with("unexpected end of hex escape")
+                            || msg.starts_with("lone leading surrogate"))),
+                "the plugin accepted what serde_json refuses: {msg}"
+            );
+            None
+        }
+    }
+}
+
+/// An id as `serde_json` reads it: a string, or a number's digits.
+fn id_of(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 fuzz_target!(|data: &[u8]| {
     let (pick, body) = data.split_first().map_or((0, data), |(p, b)| (*p, b));
     let small = Limits {
@@ -68,6 +104,25 @@ fuzz_target!(|data: &[u8]| {
             Lookup::NoMatch | Lookup::Match(_) => {
                 assert_eq!(page.kept, 1);
                 assert!(matches!(page.data, Seen::List | Seen::Object));
+            }
+        }
+        // The flags are true: a second reader sees the same `data`.
+        if let Some(v) = second_reader(body) {
+            let data = &v["data"];
+            let top = match data {
+                serde_json::Value::Array(a) => {
+                    assert_eq!(a.len().min(1), page.kept as usize);
+                    a.first()
+                }
+                serde_json::Value::Object(_) => Some(data),
+                serde_json::Value::Null => {
+                    assert!(v.get("data").is_some(), "a miss needs `data`");
+                    None
+                }
+                other => panic!("accepted a `data` of {other}"),
+            };
+            if let Ok(Lookup::Match(s)) = plugin::parse_answer(body) {
+                assert_eq!(top.and_then(|t| id_of(&t["id"])), Some(s.scene_id));
             }
         }
     }

@@ -1116,3 +1116,27 @@ fn the_rest_is_read_past_the_item_cap() {
     );
     assert_eq!(cut.page.stop, Some(Stop::Bytes));
 }
+
+/// A key written with an escape anywhere in an item (its own keys, `site`'s,
+/// a performer's) spoils the item, so an escaped repeat can't dodge the
+/// first-wins rule (runner, #511 review). `~` stands for a backslash.
+#[test]
+fn an_escaped_key_in_an_item_spoils_it() {
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    for item in [
+        r#"{"id":"good-1","~u0069d":"other"}"#,
+        r#"{"~u0069d":"other","id":"good-1"}"#,
+        r#"{"id":"good-1","unread~u0020key":1}"#,
+        r#"{"id":"good-1","site":{"n~u0061me":"S"}}"#,
+        r#"{"id":"good-1","performers":[{"n~u0061me":"P"}]}"#,
+    ] {
+        let body = esc(&format!(r#"{{"data":[{item}]}}"#));
+        let a = parse(body.as_bytes());
+        assert_eq!((a.page.kept, a.page.skipped.malformed), (0, 1), "{body}");
+    }
+    // An escape inside a value is fine, and the next item starts clean.
+    let body = esc(r#"{"data":[{"~u0069d":"a"},{"id":"b","title":"~u0041"}]}"#);
+    let a = parse(body.as_bytes());
+    assert_eq!(ids(&a), vec!["b"]);
+    assert_eq!(a.found[0].matched.title.as_deref(), Some("A"));
+}

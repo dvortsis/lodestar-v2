@@ -1092,3 +1092,32 @@ fn the_rest_is_read_past_the_item_cap() {
     );
     assert_eq!(at(deep).page.stop, Some(Stop::Depth));
 }
+
+/// A key written with an escape anywhere in a scene (its own keys, its
+/// studio's, a performer's) spoils the scene, so an escaped repeat can't
+/// dodge the repeat rule (runner, #511 review). `~` stands for a backslash.
+#[test]
+fn an_escaped_key_in_a_scene_spoils_it() {
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    let (a, b, s) = (id(1), id(2), id(3));
+    for scene in [
+        format!(r#"{{"id":"{a}","~u0069d":"{b}"}}"#),
+        format!(r#"{{"~u0069d":"{b}","id":"{a}"}}"#),
+        format!(r#"{{"id":"{a}","t~u0069tle":"x"}}"#),
+        format!(r#"{{"id":"{a}","unread~u0020key":1}}"#),
+        format!(r#"{{"id":"{a}","studio":{{"id":"{s}","n~u0061me":"S"}}}}"#),
+        format!(r#"{{"id":"{a}","performers":[{{"p~u0065rformer":{{"name":"P"}}}}]}}"#),
+        format!(r#"{{"id":"{a}","performers":[{{"performer":{{"name":"P","n~u0061me":"Q"}}}}]}}"#),
+    ] {
+        let body = esc(&format!(r#"{{"data":{{"searchScene":[{scene}]}}}}"#));
+        let f = parse(body.as_bytes());
+        assert_eq!((f.page.kept, f.page.skipped.malformed), (0, 1), "{body}");
+    }
+    // An escape inside a value is fine, and the next scene starts clean.
+    let body = esc(&format!(
+        r#"{{"data":{{"searchScene":[{{"id":"{a}","t~u0069tle":1}},{{"id":"{b}","title":"~u0041"}}]}}}}"#
+    ));
+    let f = parse(body.as_bytes());
+    assert_eq!((f.page.kept, f.page.skipped.malformed), (1, 1));
+    assert_eq!(f.scenes[0].matched.title.as_deref(), Some("A"));
+}

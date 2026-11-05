@@ -591,3 +591,19 @@ fn a_repeated_field_in_the_top_item_keeps_the_first() {
         ("good-1", Some("First"))
     );
 }
+
+/// An escaped repeat of an item key, in either order, or an escaped key in
+/// `site` or a performer, is not understood (runner, #511).
+#[test]
+fn an_escaped_key_in_the_top_item_is_an_error() {
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    for item in [
+        r#"{"id":"x","~u0069d":"good-1"}"#,
+        r#"{"~u0069d":"good-1","id":"x"}"#,
+        r#"{"id":"good-1","site":{"name":"S","n~u0061me":"T"}}"#,
+        r#"{"id":"good-1","performers":[{"name":"P","n~u0061me":"Q"}]}"#,
+    ] {
+        let body = esc(&format!(r#"{{"data":[{item}]}}"#));
+        assert!(tpdb::parse_answer(body.as_bytes()).is_err(), "{body}");
+    }
+}

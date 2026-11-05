@@ -161,7 +161,8 @@ pub struct Skipped {
     pub over_cap: u32,
     /// An item that isn't an object, a string with a lone surrogate, a
     /// kept field of the wrong type, an unknown `type`, or a `date` that
-    /// isn't a real `YYYY-MM-DD`.
+    /// isn't a real `YYYY-MM-DD`, or a key written with an escape in the item,
+    /// its `site` or a performer.
     pub malformed: u32,
 }
 
@@ -254,6 +255,7 @@ pub fn parse_each(body: &[u8], limits: &Limits, mut emit: impl FnMut(Found)) -> 
             stop: summary.stop,
             ..Page::default()
         },
+        escaped: false,
     };
     // Every read propagates its `Stop` with `?`: after one, the reader's
     // cursor sits mid-token and nothing more may be read.
@@ -284,6 +286,8 @@ struct Parser<'a, 'l> {
     l: &'l Limits,
     items: usize,
     page: Page,
+    /// A key written with an escape was read in the item being read.
+    escaped: bool,
 }
 
 impl<'a> Walk<'a> for Parser<'a, '_> {
@@ -431,7 +435,15 @@ impl Parser<'_, '_> {
             return Ok(());
         }
         let mut d = Draft::default();
+        self.escaped = false;
         self.object(|p, k| p.field(&mut d, k))?;
+        // A key written with an escape anywhere the item is read (its own
+        // keys, `site`'s or a performer's) spoils it: keys are compared as
+        // written, so an escaped repeat would dodge the first-wins rule, and
+        // a real server never escapes an ASCII key (runner, #511 review).
+        if self.escaped {
+            d.spoil(Bad::Malformed);
+        }
         match d.finish() {
             Ok(f) => {
                 self.page.kept = self.page.kept.saturating_add(1);
@@ -445,6 +457,7 @@ impl Parser<'_, '_> {
     /// A field of an item. The first value of each wins; a repeat is
     /// skipped.
     fn field(&mut self, d: &mut Draft, key: &str) -> R<()> {
+        self.escaped |= key.contains('\\');
         match key {
             "id" if d.id.is_none() => d.id = Some(self.id(d)?),
             // A wrong-typed value, an unknown `type` or a date that isn't
@@ -463,12 +476,15 @@ impl Parser<'_, '_> {
                 // drops only the studio: the shared degrade rule.
                 let (mut name, mut own) = (None, Draft::default());
                 if self.j.peek() == Some(b'{') {
-                    self.object(|p, k| match k {
-                        "name" if name.is_none() => {
-                            name = Some(p.strict(&mut own)?.and_then(|s| clean_name(&s)));
-                            Ok(())
+                    self.object(|p, k| {
+                        p.escaped |= k.contains('\\');
+                        match k {
+                            "name" if name.is_none() => {
+                                name = Some(p.strict(&mut own)?.and_then(|s| clean_name(&s)));
+                                Ok(())
+                            }
+                            _ => p.skip_in(&mut own),
                         }
-                        _ => p.skip_in(&mut own),
                     })?;
                 } else {
                     self.skip_in(&mut own)?;
@@ -515,6 +531,7 @@ impl Parser<'_, '_> {
         // Past the cap, the entry is only read past.
         let keep = list.list.len() < self.l.max_performers;
         self.object(|p, k| {
+            p.escaped |= k.contains('\\');
             match k {
                 "name" if keep && name.is_none() => {
                     name = Some(p.strict(&mut own)?.and_then(|s| clean_name(&s)));

@@ -195,7 +195,8 @@ pub struct Skipped {
     /// or an array read past that's over [`Limits::max_array`].
     pub over_cap: u32,
     /// A kept field of the wrong type, an id that isn't a UUID, a date
-    /// that isn't one, a bad escape, a repeated key, or a scene that isn't
+    /// that isn't one, a bad escape, a repeated key, a key written with an
+    /// escape in the scene, its studio or a performer, or a scene that isn't
     /// an object.
     pub malformed: u32,
 }
@@ -294,6 +295,7 @@ pub fn parse_each(body: &[u8], limits: &Limits, mut emit: impl FnMut(Scene)) -> 
             stop: summary.stop,
             ..Page::default()
         },
+        escaped: false,
     };
     if let Err(stop) = p.document(&mut emit) {
         // A structural fault outranks the item cap: the answer isn't whole.
@@ -371,6 +373,8 @@ struct Parser<'a, 'l> {
     l: &'l Limits,
     items: usize,
     page: Page,
+    /// A key written with an escape was read in the scene being read.
+    escaped: bool,
 }
 
 impl<'a> Walk<'a> for Parser<'a, '_> {
@@ -523,10 +527,18 @@ impl Parser<'_, '_> {
             return self.j.skip().map(drop);
         }
         let mut d = Draft::default();
+        self.escaped = false;
         if self.j.peek() == Some(b'{') {
             self.object(|p, k| p.field(&mut d, k))?;
         } else {
             self.wrong(&mut d)?;
+        }
+        // A key written with an escape anywhere the scene is read (its own
+        // keys, its studio's or a performer's) spoils it: keys are compared
+        // as written, so an escaped repeat would dodge the repeat rule, and
+        // a real server never escapes an ASCII key (runner, #511 review).
+        if self.escaped {
+            d.spoil(Bad::Malformed);
         }
         match d.finish() {
             Ok(scene) => {
@@ -540,6 +552,7 @@ impl Parser<'_, '_> {
 
     /// A field of a scene. Each may appear once.
     fn field(&mut self, d: &mut Draft, key: &str) -> R<()> {
+        self.escaped |= key.contains('\\');
         let mut seen = d.seen;
         let bit = match key {
             "id" => F_ID,
@@ -586,6 +599,7 @@ impl Parser<'_, '_> {
                 let mut e = Draft::default();
                 let (mut id, mut name, mut seen) = (None, None, 0u8);
                 self.object(|p, k| {
+                    p.escaped |= k.contains('\\');
                     match k {
                         "id" if e.once(&mut seen, F_ID) => id = p.id(&mut e)?,
                         "name" if e.once(&mut seen, F_NAME) => name = p.name(&mut e)?,
@@ -642,6 +656,7 @@ impl Parser<'_, '_> {
         }
         let (mut name, mut seen) = (None, 0u8);
         self.object(|p, k| {
+            p.escaped |= k.contains('\\');
             if k != "performer" || !e.once(&mut seen, F_PERFORMER) {
                 return p.skip_in(&mut e);
             }
@@ -650,6 +665,7 @@ impl Parser<'_, '_> {
             }
             let mut inner = 0u8;
             p.object(|p, k| {
+                p.escaped |= k.contains('\\');
                 match k {
                     "name" if e.once(&mut inner, F_NAME) => name = p.name(&mut e)?,
                     _ => p.skip_in(&mut e)?,

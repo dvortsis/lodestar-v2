@@ -728,3 +728,24 @@ fn an_escaped_envelope_key_is_its_name() {
         Lookup::NoMatch
     );
 }
+
+/// An escaped repeat of a scene key, in either order, or an escaped key in
+/// the studio or a performer, is not understood: a reader that unescapes
+/// keys and lets the last win would take another scene (runner, #511).
+#[test]
+fn an_escaped_key_in_the_top_scene_is_an_error() {
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    let a1 = "00000000-0000-4000-8000-0000000000a1";
+    let a2 = "00000000-0000-4000-8000-0000000000a2";
+    let s1 = "00000000-0000-4000-8000-0000000000c1";
+    for scene in [
+        format!(r#"{{"id":"{a1}","~u0069d":"{a2}"}}"#),
+        format!(r#"{{"~u0069d":"{a2}","id":"{a1}"}}"#),
+        format!(r#"{{"id":"{a1}","title":"A","t~u0069tle":"B"}}"#),
+        format!(r#"{{"id":"{a1}","studio":{{"id":"{s1}","name":"S","n~u0061me":"T"}}}}"#),
+        format!(r#"{{"id":"{a1}","performers":[{{"performer":{{"n~u0061me":"P"}}}}]}}"#),
+    ] {
+        let body = esc(&format!(r#"{{"data":{{"searchScene":[{scene}]}}}}"#));
+        assert!(stashdb::parse_answer(body.as_bytes()).is_err(), "{body}");
+    }
+}
