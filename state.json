@@ -2949,7 +2949,7 @@
    "brief": "briefs/X-flake-boot-shell.md"
   },
   "X-followups-1105": {
-   "status": "building",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnB1hAwM3KWzebWAnhU",
    "launched": "2026-11-05T05:38Z",
@@ -3504,7 +3504,8 @@
   "2026-11-05T08:36Z #477 X-flake-search-keyboard merged (ea01beb2; Assist late-mount fix), archived; X-fuzz-1105 launched in slot 1. Slots 10, 11 idle (recorded reason).",
   "2026-11-05T08:53Z #469 RP-UC merged (0531d024), archived. RP-1b (slot 6) and X-filter-perf-1105 (slot 10) launched. Slot 11 idle (recorded).",
   "2026-11-05T09:00Z CI infra: test (ubuntu-latest) out of disk on #481 (also #432, #434 on 2026-11-04). X-ci-disk launched in slot 11. Known unrelated failure under \u00a72.18 until it lands.",
-  "2026-11-05T09:04Z #460 X-log-url-redact-2 merged (40c5c846; monotone by construction), archived; X-log-url-redact-3 launched in slot 2."
+  "2026-11-05T09:04Z #460 X-log-url-redact-2 merged (40c5c846; monotone by construction), archived; X-log-url-redact-3 launched in slot 2.",
+  "2026-11-05T09:10Z #473 X-followups-1105 merged (50aeef0f), archived; slot 9 idle with reason."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5242,7 +5243,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T09:06Z",
+  "updated": "2026-11-05T09:11Z",
   "items": [
    {
     "slot": 1,
@@ -5310,11 +5311,8 @@
    },
    {
     "slot": 9,
-    "slice": "X-followups-1105",
-    "role": "build",
-    "agent": "claude",
-    "doing": "Small review follow-ups: one cache fetch for source names, skipping unused work, a test gap, a log kind",
-    "since": "2026-11-05T05:38Z"
+    "status": "idle",
+    "doing": "Held: X-source-adult-2 waits on RP-3 (#478, api/filters.rs); SRC-11c, SRC-13c, RP-4, ENR-1b wait on #479 (writer.rs, host files); LEGAL-2 and the legal-notice marker wait on #472"
    },
    {
     "slot": 10,
