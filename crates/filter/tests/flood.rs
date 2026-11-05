@@ -114,7 +114,7 @@ fn episode(n: usize) -> String {
     format!("Example Show S01E{:02} {q} HDTV x264-G{n}", n % 90 + 1)
 }
 
-const PUB: Origin<'static> = Origin::Publisher("uploader");
+const PUB: Origin<'static> = Origin::Publisher(1, "uploader");
 
 /// Commits `n` near-duplicates from `origin` in one minute and returns
 /// the last verdict.
@@ -201,7 +201,7 @@ fn what_isnt_a_flood_never_counts() {
     // One title, many publishers and sources.
     for i in 0..300 {
         let p = format!("uploader{i}");
-        let v = commit(&e, &mut map, Origin::Publisher(&p), &episode(0), 1_000);
+        let v = commit(&e, &mut map, Origin::Publisher(1, &p), &episode(0), 1_000);
         assert_eq!(decided(&v), None, "publisher {i}");
         let s = Origin::Source((i % 60) as u8 + 1);
         if i < 60 * (FLAG_AT as usize - 1) {
@@ -318,6 +318,49 @@ fn your_deciding_rule_comes_first_and_the_strongest_pack_action_wins() {
     );
 }
 
+/// The adult reading (an always-adult source's find, or one your Is
+/// adult rule makes adult) is judged with SP-3 too, and the stricter
+/// verdict stands: a `type:adult` rule of yours decides over SP-3's flag.
+#[test]
+fn the_adult_reading_is_judged_too() {
+    let mut e = engine();
+    e.rules.push(UserRule {
+        id: 4,
+        query: parse("type:adult").unwrap(),
+        action: Action::Hide,
+        enabled: true,
+        shadow_until: None,
+        unless: None,
+    });
+    let name = episode(0);
+    let f = files(VIDEO);
+    let class = classify(&name, &f);
+    assert_ne!(class.content_type, lodestar_classify::ContentType::Adult);
+    let facts = Facts {
+        class: &class,
+        size: 700 << 20,
+        piece_len: 1 << 20,
+        flags: 0,
+        discovered_at: 0,
+        now: 0,
+    };
+    let item = Item {
+        hashes: &[H],
+        name: &name,
+        files: &f,
+        content_type: class.content_type,
+    };
+    let judged =
+        |e: &Engine, adult| decided(&e.judge_flooded(&item, &facts, 0, Level::Flag, adult));
+    // As detected: SP-3's flag.
+    assert_eq!(judged(&e, false), Some((SP3, Action::Flag)));
+    // An always-adult source found it: the adult reading's rule wins.
+    assert_eq!(judged(&e, true), Some((RuleRef::User(4), Action::Hide)));
+    // Your Is adult rule makes it adult: the same.
+    e.load_class_rules(&[(1, "example".into(), true)]);
+    assert_eq!(judged(&e, false), Some((RuleRef::User(4), Action::Hide)));
+}
+
 // ---------------------------------------------------------------------
 // The store: overrides and versions.
 
@@ -410,7 +453,7 @@ fn pending_on_an_upgraded_store_applied_on_a_fresh_one() {
 fn origin_of(o: u8) -> Origin<'static> {
     const NAMES: [&str; 8] = ["a", "b", "c", "d", "e", "f", "g", "h"];
     if o < 8 {
-        Origin::Publisher(NAMES[o as usize])
+        Origin::Publisher(1, NAMES[o as usize])
     } else {
         Origin::Source(o)
     }
@@ -472,13 +515,13 @@ fn the_full_cap_holds() {
     let s = sig_of(1);
     for i in 0..3 * flood::MAX_ORIGINS {
         let p = format!("publisher-{i}");
-        map.record(Origin::Publisher(&p), s, i as i64);
+        map.record(Origin::Publisher(1, &p), s, i as i64);
         assert!(map.len() <= flood::MAX_ORIGINS);
     }
     map.check().unwrap();
     assert_eq!(map.len(), flood::MAX_ORIGINS);
     // A huge publisher string costs no more than a short one.
     let long = "p".repeat(1 << 20);
-    map.record(Origin::Publisher(&long), s, 0);
+    map.record(Origin::Publisher(1, &long), s, 0);
     assert_eq!(map.len(), flood::MAX_ORIGINS);
 }

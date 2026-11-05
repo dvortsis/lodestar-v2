@@ -572,8 +572,8 @@ impl Pipeline {
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
-        // The sources SP-3 counts when they name no publisher (RP-4).
-        let flood_counted = writer::flood_counted(
+        // The sources SP-3 counts, with a publisher or without (RP-4).
+        let flood = writer::Flooding::for_sources(
             registered
                 .iter()
                 .zip(&plugins)
@@ -967,10 +967,7 @@ impl Pipeline {
         let writer = writer::Writer {
             store: Some(store),
             adult,
-            flood: writer::Flooding {
-                counted: flood_counted,
-                ..Default::default()
-            },
+            flood,
             enrichers,
             backfill_after: 0,
             backfill_done: false,

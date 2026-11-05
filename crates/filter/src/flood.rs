@@ -21,10 +21,12 @@
 //!   [`SIGNATURES`] or more different titles between each of its own
 //!   names is forgotten each time, at the cost of sending that many
 //!   times more.
-//! - **No text is kept.** A publisher is hashed with keys drawn at
-//!   process start ([`RandomState`]), so a publisher string can't be
-//!   chosen to share another's count, and nothing the map holds grows
-//!   with the length of what a source sends.
+//! - **No text is kept.** A publisher is keyed with the source that
+//!   named it, so one source can't add to another's publisher, and the
+//!   pair is hashed with keys drawn at process start ([`RandomState`]), so
+//!   no string can be chosen to collide with another's. At most
+//!   [`MAX_PUBLISHER_BYTES`] of it are hashed, and nothing the map holds
+//!   grows with the length of what a source sends.
 //! - **Memory only,** rebuilt from nothing at start: a restart forgets at
 //!   most one window (plan §3).
 //!
@@ -50,6 +52,10 @@ pub const DEMOTE_AT: u32 = 100;
 pub const MAX_ORIGINS: usize = 10_000;
 /// Signatures kept per publisher or source.
 pub const SIGNATURES: usize = 16;
+/// Bytes of a publisher hashed: a longer one is the same publisher as
+/// its first [`MAX_PUBLISHER_BYTES`]. Claims are clamped before this
+/// (SRC-2); this keeps the map's cost fixed whatever a caller passes.
+pub const MAX_PUBLISHER_BYTES: usize = 256;
 /// Title tokens a signature reads: a title longer than this is the same
 /// near-duplicate as its first [`MAX_TOKENS`].
 pub const MAX_TOKENS: usize = 32;
@@ -79,8 +85,11 @@ impl Level {
 /// Who a name is counted against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin<'a> {
-    /// The publisher a source's claims name (SRC-2), as stated.
-    Publisher(&'a str),
+    /// The publisher a source's claims name (SRC-2), as stated, with the
+    /// source that named it: the same name from two sources is two
+    /// publishers, so one source can't add to another's count (runner,
+    /// #495).
+    Publisher(u8, &'a str),
     /// A source without a publisher, by its id. The DHT is never one: it
     /// isn't a publisher (Q10), so the writer leaves its finds out.
     Source(u8),
@@ -131,8 +140,15 @@ struct Counts {
 
 impl Counts {
     /// Moves the window on to bucket `at`, forgetting what's left it. A
-    /// clock that went back counts in the newest bucket.
+    /// clock that went back within the window counts in the newest
+    /// bucket; one that went back further starts the window again at
+    /// `at`, so a clock set back days can't hold old names in it.
     fn advance(&mut self, at: i64) {
+        if at < self.newest - BUCKETS as i64 {
+            self.buckets = [0; BUCKETS];
+            self.newest = at;
+            return;
+        }
         if at <= self.newest {
             return;
         }
@@ -235,9 +251,11 @@ impl Flood {
     pub fn key(&self, origin: Origin<'_>) -> u64 {
         let mut h = self.keys.build_hasher();
         match origin {
-            Origin::Publisher(p) => {
+            Origin::Publisher(source, p) => {
                 h.write_u8(0);
-                h.write(p.as_bytes());
+                h.write_u8(source);
+                let b = p.as_bytes();
+                h.write(&b[..b.len().min(MAX_PUBLISHER_BYTES)]);
             }
             Origin::Source(s) => {
                 h.write_u8(1);
@@ -432,7 +450,7 @@ mod tests {
     #[test]
     fn counts_flag_then_demote_within_the_hour() {
         let mut f = Flood::default();
-        let p = Origin::Publisher("uploader");
+        let p = Origin::Publisher(1, "uploader");
         let s = sig("Some Title");
         for n in 1..FLAG_AT {
             assert_eq!(f.record(p, s, 1000 + i64::from(n)), None, "{n}");
@@ -443,7 +461,7 @@ mod tests {
         }
         assert_eq!(f.record(p, s, 1300), Some(Level::Demote));
         // Another publisher, another source, another title: their own.
-        assert_eq!(f.record(Origin::Publisher("other"), s, 1300), None);
+        assert_eq!(f.record(Origin::Publisher(1, "other"), s, 1300), None);
         assert_eq!(f.record(Origin::Source(3), s, 1300), None);
         assert_eq!(f.record(p, sig("Another Title"), 1300), None);
         // An hour on, the window is empty again.
@@ -469,6 +487,29 @@ mod tests {
         assert_eq!(f.count(p, s, t0 + WINDOW_SECS), 10);
         // A clock that goes back counts in the newest bucket.
         assert_eq!(f.record(p, s, t0), Some(Level::Flag));
+        // One set back two days starts the window again.
+        let back = t0 + 30 * 60 - 2 * 86_400;
+        assert_eq!(f.record(p, s, back), None);
+        assert_eq!(f.count(p, s, back), 1);
+    }
+
+    #[test]
+    fn one_publisher_name_on_two_sources_is_two_publishers() {
+        let mut f = Flood::default();
+        let s = sig("Title");
+        for _ in 0..FLAG_AT - 1 {
+            f.record(Origin::Publisher(1, "p"), s, 0);
+        }
+        assert_eq!(f.record(Origin::Publisher(2, "p"), s, 0), None);
+        assert_eq!(f.count(Origin::Publisher(1, "p"), s, 0), FLAG_AT - 1);
+        assert_eq!(f.record(Origin::Publisher(1, "p"), s, 0), Some(Level::Flag));
+        // Past the hashed length, one publisher.
+        let long = "x".repeat(MAX_PUBLISHER_BYTES);
+        let longer = format!("{long}tail");
+        assert_eq!(
+            f.key(Origin::Publisher(1, &long)),
+            f.key(Origin::Publisher(1, &longer))
+        );
     }
 
     #[test]
@@ -476,21 +517,21 @@ mod tests {
         let mut f = Flood::with_cap(3);
         let s = sig("Title");
         for p in ["a", "b", "c"] {
-            f.record(Origin::Publisher(p), s, 0);
+            f.record(Origin::Publisher(1, p), s, 0);
         }
-        f.record(Origin::Publisher("a"), s, 1);
-        f.record(Origin::Publisher("d"), s, 2);
+        f.record(Origin::Publisher(1, "a"), s, 1);
+        f.record(Origin::Publisher(1, "d"), s, 2);
         f.check().unwrap();
         assert_eq!(f.len(), 3);
-        assert_eq!(f.count(Origin::Publisher("b"), s, 2), 0, "evicted");
-        assert_eq!(f.count(Origin::Publisher("a"), s, 2), 2);
-        assert_eq!(f.count(Origin::Publisher("c"), s, 2), 1);
+        assert_eq!(f.count(Origin::Publisher(1, "b"), s, 2), 0, "evicted");
+        assert_eq!(f.count(Origin::Publisher(1, "a"), s, 2), 2);
+        assert_eq!(f.count(Origin::Publisher(1, "c"), s, 2), 1);
     }
 
     #[test]
     fn a_flood_keeps_its_slot_among_many_titles() {
         let mut f = Flood::default();
-        let p = Origin::Publisher("p");
+        let p = Origin::Publisher(1, "p");
         let flood = sig("Same Spam");
         let mut level = None;
         for i in 0..FLAG_AT {
