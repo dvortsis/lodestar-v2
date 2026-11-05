@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T19:22Z",
+  "updated_at": "2026-11-05T19:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3070,7 +3070,8 @@
       "since": "2026-11-05T10:55Z",
       "pr": 495,
       "merge": "85179f32",
-      "done": "2026-11-05T19:21Z"
+      "done": "2026-11-05T19:21Z",
+      "archived": true
     },
     "SRC-11c": {
       "status": "running",
@@ -3238,10 +3239,10 @@
     },
     "RP-5": {
       "status": "running",
-      "session": "session_01MMjhnAx3emoPDFaFTYmbJi",
+      "session": "session_01MMjhnBfKMN7CfvitFcUrq2",
       "since": "2026-11-05T19:21Z",
       "brief": "briefs/RP-5.md",
-      "note": "same session as RP-4"
+      "note": "fresh session (RP-4 session declined a new branch); handoff in brief"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
