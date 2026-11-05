@@ -4672,7 +4672,10 @@
     "owner-flag \u00a72.19 (SRC-13c #493): every External/Restricted/Overlay source acknowledged before this build turns off once at upgrade and asks again (old FNV acks fail closed); consent now covers full address templates, so a path change on the same host asks again. Release-note line requested.",
     "SRC-15b brief: the consent dialog shows GET /sources endpoints exactly as returned (from #493).",
     "owner-flag \u00a72.19 (X-source-adult-2 #494): imports follow SRC-14b, so a disabled or purged always-adult source (Sukebei) contributes no adult bit on import (gap 3 stays as built).",
-    "Follow-up (gap 4, from #494): one shared always-adult manifest list used by both the pipeline and the import CLI, so they stay in step (the CLI lists Sukebei by hand today)."
+    "Follow-up (gap 4, from #494): one shared always-adult manifest list used by both the pipeline and the import CLI, so they stay in step (the CLI lists Sukebei by hand today).",
+    "owner-flag \u00a72.19/\u00a72.26 (RP-4 #495, plan Q10 refinements): importers and torrent-cache backlogs count toward SP-3 only when a publisher is named (replay and lookup traffic are not flooding); one rare writer path (feed key claimed before a restart) costs +16.5% per insert, with the common paths asserted <=5%.",
+    "Follow-up: move RP-4 sp3_writer_cost (ignored test) into the bench/ gate.",
+    "Flake (runner to fix): crates/lodestar update::engine::tests::the_log_over_an_install_names_events_and_never_urls captures another test's address.confirm_needed log line in the full workspace run (seen on RP-4 locally); log capture is not isolated per test."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
