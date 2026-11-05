@@ -582,10 +582,10 @@ impl Verified {
     /// tracker's address holds the uploader's passkey, and its comment
     /// often names the tracker. Otherwise only trackers with no user name,
     /// query or passkey-shaped part are kept, and none on a literal LAN,
-    /// loopback or link-local address: the file is a third party's. A kept
-    /// tracker is the address as checked (the `url` crate's form), never
-    /// the file's own text, which a looser parser could read as another
-    /// host (X-fuzz-cache-1105). Web
+    /// loopback or link-local address or a `localhost` name: the file is a
+    /// third party's (X-claim-trackers). A kept tracker is the address as
+    /// checked (the `url` crate's form), never the file's own text, which a
+    /// looser parser could read as another host (X-fuzz-cache-1105). Web
     /// seeds and `created by` have no claim field yet
     /// (`docs/decisions/2026-11-05-SRC-13.md`).
     pub fn claims(&self) -> Claims {
@@ -633,36 +633,27 @@ impl Verified {
     }
 }
 
-/// `raw` as the address that was checked, when it's a public tracker: no
-/// user name, query, fragment or passkey-shaped path segment, and not on
-/// a literal LAN, loopback or link-local address. The normalised form is
-/// what's kept, so what's stored is what was judged.
+/// `raw` as the address that was checked, when it's a public tracker: on
+/// a public host by the shared guard ([`net::public_tracker_url`]: no
+/// user name, no literal LAN, loopback, link-local or reserved address in
+/// any spelling, no `localhost`), and with no query, fragment or
+/// passkey-shaped path segment. The normalised form is what's kept, so
+/// what's stored is what was judged.
 fn public_tracker(raw: &str) -> Option<String> {
     if raw.len() > MAX_TRACKER_URL {
         return None;
     }
-    let url = url::Url::parse(raw).ok()?;
-    let host = url.host_str()?;
-    // `check_url` takes http(s) only: a UDP tracker's host is checked as
-    // the same host over http.
-    let public = match url.scheme() {
-        "http" | "https" => net::check_url(&url, NetPolicy::notification(false)).is_ok(),
-        "udp" => url::Url::parse(&format!("http://{host}/"))
-            .is_ok_and(|u| net::check_url(&u, NetPolicy::notification(false)).is_ok()),
-        _ => false,
-    };
-    let kept = public
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.query().is_none()
+    let kept = net::public_tracker_url(raw)?;
+    let url = url::Url::parse(&kept).ok()?;
+    let ok = url.query().is_none()
         && url.fragment().is_none()
         && !url
             .path_segments()
             .into_iter()
             .flatten()
             .any(|s| s.len() >= PASSKEY_MIN && s.bytes().all(|b| b.is_ascii_alphanumeric()))
-        && url.as_str().len() <= MAX_TRACKER_URL;
-    kept.then(|| url.into())
+        && kept.len() <= MAX_TRACKER_URL;
+    ok.then_some(kept)
 }
 
 /// Why one cache didn't give a verified file.
@@ -1022,6 +1013,10 @@ mod tests {
             "https://t.example/abcdef0123456789abcd/announce",
             "wss://t.example/announce",
             "https://user@t.example/announce",
+            "http://localhost/announce",
+            "udp://localhost:6969/announce",
+            "http://foo.localhost/",
+            "udp://ⓛocalhost:6969/announce",
         ] {
             assert_eq!(public_tracker(bad), None, "{bad}");
         }

@@ -1261,6 +1261,7 @@ dependencies = [
  "lodestar-cluster",
  "lodestar-dht",
  "lodestar-filter",
+ "lodestar-integrations",
  "lodestar-metainfo",
  "lodestar-release-parser",
  "lodestar-search",

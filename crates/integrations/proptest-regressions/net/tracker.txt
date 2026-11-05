@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e1bc9edf2e9c3c12a5f97da6b27e507a2be3a5011279584e6640cafd7cbe0b77 # shrinks to scheme = "udp", sep = "://", userinfo = "", host = "16777216", port = "", slash = "", path = "?"

@@ -12,12 +12,18 @@
 //!
 //! Every body that `verify_body` accepts under its own v1 (or v2) key is
 //! checked: trackers are the file's own, in the `url` crate's form (the
-//! address as checked), in order, once each, within the caps, and none with a query, fragment, user name or another scheme;
-//! nothing comes from a private dict; the comment is the file's, cut to
+//! address as checked), in order, once each, within the caps, and none
+//! with a query, fragment, user name or another scheme, nor on a literal
+//! address `classify` doesn't call public or a `localhost` name, read
+//! again from the stored text (X-claim-trackers); nothing comes from a
+//! private dict; the comment is the file's, cut to
 //! the cap; and `creation date` is kept only within the believable range.
 #![no_main]
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use libfuzzer_sys::fuzz_target;
+use lodestar_integrations::net::{AddrClass, classify};
 use lodestar_metainfo::{Info, ParseOptions, TorrentFile};
 use lodestar_sources::claims::{self, Claims, Confidence};
 use lodestar_sources_plugins::torrent_cache::{
@@ -70,6 +76,32 @@ fn built(data: &[u8]) -> Vec<u8> {
     }
     v.extend_from_slice(b"ee");
     v
+}
+
+/// The host a client would dial for a kept tracker, read again from the
+/// stored text: `udp`'s opaque host as the same host over `http`.
+fn dialed_host(t: &str) -> String {
+    let u = url::Url::parse(t).expect("a kept tracker parses");
+    let u = if u.scheme() == "udp" {
+        url::Url::parse(&format!("http://{}/", u.host_str().unwrap_or_default()))
+            .expect("a kept udp tracker's host parses over http")
+    } else {
+        u
+    };
+    u.host_str().expect("a kept tracker has a host").to_owned()
+}
+
+/// Whether `host` reaches the user's own network: a literal address that
+/// `classify` doesn't call public, or a `localhost` name.
+fn non_public(host: &str) -> bool {
+    let literal = match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        Some(v6) => v6.parse::<Ipv6Addr>().ok().map(IpAddr::V6),
+        None => host.parse::<Ipv4Addr>().ok().map(IpAddr::V4),
+    };
+    let name = host.trim_end_matches('.');
+    literal.is_some_and(|ip| classify(ip) != AddrClass::Public)
+        || name == "localhost"
+        || name.ends_with(".localhost")
 }
 
 fn has_scheme(t: &str) -> bool {
@@ -133,13 +165,23 @@ fuzz_target!(|data: &[u8]| {
 
     // The file's own trackers, in its order, once each, within the caps.
     assert!(c.trackers.len() <= claims::MAX_TRACKERS);
-    // Kept in the `url` crate's form, the address as it was checked.
+    // Kept in the `url` crate's form, the address as it was checked; a
+    // `udp` host as it reads over `http` (X-claim-trackers).
     let listed: Vec<String> = t
         .announce
         .iter()
         .flatten()
         .filter_map(|l| url::Url::parse(l).ok())
-        .map(String::from)
+        .map(|mut u| {
+            if u.scheme() == "udp"
+                && let Some(h) = u.host_str().map(str::to_owned)
+                && let Ok(j) = url::Url::parse(&format!("http://{h}/"))
+                && let Some(jh) = j.host_str()
+            {
+                let _ = u.set_host(Some(jh));
+            }
+            String::from(u)
+        })
         .collect();
     let mut at = 0;
     for (i, tr) in c.trackers.iter().enumerate() {
@@ -159,6 +201,26 @@ fuzz_target!(|data: &[u8]| {
         assert!(
             !authority.contains('@'),
             "a tracker with a user name was kept"
+        );
+        let host = dialed_host(tr);
+        assert!(
+            !non_public(&host),
+            "a tracker on a non-public host was kept"
+        );
+        assert!(
+            host.starts_with('[')
+                || host.bytes().all(|b| b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || b == b'-'
+                    || b == b'.'),
+            "a tracker host with characters no hostname holds was kept"
+        );
+        assert_eq!(
+            url::Url::parse(tr)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned)),
+            Some(host),
+            "a udp tracker was kept with a host other than the one judged"
         );
     }
 
