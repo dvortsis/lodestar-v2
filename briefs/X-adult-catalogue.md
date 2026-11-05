@@ -1,5 +1,5 @@
 # X-adult-catalogue: one compiled-in manifest catalogue, so the import CLI can never miss an always-adult source
-**Model:** Opus (content safety). A fresh Opus reviewer follows. Runner brief, 2026-11-05T18:55Z.
+**Model:** Opus (content safety). A fresh Opus reviewer follows. Runner brief, 2026-11-05T18:50Z.
 
 ## Why
 This is #494's follow-up for "gap 4". Today `lodestar import` builds its always-adult mask from a hand-written list: `crates/lodestar/src/cli/import.rs:806-825` lists `nyaa::Sukebei` alone. The pipeline builds its mask from the plugins that are actually registered (`crates/pipeline/src/source_adult.rs`, `AdultSources::of`). So a second always-adult plugin added later would be masked in the pipeline but not on import, and its torrents would import as non-adult. Separately, the two "no manifest is both Enrichment and always_adult" tests (in `crates/sources-plugins/tests/tpdb.rs`, and `stashdb.rs` once #506 merges) find manifests by scanning source text, which is fragile.
