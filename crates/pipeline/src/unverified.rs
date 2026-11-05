@@ -600,6 +600,15 @@ pub fn ingest(
         if c.adult.is_some() && !ctx.enrichers.has(d.source) {
             c.adult = None;
             if c == Claims::default() {
+                // Nothing else was claimed. An always-adult source has
+                // still found the torrent stored under the key: its mask
+                // applies, as for a bare sighting.
+                if ctx.adult.has(d.source)
+                    && let Some(id) = store.find(&d.found.key)?
+                    && !out.adult.contains(&id)
+                {
+                    out.adult.push(id);
+                }
                 UnverifiedStats::add(&stats.refused, 1);
                 continue;
             }
@@ -720,11 +729,6 @@ pub fn ingest(
                 if !out.matched.contains(&id) {
                     out.matched.push(id);
                 }
-                // An enrichment source that's also always adult keeps its
-                // mask: the writer classifies the torrent as adult.
-                if ctx.adult.has(d.source) && !out.adult.contains(&id) {
-                    out.adult.push(id);
-                }
                 &stats.on_torrent
             }
             // Held meanwhile, or no longer stored.
@@ -744,9 +748,16 @@ pub fn ingest(
             Some(filter) => match crate::enrich::apply_matches(store, &ids, filter, ctx.adult, now)
             {
                 Ok(m) => !m.deferred.is_empty(),
-                Err(_) => store.mark_unenriched(&ids).is_ok(),
+                // Marked if it can be; the flag starts a pass either way.
+                Err(_) => {
+                    let _ = store.mark_unenriched(&ids);
+                    true
+                }
             },
-            None => store.mark_unenriched(&ids).is_ok(),
+            None => {
+                let _ = store.mark_unenriched(&ids);
+                true
+            }
         };
         if deferred && let Some(flag) = ctx.reenrich {
             flag.store(true, Ordering::Release);

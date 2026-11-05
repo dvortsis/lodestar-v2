@@ -849,6 +849,7 @@ impl Pipeline {
                 stats: intake_stats.clone(),
                 filter: config.filter.clone(),
                 held: held.clone(),
+                enrichers,
             },
             intake_shutdown,
         ));
@@ -1322,6 +1323,8 @@ struct Intake {
     stats: Arc<IntakeStats>,
     filter: Arc<Handle>,
     held: Arc<HeldSet>,
+    /// The adult-enrichment sources: their matches aren't harvested keys.
+    enrichers: adult_enrich::EnrichSources,
 }
 
 /// The worker's intake: known keys go to the writer as rediscoveries; new
@@ -1345,7 +1348,7 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             io.stats.received.fetch_add(1, Ordering::Relaxed);
             // An enrichment match (ENR-1b) is an answer about a stored
             // torrent, not a key the source harvested.
-            if !adult_enrich::is_match(&d) {
+            if !adult_enrich::is_match(&d, io.enrichers) {
                 io.rollups.add(
                     d.at,
                     metric::HARVESTED,

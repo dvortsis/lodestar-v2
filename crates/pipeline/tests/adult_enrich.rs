@@ -1259,6 +1259,15 @@ fn an_always_adult_source_cannot_skip_its_mask_with_a_section() {
         "no section kept"
     );
 
+    // A section alone from the always-adult source: nothing is stored, but
+    // its mask still applies to the torrent it found.
+    let (other, other_key) = put(&mut s, "Garden Tour 2023", dht, 0, false);
+    let d = matched(sukebei, other_key, section(Some(Kind2::Scene), "Garden"));
+    let done = ingest_with(&mut s, &engine, ctx, &d);
+    assert!(done.matched.is_empty());
+    assert_eq!(done.adult, vec![other], "the mask applies");
+    assert!(s.torrent_claims(other).unwrap().is_empty());
+
     // A section alone, from a source that isn't an enrichment source,
     // stores nothing.
     let d = matched(dht, key, section(Some(Kind2::Scene), "Garden"));
@@ -1441,4 +1450,120 @@ fn a_rewritten_match_is_marked_and_applied_again() {
     };
     lodestar_pipeline::enrich::enrich_stored_with(&mut s, 0, 100, &backfill).unwrap();
     assert_eq!(kind(&s, with), Some(AdultKind::Vr));
+}
+
+/// A source the test drives through a channel, with its own manifest.
+struct Scripted {
+    manifest: Manifest,
+    rx: Mutex<Option<mpsc::Receiver<lodestar_sources::Found>>>,
+}
+
+impl SourcePlugin for Scripted {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        let mut rx = self.rx.lock().unwrap().take().expect("run once");
+        Box::pin(async move {
+            loop {
+                tokio::select! {
+                    _ = ctx.shutdown.requested() => return Ok(()),
+                    Some(f) = rx.recv() => {
+                        ctx.emitter.emit(f).await.map_err(|_| PluginError("closed".into()))?;
+                    }
+                }
+            }
+        })
+    }
+}
+
+fn scripted(
+    id: &'static str,
+    kinds: &'static [Kind],
+) -> (Arc<Scripted>, mpsc::Sender<lodestar_sources::Found>) {
+    let (tx, rx) = mpsc::channel(8);
+    let manifest = Manifest {
+        id,
+        name: id,
+        kinds,
+        consent: Consent::None,
+        enabled_by_default: true,
+        ..MANIFEST.clone()
+    };
+    let s = Scripted {
+        manifest,
+        rx: Mutex::new(Some(rx)),
+    };
+    (Arc::new(s), tx)
+}
+
+/// Intake counts a feed's discovery as harvested, never an enrichment
+/// source's match on a stored torrent (ENR-1b), and the match is still
+/// stored through the writer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_match_is_not_counted_as_harvested() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let key = {
+        let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+        let dht = s.register_source("dht", "1", 0).unwrap();
+        put(&mut s, "Garden Scene", dht, 0, true).1
+    };
+    let (enricher, enrich_tx) = scripted("test-enricher", &[Kind::Enrichment]);
+    let (feed, feed_tx) = scripted("test-feed", &[Kind::Discovery]);
+    let config = lodestar_pipeline::PipelineConfig {
+        flush_every: Duration::from_millis(100),
+        filter: stand_in(),
+        ..lodestar_pipeline::PipelineConfig::default()
+    };
+    let pipeline = lodestar_pipeline::Pipeline::start(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![enricher, feed],
+    )
+    .await
+    .unwrap();
+    let claims = lodestar_sources::Claims {
+        adult: Some(section(Some(Kind2::Scene), "Garden")),
+        ..Default::default()
+    };
+    enrich_tx
+        .send(lodestar_sources::Found::key(key, STRATEGY).with_claims(claims))
+        .await
+        .unwrap();
+    let named = lodestar_sources::Claims {
+        name: Some("Other Release 2024".into()),
+        ..Default::default()
+    };
+    let other = InfoHash([7; 20]);
+    feed_tx
+        .send(lodestar_sources::Found::key(other, 0).with_claims(named))
+        .await
+        .unwrap();
+    let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let harvested = |r: &Store| -> i64 {
+        r.rollup(lodestar_pipeline::metric::HARVESTED, 0, i64::MAX)
+            .unwrap()
+            .iter()
+            .map(|c| c.value)
+            .sum()
+    };
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    loop {
+        let id = reader.find(&key).unwrap().unwrap();
+        let stored = !reader.torrent_claims(id).unwrap().is_empty()
+            && reader.unverified(Net::Bt, &other.0).unwrap().is_some()
+            && harvested(&reader) >= 1;
+        if stored {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for both"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let store = pipeline.shutdown().await.unwrap();
+    assert_eq!(harvested(&store), 1, "only the feed's discovery");
 }

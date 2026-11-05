@@ -59,11 +59,14 @@ use crate::source_adult::AdultSources;
 /// DHT's and verification's (`unverified::VERIFY_STRATEGY`).
 pub const STRATEGY: u8 = 202;
 
-/// Whether `d` is an enrichment match the runtime emitted: its strategy
-/// code and an adult-enrichment section. Intake doesn't count it as
-/// harvested (ENR-1b).
-pub fn is_match(d: &lodestar_sources::Discovery) -> bool {
-    d.found.strategy == STRATEGY && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
+/// Whether `d` is an enrichment match the runtime emitted: from an
+/// enrichment source, with its strategy code and an adult-enrichment
+/// section, the same test the writer's gate makes. Intake doesn't count it
+/// as harvested (ENR-1b); another source's discovery always is.
+pub fn is_match(d: &lodestar_sources::Discovery, enrichers: EnrichSources) -> bool {
+    enrichers.has(d.source)
+        && d.found.strategy == STRATEGY
+        && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
 }
 
 /// User-interest lookups waiting at most; more are dropped. Each takes a
@@ -997,12 +1000,17 @@ mod tests {
             name: Some("n".into()),
             ..Claims::default()
         };
-        assert!(is_match(&d(
-            Found::key(key, STRATEGY).with_claims(section.clone())
-        )));
-        assert!(!is_match(&d(Found::key(key, STRATEGY).with_claims(named))));
-        assert!(!is_match(&d(Found::key(key, STRATEGY))));
-        assert!(!is_match(&d(Found::key(key, 0).with_claims(section))));
+        let enr = EnrichSources(1 << source.get());
+        let m = d(Found::key(key, STRATEGY).with_claims(section.clone()));
+        assert!(is_match(&m, enr));
+        // Another source using the same strategy code is still harvested.
+        assert!(!is_match(&m, EnrichSources::default()));
+        assert!(!is_match(
+            &d(Found::key(key, STRATEGY).with_claims(named)),
+            enr
+        ));
+        assert!(!is_match(&d(Found::key(key, STRATEGY)), enr));
+        assert!(!is_match(&d(Found::key(key, 0).with_claims(section)), enr));
     }
 
     #[test]
