@@ -45,6 +45,16 @@ fn until<T>(what: &str, mut ok: impl FnMut() -> Option<T>) -> T {
     }
 }
 
+/// The session cookie a response sets.
+fn cookie(response: &str) -> String {
+    response
+        .lines()
+        .find_map(|l| l.strip_prefix("set-cookie: "))
+        .and_then(|c| c.split(';').next())
+        .expect("session cookie")
+        .to_string()
+}
+
 struct Server {
     child: Child,
     log: Arc<Mutex<String>>,
@@ -132,6 +142,33 @@ impl Server {
         })
     }
 
+    /// Starts and stops it without setting it up; returns its log, after
+    /// checking the DHT never started (a node that ran logs
+    /// [`DHT_STARTED`] when it binds).
+    fn run_unset(dir: &Path) -> String {
+        let server = Server::start(dir);
+        let metrics = server.metrics();
+        assert!(
+            !metrics.contains("lodestar_dht_packets_out_total"),
+            "{metrics}"
+        );
+        let log = server.stop();
+        assert!(!log.contains(DHT_STARTED), "{log}");
+        log
+    }
+
+    /// `POST /login` with the password `setup` chose; returns the cookie.
+    fn login(&self) -> String {
+        let r = request(
+            self.port,
+            "POST /api/v1/login HTTP/1.0\r\nContent-Type: application/json",
+            r#"{"password":"correct horse battery"}"#,
+        )
+        .unwrap();
+        assert!(r.starts_with("HTTP/1.0 200"), "{r}");
+        cookie(&r)
+    }
+
     /// `POST /setup`; returns the session cookie.
     fn setup(&self) -> String {
         let token = self.token();
@@ -145,11 +182,7 @@ impl Server {
         )
         .unwrap();
         assert!(r.starts_with("HTTP/1.0 200"), "{r}");
-        r.lines()
-            .find_map(|l| l.strip_prefix("set-cookie: "))
-            .and_then(|c| c.split(';').next())
-            .expect("session cookie")
-            .to_string()
+        cookie(&r)
     }
 
     fn post(&self, path: &str, cookie: &str) -> String {
@@ -178,22 +211,14 @@ impl Server {
 fn the_crawler_waits_for_setup_across_a_restart_then_starts() {
     let dir = tempfile::tempdir().unwrap();
 
-    // A fresh data directory: served, then stopped, the DHT never ran.
-    // Its state file is written only by a node that ran.
-    let server = Server::start(dir.path());
-    let metrics = server.metrics();
-    assert!(
-        !metrics.contains("lodestar_dht_packets_out_total"),
-        "{metrics}"
-    );
-    let log = server.stop();
-    assert!(!log.contains(DHT_STARTED), "{log}");
+    // A fresh data directory, served and stopped twice without setup: the
+    // DHT never ran (its state file is written only by a node that ran).
+    Server::run_unset(dir.path());
+    Server::run_unset(dir.path());
     assert!(!dir.path().join("dht-state.bin").exists());
 
-    // Restarted before setup: still held.
-    let server = Server::start(dir.path());
-    assert!(!server.metrics().contains("lodestar_dht_packets_out_total"));
     // Setup releases it: the DHT starts and the crawler runs.
+    let server = Server::start(dir.path());
     let cookie = server.setup();
     until("the DHT to start after setup", || {
         server.log().contains(DHT_STARTED).then_some(())
@@ -212,6 +237,12 @@ fn the_crawler_waits_for_setup_across_a_restart_then_starts() {
     until("the DHT to start", || {
         server.log().contains(DHT_STARTED).then_some(())
     });
+    let cookie = server.login();
+    let status = server.status(&cookie);
+    assert!(
+        status.contains(r#""crawler":{"paused":false,"reason":null}"#),
+        "{status}"
+    );
     let log = server.stop();
     assert!(!log.contains("setup token "), "{log}");
 }
@@ -226,10 +257,11 @@ fn a_pause_the_user_chose_stays_after_setup() {
     assert!(paused.starts_with("HTTP/1.0 200"), "{paused}");
     server.stop();
     // …then the password reset (`auth.json` removed): held for setup
-    // again, and after it the user's pause still stands.
+    // again (a paused DHT still binds, so a node that ran would show)…
     std::fs::remove_file(dir.path().join("auth.json")).unwrap();
+    Server::run_unset(dir.path());
+    // …and after setup the user's pause still stands.
     let server = Server::start(dir.path());
-    assert!(!server.log().contains(DHT_STARTED));
     let cookie = server.setup();
     until("the DHT to start after setup", || {
         server.log().contains(DHT_STARTED).then_some(())

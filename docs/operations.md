@@ -115,9 +115,10 @@ Nothing is published yet.
 4. The token is generated fresh at each start while no admin exists, and is
    not stored. Once the admin password is set, no token is printed or needed.
 
-The crawler starts right away. Early on the library fills slowly because the
-routing table is still warming up; the status page and `/metrics` show
-progress.
+The crawler doesn't connect to the network until setup is done: it waits for
+the admin password and starts on its own once it's set. Early on the library
+fills slowly because the routing table is still warming up; the status page
+and `/metrics` show progress.
 
 ## 4. Networking
 

@@ -1022,6 +1022,38 @@ mod tests {
     /// `notice_version`) shows it once, and accepting records it; another
     /// change to `auth.json` keeps it.
     #[test]
+    fn set_up_turns_true_only_when_setup_saves_the_password() {
+        // LEGAL-2's hold follows this signal.
+        let (dir, auth) = fresh();
+        let path = dir.path().join("auth.json");
+        let set_up = auth.watch_set_up();
+        assert!(!*set_up.borrow(), "no password: not set up");
+        let token = auth.setup_token().unwrap();
+        let v = crate::legal::NOTICE_VERSION;
+        for refused in [
+            auth.setup_with_notice(IP, "WRONG", "correct horse battery", Some(v)),
+            auth.setup_with_notice(IP, &token, "correct horse battery", Some(v - 1)),
+            auth.setup_with_notice(IP, &token, "short", Some(v)),
+        ] {
+            assert!(refused.is_err());
+            assert!(!*set_up.borrow(), "a refused setup releases nothing");
+        }
+        assert!(!set_up.has_changed().unwrap());
+        auth.setup(IP, &token, "correct horse battery").unwrap();
+        assert!(*set_up.borrow());
+        assert!(set_up.has_changed().unwrap(), "watchers are woken");
+
+        // A restart reads it from the file, with or without the
+        // notice version an install from before LEGAL-1 lacks.
+        assert!(*Auth::load(&path, false).unwrap().watch_set_up().borrow());
+        let mut file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        file.as_object_mut().unwrap().remove("notice_version");
+        std::fs::write(&path, file.to_string()).unwrap();
+        assert!(*Auth::load(&path, false).unwrap().watch_set_up().borrow());
+    }
+
+    #[test]
     fn an_older_install_accepts_the_notice_once() {
         let (dir, auth) = fresh();
         let path = dir.path().join("auth.json");
