@@ -1005,13 +1005,6 @@ impl SearchIndex {
     /// before any producer) would fail it and look like "no match", so
     /// the caller must not narrow by it and verifies every candidate
     /// instead. Every prefilter on a tracked field goes through here.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "M7's regex and grouping prefilters are its callers"
-        )
-    )]
     pub(crate) fn prefilter(
         &self,
         field: &str,
@@ -1253,9 +1246,10 @@ impl SearchIndex {
     /// alone. `None` when this index can't answer it: the field is
     /// missing (an older index serving during the rebuild) or not
     /// complete (a backfill of it running), so the caller searches
-    /// without it rather than read an unpopulated field as "none". A
-    /// search without a lease reads the latest snapshot, which can only be
-    /// newer than the one this decides by.
+    /// without it rather than read an unpopulated field as "none".
+    /// Decided by [`SearchIndex::prefilter`] on the current snapshot: a
+    /// search without a lease reads that one or a newer one, and a field
+    /// complete in a snapshot stays complete in every later one.
     pub fn query_title_identity(
         &self,
         node: &Node,
@@ -1264,23 +1258,24 @@ impl SearchIndex {
         utc_offset: i32,
         cancel: &crate::CancelToken,
     ) -> Result<Option<Compiled>> {
-        if self.fields.title_identity == compile::ABSENT
-            || self.availability("title_identity") != Availability::Ready
-        {
+        if self.fields.title_identity == compile::ABSENT {
             return Ok(None);
         }
+        let term: Box<dyn Query> = Box::new(tantivy::query::ConstScoreQuery::new(
+            Box::new(TermQuery::new(
+                Term::from_field_u64(self.fields.title_identity, key),
+                IndexRecordOption::Basic,
+            )),
+            0.0,
+        ));
+        let Some(term) = self.prefilter("title_identity", &self.searcher(), term) else {
+            return Ok(None);
+        };
         let mut compiled = self.compile_cancelled(node, now, utc_offset, false, cancel)?;
-        let term = TermQuery::new(
-            Term::from_field_u64(self.fields.title_identity, key),
-            IndexRecordOption::Basic,
-        );
         let query = std::mem::replace(&mut compiled.query, Box::new(tantivy::query::EmptyQuery));
         compiled.query = Box::new(BooleanQuery::new(vec![
             (Occur::Must, query),
-            (
-                Occur::Must,
-                Box::new(tantivy::query::ConstScoreQuery::new(Box::new(term), 0.0)),
-            ),
+            (Occur::Must, term),
         ]));
         compiled.key.push_str(&format!("@identity{key}"));
         Ok(Some(compiled))
