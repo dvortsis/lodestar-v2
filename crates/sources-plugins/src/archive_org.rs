@@ -111,6 +111,7 @@ const MANIFEST: Manifest = Manifest {
     consent: Consent::None,
     default_priority: Priority::Normal,
     enabled_by_default: false,
+    always_adult: false,
 };
 
 /// No settings: the endpoint is fixed.

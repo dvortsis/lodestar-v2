@@ -98,6 +98,7 @@ const MANIFEST: Manifest = Manifest {
     consent: Consent::Account,
     default_priority: Priority::Normal,
     enabled_by_default: false,
+    always_adult: false,
 };
 
 /// The settings form (§10.10). `api_key` is write-only: the host stores it
