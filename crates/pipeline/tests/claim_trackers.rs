@@ -36,6 +36,9 @@ fn claimed_trackers_that_reach_the_users_network_are_dropped() {
         "http://nas.local/announce",
         "https://user@t.example/announce",
         "wss://t.example/announce",
+        "udp://t.example:6969?@192.168.1.1:80/announce",
+        "udp://t.example:6969?@127.0.0.1:6969",
+        "udp://t.example:6969#@127.0.0.1:6969",
     ] {
         assert!(!tracker_url(bad), "{bad}");
     }

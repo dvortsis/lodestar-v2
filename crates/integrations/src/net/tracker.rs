@@ -29,6 +29,10 @@ use super::{NetPolicy, check_url};
 /// over `http`, which is how a client resolving it would read it; a host
 /// that doesn't parse that way is refused.
 ///
+/// The kept form has no `@` anywhere, and nothing but the host and port
+/// between `://` and the first `/`, so a reader that splits the text
+/// naively finds the same host the `url` crate does.
+///
 /// The result is a fixed point: `public_tracker_url(&kept) == Some(kept)`.
 /// Length and other caps are the caller's.
 pub fn public_tracker_url(raw: &str) -> Option<String> {
@@ -50,8 +54,15 @@ pub fn public_tracker_url(raw: &str) -> Option<String> {
     }
     let kept = String::from(url);
     // The serialisation must read back as itself, or what's stored isn't
-    // what was judged.
-    (Url::parse(&kept).ok()?.as_str() == kept).then_some(kept)
+    // what was judged. And no looser reader may find another host in it:
+    // a `udp` URL with no path keeps a `?` or `#` straight after the
+    // authority (`udp://t.example:6969?@192.168.1.1:80/`), which a parser
+    // that ends the authority at the first `/` reads as user info before
+    // a LAN host. So no `@` anywhere, and the authority ends at a `/` or
+    // the end of the text.
+    let authority = kept.split_once("://")?.1.split('/').next()?;
+    let unambiguous = !kept.contains('@') && !authority.contains(['?', '#']);
+    (unambiguous && Url::parse(&kept).ok()?.as_str() == kept).then_some(kept)
 }
 
 /// Names that resolve inside the user's network, judged after the `url`
@@ -144,12 +155,6 @@ mod tests {
                 "http://t.local.example/announce",
             ),
             ("http://t.example./announce", "http://t.example./announce"),
-            // A backslash is a `/` in a special scheme, so the `@` is in
-            // the path; the stored form puts that beyond any reading.
-            (
-                "http://t.example\\@127.0.0.1/announce",
-                "http://t.example/@127.0.0.1/announce",
-            ),
             // url 2.5.8 leaves `^` unencoded in a path.
             ("http:1.1/announce^x", "http://1.0.0.1/announce^x"),
         ] {
@@ -237,6 +242,7 @@ mod tests {
             "udp://user@t.example:6969/announce",
             "http://t.example%40127.0.0.1/announce",
             "http://t.example@127.0.0.1/announce",
+            "http://t.example\\@127.0.0.1/announce",
             "udp://t.example%40127.0.0.1:6969/announce",
             // Backslash, tab and newline: stripped or read as `/` by the
             // parser, so the host judged is the one the parser sees.
@@ -245,6 +251,15 @@ mod tests {
             "http://127.0.\n0.1/announce",
             "http://local\thost/announce",
             "udp://127.0.0.1\\x:6969/announce",
+            // A looser parser's reading: `udp` keeps a `?` or `#` right
+            // after the authority, and `@` after it reads as user info.
+            "udp://t.example:6969?@192.168.1.1:80/announce",
+            "udp://t.example:6969?@127.0.0.1:6969",
+            "udp://t.example:6969#@127.0.0.1:6969",
+            "udp://t.example:6969?x",
+            "udp://t.example#x",
+            "http://t.example/announce?u=@127.0.0.1",
+            "http://t.example/@127.0.0.1/announce",
             // Other schemes and no host.
             "wss://t.example/announce",
             "ws://t.example/announce",
@@ -275,7 +290,40 @@ mod tests {
             .and_then(|h| h.strip_suffix(']'))
             .map(|h| h.parse::<Ipv6Addr>().ok().map(IpAddr::V6))
             .unwrap_or_else(|| host.parse::<Ipv4Addr>().ok().map(IpAddr::V4));
-        lit.is_some_and(|ip| classify(ip) != AddrClass::Public) || local_name(host)
+        let name = host.trim_end_matches('.');
+        let last = name.rsplit('.').next().unwrap_or_default();
+        let lan = !name.contains('.')
+            || last.bytes().all(|b| b.is_ascii_digit())
+            || last.starts_with("0x")
+            || [
+                "localhost",
+                "localdomain",
+                "localdomain4",
+                "localdomain6",
+                "local",
+                "home.arpa",
+                "internal",
+            ]
+            .iter()
+            .any(|d| name == *d || name.ends_with(&format!(".{d}")));
+        match lit {
+            Some(ip) => classify(ip) != AddrClass::Public,
+            None => lan,
+        }
+    }
+
+    /// The host as a naive reader finds it: the authority runs from `://`
+    /// to the first `/`, the host follows its last `@` and precedes the
+    /// port.
+    fn naive_host(kept: &str) -> &str {
+        let authority = kept.split_once("://").map_or("", |(_, r)| r);
+        let authority = authority.split('/').next().unwrap_or_default();
+        let hostport = authority.rsplit('@').next().unwrap_or_default();
+        if hostport.starts_with('[') {
+            hostport.split_inclusive(']').next().unwrap_or_default()
+        } else {
+            hostport.rsplit_once(':').map_or(hostport, |(h, _)| h)
+        }
     }
 
     fn check(raw: &str) {
@@ -284,6 +332,11 @@ mod tests {
             let host = dialed_host(&kept).expect("a kept tracker has a host");
             assert!(!blocked(&host), "{raw:?} kept as {kept:?}");
             let u = Url::parse(&kept).unwrap();
+            assert_eq!(
+                naive_host(&kept),
+                u.host_str().unwrap(),
+                "{raw:?} kept as {kept:?}"
+            );
             assert!(u.username().is_empty() && u.password().is_none());
             assert!(matches!(u.scheme(), "http" | "https" | "udp"));
         }
@@ -327,9 +380,10 @@ mod tests {
             userinfo in prop_oneof![Just(""), Just("u@"), Just("u:p@"), Just("%40")],
             host in host(),
             port in prop_oneof![Just(String::new()), (0u32..70_000).prop_map(|p| format!(":{p}"))],
+            slash in prop_oneof![Just("/"), Just("")],
             path in "[a-z/^\\\\%@?#\t]{0,12}",
         ) {
-            check(&format!("{scheme}{sep}{userinfo}{host}{port}/{path}"));
+            check(&format!("{scheme}{sep}{userinfo}{host}{port}{slash}{path}"));
         }
     }
 }
