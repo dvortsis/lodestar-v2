@@ -2907,7 +2907,7 @@
    "brief": "briefs/SRC-10e.md"
   },
   "RP-2": {
-   "status": "building",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnAG2MXTt9za8igtCuD",
    "launched": "2026-11-05T03:59Z",
@@ -2982,6 +2982,13 @@
    "session": "session_01MMjhnBwEorNQE51FrPWpnt",
    "launched": "2026-11-05T06:29Z",
    "brief": "briefs/ENR-1.md"
+  },
+  "RP-3": {
+   "status": "building",
+   "model": "opus",
+   "session": "session_01MMjhnArzYGMNe1kwRV3kqG",
+   "launched": "2026-11-05T06:51Z",
+   "brief": "briefs/RP-3.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3447,7 +3454,8 @@
   "2026-11-05T05:47Z #466 X-flake-boot-shell merged (5fa277c7; boot-shell e2e flake fixed with unrouteAll ignoreErrors in afterEach); archived. Cite #466 if a PR still shows that flake.",
   "2026-11-05T06:22Z runner (\u00a72.33): X-log-url-redact-2 (#460) restructured to be monotone by construction. main scrubber is stage 1 unchanged; every new rule only adds redactions after it; the two over-redaction narrowings are dropped (runner withdraws its \u00a72.26 ask; possible X-log-url-redact-3 with its own proof). Reason: three fuzz rounds kept finding regressions where new heuristics changed main context.",
   "2026-11-05T06:29Z #467 X-source-adult merged (b9c2057a), archived. SRC-13b (slot 5) and ENR-1 (slot 12) launched. Runner PR #471 opened (plan entries, deps). RP-4 and SRC-13b both need writer.rs: RP-4 waits for SRC-13b (it carries a content-safety crash-window fix).",
-  "2026-11-05T06:47Z soak r5 started on rc.4 (dashboard relay). Baseline ends 2026-11-06T13:12:25Z. No verdict before the analyzer reports the window complete."
+  "2026-11-05T06:47Z soak r5 started on rc.4 (dashboard relay). Baseline ends 2026-11-06T13:12:25Z. No verdict before the analyzer reports the window complete.",
+  "2026-11-05T06:48Z #465 RP-2 merged (605228f9), archived; RP-3 launched in slot 8 (small PackSwitch overlap with RP-UC in api/filters.rs; RP-UC merges first). RP-4 still waits on SRC-13b (writer.rs). #469 RP-UC review MERGE; one push asked (main merge, lazy description, telesync .TS fix, Linux ISO guard or note, hook doc, precision items, weight note)."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5169,7 +5177,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T06:33Z",
+  "updated": "2026-11-05T06:52Z",
   "items": [
    {
     "slot": 1,
@@ -5226,11 +5234,11 @@
    },
    {
     "slot": 8,
-    "slice": "RP-2",
+    "slice": "RP-3",
     "role": "build",
     "agent": "claude",
-    "doing": "Rule-pack overrides: change a pack rule's action or add an exception; weakening needs the password and pauses when the rule changes.",
-    "since": "2026-11-05T03:59Z"
+    "doing": "Rule packs: the API to see pack versions and accept new ones (weakening needs your password)",
+    "since": "2026-11-05T06:51Z"
    },
    {
     "slot": 9,
