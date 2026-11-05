@@ -106,35 +106,27 @@ docker run -d --name lodestar-soak-collector --restart no \
   -v /sys/fs/cgroup:/host/cgroup:ro \
   -v /mnt/user/appdata/lodestar-soak:/evidence \
   -v /path/to/collect.py:/collect.py:ro \
-  -v /path/to/lodestar-password:/password:ro \
   python:3.12-slim python /collect.py --mode docker --container lodestar \
     --url http://127.0.0.1:8484 --cgroup-root /host/cgroup \
     --root /evidence/run-1 --commit <40-char source commit> \
-    --intensity balanced --storage-path /evidence --password-file /password
+    --intensity balanced --storage-path /evidence
 ```
+
+**Optional: `--password-file`.** Not in the command above, so a CR-0 run stays
+comparable with r4's. With it, the collector logs in to Lodestar and records
+the build's target triple from `GET /api/v1/system` as `build_target` in
+`run.json`, and nothing else from that page. The analyzer uses it for the
+memory attribution (below), and the read is retried until the API answers. The
+login is plain http, so the collector refuses to start unless the file is
+owner-only (`chmod 600`) and `--url` is a loopback or private IP address (a
+Docker network hostname such as `http://lodestar:8484` is refused). Without
+it, pass `analyze_cr0.py --c-allocator mimalloc` for the Docker image or a
+tarball instead. A CR-SPEC run requires the flag.
 
 - `--intensity`: pass the preset Lodestar is set to (`low`, `balanced` or
   `aggressive`). The analyzer takes the outstanding-RPC limit from it. Left
   out, `run.json` has no preset, and the analyzer assumes `balanced` and
   reports `intensity_assumed_balanced`.
-- `--password-file` (recommended; optional for a CR-0 run, required for a
-  CR-SPEC run): a file holding Lodestar's admin password. The collector logs in
-  once at start to read the build's target triple from `GET /api/v1/system`
-  and records only that, as `build_target` in `run.json`. The analyzer needs it
-  to know who serves C's `malloc` (see "Memory attribution" below). If the API
-  doesn't answer at start, the read is retried on later samples until it does.
-  The password and the session cookie stay in memory, never on disk. The login
-  is plain http, so two guards apply in every run kind, and the collector
-  refuses to start if either fails:
-  - the file is readable by its owner only: `chmod 600`, owned by the user the
-    collector runs as (root in the container above);
-  - `--url` is a loopback address (`127.0.0.1`, `localhost`) or a private IP
-    address. A Docker network hostname such as `http://lodestar:8484` is
-    refused, because the collector can't tell where a name leads: use
-    `--network host` and `127.0.0.1`, or the container's private IP.
-
-  Without it, `run.json` has no build target, and the report's C allocator is
-  unknown unless you pass `--c-allocator` to the analyzer.
 - `--network host` lets the collector reach a published port at `127.0.0.1`.
   Use the address you actually publish; the URL is `http://host:port` only.
 - Add `--storage-path` for every filesystem that matters (the Lodestar appdata
