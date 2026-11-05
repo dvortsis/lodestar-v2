@@ -10,11 +10,12 @@ workstreams:
 placement:
   - { ws: ws-api, match: [B0] }
   - { ws: ws-src, match: ["SRC-*"] }
+  - { ws: ws-small, match: ["QQ-*"] }
   - { ws: ws-src, match: ["X-placed*"] }
   - { ws: ws-api, match: ["/([bad/"] }
 unplaced_workstream: ws-small
 pinned: { NOPE-2: ws-small }
-held: []
+held: [QQ-held]
 expanded: []
 state_override: {}
 conditions:

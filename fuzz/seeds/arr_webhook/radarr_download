@@ -1,0 +1,22 @@
+{
+  "movie": {"id": 3, "title": "Sintel", "year": 2010, "folderPath": "/movies/Sintel (2010)", "tmdbId": 45745, "imdbId": "tt1727587"},
+  "remoteMovie": {"tmdbId": 45745, "imdbId": "tt1727587", "title": "Sintel", "year": 2010},
+  "movieFile": {
+    "id": 5,
+    "relativePath": "Sintel (2010).mkv",
+    "path": "/movies/Sintel (2010)/Sintel (2010).mkv",
+    "quality": "Bluray-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "BLENDER",
+    "sceneName": "Sintel.2010.1080p.BluRay.x264-BLENDER",
+    "indexerFlags": "0",
+    "size": 1288490000
+  },
+  "isUpgrade": false,
+  "downloadClient": "Transmission",
+  "downloadClientType": "Transmission",
+  "downloadId": "6CD8BAE816112560C859C22A04238D8F22C552DF",
+  "eventType": "Download",
+  "instanceName": "Radarr",
+  "applicationUrl": ""
+}

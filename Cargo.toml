@@ -9,6 +9,7 @@ edition = "2024"
 rust-version = "1.89"
 publish = false
 license = "AGPL-3.0-or-later"
+authors = ["Benjamin Dvortsis"]
 repository = "https://github.com/dvortsis/lodestar-v2"
 
 [workspace.dependencies]

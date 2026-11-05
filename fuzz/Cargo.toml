@@ -186,6 +186,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "arr_webhook"
+path = "fuzz_targets/arr_webhook.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "tpdb"
 path = "fuzz_targets/tpdb.rs"
 test = false

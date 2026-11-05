@@ -7214,6 +7214,224 @@
           }
         ]
       }
+    },
+    "/webhooks": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Lists the integrations: whether each has a token, and its counts.",
+        "operationId": "listWebhooks",
+        "responses": {
+          "200": {
+            "description": "Both integrations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/webhooks/{integration}": {
+      "post": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Receives a Sonarr or Radarr webhook call. Authenticated by the\nintegration's token (Basic auth's password, or Bearer), not a session;\nevery failure to authenticate is the same `401 login_required`.",
+        "operationId": "receiveWebhook",
+        "parameters": [
+          {
+            "name": "integration",
+            "in": "path",
+            "description": "`sonarr` or `radarr`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Integration"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The app's webhook event, at most 256 KiB.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Taken: a Grab or Download found a key, or the event had nothing to find; or a real event dropped (`dropped`: over the integration's rate, the source off, the pipeline full). Dropped events still answer 200 so the app doesn't back its notifications off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed_webhook`: not an event, dropped and counted; or `webhook_unreadable`: the connection failed while the body was read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`login_required`: no valid token, however it failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`webhook_too_large`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many failed tokens from this address, with `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`webhooks_unavailable` (not wired, or the store can't be read), or `source_off` for the app's Test call while the source is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/webhooks/{integration}/token": {
+      "post": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Makes the integration's token, replacing any old one at once. Needs\nthe password (428 `confirm_required` without it). The token is in this\nresponse only.",
+        "operationId": "createWebhookToken",
+        "parameters": [
+          {
+            "name": "integration",
+            "in": "path",
+            "description": "`sonarr` or `radarr`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Integration"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Made; `token` is shown this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookToken"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Removes the integration's token: its calls are refused from now on.",
+        "operationId": "deleteWebhookToken",
+        "parameters": [
+          {
+            "name": "integration",
+            "in": "path",
+            "description": "`sonarr` or `radarr`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Integration"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed, or there was none.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -13624,6 +13842,14 @@
             ]
           }
         }
+      },
+      "Integration": {
+        "type": "string",
+        "description": "An app that can call in.",
+        "enum": [
+          "sonarr",
+          "radarr"
+        ]
       },
       "JobPhase": {
         "type": "string",
@@ -21522,6 +21748,106 @@
           }
         },
         "additionalProperties": false
+      },
+      "WebhookInfo": {
+        "type": "object",
+        "description": "One integration. The counts are since start, zero when webhooks\naren't wired.",
+        "required": [
+          "integration",
+          "path",
+          "token_set",
+          "found",
+          "ignored",
+          "malformed",
+          "refused"
+        ],
+        "properties": {
+          "found": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls that found a key.",
+            "minimum": 0
+          },
+          "ignored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Valid calls with nothing to find (Test, other events).",
+            "minimum": 0
+          },
+          "integration": {
+            "$ref": "#/components/schemas/Integration"
+          },
+          "malformed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bodies that weren't an event, dropped.",
+            "minimum": 0
+          },
+          "path": {
+            "type": "string",
+            "description": "The path the app calls, under `/api/v1`."
+          },
+          "refused": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Authenticated calls not delivered: over the rate, the source off,\nthe pipeline full, a body over the cap (`413`), or one that\ncouldn't be read.",
+            "minimum": 0
+          },
+          "token_set": {
+            "type": "boolean",
+            "description": "A token is made. It can't be shown again; make a new one instead."
+          }
+        }
+      },
+      "WebhookList": {
+        "type": "object",
+        "description": "`GET /webhooks`.",
+        "required": [
+          "integrations"
+        ],
+        "properties": {
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookInfo"
+            }
+          }
+        }
+      },
+      "WebhookReceipt": {
+        "type": "object",
+        "description": "An accepted call.",
+        "required": [
+          "found",
+          "dropped"
+        ],
+        "properties": {
+          "dropped": {
+            "type": "boolean",
+            "description": "The call was dropped: over the integration's rate, the source\nturned off, or the pipeline full. Counted in `refused`."
+          },
+          "found": {
+            "type": "boolean",
+            "description": "The event named a torrent, which went to the pipeline."
+          }
+        }
+      },
+      "WebhookToken": {
+        "type": "object",
+        "description": "`POST /webhooks/{integration}/token`: the new token, this once.",
+        "required": [
+          "integration",
+          "token"
+        ],
+        "properties": {
+          "integration": {
+            "$ref": "#/components/schemas/Integration"
+          },
+          "token": {
+            "type": "string",
+            "description": "Paste it into the app's webhook connection as the Password."
+          }
+        }
       }
     },
     "responses": {

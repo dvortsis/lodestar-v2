@@ -1,0 +1,2 @@
+404
+{"error":{"code":"webhook_not_found","message":"There's no such integration; use sonarr or radarr."}}

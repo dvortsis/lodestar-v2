@@ -1,0 +1,51 @@
+{
+  "series": {
+    "id": 1,
+    "title": "Example Open Series",
+    "titleSlug": "example-open-series",
+    "path": "/tv/Example Open Series",
+    "tvdbId": 81189,
+    "tvMazeId": 169,
+    "tmdbId": 1396,
+    "imdbId": "tt0903747",
+    "type": "standard",
+    "year": 2008,
+    "genres": ["Drama"],
+    "images": [
+      {"coverType": "poster", "url": "/MediaCover/1/poster.jpg", "remoteUrl": "https://images.example/poster.jpg"}
+    ],
+    "tags": []
+  },
+  "episodes": [
+    {
+      "id": 11,
+      "episodeNumber": 1,
+      "seasonNumber": 1,
+      "title": "Pilot",
+      "overview": "An open-licence test episode.",
+      "airDate": "2008-01-20",
+      "airDateUtc": "2008-01-21T02:00:00Z",
+      "seriesId": 1,
+      "tvdbId": 349232
+    }
+  ],
+  "release": {
+    "quality": "WEBDL-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "OPEN",
+    "releaseTitle": "Example.Open.Series.S01E01.1080p.WEB-DL-OPEN",
+    "indexer": "Private Tracker (Prowlarr)",
+    "size": 1503238553,
+    "customFormatScore": 0,
+    "customFormats": [],
+    "languages": [{"id": 1, "name": "English"}],
+    "indexerFlags": ["freeleech"]
+  },
+  "downloadClient": "qBittorrent",
+  "downloadClientType": "qBittorrent",
+  "downloadId": "FB9FF1EF824D61BD83B24FB91811804DB71C0C53",
+  "customFormatInfo": {"customFormats": [], "customFormatScore": 0},
+  "eventType": "Grab",
+  "instanceName": "Sonarr",
+  "applicationUrl": "http://sonarr.example:8989"
+}
