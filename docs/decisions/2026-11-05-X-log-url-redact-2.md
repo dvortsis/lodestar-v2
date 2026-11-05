@@ -122,7 +122,7 @@ Each one leaks on `main` too.
   - a magnet whose `dn` or `kt` holds a space ending at a later parameter's word.
 
 ## Cost
-- **Both stages run on every line,** and the wide rules run twice on a line with a form without `://` or an encoded magnet. In a release build that's about 3 to 5 times `main`'s time. `only_more` keeps a set of the wide output's words, so it's linear.
+- **Both stages run on every line,** and the wide rules run twice on a line with a form without `://` or an encoded magnet. In a release build that's about 3 to 6 times `main`'s time on the adversarial units (`a://` 3.3×, `http:/` 5.3×). `only_more` keeps a set of the wide output's words, so it's linear.
 - **`Ats` takes 4 bytes per byte of text** (4 MiB for a 1 MiB line), for the time a line is scrubbed. It's built only when the text holds an `@`.
 
 ## Tests
@@ -151,26 +151,32 @@ Each one leaks on `main` too.
 - **No panics:** none in the fuzz on either side. The new magnet cut panicked on an empty URL during development; its seed is kept in `proptest-regressions/url.txt`.
 
 ## Differential fuzz against `main`
-- **Four harnesses, each comparing this PR with `origin/main` at e62a8b3:**
-  - **The labelled harness** is #432's (`reviews/432/round4-harness-labelled.rs` on `runner-state`), with ten cases added for this slice: 16 to 24 for the brief's classes, and 25 for a Debug field's name in a password. It checks `scrub_text`, `scrub` (absolute) and `scrub` (request).
-  - **The credential harness** is the fresh reviewer's (`fz2`). It glues credential names, separators, `Bearer`, encodings, magnets and URL syntax around a planted secret.
-  - **The token soup** (added for the runner's review) strings 2 to 15 random tokens around a planted secret: URL syntax, schemes, encoded separators, raw and encoded magnets, `Debug` fields, credential names, IPv6 literals and line breaks. The long soup strings 2 to 31.
+- **Five harnesses, each comparing this PR with `origin/main` at e62a8b3,** on `scrub_text`, `scrub` (absolute) and `scrub` (request):
+  - **The runner's token soup (`soup2`)** strings 2 to 31 tokens from the runner's list around a planted secret `AAQ{k}x<sep>yBBQ{k}z`, in the runner's 15 slots and 19 separators. It counts either half shown, and minimises each regression by chunk deletion.
+  - **The labelled harness** is #432's (`reviews/432/round4-harness-labelled.rs` on `runner-state`), with ten cases added for this slice: 16 to 24 for the brief's classes, and 25 for a Debug field's name in a password.
+  - **The credential harness** is the first fresh reviewer's (`fz2`).
+  - **This slice's token soup,** short (2 to 15 tokens) and long (2 to 31).
   - **#432's `review-diff-harness.rs`.**
-- **A regression is a planted secret this PR shows that `main` hides.**
-- **These are the final code's numbers, 1,000,000 inputs per run.** Earlier rounds' runs found the regressions listed under the review rounds; each is fixed.
+- **A regression is a planted secret this PR shows that `main` hides.** With the two-stage design it's 0 by construction, and every run below confirms it.
+- **Final code, two-stage design:**
 
-| Run | Seeds | Regressions | Shown by PR, per run | Shown by `main`, per run | Panics (PR / `main`) |
-|---|---|---|---|---|---|
-| Labelled, original cases 0–15 | 2, 5, 9, 13 | 0 | 6,552–6,746 | 50,085–50,984 | 0 / 0 |
-| Labelled, new cases 16–24 | 2, 5, 9, 13, 31, 41 | 0 | 9,343–9,556 | 578,046–579,616 | 0 / 0 |
-| Labelled, case 25 (Debug field in a password) | 7, 11, 19 | 0 | 0 | 60,680–61,045 | 0 / 0 |
-| Credential harness (`fz2`) | 1–8 | 0 | 1,678,767–1,681,260 | 1,828,170–1,830,674 | 0 / – |
-| Token soup | 11–20, 28, 29 | 0 | 1,134,773–1,138,117 | 1,541,391–1,546,286 | 0 / 0 |
-| Long token soup | 21–27 | 0 | 840,714–842,796 | 1,269,733–1,271,981 | 0 / 0 |
-| `review-diff-harness.rs` | 7 | 0 | 6,636 | 50,197 | 0 / 0 |
+| Run | Seeds | Inputs per seed | Regressions | Shown by PR | Shown by `main` | Panics (PR / `main`) |
+|---|---|---|---|---|---|---|
+| Runner's token soup (`soup2`) | 1, 2 | 1,200,000 | 0 | 594,763 / 594,600 | 1,303,750 / 1,303,682 | 0 / 0 |
+| Labelled, original cases 0–15 | 2, 5, 9, 13 | 1,000,000 | 0 | 6,467–6,654 | 50,085–50,984 | 0 / 0 |
+| Labelled, new cases 16–24 | 2, 5, 9, 31 | 1,000,000 | 0 | 8,797–8,901 | 578,660–579,616 | 0 / 0 |
+| Labelled, case 25 (Debug field in a password) | 7, 11 | 1,000,000 | 0 | 0 | 60,680–60,927 | 0 / 0 |
+| Credential harness (`fz2`) | 1–4 | 1,000,000 | 0 | 1,678,174–1,680,665 | 1,828,170–1,830,674 | 0 / – |
+| Token soup | 11–14 | 1,000,000 | 0 | 1,133,277–1,135,414 | 1,542,480–1,546,286 | 0 / 0 |
+| Long token soup | 21–23 | 1,000,000 | 0 | 839,189–840,707 | 1,271,398–1,271,981 | 0 / 0 |
+| `review-diff-harness.rs` | 7 | 1,000,000 | 0 | 6,547 | 50,197 | 0 / 0 |
 
-- **What the labelled harness still shows is in the gaps above:** cases 7 and 8 (raw `"` in a `Debug` value), case 3 (an unmarked username with a raw line break, or a `/` then whitespace), and cases 16–24's single-slash forms behind unknown schemes (`x:/`). The new cases show more than in the first round (about 9,400 against 5,500) because of the runner's two narrowings.
-- **The credential and soup counts are high on both sides by design.** Most of their inputs plant the secret where no rule could know it's one (`aQz…` glued to plain words).
+- **What `main` shows and this PR hides** is `main`'s count less this PR's, since this PR shows nothing `main` hides: about 709,000 per seed in the runner's soup, and about 570,000 per seed in the new class cases.
+- **Linear sweep (the runner's spec):** 3,100 random units of 1 to 6 runner tokens, each repeated to 32 KiB, 128 KiB and 256 KiB.
+  - The worst time ratio, normalised to 1 for linear, is 2.42 (`%3A`) from 32 KiB to 256 KiB; the worst from 32 KiB to 128 KiB is 9.1 (`=[::1]`, at 13 ms).
+  - Timed again at 1, 4 and 16 MiB, the worst units take 4× as long at each 4× in size (`&magnet%3A?`: 0.16 s, 0.73 s, 2.8 s), so those ratios are small-size noise, not a quadratic path.
+- **What this PR still shows is in the gaps above,** and the credential and soup counts are high on both sides by design: most inputs plant the secret where no rule could know it's one.
+- **Earlier rounds' runs found the regressions listed under the review rounds.** Each one was fixed in the wide rules, and the design now rules the class out.
 
 ## Released builds
 - **Every class leaks on v0.5.1-rc.1 to rc.4,** since they share `main`'s scrubber.
