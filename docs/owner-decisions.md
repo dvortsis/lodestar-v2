@@ -465,6 +465,11 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - `LEGAL-1`, the wizard step on `main`, follows `LEGAL-1r`. `LEGAL-2` stays after v0.5.1.
     - **Host steps for soak r5** (owner, via the dashboard session, 2026-11-05 ~01:25Z): Appdata Backup stays disabled until all soaks are done, and the temporary SSH key stays for read-only checks during r5.
 
+41. **Fill every free slot until the cut to four** (owner, via the dashboard session, 2026-11-05 ~02:45Z): "Let's do 1, 2, and 3 until tomorrow at 5pm, when it goes back to 4 slots." The cut is the one already scheduled for 2026-11-06T00:00Z (§2.36). The three items the dashboard session offered:
+    1. **A standing rule until 2026-11-06T00:00Z:** the runner launches the next ready slice whenever a slot is free, up to 12, ranked by critical path first and then by how many slices it unlocks. Overlapping `owns` still keeps a slice out (§2.36). A slot stays empty only for a reason the runner records: an `owns` conflict, the release branch, a stale ready slice, or an owner pause. The slot then shows `status: idle` with the reason in `doing`. rc.4's critical path still comes first when it needs the CI queue.
+    2. **A dashboard alarm,** "free slots, work ready", built by the dashboard session from `slices.yaml` `owns` against the running slices.
+    3. **An hourly check to the runner** from the dashboard session until the cut. On each one, the runner launches a ready slice that fits, or replies with one line giving the reason.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
