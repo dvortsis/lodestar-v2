@@ -28,9 +28,11 @@
 //! default, External consent, the same 5-minute poll. Every item is forced
 //! into the Adult category at mapping time ([`to_found_adult`]): the feed's
 //! own category is kept only as the `nyaa-category` claim, and the content
-//! type claim is always `adult` (architecture §20.9: the source's own
-//! category is a strong signal). The search layer hides Adult unless "Show
-//! adult content" is on; the plugin does not decide visibility. The filter
+//! type claim is always `adult`. **Today that is a claim only:** nothing in
+//! the pipeline reads `content-type` yet, so the item is not yet stored as
+//! Adult (see `docs/decisions/2026-11-05-SRC-10e.md`). The search layer
+//! hides Adult unless "Show adult content" is on; the plugin does not
+//! decide visibility. The filter
 //! pipeline applies to its finds exactly as to any other (child-safety core
 //! and floor before storage).
 
@@ -336,13 +338,13 @@ pub fn to_found(item: Item, now: i64) -> Option<Found> {
 /// judge it before storage like any other.
 pub fn to_found_adult(item: Item, now: i64) -> Option<Found> {
     let mut found = to_found(item, now)?;
-    if let Some(claims) = found.claims.as_deref_mut() {
-        claims.ids.retain(|i| i.scheme != "content-type");
-        claims.ids.push(ExternalId {
-            scheme: "content-type".to_owned(),
-            value: ADULT.to_owned(),
-        });
-    }
+    // `with_claims` drops empty claims, so a bare find has none yet.
+    let claims = found.claims.get_or_insert_with(Box::default);
+    claims.ids.retain(|i| i.scheme != "content-type");
+    claims.ids.push(ExternalId {
+        scheme: "content-type".to_owned(),
+        value: ADULT.to_owned(),
+    });
     Some(found)
 }
 

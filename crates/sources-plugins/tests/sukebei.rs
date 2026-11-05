@@ -143,6 +143,7 @@ async fn a_blocklisted_hash_is_an_ordinary_find_for_the_filter_to_judge() {
     let hits: Vec<_> = got.iter().filter(|d| d.found.key == blocked).collect();
     assert_eq!(hits.len(), 2);
     for d in got {
+        assert_eq!(content_types(&d), ["adult"]);
         let f = d.found;
         assert!(!f.private_source && !f.interest && f.peers.is_empty());
         assert_eq!(f.strategy, nyaa::STRATEGY_RSS);
@@ -259,6 +260,16 @@ fn adult_is_forced_for_every_category_and_for_none() {
 }
 
 #[test]
+fn a_bare_item_with_no_other_claims_is_still_adult() {
+    let mut it = item(None);
+    (it.title, it.size, it.published, it.guid) = (None, None, None, None);
+    (it.trusted, it.remake) = (None, None);
+    assert!(to_found(it.clone(), NOW).unwrap().claims.is_none());
+    let f = to_found_adult(it, NOW).unwrap();
+    assert_eq!(f.claims.unwrap().ids, [id("content-type", "adult")]);
+}
+
+#[test]
 fn an_item_without_a_key_is_not_a_find() {
     let mut it = item(Some("1_2"));
     it.hashes = Hashes { v1: None, v2: None };
@@ -270,8 +281,12 @@ proptest! {
     fn adult_found_always_has_exactly_one_adult_content_type(
         v1 in proptest::option::of(any::<[u8; 20]>()),
         category in proptest::option::of("[0-9_a-z]{0,16}"),
+        title in proptest::option::of("[ -~]{0,20}"),
+        size in any::<Option<u64>>(),
+        flags in any::<Option<bool>>(),
     ) {
         let mut it = item(category.as_deref());
+        (it.title, it.size, it.trusted, it.remake) = (title, size, flags, flags);
         it.hashes = Hashes { v1: v1.map(InfoHash), v2: None };
         match to_found_adult(it, NOW) {
             None => prop_assert!(v1.is_none()),

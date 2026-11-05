@@ -141,6 +141,23 @@ fn nyaa_rss_with_magnets() {
 }
 
 #[test]
+fn sukebei_declares_its_own_namespace_uri() {
+    // NyaaV2 derives the URI from the site address (SRC-10e).
+    let body = format!(
+        r#"<rss xmlns:nyaa="https://sukebei.nyaa.si/xmlns/nyaa" version="2.0"><channel>
+<item><title>Open Show - 02</title>
+<nyaa:infoHash>{HEX}</nyaa:infoHash><nyaa:size>734 Bytes</nyaa:size><nyaa:categoryId>1_2</nyaa:categoryId>
+</item></channel></rss>"#
+    );
+    let f = parse(body.as_bytes());
+    kept(&f, 1);
+    let it = &f.items[0];
+    assert_eq!(it.hashes, v1(HEX));
+    assert_eq!(it.size, Some(734));
+    assert_eq!(it.category.as_deref(), Some("1_2"));
+}
+
+#[test]
 fn animetosho_rss() {
     // No `nyaa:` elements: the hash comes from the magnet enclosure, and
     // the enclosure's `length` (a file's size) isn't the content size.
