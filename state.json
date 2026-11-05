@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T23:26Z",
+ "updated_at": "2026-11-05T23:37Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3298,6 +3298,42 @@
    "session": "session_01MMjhn9BtnKc4evPFE9banG",
    "brief": "briefs/X-claim-store-polish.md",
    "launched": "2026-11-05T23:26Z"
+  },
+  "P-v06-workers": {
+   "status": "running",
+   "session": "session_01MMjhnAPwroUfgPM64rXajy",
+   "brief": "briefs/P-v06-workers.md",
+   "launched": "2026-11-05T23:37Z"
+  },
+  "P-v06-companions": {
+   "status": "running",
+   "session": "session_01MMjhnAtULt1rsaDYpC2MGM",
+   "brief": "briefs/P-v06-companions.md",
+   "launched": "2026-11-05T23:37Z"
+  },
+  "P-m6-audit": {
+   "status": "running",
+   "session": "session_01MMjhnAv6578FrhAXy861Y1",
+   "brief": "briefs/P-m6-audit.md",
+   "launched": "2026-11-05T23:37Z"
+  },
+  "P-v052-manifest": {
+   "status": "running",
+   "session": "session_01MMjhnBEDz5cnZumgyb58AH",
+   "brief": "briefs/P-v052-manifest.md",
+   "launched": "2026-11-05T23:37Z"
+  },
+  "P-m8": {
+   "status": "running",
+   "session": "session_01MMjhnAY429C9qruAYakZtm",
+   "brief": "briefs/P-m8.md",
+   "launched": "2026-11-05T23:37Z"
+  },
+  "P-v08": {
+   "status": "running",
+   "session": "session_01MMjhnB8dt8KTygRkyExN9D",
+   "brief": "briefs/P-v08.md",
+   "launched": "2026-11-05T23:37Z"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4958,6 +4994,11 @@
    "id": "runner-docs-owner-usage-2325",
    "note": "Record in the runner docs PR (owner-decisions): owner 2026-11-05T23:25Z, relayed by the dashboard session: \"Keep running. We have usage available.\" Lifts the usage hold; fill to 8 until 00:00Z.",
    "added": "2026-11-05T23:24Z"
+  },
+  {
+   "id": "runner-docs-owner-nolimit-2345",
+   "note": "Record in the runner docs PR: owner 23:35Z \"Use as many resources as needed to get as much done in the next 30 mins as possible.\"; owner ~23:45Z \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Planning slices launched: P-v06-workers, P-v06-companions, P-m6-audit, P-v052-manifest, P-m8, P-v08; plus a read-only security pre-audit of v0.6 sources.",
+   "added": "2026-11-05T23:37Z"
   }
  ],
  "main_health": [
@@ -5620,16 +5661,16 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T23:26Z",
+  "updated": "2026-11-05T23:37Z",
   "items": [
    {
     "slot": 1,
-    "slice": null,
-    "role": "build",
+    "slice": "P-v06-workers",
+    "role": "plan",
     "agent": "claude",
-    "doing": "Retired: X-enr-page-flag merged (#511, 63a2c6df).",
-    "since": "2026-11-05T22:57Z",
-    "status": "idle"
+    "doing": "Plan: remote-workers epic into slices (docs only)",
+    "since": "2026-11-05T23:37Z",
+    "session": "session_01MMjhnAPwroUfgPM64rXajy"
    },
    {
     "slot": 2,
@@ -5651,12 +5692,12 @@
    },
    {
     "slot": 4,
-    "slice": null,
-    "role": "build",
+    "slice": "P-v06-companions",
+    "role": "plan",
     "agent": "claude",
-    "doing": "Retired: X-claim-store merged (#512, 01d956f3).",
-    "since": "2026-11-05T22:48Z",
-    "status": "idle"
+    "doing": "Plan: companion-manager epic into slices (docs only)",
+    "since": "2026-11-05T23:37Z",
+    "session": "session_01MMjhnAtULt1rsaDYpC2MGM"
    },
    {
     "slot": 5,
@@ -5668,12 +5709,12 @@
    },
    {
     "slot": 7,
-    "slice": null,
-    "role": "build",
+    "slice": "P-m6-audit",
+    "role": "plan",
     "agent": "claude",
-    "doing": "Retired: B13b merged (#509, 9522242c).",
-    "since": "2026-11-05T22:34Z",
-    "status": "idle"
+    "doing": "Plan: M6 packaging gap audit and slices (docs only)",
+    "since": "2026-11-05T23:37Z",
+    "session": "session_01MMjhnAv6578FrhAXy861Y1"
    },
    {
     "slot": 9,
@@ -5686,16 +5727,34 @@
    },
    {
     "slot": 12,
-    "slice": null,
-    "role": "build",
+    "slice": "P-v052-manifest",
+    "role": "plan",
     "agent": "claude",
-    "status": "idle",
-    "doing": "Kept free: nothing ready without an owns overlap (RP-G and the SP-4 follow-ups wait on RP-5 #510; X-search-files-6 needs a runner design call).",
-    "since": "2026-11-05T20:54Z"
+    "doing": "Plan: v0.5.2 feature manifest, the freeze list (docs only)",
+    "since": "2026-11-05T23:37Z",
+    "session": "session_01MMjhnBEDz5cnZumgyb58AH"
+   },
+   {
+    "slot": 13,
+    "slice": "P-m8",
+    "role": "plan",
+    "agent": "claude",
+    "doing": "Plan: M8 hardening to 1.0, slices and gates (docs only)",
+    "since": "2026-11-05T23:37Z",
+    "session": "session_01MMjhnAY429C9qruAYakZtm"
+   },
+   {
+    "slot": 14,
+    "slice": "P-v08",
+    "role": "plan",
+    "agent": "claude",
+    "doing": "Plan: v0.8 slices (docs only)",
+    "since": "2026-11-05T23:37Z",
+    "session": "session_01MMjhnB8dt8KTygRkyExN9D"
    }
   ],
   "limit": 8,
-  "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged."
+  "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged. | Owner 2026-11-05T23:35Z: \"Use as many resources as needed to get as much done in the next 30 mins as possible.\" Owner ~23:45Z in the runner chat: \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Six planning slices launched 23:36-23:37Z; they finish under the 4-slot limit from 00:00Z."
  },
  "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail."
 }
