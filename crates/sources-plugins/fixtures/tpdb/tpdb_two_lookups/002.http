@@ -1,0 +1,6 @@
+GET https://api.theporndb.net/scenes?parse=Another.Example.Name&per_page=5
+Accept: application/json
+Authorization: Bearer REDACTED
+
+HTTP 200
+Content-Type: application/json
