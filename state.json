@@ -2840,11 +2840,12 @@
       "brief": "briefs/X-search-files-4.md"
     },
     "RP-DEF": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhn8ohYvc28hCgRNG7oC",
       "launched": "2026-11-05T01:17Z",
-      "brief": "briefs/RP-DEF.md"
+      "brief": "briefs/RP-DEF.md",
+      "pr": 454
     },
     "X-mimalloc-docs": {
       "status": "building",
@@ -2901,6 +2902,13 @@
       "session": "session_01MMjhnAT2ti26jvv86Z6pDP",
       "launched": "2026-11-05T03:22Z",
       "brief": "briefs/SRC-10e.md"
+    },
+    "RP-2": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnAG2MXTt9za8igtCuD",
+      "launched": "2026-11-05T03:59Z",
+      "brief": "briefs/RP-2.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3352,7 +3360,8 @@
     "2026-11-05T01:17Z Owner (via dashboard, ~01:20Z): prioritise memory/performance and getting r5 started; keep other slots busy. Launched X-filter-budget-noise, X-search-files-4, RP-DEF on main. Sent the Unraid reset steps (destructive steps marked).",
     "2026-11-05T01:25Z Owner (via dashboard): Appdata Backup stays disabled until all soaks are done (no re-enable step in r5 steps; runner says when). Temporary SSH key lodestar-soak-temp stays for read-only checks during r5; revoke only when owner says Unraid work is finished. Unraid Part 1 read-only check matched; owner running Part 2 (remove r4 containers, delete lodestar-r4, create empty lodestar-r5). r2/r3 containers, data dirs and rc.1/rc.2 images left alone.",
     "2026-11-05T02:31Z Launched SRC-13, SRC-15a, SRC-17 (owner: keep slots busy). Held: RP-2 (owns load.rs and api/filters.rs, which RP-DEF has), RP-1b (packs/mod.rs; after RP-DEF), SRC-11b (may slip to v0.7), SRC-10e and SRC-10c-2 (low value). R-rc3-cut done; SRC-10b dropped: mark in dashboard state_override in the next runner PR.",
-    "2026-11-05T03:30Z rc.4 plan: tag after #457 merges and the release branch CI is green (~04:45Z); the release-notes docs PR does not block the tag. r5 start est. 05:15-05:30Z, baseline end est. 2026-11-06T11:45-12:00Z."
+    "2026-11-05T03:30Z rc.4 plan: tag after #457 merges and the release branch CI is green (~04:45Z); the release-notes docs PR does not block the tag. r5 start est. 05:15-05:30Z, baseline end est. 2026-11-06T11:45-12:00Z.",
+    "2026-11-05T03:59Z #454 RP-DEF merged (dd6ce6e9). Launched RP-2 in slot 8 (most unlocks: RP-3, RP-4). RP-1b and RP-UC wait for RP-2 (shared packs/mod.rs; plan: filter-engine slices one at a time)."
   ],
   "owner_flags": [
     "2026-10-23 00:33 §2.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5038,7 +5047,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T03:39Z",
+    "updated": "2026-11-05T03:59Z",
     "items": [
       {
         "slot": 1,
@@ -5098,11 +5107,11 @@
       },
       {
         "slot": 8,
-        "slice": "RP-DEF",
+        "slice": "RP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "v0.5.2: rule packs on by default on new installs; existing installs keep their settings.",
-        "since": "2026-11-05T01:17Z"
+        "doing": "Rule-pack overrides: change a pack rule's action or add an exception; weakening needs the password and pauses when the rule changes.",
+        "since": "2026-11-05T03:59Z"
       },
       {
         "slot": 9,
