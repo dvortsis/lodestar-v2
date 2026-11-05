@@ -481,7 +481,11 @@ const filtersLater = [
 	// What each rule pack hides, opened from the packs list (RP-UC, runner on #469).
 	/features\/filters\/screens\/PackInfo\.svelte$/,
 	// The packs list, loaded from the switches (RP-UC).
-	/features\/filters\/screens\/Packs\.svelte$/
+	/features\/filters\/screens\/Packs\.svelte$/,
+	// The per-pack panels, versions and overrides, loaded from the switches (RP-6).
+	/features\/filters\/screens\/packs\/PacksScreen\.svelte$/,
+	// What accepting pack versions does, inside the change dialog (RP-6).
+	/features\/filters\/screens\/packs\/PackImpact\.svelte$/
 ];
 const filtersBody = /features\/filters\/screens\/FiltersScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
@@ -726,7 +730,9 @@ const filtersLazy = (res) =>
 // fetched first on the first change from any view) has its own entry below.
 const filtersDialogsLazy = filtersLazy({
 	name: 'Filters dialogs (on demand)',
-	keys: [/features\/filters\/flows-root\.ts$/]
+	keys: [/features\/filters\/flows-root\.ts$/],
+	// Pack impact loads only when an acceptance is previewed; it has its own entry (RP-6).
+	stop: [filtersLater[4]]
 });
 const filtersDoorLazy = filtersLazy({
 	name: 'Filters flows door (on demand)',
@@ -752,7 +758,17 @@ const filtersPackInfoLazy = filtersLazy({
 const filtersPacksLazy = filtersLazy({
 	name: 'Filters packs list (on demand)',
 	keys: [filtersLater[2]],
-	stop: [...filtersDialogs, filtersLater[1]]
+	stop: [...filtersDialogs, filtersLater[1], filtersLater[3]]
+});
+const filtersPackPanelsLazy = filtersLazy({
+	name: 'Filters pack panels (on demand)',
+	keys: [filtersLater[3]],
+	stop: [...filtersDialogs, filtersLater[4]]
+});
+const filtersPackImpactLazy = filtersLazy({
+	name: 'Filters pack impact (on demand)',
+	keys: [filtersLater[4]],
+	stop: filtersDialogs
 });
 const settingsEditorLazy = requireMeasuredJs(
 	'Appearance theme editor (on demand)',
@@ -1244,7 +1260,9 @@ export default [
 	entry('Filters dialogs (on demand)', filtersDialogsLazy, '35.9 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
 	entry('Filters pack descriptions (on demand)', filtersPackInfoLazy, '1.6 KB'), // measured 1.43 KB + 10%
-	entry('Filters packs list (on demand)', filtersPacksLazy, '1.6 KB'), // measured 1.27 KB + ~25% for later packs
+	entry('Filters packs list (on demand)', filtersPacksLazy, '1.85 KB'), // measured 1.27 KB + ~25% for later packs; RP-6: +0.38 KB for the mount of the pack panels (measured 1.68 KB; 1.79 KB with the {:catch})
+	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '9 KB'),
+	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.
@@ -1356,7 +1374,9 @@ export default [
 	// (visibility.ts and commands.ts are the only doors).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
 	// runner §2.26, SRC-17: "Found by" in the drawer (27,400 B → 27,976 B; measured 551 B over, rounded up to 64 B).
-	entry('Detail drawer (own JS + CSS)', drawerView, '27976 B'),
+	// RP-6: +4 B after merging main (measured 27,980 B; nothing of the drawer's changed, so the chunk
+	// hashes in its imports moved by a few bytes). Runner to confirm.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28000 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
