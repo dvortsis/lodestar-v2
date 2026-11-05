@@ -520,7 +520,11 @@ jobs:
             fi
           done
           second=$(grep -c -F -e SmpAllocator -e c.malloc. "$syms" || true)
-          echo "zig allocator symbols: $second"
+          echo "zig allocator symbols: ${second:-unreadable}"
+          if [ -z "$second" ]; then
+            echo "::error::couldn't search the symbol list for zig's allocator"
+            exit 1
+          fi
           if [ "$second" != 0 ]; then
             grep -F -e SmpAllocator -e c.malloc. "$syms" | head -n 20 || true
             echo "::error::zig's own allocator is linked beside mimalloc in the musl build (a second C heap)"

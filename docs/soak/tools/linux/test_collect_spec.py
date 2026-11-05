@@ -262,6 +262,9 @@ class SpecRunTests(SpecBase):
             self.assertNotIn(private, text)
         self.assertEqual(analyze_cr0.c_allocator(run)["c_allocator"], "mimalloc")
 
+    def test_the_target_pattern_matches_the_analyzers(self):
+        self.assertEqual(collect.TARGET.pattern, analyze_cr0.TARGET.pattern)
+
     def test_build_target_absent_when_the_system_api_fails_or_is_malformed(self):
         # A failed read is noted (the last case); a malformed answer is just absent.
         for system in ({"build": {"target": "x86_64 unknown; rm -rf"}}, {"build": "musl"}, {"version": "x"}, 404):
@@ -272,6 +275,43 @@ class SpecRunTests(SpecBase):
             self.assertIsNone(analyze_cr0.c_allocator(run)["c_allocator"])
         events = (self.root / "events.log").read_text()
         self.assertIn("system API unavailable at start: build target not recorded", events)
+
+    def cr0_run(self, *extra, api=None):
+        write_cgroup(self.cgroup)
+        self.api = FakeDocker()
+        instance = collect.DockerInstance(self.api, "lodestar", self.cgroup, clock=self.clock.clock,
+                                          sleep=self.clock.sleep)
+        args = args_for(self.root, "--url", self.lodestar.url, *extra)
+        c = collect.Collector(args, instance, clock=self.clock.clock, sleep=self.clock.sleep, now=self.clock.now,
+                              volumes=fixed_volumes(), api_call=api)
+        return c.run()
+
+    def test_cr0_run_records_the_build_target_only_when_it_logs_in(self):
+        # A CR-0 run (r5's kind) logs in only when given --password-file.
+        password = self.tmp / "password"
+        password.write_text(PASSWORD + "\n")
+        password.chmod(0o600)
+        api = FakeAPI()
+        self.assertEqual(self.cr0_run("--password-file", str(password), api=api), 0, self.result()["reason"])
+        self.assertEqual(self.run_doc()["build_target"], "x86_64-unknown-linux-musl")
+        self.assertEqual(sum(1 for _, path, _ in api.calls if path == "/login"), 1)
+        self.setUp()
+        api = FakeAPI()
+        self.assertEqual(self.cr0_run(api=api), 0, self.result()["reason"])
+        self.assertNotIn("build_target", self.run_doc())
+        self.assertEqual(api.calls, [])  # no password, no login, no call
+
+    def test_cr0_password_file_gets_the_same_guards(self):
+        password = self.tmp / "password"
+        password.write_text(PASSWORD + "\n")
+        password.chmod(0o644)
+        with self.assertRaises(SystemExit) as caught:
+            self.cr0_run("--password-file", str(password), api=FakeAPI())
+        self.assertIn("chmod 600", str(caught.exception))
+        password.chmod(0o600)
+        with self.assertRaises(SystemExit) as caught:
+            self.cr0_run("--password-file", str(self.tmp / "missing"), api=FakeAPI())
+        self.assertIn("readable file", str(caught.exception))
 
     def test_settings_session_is_renewed_after_a_401(self):
         api = FakeAPI()

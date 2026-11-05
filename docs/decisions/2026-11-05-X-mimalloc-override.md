@@ -3,7 +3,7 @@
 Runner brief X-mimalloc-override, 2026-11-04 (an rc.4 candidate; auto-approved under owner §2.33, which names mimalloc's `override` feature as the no-`unsafe` route, and flagged to the owner under §2.19). Architecture §11 (the binary and its allocator). Follows `2026-11-04-X-thp-off.md` and `2026-11-04-X-mem-gauges.md`.
 
 ## Why
-- **Soak r4:** the worker's anonymous memory grew about 173 MiB in 4 h, in base pages. About 310 MiB sat outside mimalloc's arena in about 3,200 small mappings. The 128-512 KiB ones grew from 1,843 to 2,085 over the run, as the PR body says (`2026-11-05-soak-r4-verdict.md`).
+- **Soak r4:** the worker's anonymous memory grew about 173 MiB in 4 h, in base pages. About 310 MiB sat outside mimalloc's arena in about 3,200 small mappings. The 128-512 KiB ones grew from 1,843 to 2,085 over 1.9 h of `/proc` reads, as the PR body says (`2026-11-05-soak-r4-verdict.md`).
 - **The C allocator in the release build** (cargo-zigbuild, zig 0.17, static musl) is zig's `lib/c/malloc.zig` over `std.heap.SmpAllocator`. Its 64 KiB slabs are never unmapped, and an allocating thread checks only its own CPU slot's freelist and one neighbour's. SQLite and zstd run on many `spawn_blocking` threads, so freed C memory piles up where no other thread reuses it. The measurement below shows that pattern under threads.
 
 ## What changed

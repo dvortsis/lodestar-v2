@@ -1284,6 +1284,16 @@ class Collector:
             raise SystemExit("Use a plain http://host:port URL without credentials or path.")
         if not COMMIT.fullmatch(a.commit):
             raise SystemExit("--commit must be a lowercase hex commit id (7 to 40 characters).")
+        # Any run that logs in (a CR-SPEC run always; a CR-0 run when given one,
+        # to record the build target): the same two guards on the password.
+        if getattr(a, "password_file", None):
+            if not Path(a.password_file).is_file():
+                raise SystemExit("--password-file must name a readable file.")
+            if host_class(parsed.hostname) not in ("loopback", "private"):
+                raise SystemExit("--password-file sends the admin password over plain http: "
+                                 "use a loopback or private --url.")
+            if os.stat(a.password_file).st_mode & 0o077:
+                raise SystemExit("--password-file must be readable by its owner only (chmod 600).")
         if self.root.exists() and (not self.root.is_dir() or any(self.root.iterdir())):
             raise SystemExit("Run directory is not empty; use a fresh directory.")
         if (a.stop and self.instance.kind == "native" and self.instance.real_signals
@@ -1330,11 +1340,6 @@ class Collector:
         else:
             if not a.password_file or not Path(a.password_file).is_file():
                 raise SystemExit("--password-file is required: the settings and Insights checks need a login.")
-            if host_class(urllib.parse.urlsplit(a.url).hostname) not in ("loopback", "private"):
-                raise SystemExit("--password-file sends the admin password over plain http: "
-                                 "use a loopback or private --url.")
-            if os.stat(a.password_file).st_mode & 0o077:
-                raise SystemExit("--password-file must be readable by its owner only (chmod 600).")
         if not a.spec_commit or not COMMIT.fullmatch(a.spec_commit):
             raise SystemExit("--spec-commit must name the commit whose CR-SPEC governs this run (rule 7.2).")
         self.checklist = parse_checklist(a.checklist, a.next_run)

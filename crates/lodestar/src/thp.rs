@@ -19,11 +19,12 @@
 //!    the option from Rust needs `unsafe`, which the workspace forbids, so
 //!    it can only reach a process that's about to start. The child's
 //!    mimalloc then stops advising `MADV_HUGEPAGE` and sets
-//!    PR_SET_THP_DISABLE itself, so it holds even if (1) ever failed. It
-//!    covers mimalloc's arenas: in musl builds (the release builds) those
-//!    hold the C heaps (SQLite, zstd) too, since mimalloc is also the C
-//!    library's `malloc` there (X-mimalloc-override); in other builds the C
-//!    library's own heap is outside them, and only (1) covers it.
+//!    PR_SET_THP_DISABLE itself, so it holds even if (1) ever failed. That
+//!    `prctl` is process-wide, so it covers every heap in every build. The
+//!    `MADV_HUGEPAGE` advice it stops applies to mimalloc's arenas, which
+//!    in musl builds (the release builds) hold the C heaps (SQLite, zstd)
+//!    too, since mimalloc is also the C library's `malloc` there
+//!    (X-mimalloc-override).
 //!
 //! `LODESTAR_THP=allow` is the escape hatch: neither switch is touched, as
 //! before this change.
