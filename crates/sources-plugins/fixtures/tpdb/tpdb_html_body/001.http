@@ -1,0 +1,6 @@
+GET https://api.theporndb.net/scenes?parse=Example.Studio.24.02.29.Synthetic.Scene.One.1080p&per_page=5
+Accept: application/json
+Authorization: Bearer REDACTED
+
+HTTP 200
+Content-Type: text/html
