@@ -1774,11 +1774,11 @@ fn judge(
             verdict.shadow.retain(|d| {
                 let first = !seen.contains(&d.rule);
                 seen.push(d.rule);
-                first || !matches!(d.rule, RuleRef::Override(_))
+                first || !matches!(d.rule, lodestar_filter::RuleRef::Override(_))
             });
             if let Some(d) = &verdict.decision {
                 for e in &mut verdict.shadow {
-                    if matches!(e.rule, RuleRef::Override(_)) {
+                    if matches!(e.rule, lodestar_filter::RuleRef::Override(_)) {
                         e.action = d.action;
                     }
                 }
@@ -4671,7 +4671,6 @@ mod tests {
     fn sp3_counts_a_stored_key_once() {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
         let feed = store.register_source("feed", "1", 0).unwrap();
-        let e = sp3_engine();
         let mut flood = Flooding {
             counted: bit(feed),
             clock: Some(10_000),
