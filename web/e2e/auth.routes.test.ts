@@ -295,7 +295,7 @@ test('a session with the Legal Notice pending sees it at /login?next=…, accept
 test('About shows the Legal Notice', async ({ page, go, mock }) => {
 	mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 	await go('/settings/about');
-	await expect(page.getByRole('heading', { name: 'Legal' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Legal', exact: true })).toBeVisible();
 	await expect(page.getByRole('region', { name: 'Legal Notice' })).toContainText(
 		'Who publishes Lodestar'
 	);
