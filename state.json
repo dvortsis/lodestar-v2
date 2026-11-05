@@ -2858,7 +2858,7 @@
    "pr": 456
   },
   "X-log-url-redact-2": {
-   "status": "building",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnAgrquL8it3PiuejSu",
    "launched": "2026-11-05T01:52Z",
@@ -3503,7 +3503,8 @@
   "2026-11-05T08:33Z #474 SRC-17 merged (040567e4), archived; slot 10 idle with recorded reason.",
   "2026-11-05T08:36Z #477 X-flake-search-keyboard merged (ea01beb2; Assist late-mount fix), archived; X-fuzz-1105 launched in slot 1. Slots 10, 11 idle (recorded reason).",
   "2026-11-05T08:53Z #469 RP-UC merged (0531d024), archived. RP-1b (slot 6) and X-filter-perf-1105 (slot 10) launched. Slot 11 idle (recorded).",
-  "2026-11-05T09:00Z CI infra: test (ubuntu-latest) out of disk on #481 (also #432, #434 on 2026-11-04). X-ci-disk launched in slot 11. Known unrelated failure under \u00a72.18 until it lands."
+  "2026-11-05T09:00Z CI infra: test (ubuntu-latest) out of disk on #481 (also #432, #434 on 2026-11-04). X-ci-disk launched in slot 11. Known unrelated failure under \u00a72.18 until it lands.",
+  "2026-11-05T09:04Z #460 X-log-url-redact-2 merged (40c5c846; monotone by construction), archived; X-log-url-redact-3 launched in slot 2."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5241,7 +5242,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T09:00Z",
+  "updated": "2026-11-05T09:06Z",
   "items": [
    {
     "slot": 1,
@@ -5253,11 +5254,11 @@
    },
    {
     "slot": 2,
-    "slice": "X-log-url-redact-2",
+    "slice": "X-log-url-redact-3",
     "role": "build",
     "agent": "claude",
-    "doing": "Security: closing the remaining ways a URL password can reach the logs.",
-    "since": "2026-11-05T01:52Z"
+    "doing": "Security/performance: a proven fast path and the two narrowings for log redaction",
+    "since": "2026-11-05T09:06Z"
    },
    {
     "slot": 3,
