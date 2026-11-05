@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T16:50Z",
+  "updated_at": "2026-11-05T17:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4768,7 +4768,10 @@
     "Host-wiring slice: add a startup log event (catalogue, logs_catalog golden, web event-names and en/zh) warning on a registered Kind::Enrichment manifest that is neither in adult_enrichers nor the torrent cache (ENR-1c #502 left it, needs the log catalogue).",
     "owner-flag §2.26 (X-search-files-5 #505): torrent index 364.2 -> 391.0 B/torrent (budget 512), title_identity 15.96 B kept for B13b; rebuild ~1 h 55 min at 10M, ~2x index disk while running.",
     "X-search-files-6 (later, runner decides): the 10M file-search gate is still missed after #505 (cold p95 228.4 vs 150, warm p95 87.0 vs 30). Left: size:>100MB edge bucket (finer codes), file:mkv word clauses, -path:sample. No launch while draining to 8 slots.",
-    "B13b notes (from #505): tie api::compare::identity to title_identity (shared fn or cross-crate test); add the Backfilling-state fallback test."
+    "B13b notes (from #505): tie api::compare::identity to title_identity (shared fn or cross-crate test); add the Backfilling-state fallback test.",
+    "ENR-1d (ENR-1c session, after #502 merges; same slot): user-interest lookups (Interest::opened) must count against the 5,000/day cap per owner plan Q15 (\"jump the queue within the same cap\"); ENR-1 took them out of the cap (~9,350/day with ENR-7 limits). Runtime is unwired, so no live effect yet. Runner call: restore Q15 as written.",
+    "owner-flag §2.19/§2.26 (ENR-7 #504): drawer lookups rate-limited per client 10 burst + 1/30 s (IPv4 or IPv6 /64) and overall 30 burst + 1/20 s, 1,024 clients tracked; Public viewers never get the section; a Not adult correction hides a match.",
+    "ENR-G note (from #504 review): the detail API held_back check is narrower than the enrichment gate (no floor/dropping-list blocked_hash, no live filter verdict); until a refile sets HIDDEN a newly hidden item still shows its stored match."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
