@@ -29,6 +29,10 @@ use super::{NetPolicy, check_url};
 /// over `http`, which is how a client resolving it would read it; a host
 /// that doesn't parse that way is refused.
 ///
+/// The judged host must be a plain hostname (ASCII lower-case letters,
+/// digits, `-` and `.`) or an IP literal, and a `udp` URL is stored with
+/// that judged host, not its opaque spelling.
+///
 /// The kept form has no `@` anywhere, and nothing but the host and port
 /// between `://` and the first `/`, so a reader that splits the text
 /// naively finds the same host the `url` crate does.
@@ -36,7 +40,7 @@ use super::{NetPolicy, check_url};
 /// The result is a fixed point: `public_tracker_url(&kept) == Some(kept)`.
 /// Length and other caps are the caller's.
 pub fn public_tracker_url(raw: &str) -> Option<String> {
-    let url = Url::parse(raw).ok()?;
+    let mut url = Url::parse(raw).ok()?;
     if !url.username().is_empty() || url.password().is_some() {
         return None;
     }
@@ -49,8 +53,19 @@ pub fn public_tracker_url(raw: &str) -> Option<String> {
         _ => return None,
     };
     check_url(&judged, NetPolicy::notification(false)).ok()?;
-    if local_name(judged.host_str()?) {
+    let host = judged.host_str()?;
+    if !hostname_chars(host) || local_name(host) {
         return None;
+    }
+    // A `udp` URL keeps the host as judged (lower-cased, decoded,
+    // IDNA-mapped), never its opaque spelling: `udp://T.Example` and
+    // `udp://%74.example` store `t.example`, so a reader that doesn't
+    // decode can't see a different set of labels.
+    if url.scheme() == "udp" {
+        url.set_host(Some(host)).ok()?;
+        if url.host_str() != Some(host) {
+            return None;
+        }
     }
     let kept = String::from(url);
     // The serialisation must read back as itself, or what's stored isn't
@@ -63,6 +78,21 @@ pub fn public_tracker_url(raw: &str) -> Option<String> {
     let authority = kept.split_once("://")?.1.split('/').next()?;
     let unambiguous = !kept.contains('@') && !authority.contains(['?', '#']);
     (unambiguous && Url::parse(&kept).ok()?.as_str() == kept).then_some(kept)
+}
+
+/// Whether a judged host is made only of what a hostname or an IP
+/// literal can hold: ASCII lower-case letters, digits, `-` and `.`, or a
+/// bracketed IPv6 literal. The `url` crate keeps `,`, `;`, `_` and other
+/// characters in a domain, and a reader that splits a tracker list on
+/// them would find `127.0.0.1` in `127.0.0.1,t.example`.
+fn hostname_chars(host: &str) -> bool {
+    if let Some(v6) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return v6.parse::<std::net::Ipv6Addr>().is_ok();
+    }
+    !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
 }
 
 /// Names that resolve inside the user's network, judged after the `url`
@@ -155,6 +185,15 @@ mod tests {
                 "http://t.local.example/announce",
             ),
             ("http://t.example./announce", "http://t.example./announce"),
+            // A udp host is stored as judged, not as spelled.
+            ("udp://T.Example:6969/a", "udp://t.example:6969/a"),
+            ("udp://%74.example:6969/a", "udp://t.example:6969/a"),
+            (
+                "udp://bücher.example:6969/a",
+                "udp://xn--bcher-kva.example:6969/a",
+            ),
+            ("udp://t%E3%80%82example:6969/a", "udp://t.example:6969/a"),
+            ("udp://8.8.8.8:6969/a", "udp://8.8.8.8:6969/a"),
             // url 2.5.8 leaves `^` unencoded in a path.
             ("http:1.1/announce^x", "http://1.0.0.1/announce^x"),
         ] {
@@ -260,6 +299,18 @@ mod tests {
             "udp://t.example#x",
             "http://t.example/announce?u=@127.0.0.1",
             "http://t.example/@127.0.0.1/announce",
+            // Characters no hostname holds, which a list splitter could
+            // cut at.
+            "http://127.0.0.1,t.example/announce",
+            "http://localhost,t.example/a",
+            "http://127.0.0.1;t.example/a",
+            "http://127.0.0.1_.example/a",
+            "udp://127.0.0.1,t.example:6969/announce",
+            "http://t.example,/a",
+            "http://t_x.example/a",
+            "http://t.ex$ample/a",
+            "http://t.ex!ample/a",
+            "udp://t.ex*ample:6969/a",
             // Other schemes and no host.
             "wss://t.example/announce",
             "ws://t.example/announce",
@@ -337,6 +388,14 @@ mod tests {
                 u.host_str().unwrap(),
                 "{raw:?} kept as {kept:?}"
             );
+            let h = u.host_str().unwrap();
+            let plain =
+                |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.';
+            assert!(
+                h.starts_with('[') || h.bytes().all(plain),
+                "{raw:?} kept as {kept:?}"
+            );
+            assert_eq!(h, host, "the stored host is the judged one: {raw:?}");
             assert!(u.username().is_empty() && u.password().is_none());
             assert!(matches!(u.scheme(), "http" | "https" | "udp"));
         }
@@ -360,7 +419,7 @@ mod tests {
             any::<u128>().prop_map(|n| format!("[{}]", Ipv6Addr::from(n))),
             any::<u32>().prop_map(|n| format!("[::ffff:{}]", Ipv4Addr::from(n))),
             any::<u32>().prop_map(|n| format!("[64:ff9b::{}]", Ipv4Addr::from(n))),
-            "[a-zA-Z0-9.ⓛＬ%@\\\\:-]{0,24}",
+            "[a-zA-Z0-9.ⓛＬ%@\\\\:,;_$!*-]{0,24}",
             "[a-z]{0,8}\\.?(localhost|LOCALHOST|ⓛocalhost|%6cocalhost)\\.?",
         ]
     }

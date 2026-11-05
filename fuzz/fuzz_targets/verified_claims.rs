@@ -165,13 +165,23 @@ fuzz_target!(|data: &[u8]| {
 
     // The file's own trackers, in its order, once each, within the caps.
     assert!(c.trackers.len() <= claims::MAX_TRACKERS);
-    // Kept in the `url` crate's form, the address as it was checked.
+    // Kept in the `url` crate's form, the address as it was checked; a
+    // `udp` host as it reads over `http` (X-claim-trackers).
     let listed: Vec<String> = t
         .announce
         .iter()
         .flatten()
         .filter_map(|l| url::Url::parse(l).ok())
-        .map(String::from)
+        .map(|mut u| {
+            if u.scheme() == "udp"
+                && let Some(h) = u.host_str().map(str::to_owned)
+                && let Ok(j) = url::Url::parse(&format!("http://{h}/"))
+                && let Some(jh) = j.host_str()
+            {
+                let _ = u.set_host(Some(jh));
+            }
+            String::from(u)
+        })
         .collect();
     let mut at = 0;
     for (i, tr) in c.trackers.iter().enumerate() {
@@ -192,9 +202,25 @@ fuzz_target!(|data: &[u8]| {
             !authority.contains('@'),
             "a tracker with a user name was kept"
         );
+        let host = dialed_host(tr);
         assert!(
-            !non_public(&dialed_host(tr)),
+            !non_public(&host),
             "a tracker on a non-public host was kept"
+        );
+        assert!(
+            host.starts_with('[')
+                || host.bytes().all(|b| b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || b == b'-'
+                    || b == b'.'),
+            "a tracker host with characters no hostname holds was kept"
+        );
+        assert_eq!(
+            url::Url::parse(tr)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned)),
+            Some(host),
+            "a udp tracker was kept with a host other than the one judged"
         );
     }
 
