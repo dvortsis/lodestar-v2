@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T10:25Z",
+  "updated_at": "2026-11-05T10:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2970,11 +2970,13 @@
       "brief": "briefs/D-sources-guide.md"
     },
     "SRC-13b": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBXERze1gpefEzBTbM",
       "launched": "2026-11-05T06:29Z",
-      "brief": "briefs/SRC-13b.md"
+      "brief": "briefs/SRC-13b.md",
+      "merge": "7692ea2f",
+      "pr": 479
     },
     "ENR-1": {
       "status": "building",
@@ -3041,6 +3043,21 @@
       "status": "running",
       "session": "session_01MMjhnBYijZp8P3ZD6kxHSg",
       "since": "2026-11-05T10:20Z"
+    },
+    "RP-4": {
+      "status": "running",
+      "session": "session_01MMjhnAx3emoPDFaFTYmbJi",
+      "since": "2026-11-05T10:55Z"
+    },
+    "SRC-11c": {
+      "status": "running",
+      "session": "session_01MMjhn9xtDqii8xa2mRBwoQ",
+      "since": "2026-11-05T10:55Z"
+    },
+    "SRC-13c": {
+      "status": "running",
+      "session": "session_01MMjhn93TXYuo1mo58RPGAc",
+      "since": "2026-11-05T10:55Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5260,7 +5277,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T10:20Z",
+    "updated": "2026-11-05T10:55Z",
     "items": [
       {
         "slot": 1,
@@ -5296,11 +5313,11 @@
       },
       {
         "slot": 5,
-        "slice": "SRC-13b",
+        "slice": "RP-4",
         "role": "build",
         "agent": "claude",
-        "doing": "Sources: wiring the torrent-cache plugin in (consent covers your configured hosts, the writer entry, a content-safety crash-window fix)",
-        "since": "2026-11-05T06:29Z"
+        "doing": "Rule packs: SP-3 flooding, a bounded per-publisher near-duplicate rate judged in the writer",
+        "since": "2026-11-05T10:55Z"
       },
       {
         "slot": 6,
@@ -5328,8 +5345,11 @@
       },
       {
         "slot": 9,
-        "status": "idle",
-        "doing": "Held: SRC-11c, SRC-13c, RP-4, ENR-1b wait on #479 (writer.rs, host files); LEGAL-2 and X-settings-trim wait on #472"
+        "slice": "SRC-11c",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Sources: wiring the Sonarr/Radarr webhooks into the app",
+        "since": "2026-11-05T10:55Z"
       },
       {
         "slot": 10,
@@ -5341,8 +5361,11 @@
       },
       {
         "slot": 11,
-        "status": "idle",
-        "doing": "Held: SRC-11c, SRC-13c, RP-4, ENR-1b wait on #479 (writer.rs, host files); LEGAL-2 and X-settings-trim wait on #472"
+        "slice": "SRC-13c",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Sources: saving a plugin's settings, with exact-host consent and full addresses in the dialog",
+        "since": "2026-11-05T10:55Z"
       },
       {
         "slot": 12,
