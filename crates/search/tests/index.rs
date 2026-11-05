@@ -583,10 +583,14 @@ fn an_index_left_behind_catches_up_alone() {
         (index.watermark().unwrap(), index.files_watermark().unwrap()),
         (4, 0)
     );
-    // An extension and an exclusion, so the file index answers (a lone
-    // `ext:` and a bucketed size are the torrent index's terms,
-    // X-search-files-4 and -5).
-    assert!(ids(&index, "file:(ext:flac -zzqxnever)").is_empty());
+    // An extension, a size and an exclusion, so the file index answers
+    // (a lone `ext:`, a bucketed size and an extension less words are
+    // the torrent index's terms, X-search-files-4, -5 and -6).
+    assert!(ids(&index, "file:(ext:flac size:>0 -zzqxnever)").is_empty());
+    // An extension less a word reads its candidates from the torrent's
+    // terms, and its bad torrents from the file index (X-search-files-6),
+    // so, as a bucket clause, it finds the torrent already.
+    assert_eq!(ids(&index, "file:(ext:flac -zzqxnever)"), [1]);
     // A bucket clause on whole codes reads the torrent's own terms, which
     // the torrent index already has (X-search-files-5): it finds the
     // torrent before the file index catches up, with no matched files.
@@ -598,7 +602,7 @@ fn an_index_left_behind_catches_up_alone() {
     w.commit().unwrap();
     assert_eq!(index.num_docs(), 4);
     assert_eq!(index.num_files(), 9);
-    assert_eq!(ids(&index, "file:(ext:flac -zzqxnever)"), [1]);
+    assert_eq!(ids(&index, "file:(ext:flac size:>0 -zzqxnever)"), [1]);
 }
 
 #[test]

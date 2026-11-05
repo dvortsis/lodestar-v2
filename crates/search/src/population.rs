@@ -76,8 +76,9 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     // X-search-files-5 (v7): filled by the rebuild that makes v7. A
     // change to `files::size_code` or `covered_buckets` must bump the two
     // bucket fields, so an index answers from them only once rewritten.
-    ("file_bucket", 1),
-    ("file_ext_bucket", 1),
+    // Generation 2 (X-search-files-6): finer codes, with decimal floors.
+    ("file_bucket", 2),
+    ("file_ext_bucket", 2),
     ("title_identity", 1),
 ];
 

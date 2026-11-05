@@ -8,7 +8,7 @@ use lodestar_store::{Col, HotColumns};
 use tantivy::Term;
 use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, FuzzyTermQuery, Occur,
-    PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery,
+    PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery, TermSetQuery,
 };
 use tantivy::schema::{Field, IndexRecordOption};
 
@@ -207,17 +207,72 @@ pub(crate) fn bucket_edges(of: &Node) -> Option<Node> {
     })
 }
 
+/// A `file:(…)` clause of one extension atom and negated words
+/// (`file:(ext:mkv,mp4,avi -path:sample)`), which the torrent index
+/// answers with the file index's help when the words are rare
+/// (X-search-files-6): a torrent matches when one of its covered files
+/// has one of the extensions and none of the words. So it matches
+/// exactly when it has a covered file with the extensions
+/// (`file_ext_bucket`, the candidates) and isn't one of the *bad*
+/// torrents: those with such a file that has a word (the suspects, read
+/// from the file index driven by the words' postings) and none without
+/// (checked in the file index on the suspects' files only). The file
+/// pass computes the bad set ([`crate::files::bad_torrents`]) and
+/// stores it under [`rescued_key`]; when it doesn't (a common word, or
+/// the bucket terms not ready), the clause runs on the file index whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NegatedWords {
+    pub exts: Vec<String>,
+    /// The negated words, each a `Node::Word` that isn't on the title.
+    pub words: Vec<Node>,
+}
+
+pub(crate) fn negated_words(of: &Node) -> Option<NegatedWords> {
+    let Node::And { of } = of else {
+        return None;
+    };
+    let mut exts = None;
+    let mut words = Vec::new();
+    for n in of {
+        match n {
+            Node::Not { of: w } if matches!(**w, Node::Word { field, .. } if field != TextField::Title) =>
+            {
+                words.push((**w).clone());
+            }
+            n => match file_exts(n) {
+                Some(e) if exts.is_none() => exts = Some(e),
+                _ => return None,
+            },
+        }
+    }
+    let exts = exts?;
+    (!words.is_empty() && !exts.is_empty()).then_some(NegatedWords { exts, words })
+}
+
+/// The [`FileSets`] key of a [`negated_words`] clause's bad torrents.
+pub(crate) fn rescued_key(of: &Node) -> String {
+    format!("{of:?}@bad")
+}
+
 /// Whether the torrent index answers a `file:(…)` clause itself: a lone
 /// extension ([`file_exts`]), or a [`bucket_clause`] when its terms are
 /// complete.
+/// It also answers a [`negated_words`] clause whose bad torrents the
+/// file pass found.
 fn torrent_level(of: &Node, f: &Cx<'_>) -> bool {
-    file_exts(of).is_some() || (f.buckets && bucket_clause(of).is_some())
+    file_exts(of).is_some()
+        || (f.buckets
+            && (bucket_clause(of).is_some()
+                || (negated_words(of).is_some() && f.files.contains_key(&rescued_key(of)))))
 }
 
 /// The torrent-index query for a [`torrent_level`] clause, unscored.
 fn torrent_level_query(of: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
     if let Some(any) = file_exts(of) {
         return compile_opt(&Node::Ext { any }, f, now);
+    }
+    if let Some(neg) = negated_words(of) {
+        return Some(negated_query(&neg, f, f.files.get(&rescued_key(of))?));
     }
     let b = bucket_clause(of)?;
     let (codes, _) = crate::files::code_plan(b.lo, b.hi);
@@ -258,6 +313,30 @@ fn torrent_level_query(of: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
     } else {
         Box::new(BooleanQuery::new(clauses))
     })
+}
+
+/// A [`negated_words`] clause on the torrent index: a covered file with
+/// one of the extensions (any of its `{ext}:{code}` terms), less the
+/// file pass's bad torrents (by their indexed `id`).
+fn negated_query(neg: &NegatedWords, f: &Cx<'_>, bad: &IdSet) -> Q {
+    if f.file_ext_bucket == ABSENT {
+        return Box::new(EmptyQuery);
+    }
+    let exts: Vec<String> = neg.exts.iter().map(|e| regex_escape(e)).collect();
+    let pattern = format!("({}):[0-9]+", exts.join("|"));
+    let candidates: Q = match RegexQuery::from_pattern(&pattern, f.file_ext_bucket) {
+        Ok(q) => Box::new(q),
+        Err(_) => return Box::new(EmptyQuery),
+    };
+    let bad = bad.to_vec();
+    if bad.is_empty() || f.id == ABSENT {
+        return candidates;
+    }
+    let ids = TermSetQuery::new(bad.into_iter().map(|id| Term::from_field_u64(f.id, id)));
+    Box::new(BooleanQuery::new(vec![
+        (Occur::Must, candidates),
+        (Occur::MustNot, Box::new(ids)),
+    ]))
 }
 
 /// A compiled query in its parts.

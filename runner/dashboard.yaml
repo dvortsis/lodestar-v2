@@ -370,6 +370,7 @@ placement:
   - X-search-files-3
   - X-search-files-4
   - X-search-files-5
+  - X-search-files-6
   - G-import-*
   - CR-3
   - G-rebuild-10M

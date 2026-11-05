@@ -1333,6 +1333,26 @@ impl SearchIndex {
         for of in &clauses {
             let key = format!("{of:?}");
             cancel.check()?;
+            // A clause of extensions less rare words: the bad torrents
+            // only, read through the words (X-search-files-6).
+            if let Some(neg) = compile::negated_words(of).filter(|_| buckets) {
+                match files::bad_torrents(
+                    &files_searcher,
+                    &self.files.fields,
+                    &neg,
+                    &self.files.cache,
+                    cancel,
+                ) {
+                    Ok(Some(bad)) => {
+                        sets.insert(compile::rescued_key(of), Arc::new(bad));
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(e @ (Error::Cancelled | Error::OutOfTime)) => return Err(e),
+                    // The whole clause on the file index, below.
+                    Err(_) => {}
+                }
+            }
             let query = files::compile(of, &self.files.fields);
             // Tests swap in a query that cancels partway (`testing`).
             #[cfg(test)]
