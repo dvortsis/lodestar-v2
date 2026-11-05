@@ -5,10 +5,12 @@
 //!   [`saved_config`]). Settings that are missing or don't pass the
 //!   plugin's rules give an empty list: the plugin is registered but
 //!   fails "needs setup", and its egress reaches nothing.
-//! - **Consent covers the configured hosts.** The plugin's manifest lists
-//!   its config's hosts as its endpoints, which SRC-4's consent version
-//!   digests: a list with a new or changed host switches the plugin off at
-//!   the next start until it's acknowledged again.
+//! - **Consent covers the configured addresses.** The plugin's manifest
+//!   lists its config's address templates as its endpoints, which the
+//!   consent version holds exactly (SRC-13c): a list with a new or changed
+//!   address switches the plugin off at the next start until it's
+//!   acknowledged again. The settings are written through
+//!   `PATCH /sources/{id}`'s `config` and apply at the next start.
 //! - **Fed from two places** ([`run`]): the pipeline's [`Cursor`] over
 //!   unverified items, a page at a time and never more than the lane has
 //!   room for (`Why::Unverified`), and user interest, a search hit or a
@@ -441,14 +443,14 @@ mod tests {
         let built = build(saved_config(&store));
         assert_eq!(built.plugin.config().caches().len(), 1);
         assert!(SourcePlugin::endpoints(&*built.plugin).is_some());
-        let hosts: Vec<&str> = built
+        let listed: Vec<&str> = built
             .plugin
             .manifest()
             .endpoints
             .iter()
             .map(|e| e.host)
             .collect();
-        assert_eq!(hosts, ["a.example"]);
+        assert_eq!(listed, ["a.example/t/{hash}"]);
     }
 
     /// The start's consent check (`need_in`, as the pipeline's start runs
@@ -473,6 +475,16 @@ mod tests {
             build(Config::new(&["https://a.example/{hash}", "https://b.example/{hash}"]).unwrap());
         assert_eq!(
             consent::need_in(&store, added.plugin.manifest()).unwrap(),
+            Some(consent::Need::Endpoints)
+        );
+        // A record in SRC-4's digest form, as stored before SRC-13c,
+        // covers nothing: the start switches the plugin off (fail closed).
+        store.set_source_state(id, SourceState::Disabled).unwrap();
+        store
+            .enable_source(id, Some("external|1-89a3fbe40d4a9f3f|1"))
+            .unwrap();
+        assert_eq!(
+            consent::need_in(&store, again.plugin.manifest()).unwrap(),
             Some(consent::Need::Endpoints)
         );
     }

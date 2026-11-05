@@ -501,6 +501,9 @@ pub struct SourceView {
     /// A purge started and didn't finish (a crash, a cancel or an error):
     /// the source stays off until a purge run again finishes it.
     pub purge_pending: bool,
+    /// Its saved settings differ from the ones it was built with at this
+    /// start: they apply at the next one.
+    pub config_pending: bool,
 }
 
 /// `HTTPS_PROXY` or `ALL_PROXY` is set while a source connects directly.
@@ -556,7 +559,12 @@ pub fn egress_warnings(
     out
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// The largest settings document `PATCH /sources/{id}` takes, in bytes.
+/// A plugin's own rules are tighter (a torrent cache's list is at most
+/// about 4 KiB); this bounds what reaches them.
+pub const MAX_CONFIG_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct SourceChange {
     pub enabled: Option<bool>,
     pub priority: Option<Priority>,
@@ -573,6 +581,26 @@ pub struct SourceChange {
     /// `Some(windows)` sets them (`[]`: any time).
     pub schedule: Option<Vec<Window>>,
     pub agents: Option<u32>,
+    /// The plugin's settings as JSON, checked by the plugin
+    /// (`SourcePlugin::check_config`). Applies at the next start.
+    pub config: Option<String>,
+}
+
+impl std::fmt::Debug for SourceChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceChange")
+            .field("enabled", &self.enabled)
+            .field("priority", &self.priority)
+            .field("consent", &self.consent)
+            .field("consent_version", &self.consent_version.as_ref().map(|_| "…"))
+            .field("password_confirmed", &self.password_confirmed)
+            .field("egress", &self.egress)
+            .field("schedule", &self.schedule)
+            .field("agents", &self.agents)
+            // Settings can hold a per-user address: never printed.
+            .field("config", &self.config.as_ref().map(|_| "…"))
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -923,7 +951,12 @@ impl Control {
                     let names = store.source_secret_names(s.manifest.id)?;
                     let settings = saved_settings(&store, s.manifest.id, false)?;
                     let pending = store.source_purge_started(s.manifest.id)?.is_some();
-                    Ok((s.id, (need, names, settings, pending)))
+                    let config = if s.config_editable {
+                        store.source_setting(s.manifest.id, SourceSetting::Config)?
+                    } else {
+                        None
+                    };
+                    Ok((s.id, (need, names, settings, pending, config)))
                 })
                 .collect::<Result<HashMap<_, _>, Error>>()?;
             (store.sources()?, store.cohorts(hour - 23, hour + 1)?, gates)
@@ -935,8 +968,11 @@ impl Control {
             .into_iter()
             .map(|status| {
                 let row = rows.iter().find(|r| r.id == status.id);
-                let (need, credentials, settings, purge_pending) =
+                let (need, credentials, settings, purge_pending, saved_config) =
                     gates.get(&status.id).cloned().unwrap_or_default();
+                let config_pending = saved_config.is_some_and(|saved| {
+                    self.inner.monitor.running_config(status.id).as_deref() != Some(saved.as_str())
+                });
                 let egress_warnings = egress_warnings(
                     &settings.egress,
                     status.egress.as_ref(),
@@ -966,6 +1002,7 @@ impl Control {
                     settings,
                     egress_warnings,
                     purge_pending,
+                    config_pending,
                     status,
                 }
             })
@@ -990,6 +1027,28 @@ impl Control {
     ) -> Result<SourceView, SourceError> {
         let manifest = self.manifest(id)?;
         let priority = change.priority;
+        // The plugin checks its settings before anything is read or
+        // written; what's saved is its own form of them. A refusal names
+        // the rule, never a value.
+        let config = match &change.config {
+            None => None,
+            Some(json) if json.len() > MAX_CONFIG_BYTES => {
+                return Err(SourceError::Invalid {
+                    field: "config",
+                    reason: format!("the settings are over {} KiB", MAX_CONFIG_BYTES / 1024),
+                });
+            }
+            Some(json) => Some(
+                self.inner
+                    .monitor
+                    .check_config(id, json)
+                    .ok_or(SourceError::Unknown)?
+                    .map_err(|r| SourceError::Invalid {
+                        field: "config",
+                        reason: r.0.to_string(),
+                    })?,
+            ),
+        };
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
             let mut store = this.inner.store.lock().expect("store lock");
@@ -1042,7 +1101,14 @@ impl Control {
             if change.egress.is_some() && !change.password_confirmed {
                 return Err(SourceError::PasswordRequired);
             }
-            let settings = settings_changes(&change, &this.policy(id)?)?;
+            let mut settings = settings_changes(&change, &this.policy(id)?)?;
+            if let Some(json) = config {
+                // Applies at the next start, when the plugin is built from
+                // it: a list with an address the stored acknowledgement
+                // doesn't hold switches the source off there until it's
+                // acknowledged again (`consent::need_in`).
+                settings.push((SourceSetting::Config, json));
+            }
             if let Some(p) = change.priority {
                 let key = format!("{PRIORITY_KEY}{}", manifest.id);
                 let value = format!("\"{}\"", priority_name(p));

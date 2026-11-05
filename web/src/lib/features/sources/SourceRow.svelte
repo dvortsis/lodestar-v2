@@ -8,6 +8,7 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Badge from '$lib/ui/labels/Badge.svelte';
+	import Mono from '$lib/ui/labels/Mono.svelte';
 	import Select from '$lib/ui/fields/Select.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import StatusPill from './StatusPill.svelte';
@@ -45,6 +46,9 @@
 	const found = $derived(formatCount(s.health.harvested_24h, locale()));
 	const stored = $derived(formatCount(s.health.stored_24h, locale()));
 	const consent = $derived(consentText(s.consent));
+	// What an acknowledgement covers, exactly as the server compares it: full addresses, so a
+	// per-user path (`/~me/`) is seen before it's accepted (SRC-13c).
+	const showAddresses = $derived(need === 'endpoints' || need === 'consent');
 
 	async function toggled(e: Event & { currentTarget: HTMLInputElement }) {
 		const el = e.currentTarget;
@@ -111,6 +115,20 @@
 		<p class="text-small" id="{id}-need" data-testid="{id}-need">
 			{setupText(need)}
 		</p>
+	{/if}
+	{#if showAddresses}
+		<div class="flex flex-col gap-1 text-small" data-testid="{id}-addresses">
+			<p>{m.sources_addresses_heading()}</p>
+			{#if s.endpoints.length > 0}
+				<ul class="flex flex-col gap-1">
+					{#each s.endpoints as address (address)}
+						<li><Mono wrap>{address}</Mono></li>
+					{/each}
+				</ul>
+			{:else}
+				<p class="text-muted-text">{m.sources_addresses_none()}</p>
+			{/if}
+		</div>
 	{/if}
 	{#if s.health.last_error}
 		<p class="text-small text-error" data-testid="{id}-last-error">
