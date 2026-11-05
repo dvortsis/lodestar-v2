@@ -104,4 +104,8 @@ A security fix in `crates/log/src/url.rs` (architecture §12.1, B12, B-log1).
   - `https://h/pass.json?x": "<s>"`: the name is `json`;
   - `magnet:?…&tr=https://h/pass?x": "<s>"`: the magnet's span takes the name;
   - `x=https%3A%2F%2Fh%2Fpass%3Fx": "<s>"`: encoded, so no URL rule reads it.
+- **Other look-alikes still hide nothing, on `main` too:** `﹕` (U+FE55), `∶` (U+2236), `︓` (U+FE13), and spaces such as U+202F and U+3000 after `Bearer`. Each is one more arm in `ascii_separators`, and in `plain_line`'s refusals, if logs ever show it.
+- **The look-alike commit's own review** found nothing above its bar.
+  - It checked that `plain_line`'s byte matching is exact, and that `ascii_separators` keeps the words the same.
+  - Its own fuzz ran 300,000 soups with look-alikes and near misses, and found 0 mismatches.
 - **Cosmetic:** `https://h/pass?x"=[<s>]` shows as `https://h/pass"=[redacted]]`, with one extra `]`.
