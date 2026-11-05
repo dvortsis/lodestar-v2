@@ -4,7 +4,7 @@
 
 *Status: the in-app step that shows this notice at first-run setup, the on-by-default rule packs and the unauthorised-copy pack are being built for the first release. Until they ship, the notice is published here and linked from the README and the user guide.*
 
-Lodestar shows this notice once, before first use, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
+Lodestar shows this notice before first use, and again whenever its version is raised, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
 
 ## 1. Who publishes Lodestar, and under what licence
 Lodestar is published by its copyright holder, **Benjamin Dvortsis**, who maintains the repository at https://github.com/dvortsis/lodestar-v2, together with the contributors named in that repository's history.
