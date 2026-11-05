@@ -18,6 +18,7 @@
 //! do; the pool waits on prepare and prepare on the writer, which is the
 //! backpressure that keeps memory flat.
 
+pub mod adult_enrich;
 pub mod control;
 mod coordinator;
 mod dht;

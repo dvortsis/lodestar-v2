@@ -1039,18 +1039,26 @@ mod tests {
         assert!(!seeded.unseeded && seeded.conditions.is_empty());
         // Rules added after RP-0 never applied on a store seeded before
         // them: nothing of theirs applies, and they're pending, in shadow.
+        // Rules with a version after their first (MW-2@2 and FK-2@2,
+        // RP-1b) keep version 1 applied, with the new one pending.
         let added = super::super::manifest::ADDED_AFTER_RP0;
+        let bumped = [PackRule::Mw2, PackRule::Fk2];
         for r in PackRule::ALL {
             if added.contains(&r) {
                 for st in [none.state(r), seeded.state(r)] {
                     assert!(st.apply.is_empty() && st.pending(), "{}", r.id());
                     assert_eq!(st.direction, Some(Direction::Widens), "{}", r.id());
                 }
+            } else if bumped.contains(&r) {
+                for st in [none.state(r), seeded.state(r)] {
+                    assert!(st.pending(), "{}", r.id());
+                    assert_eq!(st.direction, Some(Direction::Narrows), "{}", r.id());
+                }
             } else {
                 assert!(none.state(r).plain && seeded.state(r).plain, "{}", r.id());
             }
         }
-        assert_eq!(seeded.pending().count(), added.len());
+        assert_eq!(seeded.pending().count(), added.len() + bumped.len());
         // A fresh store's record has every rule at its current version.
         let fresh = Rows {
             applied: [

@@ -221,7 +221,8 @@ impl Fixture {
         let (uri, body) = match self.auth.setup_token() {
             Some(token) => (
                 "/api/v1/setup",
-                json!({ "token": token, "password": "correct horse battery" }),
+                json!({ "token": token, "password": "correct horse battery",
+                        "notice_version": lodestar_api::legal::NOTICE_VERSION }),
             ),
             None => (
                 "/api/v1/login",
@@ -1070,7 +1071,8 @@ impl GatedFixture {
         let (uri, body) = match self.auth.setup_token() {
             Some(token) => (
                 "/api/v1/setup",
-                json!({ "token": token, "password": "correct horse battery" }),
+                json!({ "token": token, "password": "correct horse battery",
+                        "notice_version": lodestar_api::legal::NOTICE_VERSION }),
             ),
             None => (
                 "/api/v1/login",

@@ -28,6 +28,8 @@ export function redirectFor(
 	if (!status) return null;
 	if (page === 'login') {
 		if (status.setup_required) return '/setup';
+		// Signed in but the Legal Notice isn't accepted: the sign-in page shows it.
+		if (status.logged_in && status.notice_required) return null;
 		return status.logged_in ? next : null;
 	}
 	if (status.setup_required) return null;

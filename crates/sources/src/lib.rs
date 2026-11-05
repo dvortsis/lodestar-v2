@@ -9,6 +9,7 @@
 pub mod claims;
 pub mod consent;
 pub mod egress;
+pub mod enrich;
 mod funnel;
 pub mod http;
 mod manifest;

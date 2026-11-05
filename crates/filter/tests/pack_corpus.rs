@@ -277,12 +277,12 @@ fn precision_items_reach_their_guards() {
 /// The guards §20.6 names that aren't built yet: the items they'd pass
 /// are held today, listed with `gap` lines and reported. When a guard is
 /// built (with its version bump), its items pass and this list shrinks.
+/// RP-1b built the last two (MW-2@2, FK-2@2).
 #[test]
 fn known_gaps_are_listed() {
     let report = builtin().run(&Manifest::builtin());
-    let mut gaps: Vec<&str> = report.gaps().iter().map(|(r, _)| r.id()).collect();
-    gaps.sort_unstable();
-    assert_eq!(gaps, ["FK-2", "MW-2", "MW-2"]);
+    let gaps: Vec<&str> = report.gaps().iter().map(|(r, _)| r.id()).collect();
+    assert!(gaps.is_empty(), "{gaps:?}");
     for p in report.precision.iter().filter(|p| !p.gaps.is_empty()) {
         let held: Vec<PackRule> = p.held.iter().map(|(r, _)| *r).collect();
         assert_eq!(held, p.gaps, "{}", p.name);
@@ -394,6 +394,36 @@ fn a_broken_guard_fails_the_corpus() {
                 failures.join("\n")
             );
         }
+    }
+}
+
+/// MW-2@2's music-production guard and FK-2@2's short-episode guard
+/// (RP-1b) are what lets their precision items pass: with the rule back at
+/// its version 1, which a release keeps while installs may have it
+/// applied, every one of them is held by that rule and nothing else.
+#[test]
+fn the_rp1b_guards_let_their_items_pass() {
+    let c = builtin();
+    let m = Manifest::builtin();
+    for (rule, expect) in [(PackRule::Mw2, 4), (PackRule::Fk2, 2)] {
+        let e = m.entry(rule);
+        assert_eq!(e.current().version, 2, "{}", rule.id());
+        assert_eq!(e.current().direction, Direction::Narrows, "{}", rule.id());
+        let v1 = e.retained(1).expect("version 1 is kept").clone();
+        let report = c.run(&manifest_with(rule, vec![v1]));
+        // The items each version-1 rule holds that version 2 passes.
+        let held: Vec<&str> = report
+            .precision
+            .iter()
+            .filter(|p| p.held.iter().any(|(r, _)| *r == rule))
+            .map(|p| {
+                let rules: Vec<PackRule> = p.held.iter().map(|(r, _)| *r).collect();
+                assert_eq!(rules, [rule], "{}", p.name);
+                p.name.as_str()
+            })
+            .collect();
+        assert_eq!(held.len(), expect, "{}: {held:?}", rule.id());
+        assert!(!report.passes());
     }
 }
 

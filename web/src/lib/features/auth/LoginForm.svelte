@@ -10,13 +10,16 @@
 	import { createAuthForm } from './form.svelte';
 	import FormAlert from './FormAlert.svelte';
 	import { toNext, toSetup } from './nav';
+	import { checkAuth } from './gate';
 	import { setSession } from './session.svelte';
 
 	interface Props {
 		next: string;
+		/** Signed in, but the Legal Notice must be accepted first: the page shows it. */
+		onnotice?: () => void;
 	}
 
-	let { next }: Props = $props();
+	let { next, onnotice }: Props = $props();
 
 	const form = createAuthForm();
 	onDestroy(form.destroy);
@@ -49,7 +52,9 @@
 		if (ok) {
 			password = '';
 			setSession('signed_in');
-			await toNext(next);
+			const status = await checkAuth();
+			if (status?.notice_required && onnotice) onnotice();
+			else await toNext(next);
 			return;
 		}
 		const s = form.state;

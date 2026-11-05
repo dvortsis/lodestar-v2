@@ -560,5 +560,7 @@
 	"settings_logging_ev_update_probation_passed_n": "新版本已确认",
 	"settings_logging_ev_update_probation_passed_h": "新版本运行良好，予以保留。",
 	"settings_logging_ev_update_probation_failed_n": "新版本已回滚",
-	"settings_logging_ev_update_probation_failed_h": "新版本出现问题，已恢复旧版本。"
+	"settings_logging_ev_update_probation_failed_h": "新版本出现问题，已恢复旧版本。",
+	"settings_logging_ev_auth_notice_accepted_n": "已接受法律声明",
+	"settings_logging_ev_auth_notice_accepted_h": "管理员在登录关卡接受了法律声明；该行给出其版本。"
 }

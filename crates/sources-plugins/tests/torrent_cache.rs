@@ -959,3 +959,88 @@ fn the_queue_says_how_much_room_each_lane_has() {
     assert_eq!(queue.room(Why::Unverified), torrent_cache::QUEUE - 1);
     assert_eq!(queue.room(Why::Interest), torrent_cache::QUEUE);
 }
+
+// ---- the sync check is the async path's (X-fuzz-cache-1105) ----
+
+/// The `torrent_cache` fuzz target's seeds, each a key-picking byte and a
+/// body.
+fn fuzz_seeds() -> Vec<(String, u8, Vec<u8>)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/seeds/torrent_cache");
+    let mut out: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            let data = std::fs::read(e.path()).unwrap();
+            let name = e.file_name().into_string().unwrap();
+            (name, data[0], data[1..].to_vec())
+        })
+        .collect();
+    out.sort();
+    assert!(out.len() >= 20, "the seeds are missing");
+    out
+}
+
+/// The key the fuzz target picks for `body`: its v1 hash, its truncated
+/// v2 hash, or 20 bytes from the input.
+fn picked(pick: u8, body: &[u8]) -> InfoHash {
+    let hashes = lodestar_metainfo::TorrentFile::raw_info(body, &torrent_cache::LIMITS)
+        .ok()
+        .and_then(|raw| lodestar_metainfo::Info::parse(raw).ok())
+        .map(|i| (i.v1, i.v2.map(|h| h.truncated())));
+    match (pick % 3, hashes) {
+        (0, Some((v1, v2))) => v1.or(v2).unwrap(),
+        (1, Some((v1, v2))) => v2.or(v1).unwrap(),
+        _ => {
+            let mut k = [0u8; 20];
+            let n = body.len().min(20);
+            k[..n].copy_from_slice(&body[..n]);
+            InfoHash(k)
+        }
+    }
+}
+
+/// The plugin's async lookup, with one cache serving `body`, gives what
+/// `verify_body` gives on the same bytes: the same file, raw dict, claims
+/// and provenance, or the same miss, counted once.
+#[tokio::test(start_paused = true)]
+async fn the_async_lookup_and_verify_body_agree_on_the_fuzz_seeds() {
+    let (mut hits, mut misses) = (0, 0);
+    for (name, pick, body) in fuzz_seeds() {
+        let lookup = unverified(picked(pick, &body));
+        let sync = torrent_cache::verify_body(body.clone(), &lookup, "c.example");
+        let fake = FakeCache::new(&[("c.example", Answer::File(body))]);
+        let mut run = start(&["https://c.example/{hash}"], fake, &[lookup]);
+        let stats = run.plugin.stats();
+        match sync {
+            Ok(want) => {
+                hits += 1;
+                let got = run.verified.recv().await.unwrap();
+                assert_eq!(got.key(), want.key(), "{name}");
+                assert_eq!(got.why(), want.why(), "{name}");
+                assert_eq!(got.is_v2(), want.is_v2(), "{name}");
+                assert_eq!(got.host(), want.host(), "{name}");
+                assert_eq!(got.torrent(), want.torrent(), "{name}");
+                assert_eq!(got.info_raw(), want.info_raw(), "{name}");
+                assert_eq!(got.claims(), want.claims(), "{name}");
+                assert_eq!(got.provenance(), want.provenance(), "{name}");
+                assert_eq!(n(&stats.verified), 1, "{name}");
+            }
+            Err(miss) => {
+                misses += 1;
+                wait_for("the miss to be counted", || {
+                    n(&stats.mismatched) + n(&stats.invalid) == 1
+                })
+                .await;
+                let (mismatched, invalid) = (n(&stats.mismatched), n(&stats.invalid));
+                match miss {
+                    Miss::Mismatch => assert_eq!((mismatched, invalid), (1, 0), "{name}"),
+                    Miss::Invalid => assert_eq!((mismatched, invalid), (0, 1), "{name}"),
+                    other => panic!("{name}: verify_body said {other:?}"),
+                }
+                assert!(run.verified.try_recv().is_err(), "{name}");
+            }
+        }
+        run.running.stop_within().await.unwrap();
+    }
+    assert!(hits > 0 && misses > 0, "{hits} hits, {misses} misses");
+}
