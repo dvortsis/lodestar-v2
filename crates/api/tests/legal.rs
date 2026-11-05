@@ -314,6 +314,94 @@ async fn a_version_bump_gates_the_session_until_accepted() {
     assert_eq!(status_of(&a, &cookie).await, (true, false));
 }
 
+/// The routes a session with the notice pending may still reach: the
+/// open auth routes, the notice itself and accepting it, the API's own
+/// description, and the token-authenticated webhook calls. Everything
+/// else in `/openapi.json` answers `409 notice_required`.
+const PENDING_ALLOWED: [(&str, &str); 8] = [
+    ("get", "/auth"),
+    ("post", "/setup"),
+    ("post", "/login"),
+    ("post", "/logout"),
+    ("get", "/legal/notice"),
+    ("post", "/legal/accept"),
+    ("get", "/openapi.json"),
+    ("post", "/webhooks/{integration}"),
+];
+
+/// Every documented path and method, with the notice pending: 409
+/// `notice_required` unless the route is on [`PENDING_ALLOWED`]. A new
+/// route mounted without `protected` (or the key guard) fails here. The
+/// document is the router's own (`tests/openapi.rs` keeps the two in
+/// step), so nothing can be left out of the walk.
+#[tokio::test]
+async fn every_route_but_the_allowed_ones_meets_the_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = set_up_then(dir.path(), NOTICE_VERSION, NOTICE_VERSION + 1).await;
+    let cookie = login(&a).await;
+    let (status, doc, _) = send(&a, get("/api/v1/openapi.json", None), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let paths = doc["paths"].as_object().expect("paths");
+    let mut walked = 0;
+    let mut allowed_seen = Vec::new();
+    for (path, item) in paths {
+        for (method, _) in item.as_object().unwrap() {
+            let m = method.as_str();
+            if !matches!(m, "get" | "post" | "put" | "patch" | "delete") {
+                continue;
+            }
+            walked += 1;
+            // Any value fits a path parameter: the guard answers first.
+            let uri = format!("/api/v1{}", fill_params(path));
+            let mut req = Request::builder()
+                .method(m.to_uppercase().as_str())
+                .uri(&uri)
+                .header(header::COOKIE, &cookie);
+            if m != "get" && m != "delete" {
+                req = req.header(header::CONTENT_TYPE, "application/json");
+            }
+            let body = if m == "get" {
+                Body::empty()
+            } else {
+                Body::from("{}")
+            };
+            let (status, body, _) = send(&a, req.body(body).unwrap(), None).await;
+            let gated =
+                status == StatusCode::CONFLICT && body["error"]["code"] == "notice_required";
+            if PENDING_ALLOWED.contains(&(m, path.as_str())) {
+                allowed_seen.push((m, path.clone()));
+                assert!(!gated, "{m} {path} must stay open with the notice pending");
+            } else {
+                assert!(gated, "{m} {path} isn't gated: {status} {body}");
+            }
+        }
+    }
+    assert!(walked > 100, "walked only {walked} routes");
+    assert_eq!(
+        allowed_seen.len(),
+        PENDING_ALLOWED.len(),
+        "every allowed route is documented: {allowed_seen:?}"
+    );
+}
+
+/// `/torrents/{hash}` → `/torrents/1`.
+fn fill_params(path: &str) -> String {
+    let mut out = String::new();
+    let mut in_param = false;
+    for c in path.chars() {
+        match c {
+            '{' => {
+                in_param = true;
+                out.push('1');
+            }
+            '}' => in_param = false,
+            _ if !in_param => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// An edit that leaves the version alone never shows the notice again.
 #[tokio::test]
 async fn an_editorial_change_does_not_gate() {

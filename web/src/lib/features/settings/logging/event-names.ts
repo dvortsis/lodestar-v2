@@ -404,6 +404,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_auth_rate_limited_n,
 		m.settings_logging_ev_auth_rate_limited_h
 	],
+	'auth.notice_accepted': [
+		m.settings_logging_ev_auth_notice_accepted_n,
+		m.settings_logging_ev_auth_notice_accepted_h
+	],
 	'auth.password_changed': [
 		m.settings_logging_ev_auth_password_changed_n,
 		m.settings_logging_ev_auth_password_changed_h

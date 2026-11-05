@@ -17,7 +17,7 @@ use crate::ApiState;
 use crate::auth::auth_error;
 use crate::dto::auth::{AcceptNoticeRequest, LegalNotice, OkResponse};
 use crate::error::{ApiResult, internal};
-use crate::extract::{Json, same_origin_json};
+use crate::extract::{ClientIp, Json, same_origin_json};
 
 /// The Legal Notice's version. See the module docs before changing it.
 pub const NOTICE_VERSION: u32 = 3;
@@ -55,16 +55,21 @@ pub(crate) async fn get_notice(State(s): State<ApiState>) -> axum::Json<LegalNot
 )]
 pub(crate) async fn accept_notice(
     State(s): State<ApiState>,
+    ClientIp(ip): ClientIp,
     headers: HeaderMap,
     Json(body): Json<AcceptNoticeRequest>,
 ) -> ApiResult<axum::Json<OkResponse>> {
     same_origin_json(&headers)?;
     // Saving writes auth.json under the auth lock: off the async workers.
     let auth = s.auth.clone();
-    tokio::task::spawn_blocking(move || auth.accept_notice(body.version))
+    let version = body.version;
+    tokio::task::spawn_blocking(move || auth.accept_notice(version))
         .await
         .map_err(internal)?
         .map_err(|e| auth_error(e, "version"))?;
+    // The audit line: who (the client address) and which version; the
+    // record carries the time. Never the session or the cookie.
+    crate::auth::log_events::notice_accepted(ip, version);
     Ok(axum::Json(OkResponse::OK))
 }
 
