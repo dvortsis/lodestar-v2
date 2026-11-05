@@ -76,6 +76,7 @@ fn scripted(id: &'static str, always_adult: bool) -> (Arc<Scripted>, mpsc::Sende
             default_priority: Priority::Normal,
             enabled_by_default: true,
             always_adult,
+            finds_private: false,
         },
         rx: Mutex::new(Some(rx)),
     };

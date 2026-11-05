@@ -92,6 +92,8 @@ pub(crate) const MANIFEST: Manifest = Manifest {
     default_priority: Priority::Normal,
     enabled_by_default: false,
     always_adult: false,
+    // What your download clients hold (§18.7).
+    finds_private: true,
 };
 
 /// No settings of its own: the client and its credentials are Settings →

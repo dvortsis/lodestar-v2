@@ -158,6 +158,7 @@ fn dht_source() -> Source {
         },
         enabled: true,
         endpoints: Vec::new(),
+        finds_private: false,
         health: SourceHealth {
             harvested_24h: 1200,
             last_error: None,
@@ -194,6 +195,7 @@ fn restricted_source() -> Source {
         consent_version: "t1 22:https://shadow.example".into(),
         enabled: false,
         endpoints: vec!["https://shadow.example".into()],
+        finds_private: false,
         health: SourceHealth {
             harvested_24h: 0,
             last_error: None,

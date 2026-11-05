@@ -115,6 +115,7 @@ pub(crate) const MANIFEST: Manifest = Manifest {
     default_priority: Priority::Low,
     enabled_by_default: false,
     always_adult: false,
+    finds_private: false,
 };
 
 /// The settings form (§10.10).

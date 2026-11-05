@@ -419,6 +419,10 @@ pub struct Source {
     /// addresses it runs with now: settings saved since apply at the next
     /// start (`restart_required`).
     pub endpoints: Vec<String>,
+    /// What it finds reflects your own setup (download clients, indexers,
+    /// Sonarr and Radarr): kept private, and never named to an API key or
+    /// feed token as a source of anything (§18.7).
+    pub finds_private: bool,
     pub health: SourceHealth,
     pub id: u8,
     pub kinds: Vec<SourceKind>,
@@ -474,6 +478,7 @@ pub struct Source {
         },
         "enabled": true,
         "endpoints": [],
+        "finds_private": false,
         "health": {
             "harvested_24h": 1840221,
             "last_error": null,

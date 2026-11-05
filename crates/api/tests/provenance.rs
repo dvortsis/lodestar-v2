@@ -61,6 +61,7 @@ fn source(id: u8, plugin: &str, name: &str, consent: &str) -> Source {
         },
         "enabled": true,
         "endpoints": [],
+        "finds_private": false,
         "health": { "harvested_24h": 0, "last_error": null, "last_run": null,
             "running": true, "stored_24h": 0 },
         "id": id,

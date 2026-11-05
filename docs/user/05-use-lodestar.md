@@ -8,6 +8,7 @@ Once you create the admin password, Lodestar opens to **Search** while the [DHT]
 > - Inspect a torrent's file tree and copy its magnet link in the detail drawer.
 > - Browse newest discoveries on **Discover** and check pipeline health on **Insights**.
 > - Choose which sources Lodestar uses to find torrents in **Settings → Sources**.
+> - Connect Sonarr and Radarr so each release they grab reaches Lodestar.
 
 ## 5.1 Search and filter
 <!-- index: Search; facets; query syntax; composition bar -->
@@ -53,7 +54,7 @@ Select **Copy magnet** to copy the magnet URI to your clipboard, or **Open full 
 ## 5.4 Choose where Lodestar finds torrents (Settings → Sources)
 <!-- index: sources; Settings → Sources; source status; source priority; yield bar -->
 
-A [**source**](glossary.md#lodestar-source) is a place Lodestar learns about torrents from. The [DHT](glossary.md#dht) is the one it uses out of the box. This version lists **Mainline DHT** and **Torrent cache** (below). More sources, such as a torrent site or an indexer app you already run, come in later versions. Lodestar still collects [metadata](glossary.md#metadata) only and never downloads torrent content.
+A [**source**](glossary.md#lodestar-source) is a place Lodestar learns about torrents from. The [DHT](glossary.md#dht) is the one it uses out of the box. This version lists **Mainline DHT**, **Torrent cache** (below) and **Sonarr and Radarr webhooks** (see [section 5.5](#55-connect-sonarr-and-radarr)). More sources, such as a torrent site, come in later versions. Lodestar still collects [metadata](glossary.md#metadata) only and never downloads torrent content.
 
 To see them, select **Settings**, then **Sources** under **Crawling**.
 
@@ -120,6 +121,83 @@ A short bar with a high find count is normal. Many torrents a source hears of ne
 > [!NOTE]
 > Changes on this screen are saved at once, and unlike other settings there is no **Undo**. To reverse one, set the switch or menu back. **Priority** applies at once. **On** applies at the next restart.
 
+## 5.5 Connect Sonarr and Radarr
+<!-- index: Sonarr; Radarr; webhook; webhook token; Sonarr and Radarr webhooks -->
+
+If you run Sonarr or Radarr, each can tell Lodestar about every release it grabs or imports. It does this with a [**webhook**](glossary.md#webhook): a short message Sonarr or Radarr sends to Lodestar's address. Lodestar keeps the release's hash, title, size and the show's or movie's catalogue numbers. It never keeps the indexer's name, your download client, file paths or addresses.
+
+Everything that comes this way is **private**. Your indexers may be private trackers, so Lodestar never looks these torrents up in the DHT or on public trackers. It never serves them through feeds or shareable exports either.
+
+Each app proves who it is with a **webhook token**: a long secret that only that app knows. Sonarr and Radarr each get their own.
+
+**Step 1: turn the source on.**
+
+1. In Lodestar, select **Settings**, then **Sources** under **Crawling**.
+2. Turn on **Sonarr and Radarr webhooks**. It is a plain switch: it contacts no other site.
+3. Restart Lodestar. The source starts at the next start. A restart can include the six-hour DHT wait; see [section 3.8](03-keep-lodestar-safe.md#38-restart-without-the-six-hour-wait).
+
+Result: after the restart, its row says **Running**.
+
+**Step 2: make a token.** The Sources screen has no token panel yet; one is coming in a later version **(planned)**. Until then, make the token from a terminal on your home network. In the commands, replace `<server-ip>` with your server's address, and `sonarr` with `radarr` for Radarr.
+
+**On Unraid, Linux or macOS,** use a bash terminal. On Unraid, the **Terminal** button at the top of the web UI opens one.
+
+1. Paste these lines. The `read` line waits for your admin password; type it and press Enter. It doesn't show, and it doesn't go into the shell's history or the list of running programs.
+
+    ```bash
+    LODESTAR=http://<server-ip>:8090; APP=sonarr
+    read -rs LODESTAR_PW
+    umask 077; JAR=$(mktemp)
+    body() { printf '{"password":"%s"}' "$(printf '%s' "$LODESTAR_PW" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+    body | curl -fsS -c "$JAR" -H 'Content-Type: application/json' --data-binary @- "$LODESTAR/api/v1/login" >/dev/null &&
+      body | curl -fsS -b "$JAR" -H 'Content-Type: application/json' --data-binary @- "$LODESTAR/api/v1/webhooks/$APP/token"
+    rm -f "$JAR"; unset LODESTAR_PW
+    ```
+
+**On Windows,** use PowerShell:
+
+1. Paste these lines. A window asks for your admin password; the user name doesn't matter.
+
+    ```powershell
+    $Lodestar = 'http://<server-ip>:8090'; $App = 'sonarr'
+    $c = Get-Credential -UserName lodestar -Message 'Lodestar admin password'
+    $b = @{ password = $c.GetNetworkCredential().Password } | ConvertTo-Json
+    Invoke-RestMethod -Method Post -Uri "$Lodestar/api/v1/login" -ContentType application/json -Body $b -SessionVariable s | Out-Null
+    Invoke-RestMethod -Method Post -Uri "$Lodestar/api/v1/webhooks/$App/token" -ContentType application/json -Body $b -WebSession $s
+    Remove-Variable c, b, s
+    ```
+
+Result: Lodestar answers with the integration and a token starting `lsw_`. Copy the token. Lodestar shows it only this once and keeps only a fingerprint of it. Making a new token replaces the old one at once.
+
+If it fails with error 401, the password was wrong. Error 429 means too many wrong tries; wait a minute and try again. Error 409 means an update changed the Legal Notice: sign in to Lodestar in your browser, read and accept it, then run the commands again.
+
+**Step 3: add the connection in Sonarr or Radarr.**
+
+1. In Sonarr or Radarr, go to **Settings → Connect**, select **+**, then **Webhook**.
+2. Give it a name, such as `Lodestar`.
+3. Turn on **On Grab** and **On Import** (the names vary a little between versions). Leave the others off; Lodestar ignores them.
+4. Set **URL** to `http://<server-ip>:8090/api/v1/webhooks/sonarr` (or `…/radarr` for Radarr) and **Method** to **POST**.
+5. Set **Username** to anything, such as `lodestar`, and paste the token into **Password**.
+6. Select **Test**, then **Save**.
+
+Result: the test succeeds. If it says the source is turned off, go back to step 1. If it fails to log in, check that the token is pasted whole and goes with the right app.
+
+This diagram shows the path a grab takes.
+
+```mermaid
+flowchart LR
+  A[Sonarr or Radarr] -- "webhook with the token" --> B[Lodestar]
+  B --> C[(Kept private)]
+```
+
+In words: Sonarr or Radarr sends each grab to Lodestar with its token, and Lodestar keeps what it learns as private.
+
+> [!IMPORTANT]
+> **Recommended:** keep Sonarr, Radarr and Lodestar on the same home network, and never forward port 8090 on your router. Give each app its own token. If a token leaks, make a new one at once; the old one stops working.
+
+> [!NOTE]
+> If Sonarr or Radarr sends more than Lodestar takes at once, or the source is off, Lodestar still answers with success and drops the message. That way the app doesn't pause the connection. Only the **Test** button is told when the source is off.
+
 > [!TIP]
 > **Key takeaways**
 > - Combine text queries with facet checkboxes or `field:value` tokens on **Search**.
@@ -127,6 +205,7 @@ A short bar with a high find count is normal. Many torrents a source hears of ne
 > - Open **Insights** to check whether the DHT crawler and index are healthy.
 > - Leave **External** and **Account** sources off unless you need them. Source changes are saved at once with no **Undo**, and **On** applies at the next restart.
 > - A torrent cache learns which torrents you look up. Add only one whose terms allow it, and accept its exact addresses again whenever the list changes.
+> - Connect Sonarr and Radarr with one webhook token each, kept on your home network.
 
 <!-- nav:start -->
 ---

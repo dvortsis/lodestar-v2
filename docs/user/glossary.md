@@ -90,6 +90,10 @@ A network protocol without a connection setup, used for peer discovery. Firewall
 
 A private tunnel to another network. It can hide your home IP address from peers and let you reach home safely from outside.
 
+## Webhook
+
+A short message one app sends to another's address when something happens. Sonarr and Radarr send one to Lodestar when they grab or import a release.
+
 ## Yield bar
 
 The small bar on a source's row in **Settings → Sources**. It shows how much of what the source found first, in the last 24 hours, Lodestar stored.

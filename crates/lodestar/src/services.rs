@@ -52,6 +52,8 @@ pub struct Services {
     system: Arc<dyn lodestar_api::system::SystemApi>,
     /// `/updates` (B-update), beside `/system`.
     updates: Arc<dyn lodestar_api::updates::UpdatesApi>,
+    /// `POST /webhooks/{integration}` (SRC-11c), over the plugin's inbox.
+    webhooks: Arc<lodestar_api::webhooks::Webhooks>,
 }
 
 /// What has to be stopped on the way out.
@@ -265,6 +267,12 @@ impl Services {
         let cache = crate::torrent_cache::build(cache_config);
         plugins.push(cache.plugin.clone());
         pipeline_config.torrent_cache = Some(crate::torrent_cache::ID);
+        // Sonarr and Radarr webhooks (SRC-11c): off until you enable it.
+        // The API's route hands authenticated bodies to its inbox, and
+        // its finds take the pipeline's path as every source's do.
+        let arr = Arc::new(lodestar_sources_plugins::arr::ArrWebhooks::new());
+        let webhooks = lodestar_api::webhooks::Webhooks::new(Arc::new(ArrSink(arr.inbox())));
+        plugins.push(arr);
         pipeline_config.hot = Some(hot.clone());
         // The gate's searchable count follows the serving index (below).
         pipeline_config.gate_follows_index = serving.is_some();
@@ -586,6 +594,7 @@ impl Services {
             listener,
             system,
             updates: updates.api,
+            webhooks,
         })
     }
 
@@ -621,6 +630,7 @@ impl Services {
             listener,
             system,
             updates,
+            webhooks,
         } = self;
         // Exports and other background jobs (§9): one registry, closed at
         // shutdown so open downloads end rather than hold it.
@@ -644,6 +654,7 @@ impl Services {
             .layer(Extension(export_adult))
             .layer(Extension(system))
             .layer(Extension(updates))
+            .layer(webhooks.layer())
             .into_make_service_with_connect_info::<SocketAddr>();
         // Open streams never end on their own: closing the hub ends them,
         // and closing the jobs ends open exports, so the graceful
@@ -789,6 +800,32 @@ impl Handles {
     }
 }
 
+/// The webhook route's sink: the `arr_webhooks` plugin's inbox, which
+/// parses with its bounded reader and never waits (SRC-11b).
+struct ArrSink(lodestar_sources_plugins::arr::Inbox);
+
+impl lodestar_api::webhooks::WebhookSink for ArrSink {
+    fn deliver(
+        &self,
+        integration: lodestar_api::webhooks::Integration,
+        body: &[u8],
+    ) -> lodestar_api::webhooks::Delivered {
+        use lodestar_api::webhooks::{Delivered, Integration};
+        use lodestar_sources_plugins::arr::{App, Delivery};
+        let app = match integration {
+            Integration::Sonarr => App::Sonarr,
+            Integration::Radarr => App::Radarr,
+        };
+        match self.0.deliver(app, body) {
+            Delivery::Found => Delivered::Found,
+            Delivery::Ignored => Delivered::Ignored,
+            Delivery::Malformed => Delivered::Malformed,
+            Delivery::Busy => Delivered::Busy,
+            Delivery::Off { test } => Delivered::Off { test },
+        }
+    }
+}
+
 /// The key that seals quarantined names (§20.3), created on first use.
 /// It lives beside the database, not in it, so a copy of the database
 /// alone doesn't reveal names; on Unix only the owner can read it.
@@ -886,6 +923,7 @@ mod gate_tests {
         default_priority: Priority::Normal,
         enabled_by_default: true,
         always_adult: false,
+        finds_private: false,
     };
 
     /// Reports one key, with a peer, then waits.

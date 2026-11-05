@@ -448,6 +448,8 @@ pub(crate) const MANIFEST: Manifest = Manifest {
     default_priority: Priority::Normal,
     enabled_by_default: false,
     always_adult: false,
+    // The releases your Sonarr or Radarr grabbed (§18.7).
+    finds_private: true,
 };
 
 /// No settings of its own: each integration's token is made under

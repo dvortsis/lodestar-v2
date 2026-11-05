@@ -246,7 +246,7 @@ Nothing connects to the network until setup is done: the crawler waits, and it s
 
 To read the notice again later, open **Settings** → **About** and select **Show the Legal Notice** in the **Legal** section.
 
-Some updates change the notice in substance, such as the update from 0.5.1. After one, Lodestar shows the new notice once, the next time you sign in. It does the same if your copy was set up before it showed the notice. Read it and select **I have read it, continue**. Apps that use an API key, a feed link or a webhook keep working meanwhile.
+Some updates change the notice in substance, such as the update from 0.5.1. After one, Lodestar shows the new notice once, the next time you sign in. It does the same if your copy was set up before it showed the notice. Read it and select **I have read it, continue**. Apps that use an API key, a feed link or a [webhook](glossary.md#webhook) keep working meanwhile.
 
 > [!NOTE]
 > **Worked example**

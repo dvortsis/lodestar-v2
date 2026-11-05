@@ -81,6 +81,7 @@ async fn start(setup_done: Option<watch::Receiver<bool>>, paused: bool) -> Start
             default_priority: Priority::Normal,
             enabled_by_default: true,
             always_adult: false,
+            finds_private: false,
         },
         ran: ran.clone(),
     });

@@ -99,6 +99,8 @@ pub(crate) const MANIFEST: Manifest = Manifest {
     default_priority: Priority::Normal,
     enabled_by_default: false,
     always_adult: false,
+    // What your own indexers list, which may be private trackers.
+    finds_private: true,
 };
 
 /// The settings form (§10.10). `api_key` is write-only: the host stores it

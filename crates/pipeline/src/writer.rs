@@ -5038,6 +5038,7 @@ mod tests {
             default_priority: lodestar_sources::Priority::Normal,
             enabled_by_default: false,
             always_adult: false,
+            finds_private: false,
         };
         let id = |n| SourceId::new(n).unwrap();
         let nyaa = m("nyaa", &[Kind::Discovery]);
@@ -5115,6 +5116,7 @@ mod tests {
             default_priority: lodestar_sources::Priority::Normal,
             enabled_by_default: false,
             always_adult: false,
+            finds_private: false,
         };
         let mut flood = Flooding::for_sources([(scrape, &manifest)]);
         flood.clock = Some(10_000);

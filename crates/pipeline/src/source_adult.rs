@@ -140,6 +140,7 @@ mod tests {
             default_priority: lodestar_sources::Priority::Normal,
             enabled_by_default: false,
             always_adult,
+            finds_private: false,
         }
     }
 

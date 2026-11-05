@@ -93,6 +93,7 @@ pub(crate) const MANIFEST: Manifest = Manifest {
     default_priority: Priority::Normal,
     enabled_by_default: false,
     always_adult: false,
+    finds_private: false,
 };
 
 pub(crate) const SUKEBEI_MANIFEST: Manifest = Manifest {
@@ -106,6 +107,7 @@ pub(crate) const SUKEBEI_MANIFEST: Manifest = Manifest {
     // pipeline reads this, not the `content-type` claim, so a feed can't
     // turn it off (X-source-adult).
     always_adult: true,
+    finds_private: false,
     ..MANIFEST
 };
 

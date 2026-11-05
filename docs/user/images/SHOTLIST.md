@@ -16,3 +16,4 @@ Lodestar UI screens (`setup-notice.png`, `setup-screen.png`, `search-{light,dark
 | 5.2 | Torrent detail drawer open on **Search** | `docs:shots` | Captured (`detail-light.png`, `detail-dark.png`) |
 | 5.3 | **Discover** and **Insights** screens | `docs:shots` | Captured (`discover-{light,dark}.png`, `insights-{light,dark}.png`) |
 | 5.4 | **Settings → Sources** with a source that needs setup outlined | `docs:shots` | Captured (`sources-{light,dark}.png`) |
+| 5.5 | Sonarr **Settings → Connect → Webhook** dialog with **URL**, **Method**, **Username** and **Password** filled in (token blurred) | Owner | Pending host capture |

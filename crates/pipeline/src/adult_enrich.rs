@@ -1190,6 +1190,7 @@ mod tests {
             default_priority: lodestar_sources::Priority::Normal,
             enabled_by_default: false,
             always_adult: false,
+            finds_private: false,
         };
         let a = SourceId::new(2).unwrap();
         let b = SourceId::new(5).unwrap();
@@ -1214,6 +1215,7 @@ mod tests {
         // Enrichment and always adult together is refused.
         let both = lodestar_sources::Manifest {
             always_adult: true,
+            finds_private: false,
             ..m.clone()
         };
         assert!(admitted(&m) && !admitted(&both) && !admitted(&feed));
@@ -1236,6 +1238,7 @@ mod tests {
             default_priority: lodestar_sources::Priority::Normal,
             enabled_by_default: false,
             always_adult: true,
+            finds_private: false,
         };
         let _ = EnrichSources::of([(SourceId::new(2).unwrap(), &m)], &["both"]);
     }

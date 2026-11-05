@@ -19894,6 +19894,7 @@
           "egress",
           "enabled",
           "endpoints",
+          "finds_private",
           "health",
           "id",
           "kinds",
@@ -20143,6 +20144,10 @@
             },
             "description": "The addresses it contacts, as `protocol://address`, sorted: what\nthe consent dialog shows and an acknowledgement covers, compared\nexactly. A built-in source lists hosts; one whose addresses come\nfrom your settings (a torrent cache) lists each full address\ntemplate, path and query included, such as\n`https://cache.example/~me/{hash}.torrent`. These are the\naddresses it runs with now: settings saved since apply at the next\nstart (`restart_required`)."
           },
+          "finds_private": {
+            "type": "boolean",
+            "description": "What it finds reflects your own setup (download clients, indexers,\nSonarr and Radarr): kept private, and never named to an API key or\nfeed token as a source of anything (§18.7)."
+          },
           "health": {
             "$ref": "#/components/schemas/SourceHealth"
           },
@@ -20375,6 +20380,7 @@
               },
               "enabled": true,
               "endpoints": [],
+              "finds_private": false,
               "health": {
                 "harvested_24h": 1840221,
                 "last_error": null,
