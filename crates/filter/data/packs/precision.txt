@@ -17,21 +17,36 @@ item Example.Movie.2019.DVD
   file 2M PC/Example Player Install.exe
   guards MW-2 MW-3
 
-# Music production packs: VST plug-ins and sample libraries (MW-2).
-# Known gap: MW-2@1 has no music-production guard, so a pack the
-# classifier calls music, with its installer, is hidden (RP-1 decisions).
+# Music production packs: VST plug-ins and sample libraries (MW-2@2's
+# music-production guard: mostly audio and presets, at most two `.exe` or
+# `.msi` installers, and presets or audio in sample folders).
 item Example Synth VST Collection v2.1 x64
   file 40M setup.exe
   file 20M Presets/Bass 01.wav
   file 20M Presets/Lead 01.wav
   guards MW-2
-  gap MW-2
 item Example Drum Samples Vol 3 WAV
   file 30M Kicks/Kick 01.wav
   file 30M Snares/Snare 01.wav
   file 2M Installer.exe
   guards MW-2
-  gap MW-2
+item Example Strings Library v1.4 KONTAKT
+  file 3M Instruments/Example Strings Legato.nki
+  file 3M Instruments/Example Strings Pizzicato.nki
+  file 300M Samples/Legato C3.wav
+  file 300M Samples/Legato C4.wav
+  file 300M Samples/Pizzicato C3.wav
+  file 30M Example Strings Installer.exe
+  guards MW-2
+item Example Bass Synth v3.0 x64 VST3
+  file 60M Example Bass Synth Setup.msi
+  file 8M Example Bass Synth.vst3
+  file 40K Presets/Init.fxp
+  file 40K Presets/Wobble.fxp
+  file 40K Presets/Sub.fxp
+  file 12M Demo/Example Bass Synth Demo.mp3
+  file 80M Loops/Bass Loop 01.wav
+  guards MW-2
 
 # Software that ships a codec or player (MW-2, MW-3: `unless type:software`;
 # MW-4: an executable without a tiny HD video isn't enough).
@@ -86,16 +101,21 @@ item Example.Movie.2019.1080p.WEB
   file 30M Sample/example-preview.mkv
   guards FK-2
 
-# Short-episode packs (FK-2).
-# Known gap: FK-2@1 has no short-episode guard, so a pack of short HD
-# episodes under 40 MiB each is flagged (RP-1 decisions).
+# Short-episode packs (FK-2@2's short-episode guard: three or more
+# `SxxEyy` episodes of one series, none under 8 MiB, the largest at most
+# twice the smallest).
 item Example Shorts S01 1080p WEB
   file 35M Example Shorts S01E01 1080p WEB.mkv
   file 35M Example Shorts S01E02 1080p WEB.mkv
   file 35M Example Shorts S01E03 1080p WEB.mkv
   file 35M Example Shorts S01E04 1080p WEB.mkv
   guards FK-2
-  gap FK-2
+item Example.Cartoon.S02.720p.WEB-DL
+  file 18M Example.Cartoon.S02E01.720p.WEB-DL.mp4
+  file 22M Example.Cartoon.S02E02.720p.WEB-DL.mp4
+  file 20M Example.Cartoon.S02E03.720p.WEB-DL.mp4
+  file 30K Example.Cartoon.S02E01.720p.WEB-DL.srt
+  guards FK-2
 
 # Real media beside an archive and a note (LU-2: not when real media is
 # present).

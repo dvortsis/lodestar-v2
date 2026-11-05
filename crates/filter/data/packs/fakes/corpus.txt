@@ -33,6 +33,37 @@ miss Example.Movie.2019.1080p.WEB
   file 4G Example.Movie.2019.1080p.WEB.mkv
 miss Example.Clip.480p
   file 10M Example.Clip.480p.mp4
+# FK-2@2's short-episode guard, and what it must still flag: too few
+# episodes, episodes too small or too uneven, mixed series, and a repeat.
+miss Example Shorts S01 1080p WEB
+  file 30M Example Shorts S01E01 1080p WEB.mkv
+  file 32M Example Shorts S01E02 1080p WEB.mkv
+  file 28M Example Shorts S01E03 1080p WEB.mkv
+match Example.Show.S01.1080p.WEB
+  file 30M Example.Show.S01E01.1080p.WEB.mkv
+  file 30M Example.Show.S01E02.1080p.WEB.mkv
+match Example.Show.S01.1080p.WEB
+  file 2M Example.Show.S01E01.1080p.WEB.mkv
+  file 2M Example.Show.S01E02.1080p.WEB.mkv
+  file 2M Example.Show.S01E03.1080p.WEB.mkv
+  file 2M Example.Show.S01E04.1080p.WEB.mkv
+match Example.Show.S01.1080p.WEB
+  file 10M Example.Show.S01E01.1080p.WEB.mkv
+  file 10M Example.Show.S01E02.1080p.WEB.mkv
+  file 35M Example.Show.S01E03.1080p.WEB.mkv
+match Example Collection 1080p WEB
+  file 30M Example.Show.S01E01.1080p.WEB.mkv
+  file 30M Other.Show.S01E02.1080p.WEB.mkv
+  file 30M Third.Show.S01E03.1080p.WEB.mkv
+match Example.Show.S01.1080p.WEB
+  file 30M Example.Show.S01E01.1080p.WEB.mkv
+  file 30M Example.Show.S01E01.1080p.WEB.REPACK.mkv
+  file 30M Example.Show.S01E02.1080p.WEB.mkv
+match Example.Show.S01.1080p.WEB
+  file 30M Example.Show.S01E01.1080p.WEB.mkv
+  file 30M Example.Show.S01E02.1080p.WEB.mkv
+  file 30M Example.Show.S01E03.1080p.WEB.mkv
+  file 30M Example.Show.1080p.WEB.mkv
 
 rule FK-4
 match Example.Movie.2019.1080p.WEB
