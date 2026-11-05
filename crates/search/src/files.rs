@@ -253,8 +253,8 @@ pub fn file_docs(torrent: u64, tree: &FileTree) -> Vec<FileDoc> {
     out
 }
 
-/// The distinct size buckets of the files [`file_docs`] indexes, sorted,
-/// and their distinct `{ext}:{bucket}` pairs, sorted: the torrent index's
+/// The distinct [`size_code`]s of the files [`file_docs`] indexes, sorted,
+/// and their distinct `{ext}:{code}` pairs, sorted: the torrent index's
 /// v7 `file_bucket` and `file_ext_bucket` (X-search-files-5). Decided by
 /// exactly `file_docs`' rule (test `covered_buckets_are_the_file_docs`),
 /// so a bucket or pair term holds for a torrent exactly when one of its
@@ -276,10 +276,10 @@ pub fn covered_buckets(tree: &FileTree) -> (Vec<u64>, Vec<String>) {
         if pack && !worth_it_in_a_pack(ext.as_deref(), f.size) {
             continue;
         }
-        let b = size_bucket(f.size);
-        buckets.push(b);
+        let c = size_code(f.size);
+        buckets.push(c);
         if let Some(e) = ext {
-            pairs.push(ext_bucket_term(&e, b));
+            pairs.push(ext_bucket_term(&e, c));
         }
     }
     buckets.sort_unstable();
@@ -289,11 +289,45 @@ pub fn covered_buckets(tree: &FileTree) -> (Vec<u64>, Vec<String>) {
     (buckets, pairs)
 }
 
-/// `file_ext_bucket`'s term for a file of extension `ext` in `bucket`.
-/// Extensions are ASCII letters and digits (`doc::extension`), so the
-/// colon can't be part of one.
-pub fn ext_bucket_term(ext: &str, bucket: u64) -> String {
-    format!("{ext}:{bucket}")
+/// A file's code in the torrent's `file_bucket` and `file_ext_bucket`:
+/// its [`size_bucket`] twice, plus one when it's above the bucket's floor.
+/// Splitting a bucket at its floor makes a range with a strict lower
+/// bound on a floor (`size:>1GiB`) or an upper bound on one (`size:<=1GiB`)
+/// whole codes, where it would otherwise check every file of the edge
+/// bucket in the file index (X-search-files-5). Sizes exactly on a floor
+/// are rare, so it costs almost no terms.
+pub fn size_code(size: u64) -> u64 {
+    let b = size_bucket(size);
+    b * 2 + u64::from(size > bucket_floor(b))
+}
+
+/// `file_ext_bucket`'s term for a file of extension `ext` and
+/// [`size_code`] `code`. Extensions are ASCII letters and digits
+/// (`doc::extension`), so the colon can't be part of one.
+pub fn ext_bucket_term(ext: &str, code: u64) -> String {
+    format!("{ext}:{code}")
+}
+
+/// How the torrent's codes answer a size range: the [`size_code`]s the
+/// range holds whole, and the parts of it left for the file index (in at
+/// most two edge buckets, each within the bucket and not a whole code).
+pub(crate) fn code_plan(lo: u64, hi: u64) -> (Vec<u64>, Vec<(u64, u64)>) {
+    let (inner, edges) = split_range(lo, hi);
+    let mut codes: Vec<u64> = inner.iter().flat_map(|b| [b * 2, b * 2 + 1]).collect();
+    let mut left = Vec::new();
+    for (elo, ehi) in edges {
+        let b = size_bucket(elo);
+        let (floor, ceil) = (bucket_floor(b), bucket_ceil(b));
+        if elo == floor && ehi == floor {
+            codes.push(b * 2);
+        } else if elo == floor.saturating_add(1) && ehi == ceil && b >= 2 {
+            codes.push(b * 2 + 1);
+        } else {
+            left.push((elo, ehi));
+        }
+    }
+    codes.sort_unstable();
+    (codes, left)
 }
 
 /// A size range split at its buckets: those wholly inside it, and the
@@ -2414,13 +2448,13 @@ mod tests {
     fn covered_buckets_are_the_file_docs() {
         let want = |t: &FileTree| {
             let docs = file_docs(1, t);
-            let mut b: Vec<u64> = docs.iter().map(|d| size_bucket(d.size)).collect();
+            let mut b: Vec<u64> = docs.iter().map(|d| size_code(d.size)).collect();
             let mut p: Vec<String> = docs
                 .iter()
                 .filter_map(|d| {
                     d.ext
                         .as_ref()
-                        .map(|e| ext_bucket_term(e, size_bucket(d.size)))
+                        .map(|e| ext_bucket_term(e, size_code(d.size)))
                 })
                 .collect();
             b.sort_unstable();
@@ -2439,7 +2473,7 @@ mod tests {
         ]);
         let (b, p) = covered_buckets(&small);
         assert_eq!((b.clone(), p.clone()), want(&small));
-        assert!(b.contains(&size_bucket(900)), "README has a bucket");
+        assert!(b.contains(&size_code(900)), "README has a bucket");
         assert!(!p.iter().any(|t| t.starts_with("exe:")), "{p:?}");
         let mut files: Vec<(String, u64)> = (0..SMART_ALL_FILES + 5)
             .map(|i| (format!("pics/{i}.jpg"), 100_000 + i as u64))
@@ -2458,10 +2492,35 @@ mod tests {
         assert_eq!(
             p,
             [
-                ext_bucket_term("jpg", size_bucket(SMART_MIN_SIZE)),
-                ext_bucket_term("mp3", size_bucket(4 << 20)),
+                ext_bucket_term("jpg", size_code(SMART_MIN_SIZE)),
+                ext_bucket_term("mp3", size_code(4 << 20)),
             ]
         );
+    }
+
+    /// A strict lower bound on a bucket's floor, or an upper bound on one,
+    /// is whole codes; any other edge is left to the file index.
+    #[test]
+    fn floors_split_buckets_into_whole_codes() {
+        let g = 1u64 << 30;
+        let b = size_bucket(g);
+        assert_eq!(bucket_floor(b), g);
+        assert_eq!((size_code(g), size_code(g + 1)), (b * 2, b * 2 + 1));
+        assert_eq!(size_code(0), 0);
+        assert_eq!(size_code(1), 2);
+        // `size:>1GiB`: every code from b's upper half on, no file check.
+        let (codes, left) = code_plan(g + 1, u64::MAX);
+        assert!(left.is_empty());
+        assert_eq!(codes[0], b * 2 + 1);
+        assert_eq!(codes.len() as u64, 256 - (b * 2 + 1));
+        // `size:<=1GiB`: up to b's floor code.
+        let (codes, left) = code_plan(0, g);
+        assert!(left.is_empty());
+        assert_eq!(codes.last(), Some(&(b * 2)));
+        // `size:>100MiB`: mid-bucket, left to the file index.
+        let m = 100u64 << 20;
+        let (_, left) = code_plan(m + 1, u64::MAX);
+        assert_eq!(left, [(m + 1, bucket_ceil(size_bucket(m)))]);
     }
 
     /// A range splits into the buckets wholly inside it and its parts in

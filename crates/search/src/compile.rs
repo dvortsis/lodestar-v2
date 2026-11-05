@@ -185,7 +185,7 @@ pub(crate) fn bucket_clause(of: &Node) -> Option<BucketClause> {
 /// `None` when the range covers whole buckets only.
 pub(crate) fn bucket_edges(of: &Node) -> Option<Node> {
     let b = bucket_clause(of)?;
-    let (_, edges) = crate::files::split_range(b.lo, b.hi);
+    let (_, edges) = crate::files::code_plan(b.lo, b.hi);
     let mut ranges: Vec<Node> = edges
         .into_iter()
         .map(|(lo, hi)| Node::Range {
@@ -220,9 +220,9 @@ fn torrent_level_query(of: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
         return compile_opt(&Node::Ext { any }, f, now);
     }
     let b = bucket_clause(of)?;
-    let (inner, _) = crate::files::split_range(b.lo, b.hi);
+    let (codes, _) = crate::files::code_plan(b.lo, b.hi);
     let mut clauses: Vec<(Occur, Q)> = Vec::new();
-    for bucket in inner {
+    for bucket in codes {
         match &b.exts {
             None if f.file_bucket != ABSENT => clauses.push((
                 Occur::Should,

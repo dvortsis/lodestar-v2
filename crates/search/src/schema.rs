@@ -129,13 +129,13 @@ pub struct Fields {
     /// for substring search and the regex prefilter. Off in low-resource
     /// mode (§3).
     pub name_trigram: Field,
-    /// v7. The distinct [`size_bucket`](crate::files::size_bucket)s of
-    /// the files the file index covers ([`crate::files::covered_buckets`]),
-    /// in the inverted index only. A file is in exactly one bucket, so a
-    /// bucket wholly inside a `file:(size:…)` range answers for every
-    /// file in it.
+    /// v7. The distinct [`size_code`](crate::files::size_code)s (a size
+    /// bucket split at its floor) of the files the file index covers
+    /// ([`crate::files::covered_buckets`]), in the inverted index only. A
+    /// file has exactly one code, so a code wholly inside a
+    /// `file:(size:…)` range answers for every file in it.
     pub file_bucket: Field,
-    /// v7. The same files' `{ext}:{bucket}` pairs (keyword, docs only),
+    /// v7. The same files' `{ext}:{code}` pairs (keyword, docs only),
     /// for `file:(ext:… size:…)`: one file's extension and bucket
     /// together, so it's exact for one file.
     pub file_ext_bucket: Field,
