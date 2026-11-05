@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
@@ -111,9 +113,14 @@ pub(crate) type PluginNames = HashMap<String, PluginName>;
 /// shows by plugin id and counts as private (a public caller sees none).
 const NAMES_RETRY: Duration = Duration::from_secs(5);
 
+/// How long a listing may take before it counts as failed, so a
+/// `sources()` that hangs (the writer's lock held elsewhere) holds up
+/// each search with a viewer for at most this, then backs off.
+const NAMES_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// One pipeline's names: listed once, single-flight. Manifests are fixed
 /// for the life of the process, so a listing that succeeds is kept for
-/// good; one that fails is retried after `retry`.
+/// good; one that fails, times out or panics is retried after `retry`.
 #[derive(Debug)]
 struct NamesSlot {
     names: OnceCell<Arc<PluginNames>>,
@@ -122,14 +129,16 @@ struct NamesSlot {
     /// answer rather than each listing again.
     failed: Arc<tokio::sync::Mutex<Option<Instant>>>,
     retry: Duration,
+    timeout: Duration,
 }
 
 impl NamesSlot {
-    fn new(retry: Duration) -> NamesSlot {
+    fn new(retry: Duration, timeout: Duration) -> NamesSlot {
         NamesSlot {
             names: OnceCell::new(),
             failed: Arc::new(tokio::sync::Mutex::new(None)),
             retry,
+            timeout,
         }
     }
 
@@ -158,7 +167,18 @@ impl NamesSlot {
         let slot = self.clone();
         let listing = tokio::spawn(async move {
             let mut failed = failed;
-            match list().await {
+            // Its own task, so a panic in it is a failure like any other.
+            let job = tokio::spawn(list());
+            let abort = job.abort_handle();
+            let answer = match tokio::time::timeout(slot.timeout, job).await {
+                Ok(Ok(answer)) => answer,
+                Ok(Err(_panicked)) => None,
+                Err(_elapsed) => {
+                    abort.abort();
+                    None
+                }
+            };
+            match answer {
                 Some(names) => {
                     let names = Arc::new(names);
                     // Only the holder of `failed` sets it, so this can't
@@ -173,8 +193,7 @@ impl NamesSlot {
                 }
             }
         });
-        // A listing that panicked left `failed` as it was: the next
-        // request asks again.
+        // Only the runtime shutting down fails this join.
         listing.await.unwrap_or_default()
     }
 }
@@ -202,7 +221,7 @@ async fn names_for(ops: Arc<dyn OpsApi>) -> Arc<PluginNames> {
         match cache.iter().find(|(w, _)| Weak::ptr_eq(w, &key)) {
             Some((_, slot)) => slot.clone(),
             None => {
-                let slot = Arc::new(NamesSlot::new(NAMES_RETRY));
+                let slot = Arc::new(NamesSlot::new(NAMES_RETRY, NAMES_TIMEOUT));
                 cache.push((key, slot.clone()));
                 slot
             }
@@ -883,7 +902,7 @@ pub(crate) mod tests {
     async fn concurrent_first_requests_list_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         const N: usize = 16;
-        let slot = Arc::new(NamesSlot::new(NAMES_RETRY));
+        let slot = Arc::new(NamesSlot::new(NAMES_RETRY, NAMES_TIMEOUT));
         let calls = Arc::new(AtomicUsize::new(0));
         // Every request starts before the listing may answer.
         let gate = Arc::new(tokio::sync::Barrier::new(N));
@@ -917,7 +936,7 @@ pub(crate) mod tests {
     async fn a_failing_listing_is_not_retried_per_request() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         const N: usize = 16;
-        let slot = Arc::new(NamesSlot::new(Duration::from_secs(3600)));
+        let slot = Arc::new(NamesSlot::new(Duration::from_secs(3600), NAMES_TIMEOUT));
         let calls = Arc::new(AtomicUsize::new(0));
         // Concurrent requests while it fails, then requests after.
         let tasks: Vec<_> = (0..N)
@@ -954,7 +973,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_failed_listing_is_retried_after_the_back_off() {
         // No back-off: the next request asks again, and a success is kept.
-        let slot = Arc::new(NamesSlot::new(Duration::ZERO));
+        let slot = Arc::new(NamesSlot::new(Duration::ZERO, NAMES_TIMEOUT));
         assert!(slot.get(|| async { None }).await.is_empty());
         assert_eq!(slot.get(|| async { Some(names_of(1)) }).await.len(), 1);
         let kept = slot.get(|| async { panic!("listed after success") }).await;
@@ -964,7 +983,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_request_dropped_mid_listing_does_not_start_a_second() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let slot = Arc::new(NamesSlot::new(NAMES_RETRY));
+        let slot = Arc::new(NamesSlot::new(NAMES_RETRY, NAMES_TIMEOUT));
         let calls = Arc::new(AtomicUsize::new(0));
         let (started_tx, started) = tokio::sync::oneshot::channel();
         let (finish, finish_rx) = tokio::sync::oneshot::channel::<()>();
@@ -1000,12 +1019,49 @@ pub(crate) mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_listing_times_out_and_backs_off() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let slot = Arc::new(NamesSlot::new(NAMES_RETRY, NAMES_TIMEOUT));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hang = |calls: Arc<AtomicUsize>| {
+            move || async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<Option<PluginNames>>().await
+            }
+        };
+        let started = Instant::now();
+        assert!(slot.get(hang(calls.clone())).await.is_empty());
+        assert!(started.elapsed() >= NAMES_TIMEOUT);
+        // Backing off: no second listing.
+        assert!(slot.get(hang(calls.clone())).await.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // After the back-off it asks again.
+        tokio::time::advance(NAMES_RETRY).await;
+        let names = slot.get(|| async { Some(names_of(2)) }).await;
+        assert_eq!(names.len(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_panicked_listing_backs_off_like_a_failure() {
+        let slot = Arc::new(NamesSlot::new(NAMES_RETRY, NAMES_TIMEOUT));
+        assert!(
+            slot.get(|| async { panic!("listing panicked") })
+                .await
+                .is_empty()
+        );
+        let again = slot.get(|| async { panic!("retried at once") }).await;
+        assert!(again.is_empty());
+        tokio::time::advance(NAMES_RETRY).await;
+        assert_eq!(slot.get(|| async { Some(names_of(1)) }).await.len(), 1);
+    }
+
     /// A pipeline that counts its `sources()` calls; everything else is
     /// unused.
     #[derive(Debug, Default)]
-    struct CountingOps {
-        calls: std::sync::atomic::AtomicUsize,
-        fail: bool,
+    pub(crate) struct CountingOps {
+        pub(crate) calls: std::sync::atomic::AtomicUsize,
+        pub(crate) fail: bool,
     }
 
     impl OpsApi for CountingOps {
@@ -1060,7 +1116,9 @@ pub(crate) mod tests {
 
     /// Through the per-pipeline cache: concurrent first requests, and
     /// requests while the listing fails, each pipeline listing once.
-    #[tokio::test]
+    /// Paused time: the back-off can't run out mid-test however slow
+    /// the runner.
+    #[tokio::test(start_paused = true)]
     async fn each_pipeline_lists_once_through_the_cache() {
         use std::sync::atomic::Ordering;
         const N: usize = 16;

@@ -159,6 +159,57 @@ mod tests {
         );
     }
 
+    /// Newest shows no provenance, so it never lists the plugins (each
+    /// listing takes the store's writer lock); a search with a viewer
+    /// does.
+    #[tokio::test]
+    async fn newest_never_lists_the_plugins() {
+        use std::sync::atomic::Ordering;
+        use std::sync::{Arc, Mutex};
+
+        use lodestar_store::{Store, StoreConfig};
+
+        use crate::torrents::tests::CountingOps;
+
+        let dir = tempfile::tempdir().unwrap();
+        let ops = Arc::new(CountingOps::default());
+        let s = ApiState {
+            auth: Arc::new(crate::Auth::load(&dir.path().join("auth.json"), false).unwrap()),
+            index: Some(lodestar_search::SearchIndex::in_memory().unwrap().into()),
+            reader: Arc::new(Mutex::new(
+                Store::open_in_memory(StoreConfig::default()).unwrap(),
+            )),
+            filters: None,
+            settings: None,
+            ops: Some(ops.clone()),
+            user_data: None,
+            adult: crate::AdultVisibility::follow(|| false),
+            insights: None,
+            hot: None,
+            events: None,
+        };
+        for kind in [None, Some("movie".to_string())] {
+            let p = DiscoverQuery {
+                kind,
+                ..DiscoverQuery::default()
+            };
+            let _newest = discover(State(s.clone()), HeaderMap::new(), Query(p))
+                .await
+                .unwrap();
+        }
+        assert_eq!(ops.calls.load(Ordering::SeqCst), 0);
+        // The counter counts: a search for a viewer lists them.
+        let _page = search::search_route(
+            State(s),
+            None,
+            HeaderMap::new(),
+            Query(SearchRequest::default()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ops.calls.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn tabs_are_content_types_only() {
         assert_eq!(tab(None).unwrap(), None);
