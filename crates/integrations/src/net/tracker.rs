@@ -59,17 +59,34 @@ pub fn public_tracker_url(raw: &str) -> Option<String> {
 /// `localhost` and every name under it (RFC 6761), the special-use LAN
 /// domains `local` (mDNS, RFC 6762), `home.arpa` (RFC 8375) and
 /// `internal` (ICANN's private-use TLD), and any single-label name, which
-/// a resolver completes with the LAN's search domain. A bracketed IPv6
-/// literal or a dotted IPv4 one isn't a name; [`check_url`] judged it.
+/// a resolver completes with the LAN's search domain. `localdomain` (and
+/// its `4` and `6` forms) is refused too: Red Hat-family systems map
+/// `localhost.localdomain` to loopback in `/etc/hosts`, and it's a common
+/// LAN search domain. So is a
+/// name whose last label is a number (`127.0.0.1..`, which the `url`
+/// crate reads as a name rather than an address), since a looser IPv4
+/// parser could read it as one. A bracketed IPv6 literal or a dotted IPv4
+/// one isn't a name; [`check_url`] judged it.
 fn local_name(host: &str) -> bool {
-    if host.starts_with('[') {
+    if host.starts_with('[') || host.parse::<std::net::Ipv4Addr>().is_ok() {
         return false;
     }
     let host = host.trim_end_matches('.');
+    let last = host.rsplit('.').next().unwrap_or_default();
     !host.contains('.')
-        || ["localhost", "local", "home.arpa", "internal"]
-            .iter()
-            .any(|d| host == *d || host.strip_suffix(d).is_some_and(|h| h.ends_with('.')))
+        || last.bytes().all(|b| b.is_ascii_digit())
+        || last.starts_with("0x")
+        || [
+            "localhost",
+            "localdomain",
+            "localdomain4",
+            "localdomain6",
+            "local",
+            "home.arpa",
+            "internal",
+        ]
+        .iter()
+        .any(|d| host == *d || host.strip_suffix(d).is_some_and(|h| h.ends_with('.')))
 }
 
 #[cfg(test)]
@@ -183,6 +200,13 @@ mod tests {
             "udp://t.local:6969/announce",
             "http://nas.home.arpa/announce",
             "http://t.internal/announce",
+            "http://localhost.localdomain/announce",
+            "udp://localhost6.localdomain6:6969/announce",
+            "http://nas.localdomain/announce",
+            "http://127.0.0.1../announce",
+            "udp://127.0.0.1..:6969/announce",
+            "http://0x7f.1../announce",
+            "http://127.0.0.1。。/announce",
             "http://t。local/announce",
             "http://ⓛocalhost．/announce",
             "http://xn--ocalhost-/announce",
