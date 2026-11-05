@@ -973,7 +973,7 @@ pub fn scrub_text(text: &str) -> String {
 /// wide rules hide, and then what the credential rules find in their
 /// output, hidden in it too.
 fn scrub_text_slow(text: &str) -> String {
-    let wide = wide::scrub_text(text);
+    let (wide, loose) = wide::scrub_text_and_loose(text);
     // A credential's name the first pass leaves at a URL's end, once its
     // query goes (`https://h/pass?x": "<s>"` reads `…/pass": "<s>"`), takes
     // the value after it: the credential rules read the wide output again
@@ -999,6 +999,13 @@ fn scrub_text_slow(text: &str) -> String {
         if let std::borrow::Cow::Owned(ascii) = ascii_separators(read, true) {
             out = only_more(&out, &wide::redact_secrets(&ascii));
         }
+    }
+    // The original text read with URL forms rewritten even in a credential's
+    // value (see `wide::scrub_text_and_loose`), as one more layer: the wide
+    // output keeps such values whole, which hides what splitting one would
+    // show (X-log-url-redact-3's security review).
+    if let Some(loose) = loose {
+        out = only_more(&out, &loose);
     }
     out
 }
@@ -1548,7 +1555,7 @@ mod wide {
         ])
     }
 
-    /// A raw magnet link only, as `main` found them (see [`scrub_text`]'s
+    /// A raw magnet link only, as `main` found them (see [`scrub_text_on`]'s
     /// first pass).
     fn raw_magnets() -> AnyOf {
         AnyOf::new(&[("magnet:", true)])
@@ -1626,16 +1633,35 @@ mod wide {
         }
     }
 
-    /// `text` with every URL in it scrubbed and its query string dropped,
-    /// and every run that looks like an info hash or a session secret (32 or
-    /// more hex digits, or 32 base32 characters) hidden. For lines the code
-    /// didn't type: the third-party crates' and the not-yet-converted ones.
+    /// The wide rules' output for `text` ([`scrub_text_on`]), and, when the
+    /// original text holds a URL form without `://`, one more reading of it
+    /// with that form rewritten even inside a credential's value
+    /// (X-log-url-redact-5). A `//` that starts
+    /// a credential's value may be a URL's whose password follows a space
+    /// (`PW: //u: <secret>@h`): the value ends at that space, and the first
+    /// pass has hidden the `//`, so only this reading's URL rules hide the
+    /// rest. It's a layer of its own (`scrub_text_slow`), so the rewrite can
+    /// only hide more.
+    pub(super) fn scrub_text_and_loose(text: &str) -> (String, Option<String>) {
+        let debug = scrub_debug_forms(text);
+        let loose = match normalize_separators(&debug, false) {
+            std::borrow::Cow::Owned(loose) => Some(scrub_pass(&loose, true)),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+        (scrub_text_on(&debug), loose)
+    }
+
+    /// `text`, which the `Debug` rules have read already, with every URL in
+    /// it scrubbed and its query string dropped, and every run that looks
+    /// like an info hash or a session secret (32 or more hex digits, or 32
+    /// base32 characters) hidden. For lines the code didn't type: the
+    /// third-party crates' and the not-yet-converted ones.
     ///
     /// One forward pass: each needle's next match is remembered, and the
     /// userinfo's look-ahead is bounded, so a line of `a://` or `magnet:`
     /// repeats costs time in proportion to its length.
-    pub(super) fn scrub_text(text: &str) -> String {
-        let first = scrub_pass(&scrub_debug_forms(text), false);
+    fn scrub_text_on(text: &str) -> String {
+        let first = scrub_pass(text, false);
         // What `main` didn't know, URL forms without a raw `://` (`http:%2F%2F`,
         // `http:/`, `//u:p@h`, written with one here) and percent-encoded
         // magnets, is scrubbed in a second pass over the first's output
@@ -1654,7 +1680,7 @@ mod wide {
         }
     }
 
-    /// One pass of [`scrub_text`]'s URL rules over `text`; `encoded` is
+    /// One pass of [`scrub_text_on`]'s URL rules over `text`; `encoded` is
     /// whether percent-encoded magnets start a span too.
     fn scrub_pass(text: &str, encoded: bool) -> String {
         let ats = Ats::new(text);
@@ -2132,7 +2158,7 @@ mod wide {
     }
 
     /// `text` with URL forms that lack a raw `://` written with one, so
-    /// [`scrub_text`] finds them (X-log-url-redact-2):
+    /// [`scrub_text_on`] finds them (X-log-url-redact-2):
     /// - a `:` and two `/`, any of them percent-encoded once or twice or the
     ///   `/` JSON-escaped (`http:%2F%2F`, `http%3A%2F%2F`, `http%3A//`,
     ///   `http:\/\/`, `http:%2F/`);
@@ -4161,6 +4187,24 @@ pass:"S3CRET"#,
             "IPA /kæːt/ ok",
         ] {
             assert_eq!(scrub_text(text), text);
+        }
+    }
+
+    /// A `//` URL whose password follows a space, at the start of a
+    /// credential's value: the value ends at that space, and only the URL
+    /// rules hide the rest (X-log-url-redact-5; `planted_secrets_never_get
+    /// _through`'s seed from #489's CI). The unquoted values after `PW: `,
+    /// `token=` and `x-api-key: ` showed the secret on `main`. Glued `PW:`
+    /// (a raw `://`) and a quoted value are guards: `main` hides them too.
+    #[test]
+    fn a_network_path_in_a_credential_s_value_keeps_its_password() {
+        for before in ["PW:", "PW: ", "token=", "x-api-key: ", "password:\""] {
+            for syntax in [" ", "  ", "\t"] {
+                let text = format!("{before}//u:{syntax}ZqAA0aaA9@host.example/x");
+                assert!(!plain_line(&text), "{text:?}");
+                let s = scrub_text(&text);
+                assert!(!s.contains("ZqAA0aaA9"), "{text:?}: {s}");
+            }
         }
     }
 
