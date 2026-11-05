@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T19:24Z",
+  "updated_at": "2026-11-05T19:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4846,7 +4846,8 @@
     "owner flag sent 18:56Z: X-search-files-5 v7 numbers and cost (#505 merged a1e0d849).",
     "owner flag sent 18:58Z: LEGAL-2 hold (#499 merged e163e323).",
     "owner flag sent 19:18Z: ENR-7 (#504 merged af4e9f7d). ENR-8 (drawer section, Sonnet) is now ready.",
-    "owner flag sent 19:21Z: RP-4 SP-3 refinements (#495 merged 85179f32)."
+    "owner flag sent 19:21Z: RP-4 SP-3 refinements (#495 merged 85179f32).",
+    "owner-flag §2.26 (ENR-8): Detail drawer limit 28,000 -> 28,064 B and /t/[hash] 21,840 -> 21,904 B for the one dynamic import of the adult-enrichment section (+53/+54 B measured); the section itself is an on-demand chunk (1,530 B, limit 1,700)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
