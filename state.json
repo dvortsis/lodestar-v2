@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T23:50Z",
+ "updated_at": "2026-11-05T23:51Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3339,6 +3339,18 @@
    "session": "session_01MMjhnB8dt8KTygRkyExN9D",
    "brief": "briefs/P-v08.md",
    "launched": "2026-11-05T23:37Z"
+  },
+  "X-tcache-recheck": {
+   "status": "running",
+   "session": "session_01MMjhnCPUNw7cymdGSLRHSf",
+   "brief": "briefs/X-tcache-recheck.md",
+   "launched": "2026-11-05T23:51Z"
+  },
+  "X-sources-low": {
+   "status": "running",
+   "session": "session_01MMjhn9dpWGKRy1HvxiCaet",
+   "brief": "briefs/X-sources-low.md",
+   "launched": "2026-11-05T23:51Z"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5009,6 +5021,11 @@
    "id": "gate-notes-from-preaudit",
    "note": "From the runner security pre-audit (main 63a2c6df) for the gates: SRC-G must require a store-backed, fail-closed PrivateTrackers before full_scrape is wired (only StaticPrivateTrackers exists, test-only). ENR-G must check that the host Switches::kill_switch_tripped treats an Unchecked or permanently-down route as tripped. Add both to the gates notes in the runner docs PR.",
    "added": "2026-11-05T23:50Z"
+  },
+  {
+   "id": "owner-flag-preaudit",
+   "note": "Flag to owner (\u00a72.19): pre-audit M2 changes \"turning a source off applies at next start\" (SRC-11c/13b/14a decisions) to immediate stop; M1 re-checks holds/floor at send. Send at merge.",
+   "added": "2026-11-05T23:51Z"
   }
  ],
  "main_health": [
@@ -5671,7 +5688,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T23:37Z",
+  "updated": "2026-11-05T23:51Z",
   "items": [
    {
     "slot": 1,
@@ -5761,6 +5778,24 @@
     "doing": "Plan: v0.8 slices (docs only)",
     "since": "2026-11-05T23:37Z",
     "session": "session_01MMjhnB8dt8KTygRkyExN9D"
+   },
+   {
+    "slot": 15,
+    "slice": "X-tcache-recheck",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Security: re-check torrent-cache lookups at send; stop a source when it is turned off (pre-audit M1, M2)",
+    "since": "2026-11-05T23:51Z",
+    "session": "session_01MMjhnCPUNw7cymdGSLRHSf"
+   },
+   {
+    "slot": 16,
+    "slice": "X-sources-low",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Security: egress port check, redirect header strip, shared title cleaner (pre-audit L1, L2, L4)",
+    "since": "2026-11-05T23:51Z",
+    "session": "session_01MMjhn9dpWGKRy1HvxiCaet"
    }
   ],
   "limit": 8,
