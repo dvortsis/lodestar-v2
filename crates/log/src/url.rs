@@ -546,6 +546,8 @@ pub fn scrub_text(text: &str) -> String {
         // Where the next `://` starts in `rest`, if there's one after this
         // URL's own userinfo.
         let mut nested = None;
+        // Whether that look-ahead ran over a later `://`.
+        let mut crossed = false;
         if url {
             nested = scheme.from(text, pos + i + 3).map(|n| n - pos);
             let next = nested.unwrap_or(rest.len()) - (i + 3);
@@ -555,9 +557,20 @@ pub fn scrub_text(text: &str) -> String {
                 // URL's userinfo, and the next one is after it.
                 if nested.is_some_and(|n| n < from) {
                     nested = scheme.from(text, pos + from).map(|n| n - pos);
+                    crossed = true;
                 }
             }
         }
+        // A credential's name in the userinfo whose value runs on past its
+        // `@` (`://\nAuthorization: x@<secret>`): what follows the `@` is
+        // that value, not a host, so the whole span goes (below).
+        // A value can't stop at the `@` (it's no stop character), so one
+        // that reaches the userinfo's end runs on past it. The userinfo
+        // regions never overlap, so this stays linear.
+        let value_in_userinfo = from > i + 3
+            && secret_cuts(&rest[i + 3..from])
+                .iter()
+                .any(|&(_, b)| i + 3 + b >= from);
         // An IPv6 literal host (`http://[::1]:6969/…`): its `]` doesn't end
         // the URL.
         let mut scan = from;
@@ -646,6 +659,19 @@ pub fn scrub_text(text: &str) -> String {
                         .map(|m| m - pos)
                         .filter(|&m| m < nested && !rest[m..nested].contains(hard_stop))
                         .unwrap_or(nested);
+                    // After a look-ahead that ran over a `://`, the next URL
+                    // goes too, to its first hard stop: what the look-ahead
+                    // took may be its password (`://#://@=://<secret>`).
+                    let stop = match crossed && stop == nested {
+                        true => {
+                            nested
+                                + rest[nested..]
+                                    .find(hard_stop)
+                                    .unwrap_or(rest.len() - nested)
+                        }
+                        false => stop,
+                    };
+                    carry = Some(rest[start..stop].to_string());
                     pos += stop;
                     continue;
                 }
@@ -675,7 +701,13 @@ pub fn scrub_text(text: &str) -> String {
             _ => end,
         };
         out.push_str(&lead(rest, start, i, carry.take()));
-        out.push_str(&scrub_with(&rest[i..end.max(i)], Form::Absolute, true));
+        match value_in_userinfo {
+            true => {
+                out.push_str("://");
+                out.push_str(REDACTED);
+            }
+            false => out.push_str(&scrub_with(&rest[i..end.max(i)], Form::Absolute, true)),
+        }
         // A span that ends on a credential's name (`&tr=Authorization:`,
         // `/token=`, `@Bearer`) leaves its value after the span: the text
         // after it is read with that name before it, so the plain-text
@@ -2510,6 +2542,21 @@ me@x"
             ] {
                 assert!(!s.contains("S3CRET"), "{text:?} -> {s:?}");
             }
+        }
+        // A look-ahead over a line break or a `://` took a credential's name
+        // into the userinfo (fuzz, against `main`). Free text only: `scrub`
+        // takes a URL, and shows these as `main` does.
+        for text in [
+            "://\nAuthorization: Some(httpx[@S3CRET",
+            "://{,\nAuthorization:  @keyS3CRET",
+            "://\nAuthorization: passpassword@S3CRET/",
+            "Authorization: &tr=://#://@=://S3CRET",
+            "http%40sid)https://h/&Basic @key\n:S3CRET",
+            "https://h/Basic =Authorization: @%2F/}S3CRETusername",
+            "ahttps://h/{//usernamea@S3CRET",
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text:?} -> {s:?}");
         }
         assert_eq!(
             scrub_text("see https://h/x/token: S3CRET ok"),

@@ -57,6 +57,9 @@ Both found shapes where this PR showed a secret `main` hid. Each is fixed, and e
 - **A credential's value in a path or an authority that holds `/`** (`/token:https:\/\/h\/<s>`, `@token:https:\/\/…`). Both show on `main` too.
   - In a path, the value and the rest of the path go (`scrub_path`, used by `finish` and by a Debug `path`).
   - A host holding a character no host can, or a port that's no number, hides the rest of the URL.
+- **A look-ahead that crosses a line break or a `://` can take a credential's name into the userinfo** (`://\nAuthorization: x@<s>`, `Authorization: &tr=://#://@=://<s>`). Two rules cover it:
+  - When a value that starts in the userinfo runs past its `@`, the whole span goes, since what follows is that value, not a host. A value can't stop at an `@`, so reading the userinfo alone tells; it stays linear.
+  - When the look-ahead ran over a `://` and the "hide up to the next `://`" branch is taken, the next URL goes too, to its first hard stop.
 - **A magnet glued to an authority hides the whole URL** (`https://<s>,magnet:?xt=a` shows as `https://[redacted]`). Cutting there dropped the `:` that made `main` hide it.
 
 ## Over-redaction accepted ("never too little")
