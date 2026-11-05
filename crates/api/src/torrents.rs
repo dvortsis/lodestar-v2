@@ -286,7 +286,8 @@ impl Catalogue {
                 id: e.id,
                 name: e.name.clone(),
                 plugin: e.plugin.clone(),
-                private: private || private_claim,
+                // Only the admin is told a claim was private.
+                private: private || (private_claim && viewer == Viewer::Admin),
             });
         }
         // Claims from a source that's no longer in the bitset (purged
