@@ -238,8 +238,8 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
                 _ => claims::Confidence::Low,
             },
         },
-        // Not stored until ENR-1 judges the section's text first (plan Q3).
-        adult: None,
+        // Judged, as extra evidence, before it's stored ([`judge_in`]).
+        adult: c.adult.clone(),
     })
 }
 
@@ -344,6 +344,30 @@ pub fn judge(
     adult: bool,
     now: i64,
 ) -> Option<Hold> {
+    judge_in(engine, key, c, None, sealer, adult, now)
+}
+
+/// [`judge`], and the claims' adult-enrichment section (ENR-0) judged as
+/// extra evidence (ENR-1, plan Q3): each of its texts (the scene title,
+/// the studio, each performer), all of them together, and, when
+/// `context` gives the verified name of the torrent the claims are on,
+/// that name with them. Every one is judged as adult, since only Adult
+/// items are looked up (Q2), so the Adult-only core's thresholds apply.
+///
+/// **Stricter only.** The section's texts are judged as extra items: a
+/// hit adds a hold (a core one holds the hash, as for any claim), and
+/// nothing they hold can cancel a decision on another text. They're never
+/// a counter-signal: no exception or rule judging the torrent's own name
+/// sees them.
+pub fn judge_in(
+    engine: &Engine,
+    key: [u8; 20],
+    c: &Claims,
+    context: Option<&str>,
+    sealer: Option<&Sealer>,
+    adult: bool,
+    now: i64,
+) -> Option<Hold> {
     let hashes = vec![key];
     let files = claimed_files(c);
     let size = c
@@ -369,7 +393,52 @@ pub fn judge(
         }
         found.get_or_insert(h);
     }
+    for text in c
+        .adult
+        .as_ref()
+        .map(|a| enrichment_texts(a, context))
+        .unwrap_or_default()
+    {
+        let Some(h) = judge_text(engine, &hashes, &text, &[], 0, sealer, true, now) else {
+            continue;
+        };
+        if h.core {
+            return Some(h);
+        }
+        found.get_or_insert(h);
+    }
     found
+}
+
+/// The texts of an adult-enrichment section that [`judge_in`] judges:
+/// each one alone (the scene title, the studio, each performer, and the
+/// scene id with its `-`s read as spaces, since a slug can carry the
+/// title), then all of them together, then `context` (the torrent's
+/// verified name) with each one and with all of them. Empty texts are
+/// left out.
+pub fn enrichment_texts(a: &claims::AdultEnrichment, context: Option<&str>) -> Vec<String> {
+    let slug = a.scene_id.replace('-', " ");
+    let mut alone: Vec<&str> = Vec::with_capacity(3 + a.performers.len());
+    alone.extend(a.title.as_deref());
+    alone.extend(a.studio.as_deref());
+    alone.extend(a.performers.iter().map(String::as_str));
+    alone.push(slug.trim());
+    alone.retain(|t| !t.is_empty());
+    if alone.is_empty() {
+        return Vec::new();
+    }
+    let together = alone.join(" ");
+    let mut out: Vec<String> = alone.iter().map(|t| (*t).to_owned()).collect();
+    if alone.len() > 1 {
+        out.push(together.clone());
+    }
+    if let Some(name) = context.filter(|n| !n.is_empty()) {
+        out.extend(alone.iter().map(|t| format!("{name} {t}")));
+        if alone.len() > 1 {
+            out.push(format!("{name} {together}"));
+        }
+    }
+    out
 }
 
 /// [`judge`] for one text, as a torrent's name, with `files`.
@@ -478,6 +547,9 @@ pub struct Ingested {
     /// Stored torrents an always-adult source has just claimed: the writer
     /// classifies them as adult (`enrich::adult_by_source`).
     pub adult: Vec<i64>,
+    /// Stored torrents that gained an adult-enrichment match (ENR-1),
+    /// classified again with it here ([`crate::enrich::apply_matches`]).
+    pub matched: Vec<i64>,
 }
 
 /// Judges a batch of discoveries with claims and stores what the rules
@@ -497,6 +569,8 @@ pub fn ingest(
     let mut out = Ingested::default();
     UnverifiedStats::add(&stats.received, found.len());
     let mut keep: Vec<(&Discovery, Claims)> = Vec::with_capacity(found.len());
+    // Enrichment matches, with the stored torrent they're on.
+    let mut matches: Vec<(&Discovery, Claims, i64)> = Vec::new();
     let mut holds: Vec<Hold> = Vec::new();
     for d in found {
         let Some(c) = store_claims(d) else { continue };
@@ -505,8 +579,31 @@ pub fn ingest(
             continue;
         }
         let adult = ctx.adult.has(d.source);
-        let Some(mut h) = judge(engine, d.found.key.0, &c, ctx.sealer, adult, now) else {
-            keep.push((d, c));
+        // An adult-enrichment match (ENR-1) is only ever about a stored,
+        // verified torrent, looked up by the enrichment runtime: one for
+        // any other key, or through a private source, is refused.
+        let on = match &c.adult {
+            None => None,
+            Some(_) => {
+                let id = if d.found.private_source {
+                    None
+                } else {
+                    store.find(&d.found.key)?
+                };
+                let Some(id) = id else {
+                    UnverifiedStats::add(&stats.refused, 1);
+                    continue;
+                };
+                Some((id, store.torrent(id)?.map(|r| r.name)))
+            }
+        };
+        let context = on.as_ref().and_then(|(_, name)| name.as_deref());
+        let Some(mut h) = judge_in(engine, d.found.key.0, &c, context, ctx.sealer, adult, now)
+        else {
+            match on {
+                Some((id, _)) => matches.push((d, c, id)),
+                None => keep.push((d, c)),
+            }
             continue;
         };
         if !h.core {
@@ -586,6 +683,33 @@ pub fn ingest(
                 Put::Held | Put::Bare => &stats.refused,
             };
             UnverifiedStats::add(counter, 1);
+        }
+    }
+    // Enrichment matches go on the torrent as the source's claims, never
+    // as an unverified item and never as a sighting: the source didn't
+    // find the key, the runtime asked about it.
+    for (d, c, id) in matches {
+        let counter = match store.put_claims(id, d.source, &c, false) {
+            Ok(true) => {
+                if !out.matched.contains(&id) {
+                    out.matched.push(id);
+                }
+                &stats.on_torrent
+            }
+            // Held meanwhile, or no longer stored.
+            Ok(false) => &stats.refused,
+            // Disabled or purged meanwhile (SRC-1).
+            Err(lodestar_store::Error::Invalid(_)) => &stats.refused,
+            Err(e) => return Err(e),
+        };
+        UnverifiedStats::add(counter, 1);
+    }
+    if !out.matched.is_empty() {
+        // The kind is a refinement, never a safety decision: if classifying
+        // fails here, the backfill applies the match instead.
+        let ids = out.matched.clone();
+        if crate::enrich::apply_matches(store, &ids, engine, ctx.adult, now).is_err() {
+            let _ = store.mark_unenriched(&ids);
         }
     }
     Ok(out)
@@ -781,8 +905,22 @@ pub fn refile_step(
                 };
                 // Claims an always-adult source made: judged as adult too.
                 let adult = ctx.adult.has(c.source);
-                if let Some(mut h) = judge_hashes(&engine, &hashes, claims, ctx.sealer, adult, now)
-                {
+                // An enrichment match is judged with the torrent's name,
+                // as at ingest (ENR-1).
+                let context = match &claims.adult {
+                    Some(_) => store.torrent(c.torrent_id)?.map(|r| r.name),
+                    None => None,
+                };
+                let found = judge_hashes(
+                    &engine,
+                    &hashes,
+                    claims,
+                    context.as_deref(),
+                    ctx.sealer,
+                    adult,
+                    now,
+                );
+                if let Some(mut h) = found {
                     // Only the floor and the core hold a stored torrent on
                     // a claim; any other rule only takes the claims away.
                     let hold = h.core.then(|| {
@@ -856,17 +994,18 @@ fn judge_hashes(
     engine: &Engine,
     hashes: &[[u8; 20]],
     c: &Claims,
+    context: Option<&str>,
     sealer: Option<&Sealer>,
     adult: bool,
     now: i64,
 ) -> Option<Hold> {
     let first = *hashes.first()?;
-    let mut h = judge(engine, first, c, sealer, adult, now);
+    let mut h = judge_in(engine, first, c, context, sealer, adult, now);
     for &other in &hashes[1..] {
         if h.is_some() {
             break;
         }
-        h = judge(engine, other, c, sealer, adult, now);
+        h = judge_in(engine, other, c, context, sealer, adult, now);
     }
     h
 }

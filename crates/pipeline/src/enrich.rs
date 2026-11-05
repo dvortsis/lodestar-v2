@@ -4,12 +4,17 @@
 //! coordinator runs it for torrents that arrive without it (imports,
 //! torrents stored before M3, records from an older parser).
 
-use lodestar_classify::ContentType;
-use lodestar_classify::{Classification, Correction, ENRICHMENT_VERSION, FileInfo};
-use lodestar_filter::reclassify::reclassify_row;
-use lodestar_filter::{Handle, Sealer};
+use lodestar_classify::{
+    Classification, ContentType, Correction, ENRICHMENT_VERSION, EnrichmentMatch, FileInfo,
+    MatchKind, Record, classify_enriched,
+};
+use lodestar_filter::reclassify::{Reclassified, reclassify_row};
+use lodestar_filter::{Engine, Handle, Sealer};
 use lodestar_metainfo::{File, TextEncoding};
-use lodestar_store::{Enriched, Store};
+use lodestar_store::claims::{AdultEnrichment, AdultKind};
+use lodestar_store::{Enriched, Store, TorrentRow};
+
+use crate::source_adult::AdultSources;
 
 pub use lodestar_filter::reclassify::enrich_corrected;
 
@@ -142,7 +147,13 @@ fn enrich_ids(
             let files = file_infos(&tree.files, tree.encoding);
             let r = reclassify_row(&row, &files, own, was_adult, engine, now);
             refilings.extend(r.refilings(&row, ctx.sealer));
-            batch.push((id, r.enriched));
+            // A stored enrichment match pins the adult kind (ENR-1): a
+            // newer parser keeps it.
+            let enriched = match with_match(store, &row, &files, own, &r)? {
+                Some(e) => e,
+                None => r.enriched,
+            };
+            batch.push((id, enriched));
         }
     }
     let refiled: Vec<_> = refilings
@@ -210,6 +221,154 @@ pub fn adult_by_source(
         store.mark_unenriched(&due)?;
     }
     Ok(done)
+}
+
+/// The enrichment match an adult-enrichment section gives classification
+/// (ENR-6's [`EnrichmentMatch`]): the kind the service reports. A section
+/// without a kind pins nothing.
+pub fn match_of(a: &AdultEnrichment) -> Option<EnrichmentMatch> {
+    let kind = match a.kind? {
+        AdultKind::Scene => MatchKind::Scene,
+        AdultKind::Movie => MatchKind::Movie,
+        AdultKind::Vr => MatchKind::Vr,
+    };
+    Some(EnrichmentMatch::new(kind))
+}
+
+/// The enrichment match stored on torrent `id`: the first, by source, of
+/// its claims' adult sections that names a kind. `unverified::ingest`
+/// keeps a section only on a stored torrent and never through a private
+/// source; it doesn't yet check that the source is an enrichment plugin
+/// (`docs/decisions/2026-11-05-ENR-1.md`).
+pub fn stored_match(
+    store: &Store,
+    id: i64,
+) -> Result<Option<EnrichmentMatch>, lodestar_store::Error> {
+    Ok(store
+        .torrent_claims(id)?
+        .iter()
+        .filter_map(|c| c.claims.as_ref()?.adult.as_ref())
+        .find_map(match_of))
+}
+
+/// `r`'s enrichment with the torrent's stored match applied through
+/// ENR-6's entry point ([`classify_enriched`]), when `r` is adult and its
+/// claims hold one; `None` otherwise. Only the adult kind and confidence
+/// can change: a match never makes an item adult here, never un-adults
+/// one, and filtering never judges this result (§20.7).
+fn with_match(
+    store: &Store,
+    row: &TorrentRow,
+    files: &[FileInfo],
+    own: Correction,
+    r: &Reclassified,
+) -> Result<Option<Enriched>, lodestar_store::Error> {
+    if r.class.content_type != ContentType::Adult {
+        return Ok(None);
+    }
+    let Some(m) = stored_match(store, row.id)? else {
+        return Ok(None);
+    };
+    // The correction (or rule, or always-adult source) that made it adult,
+    // so its confidence stays 100; else detection's, with the match.
+    let fix = Correction {
+        adult: (own.adult == Some(true) || r.relabelled).then_some(true),
+        not_junk: own.not_junk,
+    };
+    Ok(Some(enriched_of(&classify_enriched(
+        &row.name,
+        files,
+        fix,
+        Some(m),
+    ))))
+}
+
+/// A classification in the form the store keeps.
+fn enriched_of(c: &Classification) -> Enriched {
+    Enriched {
+        version: ENRICHMENT_VERSION,
+        content_type: c.content_type.code(),
+        junk_score: c.junk.score,
+        comp: c.composition.encode(),
+        data: Record::new(c).encode(),
+    }
+}
+
+/// What [`apply_matches`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Matched {
+    /// Torrents classified again with their match.
+    pub classified: usize,
+    /// Torrents marked for the backfill instead: one not stored as adult
+    /// yet (becoming adult needs the backfill's judgement and holds), or
+    /// a batch the classification rules moved under.
+    pub deferred: Vec<i64>,
+}
+
+/// Classifies again, at once, the stored torrents among `ids` that just
+/// gained an enrichment match (ENR-1), so the match pins their adult kind.
+///
+/// Only a torrent stored as adult is classified here: classifying it
+/// again can't make it adult, so nothing new needs judging or holding,
+/// and the write holds nothing. Any other is marked for the backfill,
+/// which judges and holds as usual. A torrent whose classification is no
+/// longer adult (your Not adult correction or rule since), or whose
+/// claims no longer hold a match, is left alone. When the rules changed
+/// under the batch, it's all marked for the backfill instead.
+pub fn apply_matches(
+    store: &mut Store,
+    ids: &[i64],
+    engine: &Engine,
+    adult: AdultSources,
+    now: i64,
+) -> Result<Matched, lodestar_store::Error> {
+    let generation = store.class_gen()?;
+    let mut batch: Vec<(i64, Enriched)> = Vec::new();
+    let mut deferred = Vec::new();
+    for &id in ids {
+        if batch.iter().any(|(b, _)| *b == id) || deferred.contains(&id) {
+            continue;
+        }
+        let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) else {
+            continue;
+        };
+        if store.content_type(id)? != Some(ContentType::Adult.code()) {
+            deferred.push(id);
+            continue;
+        }
+        let own = store.correction(id)?.map(correction).unwrap_or_default();
+        let own = crate::source_adult::correction(own, row.sources, adult);
+        let files = file_infos(&tree.files, tree.encoding);
+        // Stored as adult, so it's judged as adult already: nothing to hold.
+        let r = reclassify_row(&row, &files, own, true, Some(engine), now);
+        if let Some(e) = with_match(store, &row, &files, own, &r)? {
+            batch.push((id, e));
+        }
+    }
+    if !deferred.is_empty() {
+        store.mark_unenriched(&deferred)?;
+    }
+    if batch.is_empty() {
+        return Ok(Matched {
+            classified: 0,
+            deferred,
+        });
+    }
+    match store.set_enrichments_at(generation, &batch, &[])? {
+        Some(classified) => Ok(Matched {
+            classified,
+            deferred,
+        }),
+        None => {
+            let ids: Vec<i64> = batch.iter().map(|(id, _)| *id).collect();
+            store.mark_unenriched(&ids)?;
+            deferred.extend(ids);
+            Ok(Matched {
+                classified: 0,
+                deferred,
+            })
+        }
+    }
 }
 
 /// One batch of the import-candidate refile sweep
