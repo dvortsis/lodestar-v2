@@ -4771,7 +4771,8 @@
     "B13b notes (from #505): tie api::compare::identity to title_identity (shared fn or cross-crate test); add the Backfilling-state fallback test.",
     "owner-flag §2.19/§2.26 (ENR-7 #504): drawer lookups rate-limited per client 10 burst + 1/30 s (IPv4 or IPv6 /64) and overall 30 burst + 1/20 s, 1,024 clients tracked; Public viewers never get the section; a Not adult correction hides a match.",
     "ENR-G note (from #504 review): the detail API held_back check is narrower than the enrichment gate (no floor/dropping-list blocked_hash, no live filter verdict); until a refile sets HIDDEN a newly hidden item still shows its stored match.",
-    "Q15 cap fix folded into ENR-1c #502 (17:12Z): Interest::opened lookups count against the 5,000/day cap per owner plan Q15; no separate ENR-1d slice (8-slot drain)."
+    "Q15 cap fix folded into ENR-1c #502 (17:12Z): Interest::opened lookups count against the 5,000/day cap per owner plan Q15; no separate ENR-1d slice (8-slot drain).",
+    "owner-flag §2.19 (RP-4 #495): with no plugin setting a publisher yet, SP-3 counts per source for Nyaa and Sukebei only; a busy release day (20+ same-title uploads in an hour across groups) can flag (never hide) a legitimate title, per Q10 as written."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
