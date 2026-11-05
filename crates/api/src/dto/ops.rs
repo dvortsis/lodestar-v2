@@ -412,6 +412,10 @@ pub struct Source {
     /// The hosts it contacts, as `protocol://host`: what an `external`
     /// source's acknowledgement covers.
     pub endpoints: Vec<String>,
+    /// What it finds reflects your own setup (download clients, indexers,
+    /// Sonarr and Radarr): kept private, and never named to an API key or
+    /// feed token as a source of anything (§18.7).
+    pub finds_private: bool,
     pub health: SourceHealth,
     pub id: u8,
     pub kinds: Vec<SourceKind>,

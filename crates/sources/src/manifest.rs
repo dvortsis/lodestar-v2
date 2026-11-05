@@ -95,6 +95,13 @@ pub struct Manifest {
     /// turn it off; it only ever makes an item adult, never non-adult
     /// (`docs/decisions/2026-11-05-X-source-adult.md`).
     pub always_adult: bool,
+    /// What this source finds reflects your own setup (your download
+    /// clients, your indexers, the releases your Sonarr or Radarr grabbed),
+    /// so it's never shown to a public viewer (an API key, a feed token) as
+    /// a source of anything, not even of a torrent that's also stored
+    /// publicly (§18.7, `docs/decisions/2026-11-05-SRC-11c.md`). Like
+    /// [`Manifest::always_adult`], a property of the plugin's code.
+    pub finds_private: bool,
 }
 
 impl Manifest {

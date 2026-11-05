@@ -19683,6 +19683,7 @@
           "egress",
           "enabled",
           "endpoints",
+          "finds_private",
           "health",
           "id",
           "kinds",
@@ -19931,6 +19932,10 @@
               "type": "string"
             },
             "description": "The hosts it contacts, as `protocol://host`: what an `external`\nsource's acknowledgement covers."
+          },
+          "finds_private": {
+            "type": "boolean",
+            "description": "What it finds reflects your own setup (download clients, indexers,\nSonarr and Radarr): kept private, and never named to an API key or\nfeed token as a source of anything (§18.7)."
           },
           "health": {
             "$ref": "#/components/schemas/SourceHealth"

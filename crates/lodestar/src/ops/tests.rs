@@ -41,6 +41,7 @@ static FEED: Manifest = Manifest {
     default_priority: Priority::Normal,
     enabled_by_default: true,
     always_adult: false,
+    finds_private: false,
 };
 
 /// Reports a new key with a peer every 10 ms.
@@ -956,6 +957,7 @@ fn gated() -> Vec<(Arc<dyn SourcePlugin>, Arc<std::sync::atomic::AtomicBool>)> {
                 default_priority: Priority::Normal,
                 enabled_by_default: false,
                 always_adult: false,
+                finds_private: false,
             };
             (
                 Arc::new(Gated(m, ran.clone())) as Arc<dyn SourcePlugin>,

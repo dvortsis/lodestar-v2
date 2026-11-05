@@ -327,6 +327,7 @@ static MANIFEST: Manifest = Manifest {
     default_priority: Priority::Low,
     enabled_by_default: false,
     always_adult: false,
+    finds_private: false,
 };
 
 static POLICY: Policy = Policy {

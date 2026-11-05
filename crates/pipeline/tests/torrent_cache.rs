@@ -301,6 +301,7 @@ mod wired {
             default_priority: Priority::Normal,
             enabled_by_default: on,
             always_adult,
+            finds_private: false,
         }))
     }
 

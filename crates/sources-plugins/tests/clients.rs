@@ -296,6 +296,7 @@ fn caps_consent_and_endpoints() {
     assert_eq!(m.id, clients::ID);
     assert_eq!(m.consent, Consent::Account);
     assert!(m.endpoints.is_empty() && !m.enabled_by_default);
+    assert!(m.finds_private, "never named to a public viewer (§18.7)");
     let policy = p.policy();
     assert!(policy.caps.min_poll_interval >= POLL);
     let limits = policy.limits(&UserLimits::default());

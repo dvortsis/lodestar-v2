@@ -285,6 +285,7 @@ fn manifest_and_policy() {
     assert_eq!(m.id, "prowlarr");
     assert_eq!(m.consent, Consent::Account);
     assert!(!m.enabled_by_default);
+    assert!(m.finds_private, "never named to a public viewer (§18.7)");
     assert!(
         m.endpoints.is_empty(),
         "the user's address is the only host"

@@ -350,6 +350,7 @@ fn source(v: SourceView) -> Source {
             .iter()
             .map(|e| format!("{}://{}", e.protocol, e.host))
             .collect(),
+        finds_private: m.finds_private,
         health: SourceHealth {
             harvested_24h: v.harvested_24h,
             last_error: v.status.last_error.clone(),

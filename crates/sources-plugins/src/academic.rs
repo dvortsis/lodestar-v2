@@ -76,6 +76,7 @@ const MANIFEST: Manifest = Manifest {
     default_priority: Priority::Normal,
     enabled_by_default: false,
     always_adult: false,
+    finds_private: false,
 };
 
 /// No settings: the endpoint is fixed.

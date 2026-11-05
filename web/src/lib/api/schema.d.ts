@@ -8145,6 +8145,12 @@ export interface components {
              *     source's acknowledgement covers.
              */
             endpoints: string[];
+            /**
+             * @description What it finds reflects your own setup (download clients, indexers,
+             *     Sonarr and Radarr): kept private, and never named to an API key or
+             *     feed token as a source of anything (§18.7).
+             */
+            finds_private: boolean;
             health: components["schemas"]["SourceHealth"];
             /** Format: int32 */
             id: number;

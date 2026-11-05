@@ -99,8 +99,9 @@ impl Viewer {
 pub(crate) struct PluginName {
     pub name: String,
     /// Its consent class isn't `account` (§18.7: Prowlarr, Jackett,
-    /// private-tracker announces and your own clients are). Its results
-    /// may be public.
+    /// private-tracker announces and your own clients are), and its
+    /// manifest doesn't say its finds are private (Sonarr and Radarr
+    /// webhooks). Its results may be public.
     pub public: bool,
 }
 
@@ -229,22 +230,24 @@ async fn names_for(ops: Arc<dyn OpsApi>) -> Arc<PluginNames> {
     };
     slot.get(move || async move {
         let list = ops.sources().await.ok()?;
-        Some(
-            list.into_iter()
-                .map(|src| {
-                    let public = src.consent != ConsentClass::Account;
-                    (
-                        src.plugin,
-                        PluginName {
-                            name: src.name,
-                            public,
-                        },
-                    )
-                })
-                .collect(),
-        )
+        Some(list.into_iter().map(plugin_name).collect())
     })
     .await
+}
+
+/// A listed source's name, and whether a public viewer may see it: never
+/// an account's, nor one whose finds reflect your own setup (§18.7: your
+/// clients, your indexers, the releases your Sonarr or Radarr grabbed),
+/// even on a torrent that's also stored publicly.
+fn plugin_name(src: crate::ops::Source) -> (String, PluginName) {
+    let public = src.consent != ConsentClass::Account && !src.finds_private;
+    (
+        src.plugin,
+        PluginName {
+            name: src.name,
+            public,
+        },
+    )
 }
 
 /// One registered source, as provenance shows it.
@@ -1146,6 +1149,72 @@ pub(crate) mod tests {
             }
             assert_eq!(ops.calls.load(Ordering::SeqCst), 1, "fail: {fail}");
         }
+    }
+
+    /// A listed source as `sources()` gives it, with only what
+    /// [`plugin_name`] reads set.
+    fn listed(plugin: &str, name: &str, consent: &str, finds_private: bool) -> crate::ops::Source {
+        serde_json::from_value(serde_json::json!({
+            "agents": { "count": 1, "enforced": false, "max": 1 },
+            "consent": consent, "consent_required": false, "consent_version": "",
+            "credentials": [], "editable": [],
+            "egress": { "live": null, "setting": null, "warnings": [] },
+            "enabled": true, "endpoints": [], "finds_private": finds_private,
+            "health": { "harvested_24h": 0, "last_error": null, "last_run": null,
+                "running": true, "stored_24h": 0 },
+            "id": 0, "kinds": ["discovery"], "name": name, "needs": null, "networks": ["bt"],
+            "not_yet_editable": [], "password_required": false, "plugin": plugin,
+            "priority": "normal", "purge_pending": false, "restart_required": false,
+            "risk": "low", "schedule": { "default": [], "enforced": false, "windows": [] },
+            "state": "enabled", "version": "1"
+        }))
+        .unwrap()
+    }
+
+    /// SRC-11c: a Sonarr or Radarr grab of a torrent that's also stored
+    /// publicly adds the webhooks' bit to that row. The webhooks source is
+    /// consent None, yet a public viewer never sees it named, nor can pick
+    /// it as a facet; the signed-in admin sees it, marked private.
+    #[test]
+    fn a_source_whose_finds_are_private_is_never_named_to_the_public() {
+        let names: PluginNames = [
+            listed("dht", "Mainline DHT", "none", false),
+            listed("arr_webhooks", "Sonarr and Radarr webhooks", "none", true),
+        ]
+        .into_iter()
+        .map(plugin_name)
+        .collect();
+        assert!(names["dht"].public);
+        assert!(!names["arr_webhooks"].public);
+        let c = Catalogue::of(
+            [(0u8, "dht"), (1, "arr_webhooks")]
+                .into_iter()
+                .map(|(id, plugin)| SourceEntry {
+                    id,
+                    plugin: plugin.into(),
+                    name: names[plugin].name.clone(),
+                    public: Some(names[plugin].public),
+                })
+                .collect(),
+        );
+        // Stored publicly: found by the DHT and by the webhook, no
+        // private-source flag.
+        let r = row(0b11, Some(0), 0);
+        let public = c.provenance(&r, &[], Viewer::Public);
+        assert_eq!(plugins(&public), ["dht"]);
+        assert_eq!(c.hit_source(&r, Viewer::Public).unwrap().plugin, "dht");
+        assert!(!c.shows_plugin("arr_webhooks", Viewer::Public));
+        let admin = c.provenance(&r, &[], Viewer::Admin);
+        let mut seen = plugins(&admin);
+        seen.sort_unstable();
+        assert_eq!(seen, ["arr_webhooks", "dht"]);
+        assert!(
+            admin
+                .sources
+                .iter()
+                .any(|s| s.plugin == "arr_webhooks" && s.private)
+        );
+        assert!(c.shows_plugin("arr_webhooks", Viewer::Admin));
     }
 
     #[test]

@@ -238,6 +238,7 @@ fn caps_consent_and_endpoints() {
     assert_eq!(m.id, arr::ID);
     assert_eq!(m.consent, Consent::None);
     assert!(m.endpoints.is_empty(), "it contacts nothing");
+    assert!(m.finds_private, "never named to a public viewer (§18.7)");
     assert!(!m.enabled_by_default);
     assert_eq!(p.policy().distribution, Distribution::Coordinator);
     assert_eq!(p.policy().max_agents, 1);
