@@ -4616,7 +4616,8 @@
     "X-ci-disk (#482) merged: test-job target 19G vs 41G+ before. Not yet proven on a 72G runner; the new disk step prints df every run. If a 72G runner still runs short, remove more preinstalled toolchains. Nits: continue-on-error on the diagnostic step; !cancelled() instead of always().",
     "Owner flag (\u00a72.26) from LEGAL-1 (#472) after main merge: CSS budget 19.65 \u2192 19.72 kB (under the \u00a710.1 20 kB cap), /t/[hash] 21,776 \u2192 21,840 B. The legal notice dropped the unauthorised-copy (planned) marker and its status line, still v3.",
     "After #479 merges: split a sync verify_body out of TorrentCache::ask (sources-plugins/src/torrent_cache.rs) so the torrent_cache fuzz target calls the real reply path and fuzzes Verified::claims (X-fuzz-1105, #484 decisions file). Next fuzz campaign: give more time to metainfo (~1k exec/s), rss, release, query and tokenizer.",
-    "owner-flag \u00a72.19 (RP-1b #485): MW-2@2 narrows a malware rule; residual: one .exe in a Music torrent with two samples in a sample folder passes MW-2, only MW-1 can hold it. Flag with the PR merge."
+    "owner-flag \u00a72.19 (RP-1b #485): MW-2@2 narrows a malware rule; residual: one .exe in a Music torrent with two samples in a sample folder passes MW-2, only MW-1 can hold it. Flag with the PR merge.",
+    "After #479: add a sync verify_body path for the torrent_cache fuzz target (fuzz harness follow-up; small, Sonnet-ok after review)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
