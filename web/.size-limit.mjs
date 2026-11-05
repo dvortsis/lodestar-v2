@@ -1161,8 +1161,8 @@ export default [
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
 		'45 KB'
 	),
-	// SRC-15a (runner §2.26): +64 B for the Sources registry entry (measured residue 16 B, rounded up).
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45.07 KB'),
+	// X-settings-trim: back at the §10.1 cap (44.95 kB measured) after the SRC-15a/LEGAL-1 raises.
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1214,10 +1214,9 @@ export default [
 	// first change, through the flows' door): measured 30.54 KB, limit = measured + ~10% of the cut.
 	// SRC-15a (runner §2.26): FiltersScreen and NotificationsScreen +64 B each for the Sources registry
 	// entry in the shared chunk (measured residue 56 and 59 B, rounded up to 64 B).
-	// LEGAL-1 (runner §2.26): FiltersScreen and NotificationsScreen +64 B each again, for the Legal
-	// Notice gate in the shared API and events clients (a 409 notice_required goes to the sign-in
-	// gate): measured 31.08 KB and 45.09 KB, residue 11 and 25 B, rounded up to 64 B. That takes
-	// NotificationsScreen past the §10.1 45 KB route cap; the runner flags it to the owner (§2.19).
+	// LEGAL-1 (runner §2.26): FiltersScreen +64 B again, for the Legal Notice gate in the shared API
+	// and events clients (measured 31.08 KB). X-settings-trim brought NotificationsScreen (44.99 KB
+	// measured) back under the §10.1 45 KB route cap, so it has the default limit again.
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
 	...settingsHandBuilt.map(({ name, files }) =>
@@ -1232,9 +1231,7 @@ export default [
 						? '30.4 KB'
 						: name === 'SourcesScreen'
 							? '30 KB'
-							: name === 'NotificationsScreen'
-								? '45.14 KB'
-								: '45 KB'
+							: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
