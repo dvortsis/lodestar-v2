@@ -941,7 +941,7 @@ impl Control {
                     &settings.egress,
                     status.egress.as_ref(),
                     proxy_env,
-                    crate::egress::auto_dns(&status.manifest),
+                    status.auto_dns,
                 );
                 let count = |stage: Stage| -> i64 {
                     cohorts

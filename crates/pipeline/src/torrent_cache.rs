@@ -4,9 +4,15 @@
 //!
 //! - **What may be looked up** ([`Cursor`]): unverified items, a page at
 //!   a time from the store, **never one flagged `private_source`** (a
-//!   lookup tells the cache the hash, §18.7). User interest is the
-//!   host's to add; it passes the item's `private_source` flag to the
+//!   lookup tells the cache the hash, §18.7). For user interest,
+//!   [`interest`] reads the key and its `private_source` flag from the
+//!   store, never from the caller, and the host passes that flag to the
 //!   plugin's `Lookup::new`, which refuses a private key too.
+//! - **Host wiring** (SRC-13b, `docs/decisions/2026-11-05-SRC-13b.md`):
+//!   the host hands each verified file to [`Feed`]. The pipeline's judge
+//!   task runs [`judge_sealed`], and the writer commits what it may store
+//!   or hold through its lease-free entry, judging it again through the
+//!   always-adult mask.
 //! - **What a cached file becomes** ([`judge`]): a `.torrent` whose info
 //!   dict hashes to the key is verified metadata (Q8), with provenance
 //!   [`PROVENANCE`]. It's judged from the info dict's raw bytes, parsed
@@ -22,10 +28,11 @@
 //! Nothing here logs a name or a hash.
 
 use lodestar_classify::{Classification, FileInfo};
-use lodestar_filter::{Action, Engine, Facts, Item, Verdict};
+use lodestar_filter::{Action, Engine, Facts, Item, Sealer, Verdict};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_store::unverified::{MAX_PAGE, Network};
-use lodestar_store::{Prepared, Preparer, Store};
+use lodestar_store::{Prepared, Preparer, SourceId, Store};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::unverified::VERIFY_ROUND_SECS;
 
@@ -141,6 +148,12 @@ pub enum Judged {
         hashes: Vec<[u8; 20]>,
         verdict: Verdict,
         version: u64,
+        /// The name sealed for a quarantine's review ([`judge_sealed`]
+        /// with a sealer); `None` otherwise.
+        sealed: Option<Vec<u8>>,
+        /// Held by the Adult-only core only because your rule made it
+        /// adult: a tombstone when the quarantine ends (§20.9).
+        adult_hold: bool,
     },
     Refused(Refusal),
 }
@@ -155,6 +168,19 @@ pub enum Judged {
 pub fn judge(
     engine: &Engine,
     preparer: &mut Preparer,
+    key: InfoHash,
+    raw_info: &[u8],
+    now: i64,
+) -> Judged {
+    judge_sealed(engine, preparer, None, key, raw_info, now)
+}
+
+/// [`judge`], sealing a quarantined name with `sealer` for its review, as
+/// the writer seals a fetched one.
+pub fn judge_sealed(
+    engine: &Engine,
+    preparer: &mut Preparer,
+    sealer: Option<&Sealer>,
     key: InfoHash,
     raw_info: &[u8],
     now: i64,
@@ -194,17 +220,25 @@ pub fn judge(
         content_type: class.content_type,
     };
     let (verdict, says) = engine.judge_classified(&item, Some(&facts), now);
-    if matches!(
-        verdict.decision.as_ref().map(|d| d.action),
-        Some(Action::Drop | Action::Quarantine)
-    ) {
+    let fix = crate::enrich::rule_fix(says, &class);
+    let held = verdict.decision.as_ref().map(|d| d.action);
+    if matches!(held, Some(Action::Drop | Action::Quarantine)) {
+        let sealed = (held == Some(Action::Quarantine))
+            .then(|| sealer.and_then(|s| s.seal(&prepared.name).ok()))
+            .flatten();
+        let adult_hold = fix == Some(true)
+            && verdict
+                .decision
+                .as_ref()
+                .is_some_and(lodestar_filter::reclassify::adult_hold);
         return Judged::Held {
             hashes,
             verdict,
             version: engine.version,
+            sealed,
+            adult_hold,
         };
     }
-    let fix = crate::enrich::rule_fix(says, &class);
     if fix.is_some() {
         prepared.enrichment = Some(crate::enrich::enrich_with_rule(&prepared.name, &files, fix));
     }
@@ -217,4 +251,206 @@ pub fn judge(
         version: engine.version,
         fix,
     }))
+}
+
+/// A key user interest may look up: the item's or torrent's own key and
+/// its `private_source` flag, both read from the store, never from the
+/// caller (`docs/decisions/2026-11-05-SRC-13b.md`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Interest {
+    pub key: InfoHash,
+    /// The store has it as private (§18.7): the plugin's `Lookup::new`
+    /// refuses it, and so does the host before it gets there.
+    pub private_source: bool,
+}
+
+// The key is what a lookup leaks: never in a log line.
+impl std::fmt::Debug for Interest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Interest")
+            .field("private_source", &self.private_source)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What interest in item or torrent `id` (a search hit, a detail view)
+/// may look up, from the store alone. `None` when there's nothing a cache
+/// could add, or the store doesn't know the id:
+/// - **an unverified item** gives its key, private when the item is, or
+///   when a torrent stored under the key is;
+/// - **a stored torrent** only when its file list is partial (an import),
+///   private when it's `private_source` or marked private (BEP 27);
+/// - anything else (a complete torrent, an unknown id, a non-BitTorrent
+///   item) gives `None`: it isn't looked up.
+pub fn interest(store: &Store, id: i64) -> Result<Option<Interest>, lodestar_store::Error> {
+    use lodestar_store::flags;
+    let private_flags = flags::PRIVATE_SOURCE | flags::PRIVATE;
+    if let Some(row) = store.torrent(id)? {
+        if row.flags & flags::FILES_PARTIAL == 0 {
+            return Ok(None);
+        }
+        return Ok(Some(Interest {
+            key: row.info_hash,
+            private_source: row.flags & private_flags != 0,
+        }));
+    }
+    let Some(item) = store
+        .pending_keys_after(id.saturating_sub(1), 1)?
+        .into_iter()
+        .next()
+        .filter(|i| i.id == id && i.network == Network::Bt)
+    else {
+        return Ok(None);
+    };
+    let Ok(k) = <[u8; 20]>::try_from(item.key.as_slice()) else {
+        return Ok(None);
+    };
+    let key = InfoHash(k);
+    let stored_private = match store.find(&key)? {
+        Some(t) => store
+            .torrent(t)?
+            .is_none_or(|t| t.flags & private_flags != 0),
+        None => false,
+    };
+    Ok(Some(Interest {
+        key,
+        private_source: item.private_source || stored_private,
+    }))
+}
+
+/// A verified file from the plugin, as the host hands it to the pipeline
+/// ([`Feed`]): the key, the info dict's raw bytes and the fields outside
+/// it as claims (`Verified::claims`, `Verified::provenance`). Its `Debug`
+/// shows none of them.
+pub struct Fetched {
+    pub key: InfoHash,
+    pub info_raw: Vec<u8>,
+    pub claims: lodestar_sources::claims::Claims,
+    pub provenance: lodestar_sources::claims::Provenance,
+}
+
+impl std::fmt::Debug for Fetched {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fetched").finish_non_exhaustive()
+    }
+}
+
+/// Where the host hands the pipeline the plugin's verified files
+/// (`Pipeline::torrent_cache_feed`). Cheap to clone. Sending waits for
+/// room, so a slow writer slows the plugin's lookups rather than filling
+/// memory.
+#[derive(Debug, Clone)]
+pub struct Feed {
+    tx: tokio::sync::mpsc::Sender<Fetched>,
+}
+
+/// The pipeline has stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Closed;
+
+impl Feed {
+    pub async fn send(&self, f: Fetched) -> Result<(), Closed> {
+        self.tx.send(f).await.map_err(|_| Closed)
+    }
+}
+
+/// What the pipeline did with the plugin's files, for the status page.
+/// Never holds a hash or a name.
+#[derive(Debug, Default)]
+pub struct CacheStats {
+    /// Files handed over by the host.
+    pub received: AtomicU64,
+    /// Stored as verified metadata, as new torrents or promotions.
+    pub stored: AtomicU64,
+    /// Of `stored`, unverified items promoted under their own ids.
+    pub promoted: AtomicU64,
+    /// Already stored: the file added nothing but its source.
+    pub existing: AtomicU64,
+    /// Held by the filter (drop or quarantine), at judging or at commit.
+    pub held: AtomicU64,
+    /// Refused before the filter: a hash mismatch, the floor's hash list,
+    /// or a dict that doesn't parse or prepare ([`Refusal`]).
+    pub refused: AtomicU64,
+    /// Held under rules that changed before the commit: judged again by
+    /// the writer under the current ones (and, should they change again
+    /// meanwhile, dropped unwritten).
+    pub stale: AtomicU64,
+    /// Lost to a store error.
+    pub errors: AtomicU64,
+}
+
+/// What the writer commits for one file: a judged file from source
+/// `source` with its claims, at `at`.
+pub(crate) struct ToCommit {
+    pub source: SourceId,
+    pub judged: Judged,
+    pub claims: lodestar_sources::claims::Claims,
+    pub provenance: lodestar_sources::claims::Provenance,
+    pub at: i64,
+    /// The info dict's raw bytes, kept for a `Held` only: the writer
+    /// judges it again when the rules changed before its commit.
+    pub info_raw: Vec<u8>,
+    pub key: InfoHash,
+}
+
+/// A feed's channel: its sending half for the host, and the receiving
+/// half the pipeline's judge task reads. The pipeline makes its own
+/// (`Pipeline::torrent_cache_feed`); a host's tests use this one.
+pub fn feed() -> (Feed, tokio::sync::mpsc::Receiver<Fetched>) {
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    (Feed { tx }, rx)
+}
+
+/// Judges each file the host hands over ([`judge_sealed`], on the blocking
+/// pool, under the filter's current rules) and passes what may be stored
+/// or held on to the writer. A refusal is counted and dropped here. Ends
+/// when the feed or the writer closes.
+pub(crate) async fn judge_task(
+    mut fetched: tokio::sync::mpsc::Receiver<Fetched>,
+    out: tokio::sync::mpsc::Sender<ToCommit>,
+    mut preparer: Preparer,
+    filter: std::sync::Arc<lodestar_filter::Handle>,
+    sealer: Option<std::sync::Arc<Sealer>>,
+    source: SourceId,
+    stats: std::sync::Arc<crate::WriterStats>,
+) {
+    while let Some(f) = fetched.recv().await {
+        stats.torrent_cache.received.fetch_add(1, Ordering::Relaxed);
+        let engine = filter.current();
+        let sealer = sealer.clone();
+        let now = crate::unix_now();
+        let Ok((p, judged, f)) = tokio::task::spawn_blocking(move || {
+            let j = judge_sealed(
+                &engine,
+                &mut preparer,
+                sealer.as_deref(),
+                f.key,
+                &f.info_raw,
+                now,
+            );
+            (preparer, j, f)
+        })
+        .await
+        else {
+            return;
+        };
+        preparer = p;
+        if let Judged::Refused(_) = judged {
+            stats.torrent_cache.refused.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+        let held = matches!(judged, Judged::Held { .. });
+        let commit = ToCommit {
+            source,
+            judged,
+            claims: f.claims,
+            provenance: f.provenance,
+            at: now,
+            info_raw: if held { f.info_raw } else { Vec::new() },
+            key: f.key,
+        };
+        if out.send(commit).await.is_err() {
+            return;
+        }
+    }
 }

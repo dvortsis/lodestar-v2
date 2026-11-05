@@ -258,3 +258,265 @@ fn the_files_encoding_key_cant_change_how_the_name_is_judged() {
     let j = torrent_cache::judge(&filter.current(), &mut store.preparer(), key, span, T);
     assert!(matches!(j, Judged::Held { .. }), "{j:?}");
 }
+
+// ---- through the pipeline: the writer's lease-free entry (SRC-13b) ----
+
+mod wired {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use lodestar_classify::ContentType;
+    use lodestar_metainfo::{Info, InfoHash};
+    use lodestar_pipeline::torrent_cache::{Feed, Fetched};
+    use lodestar_pipeline::{Pipeline, PipelineConfig, WriterStats};
+    use lodestar_sources::claims::{Claims as Found, Confidence, Provenance};
+    use lodestar_sources::{
+        BoxFuture, Consent, Kind, Manifest, Network as Net, PluginError, Priority, Risk, SourceCtx,
+        SourcePlugin,
+    };
+    use lodestar_store::claims::Claims;
+    use lodestar_store::unverified::{Network, NewUnverified};
+    use lodestar_store::{Store, StoreConfig};
+
+    use super::{T, info_bytes, stand_in};
+
+    const CACHE: &str = "torrent_cache";
+
+    /// A source that does nothing until it's stopped: the stand-in for
+    /// the torrent-cache plugin (whose files the test hands over itself)
+    /// and for the sources whose unverified items it looks up.
+    struct Idle(Manifest);
+
+    fn idle(id: &'static str, on: bool, always_adult: bool) -> Arc<dyn SourcePlugin> {
+        Arc::new(Idle(Manifest {
+            id,
+            name: id,
+            version: "1",
+            kinds: &[Kind::Enrichment],
+            networks: &[Net::Bt],
+            endpoints: &[],
+            risk: Risk::Low,
+            consent: Consent::None,
+            default_priority: Priority::Normal,
+            enabled_by_default: on,
+            always_adult,
+        }))
+    }
+
+    impl SourcePlugin for Idle {
+        fn manifest(&self) -> &Manifest {
+            &self.0
+        }
+
+        fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+            Box::pin(async move {
+                ctx.shutdown.requested().await;
+                Ok(())
+            })
+        }
+    }
+
+    fn config() -> PipelineConfig {
+        PipelineConfig {
+            flush_every: Duration::from_millis(100),
+            batch_wait: Duration::from_millis(20),
+            filter: Arc::new(stand_in()),
+            sealer: Some(Arc::new(lodestar_filter::Sealer::new(
+                &lodestar_filter::Sealer::generate_key().unwrap(),
+            ))),
+            torrent_cache: Some(CACHE),
+            ..PipelineConfig::default()
+        }
+    }
+
+    /// Polls for 10 s (standards §2), so the slowest runner passes.
+    async fn until(what: &str, mut f: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            if f() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    fn n(a: &std::sync::atomic::AtomicU64) -> u64 {
+        a.load(Ordering::Relaxed)
+    }
+
+    /// A store holding one unverified item for `name`'s info dict, found by
+    /// source `by`: its key, its id and the dict.
+    fn with_item(
+        store: &mut Store,
+        by: &str,
+        claimed: &str,
+        name: &str,
+    ) -> (InfoHash, i64, Vec<u8>) {
+        let src = store.register_source(by, "1", T).unwrap();
+        let raw = info_bytes(name);
+        let key = Info::parse(&raw).unwrap().primary_hash();
+        let c = Claims {
+            name: Some(claimed.into()),
+            ..Claims::default()
+        };
+        store
+            .put_unverified(&[NewUnverified {
+                network: Network::Bt,
+                key: &key.0,
+                source: src,
+                private_source: false,
+                claims: Some(&c),
+                at: T,
+            }])
+            .unwrap();
+        let id = store.unverified(Network::Bt, &key.0).unwrap().unwrap().id;
+        (key, id, raw)
+    }
+
+    fn fetched(key: InfoHash, raw: Vec<u8>) -> Fetched {
+        Fetched {
+            key,
+            info_raw: raw,
+            claims: Found {
+                trackers: vec!["udp://tracker.example:1337/announce".into()],
+                description: Some("Encoded by someone".into()),
+                ..Found::default()
+            },
+            provenance: Provenance {
+                external_ref: None,
+                published_at: Some(T - 86_400),
+                confidence: Confidence::Medium,
+            },
+        }
+    }
+
+    async fn start(store: Store, plugins: Vec<Arc<dyn SourcePlugin>>) -> (Pipeline, Feed) {
+        let pipeline = Pipeline::start(config(), store, plugins).await.unwrap();
+        let feed = pipeline.torrent_cache_feed().expect("the cache is enabled");
+        (pipeline, feed)
+    }
+
+    fn stats(p: &Pipeline) -> &WriterStats {
+        p.writer_stats()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cached_file_promotes_the_item_under_its_id_with_the_caches_claims() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let (key, item, raw) = with_item(&mut store, "feed", "Sintel", "Sintel 2010 1080p.mkv");
+        let (pipeline, feed) = start(
+            store,
+            vec![idle("feed", true, false), idle(CACHE, true, false)],
+        )
+        .await;
+        feed.send(fetched(key, raw)).await.unwrap();
+        until("stored, with its claims", || {
+            let s = stats(&pipeline);
+            n(&s.torrent_cache.stored) == 1 && n(&s.unverified.on_torrent) == 1
+        })
+        .await;
+        let s = stats(&pipeline);
+        assert_eq!(n(&s.torrent_cache.promoted), 1);
+        // Not the crawl's: nothing in the writer's own stored count, and
+        // the cache's claims on it aren't a rediscovery.
+        assert_eq!(n(&s.stored), 0);
+        assert_eq!(n(&s.rediscovered), 0);
+        let gate = pipeline.monitor().gate().clone();
+        assert_eq!(
+            gate.excluded(lodestar_pipeline::gate::Excluded::Rediscovered),
+            0
+        );
+        drop(feed);
+        let store = pipeline.shutdown().await.unwrap();
+        // Promoted under the item's own id (§18.5), and the item is gone.
+        assert_eq!(store.find(&key).unwrap(), Some(item));
+        assert!(store.unverified(Network::Bt, &key.0).unwrap().is_none());
+        let cache = store
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.plugin == CACHE)
+            .unwrap()
+            .id;
+        let row = store.torrent(item).unwrap().unwrap();
+        assert_ne!(row.sources & (1 << cache.get()), 0, "the plugin's bit");
+        assert_eq!(row.name, "Sintel 2010 1080p.mkv", "the verified name");
+        // The fields outside the info dict, as the plugin's claims.
+        let claims = store.torrent_claims(item).unwrap();
+        let mine = claims
+            .iter()
+            .find(|c| c.source == cache)
+            .expect("cache claims");
+        let c = mine.claims.as_ref().unwrap();
+        assert_eq!(c.trackers, ["udp://tracker.example:1337/announce"]);
+        assert_eq!(c.description.as_deref(), Some("Encoded by someone"));
+        assert_eq!(c.provenance.published_at, Some(T - 86_400));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_held_cached_file_is_never_stored_and_its_item_goes() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        // The claims look clean; the verified name is a CS pattern.
+        let (key, _, raw) = with_item(&mut store, "feed", "Holiday", "rolea lexa.mp4");
+        let (pipeline, feed) = start(
+            store,
+            vec![idle("feed", true, false), idle(CACHE, true, false)],
+        )
+        .await;
+        feed.send(fetched(key, raw)).await.unwrap();
+        until("held", || n(&stats(&pipeline).torrent_cache.held) == 1).await;
+        assert_eq!(n(&stats(&pipeline).torrent_cache.stored), 0);
+        drop(feed);
+        let store = pipeline.shutdown().await.unwrap();
+        assert!(store.find(&key).unwrap().is_none(), "never stored");
+        assert!(store.unverified(Network::Bt, &key.0).unwrap().is_none());
+        assert_eq!(store.held_among(&[key.0]).unwrap(), [true]);
+        // The hold records the rule.
+        let hits = store.filter_hits(0).unwrap();
+        assert!(hits.iter().any(|h| h.hash == key.0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_always_adult_sources_item_stays_adult_through_a_cache() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let (key, item, raw) = with_item(&mut store, "adult", "Clips", "Garden Tour 2022.mkv");
+        let (pipeline, feed) = start(
+            store,
+            vec![idle("adult", true, true), idle(CACHE, true, false)],
+        )
+        .await;
+        feed.send(fetched(key, raw)).await.unwrap();
+        until("stored", || n(&stats(&pipeline).torrent_cache.stored) == 1).await;
+        drop(feed);
+        let store = pipeline.shutdown().await.unwrap();
+        assert_eq!(store.find(&key).unwrap(), Some(item));
+        // The writer judged it through the always-adult mask: a clean name
+        // from an always-adult source's item is stored Adult.
+        assert_eq!(
+            store.content_type(item).unwrap(),
+            Some(ContentType::Adult.code())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_feed_while_the_plugin_is_off() {
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let pipeline = Pipeline::start(config(), store, vec![idle(CACHE, false, false)])
+            .await
+            .unwrap();
+        assert!(pipeline.torrent_cache_feed().is_none());
+        pipeline.shutdown().await.unwrap();
+        // And none without the setting naming it.
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let cfg = PipelineConfig {
+            torrent_cache: None,
+            ..config()
+        };
+        let pipeline = Pipeline::start(cfg, store, vec![idle(CACHE, true, false)])
+            .await
+            .unwrap();
+        assert!(pipeline.torrent_cache_feed().is_none());
+        pipeline.shutdown().await.unwrap();
+    }
+}

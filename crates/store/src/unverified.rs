@@ -279,7 +279,7 @@ impl Store {
         }
         let mut out = Vec::with_capacity(items.len());
         for (item, blob) in items.iter().zip(&blobs) {
-            out.push(put_one(&tx, item, blob.as_deref())?);
+            out.push(put_one(&tx, item, blob.as_deref(), self.adult_mark)?);
         }
         tx.commit()?;
         Ok(out)
@@ -717,6 +717,11 @@ impl Store {
             crate::insights::count_promoted(&tx, id, at, codes)?;
             Promoted::Kept(id)
         };
+        // Found by an always-adult source and not stored adult yet: marked
+        // in this transaction, so the reclassification after it is retried.
+        if let Promoted::Kept(t) | Promoted::Merged(t) = out {
+            crate::mark_adult_found(&tx, self.adult_mark, t)?;
+        }
         // A promotion isn't a deletion: nothing is journalled.
         delete_item(&tx, id, false)?;
         tx.commit()?;
@@ -1048,7 +1053,12 @@ fn check_state(key: &str, value: Option<&[u8]>) -> Result<()> {
     Ok(())
 }
 
-fn put_one(tx: &Transaction<'_>, item: &NewUnverified<'_>, blob: Option<&[u8]>) -> Result<Put> {
+fn put_one(
+    tx: &Transaction<'_>,
+    item: &NewUnverified<'_>,
+    blob: Option<&[u8]>,
+    adult_mark: crate::AdultMark,
+) -> Result<Put> {
     let key = item.key;
     let swarm: [u8; 20] = key.try_into().map_err(|_| Error::Invalid("key length"))?;
     if held(tx, &[swarm])? {
@@ -1057,6 +1067,10 @@ fn put_one(tx: &Transaction<'_>, item: &NewUnverified<'_>, blob: Option<&[u8]>) 
     let bit = item.source.bit();
     if let Some(id) = crate::find_any(tx, std::iter::once(lodestar_metainfo::InfoHash(swarm)))? {
         crate::add_sources(tx, id, bit as u64)?;
+        // An always-adult source's bit, in this transaction: marked for
+        // the backfill, so the reclassification after it is retried if
+        // it never commits (X-source-adult's crash window, SRC-13b).
+        crate::mark_adult_found(tx, adult_mark, id)?;
         if !item.private_source {
             crate::make_public(tx, id)?;
         }

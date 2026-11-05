@@ -81,6 +81,8 @@ pub struct WriterStats {
     pub swarm_updates: AtomicU64,
     /// The unverified pipeline: claims judged, stored, held, promoted.
     pub unverified: UnverifiedStats,
+    /// Torrent-cache files judged and committed (SRC-13b).
+    pub torrent_cache: crate::torrent_cache::CacheStats,
 }
 
 pub(crate) struct WriterIo {
@@ -97,6 +99,9 @@ pub(crate) struct WriterIo {
     /// Discoveries with claims, from intake: judged, then stored as
     /// unverified items or claims (SRC-2).
     pub claims: mpsc::Receiver<unverified::Claimed>,
+    /// Torrent-cache files, judged (SRC-13b): verified metadata that came
+    /// through no lease, committed by [`Writer::commit_cache`].
+    pub cache: mpsc::Receiver<crate::torrent_cache::ToCommit>,
 }
 
 pub(crate) struct Writer {
@@ -134,6 +139,10 @@ pub(crate) struct Writer {
     pub sweep: unverified::Sweep,
     /// The verification cursor (`sources.verify_unverified`).
     pub verify: unverified::Verify,
+    /// Runs between a commit's transaction and its adult reclassification
+    /// (`adult_by_source`); `true` skips that step, as a crash there would.
+    #[cfg(test)]
+    pub(crate) crash_before_adult: bool,
     /// Runs between a sweep or backfill batch's commit and its hold
     /// check, so tests can land a release or a rule change exactly there.
     #[cfg(test)]
@@ -229,16 +238,66 @@ impl CandidateSweep {
     }
 }
 
-/// A result under a current lease, ready to commit.
+/// A result under a current lease, ready to commit, or verified metadata
+/// from a torrent cache, which came through no lease.
 struct Committing {
     results: Results,
+    /// The coordinator's lease; for a cache's file, one made up for it that
+    /// the coordinator never issued ([`Committing::lease_free`]).
     lease: Lease,
+    /// Under a lease the coordinator issued: the funnel, the gate and the
+    /// lease's end are accounted for it. `false` for a cache's file.
+    leased: bool,
     /// The authoritative filter verdict, and the sealed name for a
     /// quarantine.
     verdict: Option<Decision>,
     /// What rules in shadow mode would have done (logged only).
     shadow: Vec<Decision>,
     sealed: Option<Vec<u8>>,
+}
+
+impl Committing {
+    /// A cache's admitted file from source `source`, found at `at`: the
+    /// record a worker would hand over for a BEP 9 fetch, under a lease
+    /// that names the plugin as its only finder. Never in the funnel or
+    /// the gate, and never ends a lease (`leased` is `false`).
+    fn lease_free(a: crate::torrent_cache::Admitted, source: SourceId, at: i64) -> Committing {
+        Committing {
+            results: Results {
+                key: a.key,
+                token: lodestar_cluster::Token(0),
+                worker: WorkerId::LOCAL,
+                torrent: a.torrent,
+                sources: bit(source),
+                metadata_at: at,
+                files: a.files,
+                class: a.class,
+                verdict: a.verdict,
+                version: a.version,
+                fix: a.fix,
+                // A private key is never looked up (§18.7); whether a
+                // private source stored it since is read at the commit's
+                // judge (`stored_private`).
+                private_source: false,
+                // Decided at commit (`source_adult`): the item it promotes,
+                // or a stored torrent under its hash.
+                source_adult: false,
+            },
+            lease: Lease {
+                holder: WorkerId::LOCAL,
+                token: lodestar_cluster::Token(0),
+                cohort: at.div_euclid(3600),
+                source,
+                sources: bit(source),
+                strategy: 0,
+                discovered_at: at,
+            },
+            leased: false,
+            verdict: None,
+            shadow: Vec::new(),
+            sealed: None,
+        }
+    }
 }
 
 /// What a transaction did, for the async side to account.
@@ -270,6 +329,7 @@ impl Writer {
     /// Runs until the pool has stopped (its output closes), then persists
     /// the final queue and returns the store.
     pub async fn run(mut self, mut io: WriterIo) -> Store {
+        self.arm_adult_mark();
         let start = Instant::now() + self.cfg.flush_every;
         let mut flush = interval_at(start, self.cfg.flush_every);
         loop {
@@ -312,6 +372,16 @@ impl Writer {
                         }
                     }
                     self.ingest_claims(batch).await;
+                }
+                Some(first) = io.cache.recv() => {
+                    let mut batch = vec![first];
+                    while batch.len() < self.cfg.batch_max {
+                        match io.cache.try_recv() {
+                            Ok(c) => batch.push(c),
+                            Err(_) => break,
+                        }
+                    }
+                    self.commit_cache(batch, &io.retry).await;
                 }
                 Some(queue) = io.queues.recv() => self.save_queue(queue).await,
                 // Always ready until done; the unbiased select gives it a
@@ -377,88 +447,35 @@ impl Writer {
         .expect("checkpoint task")
     }
 
-    /// The authoritative filter check (§19.4, §20.4): a verdict from the
-    /// built-in worker under the current rule set stands; anything else is
-    /// judged again. Quarantined names are sealed here.
-    fn judge(&self, mut committing: Vec<Committing>) -> Vec<Committing> {
-        let engine = self.filter.current();
-        // One read per batch, and none while no always-adult source is
-        // registered. A read error counts as having items: stricter.
-        let unverified = !self.adult.is_empty()
-            && self
-                .store
-                .as_ref()
-                .is_some_and(|s| s.has_unverified().unwrap_or(true));
-        for c in &mut committing {
-            // Found by an always-adult source the worker didn't see: the
-            // lease's, or the source of an unverified item it promotes.
-            // Judged again as adult before anything is stored.
-            let newly_adult = !c.results.source_adult && self.source_adult(c, unverified);
-            let r = &mut c.results;
-            r.source_adult |= newly_adult;
-            let verdict =
-                if r.worker == WorkerId::LOCAL && r.version == engine.version && !newly_adult {
-                    std::mem::take(&mut r.verdict)
-                } else {
-                    rejudge(&engine, r, c.lease.discovered_at, unix_now())
-                };
-            c.verdict = verdict.decision;
-            c.shadow = verdict.shadow;
-            if c.verdict
-                .as_ref()
-                .is_some_and(|h| h.action == Action::Quarantine)
-            {
-                c.sealed = self
-                    .sealer
-                    .as_ref()
-                    .and_then(|s| s.seal(&r.torrent.name).ok());
-            }
+    /// Rows an always-adult source finds are marked for the backfill in the
+    /// commit's own transaction (SRC-13b), so a crash before
+    /// [`Writer::adult_by_source`] can't leave one non-adult with no retry.
+    fn arm_adult_mark(&mut self) {
+        if let Some(store) = self.store.as_mut() {
+            store.set_adult_mark(lodestar_store::AdultMark {
+                sources: self.adult.0,
+                content_type: lodestar_classify::ContentType::Adult.code(),
+            });
         }
-        committing
     }
 
-    /// Whether an always-adult source found what `c` commits, besides the
-    /// sources its worker saw: the lease's, a stored torrent's under one of
-    /// its swarm hashes (a partial import being upgraded), or any finder of
-    /// an unverified item under one (the one promotion stores it as).
-    /// Costs nothing while no such source is registered.
-    fn source_adult(&self, c: &Committing, unverified: bool) -> bool {
-        if self.adult.is_empty() {
-            return false;
+    /// The authoritative filter check (§19.4, §20.4), on the blocking pool:
+    /// it reads the store ([`judge`]).
+    async fn judge(&mut self, committing: Vec<Committing>) -> Vec<Committing> {
+        if committing.is_empty() {
+            return committing;
         }
-        let r = &c.results;
-        if self
-            .adult
-            .any(r.sources | c.lease.sources | bit(c.lease.source))
-        {
-            return true;
-        }
-        let Some(store) = self.store.as_ref() else {
-            return false;
-        };
-        // Already stored and found by one before: a refetch of a partial
-        // import (its lease is the peer finder's) upgrades that row, so
-        // the row's own finders count too. A read error counts as adult.
-        let stored = r.torrent.swarm_hashes().any(|h| match store.find(&h) {
-            Ok(None) => false,
-            Ok(Some(id)) => store
-                .torrent(id)
-                .map_or(true, |t| t.is_some_and(|t| self.adult.any(t.sources))),
-            Err(_) => true,
-        });
-        if stored {
-            return true;
-        }
-        if !unverified {
-            return false;
-        }
-        r.torrent.swarm_hashes().any(|h| {
-            // A read error counts as adult: stricter, and the commit's
-            // own reads will fail the same way.
-            store.unverified(Network::Bt, &h.0).map_or(true, |i| {
-                i.is_some_and(|i| self.adult.any(i.sources) || self.adult.has(i.source))
-            })
+        let store = self.store.take().expect("store");
+        let engine = self.filter.current();
+        let (adult, sealer) = (self.adult, self.sealer.clone());
+        let (store, committing) = tokio::task::spawn_blocking(move || {
+            let committing = judge(&store, &engine, adult, sealer.as_deref(), committing);
+            (store, committing)
         })
+        .await
+        .expect("judge task");
+        self.store = Some(store);
+        committing
     }
 
     /// Classifies as adult the stored torrents among `ids` that an
@@ -579,11 +596,28 @@ impl Writer {
         events: Vec<Event>,
         retry: &mpsc::Sender<Discovery>,
     ) {
+        self.commit_all(results, Vec::new(), touches, swarm, events, retry)
+            .await;
+    }
+
+    /// [`Writer::commit`], with `cache`'s lease-free files committed in the
+    /// same transaction. Returns those of them it stored: the index in
+    /// `cache`, the torrent's id, whether it's a new row, and whether it
+    /// was committed as `private_source` (read from the store at judging).
+    async fn commit_all(
+        &mut self,
+        results: Vec<Results>,
+        cache: Vec<Committing>,
+        touches: Vec<Discovery>,
+        swarm: Vec<SwarmUpdate>,
+        events: Vec<Event>,
+        retry: &mpsc::Sender<Discovery>,
+    ) -> Vec<(usize, i64, bool, bool)> {
         // Fencing (§19.3): only results under a current lease count. A
         // stale one comes from a holder whose lease expired; the key's new
         // holder will deliver it.
         let delivered = results.len();
-        let committing: Vec<Committing> = results
+        let mut committing: Vec<Committing> = results
             .into_iter()
             .filter_map(|r| {
                 let lease = self
@@ -593,6 +627,7 @@ impl Writer {
                 Some(Committing {
                     results: r,
                     lease,
+                    leased: true,
                     verdict: None,
                     shadow: Vec::new(),
                     sealed: None,
@@ -601,11 +636,15 @@ impl Writer {
             .collect();
         self.gate
             .exclude(Excluded::Duplicate, (delivered - committing.len()) as u64);
+        // A cache's files follow the leased results: `cache`'s index `j`
+        // is `first_cache + j` below.
+        let first_cache = committing.len();
+        committing.extend(cache);
         // The classification rules' generation before the rules
         // themselves: a batch judged under rules older than the store's
         // generation is marked for enriching again (§20.9).
         let class_gen = self.store.as_ref().and_then(|s| s.class_gen().ok());
-        let committing = self.judge(committing);
+        let committing = self.judge(committing).await;
         let cohorts = self.funnel.drain();
         let mut counters = self.rollups.drain();
         // The same transitions by event time, at the flush (B11b).
@@ -617,7 +656,7 @@ impl Writer {
             && cohorts.is_empty()
             && counters.is_empty()
         {
-            return;
+            return Vec::new();
         }
         let mut store = self.store.take().expect("store");
         let now = unix_now();
@@ -720,8 +759,18 @@ impl Writer {
                     // The batch is lost but its promotions committed in
                     // their own transactions: they're accounted below.
                     self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                    let lost = committing.len() - o.stored.len() - o.blocked.len();
-                    self.gate.exclude(Excluded::StoreFailed, lost as u64);
+                    let lost = |leased: bool| {
+                        (0..committing.len())
+                            .filter(|i| committing[*i].leased == leased)
+                            .filter(|i| !o.stored.iter().any(|s| s.0 == *i))
+                            .filter(|i| !o.blocked.contains(i))
+                            .count() as u64
+                    };
+                    self.gate.exclude(Excluded::StoreFailed, lost(true));
+                    self.stats
+                        .torrent_cache
+                        .errors
+                        .fetch_add(lost(false), Ordering::Relaxed);
                     lodestar_log::log_event!(
                         crate::log_events::STORE_WRITE_FAILED,
                         error = crate::log_events::store_error(&e)
@@ -734,13 +783,18 @@ impl Writer {
                 // leases stay held, so the keys aren't fetched again in
                 // this run.
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                let cache = committing.iter().filter(|c| !c.leased).count() as u64;
                 self.gate
-                    .exclude(Excluded::StoreFailed, committing.len() as u64);
+                    .exclude(Excluded::StoreFailed, committing.len() as u64 - cache);
+                self.stats
+                    .torrent_cache
+                    .errors
+                    .fetch_add(cache, Ordering::Relaxed);
                 lodestar_log::log_event!(
                     crate::log_events::STORE_WRITE_FAILED,
                     error = crate::log_events::store_error(&e)
                 );
-                return;
+                return Vec::new();
             }
         };
         self.stats.transactions.fetch_add(1, Ordering::Relaxed);
@@ -781,8 +835,28 @@ impl Writer {
             .map(|&(_, id, _, _)| id)
             .collect();
         let committed_at = unix_now();
+        let mut cache_stored = Vec::new();
         for (i, id, new, _) in outcome.stored {
             let c = &committing[i];
+            // A cache's file: no lease to end, and neither the crawl's
+            // funnel nor its gate (SRC-13b).
+            if !c.leased {
+                if let (true, Some(hot)) = (new, &self.hot) {
+                    let at = c.lease.discovered_at.clamp(0, i64::from(u32::MAX - 1));
+                    hot.touch(id as u64, at as u32);
+                }
+                let cs = &self.stats.torrent_cache;
+                if new {
+                    cs.stored.fetch_add(1, Ordering::Relaxed);
+                    if outcome.promoted_as.iter().any(|(j, _, _)| *j == i) {
+                        cs.promoted.fetch_add(1, Ordering::Relaxed);
+                    }
+                } else {
+                    cs.existing.fetch_add(1, Ordering::Relaxed);
+                }
+                cache_stored.push((i - first_cache, id, new, c.results.private_source));
+                continue;
+            }
             // The gate counts what the store says, whether or not the
             // lease is still current below: a new row is new once, and a
             // second delivery of it reads as already stored.
@@ -837,12 +911,26 @@ impl Writer {
         // fetched and stored as new.
         for i in outcome.refused {
             let c = &committing[i];
+            if !c.leased {
+                self.stats
+                    .torrent_cache
+                    .refused
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             self.gate.exclude(Excluded::SourceStopped, 1);
             self.coordinator
                 .lost(&c.results.key, c.results.token, Loss::Evicted);
         }
         for i in outcome.blocked {
             let c = &committing[i];
+            if !c.leased {
+                self.stats
+                    .torrent_cache
+                    .held
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             let (counter, excluded) = match c.verdict.as_ref().map(|h| h.action) {
                 Some(Action::Quarantine) => (&self.stats.quarantined, Excluded::Quarantined),
                 _ => (&self.stats.blocked, Excluded::Filtered),
@@ -893,9 +981,257 @@ impl Writer {
                 }
             }
         }
+        #[cfg(test)]
+        if self.crash_before_adult {
+            return cache_stored;
+        }
         self.adult_by_source(adult_ids).await;
         if self.have.is_full() {
             self.rebuild_have().await;
+        }
+        cache_stored
+    }
+
+    /// Commits a batch of judged torrent-cache files (SRC-13b), the
+    /// writer's lease-free entry beside the pool's results:
+    /// - **`Store`** commits as verified metadata from the plugin's source,
+    ///   through the same transaction, re-judge and promotion as a fetched
+    ///   result (an unverified item holding the key is promoted under its
+    ///   own id, §18.5). The writer judges it again when the rules moved on
+    ///   since [`torrent_cache::judge`], or when an always-adult source
+    ///   found it, so it stays adult. Once stored, the file's trackers,
+    ///   comment and creation date are stored as that source's claims,
+    ///   judged as any source's are.
+    /// - **`Held`** is written as a held ingest verdict is (a tombstone or
+    ///   quarantine, with the rule id and evidence, and the sealed name of
+    ///   a quarantine), with intake told before the write. One held under
+    ///   rules that have since changed is judged again under the current
+    ///   ones first ([`Writer::rejudge_stale_holds`]); should they change
+    ///   once more meanwhile, it's dropped unwritten.
+    /// - **`Refused`** is counted and dropped (the judge task counts it).
+    ///
+    /// [`torrent_cache::judge`]: crate::torrent_cache::judge
+    async fn commit_cache(
+        &mut self,
+        batch: Vec<crate::torrent_cache::ToCommit>,
+        retry: &mpsc::Sender<Discovery>,
+    ) {
+        use crate::torrent_cache::Judged;
+        let batch = self.rejudge_stale_holds(batch).await;
+        let version = self.filter.current().version;
+        let cs = &self.stats.torrent_cache;
+        let mut admitted = Vec::new();
+        let mut claims = Vec::new();
+        let mut holds = Vec::new();
+        for t in batch {
+            match t.judged {
+                Judged::Store(a) => {
+                    let found = lodestar_sources::Found::key(a.key, 0)
+                        .with_claims(t.claims)
+                        .with_provenance(t.provenance);
+                    claims.push(Discovery {
+                        source: t.source,
+                        found,
+                        at: t.at,
+                        reply: false,
+                    });
+                    admitted.push(Committing::lease_free(*a, t.source, t.at));
+                }
+                Judged::Held {
+                    hashes,
+                    verdict,
+                    version: judged_under,
+                    sealed,
+                    adult_hold,
+                } => {
+                    // Counted as `stale` when it was judged again.
+                    let Some(d) = verdict.decision.filter(|_| judged_under == version) else {
+                        continue;
+                    };
+                    let held = match d.action {
+                        Action::Drop => Held::Tombstone,
+                        Action::Quarantine => Held::Quarantine,
+                        // `judge` holds only these two.
+                        _ => continue,
+                    };
+                    holds.push(unverified::Hold {
+                        hashes,
+                        rule: d.rule.id(),
+                        action: d.action.code(),
+                        held,
+                        sealed,
+                        evidence: d.evidence_codes(),
+                        adult_hold,
+                        core: matches!(d.rule, lodestar_filter::RuleRef::Core(_)),
+                    });
+                }
+                Judged::Refused(_) => {
+                    cs.refused.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        if !holds.is_empty() {
+            self.hold_cache(holds).await;
+        }
+        if admitted.is_empty() {
+            return;
+        }
+        let stored = self
+            .commit_all(
+                Vec::new(),
+                admitted,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                retry,
+            )
+            .await;
+        // The fields outside the info dict, as the plugin's claims on what
+        // it stored: never on what was held or refused.
+        // Marked private as the commit was: storing them must never make a
+        // torrent public that the commit kept private (`put_one` clears
+        // the mark for a public sighting).
+        let mut keep: Vec<Option<bool>> = vec![None; claims.len()];
+        for (j, _, _, private) in stored {
+            keep[j] = Some(private);
+        }
+        let found: Vec<Discovery> = claims
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(mut d, k)| {
+                d.found.private_source = k?;
+                Some(d)
+            })
+            .collect();
+        if !found.is_empty() {
+            self.ingest_found(found, false).await;
+        }
+    }
+
+    /// Judges again, on the blocking pool and under the current rules,
+    /// each held cache file that was judged under rules that have changed
+    /// since: a looser rule set may now store it, a stricter one still
+    /// holds it. Counted as `stale`. A file whose judging panics stays
+    /// held as it was (counted as an error), never stored; the panic
+    /// doesn't reach the writer, whose store the task holds.
+    async fn rejudge_stale_holds(
+        &mut self,
+        mut batch: Vec<crate::torrent_cache::ToCommit>,
+    ) -> Vec<crate::torrent_cache::ToCommit> {
+        use crate::torrent_cache::Judged;
+        let engine = self.filter.current();
+        let stale = |t: &crate::torrent_cache::ToCommit| matches!(t.judged, Judged::Held { version, .. } if version != engine.version);
+        let n = batch.iter().filter(|t| stale(t)).count();
+        if n == 0 {
+            return batch;
+        }
+        self.stats
+            .torrent_cache
+            .stale
+            .fetch_add(n as u64, Ordering::Relaxed);
+        let store = self.store.take().expect("store");
+        let sealer = self.sealer.clone();
+        let (store, batch, failed) = tokio::task::spawn_blocking(move || {
+            let mut preparer = store.preparer();
+            let mut failed = 0u64;
+            for t in &mut batch {
+                if matches!(t.judged, Judged::Held { version, .. } if version != engine.version) {
+                    // A panic judging one file mustn't take the writer
+                    // down: it stays held, as it was, under these rules.
+                    let judged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::torrent_cache::judge_sealed(
+                            &engine,
+                            &mut preparer,
+                            sealer.as_deref(),
+                            t.key,
+                            &t.info_raw,
+                            unix_now(),
+                        )
+                    }));
+                    match judged {
+                        Ok(j) => t.judged = j,
+                        Err(_) => {
+                            failed += 1;
+                            if let Judged::Held { version, .. } = &mut t.judged {
+                                *version = engine.version;
+                            }
+                        }
+                    }
+                }
+            }
+            (store, batch, failed)
+        })
+        .await
+        .expect("cache rejudge task");
+        self.store = Some(store);
+        if failed > 0 {
+            self.stats
+                .torrent_cache
+                .errors
+                .fetch_add(failed, Ordering::Relaxed);
+        }
+        batch
+    }
+
+    /// Writes held cache files' holds (SRC-13b) as a held ingest verdict is
+    /// written: marked for intake first, then the hold, removing the
+    /// unverified item under the key, or a stored torrent under it (an
+    /// import whose verified name is now known to be held), in the same
+    /// transaction.
+    async fn hold_cache(&mut self, holds: Vec<unverified::Hold>) {
+        let mut store = self.store.take().expect("store");
+        let held = self.held.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let n = holds.len() as u64;
+        let (store, written, result) = tokio::task::spawn_blocking(move || {
+            let now = unix_now();
+            let hashes: Vec<[u8; 20]> = holds.iter().flat_map(|h| h.hashes.clone()).collect();
+            let pending = held.pend(&hashes);
+            // One transaction per hold: those before an error are written.
+            let mut written = 0u64;
+            let result = (|| {
+                for h in &holds {
+                    let f = h.filtered(now, quarantine_secs);
+                    let item = h
+                        .hashes
+                        .iter()
+                        .find_map(|k| store.unverified(Network::Bt, k).transpose())
+                        .transpose()?;
+                    match item {
+                        Some(item) => {
+                            let refiled = RefiledUnverified {
+                                id: item.id,
+                                filtered: Some(f),
+                            };
+                            store.refile_unverified(&[refiled], || true)?;
+                        }
+                        None => {
+                            store.hold_claims(&[f])?;
+                        }
+                    }
+                    written += 1;
+                }
+                Ok::<_, lodestar_store::Error>(())
+            })();
+            // Written or failed: the store says which hold.
+            hold_committed(&store, Some(pending), true);
+            (store, written, result)
+        })
+        .await
+        .expect("cache hold task");
+        self.store = Some(store);
+        let cs = &self.stats.torrent_cache;
+        cs.held.fetch_add(written, Ordering::Relaxed);
+        match result {
+            Ok(()) => {}
+            Err(e) => {
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                cs.errors.fetch_add(n - written, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::STORE_WRITE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
         }
     }
 
@@ -1001,6 +1337,14 @@ impl Writer {
     async fn ingest_claims(&mut self, claimed: Vec<unverified::Claimed>) {
         // The budget is given back when the batch is done, stored or not.
         let (batch, _permits): (Vec<Discovery>, Vec<_>) = claimed.into_iter().unzip();
+        self.ingest_found(batch, true).await;
+    }
+
+    /// [`Writer::ingest_claims`]'s work, for discoveries that hold no
+    /// budget. `rediscovery`: a sighting of a stored torrent is counted as
+    /// a rediscovery (a feed's). A cache's claims on the torrent it has
+    /// just stored aren't one (SRC-13b), so they skip that accounting.
+    async fn ingest_found(&mut self, batch: Vec<Discovery>, rediscovery: bool) {
         let store = self.store.take().expect("store");
         let filter = self.filter.clone();
         let sealer = self.sealer.clone();
@@ -1053,7 +1397,12 @@ impl Writer {
                 let adult_ids = std::mem::take(&mut done.adult);
                 // A feed's sighting of a stored torrent is a rediscovery, as
                 // a bare one is in `commit`.
-                for (id, at, source, strategy) in done.touched {
+                let touched = if rediscovery {
+                    std::mem::take(&mut done.touched)
+                } else {
+                    Vec::new()
+                };
+                for (id, at, source, strategy) in touched {
                     if let Some(hot) = &self.hot {
                         hot.touch(id as u64, at.clamp(0, i64::from(u32::MAX - 1)) as u32);
                     }
@@ -1064,6 +1413,10 @@ impl Writer {
                     self.gate.exclude(Excluded::Rediscovered, 1);
                     self.rollups
                         .add(at, metric::REDISCOVERED, source, i64::from(strategy), 1);
+                }
+                #[cfg(test)]
+                if self.crash_before_adult {
+                    return;
                 }
                 self.adult_by_source(adult_ids).await;
             }
@@ -1343,6 +1696,110 @@ impl Writer {
     }
 }
 
+/// The authoritative filter check (§19.4, §20.4): a verdict from the
+/// built-in worker under the current rule set stands; anything else is
+/// judged again. Quarantined names are sealed here. Blocking: it reads
+/// the store.
+fn judge(
+    store: &Store,
+    engine: &Engine,
+    adult: AdultSources,
+    sealer: Option<&Sealer>,
+    mut committing: Vec<Committing>,
+) -> Vec<Committing> {
+    // One read per batch, and none while no always-adult source is
+    // registered. A read error counts as having items: stricter.
+    let unverified = !adult.is_empty() && store.has_unverified().unwrap_or(true);
+    for c in &mut committing {
+        // A cache's file was looked up as public. Whether a private
+        // source has stored the key since is read here, so the commit
+        // never clears a private mark from the lookup's old view.
+        if !c.leased {
+            c.results.private_source = stored_private(store, &c.results);
+        }
+        // Found by an always-adult source the worker didn't see: the
+        // lease's, or the source of an unverified item it promotes.
+        // Judged again as adult before anything is stored.
+        let newly_adult = !c.results.source_adult && source_adult(store, adult, c, unverified);
+        let r = &mut c.results;
+        r.source_adult |= newly_adult;
+        let verdict = if r.worker == WorkerId::LOCAL && r.version == engine.version && !newly_adult
+        {
+            std::mem::take(&mut r.verdict)
+        } else {
+            rejudge(engine, r, c.lease.discovered_at, unix_now())
+        };
+        c.verdict = verdict.decision;
+        c.shadow = verdict.shadow;
+        if c.verdict
+            .as_ref()
+            .is_some_and(|h| h.action == Action::Quarantine)
+        {
+            c.sealed = sealer.and_then(|s| s.seal(&r.torrent.name).ok());
+        }
+    }
+    committing
+}
+
+/// Whether the store holds `r`'s key as private now: a torrent under one
+/// of its swarm hashes marked `private_source`, or an unverified item
+/// under one that is. A read error counts as private: stricter. Blocking.
+/// The writer is the store's only writer apart from imports, which never
+/// clear a private mark, so what's read here holds at the commit.
+fn stored_private(store: &Store, r: &Results) -> bool {
+    r.torrent.swarm_hashes().any(|h| {
+        let torrent = match store.find(&h) {
+            Ok(Some(id)) => store.torrent(id).map_or(true, |t| {
+                t.is_some_and(|t| t.flags & flags::PRIVATE_SOURCE != 0)
+            }),
+            Ok(None) => false,
+            Err(_) => true,
+        };
+        torrent
+            || store
+                .unverified(Network::Bt, &h.0)
+                .map_or(true, |i| i.is_some_and(|i| i.private_source))
+    })
+}
+
+/// Whether an always-adult source found what `c` commits, besides the
+/// sources its worker saw: the lease's, a stored torrent's under one of
+/// its swarm hashes (a partial import being upgraded), or any finder of
+/// an unverified item under one (the one promotion stores it as).
+/// Costs nothing while no such source is registered. Blocking.
+fn source_adult(store: &Store, adult: AdultSources, c: &Committing, unverified: bool) -> bool {
+    if adult.is_empty() {
+        return false;
+    }
+    let r = &c.results;
+    if adult.any(r.sources | c.lease.sources | bit(c.lease.source)) {
+        return true;
+    }
+    // Already stored and found by one before: a refetch of a partial
+    // import (its lease is the peer finder's) upgrades that row, so
+    // the row's own finders count too. A read error counts as adult.
+    let stored = r.torrent.swarm_hashes().any(|h| match store.find(&h) {
+        Ok(None) => false,
+        Ok(Some(id)) => store
+            .torrent(id)
+            .map_or(true, |t| t.is_some_and(|t| adult.any(t.sources))),
+        Err(_) => true,
+    });
+    if stored {
+        return true;
+    }
+    if !unverified {
+        return false;
+    }
+    r.torrent.swarm_hashes().any(|h| {
+        // A read error counts as adult: stricter, and the commit's
+        // own reads will fail the same way.
+        store.unverified(Network::Bt, &h.0).map_or(true, |i| {
+            i.is_some_and(|i| adult.any(i.sources) || adult.has(i.source))
+        })
+    })
+}
+
 /// Judges a torrent again at commit (a remote worker's, one prepared
 /// under an older rule set, or one an always-adult source found that its
 /// worker didn't see), and stores what the classification rules (and the
@@ -1475,7 +1932,9 @@ fn transaction(
                 } | marks(committing[i].verdict.as_ref())
                     // A refetch's row is an import's, even when it comes
                     // back new: kept out of the crawl's cohorts and yield.
-                    | if crate::in_funnel(lease.cohort) {
+                    // So is a torrent cache's (SRC-13b): it never came
+                    // through the crawl's funnel, live or in a repair.
+                    | if crate::in_funnel(lease.cohort) && committing[i].leased {
                         0
                     } else {
                         flags::IMPORTED
@@ -1786,12 +2245,32 @@ mod tests {
     }
 
     fn results() -> Results {
+        results_named(NAME)
+    }
+
+    fn info_named(name: &str) -> Vec<u8> {
+        to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                (
+                    b"name".to_vec(),
+                    OwnedValue::Bytes(format!("{name}.mp4").into_bytes()),
+                ),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+    }
+
+    fn results_named(name: &str) -> Results {
         let raw = to_vec(&OwnedValue::Dict(
             [
                 (b"length".to_vec(), OwnedValue::Int(900 << 20)),
                 (
                     b"name".to_vec(),
-                    OwnedValue::Bytes(format!("{NAME}.mp4").into_bytes()),
+                    OwnedValue::Bytes(format!("{name}.mp4").into_bytes()),
                 ),
                 (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
                 (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
@@ -1859,6 +2338,7 @@ mod tests {
             verify: Default::default(),
             between: None,
             marked: None,
+            crash_before_adult: false,
         }
     }
 
@@ -1903,12 +2383,13 @@ mod tests {
         let c = Committing {
             results: r,
             lease,
+            leased: true,
             verdict: None,
             shadow: Vec::new(),
             sealed: None,
         };
         // Not stored yet, and only the DHT found it: not adult.
-        assert!(!w.source_adult(&c, false));
+        assert!(!source_adult(w.store.as_ref().unwrap(), w.adult, &c, false));
         let store = w.store.as_mut().unwrap();
         store
             .write(&WriteBatch {
@@ -1923,9 +2404,15 @@ mod tests {
                 ..WriteBatch::default()
             })
             .unwrap();
-        assert!(w.source_adult(&c, false), "the stored row's finder");
+        assert!(
+            source_adult(w.store.as_ref().unwrap(), w.adult, &c, false),
+            "the stored row's finder"
+        );
         w.adult = AdultSources::default();
-        assert!(!w.source_adult(&c, false), "none registered");
+        assert!(
+            !source_adult(w.store.as_ref().unwrap(), w.adult, &c, false),
+            "none registered"
+        );
     }
 
     /// The gate at the writer's commit: new once, then already stored; a
@@ -2729,6 +3216,7 @@ mod tests {
             finish,
             swarm,
             claims,
+            cache: mpsc::channel(1).1,
         }));
         drop((results_tx, touches_tx, queues_tx, swarm_tx, claims_tx));
         finish_tx.send(Vec::new()).unwrap();
@@ -3038,6 +3526,7 @@ mod tests {
                 finish,
                 swarm,
                 claims: claims_rx,
+                cache: mpsc::channel(1).1,
             }));
             // The sweep runs between inputs; wait for it with a deadline.
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -3319,6 +3808,7 @@ mod tests {
                     finish,
                     swarm,
                     claims,
+                    cache: mpsc::channel(1).1,
                 })),
             )
             .await
@@ -3328,5 +3818,419 @@ mod tests {
                 assert!(store.unverified(Network::Bt, &[k; 20]).unwrap().is_some());
             }
         }
+    }
+
+    // ---- SRC-13b: the crash window, and the lease-free entry ----
+
+    fn stored_by(w: &mut Writer, name: &str, source: SourceId) -> (i64, InfoHash) {
+        let r = results_named(name);
+        let store = w.store.as_mut().unwrap();
+        let written = store
+            .write(&WriteBatch {
+                prepared: &[PreparedTorrent {
+                    torrent: &r.torrent,
+                    discovered_at: 0,
+                    metadata_at: 0,
+                    extra_flags: 0,
+                    source,
+                    verified: true,
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+        (written.prepared[0].stored().unwrap(), r.key)
+    }
+
+    fn sighting(source: SourceId, key: InfoHash) -> Discovery {
+        Discovery {
+            source,
+            found: lodestar_sources::Found::key(key, 0),
+            at: unix_now(),
+            reply: false,
+        }
+    }
+
+    /// The #467 review's crash window: the commit that writes an always-
+    /// adult source's bit marks the row for the backfill in the same
+    /// transaction, so a failure before `adult_by_source` (simulated here)
+    /// leaves it marked, and the backfill classifies it adult.
+    #[tokio::test]
+    async fn a_crash_before_the_adult_step_leaves_the_row_marked_for_the_backfill() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 1).unwrap();
+        let adult = store.register_source("adult", "1", 1).unwrap();
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.adult = AdultSources(bit(adult));
+        w.arm_adult_mark();
+        let (retry, _rx) = mpsc::channel(4);
+        let adult_code = Some(ContentType::Adult.code());
+        let (crashed, crashed_key) = stored_by(&mut w, "Garden Tour 2022", dht);
+        let (fine, fine_key) = stored_by(&mut w, "Garden Tour 2023", dht);
+        let marked = |w: &Writer| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+                .unwrap()
+        };
+        assert!(marked(&w).is_empty());
+
+        // The always-adult source sees one; the step after the commit fails.
+        w.crash_before_adult = true;
+        w.commit(
+            vec![],
+            vec![sighting(adult, crashed_key)],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        let store = w.store.as_ref().unwrap();
+        assert_ne!(store.content_type(crashed).unwrap(), adult_code);
+        assert_eq!(marked(&w), [crashed], "marked by the commit itself");
+        // The backfill finds the mark and applies the same correction.
+        w.backfill_done = false;
+        w.backfill().await;
+        let store = w.store.as_ref().unwrap();
+        assert_eq!(store.content_type(crashed).unwrap(), adult_code);
+        assert!(marked(&w).is_empty());
+
+        // With no failure, the step after the commit classifies it at once
+        // and its write clears the mark.
+        w.crash_before_adult = false;
+        w.commit(
+            vec![],
+            vec![sighting(adult, fine_key)],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        let store = w.store.as_ref().unwrap();
+        assert_eq!(store.content_type(fine).unwrap(), adult_code);
+        assert!(marked(&w).is_empty());
+    }
+
+    fn drop_rule(filter: &Handle, query: &str) {
+        filter.update_engine(|e| {
+            let notes = e.load_rules(&lodestar_store::RuleSet {
+                rules: vec![lodestar_store::RuleRow {
+                    id: 1,
+                    query: query.into(),
+                    action: Action::Drop.code(),
+                    enabled: true,
+                    shadow_until: None,
+                    unless_query: None,
+                }],
+                ..Default::default()
+            });
+            assert!(notes.is_empty(), "{notes:?}");
+            e.version += 1;
+        });
+    }
+
+    fn cached(w: &Writer, name: &str, source: SourceId) -> crate::torrent_cache::ToCommit {
+        let raw = info_named(name);
+        let key = lodestar_metainfo::Info::parse(&raw).unwrap().primary_hash();
+        let mut preparer = w.store.as_ref().unwrap().preparer();
+        let judged =
+            crate::torrent_cache::judge(&w.filter.current(), &mut preparer, key, &raw, unix_now());
+        crate::torrent_cache::ToCommit {
+            source,
+            judged,
+            claims: Default::default(),
+            provenance: Default::default(),
+            at: unix_now(),
+            info_raw: raw,
+            key,
+        }
+    }
+
+    /// A cache's file admitted under rules that changed before its commit
+    /// is judged again by the writer: a drop rule added since holds it.
+    /// One held under rules that changed since is judged again too: with
+    /// the rule gone, it's stored; with it still there, it's held.
+    #[tokio::test]
+    async fn the_writer_judges_a_stale_cache_file_again() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let cache = store.register_source("torrent_cache", "1", 1).unwrap();
+        let mut w = writer(store, coordinator, gate.clone());
+        let (retry, _rx) = mpsc::channel(4);
+        let admitted = cached(&w, "Big Buck Bunny", cache);
+        assert!(matches!(
+            admitted.judged,
+            crate::torrent_cache::Judged::Store(_)
+        ));
+        let key = match &admitted.judged {
+            crate::torrent_cache::Judged::Store(a) => a.key,
+            _ => unreachable!(),
+        };
+        drop_rule(&w.filter, "bunny");
+        w.commit_cache(vec![admitted], &retry).await;
+        let cs = &w.stats.torrent_cache;
+        assert_eq!(cs.held.load(Ordering::Relaxed), 1);
+        assert_eq!(cs.stored.load(Ordering::Relaxed), 0);
+        let store = w.store.as_ref().unwrap();
+        assert!(store.find(&key).unwrap().is_none());
+        assert_eq!(store.held_among(&[key.0]).unwrap(), [true]);
+        // Never the crawl's: the gate saw nothing.
+        assert_eq!(gate.excluded(Excluded::Filtered), 0);
+
+        // Held under the drop rule, then the rules change with the rule
+        // still there: judged again, and held.
+        let held = cached(&w, "Bunny Returns", cache);
+        let held_key = match &held.judged {
+            crate::torrent_cache::Judged::Held { hashes, .. } => InfoHash(hashes[0]),
+            j => panic!("not held: {j:?}"),
+        };
+        w.filter.update_engine(|e| e.version += 1);
+        w.commit_cache(vec![held], &retry).await;
+        let cs = &w.stats.torrent_cache;
+        assert_eq!(cs.stale.load(Ordering::Relaxed), 1);
+        assert_eq!(cs.held.load(Ordering::Relaxed), 2);
+        let store = w.store.as_ref().unwrap();
+        assert_eq!(store.held_among(&[held_key.0]).unwrap(), [true]);
+
+        // Held under the drop rule, then the rule goes: judged again under
+        // the rules as they are now, and stored.
+        let held = cached(&w, "Bunny Again", cache);
+        let again_key = match &held.judged {
+            crate::torrent_cache::Judged::Held { hashes, .. } => InfoHash(hashes[0]),
+            j => panic!("not held: {j:?}"),
+        };
+        w.filter.update_engine(|e| {
+            e.load_rules(&lodestar_store::RuleSet::default());
+            e.version += 1;
+        });
+        w.commit_cache(vec![held], &retry).await;
+        let cs = &w.stats.torrent_cache;
+        assert_eq!(cs.stale.load(Ordering::Relaxed), 2);
+        assert_eq!(cs.held.load(Ordering::Relaxed), 2);
+        assert_eq!(cs.stored.load(Ordering::Relaxed), 1);
+        let store = w.store.as_ref().unwrap();
+        assert!(store.find(&again_key).unwrap().is_some());
+        assert_eq!(store.held_among(&[again_key.0]).unwrap(), [false]);
+    }
+
+    /// A clean cache file with no item under its key is stored as a new
+    /// row from the plugin's source, outside the funnel and the gate.
+    #[tokio::test]
+    async fn a_cache_file_is_stored_from_the_plugins_source_without_a_lease() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel.clone()));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let cache = store.register_source("torrent_cache", "1", 1).unwrap();
+        let mut w = writer(store, coordinator.clone(), gate.clone());
+        let (retry, _rx) = mpsc::channel(4);
+        let c = cached(&w, "Sintel 2010", cache);
+        w.commit_cache(vec![c], &retry).await;
+        assert_eq!(w.stats.torrent_cache.stored.load(Ordering::Relaxed), 1);
+        assert_eq!(w.stats.stored.load(Ordering::Relaxed), 0);
+        assert_eq!(gate.new_verified(Origin::Network), 0);
+        assert!(funnel.drain().is_empty(), "nothing in the funnel");
+        let store = w.store.as_ref().unwrap();
+        let key = lodestar_metainfo::Info::parse(&info_named("Sintel 2010"))
+            .unwrap()
+            .primary_hash();
+        let id = store.find(&key).unwrap().unwrap();
+        let row = store.torrent(id).unwrap().unwrap();
+        assert_eq!(row.sources, bit(cache));
+        // Kept out of the crawl's cohorts, live and in `rollup --repair`.
+        assert_ne!(row.flags & flags::IMPORTED, 0);
+        assert!(w.have.contains(&key));
+    }
+
+    /// The writer's own judge applies the always-adult mask to a cache's
+    /// file inside the commit: an always-adult source's item is promoted
+    /// Adult before the adult step after the commit runs (here it never
+    /// does, as after a crash).
+    #[tokio::test]
+    async fn a_cache_file_for_an_always_adult_item_is_committed_adult() {
+        use lodestar_store::unverified::NewUnverified;
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let adult = store.register_source("adult", "1", 1).unwrap();
+        let cache = store.register_source("torrent_cache", "1", 1).unwrap();
+        let key = lodestar_metainfo::Info::parse(&info_named("Garden Tour 2022"))
+            .unwrap()
+            .primary_hash();
+        let claims = lodestar_store::claims::Claims {
+            name: Some("Clips".into()),
+            ..Default::default()
+        };
+        store
+            .put_unverified(&[NewUnverified {
+                network: Network::Bt,
+                key: &key.0,
+                source: adult,
+                private_source: false,
+                claims: Some(&claims),
+                at: 1,
+            }])
+            .unwrap();
+        let item = store.unverified(Network::Bt, &key.0).unwrap().unwrap().id;
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.adult = AdultSources(bit(adult));
+        w.arm_adult_mark();
+        w.crash_before_adult = true;
+        let (retry, _rx) = mpsc::channel(4);
+        let c = cached(&w, "Garden Tour 2022", cache);
+        w.commit_cache(vec![c], &retry).await;
+        let store = w.store.as_ref().unwrap();
+        assert_eq!(store.find(&key).unwrap(), Some(item));
+        assert_eq!(
+            store.content_type(item).unwrap(),
+            Some(ContentType::Adult.code())
+        );
+    }
+
+    /// A held cache file for a stored partial import removes that row in
+    /// the hold's transaction; a store error is counted as the cache's.
+    #[tokio::test]
+    async fn a_held_cache_file_removes_a_stored_import_and_errors_are_counted() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 1).unwrap();
+        let cache = store.register_source("torrent_cache", "1", 1).unwrap();
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        let (id, key) = stored_by(&mut w, "Bunny Partial", dht);
+        let (retry, _rx) = mpsc::channel(4);
+        drop_rule(&w.filter, "bunny");
+        let held = cached(&w, "Bunny Partial", cache);
+        assert!(matches!(
+            held.judged,
+            crate::torrent_cache::Judged::Held { .. }
+        ));
+        w.commit_cache(vec![held], &retry).await;
+        let store = w.store.as_ref().unwrap();
+        assert!(store.torrent(id).unwrap().is_none(), "removed");
+        assert_eq!(store.held_among(&[key.0]).unwrap(), [true]);
+        let cs = &w.stats.torrent_cache;
+        assert_eq!(cs.held.load(Ordering::Relaxed), 1);
+
+        // A store that can't be written: the cache's file is lost, counted
+        // as its error and not as the gate's.
+        let clean = cached(&w, "Sintel 2010", cache);
+        w.store
+            .as_ref()
+            .unwrap()
+            .connection()
+            .execute_batch("PRAGMA query_only = ON")
+            .unwrap();
+        w.commit_cache(vec![clean], &retry).await;
+        let cs = &w.stats.torrent_cache;
+        assert_eq!(cs.errors.load(Ordering::Relaxed), 1);
+        assert_eq!(cs.stored.load(Ordering::Relaxed), 0);
+        assert_eq!(w.gate.excluded(Excluded::StoreFailed), 0);
+    }
+
+    /// The crash window on the claims path (runner's review of #479): an
+    /// always-adult source's claims on a stored torrent set its bit in
+    /// `put_unverified`'s transaction, which marks the row there, so a
+    /// failure before `adult_by_source` (simulated) leaves it for the
+    /// backfill.
+    #[tokio::test]
+    async fn a_crash_after_always_adult_claims_leaves_the_row_marked() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 1).unwrap();
+        let adult = store.register_source("adult", "1", 1).unwrap();
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.adult = AdultSources(bit(adult));
+        w.arm_adult_mark();
+        let (id, key) = stored_by(&mut w, "Garden Tour 2024", dht);
+        w.crash_before_adult = true;
+        let claims = lodestar_sources::Claims {
+            name: Some("Clips".into()),
+            ..Default::default()
+        };
+        let d = Discovery {
+            source: adult,
+            found: lodestar_sources::Found::key(key, 0).with_claims(claims),
+            at: unix_now(),
+            reply: false,
+        };
+        w.ingest_found(vec![d], true).await;
+        assert_eq!(w.stats.unverified.on_torrent.load(Ordering::Relaxed), 1);
+        let adult_code = Some(ContentType::Adult.code());
+        let unenriched = |w: &Writer| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+                .unwrap()
+        };
+        assert_ne!(
+            w.store.as_ref().unwrap().content_type(id).unwrap(),
+            adult_code
+        );
+        assert_eq!(unenriched(&w), [id], "marked by the claims' transaction");
+        w.backfill_done = false;
+        w.backfill().await;
+        assert_eq!(
+            w.store.as_ref().unwrap().content_type(id).unwrap(),
+            adult_code
+        );
+        assert!(unenriched(&w).is_empty());
+    }
+
+    /// A key a private source stored after the cache's lookup stays
+    /// private: the commit reads the store's mark, never the lookup's.
+    #[tokio::test]
+    async fn a_cache_file_never_clears_a_private_mark_set_since_its_lookup() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let feed = store.register_source("private_feed", "1", 1).unwrap();
+        let cache = store.register_source("torrent_cache", "1", 1).unwrap();
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        let (retry, _rx) = mpsc::channel(4);
+        let mut c = cached(&w, "Sintel 2011", cache);
+        // A file with the fields outside its info dict, so its claims are
+        // stored too (runner's delta review of #479): they mustn't make it
+        // public either.
+        c.claims.trackers = vec!["udp://tracker.example:1337/announce".into()];
+        c.claims.description = Some("Encoded by someone".into());
+        c.provenance.published_at = Some(1_600_000_000);
+        // Stored by a private source after the lookup, before the commit.
+        let r = results_named("Sintel 2011");
+        let id = w
+            .store
+            .as_mut()
+            .unwrap()
+            .write(&WriteBatch {
+                prepared: &[PreparedTorrent {
+                    torrent: &r.torrent,
+                    discovered_at: 0,
+                    metadata_at: 0,
+                    extra_flags: flags::PRIVATE_SOURCE,
+                    source: feed,
+                    verified: true,
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap()
+            .prepared[0]
+            .stored()
+            .unwrap();
+        w.commit_cache(vec![c], &retry).await;
+        assert_eq!(w.stats.torrent_cache.existing.load(Ordering::Relaxed), 1);
+        let row = w.store.as_ref().unwrap().torrent(id).unwrap().unwrap();
+        assert_ne!(row.flags & flags::PRIVATE_SOURCE, 0, "still private");
+        assert_ne!(row.sources & bit(cache), 0);
+        // The claims were stored, as a private source's are.
+        assert_eq!(w.stats.unverified.on_torrent.load(Ordering::Relaxed), 1);
+        let claims = w.store.as_ref().unwrap().torrent_claims(id).unwrap();
+        let mine = claims.iter().find(|c| c.source == cache).expect("claims");
+        assert!(mine.private_source);
     }
 }
