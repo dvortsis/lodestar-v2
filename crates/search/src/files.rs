@@ -2341,11 +2341,18 @@ pub(crate) const NEGATED_RATIO: u64 = 8;
 
 /// The bad torrents of a [`crate::compile::negated_words`] clause: those
 /// with a covered file of the extensions that has one of the words (the
-/// suspects, driven by the words' postings), and none of the
-/// extensions without them (checked on the suspects' files only). The
-/// clause's torrents are the candidates (`file_ext_bucket`) less these.
-/// `None` when the words aren't rare enough ([`NEGATED_RATIO`]) or
-/// compile to nothing: the clause then runs on the file index whole.
+/// suspects), and none of the extensions without them. The clause's
+/// torrents are the candidates (`file_ext_bucket`) less these. `None`
+/// when the words aren't rare enough ([`NEGATED_RATIO`]) or compile to
+/// nothing: the clause then runs on the file index whole.
+///
+/// Each segment's suspects come from its files with an extension and a
+/// word, driven by the words' postings ([`undecided_in`]). A torrent's
+/// files are normally adjacent documents, so each suspect is rescued
+/// there when a neighbour of its own has an extension and no word; the
+/// rest are its *undecided* ones, cached per segment. Every undecided
+/// torrent is then checked exactly on all of its files, wherever they
+/// are (`torrent` terms), so the answer never depends on where they sit.
 pub(crate) fn bad_torrents(
     searcher: &Searcher,
     f: &FileFields,
@@ -2353,6 +2360,20 @@ pub(crate) fn bad_torrents(
     cache: &FileSetCache,
     cancel: &crate::CancelToken,
 ) -> crate::index::Result<Option<IdSet>> {
+    bad_torrents_at(searcher, f, neg, cache, cancel, NEGATED_RATIO)
+}
+
+/// [`bad_torrents`] with the words' files at most a `ratio`th of the
+/// extensions' (0: whatever their number, for tests).
+fn bad_torrents_at(
+    searcher: &Searcher,
+    f: &FileFields,
+    neg: &crate::compile::NegatedWords,
+    cache: &FileSetCache,
+    cancel: &crate::CancelToken,
+    ratio: u64,
+) -> crate::index::Result<Option<IdSet>> {
+    cancel.check()?;
     if f.torrent == ABSENT || f.ext == ABSENT {
         return Ok(None);
     }
@@ -2389,45 +2410,146 @@ pub(crate) fn bad_torrents(
         doc_freq(searcher, &ext_terms)?,
         doc_freq(searcher, &word_terms)?,
     );
-    if words_n.saturating_mul(NEGATED_RATIO) > exts {
+    if words_n.saturating_mul(ratio) > exts {
         return Ok(None);
     }
-    cancel.check()?;
-    let suspects_node = Node::And {
-        of: vec![ext, words],
-    };
-    let suspects_q = compile_node(&suspects_node, f).expect("an extension compiles");
-    let suspects = torrent_ids(
-        searcher,
-        suspects_q.as_ref(),
-        &format!("{suspects_node:?}"),
-        cache,
-        cancel,
-    )?
+    let scoring = EnableScoring::disabled_from_searcher(searcher);
+    let suspects = BooleanQuery::new(vec![
+        (Occur::Must, ext_q.box_clone()),
+        (Occur::Must, words_q.box_clone()),
+    ]);
+    let rescue = BooleanQuery::new(vec![(Occur::Must, ext_q), (Occur::MustNot, words_q)]);
+    let key = format!(
+        "{:?}@undecided",
+        Node::And {
+            of: vec![ext, words]
+        }
+    );
+    let segs = searcher.segment_readers();
+    let keys: Vec<CacheKey> = segs
+        .iter()
+        .map(|seg| (key.clone(), seg.segment_id(), seg.num_deleted_docs()))
+        .collect();
+    let mut parts: Vec<Option<Arc<IdPart>>> = keys.iter().map(|k| cache.get(k)).collect();
+    let missed: Vec<usize> = (0..segs.len()).filter(|i| parts[*i].is_none()).collect();
+    if !missed.is_empty() {
+        let (suspects_w, rescue_w) = (suspects.weight(scoring)?, rescue.weight(scoring)?);
+        let failed = AtomicBool::new(false);
+        let found = searcher
+            .index()
+            .search_executor()
+            .map(
+                |i: usize| {
+                    undecided_in(
+                        &segs[i],
+                        suspects_w.as_ref(),
+                        rescue_w.as_ref(),
+                        cancel,
+                        &failed,
+                    )
+                    .inspect_err(|_| failed.store(true, Ordering::Release))
+                },
+                missed.iter().copied(),
+            )
+            .map_err(|e| crate::cancel::stopped_or(cancel, e))?;
+        cancel.check()?;
+        for (i, ids) in missed.into_iter().zip(found) {
+            let ids = Arc::new(IdPart::from_sorted(ids));
+            cache.insert(keys[i].clone(), ids.clone());
+            parts[i] = Some(ids);
+        }
+    }
+    let undecided = IdSet {
+        parts: parts.into_iter().flatten().collect(),
+        union: OnceLock::new(),
+    }
     .to_vec();
-    if suspects.is_empty() {
+    if undecided.is_empty() {
         return Ok(Some(IdSet::default()));
     }
-    cancel.check()?;
-    // The suspects' files with an extension and none of the words.
+    // Each undecided torrent's files with an extension and no word, in
+    // every segment.
     let theirs = TermSetQuery::new(
-        suspects
+        undecided
             .iter()
             .map(|&id| Term::from_field_u64(f.torrent, id)),
     );
-    let rescue = BooleanQuery::new(vec![
+    let exact = BooleanQuery::new(vec![
         (Occur::Must, Box::new(theirs) as Q),
-        (Occur::Must, ext_q),
-        (Occur::MustNot, words_q),
+        (Occur::Must, Box::new(rescue) as Q),
     ]);
-    let rescued = searcher.search(&rescue, &Torrents)?;
+    let rescued = searcher.search(&exact, &Torrents)?;
     cancel.check()?;
     Ok(Some(IdSet::from_ids(
-        suspects
+        undecided
             .into_iter()
             .filter(|id| rescued.binary_search(id).is_err())
             .collect(),
     )))
+}
+
+/// One segment's undecided suspects of a negated-word clause, sorted and
+/// distinct: the torrents of its live files matching `suspects` (an
+/// extension and a word) none of whose adjacent files of the same
+/// torrent (its run of documents around them) matches `rescue` (an
+/// extension and no word). `rescue` is only ever sought forward, so a
+/// run is checked from the first document not checked before; a file of
+/// the torrent outside its run, or before that, leaves it undecided,
+/// for the exact check.
+fn undecided_in(
+    seg: &SegmentReader,
+    suspects: &dyn Weight,
+    rescue: &dyn Weight,
+    cancel: &crate::CancelToken,
+    failed: &AtomicBool,
+) -> tantivy::Result<Vec<u64>> {
+    let column = seg.fast_fields().u64("torrent")?;
+    let alive = |d: DocId| seg.alive_bitset().is_none_or(|a| a.is_alive(d));
+    let torrent = |d: DocId| column.first(d);
+    let mut sus = suspects.scorer(seg, 1.0)?;
+    let mut res = rescue.scorer(seg, 1.0)?;
+    let mut out = Vec::new();
+    // The first document not yet checked against `rescue`.
+    let mut next = 0;
+    let mut last: Option<u64> = None;
+    let mut seen = 0u32;
+    let mut doc = sus.doc();
+    while doc != TERMINATED {
+        seen += 1;
+        if seen.is_multiple_of(4096) && (cancel.is_stopped() || failed.load(Ordering::Acquire)) {
+            return Err(crate::cancel::interrupted());
+        }
+        if let Some(t) = torrent(doc).filter(|_| alive(doc))
+            && last != Some(t)
+        {
+            last = Some(t);
+            let mut d = doc;
+            while d > next && torrent(d - 1) == Some(t) {
+                d -= 1;
+            }
+            let mut rescued = false;
+            while d < seg.max_doc() && torrent(d) == Some(t) {
+                if d >= next {
+                    if res.doc() < d {
+                        res.seek(d);
+                    }
+                    if res.doc() == d && alive(d) {
+                        rescued = true;
+                        break;
+                    }
+                }
+                d += 1;
+            }
+            next = next.max(d);
+            if !rescued {
+                out.push(t);
+            }
+        }
+        doc = sus.advance();
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
 }
 
 /// The documents holding any of `terms`, summed over the searcher's
@@ -4274,5 +4396,97 @@ mod bucket_props {
             visited > 0 && visited <= crate::cancel::CHECK_EVERY as usize,
             "{visited}"
         );
+    }
+}
+
+#[cfg(test)]
+mod negated_props {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// One file: its torrent (1..=6), whether it's a `.mkv` (else
+    /// `.srt`), and whether it sits in `sample/`.
+    type F = (u64, bool, bool);
+
+    /// A file index of `segments` (files in the order given, so a
+    /// torrent's files may be apart or in several segments), with
+    /// torrent `deleted`'s files deleted.
+    fn index(segments: &[Vec<F>], deleted: u64) -> (Searcher, FileFields) {
+        let (schema, f) = schema();
+        let index = bucket_props_ram(schema);
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        for seg in segments {
+            for (i, &(torrent, mkv, sample)) in seg.iter().enumerate() {
+                let ext = if mkv { "mkv" } else { "srt" };
+                let doc = FileDoc {
+                    torrent,
+                    index: i as u64,
+                    name: format!("f{i}.{ext}"),
+                    dirs: if sample {
+                        vec!["Sample".into()]
+                    } else {
+                        Vec::new()
+                    },
+                    ext: Some(ext.into()),
+                    size: 10,
+                    category: Category::Other,
+                    pieces_root: None,
+                };
+                writer.add_document(doc.to_document(&f)).unwrap();
+            }
+            writer.commit().unwrap();
+        }
+        writer.delete_term(Term::from_field_u64(f.torrent, deleted));
+        writer.commit().unwrap();
+        (index.reader().unwrap().searcher(), f)
+    }
+
+    fn bucket_props_ram(schema: Schema) -> tantivy::Index {
+        let index = tantivy::Index::create_in_ram(schema);
+        index
+            .tokenizers()
+            .register(NAME_TOKENIZER, tokenizer::NameTokenizer::default());
+        index
+    }
+
+    fn files() -> impl Strategy<Value = Vec<Vec<F>>> {
+        prop::collection::vec(
+            prop::collection::vec((1u64..=6, any::<bool>(), any::<bool>()), 0..12),
+            1..4,
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// `file:(ext:mkv -path:sample)`'s bad torrents are exactly those
+        /// with a live `.mkv` in `sample/` and none elsewhere, however
+        /// their files are spread over documents and segments, and
+        /// whether the per-segment results come from the cache or not
+        /// (X-search-files-6).
+        #[test]
+        fn bad_torrents_are_exact(segments in files(), deleted in 0u64..=6) {
+            let (searcher, f) = index(&segments, deleted);
+            let neg = crate::compile::NegatedWords {
+                exts: vec!["mkv".into()],
+                words: vec![Node::Word { field: TextField::Path, word: "sample".into() }],
+            };
+            let all: Vec<F> = segments.concat();
+            let has = |t: u64, sample: bool| {
+                all.iter().any(|&(u, mkv, s)| u == t && u != deleted && mkv && s == sample)
+            };
+            let want: Vec<u64> = (1..=6).filter(|&t| has(t, true) && !has(t, false)).collect();
+            let cache = FileSetCache::default();
+            for _ in 0..2 {
+                let got = bad_torrents_at(&searcher, &f, &neg, &cache, &crate::CancelToken::new(), 0)
+                    .unwrap()
+                    .expect("ratio 0 always reads the words")
+                    .to_vec();
+                prop_assert_eq!(&got, &want);
+            }
+        }
     }
 }
