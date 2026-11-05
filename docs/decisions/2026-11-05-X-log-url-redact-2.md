@@ -2,7 +2,18 @@
 
 A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (architecture §12.1, B12's "For the logging slice", B-log1). It closes the classes that X-log-url-redact (#432) found and left out of scope ("Known gaps for X-log-url-redact-2" in `docs/decisions/2026-11-04-X-log-url-redact.md`). Each one leaks on `main` and on every release so far. The rule is the brief's: never too little. Over-redaction is accepted when it's named here, and nothing `main` hides may show.
 
-## Fix, by class
+## Design: two stages, monotone by construction (runner's call, §2.33)
+Three review rounds found shapes where a heuristic this slice added changed the context `main`'s heuristics relied on, so the PR showed a secret `main` hid. Fixing them one by one didn't converge. So the runner chose a structure that rules them out.
+- **Stage 1 is `main`'s scrubber, unchanged** (`scrub_floor`, `scrub_text_floor`; only the two entry points are renamed). Its output is the floor.
+- **The wider rules run beside it on the original text** (`mod wide`): every class and fix below. They decide only what more to hide.
+- **`only_more` hides in stage 1's output each word the wide rules' output doesn't hold.** A word is a run of letters, digits and `_`; `[redacted]`'s own word is never hidden again.
+  - It only replaces text of stage 1's output with `[redacted]`. So nothing stage 1 hid can show again, for any secret, punctuation included, whatever any wide rule does.
+  - A secret the wide rules hide is hidden unless the same word shows elsewhere in their output. A random secret seldom does; a short common word may (`u` in `/x?u=…u:<s>`).
+  - For a readable line, hidden words with only punctuation between them go as one `[redacted]`. That hides only more.
+- **What shows is `main`'s spelling,** with more of it hidden. A form the wide rules rewrite (`http:/u:p@h` as `http://…`) keeps `main`'s spelling: `see http:/[redacted]@h/x ok`.
+- **The public `scrub_text` and `scrub` are the two stages and `only_more`.** Every other function is stage 1's or the wide rules'.
+
+## The wide rules, by class
 - **A password holding URL syntax, with the URL standing alone** (class 1). This one needed the userinfo look-ahead to cross the next `://`.
   - **Cause.** The look-ahead stopped at the next `://`, because that bound kept `scrub_text` linear.
   - **Fix.** An index of every `@` (`Ats`) gives the last `@` in a window in constant time. So the window can now run over any number of `://` and stay linear.
@@ -13,11 +24,11 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
     - an empty authority before a hard stop, or an empty one in any scheme but `file` (`ftp:///\n<secret>@h`);
     - a `://` with no scheme before it;
     - an authority that runs straight into the next `://` (`u://<secret>@h`, whose `:` is the password's).
-  - **Without a sign, the window runs to the later of the first `/` and the first whitespace,** and never past a line break or the next `://`. On `main` it ran to the first `/`, so it crossed spaces (`x://a b@h` stays hidden). Now it also crosses a `/` up to whitespace, which closes `http://<secret>/"@h/`. (Narrowed by the runner, §2.26: an earlier round crossed whitespace too.)
+  - **Without a sign, the window crosses `/` and every hard stop except a line break.** That closes `http://<secret>/"@h/` and `http://<secret>/ x@h/`. (The runner had this narrowed under §2.26, then withdrew that: see "Follow-up".)
   - **These shapes are now hidden:** `udp://u:@<s>"://@h/x`, `ssh://u:://@<s>"@h/`, `ssh://u:\n<s>@h`, `wss://u%3A<s>\n@h` and `http://u%3A<s>/"@h/`.
   - **A host holding `%` outside an IPv6 literal is hidden whole** (`wss://u%3A<s>%40h`), as is a malformed `[…]` host.
 - **Whitespace or a line break inside a magnet** (class 2).
-  - **When the hard stop falls in a display name or keywords (`dn`, `kt`), any later word that carries a magnet parameter carries the magnet on; with none, it runs to the end of the text.** A name may hold any number of raw spaces and line breaks, and there's no telling where it ends. (Narrowed by the runner, §2.26: an earlier round always took the rest.)
+  - **When the hard stop falls in a display name or keywords (`dn`, `kt`), the magnet runs to the end of the text.** A name may hold any number of raw spaces and line breaks, and there's no telling where it ends. (The runner had this narrowed under §2.26, then withdrew that: see "Follow-up".)
   - **After any other stop, a following word that carries a magnet parameter carries the magnet on** (`&tr=`, `&dn=`, or `%26dn%3D` encoded; BEP 9 keys and the common extras).
 - **A magnet inside a `://` URL's path, query or fragment** (class 3, B-log1).
   - **The URL's span now ends where the magnet's does,** never at the outer URL's soft end. `GET http://lodestar:8080/api/add?uri=magnet:?xt=…&dn=Some.Movie,2020.1080p` shows as `GET http://lodestar:8080/api/add`.
@@ -80,19 +91,16 @@ Its own differential harness found secrets this PR showed that `main` hid: 310 i
 - **With a later `://`, an extra `]` after an IPv6 literal ends the scan,** as on `main` (`s3://[::1]]?'<s>ws://`).
 
 ## Over-redaction accepted ("never too little")
-- **A URL followed by an `@` before both its first `/` and its first whitespace end, within 512 bytes, on the same line and before the next `://`, loses its host and path.**
-  - `see https://a.example and me@x.org` shows as `see https://[redacted]@x.org`, as on `main`.
-  - `see https://a.example/p and me@x` keeps its path, also as on `main`.
+- **A URL followed by any `@` on the same line, within 512 bytes and before the next `://`, loses its host and path,** whether it has userinfo or not.
+  - `see https://a.example/p and me@x` shows as `see https://[redacted] [redacted] [redacted]`. #432 kept that path.
+  - A line break still ends the window when nothing marks userinfo: `see https://a.example/p\nme@x` is unchanged.
 - **With a sign of userinfo, the window also crosses `://` and line breaks.**
-  - `http://user:hunter2://x@h/ ok` shows as `http://[redacted] ok`.
-  - `://@http://u:p@h/x` shows as `://[redacted]`. That's the shrunk input from #432.
-  - `see http://h/a then://@https://u:p@h2/b` shows as `see http://h/a then://[redacted]`.
-- **A magnet whose `dn` or `kt` holds the stop, and with no later parameter, takes the rest of the text.**
-  - Example: `add magnet:?xt=…&dn=Some Name to queue` shows as `add magnet:[redacted]`.
-  - With a later parameter, it ends at that word's stop: `add magnet:?xt=…&dn=Some Name&tr=udp://t/a to queue` keeps ` to queue`.
+  - `http://user:hunter2://x@h/ ok` shows as `http://[redacted]://[redacted]@[redacted]/ ok`.
+  - `://@http://u:p@h/x` shows as `://[redacted]://[redacted]@[redacted]`. That's the shrunk input from #432.
+- **A magnet whose `dn` or `kt` holds the stop takes the rest of the text.** `add magnet:?xt=…&dn=Some Name to queue` shows as `add magnet:[redacted] [redacted] [redacted] [redacted]`.
 - **A magnet in a typed URL's query loses every pair after it.**
-- **Encoded URLs in free text lose their host** (`GET /login?next=https%3A%2F%2Fh%2Fx` shows as `…next=https://[redacted]`). After the pass, the host holds a `%`.
-- **The forms without `://` show with one** (`http:/u:p@h` shows as `http://[redacted]@h`, `//u:p@h` as `://[redacted]@h`). A redacted line needn't keep the spelling.
+- **Encoded URLs in free text lose what follows their scheme.**
+- **A word the wide rules hid is hidden wherever it shows in stage 1's output,** including where they kept it. For example, a host that's also part of a hidden password.
 
 ## Known gaps left
 Each one leaks on `main` too.
@@ -101,14 +109,20 @@ Each one leaks on `main` too.
 - **A `Debug` value holding a raw, unescaped `"` where a password sits** (the fuzz's cases 7 and 8 plant them). `Debug` never writes one; the values a real `Debug` writes are covered above.
 - **Forms escaped or encoded more than the pass knows** (class 7): a double JSON escape (`http:\\\/\\\/u:<s>@h`), an encoded backslash (`http:%5C/%5C/u:<s>@h`), and a magnet encoded three times (`magnet%25253A…`, class 4). Each extra form is one more spelling in `separator_len` or `magnets` if logs ever show it.
 - **`scrub` (typed URLs) given free text with a credential's value before `://`** (`secret=https%3A%2F%2Fh/<s>` as an absolute URL). Typed URLs come from the code, never from such text; `scrub_text` hides it.
-- **A `/` and then whitespace in a password with nothing marking the userinfo** (`http://<s>/ x@h/`). The runner's narrowing (§2.26) made it a gap. `url` never prints a raw space, and the test asserts the gap.
+- **A word the wide rules hid that shows elsewhere in their output stays in stage 1's** (see the design section). A random secret seldom repeats; a short common word may.
 - **From the runner's review:**
   - an encoded URL in a raw URL's path, or glued after one;
   - in typed `scrub`, an encoded URL as a whole request path;
   - in typed `scrub`, a raw `&` in a nested password inside a query;
   - `token=<//u:\n<s>@h`.
 
+## Follow-up: X-log-url-redact-3
+- **The runner withdrew its two narrowings (§2.26) when it chose the two-stage design: security first.** They might come back in a slice of their own, with its own proof:
+  - the unmarked userinfo window ending at the later of the first `/` and the first whitespace;
+  - a magnet whose `dn` or `kt` holds a space ending at a later parameter's word.
+
 ## Cost
+- **Both stages run on every line,** and the wide rules run twice on a line with a form without `://` or an encoded magnet. In a release build that's about 3 to 5 times `main`'s time. `only_more` keeps a set of the wide output's words, so it's linear.
 - **`Ats` takes 4 bytes per byte of text** (4 MiB for a 1 MiB line), for the time a line is scrubbed. It's built only when the text holds an `@`.
 
 ## Tests
@@ -123,7 +137,7 @@ Each one leaks on `main` too.
   - `a_debug_field_name_in_a_password_keeps_its_at` (the runner's case)
   - `a_credential_s_value_is_never_split_into_a_url` and `a_name_glued_on_never_escapes_with_its_value` (the self-review and security review)
   - `the_runner_s_review_cases_keep_no_secret` (the runner's review)
-- **Existing tests whose expected output changed:** three exact outputs, named in the over-redaction section above, and the magnet test's `dn`-last case. Every other assertion is unchanged.
+- **Existing tests whose expected output changed:** the exact outputs named in the over-redaction section above, the magnet test's `dn`-last case, and the spellings the design keeps from `main` (`http:/`, `//`, `magnet%…`). Every other assertion is unchanged.
 - **Properties:**
   - `planted_secrets_never_get_through` adds line breaks and `://` on both sides of a hard stop, `u%3A`, unmarked userinfo holding `/` and hard stops, every form without `://`, and the `//` and single-slash forms.
   - A new `magnets_keep_no_secret` covers whitespace in `dn`, `kt` and `tr`, a magnet in a URL after a soft end, encoded and `Debug`-escaped magnets, and a malformed IPv6 literal before a passkey.
