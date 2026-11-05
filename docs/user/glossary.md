@@ -26,6 +26,10 @@ A router setting that sends all unrequested internet traffic to one device. Neve
 
 The layer behind Unraid's `/mnt/user` paths. It adds overhead that databases notice.
 
+## Lodestar source
+
+A place Lodestar learns about torrents from. **Mainline DHT** is the one in this version. Each source has a row in **Settings → Sources**.
+
 ## Metadata
 
 The description a torrent publishes about itself: name, file list, sizes and dates. It is not the content.
@@ -81,6 +85,10 @@ A network protocol without a connection setup, used for peer discovery. Firewall
 ## VPN
 
 A private tunnel to another network. It can hide your home IP address from peers and let you reach home safely from outside.
+
+## Yield bar
+
+The small bar on a source's row in **Settings → Sources**. It shows how much of what the source found first, in the last 24 hours, Lodestar stored.
 
 <!-- nav:start -->
 ---
