@@ -1,0 +1,68 @@
+# The unauthorised-copy pack's corpus (RP-UC). Format:
+# crates/filter/src/corpus.rs. Every name is made up ("Example"); nothing
+# points to a real release. The parser's golden corpus is the pack's
+# wider test set (crates/filter/tests/unauthorised_copy.rs).
+
+rule UC-1
+match Example.Movie.2024.HDCAM.x264-GRP
+  file 1400M Example.Movie.2024.HDCAM.x264-GRP.mkv
+match Example Movie (2024) [TS] 720p
+  file 900M Example Movie (2024) [TS] 720p.mkv
+match Example.Movie.2024.TC.XviD-GRP
+  file 700M Example.Movie.2024.TC.XviD-GRP.avi
+match Example Movie 2024 DVDSCR x264
+  file 1G Example Movie 2024 DVDSCR x264.mkv
+match Example.Movie.2024.CAM.x264-GRP
+  file 1G Example.Movie.2024.CAM.x264-GRP.mkv
+match Example.Movie.2024.TS
+  file 1G Example.Movie.2024.TS.mkv
+match Example.Movie.2024.720p.TS
+  file 1G Example.Movie.2024.720p.TS.mkv
+miss Nanny Cam 1080p x264-GRP
+  file 2G Nanny Cam 1080p x264-GRP.mkv
+miss Little Ts 720p
+  file 900M Little Ts 720p.mkv
+miss Example.Movie.2024.1080p.BluRay.x264-GRP
+  file 8G Example.Movie.2024.1080p.BluRay.x264-GRP.mkv
+miss Example.Film.2019.ts
+  file 2G Example.Film.2019.ts
+miss Example.Show.S01E01.HDTS.x264-GRP
+  file 400M Example.Show.S01E01.HDTS.x264-GRP.mkv
+
+rule UC-2
+match Example Photo Editor 2024 v25.1 x64 Crack
+  file 2G setup.exe
+  file 1M Crack/patch.exe
+match Example.Office.Suite.2021.v16.0.Keygen-GRP
+  file 2G setup.exe
+  file 1M keygen.exe
+match Example Video Converter v5.2 Pre-Activated x64
+  file 80M setup.exe
+miss Example.Browser.120.0.1.Patch
+  file 50M update.exe
+miss Crack Attack v1.2 x64 Patch
+  file 50M setup.exe
+miss Example Movie Crack 2019 1080p WEB
+  file 4G Example.Movie.Crack.2019.1080p.WEB.mkv
+miss Example Game v1.2 Crack
+  file 4G setup.exe
+  type game
+
+rule UC-3
+match Example.Movie.2019.1080p.BluRay.x264-GRP
+  file 8G Example.Movie.2019.1080p.BluRay.x264-GRP.mkv
+match Example.Show.S02E03.1080p.WEB-DL.DDP5.1.H.264-GRP
+  file 2G Example.Show.S02E03.1080p.WEB-DL.DDP5.1.H.264-GRP.mkv
+match Example Movie 2019 2160p WEBRip x265-GRP
+  file 12G Example Movie 2019 2160p WEBRip x265-GRP.mkv
+miss Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP
+  file 900M Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP.mkv
+miss Example.Film.1950.DVDRip.XviD-GRP
+  file 700M Example.Film.1950.DVDRip.XviD-GRP.avi
+  file 2K example-film-1950_meta.xml
+  file 4K example-film-1950_files.xml
+miss Example Album 2019 FLAC WEB-GRP
+  file 30M 01 - Example Song.flac
+  file 30M 02 - Another Song.flac
+miss Example Home Video 2019
+  file 4G Example Home Video 2019.mp4

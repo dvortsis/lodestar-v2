@@ -2,6 +2,7 @@
 //! every target as before, on walks each family's cursors only when a
 //! query goes out, and new contacts are attributed to the target's kind.
 
+use super::tests::{UNBOUND, unbound};
 use super::*;
 use crate::compact::{CompactNodes, encode_nodes};
 use rand::SeedableRng;
@@ -45,17 +46,15 @@ fn peer(a: &mut Actor) -> std::net::UdpSocket {
     p
 }
 
-/// The target of the next `sample_infohashes` `p` receives, waiting up to
-/// [`DEADLINE`] for it.
-fn sample_target(p: &std::net::UdpSocket) -> [u8; 20] {
+/// The target of the next `sample_infohashes` that `p` receives from the
+/// actor at `from`, waiting up to [`DEADLINE`] for it. Filtered by
+/// [`super::tests::sample_from`], as the restart tests' counts are.
+fn sample_target(p: &std::net::UdpSocket, from: SocketAddr) -> [u8; 20] {
     let mut buf = [0u8; 2048];
     loop {
-        let (len, _) = p.recv_from(&mut buf).expect("a sample within the deadline");
-        if let Ok(m) = crate::krpc::parse(&buf[..len])
-            && let Body::Query(q) = m.body
-            && let Method::SampleInfohashes { target, .. } = q.method
-        {
-            return target.0;
+        let (len, src) = p.recv_from(&mut buf).expect("a sample within the deadline");
+        if let Some(target) = super::tests::sample_from(&buf[..len], src, from) {
+            return target;
         }
     }
 }
@@ -91,8 +90,8 @@ fn switch_off_draws_each_target_uniformly_as_before() {
     let _explore: [u8; 20] = rng.random();
     let (want1, want2): ([u8; 20], [u8; 20]) = (rng.random(), rng.random());
     a.sample_tick(&sockets, Instant::now());
-    assert_eq!(sample_target(&p1), want1);
-    assert_eq!(sample_target(&p2), want2);
+    assert_eq!(sample_target(&p1, a.cfg.bind[0]), want1);
+    assert_eq!(sample_target(&p2, a.cfg.bind[0]), want2);
     let st = a.stats.snapshot();
     assert_eq!(st.target_prefix_queries, [0, 0]);
     assert_eq!(st.target_prefix_cycles, 0);
@@ -103,7 +102,10 @@ fn switch_on_walks_the_prefixes_and_holds_on_throttle_and_pause() {
     let (mut a, sockets) = actor(true);
     let peers: Vec<_> = (0..3).map(|_| peer(&mut a)).collect();
     a.sample_tick(&sockets, Instant::now());
-    let mut at: Vec<u8> = peers.iter().map(|p| position(sample_target(p))).collect();
+    let mut at: Vec<u8> = peers
+        .iter()
+        .map(|p| position(sample_target(p, a.cfg.bind[0])))
+        .collect();
     at.sort_unstable();
     assert_eq!(at, [0, 1, 2]);
     assert_eq!(cursor(&a, TargetKind::Sample), 3);
@@ -133,7 +135,11 @@ fn switch_on_walks_the_prefixes_and_holds_on_throttle_and_pause() {
     assert_eq!(cursor(&a, TargetKind::Explore), explore);
     a.paused = false;
     a.sample_tick(&sockets, Instant::now());
-    assert_eq!(position(sample_target(&p)), 3, "resumes where it stopped");
+    assert_eq!(
+        position(sample_target(&p, a.cfg.bind[0])),
+        3,
+        "resumes where it stopped"
+    );
 }
 
 #[test]
@@ -143,7 +149,10 @@ fn a_cursor_wraps_after_prefix_255_and_counts_a_cycle() {
     let p1 = peer(&mut a);
     let p2 = peer(&mut a);
     a.sample_tick(&sockets, Instant::now());
-    let mut prefixes = [sample_target(&p1)[0], sample_target(&p2)[0]];
+    let mut prefixes = [
+        sample_target(&p1, a.cfg.bind[0])[0],
+        sample_target(&p2, a.cfg.bind[0])[0],
+    ];
     prefixes.sort_unstable();
     assert_eq!(prefixes, [0, 255], "the pass's last prefix, then the first");
     assert_eq!(cursor(&a, TargetKind::Sample), 1);
@@ -156,7 +165,7 @@ fn new_contacts_are_counted_by_the_target_that_brought_them() {
     let (mut a, sockets) = actor(false);
     let p = peer(&mut a);
     a.sample_tick(&sockets, Instant::now());
-    sample_target(&p);
+    sample_target(&p, a.cfg.bind[0]);
     let (&tid, pend) = a
         .pending
         .iter()
@@ -168,7 +177,7 @@ fn new_contacts_are_counted_by_the_target_that_brought_them() {
             .iter()
             .map(|&port| NodeInfo {
                 id: NodeId([port as u8; 20]),
-                addr: SocketAddr::from(([127, 0, 0, 1], port)),
+                addr: unbound(false, port),
             })
             .collect();
         encode_nodes(&nodes, false)
@@ -189,7 +198,7 @@ fn new_contacts_are_counted_by_the_target_that_brought_them() {
         };
         a.on_response(&sockets, family, &msg, Some(&response), to);
     };
-    reply(&mut a, tid, &contacts(&[40001, 40002]));
+    reply(&mut a, tid, &contacts(&[901, 902]));
     assert_eq!(a.stats.snapshot().target_novel_nodes, [0, 2]);
 
     // A ping's contacts aren't a target's; one already queued isn't new.
@@ -202,7 +211,7 @@ fn new_contacts_are_counted_by_the_target_that_brought_them() {
         .iter()
         .find(|(_, q)| matches!(q.purpose, Purpose::Ping))
         .unwrap();
-    reply(&mut a, ping, &contacts(&[40001, 40003]));
+    reply(&mut a, ping, &contacts(&[901, 903]));
     assert_eq!(a.stats.snapshot().target_novel_nodes, [0, 2]);
     assert!(
         a.sampler.frontier_len() >= 3,
@@ -213,7 +222,7 @@ fn new_contacts_are_counted_by_the_target_that_brought_them() {
 #[test]
 fn the_exploration_lookup_is_marked_and_its_contacts_count_as_explore() {
     let (mut a, sockets) = actor(false);
-    let x: SocketAddr = "127.0.0.1:40100".parse().unwrap();
+    let x: SocketAddr = unbound(false, UNBOUND);
     let id = NodeId([9; 20]);
     a.families[0]
         .table
@@ -231,7 +240,7 @@ fn the_exploration_lookup_is_marked_and_its_contacts_count_as_explore() {
     let raw = encode_nodes(
         &[NodeInfo {
             id: NodeId([1; 20]),
-            addr: "127.0.0.1:40101".parse().unwrap(),
+            addr: unbound(false, 910),
         }],
         false,
     );
@@ -258,7 +267,7 @@ fn the_explore_cursor_moves_only_when_its_lookup_sends() {
     a.families[0].table.insert(
         NodeInfo {
             id: NodeId([9; 20]),
-            addr: "127.0.0.1:40200".parse().unwrap(),
+            addr: unbound(false, UNBOUND),
         },
         Contact::Response,
         0,
@@ -276,7 +285,7 @@ fn a_throttled_exploration_lookup_moves_its_cursor_when_it_sends() {
     a.families[0].table.insert(
         NodeInfo {
             id: NodeId([9; 20]),
-            addr: "127.0.0.1:40300".parse().unwrap(),
+            addr: unbound(false, UNBOUND),
         },
         Contact::Response,
         0,

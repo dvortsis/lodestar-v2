@@ -10,11 +10,11 @@
 //! so the plugin is held tight:
 //! - **Off by default, External consent** (§18.7): the server refuses to
 //!   turn it on until its consent is acknowledged (SRC-4). That
-//!   acknowledgement must cover the configured cache hosts, so adding or
-//!   changing one asks again. SRC-4 digests only the manifest's built-in
-//!   endpoints, which are empty here, so **the plugin isn't registered**
-//!   until SRC-13b makes the acknowledgement cover the configured list
-//!   (`docs/decisions/2026-11-05-SRC-13.md`).
+//!   acknowledgement covers the configured cache hosts, so adding or
+//!   changing one asks again: each plugin's manifest lists its own
+//!   config's hosts as its endpoints ([`TorrentCache::manifest`]), and
+//!   SRC-4's consent version digests the manifest's endpoints
+//!   (`docs/decisions/2026-11-05-SRC-13b.md`).
 //! - **The cache list is the user's** and starts empty. [`SUGGESTED`] is
 //!   shown beside it in the settings form, never enabled for them.
 //!
@@ -50,10 +50,11 @@
 //! check. It still goes through the full filter pipeline before storage
 //! (the pipeline's `torrent_cache::judge`, SRC-2's path).
 //!
-//! **Host wiring** (SRC-13b): the host builds the plugin from the saved
-//! config with a [`Queue`] it feeds from the pipeline's cursor and from
-//! user interest, with each key's `private_source` taken from the store,
-//! and takes each [`Verified`]'s raw info dict to the pipeline's judge.
+//! **Host wiring** (SRC-13b, `crates/lodestar/src/torrent_cache.rs`): the
+//! host builds the plugin from its saved config with a [`Queue`] it feeds
+//! from the pipeline's cursor and from user interest, with each key's
+//! `private_source` taken from the store, and takes each [`Verified`]'s
+//! raw info dict to the pipeline's judge.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -64,8 +65,9 @@ use lodestar_metainfo::{Info, InfoHash, Limits, ParseOptions, TorrentFile};
 use lodestar_sources::claims::{self, Claims, Confidence, Provenance};
 use lodestar_sources::http::{HostState, StreamLimits, host_key};
 use lodestar_sources::{
-    Backoff, BoxFuture, Caps, Client, Consent, Distribution, Endpoints, HostRate, HttpError, Kind,
-    Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx, SourcePlugin,
+    Backoff, BoxFuture, Caps, Client, Consent, Distribution, Endpoint, Endpoints, HostRate,
+    HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx,
+    SourcePlugin,
 };
 use serde::Deserialize;
 use tokio::sync::{Mutex, mpsc};
@@ -128,7 +130,9 @@ pub struct Suggestion {
 /// `docs/decisions/2026-11-05-SRC-13.md`).
 pub const SUGGESTED: &[Suggestion] = &[];
 
-const MANIFEST: Manifest = Manifest {
+/// The manifest with no cache listed. A plugin's own
+/// ([`SourcePlugin::manifest`]) lists its config's hosts as endpoints.
+pub const MANIFEST: Manifest = Manifest {
     id: ID,
     name: "Torrent cache",
     version: "1",
@@ -179,6 +183,9 @@ pub struct Cache {
     upper: bool,
     /// The limiter's, the poll unit's and the egress host list's key.
     host: String,
+    /// The port, when it isn't https's own: part of what the consent
+    /// acknowledgement covers ([`TorrentCache::manifest`]).
+    port: Option<u16>,
 }
 
 impl Cache {
@@ -310,6 +317,7 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
         tail: tail.to_owned(),
         upper: is_upper,
         host,
+        port: url.port(),
     })
 }
 
@@ -365,6 +373,15 @@ pub struct Queue {
 }
 
 impl Queue {
+    /// How many more lookups `why`'s lane takes now, so a feeder can page
+    /// no more than fits rather than have the rest dropped.
+    pub fn room(&self, why: Why) -> usize {
+        match why {
+            Why::Interest => self.interest.capacity(),
+            Why::Unverified => self.unverified.capacity(),
+        }
+    }
+
     /// Queues `lookup` without waiting. `false` when its lane is full or
     /// the plugin is gone; a full lane counts [`Stats::dropped`].
     pub fn push(&self, lookup: Lookup) -> bool {
@@ -424,7 +441,7 @@ pub struct Stats {
 }
 
 /// A cached `.torrent` whose info dict hashes to its lookup's key. Made
-/// only by [`TorrentCache::lookup`], after that check. Its `Debug` shows
+/// only by [`verify_body`], after that check. Its `Debug` shows
 /// neither the key nor the file.
 #[derive(Clone)]
 pub struct Verified {
@@ -487,7 +504,10 @@ impl Verified {
     /// tracker's address holds the uploader's passkey, and its comment
     /// often names the tracker. Otherwise only trackers with no user name,
     /// query or passkey-shaped part are kept, and none on a literal LAN,
-    /// loopback or link-local address: the file is a third party's. Web
+    /// loopback or link-local address: the file is a third party's. A kept
+    /// tracker is the address as checked (the `url` crate's form), never
+    /// the file's own text, which a looser parser could read as another
+    /// host (X-fuzz-cache-1105). Web
     /// seeds and `created by` have no claim field yet
     /// (`docs/decisions/2026-11-05-SRC-13.md`).
     pub fn claims(&self) -> Claims {
@@ -499,8 +519,10 @@ impl Verified {
                 if out.len() >= claims::MAX_TRACKERS {
                     break;
                 }
-                if public_tracker(url) && !out.contains(url) {
-                    out.push(url.clone());
+                if let Some(url) = public_tracker(url)
+                    && !out.contains(&url)
+                {
+                    out.push(url);
                 }
             }
             out
@@ -533,16 +555,16 @@ impl Verified {
     }
 }
 
-fn public_tracker(raw: &str) -> bool {
+/// `raw` as the address that was checked, when it's a public tracker: no
+/// user name, query, fragment or passkey-shaped path segment, and not on
+/// a literal LAN, loopback or link-local address. The normalised form is
+/// what's kept, so what's stored is what was judged.
+fn public_tracker(raw: &str) -> Option<String> {
     if raw.len() > MAX_TRACKER_URL {
-        return false;
+        return None;
     }
-    let Ok(url) = url::Url::parse(raw) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
+    let url = url::Url::parse(raw).ok()?;
+    let host = url.host_str()?;
     // `check_url` takes http(s) only: a UDP tracker's host is checked as
     // the same host over http.
     let public = match url.scheme() {
@@ -551,7 +573,7 @@ fn public_tracker(raw: &str) -> bool {
             .is_ok_and(|u| net::check_url(&u, NetPolicy::notification(false)).is_ok()),
         _ => false,
     };
-    public
+    let kept = public
         && url.username().is_empty()
         && url.password().is_none()
         && url.query().is_none()
@@ -561,6 +583,8 @@ fn public_tracker(raw: &str) -> bool {
             .into_iter()
             .flatten()
             .any(|s| s.len() >= PASSKEY_MIN && s.bytes().all(|b| b.is_ascii_alphanumeric()))
+        && url.as_str().len() <= MAX_TRACKER_URL;
+    kept.then(|| url.into())
 }
 
 /// Why one cache didn't give a verified file.
@@ -581,6 +605,8 @@ pub enum Miss {
 /// The torrent-cache plugin.
 pub struct TorrentCache {
     config: Config,
+    /// [`MANIFEST`] with the config's hosts as its endpoints.
+    manifest: Manifest,
     lanes: Arc<Mutex<Lanes>>,
     out: mpsc::Sender<Verified>,
     stats: Arc<Stats>,
@@ -608,8 +634,13 @@ impl TorrentCache {
             unverified: unverified_tx,
             stats: Arc::clone(&stats),
         };
+        let manifest = Manifest {
+            endpoints: endpoints_of(&config),
+            ..MANIFEST
+        };
         let plugin = TorrentCache {
             config,
+            manifest,
             lanes: Arc::new(Mutex::new(Lanes {
                 interest,
                 unverified,
@@ -622,6 +653,11 @@ impl TorrentCache {
 
     pub fn stats(&self) -> &Stats {
         &self.stats
+    }
+
+    /// The counters, shared, for the status page.
+    pub fn stats_handle(&self) -> Arc<Stats> {
+        Arc::clone(&self.stats)
     }
 
     pub fn config(&self) -> &Config {
@@ -703,34 +739,80 @@ impl TorrentCache {
                 Err(_) => return Err(fail(Miss::Failed)),
             }
         }
-        let mut torrent =
-            TorrentFile::parse_with(&body, &LIMITS).map_err(|_| fail(Miss::Invalid))?;
-        // The info dict as BEP 9 would deliver it: its own bytes, no hint
-        // from the file's unhashed `encoding` key.
-        let info_raw = TorrentFile::raw_info(&body, &LIMITS)
-            .map_err(|_| fail(Miss::Invalid))?
-            .to_vec();
-        drop(body);
-        torrent.info = Info::parse_with(
-            &info_raw,
-            &ParseOptions {
-                limits: LIMITS,
-                encoding_hint: None,
-            },
-        )
-        .map_err(|_| fail(Miss::Invalid))?;
-        let v2 = match verify(&torrent, &lookup.key) {
-            Some(v2) => v2,
-            None => return Err(fail(Miss::Mismatch)),
-        };
-        Ok(Verified {
-            lookup: *lookup,
-            torrent,
-            info_raw,
-            v2,
-            host: cache.host.clone(),
-        })
+        verify_body(body, lookup, &cache.host).map_err(fail)
     }
+}
+
+/// A cache's reply body, checked: parsed as a `.torrent` within
+/// [`LIMITS`], its info dict re-parsed from its raw span with no encoding
+/// hint ([`TorrentFile::raw_info`]; the file's top-level `encoding` key
+/// isn't covered by the hash), and kept only when that dict hashes to
+/// `lookup`'s key ([`verify`]). `host` is the cache it came from.
+///
+/// Sync and free of I/O, so it's fuzzed directly (`fuzz/fuzz_targets/
+/// torrent_cache.rs`); [`TorrentCache::lookup`] calls it on each body it
+/// fetches. The body is taken by value and dropped once the raw dict is
+/// copied out, so a file near the 8 MiB cap isn't held while its dict is
+/// parsed again.
+///
+/// # Errors
+/// [`Miss::Invalid`] when either parse fails, [`Miss::Mismatch`] when
+/// the dict hashes to another key. Nothing is counted here: the caller
+/// counts the miss.
+pub fn verify_body(body: Vec<u8>, lookup: &Lookup, host: &str) -> Result<Verified, Miss> {
+    let mut torrent = TorrentFile::parse_with(&body, &LIMITS).map_err(|_| Miss::Invalid)?;
+    // The info dict as BEP 9 would deliver it: its own bytes, no hint
+    // from the file's unhashed `encoding` key.
+    let info_raw = TorrentFile::raw_info(&body, &LIMITS)
+        .map_err(|_| Miss::Invalid)?
+        .to_vec();
+    drop(body);
+    torrent.info = Info::parse_with(
+        &info_raw,
+        &ParseOptions {
+            limits: LIMITS,
+            encoding_hint: None,
+        },
+    )
+    .map_err(|_| Miss::Invalid)?;
+    let Some(v2) = verify(&torrent, &lookup.key) else {
+        return Err(Miss::Mismatch);
+    };
+    Ok(Verified {
+        lookup: *lookup,
+        torrent,
+        info_raw,
+        v2,
+        host: host.to_owned(),
+    })
+}
+
+/// `config`'s hosts as manifest endpoints (`host`, or `host:port` for a
+/// port other than 443), sorted and once each. The manifest's list is
+/// `&'static`, so it's leaked: a few bytes per host, at most
+/// [`MAX_CACHES`], once per plugin built (once per start).
+fn endpoints_of(config: &Config) -> &'static [Endpoint] {
+    let mut hosts: Vec<String> = config
+        .caches
+        .iter()
+        .map(|c| match c.port {
+            Some(p) => format!("{}:{p}", c.host),
+            None => c.host.clone(),
+        })
+        .collect();
+    hosts.sort_unstable();
+    hosts.dedup();
+    if hosts.is_empty() {
+        return &[];
+    }
+    let list: Vec<Endpoint> = hosts
+        .into_iter()
+        .map(|h| Endpoint {
+            protocol: "https",
+            host: Box::leak(h.into_boxed_str()),
+        })
+        .collect();
+    Box::leak(list.into_boxed_slice())
 }
 
 /// Whether `torrent`'s info dict is `key`'s: `Some(false)` when its SHA-1
@@ -748,12 +830,21 @@ pub fn verify(torrent: &TorrentFile, key: &InfoHash) -> Option<bool> {
 }
 
 impl SourcePlugin for TorrentCache {
+    /// [`MANIFEST`] with each listed cache's host as an `https` endpoint:
+    /// SRC-4's consent version digests them, so the acknowledgement covers
+    /// exactly these hosts, and adding or changing one asks again.
     fn manifest(&self) -> &Manifest {
-        &MANIFEST
+        &self.manifest
     }
 
     fn policy(&self) -> &Policy {
         &POLICY
+    }
+
+    /// The listed caches' hosts, public addresses only; `None` while the
+    /// list is empty, so nothing is reachable.
+    fn endpoints(&self) -> Option<Endpoints> {
+        TorrentCache::endpoints(self)
     }
 
     fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
@@ -826,7 +917,7 @@ mod tests {
             "udp://tracker.example:1337/announce",
             "https://tracker.example/announce",
         ] {
-            assert!(public_tracker(ok), "{ok}");
+            assert_eq!(public_tracker(ok).as_deref(), Some(ok));
         }
         for bad in [
             "http://192.168.1.1/announce",
@@ -838,8 +929,24 @@ mod tests {
             "wss://t.example/announce",
             "https://user@t.example/announce",
         ] {
-            assert!(!public_tracker(bad), "{bad}");
+            assert_eq!(public_tracker(bad), None, "{bad}");
         }
+    }
+
+    /// The `verified_claims` fuzz target's first find (X-fuzz-cache-1105):
+    /// `http:1.1/…` is read as `http://1.0.0.1/…`, a public host, while a
+    /// looser parser could read the loopback address later in the text.
+    /// What's kept is the address as checked, never the file's text.
+    #[test]
+    fn a_tracker_is_kept_as_checked_not_as_written() {
+        let raw = "http:1.1/announce^udp://127.0.0.1:6969/announce";
+        let kept = public_tracker(raw).unwrap();
+        assert!(kept.starts_with("http://1.0.0.1/"), "{kept}");
+        assert_eq!(public_tracker(&kept).as_deref(), Some(kept.as_str()));
+        assert_eq!(
+            public_tracker("HTTPS://Tracker.Example:443/announce").as_deref(),
+            Some("https://tracker.example/announce")
+        );
     }
 
     #[test]

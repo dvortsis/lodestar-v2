@@ -238,6 +238,15 @@ pub fn build(path: &Path, layout: Layout, rows: &[TorrentRow]) -> Vec<i64> {
     let mut conn = create(path, layout);
     let ids = insert(&mut conn, rows);
     conn.close().expect("close fixture");
+    // SQLite drops a failed close-time checkpoint silently (no disk space,
+    // say), leaving the WAL; the source would then be refused as not
+    // quiescent, a fixture failure that reads as the importer's.
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    assert!(
+        !std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0),
+        "the fixture's WAL outlived its close (out of disk space?)"
+    );
     ids
 }
 

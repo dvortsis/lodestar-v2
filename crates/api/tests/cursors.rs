@@ -147,7 +147,7 @@ fn post(uri: &str, cookie: Option<&str>, body: Value) -> Request<Body> {
 async fn session(f: &Fixture) -> String {
     let (status, cookie, _) = match f.auth.setup_token() {
         Some(token) => {
-            let body = json!({ "token": token, "password": PASSWORD });
+            let body = json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION });
             call(&f.app, post("/api/v1/setup", None, body)).await
         }
         None => {

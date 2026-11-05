@@ -25,6 +25,14 @@ use std::sync::{Arc, OnceLock};
 use super::{Ctx, Pack, PackRule};
 use crate::core::Action;
 
+/// Rules added after RP-0 (owner §2.39, RP-UC): not part of any
+/// install's behaviour before, so seeding never records them. On a store
+/// seeded before they shipped they're pending, in shadow, until accepted
+/// or until their pack is turned on (which records them); a fresh store
+/// records every rule at its current version, so they apply there.
+pub const ADDED_AFTER_RP0: &[PackRule] =
+    &[PackRule::Mw6, PackRule::Uc1, PackRule::Uc2, PackRule::Uc3];
+
 /// What a version changed against the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -206,16 +214,29 @@ impl Manifest {
                 let entries = PackRule::ALL
                     .into_iter()
                     .map(|r| {
-                        RuleEntry::new(
-                            r,
-                            true,
-                            vec![Version {
-                                version: 1,
-                                direction: Direction::Widens,
-                                action: r.action(),
-                                code: Some(Code::Current),
-                            }],
-                        )
+                        let v = |version, direction, code| Version {
+                            version,
+                            direction,
+                            action: r.action(),
+                            code: Some(code),
+                        };
+                        // A rule's earlier versions, kept while an install
+                        // may still have them applied, then its current one.
+                        let mut versions: Vec<Version> = match r {
+                            // RP-1b: the music-production and
+                            // short-episode guards.
+                            PackRule::Mw2 => vec![v(1, Direction::Widens, Code::Fn(super::mw2_v1))],
+                            PackRule::Fk2 => vec![v(1, Direction::Widens, Code::Fn(super::fk2_v1))],
+                            _ => Vec::new(),
+                        };
+                        let next = versions.len() as u32 + 1;
+                        let direction = if next == 1 {
+                            Direction::Widens
+                        } else {
+                            Direction::Narrows
+                        };
+                        versions.push(v(next, direction, Code::Current));
+                        RuleEntry::new(r, !ADDED_AFTER_RP0.contains(&r), versions)
                     })
                     .collect();
                 Arc::new(Manifest::new(entries).expect("the built-in manifest is valid"))
@@ -290,6 +311,9 @@ pub fn changelog(pack: Pack) -> &'static str {
         Pack::Fakes => include_str!("../../data/packs/fakes/CHANGELOG.md"),
         Pack::Spam => include_str!("../../data/packs/spam/CHANGELOG.md"),
         Pack::Scams => include_str!("../../data/packs/scams/CHANGELOG.md"),
+        Pack::UnauthorisedCopy => {
+            include_str!("../../data/packs/unauthorised-copy/CHANGELOG.md")
+        }
     }
 }
 
@@ -324,7 +348,12 @@ mod tests {
         for r in PackRule::ALL {
             let e = m.entry(r);
             assert_eq!(e.rule, r);
-            assert!(e.baseline, "{} existed before RP-0", r.id());
+            assert_eq!(
+                e.baseline,
+                !ADDED_AFTER_RP0.contains(&r),
+                "{} existed before RP-0, or was added after it",
+                r.id()
+            );
             assert_eq!(e.current().action, r.action(), "{}", r.id());
             assert!(matches!(e.current().code, Some(Code::Current)));
             assert_eq!(e.direction(None, 1), Some(Direction::Widens));
@@ -559,19 +588,61 @@ mod tests {
             }
             out.push((name, f));
         }
+        // Names for the rules added after RP-0 (MW-6, UC-1 to UC-3), after
+        // the generated set, so the rules before them keep their golden.
+        const EXTRA: &[(&str, &[(&str, u64)])] = &[
+            ("Example Editor v2.1 x64 Crack", &[("setup.exe", 2 << 30)]),
+            ("Example.Suite.v16.0.Keygen-GRP", &[("setup.exe", 2 << 30)]),
+            (
+                "Example Tool v4.1 Pre-Activated",
+                &[("setup.exe", 80 << 20)],
+            ),
+            ("Example.Browser.120.0.1.Patch", &[("update.exe", 50 << 20)]),
+            ("Crack Attack v1.2 x64 Patch", &[("setup.exe", 50 << 20)]),
+            ("Example.Movie.2024.HDCAM.x264-GRP", &[("m.mkv", 1 << 30)]),
+            ("Example Movie (2024) [TS] 720p", &[("m.mkv", 1 << 30)]),
+            ("Example.Movie.2024.CAM.x264-GRP", &[("m.mkv", 1 << 30)]),
+            ("Nanny Cam 1080p x264-GRP", &[("m.mkv", 1 << 30)]),
+            ("Little Ts 720p", &[("m.mkv", 1 << 30)]),
+            (
+                "Example.Movie.2019.1080p.BluRay.x264-GRP",
+                &[("m.mkv", 8 << 30)],
+            ),
+            (
+                "Example.Show.S02E03.1080p.WEB-DL.H.264-GRP",
+                &[("m.mkv", 2 << 30)],
+            ),
+            (
+                "Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP",
+                &[("m.mkv", 1 << 30)],
+            ),
+            ("Example Movie 2019 1080p BluRay", &[("m.mkv", 8 << 30)]),
+        ];
+        for (name, files) in EXTRA {
+            let f = files
+                .iter()
+                .map(|(p, s)| FileInfo::new(vec![(*p).to_owned()], *s))
+                .collect();
+            out.push(((*name).to_owned(), f));
+        }
         out
     }
 
-    /// Per rule, version and action, how many of [`golden_set`] it matches and a
-    /// hash of which. A change to what a rule matches fails this unless
-    /// its version is bumped (and the new version's golden added): the
-    /// golden of today's behaviour that RP-1's corpus takes over.
+    /// Per rule, version and action, how many of [`golden_set`] it matches
+    /// and a hash of which, for every version whose code is kept. MW-2@2
+    /// and FK-2@2 match the same as their version 1 here: the set has no
+    /// music-production or short-episode pack, which is what they pass. A
+    /// change to what a rule matches fails this unless its version is
+    /// bumped (and the new version's golden added): the golden of today's
+    /// behaviour that RP-1's corpus takes over.
     const GOLDEN: &[(&str, usize, u64)] = &[
         ("MW-4@1 drop", 16, 13510458297458882951),
         ("MW-1@1 hide", 318, 18405588938268816894),
         ("MW-2@1 hide", 199, 5420927143327199823),
+        ("MW-2@2 hide", 199, 5420927143327199823),
         ("MW-3@1 hide", 114, 17286647990777949854),
         ("MW-5@1 hide", 128, 624893996585892302),
+        ("MW-6@1 hide", 3, 8239104331045227003),
         ("LU-1@1 hide", 6, 5791013990083080710),
         ("LU-4@1 hide", 587, 15362597008036224271),
         ("LU-2@1 demote", 85, 18213498744997554530),
@@ -580,26 +651,37 @@ mod tests {
         ("FK-1@1 hide", 195, 1162936391390153166),
         ("FK-5@1 demote", 29, 8441971907697171463),
         ("FK-2@1 flag", 16, 1128617146480757237),
+        ("FK-2@2 flag", 16, 1128617146480757237),
         ("SP-2@1 hide", 162, 11973947260632497437),
         ("SP-1@1 demote", 426, 419072724506069972),
         ("SC-1@1 hide", 351, 370022691562877752),
         ("SC-2@1 hide", 287, 15705590736820052948),
+        ("UC-1@1 hide", 3, 3719771000408991908),
+        ("UC-2@1 hide", 3, 8239104331045227003),
+        ("UC-3@1 hide", 2, 1690303002812331472),
     ];
 
     #[test]
     fn rules_match_as_their_version_says() {
         let set = golden_set();
         let m = Manifest::builtin();
-        let mut got: Vec<(String, usize, u64)> = PackRule::ALL
+        // Every version whose code the build keeps, so a kept version's
+        // code can't drift either.
+        let versions: Vec<(PackRule, &Version)> = PackRule::ALL
             .into_iter()
-            .map(|r| {
+            .flat_map(|r| {
+                m.entry(r)
+                    .versions()
+                    .iter()
+                    .filter(|v| v.code.is_some())
+                    .map(move |v| (r, v))
+            })
+            .collect();
+        let mut got: Vec<(String, usize, u64)> = versions
+            .iter()
+            .map(|(r, v)| {
                 (
-                    format!(
-                        "{}@{} {}",
-                        r.id(),
-                        m.entry(r).current().version,
-                        m.entry(r).current().action.as_str()
-                    ),
+                    format!("{}@{} {}", r.id(), v.version, v.action.as_str()),
                     0,
                     FNV,
                 )
@@ -628,8 +710,8 @@ mod tests {
                 ctx.matches(PackRule::Sc1) || ctx.matches(PackRule::Sc2),
                 "{name:?}"
             );
-            for (r, g) in PackRule::ALL.into_iter().zip(&mut got) {
-                if m.entry(r).current().matches(r, &ctx) == Some(true) {
+            for ((r, v), g) in versions.iter().zip(&mut got) {
+                if v.matches(*r, &ctx) == Some(true) {
                     g.1 += 1;
                     for b in (i as u32).to_le_bytes() {
                         g.2 = (g.2 ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);

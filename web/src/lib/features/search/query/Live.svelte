@@ -39,7 +39,10 @@
 		s.setText(text);
 	}
 
+	/** The text Enter last searched; Assist, mounting later, must not treat it as fresh typing. */
+	let submittedText: string | null = null;
 	function submit() {
+		submittedText = editor?.text ?? s.text;
 		ensureSearchPath();
 		void s.submit().then(() => {
 			if (!s.parseError && s.text.trim()) recordRecent?.(s.text);
@@ -342,6 +345,7 @@
 		accept={acceptText}
 		{announce}
 		hidden={() => s.hidden}
+		submitted={() => submittedText !== null && submittedText === (editor?.text ?? '')}
 	/>
 {/if}
 <p class="sr-only" aria-live="polite">{said}</p>

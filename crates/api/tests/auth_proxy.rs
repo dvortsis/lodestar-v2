@@ -105,7 +105,7 @@ async fn signed_in(f: &Fixture) -> String {
             Method::POST,
             "/api/v1/setup",
             &[],
-            Some(json!({ "token": token, "password": PASSWORD })),
+            Some(json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION })),
         ),
         at([127, 0, 0, 1]),
     )

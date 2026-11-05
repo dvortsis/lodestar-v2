@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use lodestar_sources::{
     DownReason, Egress, EgressFactory, Endpoints, Manifest, PluginEgress, RouteKind, RouteState,
-    Shutdown, SocksDns,
+    Shutdown, SocksDns, SourcePlugin,
 };
 use tokio::task::JoinHandle;
 
@@ -29,16 +29,20 @@ fn proxy_env_in(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
         .any(|k| get(k).is_some_and(|v| !v.is_empty()))
 }
 
-/// The hosts `m`'s requests may reach: its manifest's own. (A plugin
-/// whose endpoints the user enters needs `Endpoints::user_entered`; the
-/// first is SRC-7's.)
-pub fn endpoints(m: &Manifest) -> Endpoints {
-    Endpoints::manifest(m.endpoints)
+/// The hosts `plugin`'s requests may reach: the ones it names
+/// ([`SourcePlugin::endpoints`], by default its manifest's own). When it
+/// names none (a torrent cache with no cache listed), an empty pinned list:
+/// nothing is reachable.
+pub fn endpoints(plugin: &dyn SourcePlugin) -> Endpoints {
+    plugin
+        .endpoints()
+        .unwrap_or_else(|| Endpoints::manifest(&[]))
 }
 
-/// Who resolves names for `m` on a SOCKS5 route the user left on `auto`.
-pub fn auto_dns(m: &Manifest) -> SocksDns {
-    lodestar_sources::egress::default_dns(&endpoints(m))
+/// Who resolves names for `plugin` on a SOCKS5 route the user left on
+/// `auto`.
+pub fn auto_dns(plugin: &dyn SourcePlugin) -> SocksDns {
+    lodestar_sources::egress::default_dns(&endpoints(plugin))
 }
 
 /// A plugin's client, the route it was built with (`None` when it
@@ -50,22 +54,32 @@ pub struct Built {
     pub setting: SavedEgress,
 }
 
-/// Builds `m`'s client on its saved `setting`, through the route it
-/// names. An unreadable setting fails closed: the route is down for good
-/// ([`DownReason::SettingUnreadable`]), never direct.
-pub async fn build(factory: &EgressFactory, m: &Manifest, setting: &SavedEgress) -> Built {
+/// Builds `plugin`'s client on its saved `setting`, through the route it
+/// names, to its [`endpoints`]. An unreadable setting fails closed: the
+/// route is down for good ([`DownReason::SettingUnreadable`]), never
+/// direct.
+pub async fn build(
+    factory: &EgressFactory,
+    plugin: &dyn SourcePlugin,
+    setting: &SavedEgress,
+) -> Built {
+    let m: &Manifest = plugin.manifest();
     let (egress, route) = match setting {
         Ok(EgressSetting::Direct) => {
-            let e = factory.build(m.id, &Egress::Direct, endpoints(m)).await;
+            let e = factory
+                .build(m.id, &Egress::Direct, endpoints(plugin))
+                .await;
             (e, Some(Egress::Direct))
         }
-        Ok(EgressSetting::Socks5(spec)) => factory.build_socks5(m.id, spec, endpoints(m)).await,
+        Ok(EgressSetting::Socks5(spec)) => {
+            factory.build_socks5(m.id, spec, endpoints(plugin)).await
+        }
         Err(Unreadable) => {
             let e = factory.unavailable(
                 m.id,
                 RouteKind::Socks5,
                 DownReason::SettingUnreadable,
-                endpoints(m),
+                endpoints(plugin),
             );
             (e, None)
         }
@@ -221,13 +235,29 @@ mod tests {
         &M
     }
 
+    /// A plugin with [`manifest`]'s endpoints.
+    struct Probe;
+
+    impl SourcePlugin for Probe {
+        fn manifest(&self) -> &Manifest {
+            manifest()
+        }
+
+        fn run(
+            &self,
+            _: lodestar_sources::SourceCtx,
+        ) -> lodestar_sources::BoxFuture<'_, Result<(), lodestar_sources::PluginError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
     /// The monitor finds a proxy that went away with no request sent, and
     /// sees it come back; it ends when the plugins shut down. A direct
     /// route gets no task.
     #[tokio::test]
     async fn the_monitor_follows_the_route_and_stops_at_shutdown() {
         let factory = EgressFactory::new(Arc::new(lodestar_sources::egress::NoCredentials));
-        let direct = build(&factory, manifest(), &Ok(EgressSetting::Direct))
+        let direct = build(&factory, &Probe, &Ok(EgressSetting::Direct))
             .await
             .egress;
         let (_stop, shutdown) = Shutdown::new();
@@ -240,7 +270,7 @@ mod tests {
             port: addr.port(),
             dns: None,
         });
-        let egress = build(&factory, manifest(), &Ok(setting)).await.egress;
+        let egress = build(&factory, &Probe, &Ok(setting)).await.egress;
         let (stop, shutdown) = Shutdown::new();
         let task = watch(
             "feed",

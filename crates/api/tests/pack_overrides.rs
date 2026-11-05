@@ -37,6 +37,21 @@ fn real_mw2(c: &PackCtx<'_>) -> bool {
     c.matches(PackRule::Mw2)
 }
 
+/// The built-in manifest with MW-2 at version 1 only, the base these
+/// tests start from (the build ships MW-2@2 since RP-1b): the version 1
+/// this build keeps.
+fn at_v1() -> Arc<Manifest> {
+    let b = Manifest::builtin();
+    let mut entries: Vec<RuleEntry> = PackRule::ALL
+        .into_iter()
+        .filter(|r| *r != PackRule::Mw2)
+        .map(|r| b.entry(r).clone())
+        .collect();
+    let v1 = b.entry(PackRule::Mw2).retained(1).expect("kept").clone();
+    entries.push(RuleEntry::new(PackRule::Mw2, true, vec![v1]));
+    Arc::new(Manifest::new(entries).unwrap())
+}
+
 /// The built-in manifest, MW-2 with a version 2 that drops what version 1
 /// hid.
 fn bumped() -> Arc<Manifest> {
@@ -46,7 +61,7 @@ fn bumped() -> Arc<Manifest> {
 /// The built-in manifest, MW-2 with a version 2 matching what version 1
 /// (hide) did, with `action`.
 fn bumped_to(direction: Direction, action: Action) -> Arc<Manifest> {
-    let b = Manifest::builtin();
+    let b = at_v1();
     let mut entries: Vec<RuleEntry> = PackRule::ALL
         .into_iter()
         .filter(|r| *r != PackRule::Mw2)
@@ -69,14 +84,14 @@ fn bumped_to(direction: Direction, action: Action) -> Arc<Manifest> {
     Arc::new(Manifest::new(entries).unwrap())
 }
 
-/// A store an earlier build set up with every rule at version 1 and the
+/// A store an earlier build set up with MW-2 at version 1 and the
 /// malware pack on, served with `manifest`.
 fn fixture(manifest: Arc<Manifest>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
     store.update_settings_text(&[], &[FRESH_KEY]).unwrap();
-    let v1 = upgrade::current_record(&Manifest::builtin()).encode();
+    let v1 = upgrade::current_record(&at_v1()).encode();
     store
         .write_pack_versions([Some(&v1), Some(&v1)], Some(("malware", true)))
         .unwrap();
@@ -157,7 +172,7 @@ async fn logged_in(f: &Fixture) -> String {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": PASSWORD }),
+            json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;
@@ -246,17 +261,19 @@ const ACTIONS: [(&str, Action); 4] = [
 
 #[tokio::test]
 async fn every_weakening_override_needs_the_password_and_no_strengthening_one_does() {
-    let f = fixture(Manifest::builtin());
+    let f = fixture(at_v1());
     let c = logged_in(&f).await;
     for rule in PackRule::ALL {
         let id = rule.id();
+        // FK-2 is at version 2 (RP-1b); every other rule here at 1.
+        let base = f.manifest.entry(rule).current().version;
         for (name, action) in ACTIONS {
             for unless in [None, Some("group:trusted")] {
-                let change = set(id, name, unless, Some(1));
+                let change = set(id, name, unless, Some(base));
                 let p = preview(&f, &c, &change).await;
                 let weak = unless.is_some() || action < rule.action();
                 assert_eq!(p["weakening"], json!(weak), "{id} {name} {unless:?}");
-                assert_eq!(p["pack_base"], json!(1));
+                assert_eq!(p["pack_base"], json!(base));
                 let (status, body) = apply(&f, &c, &change, None).await;
                 if weak {
                     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{id} {name}");
@@ -271,7 +288,7 @@ async fn every_weakening_override_needs_the_password_and_no_strengthening_one_do
                     assert_eq!(status, StatusCode::OK, "{id} {name}: {body}");
                     assert_eq!(body["assessment"]["confirm"], json!(false));
                 }
-                let mut want = format!("1\n1\n{name}");
+                let mut want = format!("1\n{base}\n{name}");
                 if let Some(u) = unless {
                     want.push('\n');
                     want.push_str(u);
@@ -296,7 +313,7 @@ async fn every_weakening_override_needs_the_password_and_no_strengthening_one_do
 
 #[tokio::test]
 async fn a_lighter_action_than_the_override_before_it_weakens_too() {
-    let f = fixture(Manifest::builtin());
+    let f = fixture(at_v1());
     let c = logged_in(&f).await;
     // MW-2 hides; drop is heavier, so no password.
     let (status, _) = apply(&f, &c, &set("MW-2", "drop", None, None), None).await;
@@ -314,7 +331,7 @@ async fn a_lighter_action_than_the_override_before_it_weakens_too() {
 
 #[tokio::test]
 async fn bad_input_is_refused_before_anything_is_stored() {
-    let f = fixture(Manifest::builtin());
+    let f = fixture(at_v1());
     let c = logged_in(&f).await;
     for (change, code) in [
         (set("MW-9", "hide", None, None), "unknown_pack_rule"),
@@ -378,14 +395,14 @@ async fn a_base_change_pauses_weakening_overrides_and_keeps_strengthening_ones()
     assert_eq!(status, StatusCode::OK, "{body}");
     let o = overview_rule(&f, &c, "MW-2").await;
     assert_eq!(
-        o["override"],
+        o["pack_override"],
         json!({"action": "demote", "base": 1, "changed": false, "paused": false,
                "unless": null, "unreadable": false})
     );
     f.api.accept_pack_versions(&[PackRule::Mw2], 10).unwrap();
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(true));
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(o["pack_override"]["paused"], json!(true));
     let e = f.api.engine.current();
     let l = e.pack_overrides.get(PackRule::Mw2).unwrap();
     assert!(l.paused, "the engine pauses it too");
@@ -398,8 +415,8 @@ async fn a_base_change_pauses_weakening_overrides_and_keeps_strengthening_ones()
     let (status, _) = apply(&f, &c, &change, Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK);
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["base"], json!(2));
-    assert_eq!(o["override"]["changed"], json!(false));
+    assert_eq!(o["pack_override"]["base"], json!(2));
+    assert_eq!(o["pack_override"]["changed"], json!(false));
 
     // Strengthening against version 1 (drop over hide): kept, flagged.
     let f = fixture(bumped());
@@ -408,8 +425,8 @@ async fn a_base_change_pauses_weakening_overrides_and_keeps_strengthening_ones()
     assert_eq!(status, StatusCode::OK);
     f.api.accept_pack_versions(&[PackRule::Mw2], 10).unwrap();
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(false));
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(o["pack_override"]["paused"], json!(false));
 }
 
 #[tokio::test]
@@ -442,7 +459,7 @@ async fn changed_since_preview_refuses_what_weakens_by_apply() {
 
 #[tokio::test]
 async fn a_weakening_override_waits_while_the_version_is_in_doubt() {
-    let f = fixture(Manifest::builtin());
+    let f = fixture(at_v1());
     let c = logged_in(&f).await;
     f.api
         .store
@@ -458,8 +475,8 @@ async fn a_weakening_override_waits_while_the_version_is_in_doubt() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["assessment"]["pack_base"], json!(0));
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(false));
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(o["pack_override"]["paused"], json!(false));
 }
 
 #[tokio::test]
@@ -479,8 +496,12 @@ async fn changed_since_preview_covers_removal_too() {
     );
     f.api.accept_pack_versions(&[PackRule::Mw2], 10).unwrap();
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(false), "heavier than v2");
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(
+        o["pack_override"]["paused"],
+        json!(false),
+        "heavier than v2"
+    );
     let err = f.api.apply(&remove, previewed, 11).unwrap_err();
     assert_eq!(err.code(), "changed_since_preview");
     assert!(stored(&f, "MW-2").is_some());
@@ -508,8 +529,8 @@ async fn undo_across_a_base_change_restores_the_override_paused() {
     assert_eq!(stored(&f, "MW-2"), Some(Ok("1\n1\ndemote".into())));
     assert_eq!(stored(&f, "SP-1"), None);
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(true));
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(o["pack_override"]["paused"], json!(true));
     let e = f.api.engine.current();
     assert!(e.pack_overrides.get(PackRule::Mw2).unwrap().paused);
     assert_eq!(
@@ -521,7 +542,7 @@ async fn undo_across_a_base_change_restores_the_override_paused() {
 
 #[tokio::test]
 async fn undo_restores_the_previous_overrides() {
-    let f = fixture(Manifest::builtin());
+    let f = fixture(at_v1());
     let c = logged_in(&f).await;
     let (status, _) = apply(&f, &c, &set("MW-2", "drop", None, None), None).await;
     assert_eq!(status, StatusCode::OK);
@@ -564,7 +585,7 @@ async fn undo_restores_the_previous_overrides() {
 
 #[tokio::test]
 async fn an_unreadable_row_fails_closed_is_listed_and_can_be_removed() {
-    let f = fixture(Manifest::builtin());
+    let f = fixture(at_v1());
     let c = logged_in(&f).await;
     f.api
         .store
@@ -579,8 +600,8 @@ async fn an_unreadable_row_fails_closed_is_listed_and_can_be_removed() {
     assert_eq!(e.unreadable.len(), 1);
     assert_eq!(e.unreadable[0].label(), "packs.override.MW-2");
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["unreadable"], json!(true));
-    assert_eq!(o["override"]["unless"], json!(null));
+    assert_eq!(o["pack_override"]["unreadable"], json!(true));
+    assert_eq!(o["pack_override"]["unless"], json!(null));
     let record = f
         .api
         .store

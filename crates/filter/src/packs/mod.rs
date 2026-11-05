@@ -1,7 +1,8 @@
-//! The built-in rule packs (§20.6): malware, lures, fakes, spam and
-//! scams. Rules read the classifier's junk reasons and structure
-//! fingerprints, so the packs and the junk score never disagree, and each
-//! carries its false-positive guards.
+//! The built-in rule packs (§20.6): malware, lures, fakes, spam, scams and
+//! unauthorised-copy. Rules read the classifier's junk reasons, structure
+//! fingerprints and the release parser's fields, so the packs and the junk
+//! score never disagree, and each carries its false-positive guards. The
+//! unauthorised-copy pack and MW-6 are in [`unauthorised_copy`].
 //!
 //! Each rule has a version in the compiled-in [`manifest`], and the
 //! version this install applied is recorded and resolved by [`upgrade`]
@@ -13,7 +14,8 @@
 //! index of hidden items).
 //!
 //! A CSX-5 *Neutralize term* stops a word counting as evidence in the
-//! rules that read keyword lists (MW-3, LU-2, LU-4, SC-1, SC-2) and in LU-1's
+//! rules that read keyword lists (MW-3, MW-6, LU-2, LU-4, SC-1, SC-2, UC-1,
+//! UC-2) and in LU-1's
 //! lure notes (§20.5.5), as it does in the core and your rules. The
 //! words of a name or file the rules count are read with the neutralized
 //! ones blanked, positions kept ([`Ctx::evidence`], [`Ctx::live_lure`]). The guards that keep a rule from matching
@@ -23,6 +25,7 @@
 
 pub mod manifest;
 pub mod overrides;
+pub mod unauthorised_copy;
 pub mod upgrade;
 
 use std::collections::BTreeSet;
@@ -40,15 +43,19 @@ pub enum Pack {
     Fakes,
     Spam,
     Scams,
+    /// Names that follow the conventions of unauthorised copies (owner
+    /// §2.39): UC-1 to UC-3.
+    UnauthorisedCopy,
 }
 
 impl Pack {
-    pub const ALL: [Pack; 5] = [
+    pub const ALL: [Pack; 6] = [
         Pack::Malware,
         Pack::Lures,
         Pack::Fakes,
         Pack::Spam,
         Pack::Scams,
+        Pack::UnauthorisedCopy,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -58,6 +65,7 @@ impl Pack {
             Pack::Fakes => "fakes",
             Pack::Spam => "spam",
             Pack::Scams => "scams",
+            Pack::UnauthorisedCopy => "unauthorised-copy",
         }
     }
 
@@ -87,16 +95,27 @@ pub enum PackRule {
     /// "Generator / hack" for online-game currencies or accounts, split
     /// out of SC-1 so it has its own switch (plan 2026-11-04 Q16).
     Sc2,
+    /// Cracked software (owner §2.39), in the malware pack so turning
+    /// `unauthorised-copy` off doesn't restore it. Added after RP-0, so
+    /// declared last: [`PackRule::index`] stays as it was for the others.
+    Mw6,
+    /// Camcorder, telesync, telecine and screener rips of films.
+    Uc1,
+    /// Cracked software, as MW-6 reads it.
+    Uc2,
+    /// Scene-style film and TV rips.
+    Uc3,
 }
 
 impl PackRule {
     /// In evaluation order: the strongest action within a pack first.
-    pub const ALL: [PackRule; 17] = [
+    pub const ALL: [PackRule; 21] = [
         PackRule::Mw4,
         PackRule::Mw1,
         PackRule::Mw2,
         PackRule::Mw3,
         PackRule::Mw5,
+        PackRule::Mw6,
         PackRule::Lu1,
         PackRule::Lu4,
         PackRule::Lu2,
@@ -109,6 +128,9 @@ impl PackRule {
         PackRule::Sp1,
         PackRule::Sc1,
         PackRule::Sc2,
+        PackRule::Uc1,
+        PackRule::Uc2,
+        PackRule::Uc3,
     ];
 
     /// How many rules there are.
@@ -138,6 +160,10 @@ impl PackRule {
             PackRule::Sp2 => "SP-2",
             PackRule::Sc1 => "SC-1",
             PackRule::Sc2 => "SC-2",
+            PackRule::Mw6 => "MW-6",
+            PackRule::Uc1 => "UC-1",
+            PackRule::Uc2 => "UC-2",
+            PackRule::Uc3 => "UC-3",
         }
     }
 
@@ -148,11 +174,12 @@ impl PackRule {
     pub fn pack(self) -> Pack {
         use PackRule::*;
         match self {
-            Mw1 | Mw2 | Mw3 | Mw4 | Mw5 => Pack::Malware,
+            Mw1 | Mw2 | Mw3 | Mw4 | Mw5 | Mw6 => Pack::Malware,
             Lu1 | Lu2 | Lu3 | Lu4 => Pack::Lures,
             Fk1 | Fk2 | Fk4 | Fk5 => Pack::Fakes,
             Sp1 | Sp2 => Pack::Spam,
             Sc1 | Sc2 => Pack::Scams,
+            Uc1 | Uc2 | Uc3 => Pack::UnauthorisedCopy,
         }
     }
 
@@ -161,7 +188,9 @@ impl PackRule {
         use PackRule::*;
         match self {
             Mw4 | Fk4 => Action::Drop,
-            Mw1 | Mw2 | Mw3 | Mw5 | Lu1 | Lu4 | Fk1 | Sp2 | Sc1 | Sc2 => Action::Hide,
+            Mw1 | Mw2 | Mw3 | Mw5 | Mw6 | Lu1 | Lu4 | Fk1 | Sp2 | Sc1 | Sc2 | Uc1 | Uc2 | Uc3 => {
+                Action::Hide
+            }
             Lu2 | Lu3 | Fk5 | Sp1 => Action::Demote,
             Fk2 => Action::Flag,
         }
@@ -189,10 +218,7 @@ impl PackSwitches {
 }
 
 fn words(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect()
+    lodestar_classify::crack::words(text)
 }
 
 fn ext(f: &FileInfo) -> Option<Ext> {
@@ -285,13 +311,14 @@ impl<'a> Ctx<'a> {
     /// `neutral` is the keys of the Neutralize entries that apply to the
     /// torrent, as the core and your rules get them.
     pub fn new(item: &'a Item<'a>, facts: &'a Facts<'a>, neutral: &'a [String]) -> Ctx<'a> {
-        let files = item
-            .files
-            .iter()
-            .take(crate::MAX_FILES)
-            .filter(|x| !x.padding)
-            .map(|x| (x, ext(x)))
-            .collect();
+        let mut files = Vec::with_capacity(item.files.len().min(crate::MAX_FILES));
+        files.extend(
+            item.files
+                .iter()
+                .take(crate::MAX_FILES)
+                .filter(|x| !x.padding)
+                .map(|x| (x, ext(x))),
+        );
         Ctx {
             item,
             facts,
@@ -394,7 +421,15 @@ impl<'a> Ctx<'a> {
     fn with_ext<'s>(&'s self, set: &'s [&str]) -> impl Iterator<Item = &'s FileInfo> + 's {
         self.files
             .iter()
-            .filter(move |(_, e)| e.is_some_and(|e| set.contains(&e.as_str())))
+            .filter(move |(_, e)| {
+                e.is_some_and(|e| {
+                    // Extensions are at most 8 bytes: compared in line,
+                    // not by a library call per name in the set.
+                    let e = e.as_bytes();
+                    set.iter()
+                        .any(|s| s.len() == e.len() && s.bytes().zip(e).all(|(a, b)| a == *b))
+                })
+            })
             .map(|(f, _)| *f)
     }
 
@@ -418,7 +453,8 @@ impl<'a> Ctx<'a> {
         let pct = |c: Category| f.class.composition.pct_bytes(c);
         match rule {
             Mw1 => junk(JunkReason::DoubleExtension),
-            Mw2 => junk(JunkReason::Executable) && media(t) && !software && !disc,
+            // MW-2@2: MW-2@1 unless it's a music-production pack.
+            Mw2 => mw2_v1(self) && !self.production_pack(),
             Mw3 => {
                 matches!(t, ContentType::Movie | ContentType::Tv | ContentType::Video)
                     && !disc
@@ -451,15 +487,8 @@ impl<'a> Ctx<'a> {
                         || UNLOCK_PASSWORD.iter().all(|u| w.iter().any(|w| w == u)))
             }),
             Fk1 => junk(JunkReason::NameMismatch) && !disc && !scene,
-            // Its words are a guard only: they read as they are.
-            Fk2 => {
-                junk(JunkReason::TinyVideo)
-                    && !structure.contains(Structure::SAMPLE)
-                    && !self
-                        .name_words()
-                        .iter()
-                        .any(|w| w == "trailer" || w == "sample")
-            }
+            // FK-2@2: FK-2@1 unless it's a short-episode pack.
+            Fk2 => fk2_v1(self) && !self.episode_pack(),
             Fk4 => junk(JunkReason::Empty) || junk(JunkReason::PaddingOnly),
             Fk5 => {
                 junk(JunkReason::ArchiveForMedia)
@@ -470,6 +499,9 @@ impl<'a> Ctx<'a> {
             Sp2 => stuffed(self.item.name) && !matches!(t, ContentType::Music),
             Sc1 => self.scam(|x| !GAMES.contains(&x)),
             Sc2 => self.scam(|x| GAMES.contains(&x)),
+            Mw6 | Uc2 => self.cracked_software(),
+            Uc1 => self.uc1(),
+            Uc3 => self.uc3(),
         }
     }
 
@@ -485,6 +517,234 @@ impl<'a> Ctx<'a> {
                 .iter()
                 .any(|x| x == "trainer" || x == "mod" || x == "offline")
     }
+}
+
+/// MW-2@1, kept while an install may still have it applied (RP-0): an
+/// executable in a movie, TV, music, video or adult torrent, except
+/// software, games and disc images.
+pub(crate) fn mw2_v1(ctx: &Ctx<'_>) -> bool {
+    let class = ctx.facts.class;
+    let t = class.content_type;
+    let disc =
+        class.structure.contains(Structure::BLURAY) || class.structure.contains(Structure::DVD);
+    class.junk.reasons.contains(&JunkReason::Executable)
+        && media(t)
+        && !matches!(t, ContentType::Software | ContentType::Game)
+        && !disc
+}
+
+/// FK-2@1, kept while an install may still have it applied (RP-0): a tiny
+/// video claiming HD, except samples and trailers. Its words are a guard
+/// only: they read as they are.
+pub(crate) fn fk2_v1(ctx: &Ctx<'_>) -> bool {
+    let class = ctx.facts.class;
+    class.junk.reasons.contains(&JunkReason::TinyVideo)
+        && !class.structure.contains(Structure::SAMPLE)
+        && !ctx
+            .name_words()
+            .iter()
+            .any(|w| w == "trailer" || w == "sample")
+}
+
+/// The installers MW-2@2's music-production guard allows: a plain
+/// Windows installer. A script, shortcut, screensaver or archive of code
+/// (`.bat`, `.lnk`, `.scr`, `.jar`, …) is never a plug-in installer.
+const INSTALLERS: &[&str] = &["exe", "msi"];
+
+/// At most this many installers in a music-production pack (an installer
+/// and, say, its 32-bit twin or an uninstaller).
+const MAX_INSTALLERS: usize = 2;
+
+/// Preset, instrument and sample-library formats of music software:
+/// plug-in presets and banks (`.fxp`, `.fxb`, `.vstpreset`, `.aupreset`,
+/// `.h2p`, `.nmsv`), Kontakt and other sampler instruments and their
+/// sample containers (`.nki`, `.nkm`, `.nkb`, `.nkc`, `.nkx`, `.nkr`,
+/// `.ncw`, `.exs`, `.sfz`, `.sf2`), Ableton devices and racks (`.adg`,
+/// `.adv`) and REX loops (`.rx2`). None of them runs.
+const PRESETS: &[&str] = &[
+    "fxp",
+    "fxb",
+    "vstpreset",
+    "aupreset",
+    "h2p",
+    "nmsv",
+    "nki",
+    "nkm",
+    "nkb",
+    "nkc",
+    "nkx",
+    "nkr",
+    "ncw",
+    "exs",
+    "sfz",
+    "sf2",
+    "adg",
+    "adv",
+    "rx2",
+];
+
+/// Folder words of a sample library: audio inside one of them is a
+/// sample, not an album track.
+const SAMPLE_DIRS: &[&str] = &[
+    "samples",
+    "presets",
+    "patches",
+    "multisamples",
+    "oneshots",
+    "loops",
+    "kicks",
+    "snares",
+    "hats",
+    "hihats",
+    "claps",
+    "cymbals",
+    "toms",
+    "percussion",
+];
+
+/// At least this many audio files in a music-production pack, and this
+/// many presets or samples in sample folders for its layout.
+const MIN_SOUNDS: usize = 2;
+
+/// FK-2@2's short-episode pack: at least this many episodes.
+const MIN_EPISODES: usize = 3;
+
+/// No episode of a short-episode pack is smaller than this. HD video at
+/// a typical web bitrate (about 2-6 Mbit/s) runs to 16 MiB in well under
+/// a minute; the smallest episode of the precision corpus is 18 MiB, and
+/// a fake is usually far smaller.
+const MIN_EPISODE_BYTES: u64 = 16 << 20;
+
+impl Ctx<'_> {
+    /// Whether the torrent has more files than the rules read
+    /// ([`crate::MAX_FILES`]). The classifier reads them all, so a guard
+    /// that passes on the files it sees fails closed here: an executable
+    /// or a stray video past the cap can't hide behind it.
+    fn truncated(&self) -> bool {
+        self.item.files.len() > crate::MAX_FILES
+    }
+
+    /// MW-2@2's guard (§20.6 "music production packs (VST/samples)"): a
+    /// music torrent made mostly of audio and presets, with at most
+    /// [`MAX_INSTALLERS`] plain installers beside them and a
+    /// plug-in or sample-library layout. All of:
+    /// - **music**, as the classifier reads it;
+    /// - **every executable is an `.exe` or `.msi`**, and there are at most
+    ///   [`MAX_INSTALLERS`]: any other program the pack ([`EXECUTABLE`]) or
+    ///   the classifier ([`lodestar_classify::ext::is_dangerous`], which adds
+    ///   `.com`) knows keeps it held;
+    /// - **sounds**: at least [`MIN_SOUNDS`] audio files, and the audio and
+    ///   [`PRESETS`] files together more than half the files and at least
+    ///   twice the installers;
+    /// - **a production layout**: at least [`MIN_SOUNDS`] [`PRESETS`]
+    ///   files, or at least [`MIN_SOUNDS`] audio files inside a
+    ///   [`SAMPLE_DIRS`] folder.
+    ///
+    /// Plug-in binaries (`.vst3`, `.dll`, …) never count as sounds or as
+    /// the layout, so code beside one sample is still held. Folder and
+    /// file names are read as they are, as every guard is. A torrent
+    /// with more files than the rules read never passes ([`Ctx::truncated`]).
+    fn production_pack(&self) -> bool {
+        if self.facts.class.content_type != ContentType::Music || self.truncated() {
+            return false;
+        }
+        let (mut installers, mut sounds, mut audio, mut presets, mut sampled) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
+        for (f, e) in &self.files {
+            let e = e.as_ref().map_or("", |x| x.as_str());
+            // What the pack reads as a program, or what the classifier
+            // does (`.com`), so the guard never passes one MW-2@1 holds for.
+            if EXECUTABLE.contains(&e) || lodestar_classify::ext::is_dangerous(e) {
+                if !INSTALLERS.contains(&e) {
+                    return false;
+                }
+                installers += 1;
+            } else if PRESETS.contains(&e) {
+                presets += 1;
+                sounds += 1;
+            } else if lodestar_classify::ext::category_of(e) == Category::Audio {
+                sounds += 1;
+                audio += 1;
+                let dirs = &f.path[..f.path.len().saturating_sub(1)];
+                if dirs
+                    .iter()
+                    .any(|d| words(d).iter().any(|w| SAMPLE_DIRS.contains(&w.as_str())))
+                {
+                    sampled += 1;
+                }
+            }
+        }
+        (1..=MAX_INSTALLERS).contains(&installers)
+            && audio >= MIN_SOUNDS
+            && sounds * 2 > self.files.len()
+            && sounds >= 2 * installers
+            && (presets >= MIN_SOUNDS || sampled >= MIN_SOUNDS)
+    }
+
+    /// FK-2@2's guard (§20.6 "short-episode pack"): every video is an
+    /// episode of one series, and they look like a season's worth. All of:
+    /// - at least [`MIN_EPISODES`] video files;
+    /// - each named `<series> SxxEyy …`, the same series words before the
+    ///   episode marker in every one, the torrent's name starting with
+    ///   them, and no episode twice;
+    /// - each at least [`MIN_EPISODE_BYTES`], and the largest at most twice
+    ///   the smallest.
+    ///
+    /// One tiny HD video is still flagged, and so is a set of tiny files
+    /// of different series, sizes or no episode numbers, and a torrent
+    /// with more files than the rules read ([`Ctx::truncated`]).
+    fn episode_pack(&self) -> bool {
+        if self.truncated() {
+            return false;
+        }
+        let mut series: Option<Vec<String>> = None;
+        let mut seen: Vec<(u16, u16)> = Vec::new();
+        let (mut small, mut large) = (u64::MAX, 0u64);
+        for (f, e) in &self.files {
+            let e = e.as_ref().map_or("", |x| x.as_str());
+            if lodestar_classify::ext::category_of(e) != Category::Video {
+                continue;
+            }
+            let w = words(f.name());
+            let Some((at, ep)) = w
+                .iter()
+                .enumerate()
+                .find_map(|(i, x)| episode(x).map(|ep| (i, ep)))
+            else {
+                return false;
+            };
+            if at == 0 || seen.contains(&ep) {
+                return false;
+            }
+            match &series {
+                Some(s) if s[..] != w[..at] => return false,
+                Some(_) => {}
+                None => series = Some(w[..at].to_vec()),
+            }
+            seen.push(ep);
+            small = small.min(f.size);
+            large = large.max(f.size);
+        }
+        let named = series
+            .as_ref()
+            .is_some_and(|s| self.name_words().starts_with(s));
+        named
+            && seen.len() >= MIN_EPISODES
+            && small >= MIN_EPISODE_BYTES
+            && large <= small.saturating_mul(2)
+    }
+}
+
+/// A word `sNNeNN` (one to three digits each), as season and episode.
+fn episode(w: &str) -> Option<(u16, u16)> {
+    let rest = w.strip_prefix('s')?;
+    let (s, e) = rest.split_once('e')?;
+    let num = |x: &str| {
+        (!x.is_empty() && x.len() <= 3 && x.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| x.parse().ok())
+            .flatten()
+    };
+    Some((num(s)?, num(e)?))
 }
 
 /// `www.site.com - Title`, `[site.org] Title` or `Title [site.net]`.
@@ -659,6 +919,213 @@ mod tests {
         assert_eq!(PackRule::Sc2.action(), PackRule::Sc1.action());
     }
 
+    const M: u64 = 1 << 20;
+
+    /// MW-2@2's music-production guard at each of its thresholds: what
+    /// passes, and the nearest thing that MW-2 still holds.
+    #[test]
+    fn mw2_music_production_guard() {
+        let mw2 = |paths: &[(&str, u64)]| hit("Example Pack WAV", paths).contains(&"MW-2");
+        // Two samples in sample folders beside one installer: a pack.
+        let pack = [
+            ("Kicks/Kick 01.wav", 30 * M),
+            ("Snares/Snare 01.wav", 30 * M),
+            ("setup.exe", 2 * M),
+        ];
+        assert!(!mw2(&pack));
+        // One sample beside an installer, even in a sample folder.
+        assert!(mw2(&[("Samples/Pad.wav", 60 * M), ("setup.exe", 2 * M)]));
+        // An album: audio outside any sample folder.
+        assert!(mw2(&[
+            ("01 - Song.wav", 30 * M),
+            ("02 - Song.wav", 30 * M),
+            ("setup.exe", 2 * M),
+        ]));
+        // One song and one preset beside an installer is held: the
+        // layout takes two presets, and two audio files are needed anyway.
+        assert!(mw2(&[
+            ("01 - Song.wav", 60 * M),
+            ("Bass.fxp", 40_000),
+            ("setup.exe", 2 * M),
+        ]));
+        assert!(
+            mw2(&[
+                ("01 - Song.wav", 60 * M),
+                ("Bass.fxp", 40_000),
+                ("Lead.fxp", 40_000),
+                ("Pad.fxp", 40_000),
+                ("setup.exe", 2 * M),
+            ]),
+            "presets don't stand in for audio"
+        );
+        assert!(!mw2(&[
+            ("01 - Song.wav", 30 * M),
+            ("02 - Song.wav", 30 * M),
+            ("Bass.fxp", 40_000),
+            ("Lead.fxp", 40_000),
+            ("setup.exe", 2 * M),
+        ]));
+        // Anything but a plain installer is held.
+        for exe in [
+            "install.bat",
+            "crack.com",
+            "run.cmd",
+            "open.vbs",
+            "x.lnk",
+            "a.jar",
+            "x.scr",
+        ] {
+            let mut p = pack.to_vec();
+            p[2].0 = exe;
+            assert!(mw2(&p), "{exe}");
+        }
+        assert!(!mw2(&[
+            ("Kicks/Kick 01.wav", 30 * M),
+            ("Snares/Snare 01.wav", 30 * M),
+            ("setup.msi", 2 * M),
+        ]));
+        // Two installers need four sounds; a third is never a pack.
+        let two = [
+            ("Kicks/Kick 01.wav", 30 * M),
+            ("Kicks/Kick 02.wav", 30 * M),
+            ("Snares/Snare 01.wav", 30 * M),
+            ("setup.exe", 2 * M),
+            ("setup64.exe", 2 * M),
+        ];
+        assert!(mw2(&two), "three sounds, two installers");
+        let mut four = two.to_vec();
+        four.push(("Snares/Snare 02.wav", 30 * M));
+        assert!(!mw2(&four));
+        four.push(("activate.exe", 2 * M));
+        assert!(mw2(&four), "three installers");
+        // Sounds must be more than half the files: plug-in code and
+        // anything else count against them.
+        assert!(mw2(&[
+            ("Kicks/Kick 01.wav", 60 * M),
+            ("Snares/Snare 01.wav", 60 * M),
+            ("setup.exe", 2 * M),
+            ("plugin.vst3", 2 * M),
+            ("plugin.dll", 2 * M),
+        ]));
+        // Folder words are whole words.
+        assert!(mw2(&[
+            ("Kickstarter/Kick 01.wav", 30 * M),
+            ("Kickstarter/Snare 01.wav", 30 * M),
+            ("setup.exe", 2 * M),
+        ]));
+        // Past the files the rules read, a script could hide: fail closed.
+        let mut many: Vec<(String, u64)> = (0..crate::MAX_FILES)
+            .map(|i| (format!("Samples/Hit {i:04}.wav"), M))
+            .collect();
+        many.push(("setup.exe".into(), M));
+        let few: Vec<(&str, u64)> = many.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        assert!(!mw2(&few[few.len() - 3..]));
+        many.push(("run.bat".into(), 1_000));
+        let all: Vec<(&str, u64)> = many.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        assert!(mw2(&all), "a script past the cap");
+        // Video lures are untouched: the guard reads music only.
+        assert!(
+            hit(
+                "Example.Movie.2019.1080p.WEB",
+                &[
+                    ("Example.Movie.2019.1080p.WEB.mkv", 4 << 30),
+                    ("Presets/Bass.fxp", 40_000),
+                    ("Samples/a.wav", M),
+                    ("Samples/b.wav", M),
+                    ("setup.exe", 2 * M),
+                ],
+            )
+            .contains(&"MW-2")
+        );
+    }
+
+    /// FK-2@2's short-episode guard at each of its thresholds.
+    #[test]
+    fn fk2_short_episode_guard() {
+        let fk2 =
+            |paths: &[(&str, u64)]| hit("Example Shorts S01 1080p WEB", paths).contains(&"FK-2");
+        let ep = |n: u32| format!("Example Shorts S01E{n:02} 1080p WEB.mkv");
+        let (e1, e2, e3) = (ep(1), ep(2), ep(3));
+        assert!(!fk2(&[(&e1, 30 * M), (&e2, 30 * M), (&e3, 30 * M)]));
+        assert!(fk2(&[(&e1, 30 * M)]), "one tiny HD file");
+        assert!(fk2(&[(&e1, 30 * M), (&e2, 30 * M)]), "two episodes");
+        // The floor and the spread.
+        assert!(!fk2(&[(&e1, 16 * M), (&e2, 16 * M), (&e3, 16 * M)]));
+        assert!(fk2(&[(&e1, 16 * M - 1), (&e2, 16 * M), (&e3, 16 * M)]));
+        assert!(!fk2(&[(&e1, 17 * M), (&e2, 34 * M), (&e3, 20 * M)]));
+        assert!(fk2(&[(&e1, 17 * M), (&e2, 34 * M + 1), (&e3, 20 * M)]));
+        // The torrent's name must start with the episodes' series.
+        assert!(
+            hit(
+                "Big Movie 2024 2160p",
+                &[(&e1, 30 * M), (&e2, 30 * M), (&e3, 30 * M)]
+            )
+            .contains(&"FK-2")
+        );
+        assert!(
+            !hit(
+                "Example.Shorts.S01.1080p",
+                &[(&e1, 30 * M), (&e2, 30 * M), (&e3, 30 * M)]
+            )
+            .contains(&"FK-2")
+        );
+        // One series, no repeats, every video an episode.
+        assert!(fk2(&[
+            (&e1, 30 * M),
+            (&e2, 30 * M),
+            ("Other Show S01E03 1080p WEB.mkv", 30 * M),
+        ]));
+        assert!(fk2(&[(&e1, 30 * M), (&e1, 30 * M), (&e2, 30 * M)]));
+        assert!(fk2(&[
+            (&e1, 30 * M),
+            (&e2, 30 * M),
+            (&e3, 30 * M),
+            ("Example Shorts 1080p WEB.mkv", 30 * M),
+        ]));
+        assert!(
+            fk2(&[
+                ("S01E01.mkv", 30 * M),
+                ("S01E02.mkv", 30 * M),
+                ("S01E03.mkv", 30 * M),
+            ]),
+            "no series words"
+        );
+        // Other files don't count, and seasons may differ.
+        assert!(!fk2(&[
+            (&e1, 30 * M),
+            (&e2, 30 * M),
+            ("Example Shorts S02E01 1080p WEB.mkv", 30 * M),
+            ("cover.jpg", M),
+        ]));
+        let many_ep = |n: u32| {
+            format!(
+                "Example Shorts S{:02}E{:02} 1080p WEB.mkv",
+                n / 100,
+                n % 100
+            )
+        };
+        let mut many: Vec<String> = (0..crate::MAX_FILES as u32).map(many_ep).collect();
+        many.push("Other Show S01E01 1080p WEB.mkv".into());
+        let all: Vec<(&str, u64)> = many.iter().map(|p| (p.as_str(), 30 * M)).collect();
+        assert!(!fk2(&all[..5]));
+        assert!(!fk2(&all[..crate::MAX_FILES]), "a full pack at the cap");
+        assert!(fk2(&all), "a stray video past the cap");
+        assert_eq!(episode("s01e02"), Some((1, 2)));
+        assert_eq!(episode("s1e100"), Some((1, 100)));
+        for w in [
+            "s01",
+            "e01",
+            "s01e",
+            "se01",
+            "s01e01e02",
+            "s0001e01",
+            "sxe1",
+            "s01x02",
+        ] {
+            assert_eq!(episode(w), None, "{w}");
+        }
+    }
+
     #[test]
     fn ids_and_packs() {
         for r in PackRule::ALL {
@@ -742,14 +1209,23 @@ mod tests {
         assert!(
             !hit("Fortnite Trainer Offline Mod", &[("trainer.exe", 1 << 20)]).contains(&"SC-1")
         );
-        // A plain release passes every pack.
-        assert!(
+        // A plain scene release passes every pack but UC-3, which hides
+        // scene-style film rips (owner §2.39).
+        assert_eq!(
             hit(
                 "The.Matrix.1999.1080p.BluRay.x264-GRP",
                 &[
                     ("The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", 8 << 30),
                     ("grp.nfo", 4000)
                 ]
+            ),
+            ["UC-3"]
+        );
+        // Without a release group it isn't scene-style.
+        assert!(
+            hit(
+                "The Matrix 1999 1080p BluRay",
+                &[("The Matrix 1999 1080p BluRay.mkv", 8 << 30)]
             )
             .is_empty()
         );
@@ -830,6 +1306,36 @@ mod tests {
             ),
             ("SC-1", "Free Robux", vec![("robux.exe", 1 << 20)], "robux"),
             ("SC-1", "Free Robux", vec![("robux.exe", 1 << 20)], "FREE"),
+            (
+                "MW-6",
+                "Example Tool v1.0 Keygen",
+                vec![("setup.exe", 80 << 20)],
+                "keygen",
+            ),
+            (
+                "UC-2",
+                "Example Tool v1.0 Keygen",
+                vec![("setup.exe", 80 << 20)],
+                "keygen",
+            ),
+            (
+                "MW-6",
+                "Example Disk Tool v4.1 K'ed",
+                vec![("setup.exe", 80 << 20)],
+                "ed",
+            ),
+            (
+                "UC-1",
+                "Example.Movie.2024.HDCAM.x264-GRP",
+                vec![("Example.Movie.2024.mkv", 1 << 30)],
+                "hdcam",
+            ),
+            (
+                "UC-1",
+                "Example Movie (2024) [TS] 720p",
+                vec![("Example.Movie.2024.mkv", 1 << 30)],
+                "ts",
+            ),
         ];
         for (rule, name, paths, word) in cases {
             assert!(hit(name, paths).contains(rule), "{rule} {name} {paths:?}");
@@ -895,6 +1401,27 @@ mod tests {
                 "Free Robux Spotify",
                 vec![("a.exe", 1 << 20)],
                 &["robux"],
+            ),
+            // A neutralized crack word in the program's title takes
+            // nothing from the crack word after it.
+            (
+                "MW-6",
+                "Crack Attack v1.2 Keygen",
+                vec![("setup.exe", 50 << 20)],
+                &["crack"],
+            ),
+            (
+                "UC-2",
+                "Crack Attack v1.2 Keygen",
+                vec![("setup.exe", 50 << 20)],
+                &["crack"],
+            ),
+            // Another marker still counts.
+            (
+                "UC-1",
+                "Example.Movie.2024.HDCAM.TS.x264-GRP",
+                vec![("Example.Movie.2024.mkv", 1 << 30)],
+                &["hdcam"],
             ),
         ];
         for (rule, name, paths, words) in cases {
@@ -1176,6 +1703,21 @@ mod tests {
                     .filter(|r| masked.contains(r) || ["SP-1", "SP-2"].contains(r))
                     .collect();
                 prop_assert_eq!(&neutralized, &both);
+            }
+
+            /// `episode` never panics on any word, and reads back every
+            /// `sNNeNN` of one to three digits each, leading zeros or not.
+            #[test]
+            fn episode_markers_round_trip(
+                any_word in "\\PC{0,24}",
+                s in 0u16..1000,
+                e in 0u16..1000,
+                sw in 1usize..=3,
+                ew in 1usize..=3,
+            ) {
+                let _ = super::super::episode(&any_word);
+                let w = format!("s{s:0sw$}e{e:0ew$}");
+                prop_assert_eq!(super::super::episode(&w), Some((s, e)));
             }
         }
     }

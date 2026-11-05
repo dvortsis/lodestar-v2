@@ -366,6 +366,16 @@
 				{#if summary}{@render summary(assessment)}{:else}
 					<ImpactSummary preview={assessment.preview} />
 				{/if}
+				{#if assessment.pack_acceptance?.length}
+					{@const rows = assessment?.pack_acceptance ?? []}
+					{#await import('../screens/packs/PackImpact.svelte') then { default: PackImpact }}
+						<PackImpact {rows} />
+					{:catch}
+						<p class="text-muted-text" data-testid="pack-impact-failed">
+							{m.filters_packs_impact_failed()}
+						</p>
+					{/await}
+				{/if}
 				{#if shadowing && change && canShadow(change)}
 					<p class="text-small text-muted-text" data-testid="change-shadow-note">
 						{m.filters_flows_shadow_note({

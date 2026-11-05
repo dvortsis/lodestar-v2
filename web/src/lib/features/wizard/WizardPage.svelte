@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The first-run wizard's shell (§10.10.10): stepped progress, one primary action per step, Back
-	// and Skip on the optional ones. Steps 1 and 2 are done in /setup; the rest load on demand, one
-	// chunk each, and share this frame. Progress sits in sessionStorage so a reload resumes, and
+	// and Skip on the optional ones. The first steps (`SETUP_STEPS`) are done in /setup; the rest
+	// load on demand, one chunk each, and share this frame. Progress sits in sessionStorage so a reload resumes, and
 	// nothing else in the app waits on it.
 	import { tick, type Component } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -13,6 +13,7 @@
 	import IconHere from '~icons/ph/arrow-circle-right';
 	import IconLater from '~icons/ph/circle';
 	import {
+		SETUP_STEPS,
 		STEPS,
 		advance,
 		back,
@@ -51,6 +52,12 @@
 		blocklists: () => m.blocklists_wizard_title(),
 		updates: () => m.wizard_step_updates(),
 		done: () => m.wizard_step_done()
+	};
+
+	const pastTitles: Record<(typeof SETUP_STEPS)[number], () => string> = {
+		legal: () => m.wizard_step_legal(),
+		token: () => m.auth_setup_step_token(),
+		password: () => m.auth_setup_step_password()
 	};
 
 	let progress = $state<Progress>(readProgress());
@@ -139,7 +146,7 @@
 
 	<nav aria-label={m.wizard_progress()}>
 		<ol class="flex flex-wrap gap-4 text-small" data-testid="wizard-progress">
-			{#each [m.auth_setup_step_token(), m.auth_setup_step_password()] as past (past)}
+			{#each SETUP_STEPS.map((id) => pastTitles[id]()) as past (past)}
 				<li class="flex items-center gap-1 text-muted-text">
 					<IconCheck aria-hidden="true" class="text-success" />
 					<span>{past}</span>
@@ -158,7 +165,7 @@
 					data-state={s}
 				>
 					<Icon aria-hidden="true" />
-					<span>{formatCount(i + 3)}. {titles[step.id]()}</span>
+					<span>{formatCount(i + SETUP_STEPS.length + 1)}. {titles[step.id]()}</span>
 					<span class="text-muted-text">· {statusText[s]()}</span>
 				</li>
 			{/each}

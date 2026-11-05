@@ -120,9 +120,46 @@ To update by hand:
    **Result:** The container starts, and the old data is intact.
 
 ## 3.6 Know what protects the content filters and API keys
-<!-- index: API keys; content filters; child-safety core -->
+<!-- index: API keys; content filters; child-safety core; rule packs; unauthorised-copy pack; pack version; pending pack version; in doubt -->
 
 The child-safety core of the content filters is always on. A change that would weaken protection asks for your password and shows a plain-language warning first.
+
+Rule packs sit on top of the core. A rule pack is a set of rules that hides one kind of unwanted torrent. There are six: malware, lures, fakes, spam, scams and unauthorised copies. On a new install they are all on, and we recommend you leave them on.
+
+The **unauthorised-copy** pack hides torrents whose names follow the conventions of unauthorised copies:
+
+- camcorder, telesync, telecine and screener copies of films (names with `HDCAM`, `HDTS`, `DVDSCR` and similar);
+- film and TV releases named the way release groups name their copies, such as `Title.2019.1080p.BluRay.x264-GROUP`;
+- cracked software, such as a program sold with a `Keygen` or a `Crack`. A plain `Patch` or `Update` is never hidden.
+
+It reads only the name. It can't know who holds the rights to anything, so it may hide something you are allowed to have.
+
+<details>
+<summary>What it lets through, and how to show something it hides</summary>
+
+A built-in list of public-domain and Creative Commons films, such as *Big Buck Bunny* or *Night of the Living Dead* (1968), passes its scene-style rule. So do items from the Internet Archive that carry the Archive's own file lists. To show anything else it hides, add the search to **Always allow** in **Settings → Filters & Safety**.
+
+</details>
+
+On a new install, the malware pack also hides cracked software, because cracks often carry malware. Turning the unauthorised-copy pack off then doesn't show cracked software again. If you also turn off the malware pack's cracked-software rule (MW-6), cracked software shows again but still ranks lower in search, as other junk does.
+
+If you installed an earlier version, the unauthorised-copy pack starts off. Lodestar offers it in the setup wizard and in **Settings → Filters & Safety**, where turning it on shows what it would hide first. We recommend you turn it on. The malware pack's new cracked-software rule waits for review on an upgraded install, so it hides nothing until a later version lets you accept it.
+
+### Pack versions and your password
+
+Each rule pack has a **version**. A new Lodestar release can bring a newer version of a pack's rules. It doesn't change what you see straight away. It waits as a **newer version waiting**, runs quietly in the background, and changes nothing until you accept it.
+
+To review one, open **Settings → Filters & Safety** and find the pack under **Pack versions and overrides**. **What changed** lists the changes in plain words. **Accept** shows what the new version would hold that the old one doesn't, and the other way round, before anything happens.
+
+**Why you're asked for your password.** If the new version would let anything through that the old one held, accepting it weakens your filters. Lodestar then shows a warning and asks for your admin password, as for any change that weakens protection. A new version that only holds more needs no password. Lodestar decides which it is, not the screen.
+
+**What "in doubt" means.** Sometimes Lodestar can't confirm a change is safe. It may have no record of what the new version does. It may not have seen enough of your torrents while the version ran. The screen then says "We can't confirm this change is safe, so it needs your password". That is a reason to read the warning, not a fault.
+
+Accept only if the warning matches what you want.
+
+**Accepting can't be undone with Undo.** If the warning lists holds left for review, they stay held. Nothing is released.
+
+**Your own overrides.** You can change what a rule does, or exempt searches from it, with **Edit override**. When a rule's version changes after you set an override, the screen says so. If your override would now make the rule looser, it is **paused**. The rule applies as built until you choose **Confirm again** and give your password.
 
 API keys, which let other apps such as Torznab clients talk to Lodestar, are **(planned)**. When they arrive, create one key per app and regenerate any key that leaks. Never use the admin password as a key.
 

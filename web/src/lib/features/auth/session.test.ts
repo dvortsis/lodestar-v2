@@ -88,6 +88,18 @@ describe('installAuthHandlers', () => {
 		expect(currentSession()).toBe('signed_out');
 	});
 
+	it('sends a pending Legal Notice to the sign-in page, keeping the session', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				json(409, { error: { code: 'notice_required', message: 'Read it first.' } })
+			)
+		);
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(nav.toLoginFrom).toHaveBeenCalledWith('/search?q=ubuntu&sort=size');
+		expect(currentSession()).toBe('signed_in');
+	});
+
 	it('sends setup_required to /setup instead', async () => {
 		vi.stubGlobal(
 			'fetch',

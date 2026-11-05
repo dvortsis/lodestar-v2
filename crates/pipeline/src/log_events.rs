@@ -310,9 +310,12 @@ pub fn state(s: lodestar_store::SourceState) -> &'static str {
 /// A filter loader's note (`rule U-12 skipped: it no longer parses`,
 /// `rule U-3 fails closed: unreadable`) as
 /// what was skipped, its id and why, so the note's text (which a later
-/// loader could make name a term) is never logged.
+/// loader could make name a term) is never logged. A pack override's id
+/// (`MW-1`) isn't a number, so it logs as 0; the Insights exception
+/// `filter_rows_unreadable` names the row.
 pub fn filter_note(note: &str) -> (&'static str, u64, &'static str) {
-    const WHAT: [(&str, &str); 5] = [
+    const WHAT: [(&str, &str); 6] = [
+        ("pack override ", "pack_override"),
         ("classification rule ", "class_rule"),
         ("rule U-", "rule"),
         ("override O-", "override"),
@@ -374,6 +377,10 @@ mod tests {
             (
                 "classification rule 2 fails closed: it no longer parses",
                 ("class_rule", 2, "fails_closed"),
+            ),
+            (
+                "pack override MW-1 fails closed: unreadable",
+                ("pack_override", 0, "fails_closed"),
             ),
             ("rule about sometermhere", ("other", 0, "other")),
         ] {

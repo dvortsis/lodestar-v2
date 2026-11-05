@@ -212,6 +212,7 @@ placement:
   - S-appearance
   - S-keys
   - M-auth
+  - X-settings-trim
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -256,12 +257,18 @@ placement:
   match:
   - F-*
   - X-ci-health
+  - X-flake-update-log
   - X-log-url-redact
   - X-log-url-redact-2
+  - X-log-url-redact-3
+  - X-log-url-redact-4
+  - X-log-url-redact-5
   - X-flake-boot-shell
+  - X-flake-subs-stall
   - X-followups-1105
   - X-source-adult-2
   - X-flakes-1105
+  - X-fuzz-cache-1105
   - D-sources-guide
   - L4-followups
   - S-settings-reconcile
@@ -394,6 +401,7 @@ pinned:
   X-dashboard-adapts: ws-small
   X-dashboard-idle-slots: ws-small
   X-filter-budget-noise: ws-small
+  X-filter-perf-1105: ws-small
   F-filter-standin-undo: ws-small
   X-overflow-links: ws-small
   X-polish-carry-1102: ws-small

@@ -30,6 +30,10 @@ pub enum JunkReason {
     /// A source's claimed file list contradicts the verified one (§18.5):
     /// see [`claim_mismatch`].
     ClaimMismatch,
+    /// Cracked software (owner §2.39): a software release the parser
+    /// flags as cracked, named with a crack-specific word after its title
+    /// ([`cracked`]). `patch` alone never counts.
+    Cracked,
 }
 
 impl JunkReason {
@@ -46,6 +50,7 @@ impl JunkReason {
             JunkReason::ArchiveForMedia => 30,
             JunkReason::TinyVideo => 40,
             JunkReason::ClaimMismatch => 30,
+            JunkReason::Cracked => 40,
         }
     }
 
@@ -62,6 +67,7 @@ impl JunkReason {
             JunkReason::ArchiveForMedia => "archive-for-media",
             JunkReason::TinyVideo => "tiny-video",
             JunkReason::ClaimMismatch => "claim-mismatch",
+            JunkReason::Cracked => "cracked",
         }
     }
 
@@ -78,6 +84,7 @@ impl JunkReason {
             ArchiveForMedia,
             TinyVideo,
             ClaimMismatch,
+            Cracked,
         ]
         .into_iter()
         .find(|r| r.as_str() == key)
@@ -96,6 +103,7 @@ impl JunkReason {
             JunkReason::ArchiveForMedia => "The name promises media, but the files are an archive",
             JunkReason::TinyVideo => "The video files are too small for the quality claimed",
             JunkReason::ClaimMismatch => "The files don't match what the source listed",
+            JunkReason::Cracked => "Cracked software: a crack, keygen or activator",
         }
     }
 }
@@ -202,6 +210,85 @@ impl Junk {
             *self = finish(std::mem::take(&mut self.reasons));
         }
     }
+}
+
+/// The words that name a crack (owner §2.39, MW-6, UC-2): one word, or
+/// two in a row. The parser also rates `patch` a weak cracked token; it's
+/// left out, so a lawful patch (`Firefox.120.0.1.Patch`) never counts.
+/// `k'ed` is read as `k` then `ed`, the way [`words`] splits it, and only
+/// counts where the name spells it with an apostrophe.
+pub const CRACK_WORDS: &[&[&str]] = &[
+    &["crack"],
+    &["cracked"],
+    &["keygen"],
+    &["keymaker"],
+    &["activator"],
+    &["pre", "activated"],
+    &["k", "ed"],
+];
+
+/// A name's words as the crack check reads them: runs of letters and
+/// digits, lowercased. Packs blank neutralized words in the same list,
+/// positions kept, and pass it to [`crack_words_in`].
+pub fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        // An ASCII word lowercases the same either way; the ASCII form
+        // skips the per-character Unicode lookup (the filter's packs read
+        // every torrent's name this way).
+        .map(|w| {
+            if w.is_ascii() {
+                w.to_ascii_lowercase()
+            } else {
+                w.to_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// Words that, right after `crack` or `cracked`, make it physical damage
+/// (`Linux.ISO.cracked.screen.fix`, a phone repair guide), not a software
+/// crack. Narrow on purpose: `Crack.Fix`, a scene fix for a crack, stays a
+/// crack.
+const DAMAGE: &[&str] = &["screen", "screens", "glass", "display", "lcd", "phone"];
+
+/// How many crack words ([`CRACK_WORDS`]) `words` holds, each phrase
+/// counted where it starts. `k ed` counts only when `name` spells `k'ed`
+/// (either apostrophe); `crack` or `cracked` followed by a damage word
+/// ([`DAMAGE`]) doesn't count.
+pub fn crack_words_in(words: &[String], name: &str) -> usize {
+    let low = name.to_lowercase();
+    let spelled = low.contains("k'ed") || low.contains("k\u{2019}ed");
+    (0..words.len())
+        .filter(|&i| {
+            CRACK_WORDS.iter().any(|p| {
+                words.len() - i >= p.len()
+                    && p.iter().zip(&words[i..]).all(|(a, b)| a == b)
+                    && (p != &["k", "ed"] || spelled)
+                    && !(matches!(p, [w] if *w == "crack" || *w == "cracked")
+                        && words
+                            .get(i + 1)
+                            .is_some_and(|n| DAMAGE.contains(&n.as_str())))
+            })
+        })
+        .count()
+}
+
+/// Whether a software release is cracked (MW-6, UC-2): the parser's
+/// `cracked` flag **and** a crack word the title doesn't account for. A
+/// title like `Crack Attack` names the program, not a crack, so its words
+/// are taken off; a crack word must remain after them. `name` must be the
+/// text `release` was parsed from: the torrent's name, or for an
+/// uninformative name the file or folder name it was resolved from
+/// (`Effective::resolved_from`), as `classify_enriched` passes it. The
+/// content type is the caller's to check.
+pub fn cracked(name: &str, release: &lodestar_release_parser::Release) -> bool {
+    use lodestar_release_parser::Flag;
+    if !release.flags.contains(&Flag::Cracked) {
+        return false;
+    }
+    let in_title = crack_words_in(&words(&release.title), &release.title);
+    crack_words_in(&words(name), name) > in_title
 }
 
 /// A claimed file: its path below the root, and its size if the source

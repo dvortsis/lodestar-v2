@@ -1779,7 +1779,7 @@
         "tags": [
           "filters"
         ],
-        "summary": "The core rules' hashed examples, run against the rules as they are.",
+        "summary": "The core rules' hashed examples, run against the rules as they are,\nand the pack corpora with counts and disagreements per rule.",
         "operationId": "getFilterFixtures",
         "responses": {
           "200": {
@@ -3311,6 +3311,70 @@
             "session": []
           }
         ]
+      }
+    },
+    "/legal/accept": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Records that the signed-in admin accepted the Legal Notice `version`\n(the current one; 409 `notice_required` for any other). The one\nsession route the notice gate lets through. Accepting again is a\nno-op.",
+        "operationId": "acceptLegalNotice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptNoticeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/legal/notice": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The Legal Notice this build shows, for the setup screen, the sign-in\ngate and Settings → About. Open: it's shown before there's a session.",
+        "operationId": "getLegalNotice",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalNotice"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
       }
     },
     "/login": {
@@ -5681,7 +5745,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Claims a fresh instance with the setup token from the logs and a new\npassword; logs in.",
+        "summary": "Claims a fresh instance with the setup token from the logs, a new\npassword and the Legal Notice version the admin accepted (409\n`notice_required` when it's missing or not the current one); logs in.",
         "operationId": "setup",
         "requestBody": {
           "content": {
@@ -7436,6 +7500,21 @@
   },
   "components": {
     "schemas": {
+      "AcceptNoticeRequest": {
+        "type": "object",
+        "description": "`POST /legal/accept`.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version shown. Not the current one: `409 notice_required`.",
+            "minimum": 0
+          }
+        }
+      },
       "AddressChange": {
         "type": "object",
         "description": "A pending HTTP-address change (§10.10.6's lockout protection).",
@@ -7782,11 +7861,25 @@
               }
             ]
           },
+          "pack_acceptance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackAcceptance"
+            },
+            "description": "For `accept_pack_versions`: what accepting each version does, from\nits shadow results in the replay window and the review queue."
+          },
           "pack_base": {
             "type": "integer",
             "format": "int32",
             "description": "For `set_pack_override`: the version of the rule the override is\nbound to (0 while the version this install applied isn't known).\nSend it back as `base` to confirm a weakening override with the\npassword.",
             "minimum": 0
+          },
+          "pack_versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For `accept_pack_versions`: the versions it accepts, `RULE@version`.\nSend them back as `versions` to confirm with the password."
           },
           "preview": {
             "$ref": "#/components/schemas/Preview"
@@ -8440,11 +8533,16 @@
         "description": "`GET /auth`.",
         "required": [
           "logged_in",
+          "notice_required",
           "setup_required"
         ],
         "properties": {
           "logged_in": {
             "type": "boolean"
+          },
+          "notice_required": {
+            "type": "boolean",
+            "description": "Signed in, but the current Legal Notice isn't accepted yet: show it\nand `POST /legal/accept`. Every other session route answers `409\nnotice_required` meanwhile. Always `false` when not signed in."
           },
           "setup_required": {
             "type": "boolean",
@@ -8959,6 +9057,70 @@
             }
           },
           {
+            "type": "object",
+            "description": "Confirms again your override of one pack rule whose base changed\nsince you set it (RP-3, §20.8): the same action and `unless`, bound\nto the version that applies now. Confirming one that weakens the\nrule as it is now (a paused one, among them) needs the password and\nthe assessment's [`Assessment::pack_base`] sent back as `base`.",
+            "required": [
+              "rule",
+              "op"
+            ],
+            "properties": {
+              "base": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "The previewed `pack_base`, to confirm a weakening override.",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "confirm_pack_override"
+                ]
+              },
+              "rule": {
+                "type": "string",
+                "example": "MW-2"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Accepts the pending versions of pack rules (RP-3, §20.10): each\nnamed rule (`MW-2`), or every pending rule of a named pack\n(`malware`), switches to the version this build ships. Nothing is\nreleased: holds the new version wouldn't make stay for review.\n\nIt strengthens filtering only when every accepted version's\nrecorded direction is `widens` or `action-heavier` and the shadow\nresults agree. Anything else weakens it: confirm with the password\nand send back the assessment's [`Assessment::pack_versions`] as\n`versions`. Undo never undoes an acceptance.",
+            "required": [
+              "rules",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "accept_pack_versions"
+                ]
+              },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "example": [
+                  "MW-2"
+                ]
+              },
+              "versions": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "The previewed `pack_versions` (`RULE@version`), to confirm a\nweakening acceptance. When sent, apply accepts only exactly\nthese."
+              }
+            }
+          },
+          {
             "allOf": [
               {
                 "$ref": "#/components/schemas/MatchInput"
@@ -9450,6 +9612,33 @@
               "db",
               "env"
             ]
+          }
+        }
+      },
+      "ChangelogEntry": {
+        "type": "object",
+        "description": "One version's changelog entry.",
+        "required": [
+          "direction",
+          "text",
+          "version"
+        ],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "description": "`widens`, `narrows`, `action-heavier`, `action-lighter` or `mixed`\nagainst the version before, as recorded."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The entry's text (Markdown); null when the changelog has none."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -12741,9 +12930,10 @@
       },
       "Fixtures": {
         "type": "object",
-        "description": "`GET /filters/fixtures`: the core rules' hashed examples, run against\nthe rules as they are (§20.8).",
+        "description": "`GET /filters/fixtures`: the core rules' hashed examples, run against\nthe rules as they are, and the pack corpora (§20.8).",
         "required": [
-          "core"
+          "core",
+          "packs"
         ],
         "properties": {
           "core": {
@@ -12751,6 +12941,9 @@
             "items": {
               "$ref": "#/components/schemas/FixtureCounts"
             }
+          },
+          "packs": {
+            "$ref": "#/components/schemas/PackCorpus"
           }
         }
       },
@@ -14405,6 +14598,30 @@
           "label": "4K"
         }
       },
+      "LegalNotice": {
+        "type": "object",
+        "description": "`GET /legal/notice`: the Legal Notice this build shows.",
+        "required": [
+          "version",
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The notice as Markdown (headings, paragraphs, lists, bold, italics,\ncode and links), in English only."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Raised only when the notice changes in substance; send it back to\naccept.",
+            "minimum": 0
+          }
+        },
+        "example": {
+          "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 3 · 2026-11-05**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+          "version": 3
+        }
+      },
       "LogCatalog": {
         "type": "object",
         "description": "`GET /logs/catalog`.",
@@ -15652,7 +15869,10 @@
           "exceptions",
           "ip_ranges",
           "overrides",
+          "pack_conditions",
           "packs",
+          "packs_seeded_over_rules",
+          "pending_pack_versions",
           "pending_floor_removals",
           "quarantine",
           "rules",
@@ -15694,11 +15914,26 @@
               "$ref": "#/components/schemas/OverrideEntry"
             }
           },
+          "pack_conditions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Conditions of the pack-version state for the Filters & Safety\nnotice (`packs.lost`, `packs.differ`, `packs.skipped.MW-2`, …);\nempty when there's nothing to report."
+          },
           "packs": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PackState"
             }
+          },
+          "packs_seeded_over_rules": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Pack versions were first recorded at this time on a store that\nalready had rules (an upgrade from before versions existed, or\nevery version row lost): worth a notice."
           },
           "pending_floor_removals": {
             "type": "array",
@@ -15706,6 +15941,13 @@
               "$ref": "#/components/schemas/PendingFloorEntry"
             },
             "description": "Entries a config file or a floor-marked list dropped, still blocked\nuntil you settle them (§2.7)."
+          },
+          "pending_pack_versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingPackVersion"
+            },
+            "description": "Pack-rule versions waiting to be accepted, with their changelogs."
           },
           "quarantine": {
             "type": "integer",
@@ -15840,6 +16082,194 @@
           }
         }
       },
+      "PackAcceptance": {
+        "type": "object",
+        "description": "What accepting one pending pack-rule version does (RP-3). Torrent\ncounts are distinct torrents in the replay window whose shadow result\n(the pending version beside the applied one) was recorded.",
+        "required": [
+          "applied",
+          "direction",
+          "disagreements",
+          "heavier",
+          "in_doubt",
+          "lighter",
+          "newly_held",
+          "no_longer_held",
+          "review_quarantine",
+          "review_tombstones",
+          "rule",
+          "strengthens",
+          "version"
+        ],
+        "properties": {
+          "applied": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version this install applied; null when it isn't known, or it\nnever applied the rule (a new rule).",
+            "minimum": 0
+          },
+          "direction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The recorded direction from `applied` to `version`, every step\ncombined: `widens`, `narrows`, `action-heavier`, `action-lighter`\nor `mixed`; null when there's no record."
+          },
+          "disagreements": {
+            "type": "integer",
+            "description": "Torrents whose shadow result contradicts the recorded direction.",
+            "minimum": 0
+          },
+          "heavier": {
+            "type": "integer",
+            "description": "Torrents both versions hold, the new one with a heavier action.",
+            "minimum": 0
+          },
+          "in_doubt": {
+            "type": "boolean",
+            "description": "The version state is in doubt for this rule (a Filters & Safety\nnotice about pack versions): accepting is weakening."
+          },
+          "lighter": {
+            "type": "integer",
+            "description": "Torrents both versions hold, the new one with a lighter action.",
+            "minimum": 0
+          },
+          "newly_held": {
+            "type": "integer",
+            "description": "Torrents only the new version holds.",
+            "minimum": 0
+          },
+          "no_longer_held": {
+            "type": "integer",
+            "description": "Torrents only the applied version holds.",
+            "minimum": 0
+          },
+          "review_quarantine": {
+            "type": "integer",
+            "description": "Holds of this rule acceptance leaves for review: in quarantine, and\ndropped. Nothing is released.",
+            "minimum": 0
+          },
+          "review_tombstones": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rule": {
+            "type": "string",
+            "example": "MW-2"
+          },
+          "strengthens": {
+            "type": "boolean",
+            "description": "Accepting this version strengthens filtering."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version accepted: the one this build ships.",
+            "minimum": 0
+          }
+        }
+      },
+      "PackCorpus": {
+        "type": "object",
+        "description": "The pack corpora this build ships, run against its pack rules, each\nrule on its own (RP-1): the same pass or fail CI enforces.",
+        "required": [
+          "error",
+          "failures",
+          "passes",
+          "precision_failing",
+          "precision_items",
+          "rules"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The corpus didn't load: why. Nothing else is reported then."
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Each failure, readable: a wrong example, too few examples, a\nrecorded direction the corpus doesn't show."
+          },
+          "passes": {
+            "type": "boolean",
+            "description": "Everything passed (known gaps don't fail it)."
+          },
+          "precision_failing": {
+            "type": "integer",
+            "description": "Precision items (legitimate torrents each guard exists for) held by\na rule they shouldn't be, known gaps aside.",
+            "minimum": 0
+          },
+          "precision_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackFixtureCounts"
+            }
+          }
+        }
+      },
+      "PackFixtureCounts": {
+        "type": "object",
+        "required": [
+          "direction_disagreements",
+          "failing",
+          "gaps",
+          "must_match",
+          "must_not_match",
+          "pack",
+          "rule",
+          "version"
+        ],
+        "properties": {
+          "direction_disagreements": {
+            "type": "integer",
+            "description": "Versions of the rule whose recorded direction the corpus doesn't\nshow (RP-1's direction checks).",
+            "minimum": 0
+          },
+          "failing": {
+            "type": "integer",
+            "description": "Examples the rule gets wrong.",
+            "minimum": 0
+          },
+          "gaps": {
+            "type": "integer",
+            "description": "Precision items the rule holds because a guard it should have\nisn't built yet (a known over-filter, not a pass).",
+            "minimum": 0
+          },
+          "must_match": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "must_not_match": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pack": {
+            "type": "string",
+            "example": "malware"
+          },
+          "rule": {
+            "type": "string",
+            "example": "MW-2"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version judged: the one this build ships.",
+            "minimum": 0
+          }
+        }
+      },
       "PackOverrideState": {
         "type": "object",
         "description": "Your override of one pack rule, as stored and as it applies now.",
@@ -15892,12 +16322,35 @@
         "type": "object",
         "required": [
           "action",
+          "applied",
+          "base_action",
+          "base_changed",
           "id",
-          "on"
+          "on",
+          "pending",
+          "version"
         ],
         "properties": {
           "action": {
-            "type": "string"
+            "type": "string",
+            "description": "The action that applies now: the base action, or your override's\nwhere it applies."
+          },
+          "applied": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version this install accepted; null when it isn't known, or it\nnever applied the rule (a new rule waiting to be accepted).",
+            "minimum": 0
+          },
+          "base_action": {
+            "type": "string",
+            "description": "The rule's own action as the versions that apply now take it."
+          },
+          "base_changed": {
+            "type": "boolean",
+            "description": "Your override's base changed since you set it (§20.8)."
           },
           "id": {
             "type": "string",
@@ -15906,20 +16359,41 @@
           "on": {
             "type": "boolean"
           },
-          "override": {
+          "pack_override": {
             "$ref": "#/components/schemas/PackOverrideState",
-            "description": "Your override of the rule (RP-2), when it has one."
+            "description": "Your override of the rule (RP-2), when it has one. Not one of the\nOverride entries (`overrides`), which skip rules altogether."
+          },
+          "pending": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version waiting to be accepted, run in shadow meanwhile.",
+            "minimum": 0
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The rule's version as this build ships it.",
+            "minimum": 0
           }
         }
       },
       "PackState": {
         "type": "object",
         "required": [
+          "changelog",
           "id",
           "on",
-          "rules"
+          "rules",
+          "version"
         ],
         "properties": {
+          "changelog": {
+            "type": "string",
+            "description": "The pack's changelog as this build ships it (Markdown, one\n`## RULE@version` entry per version, newest first)."
+          },
           "id": {
             "type": "string",
             "example": "malware"
@@ -15932,6 +16406,11 @@
             "items": {
               "$ref": "#/components/schemas/PackRuleState"
             }
+          },
+          "version": {
+            "type": "string",
+            "description": "The pack's version: its rules' versions as this build ships them.",
+            "example": "MW-1@1 MW-2@1 MW-3@1 MW-4@1 MW-5@1"
           }
         }
       },
@@ -16065,6 +16544,56 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "PendingPackVersion": {
+        "type": "object",
+        "description": "A pack-rule version waiting to be accepted (RP-0, §20.10): it runs in\nshadow until `accept_pack_versions` accepts it.",
+        "required": [
+          "applied",
+          "changelog",
+          "direction",
+          "pack",
+          "rule",
+          "version"
+        ],
+        "properties": {
+          "applied": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version this install applied; null when it isn't known, or it\nnever applied the rule.",
+            "minimum": 0
+          },
+          "changelog": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangelogEntry"
+            },
+            "description": "The changelog entries from `applied` (exclusive) to `version`,\nnewest first."
+          },
+          "direction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The recorded direction from `applied`, every step combined; null\nwhen there's no record."
+          },
+          "pack": {
+            "type": "string",
+            "example": "malware"
+          },
+          "rule": {
+            "type": "string",
+            "example": "MW-2"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -16680,6 +17209,7 @@
           "at",
           "expires_at",
           "hash",
+          "pack_review",
           "rule",
           "sealed"
         ],
@@ -16699,6 +17229,10 @@
           },
           "hash": {
             "type": "string"
+          },
+          "pack_review": {
+            "type": "boolean",
+            "description": "An acceptance of a newer version of its pack rule left it for\nreview: the version that applies now may not hold it (RP-3)."
           },
           "rule": {
             "type": "string"
@@ -19174,6 +19708,12 @@
           "password"
         ],
         "properties": {
+          "notice_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The Legal Notice version shown and accepted (`GET /legal/notice`).\nMissing or not the current one: `409 notice_required`.",
+            "minimum": 0
+          },
           "password": {
             "type": "string",
             "description": "At least 10 characters."
@@ -20969,6 +21509,7 @@
           "adult_hold",
           "at",
           "hash",
+          "pack_review",
           "rule"
         ],
         "properties": {
@@ -20982,6 +21523,10 @@
           },
           "hash": {
             "type": "string"
+          },
+          "pack_review": {
+            "type": "boolean",
+            "description": "An acceptance of a newer version of its pack rule left it for\nreview: the version that applies now may not hold it (RP-3)."
           },
           "rule": {
             "type": "string"
@@ -22246,7 +22791,7 @@
   "tags": [
     {
       "name": "auth",
-      "description": "First-run setup, login and sessions (§12)."
+      "description": "First-run setup, login, sessions (§12) and the Legal Notice."
     },
     {
       "name": "search",

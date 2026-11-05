@@ -346,7 +346,9 @@ const FIXTURES: &[Fixture] = &[
         kind: Software,
         title: "Total Commander",
         resolved: None,
-        junk: &[],
+        // The parser's cracked flag and `Keygen` after the title (owner
+        // §2.39, MW-6).
+        junk: &[Cracked],
     },
 ];
 

@@ -18,6 +18,7 @@ lodestar-filter = { path = "../crates/filter" }
 lodestar-metainfo = { path = "../crates/metainfo" }
 lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
+lodestar-sources = { path = "../crates/sources" }
 lodestar-sources-feeds = { path = "../crates/sources-feeds" }
 lodestar-sources-importers = { path = "../crates/sources-importers" }
 lodestar-sources-plugins = { path = "../crates/sources-plugins" }
@@ -28,6 +29,8 @@ base64 = "=0.22.1"
 semver = "=1.0.28"
 serde_json = "1.0.154"
 sha2 = "0.11"
+# The plugins' own pin: `verified_claims` compares trackers in its form.
+url = "2.5.8"
 lodestar-utp = { path = "../crates/utp" }
 
 # Each target is a separate binary; see README.md for running them.
@@ -202,6 +205,20 @@ bench = false
 [[bin]]
 name = "stashdb"
 path = "fuzz_targets/stashdb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "torrent_cache"
+path = "fuzz_targets/torrent_cache.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verified_claims"
+path = "fuzz_targets/verified_claims.rs"
 test = false
 doc = false
 bench = false

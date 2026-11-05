@@ -60,9 +60,17 @@ pub struct Ext {
 }
 
 impl Ext {
+    #[inline]
     pub fn as_str(&self) -> &str {
         // Only ASCII bytes are ever stored.
-        std::str::from_utf8(&self.buf[..usize::from(self.len)]).unwrap_or("")
+        std::str::from_utf8(self.as_bytes()).unwrap_or("")
+    }
+
+    /// The extension's bytes, lowercase ASCII: [`Ext::as_str`] without
+    /// checking them, for comparing against a list.
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf[..usize::from(self.len)]
     }
 }
 
