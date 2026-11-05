@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T18:51Z",
+  "updated_at": "2026-11-05T18:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3011,13 +3011,15 @@
       "brief": "briefs/D-v052-notes.md"
     },
     "X-search-files-5": {
-      "status": "building",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBuYcaSNVCmZuFhZDV",
       "launched": "2026-11-05T07:22Z",
       "brief": "briefs/X-search-files-5.md",
       "pr": 505,
-      "head": "1f2f9e32"
+      "head": "1f2f9e32",
+      "merge": "a1e0d849",
+      "done": "2026-11-05T18:56Z"
     },
     "RP-1b": {
       "status": "merged",
@@ -3209,6 +3211,13 @@
       "session": "session_01MMjhnC7AbvoZdGop4zLbGv",
       "since": "2026-11-05T18:50Z",
       "brief": "briefs/X-adult-catalogue.md"
+    },
+    "B13b": {
+      "status": "running",
+      "session": "session_01MMjhnBuYcaSNVCmZuFhZDV",
+      "since": "2026-11-05T18:56Z",
+      "brief": "briefs/B13b.md",
+      "note": "same session as X-search-files-5"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4808,7 +4817,8 @@
     "owner-flag §2.19 (ENR-1c #502): user-interest enrichment lookups count against the 5,000/day cap (owner Q15 restored; ENR-1 had exempted them); an unlisted enrichment plugin's answers are refused.",
     "owner flag sent 18:12Z: X-source-adult-2 gap 3 (#494 merged d3906e36). CI note: GitHub left finished jobs shown in_progress (ubuntu test, e2e-ok); verified via job steps before merge.",
     "CI note 18:16Z: GitHub left finished jobs shown in_progress/queued on several heads (e2e-ok aggregate on #501 never got a runner; all its E2E jobs passed). Runner verified job steps before merging #494, #501.",
-    "owner flag sent 18:15Z: X-claim-trackers tightenings (#500 merged c98be2d6). Canonical tracker store follow-up (store_claims via public_tracker_url) is now unblocked; held by the 8-slot drain."
+    "owner flag sent 18:15Z: X-claim-trackers tightenings (#500 merged c98be2d6). Canonical tracker store follow-up (store_claims via public_tracker_url) is now unblocked; held by the 8-slot drain.",
+    "owner flag sent 18:56Z: X-search-files-5 v7 numbers and cost (#505 merged a1e0d849)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5469,7 +5479,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T18:51Z",
+    "updated": "2026-11-05T18:56Z",
     "items": [
       {
         "slot": 1,
@@ -5505,11 +5515,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-search-files-5",
+        "slice": "B13b",
         "role": "build",
         "agent": "claude",
-        "doing": "Performance: getting cold file search at 10M under 150 ms, continued (ext and size terms per torrent)",
-        "since": "2026-11-05T07:22Z"
+        "doing": "Search: siblings for short no-year titles (Up, Heat) via the title-identity key",
+        "since": "2026-11-05T18:56Z"
       },
       {
         "slot": 8,
