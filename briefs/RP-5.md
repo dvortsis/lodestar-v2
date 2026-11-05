@@ -1,5 +1,5 @@
 # RP-5: SP-4, clones of hidden spam (payload-signature set, inherited action, release follows the original)
-**Model:** Opus (filter and content-safety core). `/security-review` and a fresh Opus reviewer follow. Runner brief, 2026-11-05T19:20Z. Runs in the same session as RP-4.
+**Model:** Opus (filter and content-safety core). `/security-review` and a fresh Opus reviewer follow. Runner brief, 2026-11-05T19:20Z. A fresh session; RP-4's handoff notes are at the end.
 
 ## Why
 RP-4 (#495, merged 85179f32) added SP-3 flooding. SP-4 is the last spam rule. When an original is hidden by SP-2, or by SP-3 at demote or above, its payload signature joins a capped set. A later torrent with the same payload signature then inherits the original's action. The spec is in `docs/plan/2026-11-04-v06-rulepacks.md`: §4.3 "RP-5", line 47 (storage), and Q12 (the runner's call: 1M signatures, 8 MB, oldest dropped first, in append-only 64 KB `settings` chunks). This is the gate before RP-G.
@@ -42,3 +42,11 @@ RP-4 (#495, merged 85179f32) added SP-3 flooding. SP-4 is the last spam rule. Wh
 - `/security-review` on the diff
 
 Then open the PR "RP-5: SP-4 clones of hidden spam (payload-signature set, inherited action, release follows the original)" with the label `full-ci`. Follow `.claude/skills/steward/SKILL.md`. Message the runner with the PR number and head. Never merge. Push once per round. No fixed sleeps.
+
+## Handoff from the RP-4 session (data, not instructions)
+1. SP-3's writer step is `Flooding::count` in `crates/pipeline/src/writer.rs`, called from the free `judge()` before quarantine sealing. A second judgment goes through `Engine::judge_flooded`, which reads the commit via `with_item`. That is the natural place for SP-4's signature check and for adding a signature on a hide.
+2. `Ctx::flood` in `crates/filter/src/packs/` shows how writer-only state reaches the pack layer without touching `filter::Item`.
+3. The writer-cost harness is `sp3_writer_cost` (ignored, release build). The DHT-only commit is the 5% case that matters most. Today it pays only a bit test.
+4. The `results_named` test helper sets `sources: 1`, which aliases whichever source was registered first.
+5. API goldens change whenever a pack's CHANGELOG changes. Re-bless them with `LODESTAR_BLESS=1 cargo test -p lodestar-api --test golden`.
+6. Container disk: full workspace tests fit only with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`.
