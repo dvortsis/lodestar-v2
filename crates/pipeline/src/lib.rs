@@ -28,6 +28,8 @@ mod have;
 pub mod health;
 pub mod log_events;
 mod rollups;
+pub mod source_adult;
+pub mod torrent_cache;
 pub mod unverified;
 mod worker;
 mod writer;
@@ -558,6 +560,13 @@ impl Pipeline {
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
+        // The sources whose every find is classified adult (X-source-adult).
+        let adult = source_adult::AdultSources::of(
+            registered
+                .iter()
+                .zip(&plugins)
+                .map(|((id, ..), p)| (*id, p.manifest())),
+        );
         lodestar_log::log_event!(
             log_events::STARTING,
             stored = have.len(),
@@ -827,6 +836,7 @@ impl Pipeline {
                 leases: leases.clone(),
                 stats: writer_stats.clone(),
                 gate: gate.clone(),
+                adult,
                 batch_max: 64,
                 batch_wait: Duration::from_millis(20),
             }
@@ -905,6 +915,7 @@ impl Pipeline {
         let rollups_handle = rollups.clone();
         let writer = writer::Writer {
             store: Some(store),
+            adult,
             backfill_after: 0,
             backfill_done: false,
             backfill_backoff: Default::default(),

@@ -1,0 +1,22 @@
+{
+  "series": {"id": 1, "title": "Example Open Series", "path": "/tv/Example Open Series", "tvdbId": 81189, "imdbId": "tt0903747", "type": "standard", "year": 2008},
+  "episodes": [{"id": 11, "episodeNumber": 1, "seasonNumber": 1, "title": "Pilot", "seriesId": 1}],
+  "episodeFile": {
+    "id": 21,
+    "relativePath": "Season 01/Example Open Series - S01E01 - Pilot.mkv",
+    "path": "/tv/Example Open Series/Season 01/Example Open Series - S01E01 - Pilot.mkv",
+    "quality": "WEBDL-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "OPEN",
+    "sceneName": "Example.Open.Series.S01E01.1080p.WEB-DL-OPEN",
+    "size": 1503238553,
+    "dateAdded": "2026-11-05T10:00:00Z"
+  },
+  "isUpgrade": false,
+  "downloadClient": "qBittorrent",
+  "downloadClientType": "qBittorrent",
+  "downloadId": "fb9ff1ef824d61bd83b24fb91811804db71c0c53",
+  "eventType": "Download",
+  "instanceName": "Sonarr",
+  "applicationUrl": ""
+}

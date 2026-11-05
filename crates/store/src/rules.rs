@@ -7,6 +7,10 @@
 //! `settings` rows ([`PackVersionRows`]): read with the rule set, so every
 //! engine load sees them, but never written by [`Store::replace_rule_set`],
 //! so Undo never changes them.
+//!
+//! Pack-rule overrides (RP-2) are `settings` rows too, one per overridden
+//! rule ([`PACK_OVERRIDE_PREFIX`]), and part of the rule set: Undo
+//! snapshots and restores them with everything else.
 
 use rusqlite::types::ValueRef;
 use rusqlite::{OptionalExtension, params};
@@ -52,6 +56,15 @@ pub struct ExceptionRow {
 pub const PACKS_APPLIED_KEYS: [&str; 2] = ["filter.packs.applied", "filter.packs.applied.2"];
 /// The durable marker that pack versions were seeded.
 pub const PACKS_SEEDED_KEY: &str = "filter.packs.seeded";
+
+/// The `settings` key prefix of a pack-rule override: one row per rule,
+/// `filter.pack_override:MW-1`. The value's meaning is the filter
+/// engine's (`packs::overrides`).
+pub const PACK_OVERRIDE_PREFIX: &str = "filter.pack_override:";
+
+/// One pack-rule override row: `(pack rule id, value as stored)`, the
+/// value's text, or its bytes when it doesn't read as text.
+pub type PackOverrideRow = (String, std::result::Result<String, Vec<u8>>);
 
 /// A `settings` row as stored: `None` when there's no row, `Ok` with its
 /// text, or `Err` with the raw bytes of a value that doesn't read as text
@@ -100,23 +113,71 @@ pub struct RuleSet {
     pub allow: Vec<(i64, String)>,
     /// The pack-version rows. Not part of what Undo restores.
     pub pack_versions: PackVersionRows,
+    /// Pack-rule overrides: `(pack rule id, value as stored)`, by id. A
+    /// value that doesn't read as text is kept as its bytes, so it stays
+    /// unreadable (and fails closed) across an Undo.
+    pub pack_overrides: Vec<PackOverrideRow>,
 }
 
 /// A `settings` row's value ([`StoredText`]).
 fn stored_text(conn: &rusqlite::Connection, key: &str) -> Result<StoredText> {
     Ok(conn
         .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
-            Ok(match r.get_ref(0)? {
-                ValueRef::Text(b) => {
-                    std::str::from_utf8(b).map_or_else(|_| Err(b.to_vec()), |t| Ok(t.to_owned()))
-                }
-                ValueRef::Blob(b) => Err(b.to_vec()),
-                ValueRef::Null => Err(Vec::new()),
-                ValueRef::Integer(n) => Err(n.to_string().into_bytes()),
-                ValueRef::Real(x) => Err(x.to_string().into_bytes()),
-            })
+            Ok(text_or_bytes(r.get_ref(0)?))
         })
         .optional()?)
+}
+
+/// A stored value as [`StoredText`] reads it.
+fn text_or_bytes(v: ValueRef<'_>) -> std::result::Result<String, Vec<u8>> {
+    match v {
+        ValueRef::Text(b) => {
+            std::str::from_utf8(b).map_or_else(|_| Err(b.to_vec()), |t| Ok(t.to_owned()))
+        }
+        ValueRef::Blob(b) => Err(b.to_vec()),
+        ValueRef::Null => Err(Vec::new()),
+        ValueRef::Integer(n) => Err(n.to_string().into_bytes()),
+        ValueRef::Real(x) => Err(x.to_string().into_bytes()),
+    }
+}
+
+/// Every pack-rule override row, by key.
+fn pack_override_rows(conn: &rusqlite::Connection) -> Result<Vec<PackOverrideRow>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT key, value FROM settings WHERE substr(key, 1, ?1) = ?2 ORDER BY key",
+    )?;
+    let rows = stmt.query_map(
+        params![PACK_OVERRIDE_PREFIX.len() as i64, PACK_OVERRIDE_PREFIX],
+        |r| {
+            let key: String = r.get(0)?;
+            Ok((
+                key[PACK_OVERRIDE_PREFIX.len()..].to_owned(),
+                text_or_bytes(r.get_ref(1)?),
+            ))
+        },
+    )?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Writes one pack-rule override row as stored: text as text, bytes as a
+/// blob.
+fn put_pack_override(
+    conn: &rusqlite::Connection,
+    rule: &str,
+    value: &std::result::Result<String, Vec<u8>>,
+) -> Result<()> {
+    let key = format!("{PACK_OVERRIDE_PREFIX}{rule}");
+    match value {
+        Ok(t) => upsert_setting(conn, &key, t),
+        Err(b) => {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, b],
+            )?;
+            Ok(())
+        }
+    }
 }
 
 fn pack_version_rows(conn: &rusqlite::Connection) -> Result<PackVersionRows> {
@@ -198,7 +259,24 @@ impl Store {
             set.allow.push(r?);
         }
         set.pack_versions = pack_version_rows(c)?;
+        set.pack_overrides = pack_override_rows(c)?;
         Ok(set)
+    }
+
+    /// Writes (`Some`) or removes (`None`) one pack rule's override row.
+    /// The value is the filter engine's encoding; it holds no author, time
+    /// or reason.
+    pub fn set_pack_override(&mut self, rule: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(v) => put_pack_override(&self.conn, rule, &Ok(v.to_owned())),
+            None => {
+                self.conn.execute(
+                    "DELETE FROM settings WHERE key = ?1",
+                    [format!("{PACK_OVERRIDE_PREFIX}{rule}")],
+                )?;
+                Ok(())
+            }
+        }
     }
 
     /// The pack-version rows alone.
@@ -489,7 +567,8 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Replaces every rule-layer table with `set` (one-step Undo). The
+    /// Replaces every rule-layer table, and the pack-rule override rows,
+    /// with `set` (one-step Undo). The
     /// pack-version rows are left as they are: Undo restores rule-set
     /// edits, never versions, so it can't undo an acceptance or accept a
     /// pending version.
@@ -503,6 +582,13 @@ impl Store {
             "filter_allow",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        tx.execute(
+            "DELETE FROM settings WHERE substr(key, 1, ?1) = ?2",
+            params![PACK_OVERRIDE_PREFIX.len() as i64, PACK_OVERRIDE_PREFIX],
+        )?;
+        for (rule, value) in &set.pack_overrides {
+            put_pack_override(&tx, rule, value)?;
         }
         for (i, r) in set.rules.iter().enumerate() {
             tx.execute(
@@ -932,6 +1018,44 @@ mod tests {
             s.setting_text(PACKS_SEEDED_KEY).unwrap().as_deref(),
             Some("1"),
             "quiet"
+        );
+    }
+
+    #[test]
+    fn pack_overrides_read_write_and_undo_with_the_rule_set() {
+        let mut s = store();
+        assert!(s.rule_set().unwrap().pack_overrides.is_empty());
+        s.set_pack_override("MW-1", Some("1\n1\ndemote")).unwrap();
+        s.set_pack_override("SP-1", Some("1\n1\nhide")).unwrap();
+        // A key that only looks like the prefix through LIKE wildcards.
+        s.conn
+            .execute(
+                "INSERT INTO settings (key, value) VALUES ('filter.pack-override:X', 'no'),
+                 (?1, x'ff')",
+                [format!("{PACK_OVERRIDE_PREFIX}LU-1")],
+            )
+            .unwrap();
+        let set = s.rule_set().unwrap();
+        assert_eq!(
+            set.pack_overrides,
+            [
+                ("LU-1".to_owned(), Err(vec![0xff])),
+                ("MW-1".to_owned(), Ok("1\n1\ndemote".to_owned())),
+                ("SP-1".to_owned(), Ok("1\n1\nhide".to_owned())),
+            ]
+        );
+        s.set_pack_override("SP-1", None).unwrap();
+        s.set_pack_override("SP-1", None).unwrap();
+        assert_eq!(s.rule_set().unwrap().pack_overrides.len(), 2);
+        // Undo: replaced with the snapshot's, an unreadable one kept as bytes.
+        s.replace_rule_set(&set).unwrap();
+        assert_eq!(s.rule_set().unwrap().pack_overrides, set.pack_overrides);
+        s.replace_rule_set(&RuleSet::default()).unwrap();
+        assert!(s.rule_set().unwrap().pack_overrides.is_empty());
+        assert_eq!(
+            s.setting_text("filter.pack-override:X").unwrap().as_deref(),
+            Some("no"),
+            "other settings are left"
         );
     }
 

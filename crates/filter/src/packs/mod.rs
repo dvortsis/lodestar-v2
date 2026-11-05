@@ -24,6 +24,7 @@
 //! rule.
 
 pub mod manifest;
+pub mod overrides;
 pub mod unauthorised_copy;
 pub mod upgrade;
 

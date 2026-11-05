@@ -11,7 +11,9 @@
 //! 6. the pack layer: built-in packs and subscribed lists, the strongest
 //!    action winning. Each pack rule applies the version this install
 //!    accepted, and a version pending acceptance runs in shadow beside it
-//!    ([`crate::load::upgrade`], RP-0).
+//!    ([`crate::load::upgrade`], RP-0). An override you set changes a
+//!    rule's action or adds an `unless`, never what it matches
+//!    ([`packs::overrides`], RP-2).
 //!
 //! Prepare stamps its verdict with the version it used; commit trusts a
 //! verdict from the built-in worker at the current version and judges
@@ -26,6 +28,7 @@ use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
 use crate::hash::TermSet;
 use crate::matcher::{Doc, Facts, Reading};
 use crate::packs::manifest::Manifest;
+use crate::packs::overrides::{self, PackOverrides};
 use crate::packs::upgrade::{PackShadow, PackVersions};
 use crate::packs::{self, PackRule, PackSwitches};
 use crate::prefilter::RuleList;
@@ -138,6 +141,9 @@ pub struct Engine {
     /// Which version of each pack rule applies, and which is pending
     /// ([`crate::load`] resolves it from the stored record).
     pub pack_versions: PackVersions,
+    /// Your overrides of pack rules, resolved against `pack_versions`
+    /// ([`crate::load`]).
+    pub pack_overrides: PackOverrides,
     /// Your rules, indexed so a torrent only meets those that could match.
     pub rules: RuleList,
     pub overrides: OverrideList,
@@ -163,6 +169,7 @@ impl Engine {
             packs: PackSwitches::default(),
             manifest: Manifest::builtin(),
             pack_versions: PackVersions::default(),
+            pack_overrides: PackOverrides::default(),
             rules: RuleList::default(),
             overrides: OverrideList::default(),
             exceptions: Vec::new(),
@@ -465,6 +472,16 @@ impl Engine {
                     }
                     pack_shadow.push(s);
                 }
+                // Your override, over what the applied versions decided
+                // (the shadow above compares the base rule's sides).
+                let applied = match self.pack_overrides.effect(r) {
+                    None => applied,
+                    Some(e) => {
+                        overrides::apply(e, applied, !pv.state(r).unaccepted.is_empty(), |u| {
+                            doc.matches(u, &[])
+                        })
+                    }
+                };
                 if let Some(action) = applied {
                     packs.push(Decision {
                         rule: RuleRef::Pack(r),

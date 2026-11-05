@@ -52,6 +52,30 @@ pub enum Change {
     RemoveRule {
         id: i64,
     },
+    /// Your override of one pack rule (RP-2): its action, and optionally
+    /// an `unless`. It never changes what the rule matches, and it replaces
+    /// the rule's override if it has one. Any `unless`, or an action lighter
+    /// than what applies now, weakens filtering: confirm it with the
+    /// password and send back the assessment's [`Assessment::pack_base`]
+    /// as `base`. The override is bound to that version; once a newer
+    /// version is accepted, one that weakens the new version pauses until
+    /// it's set again.
+    SetPackOverride {
+        #[schema(example = "MW-2")]
+        rule: String,
+        /// `flag`, `demote`, `hide` or `drop`.
+        action: String,
+        /// An empty string means none.
+        unless: Option<String>,
+        /// The previewed `pack_base`, to confirm a weakening override.
+        base: Option<u32>,
+    },
+    /// Removes your override of one pack rule: the rule applies as built.
+    /// Removing one heavier than the rule's own action weakens filtering.
+    RemovePackOverride {
+        #[schema(example = "MW-2")]
+        rule: String,
+    },
     AddOverride {
         #[serde(flatten)]
         what: MatchInput,
@@ -239,6 +263,13 @@ pub struct Assessment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub unblocked: Option<usize>,
+    /// For `set_pack_override`: the version of the rule the override is
+    /// bound to (0 while the version this install applied isn't known).
+    /// Send it back as `base` to confirm a weakening override with the
+    /// password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub pack_base: Option<u32>,
     /// All of them, for applying.
     #[serde(skip)]
     pub(crate) settles: Option<Vec<[u8; 20]>>,
@@ -397,6 +428,33 @@ pub struct PackRuleState {
     #[schema(example = "MW-2")]
     pub id: String,
     pub on: bool,
+    /// Your override of the rule (RP-2), when it has one.
+    #[serde(rename = "override", default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub pack_override: Option<PackOverrideState>,
+}
+
+/// Your override of one pack rule, as stored and as it applies now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PackOverrideState {
+    /// Null when the stored row doesn't read.
+    #[schema(required = true)]
+    pub action: Option<String>,
+    /// The version it was made against (0: not known then); null when it
+    /// doesn't read.
+    #[schema(required = true)]
+    pub base: Option<u32>,
+    /// The base rule changed since it was set (§20.8): a newer version was
+    /// accepted, or the version state is in doubt.
+    pub changed: bool,
+    /// Changed, and it would weaken the rule as it is now: the rule
+    /// applies as built until the override is set again with the password.
+    pub paused: bool,
+    #[schema(required = true)]
+    pub unless: Option<String>,
+    /// The stored row doesn't read: the stronger of its action and the
+    /// rule's applies, and its `unless` is dropped.
+    pub unreadable: bool,
 }
 
 /// One of your rules.

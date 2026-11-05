@@ -105,8 +105,29 @@ fn doc(i: u64) -> TorrentDoc {
             ambiguous: i.is_multiple_of(8),
             shares,
         },
-        provenance: crate::doc::DocProvenance::stored_torrent(),
+        provenance: provenance(i),
     }
+}
+
+/// Torrent `i`'s provenance: mostly verified clearnet torrents the DHT
+/// found, with some unverified, other-tier and source-less ones.
+fn provenance(i: u64) -> crate::doc::DocProvenance {
+    let mut p = crate::doc::DocProvenance::stored_torrent();
+    if i % 11 == 5 {
+        p.verified = Verified::No;
+    }
+    if i.is_multiple_of(13) {
+        p.network = Network::Ipfs;
+    } else if i % 13 == 7 {
+        p.network = Network::Ed2k;
+    }
+    if !i.is_multiple_of(17) {
+        p.sources.push("dht".into());
+    }
+    if i.is_multiple_of(3) {
+        p.sources.push("nyaa".into());
+    }
+    p
 }
 
 /// The values torrent `d` has for facet `f`.
@@ -140,6 +161,11 @@ fn values(f: Facet, d: &TorrentDoc) -> Vec<String> {
             .filter(|s| s.1 > 0)
             .map(|s| s.0.as_str().to_owned())
             .collect(),
+        Source::Prov { field, .. } => match field {
+            "verified" => vec![d.provenance.verified.as_str().to_owned()],
+            "network" => vec![d.provenance.network.as_str().to_owned()],
+            _ => d.provenance.sources.clone(),
+        },
     }
 }
 
@@ -231,6 +257,21 @@ fn leaf(f: Facet, v: &str) -> Node {
             lo: 1,
             hi: 100,
         },
+        Source::Prov { field, .. } => match field {
+            "verified" => Node::Verified {
+                any: vec![if v == "yes" {
+                    Verified::Yes
+                } else {
+                    Verified::No
+                }],
+            },
+            "network" => Node::Network {
+                any: vec![Network::from_name(v).unwrap()],
+            },
+            _ => Node::Source {
+                any: vec![v.to_owned()],
+            },
+        },
     }
 }
 
@@ -302,7 +343,15 @@ fn validate(docs: &[TorrentDoc], index: &Arc<SearchIndex>, q: &str) {
                 v.value
             );
         }
-        if matches!(f.source(), Source::Flag(_)) || *f == Facet::Type {
+        let single = matches!(
+            f.source(),
+            Source::Flag(_)
+                | Source::Prov {
+                    default: Some(_),
+                    ..
+                }
+        );
+        if single || *f == Facet::Type {
             let sum: u64 = counts.values.iter().map(|v| v.count).sum();
             assert_eq!(sum as usize, ids.len(), "{q}: {} sums", f.name());
             // The result count is the selected values' disjunctive counts.
@@ -357,6 +406,19 @@ fn counts_reconcile_with_brute_force_and_the_index() {
         "adult:scene",
         "size:>1GB discovered:<30d",
         "year:2000..2010 common",
+        // Provenance (SRC-3's fields): `verified:yes` alone takes the
+        // `no`-only pass.
+        "verified:yes",
+        "common verified:yes",
+        "verified:no",
+        "verified:yes,no third",
+        "-verified:no",
+        "network:bt",
+        "network:ipfs,ed2k common",
+        "-network:bt",
+        "source:nyaa",
+        "-source:dht common",
+        "source:dht verified:yes network:bt",
     ] {
         validate(&docs, &index, q);
     }
@@ -773,7 +835,15 @@ fn large_counts_are_sampled_within_tolerance() {
         ..all_values()
     };
     let exact = all_values();
-    for q in ["", "common res:1080p", "third", "lang:fr | lang:de"] {
+    for q in [
+        "",
+        "common res:1080p",
+        "third",
+        "lang:fr | lang:de",
+        // The `no`-only pass merged with a sampled shared one.
+        "verified:yes",
+        "common verified:yes",
+    ] {
         let (_, _, est) = run(&index, q, &sampled);
         let (_, _, want) = run(&index, q, &exact);
         assert!(want.sample_rate.is_none(), "{q}: exact below the threshold");
@@ -927,6 +997,9 @@ fn unavailable_groups_are_named_not_zeroed() {
             "ambiguous",
             "imported",
             "backfill",
+            "network",
+            "source",
+            "verified",
             "adult"
         ]
     );
@@ -939,6 +1012,82 @@ fn unavailable_groups_are_named_not_zeroed() {
         Facet::ALL.map(Some)
     );
     assert_eq!(Facet::from_name("seeders"), None);
+}
+
+/// Documents indexed before SRC-3 carry no `verified`, `network` or
+/// `source` value, and every one is a verified `bt` torrent: the
+/// defaults count them, as `compile.rs`'s `provenance` reads them.
+#[test]
+fn documents_without_provenance_fields_count_as_the_defaults() {
+    let mut docs = corpus(300);
+    let index = SearchIndex::in_memory().unwrap();
+    let f = *index.fields();
+    let (raw, reader) = index.raw();
+    let mut w: tantivy::IndexWriter = raw.writer_with_num_threads(1, 50 << 20).unwrap();
+    for (i, d) in docs.iter_mut().enumerate() {
+        let doc = d.to_document(&f);
+        if i % 3 != 0 {
+            w.add_document(doc).unwrap();
+            continue;
+        }
+        // The shape a pre-SRC-3 build wrote.
+        d.provenance = crate::doc::DocProvenance::stored_torrent();
+        let mut old = tantivy::TantivyDocument::new();
+        for (field, v) in doc.field_values() {
+            if ![f.verified, f.network, f.source].contains(&field) {
+                old.add_field_value(field, v);
+            }
+        }
+        w.add_document(old).unwrap();
+    }
+    w.commit().unwrap();
+    reader.reload().unwrap();
+    let index = Arc::new(index);
+    for q in [
+        "",
+        "verified:yes",
+        "verified:no",
+        "network:bt common",
+        "-network:bt",
+        "source:dht",
+    ] {
+        validate(&docs, &index, q);
+    }
+}
+
+#[test]
+fn provenance_facets_count_the_default_as_the_rest() {
+    let docs = corpus(200);
+    let index = build(&docs, 2);
+    let (_, _, got) = run(&index, "", &all_values());
+    let count = |f: Facet, v: &str| {
+        got.term(f)
+            .unwrap()
+            .values
+            .iter()
+            .find(|x| x.value == v)
+            .map_or(0, |x| x.count)
+    };
+    let no = (0..200u64).filter(|i| i % 11 == 5).count() as u64;
+    assert_eq!(count(Facet::Verified, "no"), no);
+    assert_eq!(count(Facet::Verified, "yes"), 200 - no);
+    let other = (0..200u64)
+        .filter(|i| i.is_multiple_of(13) || i % 13 == 7)
+        .count() as u64;
+    assert_eq!(count(Facet::Network, "bt"), 200 - other);
+    // `source` is many-valued, and a document without one counts under
+    // none.
+    let dht = (0..200u64).filter(|i| !i.is_multiple_of(17)).count() as u64;
+    assert_eq!(count(Facet::Source, "dht"), dht);
+    assert_eq!(count(Facet::Source, "nyaa"), 67);
+    assert!(!got.term(Facet::Source).unwrap().partial);
+    // The default clause is the facet's selection, and `no` still counts.
+    let (_, _, got) = run(&index, "verified:yes", &all_values());
+    let v = got.term(Facet::Verified).unwrap();
+    let yes = v.values.iter().find(|x| x.value == "yes").unwrap();
+    assert!(yes.selected && yes.count == 200 - no);
+    assert_eq!(v.values.iter().find(|x| x.value == "no").unwrap().count, no);
+    assert_eq!(got.matches, 200 - no);
 }
 
 mod rebuild {

@@ -7214,6 +7214,224 @@
           }
         ]
       }
+    },
+    "/webhooks": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Lists the integrations: whether each has a token, and its counts.",
+        "operationId": "listWebhooks",
+        "responses": {
+          "200": {
+            "description": "Both integrations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/webhooks/{integration}": {
+      "post": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Receives a Sonarr or Radarr webhook call. Authenticated by the\nintegration's token (Basic auth's password, or Bearer), not a session;\nevery failure to authenticate is the same `401 login_required`.",
+        "operationId": "receiveWebhook",
+        "parameters": [
+          {
+            "name": "integration",
+            "in": "path",
+            "description": "`sonarr` or `radarr`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Integration"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The app's webhook event, at most 256 KiB.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Taken: a Grab or Download found a key, or the event had nothing to find; or a real event dropped (`dropped`: over the integration's rate, the source off, the pipeline full). Dropped events still answer 200 so the app doesn't back its notifications off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed_webhook`: not an event, dropped and counted; or `webhook_unreadable`: the connection failed while the body was read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`login_required`: no valid token, however it failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`webhook_too_large`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many failed tokens from this address, with `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`webhooks_unavailable` (not wired, or the store can't be read), or `source_off` for the app's Test call while the source is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/webhooks/{integration}/token": {
+      "post": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Makes the integration's token, replacing any old one at once. Needs\nthe password (428 `confirm_required` without it). The token is in this\nresponse only.",
+        "operationId": "createWebhookToken",
+        "parameters": [
+          {
+            "name": "integration",
+            "in": "path",
+            "description": "`sonarr` or `radarr`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Integration"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Made; `token` is shown this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookToken"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Removes the integration's token: its calls are refused from now on.",
+        "operationId": "deleteWebhookToken",
+        "parameters": [
+          {
+            "name": "integration",
+            "in": "path",
+            "description": "`sonarr` or `radarr`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Integration"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed, or there was none.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -7563,6 +7781,12 @@
                 "description": "For a keyword override: the same entry as *Neutralize term*."
               }
             ]
+          },
+          "pack_base": {
+            "type": "integer",
+            "format": "int32",
+            "description": "For `set_pack_override`: the version of the rule the override is\nbound to (0 while the version this install applied isn't known).\nSend it back as `base` to confirm a weakening override with the\npassword.",
+            "minimum": 0
           },
           "preview": {
             "$ref": "#/components/schemas/Preview"
@@ -8674,6 +8898,67 @@
             }
           },
           {
+            "type": "object",
+            "description": "Your override of one pack rule (RP-2): its action, and optionally\nan `unless`. It never changes what the rule matches, and it replaces\nthe rule's override if it has one. Any `unless`, or an action lighter\nthan what applies now, weakens filtering: confirm it with the\npassword and send back the assessment's [`Assessment::pack_base`]\nas `base`. The override is bound to that version; once a newer\nversion is accepted, one that weakens the new version pauses until\nit's set again.",
+            "required": [
+              "rule",
+              "action",
+              "op"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "description": "`flag`, `demote`, `hide` or `drop`."
+              },
+              "base": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "The previewed `pack_base`, to confirm a weakening override.",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "set_pack_override"
+                ]
+              },
+              "rule": {
+                "type": "string",
+                "example": "MW-2"
+              },
+              "unless": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "An empty string means none."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Removes your override of one pack rule: the rule applies as built.\nRemoving one heavier than the rule's own action weakens filtering.",
+            "required": [
+              "rule",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "remove_pack_override"
+                ]
+              },
+              "rule": {
+                "type": "string",
+                "example": "MW-2"
+              }
+            }
+          },
+          {
             "allOf": [
               {
                 "$ref": "#/components/schemas/MatchInput"
@@ -9227,6 +9512,91 @@
               "ok",
               "failed"
             ]
+          }
+        }
+      },
+      "ClaimDifferences": {
+        "type": "object",
+        "description": "What a source claimed that the verified metadata contradicts\n(§18.5). A field is null when the source didn't state it or it\nagrees; claimed file lists themselves are never returned. Names are\ncompared byte for byte, so a feed's tidied title differs: show it as\ninformation, not a warning.",
+        "required": [
+          "file_count",
+          "matches",
+          "name",
+          "size"
+        ],
+        "properties": {
+          "file_count": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimedNumber",
+                "description": "Files claimed against files in the info dictionary (padding\nexcluded)."
+              }
+            ]
+          },
+          "matches": {
+            "type": "boolean",
+            "description": "Every stated field agrees."
+          },
+          "name": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimedText",
+                "description": "Both names are cut to 1,024 bytes."
+              }
+            ]
+          },
+          "size": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimedNumber",
+                "description": "Bytes."
+              }
+            ]
+          }
+        }
+      },
+      "ClaimedNumber": {
+        "type": "object",
+        "description": "A claimed number and the verified one.",
+        "required": [
+          "claimed",
+          "verified"
+        ],
+        "properties": {
+          "claimed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "verified": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ClaimedText": {
+        "type": "object",
+        "description": "A claimed text and the verified one.",
+        "required": [
+          "claimed",
+          "verified"
+        ],
+        "properties": {
+          "claimed": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "string"
           }
         }
       },
@@ -11791,6 +12161,7 @@
           "histograms",
           "sample_rate",
           "sampled",
+          "source_names",
           "took_ms",
           "total",
           "total_approx",
@@ -11815,7 +12186,7 @@
           },
           "facets": {
             "type": "object",
-            "description": "Term facets by name: `type`, `ext`, `res`, `category`, `lang`,\n`group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,\n`ambiguous`, `imported`, `backfill`, and `adult` when there are\nadult subtypes to list.",
+            "description": "Term facets by name: `type`, `ext`, `res`, `category`, `lang`,\n`group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,\n`ambiguous`, `imported`, `backfill`, `network`, `source`,\n`verified`, and `adult` when there are adult subtypes to list.\n\n`verified` counts `no` even while the search hides unverified\nitems, since its default `verified:yes` is the facet's own\nselection; `source` lists plugin ids (names in `source_names`),\nand never a private source's to anyone but the admin session\n(§18.7).",
             "additionalProperties": {
               "$ref": "#/components/schemas/TermFacet"
             },
@@ -11844,6 +12215,19 @@
           "sampled": {
             "type": "boolean",
             "description": "Some group was computed on a sample (above 1,000,000 matches, or\n300,000 when a segment holds more than 300,000 torrents)."
+          },
+          "source_names": {
+            "type": "object",
+            "description": "The display name of each plugin id the `source` facet lists.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "example": {
+              "dht": "Mainline DHT"
+            }
           },
           "took_ms": {
             "type": "number",
@@ -12716,6 +13100,22 @@
           "truncated": {
             "type": "boolean",
             "description": "More matched than the group lists."
+          }
+        }
+      },
+      "HitSource": {
+        "type": "object",
+        "description": "A hit's source: the display name, and the id `source:` takes.",
+        "required": [
+          "name",
+          "plugin"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "plugin": {
+            "type": "string"
           }
         }
       },
@@ -13624,6 +14024,14 @@
             ]
           }
         }
+      },
+      "Integration": {
+        "type": "string",
+        "description": "An app that can call in.",
+        "enum": [
+          "sonarr",
+          "radarr"
+        ]
       },
       "JobPhase": {
         "type": "string",
@@ -15432,6 +15840,54 @@
           }
         }
       },
+      "PackOverrideState": {
+        "type": "object",
+        "description": "Your override of one pack rule, as stored and as it applies now.",
+        "required": [
+          "action",
+          "base",
+          "changed",
+          "paused",
+          "unless",
+          "unreadable"
+        ],
+        "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null when the stored row doesn't read."
+          },
+          "base": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version it was made against (0: not known then); null when it\ndoesn't read.",
+            "minimum": 0
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "The base rule changed since it was set (§20.8): a newer version was\naccepted, or the version state is in doubt."
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Changed, and it would weaken the rule as it is now: the rule\napplies as built until the override is set again with the password."
+          },
+          "unless": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unreadable": {
+            "type": "boolean",
+            "description": "The stored row doesn't read: the stronger of its action and the\nrule's applies, and its `unless` is dropped."
+          }
+        }
+      },
       "PackRuleState": {
         "type": "object",
         "required": [
@@ -15449,6 +15905,10 @@
           },
           "on": {
             "type": "boolean"
+          },
+          "override": {
+            "$ref": "#/components/schemas/PackOverrideState",
+            "description": "Your override of the rule (RP-2), when it has one."
           }
         }
       },
@@ -15923,6 +16383,126 @@
         "example": {
           "identifying_until": 1700003600,
           "query_logging": false
+        }
+      },
+      "Provenance": {
+        "type": "object",
+        "description": "A torrent's provenance (architecture §18.5, §18.6, §18.8).\n\n**Private sources (§18.7):** a source with the account consent class\n(Prowlarr, Jackett, private-tracker announces, your own download\nclients), claims that came through a private source, and every\nsource of a `private_source` torrent are shown only to the signed-in\nadmin session. Any other caller (an API key, once these routes take\none) gets them left out (a public source with a private claim keeps\nits name, with `claim` null) and `withheld` set.",
+        "required": [
+          "network",
+          "sources",
+          "verified",
+          "withheld"
+        ],
+        "properties": {
+          "network": {
+            "type": "string",
+            "description": "The network tier (§18.6): `bt` for every stored torrent."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceSource"
+            },
+            "description": "The sources that found it: the first one first, then by id.\nEmpty for a torrent stored before provenance was recorded."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "It has verified metadata (§18.5). Always true here: a torrent's\ndetail is its BEP 9 info dictionary."
+          },
+          "withheld": {
+            "type": "boolean",
+            "description": "Sources or claims were left out because they're private and this\ncaller isn't the admin session."
+          }
+        },
+        "example": {
+          "network": "bt",
+          "sources": [
+            {
+              "claim": null,
+              "first": true,
+              "first_seen_at": 1792677600,
+              "id": 0,
+              "name": "Mainline DHT",
+              "plugin": "dht",
+              "private": false
+            },
+            {
+              "claim": {
+                "file_count": {
+                  "claimed": 3,
+                  "verified": 4
+                },
+                "matches": false,
+                "name": null,
+                "size": null
+              },
+              "first": false,
+              "first_seen_at": null,
+              "id": 2,
+              "name": "Nyaa",
+              "plugin": "nyaa",
+              "private": false
+            }
+          ],
+          "verified": true,
+          "withheld": false
+        }
+      },
+      "ProvenanceSource": {
+        "type": "object",
+        "description": "One source that found a torrent.",
+        "required": [
+          "claim",
+          "first",
+          "first_seen_at",
+          "id",
+          "name",
+          "plugin",
+          "private"
+        ],
+        "properties": {
+          "claim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimDifferences",
+                "description": "How what it claimed compares with the verified metadata; null when\nit made no claims about this torrent."
+              }
+            ]
+          },
+          "first": {
+            "type": "boolean",
+            "description": "It found the torrent first."
+          },
+          "first_seen_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When it first found the torrent: the torrent's discovery time for\nthe first source; null for the others, whose first sighting isn't\nrecorded."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The source's id, as `GET /sources` lists it.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The plugin's display name; its manifest id when this build doesn't\nrun that plugin."
+          },
+          "plugin": {
+            "type": "string",
+            "description": "The manifest id, as `source:` takes it."
+          },
+          "private": {
+            "type": "boolean",
+            "description": "A private source, or its claims came through one (§18.7). Only the\nadmin session ever sees one."
+          }
         }
       },
       "ProxySettings": {
@@ -17177,6 +17757,10 @@
             "format": "int64",
             "minimum": 0
           },
+          "source": {
+            "$ref": "#/components/schemas/HitSource",
+            "description": "The source that found it first, or the first one this caller may\nsee (§18.7: a private source is shown only to the admin session).\nOn `/search` hits only, and absent when none is known or visible."
+          },
           "swarm_suspect": {
             "type": "boolean",
             "description": "One tracker reports a swarm nothing else sees (§8): fake seeding."
@@ -17205,6 +17789,10 @@
             "format": "int32",
             "description": "Of those, trackers that reported anyone; null = never scraped.",
             "minimum": 0
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "It has verified metadata (§18.5, the \"Unverified\" badge when\nfalse). On `/search` hits only."
           }
         }
       },
@@ -20216,6 +20804,7 @@
           "approx",
           "distinct",
           "other",
+          "partial",
           "values"
         ],
         "properties": {
@@ -20234,6 +20823,10 @@
             "format": "int64",
             "description": "The counts of the values not listed, summed (a torrent with two\nsuch values counts twice).",
             "minimum": 0
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "The field is still being backfilled after an index upgrade, so the\ncounts are low (only `source`): show them as partial."
           },
           "values": {
             "type": "array",
@@ -20454,6 +21047,7 @@
           "metadata_at",
           "name",
           "piece_len",
+          "provenance",
           "seeders",
           "seeders_approx",
           "size",
@@ -20570,6 +21164,10 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/Provenance",
+            "description": "Where it came from (§18.5, §18.8): \"Found by: DHT · Nyaa\"."
           },
           "seeders": {
             "type": [
@@ -21522,6 +22120,106 @@
           }
         },
         "additionalProperties": false
+      },
+      "WebhookInfo": {
+        "type": "object",
+        "description": "One integration. The counts are since start, zero when webhooks\naren't wired.",
+        "required": [
+          "integration",
+          "path",
+          "token_set",
+          "found",
+          "ignored",
+          "malformed",
+          "refused"
+        ],
+        "properties": {
+          "found": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls that found a key.",
+            "minimum": 0
+          },
+          "ignored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Valid calls with nothing to find (Test, other events).",
+            "minimum": 0
+          },
+          "integration": {
+            "$ref": "#/components/schemas/Integration"
+          },
+          "malformed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bodies that weren't an event, dropped.",
+            "minimum": 0
+          },
+          "path": {
+            "type": "string",
+            "description": "The path the app calls, under `/api/v1`."
+          },
+          "refused": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Authenticated calls not delivered: over the rate, the source off,\nthe pipeline full, a body over the cap (`413`), or one that\ncouldn't be read.",
+            "minimum": 0
+          },
+          "token_set": {
+            "type": "boolean",
+            "description": "A token is made. It can't be shown again; make a new one instead."
+          }
+        }
+      },
+      "WebhookList": {
+        "type": "object",
+        "description": "`GET /webhooks`.",
+        "required": [
+          "integrations"
+        ],
+        "properties": {
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookInfo"
+            }
+          }
+        }
+      },
+      "WebhookReceipt": {
+        "type": "object",
+        "description": "An accepted call.",
+        "required": [
+          "found",
+          "dropped"
+        ],
+        "properties": {
+          "dropped": {
+            "type": "boolean",
+            "description": "The call was dropped: over the integration's rate, the source\nturned off, or the pipeline full. Counted in `refused`."
+          },
+          "found": {
+            "type": "boolean",
+            "description": "The event named a torrent, which went to the pipeline."
+          }
+        }
+      },
+      "WebhookToken": {
+        "type": "object",
+        "description": "`POST /webhooks/{integration}/token`: the new token, this once.",
+        "required": [
+          "integration",
+          "token"
+        ],
+        "properties": {
+          "integration": {
+            "$ref": "#/components/schemas/Integration"
+          },
+          "token": {
+            "type": "string",
+            "description": "Paste it into the app's webhook connection as the Password."
+          }
+        }
       }
     },
     "responses": {

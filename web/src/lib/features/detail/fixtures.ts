@@ -27,6 +27,7 @@ export function torrentDetail(over: Partial<TorrentDetail> = {}): TorrentDetail 
 		metadata_at: 1_700_000_100,
 		name: 'Show.S01.1080p.WEB-DL-GRP',
 		piece_len: 4_194_304,
+		provenance: { network: 'bt', sources: [], verified: true, withheld: false },
 		seeders: 120,
 		seeders_approx: false,
 		size: 2_900_000_000,

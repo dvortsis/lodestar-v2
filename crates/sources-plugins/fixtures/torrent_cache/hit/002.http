@@ -1,0 +1,5 @@
+GET https://second.example/get?h=695B0B3DEBB14473D741F7A3A86561E42009D6DC
+Accept: application/x-bittorrent
+
+HTTP 200
+Content-Type: application/x-bittorrent

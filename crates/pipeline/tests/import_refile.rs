@@ -116,6 +116,7 @@ fn sweep(store: &mut Store, filter: &Handle, sealer: Option<&Sealer>, limit: usi
         filter: None,
         sealer,
         quarantine_secs: 86_400,
+        ..Backfill::default()
     };
     let version = filter.current().version;
     let (mut after, mut batches) = (0, 0);
