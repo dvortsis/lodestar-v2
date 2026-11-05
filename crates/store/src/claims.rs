@@ -93,6 +93,14 @@ pub const MAX_STUDIO: usize = 256;
 pub const MAX_PERFORMERS: usize = 64;
 /// Bytes in one performer name: the parsers' `MAX_NAME`.
 pub const MAX_PERFORMER: usize = 256;
+
+// `unverified::MAX_ROW` bounds a row's `decoded_size` with the ids at
+// their count limit and no performers. A row with an adult section holds
+// no ids (`Claims::check`), so its performer list must take no more room
+// than the ids it can't have: 64 × 24 ≤ 32 × 48 today.
+const _: () = assert!(
+    MAX_PERFORMERS * std::mem::size_of::<String>() <= MAX_IDS * std::mem::size_of::<ExternalId>()
+);
 /// Bytes of claim text in all (provenance aside), as `lodestar_sources`
 /// clamps it. The adult section's text counts too (at most ~17 KiB).
 pub const MAX_TOTAL: usize = 1024 * 1024;
@@ -182,8 +190,10 @@ pub struct Provenance {
 }
 
 /// What an adult-enrichment service (ThePornDB, StashDB; architecture
-/// §20.9) says an item is.
+/// §20.9) says an item is. The discriminants are the stored `kind` byte
+/// (0 is no kind), so they are part of the format: never renumber them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum AdultKind {
     Scene = 1,
     Movie = 2,
