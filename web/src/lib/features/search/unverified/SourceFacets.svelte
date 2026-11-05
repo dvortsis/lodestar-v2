@@ -7,7 +7,8 @@
 	import type { Ast } from '$lib/state/search.svelte';
 	import TermGroup from '../facets/TermGroup.svelte';
 	import type { FacetsResponse } from '../facets/facets.svelte';
-	import { clearSources, fixedSources, shortName, toggleSource } from './source';
+	import { clearField, fieldOf, fixedValues, toggleValue } from '../facets/toggle';
+	import { shortName } from './source';
 	import UnverifiedToggle from './UnverifiedToggle.svelte';
 
 	interface Props {
@@ -17,6 +18,7 @@
 	}
 	let { data, ast, onchange }: Props = $props();
 
+	const FIELD = fieldOf('source')!;
 	const source = $derived(data.facets.source);
 	const unverified = $derived(data.facets.verified?.values.find((v) => v.value === 'no'));
 	const nameOf = (id: string) => shortName(data.source_names[id] ?? id);
@@ -30,9 +32,9 @@
 			facet={source}
 			labelOf={nameOf}
 			excludable={false}
-			fixed={fixedSources(ast)}
-			onvalue={(v) => onchange(toggleSource(ast, v))}
-			onclear={() => onchange(clearSources(ast))}
+			fixed={fixedValues(ast, FIELD)}
+			onvalue={(v) => onchange(toggleValue(ast, FIELD, v))}
+			onclear={() => onchange(clearField(ast, FIELD))}
 		/>
 		{#if source.partial}
 			<p class="fr-muted" data-testid="facet-source-partial">

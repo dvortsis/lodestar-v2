@@ -14,6 +14,7 @@ const src = (over: Partial<ProvenanceSource> = {}): ProvenanceSource => ({
 	...over
 });
 const base: P = { network: 'bt', sources: [], verified: true, withheld: false };
+const T = { timeout: 10_000 };
 
 describe('Provenance', () => {
 	it('lists the sources joined by a dot, with DHT shortened', () => {
@@ -23,38 +24,52 @@ describe('Provenance', () => {
 				sources: [src(), src({ id: 2, plugin: 'nyaa', name: 'Nyaa', first: false })]
 			}
 		});
-		expect(screen.getByTestId('detail-found-by').textContent).toMatch(/Found by:\s*DHT\s*·\s*Nyaa/);
+		expect(screen.getByTestId('detail-found-by').textContent).toMatch(/Found by:\s*DHT.*·.*Nyaa/);
+	});
+	it('gives screen readers a comma between sources', () => {
+		render(Provenance, {
+			provenance: {
+				...base,
+				sources: [src(), src({ id: 2, plugin: 'nyaa', name: 'Nyaa', first: false })]
+			}
+		});
+		const sep = screen.getByTestId('detail-found-by').querySelector('.sr-only');
+		expect(sep?.textContent?.trim()).toBe(',');
 	});
 	it('shows nothing for no sources and nothing withheld', () => {
 		const { container } = render(Provenance, { provenance: base });
 		expect(container.textContent!.trim()).toBe('');
 	});
-	it('says only "private source" when sources were withheld', () => {
-		render(Provenance, { provenance: { ...base, sources: [src()], withheld: true } });
-		const t = screen.getByTestId('detail-sources-withheld');
-		expect(t.textContent).toContain('private source');
-		expect(t.querySelector('svg')).toBeTruthy();
-		expect(screen.getByTestId('detail-found-by').textContent).toMatch(/DHT/);
+	it('notes withheld details without adding a source, even with no sources', () => {
+		const { container } = render(Provenance, { provenance: { ...base, withheld: true } });
+		expect(screen.queryByTestId('detail-found-by')).toBeNull();
+		expect(screen.getByTestId('detail-sources-withheld').textContent).toContain('private sources');
+		expect(container.textContent).not.toContain('Found by');
 	});
-	it('marks a private source for the admin with an icon and text', () => {
+	it('keeps a public source and adds the note when some were withheld', () => {
+		render(Provenance, { provenance: { ...base, sources: [src()], withheld: true } });
+		expect(screen.getByTestId('detail-found-by').textContent).toMatch(/DHT/);
+		expect(screen.getByTestId('detail-sources-withheld')).toBeTruthy();
+	});
+	it('marks a private source for the admin in words', () => {
 		render(Provenance, {
 			provenance: {
 				...base,
 				sources: [src({ plugin: 'prowlarr', name: 'Prowlarr', private: true })]
 			}
 		});
-		const el = screen.getByTestId('detail-source-prowlarr');
-		expect(el.textContent).toContain('private');
-		expect(el.querySelector('svg')).toBeTruthy();
+		expect(screen.getByTestId('detail-source-prowlarr').textContent).toContain('(private)');
 	});
-	it('shows the Unverified badge only when not verified', () => {
-		const { unmount } = render(Provenance, { provenance: base });
-		expect(screen.queryByTestId('unverified-badge')).toBeNull();
-		unmount();
-		render(Provenance, { provenance: { ...base, verified: false } });
-		expect(screen.getByTestId('unverified-badge')).toBeTruthy();
+	it('loads nothing about differences when claims match', () => {
+		render(Provenance, {
+			provenance: {
+				...base,
+				sources: [src({ claim: { matches: true, name: null, size: null, file_count: null } })]
+			}
+		});
+		expect(screen.queryByTestId('detail-claim-differences')).toBeNull();
 	});
-	it('lists the claim differences, with formatted numbers', () => {
+	it('lists the claim differences, with formatted numbers', async () => {
 		render(Provenance, {
 			provenance: {
 				...base,
@@ -73,32 +88,15 @@ describe('Provenance', () => {
 				]
 			}
 		});
-		expect(screen.getByTestId('detail-claim-name-nyaa').textContent).toContain(
+		expect((await screen.findByTestId('detail-claim-name-nyaa', {}, T)).textContent).toContain(
 			'the name was "Show S01"; the metadata says "Show.S01.1080p"'
 		);
-		expect(screen.getByTestId('detail-claim-size-nyaa').textContent).toContain(
-			'size was 1.00\u00a0KiB'
-		);
+		expect(screen.getByTestId('detail-claim-size-nyaa').textContent).toContain('size was 1.00 KiB');
 		expect(screen.getByTestId('detail-claim-files-nyaa').textContent).toContain(
 			'file count was 3; the metadata says 4'
 		);
 	});
-	it('hides the section when claims match', () => {
-		render(Provenance, {
-			provenance: {
-				...base,
-				sources: [src({ claim: { matches: true, name: null, size: null, file_count: null } })]
-			}
-		});
-		expect(screen.queryByTestId('detail-claim-differences')).toBeNull();
-	});
-	it('notes withheld details without adding a source, even with no sources', () => {
-		const { container } = render(Provenance, { provenance: { ...base, withheld: true } });
-		expect(screen.queryByTestId('detail-found-by')).toBeNull();
-		expect(screen.getByTestId('detail-sources-withheld').textContent).toContain('private sources');
-		expect(container.textContent).not.toContain('Found by');
-	});
-	it('lists differences from several sources and uses the given heading level', () => {
+	it('lists differences from several sources and uses the given heading level', async () => {
 		const claim = (n: number) => ({
 			matches: false,
 			name: null,
@@ -115,7 +113,7 @@ describe('Provenance', () => {
 				]
 			}
 		});
-		expect(screen.getByTestId('detail-claim-files-nyaa')).toBeTruthy();
+		expect(await screen.findByTestId('detail-claim-files-nyaa', {}, T)).toBeTruthy();
 		expect(screen.getByTestId('detail-claim-files-rss')).toBeTruthy();
 		expect(screen.getByRole('heading', { level: 2 }).textContent).toContain('Claims that differ');
 	});

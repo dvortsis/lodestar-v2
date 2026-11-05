@@ -16,6 +16,7 @@
 	}
 	let { ast, onchange, count = null }: Props = $props();
 
+	const uid = $props.id();
 	const on = $derived(showsUnverified(ast));
 	function change(e: Event) {
 		onchange(withUnverified(ast, (e.currentTarget as HTMLInputElement).checked));
@@ -27,14 +28,14 @@
 		label={m.search_unverified_toggle()}
 		checked={on}
 		onchange={change}
-		aria-describedby="unverified-hint{count ? ' unverified-count' : ''}"
+		aria-describedby="{uid}-hint{count ? ` ${uid}-count` : ''}"
 	/>
 	{#if count}
-		<span class="text-caption" id="unverified-count" data-testid="unverified-count"
+		<span class="text-caption" id="{uid}-count" data-testid="unverified-count"
 			>{formatCount(count, currentLocale())}</span
 		>
 	{/if}
-	<p id="unverified-hint" class="fr-muted">
+	<p id="{uid}-hint" class="fr-muted">
 		{m.search_unverified_hint()}
 	</p>
 </div>
