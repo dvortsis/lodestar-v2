@@ -100,7 +100,7 @@ fn state_key(host: &str) -> String {
     format!("last:{host}")
 }
 
-const MANIFEST: Manifest = Manifest {
+pub(crate) const MANIFEST: Manifest = Manifest {
     id: ID,
     name: "Tracker full scrape",
     version: "1",
