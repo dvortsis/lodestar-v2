@@ -1,17 +1,23 @@
 <script lang="ts">
-	// First-run setup (§10.10.10 steps 1 and 2): the setup token from the log, then the admin
-	// password. The server takes both in one request (POST /setup), so the token step only checks
-	// the format; a wrong token comes back from the submit and returns to step 1.
+	// First-run setup (§10.10.10), the steps before a session exists (`SETUP_STEPS`): the Legal
+	// Notice with its required box (owner §2.38, the wizard's LegalStep), the setup token from the
+	// log, then the admin password. The server takes all three in one request (POST /setup), so the
+	// earlier steps only check locally: a wrong token comes back from the submit and returns to the
+	// token step, and a notice that changed meanwhile (409 notice_required) returns to the notice
+	// step with the new text and the box cleared.
 	import { onDestroy, tick } from 'svelte';
 	import { api } from '$lib/api/client';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import LegalStep from '../wizard/LegalStep.svelte';
+	import { SETUP_STEPS, type SetupStepId } from '../wizard/steps';
 	import { failureMessage } from './errors';
 	import { createAuthForm } from './form.svelte';
 	import FormAlert from './FormAlert.svelte';
 	import type { FieldName } from './machine';
+	import { resetNoticeCache, type LegalNotice } from './notice';
 	import { toLogin, toWelcome } from './nav';
 	import { checkPassword, isBlocking, MIN_PASSWORD_CHARS } from './password';
 	import { setSession } from './session.svelte';
@@ -20,17 +26,22 @@
 	const form = createAuthForm();
 	onDestroy(form.destroy);
 
-	type Step = 'token' | 'password';
-	let step = $state<Step>('token');
+	type Step = SetupStepId;
+	let step = $state<Step>(SETUP_STEPS[0]);
+	let notice = $state<LegalNotice | null>(null);
+	let read = $state(false);
+	/** Set when the notice step is entered, so it focuses the notice once loaded. */
+	let noticeVisit = $state(0);
 	let token = $state('');
 	let password = $state('');
 	let confirm = $state('');
 	let root = $state<HTMLDivElement>();
 
-	const steps: { id: Step; label: () => string }[] = [
-		{ id: 'token', label: m.auth_setup_step_token },
-		{ id: 'password', label: m.auth_setup_step_password }
-	];
+	const labels: Record<Step, () => string> = {
+		legal: m.wizard_step_legal,
+		token: m.auth_setup_step_token,
+		password: m.auth_setup_step_password
+	};
 
 	const strength = $derived(password ? checkPassword(password) : null);
 	const strengthHint = $derived(
@@ -47,6 +58,13 @@
 			? failureMessage(form.state.failure)
 			: undefined;
 	const locked = $derived(form.state.name === 'locked');
+	const noticeError = $derived(
+		form.state.name !== 'error' || form.state.failure.field !== 'notice'
+			? undefined
+			: form.state.failure.kind === 'invalid'
+				? ('unchecked' as const)
+				: ('changed' as const)
+	);
 
 	async function focus(name: FieldName, select = false) {
 		await tick();
@@ -60,20 +78,37 @@
 		return focus(field, true);
 	}
 
+	async function goTo(next: Step) {
+		step = next;
+		if (next === 'legal') noticeVisit++;
+		else await focus(next);
+	}
+
+	async function continueFromNotice(event: SubmitEvent) {
+		event.preventDefault();
+		if (!notice) return;
+		if (!read) {
+			form.invalid({ kind: 'invalid', field: 'notice', reason: 'notice_unchecked' });
+			await tick();
+			root?.querySelector<HTMLInputElement>('input[name="notice"]')?.focus();
+			return;
+		}
+		form.edit();
+		await goTo('token');
+	}
+
 	async function continueToPassword(event: SubmitEvent) {
 		event.preventDefault();
 		const parsed = parseToken(token);
 		if (!parsed) return invalid('token', 'token_invalid');
 		token = parsed;
 		form.edit();
-		step = 'password';
-		await focus('password');
+		await goTo('password');
 	}
 
 	async function back() {
 		form.edit();
-		step = 'token';
-		await focus('token');
+		await goTo(step === 'password' ? 'token' : 'legal');
 	}
 
 	async function submit(event: SubmitEvent) {
@@ -82,7 +117,13 @@
 		const check = checkPassword(password);
 		if (isBlocking(check)) return invalid('password', check);
 		if (confirm !== password) return invalid('confirm', 'mismatch');
-		const body = { token, password };
+		if (!notice || !read) {
+			// The box is required; the steps can't skip it, but never send without it.
+			await goTo('legal');
+			form.invalid({ kind: 'invalid', field: 'notice', reason: 'notice_unchecked' });
+			return;
+		}
+		const body = { token, password, notice_version: notice.version };
 		const ok = await form.submit(() => api.post('/setup', { body }));
 		if (ok) {
 			token = password = confirm = '';
@@ -98,6 +139,12 @@
 		} else if (s.failure.kind === 'bad_token') {
 			step = 'token';
 			await focus('token', true);
+		} else if (s.failure.kind === 'notice_required') {
+			// A newer build is serving: show its notice and ask again. The error stays on screen.
+			resetNoticeCache();
+			notice = null;
+			read = false;
+			await goTo('legal');
 		} else if (s.failure.field) {
 			await focus(s.failure.field, true);
 		}
@@ -106,17 +153,34 @@
 
 <div bind:this={root} class="flex flex-col gap-6">
 	<ol aria-label={m.auth_setup_steps()} class="flex flex-wrap gap-x-4 gap-y-1 text-small">
-		{#each steps as s, i (s.id)}
+		{#each SETUP_STEPS as id, i (id)}
 			<li
-				aria-current={s.id === step ? 'step' : undefined}
-				class={s.id === step ? 'font-semibold text-base-content' : 'text-muted-text'}
+				aria-current={id === step ? 'step' : undefined}
+				class={id === step ? 'font-semibold text-base-content' : 'text-muted-text'}
 			>
-				{i + 1}. {s.label()}
+				{i + 1}. {labels[id]()}
 			</li>
 		{/each}
 	</ol>
 
-	{#if step === 'token'}
+	{#if step === 'legal'}
+		<form method="post" class="flex flex-col gap-4" novalidate onsubmit={continueFromNotice}>
+			<h2 class="text-title font-semibold text-base-content">{m.wizard_step_legal()}</h2>
+			{#key noticeVisit}
+				<LegalStep
+					bind:notice
+					bind:read
+					error={noticeError}
+					focusOnLoad={noticeVisit > 0}
+					onchange={() => form.edit()}
+				/>
+			{/key}
+			<FormAlert {form} />
+			<Button type="submit" variant="primary" aria-disabled={!notice || undefined}>
+				{m.auth_token_next()}
+			</Button>
+		</form>
+	{:else if step === 'token'}
 		<form method="post" class="flex flex-col gap-4" novalidate onsubmit={continueToPassword}>
 			<h2 class="text-title font-semibold text-base-content">{m.auth_setup_step_token()}</h2>
 			<Field
@@ -156,7 +220,10 @@
 				</ul>
 			</details>
 			<FormAlert {form} />
-			<Button type="submit" variant="primary">{m.auth_token_next()}</Button>
+			<div class="flex flex-col-reverse gap-3 medium:flex-row medium:justify-between">
+				<Button variant="quiet" onclick={back}>{m.auth_back()}</Button>
+				<Button type="submit" variant="primary">{m.auth_token_next()}</Button>
+			</div>
 		</form>
 	{:else}
 		<form method="post" class="flex flex-col gap-4" novalidate onsubmit={submit}>

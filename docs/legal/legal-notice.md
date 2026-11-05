@@ -2,8 +2,6 @@
 
 **Version 2 · 2026-11-04**
 
-*Status: the in-app step that shows this notice at first-run setup is being built for the first release (v0.5.1); the on-by-default rule packs and the unauthorised-copy pack ship in v0.5.2. Until the step ships, the notice is published here and linked from the README and the user guide.*
-
 Lodestar shows this notice before first use, and again whenever its version is raised, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
 
 ## 1. Who publishes Lodestar, and under what licence

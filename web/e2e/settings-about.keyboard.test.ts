@@ -179,6 +179,18 @@ test.describe('keyboard: Settings → About', () => {
 		await expect(page.getByRole('searchbox', { name: 'Search components' })).toBeVisible();
 	});
 
+	test('the Legal Notice opens on request, with its version', async ({ page, go, kbd }) => {
+		await go('/settings/about');
+		await expect(page.getByRole('heading', { name: 'Legal', exact: true })).toBeVisible();
+		await kbd.tabTo(page.getByRole('button', { name: 'Show the Legal Notice' }), 100);
+		await kbd.press('Enter');
+		await expect(page.getByTestId('about-notice-version')).toHaveText('Version 2');
+		await expect(page.getByRole('region', { name: 'Legal Notice' })).toContainText(
+			'Who publishes Lodestar'
+		);
+		await expectNoA11yViolations(page);
+	});
+
 	test('keeps the page when the server does not answer', async ({ page, go, mock }) => {
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
 		on('getSystem', () => ({

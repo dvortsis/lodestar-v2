@@ -225,6 +225,22 @@ describe('errors', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	it('409 notice_required goes to the sign-in page like a 401, without retrying', async () => {
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		const ev = make();
+		fetchMock.mockImplementation(async () => err(409, 'notice_required'));
+		ev.on('torrents', () => {});
+		await tick();
+		expect(handler).toHaveBeenCalledWith(expect.any(String), {
+			setupRequired: false,
+			noticeRequired: true
+		});
+		expect(ev.status).toBe('stopped');
+		await tick(120_000);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it('429 shows busy, waits Retry-After, then retries', async () => {
 		const ev = make();
 		fetchMock

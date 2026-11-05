@@ -35,7 +35,7 @@ use axum::response::{IntoResponse, Response};
 use lodestar_store::{KeyCheck, KeyKind};
 
 use super::Auth;
-use super::http::{SessionAuth, logged_in, login_required};
+use super::http::{SessionAuth, logged_in, login_required, notice_required};
 use super::limit::retry_after;
 use crate::ApiState;
 use crate::error::{ApiError, internal, wrong_method};
@@ -167,6 +167,12 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
     };
     let peer = peer_ip(req.extensions());
     if logged_in(&auth, req.headers(), peer) {
+        // A browser meets the notice gate here too. API keys and feed
+        // tokens don't: the admin who made them meets it at sign-in, and
+        // an upgrade mustn't stop a connected app before they do.
+        if auth.notice_pending() {
+            return notice_required().into_response();
+        }
         req.extensions_mut().insert(Access::Session);
         return next.run(req).await;
     }

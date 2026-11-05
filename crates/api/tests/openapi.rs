@@ -24,6 +24,8 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/auth/proxy"),
     ("PUT", "/auth/proxy"),
     ("POST", "/sessions/revoke-others"),
+    ("GET", "/legal/notice"),
+    ("POST", "/legal/accept"),
     ("GET", "/keys"),
     ("POST", "/keys"),
     ("DELETE", "/keys/{id}"),
@@ -142,7 +144,14 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/logs/archive.zip"),
     ("GET", "/openapi.json"),
 ];
-const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"];
+const OPEN: [&str; 6] = [
+    "/auth",
+    "/setup",
+    "/login",
+    "/logout",
+    "/legal/notice",
+    "/openapi.json",
+];
 const METHODS: [&str; 8] = [
     "get", "put", "post", "delete", "options", "head", "patch", "trace",
 ];

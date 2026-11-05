@@ -103,5 +103,10 @@
 	"wizard_pack_spam": "垃圾信息",
 	"wizard_pack_spam_text": "隐藏塞进名称里的广告和推广。",
 	"wizard_pack_scams": "骗局",
-	"wizard_pack_scams_text": "隐藏虚假赠品和“需要密码”的骗术。"
+	"wizard_pack_scams_text": "隐藏虚假赠品和“需要密码”的骗术。",
+	"wizard_step_legal": "法律声明",
+	"wizard_legal_intro": "了解 Lodestar 在你的网络上做什么，以及哪些事情由你决定。请滚动阅读全文。",
+	"wizard_legal_confirm": "我已阅读法律声明",
+	"wizard_legal_unchecked": "请确认你已阅读法律声明后继续。",
+	"wizard_legal_changed": "此页面打开期间法律声明已更新。请阅读新版本，然后再次确认。"
 }

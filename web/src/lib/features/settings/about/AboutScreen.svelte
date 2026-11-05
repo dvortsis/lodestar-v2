@@ -40,7 +40,8 @@
 	let copied = $state<'copied' | 'manual'>();
 	let Diagnostics = $state.raw<Component<{ info: System; uiBuild: string }>>();
 	let Licences = $state.raw<Component>();
-	let partFailed = $state<'diagnostics' | 'licences'>();
+	let Legal = $state.raw<Component>();
+	let partFailed = $state<'diagnostics' | 'licences' | 'legal'>();
 
 	$effect(() => {
 		void attempt;
@@ -141,6 +142,14 @@
 			Licences = (await import('./Licences.svelte')).default;
 		} catch {
 			partFailed = 'licences';
+		}
+	}
+	async function openLegal() {
+		partFailed = undefined;
+		try {
+			Legal = (await import('./Legal.svelte')).default;
+		} catch {
+			partFailed = 'legal';
 		}
 	}
 	const newest = $derived(updates?.releases[0]);
@@ -407,6 +416,24 @@
 		{/if}
 	</section>
 
+	<section aria-labelledby="about-legal" class="flex flex-col gap-2">
+		<h2 id="about-legal" class="text-body-lg font-semibold">{m.settings_about_legal()}</h2>
+		<p class="text-muted-text">{m.settings_about_legal_lead()}</p>
+		{#if Legal}
+			<Legal />
+		{:else}
+			<div><Button onclick={openLegal}>{m.settings_about_legal_show()}</Button></div>
+		{/if}
+		{#if link}
+			<p>
+				{@render ext(
+					`${link.repo}/blob/main/docs/legal/operator-guidance.md`,
+					m.settings_about_legal_operators()
+				)}
+			</p>
+		{/if}
+	</section>
+
 	<section aria-labelledby="about-licences" class="flex flex-col gap-2">
 		<h2 id="about-licences" class="text-body-lg font-semibold">{m.settings_about_licences()}</h2>
 		<p>{m.settings_about_licence_own()}</p>
@@ -426,6 +453,8 @@
 	<p role="alert" class="text-small text-error">
 		{partFailed === 'licences'
 			? m.settings_about_licence_error()
-			: m.settings_about_diagnostics_error()}
+			: partFailed === 'legal'
+				? m.settings_about_legal_error()
+				: m.settings_about_diagnostics_error()}
 	</p>
 {/if}

@@ -217,7 +217,7 @@ Do not use `network_mode: host` unless you need it. It skips Docker's network tr
 Pin an exact version such as `x.y.z` instead of `latest` once releases exist, if you want updates only when you decide.
 
 ## 2.5 Create the admin password
-<!-- index: setup token; admin password; first run -->
+<!-- index: setup token; admin password; first run; Legal Notice -->
 
 On a fresh data folder, Lodestar prints a one-time **setup token** to its log. Anyone who can read the log can claim a fresh instance, so do this before anyone else can reach the web UI.
 
@@ -231,13 +231,22 @@ To create the admin password:
 
 2. Find the line that contains `enter setup token` and copy the word right after it. The line also has a time and a level at its start.
 3. Open `http://<server-ip>:8090` in your browser. Replace `<server-ip>` with your server's address, or use `localhost` on the same machine.
-4. Enter the token and choose a password from your password manager.
+4. Read the **Legal Notice**. It says what Lodestar does on your network, what it finds, and what is yours to decide. Scroll the box to read all of it. Select **I have read the Legal Notice**, then **Continue**.
+5. Enter the token, then select **Continue**.
+6. Choose a password from your password manager, enter it twice, and select **Create password and sign in**.
    **Result:** Lodestar signs you in. It prints no token again.
 
+![Lodestar first-run setup screen showing the Legal Notice, with the I have read the Legal Notice box outlined](images/setup-notice.png)
+*Figure 2.3: The first step of setup at /setup: the Legal Notice, with the box you select outlined.*
+
 ![Lodestar first-run setup screen with the Setup token field outlined](images/setup-screen.png)
-*Figure 2.3: The first-run setup screen at /setup, with the Setup token field outlined and log instructions expanded.*
+*Figure 2.4: The setup token step, with the Setup token field outlined.*
 
 The crawler starts at once. The library fills slowly at first while the DHT routing table warms up.
+
+To read the notice again later, open **Settings** → **About** and select **Show the Legal Notice** in the **Legal** section.
+
+If your copy of Lodestar was set up before it showed the notice, it shows the notice once, the next time you sign in. Read it and select **I have read it, continue**. It shows again only when a later version changes the notice in substance. Apps that use an API key or a feed link keep working meanwhile.
 
 > [!NOTE]
 > **Worked example**

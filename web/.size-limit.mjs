@@ -350,8 +350,12 @@ const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal
 // buttons are pressed, and its navigation icon and purpose line (for the filter) on demand; gated on
 // their own below. The parts only load from About's body.
 const settingsAboutModules = [/features\/settings\/about\/(icon|about)\.ts$/];
+// About → Legal (LEGAL-1): the Legal Notice with its renderer, loaded by "Show the Legal Notice";
+// gated on its own below, so About's other parts keep their budget.
+const settingsAboutLegal = [/features\/settings\/about\/Legal\.svelte$/];
 const settingsAboutParts = [
 	/features\/settings\/about\/(Diagnostics|Licences)\.svelte$/,
+	...settingsAboutLegal,
 	...settingsAboutModules
 ];
 // Updates (S-updates): the release notes and history load after the first view, and its navigation
@@ -587,8 +591,21 @@ const settingsAboutPartsLazy = requireMeasuredJs('Settings about parts (on deman
 			.filter(
 				(key) =>
 					settingsAboutParts.some((re) => re.test(key)) &&
-					!settingsAboutModules.some((re) => re.test(key))
+					!settingsAboutModules.some((re) => re.test(key)) &&
+					!settingsAboutLegal.some((re) => re.test(key))
 			)
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...aboutFirstView
+				])
+			)
+	)
+]);
+const settingsAboutLegalLazy = requireMeasuredJs('Settings about Legal Notice (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsAboutLegal.some((re) => re.test(key)))
 			.flatMap((key) =>
 				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
 					...settingsShellView,
@@ -1142,6 +1159,8 @@ export default [
 	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
 	// About's diagnostics block and licence list (S-about): LIMIT_ABOUT_PARTS
 	entry('Settings about parts (on demand)', settingsAboutPartsLazy, '3.44 KB'),
+	// LEGAL-1: About → Legal, the notice's box and renderer. Measured 2.74 KB, limit = measured + ~10%.
+	entry('Settings about Legal Notice (on demand)', settingsAboutLegalLazy, '3 KB'),
 	entry('Settings about icon and purpose (on demand)', settingsAboutModulesLazy, '0.39 KB'),
 	// Updates' release notes and history (S-updates): measured + 10%.
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),

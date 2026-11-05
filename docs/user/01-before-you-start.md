@@ -37,7 +37,7 @@ Four more facts hold today:
 - Rule packs are on by default on a new install. A rule pack is a set of rules that hides junk such as malware, fakes and scams. You can turn a pack off in the setup wizard or in **Settings → Filters & Safety**. Turning one off shows what it would let through and asks for your password. We recommend you leave them on.
 
 > [!IMPORTANT]
-> **Lodestar is made for lawful use.** You run your own copy. You decide what it connects to, and anything you do with what it finds is your sole responsibility. The laws on peer-to-peer networks differ by country and by state. Read the [Legal Notice and Network Risks](../legal/legal-notice.md) before you install. It explains what Lodestar does on your network and what it finds. Showing it at first-run setup is **(planned)**.
+> **Lodestar is made for lawful use.** You run your own copy. You decide what it connects to, and anything you do with what it finds is your sole responsibility. The laws on peer-to-peer networks differ by country and by state. Read the [Legal Notice and Network Risks](../legal/legal-notice.md) before you install. It explains what Lodestar does on your network and what it finds. Setup shows it again as its first step and asks you to confirm that you've read it.
 
 <details>
 <summary>What the crawler still shares with the network</summary>

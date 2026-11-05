@@ -151,7 +151,7 @@ async fn session(f: &Fixture) -> String {
     let req = Request::post("/api/v1/setup")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
-            json!({ "token": token, "password": "correct horse battery" }).to_string(),
+            json!({ "token": token, "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }).to_string(),
         ))
         .unwrap();
     let mut req = req;

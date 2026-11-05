@@ -20,13 +20,15 @@ export type FailKind =
 	| 'setup_done'
 	| 'not_set_up'
 	| 'rate_limited'
+	/** The Legal Notice changed since this page loaded it: show the new one. */
+	| 'notice_required'
 	| 'network'
 	| 'server'
 	/** Client-side validation: the request was never sent. */
 	| 'invalid';
 
 /** The form field an error belongs to, for focus and `aria-describedby`. */
-export type FieldName = 'token' | 'password' | 'confirm';
+export type FieldName = 'token' | 'password' | 'confirm' | 'notice';
 
 export interface Failure {
 	kind: FailKind;
@@ -108,6 +110,8 @@ export function classify(e: unknown, now: number): Failure {
 			return { kind: 'setup_done' };
 		case 'not_set_up':
 			return { kind: 'not_set_up' };
+		case 'notice_required':
+			return { kind: 'notice_required', field: 'notice' };
 		case 'network':
 			return { kind: 'network' };
 	}

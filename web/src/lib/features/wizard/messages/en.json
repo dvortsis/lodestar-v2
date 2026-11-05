@@ -103,5 +103,10 @@
 	"wizard_pack_spam": "Spam",
 	"wizard_pack_spam_text": "Hides advertising and promotion stuffed into names.",
 	"wizard_pack_scams": "Scams",
-	"wizard_pack_scams_text": "Hides fake giveaways and \"password required\" tricks."
+	"wizard_pack_scams_text": "Hides fake giveaways and \"password required\" tricks.",
+	"wizard_step_legal": "Legal Notice",
+	"wizard_legal_intro": "Read what Lodestar does on your network and what is yours to decide. Scroll to read it all.",
+	"wizard_legal_confirm": "I have read the Legal Notice",
+	"wizard_legal_unchecked": "Confirm that you have read the Legal Notice to continue.",
+	"wizard_legal_changed": "The Legal Notice changed while this page was open. Read the new version, then confirm again."
 }

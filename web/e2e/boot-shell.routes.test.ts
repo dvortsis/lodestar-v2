@@ -204,6 +204,7 @@ test('no layout shift on the sign-in and setup screens, where the shell is dropp
 		// Measure each intended screen, not an auth redirect to another screen.
 		mock.on('getAuthStatus', {
 			logged_in: path === '/welcome',
+			notice_required: false,
 			setup_required: path === '/setup'
 		});
 		await go(path);
@@ -220,8 +221,16 @@ for (const path of ['/login', '/setup']) {
 		go,
 		mock
 	}) => {
-		let finish!: (value: { logged_in: boolean; setup_required: boolean }) => void;
-		const status = new Promise<{ logged_in: boolean; setup_required: boolean }>((resolve) => {
+		let finish!: (value: {
+			logged_in: boolean;
+			notice_required: boolean;
+			setup_required: boolean;
+		}) => void;
+		const status = new Promise<{
+			logged_in: boolean;
+			notice_required: boolean;
+			setup_required: boolean;
+		}>((resolve) => {
 			finish = resolve;
 		});
 		mock.on('getAuthStatus', () => status);
@@ -230,7 +239,7 @@ for (const path of ['/login', '/setup']) {
 		await expect(page.getByRole('status')).toContainText('Checking');
 		await expect(page.locator('main [inert] form')).toHaveCount(1);
 		await expect(page.locator('main input:not([hidden])').first()).toBeHidden();
-		finish({ logged_in: false, setup_required: path === '/setup' });
+		finish({ logged_in: false, notice_required: false, setup_required: path === '/setup' });
 		await expect(page.locator('main input:not([hidden])').first()).toBeVisible();
 		await expect(page.locator('main [inert]')).toHaveCount(0);
 		await page.waitForLoadState('networkidle');
@@ -244,7 +253,7 @@ for (const width of [1280, 390, 320]) {
 		mock
 	}) => {
 		await page.setViewportSize({ width, height: 844 });
-		mock.on('getAuthStatus', { logged_in: false, setup_required: true });
+		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: true });
 		let releaseFont!: () => void;
 		let blockedFonts = 0;
 		const fontReady = new Promise<void>((resolve) => (releaseFont = resolve));

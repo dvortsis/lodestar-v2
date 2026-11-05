@@ -185,7 +185,7 @@ async fn signed_in(f: &Fixture) -> String {
             Method::POST,
             "/api/v1/setup",
             None,
-            Some(json!({ "token": token, "password": PASSWORD })),
+            Some(json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION })),
         ),
         fresh_ip(),
     )
@@ -1006,7 +1006,7 @@ async fn without_user_data_keys_are_unavailable() {
             Method::POST,
             "/api/v1/setup",
             None,
-            Some(json!({ "token": token, "password": PASSWORD })),
+            Some(json!({ "token": token, "password": PASSWORD, "notice_version": lodestar_api::legal::NOTICE_VERSION })),
         ),
         fresh_ip(),
     )

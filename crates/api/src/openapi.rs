@@ -26,7 +26,14 @@ pub const PREFIX: &str = "/api/v1";
 /// The session cookie's security scheme.
 const SESSION: &str = "session";
 /// Paths that need no session.
-const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"];
+const OPEN: [&str; 6] = [
+    "/auth",
+    "/setup",
+    "/login",
+    "/logout",
+    "/legal/notice",
+    "/openapi.json",
+];
 
 #[derive(OpenApi)]
 #[openapi(
@@ -39,7 +46,7 @@ const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"
     paths(openapi_json),
     components(schemas(ErrorEnvelope)),
     tags(
-        (name = "auth", description = "First-run setup, login and sessions (§12)."),
+        (name = "auth", description = "First-run setup, login, sessions (§12) and the Legal Notice."),
         (name = "search", description = "The query language and search (§8)."),
         (name = "torrents", description = "One torrent's details and files."),
         (name = "filters", description = "Filtering and safety (§20)."),
