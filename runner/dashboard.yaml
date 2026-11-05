@@ -360,6 +360,7 @@ placement:
   - P-v06-rulepacks
   - RP-*
   - ENR-*
+  - X-enr-page-flag
   - LEGAL-1
   - LEGAL-2
 - ws: ws-imp-tools
