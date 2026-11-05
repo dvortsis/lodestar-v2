@@ -59,6 +59,13 @@ use crate::source_adult::AdultSources;
 /// DHT's and verification's (`unverified::VERIFY_STRATEGY`).
 pub const STRATEGY: u8 = 202;
 
+/// Whether `d` is an enrichment match the runtime emitted: its strategy
+/// code and an adult-enrichment section. Intake doesn't count it as
+/// harvested (ENR-1b).
+pub fn is_match(d: &lodestar_sources::Discovery) -> bool {
+    d.found.strategy == STRATEGY && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
+}
+
 /// User-interest lookups waiting at most; more are dropped. Each takes a
 /// [`MIN_INTERVAL`], so this is about a minute of opened drawers.
 pub const INTEREST_QUEUE: usize = 64;
@@ -77,6 +84,33 @@ const IDLE: Duration = Duration::from_secs(60);
 
 /// The pause between two background pages that held nothing adult.
 const SCAN_PAUSE: Duration = Duration::from_millis(50);
+
+/// The registered adult-enrichment sources (manifests with
+/// [`Kind::Enrichment`](lodestar_sources::Kind::Enrichment)), as a bitset
+/// over [`SourceId`]s. Only these may attach an adult-enrichment section to
+/// a claim (`unverified::Ctx::enrichers`, ENR-1b). Empty: none may.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnrichSources(pub u64);
+
+impl EnrichSources {
+    /// The enrichment sources among registered `(id, manifest)` pairs.
+    pub fn of<'a>(registered: impl IntoIterator<Item = (SourceId, &'a Manifest)>) -> EnrichSources {
+        EnrichSources(
+            registered
+                .into_iter()
+                .filter(|(_, m)| m.is(lodestar_sources::Kind::Enrichment))
+                .fold(0, |bits, (id, _)| bits | source_bit(id)),
+        )
+    }
+
+    pub fn has(self, source: SourceId) -> bool {
+        self.0 & source_bit(source) != 0
+    }
+}
+
+fn source_bit(source: SourceId) -> u64 {
+    1u64.checked_shl(u32::from(source.get())).unwrap_or(0)
+}
 
 /// What the gate needs from outside the store. The host implements it.
 pub trait Switches: Send + Sync {
@@ -282,17 +316,21 @@ pub fn check(
     if let Err(why) = eligible(&g) {
         return Ok(Err(why));
     }
+    // The torrent's name alone, never with its files: with no files, the
+    // parse can't take a title from a file or folder name (Q2: never the
+    // files). A name that says nothing useful ("New folder", ambiguous, or
+    // resolved from the files) sends nothing in either form: it can't
+    // match, costs budget, and tells the service an adult item was viewed
+    // (ENR-1b, runner §2.33).
+    let named = classify_corrected(&row.name, &[], Correction::default());
+    if named.title.ambiguous || named.title.resolved.is_some() {
+        return Ok(Err(Ineligible::NoQuery));
+    }
     let query = match ctx.form {
-        // The torrent's own name, never a file's.
+        // The torrent's own name. A single-file torrent's name is its file
+        // name, which is allowed: it's the display name.
         QueryForm::Name => Query::name(&row.name),
         QueryForm::Parsed => {
-            // From the torrent's name alone: with no files, the parse can't
-            // take a title from a file or folder name (Q2: never the
-            // files). A name that says nothing useful sends nothing.
-            let named = classify_corrected(&row.name, &[], Correction::default());
-            if named.title.ambiguous || named.title.resolved.is_some() {
-                return Ok(Err(Ineligible::NoQuery));
-            }
             let r = Record::new(&named);
             r.release("title").and_then(|title| {
                 Query::parsed(
@@ -939,6 +977,59 @@ mod tests {
                 && !g.pending;
             prop_assert_eq!(eligible(&g).is_ok(), all);
         }
+    }
+
+    #[test]
+    fn only_a_match_skips_the_harvest() {
+        let key = InfoHash([1; 20]);
+        let source = SourceId::new(3).unwrap();
+        let d = |found: Found| lodestar_sources::Discovery {
+            source,
+            found,
+            at: 0,
+            reply: false,
+        };
+        let section = Claims {
+            adult: Some(lodestar_sources::claims::AdultEnrichment::new("1")),
+            ..Claims::default()
+        };
+        let named = Claims {
+            name: Some("n".into()),
+            ..Claims::default()
+        };
+        assert!(is_match(&d(
+            Found::key(key, STRATEGY).with_claims(section.clone())
+        )));
+        assert!(!is_match(&d(Found::key(key, STRATEGY).with_claims(named))));
+        assert!(!is_match(&d(Found::key(key, STRATEGY))));
+        assert!(!is_match(&d(Found::key(key, 0).with_claims(section))));
+    }
+
+    #[test]
+    fn enrichment_sources_are_those_of_that_kind() {
+        let mut m = lodestar_sources::Manifest {
+            id: "x",
+            name: "x",
+            version: "1",
+            kinds: &[lodestar_sources::Kind::Enrichment],
+            networks: &[],
+            endpoints: &[],
+            risk: lodestar_sources::Risk::Low,
+            consent: lodestar_sources::Consent::Account,
+            default_priority: lodestar_sources::Priority::Normal,
+            enabled_by_default: false,
+            always_adult: false,
+        };
+        let a = SourceId::new(2).unwrap();
+        let b = SourceId::new(5).unwrap();
+        let feed = lodestar_sources::Manifest {
+            kinds: &[lodestar_sources::Kind::Discovery],
+            ..m.clone()
+        };
+        m.id = "y";
+        let set = EnrichSources::of([(a, &m), (b, &feed)]);
+        assert!(set.has(a) && !set.has(b));
+        assert!(!EnrichSources::default().has(a));
     }
 
     #[test]

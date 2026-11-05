@@ -108,6 +108,9 @@ pub(crate) struct Writer {
     pub store: Option<Store>,
     /// The sources whose every find is adult ([`crate::source_adult`]).
     pub adult: AdultSources,
+    /// The adult-enrichment sources: only they may attach an enrichment
+    /// section (`unverified::Ctx::enrichers`, ENR-1b).
+    pub enrichers: crate::adult_enrich::EnrichSources,
     /// The background enrichment pass: the last id it reached, and whether
     /// it has found nothing left to do.
     pub backfill_after: i64,
@@ -713,6 +716,7 @@ impl Writer {
                     sealer: sealer.as_deref(),
                     quarantine_secs,
                     adult,
+                    ..Default::default()
                 },
                 stats: &stats.unverified,
                 mark: &mark,
@@ -1352,6 +1356,7 @@ impl Writer {
         let held = self.held.clone();
         let stats = self.stats.clone();
         let adult = self.adult;
+        let (enrichers, reenrich) = (self.enrichers, self.reenrich.clone());
         #[cfg(test)]
         let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
@@ -1369,6 +1374,9 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
                 adult,
+                enrichers,
+                filter: Some(&filter),
+                reenrich: Some(&reenrich),
             };
             let result = unverified::ingest(
                 &mut store,
@@ -1465,6 +1473,7 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
                 adult,
+                ..Default::default()
             };
             let result = unverified::refile_step(
                 &mut store,
@@ -2305,6 +2314,7 @@ mod tests {
         Writer {
             store: Some(store),
             adult: AdultSources::default(),
+            enrichers: Default::default(),
             backfill_after: 0,
             backfill_done: true,
             backfill_backoff: Default::default(),

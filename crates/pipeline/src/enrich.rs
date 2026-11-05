@@ -9,7 +9,7 @@ use lodestar_classify::{
     MatchKind, Record, classify_enriched,
 };
 use lodestar_filter::reclassify::{Reclassified, reclassify_row};
-use lodestar_filter::{Engine, Handle, Sealer};
+use lodestar_filter::{Handle, Sealer};
 use lodestar_metainfo::{File, TextEncoding};
 use lodestar_store::claims::{AdultEnrichment, AdultKind};
 use lodestar_store::{Enriched, Store, TorrentRow};
@@ -283,6 +283,24 @@ fn with_match(
     ))))
 }
 
+/// Marks for the backfill those of the stored torrents `ids` whose claims
+/// hold an adult-enrichment section, so their match is applied again.
+/// For a commit that rewrote a torrent's classification without reading
+/// its claims: a partial import's upgrade writes prepare's record, which
+/// knows no match (ENR-1b). Returns the ids marked.
+pub fn mark_matched(store: &mut Store, ids: &[i64]) -> Result<Vec<i64>, lodestar_store::Error> {
+    let mut marked = Vec::new();
+    for &id in ids {
+        if !marked.contains(&id) && stored_match(store, id)?.is_some() {
+            marked.push(id);
+        }
+    }
+    if !marked.is_empty() {
+        store.mark_unenriched(&marked)?;
+    }
+    Ok(marked)
+}
+
 /// A classification in the form the store keeps.
 fn enriched_of(c: &Classification) -> Enriched {
     Enriched {
@@ -318,11 +336,16 @@ pub struct Matched {
 pub fn apply_matches(
     store: &mut Store,
     ids: &[i64],
-    engine: &Engine,
+    filter: &Handle,
     adult: AdultSources,
     now: i64,
 ) -> Result<Matched, lodestar_store::Error> {
+    // The generation first, then the rules (as the backfill reads them):
+    // rules read after a change are never older than the generation they're
+    // written under, so a write can't clear a mark a rules change set.
     let generation = store.class_gen()?;
+    let engine = filter.current();
+    let engine = &*engine;
     let mut batch: Vec<(i64, Enriched)> = Vec::new();
     let mut deferred = Vec::new();
     for &id in ids {
