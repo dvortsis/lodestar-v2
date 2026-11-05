@@ -52,7 +52,7 @@
 	"wizard_how_index": "Index",
 	"wizard_how_index_text": "What it learns goes into a local search index on this machine.",
 	"wizard_how_search": "Search",
-	"wizard_how_search_text": "You search your own index. Nothing about your searches leaves this machine.",
+	"wizard_how_search_text": "You search your own index. Nothing about your searches leaves this machine unless you turn on a source that searches other sites.",
 	"wizard_how_cold": "The index grows over days and weeks, not hours. Expect little in Search at first; it fills as the crawler runs.",
 	"wizard_intensity_lead": "How hard should Lodestar crawl? Lower is gentler on your network and your router; higher finds torrents faster.",
 	"wizard_storage_lead": "How Lodestar stores what it finds. The defaults suit most machines.",

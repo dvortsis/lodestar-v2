@@ -173,7 +173,7 @@ The Mainline DHT crawler is **source plugin #1**. Every other discovery source, 
 
 Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 
-**Safety:** content filtering is a rule engine (§20): the always-on, editable **child-safety core**, opt-in rule packs, and your own rules and exceptions, with graduated actions (flag / demote / hide / quarantine / drop), live preview, review, and effect warnings with password confirmation for risky changes (no audit log). Hash lists are one kind of rule, and everything runs **before** storage.
+**Safety:** content filtering is a rule engine (§20): the always-on, editable **child-safety core**, rule packs on by default and reviewed in the wizard (owner §2.39), and your own rules and exceptions, with graduated actions (flag / demote / hide / quarantine / drop), live preview, review, and effect warnings with password confirmation for risky changes (no audit log). Hash lists are one kind of rule, and everything runs **before** storage.
 
 ## 7. Storage (SQLite = source of truth)
 
@@ -1799,7 +1799,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **Sources, plugins and network tiers (draft 8 → 9):** every source is now an on/off **plugin** under one API and crawl scheduler (§18).
 - **Ranking:** sources are ranked by 0.4 × rarity/breadth + 0.3 × volume + 0.3 × ease, with risk deciding default state and consent class.
-- **Roadmap:** importers in v0.5; Prowlarr, Nyaa, BEP 48, Internet Archive and official lists in v0.6; enrichment and outputs (including a Stremio addon) in v0.7; Anna's Archive, Nostr and Lemmy in v0.8; then I2P (v1.1), eD2k/Kad (v1.2) and IPFS (v1.3).
+- **Roadmap:** importers in v0.5; Prowlarr, Nyaa, BEP 48, Internet Archive and official lists in v0.6; enrichment and outputs (including a Stremio addon) in v0.7; Nostr and Lemmy in v0.8 (~~Anna's Archive~~ *superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins*); then I2P (v1.1), eD2k/Kad (v1.2) and IPFS (v1.3).
 - **Priority and agents** are shares of one global budget (deficit round robin, min/max shares, hard politeness caps, optional auto-balance by marginal utility including unique finds), not raw thread counts, because sources share the same bottlenecks.
 - **Data model:** provenance bitset, claims, an unverified tier and network tiers.
 - **Safety:** CSAM blocklist universal and non-disableable; private-tracker results local-only.
@@ -2480,7 +2480,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - The collection is **24 families × light and dark = 48 themes**. §10.18 names 23 families; the 24th is **Rosewood**, proposed in the palette work (PR #37) and approved.
 - **Filtering decisions (owner, 2026-10-22; `docs/owner-decisions.md` §2.7–2.9):**
   - Config files may only **add** to the locked floor. Removals or weakenings (deleting a hash from `blocklist.files`, a floor-marked list's upstream removals) are refused at start-up and go through the app with the effect warning and password.
-  - Rule packs are off until chosen and pre-checked in the first-run wizard (§20.6), never on by default.
+  - Rule packs are off until chosen and pre-checked in the first-run wizard (§20.6), never on by default. **Superseded 2026-11-04 (owner §2.39):** packs are on by default and shown checked in the wizard, where the user can uncheck any.
   - Blocklist subscriptions are off by default and chosen in the wizard or Settings, with a warning matched to how strict the chosen lists are. The §20.13 refresh mechanics stay as designed.
 - **Riverstone colour-blind figures corrected** in §10.18. The palette is unchanged by owner decision.
 - **The build runs as parallel slices** (`docs/build-plan.md`, `runner/`).
@@ -2488,7 +2488,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
 
 **M5 decisions (filtering, owner 2026-10-22):**
-- **Rule packs are off until chosen (§2.8, §20.6).** With nothing stored, `pack_switches` starts from no pack on. Packs turn on only through a stored choice: the wizard (pre-checked there) or Settings through the filters API. The guards and pack logic are unchanged.
+- **Rule packs are off until chosen (§2.8, §20.6).** With nothing stored, `pack_switches` starts from no pack on. Packs turn on only through a stored choice: the wizard (pre-checked there) or Settings through the filters API. The guards and pack logic are unchanged. **Superseded 2026-11-04 (owner §2.39):** a fresh store writes an explicit on row for every pack in the build (`pack_switches` still reads no row as off, so an Undo to an older snapshot or a store from before the change stays off); the wizard shows them for review and a stored choice records what the user switched off.
 - **The 50 µs budget is the owner's (§1.6.6, §20.8).** `LODESTAR_BUDGET_US` is gone. The `filter budget` CI job runs the gate in release.
   - **The first gate wasn't honest.** It judged one torrent, over and over, against rules none of whose words it had, so the narrowing skipped 99% of them. The review made 10% of the rules candidates that matched nothing and measured 16.8–17.0 ms per torrent.
   - **The gate now** judges a varied set of 512 torrents with 1%, 10% and 25% of the rules built on words they have, and about 40 rules per torrent that get the full match (§20.8). It holds the core, 1% and 10%; 25% is reported.
@@ -2956,7 +2956,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 Lodestar's reach comes from **many sources, each a plugin you can switch on or off**. The Mainline DHT crawler (§5) is just the first. This section defines the plugin model, ranks every candidate source, sets the roadmap, and specifies how sources share the machine (priority, agents, budgets).
 
 ### 18.1 Plugin model
-- **Compiled in, not dynamically loaded.** Every plugin is a Rust module behind a cargo feature (`src-i2p`, `src-ed2k`, `src-ipfs`, `src-annas`, …).
+- **Compiled in, not dynamically loaded.** Every plugin is a Rust module behind a cargo feature (`src-i2p`, `src-ed2k`, `src-ipfs`, ~~`src-annas`~~ *superseded 2026-11-04, owner §2.38*, …).
   - Official builds include all plugins, **disabled by default except the Mainline DHT**.
   - A `minimal` build flavour leaves out the overlay-network plugins entirely.
   - There are no third-party binaries or ABI issues. WASM-sandboxed community plugins are a post-1.0 idea.
@@ -3001,7 +3001,7 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 | — | **Mainline DHT** (BEP 5/51/passive, §5) | discovery | live | 3 | 5 | 3 | core | Med |
 | 1 | **Prowlarr/Jackett** (your indexers via Torznab/Newznab; private results local-only; also covers the public indexers, see below) | discovery | poll | 5 | 4 | 5 | **4.7** | Med |
 | 2 | **Rutracker catalogue dumps** (published XML exports: titles, hashes, categories, descriptions) | importer | import | 5 | 4 | 4 | **4.4** | Med |
-| 3 | **Anna's Archive / LibGen** (torrent lists + metadata dumps mapping files → titles/ISBNs) | importer + discovery | import/poll | 5 | 5 | 3 | **4.4** | High |
+| 3 | ~~**Anna's Archive / LibGen**~~ *superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins* (torrent lists + metadata dumps mapping files → titles/ISBNs) | importer + discovery | import/poll | 5 | 5 | 3 | **4.4** | High |
 | 4 | **Usenet NZB indexers** (your accounts, via Prowlarr's Newznab support; `usenet` tier, local-only) | network | poll | 5 | 4 | 4 | **4.4** | Med |
 | 5 | **MagnetDB** research dataset (DHT 2018–2024, 28.6M+ torrents, 950M+ files, IMDb-matched; access terms TBC) | importer | import | 4 | 5 | 4 | **4.3** | Med |
 | 6 | **Internet Archive** (item torrents + metadata API) | discovery | poll | 4 | 4 | 4 | **4.0** | Low |
@@ -3065,7 +3065,7 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 | **v0.5** (M2–M3) | **Importer framework**: bitmagnet DB (already planned), **Rutracker dumps**, **MagnetDB** (if access is granted), **Archive Team copies of defunct sites**, **RARBG/magnetico/bitmagnet exports**, **DMM hashlists**. Enrichment (M3): **No-Intro/Redump/TOSEC DATs** | The largest breadth for the least effort, and it solves the cold start. All use one streaming importer framework plus background DHT verification. DAT matching is cheap and fits the M3 enrichment work. |
 | **v0.6** (M4 + early M7) | **Companion manager v1** (§18.10: qBittorrent, Prowlarr + FlareSolverr, gluetun). **Prowlarr/Jackett** (local-only private results; public indexers included), **your download clients**, **Nyaa RSS**, **AnimeTosho**, **BEP 48 full scrape**, **Internet Archive**, **Academic/official lists**; enrichment: **torrent cache** | The top-scoring live sources, once claims/provenance and the unverified tier exist. Prowlarr and a download client need companions, so the manager lands here. The full scrape ships with the M4 tracker scraper. |
 | **v0.7** (M7) | **`usenet` tier** (+ SABnzbd/NZBGet companion), **private-tracker IRC announces**, **direct JSON API plugins** (optional). Enrichment: **srrDB, PreDB (+ live IRC feed), Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid status**. Outputs: **Torznab server, Stremio addon, bitmagnet export** | Turns breadth into findability: ambiguity resolution, multilingual titles, IDs. Usenet rides on the Prowlarr plumbing from v0.6. |
-| **v0.8** | **Anna's Archive / LibGen** (restricted consent), **Nostr NIP-35**, **Lemmy** (ActivityPub push). Adult sources need no special tier (§20.9) and can arrive with Prowlarr in v0.6 | Anna's Archive scores high but needs the consent framework and a restricted tier. Nostr and Lemmy are lower volume. |
+| **v0.8** | ~~**Anna's Archive / LibGen** (restricted consent)~~ (*superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins*), **Nostr NIP-35**, **Lemmy** (ActivityPub push). Adult sources need no special tier (§20.9) and can arrive with Prowlarr in v0.6 | ~~Anna's Archive scores high but needs the consent framework and a restricted tier.~~ *Superseded 2026-11-04 (owner §2.38).* Nostr and Lemmy are lower volume. |
 | **1.0** | Hardening across all plugins | Contract tests, politeness audits, purge correctness |
 | **v1.1** | **Network-tier infrastructure + I2P** (i2pd companion) | The first overlay network, at your request, for rare content |
 | **v1.2** | **eD2k/Kad** (+ shared-file browsing, aMule companion) | The deepest well of rare content; a new protocol stack |
@@ -3174,7 +3174,7 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
 | None | Mainline DHT, Internet Archive, Academic/official lists, BEP 48, Lemmy | a toggle |
 | External | public web services (Nyaa, Nostr, torrent cache, Wikidata, Sukebei, …) | a toggle + the endpoint list shown |
 | Account | Prowlarr/Jackett (incl. Usenet), private-tracker IRC announces, your download clients, debrid, keyed APIs (TMDB, IGDB, Discogs) | credentials (encrypted at rest, never exported); results local-only |
-| Restricted | Anna's Archive/LibGen and other High-risk content sources; tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
+| Restricted | High-risk content sources (~~Anna's Archive/LibGen~~ *superseded 2026-11-04, owner §2.38: no Anna's Archive or LibGen plugins*); tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
 | Overlay | I2P, eD2k/Kad, IPFS | a consent screen + VPN recommendation; isolated tier; one-click purge |
 
 - **No profiles of people.** Peer IPs and IDs are used only briefly, to fetch metadata or count a swarm, and are **never stored alongside what they share**. The one exception is the opt-in, time-limited **Peer activity** log kind (§12.1, owner's decision §2.11), which writes only to the local log file and live log.
@@ -3380,7 +3380,7 @@ Filtering must **block exactly what it's meant to block** and **avoid false posi
 | Layer | Edited by | Can be disabled? | Purpose |
 |---|---|---|---|
 | **Child-safety core** | Ships as signed, versioned base rules, **all on by default**. **You can edit every rule**, add your own, and **switch off any non-floor rule** (§20.5.3) | **The core as a whole: no.** It runs on every source, network, importer and worker. Its **locked floor** (CS-1a/1b, CS-8a) is always on. Non-floor rules can be switched off individually, and **CSX-5** (your override list, keywords included) overrides any non-floor rule | Keep CSAM out of the index |
-| **Rule packs** | Curated, signed, opt-in packs (§20.6) | Yes, per pack and per rule | Malware, lures, fakes, spam, scams |
+| **Rule packs** | Curated, signed packs, on by default and reviewed in the wizard (§20.6, owner §2.39) | Yes, per pack and per rule | Malware, lures, fakes, spam, scams, unauthorised-copy patterns |
 | **Your rules and exceptions** | You | Yes | Anything else you want blocked, hidden, demoted or flagged, and exceptions to packs and to your own rules |
 
 **Evaluation order:**
@@ -3546,7 +3546,7 @@ Plain-text must-not-match fixtures ship with them: *Sex Education S02E03 – The
 **Precision in the curated base:** single ambiguous words never trigger on their own (e.g. "teen", common in legal adult marketing for 18–19-year-olds). Rules need multiple independent indicators, with stricter thresholds inside Adult (§20.9).
 
 ### 20.6 Rule packs (built in)
-Packs are signed, versioned and opt-in, and **all five are pre-checked in the first-run wizard**. Each ships with its test corpus and changelog, and every rule can be toggled. Packs reuse the M3 junk reasons (`classify::junk`), so the junk score and the packs never disagree.
+Packs are signed and versioned. **All six are on by default and shown, checked, in the first-run wizard for review; the user can uncheck any pack or rule there or in Settings** (owner, 2026-11-04, §2.39, which supersedes the earlier "off until chosen"). Each ships with its test corpus and changelog, and every rule can be toggled. Packs reuse the M3 junk reasons (`classify::junk`), so the junk score and the packs never disagree.
 
 **`malware`**
 
@@ -3557,6 +3557,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | MW-3 | Video + an executable named codec / player / setup / install / unlock | hide | same as MW-2 |
 | MW-4 | `junk:tiny-video` **and** an executable | drop | the combination only |
 | MW-5 | `.scr`/`.pif` anywhere | hide | `unless type:software` with screensaver context |
+| MW-6 | Cracked software: a release the parser classifies as software carrying the `Cracked` flag **and** a crack-specific token (crack, cracked, keygen, keymaker, activator, k'ed, pre-activated); `patch` alone, which the lexicon also rates a weak `Cracked` token, never matches, so lawful patches such as `Firefox.120.0.1.Patch` pass | hide | the parser's flag plus the token, never a title that merely contains a word; the software kind is required, so game levels, track titles and film titles with the word aren't matched, and music-production packs and games are excluded by the kind; the release-parser corpus plus lawful patch and update names is its precision set. Owner §2.39 (2026-11-04), added by RP-UC; its own switch, so turning `unauthorised-copy` off doesn't restore cracked software |
 
 **`lures`**
 
@@ -3590,8 +3591,18 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 
 | ID | Matches | Action | False-positive guards |
 |---|---|---|---|
-| SC-1 | "Free premium / crack / activator" for **online services** (streaming and music premium APKs, "free Robux/V-Bucks", crypto "wallet recovery", "Bitcoin generator") | hide | offline software cracks aren't covered (a preference, not a scam) |
+| SC-1 | "Free premium / crack / activator" for **online services** (streaming and music premium APKs, "free Robux/V-Bucks", crypto "wallet recovery", "Bitcoin generator") | hide | offline software cracks aren't a scam and aren't matched here; MW-6 covers them (owner §2.39, 2026-11-04) |
 | SC-2 | "Generator / hack" for online-game currencies or accounts | hide | single-player trainers and mods excluded |
+
+**`unauthorised-copy`** (owner, 2026-11-04, §2.39; built on the release parser's fields, with the parser's golden corpus as its test set and a lawful-names set that must never be hidden)
+
+| ID | Matches | Action | False-positive guards |
+|---|---|---|---|
+| UC-1 | Camcorder, telesync, telecine and screener rips of films (`CAM`, `TS`, `TC`, `HDCAM`, `HDTS`, `DVDSCR`, `screener`), which have no lawful public release | hide | a film classification, and the parser's source field. The parser's real rule: a weak source token (`CAM`, `TS`, `TC`, `SCR`) sets the source after the title, in brackets, in all caps when the name isn't mostly capitals (`caps_name`), or directly before a strong marker, so `Nanny Cam 1080p x264-GRP` parses as Cam and `Little Ts 720p` as Telesync. Those names and ones like them are must-not-hide entries in UC-1's precision set, and RP-UC tightens the rule until they pass (for example a strong source marker, or a weak one in brackets or after the year), with precision evidence in its PR |
+| UC-2 | Cracked software: a software release carrying the `Cracked` flag **and** a crack-specific token (crack, cracked, keygen, keymaker, activator, k'ed, pre-activated); `patch` alone, which the lexicon also rates a weak `Cracked` token, never matches, so lawful patches such as `Firefox.120.0.1.Patch` pass | hide | the same flag feeds the malware pack as a new `cracked` junk reason and rule (MW-6, added by the same slice), so switching this pack off doesn't restore cracked software while MW-6 is on; a title merely containing the word is not a flag |
+| UC-3 | Scene-style film and TV rips: parsed as film or TV, with a disc or web source tag and a release group | hide | items from official sources (Internet Archive, academic lists) exempt; a built-in allow list of public-domain and Creative Commons titles (Big Buck Bunny, Sintel, …); the user's Allow rules |
+
+The pack hides names that follow the conventions of unauthorised copies; it cannot know who holds the rights, and its description in the wizard says so.
 
 **As built (store migration V7, `lodestar_filter` rules, packs and engine):**
 - **Engine layers:** precedence follows §20.1. Within the pack layer (packs and subscribed lists) the strongest action wins.
@@ -3600,7 +3611,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - entries are exact torrents, keywords (normalized the same way the core normalizes, so evasion doesn't help) or queries, with an optional scope, an expiry and a shadow period;
   - *Neutralize term* takes one word. It removes that word's evidence from the core and from query rules.
 - **Exceptions** are per rule, by exact torrents, payload or query. The floor takes none. *Always allow* skips your rules and the packs.
-- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. **Packs are off until chosen** (owner's decision, §16 "M5 decisions"): with nothing stored, no pack is on. A pack turns on only through a stored choice, from the first-run wizard (where all five are pre-checked) or from Settings through the filters API, so an install that skips the wizard has none. Not yet built:
+- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. **Packs are on by default** (owner, 2026-11-04, §2.39, superseding "off until chosen"): a fresh store (created on this start, marked `packs.fresh` by the migration from schema version 0) gets an explicit on row for every pack in the build and every rule seeded at its current version at the first pack start; `pack_switches` keeps reading no row as off, so an existing store, an Undo to an older snapshot, or a pack the build didn't know stays off. The first-run wizard shows all of them checked for review; unchecking a pack there goes through the weakening flow inline (effect warning plus the password just set), and per-rule opt-out is in Settings through the filters API. Until that slice (RP-DEF) lands, the code still starts from no pack on. Not yet built:
   - FK-3, which needs TMDB release dates;
   - SP-3, which needs per-publisher rates;
   - SP-4, which needs a signature index of hidden items.
