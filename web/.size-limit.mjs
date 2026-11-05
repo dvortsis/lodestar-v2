@@ -1126,7 +1126,8 @@ export default [
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
 		'45 KB'
 	),
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
+	// SRC-15a (runner §2.26): +64 B for the Sources registry entry (measured residue 16 B, rounded up).
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45.07 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1173,6 +1174,8 @@ export default [
 	// icon; those now load after the first view, so every view has ≥ 1.3 KB headroom.
 	// runner §2.26, S-filters-2c: Filters & Safety keeps its −2.43 KB (the change flow loads on the
 	// first change, through the flows' door): measured 30.54 KB, limit = measured + ~10% of the cut.
+	// SRC-15a (runner §2.26): FiltersScreen and NotificationsScreen +64 B each for the Sources registry
+	// entry in the shared chunk (measured residue 56 and 59 B, rounded up to 64 B).
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
 	...settingsHandBuilt.map(({ name, files }) =>
@@ -1180,14 +1183,16 @@ export default [
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31 KB'
+				? '31.07 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
 						? '30.4 KB'
 						: name === 'SourcesScreen'
 							? '30 KB'
-							: '45 KB'
+							: name === 'NotificationsScreen'
+								? '45.07 KB'
+								: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
