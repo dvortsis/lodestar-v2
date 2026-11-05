@@ -156,6 +156,11 @@ fn fixture(n: usize) -> Fixture {
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
     store.set_setting_i64("first_run_at", FIRST_RUN).unwrap();
+    // Every torrent's source (SRC-17a: the `source` facet).
+    assert_eq!(
+        store.register_source("dht", "1", T0).unwrap(),
+        SourceId::new(0).unwrap()
+    );
     let index = SearchIndex::in_memory().unwrap();
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();

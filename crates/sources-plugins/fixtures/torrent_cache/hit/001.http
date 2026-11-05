@@ -1,0 +1,5 @@
+GET https://first.example/torrent/695b0b3debb14473d741f7a3a86561e42009d6dc.torrent
+Accept: application/x-bittorrent
+
+HTTP 404
+Content-Type: text/html

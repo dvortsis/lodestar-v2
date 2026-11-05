@@ -43,6 +43,8 @@ pub struct TorrentDetail {
     pub metadata_at: i64,
     pub name: String,
     pub piece_len: u64,
+    /// Where it came from (§18.5, §18.8): "Found by: DHT · Nyaa".
+    pub provenance: Provenance,
     /// Null = never scraped.
     #[schema(required = true)]
     pub seeders: Option<u32>,
@@ -68,6 +70,104 @@ pub struct TorrentDetail {
     /// Of those, trackers that reported anyone; null = never scraped.
     #[schema(required = true)]
     pub trackers_reporting: Option<u32>,
+}
+
+/// A torrent's provenance (architecture §18.5, §18.6, §18.8).
+///
+/// **Private sources (§18.7):** a source with the account consent class
+/// (Prowlarr, Jackett, private-tracker announces, your own download
+/// clients), claims that came through a private source, and every
+/// source of a `private_source` torrent are shown only to the signed-in
+/// admin session. Any other caller (an API key, once these routes take
+/// one) gets them left out (a public source with a private claim keeps
+/// its name, with `claim` null) and `withheld` set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "network": "bt",
+    "sources": [
+        {"claim": null, "first": true, "first_seen_at": 1792677600, "id": 0,
+         "name": "Mainline DHT", "plugin": "dht", "private": false},
+        {"claim": {"file_count": {"claimed": 3, "verified": 4}, "matches": false,
+                   "name": null, "size": null},
+         "first": false, "first_seen_at": null, "id": 2, "name": "Nyaa",
+         "plugin": "nyaa", "private": false}
+    ],
+    "verified": true,
+    "withheld": false
+}))]
+pub struct Provenance {
+    /// The network tier (§18.6): `bt` for every stored torrent.
+    pub network: String,
+    /// The sources that found it: the first one first, then by id.
+    /// Empty for a torrent stored before provenance was recorded.
+    pub sources: Vec<ProvenanceSource>,
+    /// It has verified metadata (§18.5). Always true here: a torrent's
+    /// detail is its BEP 9 info dictionary.
+    pub verified: bool,
+    /// Sources or claims were left out because they're private and this
+    /// caller isn't the admin session.
+    pub withheld: bool,
+}
+
+/// One source that found a torrent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ProvenanceSource {
+    /// How what it claimed compares with the verified metadata; null when
+    /// it made no claims about this torrent.
+    #[schema(required = true)]
+    pub claim: Option<ClaimDifferences>,
+    /// It found the torrent first.
+    pub first: bool,
+    /// When it first found the torrent: the torrent's discovery time for
+    /// the first source; null for the others, whose first sighting isn't
+    /// recorded.
+    #[schema(required = true)]
+    pub first_seen_at: Option<i64>,
+    /// The source's id, as `GET /sources` lists it.
+    pub id: u8,
+    /// The plugin's display name; its manifest id when this build doesn't
+    /// run that plugin.
+    pub name: String,
+    /// The manifest id, as `source:` takes it.
+    pub plugin: String,
+    /// A private source, or its claims came through one (§18.7). Only the
+    /// admin session ever sees one.
+    pub private: bool,
+}
+
+/// What a source claimed that the verified metadata contradicts
+/// (§18.5). A field is null when the source didn't state it or it
+/// agrees; claimed file lists themselves are never returned. Names are
+/// compared byte for byte, so a feed's tidied title differs: show it as
+/// information, not a warning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClaimDifferences {
+    /// Files claimed against files in the info dictionary (padding
+    /// excluded).
+    #[schema(required = true)]
+    pub file_count: Option<ClaimedNumber>,
+    /// Every stated field agrees.
+    pub matches: bool,
+    /// Both names are cut to 1,024 bytes.
+    #[schema(required = true)]
+    pub name: Option<ClaimedText>,
+    /// Bytes.
+    #[schema(required = true)]
+    pub size: Option<ClaimedNumber>,
+}
+
+/// A claimed number and the verified one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClaimedNumber {
+    pub claimed: u64,
+    pub verified: u64,
+}
+
+/// A claimed text and the verified one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClaimedText {
+    pub claimed: String,
+    pub verified: String,
 }
 
 /// One tracker's report (`docs/metrics.md` §7.2).

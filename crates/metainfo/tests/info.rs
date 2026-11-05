@@ -689,3 +689,45 @@ fn non_charset_hints_are_ignored() {
         );
     }
 }
+
+#[test]
+fn raw_info_is_the_hashed_span_whatever_the_encoding_key_says() {
+    // A GBK name; the top-level `encoding` key lies outside the hash.
+    let info_raw = [
+        &b"d6:lengthi5e4:name4:"[..],
+        &[0xd6, 0xd0, 0xce, 0xc4],
+        b"12:piece lengthi16384e6:pieces20:",
+        &[0u8; 20],
+        b"e",
+    ]
+    .concat();
+    let file = |enc: &str| {
+        [
+            format!("d8:encoding{}:{enc}4:info", enc.len()).as_bytes(),
+            &info_raw,
+            b"e",
+        ]
+        .concat()
+    };
+    let (a, b) = (file("windows-1252"), file("shift_jis"));
+    let ra = TorrentFile::raw_info(&a, &Limits::DEFAULT).unwrap();
+    let rb = TorrentFile::raw_info(&b, &Limits::DEFAULT).unwrap();
+    assert_eq!(ra, &info_raw[..]);
+    assert_eq!(rb, &info_raw[..]);
+    // Parsed with no hint, both are the same Info, as from BEP 9.
+    assert_eq!(Info::parse(ra).unwrap(), Info::parse(rb).unwrap());
+    // The whole-file parse takes the hint, which is why callers that
+    // judge names use the raw span.
+    assert_ne!(
+        TorrentFile::parse(&a).unwrap().info.name,
+        TorrentFile::parse(&b).unwrap().info.name
+    );
+    assert!(matches!(
+        TorrentFile::raw_info(b"d4:infoi1ee", &Limits::DEFAULT),
+        Err(Error::WrongType { .. })
+    ));
+    assert!(matches!(
+        TorrentFile::raw_info(b"de", &Limits::DEFAULT),
+        Err(Error::MissingField("info"))
+    ));
+}

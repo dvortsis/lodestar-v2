@@ -68,7 +68,7 @@ use crate::cancel::CancelToken;
 use crate::count::{self, Matcher, SAMPLE_ABOVE as SEGMENT_SAMPLE_ABOVE};
 use crate::index::{Compiled, Result};
 use crate::lease::Lease;
-use crate::query::{Node, ShareBy, TagKey};
+use crate::query::{Network, Node, ShareBy, TagKey, Verified};
 
 /// Above this many matches, a pass is computed on a sample (§8).
 pub const SAMPLE_ABOVE: usize = 1_000_000;
@@ -114,6 +114,12 @@ pub enum Facet {
     Ambiguous,
     Imported,
     Backfill,
+    /// The network tier (§18.6): `bt`, `bt-i2p`, …; one per document.
+    Network,
+    /// The sources that found it, by plugin id (several per document).
+    Source,
+    /// `yes` (verified metadata) or `no` (claims only), one per document.
+    Verified,
 }
 
 /// Where a facet's values are in the index.
@@ -129,12 +135,22 @@ enum Source {
     /// category the torrent has (`doc.rs`): read in the same pass as the
     /// tags, where ten share columns per document would double its cost.
     Category,
+    /// A v6 provenance column (SRC-3). `default` is the value a document
+    /// indexed before SRC-3 has without carrying it (`verified:yes`,
+    /// `network:bt`; see `compile.rs`'s `provenance`): it's counted as
+    /// the documents without another value, so a partly backfilled
+    /// index counts it right. `None` for `source`, which counts only
+    /// documents that carry it.
+    Prov {
+        field: &'static str,
+        default: Option<&'static str>,
+    },
 }
 
 impl Facet {
     /// Every facet, in §10.4's decision order: the default groups, then
     /// "More filters".
-    pub const ALL: [Facet; 16] = [
+    pub const ALL: [Facet; 19] = [
         Facet::Type,
         Facet::Ext,
         Facet::Res,
@@ -150,6 +166,9 @@ impl Facet {
         Facet::Ambiguous,
         Facet::Imported,
         Facet::Backfill,
+        Facet::Network,
+        Facet::Source,
+        Facet::Verified,
         Facet::Adult,
     ];
 
@@ -161,6 +180,7 @@ impl Facet {
             Source::Ext => "ext",
             Source::Flag(f) => f,
             Source::Category => "category",
+            Source::Prov { field, .. } => field,
         }
     }
 
@@ -186,6 +206,18 @@ impl Facet {
             Facet::Ambiguous => Source::Flag("ambiguous"),
             Facet::Imported => Source::Flag("imported"),
             Facet::Backfill => Source::Flag("backfill"),
+            Facet::Network => Source::Prov {
+                field: "network",
+                default: Some(Network::Bt.as_str()),
+            },
+            Facet::Source => Source::Prov {
+                field: "source",
+                default: None,
+            },
+            Facet::Verified => Source::Prov {
+                field: "verified",
+                default: Some(Verified::Yes.as_str()),
+            },
         }
     }
 
@@ -199,6 +231,7 @@ impl Facet {
             // The `cat:` terms arrived with schema v5, as `release_year`
             // did: an older index lacks that field, and the terms too.
             Source::Category => vec!["tag".into(), "release_year".into()],
+            Source::Prov { field, .. } => vec![field.into()],
         }
     }
 
@@ -224,6 +257,24 @@ impl Facet {
             (Source::Flag(f), Node::Flag { name, value }) if name == f => {
                 Some((vec![yes_no(*value).to_owned()], false))
             }
+            (
+                Source::Prov {
+                    field: "verified", ..
+                },
+                Node::Verified { any },
+            ) => Some((any.iter().map(|v| v.as_str().to_owned()).collect(), false)),
+            (
+                Source::Prov {
+                    field: "network", ..
+                },
+                Node::Network { any },
+            ) => Some((any.iter().map(|v| v.as_str().to_owned()).collect(), false)),
+            (
+                Source::Prov {
+                    field: "source", ..
+                },
+                Node::Source { any },
+            ) => Some((any.clone(), false)),
             (
                 Source::Category,
                 Node::Share {
@@ -501,6 +552,10 @@ pub struct TermCounts {
     pub distinct: u64,
     /// Computed on a sample.
     pub approx: bool,
+    /// The facet's field is still being backfilled (the population
+    /// contract): documents it hasn't reached count under no value, so
+    /// the counts are low. Only `source` can be partial.
+    pub partial: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -622,6 +677,21 @@ pub fn facets(
     let mut tallies: Vec<(Vec<Facet>, Tally)> = vec![(base.facets.clone(), shared_tally)];
     for f in own {
         let mut variant = without_facet(node, f).unwrap_or_else(|| node.clone());
+        // `verified:yes` and nothing else on the facet: the clause every
+        // search adds (§18.6: unverified items are hidden unless asked
+        // for). Its `yes` count is the shared pass's, so only the `no`
+        // documents need a pass of their own: a few, where a full pass
+        // would visit every match again on every request.
+        let only_yes = f == Facet::Verified
+            && f.selection(node) == [(Verified::Yes.as_str().to_owned(), false)];
+        if only_yes {
+            variant = with_filters(
+                variant,
+                &[Node::Verified {
+                    any: vec![Verified::No],
+                }],
+            );
+        }
         if f == Facet::Adult {
             variant = with_filters(variant, &[adult_class()]);
         }
@@ -651,6 +721,19 @@ pub fn facets(
         if t.sampled {
             sample_rate = Some(t.rate);
         }
+        let t = if only_yes {
+            // Every match of the variant is `no`, which the pass counted
+            // as a term: the facet's documents are those and the shared
+            // pass's (all `yes`).
+            let shared = &tallies[0].1;
+            Tally {
+                docs: shared.docs + t.docs,
+                sampled: shared.sampled || t.sampled,
+                ..t
+            }
+        } else {
+            t
+        };
         tallies.push((vec![f], t));
     }
 
@@ -665,9 +748,19 @@ pub fn facets(
             .copied()
             .unwrap_or(DEFAULT_LIMIT)
             .clamp(1, MAX_LIMIT);
-        let counts = top(f, t, &f.selection(node), limit);
+        let mut counts = top(f, t, &f.selection(node), limit);
         if f == Facet::Adult && counts.values.is_empty() {
             continue;
+        }
+        // `source` has no complement (`compile.rs`'s `provenance`): while
+        // it's backfilled, documents the walk hasn't reached aren't
+        // counted under any source.
+        if let Source::Prov {
+            field,
+            default: None,
+        } = f.source()
+        {
+            counts.partial = !index.availability_in(field, lease).complete();
         }
         terms.push((f, counts));
     }
@@ -810,6 +903,8 @@ struct Columns {
     tag: Option<StrColumn>,
     ext: Option<StrColumn>,
     flag: Option<StrColumn>,
+    /// The provenance facets' columns, in [`PROV`] order.
+    prov: [Option<StrColumn>; 3],
     size: Option<Column<u64>>,
     discovered: Option<Column<i64>>,
     year: Option<Column<u64>>,
@@ -823,6 +918,11 @@ impl Columns {
             tag: str_col("tag", !want.tags().is_empty() || want.has(Facet::Category))?,
             ext: str_col("ext", want.has(Facet::Ext))?,
             flag: str_col("flag", !want.flags().is_empty())?,
+            prov: [
+                str_col(PROV[0].name(), want.has(PROV[0]))?,
+                str_col(PROV[1].name(), want.has(PROV[1]))?,
+                str_col(PROV[2].name(), want.has(PROV[2]))?,
+            ],
             size: if want.histo(Histo::Size) {
                 fast.column_opt("size")?
             } else {
@@ -842,12 +942,16 @@ impl Columns {
     }
 }
 
+/// The facets on a provenance column, in [`Columns::prov`]'s order.
+const PROV: [Facet; 3] = [Facet::Network, Facet::Source, Facet::Verified];
+
 /// Raw counts in one segment.
 struct Counts {
     docs: u64,
     tag: Vec<u32>,
     ext: Vec<u32>,
     flag: Vec<u32>,
+    prov: [Vec<u32>; 3],
     size: [u64; SIZE_BINS],
     hours: Hours,
     years: HashMap<u64, u64>,
@@ -919,6 +1023,11 @@ impl Counts {
             tag: terms(&cols.tag),
             ext: terms(&cols.ext),
             flag: terms(&cols.flag),
+            prov: [
+                terms(&cols.prov[0]),
+                terms(&cols.prov[1]),
+                terms(&cols.prov[2]),
+            ],
             size: [0; SIZE_BINS],
             hours: Hours::for_column(cols.discovered.as_ref(), now),
             years: HashMap::new(),
@@ -934,10 +1043,14 @@ impl Counts {
         times: &mut Vec<Option<i64>>,
     ) {
         self.docs += docs.len() as u64;
+        let [p0, p1, p2] = &mut self.prov;
         for (col, counts) in [
             (&cols.tag, &mut self.tag),
             (&cols.ext, &mut self.ext),
             (&cols.flag, &mut self.flag),
+            (&cols.prov[0], p0),
+            (&cols.prov[1], p1),
+            (&cols.prov[2], p2),
         ] {
             if let Some(col) = col {
                 for &d in docs {
@@ -1011,6 +1124,20 @@ impl Counts {
             terms(col, &self.flag, 0..col.num_terms() as u64, |term, c| {
                 if let Some((f, _)) = flags.iter().find(|(_, n)| *n == term) {
                     put(*f, "yes", c);
+                }
+            })?;
+        }
+        for ((f, col), counts) in PROV.iter().zip(&cols.prov).zip(&self.prov) {
+            let Some(col) = col else { continue };
+            let default = match f.source() {
+                Source::Prov { default, .. } => default,
+                _ => None,
+            };
+            terms(col, counts, 0..col.num_terms() as u64, |term, c| {
+                // The default is the documents without another value
+                // (`top`), whether or not they carry it.
+                if Some(term) != default {
+                    put(*f, term, c);
                 }
             })?;
         }
@@ -1122,6 +1249,25 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
                 ("no".to_owned(), (t.docs - yes).max(0.0).round() as u64),
             ]
         }
+        Source::Prov {
+            default: Some(default),
+            ..
+        } => {
+            // One value per document: the default is the rest.
+            let mut rest = 0.0;
+            let mut all: Vec<(String, u64)> = t
+                .terms
+                .iter()
+                .filter(|((g, _), _)| *g == f)
+                .map(|((_, v), c)| {
+                    rest += c;
+                    (v.clone(), c.round() as u64)
+                })
+                .collect();
+            all.push((default.to_owned(), (t.docs - rest).max(0.0).round() as u64));
+            all.retain(|(_, c)| *c > 0);
+            all
+        }
         _ => t
             .terms
             .iter()
@@ -1169,6 +1315,7 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
         other,
         distinct,
         approx: t.sampled,
+        partial: false,
     }
 }
 

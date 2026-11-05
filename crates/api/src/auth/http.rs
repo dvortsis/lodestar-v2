@@ -110,7 +110,13 @@ async fn guard(req: Request, next: Next) -> Response {
             .into_response();
     };
     match check_session(&auth, req.headers(), peer_ip(req.extensions())) {
-        Ok(()) => next.run(req).await,
+        Ok(()) => {
+            // Who it is, as `key_or_session` says it: a handler that
+            // shows a private source's data (§18.7) asks.
+            let mut req = req;
+            req.extensions_mut().insert(super::Access::Session);
+            next.run(req).await
+        }
         Err(e) => e.into_response(),
     }
 }

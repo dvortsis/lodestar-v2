@@ -54,6 +54,7 @@ pub mod system;
 mod torrents;
 pub mod updates;
 mod user_items;
+pub mod webhooks;
 
 use std::sync::{Arc, Mutex};
 
@@ -123,6 +124,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(updates::routes())
         .merge(alerts::routes())
         .merge(logs::routes())
+        .merge(webhooks::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth::of(&state)))

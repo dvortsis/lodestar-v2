@@ -38,6 +38,8 @@ use quick_xml::{Reader, XmlVersion};
 
 /// The namespace of Nyaa's RSS elements (`nyaa:infoHash`, `nyaa:seeders`, …).
 pub const NYAA_NS: &str = "https://nyaa.si/xmlns/nyaa";
+/// Sukebei's own URI (NyaaV2 derives it from the site address; SRC-10e).
+pub const SUKEBEI_NS: &str = "https://sukebei.nyaa.si/xmlns/nyaa";
 /// The Atom 1.0 namespace.
 pub const ATOM_NS: &str = "http://www.w3.org/2005/Atom";
 /// Tracked namespace bindings in scope at once. A real feed has a few.
@@ -130,7 +132,7 @@ impl Ns {
         match uri {
             "" => Ns::None,
             ATOM_NS => Ns::Atom,
-            NYAA_NS => Ns::Nyaa,
+            NYAA_NS | SUKEBEI_NS => Ns::Nyaa,
             _ => Ns::Other,
         }
     }

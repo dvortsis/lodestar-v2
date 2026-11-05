@@ -21,6 +21,7 @@ const term = (values: [string, number][], selected?: string): Term => ({
 	approx: false,
 	distinct: values.length,
 	other: 0,
+	partial: false,
 	values: values.map(([value, count]) => ({
 		value,
 		count,
@@ -78,6 +79,7 @@ const facets = (): Facets => ({
 	},
 	sample_rate: null,
 	sampled: false,
+	source_names: {},
 	took_ms: 1,
 	total: 640,
 	total_approx: false,
