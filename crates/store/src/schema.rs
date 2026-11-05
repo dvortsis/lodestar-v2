@@ -950,7 +950,7 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
 /// newer version, and snapshots an existing database before changing it
 /// (architecture §12).
 pub(crate) fn migrate(conn: &mut Connection, path: Option<&Path>) -> Result<()> {
-    migrate_with(conn, path, MIGRATIONS)?;
+    migrate_creating(conn, path, MIGRATIONS, Some(CREATED))?;
     repair_v12(conn)
 }
 
@@ -1000,10 +1000,38 @@ fn check_current_with(conn: &Connection, latest: i64) -> Result<()> {
     Ok(())
 }
 
+/// The `settings` row recording that this store was created on this
+/// start, with no prior schema (RP-DEF, `docs/decisions/2026-11-05-RP-DEF.md`):
+/// rule packs are then seeded on by default. `lodestar_filter`'s
+/// `packs::upgrade::ensure_seeded` consumes it.
+pub const PACKS_FRESH_KEY: &str = "packs.fresh";
+/// The `settings` row recording that this build's pack defaults were
+/// applied: every pack on for a fresh store, an explicit off row for
+/// every pack without one on a store that existed before.
+pub const PACKS_DEFAULTS_KEY: &str = "packs.defaults";
+
+/// Run in the transaction of the first migration from schema version 0,
+/// the one that creates the store (and its `settings` table), so the
+/// store's freshness is never lost to a crash part-way through creating
+/// it, and an existing store never gains it.
+const CREATED: &str = "INSERT OR IGNORE INTO settings (key, value) VALUES ('packs.fresh', '1');";
+
+#[cfg(test)]
 fn migrate_with(
     conn: &mut Connection,
     path: Option<&Path>,
     migrations: &[(i64, &str)],
+) -> Result<()> {
+    migrate_creating(conn, path, migrations, None)
+}
+
+/// [`migrate_with`], running `created` in the first migration's
+/// transaction when the store had no schema.
+fn migrate_creating(
+    conn: &mut Connection,
+    path: Option<&Path>,
+    migrations: &[(i64, &str)],
+    created: Option<&str>,
 ) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1033,9 +1061,15 @@ fn migrate_with(
     {
         take_snapshot(conn, path, current + 1)?;
     }
+    let mut first = current == 0;
     for (version, sql) in migrations.iter().filter(|(v, _)| *v > current) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
+        if std::mem::take(&mut first)
+            && let Some(created) = created
+        {
+            tx.execute_batch(created)?;
+        }
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, unixepoch())",
             [version],
@@ -1167,6 +1201,59 @@ mod tests {
     /// including deleted ones.
     /// Migrations apply above the newest recorded one, so a gap (a
     /// number merged out of order) would be skipped forever.
+    fn fresh_marker(conn: &Connection) -> Option<String> {
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [PACKS_FRESH_KEY],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// RP-DEF: the migration that creates the store writes `packs.fresh`
+    /// in its own transaction; an existing store never gains it.
+    #[test]
+    fn only_the_creating_migration_marks_the_store_fresh() {
+        let mut fresh = Connection::open_in_memory().unwrap();
+        migrate(&mut fresh, None).unwrap();
+        assert_eq!(fresh_marker(&fresh).as_deref(), Some("1"));
+        assert!(CREATED.contains(PACKS_FRESH_KEY), "the SQL names the key");
+        // A store from an earlier build, upgraded: no marker.
+        let mut old = Connection::open_in_memory().unwrap();
+        migrate_with(&mut old, None, &MIGRATIONS[..13]).unwrap();
+        migrate(&mut old, None).unwrap();
+        assert_eq!(fresh_marker(&old), None);
+        // A crash after the first migration committed: the marker is
+        // already there, so the next start still sees a fresh store.
+        let mut crashed = Connection::open_in_memory().unwrap();
+        migrate_creating(&mut crashed, None, &MIGRATIONS[..1], Some(CREATED)).unwrap();
+        assert_eq!(fresh_marker(&crashed).as_deref(), Some("1"));
+        migrate(&mut crashed, None).unwrap();
+        assert_eq!(fresh_marker(&crashed).as_deref(), Some("1"));
+        // Opening a current store again writes nothing.
+        crashed
+            .execute("DELETE FROM settings WHERE key = ?1", [PACKS_FRESH_KEY])
+            .unwrap();
+        migrate(&mut crashed, None).unwrap();
+        assert_eq!(fresh_marker(&crashed), None);
+        // A failed creating migration leaves neither schema nor marker.
+        let mut failed = Connection::open_in_memory().unwrap();
+        let bad: &[(i64, &str)] = &[(
+            1,
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value ANY NOT NULL) STRICT; SELECT nope();",
+        )];
+        assert!(migrate_creating(&mut failed, None, bad, Some(CREATED)).is_err());
+        let tables: i64 = failed
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'settings'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+    }
+
     #[test]
     fn versions_are_contiguous() {
         for (i, (v, _)) in MIGRATIONS.iter().enumerate() {

@@ -629,28 +629,138 @@ pub fn copy_sc1_switch(stored: &[(String, bool)]) -> Vec<(String, bool)> {
     out
 }
 
-/// Seeds the pack versions once (the module docs): only when no
-/// pack-version row exists at all, in one transaction, [`seed_record`],
-/// SC-1's stored switch and exceptions copied to SC-2, and the marker,
-/// which records `now` when the rule set already had rows
-/// ([`SEEDED_ON_RULES`]), so such a seeding is never silent. Run at every start before
-/// the filter is first read (the pipeline's start), and by the filters
-/// API before any change. Returns what it did, or `None` when the store
-/// had state.
+/// The record a fresh store is seeded with (RP-DEF): every rule this
+/// build knows at its current version, so none is pending.
+pub fn current_record(manifest: &Manifest) -> Applied {
+    let mut a = Applied::default();
+    for r in PackRule::ALL {
+        a.0.insert(r.id().to_owned(), manifest.entry(r).current().version);
+    }
+    a
+}
+
+/// Seeds the store once, before the filter is first read: run at every
+/// start (the pipeline's start), and by the filters API before any change
+/// as the fallback. Three steps, each its own transaction and each done at
+/// most once (`docs/decisions/2026-11-05-RP-DEF.md`):
+/// 1. **A fresh data directory** (the store's creating migration wrote
+///    [`FRESH_KEY`]): every pack without a switch row is switched **on**,
+///    the rules it turns on are recorded at their current versions (with
+///    no version rows, [`current_record`]), [`DEFAULTS_KEY`] is set and
+///    the fresh marker consumed, all together. Rule packs are on by
+///    default (owner §2.39).
+/// 2. **RP-0's version seeding**, only when no pack-version row exists at
+///    all: [`seed_record`], SC-1's stored switch and exceptions copied to
+///    SC-2, and the marker, which records `now` when the rule set already
+///    had rows ([`SEEDED_ON_RULES`]), so such a seeding is never silent.
+/// 3. **A store that existed before** (neither marker): every pack without
+///    a switch row gets an explicit **off** row and [`DEFAULTS_KEY`] is
+///    set, so nothing flips and filtering is unchanged.
+///
+/// Returns what changed filtering: `Some` after step 1 (a default
+/// [`Seeded`]) or step 2, `None` when the store already had state.
 pub fn ensure_seeded(
     store: &mut Store,
     manifest: &Manifest,
     now: i64,
 ) -> lodestar_store::Result<Option<Seeded>> {
-    if Rows::read(store)?.exist() {
-        return Ok(None);
+    if seed_fresh(store, manifest)? {
+        return Ok(Some(Seeded::default()));
     }
-    store.seed_pack_versions(
-        &seed_record(manifest).encode(),
-        PackRule::Sc1.id(),
-        PackRule::Sc2.id(),
-        &format!("{SEEDED_ON_RULES}@{now}"),
+    let seeded = if Rows::read(store)?.exist() {
+        None
+    } else {
+        store.seed_pack_versions(
+            &seed_record(manifest).encode(),
+            PackRule::Sc1.id(),
+            PackRule::Sc2.id(),
+            &format!("{SEEDED_ON_RULES}@{now}"),
+        )?
+    };
+    // Off rows record what already applies: no reload is needed for them.
+    // Once they're written, the common case is one read, without taking
+    // the write lock; the transaction re-checks both markers itself.
+    if matches!(store.setting_text(DEFAULTS_KEY), Ok(None)) {
+        store.apply_pack_defaults(false, &pack_names(), None)?;
+    }
+    Ok(seeded)
+}
+
+/// The settings rows of RP-DEF's markers.
+pub use lodestar_store::{PACKS_DEFAULTS_KEY as DEFAULTS_KEY, PACKS_FRESH_KEY as FRESH_KEY};
+
+fn pack_names() -> Vec<&'static str> {
+    Pack::ALL.into_iter().map(Pack::as_str).collect()
+}
+
+/// Step 1 of [`ensure_seeded`]. A pack that already has a switch row keeps
+/// it (a choice); every other pack is switched on, recording its rules as
+/// [`set_pack_switch`] does. Returns whether the fresh marker was there
+/// and is now consumed.
+///
+/// The rows are read before the write transaction, as in
+/// [`set_pack_switch`]: every caller holds the store's one writing
+/// connection (the pipeline's start runs before the filters API exists,
+/// and the API calls this under its store lock), so nothing writes
+/// between the read and the write. The transaction still re-checks the
+/// fresh marker, so a second caller never seeds twice.
+fn seed_fresh(store: &mut Store, manifest: &Manifest) -> lodestar_store::Result<bool> {
+    // The common case, cheaply: no marker, so the rule set isn't read. A
+    // marker that won't read as text still counts as there.
+    if matches!(store.setting_text(FRESH_KEY), Ok(None)) {
+        return Ok(false);
+    }
+    let set = store.rule_set()?;
+    let stored = crate::load::pack_switches(&set.pack_switches);
+    let has_row = |p: Pack| set.pack_switches.iter().any(|(id, _)| id == p.as_str());
+    let packs: Vec<Pack> = Pack::ALL.into_iter().filter(|p| !has_row(*p)).collect();
+    let rows = Rows::of(&set);
+    let texts = if rows.exist() {
+        let rules: Vec<PackRule> = packs
+            .iter()
+            .flat_map(|p| turned_on(&stored, p.as_str(), true))
+            .collect();
+        merged(manifest, &rows, &rules)
+    } else {
+        let a = current_record(manifest).encode();
+        Some([a.clone(), a])
+    };
+    let names: Vec<&str> = packs.iter().map(|p| p.as_str()).collect();
+    store.apply_pack_defaults(
+        true,
+        &names,
+        texts.as_ref().map(|[a, b]| [a.as_str(), b.as_str()]),
     )
+}
+
+/// Both applied rows with `rules` recorded at their current versions:
+/// each readable row merged on its own, keeping versions newer than this
+/// build's and ids it doesn't know; an unreadable one replaced by the
+/// readable one's merge. `None` when there's nothing to record or neither
+/// row reads (a partial record would leave the other rules pending, while
+/// the interim mode applies them all).
+fn merged(manifest: &Manifest, rows: &Rows, rules: &[PackRule]) -> Option<[String; 2]> {
+    if rules.is_empty() {
+        return None;
+    }
+    let read: Vec<Option<Applied>> = rows
+        .applied
+        .iter()
+        .map(|r| match row(r) {
+            Row::Read(mut a) => {
+                for r in rules {
+                    a.record(manifest, *r, manifest.entry(*r).current().version);
+                }
+                Some(a)
+            }
+            _ => None,
+        })
+        .collect();
+    match (&read[0], &read[1]) {
+        (Some(a), Some(b)) => Some([a.encode(), b.encode()]),
+        (Some(a), None) | (None, Some(a)) => Some([a.encode(), a.encode()]),
+        (None, None) => None,
+    }
 }
 
 /// The rules a pack switch turns on, off → on only, read against the
@@ -693,35 +803,15 @@ pub fn set_pack_switch(
     now: i64,
 ) -> lodestar_store::Result<Vec<PackRule>> {
     ensure_seeded(store, manifest, now)?;
-    let stored = crate::load::pack_switches(&store.rule_set()?.pack_switches);
+    let set = store.rule_set()?;
+    let stored = crate::load::pack_switches(&set.pack_switches);
     let rules = turned_on(&stored, id, on);
-    let rows = Rows::read(store)?;
-    let read: Vec<Row> = rows.applied.iter().map(row).collect();
-    let merged: Vec<Option<Applied>> = read
-        .iter()
-        .map(|r| match r {
-            Row::Read(a) => {
-                let mut a = a.clone();
-                for r in &rules {
-                    a.record(manifest, *r, manifest.entry(*r).current().version);
-                }
-                Some(a)
-            }
-            _ => None,
-        })
-        .collect();
-    let texts: Vec<Option<String>> = match (&merged[0], &merged[1]) {
-        _ if rules.is_empty() => vec![None, None],
-        (Some(a), Some(b)) => vec![Some(a.encode()), Some(b.encode())],
-        (Some(a), None) | (None, Some(a)) => vec![Some(a.encode()), Some(a.encode())],
-        (None, None) => vec![None, None],
-    };
-    if texts[0].is_none() {
+    let Some([a, b]) = merged(manifest, &Rows::of(&set), &rules) else {
         // Nothing to record: the switch alone, as before RP-0.
         store.set_pack_switch(id, on)?;
         return Ok(Vec::new());
-    }
-    store.write_pack_versions([texts[0].as_deref(), texts[1].as_deref()], Some((id, on)))?;
+    };
+    store.write_pack_versions([Some(&a), Some(&b)], Some((id, on)))?;
     Ok(rules)
 }
 

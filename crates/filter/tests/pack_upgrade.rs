@@ -9,16 +9,27 @@ use std::sync::Arc;
 
 use lodestar_classify::{FileInfo, classify};
 use lodestar_filter::packs::Ctx as PackCtx;
+use lodestar_filter::packs::Pack;
 use lodestar_filter::packs::manifest::{Code, Direction, Manifest, RuleEntry, Version};
 use lodestar_filter::packs::upgrade::{
-    self, APPLIED_KEYS, Condition, PackShadow, SEEDED_KEY, Side, acceptance_strengthens,
+    self, APPLIED_KEYS, Condition, DEFAULTS_KEY, FRESH_KEY, PackShadow, SEEDED_KEY, Side,
+    acceptance_strengthens,
 };
 use lodestar_filter::{
     Action, Core, CsList, Engine, Facts, Item, Lists, PackRule, RuleRef, Switches, TermSet,
 };
 use lodestar_store::{RuleSet, Store, StoreConfig};
 
+/// A store as an earlier build left it: created before RP-DEF, so
+/// without the fresh marker its creating migration now writes.
 fn store() -> Store {
+    let mut s = fresh_store();
+    s.update_settings_text(&[], &[FRESH_KEY]).unwrap();
+    s
+}
+
+/// A store created on this start (RP-DEF's fresh data directory).
+fn fresh_store() -> Store {
     Store::open_in_memory(StoreConfig::default()).unwrap()
 }
 
@@ -221,8 +232,10 @@ fn seeding_keeps_every_rule_at_baseline_and_copies_sc1_to_sc2() {
     assert_eq!(s.rule_set().unwrap().exceptions.len(), 2);
 }
 
+/// An upgraded store (no fresh marker) seeds quietly, as RP-0 did, and
+/// keeps every pack off: RP-DEF writes the off rows explicitly.
 #[test]
-fn a_fresh_store_seeds_quietly() {
+fn an_upgraded_store_seeds_quietly_and_keeps_packs_off() {
     let m = Manifest::builtin();
     let mut s = store();
     let seeded = upgrade::ensure_seeded(&mut s, &m, 0).unwrap().unwrap();
@@ -232,9 +245,120 @@ fn a_fresh_store_seeds_quietly() {
             .unwrap(),
         None
     );
-    // Packs are still off until chosen.
     let e = load(&m, &s);
     assert!(PackRule::ALL.iter().all(|r| !e.packs.is_on(*r)));
+    let set = s.rule_set().unwrap();
+    for p in Pack::ALL {
+        assert!(
+            set.pack_switches.contains(&(p.as_str().to_owned(), false)),
+            "{} has an explicit off row",
+            p.as_str()
+        );
+    }
+    assert_eq!(s.setting_text(DEFAULTS_KEY).unwrap().as_deref(), Some("1"));
+    assert!(upgrade::ensure_seeded(&mut s, &m, 0).unwrap().is_none());
+}
+
+/// RP-DEF: an upgraded store keeps every pack's state, on or off, and the
+/// rule switches the user set.
+#[test]
+fn an_upgraded_store_keeps_every_packs_state() {
+    let m = Manifest::builtin();
+    let mut s = store();
+    s.set_pack_switch("malware", true).unwrap();
+    s.set_pack_switch("spam", false).unwrap();
+    s.set_pack_switch("MW-2", false).unwrap();
+    let before = load(&m, &s).packs;
+    upgrade::ensure_seeded(&mut s, &m, 0).unwrap();
+    assert_eq!(load(&m, &s).packs, before, "filtering is unchanged");
+    let set = s.rule_set().unwrap();
+    assert!(set.pack_switches.contains(&("malware".into(), true)));
+    assert!(set.pack_switches.contains(&("MW-2".into(), false)));
+    for p in ["spam", "lures", "fakes", "scams"] {
+        assert!(set.pack_switches.contains(&(p.into(), false)), "{p}");
+    }
+    assert_eq!(s.setting_text(FRESH_KEY).unwrap(), None);
+    // Also when RP-0 had seeded it before.
+    let mut s = store();
+    seeded_with_malware(&mut s, &m);
+    assert!(load(&m, &s).packs.is_on(PackRule::Mw1));
+    assert!(!load(&m, &s).packs.is_on(PackRule::Sp1));
+}
+
+/// RP-DEF: a fresh store has every pack on, with every rule at its
+/// current version, so nothing is pending, at the first read after
+/// seeding; and a rule added after RP-0 applies too.
+#[test]
+fn a_fresh_store_has_every_pack_on_at_current_versions() {
+    let m = with_new_rule();
+    let mut s = fresh_store();
+    assert!(upgrade::ensure_seeded(&mut s, &m, 0).unwrap().is_some());
+    let e = load(&m, &s);
+    for r in PackRule::ALL {
+        assert!(e.packs.is_on(r), "{}", r.id());
+        let st = e.pack_versions.state(r);
+        assert_eq!(
+            st.apply,
+            [m.entry(r).current().version],
+            "{} at its current version",
+            r.id()
+        );
+        assert!(!st.pending(), "{}", r.id());
+    }
+    assert!(e.pack_versions.conditions.is_empty());
+    assert_eq!(decide(&e, LURE), Some((LU4, Action::Hide)), "LU-4 applies");
+    let [a, b] = rows(&s);
+    assert_eq!(a, b);
+    assert_eq!(
+        upgrade::Applied::decode(&a.unwrap()).unwrap(),
+        upgrade::current_record(&m)
+    );
+    assert_eq!(s.setting_text(SEEDED_KEY).unwrap().as_deref(), Some("1"));
+    assert_eq!(s.setting_text(DEFAULTS_KEY).unwrap().as_deref(), Some("1"));
+    assert_eq!(s.setting_text(FRESH_KEY).unwrap(), None, "consumed");
+    // Once only: a pack turned off later stays off.
+    upgrade::set_pack_switch(&mut s, &m, "spam", false, 0).unwrap();
+    assert!(upgrade::ensure_seeded(&mut s, &m, 0).unwrap().is_none());
+    assert!(!load(&m, &s).packs.is_on(PackRule::Sp1));
+}
+
+/// A fresh marker over state an earlier build wrote (a downgrade in
+/// between): rows there are choices and kept; packs without one are
+/// switched on, their rules recorded at their current versions.
+#[test]
+fn a_fresh_marker_over_existing_rows_keeps_them() {
+    let m = with_new_rule();
+    let mut s = fresh_store();
+    s.set_pack_switch("spam", false).unwrap();
+    write_rows(
+        &mut s,
+        &upgrade::seed_record(&m).encode(),
+        &upgrade::seed_record(&m).encode(),
+    );
+    upgrade::ensure_seeded(&mut s, &m, 0).unwrap().unwrap();
+    let e = load(&m, &s);
+    assert!(!e.packs.is_on(PackRule::Sp1), "spam's off row is kept");
+    assert!(e.packs.is_on(PackRule::Lu4));
+    assert!(!e.pack_versions.state(PackRule::Lu4).pending());
+    assert_eq!(decide(&e, LURE), Some((LU4, Action::Hide)));
+    assert_eq!(s.setting_text(FRESH_KEY).unwrap(), None);
+}
+
+/// RP-DEF: an Undo to a rule set from before RP-DEF (no switch rows)
+/// returns to that snapshot's off state, and nothing seeds again.
+#[test]
+fn undo_to_a_pre_defaults_rule_set_is_off() {
+    let m = Manifest::builtin();
+    let mut s = fresh_store();
+    let before = s.rule_set().unwrap();
+    assert!(before.pack_switches.is_empty());
+    upgrade::ensure_seeded(&mut s, &m, 0).unwrap();
+    assert!(load(&m, &s).packs.is_on(PackRule::Mw1));
+    s.replace_rule_set(&before).unwrap();
+    assert!(upgrade::ensure_seeded(&mut s, &m, 0).unwrap().is_none());
+    let e = load(&m, &s);
+    assert!(PackRule::ALL.iter().all(|r| !e.packs.is_on(*r)));
+    assert!(s.rule_set().unwrap().pack_switches.is_empty());
 }
 
 #[test]

@@ -72,9 +72,14 @@ pub fn decode_match(kind: u8, value: &[u8]) -> Option<Match> {
     })
 }
 
-/// The stored switches over no pack on: packs are off until chosen, in
-/// the first-run wizard or in Settings (§20.6, owner's decision §2.8).
-/// An install that never chose stays without packs.
+/// The stored switches over no pack on: a pack with no switch row is off.
+/// Packs are on by default (owner §2.39), and that default is stored, not
+/// assumed: a fresh data directory gets an explicit on row for every pack
+/// in the build, and a store that existed before gets an explicit off row
+/// (`upgrade::ensure_seeded`, RP-DEF). Reading no row as off keeps two
+/// paths safe: an Undo to a snapshot from before RP-DEF (which has no
+/// rows) returns to that snapshot's off state, and a pack a later build
+/// adds stays off on an upgraded store until it's turned on.
 pub fn pack_switches(stored: &[(String, bool)]) -> PackSwitches {
     let mut s = PackSwitches::default();
     for (id, on) in stored {
