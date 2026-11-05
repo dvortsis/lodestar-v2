@@ -274,7 +274,7 @@ flowchart LR
 
 **Things that run one at a time:**
 - **Migrations:** one migration PR open at a time (`ext:migration-slot`), written only by an Opus slice that owns the store schema. Queue: V12 → V13 (merged) → **V14 SRC-1** (§2.28 lifted the migration hold) → **V15 CR-3** (after the 50M gate), with any worker or companion table taking the next number when it reaches the slot. The runner records the queue in `runner-state` `migration_order`.
-- **Search schema:** exactly one `SCHEMA_VERSION` bump per milestone. M7's is SB-6. A slice that needs a new indexed field asks SB-6 to carry it instead of bumping.
+- **Search schema:** a released user rebuilds the search index once per release. Normally that's one `SCHEMA_VERSION` bump per milestone. M7 has two, SB-6 (v6) and X-search-files-5 (v7), both before the v0.5.2 cut, so users rebuild once, v5 → v7 (runner, 2026-11-05; the rebuild always goes straight to the current version). A slice that needs a new indexed field asks the milestone's open bump to carry it instead of bumping again.
 - **The owner's machines:** the Unraid box finishes the v0.5.1 soak first. After that, the experiment host runs A/B arms, comparator days and acceptance soaks, and the import host runs pilots. If they're the same machine, the runs never overlap; the order is soak → comparator → A/B → pilots between A/B blocks. **Bookings are exclusive and per run:** `ext:experiment-host` and `ext:import-host` hold for one booked run, not once for all, so two gates can't share the host because their `owns` happen to be disjoint.
 - **The experiment calendar** (the slice cap can't shorten this serial path):
 
@@ -389,7 +389,7 @@ A non-Claude agent picking up the work maps this to "use your strongest model fo
 | Shared thing | Rule |
 |---|---|
 | `crates/store/src/schema.rs` migrations | One migration PR at a time (`ext:migration-slot`), Opus only, in the queue in §0.7 (V14 → SRC-1 next) |
-| `crates/search` `SCHEMA_VERSION` | Exactly one bump per milestone, through the blue/green rebuild. M5's was v5 (facets). M7's is **SB-6** (v6), which carries SRC-3's `verified:`/`source:`/`network:` fields, `payload_sig`, the trigram field and file category/`pieces_root` |
+| `crates/search` `SCHEMA_VERSION` | One rebuild per release, through the blue/green rebuild. M5's was v5 (facets). M7: **SB-6** (v6), which carries SRC-3's `verified:`/`source:`/`network:` fields, `payload_sig`, the trigram field and file category/`pieces_root`, and **X-search-files-5** (v7), the torrent-level file size bucket terms and B13's title-identity key, both before the v0.5.2 cut; users rebuild once |
 | `crates/api/src/lib.rs`, `crates/lodestar/src/services.rs` | Each slice adds one line; merged in sequence |
 | `openapi.json` / `schema.d.ts` | Regenerated after bringing in `main`, never merged by hand |
 | `web/package.json` and the lockfile | A new dependency needs main-session approval |
