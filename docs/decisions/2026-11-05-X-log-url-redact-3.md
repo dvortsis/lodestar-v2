@@ -3,8 +3,9 @@
 The follow-up slice named in `docs/decisions/2026-11-05-X-log-url-redact-2.md` ("Follow-up: X-log-url-redact-3"). It changes `crates/log/src/url.rs` only (architecture §12.1, B12, B-log1). Each item is its own commit, so the runner can drop any one. Every proof compares this branch with current `main` at 40c5c84 (#460's merged code), not with the old floor. The rule is still #460's: never too little, and nothing `main` hides may show.
 
 ## Outcome
-- **Kept:** the fast path, a simpler separator pass, and `AnyOf` without a `Vec`.
+- **Kept:** the fast path, and `AnyOf` without a `Vec`.
 - **Dropped: both narrowings.** Each one showed planted secrets that `main` hides (see below). The over-redaction #460 accepted for them stays.
+- **Tried and reverted:** dropping the separator pass's credential-value guard. The fuzz passed, but `/security-review` found a secret it shows (see "Security review"). The branch keeps the commit and its revert, so the history shows both.
 
 ## 1. Fast path (kept)
 - **The problem:** a plain short line cost 4 to 6 times `main`'s old time, because both stages ran on every line.
@@ -63,13 +64,27 @@ The follow-up slice named in `docs/decisions/2026-11-05-X-log-url-redact-2.md` (
 
 ## 4. Other cleanups
 - **`AnyOf` holds a fixed array of up to three needles (kept).** It allocated a `Vec` on every `scrub_pass` and `normalize_separators` call. It searches the same as before: the fuzz shows 0 differences in 300,000 soups (seed 5).
-- **The separator pass's credential-value guard is gone (kept).**
-  - **What it was:** `normalize_separators(…, keep_values)` ran `secret_cuts` and skipped any separator inside a credential's value, so the second pass never split such a value into a URL (`secret=https%3A%2F%2Fh/<s>`, the security review in #460).
-  - **Why it can go:** it guarded the one-stage design. Stage 1 never rewrites separators and hides that value whole, and `only_more` keeps what stage 1 hid.
-  - **What the fuzz found:** 0 secrets shown that `main` hides in 2 × 1,200,000 soups, and 1,519 and 1,503 more hidden than `main`. The value's split parts now hide URL parts too.
-  - **Tests:** `a_credential_s_value_is_never_split_into_a_url` still passes.
+- **Dropping the separator pass's credential-value guard (tried, reverted).**
+  - **What the guard does:** `normalize_separators(…, keep_values)` runs `secret_cuts` and skips any separator inside a credential's value, so the second pass never splits such a value into a URL (`secret=https%3A%2F%2Fh/<s>`, the security review in #460).
+  - **Why it looked redundant:** stage 1 never rewrites separators and hides that value whole, and `only_more` keeps what stage 1 hid. The fuzz agreed: 0 secrets shown that `main` hides in 2 × 1,200,000 soups, and about 1,500 more hidden per seed.
+  - **Why it isn't redundant:** the guard reads its cuts from the first pass's output, not from the original text. That output can hold a credential's name that stage 1 never sees. See "Security review" below.
 - **Tried and kept as it was: `in_url`.** It stops the separator pass rewriting inside a word that already holds a raw `://`. Without it, the fuzz showed 1 secret `main` hides in 300,000 soups (`http:/y?,yBBQ0zhttp:/@`), so it does more than guard the old design.
 - **Left alone:** the other review-round guards in `secret_cuts` (values read again from their start) and in the Debug rules (`Hidden`). Many wide rules share them, and they also hide what the floor shows. Each would need its own fuzz round, and this slice has none to spare.
+
+## Security review
+- **`/security-review` found one regression,** in the guard's removal. It's reverted, and the input is a case of `a_credential_s_value_is_never_split_into_a_url`, which fails without the guard.
+- **The input:** `https://h/pass?x": "x%3A%2F%2Fh/<s>" http:%2F%2Fa.b/`.
+  - The first pass drops the URL's query, so its output reads `https://h/pass": "x%3A%2F%2Fh/<s>"`: a credential's name, then a value.
+  - With the guard, the second pass leaves that value whole and hides it. Without it, the second pass reads the value as a URL and keeps its path, `<s>` included.
+  - Stage 1 shows `<s>`, so `only_more` keeps it too: the word is in the wide output.
+  - `main` gives `"[redacted]"`; without the guard, the output was `"[redacted]/<s>"`.
+- **Why the fuzz missed it:** a credential slot's name is never glued to the end of a URL's path, with a query and a quote between them. So a fuzz count of 0 is evidence, not proof, for a change inside `mod wide`.
+- **Gaps on `main` too, which the review also found** (the runner may want a slice for them):
+  - the same input without the second URL: the second pass never runs, so the name is never read again;
+  - `https://h/key?a': x%3A%2F%2Fh/<s>`;
+  - `https://h/apikey?a=1'=x%3A%2F%2Fh/<s>`.
+  - A fix would read the first pass's output again for credentials, even when no second pass runs.
+- **The fast path and `AnyOf`:** the review traced every trigger again and found both sound.
 
 ## Differential fuzz against `main` (40c5c84)
 - **The harness is kept out of the commit.**
@@ -78,31 +93,36 @@ The follow-up slice named in `docs/decisions/2026-11-05-X-log-url-redact-2.md` (
   - It plants 1 to 3 marked secrets `AAQ{k}x<sep>yBBQ{k}z` in 15 credential slots, among them `user:S@`, `://S@`, `://u:S@h`, `password: "S"`, `password: Some("S")`, `token=S`, `apikey=S`, `dn=S`, `kt=S`, `Bearer S`, `Authorization: S`, `?passkey=S`, `username: "S"` and `S@`. The 22 separators include `/`, a space, `"`, `@`, `:`, `\n`, `/ `, `\"`, `://` and `%2F`.
   - A secret counts as shown if either half shows.
   - It runs `scrub_text`, `scrub` (absolute) and `scrub` (request), and shrinks each regression by chunk deletion.
-- **The head of this PR**, 2 seeds × 1,200,000 soups (about 2,400,000 secrets each):
+- **The head of this PR** (the fast path and `AnyOf`), 2 seeds × 1,200,000 soups (about 2,400,000 secrets each). Both changes keep the output as it was, and the fuzz agrees: the output matches `main`'s on every input.
 
 | Seed | Entry point | PR shows, `main` hides | `main` shows, PR hides | Shown by PR / `main` | Panics |
 |---|---|---|---|---|---|
-| 1 | `scrub_text` | **0** | 1,519 | 724,666 / 726,185 | 0 |
+| 1 | `scrub_text` | **0** | 0 | 726,185 / 726,185 | 0 |
 | 1 | `scrub` absolute | 0 | 0 | 372,569 / 372,569 | 0 |
 | 1 | `scrub` request | 0 | 0 | 264,523 / 264,523 | 0 |
-| 2 | `scrub_text` | **0** | 1,503 | 724,424 / 725,927 | 0 |
+| 2 | `scrub_text` | **0** | 0 | 725,927 / 725,927 | 0 |
 | 2 | `scrub` absolute | 0 | 0 | 371,649 / 371,649 | 0 |
 | 2 | `scrub` request | 0 | 0 | 264,023 / 264,023 | 0 |
 
 - **Why the "shown" counts are high on both sides:** most slots put the secret where no rule could know it's one. #460's known gaps say the same.
+- **The dropped and reverted changes,** for comparison, on the same seeds:
+
+| Change | PR shows, `main` hides (seed 1 / 2) | `main` shows, PR hides (seed 1 / 2) |
+|---|---|---|
+| Narrowing A | 2,045 / 2,021 | 17 / 30 |
+| Narrowing B | 502 / 501 | 1 / 0 |
+| No separator guard | 0 / 0, but see "Security review" | 1,519 / 1,503 |
 
 ## Linear time sweep
 - **The run:** 3,100 random units of 1 to 6 tokens from the fuzz's list, each repeated to 32 KiB and to 256 KiB, on this PR's `scrub_text` in a release build.
-- **The worst time ratio**, normalised to 1 for linear, is 2.34 (`%3Dkey`). #460 reported 2.42.
-- **Timed again at 1 and 4 MiB,** the five worst units take 3.0 to 4.2 times as long at 4 MiB, so small sizes cause those ratios, not a quadratic path:
+- **The worst time ratios**, normalised to 1 for linear, are 5.25 (`\n`), 4.91 (`#\`) and 3.21 (`Some(`). All three are on the fast path, at about 13 ms per 256 KiB, where small timings are noisy. The worst unit off the fast path is 2.46 (`>passkey)file://`); #460 reported 2.42.
+- **Timed again at 1, 4 and 16 MiB,** each grows about 4 times for each 4 times in size, so there's no quadratic path:
 
-| Unit | 1 MiB | 4 MiB |
-|---|---|---|
-| `%3Dkey` | 0.054 s | 0.190 s |
-| `&xl=1` | 0.151 s | 0.599 s |
-| `,magnet:?` | 0.066 s | 0.280 s |
-| `s3://%3D%26Bearer ` | 0.171 s | 0.697 s |
-| `kt=%26<\r\n {` | 0.139 s | 0.420 s |
+| Unit | 1 MiB | 4 MiB | 16 MiB |
+|---|---|---|---|
+| `\n` | 0.012 s | 0.047 s | 0.215 s |
+| `Some(` | 0.018 s | 0.055 s | 0.250 s |
+| `>passkey)file://` | 0.251 s | 0.851 s | 3.466 s |
 
 ## Unchanged
 - **#460's over-redaction list and known gaps all still apply.** The two narrowings would have shortened that list, and both are dropped.
