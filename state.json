@@ -2928,7 +2928,7 @@
    "brief": "briefs/SRC-10c-2.md"
   },
   "RP-UC": {
-   "status": "building",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhn9h8gmph6uFiNtVwyJ",
    "launched": "2026-11-05T04:59Z",
@@ -3008,6 +3008,20 @@
    "session": "session_01MMjhnBuYcaSNVCmZuFhZDV",
    "launched": "2026-11-05T07:22Z",
    "brief": "briefs/X-search-files-5.md"
+  },
+  "RP-1b": {
+   "status": "building",
+   "model": "opus",
+   "session": "session_01MMjhnCbnYfs69e34TsRCi8",
+   "launched": "2026-11-05T08:56Z",
+   "brief": "briefs/RP-1b.md"
+  },
+  "X-filter-perf-1105": {
+   "status": "building",
+   "model": "opus",
+   "session": "session_01MMjhnBUn6REgauXk7Tjitf",
+   "launched": "2026-11-05T08:56Z",
+   "brief": "briefs/X-filter-perf-1105.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3480,7 +3494,8 @@
   "2026-11-05T07:21Z #468 X-search-files-4 merged (dfc91d2d); X-search-files-5 continues in the same session (slot 7).",
   "2026-11-05T08:01Z #476 X-flakes-1105 merged (d4d70d75), archived; X-test-hygiene-1105 launched in slot 4 (prompt-only brief, #476 review follow-ups).",
   "2026-11-05T08:33Z #474 SRC-17 merged (040567e4), archived; slot 10 idle with recorded reason.",
-  "2026-11-05T08:36Z #477 X-flake-search-keyboard merged (ea01beb2; Assist late-mount fix), archived; X-fuzz-1105 launched in slot 1. Slots 10, 11 idle (recorded reason)."
+  "2026-11-05T08:36Z #477 X-flake-search-keyboard merged (ea01beb2; Assist late-mount fix), archived; X-fuzz-1105 launched in slot 1. Slots 10, 11 idle (recorded reason).",
+  "2026-11-05T08:53Z #469 RP-UC merged (0531d024), archived. RP-1b (slot 6) and X-filter-perf-1105 (slot 10) launched. Slot 11 idle (recorded)."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -4556,7 +4571,8 @@
   "New slice B13b (Opus): use the title-identity key (exact keyword of the normalized title plus spans) that X-search-files-5 adds in search SCHEMA_VERSION 7, so short no-year titles (Up, Heat) find siblings beyond the 1,000-candidate window (docs/decisions/2026-10-22-B13.md Known limit). Launch after X-search-files-5 merges; only if the field made it into v7 (size cap 16 B/torrent).",
   "SRC-13c merge gates (from #479 review): (1) replace SRC-4 FNV consent digest with an exact compare (sorted host list stored in the acknowledgement); FNV-1a has a ~2^32 second-preimage once users write the list; (2) the consent dialog shows the full URL templates (per-user paths like /~user/ matter).",
   "ENR-1b addition (from #480 review): pipeline ingest sends any adult section on a stored key down the matches path, skipping touched/adult, so an always-adult source attaching a section would bypass the X-source-adult mask; the Kind::Enrichment gate (or keeping always-adult sources on the normal path) must close it. Also fix the enrich.rs:325 generation race (apply_matches reads generation after the writer snapshot). ENR-7: rate-limit user-interest (opened) enrichment lookups.",
-  "ENR-1b also (runner call, \u00a72.33, stricter than Q2, flag to owner): the Display/Name query form returns NoQuery when the torrent name alone is ambiguous or uninformative (named.title.ambiguous or is_uninformative), e.g. New folder; it can never match, costs budget, and tells the service an adult item was viewed. Plus: a test that runs the backfill after a Pending refusal and asserts the item is eligible again; decisions note that a single-file torrent name is the file name (allowed, it is the display name). The runtime is inert until host wiring, so deferring is safe."
+  "ENR-1b also (runner call, \u00a72.33, stricter than Q2, flag to owner): the Display/Name query form returns NoQuery when the torrent name alone is ambiguous or uninformative (named.title.ambiguous or is_uninformative), e.g. New folder; it can never match, costs budget, and tells the service an adult item was viewed. Plus: a test that runs the backfill after a Pending refusal and asserts the item is eligible again; decisions note that a single-file torrent name is the file name (allowed, it is the display name). The runtime is inert until host wiring, so deferring is safe.",
+  "Legal notice (planned) marker for the unauthorised-copy pack: RP-UC merged (#469, 0531d024) so docs/legal/legal-notice.md \u00a73 should drop it. LEGAL-1 (#472) is at its final head, so do it as a tiny docs follow-up after #472 merges. Factual deletion only; NOTICE_VERSION stays 3 if #472 has not shipped."
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5217,7 +5233,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T08:37Z",
+  "updated": "2026-11-05T08:56Z",
   "items": [
    {
     "slot": 1,
@@ -5261,11 +5277,11 @@
    },
    {
     "slot": 6,
-    "slice": "RP-UC",
+    "slice": "RP-1b",
     "role": "build",
     "agent": "claude",
-    "doing": "Content filters: the unauthorised-copy pack (camcorder, cracked software, scene rips) and cracked software in the malware pack (v0.5.2)",
-    "since": "2026-11-05T04:59Z"
+    "doing": "Content filters: the two missing guards (music-production packs in the malware pack, short-episode packs in the fakes pack)",
+    "since": "2026-11-05T08:56Z"
    },
    {
     "slot": 7,
@@ -5293,13 +5309,16 @@
    },
    {
     "slot": 10,
-    "status": "idle",
-    "doing": "Held: same as slot 11 (RP-1b/X-source-adult-2/filter perf wait #469; SRC-11c/SRC-13c/RP-4/ENR-1b wait #479; LEGAL-2 waits #472)"
+    "slice": "X-filter-perf-1105",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Performance: winning back filter-budget headroom with no change to any verdict",
+    "since": "2026-11-05T08:56Z"
    },
    {
     "slot": 11,
     "status": "idle",
-    "doing": "Held: SRC-11c and LEGAL-2 need crates/lodestar host files (SRC-13b, LEGAL-1 running); SRC-13c needs SRC-13b store row; filter perf pass waits RP-UC (#469); X-search-files-5 waits #468 CI; RP-1b and X-source-adult-2 wait RP-UC"
+    "doing": "Held: X-source-adult-2 waits on RP-3 (#478, api/filters.rs); SRC-11c, SRC-13c, RP-4, ENR-1b wait on #479 (writer.rs, host files); LEGAL-2 waits on #472"
    },
    {
     "slot": 12,
