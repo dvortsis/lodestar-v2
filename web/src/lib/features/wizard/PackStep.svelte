@@ -8,7 +8,7 @@
 	//   own change dialog: the server's effect warning, then the password set in /setup.
 	// Skip, or Continue with nothing changed, sends nothing, so packs stay as they are. Turning off
 	// single rules is in Settings → Filters & Safety.
-	import { onDestroy, onMount, type Component } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
 	import { m } from '$lib/paraglide/messages.js';
@@ -16,6 +16,7 @@
 	import Checkbox from '$lib/ui/fields/Checkbox.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import type { ChangeFlow } from '../filters/flows/flow.svelte';
+	import type ChangeDialog from '../filters/flows/ChangeDialog.svelte';
 	import { applyPacks } from './packs.svelte';
 
 	type Pack = components['schemas']['PackState'];
@@ -31,7 +32,7 @@
 	let off = $state.raw<{
 		id: string;
 		flow: ChangeFlow;
-		Dialog: Component<Record<string, unknown>>;
+		Dialog: typeof ChangeDialog;
 	}>();
 	/** Whether the open flow applied, and how to tell `turnOff` it ended. */
 	let offApplied = false;
@@ -94,7 +95,7 @@
 			const flow = flows.createChangeFlow();
 			offApplied = false;
 			offDone = resolve;
-			off = { id, flow, Dialog: flows.ChangeDialog as never };
+			off = { id, flow, Dialog: flows.ChangeDialog };
 			flow.start({ op: 'pack_switch', id, on: false });
 		});
 	}
@@ -124,8 +125,9 @@
 			if (stop.signal.aborted) return false;
 			if (!(await turnOff(id, flows))) {
 				problem = { id, message: null, on: false };
-				// Cancelled or refused: the pack stays on, and the screen shows it on.
-				await load();
+				// Cancelled or refused: the pack stays on. The user's unchecks are kept, so Continue
+				// tries again, and checking the box again keeps the pack on.
+				await load(true);
 				return false;
 			}
 		}

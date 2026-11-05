@@ -678,7 +678,11 @@ pub fn ensure_seeded(
         )?
     };
     // Off rows record what already applies: no reload is needed for them.
-    store.apply_pack_defaults(false, &pack_names(), None)?;
+    // Once they're written, the common case is one read, without taking
+    // the write lock; the transaction re-checks both markers itself.
+    if matches!(store.setting_text(DEFAULTS_KEY), Ok(None)) {
+        store.apply_pack_defaults(false, &pack_names(), None)?;
+    }
     Ok(seeded)
 }
 
@@ -693,6 +697,13 @@ fn pack_names() -> Vec<&'static str> {
 /// it (a choice); every other pack is switched on, recording its rules as
 /// [`set_pack_switch`] does. Returns whether the fresh marker was there
 /// and is now consumed.
+///
+/// The rows are read before the write transaction, as in
+/// [`set_pack_switch`]: every caller holds the store's one writing
+/// connection (the pipeline's start runs before the filters API exists,
+/// and the API calls this under its store lock), so nothing writes
+/// between the read and the write. The transaction still re-checks the
+/// fresh marker, so a second caller never seeds twice.
 fn seed_fresh(store: &mut Store, manifest: &Manifest) -> lodestar_store::Result<bool> {
     // The common case, cheaply: no marker, so the rule set isn't read. A
     // marker that won't read as text still counts as there.

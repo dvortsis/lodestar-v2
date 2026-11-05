@@ -3571,6 +3571,45 @@ mod tests {
         assert!(!e.packs.is_on(PackRule::Sc2));
     }
 
+    /// RP-DEF: an Undo to a rule set saved before RP-DEF (no pack rows)
+    /// returns to that set's off state, and nothing seeds the packs on
+    /// again at the next start.
+    #[test]
+    fn undo_to_a_set_from_before_rp_def_is_off_and_stays_off() {
+        let api = test_api(Store::open_in_memory(Default::default()).unwrap());
+        api.start_packs(500).unwrap();
+        assert!(
+            Pack::ALL
+                .iter()
+                .all(|p| api.engine.current().packs.on.contains(p))
+        );
+        let old = json!({
+            "rules": [], "overrides": [], "allow": [], "core": [], "packs": [], "exceptions": [],
+        });
+        api.store()
+            .save_previous(old.to_string().as_bytes())
+            .unwrap();
+        apply_change(&api, Change::Undo);
+        let off = |api: &FiltersApi| {
+            let e = api.engine.current();
+            assert!(PackRule::ALL.iter().all(|r| !e.packs.is_on(*r)));
+            assert!(api.store().rule_set().unwrap().pack_switches.is_empty());
+        };
+        off(&api);
+        api.start_packs(600).unwrap();
+        off(&api);
+        assert!(
+            pack_upgrade::ensure_seeded(
+                &mut api.store(),
+                &lodestar_filter::packs::manifest::Manifest::builtin(),
+                700
+            )
+            .unwrap()
+            .is_none()
+        );
+        off(&api);
+    }
+
     /// A full re-mark is cleared only if no shutdown and no rule change
     /// came while it marked; otherwise it stays for the next start.
     #[test]
