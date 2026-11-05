@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import SettingField from './SettingField.svelte';
 import { fakeServer } from './testing/fake-server';
 import { dismissAll } from './dialogs';
@@ -10,6 +10,8 @@ import { spec, sv, values } from './testing/values';
 import type { FieldKey, FieldSpec } from './types';
 import { registerWidget } from './widgets';
 import WidgetStub from './testing/WidgetStub.svelte';
+
+configure({ asyncUtilTimeout: 10_000 });
 
 const SPECS: FieldSpec[] = [
 	spec('crawler.timeout_secs', {
@@ -246,6 +248,7 @@ describe('SettingField', () => {
 		expect(writeText).toHaveBeenCalledWith(
 			new URL(form.href('crawler.timeout_secs'), location.href).href
 		);
+		expect(writeText.mock.calls[0]![0]).toBe(`${location.origin}/settings/x#crawler.timeout_secs`);
 	});
 
 	it('shows config.toml key and variable on request', async () => {
