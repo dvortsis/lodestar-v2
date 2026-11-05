@@ -1664,6 +1664,7 @@ fn an_always_adult_plugin_is_refused() {
     static BOTH: Manifest = Manifest {
         id: "both",
         always_adult: true,
+        finds_private: false,
         ..MANIFEST
     };
     impl AdultEnricher for Both {
