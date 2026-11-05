@@ -12,6 +12,13 @@ test('keyboard: first-run setup from token to /welcome', async ({ page, go, mock
 	await kbd.tabTo(page.getByLabel('Setup token'));
 	await page.keyboard.type('ab12cd34ef567890');
 	await kbd.press('Enter');
+	// The notice takes focus so it can be scrolled; the checkbox is next.
+	await expect(page.getByRole('region', { name: 'Legal Notice' })).toBeFocused();
+	await kbd.press('Tab');
+	await expect(page.getByLabel('I have read the Legal Notice')).toBeFocused();
+	await kbd.press('Space');
+	await kbd.tabTo(page.getByRole('button', { name: 'Continue' }));
+	await kbd.press('Enter');
 	await expect(page.getByLabel('New admin password')).toBeFocused();
 	await page.keyboard.type('correct horse battery');
 	await kbd.press('Tab');
@@ -26,7 +33,8 @@ test('keyboard: first-run setup from token to /welcome', async ({ page, go, mock
 	await expect(page.getByRole('link', { name: 'Review settings' })).toBeFocused();
 	expect(mock.calls('setup')[0]!.postDataJSON()).toEqual({
 		token: 'AB12-CD34-EF56-7890',
-		password: 'correct horse battery'
+		password: 'correct horse battery',
+		notice_version: 2
 	});
 });
 
@@ -44,6 +52,7 @@ test('keyboard: the token help opens and Back returns to step 1', async ({
 	await kbd.tabTo(page.getByLabel('Setup token'), 20);
 	await page.keyboard.type('AB12-CD34-EF56-7890');
 	await kbd.press('Enter');
+	await expect(page.getByRole('region', { name: 'Legal Notice' })).toBeFocused();
 	await kbd.tabTo(page.getByRole('button', { name: 'Back' }));
 	await kbd.press('Enter');
 	await expect(page.getByLabel('Setup token')).toBeFocused();

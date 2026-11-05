@@ -1,0 +1,2 @@
+409
+{"error":{"code":"notice_required","message":"Read and accept the current Legal Notice first."}}

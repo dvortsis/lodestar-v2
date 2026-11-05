@@ -217,7 +217,7 @@ Do not use `network_mode: host` unless you need it. It skips Docker's network tr
 Pin an exact version such as `x.y.z` instead of `latest`, if you want updates only when you decide.
 
 ## 2.5 Create the admin password
-<!-- index: setup token; admin password; first run -->
+<!-- index: setup token; admin password; first run; Legal Notice -->
 
 On a fresh data folder, Lodestar prints a one-time **setup token** to its log. Anyone who can read the log can claim a fresh instance, so do this before anyone else can reach the web UI.
 
@@ -231,7 +231,9 @@ To create the admin password:
 
 2. Find the line that contains `enter setup token` and copy the word right after it. The line also has a time and a level at its start.
 3. Open `http://<server-ip>:8090` in your browser. Replace `<server-ip>` with your server's address, or use `localhost` on the same machine.
-4. Enter the token and choose a password from your password manager.
+4. Enter the token, then select **Continue**.
+5. Read the **Legal Notice**. It says what Lodestar does on your network, what it finds, and what is yours to decide. Scroll the box to read all of it. Select **I have read the Legal Notice**, then **Continue**.
+6. Choose a password from your password manager, enter it twice, and select **Create password and sign in**.
    **Result:** Lodestar signs you in. It prints no token again.
 
 ![Lodestar first-run setup screen with the Setup token field outlined](images/setup-screen.png)
@@ -243,6 +245,10 @@ The crawler starts at once. The library fills slowly at first while the DHT rout
 > **What to expect in the first hours**
 > - Search works at once, but the index is small. It grows over days, not minutes.
 > - After every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start.
+
+To read the notice again later, open **More** → **About**. The **Legal** section shows it.
+
+If you set up Lodestar on release candidate rc.1, rc.2 or rc.3, it never showed you the notice. After the update, the next time you open Lodestar it shows the notice first. Read it and select **I have read it, continue**. It shows again only when a later version changes the notice in substance. Apps that use an API key or a feed link keep working meanwhile.
 
 > [!NOTE]
 > **Worked example**

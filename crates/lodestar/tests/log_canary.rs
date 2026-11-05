@@ -232,7 +232,11 @@ impl Server {
         }
         let setup = s.post(
             "/api/v1/setup",
-            &format!(r#"{{"token":"{}","password":"{PASSWORD}"}}"#, s.token),
+            &format!(
+                r#"{{"token":"{}","password":"{PASSWORD}","notice_version":{v}}}"#,
+                s.token,
+                v = lodestar_api::legal::NOTICE_VERSION
+            ),
         );
         assert!(setup.starts_with("HTTP/1.0 200"), "{setup}");
         s.cookie = cookie(&setup);

@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 1.4 | 2026-11-05 | Added the Legal Notice step to first-run setup, the notice at sign-in after an upgrade from rc.1 to rc.3, and **About** → **Legal**. |
 | 1.3 | 2026-10-30 | Updated for v0.5.1: restart sampling delay, index growth, nightly warning, status pill text. |
 | 1.2 | 2026-10-26 | Corrected optional Unraid logging guidance and the Advanced View illustration against the current templates. |
 | 1.1 | 2026-10-24 | Added Chapter 5 screens, setup screen capture, Unraid form illustrations and horizontal logo lockup for v0.5.0. |

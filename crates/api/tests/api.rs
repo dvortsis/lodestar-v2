@@ -204,7 +204,7 @@ async fn logged_in(f: &Fixture) -> String {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": token, "password": "correct horse battery" }),
+            json!({ "token": token, "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;
@@ -225,7 +225,7 @@ async fn setup_login_and_protection() {
         post(
             "/api/v1/setup",
             None,
-            json!({ "token": "nope", "password": "correct horse battery" }),
+            json!({ "token": "nope", "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }),
         ),
     )
     .await;

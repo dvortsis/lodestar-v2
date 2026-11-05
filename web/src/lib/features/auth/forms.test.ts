@@ -1,5 +1,6 @@
 // Component tests: errors land on the right field or in the form alert, the 429 countdown runs
-// and unlocks, the submit can't fire twice, and nothing typed is echoed back.
+// and unlocks, the submit can't fire twice, nothing typed is echoed back, and the Legal Notice
+// must be ticked at setup and accepted at the sign-in gate.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 
@@ -13,7 +14,15 @@ const nav = vi.hoisted(() => ({
 vi.mock('./nav', () => nav);
 
 import LoginForm from './LoginForm.svelte';
+import NoticeGate from './NoticeGate.svelte';
 import SetupForm from './SetupForm.svelte';
+import { resetNoticeCache } from './notice';
+
+const NOTICE_URL = '/api/v1/legal/notice';
+const NOTICE = {
+	version: 2,
+	text: '# Lodestar Legal Notice\n\n**Version 2 · 2026-11-04**\n\n## 1. Who\n- one\n- two'
+};
 
 type Reply = { status: number; body: unknown; headers?: Record<string, string> };
 const ok: Reply = { status: 200, body: { ok: true } };
@@ -24,12 +33,19 @@ const fail = (status: number, code: string, headers?: Record<string, string>): R
 });
 
 let replies: Reply[];
+/** What `GET /legal/notice` answers, in order; then the notice. */
+let notices: Reply[];
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
 	vi.clearAllMocks();
+	resetNoticeCache();
 	replies = [];
-	fetchMock = vi.fn(async () => {
-		const r = replies.shift() ?? ok;
+	notices = [];
+	fetchMock = vi.fn(async (url: string) => {
+		const r =
+			url === NOTICE_URL
+				? (notices.shift() ?? { status: 200, body: NOTICE })
+				: (replies.shift() ?? ok);
 		return new Response(JSON.stringify(r.body), {
 			status: r.status,
 			headers: { 'Content-Type': 'application/json', ...r.headers }
@@ -42,8 +58,9 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-const sentBody = (i = 0) =>
-	JSON.parse((fetchMock.mock.calls[i] as [string, RequestInit])[1].body as string);
+/** The requests besides fetching the notice. */
+const calls = () => fetchMock.mock.calls.filter((c) => c[0] !== NOTICE_URL);
+const sentBody = (i = 0) => JSON.parse((calls()[i] as [string, RequestInit])[1].body as string);
 
 describe('LoginForm', () => {
 	const password = () => screen.getByLabelText(/^Password/) as HTMLInputElement;
@@ -56,7 +73,7 @@ describe('LoginForm', () => {
 		await fireEvent.input(password(), { target: { value: 'correct horse' } });
 		await fireEvent.click(submit());
 		await waitFor(() => expect(nav.toNext).toHaveBeenCalledWith('/search?q=a'));
-		expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/login');
+		expect(calls()[0]![0]).toBe('/api/v1/login');
 		expect(sentBody()).toEqual({ password: 'correct horse' });
 	});
 
@@ -150,10 +167,20 @@ describe('SetupForm', () => {
 	const confirmPw = () => screen.getByLabelText(/^Confirm password/) as HTMLInputElement;
 	const create = () => screen.getByRole('button', { name: 'Create password and sign in' });
 
-	async function toPasswordStep(token = 'first run: enter setup token ab12-cd34-ef56-7890 now') {
+	const readBox = () => screen.getByLabelText('I have read the Legal Notice') as HTMLInputElement;
+	const cont = () => screen.getByRole('button', { name: 'Continue' });
+
+	async function toNoticeStep(token = 'first run: enter setup token ab12-cd34-ef56-7890 now') {
 		render(SetupForm);
 		await fireEvent.input(tokenInput(), { target: { value: token } });
-		await fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+		await fireEvent.click(cont());
+		await screen.findByLabelText('I have read the Legal Notice');
+	}
+
+	async function toPasswordStep(token?: string) {
+		await toNoticeStep(token);
+		await fireEvent.click(readBox());
+		await fireEvent.click(cont());
 		await waitFor(() => expect(document.activeElement).toBe(newPw()));
 	}
 
@@ -172,8 +199,70 @@ describe('SetupForm', () => {
 		);
 		await fill('correct horse battery');
 		await waitFor(() => expect(nav.toWelcome).toHaveBeenCalledOnce());
-		expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/setup');
-		expect(sentBody()).toEqual({ token: 'AB12-CD34-EF56-7890', password: 'correct horse battery' });
+		expect(calls()[0]![0]).toBe('/api/v1/setup');
+		expect(sentBody()).toEqual({
+			token: 'AB12-CD34-EF56-7890',
+			password: 'correct horse battery',
+			notice_version: 2
+		});
+	});
+
+	it('shows the notice rendered, scrollable, as its own step', async () => {
+		await toNoticeStep();
+		expect(screen.getByRole('listitem', { current: 'step' }).textContent).toContain('Legal Notice');
+		const region = screen.getByRole('region', { name: 'Legal Notice' });
+		expect(region.getAttribute('tabindex')).toBe('0');
+		expect(region.className).toContain('overflow-y-auto');
+		expect(screen.getByRole('heading', { level: 3, name: '1. Who' })).toBeTruthy();
+		expect(region.querySelectorAll('li')).toHaveLength(2);
+		expect(region.querySelector('strong')!.textContent).toBe('Version 2 · 2026-11-04');
+		expect(readBox().checked).toBe(false);
+		expect(readBox().required).toBe(true);
+	});
+
+	it('needs the checkbox before the password step', async () => {
+		await toNoticeStep();
+		await fireEvent.click(cont());
+		expect(
+			await screen.findByText('Confirm that you have read the Legal Notice to continue.')
+		).toBeTruthy();
+		expect(readBox().getAttribute('aria-invalid')).toBe('true');
+		await waitFor(() => expect(document.activeElement).toBe(readBox()));
+		expect(screen.queryByLabelText(/^New admin password/)).toBeNull();
+		await fireEvent.click(readBox());
+		expect(screen.queryByText(/Confirm that you have read/)).toBeNull();
+		await fireEvent.click(cont());
+		await waitFor(() => expect(document.activeElement).toBe(newPw()));
+		expect(calls()).toHaveLength(0);
+	});
+
+	it('returns to the notice, fetched again and unticked, when it changed meanwhile', async () => {
+		replies = [fail(409, 'notice_required')];
+		notices = [
+			{ status: 200, body: NOTICE },
+			{ status: 200, body: { ...NOTICE, version: 3 } }
+		];
+		await toPasswordStep();
+		await fill('correct horse battery');
+		expect(
+			await screen.findByText(/The Legal Notice changed while this page was open/)
+		).toBeTruthy();
+		await waitFor(() => expect(readBox().checked).toBe(false));
+		await fireEvent.click(readBox());
+		await fireEvent.click(cont());
+		await fill('correct horse battery');
+		await waitFor(() => expect(nav.toWelcome).toHaveBeenCalledOnce());
+		expect(sentBody(1).notice_version).toBe(3);
+	});
+
+	it("offers a retry when the notice can't be loaded", async () => {
+		notices = [fail(500, 'internal')];
+		render(SetupForm);
+		await fireEvent.input(tokenInput(), { target: { value: 'AB12CD34EF567890' } });
+		await fireEvent.click(cont());
+		expect(await screen.findByText(/Couldn't load the Legal Notice/)).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+		expect(await screen.findByLabelText('I have read the Legal Notice')).toBeTruthy();
 	});
 
 	it('refuses a malformed token without sending it', async () => {
@@ -207,7 +296,7 @@ describe('SetupForm', () => {
 		await fill('correct horse battery', 'correct horse batterz');
 		expect(await screen.findByText(/The passwords don't match/)).toBeTruthy();
 		expect(confirmPw().getAttribute('aria-invalid')).toBe('true');
-		expect(fetchMock).not.toHaveBeenCalled();
+		expect(calls()).toHaveLength(0);
 	});
 
 	it('hints at strength without blocking', async () => {
@@ -237,10 +326,71 @@ describe('SetupForm', () => {
 		expect(create().getAttribute('aria-disabled')).toBe('true');
 	});
 
-	it('goes back to the token step with Back', async () => {
+	it('goes back a step at a time with Back, keeping the tick', async () => {
 		await toPasswordStep();
+		await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+		await waitFor(() => expect(document.activeElement).toBe(readBox()));
+		expect(readBox().checked).toBe(true);
 		await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
 		await waitFor(() => expect(document.activeElement).toBe(tokenInput()));
 		expect(tokenInput().value).toBe('AB12-CD34-EF56-7890');
+	});
+});
+
+describe('LoginForm and the Legal Notice', () => {
+	it('hands over to the notice when signing in finds it pending', async () => {
+		replies = [
+			ok,
+			{ status: 200, body: { logged_in: true, notice_required: true, setup_required: false } }
+		];
+		const onnotice = vi.fn();
+		render(LoginForm, { next: '/search', onnotice });
+		await fireEvent.input(screen.getByLabelText(/^Password/), {
+			target: { value: 'correct horse' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+		await waitFor(() => expect(onnotice).toHaveBeenCalledOnce());
+		expect(nav.toNext).not.toHaveBeenCalled();
+	});
+});
+
+describe('NoticeGate', () => {
+	const accept = () => screen.getByRole('button', { name: 'I have read it, continue' });
+
+	it('accepts the version it showed, then goes on to next', async () => {
+		render(NoticeGate, { next: '/search?q=a' });
+		expect(await screen.findByRole('region', { name: 'Legal Notice' })).toBeTruthy();
+		await fireEvent.click(accept());
+		await waitFor(() => expect(nav.toNext).toHaveBeenCalledWith('/search?q=a'));
+		expect(calls()[0]![0]).toBe('/api/v1/legal/accept');
+		expect(sentBody()).toEqual({ version: 2 });
+	});
+
+	it('sends nothing before the notice has loaded', async () => {
+		let release!: (r: Response) => void;
+		fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (release = r)));
+		render(NoticeGate, { next: '/' });
+		expect(screen.getByRole('status').textContent).toContain('Loading the Legal Notice');
+		expect(accept().getAttribute('aria-disabled')).toBe('true');
+		await fireEvent.click(accept());
+		expect(calls()).toHaveLength(0);
+		release(new Response(JSON.stringify(NOTICE), { status: 200 }));
+		await screen.findByRole('region', { name: 'Legal Notice' });
+	});
+
+	it('shows the new notice when the one shown is stale', async () => {
+		replies = [fail(409, 'notice_required'), ok];
+		notices = [
+			{ status: 200, body: NOTICE },
+			{ status: 200, body: { version: 3, text: 'Version three.' } }
+		];
+		render(NoticeGate, { next: '/' });
+		await screen.findByRole('region', { name: 'Legal Notice' });
+		await fireEvent.click(accept());
+		expect(await screen.findByText(/The Legal Notice changed/)).toBeTruthy();
+		expect(await screen.findByText('Version three.')).toBeTruthy();
+		await fireEvent.click(accept());
+		await waitFor(() => expect(nav.toNext).toHaveBeenCalledOnce());
+		expect(sentBody(1)).toEqual({ version: 3 });
 	});
 });

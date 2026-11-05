@@ -105,5 +105,7 @@
 	"settings_transport_utp_label": "uTP (not active yet)",
 	"settings_transport_utp_help": "Fetch metadata over uTP (BEP 29) as well as TCP. Not active yet: uTP has no effect until a later release, so changing this only changes what is saved.",
 	"settings_transport_fallback_to_tcp_label": "Fall back to TCP (not active yet)",
-	"settings_transport_fallback_to_tcp_help": "When a uTP connection fails, try the peer over TCP. Not active yet: uTP has no effect until a later release, so changing this only changes what is saved."
+	"settings_transport_fallback_to_tcp_help": "When a uTP connection fails, try the peer over TCP. Not active yet: uTP has no effect until a later release, so changing this only changes what is saved.",
+	"settings_about_legal": "Legal",
+	"settings_about_legal_lead": "The Legal Notice for this version of Lodestar: what Lodestar does on your network, what is yours to decide, and what its makers do and don't promise."
 }

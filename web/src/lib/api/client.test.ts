@@ -273,6 +273,23 @@ describe('401 handling', () => {
 		expect(handler).toHaveBeenCalledWith(expect.any(String), { setupRequired: true });
 	});
 
+	it('sends a pending Legal Notice (409 notice_required) to the handler too', async () => {
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		fetchMock.mockImplementation(async () => envelope('notice_required', 409));
+		await api.get('/parse').catch(() => {});
+		await api.get('/filters').catch(() => {});
+		expect(handler).toHaveBeenCalledTimes(1);
+		expect(handler).toHaveBeenCalledWith(location.pathname + location.search, {
+			setupRequired: false,
+			noticeRequired: true
+		});
+		handler.mockClear();
+		onLoginRequired(handler);
+		await api.post('/legal/accept', { body: { version: 1 } }).catch(() => {});
+		expect(handler).not.toHaveBeenCalled();
+	});
+
 	it('a successful public /auth does not reset the de-duplication', async () => {
 		const handler = vi.fn();
 		onLoginRequired(handler);
