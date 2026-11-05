@@ -620,7 +620,9 @@ impl Ctx<'_> {
     /// plug-in or sample-library layout. All of:
     /// - **music**, as the classifier reads it;
     /// - **every executable is an `.exe` or `.msi`**, and there are at most
-    ///   [`MAX_INSTALLERS`];
+    ///   [`MAX_INSTALLERS`]: any other program the pack ([`EXECUTABLE`]) or
+    ///   the classifier ([`lodestar_classify::ext::is_dangerous`], which adds
+    ///   `.com`) knows keeps it held;
     /// - **sounds**: at least [`MIN_SOUNDS`] audio or [`PRESETS`] files,
     ///   more than half the files and at least twice the installers;
     /// - **a production layout**: a [`PRESETS`] file, or at least
@@ -637,7 +639,9 @@ impl Ctx<'_> {
         let (mut installers, mut sounds, mut presets, mut sampled) = (0usize, 0usize, 0, 0);
         for (f, e) in &self.files {
             let e = e.as_ref().map_or("", |x| x.as_str());
-            if EXECUTABLE.contains(&e) {
+            // What the pack reads as a program, or what the classifier
+            // does (`.com`), so the guard never passes one MW-2@1 holds for.
+            if EXECUTABLE.contains(&e) || lodestar_classify::ext::is_dangerous(e) {
                 if !INSTALLERS.contains(&e) {
                     return false;
                 }
@@ -925,6 +929,7 @@ mod tests {
         // Anything but a plain installer is held.
         for exe in [
             "install.bat",
+            "crack.com",
             "run.cmd",
             "open.vbs",
             "x.lnk",
