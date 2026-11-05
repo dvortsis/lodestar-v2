@@ -1427,29 +1427,49 @@ mod wide {
         }
     }
 
-    /// The first match of any of several needles at or after `from`.
-    struct AnyOf(Vec<Next>);
+    /// The first match of any of up to three needles at or after `from`:
+    /// the first `len` of `needles`. A fixed array, so building one never
+    /// allocates.
+    struct AnyOf {
+        needles: [Next; 3],
+        len: usize,
+    }
 
     impl AnyOf {
+        /// One to three needles, each with whether it ignores case.
+        fn new(needles: &[(&'static str, bool)]) -> AnyOf {
+            let one = |k: usize| {
+                let (needle, ci) = needles[k.min(needles.len() - 1)];
+                Next::new(needle, ci)
+            };
+            AnyOf {
+                needles: [one(0), one(1), one(2)],
+                len: needles.len().min(3),
+            }
+        }
+
         fn from(&mut self, text: &str, from: usize) -> Option<usize> {
-            self.0.iter_mut().filter_map(|n| n.from(text, from)).min()
+            self.needles[..self.len]
+                .iter_mut()
+                .filter_map(|n| n.from(text, from))
+                .min()
         }
     }
 
     /// The ways a magnet link starts: raw, or percent-encoded once or twice
     /// (`magnet%3A%3Fxt=…`).
     fn magnets() -> AnyOf {
-        AnyOf(vec![
-            Next::new("magnet:", true),
-            Next::new("magnet%3a", true),
-            Next::new("magnet%253a", true),
+        AnyOf::new(&[
+            ("magnet:", true),
+            ("magnet%3a", true),
+            ("magnet%253a", true),
         ])
     }
 
     /// A raw magnet link only, as `main` found them (see [`scrub_text`]'s
     /// first pass).
     fn raw_magnets() -> AnyOf {
-        AnyOf(vec![Next::new("magnet:", true)])
+        AnyOf::new(&[("magnet:", true)])
     }
 
     /// Where the first percent-encoded magnet (`magnet%3A`, `magnet%253A`)
@@ -2061,7 +2081,7 @@ mod wide {
         let mut out = String::new();
         let mut copied = 0;
         let mut at = Next::new("@", false);
-        let mut line = AnyOf(vec![Next::new("\n", false), Next::new("\r", false)]);
+        let mut line = AnyOf::new(&[("\n", false), ("\r", false)]);
         let mut k = 0;
         // Whether `k` is in a word that holds a raw `://` already: a form inside
         // a URL is that URL's rules' (`https://h/{//u@<s>` keeps its path `@`).
