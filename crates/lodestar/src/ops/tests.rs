@@ -216,13 +216,23 @@ impl Fixture {
         )
     }
 
+    /// A session: through setup on a fresh data directory, or a login
+    /// once setup was done (after a restart).
     async fn session(&self) -> String {
-        let token = self.auth.setup_token().unwrap();
-        let mut req = Request::post("/api/v1/setup")
+        let (uri, body) = match self.auth.setup_token() {
+            Some(token) => (
+                "/api/v1/setup",
+                json!({ "token": token, "password": "correct horse battery",
+                        "notice_version": lodestar_api::legal::NOTICE_VERSION }),
+            ),
+            None => (
+                "/api/v1/login",
+                json!({ "password": "correct horse battery" }),
+            ),
+        };
+        let mut req = Request::post(uri)
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                json!({ "token": token, "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }).to_string(),
-            ))
+            .body(Body::from(body.to_string()))
             .unwrap();
         req.extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 2], 1))));
@@ -1057,13 +1067,23 @@ impl GatedFixture {
         )
     }
 
+    /// A session: through setup on a fresh data directory, or a login
+    /// once setup was done (after a restart).
     async fn session(&self) -> String {
-        let token = self.auth.setup_token().unwrap();
-        let mut req = Request::post("/api/v1/setup")
+        let (uri, body) = match self.auth.setup_token() {
+            Some(token) => (
+                "/api/v1/setup",
+                json!({ "token": token, "password": "correct horse battery",
+                        "notice_version": lodestar_api::legal::NOTICE_VERSION }),
+            ),
+            None => (
+                "/api/v1/login",
+                json!({ "password": "correct horse battery" }),
+            ),
+        };
+        let mut req = Request::post(uri)
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                json!({ "token": token, "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }).to_string(),
-            ))
+            .body(Body::from(body.to_string()))
             .unwrap();
         req.extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 2], 1))));
@@ -1428,5 +1448,156 @@ async fn a_restart_honours_consent_and_a_new_text_asks_again() {
     // Instant checks: the stored state above is what carries the test.
     assert!(f.pipeline.sources().iter().all(|s| !s.running));
     assert!(moved_ran.iter().all(|r| !r.load(Ordering::SeqCst)));
+    f.pipeline.shutdown().await.unwrap();
+}
+
+/// The torrent cache as the host builds it, from what's saved in `dir`'s
+/// database, beside the gated plugins.
+fn with_cache(dir: &tempfile::TempDir) -> Vec<Arc<dyn SourcePlugin>> {
+    let db = dir.path().join("t.db");
+    let config = Store::open(&db, StoreConfig::default())
+        .map(|s| crate::torrent_cache::saved_config(&s))
+        .unwrap_or_default();
+    let mut plugins: Vec<Arc<dyn SourcePlugin>> = gated().into_iter().map(|(p, _)| p).collect();
+    plugins.push(crate::torrent_cache::build(config).plugin);
+    plugins
+}
+
+fn cache_state(dir: &tempfile::TempDir) -> lodestar_store::SourceState {
+    Store::open(dir.path().join("t.db"), StoreConfig::default())
+        .unwrap()
+        .sources()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.plugin == crate::torrent_cache::ID)
+        .unwrap()
+        .state
+}
+
+/// SRC-13c through the real router: `config` is checked by the plugin,
+/// saved, applied at the next start, and a list the acknowledgement
+/// doesn't cover (a host or a path changed) turns the cache off there
+/// until the new list is acknowledged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_config_written_through_the_api_turns_the_cache_off_until_acknowledged() {
+    const ID: &str = crate::torrent_cache::ID;
+    let dir = tempfile::tempdir().unwrap();
+    let plugins = with_cache(&dir);
+    let f = gated_fixture(dir, plugins).await;
+    let c = f.session().await;
+    let s = f.source(&c, ID).await;
+    assert!(s["editable"].as_array().unwrap().contains(&json!("config")));
+    assert_eq!(s["endpoints"], json!([]));
+    assert_eq!(s["needs"], json!("endpoints_ack"));
+    // Only a plugin whose settings can be written takes them.
+    let other = f.source(&c, "external").await;
+    assert!(
+        !other["editable"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("config"))
+    );
+    let (status, e) = f
+        .patch(&c, "external", json!({ "config": { "caches": [] } }))
+        .await;
+    assert_eq!(
+        (status, e["error"]["code"].clone()),
+        (400, json!("invalid_config"))
+    );
+
+    // Refused: not an object, an unknown field, over the size cap, plain
+    // http. None of them quotes what was sent.
+    let big = format!("https://a.example/{}{{hash}}", "a".repeat(17 * 1024));
+    for bad in [
+        json!("https://a.example/{hash}"),
+        json!({ "caches": [], "extra": true }),
+        json!({ "caches": [big] }),
+        json!({ "caches": ["http://private-token.example/{hash}"] }),
+        json!({ "caches": ["https://a.example/\u{202e}{hash}"] }),
+    ] {
+        let (status, e) = f.patch(&c, ID, json!({ "config": bad })).await;
+        assert_eq!(status, 400, "{bad}");
+        assert_eq!(e["error"]["code"], json!("invalid_config"), "{bad}");
+        assert_eq!(e["error"]["field"], json!("config"));
+        assert!(!e.to_string().contains("private-token"), "{e}");
+    }
+    let store = Store::open(f.dir.path().join("t.db"), StoreConfig::default()).unwrap();
+    assert!(
+        crate::torrent_cache::saved_config(&store)
+            .caches()
+            .is_empty()
+    );
+    drop(store);
+
+    // Saved; it applies at the next start.
+    let a = "https://a.example/~me/{hash}.torrent";
+    let (status, s) = f
+        .patch(
+            &c,
+            ID,
+            json!({ "config": { "caches": [format!(" {a} ")] } }),
+        )
+        .await;
+    assert_eq!(status, 200, "{s}");
+    assert_eq!(s["restart_required"], json!(true));
+    assert_eq!(
+        s["endpoints"],
+        json!([]),
+        "the running list until the restart"
+    );
+    let GatedFixture { pipeline, dir, .. } = f;
+    pipeline.shutdown().await.unwrap();
+
+    // The next start: the full address is shown and its version is what
+    // an acknowledgement must name.
+    let plugins = with_cache(&dir);
+    let f = gated_fixture(dir, plugins).await;
+    let c = f.session().await;
+    let s = f.source(&c, ID).await;
+    assert_eq!(s["endpoints"], json!([a]));
+    assert_eq!(s["restart_required"], json!(false));
+    let version = s["consent_version"].clone();
+    assert!(version.as_str().unwrap().ends_with(a), "{version}");
+    let (status, e) = f
+        .patch(&c, ID, json!({ "enabled": true, "consent": "external" }))
+        .await;
+    assert_eq!(status, 409);
+    assert!(
+        !e.to_string().contains("a.example"),
+        "the 409 quotes no address: {e}"
+    );
+    let (status, _) = f
+        .patch(
+            &c,
+            ID,
+            json!({ "enabled": true, "consent": "external", "consent_version": version }),
+        )
+        .await;
+    assert_eq!(status, 200);
+    // The same list with another path on the same host is another party.
+    let moved = "https://a.example/~someone-else/{hash}.torrent";
+    let (status, _) = f
+        .patch(&c, ID, json!({ "config": { "caches": [moved] } }))
+        .await;
+    assert_eq!(status, 200);
+    let GatedFixture { pipeline, dir, .. } = f;
+    pipeline.shutdown().await.unwrap();
+
+    // The next start: off until the new list is acknowledged.
+    let plugins = with_cache(&dir);
+    let f = gated_fixture(dir, plugins).await;
+    assert_eq!(cache_state(&f.dir), lodestar_store::SourceState::Disabled);
+    let c = f.session().await;
+    let s = f.source(&c, ID).await;
+    assert_eq!(s["endpoints"], json!([moved]));
+    assert_eq!(s["needs"], json!("endpoints_ack"));
+    let (status, _) = f
+        .patch(
+            &c,
+            ID,
+            json!({ "enabled": true, "consent": "external", "consent_version": version }),
+        )
+        .await;
+    assert_eq!(status, 409, "the old list's version covers nothing now");
     f.pipeline.shutdown().await.unwrap();
 }

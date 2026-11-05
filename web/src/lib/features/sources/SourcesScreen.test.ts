@@ -46,6 +46,32 @@ describe('Sources screen', () => {
 		expect(writes()).toHaveLength(0);
 	});
 
+	it('lists the full addresses an acknowledgement covers, paths included', async () => {
+		const cache = source({
+			id: 9,
+			name: 'Torrent cache',
+			kinds: ['enrichment'],
+			consent: 'external',
+			consent_required: true,
+			needs: 'endpoints_ack',
+			endpoints: ['https://a.example/~me/{hash}.torrent', 'https://b.example/get?h={HASH}']
+		});
+		const empty = source({ ...cache, id: 10, endpoints: [] });
+		setup(sourceList(dht, cache, empty));
+		const list = await screen.findByTestId('source-9-addresses');
+		const items = within(list)
+			.getAllByRole('listitem')
+			.map((li) => li.textContent);
+		expect(items).toEqual([
+			'https://a.example/~me/{hash}.torrent',
+			'https://b.example/get?h={HASH}'
+		]);
+		expect(screen.getByTestId('source-10-addresses').textContent).toContain('No address');
+		// A source that needs nothing to be acknowledged shows no list.
+		expect(screen.queryByTestId('source-0-addresses')).toBeNull();
+		expect(writes()).toHaveLength(0);
+	});
+
 	it('turns a source off with a PATCH and replaces the row with the reply', async () => {
 		setup();
 		net.on('PATCH /sources/{id}', {

@@ -396,9 +396,10 @@ pub struct Source {
     /// class and `"consent_version"`, unless that version is already
     /// acknowledged.
     pub consent_required: bool,
-    /// The version an acknowledgement must name. It changes when the
-    /// class's consent text or the source's endpoints change, and then
-    /// the source asks again. Empty for `none` and `account`.
+    /// The version an acknowledgement must name, sent back as it is. It
+    /// holds the class's consent-text version and every address in
+    /// `endpoints`, so it changes when either does, and then the source
+    /// asks again. Empty for `none` and `account`.
     pub consent_version: String,
     /// The names of its stored credentials; their values are never
     /// returned.
@@ -409,8 +410,14 @@ pub struct Source {
     pub egress: SourceEgress,
     /// Its stored state is `enabled`.
     pub enabled: bool,
-    /// The hosts it contacts, as `protocol://host`: what an `external`
-    /// source's acknowledgement covers.
+    /// The addresses it contacts, as `protocol://address`, sorted: what
+    /// the consent dialog shows and an acknowledgement covers, compared
+    /// exactly. A built-in source lists hosts; one whose addresses come
+    /// from your settings (a torrent cache) lists each full address
+    /// template, path and query included, such as
+    /// `https://cache.example/~me/{hash}.torrent`. These are the
+    /// addresses it runs with now: settings saved since apply at the next
+    /// start (`restart_required`).
     pub endpoints: Vec<String>,
     /// What it finds reflects your own setup (download clients, indexers,
     /// Sonarr and Radarr): kept private, and never named to an API key or
@@ -440,8 +447,8 @@ pub struct Source {
     /// by a restart): what it removed stays removed, and the source stays
     /// off until a purge run again finishes it.
     pub purge_pending: bool,
-    /// Its stored state differs from what's running: it starts or stops
-    /// at the next restart.
+    /// Its stored state or saved settings differ from what's running: it
+    /// starts, stops or picks up its new settings at the next restart.
     pub restart_required: bool,
     #[schema(inline)]
     pub risk: RiskLevel,
@@ -547,19 +554,35 @@ pub struct SourcePatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub schedule: Option<Vec<String>>,
+    /// The source's settings, as its `config_schema` describes them: a
+    /// JSON object of at most 16 KiB, checked by the source's own rules
+    /// (`400 invalid_config` names the rule broken, never a value). Only
+    /// a source whose `editable` lists `config` takes it. Applies at the
+    /// next start. A torrent cache's list is `{"caches": [...]}`; a list
+    /// with an address its acknowledgement doesn't cover switches it off
+    /// at that start until you acknowledge the new list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object, nullable = false)]
+    pub config: Option<Value>,
 }
 
 impl std::fmt::Debug for SourcePatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SourcePatch")
             .field("consent", &self.consent)
-            .field("consent_version", &self.consent_version)
+            // It holds every address, which can be a per-user one.
+            .field(
+                "consent_version",
+                &self.consent_version.as_ref().map(|_| "…"),
+            )
             .field("password", &self.password.as_ref().map(|_| "…"))
             .field("enabled", &self.enabled)
             .field("priority", &self.priority)
             .field("agents", &self.agents)
             .field("egress", &self.egress)
             .field("schedule", &self.schedule)
+            // Settings can hold a per-user address: never printed.
+            .field("config", &self.config.as_ref().map(|_| "…"))
             .finish_non_exhaustive()
     }
 }

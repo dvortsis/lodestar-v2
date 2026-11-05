@@ -54,7 +54,7 @@ Select **Copy magnet** to copy the magnet URI to your clipboard, or **Open full 
 ## 5.4 Choose where Lodestar finds torrents (Settings → Sources)
 <!-- index: sources; Settings → Sources; source status; source priority; yield bar -->
 
-A [**source**](glossary.md#lodestar-source) is a place Lodestar learns about torrents from. The [DHT](glossary.md#dht) is the one it uses out of the box. This version also lists **Sonarr and Radarr webhooks** (see [section 5.5](#55-connect-sonarr-and-radarr)) and **Torrent cache**, which can't be set up yet. More sources, such as a torrent site, come in later versions. Lodestar still collects [metadata](glossary.md#metadata) only and never downloads torrent content.
+A [**source**](glossary.md#lodestar-source) is a place Lodestar learns about torrents from. The [DHT](glossary.md#dht) is the one it uses out of the box. This version lists **Mainline DHT**, **Torrent cache** (below) and **Sonarr and Radarr webhooks** (see [section 5.5](#55-connect-sonarr-and-radarr)). More sources, such as a torrent site, come in later versions. Lodestar still collects [metadata](glossary.md#metadata) only and never downloads torrent content.
 
 To see them, select **Settings**, then **Sources** under **Crawling**.
 
@@ -92,6 +92,22 @@ To see them, select **Settings**, then **Sources** under **Crawling**.
 Until that restart, the status shows your saved choice, not what is running.
 
 **Needs setup.** Some sources must be set up before they can be turned on. Setup means reading and accepting what a source does, accepting the sites it contacts, adding account details, or typing your admin password. Their switch stays off and the row says what is missing. Setting these up is not on this screen yet. It is coming in a later version, so leave those sources off for now.
+
+**Torrent cache.** A [torrent cache](glossary.md#torrent-cache) is a website that serves a torrent's `.torrent` file when you give it the torrent's info hash. Lodestar can ask one for torrents it knows about but has no details for yet. It checks that each file it gets matches the hash, then runs the file through the content filters like any other.
+
+Each lookup tells the cache which torrent you're interested in. So the source is **off**, and its list of caches is **empty** until you add one. Before it can turn on, you accept its exact addresses:
+- Its row lists every address it contacts, in full. Accepting covers exactly those addresses. A changed list shows there after the next restart.
+- If you add, remove or change any address, even only its path, the source turns off at the next restart. It stays off until you accept the new list.
+- Lodestar never looks up a torrent from a private tracker, and asks each cache at most once a minute.
+
+Adding caches on this screen is coming in a later version **(planned)**. Until then the row shows **Needs setup** and the cache contacts nothing.
+
+**Choose a cache safely.** Only add a cache you trust, and check each of these first:
+- **Its terms allow automated lookups.** Lodestar ships no cache, because few say so.
+- **Its address starts with `https://`.** Lodestar refuses any other.
+- **The address holds nothing private,** such as a personal token or account name. The address is shown in full on the Sources screen and is stored in Lodestar's database.
+
+Each address has `{hash}` (lower case) or `{HASH}` (upper case) where the info hash goes, for example `https://cache.example/torrent/{HASH}.torrent`. You can list up to 8.
 
 **Priority.** The **Priority** menu (**Low**, **Normal**, **High** or **Maximum**) sets how much of Lodestar's fetch work a source gets compared with the others. Leave it on **Normal** unless one source is crowding out the rest.
 
@@ -188,6 +204,7 @@ In words: Sonarr or Radarr sends each grab to Lodestar with its token, and Lodes
 > - Select any row to inspect its file list and copy a magnet link.
 > - Open **Insights** to check whether the DHT crawler and index are healthy.
 > - Leave **External** and **Account** sources off unless you need them. Source changes are saved at once with no **Undo**, and **On** applies at the next restart.
+> - A torrent cache learns which torrents you look up. Add only one whose terms allow it, and accept its exact addresses again whenever the list changes.
 > - Connect Sonarr and Radarr with one webhook token each, kept on your home network.
 
 <!-- nav:start -->

@@ -15,9 +15,10 @@
 //!   whose condition no longer holds is switched off before it runs).
 //! - **Consent records** ([`Ack`]) hold the class, the version of what
 //!   was shown and a boolean, with no time and no author (Q14, §1.8.8).
-//!   The version ([`version`]) covers the class's consent text
-//!   ([`text_version`]) and the endpoint list, so a new text, or a plugin
-//!   update that contacts new hosts, asks again.
+//!   The version ([`version`]) holds the class's consent text version
+//!   ([`text_version`]) and the full address list ([`addresses`]), and is
+//!   compared exactly, so a new text, a plugin update that contacts new
+//!   hosts, or settings that list another address ask again.
 //! - **Credentials** ([`SourceCredentials`]) are sealed with the
 //!   integrations `SecretStore`, under a context of their own per source
 //!   and name ([`context`]), so a sealed value copied onto another source
@@ -34,7 +35,7 @@ pub use lodestar_integrations::{Secret, SecretStore};
 use lodestar_store::Store;
 
 use crate::egress::{CredentialError, EgressCredentials};
-use crate::manifest::{Consent, Endpoint, Manifest};
+use crate::manifest::{Consent, Manifest};
 use crate::plugin::BoxFuture;
 
 /// The current version of each class's consent text. Raise a class's
@@ -85,39 +86,48 @@ pub const fn needs_credentials(class: Consent) -> bool {
     matches!(class, Consent::Account)
 }
 
-/// The version an acknowledgement of `manifest` is bound to:
-/// `<text version>-<endpoint digest>`. Empty for a class that's never
-/// acknowledged.
+/// The version an acknowledgement of `manifest` is bound to, and what
+/// `PATCH /sources/{id}` must name: the class's text version and every
+/// address the source contacts ([`addresses`]), exactly. Empty for a
+/// class that's never acknowledged.
+///
+/// The form is `t<text version>` and then ` <length>:<address>` for each
+/// address, sorted and once each. Each address is prefixed by its length
+/// in bytes, so the text is injective: two versions are equal only when
+/// the text version and the address lists are (SRC-13c,
+/// `docs/decisions/2026-11-05-SRC-13c.md`). An endpoint list can come from
+/// the user's settings (a torrent cache's), so a digest that only notices
+/// a change isn't enough: a list chosen to collide would be covered by an
+/// acknowledgement of another one. A record written before this form (SRC-4's
+/// `<text version>-<FNV-1a digest>`) never equals it, so it counts as not
+/// acknowledged and the source asks again (fail closed).
 pub fn version(manifest: &Manifest) -> String {
+    use std::fmt::Write as _;
     if !needs_ack(manifest.consent) {
         return String::new();
     }
-    format!(
-        "{}-{:016x}",
-        text_version(manifest.consent),
-        endpoint_digest(manifest.endpoints)
-    )
+    let mut out = format!("t{}", text_version(manifest.consent));
+    for a in addresses(manifest) {
+        let _ = write!(out, " {}:{a}", a.len());
+    }
+    out
 }
 
-/// FNV-1a over the sorted, de-duplicated endpoint list. Not a security
-/// boundary (the manifest is compiled in): it only notices a change.
-fn endpoint_digest(endpoints: &[Endpoint]) -> u64 {
-    let mut list: Vec<(&str, &str)> = endpoints.iter().map(|e| (e.protocol, e.host)).collect();
+/// What the source contacts, as the consent dialog shows it and an
+/// acknowledgement covers: each endpoint as `protocol://address`, sorted
+/// and once each. For a compiled-in manifest the address is a host; for
+/// one built from the user's settings it can be a whole address template
+/// (a torrent cache's `https://cache.example/~me/{hash}.torrent`), so
+/// consent covers the path as well as the host.
+pub fn addresses(manifest: &Manifest) -> Vec<String> {
+    let mut list: Vec<String> = manifest
+        .endpoints
+        .iter()
+        .map(|e| format!("{}://{}", e.protocol, e.host))
+        .collect();
     list.sort_unstable();
     list.dedup();
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for (protocol, host) in list {
-        for b in protocol
-            .bytes()
-            .chain(*b"://")
-            .chain(host.bytes())
-            .chain(*b"\n")
-        {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0100_0000_01b3);
-        }
-    }
-    h
+    list
 }
 
 /// A consent record: the class acknowledged, the version shown and
@@ -139,12 +149,16 @@ impl Ack {
         }
     }
 
-    /// Whether this record covers `manifest` as it is now.
+    /// Whether this record covers `manifest` as it is now: an exact
+    /// compare of what was shown ([`version`]) with what the source
+    /// contacts now.
     pub fn covers(&self, manifest: &Manifest) -> bool {
         self.accepted && self.class == manifest.consent && self.version == version(manifest)
     }
 
-    /// The stored form: `<class>|<version>|<0 or 1>`.
+    /// The stored form: `<class>|<version>|<0 or 1>`. The version can
+    /// hold `|` (an address may), so it's read as everything between the
+    /// first and the last.
     pub fn encode(&self) -> String {
         format!(
             "{}|{}|{}",
@@ -157,12 +171,8 @@ impl Ack {
     /// `None` for a record this build can't read; it counts as no record,
     /// so the source asks again.
     pub fn decode(text: &str) -> Option<Ack> {
-        let mut it = text.split('|');
-        let (Some(class), Some(version), Some(accepted), None) =
-            (it.next(), it.next(), it.next(), it.next())
-        else {
-            return None;
-        };
+        let (class, rest) = text.split_once('|')?;
+        let (version, accepted) = rest.rsplit_once('|')?;
         Some(Ack {
             class: class_from_name(class)?,
             version: version.to_string(),
@@ -436,7 +446,7 @@ impl EgressCredentials for SourceCredentials {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{Kind, Network, Priority, Risk};
+    use crate::manifest::{Endpoint, Kind, Network, Priority, Risk};
     use lodestar_store::{SourceId, SourceState, StoreConfig};
 
     const ENDPOINTS: &[Endpoint] = &[
@@ -525,9 +535,10 @@ mod tests {
         let m = manifest(Consent::Restricted);
         let ack = Ack::of(&m);
         let older = Ack {
-            version: format!("0-{}", ack.version.split_once('-').unwrap().1),
+            version: ack.version.replacen("t1 ", "t0 ", 1),
             ..ack.clone()
         };
+        assert_ne!(older.version, ack.version);
         assert_eq!(need(&m, Some(&older), &[]), Some(Need::Consent));
         let moved = Manifest {
             endpoints: &ENDPOINTS[..1],
@@ -559,9 +570,138 @@ mod tests {
         let ack = Ack::of(&m);
         let text = ack.encode();
         assert_eq!(text, format!("overlay|{}|1", ack.version));
-        assert_eq!(Ack::decode(&text), Some(ack));
-        for bad in ["", "overlay", "overlay|1-0|2", "x|1-0|1", "overlay|1|1|1"] {
+        assert_eq!(Ack::decode(&text), Some(ack.clone()));
+        for bad in ["", "overlay", "overlay|t1|2", "x|t1|1", "overlay|t1"] {
             assert_eq!(Ack::decode(bad), None, "{bad}");
+        }
+        // An address may hold `|`: the version is everything between the
+        // first and the last.
+        let piped = Ack {
+            version: "t1 22:https://a.example/?a|b".into(),
+            ..ack
+        };
+        assert_eq!(Ack::decode(&piped.encode()), Some(piped));
+    }
+
+    /// The legacy digest, SRC-4's `<text version>-<FNV-1a>`, kept here to
+    /// show that a record in that form covers nothing now.
+    fn legacy_version(m: &Manifest) -> String {
+        let mut list: Vec<(&str, &str)> =
+            m.endpoints.iter().map(|e| (e.protocol, e.host)).collect();
+        list.sort_unstable();
+        list.dedup();
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for (protocol, host) in list {
+            for b in protocol
+                .bytes()
+                .chain(*b"://")
+                .chain(host.bytes())
+                .chain(*b"\n")
+            {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        format!("{}-{h:016x}", text_version(m.consent))
+    }
+
+    #[test]
+    fn a_record_in_the_old_digest_form_fails_closed() {
+        for class in [Consent::External, Consent::Restricted, Consent::Overlay] {
+            let m = manifest(class);
+            // The very record SRC-4 wrote for this manifest, as stored.
+            let text = format!("{}|{}|1", class_name(class), legacy_version(&m));
+            let old = Ack::decode(&text).expect("it still reads");
+            assert!(!old.covers(&m), "{class:?}");
+            assert!(need(&m, Some(&old), &[]).is_some(), "{class:?}");
+        }
+    }
+
+    /// Two hosts whose SRC-4 digests collide (found offline once with a
+    /// distinguished-point search, about 2^32 FNV-1a evaluations, as the
+    /// SRC-13b review warned): an acknowledgement of one covered the other
+    /// under the digest, and doesn't now.
+    #[test]
+    fn a_list_that_collided_under_fnv_no_longer_matches() {
+        let shown = with(&["c8562448a4e5c066.example"]);
+        let crafted = with(&["09dc070a8ee44c03.example"]);
+        assert_eq!(legacy_version(&shown), legacy_version(&crafted));
+        assert_eq!(legacy_version(&shown), "1-80b91d73c61aaa3a");
+        assert_ne!(version(&shown), version(&crafted));
+        assert!(Ack::of(&shown).covers(&shown));
+        assert!(!Ack::of(&shown).covers(&crafted));
+        assert_eq!(
+            need(&crafted, Some(&Ack::of(&shown)), &[]),
+            Some(Need::Endpoints)
+        );
+    }
+
+    fn leak(list: &[&str]) -> &'static [Endpoint] {
+        let v: Vec<Endpoint> = list
+            .iter()
+            .map(|h| Endpoint {
+                protocol: "https",
+                host: Box::leak(h.to_string().into_boxed_str()),
+            })
+            .collect();
+        Box::leak(v.into_boxed_slice())
+    }
+
+    fn with(list: &[&str]) -> Manifest {
+        Manifest {
+            endpoints: leak(list),
+            ..manifest(Consent::External)
+        }
+    }
+
+    #[test]
+    fn the_compare_is_exact_and_ignores_order() {
+        let shown = with(&["a.example/{hash}", "b.example/t/{hash}"]);
+        let ack = Ack::of(&shown);
+        // The same list, in another order and with a repeat.
+        let same = with(&["b.example/t/{hash}", "a.example/{hash}", "a.example/{hash}"]);
+        assert!(ack.covers(&same));
+        // One host more, one fewer, one changed, one path changed.
+        for other in [
+            &["a.example/{hash}", "b.example/t/{hash}", "c.example/{hash}"][..],
+            &["a.example/{hash}"],
+            &["a.example/{hash}", "b.examp1e/t/{hash}"],
+            &["a.example/{hash}", "b.example/~me/{hash}"],
+            &[],
+        ] {
+            assert!(!ack.covers(&with(other)), "{other:?}");
+        }
+        // Lists a separator could confuse are told apart: the length
+        // prefix makes the form injective.
+        let pairs: [(&[&str], &[&str]); 3] = [
+            (&["a 9:https://b"], &["a", "b"]),
+            (&["a.example"], &["a.example "]),
+            (&["x/{hash} 1:y"], &["x/{hash}", "y"]),
+        ];
+        for (a, b) in pairs {
+            assert_ne!(version(&with(a)), version(&with(b)), "{a:?} {b:?}");
+        }
+        // An acknowledgement given while the list was empty covers no host.
+        assert!(!Ack::of(&with(&[])).covers(&with(&["a.example/{hash}"])));
+        assert_eq!(
+            addresses(&same),
+            ["https://a.example/{hash}", "https://b.example/t/{hash}"]
+        );
+    }
+
+    proptest::proptest! {
+        /// Two address lists give one version only when they're the same
+        /// set, whatever bytes the addresses hold.
+        #[test]
+        fn versions_are_injective(
+            a in proptest::collection::vec("[ -~]{0,12}", 0..5),
+            b in proptest::collection::vec("[ -~]{0,12}", 0..5),
+        ) {
+            let ra: Vec<&str> = a.iter().map(String::as_str).collect();
+            let rb: Vec<&str> = b.iter().map(String::as_str).collect();
+            let (ma, mb) = (with(&ra), with(&rb));
+            let set = |v: &[String]| v.iter().cloned().collect::<std::collections::BTreeSet<_>>();
+            proptest::prop_assert_eq!(version(&ma) == version(&mb), set(&a) == set(&b));
         }
     }
 

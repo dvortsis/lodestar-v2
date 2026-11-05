@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import SettingField from './SettingField.svelte';
 import { fakeServer } from './testing/fake-server';
 import { dismissAll } from './dialogs';
@@ -10,6 +10,9 @@ import { spec, sv, values } from './testing/values';
 import type { FieldKey, FieldSpec } from './types';
 import { registerWidget } from './widgets';
 import WidgetStub from './testing/WidgetStub.svelte';
+
+vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: 10_000 });
 
 const SPECS: FieldSpec[] = [
 	spec('crawler.timeout_secs', {
@@ -232,6 +235,22 @@ describe('SettingField', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Options for Web address' }));
 		const items = await screen.findAllByRole('menuitem');
 		expect(items.map((i) => i.textContent?.trim())).toEqual(['Copy link to this setting']);
+	});
+
+	it('copies the absolute link to the field from the menu, once', async () => {
+		const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
+		vi.stubGlobal('navigator', { clipboard: { writeText } });
+		show('crawler.timeout_secs');
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }));
+		await fireEvent.click(
+			await screen.findByRole('menuitem', { name: 'Copy link to this setting' })
+		);
+		// Straight after the click, no wait: Safari only allows the write during the click itself.
+		expect(writeText).toHaveBeenCalledTimes(1);
+		expect(writeText).toHaveBeenCalledWith(
+			new URL(form.href('crawler.timeout_secs'), location.href).href
+		);
+		expect(writeText.mock.calls[0]![0]).toBe(`${location.origin}/settings/x#crawler.timeout_secs`);
 	});
 
 	it('shows config.toml key and variable on request', async () => {

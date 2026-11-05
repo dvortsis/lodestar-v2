@@ -149,8 +149,9 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
     fn restart_network_check(&self) -> Result<NetworkCheck, OpsError>;
 }
 
-/// Why an operation was refused.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why an operation was refused. Its `Debug` leaves out a consent
+/// version, which holds every address (they can be per-user ones).
+#[derive(Clone, PartialEq, Eq)]
 pub enum OpsError {
     UnknownSource,
     /// Enabling the source needs an acknowledgement of its class at this
@@ -183,6 +184,37 @@ pub enum OpsError {
     Internal(String),
 }
 
+impl std::fmt::Debug for OpsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpsError::UnknownSource => f.write_str("UnknownSource"),
+            OpsError::ConsentRequired { class, .. } => f
+                .debug_struct("ConsentRequired")
+                .field("class", class)
+                .finish_non_exhaustive(),
+            OpsError::PasswordRequired => f.write_str("PasswordRequired"),
+            OpsError::CredentialsRequired => f.write_str("CredentialsRequired"),
+            OpsError::BadCredential(r) => f.debug_tuple("BadCredential").field(r).finish(),
+            OpsError::Invalid {
+                code,
+                field,
+                message,
+            } => f
+                .debug_struct("Invalid")
+                .field("code", code)
+                .field("field", field)
+                .field("message", message)
+                .finish(),
+            OpsError::RouteUnavailable => f.write_str("RouteUnavailable"),
+            OpsError::RateLimited { retry_after_secs } => f
+                .debug_struct("RateLimited")
+                .field("retry_after_secs", retry_after_secs)
+                .finish(),
+            OpsError::Internal(e) => f.debug_tuple("Internal").field(e).finish(),
+        }
+    }
+}
+
 fn class_name(c: ConsentClass) -> &'static str {
     match c {
         ConsentClass::None => "none",
@@ -197,15 +229,18 @@ impl From<OpsError> for ApiError {
     fn from(e: OpsError) -> ApiError {
         match e {
             OpsError::UnknownSource => unknown_source(),
-            OpsError::ConsentRequired { class, version } => {
+            // The version isn't quoted: it holds every address the source
+            // contacts, which can be a per-user one. `GET /sources` gives it.
+            OpsError::ConsentRequired { class, version: _ } => {
                 let name = class_name(class);
                 ApiError::new(
                     StatusCode::CONFLICT,
                     "consent_required",
                     format!(
                         "Enabling this source needs your consent: its class is \"{name}\". \
-                         Show what it contacts and the consent text, then send \
-                         \"consent\": \"{name}\" and \"consent_version\": \"{version}\"."
+                         Show what it contacts (its endpoints) and the consent text, then send \
+                         \"consent\": \"{name}\" and the \"consent_version\" GET /sources \
+                         gives for it."
                     ),
                 )
                 .field("consent")
@@ -479,6 +514,9 @@ pub(crate) async fn source(
 /// Most windows a source's schedule holds.
 pub const MAX_WINDOWS: usize = 8;
 
+/// The largest `config` `PATCH /sources/{id}` takes, in bytes, as JSON.
+pub const MAX_CONFIG_BYTES: usize = 16 * 1024;
+
 /// A schedule window, `HH:MM-HH:MM`, as minutes since local midnight
 /// (`start`, `end`); `24:00` isn't a time, so `00:00` ends a day.
 pub fn parse_window(text: &str) -> Option<(u16, u16)> {
@@ -626,6 +664,22 @@ fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
             *w = window_text(start, end);
         }
     }
+    if let Some(config) = &body.config {
+        if !config.is_object() {
+            return Err(invalid(
+                "invalid_config",
+                "config",
+                "Send the settings as a JSON object, as the source's settings form describes.",
+            ));
+        }
+        if config.to_string().len() > MAX_CONFIG_BYTES {
+            return Err(invalid(
+                "invalid_config",
+                "config",
+                "The settings are over 16 KiB.",
+            ));
+        }
+    }
     if body.agents == Some(0) {
         return Err(invalid(
             "invalid_agents",
@@ -647,7 +701,13 @@ fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
 /// (`409 credentials_required`). Agents, egress and the schedule apply
 /// at the next start; changing egress needs the admin `"password"`
 /// (`428 confirm_required`), and the `interface` and `bind_address`
-/// routes are refused (`409 route_unavailable`). A purge isn't a field:
+/// routes are refused (`409 route_unavailable`). `config` sets the
+/// source's settings, for a source whose `editable` lists it: a JSON
+/// object of at most 16 KiB that the source's own rules check (`400
+/// invalid_config` names the rule, never a value). It applies at the next
+/// start; a torrent cache whose new list holds an address its
+/// acknowledgement doesn't is switched off there until you acknowledge the
+/// new list. A purge isn't a field:
 /// it's `POST /sources/{id}/purge` (`409 not_editable` here).
 #[utoipa::path(
     operation_id = "patchSource",
@@ -899,7 +959,7 @@ mod tests {
     fn refusals_map_to_the_envelope() {
         let e = ApiError::from(OpsError::ConsentRequired {
             class: ConsentClass::Restricted,
-            version: "1-00ff".into(),
+            version: "t1 25:https://a.example/~me/x".into(),
         });
         assert_eq!(
             (e.status(), e.code()),
@@ -912,7 +972,9 @@ mod tests {
                 .unwrap()
                 .contains("\"restricted\"")
         );
-        assert!(e.body().to_string().contains("1-00ff"));
+        // The version holds every address, which can be a per-user one:
+        // it isn't quoted (`GET /sources` gives it).
+        assert!(!e.body().to_string().contains("~me"));
         let e = ApiError::from(OpsError::PasswordRequired);
         assert_eq!(
             (e.status(), e.code()),

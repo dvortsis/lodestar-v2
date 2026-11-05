@@ -143,6 +143,7 @@ fn fixture_with(manifest: Arc<Manifest>, missing: &[PackRule]) -> Fixture {
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
         shutdown: Default::default(),
+        adult_sources: 0,
     });
     // The engine as the store has it: MW-2's version 1 applied, version 2
     // in shadow.

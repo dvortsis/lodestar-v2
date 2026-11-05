@@ -248,6 +248,7 @@ fn fixture() -> Fixture {
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
         shutdown: Default::default(),
+        adult_sources: 0,
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
@@ -1232,6 +1233,7 @@ async fn filters_without_an_index_or_filters() {
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
         shutdown: Default::default(),
+        adult_sources: 0,
     });
     let app = |filters: Option<Arc<FiltersApi>>| {
         Router::new().nest(

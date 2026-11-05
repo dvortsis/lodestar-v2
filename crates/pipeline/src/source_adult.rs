@@ -22,7 +22,7 @@
 //!
 //! [`always_adult`]: lodestar_sources::Manifest::always_adult
 
-use lodestar_classify::{ContentType, Correction};
+use lodestar_classify::Correction;
 use lodestar_filter::reclassify::rule_fix;
 use lodestar_filter::{Engine, Facts, Item, Verdict};
 use lodestar_store::SourceId;
@@ -58,6 +58,15 @@ impl AdultSources {
     pub fn has(self, source: SourceId) -> bool {
         self.any(bit(source))
     }
+
+    /// The store's mark for these sources ([`lodestar_store::Store::set_adult_mark`]):
+    /// a write or import commit they find marks the row for the backfill.
+    pub fn store_mark(self) -> lodestar_store::AdultMark {
+        lodestar_store::AdultMark {
+            sources: self.0,
+            content_type: lodestar_classify::ContentType::Adult.code(),
+        }
+    }
 }
 
 fn bit(source: SourceId) -> u64 {
@@ -68,56 +77,18 @@ fn bit(source: SourceId) -> u64 {
 /// with Is adult added when one of its `sources` is always adult and you
 /// haven't said Not adult.
 pub fn correction(own: Correction, sources: u64, adult: AdultSources) -> Correction {
-    match own.adult {
-        None if adult.any(sources) => Correction {
-            adult: Some(true),
-            ..own
-        },
-        _ => own,
-    }
+    lodestar_filter::reclassify::source_adult(own, sources, adult.0)
 }
 
 /// What filtering makes of an item an always-adult source found, and the
-/// fix to store with it: `Some(true)` when detection didn't call it adult,
-/// else `None` (a Not adult rule never applies to it).
-///
-/// The engine's verdict with your classification rules
-/// ([`Engine::judge_classified`]), and, unless that already judged the
-/// adult reading, the adult reading too; the stricter of the two stands.
-/// The floor's hit comes back alone, as it does from the engine.
+/// fix to store with it ([`lodestar_filter::reclassify::judge_source_adult`]).
 pub fn judge(
     engine: &Engine,
     item: &Item<'_>,
     facts: &Facts<'_>,
     now: i64,
 ) -> (Verdict, Option<bool>) {
-    let (v, says) = engine.judge_classified(item, Some(facts), now);
-    let detected = facts.class.content_type == ContentType::Adult;
-    let fix = (!detected).then_some(true);
-    // The engine judged it as adult already: detection or an Is adult
-    // rule said so.
-    // (`item.content_type` is `facts.class`'s, so `detected` covers it.)
-    if detected || says == Some(true) {
-        return (v, fix);
-    }
-    // A floor hit is final, as the engine returns it.
-    if v.decision
-        .as_ref()
-        .is_some_and(|d| matches!(d.rule, lodestar_filter::RuleRef::Core(r) if r.floor()))
-    {
-        return (v, fix);
-    }
-    let adult_class = facts.class.as_adult();
-    let adult_facts = Facts {
-        class: &adult_class,
-        ..*facts
-    };
-    let adult_item = Item {
-        content_type: ContentType::Adult,
-        ..*item
-    };
-    let as_adult = engine.judge(&adult_item, Some(&adult_facts), now);
-    (stricter(v, as_adult), fix)
+    lodestar_filter::reclassify::judge_source_adult(engine, item, facts, now)
 }
 
 /// [`judge`] when `adult`, else the engine's verdict with your
@@ -137,26 +108,16 @@ pub fn judge_maybe(
     }
 }
 
-/// The heavier decision of two verdicts (a tie keeps `a`'s), and both
-/// verdicts' shadow decisions: the engine's own rule for two readings.
+/// The heavier decision of two verdicts
+/// ([`lodestar_filter::reclassify::stricter`]).
 pub fn stricter(a: Verdict, b: Verdict) -> Verdict {
-    let decision = match (a.decision, b.decision) {
-        (Some(x), Some(y)) => Some(if y.action > x.action { y } else { x }),
-        (x, y) => x.or(y),
-    };
-    let mut shadow = a.shadow;
-    for d in b.shadow {
-        if !shadow.contains(&d) {
-            shadow.push(d);
-        }
-    }
-    Verdict { decision, shadow }
+    lodestar_filter::reclassify::stricter(a, b)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lodestar_classify::{FileInfo, classify};
+    use lodestar_classify::{ContentType, FileInfo, classify};
     use lodestar_filter::{Action, Core, CoreRule, CsList, Lists, RuleRef, Switches, TermSet};
 
     /// The writer tests' terms: a role, a sexual term, a studio.

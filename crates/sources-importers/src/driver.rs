@@ -463,7 +463,13 @@ pub async fn run(
             let (p, j) = match rec.info() {
                 Some(info) => match preparer.prepare(&info, None) {
                     Ok(mut p) => {
-                        let j = judge_torrent(&opts.filter, &mut p, &info, rec, now);
+                        // Claimed by an always-adult source (an unverified
+                        // item under its hash): judged and stored as adult
+                        // (X-source-adult-2). A read error counts as adult;
+                        // the commit's own reads fail the same way.
+                        let hashes: Vec<_> = p.swarm_hashes().collect();
+                        let adult = store.adult_finders(&hashes).map_or(true, |b| b != 0);
+                        let j = judge_torrent(&opts.filter, &mut p, &info, rec, adult, now);
                         (Some(p), j)
                     }
                     // A record the store can't prepare is committed as
@@ -630,11 +636,17 @@ fn not_running(
 /// A torrent record through enrichment and the filter, as ingest judges a
 /// fetched one (`pipeline::worker::prepare_one`): the hash lists first,
 /// then the name and files.
+///
+/// `adult`: an always-adult source has claimed it, so it's stored adult
+/// and judged as adult too, the stricter verdict standing
+/// ([`reclassify::judge_source_adult`]). The store gives the row that
+/// source's bit in the commit, so it stays adult.
 fn judge_torrent(
     filter: &Filter<'_>,
     p: &mut Prepared,
     info: &lodestar_metainfo::Info,
     rec: &Rec,
+    adult: bool,
     now: i64,
 ) -> Judged {
     let hashes: Vec<[u8; 20]> = p.swarm_hashes().map(|h| h.0).collect();
@@ -664,8 +676,15 @@ fn judge_torrent(
         files: &files,
         content_type: class.content_type,
     };
-    let (verdict, fix) = reclassify::judge_with_rules(filter.engine, &item, &class, &facts, now);
-    // Your classification rule changes what's stored (§20.9).
+    // A hash on the floor's or a dropping list first, either way, as
+    // `judge_with_rules` and the pipeline's claims judge do; then, for a
+    // claimed record, both readings, so a Not adult rule never un-adults it.
+    let (verdict, fix) = match filter.engine.blocked_hash(item.hashes) {
+        None if adult => reclassify::judge_source_adult(filter.engine, &item, &facts, now),
+        _ => reclassify::judge_with_rules(filter.engine, &item, &class, &facts, now),
+    };
+    // Your classification rule, or the source, changes what's stored
+    // (§20.9).
     if fix.is_some() {
         let c = Correction {
             adult: fix,

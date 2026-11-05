@@ -192,7 +192,7 @@ fn restricted_source() -> Source {
     Source {
         consent: ConsentClass::Restricted,
         consent_required: true,
-        consent_version: "1-00000000000000ff".into(),
+        consent_version: "t1 22:https://shadow.example".into(),
         enabled: false,
         endpoints: vec!["https://shadow.example".into()],
         finds_private: false,
@@ -759,7 +759,7 @@ async fn sources() {
             "/api/v1/sources/1",
             c,
             Some(
-                r#"{"enabled":true,"consent":"restricted","consent_version":"1-00000000000000ff"}"#,
+                r#"{"enabled":true,"consent":"restricted","consent_version":"t1 22:https://shadow.example"}"#,
             ),
         ),
     )
@@ -771,7 +771,7 @@ async fn sources() {
             "PATCH",
             "/api/v1/sources/1",
             c,
-            Some(r#"{"enabled":true,"consent":"restricted","consent_version":"1-00000000000000ff","password":"wrong"}"#),
+            Some(r#"{"enabled":true,"consent":"restricted","consent_version":"t1 22:https://shadow.example","password":"wrong"}"#),
         ),
     )
     .await;
@@ -783,7 +783,7 @@ async fn sources() {
             "PATCH",
             "/api/v1/sources/1",
             c,
-            Some(r#"{"enabled":true,"consent":"restricted","consent_version":"1-00000000000000ff","password":"correct horse battery"}"#),
+            Some(r#"{"enabled":true,"consent":"restricted","consent_version":"t1 22:https://shadow.example","password":"correct horse battery"}"#),
         ),
     )
     .await;
