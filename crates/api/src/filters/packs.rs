@@ -1,0 +1,907 @@
+//! The packs API (RP-3; architecture §20.7, §20.8, §20.10, §20.11): pack
+//! and rule versions with their changelogs, pending versions and what
+//! accepting them does, and the pack corpora's results.
+//!
+//! **Accepting a pending version** (`accept_pack_versions`) strengthens
+//! filtering only when every accepted version's recorded direction is
+//! `widens` or `action-heavier` and its shadow results agree
+//! ([`pack_upgrade::acceptance_strengthens`]). Anything else is weakening:
+//! the effect warning and the password, every time.
+//!
+//! **Shadow results come from `filter_hits`.** Ingest logs a pending
+//! version's result as a shadow hit of its rule where the pending version
+//! holds a torrent, and the applied version's as an ordinary hit where the
+//! rule decides it. Per torrent in the replay window, the heaviest of each
+//! is that torrent's [`PackShadow`]. Only hits after the shadow started
+//! count ([`SHADOW_SINCE_KEY`], recorded when the version is first seen
+//! pending, kept across restarts); before that's recorded, every hit in
+//! the window counts, which can only read as more disagreement. A hit
+//! whose action doesn't read, or more hits than are read, leaves the
+//! shadow results in doubt, and accepting is then weakening.
+//!
+//! **Nothing is released.** Holds of an accepted rule (quarantine and
+//! tombstones) that the shadow results don't show the new version making
+//! stay as they are, and are listed for review ([`REVIEW_KEY`]).
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
+
+use lodestar_filter::corpus::{Corpus, Expect};
+use lodestar_filter::packs::manifest::{self, Manifest};
+use lodestar_filter::packs::overrides::{self as pack_overrides, Effect, PackOverrides};
+use lodestar_filter::packs::upgrade::{self as pack_upgrade, PackShadow, PackVersions};
+use lodestar_filter::{Action, Pack, PackRule};
+use lodestar_store::{SHADOW, Store};
+
+use super::{PREVIEW_ROWS, REPLAY_SECS, bad, conflict, hex};
+use crate::dto::filters::{
+    ChangelogEntry, PackAcceptance, PackCorpus, PackFixtureCounts, PendingPackVersion,
+};
+use crate::error::{ApiResult, internal};
+
+/// The holds an acceptance left for review: one `RULE-ID <40 hex>` per
+/// line. Not part of Undo; no time, author or reason (§20.8).
+pub(crate) const REVIEW_KEY: &str = "filter.packs.review";
+/// Lines the review row keeps at most, newest first: as many holds as an
+/// acceptance reads (quarantine and tombstones, [`PREVIEW_ROWS`] each), so
+/// one acceptance never loses a line to the cap. Pruning keeps it to holds
+/// that still exist.
+const REVIEW_MAX: usize = 2 * PREVIEW_ROWS;
+/// Hits of one rule read for its shadow results at most.
+const HIT_ROWS: usize = 1_000_000;
+
+/// Where each pending version's shadow results start: one line per pending
+/// version, `RULE-ID@version <id>:<at>:<hash>` or `RULE-ID@version ?`.
+/// `<id>` is the highest `filter_hits` id when the API first saw that
+/// version pending, and `<at>` and `<hash>` (40 hex digits) are that hit
+/// row's own columns, copied so a later row under the same id is told
+/// apart ([`anchor`]); an empty table is `0:0:` and 40 zeros. They're the
+/// hit's, not when anyone did anything (§20.8). `?` means where it started
+/// can't be known any more. Hits after the id were judged with the version
+/// in shadow; it survives restarts. Entries for versions no longer pending
+/// are dropped.
+pub(crate) const SHADOW_SINCE_KEY: &str = "filter.packs.shadow_since";
+
+/// The rules whose stored switches are on, as the next load reads them
+/// (SC-1's switch standing in for SC-2's before seeding).
+fn switches(set: &lodestar_store::RuleSet) -> lodestar_filter::PackSwitches {
+    lodestar_filter::load::pack_switches(&pack_upgrade::copy_sc1_switch(&set.pack_switches))
+}
+
+/// The versions pending acceptance of rules that are on: a rule or pack
+/// that's off runs no shadow, and switching it on records its current
+/// version (RP-0), so nothing of it waits.
+pub(super) fn pending_on(
+    set: &lodestar_store::RuleSet,
+    versions: &PackVersions,
+) -> Vec<(PackRule, u32)> {
+    let on = switches(set);
+    versions
+        .pending()
+        .filter(|(r, _)| on.is_on(*r))
+        .filter_map(|(r, st)| Some((r, st.shadow?)))
+        .collect()
+}
+
+/// A pending version's entry in [`SHADOW_SINCE_KEY`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Since {
+    /// Its shadow started after the hit with this id, whose row held this
+    /// `at` and hash ([`hit_row`]; 0, 0 and zeros for id 0, an empty table).
+    After(i64, i64, [u8; 20]),
+    /// `?`: where it started can't be known any more (the row or a line
+    /// didn't read, or the hit ids were reused). Acceptance is weakening
+    /// until the version is accepted with the password or changes.
+    Doubt,
+}
+
+/// The stored [`SHADOW_SINCE_KEY`] row.
+#[derive(Debug, Default)]
+struct ShadowSince {
+    entries: HashMap<String, Since>,
+    /// The row, or a line of it, didn't read: a pending version without
+    /// an entry may have lost one.
+    damaged: bool,
+}
+
+fn read_shadow_since(store: &Store) -> ApiResult<ShadowSince> {
+    let text = match store.setting_text(SHADOW_SINCE_KEY) {
+        Ok(None) => return Ok(ShadowSince::default()),
+        Ok(Some(t)) => t,
+        Err(lodestar_store::Error::Corrupt(_)) => {
+            return Ok(ShadowSince {
+                damaged: true,
+                ..ShadowSince::default()
+            });
+        }
+        Err(e) => return Err(internal(e)),
+    };
+    let mut out = ShadowSince::default();
+    for l in text.lines() {
+        let entry = l.split_once(' ').and_then(|(key, v)| {
+            let since = match v {
+                "?" => Since::Doubt,
+                v => {
+                    let mut parts = v.split(':');
+                    let id: i64 = parts.next()?.parse().ok().filter(|id| *id >= 0)?;
+                    let at: i64 = parts.next()?.parse().ok()?;
+                    let hash = super::hex20(parts.next()?).ok()?;
+                    if parts.next().is_some() {
+                        return None;
+                    }
+                    Since::After(id, at, hash)
+                }
+            };
+            Some((key.to_owned(), since))
+        });
+        match entry {
+            // A version listed twice fails closed: neither line is
+            // trusted, and the row is damaged, so it's written back.
+            Some((key, _)) if out.entries.contains_key(&key) => {
+                out.entries.insert(key, Since::Doubt);
+                out.damaged = true;
+            }
+            Some((key, since)) => {
+                out.entries.insert(key, since);
+            }
+            // A line that doesn't read.
+            None => out.damaged = true,
+        }
+    }
+    Ok(out)
+}
+
+/// The highest `filter_hits` id, 0 when the table is empty.
+fn max_hit_id(store: &Store) -> ApiResult<i64> {
+    store
+        .connection()
+        .query_row("SELECT coalesce(max(id), 0) FROM filter_hits", [], |r| {
+            r.get(0)
+        })
+        .map_err(internal)
+}
+
+/// One `filter_hits` row's `at` and hash, or `None` when there's no row
+/// with that id: what tells a row from another written later under the
+/// same id.
+fn hit_row(store: &Store, id: i64) -> ApiResult<Option<(i64, [u8; 20])>> {
+    use lodestar_store::rusqlite::OptionalExtension;
+    let row = store
+        .connection()
+        .query_row(
+            "SELECT at, hash FROM filter_hits WHERE id = ?1",
+            [id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()
+        .map_err(internal)?;
+    // A hash that isn't 20 bytes can't match a recorded one: in doubt.
+    Ok(row.map(|(at, h)| (at, <[u8; 20]>::try_from(h.as_slice()).unwrap_or([0xff; 20]))))
+}
+
+/// The anchor for a version first seen pending now: the highest hit id and
+/// its row's `at` and hash (0, 0 and zeros for an empty table).
+fn new_anchor(store: &Store) -> ApiResult<Since> {
+    let id = max_hit_id(store)?;
+    let (at, hash) = hit_row(store, id)?.unwrap_or((0, [0; 20]));
+    Ok(Since::After(id, at, hash))
+}
+
+/// Where a pending version's evidence starts, read fail-closed:
+/// - `Some(Some(id))`: hits after `id`;
+/// - `Some(None)`: no entry yet (a version first seen now), so every hit
+///   in the window counts;
+/// - `None`: in doubt. Its entry is `?`; the row is damaged and it has no
+///   entry; or the hit ids were reused. `filter_hits.id` isn't
+///   AUTOINCREMENT, so once the table empties (the 30-day purge on an idle
+///   store) new hits reuse ids from 1, and `id > anchor` would drop them.
+///   Reuse shows as the anchor's row holding another hit than the one
+///   recorded, or as the anchor's row gone while lower ids are there (an
+///   anchor that aged out takes every lower id with it).
+fn anchor(store: &Store, since: &ShadowSince, key: &str) -> ApiResult<Option<Option<i64>>> {
+    Ok(match since.entries.get(key) {
+        Some(Since::After(0, ..)) => Some(Some(0)),
+        Some(Since::After(id, at, hash)) => match hit_row(store, *id)? {
+            Some(row) if row == (*at, *hash) => Some(Some(*id)),
+            Some(_) => None,
+            None => {
+                let lower: bool = store
+                    .connection()
+                    .query_row(
+                        "SELECT EXISTS (SELECT 1 FROM filter_hits WHERE id < ?1)",
+                        [*id],
+                        |r| r.get(0),
+                    )
+                    .map_err(internal)?;
+                (!lower).then_some(Some(*id))
+            }
+        },
+        Some(Since::Doubt) => None,
+        None if since.damaged => None,
+        None => Some(None),
+    })
+}
+
+/// The `pack_conditions` label of shadow evidence in doubt: a `?` entry
+/// (reused hit ids, a version listed twice) or a row or line that doesn't
+/// read.
+pub(super) const SHADOW_IN_DOUBT: &str = "packs.shadow-in-doubt";
+
+/// Whether any pending version's shadow evidence is in doubt, or the row
+/// didn't read: reported in `pack_conditions`.
+pub(super) fn shadow_in_doubt(store: &Store) -> ApiResult<bool> {
+    let row = read_shadow_since(store)?;
+    Ok(row.damaged || row.entries.values().any(|s| *s == Since::Doubt))
+}
+
+/// Records where the shadow of each newly pending version starts, marks
+/// the ones whose evidence can't be trusted any more as `?` ([`anchor`]),
+/// and drops the entries of versions no longer pending. Run at start and
+/// after every change, under the store lock.
+pub(super) fn note_shadows(store: &mut Store, manifest: &Manifest) -> ApiResult<()> {
+    let set = store.rule_set().map_err(internal)?;
+    let versions = PackVersions::resolve(manifest, &pack_upgrade::Rows::of(&set));
+    let pending = pending_on(&set, &versions);
+    let before = read_shadow_since(store)?;
+    let mut after = HashMap::new();
+    let mut fresh = None;
+    for (r, v) in pending {
+        let key = format!("{}@{v}", r.id());
+        let since = match anchor(store, &before, &key)? {
+            Some(Some(_)) => before.entries[&key],
+            Some(None) => match fresh {
+                Some(s) => s,
+                None => {
+                    let s = new_anchor(store)?;
+                    fresh = Some(s);
+                    s
+                }
+            },
+            None => Since::Doubt,
+        };
+        after.insert(key, since);
+    }
+    if after == before.entries && !before.damaged {
+        return Ok(());
+    }
+    let mut lines: Vec<String> = after
+        .iter()
+        .map(|(k, s)| match s {
+            Since::After(id, at, hash) => format!("{k} {id}:{at}:{}", hex(hash)),
+            Since::Doubt => format!("{k} ?"),
+        })
+        .collect();
+    lines.sort();
+    if lines.is_empty() {
+        store.update_settings_text(&[], &[SHADOW_SINCE_KEY])
+    } else {
+        store.set_settings_text(&[(SHADOW_SINCE_KEY, &lines.join("\n"))])
+    }
+    .map_err(internal)
+}
+
+/// The action that applies of a pack rule now: the base action, or the
+/// override's where it applies (RP-2).
+pub(super) fn applied_action(
+    manifest: &Manifest,
+    versions: &PackVersions,
+    stored: &PackOverrides,
+    rule: PackRule,
+) -> Action {
+    let base = pack_overrides::base_action(manifest, versions, rule);
+    match stored.get(rule).map(|l| &l.effect) {
+        Some(Effect::Replace(a, _)) => *a,
+        Some(Effect::AtLeast(a)) => (*a).max(base),
+        Some(Effect::None) | None => base,
+    }
+}
+
+/// A pack's version: its rules' versions as this build ships them.
+pub(super) fn pack_version(manifest: &Manifest, pack: Pack) -> String {
+    manifest
+        .pack_version(pack)
+        .iter()
+        .map(|(r, v)| format!("{}@{v}", r.id()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Compiled-in text with LF line endings: a checkout with CRLF (Git on
+/// Windows) compiles the changelogs in with `\r\n`, and the API serves
+/// the same bytes on every host.
+pub(super) fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+/// The changelog entries after `from` up to `to`, newest first.
+fn changelog(
+    manifest: &Manifest,
+    rule: PackRule,
+    from: Option<u32>,
+    to: u32,
+) -> Vec<ChangelogEntry> {
+    let mut out: Vec<ChangelogEntry> = manifest
+        .entry(rule)
+        .versions()
+        .iter()
+        .filter(|v| v.version > from.unwrap_or(0) && v.version <= to)
+        .map(|v| ChangelogEntry {
+            direction: v.direction.as_str().to_owned(),
+            text: manifest::changelog_entry(rule, v.version).map(|t| lf(t.trim())),
+            version: v.version,
+        })
+        .collect();
+    out.reverse();
+    out
+}
+
+/// Every version waiting to be accepted, of rules that are on, with its
+/// changelog entries.
+pub(super) fn pending(
+    manifest: &Manifest,
+    set: &lodestar_store::RuleSet,
+    versions: &PackVersions,
+) -> Vec<PendingPackVersion> {
+    pending_on(set, versions)
+        .into_iter()
+        .map(|(r, version)| {
+            let st = versions.state(r);
+            // A version recorded at 0 isn't known: every entry up to the
+            // pending one.
+            let from = st.applied.filter(|v| *v != pack_upgrade::UNKNOWN);
+            PendingPackVersion {
+                applied: from,
+                changelog: changelog(manifest, r, from, version),
+                direction: st.direction.map(|d| d.as_str().to_owned()),
+                pack: r.pack().as_str().to_owned(),
+                rule: r.id().to_owned(),
+                version,
+            }
+        })
+        .collect()
+}
+
+/// One rule's shadow results in the replay window: per torrent, the
+/// heaviest action of the applied side and of the shadow side.
+struct Sides {
+    by_hash: HashMap<[u8; 20], (Option<Action>, Option<Action>)>,
+    /// A hit didn't read, or there were more than [`HIT_ROWS`].
+    doubt: bool,
+}
+
+/// `after`: the hit id the shadow started after ([`SHADOW_SINCE_KEY`]),
+/// or `None` when none is recorded yet, and every hit in the window counts
+/// (an applied-only hold from before the shadow then reads as a
+/// disagreement: weakening). `applied`: the actions the applied versions
+/// take. An applied hit means they matched, whatever action an override
+/// gave it, so it counts as theirs (the heaviest, or the logged one when
+/// it's one of them): the comparison is of the base rule's two versions.
+fn sides(
+    store: &Store,
+    rule: PackRule,
+    now: i64,
+    after: Option<i64>,
+    applied: &[Action],
+) -> ApiResult<Sides> {
+    let since = now - REPLAY_SECS;
+    let mut stmt = store
+        .connection()
+        .prepare_cached(
+            "SELECT hash, action FROM filter_hits WHERE rule = ?1 AND at >= ?2 AND id > ?3 LIMIT ?4",
+        )
+        .map_err(internal)?;
+    let rows = stmt
+        .query_map(
+            lodestar_store::rusqlite::params![
+                rule.id(),
+                since,
+                after.unwrap_or(0),
+                HIT_ROWS as i64 + 1
+            ],
+            |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, u8>(1)?)),
+        )
+        .map_err(internal)?;
+    let base = applied.iter().max().copied();
+    let mut out = Sides {
+        by_hash: HashMap::new(),
+        doubt: false,
+    };
+    for (n, row) in rows.enumerate() {
+        let (hash, code) = row.map_err(internal)?;
+        let (Ok(hash), Some(action)) = (
+            <[u8; 20]>::try_from(hash.as_slice()),
+            Action::from_code(code & !SHADOW),
+        ) else {
+            out.doubt = true;
+            continue;
+        };
+        if n >= HIT_ROWS {
+            out.doubt = true;
+            break;
+        }
+        let e = out.by_hash.entry(hash).or_default();
+        if code & SHADOW != 0 {
+            e.1 = e.1.max(Some(action));
+        } else {
+            let action = if applied.contains(&action) {
+                Some(action)
+            } else {
+                base.or(Some(action))
+            };
+            e.0 = e.0.max(action);
+        }
+    }
+    Ok(out)
+}
+
+/// What an `accept_pack_versions` change does.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Acceptance {
+    pub rules: Vec<PackRule>,
+    /// `RULE@version`, the client sends back.
+    pub versions: Vec<String>,
+    pub weakening: bool,
+    pub impact: Vec<PackAcceptance>,
+    /// The holds it leaves for review.
+    pub review: Vec<(PackRule, [u8; 20])>,
+    /// Torrents the accepted versions hold in the replay window.
+    pub caught: i64,
+    /// More holds exist than are read at once ([`PREVIEW_ROWS`] of each):
+    /// those past it aren't marked for review.
+    pub holds_truncated: bool,
+}
+
+/// Rules or versions one acceptance may name: every pack and every rule.
+pub(super) const MAX_NAMED: usize = Pack::ALL.len() + PackRule::COUNT;
+
+/// Reads an acceptance against the store as the next load reads it: in
+/// the preview and again under the store lock in apply, so one previewed
+/// as strengthening that weakens by then is refused
+/// (`changed_since_preview`).
+pub(super) fn acceptance(
+    store: &Store,
+    manifest: &Manifest,
+    ids: &[String],
+    now: i64,
+) -> ApiResult<Acceptance> {
+    if ids.is_empty() {
+        return Err(bad(
+            "no_rules",
+            "Name the pack rules or packs whose pending versions to accept.",
+        )
+        .field("rules"));
+    }
+    if ids.len() > MAX_NAMED {
+        return Err(bad(
+            "too_many_rules",
+            format!("Name at most {MAX_NAMED} packs or pack rules."),
+        )
+        .field("rules"));
+    }
+    let set = store.rule_set().map_err(internal)?;
+    let versions = PackVersions::resolve(manifest, &pack_upgrade::Rows::of(&set));
+    let pending: Vec<PackRule> = pending_on(&set, &versions)
+        .into_iter()
+        .map(|(r, _)| r)
+        .collect();
+    let since = read_shadow_since(store)?;
+    let mut rules = Vec::new();
+    for id in ids {
+        if let Some(p) = Pack::from_name(id) {
+            rules.extend(pending.iter().copied().filter(|r| r.pack() == p));
+        } else if let Some(r) = PackRule::from_id(id) {
+            if !pending.contains(&r) {
+                return Err(conflict(
+                    "not_pending",
+                    format!("{id} has no version waiting to be accepted."),
+                ));
+            }
+            rules.push(r);
+        } else {
+            return Err(bad(
+                "unknown_pack",
+                format!("There's no pack or pack rule {id:?}."),
+            )
+            .field("rules"));
+        }
+    }
+    rules.sort_by_key(|r| r.index());
+    rules.dedup();
+    if rules.is_empty() {
+        return Err(conflict(
+            "not_pending",
+            "Nothing you named has a version waiting to be accepted.",
+        ));
+    }
+    let quarantine = store.quarantined(PREVIEW_ROWS).map_err(internal)?;
+    let tombstones = store.tombstones(PREVIEW_ROWS).map_err(internal)?;
+    let mut a = Acceptance {
+        holds_truncated: quarantine.len() >= PREVIEW_ROWS || tombstones.len() >= PREVIEW_ROWS,
+        ..Acceptance::default()
+    };
+    for r in &rules {
+        let r = *r;
+        let st = versions.state(r);
+        let version = st
+            .shadow
+            .ok_or_else(|| internal("pending without a version"))?;
+        let entry = manifest.entry(r);
+        let applied: Vec<Action> = st
+            .apply
+            .iter()
+            .filter_map(|v| entry.get(*v))
+            .map(|v| {
+                if st.unaccepted.contains(&v.version) {
+                    v.action.min(Action::Quarantine)
+                } else {
+                    v.action
+                }
+            })
+            .collect();
+        let key = format!("{}@{version}", r.id());
+        let (after, evidence_doubt) = match anchor(store, &since, &key)? {
+            Some(after) => (after, false),
+            None => (None, true),
+        };
+        let mut sides = sides(store, r, now, after, &applied)?;
+        sides.doubt |= evidence_doubt;
+        let shadows: Vec<PackShadow> = sides
+            .by_hash
+            .values()
+            .map(|(applied, shadow)| PackShadow {
+                rule: r,
+                version,
+                applied: *applied,
+                shadow: *shadow,
+            })
+            .collect();
+        let in_doubt = versions.in_doubt(r);
+        let strengthens =
+            !sides.doubt && pack_upgrade::acceptance_strengthens(&versions, r, &shadows);
+        let disagreements = st.direction.filter(|d| d.strengthens()).map_or(0, |d| {
+            shadows
+                .iter()
+                .filter(|s| pack_upgrade::disagrees(d, s))
+                .count()
+        });
+        let count = |f: &dyn Fn(&PackShadow) -> bool| shadows.iter().filter(|s| f(s)).count();
+        let holds_new = |h: &[u8; 20]| sides.by_hash.get(h).is_some_and(|(_, s)| s.is_some());
+        // A strengthening acceptance holds what the version before did, by
+        // its record and its shadow results; otherwise every hold of the
+        // rule the shadow results don't show the new version making.
+        let (mut rq, mut rt) = (0, 0);
+        if !strengthens {
+            for q in quarantine
+                .iter()
+                .filter(|q| q.rule == r.id() && !holds_new(&q.hash))
+            {
+                rq += 1;
+                a.review.push((r, q.hash));
+            }
+            for t in tombstones
+                .iter()
+                .filter(|t| t.rule == r.id() && !holds_new(&t.hash))
+            {
+                rt += 1;
+                a.review.push((r, t.hash));
+            }
+        }
+        a.caught += count(&|s| s.shadow.is_some()) as i64;
+        a.weakening |= !strengthens;
+        a.versions.push(format!("{}@{version}", r.id()));
+        a.impact.push(PackAcceptance {
+            applied: st.applied.filter(|v| *v != pack_upgrade::UNKNOWN),
+            direction: st.direction.map(|d| d.as_str().to_owned()),
+            disagreements,
+            heavier: count(&|s| s.heavier()),
+            in_doubt,
+            lighter: count(&|s| s.lighter()),
+            newly_held: count(&|s| s.applied.is_none() && s.shadow.is_some()),
+            no_longer_held: count(&|s| s.applied.is_some() && s.shadow.is_none()),
+            review_quarantine: rq,
+            review_tombstones: rt,
+            rule: r.id().to_owned(),
+            strengthens,
+            version,
+        });
+    }
+    a.rules = rules;
+    Ok(a)
+}
+
+/// The effect warning of a weakening acceptance (§20.11).
+pub(super) fn warning(a: &Acceptance) -> String {
+    let weak: Vec<String> = a
+        .impact
+        .iter()
+        .filter(|i| !i.strengthens)
+        .map(|i| {
+            let why = match i.direction.as_deref() {
+                _ if i.in_doubt => {
+                    "the version this install applied isn't known for sure".to_owned()
+                }
+                Some("narrows") => "it matches less than the version before".to_owned(),
+                Some("action-lighter") => "it takes a lighter action".to_owned(),
+                Some("mixed") => "it changes what it matches and how it acts".to_owned(),
+                None => "there's no record of what changed".to_owned(),
+                Some(_) if i.disagreements > 0 => format!(
+                    "{} torrents judged while it ran in shadow don't fit its record",
+                    i.disagreements
+                ),
+                Some(_) => "its shadow results couldn't all be read".to_owned(),
+            };
+            format!("{}@{} ({why})", i.rule, i.version)
+        })
+        .collect();
+    let review: usize = a
+        .impact
+        .iter()
+        .map(|i| i.review_quarantine + i.review_tombstones)
+        .sum();
+    let more = if a.holds_truncated {
+        format!(
+            " There are more holds than can be read at once ({PREVIEW_ROWS} of each kind): \
+             those past them stay held but aren't marked."
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "Accepting {} may stop hiding or dropping malware, lures, fakes, spam or scams the \
+         version you have now catches. Other rules still check them. Nothing held now is \
+         released: {review} held items the new version may not hold stay held, marked for \
+         review in the review queue.{more} Undo can't undo an acceptance. Safer: keep the \
+         version you have, and add an exception for anything it gets wrong.",
+        weak.join(", ")
+    )
+}
+
+/// The review row as stored.
+enum ReviewRow {
+    Absent,
+    Text(String),
+    /// Not text: it fails closed. Nothing is marked for review from it,
+    /// it never blocks a change or a page, and every hold stays held
+    /// (the row only ever marks holds, never releases them). The next
+    /// acceptance that leaves holds for review replaces it.
+    Unreadable,
+}
+
+fn review_row(store: &Store) -> ApiResult<ReviewRow> {
+    match store.setting_text(REVIEW_KEY) {
+        Ok(None) => Ok(ReviewRow::Absent),
+        Ok(Some(t)) => Ok(ReviewRow::Text(t)),
+        Err(lodestar_store::Error::Corrupt(_)) => Ok(ReviewRow::Unreadable),
+        Err(e) => Err(internal(e)),
+    }
+}
+
+/// The `pack_conditions` label of a review row that doesn't read.
+pub(super) const REVIEW_UNREADABLE: &str = "packs.review-unreadable";
+
+/// Whether the review row exists but doesn't read, or has lines that
+/// don't (or more than [`REVIEW_MAX`]): what it can't mark is reported,
+/// never dropped silently.
+pub(super) fn review_unreadable(store: &Store) -> ApiResult<bool> {
+    Ok(match review_row(store)? {
+        ReviewRow::Absent => false,
+        ReviewRow::Unreadable => true,
+        ReviewRow::Text(t) => {
+            let lines = t.lines().count();
+            lines > REVIEW_MAX || parse_review(&t).len() < lines
+        }
+    })
+}
+
+/// The holds acceptances left for review, as stored: at most
+/// [`REVIEW_MAX`] of them, whatever the row holds; none when it doesn't
+/// read.
+pub(super) fn review_set(store: &Store) -> ApiResult<HashSet<(String, [u8; 20])>> {
+    Ok(match review_row(store)? {
+        ReviewRow::Text(t) => parse_review(&t),
+        ReviewRow::Absent | ReviewRow::Unreadable => HashSet::new(),
+    })
+}
+
+fn parse_review(text: &str) -> HashSet<(String, [u8; 20])> {
+    text.lines()
+        .take(REVIEW_MAX)
+        .filter_map(|l| {
+            let (rule, h) = l.split_once(' ')?;
+            let h = super::hex20(h).ok()?;
+            Some((rule.to_owned(), h))
+        })
+        .collect()
+}
+
+/// The review row's value before an [`add_review`], to put back if the
+/// acceptance it was written for fails.
+pub(super) struct ReviewBefore(Option<Option<String>>);
+
+/// Puts the review row back as it was before [`add_review`]. A row that
+/// didn't read is left as rewritten: it marked nothing.
+pub(super) fn restore_review(store: &mut Store, before: ReviewBefore) -> ApiResult<()> {
+    match before.0 {
+        None => Ok(()),
+        Some(None) => store.update_settings_text(&[], &[REVIEW_KEY]),
+        Some(Some(t)) => store.set_settings_text(&[(REVIEW_KEY, &t)]),
+    }
+    .map_err(internal)
+}
+
+/// Adds holds to the review row, newest first, at most [`REVIEW_MAX`].
+/// Lines that don't read are dropped, and a row that doesn't read is
+/// replaced. Written before the acceptance it's for, so the acceptance
+/// never lands without its marks; returns what to restore if the
+/// acceptance then fails.
+pub(super) fn add_review(
+    store: &mut Store,
+    new: &[(PackRule, [u8; 20])],
+) -> ApiResult<ReviewBefore> {
+    if new.is_empty() {
+        return Ok(ReviewBefore(None));
+    }
+    let (old, before) = match review_row(store)? {
+        ReviewRow::Text(t) => (Some(t.clone()), Some(Some(t))),
+        ReviewRow::Absent => (None, Some(None)),
+        ReviewRow::Unreadable => (None, None),
+    };
+    let mut seen = HashSet::new();
+    let mut lines = Vec::new();
+    let new = new.iter().map(|(r, h)| (r.id().to_owned(), *h));
+    let old = old.as_deref().unwrap_or_default().lines().filter_map(|l| {
+        let (rule, h) = l.split_once(' ')?;
+        Some((rule.to_owned(), super::hex20(h).ok()?))
+    });
+    for (rule, h) in new.chain(old) {
+        if lines.len() == REVIEW_MAX {
+            break;
+        }
+        if seen.insert((rule.clone(), h)) {
+            lines.push(format!("{rule} {}", hex(&h)));
+        }
+    }
+    store
+        .set_settings_text(&[(REVIEW_KEY, &lines.join("\n"))])
+        .map_err(internal)?;
+    Ok(ReviewBefore(before))
+}
+
+/// Drops review lines whose hold is gone (released, expired or purged), so
+/// the row never keeps the hash of a torrent nothing holds. Skipped when
+/// the holds can't all be read at once, and left alone when the row
+/// doesn't read (it marks nothing then).
+pub(super) fn prune_review(store: &mut Store) -> ApiResult<()> {
+    let ReviewRow::Text(text) = review_row(store)? else {
+        return Ok(());
+    };
+    let quarantine = store.quarantined(PREVIEW_ROWS).map_err(internal)?;
+    let tombstones = store.tombstones(PREVIEW_ROWS).map_err(internal)?;
+    if quarantine.len() >= PREVIEW_ROWS || tombstones.len() >= PREVIEW_ROWS {
+        return Ok(());
+    }
+    let held: HashSet<(&str, &[u8; 20])> = quarantine
+        .iter()
+        .map(|q| (q.rule.as_str(), &q.hash))
+        .chain(tombstones.iter().map(|t| (t.rule.as_str(), &t.hash)))
+        .collect();
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            l.split_once(' ')
+                .is_some_and(|(rule, h)| super::hex20(h).is_ok_and(|h| held.contains(&(rule, &h))))
+        })
+        .collect();
+    if kept.len() == text.lines().count() {
+        return Ok(());
+    }
+    if kept.is_empty() {
+        store.update_settings_text(&[], &[REVIEW_KEY])
+    } else {
+        store.set_settings_text(&[(REVIEW_KEY, &kept.join("\n"))])
+    }
+    .map_err(internal)
+}
+
+/// The pack corpora run against `manifest` (RP-1's report). The built-in
+/// manifest's report is fixed for the build, so it's run once.
+pub(super) fn corpus(manifest: &Arc<Manifest>) -> PackCorpus {
+    static BUILTIN: OnceLock<PackCorpus> = OnceLock::new();
+    if Arc::ptr_eq(manifest, &Manifest::builtin()) {
+        return BUILTIN.get_or_init(|| run_corpus(manifest)).clone();
+    }
+    run_corpus(manifest)
+}
+
+fn run_corpus(manifest: &Arc<Manifest>) -> PackCorpus {
+    let corpus = match Corpus::builtin() {
+        Ok(c) => c,
+        Err(e) => {
+            return PackCorpus {
+                error: Some(e.to_string()),
+                failures: Vec::new(),
+                passes: false,
+                precision_failing: 0,
+                precision_items: 0,
+                rules: Vec::new(),
+            };
+        }
+    };
+    let report = corpus.run(manifest);
+    let gaps = report.gaps();
+    let failures = report.failures();
+    PackCorpus {
+        error: None,
+        passes: failures.is_empty(),
+        failures,
+        precision_failing: report
+            .precision
+            .iter()
+            .filter(|p| {
+                p.held.iter().any(|(r, _)| !p.gaps.contains(r))
+                    || p.gaps.iter().any(|g| !p.held.iter().any(|(r, _)| r == g))
+            })
+            .count(),
+        precision_items: report.precision.len(),
+        rules: report
+            .packs
+            .iter()
+            .flat_map(|p| &p.rules)
+            .map(|r| PackFixtureCounts {
+                direction_disagreements: report
+                    .directions
+                    .iter()
+                    .filter(|d| d.rule == r.rule && !d.agrees())
+                    .count(),
+                failing: r.disagreements(),
+                gaps: gaps.iter().filter(|(g, _)| *g == r.rule).count(),
+                must_match: r.count(Expect::Match),
+                must_not_match: r.count(Expect::Miss),
+                pack: r.rule.pack().as_str().to_owned(),
+                rule: r.rule.id().to_owned(),
+                version: r.version,
+            })
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn served_changelogs_use_lf_on_every_host() {
+        assert_eq!(lf("## A@1\r\n\r\nText.\r\n"), "## A@1\n\nText.\n");
+        assert_eq!(lf("no change\n"), "no change\n");
+    }
+
+    #[test]
+    fn the_review_row_is_capped_newest_first() {
+        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        let hash = |n: usize| {
+            let mut h = [0u8; 20];
+            h[..8].copy_from_slice(&(n as u64).to_be_bytes());
+            h
+        };
+        let old: Vec<(PackRule, [u8; 20])> = (0..10).map(|n| (PackRule::Mw2, hash(n))).collect();
+        add_review(&mut store, &old).map(|_| ()).unwrap();
+        let new: Vec<(PackRule, [u8; 20])> = (100..100 + REVIEW_MAX)
+            .map(|n| (PackRule::Mw1, hash(n)))
+            .collect();
+        add_review(&mut store, &new).map(|_| ()).unwrap();
+        let set = review_set(&store).unwrap();
+        assert_eq!(set.len(), REVIEW_MAX);
+        assert!(set.contains(&("MW-1".to_owned(), hash(100))));
+        assert!(
+            !set.contains(&("MW-2".to_owned(), hash(0))),
+            "the oldest go first"
+        );
+        // A longer row, however it was written, reads at most the cap.
+        let text = (0..REVIEW_MAX + 5)
+            .map(|n| format!("MW-3 {}", hex(&hash(n))))
+            .collect::<Vec<_>>()
+            .join("\n");
+        store.set_settings_text(&[(REVIEW_KEY, &text)]).unwrap();
+        assert_eq!(review_set(&store).unwrap().len(), REVIEW_MAX);
+    }
+}

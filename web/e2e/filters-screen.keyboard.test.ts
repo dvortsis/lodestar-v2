@@ -36,8 +36,11 @@ function serve(mock: OpenApiMock) {
 		exceptions: [],
 		ip_ranges: 0,
 		overrides: [],
+		pack_conditions: [],
 		packs: [],
+		packs_seeded_over_rules: null,
 		pending_floor_removals: [],
+		pending_pack_versions: [],
 		quarantine: 2,
 		rules: [],
 		subscriptions: [],
@@ -47,8 +50,24 @@ function serve(mock: OpenApiMock) {
 		decisions_30d: [],
 		next_cursor: null,
 		quarantine: [
-			{ hash: H, rule: 'CS-4a', at: 1, expires_at: 2, sealed: true, adult_hold: false },
-			{ hash: HA, rule: 'CS-5a', at: 1, expires_at: 2, sealed: true, adult_hold: true }
+			{
+				hash: H,
+				rule: 'CS-4a',
+				at: 1,
+				expires_at: 2,
+				sealed: true,
+				adult_hold: false,
+				pack_review: false
+			},
+			{
+				hash: HA,
+				rule: 'CS-5a',
+				at: 1,
+				expires_at: 2,
+				sealed: true,
+				adult_hold: true,
+				pack_review: false
+			}
 		]
 	});
 	mock.on('getSettings', {

@@ -148,6 +148,10 @@ pub fn change_detail(change: &Change) -> String {
             opt("unless", unless)
         ),
         Change::RemovePackOverride { rule } => format!("remove_pack_override rule={rule}"),
+        Change::ConfirmPackOverride { rule, .. } => format!("confirm_pack_override rule={rule}"),
+        Change::AcceptPackVersions { rules, .. } => {
+            format!("accept_pack_versions rules={}", rules.join(","))
+        }
         Change::AddOverride {
             what: m,
             neutralize,
