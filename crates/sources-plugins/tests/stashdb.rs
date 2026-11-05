@@ -272,6 +272,25 @@ fn answers_that_are_not_understood_are_errors() {
         format!(
             r#"{{"errors":[{{"message":"x"}}],"data":{{"searchScene":[{{"id":"{id1}","title":"T","performers":null}}]}}}}"#
         ),
+        // The early stop at a second item must not hide a later `errors`.
+        format!(
+            r#"{{"data":{{"searchScene":[{{"id":"{id1}","title":"A"}},{{"id":"{id2}","title":"B"}}]}},"errors":[{{"message":"x"}}]}}"#
+        ),
+        // A body cut right after the top scene, and trailing garbage.
+        format!(r#"{{"data":{{"searchScene":[{{"id":"{id1}","title":"A"}}]"#),
+        format!(r#"{{"data":{{"searchScene":[{{"id":"{id1}","title":"A"}}]}}}} x"#),
+        // `findScene` is another query's answer, alone or beside this one's.
+        format!(r#"{{"data":{{"findScene":{{"id":"{id1}","title":"A"}}}}}}"#),
+        format!(r#"{{"data":{{"searchScene":[],"findScene":{{"id":"{id1}","title":"A"}}}}}}"#),
+        format!(
+            r#"{{"data":{{"findScene":{{"id":"{id1}","title":"A"}},"searchScene":[{{"id":"{id2}","title":"B"}}]}}}}"#
+        ),
+        format!(r#"{{"data":{{"searchScene":[],"findScene":null}}}}"#),
+        // Repeated keys must not read as a miss.
+        r#"{"data":{"searchScene":{"id":"x"}},"data":{"searchScene":[]}}"#.to_owned(),
+        r#"{"data":null,"data":{"searchScene":[]}}"#.to_owned(),
+        r#"{"data":{"searchScene":null,"searchScene":[]}}"#.to_owned(),
+        r#"{"data":{"searchScene":[]},"data":{"searchScene":[]}}"#.to_owned(),
         // Cut off.
         format!(r#"{{"data":{{"searchScene":[{{"id":"{id1}","title":"#),
         // Every item skipped.

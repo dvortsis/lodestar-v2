@@ -42,7 +42,8 @@ use lodestar_sources::{
     Manifest, Network, PluginError, Policy, Priority, Request, Risk,
 };
 use lodestar_sources_feeds::stashdb::{self, LIMITS, Limits, Scene};
-use serde::Serialize;
+use serde::de::IgnoredAny;
+use serde::{Deserialize, Serialize};
 
 use crate::Credentials;
 
@@ -227,13 +228,16 @@ pub fn search_request(name: &str, key: &Secret) -> Result<Request, PluginError> 
         },
     })
     .map_err(|_| fail("StashDB's request didn't build"))?;
-    let mut req = Request::get(ENDPOINT)
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/json")
-        .header(KEY_HEADER, key.expose());
-    req.method = Method::Post;
-    req.body = body;
-    Ok(req)
+    Ok(Request {
+        method: Method::Post,
+        url: ENDPOINT.to_owned(),
+        headers: vec![
+            ("Accept".to_owned(), "application/json".to_owned()),
+            ("Content-Type".to_owned(), "application/json".to_owned()),
+            (KEY_HEADER.to_owned(), key.expose().to_owned()),
+        ],
+        body,
+    })
 }
 
 /// The lookup's outcome from the HTTP answer, by status first.
@@ -255,49 +259,78 @@ fn answer(res: Result<lodestar_sources::Response, HttpError>) -> Result<Lookup, 
 /// Maps a 200's body: the top match, no match for an answer that
 /// understood to nothing, and an error for one that wasn't understood, so a
 /// broken answer is never cached as a miss.
+///
+/// Every body, match or miss, first passes [`shape`], a strict structural
+/// read of the whole body: ENR-3's parser reads `searchScene` and
+/// `findScene` alike, stops early at a second item, and can't say whether
+/// it saw `searchScene`, so it alone can't tell this query's answer from
+/// another's or a cut one from a whole one.
 pub fn parse_answer(body: &[u8]) -> Result<Lookup, PluginError> {
+    let head = shape(body)?;
     let mut found = Vec::new();
     let page = stashdb::parse_each(body, &ANSWER_LIMITS, |s| {
         if found.is_empty() {
             found.push(s);
         }
     });
-    // A second item ends the read (`Stop::Items`) after the first was kept;
-    // that's expected. An unreadable first item leaves nothing here.
     // GraphQL errors, even beside a readable scene, mean part of the answer
     // may be missing (a failed performers resolver, say): not understood.
     if page.errors > 0 {
         return Err(fail(BAD_ANSWER));
     }
-    if let Some(s) = found.into_iter().next() {
-        return to_lookup(s);
+    match (found.into_iter().next(), head) {
+        // The parser's top scene must be the answer's own first entry.
+        (Some(s), Some(id)) if s.matched.id.eq_ignore_ascii_case(&id) => to_lookup(s),
+        (None, None) if page.stop.is_none() && page.skipped.total() == 0 => Ok(Lookup::NoMatch),
+        // A scene the parser kept but `searchScene` doesn't lead with, an
+        // unreadable top result, or a cut or skipped item.
+        _ => Err(fail(BAD_ANSWER)),
     }
-    // A cut or skipped item means the answer wasn't understood, not that
-    // nothing matched.
-    if page.stop.is_some() || page.skipped.total() > 0 {
-        return Err(fail(BAD_ANSWER));
-    }
-    // The parser doesn't say whether it saw `searchScene`, so this does:
-    // a miss is exactly `{"data": {"searchScene": []}}` and nothing else.
-    // A `data: null`, a missing field, or another type is not a miss.
-    if !empty_search(body) {
-        return Err(fail(BAD_ANSWER));
-    }
-    Ok(Lookup::NoMatch)
 }
 
-/// True if the root is an object whose `data` is an object whose
-/// `searchScene` is an empty list. The body is within the parser's byte
-/// cap here (a longer one stopped the parser before this is reached).
-fn empty_search(body: &[u8]) -> bool {
+/// The root of `{"data": {"searchScene": [...]}}`. A derived struct refuses
+/// a repeated field, so a duplicated `data` or `searchScene` can't hide a
+/// scene from one reader or a miss from the other.
+#[derive(Deserialize)]
+struct Root {
+    data: Data,
+    #[serde(default)]
+    errors: Option<Vec<IgnoredAny>>,
+}
+
+#[derive(Deserialize)]
+struct Data {
+    #[serde(rename = "searchScene")]
+    search_scene: Vec<Head>,
+    /// True if the key is there at all (even `null`): not this query's answer.
+    #[serde(default, rename = "findScene", deserialize_with = "present")]
+    find_scene: bool,
+}
+
+/// Only the id of an entry; the rest is the parser's to read.
+#[derive(Deserialize)]
+struct Head {
+    id: String,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    IgnoredAny::deserialize(d).map(|_| true)
+}
+
+/// Checks the whole body is one JSON document of exactly the answer's shape:
+/// within the byte cap, no trailing bytes, a `data` object with a
+/// `searchScene` list and no `findScene`, and no GraphQL `errors`. Returns
+/// the first entry's id, or `None` for an empty list.
+fn shape(body: &[u8]) -> Result<Option<String>, PluginError> {
+    if body.len() > ANSWER_LIMITS.max_bytes {
+        return Err(fail(BAD_ANSWER));
+    }
     let body = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
-    let Ok(serde_json::Value::Object(root)) = serde_json::from_slice(body) else {
-        return false;
-    };
-    matches!(
-        root.get("data").and_then(|d| d.get("searchScene")),
-        Some(serde_json::Value::Array(a)) if a.is_empty()
-    )
+    let root: Root = serde_json::from_slice(body).map_err(|_| fail(BAD_ANSWER))?;
+    if root.data.find_scene || root.errors.is_some_and(|e| !e.is_empty()) {
+        return Err(fail(BAD_ANSWER));
+    }
+    Ok(root.data.search_scene.into_iter().next().map(|h| h.id))
 }
 
 /// ENR-0's section from one scene. A scene id the section refuses is an
