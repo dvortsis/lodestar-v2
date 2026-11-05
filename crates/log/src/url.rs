@@ -963,9 +963,16 @@ pub fn scrub(url: &str, form: Form) -> String {
 /// [`scrub_text_floor`]. Stage 1's output, with what the wide rules hide
 /// hidden in it too.
 pub fn scrub_text(text: &str) -> String {
-    if plain_line(text) {
-        return scrub_text_floor(text);
+    match plain_line(text) {
+        true => scrub_text_floor(text),
+        false => scrub_text_slow(text),
     }
+}
+
+/// [`scrub_text`] without its fast path: stage 1's output, with what the
+/// wide rules hide, and then what the credential rules find in their
+/// output, hidden in it too.
+fn scrub_text_slow(text: &str) -> String {
     let wide = wide::scrub_text(text);
     // A credential's name the first pass leaves at a URL's end, once its
     // query goes (`https://h/pass?x": "<s>"` reads `…/pass": "<s>"`), takes
@@ -1465,14 +1472,14 @@ mod wide {
     /// The first match of any of up to three needles at or after `from`:
     /// the first `len` of `needles`. A fixed array, so building one never
     /// allocates.
-    struct AnyOf {
+    pub(super) struct AnyOf {
         needles: [Next; 3],
         len: usize,
     }
 
     impl AnyOf {
         /// One to three needles, each with whether it ignores case.
-        fn new(needles: &[(&'static str, bool)]) -> AnyOf {
+        pub(super) fn new(needles: &[(&'static str, bool)]) -> AnyOf {
             assert!(
                 (1..=3).contains(&needles.len()),
                 "AnyOf takes 1 to 3 needles"
@@ -3992,14 +3999,54 @@ pass:"S3CRET"#,
     /// Each of these showed the secret on `main`.
     #[test]
     fn a_name_left_at_a_url_s_end_keeps_its_value_hidden() {
-        for text in [
-            r#"https://h/pass?x": "x%3A%2F%2Fh/S3CRETxyz""#,
-            "https://h/key?a': x%3A%2F%2Fh/S3CRETxyz",
-            "https://h/apikey?a=1'=x%3A%2F%2Fh/S3CRETxyz",
+        for (text, want) in [
+            (
+                r#"https://h/pass?x": "x%3A%2F%2Fh/S3CRETxyz""#,
+                r#"https://h/pass": "[redacted]""#,
+            ),
+            (
+                "https://h/key?a': x%3A%2F%2Fh/S3CRETxyz",
+                "https://h/key': [redacted]",
+            ),
+            (
+                "https://h/apikey?a=1'=x%3A%2F%2Fh/S3CRETxyz",
+                "https://h/apikey'=[redacted]",
+            ),
+            // Over-redaction accepted: a path that ends in a name, then `=`.
+            (
+                "GET https://h/api/key?id=7 = 200 OK",
+                "GET https://h/api/key = [redacted] OK",
+            ),
         ] {
-            let s = scrub_text(text);
-            assert!(!s.contains("S3CRET"), "{text:?}: {s}");
+            assert_eq!(scrub_text(text), want, "{text:?}");
         }
+        // Ordinary lines whose path ends in a credential's name are kept.
+        for (text, want) in [
+            (
+                "GET https://api.example/v1/auth?x=1: 401 unauthorized",
+                "GET https://api.example/v1/auth 401 unauthorized",
+            ),
+            (
+                "POST https://h/session?id=1 status=200 took=12ms",
+                "POST https://h/session status=200 took=12ms",
+            ),
+            (
+                "fetch https://h/oauth/token?grant=x failed: connection reset",
+                "fetch https://h/oauth/token failed: connection reset",
+            ),
+            (
+                "tracker http://t.example/announce: timeout after 30 s",
+                "tracker http://t.example/announce: timeout after 30 s",
+            ),
+        ] {
+            assert_eq!(scrub_text(text), want, "{text:?}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "AnyOf takes 1 to 3 needles")]
+    fn any_of_refuses_no_needles() {
+        let _ = wide::AnyOf::new(&[]);
     }
 
     /// The fullwidth `：` and `＝` and a no-break space after `Bearer` still
@@ -4011,7 +4058,8 @@ pass:"S3CRET"#,
             "password：S3CRETxyz ok",
             "token＝S3CRETxyz ok",
             "x-api-key ： S3CRETxyz",
-            "Authorization: Bearer\u{a0}S3CRETxyz",
+            "X-Token：Bearer\u{a0}S3CRETxyz",
+            "see Bearer\u{a0}S3CRETxyz ok",
             "Bearer\u{a0}S3CRETxyz",
             r#"{"password"："S3CRETxyz"}"#,
         ] {
@@ -4023,8 +4071,8 @@ pass:"S3CRET"#,
         assert_eq!(scrub_text("時刻：12 ok"), "時刻：12 ok");
     }
 
-    /// The fast path (X-log-url-redact-3) gives exactly what both stages and
-    /// `only_more` give, on 2,000,000 soups of 2 to 31 tokens. The tokens are
+    /// The fast path (X-log-url-redact-3) gives exactly what the slow path
+    /// (`scrub_text_slow`: both stages and both `only_more`s) gives, on 2,000,000 soups of 2 to 31 tokens. The tokens are
     /// near misses of every wide rule's trigger (names with no separator,
     /// `Some(`, `magnet`, `bear`, `lsk`, hash-like runs, the markers), so a
     /// soup's length is even across the range. A soup with a trigger
@@ -4134,8 +4182,7 @@ pass:"S3CRET"#,
             if !plain_line(&line) {
                 continue;
             }
-            let both = only_more(&scrub_text_floor(&line), &wide::scrub_text(&line));
-            assert_eq!(scrub_text(&line), both, "{line:?}");
+            assert_eq!(scrub_text(&line), scrub_text_slow(&line), "{line:?}");
         }
         // A soup with any trigger planted in it is refused.
         for _ in 0..200_000 {
@@ -4148,6 +4195,7 @@ pass:"S3CRET"#,
         // Each trigger is refused on its own; near misses are accepted.
         for line in [
             "a:b", "a/b", "a@b", "a%b", "a=b", "a\"b", "Bearer x", "xBEARER", "lsk_1", "Lsf_",
+            "a：b", "a＝b", "a\u{a0}b",
         ] {
             assert!(!plain_line(line), "{line:?}");
         }
@@ -4159,6 +4207,9 @@ pass:"S3CRET"#,
             "token x",
             "magnet?xt",
             "日本 🦀",
+            // Other characters that start with the same bytes: `©`, `（`,
+            // `ｘ`, `；`.
+            "© （ｘ）；",
         ] {
             assert!(plain_line(line), "{line:?}");
         }
