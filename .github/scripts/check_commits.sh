@@ -2,19 +2,19 @@
 # Checks commit subjects against Conventional Commits 1.0.0.
 #   check_commits.sh <range>        e.g. origin/main..HEAD
 #   check_commits.sh --message FILE one message file (used by .githooks/commit-msg)
-# Merge commits and GitHub's `Revert "..."` subjects are exempt. Commits authored
+# Merge commits, `Revert "..."`, `fixup!` and `squash!` subjects are exempt. Commits authored
 # before CUTOFF are exempt: history before it is not rewritten
 # (docs/decisions/2026-11-05-conventional-commits.md).
 set -euo pipefail
 
 CUTOFF="2026-11-06T00:00:00Z"
 TYPES="feat|fix|perf|refactor|test|docs|build|ci|chore|revert|style"
-RE="^(${TYPES})(\([a-z0-9._/-]+\))?!?: [^[:space:]].*[^.]$"
+RE="^(${TYPES})(\([a-z0-9][a-z0-9._/-]*\))?!?: [^[:space:]].*[^.]$"
 
 fail=0
 check() { # sha subject
   local sha=$1 subject=$2
-  case $subject in "Merge "* | 'Revert "'*) return 0 ;; esac
+  case $subject in "Merge "* | 'Revert "'* | "fixup! "* | "squash! "*) return 0 ;; esac
   if [[ ${#subject} -gt 72 ]]; then
     echo "::error::${sha}: subject is ${#subject} chars (max 72): ${subject}"; fail=1; return
   fi
