@@ -311,13 +311,14 @@ impl<'a> Ctx<'a> {
     /// `neutral` is the keys of the Neutralize entries that apply to the
     /// torrent, as the core and your rules get them.
     pub fn new(item: &'a Item<'a>, facts: &'a Facts<'a>, neutral: &'a [String]) -> Ctx<'a> {
-        let files = item
-            .files
-            .iter()
-            .take(crate::MAX_FILES)
-            .filter(|x| !x.padding)
-            .map(|x| (x, ext(x)))
-            .collect();
+        let mut files = Vec::with_capacity(item.files.len().min(crate::MAX_FILES));
+        files.extend(
+            item.files
+                .iter()
+                .take(crate::MAX_FILES)
+                .filter(|x| !x.padding)
+                .map(|x| (x, ext(x))),
+        );
         Ctx {
             item,
             facts,
@@ -420,7 +421,15 @@ impl<'a> Ctx<'a> {
     fn with_ext<'s>(&'s self, set: &'s [&str]) -> impl Iterator<Item = &'s FileInfo> + 's {
         self.files
             .iter()
-            .filter(move |(_, e)| e.is_some_and(|e| set.contains(&e.as_str())))
+            .filter(move |(_, e)| {
+                e.is_some_and(|e| {
+                    // Extensions are at most 8 bytes: compared in line,
+                    // not by a library call per name in the set.
+                    let e = e.as_bytes();
+                    set.iter()
+                        .any(|s| s.len() == e.len() && s.bytes().zip(e).all(|(a, b)| a == *b))
+                })
+            })
             .map(|(f, _)| *f)
     }
 

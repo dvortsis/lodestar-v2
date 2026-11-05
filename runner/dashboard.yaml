@@ -396,6 +396,7 @@ pinned:
   X-dashboard-adapts: ws-small
   X-dashboard-idle-slots: ws-small
   X-filter-budget-noise: ws-small
+  X-filter-perf-1105: ws-small
   F-filter-standin-undo: ws-small
   X-overflow-links: ws-small
   X-polish-carry-1102: ws-small
