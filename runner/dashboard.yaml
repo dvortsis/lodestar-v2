@@ -257,6 +257,7 @@ placement:
   match:
   - F-*
   - X-ci-health
+  - X-flake-update-log
   - X-log-url-redact
   - X-log-url-redact-2
   - X-log-url-redact-3

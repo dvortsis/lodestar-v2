@@ -2887,8 +2887,15 @@ mod tests {
         for secret in ["Zq7EvilSecret", "zq7evil", "Zq7InstallSecret", "zq7cred"] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
-        // Lodestar's own events name no URL, host or address.
-        let ours: Vec<&str> = text.lines().filter(|l| l.contains("event=")).collect();
+        // The update engine's own events name no URL, host or address.
+        // The capture is the whole process's, so other tests' events (an
+        // `address.*` line may legitimately carry an address) are left
+        // out: only `update.*` events are this install's.
+        let ours: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains(r#"event="update."#))
+            .collect();
+        assert!(!ours.is_empty(), "{text}");
         let port = server.base.port().unwrap().to_string();
         for secret in [
             "zq7asset",
