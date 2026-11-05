@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T16:20Z",
+  "updated_at": "2026-11-05T16:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3147,7 +3147,9 @@
     "ENR-7": {
       "status": "running",
       "session": "session_01MMjhnCWeVRA68WzWeBjqbL",
-      "since": "2026-11-05T15:25Z"
+      "since": "2026-11-05T15:25Z",
+      "pr": 504,
+      "head": "5b9e2ab4"
     },
     "ENR-1c": {
       "status": "running",
@@ -3170,7 +3172,9 @@
       "session": "session_01MMjhn9nYcoG92h6XmRaJTH",
       "since": "2026-11-05T15:55Z",
       "model": "sonnet",
-      "brief": "briefs/ENR-4.md"
+      "brief": "briefs/ENR-4.md",
+      "pr": 503,
+      "head": "a4922b17"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4752,7 +4756,9 @@
     "Host wiring of adult enrichment (after ENR-4/ENR-5 and their owner terms check): set PipelineConfig::adult_enrichers to the plugin manifest ids (ENR-1c #502: the torrent cache is Kind::Enrichment too, so the set is explicit, empty by default); build AdultEnrichSource with Switches, StoreState; hand Interest to ENR-7 API.",
     "Runner docs PR: record owner 2026-11-05T16:15Z \"bring the slots down to 8, complete the existing slices\" in docs/owner-decisions.md (new §), and runner/slices.yaml limits.phase_total 12 -> 8 (then 4 at the cut).",
     "ENR-5 (StashDB plugin) was next to launch; held by the 8-slot limit. Launch only when fewer than 8 are running (and before the 00:00Z cut to 4 only if still under the limit).",
-    "owner-flag §2.19/§2.26 (RP-4 #495, runner rulings 16:22Z): SP-3 counts against a source id with no publisher only for live-feed sources (allow-list); full scrape, clients, arr, archive_org, academic, prowlarr, torrent cache and enrichment count only with a named publisher. Publisher counts are per source. Second judgment on a flooded commit (+3.1 µs, about +21% of a feed commit, only from the 20th name of a flood) accepted."
+    "owner-flag §2.19/§2.26 (RP-4 #495, runner rulings 16:22Z): SP-3 counts against a source id with no publisher only for live-feed sources (allow-list); full scrape, clients, arr, archive_org, academic, prowlarr, torrent cache and enrichment count only with a named publisher. Publisher counts are per source. Second judgment on a flooded commit (+3.1 µs, about +21% of a feed commit, only from the 20th name of a flood) accepted.",
+    "Follow-up (from ENR-7 #504): the adult-enrichment scene link is always null until ENR-1 carries one (Lookup::Match has no link; provenance.external_ref is never set). Host wiring adds .layer(Extension(DrawerInterest)).",
+    "Follow-up (from ENR-4 #503): sources-feeds tpdb Page should say whether it saw `data` (the plugin checks raw bytes today); ENR-4 blocklist contract test deferred to ENR-G/SRC-G."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
