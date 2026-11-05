@@ -1,0 +1,22 @@
+{
+  "data": {
+    "searchScene": [
+      {
+        "id": "00000000-0000-4000-8000-0000000000a1",
+        "title": "Synthetic Scene Alpha",
+        "release_date": "2024-03-15",
+        "studio": {"id": "00000000-0000-4000-8000-0000000000c1", "name": "Example Studio One"},
+        "performers": [
+          {"performer": {"name": "Example Performer One", "id": "00000000-0000-4000-8000-0000000000d1", "birth_date": "SENTINEL-1990-01-01", "country": "SENTINEL-COUNTRY"}},
+          {"performer": {"name": "Example Performer Two"}}
+        ],
+        "details": "SENTINEL-DESCRIPTION"
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000a2",
+        "title": "Synthetic Scene Beta",
+        "performers": [{"performer": {"name": "Example Performer Three"}}]
+      }
+    ]
+  }
+}
