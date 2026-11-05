@@ -77,6 +77,29 @@ impl Store {
         self.update_settings_text(entries, &[])
     }
 
+    /// Stores every `(key, bytes)` pair in `set` as a blob and deletes
+    /// every key in `remove`, in one transaction: all of it happens, or
+    /// none does. For a caller's own binary rows (SP-4's signature set);
+    /// [`Store::settings_with_prefix_raw`] reads them back.
+    pub fn update_settings_raw(&mut self, set: &[(&str, &[u8])], remove: &[&str]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut upsert = tx.prepare_cached(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            )?;
+            for (key, value) in set {
+                upsert.execute(params![key, value])?;
+            }
+            let mut delete = tx.prepare_cached("DELETE FROM settings WHERE key = ?1")?;
+            for key in remove {
+                delete.execute([key])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Stores every `(key, text)` pair in `set` and deletes every key in
     /// `remove`, in one transaction: all of it happens, or none does.
     pub fn update_settings_text(&mut self, set: &[(&str, &str)], remove: &[&str]) -> Result<()> {
@@ -152,12 +175,14 @@ mod tests {
             )
             .unwrap();
         assert!(s.settings_with_prefix("p.").is_err());
+        s.update_settings_raw(&[("p.d", &[1, 2][..])], &["p.c"])
+            .unwrap();
         assert_eq!(
             s.settings_with_prefix_raw("p.").unwrap(),
             vec![
                 ("p.a".to_string(), Ok("1".to_string())),
                 ("p.b".to_string(), Err(vec![0xff, 0])),
-                ("p.c".to_string(), Ok("3".to_string())),
+                ("p.d".to_string(), Err(vec![1, 2])),
             ]
         );
     }

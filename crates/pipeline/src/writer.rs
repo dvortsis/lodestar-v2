@@ -5392,11 +5392,11 @@ mod tests {
         (s.torrent(id).unwrap().unwrap().flags, hits)
     }
 
-    fn sig_rows(w: &Writer) -> Vec<(String, String)> {
+    fn sig_rows(w: &Writer) -> Vec<lodestar_store::RawSetting> {
         w.store
             .as_ref()
             .unwrap()
-            .settings_with_prefix(lodestar_filter::spam_sigs::PREFIX)
+            .settings_with_prefix_raw(lodestar_filter::spam_sigs::PREFIX)
             .unwrap()
     }
 
@@ -5571,10 +5571,24 @@ mod tests {
             }
         }
         let batch_ns = t.elapsed().as_nanos() as f64 / f64::from(flushes);
+        // A flood of one payload (each hide adds it again) after a release
+        // left a removal in the open row: compaction stays within a row.
+        let old = usable(lodestar_filter::payload_sig(&rs[0].files)).unwrap();
+        sigs.release(&mut store, &[old], None).unwrap();
+        let flood = usable(lodestar_filter::payload_sig(&rs[1].files)).unwrap();
+        let t = Instant::now();
+        for i in 0..2_048 {
+            sigs.add(flood, hid);
+            if i % 8 == 7 {
+                sigs.flush(&mut store).unwrap();
+            }
+        }
+        let flood_ns = t.elapsed().as_nanos() as f64 / 256.0;
         println!(
             "per insert: {:.2} µs; SP-4: a crawl commit with the set empty {:.3} µs ({:.2}%), \
              with the set at its cap {:.2} µs ({:.1}%); a batch with hides: {:.1} µs for their \
-             adds and its one row, {:.2} µs a commit of a 256-commit batch ({:.1}%)",
+             adds and its one row, {:.2} µs a commit of a 256-commit batch ({:.1}%); a flood \
+             of one payload after a release, {:.1} µs a batch",
             insert / 1000.0,
             empty_ns / 1000.0,
             100.0 * empty_ns / insert,
@@ -5583,6 +5597,11 @@ mod tests {
             batch_ns / 1000.0,
             batch_ns / 256.0 / 1000.0,
             100.0 * batch_ns / 256.0 / insert,
+            flood_ns / 1000.0,
+        );
+        assert!(
+            flood_ns < 4.0 * batch_ns,
+            "a flood after a release: within a row"
         );
         assert!(empty_ns <= 0.05 * insert, "a crawl commit, the set empty");
     }

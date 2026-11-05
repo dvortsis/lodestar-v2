@@ -568,10 +568,11 @@ fn rows(store: &Store) -> Vec<RawSetting> {
     store.settings_with_prefix_raw(PREFIX).unwrap()
 }
 
-fn snapshot(store: &Store) -> BTreeMap<String, String> {
+/// The rows as stored, text or blob, as bytes.
+fn snapshot(store: &Store) -> BTreeMap<String, Vec<u8>> {
     rows(store)
         .into_iter()
-        .map(|(k, v)| (k, v.unwrap()))
+        .map(|(k, v)| (k, v.map_or_else(|b| b, String::into_bytes)))
         .collect()
 }
 
@@ -615,10 +616,12 @@ fn the_set_survives_a_restart() {
     for i in 0..10_000 {
         assert_eq!(again.get(sig(i)), s.get(sig(i)), "{i}");
     }
-    // Rows of at most 4 KB, of the format.
-    for (k, v) in snapshot(&store) {
+    // Blobs of at most 4 KB, of the format: 8 bytes an entry.
+    for (k, v) in rows(&store) {
+        let v = v.expect_err("a blob");
         assert!(v.len() <= ROW_BYTES, "{k}");
-        assert!(v.starts_with("1:"), "{k}");
+        assert_eq!(v[0], spam_sigs::FORMAT, "{k}");
+        assert_eq!((v.len() - 1) % 8, 0, "{k}");
     }
 }
 
@@ -670,7 +673,7 @@ fn a_row_is_compacted_once_a_quarter_of_it_is_removed() {
     }
     s.flush(&mut store).unwrap();
     let first = format!("{PREFIX}0");
-    let len = |store: &Store| (snapshot(store)[&first].len() - 2) / 16;
+    let len = |store: &Store| (snapshot(store)[&first].len() - 1) / 8;
     assert_eq!(len(&store), ROW_ENTRIES);
     // Releases append removals to the open row; the full one is left as
     // it is until a quarter of it is dead.
@@ -796,7 +799,7 @@ fn an_unreadable_row_loses_only_its_own_and_is_never_written_over() {
         .release(&mut store, &[sig(0), sig(full + 1)], None)
         .unwrap();
     again.flush(&mut store).unwrap();
-    assert_eq!(snapshot(&store)[&format!("{PREFIX}1")], newer);
+    assert_eq!(snapshot(&store)[&format!("{PREFIX}1")], newer.as_bytes());
     // A non-text row, and a key that isn't a row number, the same.
     store
         .update_settings_text(&[(&format!("{PREFIX}x y"), "1:")], &[])
@@ -820,14 +823,14 @@ fn an_unreadable_row_loses_only_its_own_and_is_never_written_over() {
     s.add(sig(2), HID);
     s.flush(&mut store).unwrap();
     let snap = snapshot(&store);
-    assert_eq!(snap[&format!("{PREFIX}1")], "garbage");
+    assert_eq!(snap[&format!("{PREFIX}1")], b"garbage");
     assert!(
         snap.contains_key(&format!("{PREFIX}2")),
         "{:?}",
         snap.keys()
     );
     assert_eq!(
-        (snap[&format!("{PREFIX}0")].len() - 2) / 16,
+        (snap[&format!("{PREFIX}0")].len() - 1) / 8,
         1,
         "row 0 untouched"
     );
@@ -932,27 +935,74 @@ proptest! {
         }
     }
 
-    /// No row, however damaged, makes a load panic or lets the set grow
-    /// past its cap.
+    /// No row, however damaged and whatever its number, makes a load
+    /// panic or lets the set grow past its cap, and adds and releases
+    /// after it still work.
     #[test]
     fn a_damaged_row_never_panics(
-        rows in proptest::collection::vec((0u16..8, "\\PC{0,80}"), 0..8),
+        rows in proptest::collection::vec(
+            (any::<u64>(), any::<bool>(), proptest::collection::vec(any::<u8>(), 0..80)),
+            0..8,
+        ),
     ) {
         let s = SpamSigs::with_cap(16);
         let rows: Vec<RawSetting> = rows
             .into_iter()
-            .map(|(n, v)| (format!("{PREFIX}{n}"), Ok(v)))
+            .map(|(n, tagged, mut v)| {
+                if tagged {
+                    v.insert(0, spam_sigs::FORMAT);
+                }
+                (format!("{PREFIX}{}", n % 64 + if n % 3 == 0 { u64::MAX - 64 } else { 0 }), Err(v))
+            })
             .collect();
         s.load(&rows);
         prop_assert!(s.len() <= 16);
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        for i in 0..40 {
+            s.add(sig(i), HID);
+        }
+        s.release(&mut store, &[sig(39)], None).unwrap();
+        prop_assert!(s.len() <= 16);
+        prop_assert!(s.get(sig(38)).is_some());
     }
+}
+
+/// A key past the row numbers this build uses (corrupted, or another
+/// build's numbering) is listed and left alone: it never sets where new
+/// rows start, so they can't wrap or land on it.
+#[test]
+fn a_row_number_past_the_bound_is_lost_and_left_alone() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let far = format!("{PREFIX}{}", u64::MAX);
+    store
+        .update_settings_raw(&[(&far, &[spam_sigs::FORMAT][..])], &[])
+        .unwrap();
+    let s = SpamSigs::with_cap(4);
+    let loaded = s.load(&rows(&store));
+    // Not a row number this build writes: a key, sanitized, and never
+    // a bare number a row's label could take.
+    assert_eq!(loaded.lost, [format!("key-{}", u64::MAX)]);
+    for i in 0..(ROW_ENTRIES as u64 * 3) {
+        s.add(sig(i), HID);
+        s.flush(&mut store).unwrap();
+    }
+    assert_eq!(s.len(), 4);
+    let snap = snapshot(&store);
+    assert_eq!(snap[&far], [spam_sigs::FORMAT]);
+    assert!(snap.contains_key(&format!("{PREFIX}0")) || snap.contains_key(&format!("{PREFIX}2")));
+    assert!(
+        snap.keys()
+            .all(|k| k == &far || k.len() <= PREFIX.len() + 2),
+        "{:?}",
+        snap.keys()
+    );
 }
 
 #[test]
 fn the_api_constants_hold() {
     assert_eq!(spam_sigs::CAP, 1_000_000);
-    assert_eq!(ROW_ENTRIES, 255);
-    assert!(ROW_BYTES <= MAX_ROW_BYTES);
+    assert_eq!(ROW_ENTRIES, 511);
+    const { assert!(ROW_BYTES <= MAX_ROW_BYTES) };
     assert_eq!(PREFIX, "filter.sp4.sigs.");
 }
 

@@ -13,13 +13,13 @@
 //!
 //! # Storage
 //! Append-only `settings` rows of at most [`ROW_BYTES`] (4 KB; Q12 allows
-//! up to [`MAX_ROW_BYTES`], 64 KB),
-//! `filter.sp4.sigs.<n>` ([`PREFIX`]), numbered in the order they're
-//! started. A row is `1:` and then 16 hex digits per entry: the
-//! signature with its low three bits replaced by flags ([`REMOVED`],
-//! [`HIDE`], [`BY_SP3`]). Entries are appended to the newest row only;
-//! when it's full the next one starts. So a batch of hides rewrites one
-//! row of at most 4 KB, never the set.
+//! up to [`MAX_ROW_BYTES`], 64 KB), `filter.sp4.sigs.<n>` ([`PREFIX`]),
+//! numbered in the order they're started. A row is a blob: the format
+//! byte [`FORMAT`], then 8 bytes per entry, little-endian: the signature
+//! with its low three bits replaced by flags ([`REMOVED`], [`HIDE`],
+//! [`BY_SP3`]). Entries are appended to the newest row only; when it's
+//! full the next one starts. So a batch of hides rewrites one row of at
+//! most 4 KB, never the set.
 //!
 //! - **A release appends a removal** (an entry with [`REMOVED`]) rather
 //!   than rewriting the row that holds the signature. On load the last
@@ -35,8 +35,9 @@
 //!   errs strict.
 //!
 //! # Fail closed
-//! A row that doesn't read (not text, not this format: a newer version's
-//! row after a rollback, or a corrupted one) loses only its own
+//! A row that doesn't read (not a blob of this format: a newer version's
+//! row after a rollback, or a corrupted one; or a key that isn't a row
+//! number below [`MAX_ROW`]) loses only its own
 //! signatures. It's left as it is, never written over, and listed
 //! ([`SpamSigs::labels`]) in `filter.stand_ins` and the Filters & Safety
 //! notice, as RP-0 lists lost version state. New rows are numbered past
@@ -71,10 +72,13 @@ pub const MAX_ROW_BYTES: usize = 64 << 10;
 /// write where 4 KB costs the transaction's own 17 µs or so
 /// (docs/decisions/2026-11-05-RP-5.md).
 pub const ROW_BYTES: usize = 4 << 10;
-/// The format tag a row starts with.
-const FORMAT: &str = "1:";
-/// Entries in a full row: 255.
-pub const ROW_ENTRIES: usize = (ROW_BYTES - FORMAT.len()) / 16;
+/// The format byte a row starts with.
+pub const FORMAT: u8 = 1;
+/// Entries in a full row: 511.
+pub const ROW_ENTRIES: usize = (ROW_BYTES - 1) / 8;
+/// Row numbers are below this; a key past it isn't one of this build's
+/// rows (and the index packs a row number in 45 bits).
+pub const MAX_ROW: u64 = 1 << 40;
 /// The `filter.stand_ins` label prefix of a row that doesn't read.
 pub const LABEL_PREFIX: &str = "packs.sp4.row.";
 
@@ -180,8 +184,13 @@ struct Inner {
     rows: BTreeMap<u64, Row>,
     /// Live signatures, by [`key`].
     live: HashMap<u64, Loc>,
-    /// The rows that don't read: their keys' suffixes, numeric or not.
-    lost: BTreeSet<String>,
+    /// How many adds no longer live each signature still has stored: a
+    /// removal of it is needed while there's one ([`Inner::compact`]).
+    stale: HashMap<u64, u32>,
+    /// The rows that don't read, by number, and the keys under [`PREFIX`]
+    /// that aren't row numbers, as labels can carry them.
+    lost_rows: BTreeSet<u64>,
+    lost_other: BTreeSet<String>,
     /// The number of the row entries are appended to, if it's still open.
     tail: Option<u64>,
     /// The number a new row takes: past every row seen, lost ones too.
@@ -190,7 +199,7 @@ struct Inner {
     oldest: (u64, usize),
     /// Rows to write and rows to delete at the next flush.
     dirty: BTreeSet<u64>,
-    gone: BTreeSet<String>,
+    gone: BTreeSet<u64>,
 }
 
 impl Inner {
@@ -199,7 +208,9 @@ impl Inner {
             cap,
             rows: BTreeMap::new(),
             live: HashMap::new(),
-            lost: BTreeSet::new(),
+            stale: HashMap::new(),
+            lost_rows: BTreeSet::new(),
+            lost_other: BTreeSet::new(),
             tail: None,
             next: 0,
             oldest: (0, 0),
@@ -220,7 +231,9 @@ impl Inner {
             Some(n) => n,
             None => {
                 let n = self.next;
-                self.next += 1;
+                // Below MAX_ROW: one row per 511 adds would take longer
+                // than anything runs to reach it.
+                self.next = n.saturating_add(1);
                 self.rows.insert(n, Row::default());
                 self.tail = Some(n);
                 n
@@ -230,6 +243,21 @@ impl Inner {
         row.entries.push(entry);
         self.dirty.insert(n);
         (n, row.entries.len() - 1)
+    }
+
+    /// Counts a stored add of `k` that no longer lives.
+    fn went_stale(&mut self, k: u64) {
+        *self.stale.entry(k).or_default() += 1;
+    }
+
+    /// Counts a stale add of `k` dropped from the rows.
+    fn dropped_stale(&mut self, k: u64) {
+        if let Some(c) = self.stale.get_mut(&k) {
+            *c -= 1;
+            if *c == 0 {
+                self.stale.remove(&k);
+            }
+        }
     }
 
     /// Marks one entry of row `n` dead.
@@ -245,13 +273,12 @@ impl Inner {
         let mut touched = BTreeSet::new();
         if let Some(old) = self.live.remove(&k) {
             self.kill(old.row(), &mut touched);
+            self.went_stale(k);
         }
         let flags = o.flags();
         let (n, i) = self.append(k | flags);
         self.live.insert(k, Loc::new(n, i, flags));
-        while self.live.len() > self.cap {
-            self.evict(&mut touched);
-        }
+        while self.live.len() > self.cap && self.evict(&mut touched) {}
         self.compact(touched);
     }
 
@@ -274,6 +301,7 @@ impl Inner {
             return false;
         }
         self.live.remove(&k);
+        self.went_stale(k);
         let mut touched = BTreeSet::new();
         self.kill(loc.row(), &mut touched);
         let (n, _) = self.append(k | REMOVED);
@@ -285,6 +313,9 @@ impl Inner {
     /// Whether an add of `k` (by `rule`, if given) the cap dropped is still
     /// stored: one before the eviction point that no later entry cancels.
     fn dropped_add(&self, k: u64, rule: Option<PackRule>) -> bool {
+        if !self.stale.contains_key(&k) {
+            return false;
+        }
         let (on, oi) = self.oldest;
         let mut last = None;
         for (n, r) in self.rows.range(..=on) {
@@ -314,12 +345,14 @@ impl Inner {
         !cancelled && rule.is_none_or(|r| Original::from_flags(e).rule == r)
     }
 
-    /// Drops the oldest live signature.
-    fn evict(&mut self, touched: &mut BTreeSet<u64>) {
+    /// Drops the oldest live signature. Returns whether there was one to
+    /// drop.
+    fn evict(&mut self, touched: &mut BTreeSet<u64>) -> bool {
         let (mut n, mut i) = self.oldest;
         let (n, i, k) = 'search: loop {
             let Some((&rn, row)) = self.rows.range(n..).next() else {
-                return;
+                debug_assert!(self.live.is_empty(), "a live entry the rows don't hold");
+                return false;
             };
             if rn != n {
                 (n, i) = (rn, 0);
@@ -338,25 +371,23 @@ impl Inner {
                 i += 1;
             }
             let Some(after) = n.checked_add(1) else {
-                return;
+                return false;
             };
             (n, i) = (after, 0);
         };
         self.live.remove(&k);
+        self.went_stale(k);
         self.oldest = (n, i + 1);
         self.kill(n, touched);
         // Everything a lost row older than this one holds would have gone
-        // first.
-        let older: Vec<String> = self
-            .lost
-            .iter()
-            .filter(|s| s.parse::<u64>().is_ok_and(|l| l < n))
-            .cloned()
-            .collect();
-        for s in older {
-            self.lost.remove(&s);
-            self.gone.insert(s);
+        // first. Only rows by their own number: another key is never
+        // deleted.
+        let older: Vec<u64> = self.lost_rows.range(..n).copied().collect();
+        for l in older {
+            self.lost_rows.remove(&l);
+            self.gone.insert(l);
         }
+        true
     }
 
     /// Rewrites each touched row once a quarter of it is dead.
@@ -368,47 +399,52 @@ impl Inner {
             if row.dead == 0 || row.dead * 4 < row.entries.len() {
                 continue;
             }
-            // A removal is kept while an older row holds an add of its
-            // signature: dropping it would bring that add back on load.
-            let removals: BTreeSet<u64> = row
-                .entries
-                .iter()
-                .filter(|e| *e & REMOVED != 0)
-                .map(|e| key(*e))
-                .collect();
-            let needed: BTreeSet<u64> = if removals.is_empty() {
-                BTreeSet::new()
-            } else {
-                self.rows
-                    .range(..n)
-                    .flat_map(|(_, r)| r.entries.iter())
-                    .filter(|e| *e & REMOVED == 0 && removals.contains(&key(**e)))
-                    .map(|e| key(*e))
-                    .collect()
-            };
-            let live = &self.live;
-            let kept: Vec<u64> = row
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(i, e)| {
-                    let k = key(**e);
-                    if **e & REMOVED != 0 {
-                        needed.contains(&k)
-                    } else {
-                        live.get(&k)
-                            .is_some_and(|l| l.row() == n && l.index() == *i)
-                    }
-                })
-                .map(|(_, e)| *e)
-                .collect();
+            // A removal is kept while a stale add of its signature is
+            // still stored: dropping it could bring that add back on load.
+            // (Conservative: the stale add may be one a later entry
+            // cancels anyway.) The stale adds this row drops are counted
+            // first, so a removal beside its own add goes with it.
+            let mut kept = Vec::with_capacity(row.entries.len() - row.dead);
+            let mut dropped_adds = Vec::new();
+            let mut removals = Vec::new();
+            for (i, e) in row.entries.iter().enumerate() {
+                let k = key(*e);
+                if *e & REMOVED != 0 {
+                    removals.push(kept.len());
+                    kept.push(*e);
+                } else if self
+                    .live
+                    .get(&k)
+                    .is_some_and(|l| l.row() == n && l.index() == i)
+                {
+                    kept.push(*e);
+                } else {
+                    dropped_adds.push(k);
+                }
+            }
+            for k in dropped_adds {
+                self.dropped_stale(k);
+            }
+            let stale = &self.stale;
+            let mut at = 0;
+            let mut r = removals.into_iter().peekable();
+            kept.retain(|e| {
+                let i = at;
+                at += 1;
+                if r.peek() == Some(&i) {
+                    r.next();
+                    stale.contains_key(&key(*e))
+                } else {
+                    true
+                }
+            });
             if self.oldest.0 == n {
                 self.oldest.1 = 0;
             }
             if kept.is_empty() {
                 self.rows.remove(&n);
                 self.dirty.remove(&n);
-                self.gone.insert(n.to_string());
+                self.gone.insert(n);
                 if self.tail == Some(n) {
                     self.tail = None;
                 }
@@ -437,13 +473,21 @@ impl Inner {
 /// holds it in an `Arc`), the writer that adds to it and the API that
 /// releases from it. Every write to the store is made under its lock, so
 /// two writers' rows can't land out of order.
-#[derive(Debug)]
 pub struct SpamSigs {
     inner: Mutex<Inner>,
     /// Live signatures, read without the lock.
     len: AtomicUsize,
     /// Something to write.
     pending: AtomicBool,
+}
+
+impl std::fmt::Debug for SpamSigs {
+    // Never the set itself: tens of MB at the cap.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpamSigs")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for SpamSigs {
@@ -535,7 +579,7 @@ impl SpamSigs {
         if inner.dirty.is_empty() && inner.gone.is_empty() {
             return Ok(0);
         }
-        let set: Vec<(String, String)> = inner
+        let set: Vec<(String, Vec<u8>)> = inner
             .dirty
             .iter()
             .filter_map(|n| {
@@ -545,11 +589,13 @@ impl SpamSigs {
                     .map(|r| (format!("{PREFIX}{n}"), encode(&r.entries)))
             })
             .collect();
-        let gone: Vec<String> = inner.gone.iter().map(|s| format!("{PREFIX}{s}")).collect();
-        let set_refs: Vec<(&str, &str)> =
-            set.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let gone: Vec<String> = inner.gone.iter().map(|n| format!("{PREFIX}{n}")).collect();
+        let set_refs: Vec<(&str, &[u8])> = set
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_slice()))
+            .collect();
         let gone_refs: Vec<&str> = gone.iter().map(String::as_str).collect();
-        store.update_settings_text(&set_refs, &gone_refs)?;
+        store.update_settings_raw(&set_refs, &gone_refs)?;
         inner.dirty.clear();
         inner.gone.clear();
         Ok(set.len())
@@ -583,17 +629,16 @@ impl SpamSigs {
             let Some(suffix) = k.strip_prefix(PREFIX) else {
                 continue;
             };
-            let number = canonical(suffix);
-            if let Some(n) = number {
-                inner.next = inner.next.max(n.saturating_add(1));
-            }
-            match (number, v.as_ref().ok().and_then(|t| decode(t))) {
-                (Some(n), Some(entries)) => readable.push((n, entries)),
-                _ => {
-                    inner.lost.insert(match number {
-                        Some(n) => n.to_string(),
-                        None => sanitize(suffix),
-                    });
+            let Some(n) = canonical(suffix) else {
+                inner.lost_other.insert(sanitize(suffix));
+                continue;
+            };
+            inner.next = inner.next.max(n + 1);
+            // A row is a blob; text under the prefix isn't this format.
+            match v.as_ref().err().and_then(|b| decode(b)) {
+                Some(entries) => readable.push((n, entries)),
+                None => {
+                    inner.lost_rows.insert(n);
                 }
             }
         }
@@ -620,6 +665,18 @@ impl SpamSigs {
             row.entries = entries;
             inner.rows.insert(n, row);
         }
+        for (n, row) in &inner.rows {
+            for (i, e) in row.entries.iter().enumerate() {
+                let k = key(*e);
+                let live = inner
+                    .live
+                    .get(&k)
+                    .is_some_and(|l| l.row() == *n && l.index() == i);
+                if *e & REMOVED == 0 && !live {
+                    *inner.stale.entry(k).or_default() += 1;
+                }
+            }
+        }
         inner.oldest = inner.rows.keys().next().map_or((0, 0), |n| (*n, 0));
         let max_seen = inner.next.checked_sub(1);
         inner.tail = inner
@@ -628,17 +685,15 @@ impl SpamSigs {
             .filter(|(n, r)| Some(**n) == max_seen && r.entries.len() < ROW_ENTRIES)
             .map(|(n, _)| *n);
         let mut evicted = BTreeSet::new();
-        while inner.live.len() > inner.cap {
-            inner.evict(&mut evicted);
-        }
+        while inner.live.len() > inner.cap && inner.evict(&mut evicted) {}
         // Dead entries found here are compacted on the next change to
         // their row: a load writes nothing. Lost rows the cap passed are
         // still listed until then.
-        inner.lost.extend(inner.gone.iter().cloned());
-        inner.gone.clear();
+        let passed = std::mem::take(&mut inner.gone);
+        inner.lost_rows.extend(passed);
         let loaded = Loaded {
             len: inner.live.len(),
-            lost: inner.lost.iter().cloned().collect(),
+            lost: inner.lost_names(),
         };
         let mut slot = self.lock();
         *slot = inner;
@@ -650,7 +705,7 @@ impl SpamSigs {
     /// `packs.sp4.row.<n>`.
     pub fn labels(&self) -> Vec<String> {
         self.lock()
-            .lost
+            .lost_names()
             .iter()
             .map(|s| format!("{LABEL_PREFIX}{s}"))
             .collect()
@@ -668,10 +723,22 @@ impl SpamSigs {
     }
 }
 
-/// A row number as written: decimal, no sign, no leading zeros.
+impl Inner {
+    /// The rows that don't read, by number, then the other keys.
+    fn lost_names(&self) -> Vec<String> {
+        self.lost_rows
+            .iter()
+            .map(u64::to_string)
+            .chain(self.lost_other.iter().cloned())
+            .collect()
+    }
+}
+
+/// A row number as written: decimal, no sign, no leading zeros, below
+/// [`MAX_ROW`].
 fn canonical(s: &str) -> Option<u64> {
     let n: u64 = s.parse().ok()?;
-    (n.to_string() == s).then_some(n)
+    (n.to_string() == s && n < MAX_ROW).then_some(n)
 }
 
 /// A key suffix that isn't a row number, as a label can carry it.
@@ -681,43 +748,34 @@ fn sanitize(s: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
         .take(32)
         .collect();
-    if clean.is_empty() {
-        "unnamed".to_owned()
+    // Never a bare number: it would read as a row's label.
+    if clean.is_empty() || clean.bytes().all(|b| b.is_ascii_digit()) {
+        format!("key-{clean}")
     } else {
         clean
     }
 }
 
-fn encode(entries: &[u64]) -> String {
-    use std::fmt::Write;
-    let mut s = String::with_capacity(FORMAT.len() + entries.len() * 16);
-    s.push_str(FORMAT);
+fn encode(entries: &[u64]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(1 + entries.len() * 8);
+    b.push(FORMAT);
     for e in entries {
-        let _ = write!(s, "{e:016x}");
+        b.extend_from_slice(&e.to_le_bytes());
     }
-    s
+    b
 }
 
 /// A row's entries, or `None` when it isn't this format.
-fn decode(text: &str) -> Option<Vec<u64>> {
-    let hex = text.strip_prefix(FORMAT)?;
-    if text.len() > MAX_ROW_BYTES || !hex.len().is_multiple_of(16) {
+fn decode(bytes: &[u8]) -> Option<Vec<u64>> {
+    let (&tag, body) = bytes.split_first()?;
+    if tag != FORMAT || bytes.len() > MAX_ROW_BYTES || !body.len().is_multiple_of(8) {
         return None;
     }
-    hex.as_bytes()
-        .chunks_exact(16)
-        .map(|c| {
-            let c = std::str::from_utf8(c).ok()?;
-            // Lowercase hex digits only, as written.
-            if !c
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            {
-                return None;
-            }
-            u64::from_str_radix(c, 16).ok()
-        })
-        .collect()
+    Some(
+        body.chunks_exact(8)
+            .map(|c| u64::from_le_bytes(c.try_into().expect("8 bytes")))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -737,25 +795,32 @@ mod tests {
     fn rows_round_trip_and_refuse_other_formats() {
         let e = [0, u64::MAX, 0x0123_4567_89ab_cdef];
         assert_eq!(decode(&encode(&e)), Some(e.to_vec()));
-        assert_eq!(decode("1:"), Some(Vec::new()));
+        assert_eq!(encode(&e).len(), 1 + 8 * 3, "packed 8 bytes an entry");
+        assert_eq!(decode(&[FORMAT]), Some(Vec::new()));
         for bad in [
-            "2:0000000000000000",
-            "1:000",
-            "1:000000000000000g",
-            "1:000000000000000A",
-            "x",
+            &[2u8, 0, 0, 0, 0, 0, 0, 0, 0][..],
+            &[1, 0, 0, 0],
+            &[],
+            b"1:00",
         ] {
-            assert_eq!(decode(bad), None, "{bad}");
+            assert_eq!(decode(bad), None, "{bad:?}");
         }
         assert!(encode(&vec![0; ROW_ENTRIES]).len() <= ROW_BYTES);
-        assert!(FORMAT.len() + 16 * (ROW_ENTRIES + 1) > ROW_BYTES);
-        // A longer row another build wrote, up to 64 KB, still reads.
-        let long = vec![7; (MAX_ROW_BYTES - FORMAT.len()) / 16];
-        assert_eq!(decode(&encode(&long)), Some(long));
+        const { assert!(1 + 8 * (ROW_ENTRIES + 1) > ROW_BYTES) };
+        // A longer row another build wrote, up to 64 KB, still reads; one
+        // past it doesn't.
+        let long = vec![7; (MAX_ROW_BYTES - 1) / 8];
+        assert_eq!(decode(&encode(&long)), Some(long.clone()));
+        let mut longer = long;
+        longer.push(7);
+        assert_eq!(decode(&encode(&longer)), None);
         assert_eq!(canonical("12"), Some(12));
         assert_eq!(canonical("012"), None);
         assert_eq!(canonical("+1"), None);
         assert_eq!(sanitize("a b@c~"), "abc");
+        assert_eq!(sanitize("+1"), "key-1", "never a row's label");
+        assert_eq!(canonical(&MAX_ROW.to_string()), None);
+        assert_eq!(canonical(&(MAX_ROW - 1).to_string()), Some(MAX_ROW - 1));
     }
 
     #[test]
