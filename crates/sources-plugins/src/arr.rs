@@ -63,7 +63,8 @@ pub const MAX_ID: usize = 32;
 ///   leaves room for fields added later without reading deep trees.
 /// - `max_values`: about 60 values an episode; 20,000 covers a pack of
 ///   300 episodes.
-/// - `max_array`: no array in the shapes comes near 1,000 elements.
+/// - `max_array`: no array in the shapes comes near 1,000 elements; a
+///   body with a longer one is refused.
 /// - `max_text`: the raw bytes of one kept string. A release title is
 ///   under 300 bytes; an overview we skip may be longer, and skipping
 ///   doesn't copy.
@@ -260,8 +261,12 @@ impl<'a> Parser<'a> {
                 p.object(|p, key| match key {
                     "releaseTitle" => p.text_into(|d| &mut d.release_title),
                     "size" => {
+                        // The first number wins; a later repeat or a
+                        // non-number doesn't change it.
                         let size = p.number()?;
-                        p.d.size = size;
+                        if p.d.size.is_none() {
+                            p.d.size = size;
+                        }
                         Ok(())
                     }
                     _ => p.skip(),
@@ -286,10 +291,13 @@ impl<'a> Parser<'a> {
         self.j.end()
     }
 
-    /// Skips the next value. An over-long array in it is fine: nothing in
-    /// it is kept, and the value cap still bounds the work.
+    /// Skips the next value. An array in it longer than
+    /// [`Limits::max_array`] refuses the whole body: no real event has one.
     fn skip(&mut self) -> R<()> {
-        self.j.skip().map(|_| ())
+        if self.j.skip()? {
+            return Err(json::Stop::Elements);
+        }
+        Ok(())
     }
 
     /// Reads an object with `f`, or skips a value of another type.

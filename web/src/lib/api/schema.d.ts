@@ -9055,7 +9055,9 @@ export interface components {
             path: string;
             /**
              * Format: int64
-             * @description Calls dropped: over the rate, the source off, or the pipeline full.
+             * @description Authenticated calls not delivered: over the rate, the source off,
+             *     the pipeline full, a body over the cap (`413`), or one that
+             *     couldn't be read.
              */
             refused: number;
             /** @description A token is made. It can't be shown again; make a new one instead. */

@@ -245,8 +245,8 @@ impl Webhooks {
         Ok(h)
     }
 
-    /// A token route changed `i`'s hash (call it after the store write):
-    /// the cache follows. Left alone before the first read, which then
+    /// A token route changed `i`'s hash: the cache follows. Called only
+    /// from [`change_token`], under the store's lock, after its write. Left alone before the first read, which then
     /// reads the new value.
     fn set_hash(&self, i: Integration, hash: Option<[u8; 32]>) {
         let mut slot = self.hashes.write().unwrap_or_else(|e| e.into_inner());
@@ -289,7 +289,9 @@ pub struct WebhookInfo {
     pub ignored: u64,
     /// Bodies that weren't an event, dropped.
     pub malformed: u64,
-    /// Calls dropped: over the rate, the source off, or the pipeline full.
+    /// Authenticated calls not delivered: over the rate, the source off,
+    /// the pipeline full, a body over the cap (`413`), or one that
+    /// couldn't be read.
     pub refused: u64,
 }
 
@@ -768,14 +770,11 @@ pub(crate) async fn create_token(
     with_store(&s, |_| Ok(())).await?;
     confirm_fresh_password(&s.auth, ip, body.password).await?;
     let (token, hash) = mint().map_err(internal)?;
-    let hex = encode_hash(&hash);
+    let hub = hub.map(|Extension(h)| h);
     with_store(&s, move |st| {
-        st.set_settings_text(&[(i.key(), &hex)]).map_err(internal)
+        change_token(st, hub.as_deref(), i, Some(hash))
     })
     .await?;
-    if let Some(Extension(h)) = &hub {
-        h.set_hash(i, Some(hash));
-    }
     let out = WebhookToken {
         integration: i,
         token,
@@ -800,14 +799,31 @@ pub(crate) async fn delete_token(
 ) -> ApiResult<axum::Json<OkResponse>> {
     same_origin_json(&headers)?;
     let i = integration(&name)?;
-    with_store(&s, move |st| {
-        st.update_settings_text(&[], &[i.key()]).map_err(internal)
-    })
-    .await?;
-    if let Some(Extension(h)) = &hub {
-        h.set_hash(i, None);
-    }
+    let hub = hub.map(|Extension(h)| h);
+    with_store(&s, move |st| change_token(st, hub.as_deref(), i, None)).await?;
     Ok(axum::Json(OkResponse { ok: true }))
+}
+
+/// Stores (`Some`) or removes (`None`) `i`'s token hash and updates the
+/// cache in the same step, while the caller holds the store's lock: two
+/// token changes can't interleave between the write and the cache, so a
+/// removed token can't stay valid in the cache, and cache and store
+/// always agree.
+fn change_token(
+    st: &mut lodestar_store::Store,
+    hub: Option<&Webhooks>,
+    i: Integration,
+    hash: Option<[u8; 32]>,
+) -> ApiResult<()> {
+    match hash {
+        Some(h) => st.set_settings_text(&[(i.key(), &encode_hash(&h))]),
+        None => st.update_settings_text(&[], &[i.key()]),
+    }
+    .map_err(internal)?;
+    if let Some(h) = hub {
+        h.set_hash(i, hash);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -944,6 +960,50 @@ mod tests {
         assert!(wait > Duration::ZERO && wait <= Duration::from_secs(1));
         // Each integration has its own.
         w.take(Integration::Radarr).unwrap();
+    }
+
+    /// Token changes racing on many threads, each through the store's
+    /// lock as the routes run them: afterwards the cache is exactly what
+    /// the store holds, so no removed or replaced token stays valid.
+    #[test]
+    fn racing_token_changes_leave_cache_and_store_agreeing() {
+        struct Nothing;
+        impl WebhookSink for Nothing {
+            fn deliver(&self, _: Integration, _: &[u8]) -> Delivered {
+                Delivered::Ignored
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(
+            lodestar_store::Store::open(dir.path().join("t.db"), Default::default()).unwrap(),
+        ));
+        let hub = Webhooks::new(Arc::new(Nothing));
+        // The cache is filled, as after a first call.
+        *hub.hashes.write().unwrap() = Some([None; 2]);
+        let threads: Vec<_> = (0..8u8)
+            .map(|t| {
+                let (store, hub) = (store.clone(), hub.clone());
+                std::thread::spawn(move || {
+                    for n in 0..100u8 {
+                        let hash = (n % 3 != 0).then_some([t ^ n; 32]);
+                        let i = Integration::ALL[usize::from(n % 2)];
+                        let mut st = store.lock().unwrap();
+                        change_token(&mut st, Some(&hub), i, hash).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let st = store.lock().unwrap();
+        let stored: Hashes = Integration::ALL.map(|i| {
+            st.setting_text(i.key())
+                .unwrap()
+                .as_deref()
+                .and_then(decode_hash)
+        });
+        assert_eq!(*hub.hashes.read().unwrap(), Some(stored));
     }
 
     proptest! {

@@ -180,6 +180,20 @@ fn malformed_bodies_are_refused_whole() {
             String::from_utf8_lossy(&body[..body.len().min(80)])
         );
     }
+    // An array past `max_array` refuses the body, even well under the
+    // value cap; one at the cap is fine.
+    let array = |n: usize| {
+        format!(
+            "{{\"eventType\":\"Test\",\"episodes\":[{}]}}",
+            vec!["0"; n].join(",")
+        )
+    };
+    const { assert!(LIMITS.max_array < LIMITS.max_values / 2) };
+    assert_eq!(
+        parse(App::Sonarr, array(LIMITS.max_array + 1).as_bytes()),
+        Err(Malformed)
+    );
+    assert!(parse(App::Sonarr, array(LIMITS.max_array).as_bytes()).is_ok());
     // The cap holds at its edge: a body of exactly `max_bytes` parses.
     let pad = LIMITS.max_bytes - r#"{"eventType":"Test","p":""}"#.len();
     let edge = format!("{{\"eventType\":\"Test\",\"p\":\"{}\"}}", "a".repeat(pad));
@@ -206,6 +220,12 @@ fn fields_are_capped_and_cleaned() {
     );
     let e = parse(App::Sonarr, body.as_bytes()).unwrap();
     assert_eq!(e.event_type, EventType::Grab);
+    // The first usable size wins: a repeat or a later non-number doesn't
+    // change it.
+    let body = format!(
+        r#"{{"eventType":"Grab","downloadId":"{BUNNY}","release":{{"size":500,"size":900,"size":"x"}}}}"#
+    );
+    assert_eq!(parse(App::Sonarr, body.as_bytes()).unwrap().size, Some(500));
     assert_eq!((e.title, e.size), (None, None));
     assert_eq!(e.ids, [("imdb", "tt0000042".to_owned())]);
     const { assert!(MAX_TITLE <= lodestar_sources::claims::MAX_NAME) };

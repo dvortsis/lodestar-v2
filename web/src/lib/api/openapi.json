@@ -21790,7 +21790,7 @@
           "refused": {
             "type": "integer",
             "format": "int64",
-            "description": "Calls dropped: over the rate, the source off, or the pipeline full.",
+            "description": "Authenticated calls not delivered: over the rate, the source off,\nthe pipeline full, a body over the cap (`413`), or one that\ncouldn't be read.",
             "minimum": 0
           },
           "token_set": {
