@@ -526,11 +526,13 @@ pub struct Ctx<'a> {
     pub quarantine_secs: i64,
     /// The sources whose every find is adult ([`crate::source_adult`]).
     pub adult: AdultSources,
-    /// The adult-enrichment sources (`Kind::Enrichment`, ENR-1b): only
-    /// these may attach an adult-enrichment section. Any other source's
-    /// section is dropped and its other claims take the usual path, so an
-    /// always-adult source can't use one to skip its mask. Empty (the
-    /// default): no source may.
+    /// The adult-enrichment sources: only the listed ones (the
+    /// `AdultEnrichSource` plugins the host runs, ENR-1c) may attach an
+    /// adult-enrichment section. Any other source's section is dropped and
+    /// its other claims take the usual path, so an always-adult source can't
+    /// use one to skip its mask. A section-only claim is a bare sighting,
+    /// except from an unlisted enrichment source, whose answers aren't
+    /// finds: refused. Empty (the default): no source may.
     pub enrichers: crate::adult_enrich::EnrichSources,
     /// The live filter: an enrichment match is classified under its
     /// classification rules read *after* the generation, never under the
@@ -606,6 +608,13 @@ pub fn ingest(
         if c.adult.is_some() && !ctx.enrichers.has(d.source) {
             c.adult = None;
             if c == Claims::default() {
+                // An enrichment source that isn't listed (the torrent cache,
+                // or a plugin the host forgot to list): its answers aren't
+                // finds, so nothing is stored and it gains no bit (#502).
+                if ctx.enrichers.of_kind(d.source) {
+                    UnverifiedStats::add(&stats.refused, 1);
+                    continue;
+                }
                 // Nothing else was claimed: what's left is a bare sighting
                 // of the key, stored and counted as one (ENR-1c). On a
                 // stored torrent the source gains its bit (so an
@@ -770,8 +779,10 @@ pub fn ingest(
     Ok(out)
 }
 
-/// Marks `ids` for the backfill, logging and counting a failure: the next
-/// rules change or start reaches them.
+/// Marks `ids` for the backfill, logging and counting a failure. When the
+/// mark fails, the rows keep their kind until the next rules or parser
+/// change re-marks them: the crash window ENR-1b already accepts for a
+/// refinement that isn't a safety decision.
 fn mark_for_backfill(store: &mut Store, ids: &[i64], stats: &UnverifiedStats) {
     if let Err(e) = store.mark_unenriched(ids) {
         enrich_failed(stats, &e);

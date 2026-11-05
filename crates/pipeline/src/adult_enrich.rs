@@ -87,12 +87,22 @@ const IDLE: Duration = Duration::from_secs(60);
 /// The pause between two background pages that held nothing adult.
 const SCAN_PAUSE: Duration = Duration::from_millis(50);
 
-/// The registered adult-enrichment sources (manifests with
-/// [`Kind::Enrichment`](lodestar_sources::Kind::Enrichment)), as a bitset
-/// over [`SourceId`]s. Only these may attach an adult-enrichment section to
-/// a claim (`unverified::Ctx::enrichers`, ENR-1b). Empty: none may.
+/// The registered adult-enrichment sources, as bitsets over [`SourceId`]s
+/// (the same layout as a torrent's `sources`).
+///
+/// - **Listed** ([`has`](Self::has)): the [`AdultEnrichSource`] plugins the
+///   host runs (`PipelineConfig::adult_enrichers`, ENR-1c). Only these may
+///   attach an adult-enrichment section to a claim
+///   (`unverified::Ctx::enrichers`). Empty: none may.
+/// - **Of the kind** ([`of_kind`](Self::of_kind)): every registered
+///   `Kind::Enrichment` source, listed or not (the torrent cache is one). A
+///   section-only claim from one that isn't listed is refused, never stored
+///   as a find, since its answers aren't finds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct EnrichSources(pub u64);
+pub struct EnrichSources {
+    pub listed: u64,
+    pub kind: u64,
+}
 
 impl EnrichSources {
     /// The adult-enrichment sources among registered `(id, manifest)`
@@ -111,23 +121,48 @@ impl EnrichSources {
         registered: impl IntoIterator<Item = (SourceId, &'a Manifest)>,
         listed: &[&str],
     ) -> EnrichSources {
-        EnrichSources(
-            registered
-                .into_iter()
-                .filter(|(_, m)| {
-                    debug_assert!(
-                        !(listed.contains(&m.id) && m.always_adult),
-                        "an adult-enrichment source can't be always adult: {}",
-                        m.id
-                    );
-                    listed.contains(&m.id) && admitted(m)
-                })
-                .fold(0, |bits, (id, _)| bits | source_bit(id)),
-        )
+        registered
+            .into_iter()
+            .filter(|(_, m)| {
+                debug_assert!(
+                    !(listed.contains(&m.id) && m.always_adult),
+                    "an adult-enrichment source can't be always adult: {}",
+                    m.id
+                );
+                m.is(lodestar_sources::Kind::Enrichment)
+            })
+            .fold(EnrichSources::default(), |set, (id, m)| EnrichSources {
+                listed: set.listed
+                    | if listed.contains(&m.id) && admitted(m) {
+                        source_bit(id)
+                    } else {
+                        0
+                    },
+                kind: set.kind | source_bit(id),
+            })
     }
 
+    /// `bits` listed (and so of the kind).
+    pub fn listed(bits: u64) -> EnrichSources {
+        EnrichSources {
+            listed: bits,
+            kind: bits,
+        }
+    }
+
+    /// A listed adult-enrichment source: it may attach sections.
     pub fn has(self, source: SourceId) -> bool {
-        self.0 & source_bit(source) != 0
+        self.listed & source_bit(source) != 0
+    }
+
+    /// A registered `Kind::Enrichment` source, listed or not.
+    pub fn of_kind(self, source: SourceId) -> bool {
+        self.kind & source_bit(source) != 0
+    }
+
+    /// No adult-enrichment source is listed.
+    pub fn is_empty(self) -> bool {
+        self.listed == 0
     }
 }
 
@@ -437,10 +472,10 @@ impl Interest {
     }
 }
 
-/// [`AdultEnrichSource::new`] refused a plugin whose manifest isn't an
+/// [`AdultEnrichSource::new`] refused a plugin: its manifest isn't an
 /// enrichment source, or says it's always adult.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AlwaysAdult;
+pub struct NotAdmitted;
 
 /// An adult-enrichment plugin, run as a source of its own: the pipeline
 /// registers, enables and stops it like any other, gives it its kit (the
@@ -479,11 +514,11 @@ impl AdultEnrichSource {
         adult: AdultSources,
         switches: Arc<dyn Switches>,
         config: Config,
-    ) -> Result<(AdultEnrichSource, Interest), AlwaysAdult> {
+    ) -> Result<(AdultEnrichSource, Interest), NotAdmitted> {
         // Its answers aren't finds, so an always-adult mask on it would
         // never apply (ENR-1c).
         if !admitted(plugin.manifest()) {
-            return Err(AlwaysAdult);
+            return Err(NotAdmitted);
         }
         let (tx, rx) = mpsc::channel(INTEREST_QUEUE);
         let policy = capped(*plugin.policy());
@@ -1036,7 +1071,7 @@ mod tests {
             name: Some("n".into()),
             ..Claims::default()
         };
-        let enr = EnrichSources(1 << source.get());
+        let enr = EnrichSources::listed(1 << source.get());
         let m = d(Found::key(key, STRATEGY).with_claims(section.clone()));
         assert!(is_match(&m, enr));
         // Another source sending a section is still harvested.
@@ -1083,6 +1118,7 @@ mod tests {
         let set = EnrichSources::of([(a, &m), (b, &feed), (c, &cache)], &["y", "x"]);
         assert!(set.has(a) && !set.has(b), "listed and of the kind");
         assert!(!set.has(c), "the kind alone isn't enough");
+        assert!(set.of_kind(a) && set.of_kind(c) && !set.of_kind(b));
         // Listing a feed doesn't make it one either.
         assert!(!EnrichSources::of([(b, &feed)], &["y"]).has(b));
         assert!(!EnrichSources::of([(a, &m)], &[]).has(a), "none listed");

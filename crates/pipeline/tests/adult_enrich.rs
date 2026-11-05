@@ -770,7 +770,7 @@ async fn the_plugin_stops_after_shutdown() {
 fn ingest(s: &mut Store, engine: &Engine, d: &Discovery) -> unverified::Ingested {
     // The discovery's source is an enrichment source, as the runtime's is.
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << d.source.get()),
+        enrichers: EnrichSources::listed(1 << d.source.get()),
         ..Ctx::default()
     };
     ingest_with(s, engine, ctx, d)
@@ -1237,7 +1237,7 @@ fn an_always_adult_source_cannot_skip_its_mask_with_a_section() {
     let engine = stand_in().current();
     let ctx = Ctx {
         adult: AdultSources(1 << sukebei.get()),
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         ..Ctx::default()
     };
     let claims = lodestar_sources::Claims {
@@ -1327,7 +1327,7 @@ fn a_failed_backfill_mark_is_counted() {
         .unwrap();
     let flag = std::sync::atomic::AtomicBool::new(false);
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         reenrich: Some(&flag),
         ..Ctx::default()
     };
@@ -1372,7 +1372,7 @@ fn a_rules_change_under_a_match_is_not_overwritten() {
         );
     });
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         filter: Some(&filter),
         ..Ctx::default()
     };
@@ -1403,7 +1403,7 @@ fn deferred_matches_raise_the_backfill_flag() {
     let engine = stand_in().current();
     let flag = std::sync::atomic::AtomicBool::new(false);
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         reenrich: Some(&flag),
         ..Ctx::default()
     };
@@ -1423,7 +1423,7 @@ fn deferred_matches_raise_the_backfill_flag() {
     let (id, key) = put(&mut s, "Garden Scene", dht, 0, true);
     let flag = std::sync::atomic::AtomicBool::new(false);
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         reenrich: Some(&flag),
         ..Ctx::default()
     };
@@ -1670,7 +1670,7 @@ fn an_always_adult_plugin_is_refused() {
         on(),
         interest_only(),
     );
-    assert_eq!(got.err(), Some(adult_enrich::AlwaysAdult));
+    assert_eq!(got.err(), Some(adult_enrich::NotAdmitted));
 }
 
 /// A section-only claim on a key an unverified item holds is that item's
@@ -1683,7 +1683,7 @@ fn a_section_only_claim_on_an_unverified_item_is_its_sighting() {
     let feed = s.register_source("feed", "1", 0).unwrap();
     let engine = stand_in().current();
     let ctx = Ctx {
-        enrichers: EnrichSources(1 << enr.get()),
+        enrichers: EnrichSources::listed(1 << enr.get()),
         ..Ctx::default()
     };
     let key = [5; 20];
@@ -1723,5 +1723,114 @@ fn a_section_only_claim_on_an_unverified_item_is_its_sighting() {
         claims.name.as_deref(),
         Some("Garden Walk"),
         "its own claims stay"
+    );
+}
+
+/// An enrichment source that isn't listed (the torrent cache, or a plugin
+/// the host forgot to list) has its section-only answers refused: nothing
+/// stored, and no bit on the torrent (#502 review).
+#[test]
+fn an_unlisted_enrichment_sources_answer_is_refused() {
+    let (mut s, dht, enr) = store();
+    let (id, key) = put(&mut s, "Garden Scene", dht, 0, true);
+    let engine = stand_in().current();
+    // Of the kind, not listed.
+    let ctx = Ctx {
+        enrichers: EnrichSources {
+            listed: 0,
+            kind: 1 << enr.get(),
+        },
+        ..Ctx::default()
+    };
+    let stats = UnverifiedStats::default();
+    let d = matched(enr, key, section(Some(Kind2::Scene), "Garden"));
+    let done = unverified::ingest(
+        &mut s,
+        &engine,
+        ctx,
+        std::slice::from_ref(&d),
+        &stats,
+        T,
+        &|_, _| {},
+    )
+    .unwrap();
+    assert!(done.matched.is_empty() && done.touched.is_empty() && done.adult.is_empty());
+    assert_eq!(stats.refused.load(Ordering::Relaxed), 1);
+    assert!(s.torrent_claims(id).unwrap().is_empty());
+    let row = s.torrent(id).unwrap().unwrap();
+    assert_eq!(row.sources & (1 << enr.get()), 0, "no bit for an answer");
+}
+
+/// Through a running pipeline with the default config: a source of the
+/// torrent cache's kind that isn't listed can't attach a section, and its
+/// section-only claim leaves the stored torrent untouched (#502 review).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_torrent_caches_kind_cannot_attach_a_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let key = {
+        let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+        let dht = s.register_source("dht", "1", 0).unwrap();
+        put(&mut s, "Garden Scene", dht, 0, true).1
+    };
+    let (cache, cache_tx) = scripted("test-cache", &[Kind::Enrichment]);
+    let (feed, feed_tx) = scripted("test-feed", &[Kind::Discovery]);
+    let config = lodestar_pipeline::PipelineConfig {
+        flush_every: Duration::from_millis(100),
+        filter: stand_in(),
+        ..lodestar_pipeline::PipelineConfig::default()
+    };
+    let pipeline = lodestar_pipeline::Pipeline::start(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![cache, feed],
+    )
+    .await
+    .unwrap();
+    let cache_id = pipeline
+        .sources()
+        .iter()
+        .find(|s| s.plugin == "test-cache")
+        .unwrap()
+        .id;
+    let claims = lodestar_sources::Claims {
+        adult: Some(section(Some(Kind2::Scene), "Garden")),
+        ..Default::default()
+    };
+    cache_tx
+        .send(lodestar_sources::Found::key(key, STRATEGY).with_claims(claims))
+        .await
+        .unwrap();
+    // A feed's claim after it, through the same writer: once that's
+    // stored, the cache's has been judged.
+    let named = lodestar_sources::Claims {
+        name: Some("Other Release 2024".into()),
+        ..Default::default()
+    };
+    let other = InfoHash([7; 20]);
+    feed_tx
+        .send(lodestar_sources::Found::key(other, 0).with_claims(named))
+        .await
+        .unwrap();
+    let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    while reader.unverified(Net::Bt, &other.0).unwrap().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the feed"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&key).unwrap().unwrap();
+    assert!(
+        store.torrent_claims(id).unwrap().is_empty(),
+        "no section stored"
+    );
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(
+        row.sources & (1 << cache_id.get()),
+        0,
+        "no bit for the cache"
     );
 }
