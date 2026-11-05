@@ -4848,7 +4848,8 @@
     "owner flag sent 18:58Z: LEGAL-2 hold (#499 merged e163e323).",
     "owner flag sent 19:18Z: ENR-7 (#504 merged af4e9f7d). ENR-8 (drawer section, Sonnet) is now ready.",
     "owner flag sent 19:21Z: RP-4 SP-3 refinements (#495 merged 85179f32).",
-    "owner-flag §2.26 (ENR-8): Detail drawer limit 28,000 -> 28,064 B and /t/[hash] 21,840 -> 21,904 B for the one dynamic import of the adult-enrichment section (+53/+54 B measured); the section itself is an on-demand chunk (1,530 B, limit 1,700)."
+    "owner-flag §2.26 (ENR-8): Detail drawer limit 28,000 -> 28,064 B and /t/[hash] 21,840 -> 21,904 B for the one dynamic import of the adult-enrichment section (+53/+54 B measured); the section itself is an on-demand chunk (1,530 B, limit 1,700).",
+    "Follow-up (from #507 review P3): a future always-adult source outside sources-plugins (e.g. in crates/pipeline) would be masked by the pipeline but not on import; add a test that every plugin services.rs registers is in the catalogue when such a source appears."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
