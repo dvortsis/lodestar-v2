@@ -387,7 +387,7 @@ describe('NoticeGate', () => {
 		render(NoticeGate, { next: '/' });
 		await screen.findByRole('region', { name: 'Legal Notice' });
 		await fireEvent.click(accept());
-		expect(await screen.findByText(/The Legal Notice changed/)).toBeTruthy();
+		expect(await screen.findByText(/The Legal Notice has changed again/)).toBeTruthy();
 		expect(await screen.findByText('Version three.')).toBeTruthy();
 		await fireEvent.click(accept());
 		await waitFor(() => expect(nav.toNext).toHaveBeenCalledOnce());

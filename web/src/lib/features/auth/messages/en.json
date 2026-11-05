@@ -57,5 +57,9 @@
 	"auth_notice_lead": "The Legal Notice has changed since you last read it. Read it, then accept it to continue.",
 	"auth_notice_accept": "I have read it, continue",
 	"auth_error_notice_unchecked": "Confirm that you have read the Legal Notice to continue.",
-	"auth_error_notice_changed": "The Legal Notice changed while this page was open. Read the new version, then confirm again."
+	"auth_error_notice_changed": "The Legal Notice changed while this page was open. Read the new version, then confirm again.",
+	"auth_about_legal": "Legal",
+	"auth_about_legal_lead": "The Legal Notice for this version of Lodestar: what Lodestar does on your network, what is yours to decide, and what its makers do and don't promise.",
+	"auth_notice_gate_changed": "The Legal Notice has changed again. Read the new version, then accept it.",
+	"auth_about_title": "About"
 }

@@ -17,8 +17,6 @@ export function failureMessage(f: Failure): string {
 					return m.auth_error_mismatch();
 				case 'required':
 					return m.auth_error_required();
-				case 'notice_unchecked':
-					return m.auth_error_notice_unchecked();
 				default:
 					return m.auth_error_too_short({ min: String(MIN_PASSWORD_CHARS) });
 			}
@@ -32,8 +30,6 @@ export function failureMessage(f: Failure): string {
 			return m.auth_error_network();
 		case 'rate_limited':
 			return m.auth_error_rate_limited();
-		case 'notice_required':
-			return m.auth_error_notice_changed();
 		default:
 			return m.auth_error_server();
 	}

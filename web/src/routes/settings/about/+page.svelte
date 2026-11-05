@@ -3,6 +3,6 @@
 	import { m } from '$lib/paraglide/messages.js';
 </script>
 
-<svelte:head><title>{m.shell_more_about()} · Lodestar</title></svelte:head>
+<svelte:head><title>{m.auth_about_title()} · Lodestar</title></svelte:head>
 
 <AboutPage />

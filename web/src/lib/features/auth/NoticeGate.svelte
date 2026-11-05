@@ -39,7 +39,7 @@
 	<NoticeBox bind:notice />
 	<FormAlert {form} />
 	{#if form.state.name === 'error' && form.state.failure.kind === 'notice_required'}
-		<p class="text-small text-base-content">{m.auth_error_notice_changed()}</p>
+		<p class="text-small text-base-content">{m.auth_notice_gate_changed()}</p>
 	{/if}
 	<Button
 		type="submit"

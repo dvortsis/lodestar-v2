@@ -56,6 +56,14 @@
 			? failureMessage(form.state.failure)
 			: undefined;
 	const locked = $derived(form.state.name === 'locked');
+	// The notice's two messages live here, not in errors.ts, which other routes load.
+	const noticeError = $derived(
+		form.state.name !== 'error' || form.state.failure.field !== 'notice'
+			? undefined
+			: form.state.failure.kind === 'invalid'
+				? m.auth_error_notice_unchecked()
+				: m.auth_error_notice_changed()
+	);
 
 	async function focus(name: FieldName, select = false) {
 		await tick();
@@ -209,18 +217,18 @@
 						name="notice"
 						label={m.auth_notice_confirm()}
 						required
-						aria-invalid={errorFor('notice') ? true : undefined}
-						aria-describedby={errorFor('notice') ? 'notice-error' : undefined}
+						aria-invalid={noticeError ? true : undefined}
+						aria-describedby={noticeError ? 'notice-error' : undefined}
 						onchange={() => form.edit()}
 					/>
-					{#if errorFor('notice')}
+					{#if noticeError}
 						<p
 							id="notice-error"
 							class="flex items-start gap-1 text-small text-base-content"
 							data-testid="field-error"
 						>
 							<IconWarning class="mt-0.5 size-4 shrink-0 text-error" aria-hidden="true" />
-							<span>{errorFor('notice')}</span>
+							<span>{noticeError}</span>
 						</p>
 					{/if}
 				</div>

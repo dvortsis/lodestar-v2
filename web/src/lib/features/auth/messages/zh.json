@@ -18,5 +18,9 @@
 	"auth_notice_lead": "自你上次阅读以来，法律声明已更新。请阅读并接受后继续。",
 	"auth_notice_accept": "我已阅读，继续",
 	"auth_error_notice_unchecked": "请确认你已阅读法律声明后继续。",
-	"auth_error_notice_changed": "此页面打开期间法律声明已更新。请阅读新版本，然后再次确认。"
+	"auth_error_notice_changed": "此页面打开期间法律声明已更新。请阅读新版本，然后再次确认。",
+	"auth_about_legal": "法律",
+	"auth_about_legal_lead": "此版本 Lodestar 的法律声明：Lodestar 在你的网络上做什么，哪些事情由你决定，以及开发者承诺与不承诺的内容。",
+	"auth_notice_gate_changed": "法律声明再次更新。请阅读新版本，然后接受。",
+	"auth_about_title": "关于"
 }

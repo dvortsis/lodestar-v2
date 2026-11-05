@@ -12,10 +12,9 @@ test('keyboard: first-run setup from token to /welcome', async ({ page, go, mock
 	await kbd.tabTo(page.getByLabel('Setup token'));
 	await page.keyboard.type('ab12cd34ef567890');
 	await kbd.press('Enter');
-	// The notice takes focus so it can be scrolled; the checkbox is next.
+	// The notice takes focus so it can be scrolled; its links, then the checkbox, follow.
 	await expect(page.getByRole('region', { name: 'Legal Notice' })).toBeFocused();
-	await kbd.press('Tab');
-	await expect(page.getByLabel('I have read the Legal Notice')).toBeFocused();
+	await kbd.tabTo(page.getByLabel('I have read the Legal Notice'), 20);
 	await kbd.press('Space');
 	await kbd.tabTo(page.getByRole('button', { name: 'Continue' }));
 	await kbd.press('Enter');

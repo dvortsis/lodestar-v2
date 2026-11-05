@@ -14,7 +14,13 @@
 
 	let { text, label, scroll = true }: Props = $props();
 	const blocks = $derived(parseBlocks(text));
+	const LINK = 'ls-focus break-all text-primary underline';
 </script>
+
+{#snippet link(href: string, text: string)}
+	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external https only (markdown.ts) -->
+	<a class={LINK} {href} target="_blank" rel="noopener noreferrer">{text}</a>
+{/snippet}
 
 {#snippet inlines(nodes: Inline[])}
 	{#each nodes as n, i (i)}
@@ -22,16 +28,12 @@
 				>{@render inlines(n.c)}</strong
 			>{:else if n.t === 'em'}<em>{@render inlines(n.c)}</em>{:else if n.t === 'code'}<code
 				class="font-mono">{n.v}</code
-			>{:else}<a
-				class="ls-focus break-all text-primary underline"
-				href={n.href}
-				target="_blank"
-				rel="noopener noreferrer">{n.v}</a
-			>{/if}
+			>{:else}{@render link(n.href, n.v)}{/if}
 	{/each}
 {/snippet}
 
-<!-- svelte-ignore a11y_no_noninteractive_tabindex: a scrolling region must be reachable by keyboard -->
+<!-- The region takes focus so a keyboard user can scroll it (axe: scrollable-region-focusable). -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <section
 	aria-label={label}
 	tabindex={scroll ? 0 : undefined}
