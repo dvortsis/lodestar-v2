@@ -418,20 +418,40 @@ impl Writer {
     }
 
     /// Whether an always-adult source found what `c` commits, besides the
-    /// sources its worker saw: the lease's source, or any finder of an
-    /// unverified item under one of its swarm hashes (the one promotion
-    /// stores it as). Costs nothing while no such source is registered.
+    /// sources its worker saw: the lease's, a stored torrent's under one of
+    /// its swarm hashes (a partial import being upgraded), or any finder of
+    /// an unverified item under one (the one promotion stores it as).
+    /// Costs nothing while no such source is registered.
     fn source_adult(&self, c: &Committing, unverified: bool) -> bool {
         if self.adult.is_empty() {
             return false;
         }
         let r = &c.results;
-        if self.adult.any(r.sources | bit(c.lease.source)) {
+        if self
+            .adult
+            .any(r.sources | c.lease.sources | bit(c.lease.source))
+        {
             return true;
         }
-        let Some(store) = self.store.as_ref().filter(|_| unverified) else {
+        let Some(store) = self.store.as_ref() else {
             return false;
         };
+        // Already stored and found by one before: a refetch of a partial
+        // import (its lease is the peer finder's) upgrades that row, so
+        // the row's own finders count too. A read error counts as adult.
+        let stored = r.torrent.swarm_hashes().any(|h| match store.find(&h) {
+            Ok(None) => false,
+            Ok(Some(id)) => store
+                .torrent(id)
+                .map_or(true, |t| t.is_some_and(|t| self.adult.any(t.sources))),
+            Err(_) => true,
+        });
+        if stored {
+            return true;
+        }
+        if !unverified {
+            return false;
+        }
         r.torrent.swarm_hashes().any(|h| {
             // A read error counts as adult: stricter, and the commit's
             // own reads will fail the same way.
@@ -1855,6 +1875,57 @@ mod tests {
         };
         r.token = token;
         r
+    }
+
+    /// A refetch the peer finder leased (a partial import's upgrade) of a
+    /// torrent an always-adult source found before counts as that source's:
+    /// the stored row's finders are read, not only the lease's.
+    #[test]
+    fn a_stored_rows_always_adult_finder_counts_at_commit() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 1).unwrap();
+        let adult = store.register_source("adult", "1", 1).unwrap();
+        let r = results();
+        let lease = Lease {
+            holder: WorkerId::LOCAL,
+            token: Token(1),
+            cohort: 0,
+            source: dht,
+            sources: bit(dht),
+            strategy: 0,
+            discovered_at: 0,
+        };
+        let mut w = writer(store, coordinator, gate);
+        w.adult = AdultSources(bit(adult));
+        let c = Committing {
+            results: r,
+            lease,
+            verdict: None,
+            shadow: Vec::new(),
+            sealed: None,
+        };
+        // Not stored yet, and only the DHT found it: not adult.
+        assert!(!w.source_adult(&c, false));
+        let store = w.store.as_mut().unwrap();
+        store
+            .write(&WriteBatch {
+                prepared: &[PreparedTorrent {
+                    torrent: &c.results.torrent,
+                    discovered_at: 0,
+                    metadata_at: 0,
+                    extra_flags: 0,
+                    source: adult,
+                    verified: true,
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+        assert!(w.source_adult(&c, false), "the stored row's finder");
+        w.adult = AdultSources::default();
+        assert!(!w.source_adult(&c, false), "none registered");
     }
 
     /// The gate at the writer's commit: new once, then already stored; a
