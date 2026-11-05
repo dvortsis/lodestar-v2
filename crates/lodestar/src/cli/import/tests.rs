@@ -606,3 +606,55 @@ async fn the_cli_and_the_server_build_the_same_filter() {
         }
     }
 }
+
+/// RP-DEF: a store first created by `lodestar import` is judged with every
+/// pack on, and served that way: the server's start finds it seeded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_store_created_by_import_is_seeded_fresh_and_served_with_packs_on() {
+    use lodestar_filter::PackRule;
+    use lodestar_filter::packs::upgrade::{DEFAULTS_KEY, FRESH_KEY};
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 3);
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    // No store yet: the import creates it.
+    let config = Config {
+        data_dir,
+        ..Config::default()
+    };
+    assert!(!config.db_path().exists());
+    let (engine, config) = {
+        let config = config.clone();
+        let args = magnetico(&src);
+        tokio::task::spawn_blocking(move || {
+            block_on(start(&config, &args, None, true, None)).unwrap();
+            let mut store = Store::open(config.db_path(), config.store_config()).unwrap();
+            let (engine, _) = filter(&config, &mut store).unwrap();
+            (engine, config)
+        })
+        .await
+        .unwrap()
+    };
+    assert!(PackRule::ALL.iter().all(|r| engine.packs.is_on(*r)));
+    let handle = Arc::new(lodestar_pipeline::default_filter());
+    let pipeline = lodestar_pipeline::Pipeline::start_with(
+        lodestar_pipeline::PipelineConfig {
+            filter: handle.clone(),
+            ..Default::default()
+        },
+        Store::open(config.db_path(), config.store_config()).unwrap(),
+        Vec::new(),
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    let e = handle.current();
+    for r in PackRule::ALL {
+        assert!(e.packs.is_on(r), "{}", r.id());
+        assert!(!e.pack_versions.state(r).pending(), "{}", r.id());
+    }
+    let store = pipeline.shutdown().await.unwrap();
+    assert_eq!(store.setting_text(FRESH_KEY).unwrap(), None);
+    assert_eq!(store.setting_text(DEFAULTS_KEY).unwrap().as_deref(), Some("1"));
+}

@@ -40,8 +40,11 @@ afterEach(() => {
 
 describe("rule-pack step through the flows' door", () => {
 	it('loads the change flow through the door on Continue, not before', async () => {
+		// An existing install with every pack off: checking them turns them on.
+		server.existingInstall();
 		render(WizardPage);
-		await screen.findByTestId('wizard-pack-malware');
+		for (const id of PACK_IDS)
+			await fireEvent.click(await screen.findByTestId(`wizard-pack-${id}`));
 		expect(load).not.toHaveBeenCalled();
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await screen.findByRole('heading', { level: 2, name: 'Blocklists' });

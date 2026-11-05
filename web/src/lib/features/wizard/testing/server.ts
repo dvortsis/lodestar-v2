@@ -2,10 +2,12 @@
 // check, behind one stubbed `fetch`.
 import { fakeServer } from '../../settings/form/testing/fake-server';
 import type { components } from '$lib/api/schema';
-import { applied, finished, strengthening } from '../../filters/flows/testing/fixtures';
+import { applied, finished, strengthening, weakening } from '../../filters/flows/testing/fixtures';
 import { WIZARD_INDEX, wizardValues } from './fixtures';
 
 export const PACK_IDS = ['malware', 'lures', 'fakes', 'spam', 'scams'];
+/** The admin password the fake server accepts for a weakening change. */
+export const PASSWORD = 'correct horse';
 type Assessment = ReturnType<typeof strengthening>;
 
 export type NetworkCheck = components['schemas']['NetworkCheck'];
@@ -39,13 +41,20 @@ export function wizardServer(values = wizardValues()) {
 	const server = fakeServer(values);
 	let check: NetworkCheck | ((method: string) => Response | NetworkCheck) = network();
 	const netCalls: string[] = [];
-	// The filters API the pack step drives: the overview, a preview job and apply.
-	const packs = PACK_IDS.map((id) => ({ id, on: false, rules: [] as unknown[] }));
+	// The filters API the pack step drives: the overview, a preview job and apply. Packs start on,
+	// as on a fresh data directory (RP-DEF); `existingInstall()` turns them all off. Turning one on
+	// previews as `assessment`; turning one off previews as `offAssessment` (weakening, password).
+	const packs = PACK_IDS.map((id) => ({ id, on: true, rules: [] as unknown[] }));
 	const filterCalls: { method: string; path: string; body: unknown }[] = [];
 	let failFilters = false;
 	let failIndex = false;
 	let assessment: Assessment = strengthening();
-	let applyReply: ((body: { change: { id: string } }) => Response) | undefined;
+	let offAssessment: Assessment = weakening({
+		warning: 'Turning off this pack shows what it hid.'
+	});
+	let previewing: { on: boolean } | undefined;
+	let applyReply:
+		((body: { change: { id: string; on: boolean }; password?: string }) => Response) | undefined;
 	const fetch = async (url: string, init: RequestInit = {}) => {
 		const method = (init.method ?? 'GET').toUpperCase();
 		const path = String(url).replace(/^\/api\/v1/, '');
@@ -67,14 +76,20 @@ export function wizardServer(values = wizardValues()) {
 				return failFilters
 					? json(500, { error: { code: 'internal', message: 'x' } })
 					: json(200, { packs: structuredClone(packs) });
-			if (method === 'POST' && path === '/filters/preview/jobs') return json(200, { job: 1 });
+			if (method === 'POST' && path === '/filters/preview/jobs') {
+				previewing = { on: body.change.on !== false };
+				return json(200, { job: 1 });
+			}
 			if (method === 'GET' && path.startsWith('/filters/preview/jobs/'))
-				return json(200, finished(assessment));
+				return json(200, finished(previewing?.on === false ? offAssessment : assessment));
 			if (method === 'POST' && path === '/filters/apply') {
 				if (applyReply) return applyReply(body);
+				const shown = body.change.on === false ? offAssessment : assessment;
+				if (shown.confirm && body.password !== PASSWORD)
+					return json(401, { error: { code: 'bad_password', message: 'Wrong password.' } });
 				const pack = packs.find((p) => p.id === body.change.id);
-				if (pack) pack.on = true;
-				return json(200, applied(assessment));
+				if (pack) pack.on = body.change.on !== false;
+				return json(200, applied(shown));
 			}
 		}
 		return server.fetch(url, init);
@@ -93,6 +108,13 @@ export function wizardServer(values = wizardValues()) {
 		},
 		setAssessment(next: Assessment) {
 			assessment = next;
+		},
+		setOffAssessment(next: Assessment) {
+			offAssessment = next;
+		},
+		/** An install from before RP-DEF: every pack off. */
+		existingInstall() {
+			for (const p of packs) p.on = false;
 		},
 		onApply(f: typeof applyReply) {
 			applyReply = f;

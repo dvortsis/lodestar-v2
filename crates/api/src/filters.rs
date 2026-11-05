@@ -3394,6 +3394,66 @@ mod tests {
         Arc::new(Manifest::new(entries).unwrap())
     }
 
+    /// A store from before RP-DEF: its creating migration wrote no fresh
+    /// marker.
+    fn old_store() -> Store {
+        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        store
+            .update_settings_text(&[], &[pack_upgrade::FRESH_KEY])
+            .unwrap();
+        store
+    }
+
+    fn applied_record(api: &FiltersApi) -> pack_upgrade::Applied {
+        let rows = version_rows(api);
+        assert_eq!(rows[0], rows[1]);
+        pack_upgrade::Applied::decode(rows[0].as_deref().unwrap()).unwrap()
+    }
+
+    /// RP-DEF: packs that are off on an existing install are offered, not
+    /// flipped; turning one on through the preview and apply records its
+    /// rules at their current versions, so nothing of it is pending.
+    #[test]
+    fn turning_a_pack_on_through_preview_and_apply_records_its_current_versions() {
+        let api = test_api(old_store());
+        api.engine.update_engine(|e| e.manifest = bumped());
+        api.start_packs(500).unwrap();
+        let e = api.engine.current();
+        assert!(!e.packs.on.contains(&Pack::Malware), "not flipped");
+        assert_eq!(applied_record(&api).get(PackRule::Mw2), Some(1));
+        let change = pack("malware", true);
+        let preview = api.assess(&change, 1_000).unwrap();
+        assert!(!preview.weakening);
+        api.apply(&change, preview, 1_000).unwrap();
+        let e = api.engine.current();
+        assert!(e.packs.on.contains(&Pack::Malware));
+        let rec = applied_record(&api);
+        for r in PackRule::ALL.into_iter().filter(|r| r.pack() == Pack::Malware) {
+            let current = e.manifest.entry(r).current().version;
+            assert_eq!(rec.get(r), Some(current), "{}", r.id());
+            assert!(!e.pack_versions.state(r).pending(), "{}", r.id());
+        }
+        assert_eq!(rec.get(PackRule::Mw2), Some(2));
+        // The other packs stay off, with their explicit rows.
+        let set = api.store().rule_set().unwrap();
+        assert!(set.pack_switches.contains(&("spam".into(), false)));
+    }
+
+    /// RP-DEF: the API's seeding fallback seeds a fresh store as the
+    /// pipeline's start does: every pack on at current versions.
+    #[test]
+    fn the_seeding_fallback_seeds_a_fresh_store_with_every_pack_on() {
+        let api = test_api(Store::open_in_memory(Default::default()).unwrap());
+        api.engine.update_engine(|e| e.manifest = bumped());
+        api.start_packs(500).unwrap();
+        let e = api.engine.current();
+        assert!(Pack::ALL.iter().all(|p| e.packs.on.contains(p)));
+        assert_eq!(applied_record(&api).get(PackRule::Mw2), Some(2));
+        assert!(!e.pack_versions.state(PackRule::Mw2).pending());
+        // Turning a pack off is weakening, as any other.
+        assert!(api.assess(&pack("spam", false), 1_000).unwrap().weakening);
+    }
+
     /// With a version really pending: a wizard re-run, Undo and redo leave
     /// it pending; acceptance switches it, and neither it nor the
     /// stand-in re-judge after it releases a hold the new version
