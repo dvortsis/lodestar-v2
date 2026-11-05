@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T18:16Z",
+  "updated_at": "2026-11-05T18:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3128,10 +3128,14 @@
       "done": "2026-11-05T15:40Z"
     },
     "X-claim-trackers": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhn8zKGKAakVk6KjLDoV",
       "since": "2026-11-05T13:13Z",
-      "brief": "briefs/X-claim-trackers.md"
+      "brief": "briefs/X-claim-trackers.md",
+      "pr": 500,
+      "merge": "c98be2d6",
+      "archived": true,
+      "done": "2026-11-05T18:15Z"
     },
     "X-flake-subs-stall": {
       "status": "merged",
@@ -4789,7 +4793,8 @@
     "Host-wiring note (from #502 delta review): stats.done grows on every 60 s retry of a held interest (~1,440 per held item per spent day); fix the metric when wiring.",
     "owner-flag §2.19 (ENR-1c #502): user-interest enrichment lookups count against the 5,000/day cap (owner Q15 restored; ENR-1 had exempted them); an unlisted enrichment plugin's answers are refused.",
     "owner flag sent 18:12Z: X-source-adult-2 gap 3 (#494 merged d3906e36). CI note: GitHub left finished jobs shown in_progress (ubuntu test, e2e-ok); verified via job steps before merge.",
-    "CI note 18:16Z: GitHub left finished jobs shown in_progress/queued on several heads (e2e-ok aggregate on #501 never got a runner; all its E2E jobs passed). Runner verified job steps before merging #494, #501."
+    "CI note 18:16Z: GitHub left finished jobs shown in_progress/queued on several heads (e2e-ok aggregate on #501 never got a runner; all its E2E jobs passed). Runner verified job steps before merging #494, #501.",
+    "owner flag sent 18:15Z: X-claim-trackers tightenings (#500 merged c98be2d6). Canonical tracker store follow-up (store_claims via public_tracker_url) is now unblocked; held by the 8-slot drain."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5450,16 +5455,8 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T18:16Z",
+    "updated": "2026-11-05T18:15Z",
     "items": [
-      {
-        "slot": 1,
-        "slice": "X-claim-trackers",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Security: one guard so tracker addresses from claims and caches can never point at your own network",
-        "since": "2026-11-05T13:13Z"
-      },
       {
         "slot": 2,
         "slice": "ENR-4",
