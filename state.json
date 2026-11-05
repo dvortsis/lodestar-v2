@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T10:20Z",
+  "updated_at": "2026-11-05T10:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4598,7 +4598,8 @@
     "ENR-1b also (runner call, \u00a72.33, stricter than Q2, flag to owner): the Display/Name query form returns NoQuery when the torrent name alone is ambiguous or uninformative (named.title.ambiguous or is_uninformative), e.g. New folder; it can never match, costs budget, and tells the service an adult item was viewed. Plus: a test that runs the backfill after a Pending refusal and asserts the item is eligible again; decisions note that a single-file torrent name is the file name (allowed, it is the display name). The runtime is inert until host wiring, so deferring is safe.",
     "X-ci-disk (#482) merged: test-job target 19G vs 41G+ before. Not yet proven on a 72G runner; the new disk step prints df every run. If a 72G runner still runs short, remove more preinstalled toolchains. Nits: continue-on-error on the diagnostic step; !cancelled() instead of always().",
     "Owner flag (\u00a72.26) from LEGAL-1 (#472) after main merge: CSS budget 19.65 \u2192 19.72 kB (under the \u00a710.1 20 kB cap), /t/[hash] 21,776 \u2192 21,840 B. The legal notice dropped the unauthorised-copy (planned) marker and its status line, still v3.",
-    "After #479 merges: split a sync verify_body out of TorrentCache::ask (sources-plugins/src/torrent_cache.rs) so the torrent_cache fuzz target calls the real reply path and fuzzes Verified::claims (X-fuzz-1105, #484 decisions file). Next fuzz campaign: give more time to metainfo (~1k exec/s), rss, release, query and tokenizer."
+    "After #479 merges: split a sync verify_body out of TorrentCache::ask (sources-plugins/src/torrent_cache.rs) so the torrent_cache fuzz target calls the real reply path and fuzzes Verified::claims (X-fuzz-1105, #484 decisions file). Next fuzz campaign: give more time to metainfo (~1k exec/s), rss, release, query and tokenizer.",
+    "owner-flag \u00a72.19 (RP-1b #485): MW-2@2 narrows a malware rule; residual: one .exe in a Music torrent with two samples in a sample folder passes MW-2, only MW-1 can hold it. Flag with the PR merge."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
