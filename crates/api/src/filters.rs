@@ -3312,7 +3312,7 @@ mod tests {
     /// leaving the versions.
     #[test]
     fn pack_versions_are_seeded_once_and_undo_leaves_them() {
-        let mut store = Store::open_in_memory(Default::default()).unwrap();
+        let mut store = old_store();
         // As before RP-0: scams on, SC-1 switched off.
         store.set_pack_switch("scams", true).unwrap();
         store.set_pack_switch("SC-1", false).unwrap();
@@ -3428,7 +3428,10 @@ mod tests {
         let e = api.engine.current();
         assert!(e.packs.on.contains(&Pack::Malware));
         let rec = applied_record(&api);
-        for r in PackRule::ALL.into_iter().filter(|r| r.pack() == Pack::Malware) {
+        for r in PackRule::ALL
+            .into_iter()
+            .filter(|r| r.pack() == Pack::Malware)
+        {
             let current = e.manifest.entry(r).current().version;
             assert_eq!(rec.get(r), Some(current), "{}", r.id());
             assert!(!e.pack_versions.state(r).pending(), "{}", r.id());

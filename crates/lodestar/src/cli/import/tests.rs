@@ -607,23 +607,21 @@ async fn the_cli_and_the_server_build_the_same_filter() {
     }
 }
 
-/// RP-DEF: a store first created by `lodestar import` is judged with every
-/// pack on, and served that way: the server's start finds it seeded.
+/// RP-DEF: a store that was set up but never served (the import needs
+/// one; nothing has seeded it) is judged by the import with every pack
+/// on, and served that way: the server's start finds it seeded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_store_created_by_import_is_seeded_fresh_and_served_with_packs_on() {
+async fn a_store_imported_into_before_serving_is_seeded_fresh_and_served_with_packs_on() {
     use lodestar_filter::PackRule;
     use lodestar_filter::packs::upgrade::{DEFAULTS_KEY, FRESH_KEY};
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("database.sqlite3");
     magnetico_db(&src, 3);
-    let data_dir = dir.path().join("data");
-    std::fs::create_dir_all(&data_dir).unwrap();
-    // No store yet: the import creates it.
-    let config = Config {
-        data_dir,
-        ..Config::default()
-    };
-    assert!(!config.db_path().exists());
+    let config = data(&dir.path().join("data"));
+    {
+        let store = Store::open(config.db_path(), config.store_config()).unwrap();
+        assert_eq!(store.setting_text(FRESH_KEY).unwrap().as_deref(), Some("1"));
+    }
     let (engine, config) = {
         let config = config.clone();
         let args = magnetico(&src);
@@ -656,5 +654,8 @@ async fn a_store_created_by_import_is_seeded_fresh_and_served_with_packs_on() {
     }
     let store = pipeline.shutdown().await.unwrap();
     assert_eq!(store.setting_text(FRESH_KEY).unwrap(), None);
-    assert_eq!(store.setting_text(DEFAULTS_KEY).unwrap().as_deref(), Some("1"));
+    assert_eq!(
+        store.setting_text(DEFAULTS_KEY).unwrap().as_deref(),
+        Some("1")
+    );
 }

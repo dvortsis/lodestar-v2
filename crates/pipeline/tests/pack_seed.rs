@@ -88,9 +88,18 @@ async fn a_fresh_store_has_every_pack_on_at_the_first_filter_read() {
     every_pack_on(&filter.current());
     let store = pipeline.shutdown().await.unwrap();
     let rec = store.setting_text(APPLIED_KEYS[0]).unwrap().unwrap();
-    assert_eq!(Applied::decode(&rec).unwrap(), current_record(&Manifest::builtin()));
-    assert_eq!(store.setting_text(SEEDED_KEY).unwrap().as_deref(), Some("1"));
-    assert_eq!(store.setting_text(DEFAULTS_KEY).unwrap().as_deref(), Some("1"));
+    assert_eq!(
+        Applied::decode(&rec).unwrap(),
+        current_record(&Manifest::builtin())
+    );
+    assert_eq!(
+        store.setting_text(SEEDED_KEY).unwrap().as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        store.setting_text(DEFAULTS_KEY).unwrap().as_deref(),
+        Some("1")
+    );
     assert_eq!(store.setting_text(FRESH_KEY).unwrap(), None);
     // A pack turned off stays off on the next start.
     let mut store = store;
@@ -141,5 +150,8 @@ async fn an_upgraded_store_keeps_every_packs_state() {
     for p in ["lures", "fakes", "spam", "scams"] {
         assert!(set.pack_switches.contains(&(p.into(), false)), "{p}");
     }
-    assert_eq!(store.setting_text(DEFAULTS_KEY).unwrap().as_deref(), Some("1"));
+    assert_eq!(
+        store.setting_text(DEFAULTS_KEY).unwrap().as_deref(),
+        Some("1")
+    );
 }
