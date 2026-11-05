@@ -973,34 +973,81 @@ pub fn scrub_text(text: &str) -> String {
 /// wide rules hide, and then what the credential rules find in their
 /// output, hidden in it too.
 fn scrub_text_slow(text: &str) -> String {
-    let wide = wide::scrub_text(text);
+    let (wide, loose) = wide::scrub_text_and_loose(text);
     // A credential's name the first pass leaves at a URL's end, once its
     // query goes (`https://h/pass?x": "<s>"` reads `…/pass": "<s>"`), takes
     // the value after it: the credential rules read the wide output again
     // (X-log-url-redact-4). Each `only_more` only hides more of its first
-    // argument, so the two together hide all that one does.
-    only_more(
+    // argument, so together they hide all that the first one does.
+    let mut out = only_more(
         &only_more(&scrub_text_floor(text), &wide),
-        &wide::redact_secrets(&ascii_separators(&wide)),
-    )
+        &wide::redact_secrets(&ascii_separators(&wide, false)),
+    );
+    // The other look-alikes (X-log-url-redact-5), in readings of their own:
+    // a look-alike space can end a value that the reading above hid whole
+    // (`token＝r\u{200b}<s>`), so that reading stays as it was. The original
+    // text is read too: a look-alike space right after a separator
+    // (`"password":\u{a0}"<s>"`) is the first pass's whole value, so its
+    // output no longer shows the real one. Only when there are any: the wide
+    // output's reading only for a look-alike the reading above doesn't map.
+    let new = |c: char| look_alike(c, false).is_none() && look_alike(c, true).is_some();
+    let wide_needs = (!wide.is_ascii() || wide.contains('\u{b}')) && wide.chars().any(new);
+    for read in [wide_needs.then_some(&*wide), Some(text)]
+        .into_iter()
+        .flatten()
+    {
+        if let std::borrow::Cow::Owned(ascii) = ascii_separators(read, true) {
+            // Runs hidden as the stages hide them, so a word glued to one
+            // (`<hash>日本`) is the same word in both.
+            out = only_more(&out, &hide_runs(&wide::redact_secrets(&ascii)));
+        }
+    }
+    // The original text read with URL forms rewritten even in a credential's
+    // value (see `wide::scrub_text_and_loose`), as one more layer: the wide
+    // output keeps such values whole, which hides what splitting one would
+    // show (X-log-url-redact-3's security review).
+    if let Some(loose) = loose {
+        out = only_more(&out, &loose);
+    }
+    out
 }
 
-/// `text` with the look-alikes of a credential's separators written in
-/// ASCII, for the credential rules' second reading only (X-log-url-redact-4,
-/// runner's review): the fullwidth `：` and `＝` as `:` and `=`, and a
-/// no-break space as a space (`Bearer\u{a0}<token>`). None of them is a
-/// word's character, so the words are the same.
-fn ascii_separators(text: &str) -> std::borrow::Cow<'_, str> {
-    if !text.contains(['\u{ff1a}', '\u{ff1d}', '\u{a0}']) {
+/// What a look-alike of a credential's separator stands for in ASCII, for
+/// the credential rules' extra readings only. `all` is false for
+/// X-log-url-redact-4's three (`：`, `＝` and the no-break space), and true
+/// for every one X-log-url-redact-5 added too:
+/// - the colons `：` `︓` `﹕` `∶` `꞉` `︰` `։` `׃` as `:`;
+/// - the equals signs `＝` `﹦` `꞊` as `=`;
+/// - every other Unicode space (no-break, ideographic, the en and thin
+///   spaces…), the vertical tab (no ASCII whitespace to the credential
+///   rules) and the zero-width spaces (U+200B, U+2060, U+FEFF) as a space.
+///
+/// None of them is a word's character, so mapping them keeps the words.
+/// The length mark `ː` (U+02D0) is left out: it's a letter, so mapping it
+/// would hide every word that holds one, IPA and all.
+fn look_alike(c: char, all: bool) -> Option<char> {
+    match c {
+        '\u{ff1a}' => Some(':'),
+        '\u{ff1d}' => Some('='),
+        '\u{a0}' => Some(' '),
+        _ if !all => None,
+        '\u{fe13}' | '\u{fe55}' | '\u{2236}' | '\u{a789}' | '\u{fe30}' | '\u{0589}'
+        | '\u{05c3}' => Some(':'),
+        '\u{fe66}' | '\u{a78a}' => Some('='),
+        '\u{200b}' | '\u{2060}' | '\u{feff}' => Some(' '),
+        c if c.is_whitespace() && !c.is_ascii_whitespace() => Some(' '),
+        _ => None,
+    }
+}
+
+/// `text` with each [`look_alike`] written in ASCII.
+fn ascii_separators(text: &str, all: bool) -> std::borrow::Cow<'_, str> {
+    let maybe = !text.is_ascii() || text.contains('\u{b}');
+    if !maybe || !text.chars().any(|c| look_alike(c, all).is_some()) {
         return text.into();
     }
     text.chars()
-        .map(|c| match c {
-            '\u{ff1a}' => ':',
-            '\u{ff1d}' => '=',
-            '\u{a0}' => ' ',
-            c => c,
-        })
+        .map(|c| look_alike(c, all).unwrap_or(c))
         .collect::<String>()
         .into()
 }
@@ -1009,12 +1056,23 @@ fn ascii_separators(text: &str) -> std::borrow::Cow<'_, str> {
 /// (X-log-url-redact-3's fast path): it holds none of `:`, `/`, `@`, `%`,
 /// `=` and `"`, and no `bearer`, `lsk_` or `lsf_` in any case (the rules
 /// match `lsk_` and `lsf_` in one case only: the rest is margin), and no
-/// fullwidth `：` or `＝` or no-break space (`ascii_separators`). Every wide
-/// rule needs one of them to fire, so on such a line both stages are
-/// [`hide_runs`] of the text, and `only_more` of two equal outputs is that
-/// output: the decisions file lists each rule's trigger, and
+/// [`look_alike`] of `:` or `=`. Every wide rule needs one of them to fire
+/// (a look-alike space only stands for a space, which makes no cut without
+/// one of the others), so on such a line both stages are [`hide_runs`] of
+/// the text, every other reading finds no cut, and `only_more` of two equal
+/// outputs is that output: the decisions file lists each rule's trigger, and
 /// `the_fast_path_matches_both_stages` checks it.
 fn plain_line(text: &str) -> bool {
+    // What `ascii_separators` maps to a separator: the same table, so the
+    // two never part. A look-alike space stays on the fast path (CJK text
+    // holds the ideographic one): mapped to a space, it makes no cut.
+    if !text.is_ascii()
+        && text
+            .chars()
+            .any(|c| matches!(look_alike(c, true), Some(':' | '=')))
+    {
+        return false;
+    }
     let b = text.as_bytes();
     let keyword = |k: usize, w: &[u8]| {
         b.get(k..k + w.len())
@@ -1024,10 +1082,6 @@ fn plain_line(text: &str) -> bool {
         b':' | b'/' | b'@' | b'%' | b'=' | b'"' => true,
         b'b' | b'B' => keyword(k, b"bearer"),
         b'l' | b'L' => keyword(k, b"lsk_") || keyword(k, b"lsf_"),
-        // A no-break space, and the fullwidth `：` and `＝` (see
-        // `ascii_separators`).
-        0xc2 => b.get(k + 1) == Some(&0xa0),
-        0xef => keyword(k, "\u{ff1a}".as_bytes()) || keyword(k, "\u{ff1d}".as_bytes()),
         _ => false,
     })
 }
@@ -1512,7 +1566,7 @@ mod wide {
         ])
     }
 
-    /// A raw magnet link only, as `main` found them (see [`scrub_text`]'s
+    /// A raw magnet link only, as `main` found them (see [`scrub_text_on`]'s
     /// first pass).
     fn raw_magnets() -> AnyOf {
         AnyOf::new(&[("magnet:", true)])
@@ -1590,16 +1644,35 @@ mod wide {
         }
     }
 
-    /// `text` with every URL in it scrubbed and its query string dropped,
-    /// and every run that looks like an info hash or a session secret (32 or
-    /// more hex digits, or 32 base32 characters) hidden. For lines the code
-    /// didn't type: the third-party crates' and the not-yet-converted ones.
+    /// The wide rules' output for `text` ([`scrub_text_on`]), and, when the
+    /// original text holds a URL form without `://`, one more reading of it
+    /// with that form rewritten even inside a credential's value
+    /// (X-log-url-redact-5). A `//` that starts
+    /// a credential's value may be a URL's whose password follows a space
+    /// (`PW: //u: <secret>@h`): the value ends at that space, and the first
+    /// pass has hidden the `//`, so only this reading's URL rules hide the
+    /// rest. It's a layer of its own (`scrub_text_slow`), so the rewrite can
+    /// only hide more.
+    pub(super) fn scrub_text_and_loose(text: &str) -> (String, Option<String>) {
+        let debug = scrub_debug_forms(text);
+        let loose = match normalize_separators(&debug, false) {
+            std::borrow::Cow::Owned(loose) => Some(scrub_pass(&loose, true)),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+        (scrub_text_on(&debug), loose)
+    }
+
+    /// `text`, which the `Debug` rules have read already, with every URL in
+    /// it scrubbed and its query string dropped, and every run that looks
+    /// like an info hash or a session secret (32 or more hex digits, or 32
+    /// base32 characters) hidden. For lines the code didn't type: the
+    /// third-party crates' and the not-yet-converted ones.
     ///
     /// One forward pass: each needle's next match is remembered, and the
     /// userinfo's look-ahead is bounded, so a line of `a://` or `magnet:`
     /// repeats costs time in proportion to its length.
-    pub(super) fn scrub_text(text: &str) -> String {
-        let first = scrub_pass(&scrub_debug_forms(text), false);
+    fn scrub_text_on(text: &str) -> String {
+        let first = scrub_pass(text, false);
         // What `main` didn't know, URL forms without a raw `://` (`http:%2F%2F`,
         // `http:/`, `//u:p@h`, written with one here) and percent-encoded
         // magnets, is scrubbed in a second pass over the first's output
@@ -1618,7 +1691,7 @@ mod wide {
         }
     }
 
-    /// One pass of [`scrub_text`]'s URL rules over `text`; `encoded` is
+    /// One pass of [`scrub_text_on`]'s URL rules over `text`; `encoded` is
     /// whether percent-encoded magnets start a span too.
     fn scrub_pass(text: &str, encoded: bool) -> String {
         let ats = Ats::new(text);
@@ -2096,7 +2169,7 @@ mod wide {
     }
 
     /// `text` with URL forms that lack a raw `://` written with one, so
-    /// [`scrub_text`] finds them (X-log-url-redact-2):
+    /// [`scrub_text_on`] finds them (X-log-url-redact-2):
     /// - a `:` and two `/`, any of them percent-encoded once or twice or the
     ///   `/` JSON-escaped (`http:%2F%2F`, `http%3A%2F%2F`, `http%3A//`,
     ///   `http:\/\/`, `http:%2F/`);
@@ -4071,12 +4144,95 @@ pass:"S3CRET"#,
         assert_eq!(scrub_text("時刻：12 ok"), "時刻：12 ok");
     }
 
+    /// A look-alike space right after a separator, or one next to a
+    /// look-alike separator, and the other look-alikes, still leave a
+    /// credential's value hidden (X-log-url-redact-5, runner's review of
+    /// #488). Each showed the secret on `main`, apart from the two guards at
+    /// the end, which `main` hides too.
+    #[test]
+    fn a_look_alike_space_or_separator_keeps_its_value_hidden() {
+        for text in [
+            "{\"password\":\u{a0}\"S3CRETxyz\"}",
+            "token=\u{a0}'S3CRETxyz'",
+            "password:\u{a0} S3CRETxyz",
+            "x-api-key :\u{3000} S3CRETxyz",
+            "Authorization: Bearer\u{a0} S3CRETxyz",
+            "password：\u{3000}\"S3CRETxyz\"",
+            "password\u{3000}：S3CRETxyz",
+            "password\u{fe55}S3CRETxyz",
+            "password\u{2236}S3CRETxyz",
+            "token\u{fe66}S3CRETxyz",
+            "Bearer\u{202f}S3CRETxyz",
+            "Bearer\u{2007}S3CRETxyz",
+            "Bearer\u{200b}S3CRETxyz",
+            "Bearer\u{feff}S3CRETxyz",
+            "password\u{200b}:S3CRETxyz",
+            // One per table arm the shapes above leave out.
+            "password\u{fe13}S3CRETxyz",
+            "password\u{a789}S3CRETxyz",
+            "password\u{fe30}S3CRETxyz",
+            "password\u{0589}S3CRETxyz",
+            "password\u{05c3}S3CRETxyz",
+            "token\u{a78a}S3CRETxyz",
+            "Bearer\u{2002}S3CRETxyz",
+            "Bearer\u{3000}S3CRETxyz",
+            "Bearer\u{2060}S3CRETxyz",
+            "Bearer\u{1680}S3CRETxyz",
+            "Bearer\u{0085}S3CRETxyz",
+            "Bearer\u{b}S3CRETxyz",
+            "password\u{b}:S3CRETxyz",
+            // The wide output's own reading (`wide_needs`): the URL's query
+            // goes, which leaves `pass` before a look-alike and the value.
+            "https://h/pass?x\":\u{3000}\"S3CRETxyz\"",
+            "https://h/pass?x\"\u{fe55}\"S3CRETxyz\"",
+            "https://h/pass?x\":\u{b}\"S3CRETxyz\"",
+            // Why X-log-url-redact-4's reading keeps its three: read with
+            // every look-alike, the zero-width space or the ideographic space
+            // ends the value early, and only that reading hides it whole.
+            "token＝r\u{200b}S3CRETxyz",
+            "password＝a\u{3000}S3CRETxyz",
+        ] {
+            assert!(!plain_line(text), "{text:?}");
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text:?}: {s}");
+        }
+        // Text around them is kept.
+        for text in [
+            "共 12\u{3000}个",
+            "a\u{a0}b ok",
+            "時刻：12 ok",
+            "ratio 1∶2 ok",
+            "IPA /kæːt/ ok",
+        ] {
+            assert_eq!(scrub_text(text), text);
+        }
+    }
+
+    /// A `//` URL whose password follows a space, at the start of a
+    /// credential's value: the value ends at that space, and only the URL
+    /// rules hide the rest (X-log-url-redact-5; `planted_secrets_never_get
+    /// _through`'s seed from #489's CI). The unquoted values after `PW: `,
+    /// `token=` and `x-api-key: ` showed the secret on `main`. Glued `PW:`
+    /// (a raw `://`) and a quoted value are guards: `main` hides them too.
+    #[test]
+    fn a_network_path_in_a_credential_s_value_keeps_its_password() {
+        for before in ["PW:", "PW: ", "token=", "x-api-key: ", "password:\""] {
+            for syntax in [" ", "  ", "\t"] {
+                let text = format!("{before}//u:{syntax}ZqAA0aaA9@host.example/x");
+                assert!(!plain_line(&text), "{text:?}");
+                let s = scrub_text(&text);
+                assert!(!s.contains("ZqAA0aaA9"), "{text:?}: {s}");
+            }
+        }
+    }
+
     /// The fast path (X-log-url-redact-3) gives exactly what the slow path
-    /// (`scrub_text_slow`: both stages and both `only_more`s) gives, on 2,000,000 soups of 2 to 31 tokens. The tokens are
-    /// near misses of every wide rule's trigger (names with no separator,
-    /// `Some(`, `magnet`, `bear`, `lsk`, hash-like runs, the markers), so a
-    /// soup's length is even across the range. A soup with a trigger
-    /// planted in it must be refused.
+    /// (`scrub_text_slow`: both stages and every `only_more`) gives, on
+    /// 2,000,000 soups of 2 to 31 tokens. The tokens are near misses of
+    /// every wide rule's trigger (names with no separator, `Some(`,
+    /// `magnet`, `bear`, `lsk`, hash-like runs, the markers), so a soup's
+    /// length is even across the range. A soup with a trigger planted in it
+    /// must be refused.
     #[test]
     fn the_fast_path_matches_both_stages() {
         const TOKENS: &[&str] = &[
@@ -4159,10 +4315,19 @@ pass:"S3CRET"#,
             "0123456789ABCDEF0123456789abcdef01234567",
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
             "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U",
+            // Look-alike spaces take the fast path (X-log-url-redact-5): with
+            // no trigger near, the slow path's readings find nothing either.
+            "\u{a0}",
+            "\u{3000}",
+            "\u{2007}",
+            "\u{200b}",
+            "\u{feff}",
+            "\u{b}",
+            "下载完成",
         ];
         const TRIGGERS: &[&str] = &[
             ":", "/", "@", "%", "=", "\"", "Bearer", "bEaReR", "lsk_", "lsf_", "LSF_", "：", "＝",
-            "\u{a0}",
+            "\u{fe55}", "\u{2236}", "\u{fe66}", "\u{a78a}",
         ];
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut next = |n: usize| {
@@ -4194,8 +4359,19 @@ pass:"S3CRET"#,
         }
         // Each trigger is refused on its own; near misses are accepted.
         for line in [
-            "a:b", "a/b", "a@b", "a%b", "a=b", "a\"b", "Bearer x", "xBEARER", "lsk_1", "Lsf_",
-            "a：b", "a＝b", "a\u{a0}b",
+            "a:b",
+            "a/b",
+            "a@b",
+            "a%b",
+            "a=b",
+            "a\"b",
+            "Bearer x",
+            "xBEARER",
+            "lsk_1",
+            "Lsf_",
+            "a：b",
+            "a＝b",
+            "a\u{fe55}b",
         ] {
             assert!(!plain_line(line), "{line:?}");
         }
@@ -4207,9 +4383,14 @@ pass:"S3CRET"#,
             "token x",
             "magnet?xt",
             "日本 🦀",
-            // Other characters that start with the same bytes: `©`, `（`,
-            // `ｘ`, `；`.
+            // Non-ASCII characters that are no look-alike still take the fast
+            // path: `©`, `（`, `ｘ`, `；`, the zero-width non-joiner and `ː`.
             "© （ｘ）；",
+            "a\u{200c}b",
+            "naːm",
+            "a\u{a0}b",
+            "共 12\u{3000}个",
+            "x\u{200b}y\u{b}z",
         ] {
             assert!(plain_line(line), "{line:?}");
         }
