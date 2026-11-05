@@ -561,6 +561,8 @@ pub struct Pipeline {
     health: Option<(watch::Sender<bool>, JoinHandle<Store>)>,
     /// The torrent-cache feed and its judge task (SRC-13b).
     torrent_cache: Option<(torrent_cache::Feed, JoinHandle<()>)>,
+    /// The registered always-adult sources ([`Pipeline::adult_sources`]).
+    adult: source_adult::AdultSources,
 }
 
 impl std::fmt::Debug for Pipeline {
@@ -1071,6 +1073,7 @@ impl Pipeline {
             writer,
             health: health_task,
             torrent_cache,
+            adult,
         })
     }
 
@@ -1083,6 +1086,13 @@ impl Pipeline {
 
     pub fn monitor(&self) -> Monitor {
         self.monitor.clone()
+    }
+
+    /// The registered sources whose every find is classified adult
+    /// (X-source-adult), for the other places that classify a stored
+    /// torrent: the API's corrections.
+    pub fn adult_sources(&self) -> source_adult::AdultSources {
+        self.adult
     }
 
     pub fn pool(&self) -> &PoolHandle {

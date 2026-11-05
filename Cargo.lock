@@ -1826,6 +1826,7 @@ dependencies = [
  "lodestar-classify",
  "lodestar-filter",
  "lodestar-metainfo",
+ "lodestar-pipeline",
  "lodestar-store",
  "proptest",
  "rusqlite",

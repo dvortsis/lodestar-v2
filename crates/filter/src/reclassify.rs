@@ -138,6 +138,70 @@ pub fn adult_hold(d: &Decision) -> bool {
         && matches!(d.action, Action::Quarantine | Action::Drop)
 }
 
+/// The correction a stored torrent is classified with when `adult` is the
+/// bitset of always-adult sources (X-source-adult): your own correction
+/// `own`, with Is adult added when one of its `sources` is always adult
+/// and you haven't said Not adult. Clearing a correction or setting only
+/// Not junk never un-adults it; your explicit Not adult does.
+pub fn source_adult(own: Correction, sources: u64, adult: u64) -> Correction {
+    match own.adult {
+        None if adult & sources != 0 => Correction {
+            adult: Some(true),
+            ..own
+        },
+        _ => own,
+    }
+}
+
+/// What filtering makes of an item an always-adult source found, and the
+/// fix to store with it: `Some(true)` when detection didn't call it adult,
+/// else `None` (a Not adult rule never applies to it).
+///
+/// The engine's verdict with your classification rules
+/// ([`Engine::judge_classified`]), and, unless that already judged the
+/// adult reading, the adult reading too; the stricter of the two stands.
+/// The floor's hit comes back alone, as it does from the engine.
+pub fn judge_source_adult(
+    engine: &Engine,
+    item: &Item<'_>,
+    facts: &Facts<'_>,
+    now: i64,
+) -> (Verdict, Option<bool>) {
+    let (v, says) = engine.judge_classified(item, Some(facts), now);
+    let detected = facts.class.content_type == ContentType::Adult;
+    let fix = (!detected).then_some(true);
+    // The engine judged it as adult already: detection or an Is adult
+    // rule said so.
+    // (`item.content_type` is `facts.class`'s, so `detected` covers it.)
+    if detected || says == Some(true) {
+        return (v, fix);
+    }
+    // A floor hit is final, as the engine returns it.
+    if v.decision
+        .as_ref()
+        .is_some_and(|d| matches!(d.rule, RuleRef::Core(r) if r.floor()))
+    {
+        return (v, fix);
+    }
+    let adult_class = facts.class.as_adult();
+    let adult_facts = Facts {
+        class: &adult_class,
+        ..*facts
+    };
+    let adult_item = Item {
+        content_type: ContentType::Adult,
+        ..*item
+    };
+    let as_adult = engine.judge(&adult_item, Some(&adult_facts), now);
+    (stricter(v, as_adult), fix)
+}
+
+/// The heavier decision of two verdicts (a tie keeps `a`'s), and both
+/// verdicts' shadow decisions: the engine's own rule for two readings.
+pub fn stricter(a: Verdict, b: Verdict) -> Verdict {
+    crate::engine::stricter(a, b)
+}
+
 /// What a classification rule's say changes: Is adult (`true`) or Not
 /// adult (`false`) where it differs from detection, else nothing.
 pub fn rule_fix(says: Option<bool>, class: &Classification) -> Option<bool> {
@@ -362,5 +426,68 @@ impl Refiling {
             },
             flags: self.flags,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::CoreRule;
+
+    #[test]
+    fn source_adult_adds_is_adult_unless_you_said_not_adult() {
+        let mask = 1 << 4;
+        let c = |adult, not_junk| Correction { adult, not_junk };
+        // Cleared, or Not junk only: Is adult added.
+        assert_eq!(
+            source_adult(c(None, false), 1 << 4 | 1, mask),
+            c(Some(true), false)
+        );
+        assert_eq!(
+            source_adult(c(None, true), 1 << 4, mask),
+            c(Some(true), true)
+        );
+        // Yours stands either way.
+        assert_eq!(
+            source_adult(c(Some(false), true), 1 << 4, mask),
+            c(Some(false), true)
+        );
+        assert_eq!(
+            source_adult(c(Some(true), false), 1 << 4, mask),
+            c(Some(true), false)
+        );
+        // Not found by an always-adult source, or none registered.
+        assert_eq!(source_adult(c(None, false), 1, mask), c(None, false));
+        assert_eq!(source_adult(c(None, false), 1 << 4, 0), c(None, false));
+    }
+
+    #[test]
+    fn stricter_keeps_the_heavier_decision_and_every_shadow() {
+        let d = |action| Decision {
+            rule: RuleRef::Core(CoreRule::Cs5a),
+            action,
+            evidence: vec![],
+        };
+        let s = stricter(
+            Verdict {
+                decision: Some(d(Action::Flag)),
+                shadow: vec![d(Action::Hide)],
+            },
+            Verdict {
+                decision: Some(d(Action::Quarantine)),
+                shadow: vec![d(Action::Hide), d(Action::Drop)],
+            },
+        );
+        assert_eq!(s.decision.unwrap().action, Action::Quarantine);
+        assert_eq!(s.shadow.len(), 2);
+        // A tie keeps the first's.
+        let tie = stricter(
+            Verdict {
+                decision: Some(d(Action::Flag)),
+                shadow: vec![],
+            },
+            Verdict::default(),
+        );
+        assert_eq!(tie.decision.unwrap().action, Action::Flag);
     }
 }

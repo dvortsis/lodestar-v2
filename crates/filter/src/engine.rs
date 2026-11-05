@@ -615,7 +615,7 @@ fn stronger_of(first: Option<Decision>, second: Option<Decision>) -> Option<Deci
 
 /// The stricter of two verdicts: the stronger decision (the first on a
 /// tie), and every shadow decision either logged.
-fn stricter(a: Verdict, b: Verdict) -> Verdict {
+pub(crate) fn stricter(a: Verdict, b: Verdict) -> Verdict {
     let decision = match (a.decision, b.decision) {
         (Some(x), Some(y)) => Some(if y.action > x.action { y } else { x }),
         (x, y) => x.or(y),

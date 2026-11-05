@@ -28,8 +28,8 @@ use lodestar_metainfo::{InfoHash, InfoHashV2};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::{
-    Error, Filtered, Held, Prepared, Result, SourceId, Store, add_sources, begin_write, filter,
-    find_any, flags, insert_new, rules, write_enrichment,
+    AdultMark, Error, Filtered, Held, Prepared, Result, SourceId, Store, add_sources, begin_write,
+    filter, find_any, flags, insert_new, mark_adult_found, rules, write_enrichment,
 };
 
 /// The version of this contract a job was created under.
@@ -922,7 +922,13 @@ impl Store {
         if batch.seq == 0 {
             return Err(Error::Invalid("import batches are numbered from 1"));
         }
-        let Store { conn, codec, .. } = self;
+        let Store {
+            conn,
+            codec,
+            adult_mark,
+            ..
+        } = self;
+        let adult_mark = *adult_mark;
         let tx = begin_write(conn)?;
         let job = load(&tx, batch.job)?;
         if batch.seq <= job.seq {
@@ -969,7 +975,7 @@ impl Store {
                         return Err(Error::Corrupt("prepared blob names an unknown dictionary"));
                     }
                     c.files_dropped += u64::from(t.files_dropped);
-                    let o = commit_torrent(&tx, batch, t)?;
+                    let o = commit_torrent(&tx, batch, t, adult_mark)?;
                     if let RecordOutcome::New(id) = o {
                         new_ids.push(id);
                         if t.completeness == Completeness::Partial {
@@ -978,7 +984,7 @@ impl Store {
                     }
                     o
                 }
-                ImportRecord::Candidate(cand) => commit_candidate(&tx, batch, cand)?,
+                ImportRecord::Candidate(cand) => commit_candidate(&tx, batch, cand, adult_mark)?,
                 ImportRecord::Invalid => RecordOutcome::Invalid,
             };
             match outcome {
@@ -1044,6 +1050,15 @@ impl Store {
             counters,
             stale_class,
         })
+    }
+
+    /// The always-adult sources (this connection's [`AdultMark`],
+    /// [`Store::set_adult_mark`]) among the finders of unverified items
+    /// under `hashes`, as a bitset: the import driver judges such a record
+    /// as adult before its commit (X-source-adult-2). `0`, with nothing
+    /// read, while no always-adult source is set.
+    pub fn adult_finders(&self, hashes: &[InfoHash]) -> Result<u64> {
+        adult_finders(&self.conn, self.adult_mark, hashes)
     }
 
     /// A stored torrent's [`Quality`], by the rule [`Quality`] states;
@@ -1593,10 +1608,59 @@ fn candidate_privacy(tx: &Transaction<'_>, hashes: &[InfoHash]) -> Result<Option
     Ok(out)
 }
 
+/// The always-adult sources in `mark` among the finders of unverified
+/// items under `hashes`, as a bitset. A disabled or purged source's bit is
+/// left out, as `Store::write` and `Store::promote` leave it out (SRC-14b;
+/// the X-source-adult decisions leave that question to the runner).
+fn adult_finders(conn: &Connection, mark: AdultMark, hashes: &[InfoHash]) -> Result<u64> {
+    if mark.sources == 0 {
+        return Ok(0);
+    }
+    let mut stmt = conn
+        .prepare_cached("SELECT sources FROM unverified_items WHERE network = ?1 AND key = ?2")?;
+    let mut bits = 0u64;
+    for h in hashes {
+        let found: Option<i64> = stmt
+            .query_row(
+                params![crate::unverified::Network::Bt as i64, &h.0[..]],
+                |r| r.get(0),
+            )
+            .optional()?;
+        bits |= found.unwrap_or(0) as u64;
+    }
+    let bits = bits & mark.sources;
+    if bits == 0 {
+        return Ok(0);
+    }
+    Ok(bits & !crate::sources::stopped_mask(conn)?)
+}
+
+/// A torrent an always-adult source has claimed, as an unverified item
+/// under one of `hashes`, gains that source's bit, so every later
+/// classification keeps it adult (X-source-adult-2). It's also marked for
+/// the backfill in this transaction unless it's stored adult already, so
+/// a record the driver judged before the claim arrived, or a stored row
+/// an import merges into, is classified adult by the backfill even if
+/// nothing else follows this commit.
+fn adult_claimed(
+    tx: &Transaction<'_>,
+    id: i64,
+    hashes: &[InfoHash],
+    mark: AdultMark,
+) -> Result<()> {
+    let bits = adult_finders(tx, mark, hashes)?;
+    if bits != 0 {
+        add_sources(tx, id, bits)?;
+        mark_adult_found(tx, mark, id)?;
+    }
+    Ok(())
+}
+
 fn commit_torrent(
     tx: &Transaction<'_>,
     batch: &ImportBatch<'_>,
     t: &ImportTorrent<'_>,
+    adult_mark: AdultMark,
 ) -> Result<RecordOutcome> {
     if t.verification == Verification::Verified {
         return Err(Error::Invalid("an import can't claim verified metadata"));
@@ -1607,6 +1671,9 @@ fn commit_torrent(
         return Ok(held_outcome(held));
     }
     if let Some(id) = find_any(tx, hashes.iter().copied())? {
+        // A claim under any of the record's hashes concerns the stored row,
+        // whatever becomes of this record.
+        adult_claimed(tx, id, &hashes, adult_mark)?;
         // The stored row's own filter state stands (§20.9 refiles stored
         // torrents); a held decision only keeps this record out.
         if let Some(held) = t.decision.held() {
@@ -1649,6 +1716,7 @@ fn commit_torrent(
     if let Some(e) = &p.enrichment {
         write_enrichment(tx, id, e)?;
     }
+    adult_claimed(tx, id, &hashes, adult_mark)?;
     tx.prepare_cached(
         "INSERT INTO import_quality (torrent_id, completeness, verification, privacy, repair,
              source_at, imported_at)
@@ -1674,6 +1742,7 @@ fn commit_candidate(
     tx: &Transaction<'_>,
     batch: &ImportBatch<'_>,
     cand: &ImportCandidate<'_>,
+    adult_mark: AdultMark,
 ) -> Result<RecordOutcome> {
     let mut hashes = vec![cand.hash];
     if let Some(v2) = cand
@@ -1687,6 +1756,9 @@ fn commit_candidate(
         return Ok(held_outcome(held));
     }
     if let Some(id) = find_any(tx, hashes.iter().copied())? {
+        // As for a torrent record: a claim under its hashes concerns the
+        // stored row, whatever becomes of this record.
+        adult_claimed(tx, id, &hashes, adult_mark)?;
         if let Some(held) = cand.decision.held() {
             return Ok(held_outcome(held));
         }
@@ -2302,6 +2374,175 @@ mod tests {
             ),
             (0, 1, 0)
         );
+    }
+
+    /// An always-adult source's unverified item under an imported hash
+    /// (X-source-adult-2): a crash before the commit leaves nothing; the
+    /// commit gives the new row that source's bit and marks it for the
+    /// backfill in the same transaction; a later merge into a row that
+    /// lacks the bit does the same. Nothing is read without a mark.
+    #[test]
+    fn an_always_adult_claim_gives_an_import_its_bit_and_mark() {
+        const ADULT: u8 = 9;
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = store.register_source("magnetico", "1", T).unwrap();
+        let adult = store.register_source("sukebei", "1", T).unwrap();
+        let other = store.register_source("nyaa", "1", T).unwrap();
+        let mark = AdultMark {
+            sources: adult.bit() as u64,
+            content_type: ADULT,
+        };
+        let job = reading(&mut store);
+        let mut a = prepared(&store, "Alpha");
+        a.enrichment = Some(crate::Enriched {
+            version: 1,
+            content_type: 1,
+            junk_score: 0,
+            comp: Vec::new(),
+            data: Vec::new(),
+        });
+        let mut b = prepared(&store, "Beta");
+        b.enrichment = a.enrichment.clone();
+        // Unverified items: Alpha's found by the adult source and another,
+        // Beta's by the other only.
+        for (p, bits) in [
+            (&a, adult.bit() as u64 | other.bit() as u64),
+            (&b, other.bit() as u64),
+        ] {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO unverified_items (network, key, source_id, sources, flags,
+                         claims, first_at, last_at)
+                     VALUES (0, ?1, ?2, ?3, 0, NULL, 0, 0)",
+                    params![&p.info_hash.0[..], other.get(), bits as i64],
+                )
+                .unwrap();
+        }
+        assert_eq!(store.adult_finders(&[a.info_hash]).unwrap(), 0, "no mark");
+        store.set_adult_mark(mark);
+        assert_eq!(
+            store.adult_finders(&[b.info_hash, a.info_hash]).unwrap(),
+            adult.bit() as u64
+        );
+        // A disabled source's bit is left out, as the writer leaves it out.
+        store
+            .set_source_state(adult, crate::SourceState::Disabled)
+            .unwrap();
+        assert_eq!(store.adult_finders(&[a.info_hash]).unwrap(), 0);
+        store.enable_source(adult, None).unwrap();
+        let torrent = |p| {
+            ImportRecord::Torrent(ImportTorrent {
+                torrent: p,
+                completeness: Completeness::ReportedComplete,
+                verification: Verification::Unknown,
+                privacy: Privacy::Unknown,
+                repair: 0,
+                source_at: None,
+                files_dropped: 0,
+                decision: PASS,
+            })
+        };
+        let records = [torrent(&a), torrent(&b)];
+        let batch = |seq| ImportBatch {
+            job: job.id,
+            seq,
+            position: b"",
+            source: src,
+            source_bytes: 0,
+            at: T,
+            class_gen: None,
+            records: &records,
+        };
+        let row = |store: &Store, p: &Prepared| -> Option<(u64, i64)> {
+            store
+                .conn
+                .query_row(
+                    "SELECT t.sources, p.parser_ver FROM torrents t
+                     JOIN torrent_parsed p ON p.torrent_id = t.id WHERE t.info_hash = ?1",
+                    [&p.info_hash.0[..]],
+                    |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?)),
+                )
+                .optional()
+                .unwrap()
+        };
+
+        // A crash inside the transaction: nothing at all.
+        FAIL_AT.with(|f| f.set(Some(Step::Records)));
+        let crashed = store.commit_import_batch(&batch(1));
+        FAIL_AT.with(|f| f.set(None));
+        assert!(crashed.is_err());
+        assert_eq!(row(&store, &a), None);
+
+        // Committed: Alpha has the adult bit (and no other finder's) and is
+        // marked; Beta is untouched.
+        store.commit_import_batch(&batch(1)).unwrap();
+        let (sources, ver) = row(&store, &a).unwrap();
+        assert_eq!(sources, src.bit() as u64 | adult.bit() as u64);
+        assert_eq!(ver, 0, "marked for the backfill");
+        assert_eq!(row(&store, &b).unwrap(), (src.bit() as u64, 1));
+
+        // A merge into a row that lacks the bit (stored before the claim
+        // was seen): it gains it and is marked.
+        store
+            .conn
+            .execute(
+                "UPDATE torrents SET sources = ?1 WHERE info_hash = ?2",
+                params![src.bit(), &a.info_hash.0[..]],
+            )
+            .unwrap();
+        let unmark = "UPDATE torrent_parsed SET parser_ver = 1";
+        store.conn.execute(unmark, []).unwrap();
+        store.commit_import_batch(&batch(2)).unwrap();
+        assert_eq!(row(&store, &a).unwrap(), (sources, 0));
+        assert_eq!(row(&store, &b).unwrap(), (src.bit() as u64, 1));
+
+        // Stored adult already: it gains the bit, but isn't marked.
+        store
+            .conn
+            .execute(
+                "UPDATE torrents SET sources = ?1, content_type = ?2 WHERE info_hash = ?3",
+                params![src.bit(), ADULT, &a.info_hash.0[..]],
+            )
+            .unwrap();
+        store.conn.execute(unmark, []).unwrap();
+        store.commit_import_batch(&batch(3)).unwrap();
+        assert_eq!(row(&store, &a).unwrap(), (sources, 1));
+
+        // A candidate (no info dict) under the stored row's hash merges the
+        // same way: the bit and the mark.
+        store
+            .conn
+            .execute(
+                "UPDATE torrents SET sources = ?1, content_type = 1 WHERE info_hash = ?2",
+                params![src.bit(), &a.info_hash.0[..]],
+            )
+            .unwrap();
+        store.conn.execute(unmark, []).unwrap();
+        let cand = [ImportRecord::Candidate(ImportCandidate {
+            hash: a.info_hash,
+            hash_v2: None,
+            name: Some(b"Alpha"),
+            size: Some(5),
+            privacy: Privacy::Unknown,
+            source_at: None,
+            decision: PASS,
+        })];
+        let merged = store
+            .commit_import_batch(&ImportBatch {
+                seq: 4,
+                records: &cand,
+                ..batch(4)
+            })
+            .unwrap();
+        let BatchCommitted::Committed { outcomes, .. } = merged else {
+            panic!("{merged:?}");
+        };
+        assert!(
+            matches!(outcomes[..], [RecordOutcome::Merged(_)]),
+            "{outcomes:?}"
+        );
+        assert_eq!(row(&store, &a).unwrap(), (sources, 0));
     }
 
     #[test]

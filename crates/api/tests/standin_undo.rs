@@ -45,6 +45,7 @@ fn api_on(store: Store, engine: Arc<Handle>, held: Arc<HeldSet>) -> FiltersApi {
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
         shutdown: Default::default(),
+        adult_sources: 0,
     }
 }
 
