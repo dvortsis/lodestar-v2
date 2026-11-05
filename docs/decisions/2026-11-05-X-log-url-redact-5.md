@@ -40,9 +40,31 @@ None of these hid the value in either stage:
   - **The trade:** it's seldom a colon in logs, and keeping it out keeps it on the fast path. `passwordːS` still shows (see the gaps).
 - **`꞊` (U+A78A),** the equals counterpart of `꞉`, is in, from the self-review.
 
+## A `//` URL's password after a space, in a credential's value (runner's addition)
+- **How it was found:** `planted_secrets_never_get_through` failed on #489's Windows CI.
+  - The template: `{before} //u:{syntax}{secret}@host.example/x`.
+  - The seed: `before = "PW:"`, `syntax = " "`.
+  - The runner moved it into this PR.
+- **What leaked:** `PW: //u: <s>@host.example/x` showed `<s>@host.example/x`.
+- **It's older than #488:** the same output on #488's merge (4e425d4e) and on its parent (6648e69f), on #483's (09c51792), on #460's (40c5c84), and on the scrubber before #460 (0531d024). The proptest planted it only rarely.
+- **The cause:**
+  - `PW` is a credential's name (`pw` is a credential part), and its value `//u:` ends at the space.
+  - #483's guard keeps the separator pass from rewriting a `//` inside a credential's value. That guard is what hides `secret=https%3A%2F%2Fh/<s>` whole.
+  - The first pass has already hidden the `//` anyway, so neither stage reads `u: <s>@host` as userinfo.
+- **The rule:** the wide rules also read the original text, after the `Debug` rules, with every URL form rewritten, credential values included (`wide::scrub_text_and_loose`).
+  - That reading's output goes through one more `only_more`, as its own layer.
+  - It runs only when the text holds such a form.
+  - The guarded wide output is unchanged, so what the guard hides stays hidden.
+- **Tests:**
+  - **The seed** is in `proptest-regressions/url.txt`. It fails without the fix.
+  - **`a_network_path_in_a_credential_s_value_keeps_its_password`** has 15 inputs: `PW:`, `PW: `, `token=`, `x-api-key: ` and `password:"`, each with a space, two spaces or a tab.
+    - The nine unquoted values after `PW: `, `token=` and `x-api-key: ` showed the secret on `main`.
+    - Glued `PW:` (which makes a raw `://`) and the quoted value are guards: `main` hides them too.
+- **The host still shows,** as on `main`: `PW: [redacted] [redacted]@host.example/x`.
+
 ## The fast path stays exact
 - **What `plain_line` refuses:** any line holding a character `look_alike(c, true)` maps. It uses the same function, so the fast path refuses exactly what the readings map. The 0xC2 and 0xEF byte arms #488 added are gone.
-- **The proof:** on a line `plain_line` accepts, `ascii_separators` changes nothing, so every reading is `redact_secrets` of text with no credential separator, and finds no cut. So the trigger table in `docs/decisions/2026-11-05-X-log-url-redact-3.md` holds. This file adds this row to it:
+- **The proof:** a line `plain_line` accepts holds no `/` or `%`, so `normalize_separators` returns it unchanged and the `//` reading doesn't run. And `ascii_separators` changes nothing on it, so every reading is `redact_secrets` of text with no credential separator, and finds no cut. So the trigger table in `docs/decisions/2026-11-05-X-log-url-redact-3.md` holds. This file adds this row to it:
 
 | Rule | What it needs to fire | Excluded by |
 |---|---|---|
@@ -60,33 +82,35 @@ None of these hid the value in either stage:
 
 ## Differential fuzz against `main` (ad9e59a)
 - **The harness:** #483's harness, kept out of the commit, with its `main` side moved to ad9e59a.
-  - **New slots (12):** the 7 shapes in "What leaked", plus `password﹕S`, `token﹦S`, `Bearer\u{202f}S`, `Bearer\u{200b}S` and `password\u{200b}:S`.
+  - **New slots (16):** the 7 shapes in "What leaked", plus `password﹕S`, `token﹦S`, `Bearer\u{202f}S`, `Bearer\u{200b}S` and `password\u{200b}:S`, plus four `//` forms: `PW: //u: S@host.example/x`, `token=//u:\tS@h`, `x-api-key: //u:  S@h/` and ` //u: S@host.example`.
   - **New token entries (10):** U+3000, U+202F, U+200B, U+FEFF, U+FE55, U+2236, U+FE66 and U+A78A, and `ː` twice (now a near miss).
 - **The run:** 2 seeds × 1,200,000 token soups, about 2,400,000 secrets per seed.
 
 | Seed | Entry point | PR shows, `main` hides | `main` shows, PR hides | Shown by PR / `main` | Panics |
 |---|---|---|---|---|---|
-| 1 | `scrub_text` | **0** | 330,761 | 724,384 / 1,055,145 | 0 |
-| 1 | `scrub` absolute | 0 | 0 | 625,915 / 625,915 | 0 |
-| 1 | `scrub` request | 0 | 0 | 490,215 / 490,215 | 0 |
-| 2 | `scrub_text` | **0** | 330,895 | 724,341 / 1,055,236 | 0 |
-| 2 | `scrub` absolute | 0 | 0 | 623,889 / 623,889 | 0 |
-| 2 | `scrub` request | 0 | 0 | 488,345 / 488,345 | 0 |
+| 1 | `scrub_text` | **0** | 377,925 | 631,408 / 1,009,333 | 0 |
+| 1 | `scrub` absolute | 0 | 0 | 612,369 / 612,369 | 0 |
+| 1 | `scrub` request | 0 | 0 | 412,185 / 412,185 | 0 |
+| 2 | `scrub_text` | **0** | 379,590 | 630,726 / 1,010,316 | 0 |
+| 2 | `scrub` absolute | 0 | 0 | 612,140 / 612,140 | 0 |
+| 2 | `scrub` request | 0 | 0 | 412,670 / 412,670 | 0 |
 
-- **With `ː` in the table,** the same seeds hid 337,045 and 337,560 more, with 0 regressions. The difference is the words holding `ː`, which now show as `main` shows them.
+- **Before the `//` rule,** with 12 new slots, the same seeds hid 330,761 and 330,895 more, with 0 regressions.
+
+- **With `ː` in the table** and 12 new slots, the same seeds hid 337,045 and 337,560 more, with 0 regressions. The difference is the words holding `ː`, which now show as `main` shows them.
 
 ## Cost
-- **ASCII lines cost the same as on `main`:** the new readings run only on non-ASCII text holding a look-alike.
+- **ASCII lines cost the same as on `main`, within noise.** The look-alike readings run only on non-ASCII text holding a look-alike. The `//` reading runs only on text holding a URL form without `://`.
 - **A line with a look-alike** gets one or two more credential readings. `下载完成：12 个文件` takes 4.6 µs, against `main`'s 3.4.
 - **Linear sweep:** 3,100 units, from 32 KiB to 256 KiB.
-  - The worst time ratio, normalised to 1 for linear, is 3.90 (`passkey`), a fast-path unit at 7 ms. The ratios are dominated by noise.
-  - The worst units off the fast path take about 4 times as long at each 4 times in size:
+  - The worst time ratio, normalised to 1 for linear, is 3.63 (`[::1]:6969`, at 72 ms). The next are fast-path units at 6 ms. The ratios are dominated by noise.
+  - The worst units, and the `//` form the new reading handles, take about 4 times as long at each 4 times in size:
 
 | Unit | 1 MiB | 4 MiB | 16 MiB |
 |---|---|---|---|
-| `cannot_be_a_base: false, ` | 0.140 s | 0.572 s | 2.380 s |
-| `@\u{3000}token=}ː'` | 0.196 s | 0.954 s | 4.178 s |
-| `https://\u{3000}#\u{200b}tr=:8080` | 0.372 s | 1.662 s | 5.810 s |
+| `[::1]:6969` | 0.096 s | 0.431 s | 1.689 s |
+| ` //a@` | 0.256 s | 1.050 s | 4.331 s |
+| `https://\u{3000}#\u{200b}tr=:8080` | 0.347 s | 1.543 s | 5.712 s |
 
   - `scrub_text_is_linear` passes.
 
