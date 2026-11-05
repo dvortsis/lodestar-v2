@@ -3313,6 +3313,70 @@
         ]
       }
     },
+    "/legal/accept": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Records that the signed-in admin accepted the Legal Notice `version`\n(the current one; 409 `notice_required` for any other). The one\nsession route the notice gate lets through. Accepting again is a\nno-op.",
+        "operationId": "acceptLegalNotice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptNoticeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/legal/notice": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The Legal Notice this build shows, for the setup screen, the sign-in\ngate and Settings → About. Open: it's shown before there's a session.",
+        "operationId": "getLegalNotice",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalNotice"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
     "/login": {
       "post": {
         "tags": [
@@ -5681,7 +5745,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Claims a fresh instance with the setup token from the logs and a new\npassword; logs in.",
+        "summary": "Claims a fresh instance with the setup token from the logs, a new\npassword and the Legal Notice version the admin accepted (409\n`notice_required` when it's missing or not the current one); logs in.",
         "operationId": "setup",
         "requestBody": {
           "content": {
@@ -7436,6 +7500,21 @@
   },
   "components": {
     "schemas": {
+      "AcceptNoticeRequest": {
+        "type": "object",
+        "description": "`POST /legal/accept`.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version shown. Not the current one: `409 notice_required`.",
+            "minimum": 0
+          }
+        }
+      },
       "AddressChange": {
         "type": "object",
         "description": "A pending HTTP-address change (§10.10.6's lockout protection).",
@@ -8454,11 +8533,16 @@
         "description": "`GET /auth`.",
         "required": [
           "logged_in",
+          "notice_required",
           "setup_required"
         ],
         "properties": {
           "logged_in": {
             "type": "boolean"
+          },
+          "notice_required": {
+            "type": "boolean",
+            "description": "Signed in, but the current Legal Notice isn't accepted yet: show it\nand `POST /legal/accept`. Every other session route answers `409\nnotice_required` meanwhile. Always `false` when not signed in."
           },
           "setup_required": {
             "type": "boolean",
@@ -14514,6 +14598,30 @@
           "label": "4K"
         }
       },
+      "LegalNotice": {
+        "type": "object",
+        "description": "`GET /legal/notice`: the Legal Notice this build shows.",
+        "required": [
+          "version",
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The notice as Markdown (headings, paragraphs, lists, bold, italics,\ncode and links), in English only."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Raised only when the notice changes in substance; send it back to\naccept.",
+            "minimum": 0
+          }
+        },
+        "example": {
+          "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 3 · 2026-11-05**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+          "version": 3
+        }
+      },
       "LogCatalog": {
         "type": "object",
         "description": "`GET /logs/catalog`.",
@@ -19600,6 +19708,12 @@
           "password"
         ],
         "properties": {
+          "notice_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The Legal Notice version shown and accepted (`GET /legal/notice`).\nMissing or not the current one: `409 notice_required`.",
+            "minimum": 0
+          },
           "password": {
             "type": "string",
             "description": "At least 10 characters."
@@ -22677,7 +22791,7 @@
   "tags": [
     {
       "name": "auth",
-      "description": "First-run setup, login and sessions (§12)."
+      "description": "First-run setup, login, sessions (§12) and the Legal Notice."
     },
     {
       "name": "search",

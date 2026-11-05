@@ -1,6 +1,6 @@
-// The wizard's steps and its progress (§10.10.10). Steps 1 and 2 happen in /setup; this list holds
-// the rest. Step 6 (import from bitmagnet) is still a hidden slot (online import is deferred,
-// B-import-server-2): `SLOTS` names where it goes, so adding it is a new entry here and a new
+// The wizard's steps and its progress (§10.10.10). The first steps happen in /setup, before there's
+// a session (`SETUP_STEPS`); `STEPS` holds the rest. §10.10.10's import step (from bitmagnet) is
+// still a hidden slot (online import is deferred, B-import-server-2): `SLOTS` names where it goes, so adding it is a new entry here and a new
 // loader in the shell, nothing else (docs/decisions/2026-10-31-S-wizard.md).
 
 export type StepId =
@@ -13,6 +13,14 @@ export type StepId =
 	| 'blocklists'
 	| 'updates'
 	| 'done';
+
+/**
+ * The steps /setup takes, in order, before the session exists: the Legal Notice first (owner
+ * §2.38, docs/decisions/2026-11-05-LEGAL-1.md), then the setup token and the admin password. The
+ * wizard's progress lists them as done.
+ */
+export const SETUP_STEPS = ['legal', 'token', 'password'] as const;
+export type SetupStepId = (typeof SETUP_STEPS)[number];
 
 /** Where the hidden import step slots in, by the step it follows. Nothing renders from this. */
 export const SLOTS = { import: 'storage' } as const;

@@ -45,5 +45,13 @@
 	"auth_error_rate_limited_countdown": "{seconds} 秒后重试。",
 	"auth_error_unlocked": "现在可以重试了。",
 	"auth_error_network": "Lodestar 没有响应。请确认它正在运行，然后重试。",
-	"auth_error_server": "服务器出现问题。请重试；如果仍然发生，请查看 Lodestar 的日志。"
+	"auth_error_server": "服务器出现问题。请重试；如果仍然发生，请查看 Lodestar 的日志。",
+	"auth_notice_label": "法律声明",
+	"auth_notice_loading": "正在加载法律声明…",
+	"auth_notice_failed": "无法加载法律声明。请确认 Lodestar 正在运行，然后重试。",
+	"auth_notice_retry": "重试",
+	"auth_notice_title": "法律声明",
+	"auth_notice_lead": "请阅读法律声明，然后接受以继续。",
+	"auth_notice_accept": "我已阅读，继续",
+	"auth_notice_gate_changed": "法律声明再次更新。请阅读新版本，然后接受。"
 }

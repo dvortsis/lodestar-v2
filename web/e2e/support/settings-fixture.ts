@@ -23,7 +23,7 @@ const value = (v: unknown): components['schemas']['SettingValue'] => ({
 
 /** Answers the index plus every section: General has its one field, others are empty. */
 export function mockSettings(mock: OpenApiMock): void {
-	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+	mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
 	mock.on('listSettings', SETTINGS_INDEX);
 	mock.on('getSettings', (request) => {
 		const section = new URL(request.url()).pathname.split('/').at(-1)!;
