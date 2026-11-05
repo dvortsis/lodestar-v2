@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T20:54Z",
+  "updated_at": "2026-11-05T21:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5513,7 +5513,8 @@
       "analyze": "--c-allocator mimalloc",
       "note": "Container settings to be compared with r4 run.json by the dashboard session (read-only).",
       "settings_check": "2026-11-05T07:08Z read-only r4 vs r5 run.json + docker inspect: container settings identical (user 0:0, ports, env, log opts, no THP env); expected diffs only (commit, root, mounts, collector script, image, identities, times); one other: user_timezone America/Denver (r4) vs UTC (r5), labels only, accepted (§2.35). r4 run.json d074cb56…ae31b, r5 run.json 728a9ee4…f59."
-    }
+    },
+    "r5 h7.77 (20:58Z): clean; private 252.2 (h3, 2,739) / 272.1 (h6, 4,855) / 288.0 (h7.8, 6,281) MiB, ~10 KB/stored torrent pre-window (provisional, not the gate); 128-512 KiB band 2 (r4 1,843); mimalloc committed 594 MB ~flat; segments 4/6. Next check ~03:15Z with h9/h12/h14 and a provisional h12-14 fit."
   ],
   "limits": {
     "phase_total": 12,
