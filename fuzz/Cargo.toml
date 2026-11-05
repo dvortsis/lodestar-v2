@@ -186,6 +186,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "tpdb"
+path = "fuzz_targets/tpdb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "stashdb"
 path = "fuzz_targets/stashdb.rs"
 test = false

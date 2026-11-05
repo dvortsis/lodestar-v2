@@ -1,0 +1,86 @@
+# The lures pack's corpus (RP-1). Format: crates/filter/src/corpus.rs.
+# Every name is made up; nothing points to a real release.
+
+rule LU-1
+match Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.rar
+  file 1K Password.txt
+match Example.Show.S01.720p.WEB
+  file 3G Example.Show.S01.720p.WEB.zip
+  file 1K Click here for the password.txt
+match Example.Movie.2020.2160p.UHD
+  file 9G Example.Movie.2020.2160p.UHD.7z
+  file 2K Get the key.html
+miss Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.mkv
+  file 1K Password.txt
+miss Example.Movie.2019.1080p.BluRay.x264-GRP
+  file 50M grp-example.rar
+  file 50M grp-example.r00
+  file 50M grp-example.r01
+  file 1K grp-example.sfv
+  file 3K grp-example.nfo
+miss Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.rar
+  file 100K Password list.txt
+
+rule LU-2
+match Example.Movie.2019.1080p
+  file 4G Example.Movie.2019.1080p.rar
+  file 1K How to open.txt
+match Example.Show.S03.1080p
+  file 6G Example.Show.S03.1080p.zip
+  file 1K Download from here.txt
+match Example.Movie.2021.720p
+  file 2G Example.Movie.2021.720p.7z
+  file 2K How to extract the files.html
+miss Example.Movie.2019.1080p
+  file 4G Example.Movie.2019.1080p.mkv
+  file 1K How to open.txt
+miss Example.Movie.2019.1080p
+  file 4G Example.Movie.2019.1080p.rar
+  file 1K readme.txt
+miss Sample Band - Example Album (2020)
+  file 300M Example Album.zip
+  file 40M bonus.flac
+  file 1K How to open.txt
+
+rule LU-3
+match Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.mkv
+  file 1K Example Site.url
+match Sample Band - Example Album (2020) [FLAC]
+  file 30M 01 - Example Song.flac
+  file 1K Visit us.url
+match Example.Show.S01E01.720p.WEB
+  file 700M Example.Show.S01E01.720p.WEB.mkv
+  file 1K More releases.url
+miss Example Tool v1.2 x64
+  file 50M setup.exe
+  file 1K Homepage.url
+miss Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.mkv
+  file 2K Example.Movie.2019.1080p.WEB.nfo
+miss Example Novel
+  file 2M Example Novel.epub
+  file 1K Author site.url
+
+rule LU-4
+match Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.rar
+  file 1K Complete a survey to unlock.txt
+match Example.Show.S01.1080p
+  file 6G Example.Show.S01.1080p.zip
+  file 2K Human verification required.html
+match Example Game 2019
+  file 4G Example Game 2019.zip
+  file 1K Unlock password.txt
+miss Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.mkv
+  file 1K readme.txt
+miss Example Tool v1.2 x64
+  file 50M setup.exe
+  file 1K Verify checksums.txt
+miss Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.rar
+  file 1K Password.txt

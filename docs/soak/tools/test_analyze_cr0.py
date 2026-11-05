@@ -733,6 +733,43 @@ class AnalyzerTests(unittest.TestCase):
         self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 0.75, places=3)
         self.assertIn("read it with the AnonHugePages row", markdown(analyze(self.root)))
 
+    def test_the_attribution_table_stays_one_table(self):
+        # Every series, other-heap and segment row sits in one unbroken block of
+        # table lines; the approximation note comes after it.
+        self.rows(self.attribution_rows())
+        lines = markdown(analyze(self.root)).splitlines()
+        start = lines.index("| Series | First | Last | Max | Slope per hour | Samples |")
+        end = start
+        while end < len(lines) and lines[end].startswith("|"):
+            end += 1
+        table = lines[start:end]
+        self.assertTrue(any(l.startswith("| Segments, main (count) |") for l in table), table)
+        self.assertTrue(any(l.startswith("| Segments, files (count) |") for l in table), table)
+        self.assertTrue(any(l.startswith("| Other heap") for l in table), table)
+        self.assertLess(end + 1, len(lines), "the note is missing after the table")
+        self.assertEqual(lines[end], "")
+        self.assertTrue(lines[end + 1].startswith("Other heap is an approximation"), lines[end + 1])
+
+    def test_a_restart_seen_only_in_a_failed_read_still_refuses(self):
+        # The gate counts every baseline row for the process; so must this section.
+        # A failed read has no values (as in test_memory_fit_ignores_a_failed_metrics_read).
+
+        def failed(change):
+            rows = self.attribution_rows()
+            for row in rows[len(rows) * 3 // 4::50]:
+                row.update(metrics_ok=False, values={}, **change)
+            for row in rows:
+                row.setdefault("process_identity", "p1")
+            self.rows(rows)
+            report = analyze(self.root)
+            return report["memory_fit"]["refused"], report["memory_attribution"]["refused"]
+        # Another process, seen only in failed reads.
+        self.assertEqual(failed({"process_id": 456}), ("identity_change", "identity_change"))
+        # The same process id, another identity, seen only in failed reads.
+        self.assertEqual(failed({"process_identity": "other"}), ("identity_change", "identity_change"))
+        # Failed reads of the same process lack a start time: no restart.
+        self.assertEqual(failed({}), (None, None))
+
     def test_snapshots_without_the_memory_metrics_report_them_absent(self):
         # An r4-style run: snapshots carry other series, none of X-mem-gauges'.
         rows = self.memory_rows(0.0)

@@ -15,6 +15,7 @@
 //! authoritatively, at commit (§19.4).
 
 mod core;
+pub mod corpus;
 mod engine;
 mod fasttok;
 mod hash;

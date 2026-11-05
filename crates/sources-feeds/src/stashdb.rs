@@ -36,8 +36,8 @@
 //! `{"data": {"findScene": scene | null}}`, with an optional `errors`
 //! array, which is counted and never read.
 
-use crate::common::{self, Bad, clean_title, days_in_month, prepare, small, unsafe_char};
-pub use crate::common::{MAX_TITLE, Stop};
+use crate::common::{self, Bad, days_in_month, prepare, small, unsafe_char};
+pub use crate::common::{MAX_NAME, MAX_TITLE, Stop};
 use crate::json::{self, R, Reader, TextError, Walk};
 
 /// Searches scenes by text: the display name, or the parsed site, date
@@ -59,8 +59,6 @@ id title release_date studio { id name } performers { performer { name } } } }";
 
 /// Bytes in a StashDB id: a UUID, `8-4-4-4-12` hex digits.
 pub const ID_LEN: usize = 36;
-/// Bytes in a kept studio or performer name.
-pub const MAX_NAME: usize = 256;
 /// The page a kept scene id links to ([`Match::link`]).
 pub const SCENES: &str = "https://stashdb.org/scenes/";
 
@@ -82,10 +80,11 @@ pub struct Limits {
     pub max_performers: usize,
     /// Elements in one array the parser reads past inside a scene; over
     /// it the scene is skipped, or the studio or performer entry it's in
-    /// dropped.
+    /// dropped, or ignored in an entry past the cap.
     pub max_array: usize,
     /// Raw bytes of a string the parser reads; over it the scene is
-    /// skipped, or the studio or performer entry it's in dropped.
+    /// skipped, or the studio or performer entry it's in dropped, or
+    /// ignored in an entry past the cap.
     pub max_text: usize,
 }
 
@@ -483,9 +482,8 @@ impl Parser<'_, '_> {
             F_ID => d.id = self.id(d)?,
             F_TITLE => {
                 if let Some(t) = self.text(d)? {
-                    // Cut to [`MAX_TITLE`] as the other feeds do.
-                    let t = clean_title(t.trim()).trim().to_owned();
-                    d.title = Some(t).filter(|t| !t.is_empty());
+                    // The enrichment parsers' one title rule (ENR-2b, D4).
+                    d.title = common::title(&t);
                 }
             }
             F_DATE => {
@@ -496,16 +494,16 @@ impl Parser<'_, '_> {
                     }
                 }
             }
-            F_STUDIO => d.studio = self.studio(d)?,
+            F_STUDIO => d.studio = self.studio()?,
             _ => self.performers(d)?,
         }
         Ok(())
     }
 
     /// `studio`: `null`, or an object with an id and a name. Any other
-    /// type spoils the scene; an object without a valid id and name is
-    /// dropped and the scene kept.
-    fn studio(&mut self, d: &mut Draft) -> R<Option<Studio>> {
+    /// type, or an object without a valid id and name, is dropped and the
+    /// scene kept: the shared degrade rule (runner, ENR-2b review).
+    fn studio(&mut self) -> R<Option<Studio>> {
         match self.j.peek() {
             Some(b'n') => self.j.skip().map(|_| None),
             Some(b'{') => {
@@ -525,23 +523,28 @@ impl Parser<'_, '_> {
                     .filter(|_| ok)
                     .map(|(id, name)| Studio { id, name }))
             }
-            _ => self.wrong(d).map(|()| None),
+            _ => self.skip_in(&mut Draft::default()).map(|()| None),
         }
     }
 
     /// `performers`: `null`, or a list of `{"performer": {"name": …}}`.
-    /// Any other type spoils the scene. An entry past
-    /// [`Limits::max_performers`], or without one usable name, is left
-    /// out and sets `truncated`; nothing is stored past the cap.
+    /// Any other type is dropped and sets `truncated`; the scene is kept.
+    /// An entry without one usable name is left out and sets `truncated`.
+    /// The cap counts kept performers, so a bad entry doesn't use it up;
+    /// once [`Limits::max_performers`] are kept, the rest are only read
+    /// past and set `truncated`.
     fn performers(&mut self, d: &mut Draft) -> R<()> {
         match self.j.peek() {
             Some(b'n') => return self.j.skip().map(drop),
             Some(b'[') => {}
-            _ => return self.wrong(d),
+            _ => {
+                d.truncated = true;
+                return self.skip_in(&mut Draft::default());
+            }
         }
         let max = self.l.max_performers;
-        self.array(|p, n| {
-            if n >= max {
+        self.array(|p, _| {
+            if d.performers.len() >= max {
                 d.truncated = true;
                 return p.j.skip().map(drop);
             }

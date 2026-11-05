@@ -1,0 +1,14 @@
+{
+  "data": {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "title": "Synthetic Movie",
+    "type": "Movie",
+    "date": "2022-06-15",
+    "site": {"name": "Example Movie Studio"},
+    "performers": [
+      {"id": "00000000-0000-4000-8000-0000000000a1", "name": "Example Performer One"},
+      {"id": "00000000-0000-4000-8000-0000000000a5", "name": "Example Performer Five"}
+    ],
+    "scenes": [{"id": "00000000-0000-4000-8000-000000000001", "title": "Synthetic Scene One"}]
+  }
+}

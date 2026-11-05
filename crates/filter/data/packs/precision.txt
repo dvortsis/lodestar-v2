@@ -1,0 +1,130 @@
+# The pack precision corpus (RP-1, §20.6's guard column, §20.8):
+# legitimate items each false-positive guard exists for. No pack rule may
+# hold any of them, except a rule named on its `gap` line. Format:
+# crates/filter/src/corpus.rs. Every name is made up; nothing points to a
+# real release.
+
+# Disc PC players (MW-2, MW-3: `has:bdmv|video_ts`).
+item Example.Movie.2019.1080p.BluRay
+  file 20G BDMV/STREAM/00001.m2ts
+  file 1K BDMV/index.bdmv
+  file 2M PC/Player Setup.exe
+  guards MW-2 MW-3
+item Example.Movie.2019.DVD
+  file 1G VIDEO_TS/VTS_01_1.VOB
+  file 20K VIDEO_TS/VTS_01_0.IFO
+  file 20K VIDEO_TS/VIDEO_TS.IFO
+  file 2M PC/Example Player Install.exe
+  guards MW-2 MW-3
+
+# Music production packs: VST plug-ins and sample libraries (MW-2).
+# Known gap: MW-2@1 has no music-production guard, so a pack the
+# classifier calls music, with its installer, is hidden (RP-1 decisions).
+item Example Synth VST Collection v2.1 x64
+  file 40M setup.exe
+  file 20M Presets/Bass 01.wav
+  file 20M Presets/Lead 01.wav
+  guards MW-2
+  gap MW-2
+item Example Drum Samples Vol 3 WAV
+  file 30M Kicks/Kick 01.wav
+  file 30M Snares/Snare 01.wav
+  file 2M Installer.exe
+  guards MW-2
+  gap MW-2
+
+# Software that ships a codec or player (MW-2, MW-3: `unless type:software`;
+# MW-4: an executable without a tiny HD video isn't enough).
+item Example Video Codec Pack v15.2 x64
+  file 40M setup.exe
+  file 2M codec.exe
+  guards MW-2 MW-3 MW-4
+
+# A game that ships its own screensaver (MW-5: `unless type:software`).
+item Example Game v1.2 REPACK
+  file 2M setup.exe
+  file 4G data1.bin
+  file 4G data2.bin
+  file 3M Example Game Screensaver.scr
+  guards MW-5
+
+# Screensavers (MW-5: `unless type:software` with screensaver context).
+item Example Aquarium Screensaver v1.0
+  file 2M setup.exe
+  file 8M Aquarium.scr
+  guards MW-5
+
+# Scene RAR sets (LU-1, FK-1, FK-5: `.sfv`/`.nfo`, no password file).
+item Example.Movie.2019.1080p.BluRay.x264-GRP
+  file 50M grp-example.rar
+  file 50M grp-example.r00
+  file 50M grp-example.r01
+  file 1K grp-example.sfv
+  file 3K grp-example.nfo
+  guards LU-1 FK-1 FK-5
+item Example.Show.S01E01.720p.HDTV.x264-GRP
+  file 50M grp-show.part1.rar
+  file 50M grp-show.part2.rar
+  file 3K grp-show.nfo
+  guards LU-1 FK-5
+
+# Disc images (FK-1: `unless` disc images).
+item Example.Movie.2019.1080p.BluRay.ISO
+  file 25G Example.Movie.2019.1080p.BluRay.iso
+  guards FK-1
+
+# Samples and trailers (FK-2; MW-4: a tiny HD video without an executable
+# isn't enough).
+item Example.Movie.2019.1080p.BluRay.Sample
+  file 20M Example.Movie.2019.1080p.BluRay.Sample.mkv
+  guards FK-2 MW-4
+item Example Movie 2019 Official Trailer 1080p
+  file 25M Example Movie 2019 Official Trailer 1080p.mp4
+  guards FK-2 MW-4
+item Example.Movie.2019.1080p.WEB
+  file 30M Sample/example-preview.mkv
+  guards FK-2
+
+# Short-episode packs (FK-2).
+# Known gap: FK-2@1 has no short-episode guard, so a pack of short HD
+# episodes under 40 MiB each is flagged (RP-1 decisions).
+item Example Shorts S01 1080p WEB
+  file 35M Example Shorts S01E01 1080p WEB.mkv
+  file 35M Example Shorts S01E02 1080p WEB.mkv
+  file 35M Example Shorts S01E03 1080p WEB.mkv
+  file 35M Example Shorts S01E04 1080p WEB.mkv
+  guards FK-2
+  gap FK-2
+
+# Real media beside an archive and a note (LU-2: not when real media is
+# present).
+item Example.Movie.2019.1080p.WEB
+  file 4G Example.Movie.2019.1080p.WEB.Extras.zip
+  file 1G Example.Movie.2019.1080p.WEB.mkv
+  file 1K How to open.txt
+  guards LU-2
+
+# Discographies and complete collections (SP-2: excluded through the file
+# structure).
+item Sample Band - Discography - Sample Band - Album 01 [FLAC] - Sample Band - Album 02 [FLAC] - Sample Band - Album 03 [FLAC] - Sample Band - Album 04 [FLAC] - Sample Band - Album 05 [FLAC] - Sample Band - Album 06 [FLAC] - Sample Band - Album 07 [FLAC] - Sample Band - Album 08 [FLAC] - Sample Band - Album 09 [FLAC] - Sample Band - Album 10 [FLAC] - Sample Band - Album 11 [FLAC] - Sample Band - Album 12 [FLAC] - Sample Band - Album 13 [FLAC] - Sample Band - Album 14 [FLAC] - Sample Band - Album 15 [FLAC] - Sample Band - Album 16 [FLAC] - Sample Band - Album 17 [FLAC] - Sample Band - Album 18 [FLAC] - Sample Band - Album 19 [FLAC] - Sample Band - Album 20 [FLAC]
+  file 300M Album 01/01 - Example Song.flac
+  file 300M Album 02/01 - Another Song.flac
+  file 300M Album 03/01 - Third Song.flac
+  guards SP-2
+
+# Offline software cracks (SC-1: offline software isn't covered).
+item Deezer Offline Music Player v3.0 Premium Activator
+  file 80M setup.exe
+  file 1M activator.exe
+  guards SC-1
+item Netflix Offline Downloader Premium v2.1
+  file 30M setup.exe
+  guards SC-1
+
+# Single-player trainers and mods (SC-2).
+item Fortnite Creative Aim Trainer Map Free
+  file 1M aim-trainer.zip
+  guards SC-2
+item Fortnite Replay Mod Free
+  file 2M replay-mod.zip
+  guards SC-2
