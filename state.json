@@ -4921,7 +4921,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T00:35Z",
+    "updated": "2026-11-05T00:37Z",
     "items": [
       {
         "slot": 1,
@@ -4930,6 +4930,14 @@
         "agent": "claude",
         "doing": "Making mimalloc serve SQLite and zstd too in the release build (one allocator), the likely fix for soak r4's memory growth.",
         "since": "2026-11-04T23:38Z"
+      },
+      {
+        "slot": 2,
+        "slice": "X-legal-docs",
+        "role": "docs",
+        "agent": "claude",
+        "doing": "PR #447: owner decisions §2.38–§2.39 (Legal Notice, rule packs on by default), the legal docs and the specs for LEGAL-1, RP-DEF and RP-UC. Reviewed; waiting for green CI.",
+        "since": "2026-11-05T00:37Z"
       },
       {
         "slot": 3,
