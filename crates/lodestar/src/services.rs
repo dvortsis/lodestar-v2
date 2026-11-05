@@ -360,6 +360,12 @@ impl Services {
         let reader = Arc::new(Mutex::new(reader));
         let (cache_hints, cache_task) = match cache_feed {
             Some(feed) => {
+                // Its own read-only connection, so its store reads never
+                // wait on the API's.
+                let (db, store_config) = (config.db_path(), config.store_config());
+                let cache_reader =
+                    tokio::task::spawn_blocking(move || Store::open_reader(db, store_config))
+                        .await??;
                 let (hints, interest) = crate::torrent_cache::InterestHints::new();
                 let (stop, stopped) = watch::channel(false);
                 let task = crate::torrent_cache::run(
@@ -367,7 +373,7 @@ impl Services {
                         feed,
                         verified: cache.verified,
                         queue: cache.queue,
-                        reader: reader.clone(),
+                        reader: Arc::new(Mutex::new(cache_reader)),
                         interest,
                         page_every: crate::torrent_cache::PAGE_EVERY,
                     },

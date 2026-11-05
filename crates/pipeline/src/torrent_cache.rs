@@ -371,8 +371,9 @@ pub struct CacheStats {
     /// Refused before the filter: a hash mismatch, the floor's hash list,
     /// or a dict that doesn't parse or prepare ([`Refusal`]).
     pub refused: AtomicU64,
-    /// Held under rules that changed before the commit: not written. The
-    /// cursor offers the key again next round.
+    /// Held under rules that changed before the commit: judged again by
+    /// the writer under the current ones (and, should they change again
+    /// meanwhile, dropped unwritten).
     pub stale: AtomicU64,
     /// Lost to a store error.
     pub errors: AtomicU64,
@@ -386,6 +387,10 @@ pub(crate) struct ToCommit {
     pub claims: lodestar_sources::claims::Claims,
     pub provenance: lodestar_sources::claims::Provenance,
     pub at: i64,
+    /// The info dict's raw bytes, kept for a `Held` only: the writer
+    /// judges it again when the rules changed before its commit.
+    pub info_raw: Vec<u8>,
+    pub key: InfoHash,
 }
 
 /// A feed's channel: its sending half for the host, and the receiving
@@ -434,12 +439,15 @@ pub(crate) async fn judge_task(
             stats.torrent_cache.refused.fetch_add(1, Ordering::Relaxed);
             continue;
         }
+        let held = matches!(judged, Judged::Held { .. });
         let commit = ToCommit {
             source,
             judged,
             claims: f.claims,
             provenance: f.provenance,
             at: now,
+            info_raw: if held { f.info_raw } else { Vec::new() },
+            key: f.key,
         };
         if out.send(commit).await.is_err() {
             return;

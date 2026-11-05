@@ -275,7 +275,9 @@ impl Committing {
                 verdict: a.verdict,
                 version: a.version,
                 fix: a.fix,
-                // A private key is never looked up (§18.7).
+                // A private key is never looked up (§18.7); whether a
+                // private source stored it since is read at the commit's
+                // judge (`stored_private`).
                 private_source: false,
                 // Decided at commit (`source_adult`): the item it promotes,
                 // or a stored torrent under its hash.
@@ -1013,6 +1015,7 @@ impl Writer {
         retry: &mpsc::Sender<Discovery>,
     ) {
         use crate::torrent_cache::Judged;
+        let batch = self.rejudge_stale_holds(batch).await;
         let version = self.filter.current().version;
         let cs = &self.stats.torrent_cache;
         let mut admitted = Vec::new();
@@ -1095,6 +1098,49 @@ impl Writer {
         if !found.is_empty() {
             self.ingest_found(found, false).await;
         }
+    }
+
+    /// Judges again, on the blocking pool and under the current rules,
+    /// each held cache file that was judged under rules that have changed
+    /// since: a looser rule set may now store it, a stricter one still
+    /// holds it. Counted as `stale`.
+    async fn rejudge_stale_holds(
+        &mut self,
+        mut batch: Vec<crate::torrent_cache::ToCommit>,
+    ) -> Vec<crate::torrent_cache::ToCommit> {
+        use crate::torrent_cache::Judged;
+        let engine = self.filter.current();
+        let stale = |t: &crate::torrent_cache::ToCommit| matches!(t.judged, Judged::Held { version, .. } if version != engine.version);
+        let n = batch.iter().filter(|t| stale(t)).count();
+        if n == 0 {
+            return batch;
+        }
+        self.stats
+            .torrent_cache
+            .stale
+            .fetch_add(n as u64, Ordering::Relaxed);
+        let store = self.store.take().expect("store");
+        let sealer = self.sealer.clone();
+        let (store, batch) = tokio::task::spawn_blocking(move || {
+            let mut preparer = store.preparer();
+            for t in &mut batch {
+                if matches!(t.judged, Judged::Held { version, .. } if version != engine.version) {
+                    t.judged = crate::torrent_cache::judge_sealed(
+                        &engine,
+                        &mut preparer,
+                        sealer.as_deref(),
+                        t.key,
+                        &t.info_raw,
+                        unix_now(),
+                    );
+                }
+            }
+            (store, batch)
+        })
+        .await
+        .expect("cache rejudge task");
+        self.store = Some(store);
+        batch
     }
 
     /// Writes held cache files' holds (SRC-13b) as a held ingest verdict is
@@ -1337,6 +1383,10 @@ impl Writer {
                     self.gate.exclude(Excluded::Rediscovered, 1);
                     self.rollups
                         .add(at, metric::REDISCOVERED, source, i64::from(strategy), 1);
+                }
+                #[cfg(test)]
+                if self.crash_before_adult {
+                    return;
                 }
                 self.adult_by_source(adult_ids).await;
             }
@@ -1631,6 +1681,12 @@ fn judge(
     // registered. A read error counts as having items: stricter.
     let unverified = !adult.is_empty() && store.has_unverified().unwrap_or(true);
     for c in &mut committing {
+        // A cache's file was looked up as public. Whether a private
+        // source has stored the key since is read here, so the commit
+        // never clears a private mark from the lookup's old view.
+        if !c.leased {
+            c.results.private_source = stored_private(store, &c.results);
+        }
         // Found by an always-adult source the worker didn't see: the
         // lease's, or the source of an unverified item it promotes.
         // Judged again as adult before anything is stored.
@@ -1653,6 +1709,27 @@ fn judge(
         }
     }
     committing
+}
+
+/// Whether the store holds `r`'s key as private now: a torrent under one
+/// of its swarm hashes marked `private_source`, or an unverified item
+/// under one that is. A read error counts as private: stricter. Blocking.
+/// The writer is the store's only writer apart from imports, which never
+/// clear a private mark, so what's read here holds at the commit.
+fn stored_private(store: &Store, r: &Results) -> bool {
+    r.torrent.swarm_hashes().any(|h| {
+        let torrent = match store.find(&h) {
+            Ok(Some(id)) => store.torrent(id).map_or(true, |t| {
+                t.is_some_and(|t| t.flags & flags::PRIVATE_SOURCE != 0)
+            }),
+            Ok(None) => false,
+            Err(_) => true,
+        };
+        torrent
+            || store
+                .unverified(Network::Bt, &h.0)
+                .map_or(true, |i| i.is_some_and(|i| i.private_source))
+    })
 }
 
 /// Whether an always-adult source found what `c` commits, besides the
@@ -3836,12 +3913,15 @@ mod tests {
             claims: Default::default(),
             provenance: Default::default(),
             at: unix_now(),
+            info_raw: raw,
+            key,
         }
     }
 
     /// A cache's file admitted under rules that changed before its commit
     /// is judged again by the writer: a drop rule added since holds it.
-    /// One held under rules that changed since isn't written at all.
+    /// One held under rules that changed since is judged again too: with
+    /// the rule gone, it's stored; with it still there, it's held.
     #[tokio::test]
     async fn the_writer_judges_a_stale_cache_file_again() {
         let funnel = Arc::new(FunnelCounts::default());
@@ -3871,7 +3951,8 @@ mod tests {
         // Never the crawl's: the gate saw nothing.
         assert_eq!(gate.excluded(Excluded::Filtered), 0);
 
-        // Held under the drop rule, then the rules move on: not written.
+        // Held under the drop rule, then the rules change with the rule
+        // still there: judged again, and held.
         let held = cached(&w, "Bunny Returns", cache);
         let held_key = match &held.judged {
             crate::torrent_cache::Judged::Held { hashes, .. } => InfoHash(hashes[0]),
@@ -3881,9 +3962,29 @@ mod tests {
         w.commit_cache(vec![held], &retry).await;
         let cs = &w.stats.torrent_cache;
         assert_eq!(cs.stale.load(Ordering::Relaxed), 1);
-        assert_eq!(cs.held.load(Ordering::Relaxed), 1);
+        assert_eq!(cs.held.load(Ordering::Relaxed), 2);
         let store = w.store.as_ref().unwrap();
-        assert_eq!(store.held_among(&[held_key.0]).unwrap(), [false]);
+        assert_eq!(store.held_among(&[held_key.0]).unwrap(), [true]);
+
+        // Held under the drop rule, then the rule goes: judged again under
+        // the rules as they are now, and stored.
+        let held = cached(&w, "Bunny Again", cache);
+        let again_key = match &held.judged {
+            crate::torrent_cache::Judged::Held { hashes, .. } => InfoHash(hashes[0]),
+            j => panic!("not held: {j:?}"),
+        };
+        w.filter.update_engine(|e| {
+            e.load_rules(&lodestar_store::RuleSet::default());
+            e.version += 1;
+        });
+        w.commit_cache(vec![held], &retry).await;
+        let cs = &w.stats.torrent_cache;
+        assert_eq!(cs.stale.load(Ordering::Relaxed), 2);
+        assert_eq!(cs.held.load(Ordering::Relaxed), 2);
+        assert_eq!(cs.stored.load(Ordering::Relaxed), 1);
+        let store = w.store.as_ref().unwrap();
+        assert!(store.find(&again_key).unwrap().is_some());
+        assert_eq!(store.held_among(&[again_key.0]).unwrap(), [false]);
     }
 
     /// A clean cache file with no item under its key is stored as a new
@@ -3999,5 +4100,96 @@ mod tests {
         assert_eq!(cs.errors.load(Ordering::Relaxed), 1);
         assert_eq!(cs.stored.load(Ordering::Relaxed), 0);
         assert_eq!(w.gate.excluded(Excluded::StoreFailed), 0);
+    }
+
+    /// The crash window on the claims path (runner's review of #479): an
+    /// always-adult source's claims on a stored torrent set its bit in
+    /// `put_unverified`'s transaction, which marks the row there, so a
+    /// failure before `adult_by_source` (simulated) leaves it for the
+    /// backfill.
+    #[tokio::test]
+    async fn a_crash_after_always_adult_claims_leaves_the_row_marked() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 1).unwrap();
+        let adult = store.register_source("adult", "1", 1).unwrap();
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.adult = AdultSources(bit(adult));
+        w.arm_adult_mark();
+        let (id, key) = stored_by(&mut w, "Garden Tour 2024", dht);
+        w.crash_before_adult = true;
+        let claims = lodestar_sources::Claims {
+            name: Some("Clips".into()),
+            ..Default::default()
+        };
+        let d = Discovery {
+            source: adult,
+            found: lodestar_sources::Found::key(key, 0).with_claims(claims),
+            at: unix_now(),
+            reply: false,
+        };
+        w.ingest_found(vec![d], true).await;
+        assert_eq!(w.stats.unverified.on_torrent.load(Ordering::Relaxed), 1);
+        let adult_code = Some(ContentType::Adult.code());
+        let unenriched = |w: &Writer| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+                .unwrap()
+        };
+        assert_ne!(
+            w.store.as_ref().unwrap().content_type(id).unwrap(),
+            adult_code
+        );
+        assert_eq!(unenriched(&w), [id], "marked by the claims' transaction");
+        w.backfill_done = false;
+        w.backfill().await;
+        assert_eq!(
+            w.store.as_ref().unwrap().content_type(id).unwrap(),
+            adult_code
+        );
+        assert!(unenriched(&w).is_empty());
+    }
+
+    /// A key a private source stored after the cache's lookup stays
+    /// private: the commit reads the store's mark, never the lookup's.
+    #[tokio::test]
+    async fn a_cache_file_never_clears_a_private_mark_set_since_its_lookup() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let feed = store.register_source("private_feed", "1", 1).unwrap();
+        let cache = store.register_source("torrent_cache", "1", 1).unwrap();
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        let (retry, _rx) = mpsc::channel(4);
+        let c = cached(&w, "Sintel 2011", cache);
+        // Stored by a private source after the lookup, before the commit.
+        let r = results_named("Sintel 2011");
+        let id = w
+            .store
+            .as_mut()
+            .unwrap()
+            .write(&WriteBatch {
+                prepared: &[PreparedTorrent {
+                    torrent: &r.torrent,
+                    discovered_at: 0,
+                    metadata_at: 0,
+                    extra_flags: flags::PRIVATE_SOURCE,
+                    source: feed,
+                    verified: true,
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap()
+            .prepared[0]
+            .stored()
+            .unwrap();
+        w.commit_cache(vec![c], &retry).await;
+        assert_eq!(w.stats.torrent_cache.existing.load(Ordering::Relaxed), 1);
+        let row = w.store.as_ref().unwrap().torrent(id).unwrap().unwrap();
+        assert_ne!(row.flags & flags::PRIVATE_SOURCE, 0, "still private");
+        assert_ne!(row.sources & bit(cache), 0);
     }
 }
