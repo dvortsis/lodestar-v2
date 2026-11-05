@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T18:39Z",
+  "updated_at": "2026-11-05T18:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3186,13 +3186,16 @@
       "done": "2026-11-05T15:56Z"
     },
     "ENR-4": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhn9nYcoG92h6XmRaJTH",
       "since": "2026-11-05T15:55Z",
       "model": "sonnet",
       "brief": "briefs/ENR-4.md",
       "pr": 503,
-      "head": "a4922b17"
+      "head": "a4922b17",
+      "merge": "ed3e0878",
+      "archived": true,
+      "done": "2026-11-05T18:50Z"
     },
     "ENR-5": {
       "status": "running",
@@ -5461,7 +5464,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T18:39Z",
+    "updated": "2026-11-05T18:50Z",
     "items": [
       {
         "slot": 1,
@@ -5470,14 +5473,6 @@
         "agent": "claude",
         "doing": "Enrichment: the StashDB plugin, built but not registered until the terms check",
         "since": "2026-11-05T18:15Z"
-      },
-      {
-        "slot": 2,
-        "slice": "ENR-4",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Enrichment: the ThePornDB plugin, built but not registered until the terms check",
-        "since": "2026-11-05T15:55Z"
       },
       {
         "slot": 3,
