@@ -991,13 +991,15 @@ fn scrub_text_slow(text: &str) -> String {
     // output no longer shows the real one. Only when there are any: the wide
     // output's reading only for a look-alike the reading above doesn't map.
     let new = |c: char| look_alike(c, false).is_none() && look_alike(c, true).is_some();
-    let wide_needs = !wide.is_ascii() && wide.chars().any(new);
+    let wide_needs = (!wide.is_ascii() || wide.contains('\u{b}')) && wide.chars().any(new);
     for read in [wide_needs.then_some(&*wide), Some(text)]
         .into_iter()
         .flatten()
     {
         if let std::borrow::Cow::Owned(ascii) = ascii_separators(read, true) {
-            out = only_more(&out, &wide::redact_secrets(&ascii));
+            // Runs hidden as the stages hide them, so a word glued to one
+            // (`<hash>日本`) is the same word in both.
+            out = only_more(&out, &hide_runs(&wide::redact_secrets(&ascii)));
         }
     }
     // The original text read with URL forms rewritten even in a credential's
@@ -1017,7 +1019,8 @@ fn scrub_text_slow(text: &str) -> String {
 /// - the colons `：` `︓` `﹕` `∶` `꞉` `︰` `։` `׃` as `:`;
 /// - the equals signs `＝` `﹦` `꞊` as `=`;
 /// - every other Unicode space (no-break, ideographic, the en and thin
-///   spaces…) and the zero-width ones (U+200B, U+2060, U+FEFF) as a space.
+///   spaces…), the vertical tab (no ASCII whitespace to the credential
+///   rules) and the zero-width spaces (U+200B, U+2060, U+FEFF) as a space.
 ///
 /// None of them is a word's character, so mapping them keeps the words.
 /// The length mark `ː` (U+02D0) is left out: it's a letter, so mapping it
@@ -1032,14 +1035,15 @@ fn look_alike(c: char, all: bool) -> Option<char> {
         | '\u{05c3}' => Some(':'),
         '\u{fe66}' | '\u{a78a}' => Some('='),
         '\u{200b}' | '\u{2060}' | '\u{feff}' => Some(' '),
-        c if !c.is_ascii() && c.is_whitespace() => Some(' '),
+        c if c.is_whitespace() && !c.is_ascii_whitespace() => Some(' '),
         _ => None,
     }
 }
 
 /// `text` with each [`look_alike`] written in ASCII.
 fn ascii_separators(text: &str, all: bool) -> std::borrow::Cow<'_, str> {
-    if text.is_ascii() || !text.chars().any(|c| look_alike(c, all).is_some()) {
+    let maybe = !text.is_ascii() || text.contains('\u{b}');
+    if !maybe || !text.chars().any(|c| look_alike(c, all).is_some()) {
         return text.into();
     }
     text.chars()
@@ -1052,14 +1056,21 @@ fn ascii_separators(text: &str, all: bool) -> std::borrow::Cow<'_, str> {
 /// (X-log-url-redact-3's fast path): it holds none of `:`, `/`, `@`, `%`,
 /// `=` and `"`, and no `bearer`, `lsk_` or `lsf_` in any case (the rules
 /// match `lsk_` and `lsf_` in one case only: the rest is margin), and no
-/// [`look_alike`] of a separator or a space. Every wide rule needs one of
-/// them to fire, so on such a line both stages are
-/// [`hide_runs`] of the text, and `only_more` of two equal outputs is that
-/// output: the decisions file lists each rule's trigger, and
+/// [`look_alike`] of `:` or `=`. Every wide rule needs one of them to fire
+/// (a look-alike space only stands for a space, which makes no cut without
+/// one of the others), so on such a line both stages are [`hide_runs`] of
+/// the text, every other reading finds no cut, and `only_more` of two equal
+/// outputs is that output: the decisions file lists each rule's trigger, and
 /// `the_fast_path_matches_both_stages` checks it.
 fn plain_line(text: &str) -> bool {
-    // What `ascii_separators` maps: the same test, so the two never part.
-    if !text.is_ascii() && text.chars().any(|c| look_alike(c, true).is_some()) {
+    // What `ascii_separators` maps to a separator: the same table, so the
+    // two never part. A look-alike space stays on the fast path (CJK text
+    // holds the ideographic one): mapped to a space, it makes no cut.
+    if !text.is_ascii()
+        && text
+            .chars()
+            .any(|c| matches!(look_alike(c, true), Some(':' | '=')))
+    {
         return false;
     }
     let b = text.as_bytes();
@@ -4168,6 +4179,12 @@ pass:"S3CRET"#,
             "Bearer\u{2060}S3CRETxyz",
             "Bearer\u{1680}S3CRETxyz",
             "Bearer\u{0085}S3CRETxyz",
+            "Bearer\u{b}S3CRETxyz",
+            "password\u{b}:S3CRETxyz",
+            // The wide output's own reading (`wide_needs`): the URL's query
+            // goes, which leaves `pass` before a look-alike and the value.
+            "https://h/pass?x\":\u{3000}\"S3CRETxyz\"",
+            "https://h/pass?x\"\u{fe55}\"S3CRETxyz\"",
             // Why X-log-url-redact-4's reading keeps its three: read with
             // every look-alike, the zero-width space or the ideographic space
             // ends the value early, and only that reading hides it whole.
@@ -4297,11 +4314,19 @@ pass:"S3CRET"#,
             "0123456789ABCDEF0123456789abcdef01234567",
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
             "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U",
+            // Look-alike spaces take the fast path (X-log-url-redact-5): with
+            // no trigger near, the slow path's readings find nothing either.
+            "\u{a0}",
+            "\u{3000}",
+            "\u{2007}",
+            "\u{200b}",
+            "\u{feff}",
+            "\u{b}",
+            "下载完成",
         ];
         const TRIGGERS: &[&str] = &[
             ":", "/", "@", "%", "=", "\"", "Bearer", "bEaReR", "lsk_", "lsf_", "LSF_", "：", "＝",
-            "\u{a0}", "\u{3000}", "\u{2007}", "\u{200b}", "\u{feff}", "\u{fe55}", "\u{2236}",
-            "\u{fe66}", "\u{a78a}",
+            "\u{fe55}", "\u{2236}", "\u{fe66}", "\u{a78a}",
         ];
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut next = |n: usize| {
@@ -4333,8 +4358,19 @@ pass:"S3CRET"#,
         }
         // Each trigger is refused on its own; near misses are accepted.
         for line in [
-            "a:b", "a/b", "a@b", "a%b", "a=b", "a\"b", "Bearer x", "xBEARER", "lsk_1", "Lsf_",
-            "a：b", "a＝b", "a\u{a0}b",
+            "a:b",
+            "a/b",
+            "a@b",
+            "a%b",
+            "a=b",
+            "a\"b",
+            "Bearer x",
+            "xBEARER",
+            "lsk_1",
+            "Lsf_",
+            "a：b",
+            "a＝b",
+            "a\u{fe55}b",
         ] {
             assert!(!plain_line(line), "{line:?}");
         }
@@ -4351,6 +4387,9 @@ pass:"S3CRET"#,
             "© （ｘ）；",
             "a\u{200c}b",
             "naːm",
+            "a\u{a0}b",
+            "共 12\u{3000}个",
+            "x\u{200b}y\u{b}z",
         ] {
             assert!(plain_line(line), "{line:?}");
         }
