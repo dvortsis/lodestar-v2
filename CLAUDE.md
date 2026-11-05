@@ -21,7 +21,7 @@ Read the relevant sections before starting any task. If work changes a decision,
   - Merge `origin/main` only when it's needed (see "Multi-session work"), and never rebase shared branches. Don't push red.
 - **Merging:** PRs merge with green CI and no blocking findings from a fresh Opus reviewer. Only the build runner merges them, falling back to GitHub auto-merge (owner, 2026-10-22 and §2.22); other sessions follow `.claude/skills/steward/SKILL.md` and never merge. A check that's also red on `main`, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block; say so on the PR (`docs/owner-decisions.md` §2.18). Jobs inside the required `ci-ok` check must still pass.
 - **New times in docs and records are UTC** (`Z`). Never write a local time zone, offset or place (`docs/owner-decisions.md` §2.35).
-- **Commits:** imperative subject ≤ 72 chars, a body that explains why, and the Co-Authored-By / Claude-Session trailers the harness supplies. Never put model identifiers in commits, PRs or code.
+- **Commits:** Conventional Commits from 2026-11-06Z: `type(scope): imperative description` ≤ 72 chars, `!` or a `BREAKING CHANGE:` footer for breaking changes (`docs/decisions/2026-11-05-conventional-commits.md`; enable the hook with `git config core.hooksPath .githooks`), a body that explains why, and the Co-Authored-By / Claude-Session trailers the harness supplies. Never put model identifiers in commits, PRs or code.
 - **Tests:** every crate ships unit tests. Parsers (bencode, KRPC, metainfo, query language, release-name parser) also get property tests or `cargo fuzz` targets, plus golden-corpus tests where the plan calls for them. Benchmarks gate budgets once `bench/` exists.
 
 ## Keeping the dashboard current

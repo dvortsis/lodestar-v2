@@ -1,0 +1,9 @@
+# Conventional Commits and SemVer from 2026-11-06 (Z)
+
+Asked by the owner: put commit messages to standard. Refines the "Commits" convention in `CLAUDE.md`; it reverses no owner decision in `docs/owner-decisions.md`. Flagged to the owner for veto (§2.19).
+
+- **Format from 2026-11-06T00:00:00Z on:** `type(scope): imperative description`, subject ≤ 72 chars, no trailing period. Types: `feat fix perf refactor test docs build ci chore revert style`. A breaking change takes `!` after the type/scope or a `BREAKING CHANGE:` footer. Scope is optional and names a durable subsystem (`dht`, `search`, `storage`, `ui`, `packaging`, `ci`), not a directory or a slice id. Body and the harness trailers stay as before.
+- **Version effect (SemVer 2.0.0):** `fix` and `perf` → patch, `feat` → minor, breaking → major (while below 1.0.0, breaking → minor). `docs`, `test`, `ci`, `chore`, `style`, `refactor` do not release on their own. `Cargo.toml` stays the single version source; no tag or release tooling is added by this decision.
+- **History is not rewritten.** About 640 commits, 185 merge commits, hundreds of PR and SHA references, and many concurrent sessions rely on today's SHAs; `CLAUDE.md` forbids rebasing shared branches and direct pushes to `main`. The older commits stay as they are, and the cutoff above is the line.
+- **Exempt:** merge commits and GitHub's `Revert "…"` subjects. PR titles keep `<id>: <title>` because the dashboard reads it; only commit subjects are linted.
+- **Enforcement:** `.github/scripts/check_commits.sh` runs in the new `commit-lint` workflow on every PR and skips commits authored before the cutoff, so PRs opened earlier still pass. It is not yet inside `ci-ok`; the runner decides whether to make it required. Locally, `git config core.hooksPath .githooks` enables a `commit-msg` hook that runs the same check.
