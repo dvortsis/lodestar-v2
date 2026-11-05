@@ -487,17 +487,23 @@ impl Writer {
     /// pass. A separate transaction after the commit: a crash between them
     /// leaves the kind unpinned until the next rules or parser change.
     async fn mark_rewritten(&mut self, ids: Vec<i64>) {
-        if ids.is_empty() {
+        if ids.is_empty() || self.enrichers.0 == 0 {
             return;
         }
         let mut store = self.store.take().expect("store");
-        let (store, result) = tokio::task::spawn_blocking(move || {
+        let (store, result, marked) = tokio::task::spawn_blocking(move || {
             let result = crate::enrich::mark_matched(&mut store, &ids);
-            (store, result)
+            // Failed (a busy claims read): mark them all, as
+            // `adult_by_source` does, so the backfill finds out (ENR-1c).
+            let marked = result.is_err() && store.mark_unenriched(&ids).is_ok();
+            (store, result, marked)
         })
         .await
         .expect("mark task");
         self.store = Some(store);
+        if marked {
+            self.reenrich.store(true, Ordering::Release);
+        }
         match result {
             Ok(marked) if !marked.is_empty() => self.reenrich.store(true, Ordering::Release),
             Ok(_) => {}
@@ -870,10 +876,12 @@ impl Writer {
             .collect();
         // Rows already stored that this commit rewrote (a partial import's
         // upgrade writes prepare's record, which knows no match: ENR-1b).
+        // None while no enrichment source is registered: nothing can hold
+        // a match (ENR-1c).
         let rewritten: Vec<i64> = outcome
             .stored
             .iter()
-            .filter(|s| !s.2)
+            .filter(|s| !s.2 && self.enrichers.0 != 0)
             .map(|s| s.1)
             .collect();
         let committed_at = unix_now();
@@ -2533,6 +2541,7 @@ mod tests {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
         let enr = store.register_source("enr", "1", 1).unwrap();
         let mut w = writer(store, coordinator.clone(), gate);
+        w.enrichers = crate::adult_enrich::EnrichSources(bit(enr));
         let (retry, _retry_rx) = mpsc::channel(4);
         w.commit(
             vec![leased(&coordinator, results())],
@@ -2575,6 +2584,59 @@ mod tests {
         .await;
         assert!(!current(&w), "marked for the backfill");
         assert!(w.reenrich.load(Ordering::Acquire));
+    }
+
+    /// The commit hook's store errors (ENR-1c): a failed claims read marks
+    /// every rewritten row for the backfill and starts the pass, and with no
+    /// enrichment source registered the hook does nothing.
+    #[tokio::test]
+    async fn a_failed_match_read_marks_every_rewritten_row() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let enr = store.register_source("enr", "1", 1).unwrap();
+        let mut w = writer(store, coordinator.clone(), gate);
+        let (retry, _retry_rx) = mpsc::channel(4);
+        let lease = |c: &Coordinator| vec![leased(c, results())];
+        w.commit(lease(&coordinator), vec![], vec![], vec![], &retry)
+            .await;
+        let id = w
+            .store
+            .as_ref()
+            .unwrap()
+            .find(&results().key)
+            .unwrap()
+            .unwrap();
+        let current = |w: &Writer| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .enrichment(id)
+                .unwrap()
+                .unwrap()
+                .version
+                == lodestar_classify::ENRICHMENT_VERSION
+        };
+        // The claims read fails: its table is gone.
+        w.store
+            .as_ref()
+            .unwrap()
+            .connection()
+            .execute_batch("DROP TABLE torrent_claims")
+            .unwrap();
+        // No enrichment source registered: the hook doesn't run.
+        w.commit(lease(&coordinator), vec![], vec![], vec![], &retry)
+            .await;
+        assert!(current(&w) && !w.reenrich.load(Ordering::Acquire));
+        assert_eq!(w.stats.errors.load(Ordering::Relaxed), 0);
+        // Registered: the read fails, so every rewritten row is marked.
+        w.enrichers = crate::adult_enrich::EnrichSources(bit(enr));
+        w.commit(lease(&coordinator), vec![], vec![], vec![], &retry)
+            .await;
+        assert!(!current(&w), "marked for the backfill");
+        assert!(w.reenrich.load(Ordering::Acquire));
+        assert_eq!(w.stats.errors.load(Ordering::Relaxed), 1);
     }
 
     /// A refetch is never the network's and never the funnel's: one that

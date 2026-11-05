@@ -59,14 +59,13 @@ use crate::source_adult::AdultSources;
 /// DHT's and verification's (`unverified::VERIFY_STRATEGY`).
 pub const STRATEGY: u8 = 202;
 
-/// Whether `d` is an enrichment match the runtime emitted: from an
-/// enrichment source, with its strategy code and an adult-enrichment
-/// section, the same test the writer's gate makes. Intake doesn't count it
-/// as harvested (ENR-1b); another source's discovery always is.
+/// Whether `d` is an enrichment match: an adult-enrichment section from an
+/// enrichment source. It's the writer's gate exactly
+/// (`unverified::ingest` keeps a section only from such a source), so the
+/// strategy code isn't part of it. Intake doesn't count a match as
+/// harvested (ENR-1b); another source's discovery always is.
 pub fn is_match(d: &lodestar_sources::Discovery, enrichers: EnrichSources) -> bool {
-    enrichers.has(d.source)
-        && d.found.strategy == STRATEGY
-        && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
+    enrichers.has(d.source) && d.found.claims.as_deref().is_some_and(|c| c.adult.is_some())
 }
 
 /// User-interest lookups waiting at most; more are dropped. Each takes a
@@ -97,11 +96,24 @@ pub struct EnrichSources(pub u64);
 
 impl EnrichSources {
     /// The enrichment sources among registered `(id, manifest)` pairs.
+    ///
+    /// **An enrichment source is never always adult** (ENR-1c). Its matches
+    /// are answers about stored torrents, not finds, so they never set its
+    /// bit on a torrent and its mask would never apply. A manifest that
+    /// claims both is refused here, so it can't attach sections, and is a
+    /// bug in debug builds.
     pub fn of<'a>(registered: impl IntoIterator<Item = (SourceId, &'a Manifest)>) -> EnrichSources {
         EnrichSources(
             registered
                 .into_iter()
-                .filter(|(_, m)| m.is(lodestar_sources::Kind::Enrichment))
+                .filter(|(_, m)| {
+                    debug_assert!(
+                        !(m.is(lodestar_sources::Kind::Enrichment) && m.always_adult),
+                        "an enrichment source can't be always adult: {}",
+                        m.id
+                    );
+                    admitted(m)
+                })
                 .fold(0, |bits, (id, _)| bits | source_bit(id)),
         )
     }
@@ -109,6 +121,12 @@ impl EnrichSources {
     pub fn has(self, source: SourceId) -> bool {
         self.0 & source_bit(source) != 0
     }
+}
+
+/// A manifest whose source may attach adult sections: an enrichment
+/// source that isn't always adult.
+pub fn admitted(m: &Manifest) -> bool {
+    m.is(lodestar_sources::Kind::Enrichment) && !m.always_adult
 }
 
 fn source_bit(source: SourceId) -> u64 {
@@ -1003,14 +1021,16 @@ mod tests {
         let enr = EnrichSources(1 << source.get());
         let m = d(Found::key(key, STRATEGY).with_claims(section.clone()));
         assert!(is_match(&m, enr));
-        // Another source using the same strategy code is still harvested.
+        // Another source sending a section is still harvested.
         assert!(!is_match(&m, EnrichSources::default()));
         assert!(!is_match(
             &d(Found::key(key, STRATEGY).with_claims(named)),
             enr
         ));
         assert!(!is_match(&d(Found::key(key, STRATEGY)), enr));
-        assert!(!is_match(&d(Found::key(key, 0).with_claims(section)), enr));
+        // The writer's gate doesn't read the strategy code, so neither does
+        // this: a section from an enrichment source is a match.
+        assert!(is_match(&d(Found::key(key, 0).with_claims(section)), enr));
     }
 
     #[test]
@@ -1038,6 +1058,33 @@ mod tests {
         let set = EnrichSources::of([(a, &m), (b, &feed)]);
         assert!(set.has(a) && !set.has(b));
         assert!(!EnrichSources::default().has(a));
+        // Enrichment and always adult together is refused.
+        let both = lodestar_sources::Manifest {
+            always_adult: true,
+            ..m.clone()
+        };
+        assert!(admitted(&m) && !admitted(&both) && !admitted(&feed));
+    }
+
+    /// Registering an enrichment source that's always adult is a bug.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "can't be always adult")]
+    fn an_always_adult_enrichment_source_is_a_bug() {
+        let m = lodestar_sources::Manifest {
+            id: "both",
+            name: "both",
+            version: "1",
+            kinds: &[lodestar_sources::Kind::Enrichment],
+            networks: &[],
+            endpoints: &[],
+            risk: lodestar_sources::Risk::Low,
+            consent: lodestar_sources::Consent::Account,
+            default_priority: lodestar_sources::Priority::Normal,
+            enabled_by_default: false,
+            always_adult: true,
+        };
+        let _ = EnrichSources::of([(SourceId::new(2).unwrap(), &m)]);
     }
 
     #[test]

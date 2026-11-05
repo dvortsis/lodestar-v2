@@ -1259,26 +1259,91 @@ fn an_always_adult_source_cannot_skip_its_mask_with_a_section() {
         "no section kept"
     );
 
-    // A section alone from the always-adult source: nothing is stored, but
-    // its mask still applies to the torrent it found.
+    // A section alone from the always-adult source is a bare sighting of
+    // the key (ENR-1c): no claims stored, the source gains its bit, so its
+    // mask really applies, and it's counted as a rediscovery.
     let (other, other_key) = put(&mut s, "Garden Tour 2023", dht, 0, false);
     let d = matched(sukebei, other_key, section(Some(Kind2::Scene), "Garden"));
     let done = ingest_with(&mut s, &engine, ctx, &d);
     assert!(done.matched.is_empty());
     assert_eq!(done.adult, vec![other], "the mask applies");
+    assert_eq!(
+        done.touched.len(),
+        1,
+        "a rediscovery, as a bare sighting is"
+    );
     assert!(s.torrent_claims(other).unwrap().is_empty());
+    let row = s.torrent(other).unwrap().unwrap();
+    assert!(
+        AdultSources(1 << sukebei.get()).any(row.sources),
+        "its bit is set"
+    );
 
-    // A section alone, from a source that isn't an enrichment source,
-    // stores nothing.
+    // A section alone, from a source that isn't an enrichment source, is a
+    // bare sighting too: no claims stored, no match.
     let d = matched(dht, key, section(Some(Kind2::Scene), "Garden"));
     let done = ingest_with(&mut s, &engine, ctx, &d);
-    assert!(done.matched.is_empty() && done.touched.is_empty());
+    assert!(done.matched.is_empty() && done.adult.is_empty());
+    assert_eq!(done.touched.len(), 1);
     assert!(
         !s.torrent_claims(id)
             .unwrap()
             .iter()
             .any(|c| c.source == dht)
     );
+    // On a key nothing stores, it's refused: the writer doesn't fetch.
+    let stats = UnverifiedStats::default();
+    let d = matched(
+        dht,
+        InfoHash([8; 20]),
+        section(Some(Kind2::Scene), "Garden"),
+    );
+    unverified::ingest(
+        &mut s,
+        &engine,
+        ctx,
+        std::slice::from_ref(&d),
+        &stats,
+        T,
+        &|_, _| {},
+    )
+    .unwrap();
+    assert_eq!(stats.refused.load(Ordering::Relaxed), 1);
+    assert_eq!(s.unverified(Net::Bt, &[8; 20]).unwrap(), None);
+}
+
+/// A failed mark for the backfill is logged and counted (ENR-1c), and the
+/// flag still starts a pass.
+#[test]
+fn a_failed_backfill_mark_is_counted() {
+    let (mut s, dht, enr) = store();
+    let (_, key) = put(&mut s, "Garden Scene", dht, 0, true);
+    let engine = stand_in().current();
+    // Marking fails: the table it writes is gone.
+    s.connection()
+        .execute_batch("DROP TABLE torrent_parsed")
+        .unwrap();
+    let flag = std::sync::atomic::AtomicBool::new(false);
+    let ctx = Ctx {
+        enrichers: EnrichSources(1 << enr.get()),
+        reenrich: Some(&flag),
+        ..Ctx::default()
+    };
+    let stats = UnverifiedStats::default();
+    let d = matched(enr, key, section(Some(Kind2::Scene), "Garden"));
+    let done = unverified::ingest(
+        &mut s,
+        &engine,
+        ctx,
+        std::slice::from_ref(&d),
+        &stats,
+        T,
+        &|_, _| {},
+    )
+    .unwrap();
+    assert_eq!(done.matched.len(), 1, "the claim is stored");
+    assert_eq!(stats.enrich_failed.load(Ordering::Relaxed), 1);
+    assert!(flag.load(Ordering::SeqCst));
 }
 
 /// The generation race (ENR-1b): a classification-rule change that lands
