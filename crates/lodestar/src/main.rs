@@ -25,6 +25,7 @@ mod system;
 #[cfg(test)]
 mod test_log;
 mod thp;
+mod torrent_cache;
 mod update;
 mod web;
 #[cfg(test)]

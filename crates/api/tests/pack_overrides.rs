@@ -378,14 +378,14 @@ async fn a_base_change_pauses_weakening_overrides_and_keeps_strengthening_ones()
     assert_eq!(status, StatusCode::OK, "{body}");
     let o = overview_rule(&f, &c, "MW-2").await;
     assert_eq!(
-        o["override"],
+        o["pack_override"],
         json!({"action": "demote", "base": 1, "changed": false, "paused": false,
                "unless": null, "unreadable": false})
     );
     f.api.accept_pack_versions(&[PackRule::Mw2], 10).unwrap();
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(true));
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(o["pack_override"]["paused"], json!(true));
     let e = f.api.engine.current();
     let l = e.pack_overrides.get(PackRule::Mw2).unwrap();
     assert!(l.paused, "the engine pauses it too");
@@ -398,8 +398,8 @@ async fn a_base_change_pauses_weakening_overrides_and_keeps_strengthening_ones()
     let (status, _) = apply(&f, &c, &change, Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK);
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["base"], json!(2));
-    assert_eq!(o["override"]["changed"], json!(false));
+    assert_eq!(o["pack_override"]["base"], json!(2));
+    assert_eq!(o["pack_override"]["changed"], json!(false));
 
     // Strengthening against version 1 (drop over hide): kept, flagged.
     let f = fixture(bumped());
@@ -408,8 +408,8 @@ async fn a_base_change_pauses_weakening_overrides_and_keeps_strengthening_ones()
     assert_eq!(status, StatusCode::OK);
     f.api.accept_pack_versions(&[PackRule::Mw2], 10).unwrap();
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(false));
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(o["pack_override"]["paused"], json!(false));
 }
 
 #[tokio::test]
@@ -458,8 +458,8 @@ async fn a_weakening_override_waits_while_the_version_is_in_doubt() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["assessment"]["pack_base"], json!(0));
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(false));
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(o["pack_override"]["paused"], json!(false));
 }
 
 #[tokio::test]
@@ -479,8 +479,12 @@ async fn changed_since_preview_covers_removal_too() {
     );
     f.api.accept_pack_versions(&[PackRule::Mw2], 10).unwrap();
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(false), "heavier than v2");
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(
+        o["pack_override"]["paused"],
+        json!(false),
+        "heavier than v2"
+    );
     let err = f.api.apply(&remove, previewed, 11).unwrap_err();
     assert_eq!(err.code(), "changed_since_preview");
     assert!(stored(&f, "MW-2").is_some());
@@ -508,8 +512,8 @@ async fn undo_across_a_base_change_restores_the_override_paused() {
     assert_eq!(stored(&f, "MW-2"), Some(Ok("1\n1\ndemote".into())));
     assert_eq!(stored(&f, "SP-1"), None);
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["changed"], json!(true));
-    assert_eq!(o["override"]["paused"], json!(true));
+    assert_eq!(o["pack_override"]["changed"], json!(true));
+    assert_eq!(o["pack_override"]["paused"], json!(true));
     let e = f.api.engine.current();
     assert!(e.pack_overrides.get(PackRule::Mw2).unwrap().paused);
     assert_eq!(
@@ -579,8 +583,8 @@ async fn an_unreadable_row_fails_closed_is_listed_and_can_be_removed() {
     assert_eq!(e.unreadable.len(), 1);
     assert_eq!(e.unreadable[0].label(), "packs.override.MW-2");
     let o = overview_rule(&f, &c, "MW-2").await;
-    assert_eq!(o["override"]["unreadable"], json!(true));
-    assert_eq!(o["override"]["unless"], json!(null));
+    assert_eq!(o["pack_override"]["unreadable"], json!(true));
+    assert_eq!(o["pack_override"]["unless"], json!(null));
     let record = f
         .api
         .store

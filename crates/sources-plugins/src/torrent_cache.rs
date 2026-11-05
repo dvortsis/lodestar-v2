@@ -10,11 +10,11 @@
 //! so the plugin is held tight:
 //! - **Off by default, External consent** (§18.7): the server refuses to
 //!   turn it on until its consent is acknowledged (SRC-4). That
-//!   acknowledgement must cover the configured cache hosts, so adding or
-//!   changing one asks again. SRC-4 digests only the manifest's built-in
-//!   endpoints, which are empty here, so **the plugin isn't registered**
-//!   until SRC-13b makes the acknowledgement cover the configured list
-//!   (`docs/decisions/2026-11-05-SRC-13.md`).
+//!   acknowledgement covers the configured cache hosts, so adding or
+//!   changing one asks again: each plugin's manifest lists its own
+//!   config's hosts as its endpoints ([`TorrentCache::manifest`]), and
+//!   SRC-4's consent version digests the manifest's endpoints
+//!   (`docs/decisions/2026-11-05-SRC-13b.md`).
 //! - **The cache list is the user's** and starts empty. [`SUGGESTED`] is
 //!   shown beside it in the settings form, never enabled for them.
 //!
@@ -50,10 +50,11 @@
 //! check. It still goes through the full filter pipeline before storage
 //! (the pipeline's `torrent_cache::judge`, SRC-2's path).
 //!
-//! **Host wiring** (SRC-13b): the host builds the plugin from the saved
-//! config with a [`Queue`] it feeds from the pipeline's cursor and from
-//! user interest, with each key's `private_source` taken from the store,
-//! and takes each [`Verified`]'s raw info dict to the pipeline's judge.
+//! **Host wiring** (SRC-13b, `crates/lodestar/src/torrent_cache.rs`): the
+//! host builds the plugin from its saved config with a [`Queue`] it feeds
+//! from the pipeline's cursor and from user interest, with each key's
+//! `private_source` taken from the store, and takes each [`Verified`]'s
+//! raw info dict to the pipeline's judge.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -64,8 +65,9 @@ use lodestar_metainfo::{Info, InfoHash, Limits, ParseOptions, TorrentFile};
 use lodestar_sources::claims::{self, Claims, Confidence, Provenance};
 use lodestar_sources::http::{HostState, StreamLimits, host_key};
 use lodestar_sources::{
-    Backoff, BoxFuture, Caps, Client, Consent, Distribution, Endpoints, HostRate, HttpError, Kind,
-    Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx, SourcePlugin,
+    Backoff, BoxFuture, Caps, Client, Consent, Distribution, Endpoint, Endpoints, HostRate,
+    HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx,
+    SourcePlugin,
 };
 use serde::Deserialize;
 use tokio::sync::{Mutex, mpsc};
@@ -128,7 +130,9 @@ pub struct Suggestion {
 /// `docs/decisions/2026-11-05-SRC-13.md`).
 pub const SUGGESTED: &[Suggestion] = &[];
 
-const MANIFEST: Manifest = Manifest {
+/// The manifest with no cache listed. A plugin's own
+/// ([`SourcePlugin::manifest`]) lists its config's hosts as endpoints.
+pub const MANIFEST: Manifest = Manifest {
     id: ID,
     name: "Torrent cache",
     version: "1",
@@ -179,6 +183,9 @@ pub struct Cache {
     upper: bool,
     /// The limiter's, the poll unit's and the egress host list's key.
     host: String,
+    /// The port, when it isn't https's own: part of what the consent
+    /// acknowledgement covers ([`TorrentCache::manifest`]).
+    port: Option<u16>,
 }
 
 impl Cache {
@@ -310,6 +317,7 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
         tail: tail.to_owned(),
         upper: is_upper,
         host,
+        port: url.port(),
     })
 }
 
@@ -365,6 +373,15 @@ pub struct Queue {
 }
 
 impl Queue {
+    /// How many more lookups `why`'s lane takes now, so a feeder can page
+    /// no more than fits rather than have the rest dropped.
+    pub fn room(&self, why: Why) -> usize {
+        match why {
+            Why::Interest => self.interest.capacity(),
+            Why::Unverified => self.unverified.capacity(),
+        }
+    }
+
     /// Queues `lookup` without waiting. `false` when its lane is full or
     /// the plugin is gone; a full lane counts [`Stats::dropped`].
     pub fn push(&self, lookup: Lookup) -> bool {
@@ -581,6 +598,8 @@ pub enum Miss {
 /// The torrent-cache plugin.
 pub struct TorrentCache {
     config: Config,
+    /// [`MANIFEST`] with the config's hosts as its endpoints.
+    manifest: Manifest,
     lanes: Arc<Mutex<Lanes>>,
     out: mpsc::Sender<Verified>,
     stats: Arc<Stats>,
@@ -608,8 +627,13 @@ impl TorrentCache {
             unverified: unverified_tx,
             stats: Arc::clone(&stats),
         };
+        let manifest = Manifest {
+            endpoints: endpoints_of(&config),
+            ..MANIFEST
+        };
         let plugin = TorrentCache {
             config,
+            manifest,
             lanes: Arc::new(Mutex::new(Lanes {
                 interest,
                 unverified,
@@ -622,6 +646,11 @@ impl TorrentCache {
 
     pub fn stats(&self) -> &Stats {
         &self.stats
+    }
+
+    /// The counters, shared, for the status page.
+    pub fn stats_handle(&self) -> Arc<Stats> {
+        Arc::clone(&self.stats)
     }
 
     pub fn config(&self) -> &Config {
@@ -733,6 +762,34 @@ impl TorrentCache {
     }
 }
 
+/// `config`'s hosts as manifest endpoints (`host`, or `host:port` for a
+/// port other than 443), sorted and once each. The manifest's list is
+/// `&'static`, so it's leaked: a few bytes per host, at most
+/// [`MAX_CACHES`], once per plugin built (once per start).
+fn endpoints_of(config: &Config) -> &'static [Endpoint] {
+    let mut hosts: Vec<String> = config
+        .caches
+        .iter()
+        .map(|c| match c.port {
+            Some(p) => format!("{}:{p}", c.host),
+            None => c.host.clone(),
+        })
+        .collect();
+    hosts.sort_unstable();
+    hosts.dedup();
+    if hosts.is_empty() {
+        return &[];
+    }
+    let list: Vec<Endpoint> = hosts
+        .into_iter()
+        .map(|h| Endpoint {
+            protocol: "https",
+            host: Box::leak(h.into_boxed_str()),
+        })
+        .collect();
+    Box::leak(list.into_boxed_slice())
+}
+
 /// Whether `torrent`'s info dict is `key`'s: `Some(false)` when its SHA-1
 /// is the key, `Some(true)` when its truncated SHA-256 is (Q8), `None`
 /// otherwise.
@@ -748,12 +805,21 @@ pub fn verify(torrent: &TorrentFile, key: &InfoHash) -> Option<bool> {
 }
 
 impl SourcePlugin for TorrentCache {
+    /// [`MANIFEST`] with each listed cache's host as an `https` endpoint:
+    /// SRC-4's consent version digests them, so the acknowledgement covers
+    /// exactly these hosts, and adding or changing one asks again.
     fn manifest(&self) -> &Manifest {
-        &MANIFEST
+        &self.manifest
     }
 
     fn policy(&self) -> &Policy {
         &POLICY
+    }
+
+    /// The listed caches' hosts, public addresses only; `None` while the
+    /// list is empty, so nothing is reachable.
+    fn endpoints(&self) -> Option<Endpoints> {
+        TorrentCache::endpoints(self)
     }
 
     fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {

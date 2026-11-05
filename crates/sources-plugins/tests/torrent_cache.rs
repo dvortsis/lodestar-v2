@@ -779,3 +779,88 @@ fn debug_never_shows_the_key() {
     let shown = format!("{:?}", unverified(key));
     assert!(!shown.contains(&key.to_string()), "{shown}");
 }
+
+// ---- consent covers the listed hosts (SRC-13b) ----
+
+fn built(templates: &[&str]) -> TorrentCache {
+    TorrentCache::new(Config::new(templates).unwrap()).0
+}
+
+#[test]
+fn the_manifest_lists_the_configured_hosts_as_https_endpoints() {
+    let p = built(&[
+        "https://b.example/t/{hash}.torrent",
+        "https://a.example:8443/get?h={HASH}",
+        "https://b.example/other/{hash}",
+    ]);
+    let hosts: Vec<(&str, &str)> = p
+        .manifest()
+        .endpoints
+        .iter()
+        .map(|e| (e.protocol, e.host))
+        .collect();
+    assert_eq!(
+        hosts,
+        [("https", "a.example:8443"), ("https", "b.example")],
+        "sorted, once each"
+    );
+    assert_eq!(p.manifest().id, torrent_cache::ID);
+    assert_eq!(p.manifest().consent, Consent::External);
+}
+
+/// An acknowledgement is bound to the hosts it was shown: adding or
+/// changing a cache host asks again, and an unchanged list doesn't, as the
+/// pipeline's start checks it (`consent::need_in`) for a plugin rebuilt
+/// from its saved settings.
+#[test]
+fn a_new_or_changed_host_asks_again_and_an_unchanged_list_doesnt() {
+    let shown = built(&["https://a.example/t/{hash}.torrent"]);
+    let ack = Ack::of(shown.manifest());
+    let need = |p: &TorrentCache| consent::need(p.manifest(), Some(&ack), &[]);
+    // The next start, the same settings: no question.
+    assert_eq!(need(&built(&["https://a.example/t/{hash}.torrent"])), None);
+    // The same host under another path: the same hosts are contacted.
+    assert_eq!(need(&built(&["https://a.example/x?h={HASH}"])), None);
+    // A host added, a host changed, the list emptied: asked again.
+    for changed in [
+        &[
+            "https://a.example/t/{hash}.torrent",
+            "https://b.example/{hash}",
+        ][..],
+        &["https://b.example/t/{hash}.torrent"][..],
+        &["https://a.example:8443/t/{hash}.torrent"][..],
+        &[][..],
+    ] {
+        assert_eq!(need(&built(changed)), Some(Need::Endpoints), "{changed:?}");
+    }
+    // An acknowledgement given before any cache was listed covers none.
+    let empty = Ack::of(built(&[]).manifest());
+    assert_eq!(
+        consent::need(
+            built(&["https://a.example/{hash}"]).manifest(),
+            Some(&empty),
+            &[]
+        ),
+        Some(Need::Endpoints)
+    );
+}
+
+#[test]
+fn the_egress_reaches_only_the_listed_hosts_through_the_plugin_trait() {
+    let none = built(&[]);
+    assert!(
+        SourcePlugin::endpoints(&none).is_none(),
+        "nothing reachable"
+    );
+    let p = built(&["https://a.example/{hash}"]);
+    assert!(SourcePlugin::endpoints(&p).is_some());
+}
+
+#[test]
+fn the_queue_says_how_much_room_each_lane_has() {
+    let (_p, queue, _rx) = TorrentCache::new(Config::default());
+    assert_eq!(queue.room(Why::Unverified), torrent_cache::QUEUE);
+    assert!(queue.push(unverified(InfoHash([1; 20]))));
+    assert_eq!(queue.room(Why::Unverified), torrent_cache::QUEUE - 1);
+    assert_eq!(queue.room(Why::Interest), torrent_cache::QUEUE);
+}

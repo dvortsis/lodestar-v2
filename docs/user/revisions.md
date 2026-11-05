@@ -2,7 +2,8 @@
 
 | Version | Date | Change |
 |---|---|---|
-| 1.7 | 2026-11-05 | Section 2.5: setup opens on the Legal Notice; reading it again in Settings → About; the one-time showing at sign-in. Section 1.2 no longer marks the setup step planned. |
+| 1.8 | 2026-11-05 | Section 2.5: setup opens on the Legal Notice; reading it again in Settings → About; the one-time showing at sign-in. Section 1.2 no longer marks the setup step planned. |
+| 1.7 | 2026-11-05 | Added section 6.2 on a Magnetico import refused as in use, and a row for it in section 6.1. |
 | 1.6 | 2026-11-05 | Added section 5.4 on Settings → Sources, its rows in Appendix B, and two glossary entries. |
 | 1.5 | 2026-11-04 | Added the lawful-use note and the Legal Notice link to section 1.2, and qualified the traffic takeaway. |
 | 1.4 | 2026-11-02 | Added a note in section 3.3 and Appendix B that blocklist downloads ignore HTTPS_PROXY, and a glossary entry. |

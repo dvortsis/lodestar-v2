@@ -31,12 +31,14 @@ fn actor() -> (Actor, Vec<SendSocket>) {
     (a, vec![SendSocket::Udp(socket)])
 }
 
-/// A routing candidate per port, each with its own id.
-fn nodes(a: &mut Actor, family: usize, ip: &str, ports: &[u16]) {
+/// A routing candidate per port, each with its own id, on loopback at a
+/// port no test socket can be bound to (see [`super::tests::UNBOUND`]):
+/// the actor sends to these.
+fn nodes(a: &mut Actor, family: usize, ipv6: bool, ports: &[u16]) {
     for &port in ports {
         let mut id = [42; 20];
         id[19] = port as u8;
-        let addr = SocketAddr::new(ip.parse().unwrap(), port);
+        let addr = super::tests::unbound(ipv6, port);
         a.families[family].table.insert(
             NodeInfo {
                 id: NodeId(id),
@@ -109,7 +111,7 @@ fn drained(a: &Actor) {
 #[tokio::test(start_paused = true)]
 async fn early_batch_arrives_while_the_lookup_still_owns_its_slot() {
     let (mut a, sockets) = actor();
-    nodes(&mut a, 0, "127.0.0.1", &[65001, 65002]);
+    nodes(&mut a, 0, false, &[901, 902]);
     let mut s = stream(&mut a, &sockets, InfoHash([1; 20]), None);
     let t = tids(&a);
     assert_eq!(t.len(), 2);
@@ -139,7 +141,7 @@ async fn early_batch_arrives_while_the_lookup_still_owns_its_slot() {
 #[tokio::test(start_paused = true)]
 async fn a_full_channel_holds_one_batch_drops_the_rest_and_still_terminates() {
     let (mut a, sockets) = actor();
-    nodes(&mut a, 0, "127.0.0.1", &[65001, 65002]);
+    nodes(&mut a, 0, false, &[901, 902]);
     let mut s = stream(&mut a, &sockets, InfoHash([2; 20]), None);
     let t = tids(&a);
     // Nobody reads: two batches queue, one waits, the rest is dropped.
@@ -165,7 +167,7 @@ async fn a_full_channel_holds_one_batch_drops_the_rest_and_still_terminates() {
 #[tokio::test(start_paused = true)]
 async fn the_tick_sends_a_held_batch_once_there_is_room() {
     let (mut a, sockets) = actor();
-    nodes(&mut a, 0, "127.0.0.1", &[65001, 65002]);
+    nodes(&mut a, 0, false, &[901, 902]);
     let mut s = stream(&mut a, &sockets, InfoHash([3; 20]), None);
     let t = tids(&a);
     answer(&mut a, &sockets, t[0], (0..24).map(peer).collect());
@@ -179,7 +181,7 @@ async fn the_tick_sends_a_held_batch_once_there_is_room() {
 #[tokio::test(start_paused = true)]
 async fn the_deadline_ends_a_stream_as_deadline_not_complete() {
     let (mut a, sockets) = actor();
-    nodes(&mut a, 0, "127.0.0.1", &[65001]);
+    nodes(&mut a, 0, false, &[901]);
     let mut s = stream(&mut a, &sockets, InfoHash([4; 20]), None);
     tokio::time::advance(LOOKUP_DEADLINE).await;
     a.scrape_tick(&sockets, Instant::now());
@@ -204,8 +206,8 @@ async fn a_dual_stack_session_is_one_request_ended_by_its_last_leg() {
         table: RoutingTable::new(a.ids[0], true),
         ipv6: true,
     });
-    nodes(&mut a, 0, "127.0.0.1", &[65001]);
-    nodes(&mut a, 1, "::1", &[65001]);
+    nodes(&mut a, 0, false, &[901]);
+    nodes(&mut a, 1, true, &[901]);
     let sem = Arc::new(Semaphore::new(1));
     let permit = sem.clone().try_acquire_owned().unwrap();
     let mut s = stream(&mut a, &sockets, InfoHash([5; 20]), Some(permit));

@@ -35,6 +35,8 @@ pub struct AppState {
     pub storage: Option<Arc<crate::storage::Gauges>>,
     /// The filter engine, for its unreadable stored rows.
     pub filter: Option<Arc<lodestar_filter::Handle>>,
+    /// The torrent-cache plugin's counters (SRC-13b).
+    pub torrent_cache: Option<Arc<lodestar_sources_plugins::torrent_cache::Stats>>,
 }
 
 #[derive(Clone)]
@@ -271,6 +273,9 @@ async fn status(State(s): State<AppState>) -> Response {
             "last_commit": get(&w.last_commit),
         },
         "dht": dht,
+        "torrent_cache": s.torrent_cache.as_ref().map(|c| {
+            crate::torrent_cache::stats_json(c, &w.torrent_cache)
+        }),
         "search": s.search.as_ref().map(|x| json!({
             "docs": x.index.index().num_docs(),
             "watermark": x.stats.watermark.load(Ordering::Relaxed),

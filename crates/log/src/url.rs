@@ -963,7 +963,32 @@ pub fn scrub(url: &str, form: Form) -> String {
 /// [`scrub_text_floor`]. Stage 1's output, with what the wide rules hide
 /// hidden in it too.
 pub fn scrub_text(text: &str) -> String {
+    if plain_line(text) {
+        return scrub_text_floor(text);
+    }
     only_more(&scrub_text_floor(text), &wide::scrub_text(text))
+}
+
+/// Whether the wide rules can add nothing to stage 1's output for `text`
+/// (X-log-url-redact-3's fast path): it holds none of `:`, `/`, `@`, `%`,
+/// `=` and `"`, and no `bearer`, `lsk_` or `lsf_` in any case (the rules
+/// match `lsk_` and `lsf_` in one case only: the rest is margin). Every wide
+/// rule needs one of them to fire, so on such a line both stages are
+/// [`hide_runs`] of the text, and `only_more` of two equal outputs is that
+/// output: the decisions file lists each rule's trigger, and
+/// `the_fast_path_matches_both_stages` checks it.
+fn plain_line(text: &str) -> bool {
+    let b = text.as_bytes();
+    let keyword = |k: usize, w: &[u8]| {
+        b.get(k..k + w.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(w))
+    };
+    !b.iter().enumerate().any(|(k, &c)| match c {
+        b':' | b'/' | b'@' | b'%' | b'=' | b'"' => true,
+        b'b' | b'B' => keyword(k, b"bearer"),
+        b'l' | b'L' => keyword(k, b"lsk_") || keyword(k, b"lsf_"),
+        _ => false,
+    })
 }
 
 /// `floor` with each word in it (a run of letters, digits and `_`) that
@@ -1403,29 +1428,50 @@ mod wide {
         }
     }
 
-    /// The first match of any of several needles at or after `from`.
-    struct AnyOf(Vec<Next>);
+    /// The first match of any of up to three needles at or after `from`:
+    /// the first `len` of `needles`. A fixed array, so building one never
+    /// allocates.
+    struct AnyOf {
+        needles: [Next; 3],
+        len: usize,
+    }
 
     impl AnyOf {
+        /// One to three needles, each with whether it ignores case.
+        fn new(needles: &[(&'static str, bool)]) -> AnyOf {
+            debug_assert!((1..=3).contains(&needles.len()));
+            let one = |k: usize| {
+                let (needle, ci) = needles[k.min(needles.len() - 1)];
+                Next::new(needle, ci)
+            };
+            AnyOf {
+                needles: [one(0), one(1), one(2)],
+                len: needles.len().min(3),
+            }
+        }
+
         fn from(&mut self, text: &str, from: usize) -> Option<usize> {
-            self.0.iter_mut().filter_map(|n| n.from(text, from)).min()
+            self.needles[..self.len]
+                .iter_mut()
+                .filter_map(|n| n.from(text, from))
+                .min()
         }
     }
 
     /// The ways a magnet link starts: raw, or percent-encoded once or twice
     /// (`magnet%3A%3Fxt=…`).
     fn magnets() -> AnyOf {
-        AnyOf(vec![
-            Next::new("magnet:", true),
-            Next::new("magnet%3a", true),
-            Next::new("magnet%253a", true),
+        AnyOf::new(&[
+            ("magnet:", true),
+            ("magnet%3a", true),
+            ("magnet%253a", true),
         ])
     }
 
     /// A raw magnet link only, as `main` found them (see [`scrub_text`]'s
     /// first pass).
     fn raw_magnets() -> AnyOf {
-        AnyOf(vec![Next::new("magnet:", true)])
+        AnyOf::new(&[("magnet:", true)])
     }
 
     /// Where the first percent-encoded magnet (`magnet%3A`, `magnet%253A`)
@@ -2037,7 +2083,7 @@ mod wide {
         let mut out = String::new();
         let mut copied = 0;
         let mut at = Next::new("@", false);
-        let mut line = AnyOf(vec![Next::new("\n", false), Next::new("\r", false)]);
+        let mut line = AnyOf::new(&[("\n", false), ("\r", false)]);
         let mut k = 0;
         // Whether `k` is in a word that holds a raw `://` already: a form inside
         // a URL is that URL's rules' (`https://h/{//u@<s>` keeps its path `@`).
@@ -3687,6 +3733,10 @@ mod tests {
             "password:%2F%2Fab+S3CRETxyz==",
             "?sig%3A%2F%2FS3CRETxyz",
             "key:%252F%252FS3CRETxyz",
+            // X-log-url-redact-3's security review: a name the first pass leaves
+            // at a URL's end (`/pass` once its query goes) makes the value
+            // after it one, though stage 1 never reads it as one.
+            r#"https://h/pass?x": "x%3A%2F%2Fh/S3CRETxyz" http:%2F%2Fa.b/"#,
             r"token:\/\/S3CRETxyz",
             "pass:http:/S3CRETxyz",
             "api_key:http%3A%2F%2FS3CRETxyz",
@@ -3897,6 +3947,164 @@ pass:"S3CRET"#,
         // A plain path still keeps its words.
         let plain = format!("{:?}", ::url::Url::parse("https://h/a/b").unwrap());
         assert!(scrub_text(&plain).contains(r#"path: "/a/b""#));
+    }
+
+    /// Known gaps, on `main` too (X-log-url-redact-3's security review): once
+    /// the first pass drops a URL's query, a credential's name at the end of
+    /// its path (`/pass`, `/key`) takes the value after the quote, but only
+    /// the second pass would read it, and it runs only when the first pass's
+    /// output holds a form without `://`. Left for a follow-up slice.
+    #[test]
+    #[ignore = "known gap on main: a name the first pass leaves at a URL's end"]
+    fn a_name_left_at_a_url_s_end_keeps_its_value_hidden() {
+        for text in [
+            r#"https://h/pass?x": "x%3A%2F%2Fh/S3CRETxyz""#,
+            "https://h/key?a': x%3A%2F%2Fh/S3CRETxyz",
+            "https://h/apikey?a=1'=x%3A%2F%2Fh/S3CRETxyz",
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains("S3CRET"), "{text:?}: {s}");
+        }
+    }
+
+    /// The fast path (X-log-url-redact-3) gives exactly what both stages and
+    /// `only_more` give, on 2,000,000 soups of 2 to 31 tokens. The tokens are
+    /// near misses of every wide rule's trigger (names with no separator,
+    /// `Some(`, `magnet`, `bear`, `lsk`, hash-like runs, the markers), so a
+    /// soup's length is even across the range. A soup with a trigger
+    /// planted in it must be refused.
+    #[test]
+    fn the_fast_path_matches_both_stages() {
+        const TOKENS: &[&str] = &[
+            "a",
+            "x",
+            "ok",
+            "h",
+            "0",
+            "42",
+            "_",
+            "-",
+            ".",
+            ",",
+            ";",
+            "'",
+            "?",
+            "&",
+            "#",
+            "(",
+            ")",
+            "[",
+            "]",
+            "{",
+            "}",
+            "<",
+            ">",
+            "\\",
+            "\\'",
+            "+",
+            "~",
+            "*",
+            "!",
+            "$",
+            "|",
+            "`",
+            " ",
+            " ",
+            "\n",
+            "\t",
+            "\r",
+            "é",
+            "日本",
+            "🦀",
+            "Some(",
+            "Some('",
+            "token",
+            "password",
+            "passkey",
+            "apikey",
+            "Authorization",
+            "Basic ",
+            "bear",
+            "Bear",
+            "bearer",
+            "BEARER ",
+            "Bearer ",
+            "lsk",
+            "lsk_",
+            "lsf_",
+            "ls_",
+            "LSK_",
+            "magnet",
+            "magnet?xt",
+            "dn",
+            "kt",
+            "xt",
+            "tr",
+            "urn",
+            "btih",
+            "http",
+            "https",
+            "www",
+            "Url { scheme ",
+            "username ",
+            "path ",
+            "query Some(",
+            "[hidden]",
+            "[redacted]",
+            "0123456789abcdef0123456789abcdef",
+            "0123456789ABCDEF0123456789abcdef01234567",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+            "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U",
+        ];
+        const TRIGGERS: &[&str] = &[
+            ":", "/", "@", "%", "=", "\"", "Bearer", "bEaReR", "lsk_", "lsf_", "LSF_",
+        ];
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as usize
+        };
+        let soup = |next: &mut dyn FnMut(usize) -> usize| -> Vec<&str> {
+            let n = 2 + next(30);
+            (0..n).map(|_| TOKENS[next(TOKENS.len())]).collect()
+        };
+        for _ in 0..2_000_000 {
+            let line = soup(&mut next).concat();
+            // Some soups spell a trigger across tokens (`bear` `er`): those
+            // must be refused, and are checked with the planted ones below.
+            if !plain_line(&line) {
+                continue;
+            }
+            let both = only_more(&scrub_text_floor(&line), &wide::scrub_text(&line));
+            assert_eq!(scrub_text(&line), both, "{line:?}");
+        }
+        // A soup with any trigger planted in it is refused.
+        for _ in 0..200_000 {
+            let mut tokens = soup(&mut next);
+            let at = next(tokens.len() + 1);
+            tokens.insert(at, TRIGGERS[next(TRIGGERS.len())]);
+            let line = tokens.concat();
+            assert!(!plain_line(&line), "{line:?}");
+        }
+        // Each trigger is refused on its own; near misses are accepted.
+        for line in [
+            "a:b", "a/b", "a@b", "a%b", "a=b", "a\"b", "Bearer x", "xBEARER", "lsk_1", "Lsf_",
+        ] {
+            assert!(!plain_line(line), "{line:?}");
+        }
+        for line in [
+            "",
+            "bear er",
+            "ls k_",
+            "lsk",
+            "token x",
+            "magnet?xt",
+            "日本 🦀",
+        ] {
+            assert!(plain_line(line), "{line:?}");
+        }
     }
 
     #[test]

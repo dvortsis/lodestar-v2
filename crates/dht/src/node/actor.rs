@@ -2457,6 +2457,49 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
 
+    /// The port for test nodes nothing listens on. Below 1024, so it is
+    /// outside every OS's ephemeral range (Linux 32768–60999, Windows and
+    /// macOS 49152–65535, FreeBSD 10000–65535; none start below 1024 by
+    /// default), and no test binds a fixed port. A routing-table entry
+    /// at a port like 65530 could be handed to another test's `:0` socket,
+    /// which then hears this actor's queries (the #476 flakes).
+    pub(super) const UNBOUND: u16 = 9;
+
+    /// A loopback address on a port no test socket can be bound to: see
+    /// [`UNBOUND`]. Use it, not a high fixed port, for any node an actor
+    /// under test may send to.
+    pub(super) fn unbound(ipv6: bool, port: u16) -> SocketAddr {
+        assert!((1..1024).contains(&port), "port {port} could be ephemeral");
+        if ipv6 {
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port))
+        } else {
+            SocketAddr::from(([127, 0, 0, 1], port))
+        }
+    }
+
+    /// The target of `datagram` if it is a `sample_infohashes` query that
+    /// `src`, the actor under test at `actor`, sent. The one filter for
+    /// every test that counts or reads samples on its own listening
+    /// sockets: those are ephemeral, and another test's actor may still
+    /// send to one (a node it learnt from a reply, say), so only the
+    /// actor's own queries count.
+    pub(super) fn sample_from(
+        datagram: &[u8],
+        src: SocketAddr,
+        actor: SocketAddr,
+    ) -> Option<[u8; 20]> {
+        if src != actor {
+            return None;
+        }
+        match crate::krpc::parse(datagram).ok()?.body {
+            Body::Query(q) => match q.method {
+                Method::SampleInfohashes { target, .. } => Some(target.0),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn fixture() -> (Actor, Vec<SendSocket>) {
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).unwrap();
@@ -2531,7 +2574,7 @@ mod tests {
     #[test]
     fn cancelled_same_hash_retry_ignores_the_old_wire_response() {
         let (mut a, sockets) = fixture();
-        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        let remote: SocketAddr = unbound(false, UNBOUND);
         a.families[0]
             .table
             .insert(candidate(remote), Contact::Response, 0);
@@ -2587,16 +2630,10 @@ mod tests {
                 sockets.swap(0, 1);
             }
             for family in &mut a.families {
-                let addr = if family.ipv6 {
-                    "[::1]:65530"
-                } else {
-                    "127.0.0.1:65530"
-                };
-                family
-                    .table
-                    .insert(candidate(addr.parse().unwrap()), Contact::Response, 0);
+                let addr = unbound(family.ipv6, UNBOUND);
+                family.table.insert(candidate(addr), Contact::Response, 0);
             }
-            let peer: SocketAddr = "127.0.0.1:60000".parse().unwrap();
+            let peer: SocketAddr = unbound(false, 60);
             let (tx, mut rx) = oneshot::channel();
             a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx.into()), None);
             let tids: Vec<_> = a.pending.keys().copied().collect();
@@ -2639,7 +2676,7 @@ mod tests {
     fn admission_permits_return_once_at_every_boundary() {
         use tokio::sync::Semaphore;
         let (mut a, sockets) = fixture();
-        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        let remote: SocketAddr = unbound(false, UNBOUND);
         a.families[0]
             .table
             .insert(candidate(remote), Contact::Response, 0);
@@ -2757,14 +2794,8 @@ mod tests {
                 sockets.swap(0, 1);
             }
             for family in &mut a.families {
-                let addr = if family.ipv6 {
-                    "[::1]:65530"
-                } else {
-                    "127.0.0.1:65530"
-                };
-                family
-                    .table
-                    .insert(candidate(addr.parse().unwrap()), Contact::Response, 0);
+                let addr = unbound(family.ipv6, UNBOUND);
+                family.table.insert(candidate(addr), Contact::Response, 0);
             }
             let sem = Arc::new(Semaphore::new(1));
             let (tx, mut rx) = oneshot::channel();
@@ -2827,7 +2858,7 @@ mod tests {
     fn queued_drops_are_counted_without_a_permit() {
         let (mut a, sockets) = fixture();
         // A node to ask, so the third request runs rather than ending empty.
-        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        let remote: SocketAddr = unbound(false, UNBOUND);
         a.families[0]
             .table
             .insert(candidate(remote), Contact::Response, 0);
@@ -3119,7 +3150,7 @@ mod tests {
     #[test]
     fn sample_saturation_preserves_lookup_service_and_stale_wire_replies_are_ignored() {
         let (mut a, sockets) = fixture();
-        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        let remote: SocketAddr = unbound(false, UNBOUND);
         a.sampler = Sampler::with_capacity(1);
         assert!(a.sampler.reserve(remote, 0, Instant::now()));
         assert!(
@@ -3152,7 +3183,7 @@ mod tests {
             0,
             &msg,
             Some(&response),
-            "127.0.0.2:65530".parse().unwrap(),
+            SocketAddr::from(([127, 0, 0, 2], UNBOUND)),
         );
         assert_eq!(a.pending.len(), 1, "wrong endpoint cannot settle work");
         a.on_response(&sockets, 0, &msg, Some(&response), remote);
@@ -3205,7 +3236,7 @@ mod tests {
         let candidates: Vec<_> = (1..=10)
             .map(|i| NodeInfo {
                 id: NodeId([i; 20]),
-                addr: "127.0.0.1:65530".parse().unwrap(),
+                addr: unbound(false, UNBOUND),
             })
             .collect();
         a.start_lookup(&sockets, 0, NodeId([4; 20]), &candidates, &[], None);
@@ -3232,7 +3263,7 @@ mod tests {
             &sockets,
             0,
             NodeId([4; 20]),
-            &[candidate("127.0.0.1:65530".parse().unwrap())],
+            &[candidate(unbound(false, UNBOUND))],
             &[],
             None,
         );
@@ -3257,10 +3288,13 @@ mod tests {
             table: RoutingTable::new(a.ids[0], true),
             ipv6: true,
         });
-        for (family, addr) in ["127.0.0.1:65530", "[::1]:65530"].into_iter().enumerate() {
+        for (family, addr) in [unbound(false, UNBOUND), unbound(true, UNBOUND)]
+            .into_iter()
+            .enumerate()
+        {
             a.families[family]
                 .table
-                .insert(candidate(addr.parse().unwrap()), Contact::Response, 0);
+                .insert(candidate(addr), Contact::Response, 0);
         }
         let (tx, rx) = oneshot::channel();
         a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx.into()), None);
@@ -3271,9 +3305,9 @@ mod tests {
             l.add(NodeInfo {
                 id: NodeId([43; 20]),
                 addr: if l.family == 0 {
-                    "127.0.0.1:65530".parse().unwrap()
+                    unbound(false, UNBOUND)
                 } else {
-                    "[::1]:65530".parse().unwrap()
+                    unbound(true, UNBOUND)
                 },
             });
         }
@@ -3548,10 +3582,7 @@ mod restart_wire {
     }
 
     /// `sample_infohashes` datagrams each peer has received from `from`
-    /// since last asked. Only the actor under test counts: other tests in
-    /// this binary sample fixed loopback ports (`127.0.0.1:65530`, …) that
-    /// one of these ephemeral sockets can be handed, and their queries
-    /// say nothing about this actor.
+    /// since last asked, filtered by [`super::tests::sample_from`].
     fn samples_received(peers: &[std::net::UdpSocket], from: SocketAddr) -> Vec<usize> {
         let mut buf = [0u8; 2048];
         peers
@@ -3559,11 +3590,7 @@ mod restart_wire {
             .map(|p| {
                 let mut n = 0;
                 while let Ok((len, src)) = p.recv_from(&mut buf) {
-                    if src == from
-                        && let Ok(m) = crate::krpc::parse(&buf[..len])
-                        && let Body::Query(q) = m.body
-                        && matches!(q.method, Method::SampleInfohashes { .. })
-                    {
+                    if super::tests::sample_from(&buf[..len], src, from).is_some() {
                         n += 1;
                     }
                 }
