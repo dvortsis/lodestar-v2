@@ -422,7 +422,12 @@ async fn run_search(
         .transpose()?;
     let exact = p.exact.unwrap_or(false);
     let reader = s.reader.clone();
-    let names = torrents::plugin_names(&s).await;
+    // Provenance only for a caller it's for: Discover Newest (no viewer)
+    // neither lists the plugins nor reads the source catalogue.
+    let viewer = match viewer {
+        Some(v) => Some((v, torrents::plugin_names(&s).await)),
+        None => None,
+    };
     // Axum drops this future when the client disconnects; the guard then
     // cancels the search running on the blocking pool.
     let cancel = CancelToken::new();
@@ -533,7 +538,10 @@ async fn run_search(
             })
         });
         let store = reader.lock().expect("reader lock");
-        let catalogue = Catalogue::read(&store, &names).map_err(internal)?;
+        let provenance = viewer
+            .map(|(v, names)| Catalogue::read(&store, &names).map(|c| (v, c)))
+            .transpose()
+            .map_err(internal)?;
         let mut hits: Vec<SearchHit> = Vec::with_capacity(page.hits.len());
         for h in page.hits.iter() {
             // A torrent deleted since indexing just drops out of the page.
@@ -559,10 +567,10 @@ async fn run_search(
                 let swarm = swarm::summary(&store, hot.as_deref(), &row).map_err(internal)?;
                 let mut hit = torrents::hit(&row, h.score, matched_files, swarm);
                 enrich(&mut hit, enrichment);
-                if let Some(viewer) = viewer {
+                if let Some((viewer, catalogue)) = &provenance {
                     // `torrents` holds verified metadata only (§18.5).
                     hit.verified = Some(true);
-                    hit.source = catalogue.hit_source(&row, viewer);
+                    hit.source = catalogue.hit_source(&row, *viewer);
                 }
                 hits.push(hit);
             }
