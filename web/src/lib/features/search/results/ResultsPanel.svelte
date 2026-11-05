@@ -180,7 +180,7 @@
 	type Detail = typeof import('$lib/features/detail/open');
 	let detail: Detail | undefined;
 	let gone = false;
-	// True once j/k/x are registered (they load lazily): a key pressed before that is dropped, so the
+	// True once j/k/x and c/o are registered (they load lazily): a key pressed before that is dropped, so the
 	// e2e specs wait on `data-keys-ready` before pressing a list key.
 	let keysReady = $state(false);
 	const detailMod = () => (detail ? Promise.resolve(detail) : import('$lib/features/detail/open'));
@@ -195,7 +195,7 @@
 			() => {}
 		);
 		// `c` and `o` work with the drawer closed: S-detail's commands act on the focused row.
-		void import('$lib/features/detail/commands').then(
+		const detailKeys = import('$lib/features/detail/commands').then(
 			(mod) => mod.registerDetailCommands(),
 			() => {}
 		);
@@ -210,7 +210,10 @@
 					if (hit) selection.toggle(hit.hash);
 				}
 			});
-			keysReady = true;
+			// c/o come from the detail chain; ready means every list key is in.
+			void detailKeys.then(() => {
+				if (!gone) keysReady = true;
+			});
 		});
 		return () => {
 			clearTimeout(giveUp);

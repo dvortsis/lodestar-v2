@@ -14,13 +14,11 @@ import {
 import { expectNoA11yViolations } from './a11y';
 import { test } from './support/test';
 import type { Page } from '@playwright/test';
+import type { KeyboardOnly } from './support/keyboard';
 
-// The list's j/k/c commands load lazily and a key pressed before they register is dropped, so wait
+// The list's j/k/x and c/o commands load lazily and a key pressed before they register is dropped, so wait
 // for the list to say they are in. Then focus the first row and wait until it really has focus.
-async function focusFirstRow(
-	page: Page,
-	kbd: { tabTo: (l: ReturnType<typeof rowOf>) => Promise<number> }
-) {
+async function focusFirstRow(page: Page, kbd: KeyboardOnly) {
 	await expect(page.locator('[data-keys-ready]')).toBeAttached();
 	await kbd.tabTo(rowOf(page, 1));
 	await expect(rowOf(page, 1)).toBeFocused();
@@ -44,6 +42,8 @@ test('/ then a query, Enter, Tab, j and k, Enter opens; j moves the open drawer;
 	await kbd.press('Enter');
 	await expect(page).toHaveURL(/[?&]q=lantern/);
 	await expect(rowOf(page, 1)).toBeVisible();
+	// No suggestions open: a Tab with them showing would accept one instead of leaving the bar.
+	await expect(bar).toHaveAttribute('aria-expanded', 'false');
 	// Shortcuts don't fire in the bar (§10.16): Tab to the list, which is one tab stop.
 	await focusFirstRow(page, kbd);
 	await kbd.press('j');
