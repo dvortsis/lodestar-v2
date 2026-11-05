@@ -317,7 +317,9 @@ def summarize(rows, max_gap, intensity="balanced"):
         for name in GAUGES:
             if number(before.get(name)) and number(after.get(name)):
                 p["measurement_coverage"][name] += dt
-        for name in before["counters"].keys() & after["counters"].keys() - reset:
+        # Sorted: a set's order follows the hash seed, and the breakdowns and hourly
+        # tables keep this insertion order, so the report would vary run to run.
+        for name in sorted(before["counters"].keys() & after["counters"].keys() - reset):
             counter = p["counters"][name]
             counter["delta"] += sum(after["counters"][name].values()) - sum(before["counters"][name].values())
             counter["covered_seconds"] += dt
@@ -488,22 +490,56 @@ def level_and_slope(points, present, scale):
     return out
 
 
-def memory_attribution(rows):
+# The build's target triple, as GET /api/v1/system reports it (`build.target`).
+TARGET = re.compile(r"[a-z0-9_]{1,16}(?:-[a-z0-9_.]{1,24}){1,4}")
+C_ALLOCATORS = ("mimalloc", "libc")
+
+
+def c_allocator(run, override=None):
+    """Who serves C's malloc (SQLite, zstd), and how that's known.
+
+    X-mimalloc-override: musl Linux builds link mimalloc's `override`, so
+    mimalloc's committed bytes already hold SQLite's; every other build's C
+    code allocates from the C library, outside them (docs/metrics.md, "Memory
+    attribution"). Decided from the target the collector recorded, never
+    guessed: without one it's unknown. The operator can state it instead
+    (`--c-allocator`), for a musl build made before the override (main before
+    #448), which the target alone can't tell apart.
+    """
+    target = run.get("build_target")
+    target = target if isinstance(target, str) and TARGET.fullmatch(target) else None
+    if override is not None:
+        if override not in C_ALLOCATORS:
+            raise ValueError("Unknown C allocator")
+        return {"build_target": target, "c_allocator": override, "c_allocator_source": "operator"}
+    if target is None:
+        return {"build_target": None, "c_allocator": None, "c_allocator_source": None}
+    musl = "-linux-musl" in target
+    return {"build_target": target, "c_allocator": "mimalloc" if musl else "libc",
+            "c_allocator_source": "build_target"}
+
+
+def memory_attribution(rows, allocator=None):
     """Informational only, not part of the gate: where the anonymous memory is.
 
     Over the gate's window (baseline hours 12-24), each X-mem-gauges series as a
     level (first, last, max) and an OLS slope per hour, the per-index segment
-    count likewise, and "other heap": RssAnon minus mimalloc's committed bytes,
-    minus SQLite's own when every window point has it. That approximates the C
-    allocations other than SQLite's (zstd, musl itself), but it also holds
-    thread stacks, other anonymous mappings and THP fill-in of mimalloc's
-    arenas, so read it with AnonHugePages; it's no bound either way. A restart
-    inside the window refuses the section, by the gate's own identity check.
+    count likewise, and "other heap": RssAnon minus mimalloc's committed bytes.
+    Where C's malloc is the C library's (`c_allocator`), SQLite's own count is
+    subtracted too, when every window point has it, since it sits outside
+    mimalloc there; where it's mimalloc, SQLite is already inside mimalloc's
+    bytes; where it's unknown, nothing more is subtracted and the label says
+    so. That approximates the C allocations other than SQLite's (zstd, musl
+    itself), but it also holds thread stacks, other anonymous mappings and THP
+    fill-in of mimalloc's arenas, so read it with AnonHugePages; it's no bound
+    either way. A restart inside the window refuses the section, by the gate's
+    own identity check.
     """
     f = MEMORY_FIT
+    allocator = allocator or c_allocator({})
     out = {"informational": True, "from_hour": f["from_hour"], "to_hour": f["to_hour"],
            "refused": None, "series": {}, "other_heap": {"status": "absent"},
-           "other_heap_excludes_sqlite": None, "segments": {}}
+           "other_heap_excludes_sqlite": None, **allocator, "segments": {}}
     every = [r for r in rows if r["phase"] == "baseline"]
     baseline = [r for r in every if usable(r)]
     if not baseline:
@@ -535,8 +571,10 @@ def memory_attribution(rows):
     if all(n in mem_seen for n in need):
         both = [(h, r["memory"]) for h, r in window if all(n in r.get("memory", {}) for n in need)]
         # SQLite is subtracted from every point or from none, so a window where
-        # it appears part-way doesn't put a step into the slope.
-        excludes = bool(both) and all("mem_sqlite_bytes" in m for _, m in both)
+        # it appears part-way doesn't put a step into the slope; and only where
+        # it's outside mimalloc, or it would be subtracted twice.
+        excludes = (allocator["c_allocator"] == "libc" and bool(both)
+                    and all("mem_sqlite_bytes" in m for _, m in both))
         pts = [(h, m["mem_rss_anon_bytes"] - m["mem_mimalloc_committed_bytes"]
                 - (m["mem_sqlite_bytes"] if excludes else 0)) for h, m in both]
         out["other_heap"] = level_and_slope(pts, True, 2**20)
@@ -740,7 +778,7 @@ def gate_verdict(identity_, covered_seconds):
     return not reasons, reasons
 
 
-def analyze(root, max_gap=90, now=None, intensity=None):
+def analyze(root, max_gap=90, now=None, intensity=None, allocator=None):
     run = read_json(root / "run.json")
     if not isinstance(run.get("settings", {}), dict):
         raise ValueError("Invalid run settings")
@@ -795,6 +833,7 @@ def analyze(root, max_gap=90, now=None, intensity=None):
     core_coverage = {name: baseline["measurement_coverage"][name]["fraction"]
                      for name in CORE_COUNTERS + GAUGES}
     run_info = run_identity(run)
+    malloc = c_allocator(run, allocator)
     fit = memory_fit(rows)
     evidence, reasons = gate_verdict(run_info, baseline["valid_interval_seconds"])
     run_info.update(baseline_measured_hours=baseline["valid_interval_seconds"] / 3600,
@@ -817,7 +856,7 @@ def analyze(root, max_gap=90, now=None, intensity=None):
         "memory_fit": fit,
         "memory_context": memory_context(rows),
         "search": search_summary(rows),
-        "memory_attribution": memory_attribution(rows),
+        "memory_attribution": memory_attribution(rows, malloc),
         "collector_completed_window": bool(result and result.get("reason") == "baseline_window_complete"),
         "stop_reason": reason,
         "clean_shutdown": clean_shutdown(result),
@@ -864,15 +903,35 @@ def attribution_markdown(attr):
     out += ["| Series | First | Last | Max | Slope per hour | Samples |",
             "| --- | ---: | ---: | ---: | ---: | ---: |"]
     out += [row(ATTRIBUTION_LABELS[name], g, "MiB") for name, g in attr["series"].items()]
-    label = ("Other heap (zstd, other C code): RssAnon - mimalloc - SQLite" if attr["other_heap_excludes_sqlite"]
-             else "Other heap (includes SQLite, zstd, C code): RssAnon - mimalloc")
-    out.append(row(label, attr["other_heap"], "MiB"))
+    out.append(row(other_heap_label(attr), attr["other_heap"], "MiB"))
     out += [row(f"Segments, {index}", g, "count") for index, g in attr["segments"].items()]
     # After the last row: a line inside the table would end it.
     out += ["", "Other heap is an approximation, not a bound: it also holds thread stacks, other "
             "anonymous mappings and transparent huge pages filling mimalloc's arenas, so read it "
-            "with the AnonHugePages row."]
+            "with the AnonHugePages row.", "", allocator_line(attr)]
     return out
+
+
+def other_heap_label(attr):
+    """What the other-heap row holds, by who serves C's malloc (`c_allocator`)."""
+    if attr.get("c_allocator") == "mimalloc":
+        return "Other heap (outside mimalloc, which holds SQLite and zstd here): RssAnon - mimalloc"
+    if attr.get("c_allocator") is None:
+        return "Other heap (C allocator unknown: may include SQLite): RssAnon - mimalloc"
+    if attr["other_heap_excludes_sqlite"]:
+        return "Other heap (zstd, other C code): RssAnon - mimalloc - SQLite"
+    return "Other heap (includes SQLite, zstd, C code): RssAnon - mimalloc"
+
+
+def allocator_line(attr):
+    target = attr.get("build_target")
+    built = f"`{target}`" if target else "not recorded"
+    if attr.get("c_allocator") is None:
+        return (f"C allocator: unknown (build target {built}). In musl builds SQLite is inside mimalloc's "
+                "bytes; elsewhere it's outside them. Pass `--c-allocator` if you know which.")
+    source = {"operator": "stated with --c-allocator", "build_target": "from the build target"}[attr["c_allocator_source"]]
+    who = {"mimalloc": "mimalloc (its `override`)", "libc": "the C library's malloc"}[attr["c_allocator"]]
+    return f"C allocator: {who}, {source} (build target {built})."
 
 
 def markdown(report):
@@ -984,13 +1043,17 @@ def main():
     parser.add_argument("--max-gap-seconds", type=float, default=90)
     parser.add_argument("--intensity", choices=sorted(OUTSTANDING_RPCS),
                         help="Preset whose outstanding-RPC cap applies (default: run.json settings)")
+    parser.add_argument("--c-allocator", choices=C_ALLOCATORS,
+                        help="Who serves C's malloc, for the memory attribution only "
+                             "(default: from run.json's build_target; unknown without one)")
     args = parser.parse_args()
     if not math.isfinite(args.max_gap_seconds) or args.max_gap_seconds <= 0:
         parser.error("--max-gap-seconds must be positive and finite")
     if args.output and args.output.resolve().is_relative_to(args.root.resolve()):
         parser.error("Report output must be outside the evidence directory")
     try:
-        report = analyze(args.root, args.max_gap_seconds, intensity=args.intensity)
+        report = analyze(args.root, args.max_gap_seconds, intensity=args.intensity,
+                         allocator=args.c_allocator)
         rendered = (json.dumps(report, indent=2, allow_nan=False) + "\n"
                     if args.format == "json" else markdown(report))
         if args.output:

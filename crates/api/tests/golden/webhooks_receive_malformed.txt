@@ -1,0 +1,2 @@
+400
+{"error":{"code":"malformed_webhook","message":"That isn't a Sonarr or Radarr webhook event."}}

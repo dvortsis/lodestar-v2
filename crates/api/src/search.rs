@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::get;
 use hmac::{Hmac, KeyInit, Mac};
@@ -22,6 +22,7 @@ use rand::RngExt;
 use sha2::{Digest, Sha256};
 use utoipa::OpenApi;
 
+use crate::auth::Access;
 use crate::dto::events::RebuildPhase;
 use crate::dto::search::{
     ClauseRemoval, CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights,
@@ -33,11 +34,12 @@ use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
 use crate::insights::codes::metric;
+use crate::torrents::{Catalogue, Viewer};
 use crate::{ApiState, INTEREST_TOP, auth, swarm, torrents};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
-#[openapi(paths(parse_query, search_get, search_post, index_state))]
+#[openapi(paths(parse_query, search_route, search_post, index_state))]
 pub(crate) struct ApiDoc;
 
 /// The widest real UTC offsets, in minutes.
@@ -190,7 +192,7 @@ pub fn routes() -> Router<ApiState> {
     auth::protected(
         Router::new()
             .route("/parse", get(parse_query))
-            .route("/search", get(search_get).post(search_post))
+            .route("/search", get(search_route).post(search_post))
             .route("/search/state", get(index_state)),
     )
 }
@@ -303,15 +305,37 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
     ),
     responses((status = 200, body = SearchResponse))
 )]
+pub(crate) async fn search_route(
+    State(s): State<ApiState>,
+    access: Option<Extension<Access>>,
+    headers: HeaderMap,
+    Query(p): Query<SearchRequest>,
+) -> ApiResult<axum::Json<SearchResponse>> {
+    let viewer = Viewer::of(access.as_ref().map(|a| &a.0));
+    get_search(s, Some(viewer), headers, p).await
+}
+
+/// `GET /search` for another handler's page (Discover's Newest), whose
+/// hits are the plain summary every other list embeds: no `source` or
+/// `verified`.
 pub(crate) async fn search_get(
     State(s): State<ApiState>,
     headers: HeaderMap,
     Query(p): Query<SearchRequest>,
 ) -> ApiResult<axum::Json<SearchResponse>> {
+    get_search(s, None, headers, p).await
+}
+
+async fn get_search(
+    s: ApiState,
+    viewer: Option<Viewer>,
+    headers: HeaderMap,
+    p: SearchRequest,
+) -> ApiResult<axum::Json<SearchResponse>> {
     if p.ast.is_some() {
         return Err(ApiError::bad_request("ast_needs_post", "Send an AST with POST.").field("ast"));
     }
-    run_search(s, &headers, p).await
+    run_search(s, viewer, &headers, p).await
 }
 
 /// Searches with query text or a query AST. The body also takes
@@ -326,15 +350,25 @@ pub(crate) async fn search_get(
 )]
 pub(crate) async fn search_post(
     State(s): State<ApiState>,
+    access: Option<Extension<Access>>,
     headers: HeaderMap,
     Json(p): Json<SearchRequest>,
 ) -> ApiResult<axum::Json<SearchResponse>> {
     same_origin_json(&headers)?;
-    run_search(s, &headers, p).await
+    run_search(
+        s,
+        Some(Viewer::of(access.as_ref().map(|a| &a.0))),
+        &headers,
+        p,
+    )
+    .await
 }
 
+/// `viewer` is who the hits' provenance (`source`, `verified`) is for;
+/// `None` leaves it out.
 async fn run_search(
     s: ApiState,
+    viewer: Option<Viewer>,
     headers: &HeaderMap,
     p: SearchRequest,
 ) -> ApiResult<axum::Json<SearchResponse>> {
@@ -388,6 +422,7 @@ async fn run_search(
         .transpose()?;
     let exact = p.exact.unwrap_or(false);
     let reader = s.reader.clone();
+    let names = torrents::plugin_names(&s).await;
     // Axum drops this future when the client disconnects; the guard then
     // cancels the search running on the blocking pool.
     let cancel = CancelToken::new();
@@ -498,6 +533,7 @@ async fn run_search(
             })
         });
         let store = reader.lock().expect("reader lock");
+        let catalogue = Catalogue::read(&store, &names).map_err(internal)?;
         let mut hits: Vec<SearchHit> = Vec::with_capacity(page.hits.len());
         for h in page.hits.iter() {
             // A torrent deleted since indexing just drops out of the page.
@@ -523,6 +559,11 @@ async fn run_search(
                 let swarm = swarm::summary(&store, hot.as_deref(), &row).map_err(internal)?;
                 let mut hit = torrents::hit(&row, h.score, matched_files, swarm);
                 enrich(&mut hit, enrichment);
+                if let Some(viewer) = viewer {
+                    // `torrents` holds verified metadata only (§18.5).
+                    hit.verified = Some(true);
+                    hit.source = catalogue.hit_source(&row, viewer);
+                }
                 hits.push(hit);
             }
         }

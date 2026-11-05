@@ -1,0 +1,5 @@
+GET https://sukebei.nyaa.si/?page=rss
+Accept: application/rss+xml, application/xml;q=0.9
+
+HTTP 200
+Content-Type: application/xml; charset=utf-8

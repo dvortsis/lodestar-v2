@@ -112,6 +112,17 @@ docker run -d --name lodestar-soak-collector --restart no \
     --intensity balanced --storage-path /evidence
 ```
 
+**Optional: `--password-file`.** Not in the command above, so a CR-0 run stays
+comparable with r4's. With it, the collector logs in to Lodestar and records
+the build's target triple from `GET /api/v1/system` as `build_target` in
+`run.json`, and nothing else from that page. The analyzer uses it for the
+memory attribution (below), and the read is retried until the API answers. The
+login is plain http, so the collector refuses to start unless the file is
+owner-only (`chmod 600`) and `--url` is a loopback or private IP address (a
+Docker network hostname such as `http://lodestar:8484` is refused). Without
+it, pass `analyze_cr0.py --c-allocator mimalloc` for the Docker image or a
+tarball instead. A CR-SPEC run requires the flag.
+
 - `--intensity`: pass the preset Lodestar is set to (`low`, `balanced` or
   `aggressive`). The analyzer takes the outstanding-RPC limit from it. Left
   out, `run.json` has no preset, and the analyzer assumes `balanced` and
@@ -198,7 +209,7 @@ Everything is written under `--root`:
 
 | File | Content |
 | --- | --- |
-| `run.json` | provenance, identity, host, network, settings |
+| `run.json` | provenance (including `build_target`, with `--password-file`), identity, host, network, settings |
 | `samples.jsonl` | one row per sample, with monotonic `elapsed_seconds` and phase |
 | `metrics/NNNNN.prom` | sanitized metrics snapshot for row `NNNNN` |
 | `baseline-start.prom` | snapshot at the start of the baseline |
@@ -230,9 +241,21 @@ the rc.3 image digest.
 `_mimalloc_committed_bytes`, `_mimalloc_peak_committed_bytes`, `_sqlite_bytes` and
 `_sqlite_highwater_bytes`, plus `lodestar_search_segments{index="main"|"files"}`. The report's `memory_attribution`
 section gives each one's first, last and max and its slope per hour over the gate's hours
-12-24, and "other heap": RssAnon minus mimalloc minus SQLite, or minus mimalloc alone for
-evidence from binaries without the SQLite gauges (the report says which). It's informational and doesn't change the gate.
-Evidence without these metrics analyzes as before, with each reported `absent`.
+12-24, and "other heap". Which formula it uses depends on who serves C's `malloc`
+(`docs/metrics.md`, "Memory attribution"). The analyzer takes that from `run.json`'s
+`build_target` and reports it as `c_allocator`:
+- **A `*-linux-musl` target** (the Docker image and the tarballs): mimalloc, through its
+  `override` feature. SQLite is already inside mimalloc's bytes, so other heap is RssAnon
+  minus mimalloc.
+- **Any other target** (glibc, Windows): the C library. Other heap is RssAnon minus mimalloc
+  minus SQLite, or minus mimalloc alone when the binary lacks the SQLite gauges.
+- **No target recorded** (no `--password-file`, or an older collector): unknown. Other heap is
+  RssAnon minus mimalloc, labelled as possibly including SQLite.
+
+`analyze_cr0.py --c-allocator mimalloc|libc` states it instead. Use `libc` for a musl build
+made before X-mimalloc-override (#448), which the target can't tell apart. The report
+records whether the value came from the target or from you. It's informational and doesn't
+change the gate. Evidence without these metrics analyzes as before, with each reported `absent`.
 
 **Memory gate (v0.5.1).** The report's `memory_fit` section (in Markdown, "Memory
 gate") fits the OLS slope of `private_bytes` (cgroup `anon`, or `RssAnon` on a
