@@ -606,7 +606,8 @@ impl std::fmt::Debug for SourceChange {
     }
 }
 
-#[derive(Debug)]
+/// Its `Debug` leaves out a consent version, which holds every address
+/// (they can be per-user ones).
 pub enum SourceError {
     Unknown,
     /// Enabling needs an acknowledgement of this class, at this version
@@ -630,6 +631,28 @@ pub enum SourceError {
         reason: String,
     },
     Store(Error),
+}
+
+impl std::fmt::Debug for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SourceError::Unknown => f.write_str("Unknown"),
+            SourceError::ConsentRequired { class, .. } => f
+                .debug_struct("ConsentRequired")
+                .field("class", class)
+                .finish_non_exhaustive(),
+            SourceError::PasswordRequired => f.write_str("PasswordRequired"),
+            SourceError::CredentialsRequired => f.write_str("CredentialsRequired"),
+            SourceError::Credential(r) => f.debug_tuple("Credential").field(r).finish(),
+            SourceError::Sealing => f.write_str("Sealing"),
+            SourceError::Invalid { field, reason } => f
+                .debug_struct("Invalid")
+                .field("field", field)
+                .field("reason", reason)
+                .finish(),
+            SourceError::Store(e) => f.debug_tuple("Store").field(e).finish(),
+        }
+    }
 }
 
 impl From<Error> for SourceError {
@@ -973,8 +996,15 @@ impl Control {
                 let row = rows.iter().find(|r| r.id == status.id);
                 let (need, credentials, settings, purge_pending, saved_config) =
                     gates.get(&status.id).cloned().unwrap_or_default();
+                // Compared in the plugin's saved form. Settings it refuses
+                // are built as its defaults at the start, so they aren't
+                // pending either.
                 let config_pending = saved_config.is_some_and(|saved| {
-                    self.inner.monitor.running_config(status.id).as_deref() != Some(saved.as_str())
+                    let monitor = &self.inner.monitor;
+                    match monitor.check_config(status.id, &saved) {
+                        Some(Ok(form)) => monitor.running_config(status.id) != Some(form),
+                        _ => false,
+                    }
                 });
                 let egress_warnings = egress_warnings(
                     &settings.egress,

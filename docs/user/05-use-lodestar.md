@@ -95,7 +95,7 @@ Until that restart, the status shows your saved choice, not what is running.
 **Torrent cache.** A [torrent cache](glossary.md#torrent-cache) is a website that serves a torrent's `.torrent` file when you give it the torrent's info hash. Lodestar can ask one for torrents it knows about but has no details for yet. It checks that each file it gets matches the hash, then runs the file through the content filters like any other.
 
 Each lookup tells the cache which torrent you're interested in. So the source is **off**, and its list of caches is **empty** until you add one. Before it can turn on, you accept its exact addresses:
-- Its row lists every address it would contact, in full. Accepting covers exactly those addresses.
+- Its row lists every address it contacts, in full. Accepting covers exactly those addresses. A changed list shows there after the next restart.
 - If you add, remove or change any address, even only its path, the source turns off at the next restart. It stays off until you accept the new list.
 - Lodestar never looks up a torrent from a private tracker, and asks each cache at most once a minute.
 

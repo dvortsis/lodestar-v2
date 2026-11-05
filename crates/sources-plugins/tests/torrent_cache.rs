@@ -494,11 +494,27 @@ fn config_refusals_name_the_rule() {
         ("https:c.example/{hash}", "start with https://"),
         ("https://[{hash}]/x", "valid address"),
         ("https://c.example\\@d.example/{hash}", "backslash"),
+        ("https://c.example%2Eevil.net/{hash}", "plain form"),
+        ("https://c.example%E3%80%82evil.net/{hash}", "plain form"),
+        ("https://0x08080808/{hash}", "plain form"),
+        ("https://010.010.010.010/{hash}", "plain form"),
+        ("https://134744072/{hash}", "plain form"),
+        ("https://c.example:443/{hash}", "plain form"),
     ];
     for (t, rule) in bad {
         let e = Config::new(&[t]).unwrap_err();
         assert!(e.0.contains(rule), "{t}: {e}");
         assert!(!e.0.contains("c.example"), "the error holds the value");
+    }
+    // Plain forms the parser leaves alone are kept, any case.
+    for ok in [
+        "https://C.Example/{hash}",
+        "https://c.example:8443/{hash}",
+        "https://8.8.8.8/{hash}",
+        "https://[2001:4860:4860::8888]/{hash}",
+        "https://xn--bcher-kva.example/{hash}",
+    ] {
+        Config::new(&[ok]).unwrap_or_else(|e| panic!("{ok}: {e}"));
     }
     let nine: Vec<String> = (0..9)
         .map(|i| format!("https://c{i}.example/{{hash}}"))

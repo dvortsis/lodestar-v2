@@ -248,6 +248,9 @@ impl Config {
     ///   bidirectional or look-alike character (a non-ASCII host is
     ///   written in its `xn--` form), and with no `\`, which the URL
     ///   parser reads as `/`;
+    /// - the host as written is the host contacted: no percent-encoding,
+    ///   no numeric form the parser rewrites (`0x08080808`), and no
+    ///   explicit `:443`;
     /// - https, with a host, no user name or password and no fragment: a
     ///   lookup over plain http would show the hash to the whole path;
     /// - not a literal LAN, loopback or link-local address: these are
@@ -341,8 +344,23 @@ fn cache(raw: &str) -> Result<Cache, ConfigError> {
     let authority_end = head
         .find("://")
         .and_then(|s| head[s + 3..].find(['/', '?']).map(|e| s + 3 + e));
-    if authority_end.is_none() {
+    let Some(authority_end) = authority_end else {
         return Err(ConfigError("{hash} must be in the path or the query"));
+    };
+    // The host as written must be the host contacted: the consent list
+    // shows the template as typed, while the parser decodes `%2E`, maps
+    // full-width dots and reads `0x08080808` as 8.8.8.8. So the authority
+    // must already be in the parser's plain form (any case).
+    let written = &head["https://".len()..authority_end];
+    let parsed = match (url.host_str(), url.port()) {
+        (Some(h), Some(p)) => format!("{h}:{p}"),
+        (Some(h), None) => h.to_owned(),
+        (None, _) => return Err(ConfigError("a cache address has no host")),
+    };
+    if !written.eq_ignore_ascii_case(&parsed) {
+        return Err(ConfigError(
+            "write a cache address's host in its plain form, with no encoding, and no port 443",
+        ));
     }
     net::check_url(&url, NetPolicy::notification(false))
         .map_err(|_| ConfigError("a cache address isn't a public one"))?;

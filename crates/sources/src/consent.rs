@@ -616,6 +616,25 @@ mod tests {
         }
     }
 
+    /// Two hosts whose SRC-4 digests collide (found offline once with a
+    /// distinguished-point search, about 2^32 FNV-1a evaluations, as the
+    /// SRC-13b review warned): an acknowledgement of one covered the other
+    /// under the digest, and doesn't now.
+    #[test]
+    fn a_list_that_collided_under_fnv_no_longer_matches() {
+        let shown = with(&["c8562448a4e5c066.example"]);
+        let crafted = with(&["09dc070a8ee44c03.example"]);
+        assert_eq!(legacy_version(&shown), legacy_version(&crafted));
+        assert_eq!(legacy_version(&shown), "1-80b91d73c61aaa3a");
+        assert_ne!(version(&shown), version(&crafted));
+        assert!(Ack::of(&shown).covers(&shown));
+        assert!(!Ack::of(&shown).covers(&crafted));
+        assert_eq!(
+            need(&crafted, Some(&Ack::of(&shown)), &[]),
+            Some(Need::Endpoints)
+        );
+    }
+
     fn leak(list: &[&str]) -> &'static [Endpoint] {
         let v: Vec<Endpoint> = list
             .iter()

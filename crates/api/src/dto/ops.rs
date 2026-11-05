@@ -566,7 +566,11 @@ impl std::fmt::Debug for SourcePatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SourcePatch")
             .field("consent", &self.consent)
-            .field("consent_version", &self.consent_version)
+            // It holds every address, which can be a per-user one.
+            .field(
+                "consent_version",
+                &self.consent_version.as_ref().map(|_| "…"),
+            )
             .field("password", &self.password.as_ref().map(|_| "…"))
             .field("enabled", &self.enabled)
             .field("priority", &self.priority)
