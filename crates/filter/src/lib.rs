@@ -18,6 +18,7 @@ mod core;
 pub mod corpus;
 mod engine;
 mod fasttok;
+pub mod flood;
 mod hash;
 mod held;
 pub mod lists;
