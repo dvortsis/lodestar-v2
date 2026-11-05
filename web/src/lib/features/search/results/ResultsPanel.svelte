@@ -180,6 +180,9 @@
 	type Detail = typeof import('$lib/features/detail/open');
 	let detail: Detail | undefined;
 	let gone = false;
+	// True once j/k/x are registered (they load lazily): a key pressed before that is dropped, so the
+	// e2e specs wait on `data-keys-ready` before pressing a list key.
+	let keysReady = $state(false);
 	const detailMod = () => (detail ? Promise.resolve(detail) : import('$lib/features/detail/open'));
 
 	onMount(() => {
@@ -207,6 +210,7 @@
 					if (hit) selection.toggle(hit.hash);
 				}
 			});
+			keysReady = true;
 		});
 		return () => {
 			clearTimeout(giveUp);
@@ -522,6 +526,7 @@
 			<div
 				class:rp-list={!tableView}
 				bind:this={listEl}
+				data-keys-ready={keysReady || undefined}
 				onfocusin={focusIn}
 				onfocusout={focusOut}
 				onpointerover={pointerOver}
