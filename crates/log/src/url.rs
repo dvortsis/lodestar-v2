@@ -1007,23 +1007,23 @@ fn scrub_text_slow(text: &str) -> String {
 /// the credential rules' extra readings only. `all` is false for
 /// X-log-url-redact-4's three (`：`, `＝` and the no-break space), and true
 /// for every one X-log-url-redact-5 added too:
-/// - the colons `：` `︓` `﹕` `∶` `꞉` `︰` `ː` `։` `׃` as `:`;
-/// - the equals signs `＝` `﹦` as `=`;
+/// - the colons `：` `︓` `﹕` `∶` `꞉` `︰` `։` `׃` as `:`;
+/// - the equals signs `＝` `﹦` `꞊` as `=`;
 /// - every other Unicode space (no-break, ideographic, the en and thin
 ///   spaces…) and the zero-width ones (U+200B, U+2060, U+FEFF) as a space.
 ///
-/// All but `ː` and `꞉` are no word's characters, so mapping them keeps the
-/// words. Those two are modifier letters: a word holding one isn't in the
-/// mapped text, so it goes whole, which hides only more.
+/// None of them is a word's character, so mapping them keeps the words.
+/// The length mark `ː` (U+02D0) is left out: it's a letter, so mapping it
+/// would hide every word that holds one, IPA and all.
 fn look_alike(c: char, all: bool) -> Option<char> {
     match c {
         '\u{ff1a}' => Some(':'),
         '\u{ff1d}' => Some('='),
         '\u{a0}' => Some(' '),
         _ if !all => None,
-        '\u{fe13}' | '\u{fe55}' | '\u{2236}' | '\u{a789}' | '\u{fe30}' | '\u{02d0}'
-        | '\u{0589}' | '\u{05c3}' => Some(':'),
-        '\u{fe66}' => Some('='),
+        '\u{fe13}' | '\u{fe55}' | '\u{2236}' | '\u{a789}' | '\u{fe30}' | '\u{0589}'
+        | '\u{05c3}' => Some(':'),
+        '\u{fe66}' | '\u{a78a}' => Some('='),
         '\u{200b}' | '\u{2060}' | '\u{feff}' => Some(' '),
         c if !c.is_ascii() && c.is_whitespace() => Some(' '),
         _ => None,
@@ -1045,8 +1045,8 @@ fn ascii_separators(text: &str, all: bool) -> std::borrow::Cow<'_, str> {
 /// (X-log-url-redact-3's fast path): it holds none of `:`, `/`, `@`, `%`,
 /// `=` and `"`, and no `bearer`, `lsk_` or `lsf_` in any case (the rules
 /// match `lsk_` and `lsf_` in one case only: the rest is margin), and no
-/// [`look_alike`] of a separator or a space. Every wide
-/// rule needs one of them to fire, so on such a line both stages are
+/// [`look_alike`] of a separator or a space. Every wide rule needs one of
+/// them to fire, so on such a line both stages are
 /// [`hide_runs`] of the text, and `only_more` of two equal outputs is that
 /// output: the decisions file lists each rule's trigger, and
 /// `the_fast_path_matches_both_stages` checks it.
@@ -4110,7 +4110,8 @@ pass:"S3CRET"#,
     /// A look-alike space right after a separator, or one next to a
     /// look-alike separator, and the other look-alikes, still leave a
     /// credential's value hidden (X-log-url-redact-5, runner's review of
-    /// #488). Each showed the secret on `main`.
+    /// #488). Each showed the secret on `main`, apart from the two guards at
+    /// the end, which `main` hides too.
     #[test]
     fn a_look_alike_space_or_separator_keeps_its_value_hidden() {
         for text in [
@@ -4129,25 +4130,47 @@ pass:"S3CRET"#,
             "Bearer\u{200b}S3CRETxyz",
             "Bearer\u{feff}S3CRETxyz",
             "password\u{200b}:S3CRETxyz",
-            "password\u{02d0}S3CRETxyz",
+            // One per table arm the shapes above leave out.
+            "password\u{fe13}S3CRETxyz",
+            "password\u{a789}S3CRETxyz",
+            "password\u{fe30}S3CRETxyz",
+            "password\u{0589}S3CRETxyz",
+            "password\u{05c3}S3CRETxyz",
+            "token\u{a78a}S3CRETxyz",
+            "Bearer\u{2002}S3CRETxyz",
+            "Bearer\u{3000}S3CRETxyz",
+            "Bearer\u{2060}S3CRETxyz",
+            "Bearer\u{1680}S3CRETxyz",
+            "Bearer\u{0085}S3CRETxyz",
+            // Why X-log-url-redact-4's reading keeps its three: read with
+            // every look-alike, the zero-width space or the ideographic space
+            // ends the value early, and only that reading hides it whole.
+            "token＝r\u{200b}S3CRETxyz",
+            "password＝a\u{3000}S3CRETxyz",
         ] {
             assert!(!plain_line(text), "{text:?}");
             let s = scrub_text(text);
             assert!(!s.contains("S3CRET"), "{text:?}: {s}");
         }
         // Text around them is kept.
-        for text in ["共 12\u{3000}个", "a\u{a0}b ok", "時刻：12 ok"] {
+        for text in [
+            "共 12\u{3000}个",
+            "a\u{a0}b ok",
+            "時刻：12 ok",
+            "ratio 1∶2 ok",
+            "IPA /kæːt/ ok",
+        ] {
             assert_eq!(scrub_text(text), text);
         }
     }
 
     /// The fast path (X-log-url-redact-3) gives exactly what the slow path
     /// (`scrub_text_slow`: both stages and every `only_more`) gives, on
-    /// 2,000,000 soups of 2 to 31 tokens. The tokens are
-    /// near misses of every wide rule's trigger (names with no separator,
-    /// `Some(`, `magnet`, `bear`, `lsk`, hash-like runs, the markers), so a
-    /// soup's length is even across the range. A soup with a trigger
-    /// planted in it must be refused.
+    /// 2,000,000 soups of 2 to 31 tokens. The tokens are near misses of
+    /// every wide rule's trigger (names with no separator, `Some(`,
+    /// `magnet`, `bear`, `lsk`, hash-like runs, the markers), so a soup's
+    /// length is even across the range. A soup with a trigger planted in it
+    /// must be refused.
     #[test]
     fn the_fast_path_matches_both_stages() {
         const TOKENS: &[&str] = &[
@@ -4234,7 +4257,7 @@ pass:"S3CRET"#,
         const TRIGGERS: &[&str] = &[
             ":", "/", "@", "%", "=", "\"", "Bearer", "bEaReR", "lsk_", "lsf_", "LSF_", "：", "＝",
             "\u{a0}", "\u{3000}", "\u{2007}", "\u{200b}", "\u{feff}", "\u{fe55}", "\u{2236}",
-            "\u{fe66}", "\u{02d0}",
+            "\u{fe66}", "\u{a78a}",
         ];
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut next = |n: usize| {
@@ -4279,9 +4302,11 @@ pass:"S3CRET"#,
             "token x",
             "magnet?xt",
             "日本 🦀",
-            // Other characters that start with the same bytes: `©`, `（`,
-            // `ｘ`, `；`.
+            // Non-ASCII characters that are no look-alike still take the fast
+            // path: `©`, `（`, `ｘ`, `；`, the zero-width non-joiner and `ː`.
             "© （ｘ）；",
+            "a\u{200c}b",
+            "naːm",
         ] {
             assert!(plain_line(line), "{line:?}");
         }
