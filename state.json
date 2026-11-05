@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T13:50Z",
+  "updated_at": "2026-11-05T14:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3126,6 +3126,12 @@
       "session": "session_01MMjhn9jusE8U5BnvTWfJJX",
       "since": "2026-11-05T13:34Z",
       "model": "sonnet"
+    },
+    "X-settings-followups": {
+      "status": "running",
+      "session": "session_01MMjhnAwFGkdPumVw5a9e9d",
+      "since": "2026-11-05T14:35Z",
+      "model": "sonnet"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5359,7 +5365,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T13:50Z",
+    "updated": "2026-11-05T14:35Z",
     "items": [
       {
         "slot": 1,
@@ -5403,8 +5409,11 @@
       },
       {
         "slot": 6,
-        "status": "idle",
-        "doing": "Held: no ready slice. RP-5 waits on RP-4 (#495); B13b on X-search-files-5; the shared always-adult list on #494"
+        "slice": "X-settings-followups",
+        "role": "build",
+        "agent": "claude",
+        "doing": "Settings: a missing Copy-link test and #496's record corrections",
+        "since": "2026-11-05T14:35Z"
       },
       {
         "slot": 7,
