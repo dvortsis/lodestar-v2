@@ -7782,6 +7782,12 @@
               }
             ]
           },
+          "pack_base": {
+            "type": "integer",
+            "format": "int32",
+            "description": "For `set_pack_override`: the version of the rule the override is\nbound to (0 while the version this install applied isn't known).\nSend it back as `base` to confirm a weakening override with the\npassword.",
+            "minimum": 0
+          },
           "preview": {
             "$ref": "#/components/schemas/Preview"
           },
@@ -8888,6 +8894,67 @@
                 "enum": [
                   "remove_rule"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Your override of one pack rule (RP-2): its action, and optionally\nan `unless`. It never changes what the rule matches, and it replaces\nthe rule's override if it has one. Any `unless`, or an action lighter\nthan what applies now, weakens filtering: confirm it with the\npassword and send back the assessment's [`Assessment::pack_base`]\nas `base`. The override is bound to that version; once a newer\nversion is accepted, one that weakens the new version pauses until\nit's set again.",
+            "required": [
+              "rule",
+              "action",
+              "op"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "description": "`flag`, `demote`, `hide` or `drop`."
+              },
+              "base": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "The previewed `pack_base`, to confirm a weakening override.",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "set_pack_override"
+                ]
+              },
+              "rule": {
+                "type": "string",
+                "example": "MW-2"
+              },
+              "unless": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "An empty string means none."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Removes your override of one pack rule: the rule applies as built.\nRemoving one heavier than the rule's own action weakens filtering.",
+            "required": [
+              "rule",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "remove_pack_override"
+                ]
+              },
+              "rule": {
+                "type": "string",
+                "example": "MW-2"
               }
             }
           },
@@ -15773,6 +15840,54 @@
           }
         }
       },
+      "PackOverrideState": {
+        "type": "object",
+        "description": "Your override of one pack rule, as stored and as it applies now.",
+        "required": [
+          "action",
+          "base",
+          "changed",
+          "paused",
+          "unless",
+          "unreadable"
+        ],
+        "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null when the stored row doesn't read."
+          },
+          "base": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version it was made against (0: not known then); null when it\ndoesn't read.",
+            "minimum": 0
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "The base rule changed since it was set (§20.8): a newer version was\naccepted, or the version state is in doubt."
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Changed, and it would weaken the rule as it is now: the rule\napplies as built until the override is set again with the password."
+          },
+          "unless": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unreadable": {
+            "type": "boolean",
+            "description": "The stored row doesn't read: the stronger of its action and the\nrule's applies, and its `unless` is dropped."
+          }
+        }
+      },
       "PackRuleState": {
         "type": "object",
         "required": [
@@ -15790,6 +15905,10 @@
           },
           "on": {
             "type": "boolean"
+          },
+          "override": {
+            "$ref": "#/components/schemas/PackOverrideState",
+            "description": "Your override of the rule (RP-2), when it has one."
           }
         }
       },
