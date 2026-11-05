@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T19:47Z",
+  "updated_at": "2026-11-05T19:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3226,10 +3226,10 @@
     },
     "B13b": {
       "status": "running",
-      "session": "session_01MMjhnBuYcaSNVCmZuFhZDV",
+      "session": "session_01MMjhnAAagVf6NaiSZgPGh6",
       "since": "2026-11-05T18:56Z",
       "brief": "briefs/B13b.md",
-      "note": "same session as X-search-files-5"
+      "note": "fresh session; applies the X-search-files-5 session patch (briefs/B13b.patch)"
     },
     "ENR-8": {
       "status": "running",
