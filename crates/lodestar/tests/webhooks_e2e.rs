@@ -263,6 +263,9 @@ fn a_grab_with_the_token_reaches_the_store_private_and_a_wrong_one_never_does() 
         (503, "source_off".to_owned()),
         "{r}"
     );
+    // Both are counted as refused: authenticated, not delivered.
+    let counts = s.counts("sonarr");
+    assert_eq!(counts["refused"], 2, "{counts}");
 
     // Enabled, it runs from the next start.
     let r = s.send(
@@ -274,6 +277,10 @@ fn a_grab_with_the_token_reaches_the_store_private_and_a_wrong_one_never_does() 
     s.stop();
 
     let s = Server::start(dir.path(), false);
+    wait_for("the source running", || {
+        let v = s.get_json(&format!("/api/v1/sources/{id}"));
+        (v["health"]["running"] == true).then_some(())
+    });
     // Every failure to authenticate is the same 401, and none reaches the
     // plugin: a wrong token, another integration's, none at all.
     let wrong = format!("lsw_{}", "A".repeat(43));
@@ -307,16 +314,38 @@ fn a_grab_with_the_token_reaches_the_store_private_and_a_wrong_one_never_does() 
     let r = s.webhook("sonarr", &token, &test);
     assert_eq!(status(&r), 200, "{r}");
     assert_eq!(body(&r), r#"{"found":false,"dropped":false}"#, "{r}");
-    let counts = s.counts("sonarr");
+    // A body that isn't an event: refused and counted, never delivered.
+    let r = s.webhook("sonarr", &token, "[]");
     assert_eq!(
-        (counts["found"].clone(), counts["ignored"].clone()),
-        (1.into(), 1.into()),
-        "{counts}"
+        (status(&r), code(&r)),
+        (400, "malformed_webhook".to_owned()),
+        "{r}"
     );
+    let counts = s.counts("sonarr");
+    for (k, n) in [
+        ("found", 1),
+        ("ignored", 1),
+        ("malformed", 1),
+        ("refused", 0),
+    ] {
+        assert_eq!(counts[k], n, "{k}: {counts}");
+    }
+    // The refused calls above never reached Radarr's side at all.
     let radarr = s.counts("radarr");
     for k in ["found", "ignored", "malformed", "refused"] {
         assert_eq!(radarr[k], 0, "{k}: {radarr}");
     }
+    // Radarr with its own token: its route parses as Radarr.
+    let r = s.post(
+        "/api/v1/webhooks/radarr/token",
+        &format!(r#"{{"password":"{PASSWORD}"}}"#),
+    );
+    assert_eq!(status(&r), 200, "{r}");
+    let radarr_token: Value = serde_json::from_str(body(&r)).unwrap();
+    let radarr_token = radarr_token["token"].as_str().unwrap().to_owned();
+    let r = s.webhook("radarr", &radarr_token, &radarr_grab);
+    assert_eq!(status(&r), 200, "{r}");
+    assert_eq!(body(&r), r#"{"found":true,"dropped":false}"#, "{r}");
 
     let db = dir.path().join("lodestar.db");
     let item = wait_for("the grab's unverified item", || {
@@ -333,16 +362,23 @@ fn a_grab_with_the_token_reaches_the_store_private_and_a_wrong_one_never_does() 
         Some("Example.Open.Series.S01E01.1080p.WEB-DL-OPEN")
     );
     assert_eq!(claims.size, Some(1_503_238_553));
-    // Radarr's refused grab never got that far.
-    let store = Store::open_reader(&db, StoreConfig::default()).unwrap();
-    assert!(
-        store
-            .unverified(Network::Bt, &key(SINTEL))
-            .unwrap()
-            .is_none()
-    );
-    drop(store);
+    // The series' ids: read from `series`, so the route mapped to Sonarr.
+    let has = |c: &lodestar_store::claims::Claims, scheme: &str, value: &str| {
+        c.ids.iter().any(|i| i.scheme == scheme && i.value == value)
+    };
+    assert!(has(claims, "tvdb", "81189"), "{claims:?}");
+    // Radarr's: read from `movie`.
+    let item = wait_for("Radarr's grab", || {
+        let store = Store::open_reader(&db, StoreConfig::default()).ok()?;
+        store.unverified(Network::Bt, &key(SINTEL)).ok()?
+    });
+    assert!(item.private_source, "{item:?}");
+    let claims = item.claims.as_ref().expect("its claims");
+    assert!(has(claims, "tmdb", "45745"), "{claims:?}");
 
     let log = s.stop();
-    assert!(!log.contains(&token), "the token is never logged");
+    assert!(
+        !log.contains(&token) && !log.contains(&radarr_token),
+        "a token is never logged"
+    );
 }
