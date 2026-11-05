@@ -169,6 +169,8 @@ pub struct Auth {
     /// The notice version this build shows: [`crate::legal::NOTICE_VERSION`],
     /// or a test's ([`Auth::with_notice_version`]).
     notice_current: u32,
+    /// `true` once a password is set: [`Auth::watch_set_up`].
+    set_up: tokio::sync::watch::Sender<bool>,
 }
 
 impl Auth {
@@ -213,6 +215,7 @@ impl Auth {
             lodestar_log::log_event!(log_events::AUTH_PROXY_SETTINGS_INVALID, field = e.field);
             Proxy::default()
         });
+        let set_up = tokio::sync::watch::Sender::new(file.password.is_some());
         Ok(Auth {
             path: path.to_path_buf(),
             state: RwLock::new(State {
@@ -230,6 +233,7 @@ impl Auth {
             proxy_forced_off: AtomicBool::new(false),
             secure_cookies,
             notice_current: crate::legal::NOTICE_VERSION,
+            set_up,
         })
     }
 
@@ -372,6 +376,13 @@ impl Auth {
         self.state.read().expect("auth lock").password.is_none()
     }
 
+    /// Reads `true` once the instance is set up (a password is saved),
+    /// and turns `true` when `POST /setup` succeeds: the crawler's setup
+    /// hold follows it (LEGAL-2). Nothing turns it back.
+    pub fn watch_set_up(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.set_up.subscribe()
+    }
+
     /// Claims the instance, accepting the current Legal Notice; returns a
     /// session cookie header value. For tools and tests: `POST /setup`
     /// calls [`Auth::setup_with_notice`] with the version the browser
@@ -439,6 +450,8 @@ impl Auth {
             *pending = None;
             drop(pending);
             drop(writer);
+            // Saved and published: the crawler may start (LEGAL-2).
+            self.set_up.send_replace(true);
             Ok(self.cookie(&key))
         })();
         log_events::checked(ip, log_events::Check::Setup, &result);

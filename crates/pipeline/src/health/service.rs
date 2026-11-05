@@ -172,6 +172,8 @@ pub(crate) struct Setup {
     pub out: mpsc::Sender<Vec<SwarmUpdate>>,
     pub rollups: Arc<Rollups>,
     pub shutdown: Shutdown,
+    /// The setup hold (LEGAL-2): no round starts before it lifts.
+    pub setup_done: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 /// Starts the scheduler and one task per tracker. The returned task ends
@@ -293,15 +295,30 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
         last_refill: None,
         last_launch: None,
     };
-    let task = tokio::spawn(scheduler.run(
-        Inputs {
-            interest: interest_rx,
-            rediscovered: redisc_rx,
-            done: done_rx,
-            dht: dht_rx,
-        },
-        s.shutdown,
-    ));
+    let inputs = Inputs {
+        interest: interest_rx,
+        rediscovered: redisc_rx,
+        done: done_rx,
+        dht: dht_rx,
+    };
+    let (mut shutdown, hold) = (s.shutdown, s.setup_done);
+    let task = tokio::spawn(async move {
+        // Held until setup (LEGAL-2), nothing is asked of any tracker or
+        // node. Hints that arrive meanwhile queue while there's room, then
+        // drop and count as ever (`try_send`); the lanes refill from the
+        // store once it runs.
+        if let Some(hold) = hold {
+            tokio::select! {
+                biased;
+                () = shutdown.requested() => {
+                    let mut scheduler = scheduler;
+                    return scheduler.store.take().expect("store");
+                }
+                () = crate::setup_hold::released(hold) => {}
+            }
+        }
+        scheduler.run(inputs, shutdown).await
+    });
     (handle, task)
 }
 

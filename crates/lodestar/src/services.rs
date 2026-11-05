@@ -318,6 +318,11 @@ impl Services {
                 ),
             ))
         });
+        // The setup hold (LEGAL-2): until someone sets the instance up,
+        // no source starts (the DHT doesn't even bind), no tracker is
+        // scraped and nothing is fetched. An instance with a password
+        // starts as before; one without waits for `POST /setup`.
+        pipeline_config.setup_done = Some(auth.watch_set_up());
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
         // Fed and drained only while it's enabled at this start with a
         // cache listed: with none, it stops at "needs setup".
@@ -477,6 +482,7 @@ impl Services {
             storage: Some(storage),
             filter: api.filters.as_ref().map(|f| f.engine.clone()),
             torrent_cache: cache_task.as_ref().map(|_| cache.stats.clone()),
+            crawl: Some(paused_now.clone()),
         };
         // The live stream (§9): new torrents from the serving index's
         // commits, crawler snapshots from the status page's counters, and
