@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 from analyze_cr0 import analyze, markdown, parse_prom
 
@@ -35,6 +36,11 @@ class AnalyzerTests(unittest.TestCase):
         (self.root / "run.json").write_text(json.dumps({
             "commit": "a" * 40, "settings": {"baseline_hours": 24, "intensity": "balanced"},
             "secret": "never-export-this",
+        }), encoding="utf-8")
+
+    def run_json(self, **fields):
+        (self.root / "run.json").write_text(json.dumps({
+            "commit": "a" * 40, "settings": {"baseline_hours": 24, "intensity": "balanced"}, **fields,
         }), encoding="utf-8")
 
     def rows(self, rows, tail=""):
@@ -656,9 +662,9 @@ class AnalyzerTests(unittest.TestCase):
                 "- Bar: upper 95% bound <= 2 MiB/h: misses the bar\n"
                 "- Peak private memory: 674.45 MiB\n\n"))
 
-    def attribution_rows(self, hours=24.5, step=60, sqlite=True, segments=True):
+    def attribution_rows(self, hours=24.5, step=60, sqlite=True, segments=True, slope=0.0, noise=0.0):
         """Per minute: anon grows 1 MiB/h, mimalloc 0.25 MiB/h, SQLite flat at 40 MiB."""
-        rows = self.memory_rows(0.0, hours=hours, step=step)
+        rows = self.memory_rows(slope, noise_mib=noise, hours=hours, step=step)
         for i, row in enumerate(rows):
             h = row["elapsed_seconds"] / 3600
             prom = ["# HELP lodestar_mem_rss_anon_bytes Resident anonymous memory.",
@@ -680,6 +686,8 @@ class AnalyzerTests(unittest.TestCase):
         return rows
 
     def test_memory_attribution_end_to_end(self):
+        # A glibc build: C's malloc is the C library's, so SQLite is outside mimalloc.
+        self.run_json(build_target="x86_64-unknown-linux-gnu")
         self.rows(self.attribution_rows())
         report = analyze(self.root)
         attr = report["memory_attribution"]
@@ -696,6 +704,8 @@ class AnalyzerTests(unittest.TestCase):
         # Other heap = anon - mimalloc - sqlite: 400 - 150 - 40 = 210 MiB at hour 0, +0.75 MiB/h.
         other = attr["other_heap"]
         self.assertTrue(attr["other_heap_excludes_sqlite"])
+        self.assertEqual((attr["build_target"], attr["c_allocator"], attr["c_allocator_source"]),
+                         ("x86_64-unknown-linux-gnu", "libc", "build_target"))
         self.assertAlmostEqual(other["first"], 210 + 0.75 * 12, places=2)
         self.assertAlmostEqual(other["slope_per_hour"], 0.75, places=3)
         self.assertEqual(attr["segments"]["main"]["max"], 12)
@@ -706,8 +716,106 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("| RssAnon (MiB) | 412.00 | 424.00 | 424.00 | 1.00 | 721 |", text)
         self.assertIn("| Other heap (zstd, other C code): RssAnon - mimalloc - SQLite (MiB) | 219.00 | 228.00 |", text)
         self.assertIn("| Segments, main (count) |", text)
+        self.assertIn("C allocator: the C library's malloc, from the build target "
+                      "(build target `x86_64-unknown-linux-gnu`).", text)
+
+    def test_musl_builds_do_not_subtract_sqlite_twice(self):
+        # X-mimalloc-override: in musl builds SQLite is already in mimalloc's bytes.
+        for target in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"):
+            self.run_json(build_target=target)
+            self.rows(self.attribution_rows())
+            report = analyze(self.root)
+            attr = report["memory_attribution"]
+            self.assertEqual((attr["build_target"], attr["c_allocator"], attr["c_allocator_source"]),
+                             (target, "mimalloc", "build_target"))
+            self.assertFalse(attr["other_heap_excludes_sqlite"])
+            # anon - mimalloc only: 400 - 150 = 250 MiB at hour 0, +0.75 MiB/h; SQLite's
+            # 40 MiB is not taken off again.
+            self.assertAlmostEqual(attr["other_heap"]["first"], 250 + 0.75 * 12, places=2)
+            self.assertAlmostEqual(attr["other_heap"]["slope_per_hour"], 0.75, places=3)
+            self.assertAlmostEqual(attr["series"]["mem_sqlite_bytes"]["last"], 40.0)  # still reported
+            text = markdown(report)
+            self.assertIn("| Other heap (outside mimalloc, which holds SQLite and zstd here): "
+                          "RssAnon - mimalloc (MiB) | 259.00 | 268.00 |", text)
+            self.assertIn(f"C allocator: mimalloc (its `override`), from the build target (build target `{target}`).",
+                          text)
+            self.assertNotIn("RssAnon - mimalloc - SQLite", text)
+
+    def test_unknown_build_target_subtracts_nothing_more_and_says_so(self):
+        # Older collectors don't record the target; a malformed one counts as absent.
+        for fields in ({}, {"build_target": "x86_64 linux musl"}, {"build_target": 7},
+                       {"build_target": "a" * 200}):
+            self.run_json(**fields)
+            self.rows(self.attribution_rows())
+            report = analyze(self.root)
+            attr = report["memory_attribution"]
+            self.assertEqual((attr["build_target"], attr["c_allocator"], attr["c_allocator_source"]),
+                             (None, None, None), fields)
+            self.assertFalse(attr["other_heap_excludes_sqlite"])
+            self.assertAlmostEqual(attr["other_heap"]["first"], 250 + 0.75 * 12, places=2)
+            text = markdown(report)
+            self.assertIn("| Other heap (C allocator unknown: may include SQLite): RssAnon - mimalloc (MiB) |", text)
+            self.assertIn("C allocator: unknown (build target not recorded).", text)
+            self.assertNotIn("x86_64 linux musl", json.dumps(report))
+
+    def test_the_operator_can_state_the_c_allocator(self):
+        # A musl build from before the override: the target alone can't tell.
+        self.run_json(build_target="x86_64-unknown-linux-musl")
+        self.rows(self.attribution_rows())
+        attr = analyze(self.root, allocator="libc")["memory_attribution"]
+        self.assertEqual((attr["build_target"], attr["c_allocator"], attr["c_allocator_source"]),
+                         ("x86_64-unknown-linux-musl", "libc", "operator"))
+        self.assertTrue(attr["other_heap_excludes_sqlite"])
+        self.assertAlmostEqual(attr["other_heap"]["first"], 210 + 0.75 * 12, places=2)
+        self.run_json()
+        attr = analyze(self.root, allocator="mimalloc")["memory_attribution"]
+        self.assertEqual((attr["c_allocator"], attr["c_allocator_source"]), ("mimalloc", "operator"))
+        self.assertFalse(attr["other_heap_excludes_sqlite"])
+        with self.assertRaisesRegex(ValueError, "Unknown C allocator"):
+            analyze(self.root, allocator="glibc")
+        script = str(Path(__file__).with_name("analyze_cr0.py"))
+        result = subprocess.run([sys.executable, "-I", script, str(self.root), "--c-allocator", "libc",
+                                 "--format", "json"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["memory_attribution"]["c_allocator_source"], "operator")
+        result = subprocess.run([sys.executable, "-I", script, str(self.root), "--c-allocator", "glibc"],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+
+    def test_memory_gate_is_unchanged_by_the_c_allocator(self):
+        # The gate (private_bytes over hours 12-24) never reads the build target or the
+        # allocator. Pinned from the analyzer before X-mimalloc-docs: the same numbers as
+        # test_memory_gate_is_unchanged_by_the_context_view, on rows carrying every gauge.
+        reports = []
+        for fields, allocator in (({}, None), ({"build_target": "x86_64-unknown-linux-musl"}, None),
+                                  ({"build_target": "x86_64-unknown-linux-gnu"}, None),
+                                  ({"build_target": "x86_64-pc-windows-msvc"}, None),
+                                  ({"build_target": "x86_64-unknown-linux-musl"}, "libc"),
+                                  ({}, "mimalloc")):
+            self.run_json(**fields)
+            self.rows(self.attribution_rows(slope=3.0, noise=1.0))
+            report = analyze(self.root, now=datetime(2026, 11, 5, tzinfo=timezone.utc), allocator=allocator)
+            fit = report["memory_fit"]
+            self.assertEqual(
+                {k: v for k, v in fit.items() if k not in ("ci95_mib_per_hour", "max_gap_seconds", "standard_error")},
+                {"bar_upper_ci_mib_per_hour": 2.0, "from_hour": 12.0, "meets_bar": False, "peak_mib": 674.45,
+                 "refused": None, "samples": 721, "series": "private_bytes", "slope_mib_per_hour": 3.0,
+                 "to_hour": 24.0, "window_complete": True})
+            self.assertEqual(fit["ci95_mib_per_hour"], [2.9789283650019294, 3.0210716349980706])
+            text = markdown(report)
+            self.assertEqual(text[text.index("## Memory gate"):text.index("## Memory context")], (
+                "## Memory gate\n\n"
+                "- Series: `private_bytes`, baseline hours 12-24 (721 samples, window complete: true)\n"
+                "- OLS slope: 3.00 MiB/h, 95% CI [2.98, 3.02] MiB/h\n"
+                "- Bar: upper 95% bound <= 2 MiB/h: misses the bar\n"
+                "- Peak private memory: 674.45 MiB\n\n"))
+            reports.append(report)
+        # Nothing but the attribution section differs between them.
+        rest = [{k: v for k, v in r.items() if k != "memory_attribution"} for r in reports]
+        self.assertTrue(all(r == rest[0] for r in rest))
 
     def test_memory_attribution_without_sqlite_says_so(self):
+        self.run_json(build_target="x86_64-pc-windows-msvc")
         self.rows(self.attribution_rows(sqlite=False, segments=False))
         report = analyze(self.root)
         attr = report["memory_attribution"]
@@ -726,6 +834,7 @@ class AnalyzerTests(unittest.TestCase):
             (self.root / "metrics" / f"{i:05d}.prom").write_text(
                 (self.root / "metrics" / f"{i:05d}.prom").read_text()
                 + f"lodestar_mem_sqlite_bytes {40 * 2**20}\n")
+        self.run_json(build_target="x86_64-unknown-linux-gnu")
         self.rows(rows)
         attr = analyze(self.root)["memory_attribution"]
         self.assertFalse(attr["other_heap_excludes_sqlite"])

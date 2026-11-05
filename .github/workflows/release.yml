@@ -493,18 +493,23 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # X-mimalloc-override: C code (SQLite, zstd, ring) must allocate from
+      # X-mimalloc-override: C code (SQLite, zstd) must allocate from
       # mimalloc, not zig's libc malloc. The shipped binary has no symbols, so
       # relink it with them (same dependencies, only the `lodestar` crate is
-      # rebuilt) and check that `malloc` and `free` are mimalloc's own entry
-      # points. Runs after the upload: the relinked file is never shipped. All
-      # four must be linked; SQLite and zstd call each, so a missing one fails
-      # loudly rather than passing.
+      # rebuilt) and check that `malloc`, `free`, `calloc` and `realloc` are
+      # mimalloc's own entry points. Runs after the upload: the relinked file
+      # is never shipped. All four must be linked; SQLite and zstd call each,
+      # so a missing one fails loudly rather than passing. Then check that zig's
+      # own allocator isn't linked beside it (X-mimalloc-docs): its malloc
+      # (`c.malloc.*`) and the `SmpAllocator` under it would be a second heap.
+      # Fixed strings with their dots, so no mimalloc or Rust symbol matches.
       - name: Check malloc is mimalloc's
         run: |
           cargo-zigbuild rustc --locked --release -p lodestar --bin lodestar --no-default-features --features web --target ${{ matrix.target }} -- -C strip=none
           bin=target/${{ matrix.target }}/release/lodestar
-          addr() { nm "$bin" | awk -v s="$1" '$3 == s && $2 ~ /^[TtWw]$/ { print $1; exit }'; }
+          syms="$RUNNER_TEMP/lodestar-${{ matrix.arch }}.nm"
+          nm "$bin" > "$syms"
+          addr() { awk -v s="$1" '$3 == s && $2 ~ /^[TtWw]$/ { print $1; exit }' "$syms"; }
           for pair in malloc:mi_malloc free:mi_free calloc:mi_calloc realloc:mi_realloc; do
             c=${pair%%:*} mi=${pair##*:}
             a=$(addr "$c") b=$(addr "$mi")
@@ -514,6 +519,13 @@ jobs:
               exit 1
             fi
           done
+          second=$(grep -c -F -e SmpAllocator -e c.malloc. "$syms" || true)
+          echo "zig allocator symbols: $second"
+          if [ "$second" != 0 ]; then
+            grep -F -e SmpAllocator -e c.malloc. "$syms" | head -n 20 || true
+            echo "::error::zig's own allocator is linked beside mimalloc in the musl build (a second C heap)"
+            exit 1
+          fi
 
   package-windows:
     name: MSI and portable zip (windows x86_64)

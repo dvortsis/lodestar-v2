@@ -1083,6 +1083,16 @@ class LodestarAPI:
         out["restart_pending"] = bool(pending) if isinstance(pending, list) else None
         return out
 
+    def build_target(self):
+        """The build's target triple from GET /system (`build.target`), or None.
+
+        It tells the analyzer who serves C's malloc: mimalloc in musl builds
+        (X-mimalloc-override), the C library elsewhere. Only a well-formed
+        triple is kept; nothing else from /system is recorded."""
+        build = self.get("/system").get("build")
+        target = build.get("target") if isinstance(build, dict) else None
+        return target if isinstance(target, str) and TARGET.fullmatch(target) else None
+
     def imports(self, from_unix, to_unix):
         """Counts of import, pause and preset annotations in the range; no job details."""
         doc = self.get(f"/insights/events?from={int(from_unix)}&to={int(to_unix)}")
@@ -1091,6 +1101,10 @@ class LodestarAPI:
                 "import_started": kinds["import_started"], "import_finished": kinds["import_finished"],
                 "intensity_changes": kinds["intensity"], "paused": kinds["paused"] + len(doc.get("paused") or []),
                 "truncated": bool(doc.get("truncated"))}
+
+
+# A Rust target triple, e.g. x86_64-unknown-linux-musl (analyze_cr0.py's TARGET).
+TARGET = re.compile(r"[a-z0-9_]{1,16}(?:-[a-z0-9_.]{1,24}){1,4}")
 
 
 def api_request(method, url, body, cookie, timeout=10):
@@ -1359,6 +1373,11 @@ class Collector:
             "process_identity": inst.identity, "process_id": inst.process_id,
             "collector_process_id": os.getpid(), "settings": settings,
         }
+        if self.api is not None:
+            try:
+                run["build_target"] = self.api.build_target()
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
+                self.note("system API unavailable at start: build target not recorded")
         if inst.kind == "docker":
             run["cgroup_version"] = 2 if (Path(a.cgroup_root) / "cgroup.controllers").exists() else None
         if self.spec:
