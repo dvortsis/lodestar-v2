@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 2.0 | 2026-11-05 | Section 2.5: nothing connects to the network until setup is done; the crawler starts on its own after setup. |
 | 1.9 | 2026-11-05 | Added a section in 3.6 on pack versions, why a new version asks for your password, what "in doubt" means and overrides. |
 | 1.8 | 2026-11-05 | Section 2.5: setup opens on the Legal Notice; reading it again in Settings → About; the one-time showing at sign-in. Section 1.2 no longer marks the setup step planned. |
 | 1.7 | 2026-11-05 | Added section 6.2 on a Magnetico import refused as in use, and a row for it in section 6.1. |

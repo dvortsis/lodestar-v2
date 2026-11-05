@@ -169,6 +169,8 @@ pub struct Auth {
     /// The notice version this build shows: [`crate::legal::NOTICE_VERSION`],
     /// or a test's ([`Auth::with_notice_version`]).
     notice_current: u32,
+    /// `true` once a password is set: [`Auth::watch_set_up`].
+    set_up: tokio::sync::watch::Sender<bool>,
 }
 
 impl Auth {
@@ -213,6 +215,7 @@ impl Auth {
             lodestar_log::log_event!(log_events::AUTH_PROXY_SETTINGS_INVALID, field = e.field);
             Proxy::default()
         });
+        let set_up = tokio::sync::watch::Sender::new(file.password.is_some());
         Ok(Auth {
             path: path.to_path_buf(),
             state: RwLock::new(State {
@@ -230,6 +233,7 @@ impl Auth {
             proxy_forced_off: AtomicBool::new(false),
             secure_cookies,
             notice_current: crate::legal::NOTICE_VERSION,
+            set_up,
         })
     }
 
@@ -372,6 +376,13 @@ impl Auth {
         self.state.read().expect("auth lock").password.is_none()
     }
 
+    /// Reads `true` once the instance is set up (a password is saved),
+    /// and turns `true` when `POST /setup` succeeds: the crawler's setup
+    /// hold follows it (LEGAL-2). Nothing turns it back.
+    pub fn watch_set_up(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.set_up.subscribe()
+    }
+
     /// Claims the instance, accepting the current Legal Notice; returns a
     /// session cookie header value. For tools and tests: `POST /setup`
     /// calls [`Auth::setup_with_notice`] with the version the browser
@@ -439,6 +450,8 @@ impl Auth {
             *pending = None;
             drop(pending);
             drop(writer);
+            // Saved and published: the crawler may start (LEGAL-2).
+            self.set_up.send_replace(true);
             Ok(self.cookie(&key))
         })();
         log_events::checked(ip, log_events::Check::Setup, &result);
@@ -1003,6 +1016,38 @@ mod tests {
         assert_eq!(file["notice_version"], v);
         let auth = Auth::load(&path, false).unwrap();
         assert!(!auth.notice_pending(), "accepted for good");
+    }
+
+    #[test]
+    fn set_up_turns_true_only_when_setup_saves_the_password() {
+        // LEGAL-2's hold follows this signal.
+        let (dir, auth) = fresh();
+        let path = dir.path().join("auth.json");
+        let set_up = auth.watch_set_up();
+        assert!(!*set_up.borrow(), "no password: not set up");
+        let token = auth.setup_token().unwrap();
+        let v = crate::legal::NOTICE_VERSION;
+        for refused in [
+            auth.setup_with_notice(IP, "WRONG", "correct horse battery", Some(v)),
+            auth.setup_with_notice(IP, &token, "correct horse battery", Some(v - 1)),
+            auth.setup_with_notice(IP, &token, "short", Some(v)),
+        ] {
+            assert!(refused.is_err());
+            assert!(!*set_up.borrow(), "a refused setup releases nothing");
+        }
+        assert!(!set_up.has_changed().unwrap());
+        auth.setup(IP, &token, "correct horse battery").unwrap();
+        assert!(*set_up.borrow());
+        assert!(set_up.has_changed().unwrap(), "watchers are woken");
+
+        // A restart reads it from the file, with or without the
+        // notice version an install from before LEGAL-1 lacks.
+        assert!(*Auth::load(&path, false).unwrap().watch_set_up().borrow());
+        let mut file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        file.as_object_mut().unwrap().remove("notice_version");
+        std::fs::write(&path, file.to_string()).unwrap();
+        assert!(*Auth::load(&path, false).unwrap().watch_set_up().borrow());
     }
 
     /// An instance set up before the notice existed (rc.1 to rc.3: no

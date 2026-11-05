@@ -37,6 +37,8 @@ pub struct AppState {
     pub filter: Option<Arc<lodestar_filter::Handle>>,
     /// The torrent-cache plugin's counters (SRC-13b).
     pub torrent_cache: Option<Arc<lodestar_sources_plugins::torrent_cache::Stats>>,
+    /// The crawler's pause and why (LEGAL-2's setup hold).
+    pub crawl: Option<lodestar_pipeline::Control>,
 }
 
 #[derive(Clone)]
@@ -242,6 +244,19 @@ async fn status(State(s): State<AppState>) -> Response {
         "now": now,
         "started_at": m.started_at(),
         "torrents": m.torrents(),
+        // Why it's paused: "setup" while it waits for setup (LEGAL-2),
+        // "user" for the crawler setting, null while it runs.
+        "crawler": s.crawl.as_ref().map(|c| {
+            let st = c.status();
+            json!({
+                "paused": st.paused,
+                "reason": match (st.paused, st.waiting_for_setup) {
+                    (false, _) => Value::Null,
+                    (true, true) => "setup".into(),
+                    (true, false) => "user".into(),
+                },
+            })
+        }),
         "sources": m.sources().iter().map(|src| json!({
             "id": src.id.get(),
             "plugin": src.plugin,

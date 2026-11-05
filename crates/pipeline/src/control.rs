@@ -11,6 +11,12 @@
 //!   state itself is the settings registry's (`crawler.paused`): after
 //!   each change the binary calls [`Control::sync`], which applies the
 //!   registry's value as it is then.
+//! - **The setup hold** (LEGAL-2, [`crate::setup_hold`]): while the
+//!   pipeline waits for setup, the crawler is paused whatever the setting
+//!   says, and [`CrawlerStatus::waiting_for_setup`] says why. The setting
+//!   is still followed underneath: when setup completes the hold lifts
+//!   on its own and the setting's value applies, so a pause the user
+//!   chose stays on.
 //! - **Events:** every pause, resume and intensity change is an `events`
 //!   row ([`crate::event`]), written through the control connection.
 //! - **Rates and reachability** come from one sampler task reading the
@@ -451,6 +457,9 @@ pub struct NetworkCheck {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrawlerStatus {
     pub paused: bool,
+    /// Paused by the setup hold (LEGAL-2): nobody has set the instance
+    /// up yet. `paused` is then `true` whatever the setting says.
+    pub waiting_for_setup: bool,
     /// Unix seconds of the last pause or resume (or the start).
     pub since: i64,
     /// `None` when the DHT is off or hasn't reported yet.
@@ -672,7 +681,12 @@ pub type CredentialChange = (String, Option<Secret>);
 
 #[derive(Debug)]
 struct State {
+    /// What's applied: `wanted`, or paused while `held`.
     paused: bool,
+    /// The pause the settings ask for.
+    wanted: bool,
+    /// The setup hold is on.
+    held: bool,
     since: i64,
     /// The last intensity recorded, so a repeat writes no event.
     intensity: Intensity,
@@ -707,8 +721,10 @@ impl std::fmt::Debug for Control {
 impl Control {
     /// Takes over a started pipeline, whose pool and DHT already have
     /// `paused` (`PoolConfig::paused`, the node's `Config::paused`), and
-    /// starts the sampler. `store` is a connection for events and source
-    /// settings, apart from the writer's.
+    /// starts the sampler. A pipeline held for setup started its pool
+    /// paused whatever `paused` says; this lifts the hold when setup
+    /// completes, then applies the setting. `store` is a connection for
+    /// events and source settings, apart from the writer's.
     pub async fn start(
         monitor: Monitor,
         dht: Option<Arc<DhtSource>>,
@@ -746,6 +762,20 @@ impl Control {
             .iter()
             .map(|s| (s.id, s.priority))
             .collect();
+        let hold = monitor
+            .setup_done()
+            .filter(|rx| crate::setup_hold::held(Some(rx)))
+            .cloned();
+        let held = hold.is_some();
+        // Held, the DHT starts paused too, whenever its plugin starts.
+        if let (true, Some(dht)) = (held, &dht) {
+            dht.set_paused(true);
+        }
+        // Set up between the pipeline's start (which paused the pool for
+        // the hold) and now: the pool takes the setting's value here.
+        if monitor.setup_done().is_some() && !held && !paused {
+            monitor.pool().set_paused(false).await;
+        }
         let control = Control {
             inner: Arc::new(Inner {
                 monitor,
@@ -755,7 +785,9 @@ impl Control {
                 epoch_unix: unix_now(),
                 toggle: tokio::sync::Mutex::new(()),
                 state: Mutex::new(State {
-                    paused,
+                    paused: paused || held,
+                    wanted: paused,
+                    held,
                     since,
                     intensity,
                     priorities,
@@ -765,7 +797,27 @@ impl Control {
         };
         control.sample_now();
         tokio::spawn(sampler(Arc::downgrade(&control.inner)));
+        if let Some(hold) = hold {
+            let inner = Arc::downgrade(&control.inner);
+            tokio::spawn(async move {
+                crate::setup_hold::released(hold).await;
+                if let Some(inner) = inner.upgrade() {
+                    Control { inner }.release_setup_hold().await;
+                }
+            });
+        }
         Ok(control)
+    }
+
+    /// Lifts the setup hold and applies the setting's pause (LEGAL-2).
+    async fn release_setup_hold(&self) {
+        let _one = self.inner.toggle.lock().await;
+        let wanted = {
+            let mut st = self.state();
+            st.held = false;
+            st.wanted
+        };
+        self.apply_effective(wanted).await;
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -802,8 +854,19 @@ impl Control {
         self.apply_intensity(intensity).await
     }
 
+    /// With `toggle` held: records the setting's pause and applies it,
+    /// unless the setup hold keeps the crawler paused anyway.
+    async fn apply_paused(&self, wanted: bool) -> bool {
+        let paused = {
+            let mut st = self.state();
+            st.wanted = wanted;
+            wanted || st.held
+        };
+        self.apply_effective(paused).await
+    }
+
     /// With `toggle` held.
-    async fn apply_paused(&self, paused: bool) -> bool {
+    async fn apply_effective(&self, paused: bool) -> bool {
         if self.state().paused == paused {
             return false;
         }
@@ -887,14 +950,15 @@ impl Control {
     }
 
     pub fn status(&self) -> CrawlerStatus {
-        let (paused, since) = {
+        let (paused, since, waiting_for_setup) = {
             let st = self.state();
-            (st.paused, st.since)
+            (st.paused, st.since, st.held)
         };
         let p = self.inner.monitor.pool_stats();
         let get = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
         CrawlerStatus {
             paused,
+            waiting_for_setup,
             since,
             dht: self
                 .inner
