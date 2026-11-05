@@ -138,6 +138,21 @@ pub fn adult_hold(d: &Decision) -> bool {
         && matches!(d.action, Action::Quarantine | Action::Drop)
 }
 
+/// The correction a stored torrent is classified with when `adult` is the
+/// bitset of always-adult sources (X-source-adult): your own correction
+/// `own`, with Is adult added when one of its `sources` is always adult
+/// and you haven't said Not adult. Clearing a correction or setting only
+/// Not junk never un-adults it; your explicit Not adult does.
+pub fn source_adult(own: Correction, sources: u64, adult: u64) -> Correction {
+    match own.adult {
+        None if adult & sources != 0 => Correction {
+            adult: Some(true),
+            ..own
+        },
+        _ => own,
+    }
+}
+
 /// What a classification rule's say changes: Is adult (`true`) or Not
 /// adult (`false`) where it differs from detection, else nothing.
 pub fn rule_fix(says: Option<bool>, class: &Classification) -> Option<bool> {

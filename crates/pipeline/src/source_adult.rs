@@ -68,13 +68,7 @@ fn bit(source: SourceId) -> u64 {
 /// with Is adult added when one of its `sources` is always adult and you
 /// haven't said Not adult.
 pub fn correction(own: Correction, sources: u64, adult: AdultSources) -> Correction {
-    match own.adult {
-        None if adult.any(sources) => Correction {
-            adult: Some(true),
-            ..own
-        },
-        _ => own,
-    }
+    lodestar_filter::reclassify::source_adult(own, sources, adult.0)
 }
 
 /// What filtering makes of an item an always-adult source found, and the

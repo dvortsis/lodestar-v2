@@ -517,6 +517,8 @@ pub struct Pipeline {
     writer: JoinHandle<Store>,
     /// The scrape scheduler, stopped first.
     health: Option<(watch::Sender<bool>, JoinHandle<Store>)>,
+    /// The registered always-adult sources ([`Pipeline::adult_sources`]).
+    adult: source_adult::AdultSources,
 }
 
 impl std::fmt::Debug for Pipeline {
@@ -990,11 +992,19 @@ impl Pipeline {
             finish: finish_tx,
             writer,
             health: health_task,
+            adult,
         })
     }
 
     pub fn monitor(&self) -> Monitor {
         self.monitor.clone()
+    }
+
+    /// The registered sources whose every find is classified adult
+    /// (X-source-adult), for the other places that classify a stored
+    /// torrent: the API's corrections.
+    pub fn adult_sources(&self) -> source_adult::AdultSources {
+        self.adult
     }
 
     pub fn pool(&self) -> &PoolHandle {

@@ -330,6 +330,7 @@ impl Services {
             jobs: Default::default(),
             quarantine_secs,
             shutdown: Default::default(),
+            adult_sources: pipeline.adult_sources().0,
         });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
         let subscriptions_stopped = crate::fixture::unless_offline(subscriptions_stopped);

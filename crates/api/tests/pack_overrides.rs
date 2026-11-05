@@ -98,6 +98,7 @@ fn fixture(manifest: Arc<Manifest>) -> Fixture {
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
         shutdown: Default::default(),
+        adult_sources: 0,
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
