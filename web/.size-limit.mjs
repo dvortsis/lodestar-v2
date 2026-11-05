@@ -145,7 +145,7 @@ const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
-	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences)\.svelte$/,
+	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment)\.svelte$/,
 	// Clipboard failure is an interaction, not part of opening the detail view.
 	// Its UI and mount runtime remain included in the on-demand budget below.
 	/features\/detail\/manual-mount\.ts$/,
@@ -1090,6 +1090,12 @@ if (carried.length)
 // with a first view, fails here before measuring.
 const drawerView = ownChunk(DRAWER, detailLazy);
 const torrentView = own('/t/[hash]', { onDemand: detailLazy });
+// ENR-8: the adult-enrichment section loads only when the API sent it (admin, Show adult content on),
+// so it has its own entry below and is left out of "Detail sections (on demand)".
+const adultSection = ownChunk('src/lib/features/detail/adult/AdultEnrichment.svelte', [], false, [
+	...drawerView,
+	...torrentView
+]);
 const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-(?:root|adult)\.ts$)/;
 const flowsCarried = [
 	['Settings FiltersScreen (first view)', filtersFirst],
@@ -1376,7 +1382,8 @@ export default [
 	// runner §2.26, SRC-17: "Found by" in the drawer (27,400 B → 27,976 B; measured 551 B over, rounded up to 64 B).
 	// RP-6: +4 B after merging main (measured 27,980 B; nothing of the drawer's changed, so the chunk
 	// hashes in its imports moved by a few bytes). Runner to confirm.
-	entry('Detail drawer (own JS + CSS)', drawerView, '28000 B'),
+	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
+	entry('Detail drawer (own JS + CSS)', drawerView, '28064 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1387,15 +1394,21 @@ export default [
 	// runner §2.26, SRC-17: "Found by" on the full page (21,200 B → 21,776 B; measured 565 B over, rounded up to 64 B).
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice gate in the shared clients (measured
 	// 21,795 B, residue 19 B, rounded up to 64 B).
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21840 B'),
+	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21904 B'),
 	entry(
 		'Detail sections (on demand)',
-		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
+		[
+			...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])
+		].filter((f) => !adultSection.includes(f)),
 		'38608 B' // runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
 	),
+	// ENR-8: the adult-enrichment section, loaded on demand and only when the API sent the field.
+	// Measured 1,530 B; limit = measured + 10%, rounded.
+	entry('Detail adult-enrichment section (on demand)', adultSection, '1700 B'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	entry(

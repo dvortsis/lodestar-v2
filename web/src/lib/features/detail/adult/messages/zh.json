@@ -1,0 +1,12 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"detail_adult_enrichment_title": "场景详情",
+	"detail_adult_enrichment_studio": "制作公司",
+	"detail_adult_enrichment_released": "发布日期",
+	"detail_adult_enrichment_scene": "场景",
+	"detail_adult_enrichment_performers": "演员",
+	"detail_adult_enrichment_performers_more": "该服务列出的演员多于这里显示的。",
+	"detail_adult_enrichment_source": "由 {source} 匹配",
+	"detail_adult_enrichment_link": "打开场景页面",
+	"detail_adult_enrichment_link_external": "（在新标签页中打开）"
+}
