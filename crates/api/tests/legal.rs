@@ -450,3 +450,66 @@ async fn the_rate_limit_is_unchanged() {
         "pending notice or not"
     );
 }
+
+/// The gate covers the trusted-proxy header's sessions and the event
+/// stream too, and accepting is same-origin JSON like every write.
+#[tokio::test]
+async fn the_gate_covers_proxy_sessions_and_streams() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = set_up_then(dir.path(), NOTICE_VERSION, NOTICE_VERSION + 1).await;
+    a.auth
+        .set_proxy(lodestar_api::auth::ProxyConfig {
+            enabled: true,
+            trusted: vec!["10.7.0.1/32".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let proxy = || {
+        Request::get("/api/v1/keys")
+            .header("Remote-User", "admin")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, body, _) = send(&a, proxy(), Some([10, 7, 0, 1])).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "notice_required");
+
+    let cookie = login(&a).await;
+    let (status, body, _) = send(&a, get("/api/v1/events", Some(&cookie)), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let cross = Request::post("/api/v1/legal/accept")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header(header::ORIGIN, "https://evil.example")
+        .header(header::HOST, "lodestar.local")
+        .body(Body::from(
+            json!({ "version": NOTICE_VERSION + 1 }).to_string(),
+        ))
+        .unwrap();
+    let (status, body, _) = send(&a, cross, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let form = Request::post("/api/v1/legal/accept")
+        .header(header::CONTENT_TYPE, "text/plain")
+        .header(header::COOKIE, &cookie)
+        .body(Body::from(
+            json!({ "version": NOTICE_VERSION + 1 }).to_string(),
+        ))
+        .unwrap();
+    let (status, _, _) = send(&a, form, None).await;
+    assert!(status.is_client_error(), "{status}");
+    assert!(a.auth.notice_pending(), "neither was accepted");
+
+    // Accepted from the proxy's session, it lifts for every session.
+    let accept = Request::post("/api/v1/legal/accept")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("Remote-User", "admin")
+        .body(Body::from(
+            json!({ "version": NOTICE_VERSION + 1 }).to_string(),
+        ))
+        .unwrap();
+    let (status, body, _) = send(&a, accept, Some([10, 7, 0, 1])).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = send(&a, proxy(), Some([10, 7, 0, 1])).await;
+    assert_eq!(status, StatusCode::OK);
+}
