@@ -14,11 +14,15 @@ use lodestar_filter::packs::manifest::{Code, Direction, Manifest, RuleEntry, Ver
 use lodestar_filter::packs::overrides::{PackOverride, label};
 use lodestar_filter::packs::upgrade::{self, FRESH_KEY, UNKNOWN};
 use lodestar_filter::{
-    Action, Core, CsList, Engine, Facts, Item, Lists, PackRule, RuleRef, Switches, TermSet,
+    Action, Core, CsList, Engine, Facts, Item, ListLayer, Lists, PackRule, RuleRef, Switches,
+    TermSet,
 };
 use lodestar_store::{ExceptionRow, OverrideRow, RuleSet, Store, StoreConfig};
 
 const MW2: RuleRef = RuleRef::Pack(PackRule::Mw2);
+
+/// A stored override value: text, or bytes that don't read as text.
+type Stored = Result<String, Vec<u8>>;
 
 /// A store an earlier build set up, with packs on and the versions of
 /// `manifest`'s first versions applied.
@@ -207,9 +211,8 @@ fn the_layers_above_the_packs_still_decide_first() {
         ..base.clone()
     };
     assert_eq!(decide(&engine(&m, &set).0, A), None);
-    // An exception to MW-2 doesn't lift another pack rule's decision, and
-    // the strongest pack action still wins: MW-2 lowered to flag under a
-    // rule of yours that hides keeps yours.
+    // Your rules decide before the pack layer: MW-2 lowered to flag under
+    // a rule of yours that hides keeps yours.
     let set = RuleSet {
         rules: vec![lodestar_store::RuleRow {
             id: 1,
@@ -225,6 +228,52 @@ fn the_layers_above_the_packs_still_decide_first() {
     assert_eq!(
         decide(&engine(&m, &set).0, A),
         Some((RuleRef::User(1), Action::Hide))
+    );
+}
+
+#[test]
+fn within_the_pack_layer_the_strongest_action_still_wins() {
+    let m = Manifest::builtin();
+    let s = store(&builtin_record());
+    let base = s.rule_set().unwrap();
+    let list = ListLayer {
+        id: 3,
+        action: Action::Hide,
+        hashes: Arc::new([[7u8; 20]].into_iter().collect()),
+    };
+    let with_list = |set: &RuleSet| {
+        let (mut e, _) = engine(&m, set);
+        e.lists.push(list.clone());
+        e
+    };
+    // MW-2 lowered to flag: the list's hide wins.
+    let lowered = RuleSet {
+        pack_overrides: vec![("MW-2".into(), Ok(row(1, Action::Flag, None)))],
+        ..base.clone()
+    };
+    assert_eq!(
+        decide(&with_list(&lowered), A),
+        Some((RuleRef::List(3), Action::Hide))
+    );
+    // MW-2 raised to drop: it wins over the list.
+    let raised = RuleSet {
+        pack_overrides: vec![("MW-2".into(), Ok(row(1, Action::Drop, None)))],
+        ..base.clone()
+    };
+    assert_eq!(decide(&with_list(&raised), A), Some((MW2, Action::Drop)));
+    // An exception to MW-2 releases from MW-2 only: the list still holds.
+    let excepted = RuleSet {
+        exceptions: vec![ExceptionRow {
+            id: 1,
+            rule: "MW-2".into(),
+            kind: KIND_HASHES,
+            value: vec![7; 20],
+        }],
+        ..raised
+    };
+    assert_eq!(
+        decide(&with_list(&excepted), A),
+        Some((RuleRef::List(3), Action::Hide))
     );
 }
 
@@ -309,7 +358,7 @@ fn unreadable_rows_fail_closed_and_are_listed() {
         ..base.clone()
     };
     // (value, decision on A, on B)
-    let cases: Vec<(Result<String, Vec<u8>>, Option<Action>, Option<Action>)> = vec![
+    let cases: Vec<(Stored, Option<Action>, Option<Action>)> = vec![
         // A lighter action with an `unless` that doesn't read: the stronger
         // (the rule's own) applies, everywhere.
         (

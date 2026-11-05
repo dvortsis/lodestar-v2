@@ -322,6 +322,9 @@ pub(crate) fn apply(
     match effect {
         Effect::None => Some(base),
         Effect::Replace(action, unless) => {
+            // Only against an unchanged base, which is never in doubt, and
+            // every state with an unaccepted version is in doubt (RP-0).
+            debug_assert!(!capped, "an override replaces only an accepted version");
             if unless.as_ref().is_some_and(unless_matches) {
                 None
             } else {

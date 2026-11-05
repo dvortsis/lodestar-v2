@@ -177,7 +177,10 @@ impl Unreadable {
             return PackRule::ALL
                 .into_iter()
                 .find(|r| r.index() as i64 == self.id)
-                .map_or_else(|| format!("packs.override.{}", self.id), overrides::label);
+                .map_or_else(
+                    || format!("{}override.{}", upgrade::LABEL_PREFIX, self.id),
+                    overrides::label,
+                );
         }
         let prefix = match self.kind {
             RowKind::Rule | RowKind::Unless => "U",

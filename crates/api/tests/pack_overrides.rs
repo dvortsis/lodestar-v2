@@ -40,6 +40,12 @@ fn real_mw2(c: &PackCtx<'_>) -> bool {
 /// The built-in manifest, MW-2 with a version 2 that drops what version 1
 /// hid.
 fn bumped() -> Arc<Manifest> {
+    bumped_to(Direction::ActionHeavier, Action::Drop)
+}
+
+/// The built-in manifest, MW-2 with a version 2 matching what version 1
+/// (hide) did, with `action`.
+fn bumped_to(direction: Direction, action: Action) -> Arc<Manifest> {
     let b = Manifest::builtin();
     let mut entries: Vec<RuleEntry> = PackRule::ALL
         .into_iter()
@@ -57,7 +63,7 @@ fn bumped() -> Arc<Manifest> {
         true,
         vec![
             v(1, Direction::Widens, Action::Hide),
-            v(2, Direction::ActionHeavier, Action::Drop),
+            v(2, direction, action),
         ],
     ));
     Arc::new(Manifest::new(entries).unwrap())
@@ -334,6 +340,17 @@ async fn bad_input_is_refused_before_anything_is_stored() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    // A blank `unless` is none (blank is the only text that parses as
+    // matching everything): hide on a hide rule, no password.
+    let (status, body) = apply(&f, &c, &set("MW-2", "hide", Some("  \t "), None), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(stored(&f, "MW-2"), Some(Ok("1\n1\nhide".into())));
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .set_pack_override("MW-2", None)
+        .unwrap();
     assert!(
         f.api
             .store
@@ -443,6 +460,63 @@ async fn a_weakening_override_waits_while_the_version_is_in_doubt() {
     let o = overview_rule(&f, &c, "MW-2").await;
     assert_eq!(o["override"]["changed"], json!(true));
     assert_eq!(o["override"]["paused"], json!(false));
+}
+
+#[tokio::test]
+async fn changed_since_preview_covers_removal_too() {
+    // Version 2 only demotes: a hide override removed after it's accepted
+    // lightens the rule.
+    let f = fixture(bumped_to(Direction::ActionLighter, Action::Demote));
+    let c = logged_in(&f).await;
+    let (status, _) = apply(&f, &c, &set("MW-2", "hide", None, None), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let remove: Change =
+        serde_json::from_value(json!({ "op": "remove_pack_override", "rule": "MW-2" })).unwrap();
+    let previewed = f.api.assess(&remove, 5).unwrap();
+    assert!(
+        !previewed.confirm,
+        "hide over hide: removing lightens nothing"
+    );
+    f.api.accept_pack_versions(&[PackRule::Mw2], 10).unwrap();
+    let o = overview_rule(&f, &c, "MW-2").await;
+    assert_eq!(o["override"]["changed"], json!(true));
+    assert_eq!(o["override"]["paused"], json!(false), "heavier than v2");
+    let err = f.api.apply(&remove, previewed, 11).unwrap_err();
+    assert_eq!(err.code(), "changed_since_preview");
+    assert!(stored(&f, "MW-2").is_some());
+}
+
+#[tokio::test]
+async fn undo_across_a_base_change_restores_the_override_paused() {
+    let f = fixture(bumped());
+    let c = logged_in(&f).await;
+    let (status, _) = apply(
+        &f,
+        &c,
+        &set("MW-2", "demote", None, Some(1)),
+        Some(PASSWORD),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = apply(&f, &c, &set("SP-1", "hide", None, None), None).await;
+    assert_eq!(status, StatusCode::OK);
+    f.api.accept_pack_versions(&[PackRule::Mw2], 10).unwrap();
+    // Undo goes back to the set before SP-1's override: MW-2's demote,
+    // made against version 1, which no longer applies.
+    let (status, _) = apply(&f, &c, &json!({ "op": "undo" }), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored(&f, "MW-2"), Some(Ok("1\n1\ndemote".into())));
+    assert_eq!(stored(&f, "SP-1"), None);
+    let o = overview_rule(&f, &c, "MW-2").await;
+    assert_eq!(o["override"]["changed"], json!(true));
+    assert_eq!(o["override"]["paused"], json!(true));
+    let e = f.api.engine.current();
+    assert!(e.pack_overrides.get(PackRule::Mw2).unwrap().paused);
+    assert_eq!(
+        e.pack_versions.state(PackRule::Mw2).applied,
+        Some(2),
+        "Undo never restores versions"
+    );
 }
 
 #[tokio::test]

@@ -727,17 +727,29 @@ fn override_change(
             let action = override_action(act)?;
             let unless = unless
                 .as_deref()
+                .map(str::trim)
                 .filter(|u| !u.is_empty())
-                .map(|u| query(u).map(|n| n.to_query()))
-                .transpose()
-                .map_err(|e| e.field("unless"))?;
+                .map(|u| query(u).map_err(|e| e.field("unless")))
+                .transpose()?;
+            // An `unless` that matches every torrent switches the rule off:
+            // that's the pack switch's change, with its own warning.
+            if unless.as_ref().is_some_and(|n| *n == Node::All) {
+                return Err(bad(
+                    "unless_matches_everything",
+                    "This unless matches every torrent, which turns the rule off: switch the rule off instead.",
+                )
+                .field("unless"));
+            }
+            let unless = unless.map(|n| n.to_query());
             let weakening = pack_overrides::weakens(action, unless.is_some(), top(r));
             let base = pack_overrides::current_base(&versions, r);
             if weakening && base == pack_upgrade::UNKNOWN {
                 return Err(conflict(
                     "pack_rule_in_doubt",
                     format!(
-                        "The version of {rule} this install applied isn't known for sure, so an                          override that weakens it can't be checked against it. Accept its pending                          version first."
+                        "The version of {rule} this install applied isn't known for sure, so an \
+                         override that weakens it couldn't be checked against it. Set it again \
+                         once the Filters & Safety notice about pack versions is resolved."
                     ),
                 ));
             }
