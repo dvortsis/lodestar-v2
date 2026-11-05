@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T18:12Z",
+  "updated_at": "2026-11-05T18:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3149,10 +3149,14 @@
       "done": "2026-11-05T16:20Z"
     },
     "X-settings-followups": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnAwFGkdPumVw5a9e9d",
       "since": "2026-11-05T14:35Z",
-      "model": "sonnet"
+      "model": "sonnet",
+      "pr": 501,
+      "merge": "b6e404fa",
+      "archived": true,
+      "done": "2026-11-05T18:16Z"
     },
     "ENR-7": {
       "status": "running",
@@ -4784,7 +4788,8 @@
     "owner flag sent 17:40Z: SRC-13c consent (#493 merged 3ac92464).",
     "Host-wiring note (from #502 delta review): stats.done grows on every 60 s retry of a held interest (~1,440 per held item per spent day); fix the metric when wiring.",
     "owner-flag §2.19 (ENR-1c #502): user-interest enrichment lookups count against the 5,000/day cap (owner Q15 restored; ENR-1 had exempted them); an unlisted enrichment plugin's answers are refused.",
-    "owner flag sent 18:12Z: X-source-adult-2 gap 3 (#494 merged d3906e36). CI note: GitHub left finished jobs shown in_progress (ubuntu test, e2e-ok); verified via job steps before merge."
+    "owner flag sent 18:12Z: X-source-adult-2 gap 3 (#494 merged d3906e36). CI note: GitHub left finished jobs shown in_progress (ubuntu test, e2e-ok); verified via job steps before merge.",
+    "CI note 18:16Z: GitHub left finished jobs shown in_progress/queued on several heads (e2e-ok aggregate on #501 never got a runner; all its E2E jobs passed). Runner verified job steps before merging #494, #501."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5445,7 +5450,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T18:12Z",
+    "updated": "2026-11-05T18:16Z",
     "items": [
       {
         "slot": 1,
@@ -5478,14 +5483,6 @@
         "agent": "claude",
         "doing": "Rule packs: SP-3 flooding, a bounded per-publisher near-duplicate rate judged in the writer",
         "since": "2026-11-05T10:55Z"
-      },
-      {
-        "slot": 6,
-        "slice": "X-settings-followups",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Settings: a missing Copy-link test and #496's record corrections",
-        "since": "2026-11-05T14:35Z"
       },
       {
         "slot": 7,
