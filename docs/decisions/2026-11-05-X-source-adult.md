@@ -14,7 +14,13 @@ Slice X-source-adult (runner brief, 2026-11-05). It closes the OPEN item in `202
   
   An item seen by both an always-adult source and the DHT stays adult: any always-adult finder is enough.
 - **Your own Not adult correction wins; a Not adult classification rule doesn't** (§2.19, runner's call, flagged to the owner). A per-torrent correction is your explicit act on one item you've looked at, as the brief recommends. A rule matches many torrents by name, and the source is the stronger signal, so a rule never un-adults a source-adult item.
-- **Known gap, for a follow-up in `crates/api`:** if you *clear* a correction with `/classify/correct`, the API reclassifies with no source signal. The item then stays at detection's type until an always-adult source next finds it, or the backfill runs. The API needs the same `source_adult::correction`. That's outside this slice's paths, so it's left to the runner.
+- **Gaps the runner tracks. Each must be closed before Sukebei is registered.**
+  - **`crates/api` corrections.** `/classify/correct` reclassifies with the correction you send and no source signal. So any correction that leaves Is adult / Not adult unset un-adults a source-adult torrent: clearing one, or setting only Not junk. It then stays at detection's type until an always-adult source finds it again, which can be never for an old item, or until a backfill reaches it after a parser upgrade. The fix is the same `source_adult::correction` in the API. That's an api-crate follow-up the runner has recorded, so it's not done here.
+  - **Imports.** An import commit (`crates/store/src/import.rs`, `sources-importers`) doesn't read `unverified_items`. A dump holding a hash that only a Sukebei unverified item claims is stored with the dump's classification and without Sukebei's bit, until Sukebei finds it again. DHT fetches of such a hash are covered (`Writer::source_adult`).
+  - **Stopped and purged sources (SRC-14b).** `Store::promote` leaves a stopped source's bit out of `sources`, and a purge clears its bit from torrents the DHT also found. The commit still stores such a torrent adult, but the next backfill finds no always-adult bit and returns it to detection's type. This follows SRC-14b, where a purge undoes what the source contributed. The runner decides whether the adult label should outlive a purge.
+  - **The plugin must be registered.** The signal comes from the registered manifests. A build or configuration that leaves the Sukebei plugin out of `Pipeline::start` builds no mask, so its torrents go back to detection's type at the next backfill.
+- **Errors fail strict.** If classifying a stored torrent as adult fails with a store error or a rules change, its row is marked for the backfill, which applies the same correction.
+- **Claims are judged from the claiming source.** At ingest, and in the sweep of claims on stored torrents, claims are judged as adult when the claiming source is always adult. The item sweep and promotion judge as adult when *any* finder is, so nothing reaches search on a non-adult reading alone.
 - **Sukebei's category claim has its own scheme**, `sukebei-category:<id>`, not `nyaa-category` (#461 review). Sukebei's ids name different categories from Nyaa's, so the two must never be read as one scheme.
 - **Tests.**
   - `crates/pipeline/tests/source_adult.rs`, end to end through the pipeline:
@@ -23,9 +29,10 @@ Slice X-source-adult (runner brief, 2026-11-05). It closes the OPEN item in `202
     - the floor refuses its hash first;
     - CS-5a holds a name only the adult reading meets;
     - a DHT fetch promotes an unverified Sukebei item as adult;
-    - a stored torrent becomes adult when the source finds it, except one you marked Not adult;
+    - a stored torrent becomes adult when the source finds it, by claims or a bare sighting, except one you marked Not adult;
     - claims and the refile sweep meet the Adult-only core.
   - Unit tests in `source_adult.rs` and `worker.rs`.
   - `crates/api/tests/source_adult.rs`: search, counts and detail by hash leave such a torrent out with Show adult content off and show it when it's on.
-  - Exports and feeds use the same stored class (`export.rs`, `digest.rs`). No fixed sleeps.
-- **Paths outside the brief's list, needed for the above.** The brief only owned `worker.rs`, but promotion and the commit re-judge are in `writer.rs`, and the backfill is in `enrich.rs`, so those are here too. `lib.rs` builds the bitset. Each other `Manifest` literal gets one `always_adult: false` line. Two new test files are added, and three test files gain `..Default::default()`. Nothing in `crates/filter` or `torrent_cache.rs` changes.
+  - Exports and feeds aren't tested here. They read the same stored class, and `export.rs` and `digest.rs` test that path. No fixed sleeps.
+  - Not tested: the generation-rejected and error paths of `enrich::adult_by_source`, and a merge promotion. The merge goes through the same `adult_ids` path as a sighting.
+- **Paths outside the brief's list, needed for the above.** The brief only owned `worker.rs`, but promotion and the commit re-judge are in `writer.rs`, and the backfill is in `enrich.rs`, so those are here too. `lib.rs` builds the bitset. Each other `Manifest` literal gets one `always_adult: false` line. Two new test files are added: `crates/pipeline/tests/source_adult.rs` and `crates/api/tests/source_adult.rs`. The second is the search-hiding test the brief asks for. Struct literals for `Ctx` and `Backfill` gain `..Default::default()` in `crates/pipeline/tests/{corrections,import_refile,unverified}.rs` and `crates/api/tests/filters.rs`, and `bench/examples` gets the manifest line. Nothing in `crates/filter` or `torrent_cache.rs` changes.

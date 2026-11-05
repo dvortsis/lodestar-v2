@@ -847,7 +847,7 @@ fn judge_item(
     // Only the floor and the core hold; any other rule removes the item
     // and holds nothing (runner, #383). An item any always-adult source
     // found is judged as adult too, whichever source's claims it holds.
-    let adult = ctx.adult.any(i.sources | source_bit(i.source));
+    let adult = ctx.adult.any(i.sources) || ctx.adult.has(i.source);
     judge(engine, key, claims, ctx.sealer, adult, now).map(|h| (i.id, h.core.then_some(h)))
 }
 
@@ -869,11 +869,6 @@ fn judge_hashes(
         h = judge(engine, other, c, sealer, adult, now);
     }
     h
-}
-
-/// `source` as a bit of a `sources` bitset.
-pub(crate) fn source_bit(source: SourceId) -> u64 {
-    1u64.checked_shl(u32::from(source.get())).unwrap_or(0)
 }
 
 /// The verification cursor (`sources.verify_unverified`, default off):

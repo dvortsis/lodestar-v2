@@ -303,7 +303,7 @@ async fn promotion_keeps_an_unverified_find_adult() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stored_torrent_an_always_adult_source_finds_becomes_adult_unless_you_said_not() {
-    let names = ["Lake Walk 2021", "Lake Walk 2020"];
+    let names = ["Lake Walk 2021", "Lake Walk 2020", "Lake Walk 2019"];
     let seeds: Vec<Seed> = names.iter().map(|n| Seed::v1(info_dict(n))).collect();
     let keys: Vec<InfoHash> = seeds.iter().map(|s| InfoHash(s.info_hash)).collect();
     let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
@@ -324,7 +324,7 @@ async fn a_stored_torrent_an_always_adult_source_finds_becomes_adult_unless_you_
             .unwrap();
     }
     until("stored", || {
-        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 2
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 3
     })
     .await;
     let mut store = pipeline.shutdown().await.unwrap();
@@ -345,15 +345,15 @@ async fn a_stored_torrent_an_always_adult_source_finds_becomes_adult_unless_you_
     let pipeline = Pipeline::start(cfg, store, vec![adult, plain])
         .await
         .unwrap();
-    // Claims about both, then a bare sighting of the first: each is the
-    // adult source finding a stored torrent.
-    for (k, n) in keys.iter().zip(names) {
+    // Claims about the first two, and only a bare sighting of the third:
+    // each is the adult source finding a stored torrent.
+    for (k, n) in keys.iter().zip(names).take(2) {
         adult_tx2
             .send(Found::key(*k, 0).with_claims(claims(n)))
             .await
             .unwrap();
     }
-    adult_tx2.send(Found::key(keys[0], 0)).await.unwrap();
+    adult_tx2.send(Found::key(keys[2], 0)).await.unwrap();
     until("seen again", || {
         let w = pipeline.writer_stats();
         w.unverified.on_torrent.load(Ordering::Relaxed) == 2
@@ -367,10 +367,12 @@ async fn a_stored_torrent_an_always_adult_source_finds_becomes_adult_unless_you_
         Some(ContentType::Adult.code())
     );
     assert_ne!(kind(&store, &keys[1]), Some(ContentType::Adult), "yours");
-    // The background pass agrees on both.
+    assert_eq!(kind(&store, &keys[2]), Some(ContentType::Adult), "bare");
+    // The background pass agrees on each.
     reenrich(&mut store, &filter, mask);
     assert_eq!(kind(&store, &keys[0]), Some(ContentType::Adult));
     assert_ne!(kind(&store, &keys[1]), Some(ContentType::Adult));
+    assert_eq!(kind(&store, &keys[2]), Some(ContentType::Adult));
 }
 
 /// Claims an always-adult source makes are judged as adult before they're

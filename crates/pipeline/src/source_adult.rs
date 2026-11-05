@@ -96,7 +96,8 @@ pub fn judge(
     let fix = (!detected).then_some(true);
     // The engine judged it as adult already: detection or an Is adult
     // rule said so.
-    if detected || item.content_type == ContentType::Adult || says == Some(true) {
+    // (`item.content_type` is `facts.class`'s, so `detected` covers it.)
+    if detected || says == Some(true) {
         return (v, fix);
     }
     // A floor hit is final, as the engine returns it.

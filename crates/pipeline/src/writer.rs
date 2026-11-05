@@ -382,11 +382,18 @@ impl Writer {
     /// judged again. Quarantined names are sealed here.
     fn judge(&self, mut committing: Vec<Committing>) -> Vec<Committing> {
         let engine = self.filter.current();
+        // One read per batch, and none while no always-adult source is
+        // registered. A read error counts as having items: stricter.
+        let unverified = !self.adult.is_empty()
+            && self
+                .store
+                .as_ref()
+                .is_some_and(|s| s.has_unverified().unwrap_or(true));
         for c in &mut committing {
             // Found by an always-adult source the worker didn't see: the
             // lease's, or the source of an unverified item it promotes.
             // Judged again as adult before anything is stored.
-            let newly_adult = !c.results.source_adult && self.source_adult(c);
+            let newly_adult = !c.results.source_adult && self.source_adult(c, unverified);
             let r = &mut c.results;
             r.source_adult |= newly_adult;
             let verdict =
@@ -414,7 +421,7 @@ impl Writer {
     /// sources its worker saw: the lease's source, or any finder of an
     /// unverified item under one of its swarm hashes (the one promotion
     /// stores it as). Costs nothing while no such source is registered.
-    fn source_adult(&self, c: &Committing) -> bool {
+    fn source_adult(&self, c: &Committing, unverified: bool) -> bool {
         if self.adult.is_empty() {
             return false;
         }
@@ -422,17 +429,14 @@ impl Writer {
         if self.adult.any(r.sources | bit(c.lease.source)) {
             return true;
         }
-        let Some(store) = self.store.as_ref() else {
+        let Some(store) = self.store.as_ref().filter(|_| unverified) else {
             return false;
         };
-        if !store.has_unverified().unwrap_or(false) {
-            return false;
-        }
         r.torrent.swarm_hashes().any(|h| {
             // A read error counts as adult: stricter, and the commit's
             // own reads will fail the same way.
             store.unverified(Network::Bt, &h.0).map_or(true, |i| {
-                i.is_some_and(|i| self.adult.any(i.sources | bit(i.source)))
+                i.is_some_and(|i| self.adult.any(i.sources) || self.adult.has(i.source))
             })
         })
     }
@@ -450,7 +454,7 @@ impl Writer {
         let quarantine_secs = self.cfg.quarantine_secs;
         let held = self.held.clone();
         let adult = self.adult;
-        let (store, result) = tokio::task::spawn_blocking(move || {
+        let (store, result, marked) = tokio::task::spawn_blocking(move || {
             let mut store = store;
             let ctx = crate::enrich::Backfill {
                 filter: Some(&filter),
@@ -464,11 +468,17 @@ impl Writer {
             };
             let result = crate::enrich::adult_by_source(&mut store, &ids, &ctx, &mark);
             hold_committed(&store, pending.into_inner(), false);
-            (store, result)
+            // Failed: the backfill applies the same once it reaches them.
+            // If even the mark fails, the next sighting tries again.
+            let marked = result.is_err() && store.mark_unenriched(&ids).is_ok();
+            (store, result, marked)
         })
         .await
         .expect("source adult task");
         self.store = Some(store);
+        if marked {
+            self.reenrich.store(true, Ordering::Release);
+        }
         match result {
             Ok(b) => {
                 if b.rejected {
@@ -1632,10 +1642,7 @@ fn promote(
         // reached yet, must not let them be promoted.
         let hold = match &item.claims {
             Some(c) => {
-                let adult = promo
-                    .ctx
-                    .adult
-                    .any(item.sources | unverified::source_bit(item.source));
+                let adult = promo.ctx.adult.any(item.sources) || promo.ctx.adult.has(item.source);
                 unverified::judge(promo.engine, h.0, c, promo.ctx.sealer, adult, now)
             }
             None => None,
