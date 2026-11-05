@@ -1,5 +1,5 @@
 # X-claim-store: store claimed trackers in their canonical, guarded form
-**Model:** Opus (untrusted input; security). Then `/security-review` and a fresh Opus reviewer. Runner brief, 2026-11-05T20:55Z.
+**Model:** Opus (untrusted input; security). Then `/security-review` and a fresh Opus reviewer. Runner brief, 2026-11-05T20:53Z.
 
 ## Why
 X-claim-trackers (#500, merged c98be2d6) added a shared tracker guard in `crates/integrations/src/net/tracker.rs`. `public_tracker_url(raw) -> Option<String>` returns the canonical form of the address it checked: a lowercase host made only of letters, digits, `-` and `.`, or an IP literal, with udp rebuilt around the host it judged. The pipeline doesn't use that output yet. `crates/pipeline/src/unverified.rs` `store_claims` (~line 207) keeps a claimed tracker only when `public_tracker_url(t) == Some(t)`. That has two problems:

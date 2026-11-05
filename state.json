@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T20:26Z",
+  "updated_at": "2026-11-05T20:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3184,12 +3184,15 @@
       "done": "2026-11-05T19:18Z"
     },
     "ENR-1c": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnBwEorNQE51FrPWpnt",
       "since": "2026-11-05T15:40Z",
       "note": "same session as ENR-1b; #497 review polish",
       "pr": 502,
-      "head": "89daa030"
+      "head": "89daa030",
+      "merge": "a8067c6d",
+      "archived": true,
+      "done": "2026-11-05T20:54Z"
     },
     "X-log-url-redact-5": {
       "status": "merged",
@@ -3254,6 +3257,12 @@
       "session": "session_01MMjhn8MfsZf78SSbRHdDCm",
       "since": "2026-11-05T20:25Z",
       "brief": "briefs/X-enr-page-flag.md"
+    },
+    "X-claim-store": {
+      "status": "running",
+      "session": "session_01MMjhnBxHKKJCVTB1LRUWQa",
+      "since": "2026-11-05T20:53Z",
+      "brief": "briefs/X-claim-store.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4859,7 +4868,8 @@
     "owner flag sent 19:18Z: ENR-7 (#504 merged af4e9f7d). ENR-8 (drawer section, Sonnet) is now ready.",
     "owner flag sent 19:21Z: RP-4 SP-3 refinements (#495 merged 85179f32).",
     "owner-flag §2.26 (ENR-8): Detail drawer limit 28,000 -> 28,064 B and /t/[hash] 21,840 -> 21,904 B for the one dynamic import of the adult-enrichment section (+53/+54 B measured); the section itself is an on-demand chunk (1,530 B, limit 1,700).",
-    "Follow-up (from #507 review P3): a future always-adult source outside sources-plugins (e.g. in crates/pipeline) would be masked by the pipeline but not on import; add a test that every plugin services.rs registers is in the catalogue when such a source appears."
+    "Follow-up (from #507 review P3): a future always-adult source outside sources-plugins (e.g. in crates/pipeline) would be masked by the pipeline but not on import; add a test that every plugin services.rs registers is in the catalogue when such a source appears.",
+    "owner flag sent 20:54Z: ENR-1c (#502 merged a8067c6d), Q15 cap restored."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -5520,7 +5530,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-05T20:26Z",
+    "updated": "2026-11-05T20:54Z",
     "items": [
       {
         "slot": 1,
@@ -5548,12 +5558,11 @@
       },
       {
         "slot": 4,
-        "slice": null,
+        "slice": "X-claim-store",
         "role": "build",
         "agent": "claude",
-        "status": "idle",
-        "doing": "Kept free: the canonical tracker store shares unverified.rs with #502 (merging); X-search-files-6 needs a runner design call (the -path:sample clause dominates p95 and stays on the file index by ruling). Filled when #502 merges.",
-        "since": "2026-11-05T19:19Z"
+        "doing": "Security: store claimed trackers in the canonical form the shared guard checked",
+        "since": "2026-11-05T20:53Z"
       },
       {
         "slot": 5,
@@ -5581,11 +5590,12 @@
       },
       {
         "slot": 12,
-        "slice": "ENR-1c",
+        "slice": null,
         "role": "build",
         "agent": "claude",
-        "doing": "Content safety: enrichment polish before the plugins land (fail-safe marks, one match test, no enricher is always-adult)",
-        "since": "2026-11-05T15:40Z"
+        "status": "idle",
+        "doing": "Kept free: no ready slice without an owns overlap (ENR-G waits on ENR-8 #508 and owner Q1; X-search-files-6 needs a runner design call; RP-G waits on RP-5).",
+        "since": "2026-11-05T20:54Z"
       }
     ],
     "limit": 8,
