@@ -1272,7 +1272,6 @@ dependencies = [
  "lodestar-utp",
  "semver",
  "serde_json",
- "sha1",
  "sha2",
 ]
 
