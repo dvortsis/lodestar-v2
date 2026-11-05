@@ -569,7 +569,7 @@ mod tests {
         let ack = Ack::of(&m);
         let text = ack.encode();
         assert_eq!(text, format!("overlay|{}|1", ack.version));
-        assert_eq!(Ack::decode(&text), Some(ack));
+        assert_eq!(Ack::decode(&text), Some(ack.clone()));
         for bad in ["", "overlay", "overlay|t1|2", "x|t1|1", "overlay|t1"] {
             assert_eq!(Ack::decode(bad), None, "{bad}");
         }
