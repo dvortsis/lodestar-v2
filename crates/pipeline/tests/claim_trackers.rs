@@ -212,6 +212,36 @@ fn store_claims_stores_the_canonical_trackers() {
     );
 }
 
+/// A private find's own reference can be a passkey URL: it's never
+/// stored, whatever the plugin sent; a public find's is (runner, L3).
+#[test]
+fn a_private_finds_external_ref_is_not_stored() {
+    for private in [false, true] {
+        let mut found = Found::key(InfoHash([8; 20]), 0).with_provenance(claims::Provenance {
+            external_ref: Some("https://t.example/details?passkey=secret".into()),
+            published_at: Some(1_600_000_000),
+            confidence: claims::Confidence::High,
+        });
+        found.private_source = private;
+        found.claims = Some(Box::new(claims::Claims {
+            name: Some("Sintel".into()),
+            ..claims::Claims::default()
+        }));
+        let d = Discovery {
+            source: SourceId::new(1).unwrap(),
+            found,
+            at: 0,
+            reply: false,
+        };
+        let c = store_claims(&d).expect("claims");
+        let want = (!private).then(|| "https://t.example/details?passkey=secret".to_owned());
+        assert_eq!(c.provenance.external_ref, want, "private {private}");
+        // The rest of the provenance is kept either way.
+        assert_eq!(c.provenance.published_at, Some(1_600_000_000));
+        assert_eq!(c.name.as_deref(), Some("Sintel"));
+    }
+}
+
 /// A discovery whose claims leave exactly `room` bytes under the total
 /// for trackers, with `trackers` claimed.
 fn near_full(room: usize, trackers: &[&str]) -> Discovery {

@@ -237,7 +237,8 @@ pub fn stored_trackers(raw: &[String], room: usize) -> Vec<String> {
 }
 
 /// The store's claims for a discovery: the source's claims and
-/// provenance, already clamped by the emitter. `None` when it has none.
+/// provenance, already clamped by the emitter, with no `external_ref` for
+/// a `private_source` find. `None` when it has none.
 pub fn store_claims(d: &Discovery) -> Option<Claims> {
     let c = d.found.claims.as_deref()?;
     let p = d.found.provenance.as_deref();
@@ -264,7 +265,12 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         description: c.description.clone(),
         publisher: c.publisher.clone(),
         provenance: claims::Provenance {
-            external_ref: p.and_then(|p| p.external_ref.clone()),
+            // Never for a private find: a private tracker's reference can
+            // be a passkey URL. Plugins drop it too; this enforces it in
+            // one place (runner, security pre-audit L3).
+            external_ref: p
+                .filter(|_| !d.found.private_source)
+                .and_then(|p| p.external_ref.clone()),
             published_at: p.and_then(|p| p.published_at),
             confidence: match p.map(|p| p.confidence) {
                 Some(lodestar_sources::Confidence::High) => claims::Confidence::High,
