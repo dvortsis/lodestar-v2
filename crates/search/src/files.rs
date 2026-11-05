@@ -333,7 +333,7 @@ pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
             if clauses.iter().all(|(o, _)| *o == Occur::MustNot) {
                 clauses.push((Occur::Must, Box::new(AllQuery)));
             }
-            Box::new(BooleanQuery::new(clauses))
+            size_checked(clauses)
         }
         Node::Or { of } => {
             let clauses: Vec<(Occur, Q)> = of
@@ -514,6 +514,20 @@ impl SizeRange {
     }
 }
 
+impl SizeRange {
+    /// How many files the range's buckets hold in a segment they cover
+    /// (edge buckets whole).
+    fn expected(&self, inv: &InvertedIndexReader) -> tantivy::Result<u32> {
+        let mut n = 0u32;
+        for (b, _) in self.buckets() {
+            if let Some(info) = inv.get_term_info(&Term::from_field_u64(self.bucket, b))? {
+                n = n.saturating_add(info.doc_freq);
+            }
+        }
+        Ok(n)
+    }
+}
+
 impl Query for SizeRange {
     fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
         let bound = |v: u64| Bound::Included(Term::from_field_u64(self.field, v));
@@ -573,6 +587,228 @@ impl Weight for SizeWeight {
 
     fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
         self.pick(seg)?.explain(seg, doc)
+    }
+}
+
+/// A conjunction's clauses as a query: [`SizeChecked`] when a required
+/// `size:` range sits beside another required clause, else the plain
+/// boolean.
+fn size_checked(clauses: Vec<(Occur, Q)>) -> Q {
+    let is_range = |o: &Occur, q: &Q| *o == Occur::Must && q.downcast_ref::<SizeRange>().is_some();
+    let ranges: Vec<SizeRange> = clauses
+        .iter()
+        .filter(|(o, q)| is_range(o, q))
+        .filter_map(|(_, q)| q.downcast_ref::<SizeRange>().cloned())
+        .collect();
+    let others = clauses
+        .iter()
+        .filter(|(o, q)| *o == Occur::Must && !is_range(o, q))
+        .count();
+    if ranges.is_empty() || others == 0 {
+        return Box::new(BooleanQuery::new(clauses));
+    }
+    let rest: Vec<(Occur, Q)> = clauses
+        .iter()
+        .filter(|(o, q)| !is_range(o, q))
+        .map(|(o, q)| (*o, q.box_clone()))
+        .collect();
+    Box::new(SizeChecked {
+        rest: Box::new(BooleanQuery::new(rest)),
+        ranges,
+        whole: Box::new(BooleanQuery::new(clauses)),
+        ratio: CHECK_RATIO,
+    })
+}
+
+/// A conjunction with required `size:` ranges and other required
+/// clauses (`ext:mkv size:>1GB`). Where the other clauses match fewer
+/// files than the ranges' buckets hold, as an extension beside a broad
+/// size usually does, they lead and each of their files has its size
+/// checked in the column, a block at a time. Intersected with a
+/// bucketed range instead, every bucket's postings were decoded and
+/// merged through a union just to be skipped through (X-search-files-4).
+/// Elsewhere it's the plain conjunction (`whole`). Both give the same
+/// files: the check is exact.
+#[derive(Debug)]
+struct SizeChecked {
+    /// The conjunction without its ranges.
+    rest: Q,
+    ranges: Vec<SizeRange>,
+    whole: Q,
+    /// [`CHECK_RATIO`]; tests force either path with 0 (never check) or
+    /// `u64::MAX` (always).
+    ratio: u64,
+}
+
+impl Clone for SizeChecked {
+    fn clone(&self) -> Self {
+        SizeChecked {
+            rest: self.rest.box_clone(),
+            ranges: self.ranges.clone(),
+            whole: self.whole.box_clone(),
+            ratio: self.ratio,
+        }
+    }
+}
+
+/// The column check leads unless the ranges' buckets hold at most
+/// `1 / CHECK_RATIO` of the files the other clauses match: reading a
+/// file's size from the column costs about what merging a file through
+/// the bucket union does, and the union's files must be decoded besides.
+const CHECK_RATIO: u64 = 4;
+
+impl Query for SizeChecked {
+    fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
+        Ok(Box::new(SizeCheckedWeight {
+            rest: self.rest.weight(scoring)?,
+            whole: self.whole.weight(scoring)?,
+            ranges: self.ranges.clone(),
+            ratio: self.ratio,
+        }))
+    }
+}
+
+struct SizeCheckedWeight {
+    rest: Box<dyn Weight>,
+    whole: Box<dyn Weight>,
+    ranges: Vec<SizeRange>,
+    ratio: u64,
+}
+
+impl SizeCheckedWeight {
+    /// The size column, if this segment should check it rather than run
+    /// the plain conjunction (`None`).
+    fn checks(
+        &self,
+        seg: &SegmentReader,
+        rest: &dyn Scorer,
+    ) -> tantivy::Result<Option<Option<Column<u64>>>> {
+        let field = self.ranges[0].field;
+        // A segment without sizes matches none, as the range would.
+        let Some(sizes) = seg
+            .fast_fields()
+            .column_opt::<u64>(seg.schema().get_field_name(field))?
+        else {
+            return Ok(Some(None));
+        };
+        // The fewest files any range's buckets hold. Without buckets a
+        // range reads the column for every file, so checking is better.
+        let mut fewest: Option<u64> = None;
+        for r in &self.ranges {
+            if let Some(inv) = r.bucketed(seg)? {
+                let n = u64::from(r.expected(&inv)?);
+                fewest = Some(fewest.map_or(n, |f| f.min(n)));
+            }
+        }
+        let lead = u64::from(rest.size_hint());
+        Ok(match fewest {
+            Some(n) if n.saturating_mul(self.ratio) < lead => None,
+            _ => Some(Some(sizes)),
+        })
+    }
+}
+
+impl Weight for SizeCheckedWeight {
+    fn scorer(&self, seg: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
+        let rest = self.rest.scorer(seg, boost)?;
+        match self.checks(seg, rest.as_ref())? {
+            None => self.whole.scorer(seg, boost),
+            Some(None) => Ok(Box::new(tantivy::query::EmptyScorer)),
+            Some(Some(sizes)) => {
+                let mut scorer = CheckedScorer {
+                    rest,
+                    sizes,
+                    ranges: self.ranges.iter().map(|r| r.range.clone()).collect(),
+                    vals: [None; tantivy::COLLECT_BLOCK_BUFFER_LEN],
+                };
+                scorer.settle();
+                Ok(Box::new(scorer))
+            }
+        }
+    }
+
+    fn explain(&self, seg: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
+        // The same files either way: the plain conjunction explains.
+        self.whole.explain(seg, doc)
+    }
+}
+
+/// The other clauses' files whose size every range contains.
+struct CheckedScorer {
+    rest: Box<dyn Scorer>,
+    sizes: Column<u64>,
+    ranges: Vec<std::ops::RangeInclusive<u64>>,
+    vals: [Option<u64>; tantivy::COLLECT_BLOCK_BUFFER_LEN],
+}
+
+impl CheckedScorer {
+    fn fits(&self, size: Option<u64>) -> bool {
+        size.is_some_and(|s| self.ranges.iter().all(|r| r.contains(&s)))
+    }
+
+    /// Moves to the first document from here whose size fits.
+    fn settle(&mut self) -> DocId {
+        loop {
+            let doc = self.rest.doc();
+            if doc == TERMINATED || self.fits(self.sizes.first(doc)) {
+                return doc;
+            }
+            self.rest.advance();
+        }
+    }
+}
+
+impl DocSet for CheckedScorer {
+    fn advance(&mut self) -> DocId {
+        self.rest.advance();
+        self.settle()
+    }
+
+    fn seek(&mut self, target: DocId) -> DocId {
+        self.rest.seek(target);
+        self.settle()
+    }
+
+    /// The other clauses' documents a block at a time, their sizes read
+    /// in one call. Never returns 0 before the end: the scan stops there.
+    fn fill_buffer(&mut self, buffer: &mut [DocId; tantivy::COLLECT_BLOCK_BUFFER_LEN]) -> usize {
+        loop {
+            let filled = self.rest.fill_buffer(buffer);
+            if filled == 0 {
+                return 0;
+            }
+            let vals = &mut self.vals[..filled];
+            vals.fill(None);
+            self.sizes.first_vals(&buffer[..filled], vals);
+            let mut kept = 0;
+            for i in 0..filled {
+                let size = self.vals[i];
+                if size.is_some_and(|s| self.ranges.iter().all(|r| r.contains(&s))) {
+                    buffer[kept] = buffer[i];
+                    kept += 1;
+                }
+            }
+            // `rest` now stands past the block, maybe on a file too big
+            // or small.
+            self.settle();
+            if kept > 0 {
+                return kept;
+            }
+        }
+    }
+
+    fn doc(&self) -> DocId {
+        self.rest.doc()
+    }
+
+    fn size_hint(&self) -> u32 {
+        self.rest.size_hint()
+    }
+}
+
+impl Scorer for CheckedScorer {
+    fn score(&mut self) -> Score {
+        self.rest.score()
     }
 }
 
@@ -684,7 +920,7 @@ impl Scorer for EdgeScorer {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct IdSet {
     parts: Vec<Arc<IdPart>>,
-    union: OnceLock<Option<BitSet>>,
+    union: OnceLock<Option<Union>>,
 }
 
 impl PartialEq for IdSet {
@@ -704,20 +940,60 @@ impl IdSet {
 
     /// Every id as a bitset, for checking each document of a segment in
     /// constant time; `None` when empty or past the bitset's range.
-    fn union(&self) -> Option<&BitSet> {
+    /// Built a word at a time from the parts kept as bitsets (most of a
+    /// broad clause's), rather than an insert per id: at 10M torrents
+    /// that was about 10 ms a query (X-search-files-4).
+    fn union(&self) -> Option<&Union> {
         self.union
             .get_or_init(|| {
                 let max = self.parts.iter().filter_map(|p| p.last()).max()?;
                 let max = u32::try_from(max).ok().filter(|m| *m < u32::MAX)?;
-                let mut set = BitSet::with_max_value(max + 1);
+                // One spare word, for a part's last word shifted across.
+                let mut words = vec![0u64; max as usize / 64 + 2];
                 for p in &self.parts {
-                    p.for_each(|id| {
-                        set.insert(id as u32);
-                    });
+                    match p.as_ref() {
+                        IdPart::List(ids) => {
+                            for id in ids {
+                                words[(id / 64) as usize] |= 1 << (id % 64);
+                            }
+                        }
+                        IdPart::Bits { base, words: from } => {
+                            let (at, shift) = ((base / 64) as usize, base % 64);
+                            for (i, w) in from.iter().enumerate() {
+                                words[at + i] |= w << shift;
+                                if shift > 0 {
+                                    words[at + i + 1] |= w >> (64 - shift);
+                                }
+                            }
+                        }
+                    }
                 }
-                Some(set)
+                Some(Union {
+                    words,
+                    end: u64::from(max) + 1,
+                })
             })
             .as_ref()
+    }
+}
+
+/// [`IdSet::union`]: bit `i` of word `i / 64` is id `i`.
+#[derive(Debug, Clone)]
+pub(crate) struct Union {
+    words: Vec<u64>,
+    /// One past the greatest id.
+    end: u64,
+}
+
+impl Union {
+    #[inline]
+    fn contains(&self, id: u64) -> bool {
+        id < self.end && (self.words[(id / 64) as usize] >> (id % 64)) & 1 == 1
+    }
+
+    #[cfg(test)]
+    fn max_value(&self) -> u64 {
+        self.end
     }
 }
 
@@ -824,6 +1100,7 @@ impl IdPart {
     }
 
     /// Calls `f` with each id, in order.
+    #[cfg(test)]
     fn for_each(&self, mut f: impl FnMut(u64)) {
         match self {
             IdPart::List(ids) => ids.iter().for_each(|id| f(*id)),
@@ -1058,23 +1335,36 @@ fn torrent_ids_in_pieces(
             .iter()
             .flat_map(|&i| pieces(segs[i].max_doc(), piece_docs).map(move |(lo, hi)| (i, lo, hi)))
             .collect();
+        // Each segment's `torrent` column, opened by its first piece and
+        // shared with the rest: opening a blockwise-linear column reads
+        // its block table (a few bytes per 512 documents), which at 10M
+        // torrents' files was several milliseconds a piece.
+        let columns: Vec<OnceLock<tantivy::Result<Column<u64>>>> =
+            segs.iter().map(|_| OnceLock::new()).collect();
         let scanned = searcher
             .index()
             .search_executor()
             .map(
                 |(i, lo, hi): (usize, DocId, DocId)| {
-                    scan_segment(&source, &segs[i], (lo, hi), cancel, &failed).map_err(|e| {
-                        // A stop by the token or by a sibling is not this
-                        // segment's own error.
-                        if !cancel.is_stopped() && !failed.load(Ordering::Acquire) {
-                            let mut slot = first_err.lock().unwrap_or_else(|p| p.into_inner());
-                            slot.get_or_insert(e);
-                            failed.store(true, Ordering::Release);
-                            crate::cancel::interrupted()
-                        } else {
-                            e
-                        }
-                    })
+                    let column = columns[i]
+                        .get_or_init(|| segs[i].fast_fields().u64("torrent"))
+                        .clone();
+                    column
+                        .and_then(|column| {
+                            scan_segment(&source, &segs[i], &column, (lo, hi), cancel, &failed)
+                        })
+                        .map_err(|e| {
+                            // A stop by the token or by a sibling is not this
+                            // segment's own error.
+                            if !cancel.is_stopped() && !failed.load(Ordering::Acquire) {
+                                let mut slot = first_err.lock().unwrap_or_else(|p| p.into_inner());
+                                slot.get_or_insert(e);
+                                failed.store(true, Ordering::Release);
+                                crate::cancel::interrupted()
+                            } else {
+                                e
+                            }
+                        })
                 },
                 tasks.iter().copied(),
             )
@@ -1119,6 +1409,7 @@ enum Gather {
 }
 
 impl Gather {
+    #[inline(always)]
     fn push(&mut self, id: u64) {
         match self {
             // A torrent's files are added together, so repeats are mostly
@@ -1207,6 +1498,7 @@ enum Source<'a> {
 fn scan_segment(
     source: &Source<'_>,
     seg: &SegmentReader,
+    column: &Column<u64>,
     (lo, hi): (DocId, DocId),
     cancel: &crate::CancelToken,
     failed: &AtomicBool,
@@ -1219,16 +1511,20 @@ fn scan_segment(
         }
     };
     stopped()?;
-    let column = seg.fast_fields().u64("torrent")?;
     let alive = seg.alive_bitset();
     let span = column.max_value().saturating_sub(column.min_value()) / 64 + 1;
     // `hint` is the scorer's estimate of matching files. Tantivy 0.27's
     // range doc set gives `num_docs / 10` (an upstream TODO), and a bare
     // `size:` range on the column fallback uses the same, so the form
     // chosen for those can be the costlier one; either is correct. The
-    // bucket path passes its postings' lengths instead.
+    // bucket path passes its postings' lengths instead. Each counts the
+    // whole segment's matches, so it's scaled to the piece's share of the
+    // documents: a piece's bitset spans the segment's ids all the same,
+    // and pays only for the matches the piece itself holds.
     let gather_for = |hint: u32| {
-        if seg.max_doc() > 0 && u64::from(hint) >= span {
+        let docs = u64::from(hi.saturating_sub(lo));
+        let hint = u64::from(hint) * docs / u64::from(seg.max_doc().max(1));
+        if seg.max_doc() > 0 && hint >= span {
             Gather::Bits {
                 lo: column.min_value(),
                 words: vec![0; span as usize],
@@ -1239,8 +1535,30 @@ fn scan_segment(
     };
     const BLOCK: usize = tantivy::COLLECT_BLOCK_BUFFER_LEN;
     let mut ids = [None; BLOCK];
+    let mut raw = [0u64; BLOCK];
+    let full = matches!(column.index, tantivy::columnar::ColumnIndex::Full);
+    // A clause's own scorer gives a torrent's matching files together, so
+    // a run of one id is pushed once; a size range's buckets give them
+    // bucket by bucket, where runs are rare and the check costs more than
+    // it saves.
+    let runs = matches!(source, Source::Weight(_));
     let mut add = |docs: &[DocId], gather: &mut Gather| {
         for docs in docs.chunks(BLOCK) {
+            if full {
+                // Every file has its torrent (as `FileDoc::to_document`
+                // writes it): read the values directly, without the
+                // optional slots.
+                let raw = &mut raw[..docs.len()];
+                column.values.get_vals(docs, raw);
+                let mut last = u64::MAX;
+                for (doc, id) in docs.iter().zip(raw.iter()) {
+                    if (!runs || last != *id) && alive.is_none_or(|a| a.is_alive(*doc)) {
+                        gather.push(*id);
+                        last = *id;
+                    }
+                }
+                continue;
+            }
             let ids = &mut ids[..docs.len()];
             // A multivalued column would leave a valueless doc's slot as
             // it was; `torrent` has one value a file, but don't rely on it.
@@ -1283,6 +1601,9 @@ fn scan_segment(
         }
         Source::Size(range) => {
             // A segment without sizes matches none, as Tantivy's range does.
+            // Belt and braces: every file document is written with a size
+            // (`FileDoc::to_document`), so only a foreign index lacks the
+            // column. The clamp below is the guard results depend on.
             let Some(sizes) = seg
                 .fast_fields()
                 .column_opt::<u64>(seg.schema().get_field_name(range.field))?
@@ -1438,7 +1759,7 @@ impl IdsWeight {
         }
         let union = self.0.union();
         let hit = |id: u64| match union {
-            Some(ids) => id < u64::from(ids.max_value()) && ids.contains(id as u32),
+            Some(ids) => ids.contains(id),
             // Ids past 4 billion: slower, but still right.
             None => self.0.contains(id),
         };
@@ -1702,10 +2023,10 @@ mod cache_regressions {
         };
         let union = set.union().unwrap();
         assert_eq!(union.max_value(), 501);
-        for id in 0..600u32 {
+        for id in 0..600u64 {
             let want = (10..200).contains(&id) || id == 3 || id == 500;
-            assert_eq!(id < 501 && union.contains(id), want, "{id}");
-            assert_eq!(set.contains(u64::from(id)), want, "{id}");
+            assert_eq!(union.contains(id), want, "{id}");
+            assert_eq!(set.contains(id), want, "{id}");
         }
     }
 
@@ -1927,9 +2248,9 @@ mod id_part_props {
                 None => prop_assert!(all.is_empty()),
                 Some(u) => {
                     let mut got = Vec::new();
-                    for id in 0..u.max_value() {
+                    for id in 0..u.max_value() + 64 {
                         if u.contains(id) {
-                            got.push(u64::from(id));
+                            got.push(id);
                         }
                     }
                     prop_assert_eq!(&got, &all);
@@ -2190,6 +2511,7 @@ mod scan_tests {
                 let g = scan_segment(
                     &source,
                     seg,
+                    &seg.fast_fields().u64("torrent").unwrap(),
                     (0, seg.max_doc()),
                     &token,
                     &AtomicBool::new(false),
@@ -2235,12 +2557,13 @@ mod scan_tests {
         writer.commit().unwrap();
         let searcher = index.reader().unwrap().searcher();
         let seg = &searcher.segment_readers()[0];
+        // The block path is the one under test: every document has an id.
+        assert!(matches!(
+            seg.fast_fields().u64("id").unwrap().index,
+            tantivy::columnar::ColumnIndex::Full
+        ));
         let wanted: Vec<u64> = (0..10_007).filter(|i| i % 3 == 0).collect();
-        let set = IdSet {
-            parts: vec![Arc::new(IdPart::from_sorted(wanted))],
-            union: OnceLock::new(),
-        };
-        let weight = IdsWeight(Arc::new(set), crate::filter::SegmentSets::default());
+        let weight = ids_weight(vec![wanted]);
         let got = weight.matches(seg).unwrap();
         for (doc, i) in ids.iter().enumerate() {
             assert_eq!(got.contains(doc as u32), i % 3 == 0, "doc {doc} id {i}");
@@ -2249,6 +2572,95 @@ mod scan_tests {
         // An empty set marks nothing.
         let none = IdsWeight(Arc::default(), crate::filter::SegmentSets::default());
         assert_eq!(none.matches(seg).unwrap().len(), 0);
+    }
+
+    fn ids_weight(parts: Vec<Vec<u64>>) -> IdsWeight {
+        let set = IdSet {
+            parts: parts
+                .into_iter()
+                .map(|p| Arc::new(IdPart::from_sorted(p)))
+                .collect(),
+            union: OnceLock::new(),
+        };
+        IdsWeight(Arc::new(set), crate::filter::SegmentSets::default())
+    }
+
+    /// Ids past `u32::MAX` have no union bitset: the join checks each
+    /// part instead, on the block path, and still marks exactly the
+    /// documents in the set.
+    #[test]
+    fn the_join_handles_ids_past_u32() {
+        let mut builder = Schema::builder();
+        let id = builder.add_u64_field("id", FAST);
+        let index = tantivy::Index::create_in_ram(builder.build());
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        let big = u64::from(u32::MAX);
+        let ids: Vec<u64> = (0..1_500u64)
+            .map(|d| if d % 2 == 0 { d } else { big - 2 + d })
+            .collect();
+        for i in &ids {
+            let mut doc = TantivyDocument::new();
+            doc.add_u64(id, *i);
+            writer.add_document(doc).unwrap();
+        }
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let seg = &searcher.segment_readers()[0];
+        assert!(matches!(
+            seg.fast_fields().u64("id").unwrap().index,
+            tantivy::columnar::ColumnIndex::Full
+        ));
+        let mut wanted: Vec<u64> = ids.iter().copied().filter(|i| i % 3 == 0).collect();
+        wanted.sort_unstable();
+        // Two parts, as two file-index segments give.
+        let (a, b) = wanted.split_at(wanted.len() / 2);
+        let weight = ids_weight(vec![a.to_vec(), b.to_vec()]);
+        assert!(weight.0.union().is_none());
+        let got = weight.matches(seg).unwrap();
+        for (doc, i) in ids.iter().enumerate() {
+            assert_eq!(got.contains(doc as u32), i % 3 == 0, "doc {doc} id {i}");
+        }
+    }
+
+    /// A column that some documents lack (never written by the indexer,
+    /// which gives every torrent an id) takes the per-document path and
+    /// leaves the documents without one unmarked.
+    #[test]
+    fn the_join_handles_documents_without_an_id() {
+        let mut builder = Schema::builder();
+        let id = builder.add_u64_field("id", FAST);
+        let other = builder.add_u64_field("other", FAST);
+        let index = tantivy::Index::create_in_ram(builder.build());
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        // Every fifth document has no id.
+        let ids: Vec<Option<u64>> = (0..2_100u64)
+            .map(|d| (d % 5 != 0).then_some(d * 3))
+            .collect();
+        for i in &ids {
+            let mut doc = TantivyDocument::new();
+            doc.add_u64(other, 1);
+            if let Some(i) = i {
+                doc.add_u64(id, *i);
+            }
+            writer.add_document(doc).unwrap();
+        }
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let seg = &searcher.segment_readers()[0];
+        assert!(!matches!(
+            seg.fast_fields().u64("id").unwrap().index,
+            tantivy::columnar::ColumnIndex::Full
+        ));
+        // Every id, so only a missing one leaves a document unmarked.
+        let weight = ids_weight(vec![(0..2_100 * 3).collect()]);
+        let got = weight.matches(seg).unwrap();
+        for (doc, i) in ids.iter().enumerate() {
+            assert_eq!(got.contains(doc as u32), i.is_some(), "doc {doc} id {i:?}");
+        }
     }
 
     /// One segment's scan fails while its siblings are mid-scan: the
@@ -2402,7 +2814,9 @@ mod bucket_props {
                         index: i as u64,
                         name: "f.bin".into(),
                         dirs: Vec::new(),
-                        ext: Some("bin".into()),
+                        // Two extensions, so a conjunction has a clause
+                        // besides the size to lead.
+                        ext: Some(if size % 3 == 0 { "dat" } else { "bin" }.into()),
                         size: *size,
                         category: Category::Other,
                         pieces_root: None,
@@ -2413,6 +2827,7 @@ mod bucket_props {
                         d.add_u64(f.torrent, torrent);
                         d.add_u64(f.index, i as u64);
                         d.add_u64(f.size, *size);
+                        d.add_text(f.ext, if size % 3 == 0 { "dat" } else { "bin" });
                     }
                     writer.add_document(d).unwrap();
                 }
@@ -2506,6 +2921,41 @@ mod bucket_props {
                 .filter(|(id, files)| *id != 2 && files.iter().any(|s| !r.contains(s)))
                 .map(|(id, _)| id)
                 .collect();
+            // Beside an extension: compiled, and with the size checked in
+            // the column or intersected with the buckets, whatever the
+            // estimate says.
+            let with_ext: Vec<u64> = segments
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, files)| (i as u64 + 1, files))
+                .filter(|(id, files)| *id != 2 && files.iter().any(|s| s % 3 != 0 && r.contains(s)))
+                .map(|(id, _)| id)
+                .collect();
+            let ext = Node::Ext { any: vec!["bin".into()] };
+            let and = Node::And { of: vec![ext.clone(), node.clone()] };
+            let compiled = compile(&and, &f).unwrap();
+            // An empty range compiles to nothing to check.
+            prop_assert_eq!(
+                compiled.downcast_ref::<SizeChecked>().is_some(),
+                q.downcast_ref::<SizeRange>().is_some()
+            );
+            prop_assert_eq!(&ids(&searcher, compiled.as_ref(), piece_docs), &with_ext, "with ext");
+            for ratio in [0, u64::MAX] {
+                let ext_q = compile(&ext, &f).unwrap();
+                let range = q.downcast_ref::<SizeRange>().cloned();
+                let Some(range) = range else { break };
+                let forced = SizeChecked {
+                    rest: Box::new(BooleanQuery::new(vec![(Occur::Must, ext_q.box_clone())])),
+                    ranges: vec![range.clone()],
+                    whole: Box::new(BooleanQuery::new(vec![
+                        (Occur::Must, ext_q),
+                        (Occur::Must, Box::new(range) as Q),
+                    ])),
+                    ratio,
+                };
+                prop_assert_eq!(&ids(&searcher, &forced, piece_docs), &with_ext, "ratio {}", ratio);
+            }
             let not = compile(&Node::Not { of: Box::new(node) }, &f).unwrap();
             prop_assert_eq!(&ids(&searcher, not.as_ref(), piece_docs), &outside, "negated");
         }
@@ -2611,7 +3061,8 @@ mod bucket_props {
             (vec![7, 7, 7], 0..=6),
         ] {
             let segments = vec![sizes.iter().map(|s| vec![*s]).collect::<Vec<_>>()];
-            // Every file without a bucket, so even the bucketed range scans.
+            // `bucket: ABSENT` below sends the range to the column path,
+            // whatever buckets the files carry.
             let (searcher, f) = index(&segments, &[]);
             let scan = SizeRange {
                 field: f.size,
