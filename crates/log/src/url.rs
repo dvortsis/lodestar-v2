@@ -682,7 +682,7 @@ pub fn scrub_text(text: &str) -> String {
         // rules still hide the value (review). The span itself is scrubbed
         // whole as before, since the name may be glued to a passkey
         // (`/<passkey>Authorization:`).
-        carry = credential_tail(&rest[i..end.max(i)]).map(|t| rest[i + t..end].to_string());
+        carry = Some(rest[start..end.max(start)].to_string());
         pos += end;
         if end == start {
             // Nothing consumed (a bare "://"): step past it.
@@ -698,19 +698,45 @@ pub fn scrub_text(text: &str) -> String {
     out
 }
 
-/// `text` scrubbed as plain text, read after `carry` (a credential's name
-/// that ended the span before it) so the name's value is hidden; the name
-/// itself isn't written again. Should the rules ever cut into the name, the
-/// whole text goes.
+/// `text` scrubbed as plain text. `carry` is the span just before it
+/// (review): a credential's name in it, or a value that started in it
+/// (`…&tr=Authorization: <s>`, `https://h/&Basic @key\n:<s>`), still has
+/// its value hidden in `text`. Every cut `text` has on its own is kept, so
+/// nothing shows that it hid alone.
 fn plain(text: &str, carry: Option<String>) -> String {
-    let Some(carry) = carry else {
-        return hide_runs(&redact_secrets(text));
-    };
-    let joined = hide_runs(&redact_secrets(&format!("{carry}{text}")));
-    match joined.strip_prefix(carry.as_str()) {
-        Some(rest) => rest.to_string(),
-        None => REDACTED.to_string(),
+    let own = secret_cuts(text);
+    let mut cuts = own.clone();
+    if let Some(carry) = carry {
+        // Never glue a name across the seam: `x` and `user=` stay apart.
+        let glue = match (carry.bytes().last(), text.bytes().next()) {
+            (Some(a), Some(b)) if name_char(a) && name_char(b) => " ",
+            _ => "",
+        };
+        let seam = carry.len() + glue.len();
+        let joined = format!("{carry}{glue}{text}");
+        cuts.extend(
+            secret_cuts(&joined)
+                .into_iter()
+                .filter(|&(_, b)| b > seam)
+                .map(|(a, b)| (a.max(seam) - seam, b - seam)),
+        );
+        cuts.sort_unstable();
     }
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (from, to) in cuts {
+        if to <= copied {
+            continue;
+        }
+        let from = from.max(copied);
+        if from > copied || copied == 0 && from == 0 {
+            out.push_str(&text[copied..from]);
+            out.push_str(REDACTED);
+        }
+        copied = to;
+    }
+    out.push_str(&text[copied..]);
+    hide_runs(&out)
 }
 
 /// Where the magnet link at `k` in `text[pos..]` ends. It ends only at a
@@ -896,12 +922,21 @@ fn normalize_separators(text: &str, keep_values: bool) -> std::borrow::Cow<'_, s
     let mut at = Next::new("@", false);
     let mut line = AnyOf([Next::new("\n", false), Next::new("\r", false)]);
     let mut k = 0;
+    // Whether `k` is in a word that holds a raw `://` already: a form inside
+    // a URL is that URL's rules' (`https://h/{//u@<s>` keeps its path `@`).
+    let mut in_url = false;
     while k < b.len() {
         while cuts.get(cut).is_some_and(|&(_, to)| to < k) {
             cut += 1;
         }
+        if b[k].is_ascii_whitespace() {
+            in_url = false;
+        } else if b[k..].starts_with(b"://") {
+            in_url = true;
+        }
         // (what's replaced, what it becomes)
         let found = match b[k] {
+            _ if in_url => None,
             b':' | b'%' => separator_len(text, k).map(|len| (len, "://")),
             b'/' if b.get(k + 1) == Some(&b'/') => {
                 let word_start = k == 0
@@ -938,6 +973,7 @@ fn normalize_separators(text: &str, keep_values: bool) -> std::borrow::Cow<'_, s
                 out.push_str(with);
                 k += len;
                 copied = k;
+                in_url = true;
             }
             None => k += 1,
         }
@@ -1337,7 +1373,10 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
                         value_end + b - name.len(),
                     )
                 })
-                .find(|&(_, b)| b > value_end);
+                .find(|&(_, b)| b > value_end)
+                // One holding a URL or a magnet is left to the URL rules,
+                // which hide it as before (`token="HTTP://u:<s>@h`).
+                .filter(|&(a, b)| !text[a..b].contains("://") && !holds_magnet(&text[a..b]));
             if let Some((a, b)) = value {
                 out.push_str(&text[value_end..a]);
                 out.push_str(REDACTED);

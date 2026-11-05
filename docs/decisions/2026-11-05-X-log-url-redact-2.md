@@ -44,11 +44,16 @@ Both found shapes where this PR showed a secret `main` hid. Each is fixed, and e
 - **The separator pass split a credential's value into a URL** (security review). Examples: `secret=https%3A%2F%2Fh/<s>`, `{"token":"https:\/\/h\/<s>"}`, `token%3A%2F%2F<s>`, `passkey=Zq%3A%2F%2F<s>`.
   - The pass now skips any separator that touches a value `redact_secrets` would hide. `secret_cuts` is that function's cut-finding, split out so both use it.
   - A `//` is rewritten only when no such value starts before its `@`.
+  - Nothing is rewritten inside a word that already holds a raw `://`, or one just rewritten. A form inside a URL is that URL's rules' (`https://h/{//u@<s>` keeps the path `@` that hid it).
   - A mixed-encoding separator needs a scheme character before it.
   - `holds_url` still finds encoded URLs as `main` did.
 - **A `Bearer` token, or any value, swallowed the next credential's name** (`Bearer pass:token: <s>`, `pass:token: <s>`, `user:username:"<s>`). Every value is now read again from its start. After `%3D` or `%3A` that's from the `3`, as `main` read it. `stop` remembers its last answer, so this stays linear.
-- **A span that ends on a credential's name** (`magnet:?xt=a &tr=Authorization: <s>`, `//@Bearer <s>`, `https://h/x/token: <s>`). The span is still scrubbed whole, since the name may be glued to a passkey. The text after it is then read with that name before it (`carry` and `plain`), so its value goes.
-- **A Debug value that ends on a credential's name** (`password: Some("user:username:"<s>`, which `main` shows too). The name's value after the closing quote goes as well.
+- **A span that ends on a credential's name, or in a value that started inside it** (`magnet:?xt=a &tr=Authorization: <s>`, `//@Bearer <s>`, `https://h/x/token: <s>`, `https://h/&Basic @key\n:<s>`).
+  - The span is still scrubbed whole, since the name may be glued to a passkey.
+  - The plain text after it is then read with the whole span before it (`carry` and `plain`). A cut that reaches past the span applies to that text.
+  - Every cut the text has on its own is kept, so it never hides less than `main` did. Names are never glued across the seam.
+  - This costs one more pass over each span.
+- **A Debug value that ends on a credential's name** (`password: Some("user:username:"<s>`, which `main` shows too). The name's value after the closing quote goes as well, unless it holds a URL or a magnet; then the URL rules hide it, as before.
 - **A credential's value in a path or an authority that holds `/`** (`/token:https:\/\/h\/<s>`, `@token:https:\/\/…`). Both show on `main` too.
   - In a path, the value and the rest of the path go (`scrub_path`, used by `finish` and by a Debug `path`).
   - A host holding a character no host can, or a port that's no number, hides the rest of the URL.
