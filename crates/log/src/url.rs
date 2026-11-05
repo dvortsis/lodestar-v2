@@ -966,7 +966,16 @@ pub fn scrub_text(text: &str) -> String {
     if plain_line(text) {
         return scrub_text_floor(text);
     }
-    only_more(&scrub_text_floor(text), &wide::scrub_text(text))
+    let wide = wide::scrub_text(text);
+    // A credential's name the first pass leaves at a URL's end, once its
+    // query goes (`https://h/pass?x": "<s>"` reads `…/pass": "<s>"`), takes
+    // the value after it: the credential rules read the wide output again
+    // (X-log-url-redact-4). Each `only_more` only hides more of its first
+    // argument, so the two together hide all that one does.
+    only_more(
+        &only_more(&scrub_text_floor(text), &wide),
+        &wide::redact_secrets(&wide),
+    )
 }
 
 /// Whether the wide rules can add nothing to stage 1's output for `text`
@@ -2673,7 +2682,7 @@ mod wide {
     /// credential-like name and `=` or `:` (`X-Api-Key: …`, `/feed?apikey=…`,
     /// `token = …`), quoted or not (`password: "…"`, `{"x-api-key": "…"}`,
     /// `token='…'`).
-    fn redact_secrets(text: &str) -> String {
+    pub(super) fn redact_secrets(text: &str) -> String {
         let mut out = String::with_capacity(text.len());
         let mut copied = 0;
         for (from, to) in secret_cuts(text) {
@@ -3949,13 +3958,11 @@ pass:"S3CRET"#,
         assert!(scrub_text(&plain).contains(r#"path: "/a/b""#));
     }
 
-    /// Known gaps, on `main` too (X-log-url-redact-3's security review): once
-    /// the first pass drops a URL's query, a credential's name at the end of
-    /// its path (`/pass`, `/key`) takes the value after the quote, but only
-    /// the second pass would read it, and it runs only when the first pass's
-    /// output holds a form without `://`. Left for a follow-up slice.
+    /// Once the first pass drops a URL's query, a credential's name at the
+    /// end of its path (`/pass`, `/key`) takes the value after the quote
+    /// (X-log-url-redact-3's security review; fixed in X-log-url-redact-4).
+    /// Each of these showed the secret on `main`.
     #[test]
-    #[ignore = "known gap on main: a name the first pass leaves at a URL's end"]
     fn a_name_left_at_a_url_s_end_keeps_its_value_hidden() {
         for text in [
             r#"https://h/pass?x": "x%3A%2F%2Fh/S3CRETxyz""#,
