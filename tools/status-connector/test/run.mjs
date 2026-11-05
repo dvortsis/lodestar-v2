@@ -220,6 +220,54 @@ github.open = [pr(23, 'B0: Reopened', 'slice/B0', '', false)]; github.state = { 
 assert.ok(!(await toolR('plan_nodes', 'o/r10')).some((n) => n.kind === 'extra'), 'nothing provisional without an X-* id');
 github.open = savedOpen; github.refs = savedRefs; github.closed = savedClosed;
 github.state = stateBefore;
+
+// free slots while work is ready: counted against the limit, and a slice whose `owns` overlap a running one is not offered
+const ask = async (repo, slotSlices, prSlices = [], extra = {}) => {
+  github.open = prSlices.map((id, n) => pr(60 + n, id + ': Running', 'slice/' + id, '', false));
+  github.refs = (extra.branches || []).map((id) => ({ ref: 'refs/heads/slice/' + id }));
+  const list = { items: extra.items || slotSlices.map((slice, n) => ({ slot: n + 1, slice, doing: 'busy' })) };
+  if (!('updated' in extra)) list.updated = new Date().toISOString(); else if (extra.updated !== undefined) list.updated = extra.updated;
+  github.state = { updated_at: 'x', slots: list };
+  const m = await metaOf(repo), idle = m.find((r) => r.key === 'idle');
+  return { idle, ids: idle ? idle.ids.split(',') : [], warn: m.filter((r) => r.key === 'warning').map((r) => r.label + ':' + r.value) };
+};
+// 1: one free slot (the boundary) with three running; overlaps by directory glob, mid-name star and brace set; a PR with no slot also blocks
+let a1 = await ask('o/r11', ['B0', 'SRC-0', 'QQ-brace'], ['QQ-pronly']);
+assert.ok(a1.idle && a1.idle.value.startsWith('1 free, '), 'one free slot is enough for the row');
+for (const id of ['SRC-6', 'QQ-brace2', 'QQ-pclash']) assert.ok(!a1.ids.includes(id), id + ' overlaps something running (directory glob, brace set, a PR in no slot)');
+for (const id of ['B0', 'SRC-0', 'QQ-brace', 'QQ-pronly']) assert.ok(!a1.ids.includes(id), id + ' is running, so it is not offered');
+for (const id of ['SRC-13', 'SRC-7', 'QQ-held', 'SRC-9']) assert.ok(!a1.ids.includes(id), id + ' is waiting, held or for the owner, so it is not ready');
+assert.ok(a1.ids.includes('SRC-8') && a1.ids.includes('QQ-md'), 'ready slices that overlap nothing are offered');
+// 1b: wildcards inside a name: auth*.rs against auth_session.rs, StatusPill* against StatusPill.svelte (fresh slices, no branch or PR of their own)
+let a1b = await ask('o/r11b', ['SRC-0', 'QQ-pill']);
+assert.ok(!a1b.ids.includes('QQ-authsess'), 'auth*.rs overlaps auth_session.rs');
+assert.ok(!a1b.ids.includes('QQ-pill2'), 'StatusPill* overlaps StatusPill.svelte');
+assert.ok((await ask('o/r11c', [])).ids.includes('QQ-authsess'), 'and the same slices are offered when the star owner is not running');
+// 1c: a slice that is active only through a slice/<id> branch (no slot, no PR) still blocks
+let a1c = await ask('o/r11d', ['SRC-0'], [], { branches: ['QQ-branchonly'] });
+assert.ok(!a1c.ids.includes('QQ-brclash') && !a1c.ids.includes('QQ-branchonly'), 'a branch-only slice counts as running');
+assert.ok((await ask('o/r11e', ['SRC-0'])).ids.includes('QQ-brclash'), 'and without the branch it is offered');
+// 2: a slot with no PR blocks, a slice that owns nothing is never blocked but is not offered while it runs; ? wildcard
+let a2 = await ask('o/r12', ['QQ-slotonly', 'QQ-noowns', 'QQ-q']);
+assert.ok(!a2.ids.includes('QQ-slotclash') && !a2.ids.includes('QQ-q2'), 'a slot with no PR and no branch still blocks its owns (directory and ?)');
+assert.ok(!a2.ids.includes('QQ-noowns') && !a2.ids.includes('QQ-slotonly') && !a2.ids.includes('QQ-q'), 'a running slice is not offered even when it owns nothing');
+// 3: bracket directories (SvelteKit routes) count as possible overlaps; a pattern that starts with a wildcard overlaps everything
+let a3 = await ask('o/r13', ['QQ-br', 'QQ-md']);
+assert.ok(!a3.ids.includes('QQ-br2') && !a3.ids.includes('QQ-star'), 'bracket directories and a leading wildcard are treated as possible overlaps');
+// 4: nothing running offers a slice that owns nothing, and an explicit idle item is a free slot
+let a4 = await ask('o/r14', [], [], { items: [{ slot: 1, status: 'idle', doing: 'kept but empty' }] });
+assert.ok(a4.idle.value.startsWith('4 free') && a4.ids.includes('QQ-noowns'), 'an idle item is free, and owns: [] is offered');
+assert.ok(a4.warn.includes('Bad owns:QQ-badowns'), 'owns that is not a list is reported');
+// 5: every slot busy gives no row; a list that cannot be trusted gives no row
+assert.equal((await ask('o/r15', ['B0', 'SRC-0', 'SRC-12', 'SRC-9'])).idle, undefined, 'no alarm when every slot is busy');
+assert.equal((await ask('o/r16', [], [], { updated: '2020-01-01T00:00:00Z' })).idle, undefined, 'a stale list says nothing about free slots');
+assert.equal((await ask('o/r17', [], [], { items: 'not a list' })).idle, undefined, 'a malformed list says nothing about free slots');
+assert.equal((await ask('o/r18', [], [], { updated: undefined })).idle, undefined, 'a list with no date says nothing about free slots');
+assert.equal((await ask('o/r19', [], [], { updated: 'yesterday-ish' })).idle, undefined, 'an unparseable date says nothing');
+assert.equal((await ask('o/r20', [], [], { updated: '2999-01-01T00:00:00Z' })).idle, undefined, 'a future date says nothing');
+github.state = null; // no runner-state at all: the plan files are still checked
+assert.ok((await metaOf('o/r21')).some((r) => r.key === 'warning' && r.label === 'Bad owns' && r.value === 'QQ-badowns'), 'a non-list owns is caught even without runner-state, so CI sees it');
+github.open = savedOpen; github.state = stateBefore;
 github.fail = true; // a GitHub failure is reported to the caller, not hidden
 const failed = (await (await worker.fetch(new Request('https://x/mcp/' + SECRET + '', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'plan_meta' } }) }), { ...env, CACHE_SECONDS: '0' })).json()).result;
 assert.equal(failed.isError, true); assert.match(failed.content[0].text, /Could not read GitHub/);
