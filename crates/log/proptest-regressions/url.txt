@@ -21,3 +21,6 @@ cc f9a3c9efdfa8c58dc62eff2f82d5a683f4c733be6b22a4e805169035cb69beb0 # shrinks to
 cc 2527fdfe30ec4b50d46f2cf1c9060f1c433b9537fb6c749ebcc26486d4b7888b # shrinks to name = "password", glue = ": Some(\"", lead = "user:username:\"", before = "", secret = "aaa0AA", after = ""
 cc 64a8aadbb564d23cd8ea85e418e2ceb00455a658ca4b457100f3e64bc0a9028c # shrinks to name = "token", glue = ":", lead = "https:\\/\\/h\\/", before = "https://h/", secret = "AaaAaA", after = ""
 cc ebd035619b909e3f2df136f41213bc32400e77d00e5e61f257defe8409072260 # shrinks to before = "", after = "pW:!a", scheme = "http", secret = "0aAAa0", syntax = ")", bare = "<", sep = "://"
+# X-log-url-redact-2, runner's review round: a credential value that held an
+# encoded magnet hid its marker from the second pass (fixed in the PR).
+cc cb6c05ec8e28e2052b7439cd8fb5d559d5604a8eb57c67fe0148ce3ea55e33d4 # shrinks to before = "pW:", scheme = "http", secret = "aAAa0a", ws = " ", tail = "", soft = "[", host = "aa.example"

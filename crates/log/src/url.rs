@@ -445,6 +445,16 @@ fn magnets() -> AnyOf<3> {
     ])
 }
 
+/// A raw magnet link only, as `main` found them (see [`scrub_text`]'s
+/// first pass).
+fn raw_magnets() -> AnyOf<3> {
+    AnyOf([
+        Next::new("magnet:", true),
+        Next::new("magnet:", true),
+        Next::new("magnet:", true),
+    ])
+}
+
 /// Whether `s` starts with a magnet link, raw or percent-encoded.
 fn starts_magnet(s: &str) -> bool {
     ["magnet:", "magnet%3a", "magnet%253a"]
@@ -509,21 +519,28 @@ impl Ats {
 /// userinfo's look-ahead is bounded, so a line of `a://` or `magnet:`
 /// repeats costs time in proportion to its length.
 pub fn scrub_text(text: &str) -> String {
-    let first = scrub_pass(&scrub_debug_forms(text));
-    // URL forms without a raw `://` (`http:%2F%2F`, `http:/`, `//u:p@h`)
-    // are written with one and scrubbed in a second pass over the first's
-    // output (runner's review). Written into the first pass, a rewritten
-    // `://` bounded the URL before it (`ftp://<s>") "h#http%3A%2F%2F@`).
+    let first = scrub_pass(&scrub_debug_forms(text), false);
+    // What `main` didn't know, URL forms without a raw `://` (`http:%2F%2F`,
+    // `http:/`, `//u:p@h`, written with one here) and percent-encoded
+    // magnets, is scrubbed in a second pass over the first's output
+    // (runner's review). Found in the first pass, a rewritten `://`
+    // bounded the URL before it (`ftp://<s>") "h#http%3A%2F%2F@`), and an
+    // encoded magnet's span split a value the credential rules hid whole.
     // The second pass can only hide more, since what the first hid is
     // already gone.
-    match normalize_separators(&first, true) {
-        std::borrow::Cow::Borrowed(_) => first,
-        std::borrow::Cow::Owned(separated) => scrub_pass(&separated),
+    let separated = normalize_separators(&first, true);
+    let encoded = [b"magnet%3a".as_slice(), b"magnet%253a"]
+        .iter()
+        .any(|m| find_ci_bytes(separated.as_bytes(), m).is_some());
+    match (separated, encoded) {
+        (std::borrow::Cow::Borrowed(_), false) => first,
+        (separated, _) => scrub_pass(&separated, true),
     }
 }
 
-/// One pass of [`scrub_text`]'s URL rules over `text`.
-fn scrub_pass(text: &str) -> String {
+/// One pass of [`scrub_text`]'s URL rules over `text`; `encoded` is
+/// whether percent-encoded magnets start a span too.
+fn scrub_pass(text: &str, encoded: bool) -> String {
     let ats = Ats::new(text);
     let whole_cuts = secret_cuts(text);
     let whole = Whole {
@@ -533,7 +550,10 @@ fn scrub_pass(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut pos = 0;
     let mut scheme = Next::new("://", false);
-    let mut magnet = magnets();
+    let mut magnet = match encoded {
+        true => magnets(),
+        false => raw_magnets(),
+    };
     // A credential's name that ended the last span (see below).
     let mut carry: Option<String> = None;
     while pos < text.len() {
@@ -730,6 +750,14 @@ fn scrub_pass(text: &str) -> String {
         // A magnet in this URL's span (`/add?uri=magnet:?xt=…&dn=Name,2020`)
         // ends only where the magnet does (B-log1), never at this URL's
         // soft end.
+        // After a look-ahead that ran over a later `://`, the span runs at
+        // least to the first hard stop after its userinfo: the URLs it ran
+        // over may hold the password, and what's glued after them may be
+        // its rest (`x://#éx://(udp://@h%3A//Some(ws://<s>`; review).
+        let end = match url && crossed {
+            true => end.max(from + rest[from..].find(hard_stop).unwrap_or(rest.len() - from)),
+            false => end,
+        };
         // Each magnet in it counts, not only the first: one after the
         // userinfo may run further than one inside it (review). One inside
         // another's span is that one's, so each byte is scanned once.
@@ -796,7 +824,20 @@ fn plain(text: &str, carry: Option<String>, whole: Whole<'_>) -> String {
                 .filter(|&(_, b)| b > seam)
                 .map(|(a, b)| (a.max(seam) - seam, b - seam)),
         );
-        cuts.sort_unstable();
+    }
+    cuts.sort_unstable();
+    // A cut that holds a percent-encoded magnet's start runs to that
+    // magnet's end: the first pass hides it as a value, and the second,
+    // which knows encoded magnets, would no longer see it
+    // (`pW:magnet%3A?xt=…&dn=<s>`).
+    for (a, b) in &mut cuts {
+        let encoded = [b"magnet%3a".as_slice(), b"magnet%253a"]
+            .iter()
+            .filter_map(|m| find_ci_bytes(&text.as_bytes()[*a..*b], m))
+            .min();
+        if let Some(m) = encoded {
+            *b = (*b).max(magnet_end(text, *a + m));
+        }
     }
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
@@ -869,40 +910,6 @@ fn magnet_span(text: &str, pos: usize, k: usize, scheme: &mut Next, ats: &Ats) -
             Some(m) if m < end => n = m,
             _ => return end,
         }
-    }
-}
-
-/// Where the credential name that ends `span` starts, if one does: a
-/// credential-like name and `=`, `:`, `%3D` or `%3A`, a quote allowed
-/// between (`&tr=Authorization:`, `"token":`), or a bare `Bearer`.
-fn credential_tail(span: &str) -> Option<usize> {
-    // Space after the separator doesn't matter (`Authorization: `).
-    let span = span.trim_end();
-    let b = span.as_bytes();
-    let sep = match () {
-        _ if span.ends_with(['=', ':']) => 1,
-        _ if ["%3d", "%3a"].iter().any(|e| {
-            span.len() >= 3
-                && span.is_char_boundary(span.len() - 3)
-                && span[span.len() - 3..].eq_ignore_ascii_case(e)
-        }) =>
-        {
-            3
-        }
-        _ => 0,
-    };
-    let mut end = b.len() - sep;
-    if sep > 0 && end > 0 && matches!(b[end - 1], b'"' | b'\'') {
-        end -= 1;
-    }
-    let start = end - b[..end].iter().rev().take_while(|&&c| name_char(c)).count();
-    let name = &span[start..end];
-    match sep {
-        // A bare `Bearer`, even glued on (`token%3ABearer`): only it is
-        // carried, so the rules read it as `Bearer`.
-        0 => (name.len() >= 6 && name[name.len() - 6..].eq_ignore_ascii_case("bearer"))
-            .then(|| end - 6),
-        _ => (!name.is_empty() && credential(name)).then_some(start),
     }
 }
 
@@ -1387,6 +1394,21 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
         return text.into();
     }
     let b = text.as_bytes();
+    // Where what a probe (below) found to hide runs to: a field's value
+    // that starts before it goes whole, and so does the text up to it.
+    let mut hide_until = 0;
+    // `text[from..to]` written out, all before `hide_until` as one cut.
+    let copy = |out: &mut String, from: usize, to: usize, hide_until: usize| {
+        let mid = hide_until.clamp(from, to);
+        if mid > from {
+            out.push_str(REDACTED);
+            // An `@` is kept for the URL rules, as for a field's value.
+            if text[from..mid].contains('@') {
+                out.push('@');
+            }
+        }
+        out.push_str(&text[mid..to]);
+    };
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
     let mut i = 0;
@@ -1443,7 +1465,7 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
             i = from;
             continue;
         }
-        out.push_str(&text[copied..from]);
+        copy(&mut out, copied, from, hide_until);
         // A stray field that runs over another (`path: "a fragment:
         // Some("f")`) would keep that one's secret: the value is scrubbed
         // whole, and the field inside is read again from its name. Its
@@ -1456,13 +1478,15 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
                     .any(|(f, ..)| b[k..].starts_with(f.as_bytes()))
         };
         let inner = (from..to).find(|&k| field_at(k));
+        let hide = from < hide_until;
         match path {
             _ if to == from => {}
             // An `@` hides the path, as the URL rules do (`finish`), and so
             // does a magnet (B-log1), whose `dn` the rules below would show.
+            true if hide => out.push_str(REDACTED),
             // A magnet is written as one, so the URL rules still run it on
             // over what follows (`path: "magnet:s3://…") @<s>`; review).
-            true if holds_magnet(&text[from..to]) => {
+            true if raw_magnets().from(&text[from..to], 0).is_some() => {
                 out.push_str("magnet:");
                 out.push_str(REDACTED);
             }
@@ -1490,59 +1514,65 @@ fn scrub_debug_forms(text: &str) -> std::borrow::Cow<'_, str> {
         // A value that ends on a credential's name (`password: Some("user:
         // username:"<secret>`): its closing quote opens that name's value,
         // which goes too, read with the name before it.
-        if let Some(t) = (url.is_none() && inner.is_none())
-            .then(|| credential_tail(&text[from..to]))
-            .flatten()
-        {
-            let name = &text[from + t..to];
+        // What the free-text rules read from this value's start on, past
+        // its closing quote (runner's review): a credential's value that
+        // ran on past it (`password: Some("user:username:"<s>`, `path:
+        // ">api_key%3D'magnet:…", Qz…`) still goes, though the value it
+        // started in is replaced.
+        if url.is_none() && inner.is_none() && to > from {
+            // The probe reads no further than the next field's name: the
+            // loop reads that field (runner's review: `username: "user%3A",
+            // password: Some("<s>")`), nor than a URL or a magnet, which the
+            // URL rules hide as before (`token="HTTP://u:<s>@h`). A scheme
+            // glued to what's before its `://` (`sid=\r<s>s3://`) stays in
+            // the probe, so it's hidden with the value.
             let mut bound = text.len().min(value_end + USERINFO_LOOKAHEAD);
             while !text.is_char_boundary(bound) {
                 bound -= 1;
             }
-            let probe = format!("{name}{}", &text[value_end..bound]);
-            let value = secret_cuts(&probe)
-                .into_iter()
-                .map(|(a, b)| {
-                    (
-                        value_end + a.max(name.len()) - name.len(),
-                        value_end + b - name.len(),
-                    )
-                })
-                .find(|&(_, b)| b > value_end)
-                // A URL or a magnet in it is left to the URL rules, which
-                // hide it as before (`token="HTTP://u:<s>@h`): the cut ends
-                // there.
-                .and_then(|(a, b)| {
-                    // At the `://` itself: a scheme glued to what's before it
-                    // (`sid=\r<s>s3://`) stays hidden with the value. One
-                    // before the value (`<s>tokens3://u:`, whose `tokens3`
-                    // reads as a name) leaves it all to the URL rules.
-                    let url = text[value_end..b].find("://").map(|c| value_end + c);
-                    let magnet = magnets()
-                        .from(&text[value_end..b], 0)
-                        .map(|m| value_end + m);
-                    match url.into_iter().chain(magnet).min() {
-                        Some(stop) if stop <= a => None,
-                        Some(stop) => Some((a, stop)),
-                        None => Some((a, b)),
-                    }
-                });
-            // It never covers a field's name (runner's review: `username:
-            // "user%3A", password: Some("<s>")` hid `password:`, whose value
-            // then showed). The cut ends there, and the field is read next.
-            let value = value.map(|(a, b)| match (a..b).find(|&k| field_at(k)) {
-                Some(f) => (a, f),
-                None => (a, b),
-            });
-            if let Some((a, b)) = value.filter(|&(a, b)| b > a) {
-                out.push_str(&text[value_end..a]);
+            let field = (value_end + 1..bound).find(|&k| field_at(k));
+            let url = text[value_end..bound].find("://").map(|c| value_end + c);
+            let magnet = raw_magnets()
+                .from(&text[value_end..bound], 0)
+                .map(|m| value_end + m);
+            let stop = [Some(bound), url, magnet].into_iter().flatten().min();
+            let limit = [stop, field].into_iter().flatten().min().unwrap_or(bound);
+            // How far the free-text rules' cut ran on past the next field,
+            // if it did (`user:\t'path: "u:h fragment: Some("<s>`).
+            if field == Some(limit) {
+                let stop = stop.unwrap_or(bound);
+                let far = secret_cuts(&text[from..stop.max(value_end)])
+                    .into_iter()
+                    .filter(|&(a, b)| from + a < limit && from + b > limit)
+                    .map(|(_, b)| from + b)
+                    .max();
+                hide_until = hide_until.max(far.unwrap_or(0));
+            }
+            // Every value the probe finds goes, not only the first
+            // (`pass:"sid=") <s>`: `sid=` has a value of its own).
+            let mut last = None;
+            for (a, b) in secret_cuts(&text[from..limit.max(value_end)]) {
+                let (a, b) = ((from + a).max(value_end), from + b);
+                if b <= a.max(copied) {
+                    continue;
+                }
+                let a = a.max(copied);
+                out.push_str(&text[copied.max(value_end)..a]);
                 out.push_str(REDACTED);
+                // As for a field's value: an `@` it held is kept for the
+                // URL rules (`…passkey=@` may end a userinfo).
+                if text[a..b].contains('@') {
+                    out.push('@');
+                }
                 copied = b;
+                last = Some(b);
+            }
+            if let Some(b) = last {
                 i = b;
             }
         }
     }
-    out.push_str(&text[copied..]);
+    copy(&mut out, copied, text.len(), hide_until);
     out.into()
 }
 

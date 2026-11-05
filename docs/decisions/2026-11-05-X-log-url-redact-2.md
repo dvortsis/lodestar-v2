@@ -25,8 +25,8 @@ A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (archite
   - **In `scrub` (typed URLs), a magnet in a query takes the rest of the query** (`?cat=1&uri=[redacted]`), since its own pairs follow it. A magnet in the path goes with the run it's glued to (`/x/magnet:[redacted]`).
   - **A magnet glued to an absolute URL's authority hides the whole URL** (`http://[::1]magnet%3A…`, `https://<s>,magnet:?xt=a` show as `scheme://[redacted]`). Cutting there dropped the `:` that made `main` hide it.
   - **Every magnet in a URL's span counts, not only the first.** One after the userinfo may run further than one inside it. A magnet inside another's span is that one's, so each byte is scanned once.
-- **A percent-encoded magnet** (class 4). `magnet%3A` and `magnet%253A` are magnets wherever `magnet:` is: in free text, in a query value, and at the start of a URL. All show as `magnet:[redacted]`.
-- **An escaped `\"` in a `Debug`-form magnet** (class 5). A `\` and the character after it never end a magnet. A `Debug` value for `path` that holds a magnet is written as `magnet:[redacted]`, so the URL rules still run that magnet on over what follows.
+- **A percent-encoded magnet** (class 4). `magnet%3A` and `magnet%253A` are magnets wherever `magnet:` is: in free text, in a query value, and at the start of a URL. All show as `magnet:[redacted]`. In free text they're found in the second pass (below), as `main` never found them. A credential's value that holds one's start in the first pass runs to that magnet's end, so its name and `dn` go with it.
+- **An escaped `\"` in a `Debug`-form magnet** (class 5). A `\` and the character after it never end a magnet. A `Debug` value for `path` that holds a raw magnet is written as `magnet:[redacted]`, so the URL rules still run that magnet on over what follows.
 - **A malformed IPv6 literal** (class 6). Extra `]` after a literal's own (`[::1]]`) don't end the URL, in a host or in a URL nested in a query.
 - **URL forms without `://`, and glued credentials** (class 7).
   - **A second pass over the first pass's output writes each such form with a plain `://` and scrubs the line again:**
@@ -54,7 +54,7 @@ Both found shapes where this PR showed a secret `main` hid. Each is fixed, and e
   - The plain text after it is then read with the whole span before it (`carry` and `plain`). A cut that reaches past the span applies to that text.
   - Every cut the text has on its own is kept, so it never hides less than `main` did. Names are never glued across the seam.
   - This costs one more pass over each span.
-- **A Debug value that ends on a credential's name** (`password: Some("user:username:"<s>`, which `main` shows too). The name's value after the closing quote goes as well, unless it holds a URL or a magnet; then the URL rules hide it, as before.
+- **A Debug value that ends on a credential's name** (`password: Some("user:username:"<s>`, which `main` shows too). The name's value after the closing quote goes as well. The runner's review generalised this to any value (below).
 - **A credential's value in a path or an authority that holds `/`** (`/token:https:\/\/h\/<s>`, `@token:https:\/\/…`). Both show on `main` too.
   - In a path, the value and the rest of the path go (`scrub_path`, used by `finish` and by a Debug `path`).
   - A host holding a character no host can, or a port that's no number, hides the rest of the URL.
@@ -63,12 +63,19 @@ Both found shapes where this PR showed a secret `main` hid. Each is fixed, and e
   - When the look-ahead ran over a `://` and the "hide up to the next `://`" branch is taken, the next URL goes too, to its first hard stop.
 
 ## Runner's review (head 259115b)
-Its own differential harness found secrets this PR showed that `main` hid: 310 in 7,000,000 token-soup inputs, all in `scrub_text`. Each class is fixed, and each repro is a test (`the_runner_s_review_cases_keep_no_secret`).
-- **A Debug value's probe took the next field's name** (real `url::Url` output: `http://user%3A:<s>@h/`, `https://h/dl/key:#<s>`). A probed value now never covers a field's name. The cut ends there, and the field is read next. A URL or magnet in the probed value is left to the URL rules: the cut ends at its `://`, or there's no cut when the `://` comes before the value.
-- **An encoded magnet's span split a credential's value** (`token: "a magnet%3A%3Fxt=b <s>"`, also on `main` with a raw `magnet:`). `plain()` now also applies the whole text's cuts that cross its region. A value that started before a span still goes after it.
-- **The hide-up-to-the-next-`://` arm used the first magnet before that `://`.** It now uses the last.
-- **A rewritten separator bounded the URL before it** (`ftp://<s>") "h#http%3A%2F%2F@`). The runner's own token soup and this slice's (below) found it. The forms without `://` are now rewritten and scrubbed in a second pass over the first pass's output, which can only hide more. The first pass has no rewritten separators, as on `main`.
-- **An extra `]` after an IPv6 literal changed the arm a nested URL took** (`s3://[::1]]?'<s>ws://`). With a later `://`, the scan stops at the extra `]`, as on `main`.
+Its own differential harness found secrets this PR showed that `main` hid: 310 in 7,000,000 token-soup inputs, all in `scrub_text`. This slice's own token soup (below) then found more of the same families. Each is fixed, and the runner's repros are tests (`the_runner_s_review_cases_keep_no_secret`).
+- **What `main` didn't know is scrubbed in a second pass over the first pass's output:** the forms without `://`, rewritten with one, and percent-encoded magnets.
+  - Found in the first pass, a rewritten `://` bounded the URL before it (`ftp://<s>") "h#http%3A%2F%2F@`). An encoded magnet's span split a value the credential rules hid whole (`token: "a magnet%3A%3Fxt=b <s>"`).
+  - The first pass finds only what `main` found. The second can only hide more, since what the first hid is gone. It runs only when the first's output holds such a form.
+- **A Debug value is read on past its closing quote, as the free-text rules read it.** Real `url::Url` output triggered this (`http://user%3A:<s>@h/` gives `username: "user%3A", password: Some("<s>")`; `https://h/dl/key:#<s>`).
+  - **What's read:** the credential rules read from the value's start to the next field's name, a URL, a magnet or 512 bytes. Every cut that runs past the quote applies there, keeping an `@` it held for the URL rules.
+  - **The next field is never skipped:** the loop reads it next. When a cut reached that field, the rules' cut ran on over it. So each later field's value that starts before where that cut ended goes whole (a `path`'s too), as does the text between (`hide_until`).
+  - **A URL or a magnet ends the read:** the URL rules hide those as before. A scheme glued to its `://` (`sid=\r<s>s3://`) stays in the read, so it's hidden with the value.
+- **Plain text applies the whole text's cuts that cross it,** so a value that started before a span still goes after it. (The cuts are now always sorted: they weren't when no span came before.)
+- **The hide-up-to-the-next-`://` arm uses the last magnet before that `://`,** not the first (`#magnet:?dn=A B magnet:?xt=a&dn=x@redis://`).
+- **A look-ahead that ran over a later `://` makes its span run at least to the first hard stop after the userinfo** (`x://#éx://(udp://@h%3A//Some(ws://<s>`).
+- **Every magnet in a URL's span counts,** not only the first.
+- **With a later `://`, an extra `]` after an IPv6 literal ends the scan,** as on `main` (`s3://[::1]]?'<s>ws://`).
 
 ## Over-redaction accepted ("never too little")
 - **A URL followed by an `@` before both its first `/` and its first whitespace end, within 512 bytes, on the same line and before the next `://`, loses its host and path.**
