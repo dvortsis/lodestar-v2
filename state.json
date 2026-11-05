@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-05T16:45Z",
+  "updated_at": "2026-11-05T16:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3015,7 +3015,9 @@
       "model": "opus",
       "session": "session_01MMjhnBuYcaSNVCmZuFhZDV",
       "launched": "2026-11-05T07:22Z",
-      "brief": "briefs/X-search-files-5.md"
+      "brief": "briefs/X-search-files-5.md",
+      "pr": 505,
+      "head": "1f2f9e32"
     },
     "RP-1b": {
       "status": "merged",
@@ -4763,7 +4765,10 @@
     "Host-wiring notes (from #503 review P5): a 401 holds the ThePornDB host 6 h even after the key is fixed (clear the hold on a credential change); while a host is held, background lookups fail at once and spend the daily budget (skip budget on held host).",
     "Follow-up (from #503 review P6, SRC-4 generic): consent::need accepts any non-egress credential name, so an Account plugin enables with no api_key stored; require the manifest-declared credential names.",
     "Follow-up (from #502 review): host-wiring brief must list every registered Kind::Enrichment adult plugin in PipelineConfig::adult_enrichers; ENR-1c warns at start for an unlisted one.",
-    "Host-wiring slice: add a startup log event (catalogue, logs_catalog golden, web event-names and en/zh) warning on a registered Kind::Enrichment manifest that is neither in adult_enrichers nor the torrent cache (ENR-1c #502 left it, needs the log catalogue)."
+    "Host-wiring slice: add a startup log event (catalogue, logs_catalog golden, web event-names and en/zh) warning on a registered Kind::Enrichment manifest that is neither in adult_enrichers nor the torrent cache (ENR-1c #502 left it, needs the log catalogue).",
+    "owner-flag §2.26 (X-search-files-5 #505): torrent index 364.2 -> 391.0 B/torrent (budget 512), title_identity 15.96 B kept for B13b; rebuild ~1 h 55 min at 10M, ~2x index disk while running.",
+    "X-search-files-6 (later, runner decides): the 10M file-search gate is still missed after #505 (cold p95 228.4 vs 150, warm p95 87.0 vs 30). Left: size:>100MB edge bucket (finer codes), file:mkv word clauses, -path:sample. No launch while draining to 8 slots.",
+    "B13b notes (from #505): tie api::compare::identity to title_identity (shared fn or cross-crate test); add the Backfilling-state fallback test."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
