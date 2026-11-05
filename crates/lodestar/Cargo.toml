@@ -94,4 +94,4 @@ windows-service = "0.8.1"
 # makes mimalloc define `malloc`/`free`, so SQLite, zstd and ring stop using
 # zig's libc heap (X-mimalloc-override). Windows and glibc builds unchanged.
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
-mimalloc = { version = "0.1", default-features = false, features = ["extended", "override"] }
+mimalloc = { version = "0.1", default-features = false, features = ["override"] }

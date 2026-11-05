@@ -497,7 +497,9 @@ jobs:
       # mimalloc, not zig's libc malloc. The shipped binary has no symbols, so
       # relink it with them (same dependencies, only the `lodestar` crate is
       # rebuilt) and check that `malloc` and `free` are mimalloc's own entry
-      # points. Runs after the upload: the relinked file is never shipped.
+      # points. Runs after the upload: the relinked file is never shipped. All
+      # four must be linked; SQLite and zstd call each, so a missing one fails
+      # loudly rather than passing.
       - name: Check malloc is mimalloc's
         run: |
           cargo-zigbuild rustc --locked --release -p lodestar --bin lodestar --no-default-features --features web --target ${{ matrix.target }} -- -C strip=none

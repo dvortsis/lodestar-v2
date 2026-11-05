@@ -21,9 +21,10 @@
 //! ```
 //!
 //! Prints a CSV row every 1,000 torrents: torrents, `RssAnon`, mimalloc's
-//! committed bytes, SQLite's own count, the anonymous memory outside
-//! mimalloc's arena, and the count of those outside mappings by size. Then
-//! commit and search latency, p50 and p99. Linux only (it reads `/proc`).
+//! committed bytes, SQLite's own count, the anonymous memory in and outside
+//! mimalloc's arena (`Anonymous`, and `Private_Dirty` outside), and the
+//! count of the outside mappings by size. Then commit and search latency,
+//! p50 and p99, and the arena runs' spans. Linux only (it reads `/proc`).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,11 +38,14 @@ use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// An anonymous region at least this big (adjacent mappings merged) is
-/// taken to be a mimalloc arena; mimalloc v3 reserves 1 GiB at a time.
+/// A run of adjacent anonymous mappings at least this big is taken to be a
+/// mimalloc arena; mimalloc v3 reserves 1 GiB at a time. Adjacent mappings
+/// are merged only to find arenas (madvise splits one into several); the
+/// bucket counts are of the kernel's own mappings, as r4 counted them.
 const ARENA_MIN: u64 = 256 << 20;
 
-/// Upper bounds of the size buckets for mappings outside the arena.
+/// Upper bounds of the size buckets for mappings outside the arena; the
+/// last is unbounded.
 const BUCKETS: [(u64, &str); 5] = [
     (128 << 10, "<128K"),
     (512 << 10, "128K-512K"),
@@ -50,29 +54,41 @@ const BUCKETS: [(u64, &str); 5] = [
     (u64::MAX, ">=16M"),
 ];
 
+/// One anonymous mapping (no path, inode 0) from `/proc/self/smaps`.
+#[derive(Debug, Clone, Copy)]
+struct Vma {
+    start: u64,
+    end: u64,
+    /// `Anonymous`, bytes.
+    anon: u64,
+    /// `Private_Dirty`, bytes.
+    dirty: u64,
+}
+
 /// What `/proc/self/smaps` says about anonymous memory.
 #[derive(Debug, Default)]
 struct Maps {
-    /// `Anonymous` in arena regions, bytes.
+    /// `Anonymous` in arena runs, bytes.
     arena: u64,
-    /// `Anonymous` in every other anonymous region, bytes.
+    /// Each arena run's span, bytes: a span past a multiple of 1 GiB means
+    /// a neighbouring mapping was counted as arena.
+    arena_spans: Vec<u64>,
+    /// `Anonymous` and `Private_Dirty` outside the arena runs, bytes.
     outside: u64,
-    /// Outside regions by size bucket (those holding any anonymous memory).
+    outside_dirty: u64,
+    /// Outside mappings holding any anonymous memory, by size bucket.
     counts: [u64; BUCKETS.len()],
-    /// `Anonymous` of the outside regions per bucket, bytes.
+    /// `Anonymous` of those mappings per bucket, bytes.
     bytes: [u64; BUCKETS.len()],
 }
 
-/// Reads `/proc/self/smaps`. Anonymous mappings (no path, inode 0) that
-/// touch are merged first: madvise and guard pages split one region into
-/// several mappings.
-fn maps() -> Maps {
+/// The anonymous mappings in `/proc/self/smaps`, in address order.
+fn vmas() -> Vec<Vma> {
     let Ok(smaps) = std::fs::read_to_string("/proc/self/smaps") else {
-        return Maps::default();
+        return Vec::new();
     };
-    // (start, end, anonymous bytes) of each anonymous mapping, in order.
-    let mut regions: Vec<(u64, u64, u64)> = Vec::new();
-    let mut current: Option<(u64, u64)> = None;
+    let mut out: Vec<Vma> = Vec::new();
+    let mut in_anon = false;
     for line in smaps.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if let Some(range) = fields
@@ -85,29 +101,59 @@ fn maps() -> Maps {
                     u64::from_str_radix(b, 16).ok()?,
                 ))
             });
-            let anon = fields.len() == 5 && fields.get(4) == Some(&"0");
-            current = parsed.filter(|_| anon);
-        } else if let (Some((start, end)), Some(&"Anonymous:")) = (current, fields.first()) {
+            in_anon = false;
+            if let (Some((start, end)), true) =
+                (parsed, fields.len() == 5 && fields.get(4) == Some(&"0"))
+            {
+                out.push(Vma {
+                    start,
+                    end,
+                    anon: 0,
+                    dirty: 0,
+                });
+                in_anon = true;
+            }
+        } else if in_anon && let Some(last) = out.last_mut() {
             let kb: u64 = fields.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
-            match regions.last_mut() {
-                Some(last) if last.1 == start => {
-                    last.1 = end;
-                    last.2 += kb * 1024;
-                }
-                _ => regions.push((start, end, kb * 1024)),
+            match fields.first() {
+                Some(&"Anonymous:") => last.anon = kb * 1024,
+                Some(&"Private_Dirty:") => last.dirty = kb * 1024,
+                _ => {}
             }
         }
     }
+    out
+}
+
+fn maps() -> Maps {
+    let vmas = vmas();
+    // Runs of touching mappings: [first, last) indexes into `vmas`.
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for (i, v) in vmas.iter().enumerate() {
+        match runs.last_mut() {
+            Some(run) if vmas[run.1 - 1].end == v.start => run.1 = i + 1,
+            _ => runs.push((i, i + 1)),
+        }
+    }
     let mut m = Maps::default();
-    for (start, end, anon) in regions {
-        let size = end - start;
-        if size >= ARENA_MIN {
-            m.arena += anon;
-        } else if anon > 0 {
-            m.outside += anon;
-            let b = BUCKETS.iter().position(|(max, _)| size < *max).unwrap_or(0);
+    for (first, last) in runs {
+        let run = &vmas[first..last];
+        let span = run[run.len() - 1].end - run[0].start;
+        if span >= ARENA_MIN {
+            m.arena += run.iter().map(|v| v.anon).sum::<u64>();
+            m.arena_spans.push(span);
+            continue;
+        }
+        for v in run.iter().filter(|v| v.anon > 0) {
+            m.outside += v.anon;
+            m.outside_dirty += v.dirty;
+            let size = v.end - v.start;
+            let b = BUCKETS
+                .iter()
+                .position(|(max, _)| size < *max)
+                .unwrap_or(BUCKETS.len() - 1);
             m.counts[b] += 1;
-            m.bytes[b] += anon;
+            m.bytes[b] += v.anon;
         }
     }
     m
@@ -148,12 +194,14 @@ fn row(n: u64) {
     let m = maps();
     let counts: Vec<String> = m.counts.iter().map(u64::to_string).collect();
     println!(
-        "{n},{:.1},{:.1},{:.1},{:.1},{:.1},{}",
+        "{n},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{}",
         mib(status("RssAnon")),
         mib(mimalloc_committed()),
-        mib(lodestar_store::memstats::sqlite_memory_used()),
+        // `u64` today, `Option<u64>` once X-mem-gauges-2 (#442) lands.
+        mib(Option::<u64>::from(lodestar_store::memstats::sqlite_memory_used()).unwrap_or(0)),
         mib(m.arena),
         mib(m.outside),
+        mib(m.outside_dirty),
         counts.join(","),
     );
 }
@@ -271,7 +319,7 @@ async fn main() {
     }
 
     println!(
-        "torrents,rss_anon_mib,mimalloc_committed_mib,sqlite_mib,arena_anon_mib,outside_anon_mib,{}",
+        "torrents,rss_anon_mib,mimalloc_committed_mib,sqlite_mib,arena_anon_mib,outside_anon_mib,outside_dirty_mib,{}",
         BUCKETS.map(|(_, name)| name).join(",")
     );
     row(0);
@@ -320,6 +368,12 @@ async fn main() {
             .unwrap_or_default(),
     );
     let m = maps();
+    let spans: Vec<String> = m
+        .arena_spans
+        .iter()
+        .map(|s| format!("{:.1}", mib(*s)))
+        .collect();
+    println!("# arena runs (MiB of address space): {}", spans.join(", "));
     for (i, (_, name)) in BUCKETS.iter().enumerate() {
         println!(
             "# outside the arena, {name}: {} mappings, {:.1} MiB",

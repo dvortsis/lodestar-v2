@@ -825,16 +825,16 @@ Added so a soak's memory verdict can say which heap holds the memory. See [the d
 
 Which heap C code (SQLite, zstd, ring) uses depends on the build:
 
-- **The Linux release builds** (static musl: the Docker image and the tarballs): mimalloc is also the C library's `malloc`, through its `override` feature ([X-mimalloc-override](decisions/2026-11-05-X-mimalloc-override.md)). mimalloc's statistics then count C allocations too, and `mem_sqlite_bytes` is part of `mem_mimalloc_committed_bytes`, not beside it. `mem_rss_anon_bytes − mem_mimalloc_committed_bytes` approximates the rest.
+- **musl builds** (the release builds: the Docker image and the tarballs): mimalloc is also the C library's `malloc`, through its `override` feature ([X-mimalloc-override](decisions/2026-11-05-X-mimalloc-override.md)). mimalloc's statistics then count C allocations too, and `mem_sqlite_bytes` is part of `mem_mimalloc_committed_bytes`, not beside it. `mem_rss_anon_bytes − mem_mimalloc_committed_bytes` approximates the rest.
 - **Every other build** (Windows, and glibc builds from source): mimalloc is the Rust allocator only. C code allocates through the C library's `malloc`, which mimalloc doesn't count. SQLite counts its own heap, so `mem_rss_anon_bytes − mem_mimalloc_committed_bytes − mem_sqlite_bytes` approximates the rest: zstd, other C code and allocator overhead.
 
 Either way the rest is neither an upper nor a lower bound. It also holds thread stacks and other anonymous mappings, and transparent huge pages that fill mimalloc's arenas past the slices mimalloc counts (read it with `mem_anon_huge_bytes`). mimalloc counts committed slices whether or not they're resident, which can make it too small.
 
 | Series | Type | Meaning |
 | --- | --- | --- |
-| `mem_mimalloc_committed_bytes` | gauge | Bytes mimalloc has committed from the OS, from its own statistics (`commit_current`). Includes free space it hasn't returned. In the Linux release builds it includes C allocations (SQLite, zstd) as well as Rust's; elsewhere Rust's only. |
+| `mem_mimalloc_committed_bytes` | gauge | Bytes mimalloc has committed from the OS, from its own statistics (`commit_current`). Includes free space it hasn't returned. In musl builds (the release builds) it includes C allocations (SQLite, zstd) as well as Rust's; elsewhere Rust's only. |
 | `mem_mimalloc_peak_committed_bytes` | gauge | The most `mem_mimalloc_committed_bytes` has been since start (`commit_peak`). |
-| `mem_sqlite_bytes` | gauge | Bytes SQLite has allocated and not freed, process-wide, by its own count (`sqlite3_memory_used`). Every connection and its page cache is included. Part of `mem_mimalloc_committed_bytes` in the Linux release builds; outside mimalloc elsewhere. |
+| `mem_sqlite_bytes` | gauge | Bytes SQLite has allocated and not freed, process-wide, by its own count (`sqlite3_memory_used`). Every connection and its page cache is included. Part of `mem_mimalloc_committed_bytes` in musl builds (the release builds); outside mimalloc elsewhere. |
 | `mem_sqlite_highwater_bytes` | gauge | The most `mem_sqlite_bytes` has been since start (`sqlite3_memory_highwater`, never reset). |
 | `mem_rss_anon_bytes` | gauge | `RssAnon` from `/proc/self/status`: resident anonymous memory, every heap included. Linux only. |
 | `mem_rss_file_bytes` | gauge | `RssFile` from `/proc/self/status`: resident file-backed pages, the memory-mapped index included. Linux only. |
