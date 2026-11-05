@@ -181,7 +181,7 @@ export class OpenApiMock {
 			return route.fulfill({
 				status: 200,
 				contentType: 'application/json',
-				body: JSON.stringify({ logged_in: false, setup_required: false })
+				body: JSON.stringify({ logged_in: false, notice_required: false, setup_required: false })
 			});
 		}
 		// The search page's results panel (S-search-2) lists saved searches in its empty state once

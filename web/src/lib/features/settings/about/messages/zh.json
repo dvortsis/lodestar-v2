@@ -109,5 +109,11 @@
 	"settings_about_credit_icons": "图标：Phosphor（MIT）。",
 	"settings_about_credit_brand": "品牌图稿：见 brand/LICENSE.md。",
 	"settings_about_check_failed": "无法检查更新。请一分钟后重试。",
-	"settings_about_diagnostics_error": "无法加载诊断信息。"
+	"settings_about_diagnostics_error": "无法加载诊断信息。",
+	"settings_about_legal": "法律",
+	"settings_about_legal_lead": "此版本 Lodestar 的法律声明：它在你的网络上做什么，哪些事情由你决定，以及开发者承诺与不承诺的内容。这就是你确认已阅读的声明。",
+	"settings_about_legal_show": "显示法律声明",
+	"settings_about_legal_version": "版本 {version}",
+	"settings_about_legal_error": "无法打开法律声明。",
+	"settings_about_legal_operators": "面向公开运行实例者的指南"
 }

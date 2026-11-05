@@ -220,7 +220,7 @@ impl Fixture {
         let mut req = Request::post("/api/v1/setup")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
-                json!({ "token": token, "password": "correct horse battery" }).to_string(),
+                json!({ "token": token, "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }).to_string(),
             ))
             .unwrap();
         req.extensions_mut()
@@ -1060,7 +1060,7 @@ impl GatedFixture {
         let mut req = Request::post("/api/v1/setup")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
-                json!({ "token": token, "password": "correct horse battery" }).to_string(),
+                json!({ "token": token, "password": "correct horse battery", "notice_version": lodestar_api::legal::NOTICE_VERSION }).to_string(),
             ))
             .unwrap();
         req.extensions_mut()

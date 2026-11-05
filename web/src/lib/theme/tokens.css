@@ -123,6 +123,7 @@
 	--compbar-gap: 2px;
 	--toast-width: 384px;
 	--listbox-max-height: calc(var(--row-height-comfortable) * 5);
+	--notice-max-height: 50svh;
 	--art-height-large: 240px;
 	--art-height-small: 160px;
 

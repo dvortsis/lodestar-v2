@@ -2,6 +2,7 @@
 // Run with `npm run docs:shots`: the opt-in `docs` project, over the mock fixture data, Riverstone,
 // 1366 wide, the clock frozen. Each shot lands in `docs/user/images/<page>-<step>.png`, optimised by
 // `./capture.ts`. Excluded from the default run and from CI.
+import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import type { components } from '../../src/lib/api/schema';
 import { discoverResponse, showAdultSettings } from '../../src/lib/features/discover/testing';
@@ -162,10 +163,30 @@ for (const mode of ['light', 'dark'] as const) {
 test.describe('setup', () => {
 	test.beforeEach(({ page }) => freeze(page));
 
+	// Setup opens on the Legal Notice (LEGAL-1); the token step follows it.
+	test('setup-notice', async ({ page, go, mock }) => {
+		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: true });
+		// The real notice, as the binary builds it in, so the box shows what a reader will scroll.
+		const text = readFileSync(
+			new URL('../../../docs/legal/legal-notice.md', import.meta.url),
+			'utf8'
+		);
+		mock.on('getLegalNotice', { version: 3, text });
+		await go('/setup');
+		await expect(page.getByRole('region', { name: 'Legal Notice' })).toBeVisible();
+		await ready(page);
+		// Outline the whole box with its words, not only the small input.
+		const box = page.getByLabel('I have read the Legal Notice').locator('xpath=..');
+		await capture(page, 'setup-notice', box);
+	});
+
 	test('setup-screen', async ({ page, go, mock }) => {
-		mock.on('getAuthStatus', { logged_in: false, setup_required: true });
+		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: true });
 		await go('/setup');
 		await expect(page.getByRole('heading', { name: 'Set up Lodestar' })).toBeVisible();
+		await page.getByLabel('I have read the Legal Notice').check();
+		await page.getByRole('button', { name: 'Continue' }).click();
+		await expect(page.getByLabel(/setup token/i).first()).toBeFocused();
 		await ready(page);
 		await capture(page, 'setup-screen', page.getByLabel(/setup token/i).first());
 	});

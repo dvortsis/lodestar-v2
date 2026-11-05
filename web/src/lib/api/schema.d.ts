@@ -1060,6 +1060,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/legal/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Records that the signed-in admin accepted the Legal Notice `version`
+         *     (the current one; 409 `notice_required` for any other). The one
+         *     session route the notice gate lets through. Accepting again is a
+         *     no-op.
+         */
+        post: operations["acceptLegalNotice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/legal/notice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Legal Notice this build shows, for the setup screen, the sign-in
+         *     gate and Settings → About. Open: it's shown before there's a session.
+         */
+        get: operations["getLegalNotice"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/login": {
         parameters: {
             query?: never;
@@ -1707,8 +1749,9 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Claims a fresh instance with the setup token from the logs and a new
-         *     password; logs in.
+         * Claims a fresh instance with the setup token from the logs, a new
+         *     password and the Legal Notice version the admin accepted (409
+         *     `notice_required` when it's missing or not the current one); logs in.
          */
         post: operations["setup"];
         delete?: never;
@@ -2314,6 +2357,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description `POST /legal/accept`. */
+        AcceptNoticeRequest: {
+            /**
+             * Format: int32
+             * @description The version shown. Not the current one: `409 notice_required`.
+             */
+            version: number;
+        };
         /** @description A pending HTTP-address change (§10.10.6's lockout protection). */
         AddressChange: {
             /**
@@ -2696,6 +2747,12 @@ export interface components {
         /** @description `GET /auth`. */
         AuthStatus: {
             logged_in: boolean;
+            /**
+             * @description Signed in, but the current Legal Notice isn't accepted yet: show it
+             *     and `POST /legal/accept`. Every other session route answers `409
+             *     notice_required` meanwhile. Always `false` when not signed in.
+             */
+            notice_required: boolean;
             /**
              * @description No password yet: claim the instance with the setup token from the
              *     logs.
@@ -5424,6 +5481,26 @@ export interface components {
             count: number;
             label: string;
         };
+        /**
+         * @description `GET /legal/notice`: the Legal Notice this build shows.
+         * @example {
+         *       "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 3 · 2026-11-05**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+         *       "version": 3
+         *     }
+         */
+        LegalNotice: {
+            /**
+             * @description The notice as Markdown (headings, paragraphs, lists, bold, italics,
+             *     code and links), in English only.
+             */
+            text: string;
+            /**
+             * Format: int32
+             * @description Raised only when the notice changes in substance; send it back to
+             *     accept.
+             */
+            version: number;
+        };
         /** @description `GET /logs/catalog`. */
         LogCatalog: {
             events: components["schemas"]["LogEvent"][];
@@ -7971,6 +8048,12 @@ export interface components {
          *     `Debug` redacts the secrets.
          */
         SetupRequest: {
+            /**
+             * Format: int32
+             * @description The Legal Notice version shown and accepted (`GET /legal/notice`).
+             *     Missing or not the current one: `409 notice_required`.
+             */
+            notice_version?: number;
             /** @description At least 10 characters. */
             password: string;
             /**
@@ -11477,6 +11560,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KeyInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    acceptLegalNotice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptNoticeRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLegalNotice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalNotice"];
                 };
             };
             default: components["responses"]["Error"];

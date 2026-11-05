@@ -4,7 +4,7 @@ import type { components, paths } from './schema';
 
 const BASE = '/api/v1';
 /** Calls to these never trigger the login redirect (a failed login is a 401 too). */
-const AUTH_PATHS = new Set(['/login', '/setup', '/auth', '/logout']);
+const AUTH_PATHS = new Set(['/login', '/setup', '/auth', '/logout', '/legal/accept']);
 const AUTH_PAGES = ['/login', '/setup'];
 
 export type ErrorBody = components['schemas']['ErrorBody'];
@@ -109,7 +109,10 @@ export async function errorFromResponse(res: Response): Promise<ApiError> {
 	return new ApiError(res.status, `http_${res.status}`, res.statusText, { retryAfter });
 }
 
-type LoginHandler = (next: string, opts: { setupRequired: boolean }) => void;
+type LoginHandler = (
+	next: string,
+	opts: { setupRequired: boolean; noticeRequired?: boolean }
+) => void;
 let loginHandler: LoginHandler | undefined;
 let loginPending = false;
 
@@ -122,18 +125,26 @@ export function onLoginRequired(handler: LoginHandler | undefined): void {
 	loginPending = false;
 }
 
-function loginRequired(path: string, setupRequired: boolean): void {
+function loginRequired(path: string, opts: Parameters<LoginHandler>[1]): void {
 	const loc = globalThis.location;
 	if (!loginHandler || loginPending || AUTH_PATHS.has(path)) return;
 	if (loc && AUTH_PAGES.some((p) => loc.pathname === p || loc.pathname.startsWith(p + '/'))) return;
 	loginPending = true;
-	loginHandler(loc ? loc.pathname + loc.search : '/', { setupRequired });
+	loginHandler(loc ? loc.pathname + loc.search : '/', opts);
 }
 
-/** Called for every 401 `login_required` (the events client uses it too). */
+/**
+ * Called for every 401 `login_required` (the events client uses it too), and every 409
+ * `notice_required`: signed in, but the Legal Notice must be accepted first, which the sign-in
+ * page shows.
+ */
 export function handleUnauthorized(e: unknown, path: string): void {
-	if (e instanceof ApiError && e.status === 401 && e.code === 'login_required')
-		loginRequired(path, e.setupRequired === true);
+	if (!(e instanceof ApiError)) return;
+	if (e.status === 401 && e.code === 'login_required')
+		loginRequired(path, { setupRequired: e.setupRequired === true });
+	// Only the notice gate's 409 carries this code.
+	else if (e.code === 'notice_required')
+		loginRequired(path, { setupRequired: false, noticeRequired: true });
 }
 
 /** Any successful response proves the session works, so a later 401 may redirect again. */

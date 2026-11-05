@@ -19,6 +19,11 @@
 //!   default; see [`proxy`].
 //! - **API keys and feed tokens** are checked by [`key_or_session`] and
 //!   [`feed_token`] on the routes that opt in (see [`crate::keys`]).
+//! - **The Legal Notice** ([`crate::legal`]): setup records the notice
+//!   version it was shown with, in `auth.json` beside the password, and a
+//!   signed-in browser whose stored version is missing or older than
+//!   [`crate::legal::NOTICE_VERSION`] gets `409 notice_required` from every
+//!   session route until it accepts ([`Auth::accept_notice`]).
 
 mod guard;
 #[cfg(test)]
@@ -80,6 +85,9 @@ pub enum AuthError {
     BadPassword,
     RateLimited,
     NotSetUp,
+    /// The Legal Notice's current version wasn't accepted: missing, or
+    /// stale.
+    NoticeRequired,
     Storage(String),
 }
 
@@ -92,6 +100,7 @@ impl std::fmt::Display for AuthError {
             AuthError::BadPassword => "wrong password",
             AuthError::RateLimited => "too many attempts; wait a minute",
             AuthError::NotSetUp => "not set up yet",
+            AuthError::NoticeRequired => "the legal notice must be accepted first",
             AuthError::Storage(e) => e,
         })
     }
@@ -108,6 +117,11 @@ struct AuthFile {
     /// Absent until first changed, so older files load unchanged.
     #[serde(default, skip_serializing_if = "ProxyConfig::is_default")]
     proxy: ProxyConfig,
+    /// The Legal Notice version the admin accepted. Absent on an instance
+    /// set up before the notice existed (rc.1 to rc.3), which then shows
+    /// it once at sign-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notice_version: Option<u32>,
 }
 
 /// What `auth.json` holds, in memory. Every change builds the next value,
@@ -131,6 +145,8 @@ struct State {
     password: Option<String>,
     key: [u8; 32],
     proxy: Proxy,
+    /// The accepted Legal Notice version, saved with the password.
+    notice: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -150,6 +166,9 @@ pub struct Auth {
     /// [`PROXY_AUTH_ENV`] is set: proxy auth is off for this run.
     proxy_forced_off: AtomicBool,
     secure_cookies: bool,
+    /// The notice version this build shows: [`crate::legal::NOTICE_VERSION`],
+    /// or a test's ([`Auth::with_notice_version`]).
+    notice_current: u32,
 }
 
 impl Auth {
@@ -169,6 +188,7 @@ impl Auth {
                     password: None,
                     session_key: hex(&random::<32>()),
                     proxy: ProxyConfig::default(),
+                    notice_version: None,
                 };
                 write_private(path, &f, &disk)?;
                 f
@@ -199,6 +219,7 @@ impl Auth {
                 password: file.password,
                 key,
                 proxy,
+                notice: file.notice_version,
             }),
             save_lock: Mutex::new(()),
             setup_token: Mutex::new(token),
@@ -208,6 +229,7 @@ impl Auth {
             key_requests: Buckets::new(KEY_BURST, KEY_REFILL_PER_SEC, crate::keys::MAX_KEYS),
             proxy_forced_off: AtomicBool::new(false),
             secure_cookies,
+            notice_current: crate::legal::NOTICE_VERSION,
         })
     }
 
@@ -219,6 +241,52 @@ impl Auth {
         self.key_failures.refill = 0.0;
         self.key_requests.refill = 0.0;
         self
+    }
+
+    /// Pretends this build shows notice `version`, so a test can raise it
+    /// across a restart. Tests only.
+    #[doc(hidden)]
+    pub fn with_notice_version(mut self, version: u32) -> Auth {
+        self.notice_current = version;
+        self
+    }
+
+    /// The Legal Notice version this build shows.
+    pub fn notice_version(&self) -> u32 {
+        self.notice_current
+    }
+
+    /// Whether the instance is set up but the admin hasn't accepted the
+    /// current notice: none recorded (set up before the notice existed) or
+    /// an older version. Session routes answer `409 notice_required` while
+    /// it holds. An editorial change that leaves the version alone never
+    /// makes it true again.
+    pub fn notice_pending(&self) -> bool {
+        let state = self.state.read().expect("auth lock");
+        state.password.is_some() && state.notice.is_none_or(|v| v < self.notice_current)
+    }
+
+    /// Records that the signed-in admin accepted notice `version`, which
+    /// must be the current one: an older one is `NoticeRequired` (the
+    /// browser showed a stale copy). Accepting again is a no-op. The route
+    /// checks the session; this asks for no password.
+    pub fn accept_notice(&self, version: u32) -> Result<(), AuthError> {
+        if version != self.notice_current {
+            return Err(AuthError::NoticeRequired);
+        }
+        let writer = self.writer();
+        let state = self.snapshot();
+        if state.password.is_none() {
+            return Err(AuthError::NotSetUp);
+        }
+        if state.notice.is_some_and(|v| v >= version) {
+            return Ok(());
+        }
+        let next = State {
+            notice: Some(version),
+            ..state
+        };
+        self.commit(&writer, next)
     }
 
     /// Applies [`PROXY_AUTH_ENV`]'s value: `off` (any case) turns proxy
@@ -304,8 +372,26 @@ impl Auth {
         self.state.read().expect("auth lock").password.is_none()
     }
 
-    /// Claims the instance; returns a session cookie header value.
+    /// Claims the instance, accepting the current Legal Notice; returns a
+    /// session cookie header value. For tools and tests: `POST /setup`
+    /// calls [`Auth::setup_with_notice`] with the version the browser
+    /// showed.
     pub fn setup(&self, ip: IpAddr, token: &str, password: &str) -> Result<String, AuthError> {
+        self.setup_with_notice(ip, token, password, Some(self.notice_current))
+    }
+
+    /// Claims the instance with the Legal Notice version the admin
+    /// accepted, which must be the current one (`NoticeRequired`
+    /// otherwise, after the token check, spending an attempt like any
+    /// other refusal). The version is saved in the same write as the
+    /// password; returns a session cookie header value.
+    pub fn setup_with_notice(
+        &self,
+        ip: IpAddr,
+        token: &str,
+        password: &str,
+        notice: Option<u32>,
+    ) -> Result<String, AuthError> {
         let result = (|| -> Result<String, AuthError> {
             self.allow(ip)?;
             let Some(expected) = self.setup_token() else {
@@ -314,6 +400,9 @@ impl Auth {
             let normalized = token.trim().to_uppercase();
             if !constant_time_eq(normalized.as_bytes(), expected.as_bytes()) {
                 return Err(AuthError::BadToken);
+            }
+            if notice != Some(self.notice_current) {
+                return Err(AuthError::NoticeRequired);
             }
             check_strength(password)?;
             // Argon2 before any lock.
@@ -334,6 +423,7 @@ impl Auth {
             let next = State {
                 password: Some(encoded),
                 key: random::<32>(),
+                notice: Some(self.notice_current),
                 ..state
             };
             let key = next.key;
@@ -546,6 +636,7 @@ impl Auth {
             password: state.password.clone(),
             session_key: hex(&state.key),
             proxy: state.proxy.config.clone(),
+            notice_version: state.notice,
         };
         write_private(&self.path, &file, &self.disk)
             .map_err(|e| AuthError::Storage(format!("saving auth: {e}")))
@@ -879,6 +970,128 @@ mod tests {
         let again = auth.login(IP, "correct horse battery").unwrap();
         assert!(again.ends_with("; Secure"));
         assert!(auth.verify(&format!("other=1; {}", header(&again))));
+    }
+
+    /// The Legal Notice at setup: a missing or stale version is refused
+    /// after the token check (and spends an attempt, like any refusal);
+    /// the current one is saved with the password and survives a restart.
+    #[test]
+    fn setup_needs_the_current_notice_and_saves_it() {
+        let (dir, auth) = fresh();
+        let path = dir.path().join("auth.json");
+        let token = auth.setup_token().unwrap();
+        let v = crate::legal::NOTICE_VERSION;
+        for notice in [None, Some(v - 1), Some(v + 1)] {
+            assert_eq!(
+                auth.setup_with_notice(IP, &token, "correct horse battery", notice),
+                Err(AuthError::NoticeRequired),
+                "{notice:?}"
+            );
+        }
+        assert_eq!(
+            auth.setup_with_notice(IP, "WRONG", "correct horse battery", None),
+            Err(AuthError::BadToken),
+            "the token is checked first"
+        );
+        assert!(auth.needs_setup(), "a refusal claims nothing");
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("notice"));
+        auth.setup_with_notice(IP, &token, "correct horse battery", Some(v))
+            .unwrap();
+        assert!(!auth.notice_pending());
+        let file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(file["notice_version"], v);
+        let auth = Auth::load(&path, false).unwrap();
+        assert!(!auth.notice_pending(), "accepted for good");
+    }
+
+    /// An instance set up before the notice existed (rc.1 to rc.3: no
+    /// `notice_version`) shows it once, and accepting records it; another
+    /// change to `auth.json` keeps it.
+    #[test]
+    fn an_older_install_accepts_the_notice_once() {
+        let (dir, auth) = fresh();
+        let path = dir.path().join("auth.json");
+        let token = auth.setup_token().unwrap();
+        auth.setup(IP, &token, "correct horse battery").unwrap();
+        let mut file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        file.as_object_mut().unwrap().remove("notice_version");
+        std::fs::write(&path, file.to_string()).unwrap();
+
+        let auth = Auth::load(&path, false).unwrap();
+        assert!(auth.notice_pending());
+        let v = crate::legal::NOTICE_VERSION;
+        assert_eq!(auth.accept_notice(v - 1), Err(AuthError::NoticeRequired));
+        assert!(auth.notice_pending(), "a stale copy accepts nothing");
+        auth.accept_notice(v).unwrap();
+        assert!(!auth.notice_pending());
+        auth.accept_notice(v).unwrap();
+        auth.change_password(IP, "correct horse battery", "a different password")
+            .unwrap();
+        let auth = Auth::load(&path, false).unwrap();
+        assert!(!auth.notice_pending(), "kept across a change and a restart");
+    }
+
+    /// A v0.5.1 install accepted notice 2 (LEGAL-1r) and stored it as
+    /// `notice_version: 2`. This build's notice is 3: it shows once at
+    /// sign-in, accepting it records 3 in the same field, and it stays
+    /// accepted across a restart.
+    #[test]
+    fn a_v0_5_1_install_sees_version_3_once() {
+        assert_eq!(crate::legal::NOTICE_VERSION, 3);
+        let (dir, auth) = fresh();
+        let path = dir.path().join("auth.json");
+        let token = auth.setup_token().unwrap();
+        auth.setup(IP, &token, "correct horse battery").unwrap();
+        let mut file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        file["notice_version"] = serde_json::json!(2);
+        std::fs::write(&path, file.to_string()).unwrap();
+
+        let auth = Auth::load(&path, false).unwrap();
+        assert!(auth.notice_pending(), "version 2 accepted, 3 shown");
+        assert_eq!(auth.accept_notice(2), Err(AuthError::NoticeRequired));
+        auth.accept_notice(3).unwrap();
+        assert!(!auth.notice_pending());
+        let file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(file["notice_version"], 3, "the same field, raised");
+        let auth = Auth::load(&path, false).unwrap();
+        assert!(!auth.notice_pending(), "shown once, not again");
+    }
+
+    /// Raising the version shows the notice again; restarting on the same
+    /// version (an editorial change to the text) doesn't.
+    #[test]
+    fn a_version_bump_shows_the_notice_again_and_an_edit_doesnt() {
+        let (dir, auth) = fresh();
+        let path = dir.path().join("auth.json");
+        let token = auth.setup_token().unwrap();
+        auth.setup(IP, &token, "correct horse battery").unwrap();
+        let v = crate::legal::NOTICE_VERSION;
+
+        let same = Auth::load(&path, false).unwrap().with_notice_version(v);
+        assert!(!same.notice_pending(), "same version: not shown again");
+
+        let raised = Auth::load(&path, false).unwrap().with_notice_version(v + 1);
+        assert!(raised.notice_pending());
+        assert_eq!(raised.accept_notice(v), Err(AuthError::NoticeRequired));
+        raised.accept_notice(v + 1).unwrap();
+        assert!(!raised.notice_pending());
+        let again = Auth::load(&path, false).unwrap().with_notice_version(v + 1);
+        assert!(!again.notice_pending());
+    }
+
+    /// Nothing to accept before setup, and nothing pending either.
+    #[test]
+    fn the_notice_waits_for_setup() {
+        let (_dir, auth) = fresh();
+        assert!(!auth.notice_pending());
+        assert_eq!(
+            auth.accept_notice(crate::legal::NOTICE_VERSION),
+            Err(AuthError::NotSetUp)
+        );
     }
 
     #[test]
