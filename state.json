@@ -2886,7 +2886,7 @@
    "brief": "briefs/SRC-17.md"
   },
   "SRC-17a": {
-   "status": "building",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnCcPGT7YJ9GgmhTMGP",
    "launched": "2026-11-05T02:32Z",
@@ -2947,6 +2947,13 @@
    "session": "session_01MMjhnCRi5mMx5RFjh52Fgb",
    "launched": "2026-11-05T05:01Z",
    "brief": "briefs/X-flake-boot-shell.md"
+  },
+  "X-followups-1105": {
+   "status": "building",
+   "model": "opus",
+   "session": "session_01MMjhnB1hAwM3KWzebWAnhU",
+   "launched": "2026-11-05T05:38Z",
+   "brief": "briefs/X-followups-1105.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3407,7 +3414,8 @@
   "2026-11-05T04:58Z #461 SRC-10e merged (0eee459b), session archived; RP-UC launched in slot 6 (one-line packs/mod.rs overlap with RP-2 accepted; the later PR brings main in).",
   "2026-11-05T05:00Z #458 SRC-13 merged (201d554b), session archived. SRC-13b (host wiring) held until X-source-adult merges: both need crates/pipeline/src/writer.rs (concurrency core; never two at once). Slot 5 went to X-flake-boot-shell (Sonnet).",
   "2026-11-05T05:15Z merged #459 SRC-11b (7196d721) and #455 SRC-15a (901a1065); both sessions archived. SRC-15a nits go to SRC-15b: role=status on the loading div; let a purged source be enabled (needs still guards) or record why not; name the user-docs how-to follow-up; .size-limit SourcesScreen comment (29,612 B); YieldBar track opacity -> token; announce re-read when the same source changes twice.",
-  "2026-11-05T05:22Z #464 SRC-10c-2 merged (2fea08bb), archived. CI and E2E green on release 5b840813 (runs 41966990514, 41966993589). Release dry run dispatched on release/v0.5.1 (dba1a5c0) to exercise the musl build and mimalloc nm check before the tag."
+  "2026-11-05T05:22Z #464 SRC-10c-2 merged (2fea08bb), archived. CI and E2E green on release 5b840813 (runs 41966990514, 41966993589). Release dry run dispatched on release/v0.5.1 (dba1a5c0) to exercise the musl build and mimalloc nm check before the tag.",
+  "2026-11-05T05:38Z rc.4 READY: Release dry run 41973157235 green on dba1a5c0 (mimalloc nm check passed on both tarballs; MSI built). Owner steps (tag v0.5.1-rc.4 on dba1a5c0, r5, R-win, gluetun, v0.5.1) sent via the dashboard session. #462 SRC-17a merged (29301e00), archived; SRC-17 told to bring main in. X-followups-1105 launched in slot 9."
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
@@ -5103,7 +5111,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T05:24Z",
+  "updated": "2026-11-05T05:38Z",
   "items": [
    {
     "slot": 1,
@@ -5168,8 +5176,11 @@
    },
    {
     "slot": 9,
-    "status": "idle",
-    "doing": "Waiting for #462 to merge, then X-followups-1105 (brief written)"
+    "slice": "X-followups-1105",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Small review follow-ups: one cache fetch for source names, skipping unused work, a test gap, a log kind",
+    "since": "2026-11-05T05:38Z"
    },
    {
     "slot": 10,
@@ -5181,11 +5192,8 @@
    },
    {
     "slot": 11,
-    "slice": "SRC-17a",
-    "role": "build",
-    "agent": "claude",
-    "doing": "Adding the API fields the provenance and Unverified badge need (where an item was found, verified or not).",
-    "since": "2026-11-05T02:32Z"
+    "status": "idle",
+    "doing": "Held: same reason as slot 12 (every ready slice overlaps a running one or waits on the owner)"
    },
    {
     "slot": 12,
