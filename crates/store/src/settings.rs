@@ -11,6 +11,10 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::{Error, Result, Store};
 
+/// A setting as [`Store::settings_with_prefix_raw`] reads it: its key,
+/// and its value as text, or as its bytes when it isn't text.
+pub type RawSetting = (String, std::result::Result<String, Vec<u8>>);
+
 impl Store {
     /// The text stored under `key`, if any. A non-text value is corrupt
     /// for a text key.
@@ -50,10 +54,50 @@ impl Store {
         Ok(out)
     }
 
+    /// Every setting whose key starts with `prefix`, sorted by key, each
+    /// value as text, or as its bytes when it isn't text (a non-text row
+    /// is the caller's to judge, and spoils no other row). The prefix is
+    /// matched literally, as in [`Store::settings_with_prefix`].
+    pub fn settings_with_prefix_raw(&self, prefix: &str) -> Result<Vec<RawSetting>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT key, value FROM settings WHERE substr(key, 1, ?2) = ?1 ORDER BY key",
+        )?;
+        let rows = stmt.query_map(params![prefix, prefix.chars().count() as i64], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                crate::rules::text_or_bytes(r.get_ref(1)?),
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Stores every `(key, text)` pair in one transaction: all of them
     /// are written, or none is.
     pub fn set_settings_text(&mut self, entries: &[(&str, &str)]) -> Result<()> {
         self.update_settings_text(entries, &[])
+    }
+
+    /// Stores every `(key, bytes)` pair in `set` as a blob and deletes
+    /// every key in `remove`, in one transaction: all of it happens, or
+    /// none does. For a caller's own binary rows (SP-4's signature set);
+    /// [`Store::settings_with_prefix_raw`] reads them back.
+    pub fn update_settings_raw(&mut self, set: &[(&str, &[u8])], remove: &[&str]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut upsert = tx.prepare_cached(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            )?;
+            for (key, value) in set {
+                upsert.execute(params![key, value])?;
+            }
+            let mut delete = tx.prepare_cached("DELETE FROM settings WHERE key = ?1")?;
+            for key in remove {
+                delete.execute([key])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Stores every `(key, text)` pair in `set` and deletes every key in
@@ -117,6 +161,30 @@ mod tests {
             vec![("config.b".to_string(), "3".to_string())]
         );
         assert!(s.settings_with_prefix("config%").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_raw_read_keeps_the_rows_beside_a_non_text_one() {
+        let (_dir, mut s) = store();
+        s.set_settings_text(&[("p.a", "1"), ("p.c", "3"), ("q", "x")])
+            .unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO settings (key, value) VALUES ('p.b', x'ff00')",
+                [],
+            )
+            .unwrap();
+        assert!(s.settings_with_prefix("p.").is_err());
+        s.update_settings_raw(&[("p.d", &[1, 2][..])], &["p.c"])
+            .unwrap();
+        assert_eq!(
+            s.settings_with_prefix_raw("p.").unwrap(),
+            vec![
+                ("p.a".to_string(), Ok("1".to_string())),
+                ("p.b".to_string(), Err(vec![0xff, 0])),
+                ("p.d".to_string(), Err(vec![1, 2])),
+            ]
+        );
     }
 
     #[test]

@@ -109,7 +109,8 @@ lodestar_log::catalogue! {
         fields: { stored: Size, queued: Size },
     }
     /// A stored filter rule was skipped: `what` (`rule`, `override`,
-    /// `exception`, `always_allow`, `class_rule`) and its id, never its
+    /// `exception`, `always_allow`, `class_rule`, `pack_override`, or
+    /// `sp4_row` for a row of SP-4's signature set) and its id, never its
     /// terms.
     FILTER_RULE_SKIPPED {
         id: "pipeline.filter_rule_skipped",
@@ -314,13 +315,14 @@ pub fn state(s: lodestar_store::SourceState) -> &'static str {
 /// (`MW-1`) isn't a number, so it logs as 0; the Insights exception
 /// `filter_rows_unreadable` names the row.
 pub fn filter_note(note: &str) -> (&'static str, u64, &'static str) {
-    const WHAT: [(&str, &str); 6] = [
+    const WHAT: [(&str, &str); 7] = [
         ("pack override ", "pack_override"),
         ("classification rule ", "class_rule"),
         ("rule U-", "rule"),
         ("override O-", "override"),
         ("exception ", "exception"),
         ("always-allow ", "always_allow"),
+        ("SP-4 signature row ", "sp4_row"),
     ];
     let Some((what, rest)) = WHAT
         .iter()
@@ -381,6 +383,10 @@ mod tests {
             (
                 "pack override MW-1 fails closed: unreadable",
                 ("pack_override", 0, "fails_closed"),
+            ),
+            (
+                "SP-4 signature row 12 skipped: unreadable",
+                ("sp4_row", 12, "unreadable"),
             ),
             ("rule about sometermhere", ("other", 0, "other")),
         ] {

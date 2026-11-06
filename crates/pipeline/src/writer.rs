@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_cluster::{Lease, WorkerId};
+use lodestar_filter::packs::sp4::AtCommit;
 use lodestar_filter::{
     Action, Decision, Engine, Facts, Handle, HeldSet, Item, Pending, Sealer, Verdict,
 };
@@ -804,6 +805,16 @@ impl Writer {
                 &refused,
                 &promo,
             );
+            // SP-4's signatures this batch added (RP-5), in one row: after
+            // the batch, whether or not it committed, so the set in memory
+            // and the store agree. A failed write stays pending for the
+            // next batch's flush.
+            if let Err(e) = engine.spam_sigs.flush(&mut store) {
+                lodestar_log::log_event!(
+                    crate::log_events::STORE_WRITE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
             let promo_pending = promo_pending.into_inner();
             #[cfg(test)]
             if let Some(f) = between
@@ -1808,6 +1819,8 @@ fn judge(
     let unverified = !adult.is_empty() && any_unverified();
     let now = flood.now();
     let sp3_on = engine.packs.is_on(lodestar_filter::PackRule::Sp3);
+    let sp4_on = engine.packs.is_on(lodestar_filter::PackRule::Sp4);
+    let sigs = &engine.spam_sigs;
     for c in &mut committing {
         // A cache's file was looked up as public. Whether a private
         // source has stored the key since is read here, so the commit
@@ -1827,15 +1840,34 @@ fn judge(
             } else {
                 rejudge(engine, r, c.lease.discovered_at, unix_now())
             };
-        // SP-3 (RP-4): prepare's verdict leaves it out; it's counted and
-        // added here, in commit order.
-        // Counted with SP-3 off too, so switching it on finds the rate as
-        // it is; judged again only while it's on.
-        if let Some(level) = flood.count(store, have, c, &any_unverified, now)
-            && sp3_on
-        {
-            let flooded = judge_flooded(engine, &c.results, c.lease.discovered_at, level, now);
-            verdict = crate::source_adult::stricter(verdict, flooded);
+        // SP-3 (RP-4) and SP-4 (RP-5): prepare's verdict leaves them out;
+        // they're judged here, in commit order.
+        // SP-3 is counted with it off too, so switching it on finds the
+        // rate as it is; judged again only while it's on.
+        let flood_level = flood
+            .count(store, have, c, &any_unverified, now)
+            .filter(|_| sp3_on);
+        // SP-4's payload signature, computed once and only when needed:
+        // to look a clone up (SP-4 on, the set not empty) or to add an
+        // original. A crawl commit while the set is empty pays nothing.
+        let mut payload: Option<Option<u64>> = None;
+        let sig_of = |r: &Results| {
+            lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(&r.files))
+        };
+        let clone_of = if sp4_on && !sigs.is_empty() {
+            payload
+                .get_or_insert_with(|| sig_of(&c.results))
+                .and_then(|s| sigs.get(s))
+        } else {
+            None
+        };
+        let at = AtCommit {
+            flood: flood_level,
+            clone_of,
+        };
+        if at.any() {
+            let again = judge_at_commit(engine, &c.results, c.lease.discovered_at, at, now);
+            verdict = crate::source_adult::stricter(verdict, again);
             // A shadow entry the two judgments both logged with their
             // own decision's action (a CSX-5 entry in shadow mode) is
             // logged once, with the decision that stands.
@@ -1852,6 +1884,21 @@ fn judge(
                     }
                 }
             }
+        }
+        // SP-4's set (RP-5): SP-2 hiding, or SP-3 demoting or hiding, a
+        // torrent this commit stores adds its signature, in memory now so
+        // a clone later in the batch is caught, and written once the batch
+        // is ([`Writer::commit_all`]). Added with SP-4 off too, so turning
+        // it on finds the originals. A clone SP-4 hid adds nothing: its
+        // signature is its original's.
+        if let Some(original) = verdict.decision.as_ref().and_then(|d| match d.rule {
+            lodestar_filter::RuleRef::Pack(r) => {
+                lodestar_filter::spam_sigs::Original::of(r, d.action)
+            }
+            _ => None,
+        }) && let Some(s) = *payload.get_or_insert_with(|| sig_of(&c.results))
+        {
+            sigs.add(s, original);
         }
         c.verdict = verdict.decision;
         c.shadow = verdict.shadow;
@@ -1946,7 +1993,7 @@ pub(crate) fn rejudge(engine: &Engine, r: &mut Results, discovered_at: i64, now:
 
 /// A commit as the engine judges it: its swarm hashes, name, files and
 /// classification, and the stored fields. Shared by [`rejudge`] and
-/// [`judge_flooded`], so the two readings of one commit can't drift.
+/// [`judge_at_commit`], so the two readings of one commit can't drift.
 fn with_item<T>(
     r: &Results,
     discovered_at: i64,
@@ -2198,18 +2245,19 @@ impl Flooding {
     }
 }
 
-/// A commit judged again with SP-3 at `level` ([`Engine::judge_flooded`]),
-/// read as [`rejudge`] reads it ([`with_item`]), an always-adult
-/// source's find as adult too.
-fn judge_flooded(
+/// A commit judged again with SP-3 at its level and SP-4 inheriting its
+/// original, as `at` says ([`Engine::judge_at_commit`]), read as
+/// [`rejudge`] reads it ([`with_item`]), an always-adult source's find as
+/// adult too.
+fn judge_at_commit(
     engine: &Engine,
     r: &Results,
     discovered_at: i64,
-    level: lodestar_filter::flood::Level,
+    at: AtCommit,
     now: i64,
 ) -> Verdict {
     with_item(r, discovered_at, now, |item, facts| {
-        engine.judge_flooded(item, facts, now, level, r.source_adult)
+        engine.judge_at_commit(item, facts, now, at, r.source_adult)
     })
 }
 
@@ -4743,6 +4791,10 @@ mod tests {
         };
         e.pack_versions = PackVersions::resolve(&Manifest::builtin(), &rows);
         assert!(e.pack_versions.state(lodestar_filter::PackRule::Sp3).plain);
+        // SP-3's fixtures share one payload (`results_named`), so once one
+        // is demoted the rest are its clones: SP-4 is off here and has
+        // tests of its own ([`sp4_writer`]).
+        e.packs.rules_off.insert(lodestar_filter::PackRule::Sp4);
         e
     }
 
@@ -5378,6 +5430,255 @@ mod tests {
         assert_eq!(flood.notes.order.len(), ClaimNotes::CAP);
     }
 
+    // -----------------------------------------------------------------
+    // SP-4 (RP-5): clones of hidden spam, judged and added at commit.
+
+    /// A keyword-stuffed name SP-2 hides.
+    fn stuffed() -> String {
+        "free movie download ".repeat(20).trim_end().to_owned()
+    }
+
+    /// A writer whose engine has every pack on and every rule applied.
+    fn sp4_writer() -> (Writer, Arc<Coordinator>) {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let mut w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+        let mut e = sp3_engine();
+        e.packs.rules_off.remove(&lodestar_filter::PackRule::Sp4);
+        w.filter = Arc::new(Handle::new(e));
+        (w, coordinator)
+    }
+
+    /// `name`'s stored flags and the rules its filter hits name.
+    fn stored_as(w: &Writer, name: &str) -> (i64, Vec<String>) {
+        let s = w.store.as_ref().unwrap();
+        let key = results_named(name).key;
+        let id = s.find(&key).unwrap().expect("stored");
+        let hits = s
+            .filter_hits(0)
+            .unwrap()
+            .into_iter()
+            .filter(|h| h.hash == key.0)
+            .map(|h| h.rule)
+            .collect();
+        (s.torrent(id).unwrap().unwrap().flags, hits)
+    }
+
+    fn sig_rows(w: &Writer) -> Vec<lodestar_store::RawSetting> {
+        w.store
+            .as_ref()
+            .unwrap()
+            .settings_with_prefix_raw(lodestar_filter::spam_sigs::PREFIX)
+            .unwrap()
+    }
+
+    /// An original SP-2 hides and its clone (another name, the same
+    /// files) in one batch: the clone is hidden by SP-4, and the batch
+    /// writes one row of the set. With SP-4 off a clone passes, and the
+    /// original's signature is still added.
+    #[tokio::test]
+    async fn sp4_hides_a_clone_later_in_the_same_batch() {
+        let (mut w, coordinator) = sp4_writer();
+        let (retry, _rx) = mpsc::channel(4);
+        let batch = vec![
+            leased(&coordinator, results_named(&stuffed())),
+            leased(&coordinator, results_named("Holiday Video 2024")),
+        ];
+        w.commit(batch, vec![], vec![], vec![], &retry).await;
+        let (flags, hits) = stored_as(&w, &stuffed());
+        assert!(flags & flags::HIDDEN != 0 && hits == ["SP-2"], "{hits:?}");
+        let (flags, hits) = stored_as(&w, "Holiday Video 2024");
+        assert!(flags & flags::HIDDEN != 0 && hits == ["SP-4"], "{hits:?}");
+        assert_eq!(w.filter.current().spam_sigs.len(), 1, "the clone adds none");
+        assert_eq!(sig_rows(&w).len(), 1, "one row");
+        // A later clone, with SP-4 off: it passes.
+        w.filter
+            .update_engine(|e| e.packs.rules_off.insert(lodestar_filter::PackRule::Sp4));
+        let later = leased(&coordinator, results_named("Garden Video 2024"));
+        w.commit(vec![later], vec![], vec![], vec![], &retry).await;
+        let (flags, hits) = stored_as(&w, "Garden Video 2024");
+        assert!(flags & flags::HIDDEN == 0 && hits.is_empty(), "{hits:?}");
+        // An original hidden while SP-4 is off is still added, and the
+        // write is one row again.
+        let before = sig_rows(&w);
+        let other = format!("{} again", stuffed());
+        let mut r = results_named(&other);
+        r.files[0].size += 1;
+        r.torrent.size += 1;
+        w.commit(
+            vec![leased(&coordinator, r)],
+            vec![],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        assert_eq!(w.filter.current().spam_sigs.len(), 2);
+        let after = sig_rows(&w);
+        assert_eq!(after.len(), 1);
+        assert_ne!(after, before);
+    }
+
+    /// Only stored torrents' hides feed the set: claims (unverified items,
+    /// the torrent cache's lookups and enrichment's matches among them)
+    /// are judged apart from the commit and never add a signature.
+    #[tokio::test]
+    async fn sp4_is_never_fed_by_claims() {
+        let (mut w, _) = sp4_writer();
+        let budget = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = budget.try_acquire_owned().unwrap();
+        let found = lodestar_sources::Found::key(InfoHash([0x42; 20]), 0).with_claims(
+            lodestar_sources::Claims {
+                name: Some(stuffed()),
+                size: Some(900 << 20),
+                ..Default::default()
+            },
+        );
+        let d = Discovery {
+            source: SourceId::new(1).unwrap(),
+            found,
+            at: 100,
+            reply: false,
+        };
+        w.ingest_claims(vec![(d, permit)]).await;
+        assert!(w.filter.current().spam_sigs.is_empty());
+        assert!(sig_rows(&w).is_empty());
+    }
+
+    /// SP-4's added cost per commit in the writer (RP-5, the same 5% gate
+    /// as SP-3's): a crawl commit while the set is empty, the lookup with
+    /// the set at its cap, and a hide's add and one-row write. Run:
+    /// `cargo test --release -p lodestar-pipeline --lib sp4_writer_cost --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement"]
+    fn sp4_writer_cost() {
+        use lodestar_filter::spam_sigs::{CAP, Original, usable};
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        const N: usize = 10_240;
+        // Torrents of three files, sizes of their own.
+        let rs: Vec<Results> = (0..N)
+            .map(|i| {
+                let mut r = results_named(&format!("Crawled Title {i} 1080p"));
+                r.files[0].size += i as u64;
+                for k in 0..2u64 {
+                    let mut f = r.files[0].clone();
+                    f.path = vec![format!("extra{k}.nfo")];
+                    f.size = 4_001 + k + i as u64;
+                    r.files.push(f);
+                }
+                r
+            })
+            .collect();
+        let t = Instant::now();
+        for batch in rs.chunks(256) {
+            let pts: Vec<PreparedTorrent<'_>> = batch
+                .iter()
+                .map(|r| PreparedTorrent {
+                    torrent: &r.torrent,
+                    discovered_at: 0,
+                    metadata_at: 0,
+                    extra_flags: 0,
+                    source: dht,
+                    verified: true,
+                })
+                .collect();
+            store
+                .write(&WriteBatch {
+                    prepared: &pts,
+                    ..WriteBatch::default()
+                })
+                .unwrap();
+        }
+        let insert = t.elapsed().as_nanos() as f64 / N as f64;
+        let e = sp3_engine();
+        let sigs = &e.spam_sigs;
+        // The writer's step, as `judge` runs it.
+        let step = |r: &Results| {
+            if !sigs.is_empty() {
+                std::hint::black_box(
+                    usable(lodestar_filter::payload_sig(&r.files)).and_then(|s| sigs.get(s)),
+                );
+            }
+        };
+        let time = |f: &dyn Fn(&Results)| {
+            let t = Instant::now();
+            for r in &rs {
+                f(r);
+            }
+            t.elapsed().as_nanos() as f64 / N as f64
+        };
+        let empty_ns = time(&step);
+        let hid = Original {
+            rule: lodestar_filter::PackRule::Sp2,
+            action: Action::Hide,
+        };
+        for i in 0..CAP as u64 {
+            sigs.add(
+                lodestar_filter::payload_sig(&[lodestar_classify::FileInfo::new(
+                    vec!["x".into()],
+                    (2 << 40) + i,
+                )])
+                .unwrap()
+                .sig,
+                hid,
+            );
+        }
+        sigs.flush(&mut store).unwrap();
+        let full_ns = time(&step);
+        // Hides: their adds, and their batch's one-row write, 8 hides a
+        // batch.
+        let t = Instant::now();
+        let mut flushes = 0;
+        for (i, r) in rs.iter().enumerate().take(2_048) {
+            if let Some(s) = usable(lodestar_filter::payload_sig(&r.files)) {
+                sigs.add(s, hid);
+            }
+            if i % 8 == 7 {
+                sigs.flush(&mut store).unwrap();
+                flushes += 1;
+            }
+        }
+        let batch_ns = t.elapsed().as_nanos() as f64 / f64::from(flushes);
+        // A flood of one payload (each hide adds it again) after a release
+        // left a removal in the open row: compaction stays within a row.
+        let old = usable(lodestar_filter::payload_sig(&rs[0].files)).unwrap();
+        sigs.release(&mut store, &[old], None).unwrap();
+        let flood = usable(lodestar_filter::payload_sig(&rs[1].files)).unwrap();
+        let t = Instant::now();
+        for i in 0..2_048 {
+            sigs.add(flood, hid);
+            if i % 8 == 7 {
+                sigs.flush(&mut store).unwrap();
+            }
+        }
+        let flood_ns = t.elapsed().as_nanos() as f64 / 256.0;
+        println!(
+            "per insert: {:.2} µs; SP-4: a crawl commit with the set empty {:.3} µs ({:.2}%), \
+             with the set at its cap {:.2} µs ({:.1}%); a batch with hides: {:.1} µs for their \
+             adds and its one row, {:.2} µs a commit of a 256-commit batch ({:.1}%); a flood \
+             of one payload after a release, {:.1} µs a batch",
+            insert / 1000.0,
+            empty_ns / 1000.0,
+            100.0 * empty_ns / insert,
+            full_ns / 1000.0,
+            100.0 * full_ns / insert,
+            batch_ns / 1000.0,
+            batch_ns / 256.0 / 1000.0,
+            100.0 * batch_ns / 256.0 / insert,
+            flood_ns / 1000.0,
+        );
+        assert!(
+            flood_ns < 4.0 * batch_ns,
+            "a flood after a release: within a row"
+        );
+        assert!(empty_ns <= 0.05 * insert, "a crawl commit, the set empty");
+    }
+
     /// SP-3's added cost per insert in the writer, measured apart from
     /// the engine's budget (RP-4 gate: at most 5% of the writer's
     /// per-insert cost). Run: `cargo test --release -p lodestar-pipeline
@@ -5523,11 +5824,14 @@ mod tests {
         let flooded: Vec<&Results> = cs.iter().take(2_000).map(|c| &c.results).collect();
         let t = Instant::now();
         for r in &flooded {
-            std::hint::black_box(judge_flooded(
+            std::hint::black_box(judge_at_commit(
                 &e,
                 r,
                 0,
-                lodestar_filter::flood::Level::Flag,
+                AtCommit {
+                    flood: Some(lodestar_filter::flood::Level::Flag),
+                    clone_of: None,
+                },
                 10_000,
             ));
         }
