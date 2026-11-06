@@ -166,7 +166,7 @@ proptest! {
                 }
                 Op::Batch { worker, keys } => {
                     let claims: Vec<Claim> = keys.iter().map(|&k| Claim { key: key(k), source: SourceId::new(0).unwrap(), strategy: 0, at: now }).collect();
-                    for (&k, answer) in keys.iter().zip(a.claim_batch(WorkerId(worker), &claims, now, None)) {
+                    for (&k, answer) in keys.iter().zip(a.claim_batch(WorkerId(worker), &claims, now, None, None)) {
                         if let BatchAnswer::Claimed { claimed, .. } = answer {
                             note(worker, k, claimed, &mut issued, &mut all, &mut seen)?;
                         }

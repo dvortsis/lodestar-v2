@@ -1193,6 +1193,9 @@ impl ClusterServer {
                     bump(&self.counters.protocol_errors);
                     return Flow::Stop(StopReason::Protocol);
                 }
+                // Commits from here on are remembered, so one racing the
+                // store check is still caught (`claim_batch`).
+                let checked_at = self.leases.commit_seq();
                 let stored = match &self.stored {
                     Some(check) => {
                         let check = check.clone();
@@ -1205,7 +1208,7 @@ impl ClusterServer {
                     }
                     None => vec![false; batch.items.len()],
                 };
-                let items = self.claim(peer, &mut batch.items, &stored);
+                let items = self.claim(peer, &mut batch.items, &stored, checked_at);
                 self.reply(
                     link,
                     ToWorker::Grants(GrantBatch {
@@ -1253,14 +1256,20 @@ impl ClusterServer {
                 let accepted = self.sink.as_ref().is_some_and(|s| s.counters(w, batch));
                 self.accepted(link, id, accepted).await
             }
+            // As for payloads: a replaced or revoked session's answers
+            // aren't taken.
             ToCoordinator::SnapshotAck(ack) => {
-                if let Some(sink) = &self.sink {
+                if let Some(sink) = &self.sink
+                    && lock(&self.fleet).is_current(peer)
+                {
                     sink.snapshot_ack(w, ack);
                 }
                 Flow::Continue
             }
             ToCoordinator::Reverified(reply) => {
-                if let Some(sink) = &self.sink {
+                if let Some(sink) = &self.sink
+                    && lock(&self.fleet).is_current(peer)
+                {
                     sink.reverified(w, reply);
                 }
                 Flow::Continue
@@ -1333,9 +1342,18 @@ impl ClusterServer {
     /// [`GrantAdmission`] hook allows are denied as busy. A key held by
     /// another worker has its source merged into that lease and its peer
     /// hints relayed to the holder (§19.3).
-    fn claim(&self, peer: &Peer, items: &mut [ClaimItem], stored: &[bool]) -> Vec<GrantItem> {
+    fn claim(
+        &self,
+        peer: &Peer,
+        items: &mut [ClaimItem],
+        stored: &[bool],
+        checked_at: u64,
+    ) -> Vec<GrantItem> {
         let w = peer.worker;
-        let now = self.clock.now_secs();
+        let now_ms = self.clock.now_ms();
+        let now = now_ms.div_euclid(1000);
+        let skew = self.config.max_skew_ms.abs();
+        let (earliest, latest) = (now_ms.saturating_sub(skew), now_ms.saturating_add(skew));
         let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
         let fleet = lock(&self.fleet);
         let current = fleet.is_current(peer);
@@ -1354,8 +1372,11 @@ impl ClusterServer {
                 out[i] = deny(DenyReason::Stored);
             } else if let Some(source) = SourceId::new(item.source) {
                 // Discovery times are the worker's clock; correct them (§19.3).
-                let at =
-                    clamp(i128::from(item.discovered_ms) - i128::from(offset)).div_euclid(1000);
+                // Then clamped to now ± the skew limit: a worker's clock
+                // never puts a key in another hour's cohort (§10.9.3).
+                let at = clamp(i128::from(item.discovered_ms) - i128::from(offset))
+                    .clamp(earliest, latest)
+                    .div_euclid(1000);
                 let claim = Claim {
                     key: InfoHash(key),
                     source,
@@ -1373,7 +1394,9 @@ impl ClusterServer {
             .as_ref()
             .map(|gate| move |wanted: usize| gate.admit(w, wanted));
         let admit_ref = admit.as_ref().map(|f| f as &dyn Fn(usize) -> usize);
-        let answers = self.leases.claim_batch(w, &claims, now, admit_ref);
+        let answers = self
+            .leases
+            .claim_batch(w, &claims, now, admit_ref, Some(checked_at));
         // Hints per holder, one message each.
         let mut relays: HashMap<WorkerId, Vec<HintItem>> = HashMap::new();
         for (&(i, claim), answer) in asks.iter().zip(answers) {

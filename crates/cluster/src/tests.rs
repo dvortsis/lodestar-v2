@@ -1317,8 +1317,13 @@ mod queues {
         };
         // Two events fit under the cap, one waits for room, and the link
         // holds 16 more: then the sender is stuck.
-        until("the link fills", || sent.load(Ordering::SeqCst) >= 18).await;
-        assert!(session.queued_bytes() > PAYLOAD);
+        // The sender's count moves when the session takes a message off the
+        // link, a moment before that message's bytes are counted: wait for
+        // both.
+        until("the link and the event queue fill", || {
+            sent.load(Ordering::SeqCst) >= 18 && session.queued_bytes() > PAYLOAD
+        })
+        .await;
         assert!(session.queued_bytes() <= CAP, "{}", session.queued_bytes());
         assert!(sent.load(Ordering::SeqCst) < total, "the stall pushed back");
         for _ in 0..total {
@@ -1332,7 +1337,9 @@ mod queues {
         assert_eq!(session.queued_bytes(), 0);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // One thread: the session task runs only when the test yields, so
+    // "the reader is stuck" is a fact when the test checks it, never a race.
+    #[tokio::test(flavor = "current_thread")]
     async fn a_stalled_session_queues_at_most_its_byte_cap() {
         let c = super::cluster(1);
         let clock = Arc::new(ManualClock::new(super::T0 * 1000));
@@ -1507,9 +1514,24 @@ mod queues {
             (snap.fetched, snap.outcomes, snap.stale_reports, snap.leases),
             (1, 1, 1, 1)
         );
-        // The commit ends a fetched lease, under its token.
+        // The worker still counts the fetched lease, as the coordinator does.
+        assert_eq!(s.leases(), 1);
+        // The commit ends a fetched lease, under its holder and token.
         let key = lodestar_metainfo::InfoHash([1; 20]);
-        assert!(authority.release(&key, crate::Token(t1)).is_some());
+        assert!(
+            authority
+                .commit(WorkerId(9), &key, crate::Token(t1))
+                .is_none()
+        );
+        assert!(
+            authority
+                .commit(WorkerId::LOCAL, &key, crate::Token(t1))
+                .is_some()
+        );
+        s.committed(vec![([1; 20], t1 + 1), ([1; 20], t1)])
+            .await
+            .unwrap();
+        assert_eq!(s.leases(), 0);
 
         // No sink: a batch is refused, never acknowledged and dropped.
         s.send(ToCoordinator::Results(Payload {
@@ -1533,7 +1555,8 @@ mod queues {
         server.shutdown();
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // One thread, as above: the queue is full when the test asserts it.
+    #[tokio::test(flavor = "current_thread")]
     async fn a_drain_is_never_crowded_out_by_a_full_queue() {
         let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
         let config = ServerConfig {

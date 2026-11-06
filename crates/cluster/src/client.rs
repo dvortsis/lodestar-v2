@@ -255,6 +255,7 @@ enum Command {
     Drained(oneshot::Sender<()>),
     Stats(Stats),
     Send(ToCoordinator, oneshot::Sender<()>),
+    Committed(Vec<([u8; 20], u64)>, oneshot::Sender<()>),
 }
 
 type Queued = (WorkerEvent, Option<OwnedSemaphorePermit>);
@@ -381,8 +382,10 @@ impl WorkerSession {
         self.ask(|tx| Command::Claim(items, tx)).await
     }
 
-    /// Reports terminal outcomes (sent once they're on the wire; the
-    /// coordinator doesn't answer).
+    /// Reports outcomes (sent once they're on the wire; the coordinator
+    /// doesn't answer). `PeerFound` and `Lost` end the lease; `Fetched`
+    /// doesn't: the lease stays held until the coordinator commits the
+    /// result (see [`committed`](Self::committed)).
     pub async fn report(&self, items: Vec<OutcomeItem>) -> Result<(), ClientError> {
         if items.is_empty() || items.len() > MAX_OUTCOME_BATCH {
             return Err(ClientError::Invalid);
@@ -429,6 +432,13 @@ impl WorkerSession {
             return Err(ClientError::Invalid);
         }
         self.ask(|tx| Command::Send(msg, tx)).await
+    }
+
+    /// Forgets leases whose results the coordinator accepted (an
+    /// `Accepted { accepted: true }` for the `Results` batch that carried
+    /// them): their commit ends them. Keys held under another token stay.
+    pub async fn committed(&self, leases: Vec<([u8; 20], u64)>) -> Result<(), ClientError> {
+        self.ask(|tx| Command::Committed(leases, tx)).await
     }
 
     /// Tells the coordinator the drain is done; it stops the session.
@@ -570,7 +580,9 @@ impl Driver {
                     .await
             }
             Command::Report(items, reply) => {
-                for item in &items {
+                // `Fetched` keeps the lease (the commit ends it), as on the
+                // coordinator; the losses end it.
+                for item in items.iter().filter(|i| i.outcome != Outcome::Fetched) {
                     if self.held.get(&item.key) == Some(&item.token) {
                         self.held.remove(&item.key);
                     }
@@ -591,6 +603,16 @@ impl Driver {
                 let step = self.send(ToCoordinator::Drained).await;
                 let _ = reply.send(());
                 step
+            }
+            Command::Committed(leases, reply) => {
+                for (key, token) in leases {
+                    if self.held.get(&key) == Some(&token) {
+                        self.held.remove(&key);
+                    }
+                }
+                self.sync_leases();
+                let _ = reply.send(());
+                Step::Continue
             }
             Command::Send(msg, reply) => {
                 let step = self.send(msg).await;

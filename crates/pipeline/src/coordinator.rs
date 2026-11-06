@@ -233,21 +233,30 @@ mod tests {
 
     #[test]
     fn every_loss_code_round_trips() {
-        for loss in [
-            Loss::NoPeers,
-            Loss::TimedOut,
-            Loss::Refused,
-            Loss::EncryptionFailed,
-            Loss::Oversize,
-            Loss::Invalid,
-            Loss::Blocked,
-            Loss::Evicted,
-            Loss::GaveUp,
-            Loss::Unreachable,
-        ] {
-            assert_eq!(loss_from_code(loss as u8), loss);
+        // Exhaustive: a new `Loss` variant fails to compile here until it's
+        // listed, and then fails the assert until `loss_from_code` maps it.
+        let listed = |l: Loss| match l {
+            Loss::NoPeers
+            | Loss::TimedOut
+            | Loss::Refused
+            | Loss::EncryptionFailed
+            | Loss::Oversize
+            | Loss::Invalid
+            | Loss::Blocked
+            | Loss::Evicted
+            | Loss::GaveUp
+            | Loss::Unreachable => l,
+        };
+        let mut seen = 0;
+        for code in 0..=u8::MAX {
+            let loss = listed(loss_from_code(code));
+            if loss as u8 == code {
+                seen += 1;
+            } else {
+                assert_eq!(loss, Loss::Invalid, "code {code}");
+            }
         }
+        assert_eq!(seen, 10, "every variant has its own code");
         assert_eq!(loss_from_code(0), Loss::Invalid);
-        assert_eq!(loss_from_code(200), Loss::Invalid);
     }
 }

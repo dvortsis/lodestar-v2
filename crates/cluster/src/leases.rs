@@ -322,6 +322,9 @@ struct AuthorityState {
     /// Kept only once remote workers are allowed ([`LeaseAuthority::serve_remote`]),
     /// so a single machine pays nothing.
     recent: Option<(HashSet<InfoHash>, VecDeque<InfoHash>)>,
+    /// Commits remembered so far (a sequence number, see
+    /// [`LeaseAuthority::commit_seq`]).
+    commits: u64,
 }
 
 impl AuthorityState {
@@ -335,7 +338,6 @@ impl AuthorityState {
         }
     }
 
-    /// One claim. The second value is whether it was a new harvest.
     /// Whether a claim for `key` would make a new lease (not one held).
     fn would_lease(&self, key: &InfoHash) -> bool {
         self.table.get(key).is_none()
@@ -355,6 +357,7 @@ impl AuthorityState {
         if let Some((set, order)) = &mut self.recent
             && set.insert(key)
         {
+            self.commits += 1;
             order.push_back(key);
             if order.len() > RECENT_COMMITS
                 && let Some(old) = order.pop_front()
@@ -364,6 +367,7 @@ impl AuthorityState {
         }
     }
 
+    /// One claim. The second value is the new lease, if it was a harvest.
     fn claim(&mut self, worker: WorkerId, c: Claim, now: i64) -> (Claimed, Option<Lease>) {
         if let Some(mut lease) = self.pending.remove(&c.key) {
             if self.pending.is_empty() {
@@ -413,6 +417,7 @@ impl LeaseAuthority {
                 pending: HashMap::new(),
                 order: VecDeque::new(),
                 recent: None,
+                commits: 0,
             }),
             events,
         }
@@ -429,6 +434,13 @@ impl LeaseAuthority {
 
     pub fn ttl_secs(&self) -> i64 {
         self.lock().table.ttl_secs()
+    }
+
+    /// The commit sequence number. A caller takes it before checking the
+    /// store and passes it to [`claim_batch`](Self::claim_batch), which then
+    /// knows whether every commit since that check is still remembered.
+    pub fn commit_seq(&self) -> u64 {
+        self.lock().commits
     }
 
     fn lock(&self) -> MutexGuard<'_, AuthorityState> {
@@ -462,16 +474,24 @@ impl LeaseAuthority {
     /// given, is asked once how many of the keys that would get a new lease
     /// (not ones already held) may get one now; the rest are
     /// [`BatchAnswer::Busy`]. A remote claim for a key committed moments ago
-    /// is [`BatchAnswer::Committed`].
+    /// is [`BatchAnswer::Committed`]. `checked_at` is the
+    /// [`commit_seq`](Self::commit_seq) taken before the caller's store
+    /// check: if more than [`RECENT_COMMITS`] commits have happened since,
+    /// some may have been forgotten, so no key gets a new lease (all are
+    /// `Busy`; the worker claims again).
     pub fn claim_batch(
         &self,
         worker: WorkerId,
         claims: &[Claim],
         now: i64,
         admit: Option<&dyn Fn(usize) -> usize>,
+        checked_at: Option<u64>,
     ) -> Vec<BatchAnswer> {
         let mut s = self.lock();
+        let forgotten =
+            checked_at.is_some_and(|seq| s.commits.saturating_sub(seq) > RECENT_COMMITS as u64);
         let mut allowed = match admit {
+            _ if forgotten => 0,
             Some(admit) => {
                 let new = claims
                     .iter()
@@ -544,9 +564,32 @@ impl LeaseAuthority {
         self.lock().table.get(key).copied()
     }
 
-    /// Ends a lease whose key was committed. `None` if `token` was stale.
+    /// Ends a lease whose key was committed, by token alone. `None` if
+    /// `token` was stale. Tokens are predictable (`epoch << 32 | seq`), so
+    /// this is for the coordinator's own commit path; a commit on a remote
+    /// worker's behalf goes through [`commit`](Self::commit), which checks
+    /// the holder too.
     pub fn release(&self, key: &InfoHash, token: Token) -> Option<Lease> {
         let mut s = self.lock();
+        let lease = s.table.release(key, token);
+        if lease.is_some() {
+            s.remember_commit(*key);
+        }
+        self.gauge(&s);
+        lease
+    }
+
+    /// Ends a lease whose key was committed, only if `worker` holds it under
+    /// `token`.
+    pub fn commit(&self, worker: WorkerId, key: &InfoHash, token: Token) -> Option<Lease> {
+        let mut s = self.lock();
+        let holds = s
+            .table
+            .get(key)
+            .is_some_and(|l| l.holder == worker && l.token == token);
+        if !holds {
+            return None;
+        }
         let lease = s.table.release(key, token);
         if lease.is_some() {
             s.remember_commit(*key);
@@ -915,9 +958,11 @@ mod tests {
         assert!(a.held(A, &key, t).is_some());
         assert!(a.held(B, &key, t).is_none());
         assert!(a.current(&key, t).is_some());
-        // Committed under its token: ended once.
-        assert!(a.release(&key, t).is_some());
-        assert!(a.release(&key, t).is_none());
+        // A commit for another worker, with the right token, is refused;
+        // the holder's ends it once.
+        assert!(a.commit(B, &key, t).is_none());
+        assert!(a.commit(A, &key, t).is_some());
+        assert!(a.commit(A, &key, t).is_none());
 
         // Fetched, then silent with no commit: expired and re-issued.
         let Claimed::Granted(t) = a.claim(A, claim(2, 0), 0) else {
@@ -985,7 +1030,7 @@ mod tests {
         assert!(a.report(A, &key, t, None).is_some());
         assert_eq!(get(&ev.lost), 0, "fetched isn't a loss");
         let one = |n: usize| move |_: usize| n;
-        let batch = a.claim_batch(B, &[claim(1, 0), claim(1, 1), claim(2, 0)], 1, None);
+        let batch = a.claim_batch(B, &[claim(1, 0), claim(1, 1), claim(2, 0)], 1, None, None);
         let granted = |b: &BatchAnswer| {
             matches!(
                 b,
@@ -1012,7 +1057,13 @@ mod tests {
             asked.store(n, std::sync::atomic::Ordering::Relaxed);
             1
         };
-        let batch = a.claim_batch(B, &[claim(1, 3), claim(5, 0), claim(6, 0)], 2, Some(&admit));
+        let batch = a.claim_batch(
+            B,
+            &[claim(1, 3), claim(5, 0), claim(6, 0)],
+            2,
+            Some(&admit),
+            None,
+        );
         assert_eq!(get(&asked), 2);
         assert!(matches!(
             batch[0],
@@ -1027,7 +1078,7 @@ mod tests {
         assert!(a.get(&InfoHash([6; 20])).is_none());
         let none = one(0);
         assert_eq!(
-            a.claim_batch(B, &[claim(7, 0)], 2, Some(&none)),
+            a.claim_batch(B, &[claim(7, 0)], 2, Some(&none), None),
             vec![BatchAnswer::Busy]
         );
     }
@@ -1042,7 +1093,7 @@ mod tests {
         // Before remote workers are allowed nothing is remembered.
         assert!(a.release(&key, t).is_some());
         assert!(matches!(
-            a.claim_batch(A, &[claim(1, 0)], 1, None)[0],
+            a.claim_batch(A, &[claim(1, 0)], 1, None, None)[0],
             BatchAnswer::Claimed {
                 harvested: true,
                 ..
@@ -1056,7 +1107,7 @@ mod tests {
         };
         assert!(a.release(&key, t).is_some());
         assert_eq!(
-            a.claim_batch(A, &[claim(1, 0)], 3, None),
+            a.claim_batch(A, &[claim(1, 0)], 3, None, Some(a.commit_seq())),
             vec![BatchAnswer::Committed]
         );
         // The built-in worker's own path is untouched (its have-filter
@@ -1068,5 +1119,34 @@ mod tests {
         assert_eq!(get(&ev.harvested), 4);
         assert!(a.held(WorkerId::LOCAL, &key, Token(0)).is_none());
         assert_eq!(a.ttl_secs(), 600);
+
+        // More commits since the store check than are remembered: no new
+        // lease, whatever the key, until the worker claims again.
+        let seq = a.commit_seq();
+        for n in 0..=RECENT_COMMITS {
+            let c = Claim {
+                key: InfoHash({
+                    let mut k = [9; 20];
+                    k[..8].copy_from_slice(&(n as u64).to_le_bytes());
+                    k
+                }),
+                ..claim(9, 0)
+            };
+            let Claimed::Granted(t) = a.claim(WorkerId::LOCAL, c, 4) else {
+                panic!()
+            };
+            assert!(a.release(&c.key, t).is_some());
+        }
+        assert_eq!(
+            a.claim_batch(A, &[claim(30, 0)], 5, None, Some(seq)),
+            vec![BatchAnswer::Busy]
+        );
+        assert!(matches!(
+            a.claim_batch(A, &[claim(30, 0)], 5, None, Some(a.commit_seq()))[0],
+            BatchAnswer::Claimed {
+                harvested: true,
+                ..
+            }
+        ));
     }
 }
