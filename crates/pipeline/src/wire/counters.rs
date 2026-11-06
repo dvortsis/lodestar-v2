@@ -26,12 +26,17 @@ pub const VERSION: u8 = 1;
 /// Counters in one batch, at most.
 pub const MAX_COUNTERS: usize = 8192;
 
-/// The largest delta one counter carries: far above any real hour's count,
-/// and far enough below `i64::MAX` that adding deltas in the rollups can't
-/// overflow.
+/// The largest delta one counter carries: far above any real hour's count.
+/// It bounds one batch only: summing within a batch can't overflow, but
+/// across batches a worker can add to the same row again and again. The
+/// intake (WK-9) must cap what it accumulates per row, accept only hours
+/// near its own clock after offset correction, and keys from each metric's
+/// own domain (`docs/decisions/2026-11-06-WK-6.md`).
 pub const MAX_VALUE: i64 = 1 << 40;
 
 /// The latest hour a counter may name (Unix hours; about the year 245,000).
+/// A shape check only: the intake's window around its own clock is the
+/// real bound.
 pub const MAX_HOUR: i64 = i32::MAX as i64;
 
 /// One varint byte for each of a counter's five fields.

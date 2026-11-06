@@ -15,6 +15,9 @@ use lodestar_pipeline::wire::{CountersBatch, Error, MAX_PAYLOAD, ResultRecord, R
 use lodestar_store::{Codec, Compressed, Counter, Prepared, Store, StoreConfig, flags};
 
 const MAX_I64: u64 = i64::MAX as u64;
+
+/// `TextEncoding` id of Windows-1252.
+const WINDOWS_1252: u8 = 10;
 use proptest::prelude::*;
 
 fn fixture(name: &str) -> PathBuf {
@@ -249,7 +252,8 @@ fn golden_results() -> ResultsBatch {
             info_hash: InfoHash([0x33; 20]),
             info_hash_v2: Some(v2),
             name: "Caf\u{e9}".into(),
-            name_raw: Some((vec![b'C', b'a', b'f', 0xe9], 2)),
+            // Windows-1252, where 0xe9 is é.
+            name_raw: Some((vec![b'C', b'a', b'f', 0xe9], WINDOWS_1252)),
             size: 5,
             piece_len: 16_384,
             piece_count: 1,
@@ -421,6 +425,18 @@ fn unknown_flag_bits_and_bad_codes_are_refused() {
     let mut b = golden_results();
     b.records[1].torrent.name_raw = Some((vec![1], 250));
     assert_eq!(b.encode(), Err(Error::Invalid("name encoding")));
+    // The raw name must decode to `name`, and is only kept when it isn't
+    // plain UTF-8.
+    for raw in [
+        (b"Cafe".to_vec(), WINDOWS_1252),
+        // Under UTF-8 the same byte decodes to U+FFFD, not to `name`.
+        (vec![b'C', b'a', b'f', 0xe9], 0),
+        ("Caf\u{e9}".as_bytes().to_vec(), 0),
+    ] {
+        let mut b = golden_results();
+        b.records[1].torrent.name_raw = Some(raw);
+        assert_eq!(b.encode(), Err(Error::Invalid("raw name")));
+    }
     let mut b = golden_results();
     b.records[0].torrent.files.dict_id = Some(1);
     assert_eq!(b.encode(), Err(Error::Invalid("dictionary")));
@@ -774,7 +790,7 @@ fn enrichment_must_be_this_builds_and_agree_with_its_hot_columns() {
 fn arb_record() -> impl Strategy<Value = ResultRecord> {
     let names = prop::collection::vec("[ -~]{1,24}", 1..6);
     (
-        "[ -~\u{e9}\u{4e2d}]{0,40}",
+        prop::collection::vec(0x20u8..=0xff, 0..40),
         names,
         any::<[u8; 20]>(),
         prop::option::of(any::<[u8; 32]>()),
@@ -786,7 +802,7 @@ fn arb_record() -> impl Strategy<Value = ResultRecord> {
     )
         .prop_map(
             |(
-                name,
+                raw_name,
                 files,
                 v1,
                 v2,
@@ -796,6 +812,10 @@ fn arb_record() -> impl Strategy<Value = ResultRecord> {
                 (private, adult, enrich, tflags),
                 blob,
             )| {
+                // A plain ASCII name, or a legacy one kept raw beside its decoding.
+                let enc = lodestar_metainfo::TextEncoding::from_id(WINDOWS_1252).unwrap();
+                let name = enc.decode(&raw_name).into_owned();
+                let name_raw = (!raw_name.is_ascii()).then(|| (raw_name.clone(), WINDOWS_1252));
                 let files: Vec<_> = files
                     .into_iter()
                     .enumerate()
@@ -813,7 +833,7 @@ fn arb_record() -> impl Strategy<Value = ResultRecord> {
                         info_hash: InfoHash(v1),
                         info_hash_v2: v2,
                         name: name.clone(),
-                        name_raw: (!name.is_ascii()).then(|| (name.as_bytes().to_vec(), 0)),
+                        name_raw: name_raw.clone(),
                         size: sources & MAX_I64,
                         piece_len: token & MAX_I64,
                         piece_count: rule & MAX_I64,

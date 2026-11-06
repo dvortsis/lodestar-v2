@@ -17,6 +17,26 @@
 //! commit, which re-judges every remote result, §19.4), and the first
 //! source (the coordinator's lease holds it).
 //!
+//! # What the coordinator must not take from a record as sent
+//! The codec checks shape, not truth: a valid record can still lie. The
+//! intake (WK-9) **must** treat these as the worker's claims:
+//! - **The enrichment.** Search's adult term and tags come from the stored
+//!   enrichment, so storing a worker's content type would let it show
+//!   adult content with "Show adult content" off. The coordinator stores
+//!   the enrichment it rebuilds from the name and blob for every remote
+//!   record, of any enrichment version, or refuses a record whose content
+//!   type or adult kind differs from the rebuilt one. The codec has no
+//!   hook for this: the rebuild needs the coordinator's classifier and
+//!   rules.
+//! - **The provenance:** `sources` and `private_source` merge with the
+//!   lease, which is authoritative (§19.3); `metadata_at` is corrected by
+//!   the worker's clock offset.
+//! - **The row's counts:** `size` and `file_count` are checked against the
+//!   rebuilt file list.
+//!
+//! The full list, with what's left for WK-8, is in
+//! `docs/decisions/2026-11-06-WK-6.md`.
+//!
 //! # Layout, version 1
 //! All integers are LEB128 varints in their shortest form; signed ones are
 //! zigzagged first. Byte strings are a varint length, then the bytes.
@@ -417,7 +437,14 @@ fn check_strings(t: &Prepared) -> Result<()> {
     cap(t.name.len(), MAX_NAME, "name")?;
     if let Some((raw, enc)) = &t.name_raw {
         cap(raw.len(), MAX_NAME_RAW, "raw name")?;
-        TextEncoding::from_id(*enc).ok_or(Error::Invalid("name encoding"))?;
+        let enc = TextEncoding::from_id(*enc).ok_or(Error::Invalid("name encoding"))?;
+        // `Preparer` keeps the raw name only when it isn't plain UTF-8,
+        // and `name` is always its decoding.
+        if (enc == TextEncoding::UTF8 && raw.as_slice() == t.name.as_bytes())
+            || enc.decode(raw) != t.name.as_str()
+        {
+            return Err(Error::Invalid("raw name"));
+        }
     }
     cap(t.files.data.len(), MAX_BLOB, "file tree")?;
     // `Preparer` stores a blob that wouldn't shrink as is, with no

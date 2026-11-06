@@ -16,6 +16,13 @@
 //! frame to drop. Both formats are hand-written varint layouts (no serde),
 //! so the bytes are exactly what this module says and nothing else.
 //!
+//! **Versions:** each payload starts with its format version, and a decoder
+//! reads only its own. `Hello` refuses only a different protocol major
+//! (`lodestar_cluster::proto`), so a new payload version needs a protocol
+//! major bump, or a payload version in `Hello`'s capabilities that the
+//! coordinator checks. Without one, a worker on another payload version
+//! would join and then have every batch refused.
+//!
 //! The worker's id is not in either payload: the coordinator takes it from
 //! the authenticated session, never from bytes the worker chose.
 
