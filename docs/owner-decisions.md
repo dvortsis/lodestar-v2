@@ -563,6 +563,16 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **The publisher's reading of AGPL §16 is removed** from notice section 8 (owner, 2026-11-06): the summary stays, and the licence text controls.
     - **Runner addition (§2.19, §2.26):** before any version is tagged, the Legal Notice and the operator guidance are checked against that build and share one release baseline; a substantive change raises `NOTICE_VERSION` (the substance test is X-legal-docs', `docs/decisions/2026-11-04-X-legal-docs.md`; §2.33 covers who makes the call). The runner adds the step to the release checklist (build-plan §0). v0.5.1: the owner chose (2026-11-06, directly to the runner): "No, do the text-only rc.5 (a)". Version 2 on `release/v0.5.1` is corrected in rc.5 before the `v0.5.1` tag (the data-folder sentence, "within half an hour", the §8 reading of AGPL §16, the older section 9; slice `R-rc5-notice`). `docs/decisions/2026-11-06-X-legal-docs-r2.md` specifies a `LEGAL-3` slice that checks the notice's factual claims against the code in CI.
 
+49. **The SRC-4 consent texts are approved (Q1)** (owner, 2026-11-06T16:20Z, relayed by the dashboard session): "https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md?plain=1#L79 looks good". The link is the "Draft consent texts" section. Approving them lifts a consent gate, so the runner confirmed it with the owner directly (runner chat, about 2026-11-06T16:35Z). The owner chose: "Approve, bound that sentence (Recommended)".
+    - **What's approved:** all four drafts (External, Account, Restricted and Overlay) as written in `docs/decisions/2026-11-02-SRC-4.md`, unchanged since `f3222361`, with one bounded change to the Account text. **That section is the approved text,** with this change applied:
+      - Before: "Results found through your account stay on this server: Lodestar never shares them through Torznab, Stremio, exports or public peer finding, because private trackers usually forbid it."
+      - After: "Results found only through your account stay on this server: Lodestar never shares them through Torznab, Stremio, exports or public peer finding, because private trackers usually forbid it. If a public source reports the same torrent, it's treated as public."
+      - The change matches the narrowing in Legal Notice version 3 (§2.48, #534): a private finding can become public on a public sighting.
+    - **Who uses them:** SRC-15b shows these texts verbatim, with the Account change, and its PR checks its strings against this section. Where an approved text differs in substance from an earlier draft, `consent::text_version` rises for its class, as SRC-4 sets out.
+    - **X-consent-gate-052 (#537) stays.** A source class is let through only once SRC-15b's dialog shows its approved text.
+
+    This condition holds: `owner-q1`.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
