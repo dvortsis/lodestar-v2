@@ -45,7 +45,7 @@ external:
   owner-signing-cert:  # deferred by the owner (owner-decisions §2.23); no slice may depend on it
     check: "The owner has provided a code-signing certificate as a repository secret"
   # ── Added by the 2026-11-02 master-plan update (build-plan §0; decisions/2026-11-02-master-plan-r2.md) ──
-  v051-soak-verdict:  # build-plan §0.4: the held epics wait for it
+  v051-soak-verdict:  # build-plan §0.4: the held epics wait for it; soak r5 on rc.4 passed, docs/decisions/2026-11-06-soak-r5-verdict.md (2026-11-06): holds
     check: "The v0.5.1 Unraid 24 h soak has a recorded verdict (pass, or fail with a fix plan) in runner-state, a merged decisions file or a soak report under docs/soak/"
   v051-tagged:  # build-plan §0.2 Track R
     check: "The owner has tagged v0.5.1 and the GitHub release is published"
