@@ -1,16 +1,18 @@
 //! The worker side of the boundary (architecture §19.4): what a worker
 //! does between finding a key and handing a finished torrent to the
 //! coordinator. M3 runs one built-in worker ([`WorkerId::LOCAL`]) in this
-//! process; remote workers will run the same stages behind the network.
+//! process; remote workers run the same stages behind the network, built
+//! without a store by [`crate::stages::WorkerStages`].
 //!
 //! - Intake claims each new key from the coordinator (see `intake`) and
 //!   keeps the lease's token here.
 //! - The fetch pool reports its losses through [`WorkerFunnel`], which
-//!   hands them to the coordinator under that token.
+//!   hands them to the coordinator under that token ([`Reports`]).
 //! - The prepare stage parses each fetched info dict, builds the row and
 //!   blob, enriches it (release parse, classification) and runs the
 //!   content filter (§20.4) into [`Results`], so the writer only commits.
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -25,17 +27,16 @@ use lodestar_metainfo::{Info, InfoHash};
 use lodestar_peer_wire::FailureKind;
 use lodestar_sources::{FetchedKey, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{Prepared, Preparer, SourceId};
-use tokio::sync::mpsc;
 use tokio::time::{Instant, timeout_at};
 
-use crate::coordinator::Coordinator;
 use crate::gate::{Excluded, GateStats};
+use crate::stages::{Inbox, Outbox, Reports};
 use crate::unix_now;
 use crate::writer::WriterStats;
 
 /// The tokens of the leases this worker holds.
 #[derive(Debug, Default)]
-pub(crate) struct WorkerLeases(Mutex<HashMap<InfoHash, Token>>);
+pub struct WorkerLeases(Mutex<HashMap<InfoHash, Token>>);
 
 impl WorkerLeases {
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<InfoHash, Token>> {
@@ -50,6 +51,15 @@ impl WorkerLeases {
     pub fn take(&self, key: &InfoHash) -> Option<Token> {
         self.map().remove(key)
     }
+
+    /// Leases held.
+    pub fn len(&self) -> usize {
+        self.map().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// The pool's funnel on a worker: progress stages count directly, the
@@ -57,7 +67,7 @@ impl WorkerLeases {
 /// the lease's token.
 pub(crate) struct WorkerFunnel {
     pub counts: Arc<FunnelCounts>,
-    pub coordinator: Arc<Coordinator>,
+    pub reports: Arc<dyn Reports>,
     pub leases: Arc<WorkerLeases>,
     pub gate: Arc<GateStats>,
 }
@@ -84,7 +94,7 @@ impl Funnel for WorkerFunnel {
                 // Counted where the lease ends, once per key: the pool
                 // gave it up on data that didn't hash to it. A protocol
                 // violation is an `Invalid` loss too, but not this.
-                if self.coordinator.lost(key, token, loss)
+                if self.reports.lost(key, token, loss)
                     && loss == Loss::Invalid
                     && cause == Some(FailureKind::HashMismatch)
                 {
@@ -119,7 +129,7 @@ impl Funnel for WorkerFunnel {
     /// than once per key.
     fn duplicate(&self, key: &InfoHash, _cohort: i64, _source: SourceId) {
         if let Some(token) = self.leases.take(key) {
-            self.coordinator.lost(key, token, Loss::Invalid);
+            self.reports.lost(key, token, Loss::Invalid);
         }
     }
 }
@@ -128,7 +138,7 @@ impl Funnel for WorkerFunnel {
 /// record, §19.4). Provenance beyond what the worker saw comes from the
 /// coordinator's lease.
 #[derive(Debug)]
-pub(crate) struct Results {
+pub struct Results {
     pub key: InfoHash,
     pub token: Token,
     pub worker: WorkerId,
@@ -157,9 +167,11 @@ pub(crate) struct Results {
 }
 
 pub(crate) struct PrepareStage {
+    /// Who the results come from.
+    pub worker: WorkerId,
     pub preparer: Preparer,
     pub filter: Arc<Handle>,
-    pub coordinator: Arc<Coordinator>,
+    pub reports: Arc<dyn Reports>,
     pub leases: Arc<WorkerLeases>,
     pub stats: Arc<WriterStats>,
     pub gate: Arc<GateStats>,
@@ -171,12 +183,14 @@ pub(crate) struct PrepareStage {
 
 impl PrepareStage {
     /// Runs until the pool's output closes. Waiting on `out` passes the
-    /// writer's backpressure on to the pool.
-    pub async fn run(
-        mut self,
-        mut fetched: mpsc::Receiver<FetchedKey>,
-        out: mpsc::Sender<Results>,
-    ) {
+    /// writer's (or the link's) backpressure on to the pool. An item from
+    /// a byte-capped queue keeps its bytes until its result is sent.
+    pub async fn run<I, O>(mut self, mut fetched: I, out: O)
+    where
+        I: Inbox,
+        I::Item: Borrow<FetchedKey>,
+        O: Outbox<Results>,
+    {
         while let Some(first) = fetched.recv().await {
             let batch = collect(first, &mut fetched, self.batch_max, self.batch_wait).await;
             let preparer = self.preparer;
@@ -186,10 +200,11 @@ impl PrepareStage {
                 let mut preparer = preparer;
                 let done: Vec<_> = batch
                     .into_iter()
-                    .map(|fk| {
+                    .map(|item| {
+                        let fk: &FetchedKey = item.borrow();
                         let source_adult = adult.any(fk.sources);
-                        let r = prepare_one(&mut preparer, &engine, &fk, source_adult);
-                        (fk, r)
+                        let r = prepare_one(&mut preparer, &engine, fk, source_adult);
+                        (item, r)
                     })
                     .collect();
                 (preparer, done)
@@ -197,7 +212,8 @@ impl PrepareStage {
             .await
             .expect("prepare task");
             self.preparer = preparer;
-            for (fk, result) in done {
+            for (item, result) in done {
+                let fk: &FetchedKey = item.borrow();
                 let Some(token) = self.leases.take(&fk.key) else {
                     lodestar_log::log_event!(
                         crate::log_events::LEASE_MISSING,
@@ -211,7 +227,7 @@ impl PrepareStage {
                         let r = Results {
                             key: fk.key,
                             token,
-                            worker: WorkerId::LOCAL,
+                            worker: self.worker,
                             torrent: done.torrent,
                             sources: fk.sources,
                             metadata_at: unix_now(),
@@ -224,7 +240,9 @@ impl PrepareStage {
                             private_source: fk.private_source,
                             source_adult: done.source_adult,
                         };
-                        if out.send(r).await.is_err() {
+                        let sent = out.send(r).await;
+                        drop(item);
+                        if sent.is_err() {
                             return;
                         }
                     }
@@ -234,7 +252,7 @@ impl PrepareStage {
                             _ => (&self.stats.invalid, Excluded::InvalidMetainfo),
                         };
                         counter.fetch_add(1, Ordering::Relaxed);
-                        if self.coordinator.lost(&fk.key, token, loss) {
+                        if self.reports.lost(&fk.key, token, loss) {
                             self.gate.exclude(excluded, 1);
                         }
                     }
@@ -323,20 +341,21 @@ fn prepare_one(
     })
 }
 
-/// Gathers more items for the same batch, briefly.
-pub(crate) async fn collect<T>(
-    first: T,
-    rx: &mut mpsc::Receiver<T>,
+/// Gathers more items for the same batch, briefly: at most `max`, for at
+/// most `wait` after the first.
+pub(crate) async fn collect<I: Inbox>(
+    first: I::Item,
+    rx: &mut I,
     max: usize,
     wait: Duration,
-) -> Vec<T> {
+) -> Vec<I::Item> {
     let mut batch = vec![first];
     let deadline = Instant::now() + wait;
     while batch.len() < max {
         match rx.try_recv() {
             Ok(x) => batch.push(x),
-            Err(mpsc::error::TryRecvError::Disconnected) => break,
-            Err(mpsc::error::TryRecvError::Empty) => match timeout_at(deadline, rx.recv()).await {
+            Err(true) => break,
+            Err(false) => match timeout_at(deadline, rx.recv()).await {
                 Ok(Some(x)) => batch.push(x),
                 Ok(None) | Err(_) => break,
             },
@@ -352,7 +371,9 @@ mod tests {
     use lodestar_cluster::{Claim, Claimed};
     use lodestar_peer_wire::Fetched;
     use lodestar_store::{Store, StoreConfig};
+    use tokio::sync::mpsc;
 
+    use crate::coordinator::Coordinator;
     use crate::gate::Origin;
 
     fn info(name: &str) -> Vec<u8> {
@@ -403,9 +424,10 @@ mod tests {
         }
         let store = Store::open_in_memory(StoreConfig::default()).unwrap();
         let stage = PrepareStage {
+            worker: WorkerId::LOCAL,
             preparer: store.preparer(),
             filter,
-            coordinator: coordinator.clone(),
+            reports: coordinator.clone(),
             leases,
             stats: Arc::default(),
             gate: gate.clone(),
@@ -506,7 +528,7 @@ mod tests {
         let gate = Arc::new(GateStats::new(0));
         let wf = WorkerFunnel {
             counts: funnel.clone(),
-            coordinator: coordinator.clone(),
+            reports: coordinator.clone(),
             leases: leases.clone(),
             gate: gate.clone(),
         };
