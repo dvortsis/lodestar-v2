@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T20:00:00Z",
+  "updated_at": "2026-11-06T20:22:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5279,6 +5279,10 @@
     {
       "at": "2026-11-06T20:00:00Z",
       "note": "#543 CMP-0a merged (b8aa63a0); same session continues with CMP-0 in slot 4. #547 X-notice-v4 (legal session, not a runner slot) under review. GS-gate #546 draft doing red-then-green demo; file index 789.2/800 B (11 B headroom), torrent 446.7/512 B."
+    },
+    {
+      "at": "2026-11-06T20:22:00Z",
+      "note": "Next runner PR: docs/plan/2026-11-06-v052-feature-manifest.md lines ~354/398/426 say \"Legal Notice v3\" and \"rc.4 accepted v2\" - now main notice is v4, v0.5.1 ships v3. X-e2e-baseline-refresh (or next web slice): web/e2e/support/notice.ts should fail loudly (Number.isInteger(v) && v > 0, error naming LegalNotice.example.version); X-notice-v4 decisions file says three specs, now four."
     }
   ],
   "main_health": [
