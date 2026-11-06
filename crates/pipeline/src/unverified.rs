@@ -57,6 +57,15 @@ pub const SEARCHABLE: SearchableCodes = SearchableCodes {
 /// Rows one refile step judges: one store page at most.
 pub const REFILE_PAGE: usize = MAX_PAGE;
 
+/// Bytes of text one refile step judges at most ([`judged_len`]), past the
+/// first row. A page's decoded claims are bounded (SRC-1's `PAGE_BYTES`),
+/// but a details section is judged joined with the claimed and verified
+/// names (ENR-9b), so small sections on torrents with long names could
+/// otherwise make one step judge hundreds of megabytes while the writer
+/// waits. A step that reaches it ends early, and the next goes on from the
+/// last row it judged.
+pub const REFILE_JUDGED_BYTES: usize = 32 << 20;
+
 /// Keys the verification cursor hands to intake per flush (every 5 s by
 /// default, so about 13 a second). The crawler commits thousands a
 /// minute, so verification takes a few percent of the writer at most
@@ -238,7 +247,11 @@ pub fn stored_trackers(raw: &[String], room: usize) -> Vec<String> {
 
 /// The store's claims for a discovery: the source's claims and
 /// provenance, already clamped by the emitter, with no `external_ref` and
-/// no trackers for a `private_source` find. `None` when it has none.
+/// no trackers for a `private_source` find, and the details section only
+/// where the store takes it ([`attach_details`]). `None` when it has none.
+///
+/// Nothing here is judged: every caller judges what this returns
+/// ([`judge`]) before it's stored, details section included.
 pub fn store_claims(d: &Discovery) -> Option<Claims> {
     let c = d.found.claims.as_deref()?;
     let p = d.found.provenance.as_deref();
@@ -280,10 +293,11 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         },
         // Judged, as extra evidence, before it's stored ([`judge_in`]).
         adult: c.adult.clone(),
-        // Not stored until ENR-10 judges it before storage, like the
-        // adult section ([`judge_in`]).
+        // Below, once the rest is in place.
         details: None,
     };
+    // Judged before it's stored, each text as a name ([`details_texts`]).
+    attach_details(c, &mut out);
     // The trackers last, in the room the rest leaves under the total.
     // None for a private find: a private tracker's announce URL can carry
     // a passkey, which the host guard doesn't look for (runner, L3).
@@ -292,6 +306,45 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         out.trackers = stored_trackers(&c.trackers, room);
     }
     Some(out)
+}
+
+/// Puts the details section (ENR-9) in `out`, the rest of a discovery's
+/// claims: the source's section as its clamp left it, or none when it
+/// can't be stored beside them. Whatever a source sends,
+/// the section either goes in with claims the store accepts or is
+/// dropped, so a feed can't make [`Claims::check`] refuse its other
+/// claims by adding one.
+///
+/// - **Never beside an adult section** (one section a row, ENR-9). The
+///   clamp drops it there already; this doesn't rely on that.
+/// - **Never beside a description or publisher**, which the store refuses
+///   there (`details claims`): either could name a person. The clamp drops
+///   those when a section survives, so on a clamped input this keeps the
+///   section; on any other it keeps what v1 stored.
+/// - **Only when the claims, section included, pass [`Claims::check`]**
+///   (its limits, `enrichment ids`, the total). Checked before the
+///   trackers go in: they're fitted to the room the section leaves.
+///
+/// `private_source` changes nothing here (`2026-11-06-ENR-9b.md`): no field
+/// is a credential or a link, unlike `external_ref` and the trackers, and
+/// the row carries the private flag that keeps it local, as it does for
+/// the claimed name and files.
+fn attach_details(c: &lodestar_sources::Claims, out: &mut Claims) {
+    debug_assert!(out.trackers.is_empty(), "the trackers go in after");
+    out.details = None;
+    let Some(d) = &c.details else {
+        return;
+    };
+    if out.adult.is_some() {
+        return;
+    }
+    if out.description.is_some() || out.publisher.is_some() {
+        return;
+    }
+    out.details = Some(d.clone());
+    if out.check().is_err() {
+        out.details = None;
+    }
 }
 
 /// A claim a rule holds back. No name in the clear: only the sealed one,
@@ -366,8 +419,9 @@ pub fn claimed_files(c: &Claims) -> Vec<FileInfo> {
 /// claimed file path together, classified as they claim, with your
 /// classification rules; then the claimed description and the publisher,
 /// each judged as a name the same way (runner, #383: every claim text that
-/// is stored passes the filter). Tracker URLs aren't names: they're
-/// validated as URLs instead ([`store_claims`]).
+/// is stored passes the filter); then the details section's texts
+/// ([`details_texts`], ENR-9b), each judged as a name the same way. Tracker
+/// URLs aren't names: they're validated as URLs instead ([`store_claims`]).
 ///
 /// `Some` when the claims must not be stored:
 /// - a floor or core (CS) rule matched any of the texts: [`Hold::core`],
@@ -405,6 +459,10 @@ pub fn judge(
 /// that name with them. Every one is judged as adult, since only Adult
 /// items are looked up (Q2), so the Adult-only core's thresholds apply.
 ///
+/// `context` is also joined with the details section's texts, as the
+/// claimed name is ([`details_texts`]); those are judged as adult only
+/// when `adult` says so, like the claimed name.
+///
 /// **Stricter only.** The section's texts are judged as extra items: a
 /// hit adds a hold (a core one holds the hash, as for any claim), and
 /// nothing they hold can cancel a decision on another text. They're never
@@ -437,6 +495,21 @@ pub fn judge_in(
         }
         let files: &[FileInfo] = if with_files { &files } else { &[] };
         let Some(h) = judge_text(engine, &hashes, text, files, size, sealer, adult, now) else {
+            continue;
+        };
+        if h.core {
+            return Some(h);
+        }
+        found.get_or_insert(h);
+    }
+    // The details section's texts, as names, the same way (ENR-9b).
+    for text in c
+        .details
+        .as_deref()
+        .map(|d| details_texts(d, &[c.name.as_deref(), context]))
+        .unwrap_or_default()
+    {
+        let Some(h) = judge_text(engine, &hashes, &text, &[], size, sealer, adult, now) else {
             continue;
         };
         if h.core {
@@ -490,6 +563,115 @@ pub fn enrichment_texts(a: &claims::AdultEnrichment, context: Option<&str>) -> V
         }
     }
     out
+}
+
+/// The texts of a details section (ENR-9) that [`judge_in`] judges, each
+/// as a name: the canonical title, each alternative title, each distinct
+/// language tag of an alternative title with its `-`s read as spaces (a
+/// tag's subtags can carry short words, as a scene id's slug can), the
+/// source category, each genre and each newsgroup alone; then, when
+/// there's more than one, all of them together; then each of `names` (the
+/// claimed name, and the verified name of the torrent the claims are on)
+/// with each text and with all of them, since a feed's category or a
+/// plugin's genre describes that very item. Each pair is its own text, as
+/// for the adult section ([`enrichment_texts`]): the core's pair rules look
+/// within a few words, so joining every text to a name in one string would
+/// let padding in one field hide another. Empty texts and names, and a name
+/// given twice, are left out.
+///
+/// **Stricter only**, as for the adult section: the joined texts can only
+/// add a hold. Every text is still judged alone.
+///
+/// **Not judged, because they aren't text:** the posting time, the year
+/// and the match confidence are numbers. The external ids beside the
+/// section are scheme and value pairs the store checks (`id_ok`), as for
+/// every claim.
+///
+/// [`details_judged_len`] gives these texts' total length without building
+/// them.
+pub fn details_texts(d: &claims::Details, names: &[Option<&str>]) -> Vec<String> {
+    let alone = details_alone(d);
+    if alone.is_empty() {
+        return Vec::new();
+    }
+    let together = alone.join(" ");
+    let mut out: Vec<String> = alone.iter().map(|t| t.to_string()).collect();
+    if alone.len() > 1 {
+        out.push(together.clone());
+    }
+    for name in distinct_names(names) {
+        out.extend(alone.iter().map(|t| format!("{name} {t}")));
+        if alone.len() > 1 {
+            out.push(format!("{name} {together}"));
+        }
+    }
+    out
+}
+
+/// The bytes [`details_texts`] judges for `d` with `names`, counted
+/// without building them, for the refile's per-step budget
+/// ([`REFILE_JUDGED_BYTES`]).
+pub fn details_judged_len(d: &claims::Details, names: &[Option<&str>]) -> usize {
+    let alone = details_alone(d);
+    let (k, l) = (alone.len(), alone.iter().map(|t| t.len()).sum::<usize>());
+    if k == 0 {
+        return 0;
+    }
+    // Alone, then together (`k - 1` spaces).
+    let together = if k > 1 { l + k - 1 } else { 0 };
+    let mut total = l + together;
+    for name in distinct_names(names) {
+        let n = name.len() + 1;
+        total += k * n + l;
+        if k > 1 {
+            total += n + together;
+        }
+    }
+    total
+}
+
+/// The section's texts judged alone, in [`details_texts`]' order.
+fn details_alone(d: &claims::Details) -> Vec<std::borrow::Cow<'_, str>> {
+    use std::borrow::Cow;
+    let mut alone: Vec<Cow<'_, str>> =
+        Vec::with_capacity(2 + 2 * d.alt_titles.len() + d.genres.len() + d.newsgroups.len());
+    alone.extend(d.canonical_title.as_deref().map(Cow::from));
+    alone.extend(d.alt_titles.iter().map(|a| Cow::from(a.title.as_str())));
+    let mut tags: Vec<&str> = Vec::new();
+    for a in &d.alt_titles {
+        if !tags.contains(&a.language.as_str()) {
+            tags.push(&a.language);
+        }
+    }
+    alone.extend(tags.into_iter().map(|t| Cow::from(t.replace('-', " "))));
+    alone.extend(d.source_category.as_deref().map(Cow::from));
+    alone.extend(d.genres.iter().map(|g| Cow::from(g.as_str())));
+    alone.extend(d.newsgroups.iter().map(|g| Cow::from(g.as_str())));
+    alone.retain(|t| !t.trim().is_empty());
+    alone
+}
+
+/// `names` without the empty ones and without repeats, in order.
+fn distinct_names<'a>(names: &[Option<&'a str>]) -> Vec<&'a str> {
+    let mut out: Vec<&str> = Vec::with_capacity(names.len());
+    for name in names.iter().flatten() {
+        if !name.trim().is_empty() && !out.contains(name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// About the bytes of text [`judge_in`] judges for `c` with `context`:
+/// its text once ([`Claims::text_len`]), and its details section's texts
+/// exactly ([`details_judged_len`]). The refile's budget
+/// ([`REFILE_JUDGED_BYTES`]) counts this.
+pub fn judged_len(c: &Claims, context: Option<&str>) -> usize {
+    c.text_len().saturating_add(
+        c.details
+            .as_deref()
+            .map_or(0, |d| details_judged_len(d, &[c.name.as_deref(), context])),
+    )
 }
 
 /// [`judge`] for one text, as a torrent's name, with `files`.
@@ -691,7 +873,19 @@ pub fn ingest(
                 Some((id, store.torrent(id)?.map(|r| r.name)))
             }
         };
-        let context = on.as_ref().and_then(|(_, name)| name.as_deref());
+        // A details section is judged with the verified name of a torrent
+        // stored under the key too, as an adult section is (ENR-9b).
+        let verified = match (&on, &c.details) {
+            (None, Some(_)) => match store.find(&d.found.key)? {
+                Some(id) => store.torrent(id)?.map(|r| r.name),
+                None => None,
+            },
+            _ => None,
+        };
+        let context = on
+            .as_ref()
+            .and_then(|(_, name)| name.as_deref())
+            .or(verified.as_deref());
         let Some(mut h) = judge_in(engine, d.found.key.0, &c, context, ctx.sealer, adult, now)
         else {
             match on {
@@ -978,10 +1172,17 @@ pub fn refile_step(
                     ..Step::default()
                 });
             };
-            let judged: Vec<(i64, Option<Hold>)> = page
-                .iter()
-                .filter_map(|i| judge_item(&engine, i, ctx, now))
-                .collect();
+            // Up to the judging budget: the rest is the next step's.
+            let (mut judged, mut spent, mut last) = (Vec::new(), 0usize, last);
+            for (n, i) in page.iter().enumerate() {
+                let cost = i.claims.as_ref().map_or(0, |c| judged_len(c, None));
+                if n > 0 && spent.saturating_add(cost) > REFILE_JUDGED_BYTES {
+                    last = page[n - 1].id;
+                    break;
+                }
+                spent = spent.saturating_add(cost);
+                judged.extend(judge_item(&engine, i, ctx, now));
+            }
             let refiled: Vec<RefiledUnverified<'_>> = judged
                 .iter()
                 .map(|(id, h)| RefiledUnverified {
@@ -1015,7 +1216,7 @@ pub fn refile_step(
         Phase::Claims => {
             let source = SourceId::new(after_claims.1).unwrap_or(SourceId::new(0).expect("0"));
             let page = store.claims_after((after_claims.0, source), REFILE_PAGE)?;
-            let Some(last) = page.last().map(|c| (c.torrent_id, c.source.get())) else {
+            let Some(mut last) = page.last().map(|c| (c.torrent_id, c.source.get())) else {
                 return Ok(Step {
                     end: true,
                     after_item,
@@ -1024,7 +1225,8 @@ pub fn refile_step(
                 });
             };
             let mut judged: Vec<(i64, SourceId, Option<Hold>)> = Vec::new();
-            for c in &page {
+            let mut spent = 0usize;
+            for (n, c) in page.iter().enumerate() {
                 let Some(claims) = &c.claims else {
                     judged.push((c.torrent_id, c.source, None));
                     continue;
@@ -1034,12 +1236,21 @@ pub fn refile_step(
                 };
                 // Claims an always-adult source made: judged as adult too.
                 let adult = ctx.adult.has(c.source);
-                // An enrichment match is judged with the torrent's name,
-                // as at ingest (ENR-1).
-                let context = match &claims.adult {
-                    Some(_) => store.torrent(c.torrent_id)?.map(|r| r.name),
-                    None => None,
+                // An enrichment match or a details section is judged with
+                // the torrent's name, as at ingest (ENR-1, ENR-9b).
+                let context = if claims.adult.is_some() || claims.details.is_some() {
+                    store.torrent(c.torrent_id)?.map(|r| r.name)
+                } else {
+                    None
                 };
+                // Up to the judging budget: the rest is the next step's.
+                let cost = judged_len(claims, context.as_deref());
+                if n > 0 && spent.saturating_add(cost) > REFILE_JUDGED_BYTES {
+                    let prev = &page[n - 1];
+                    last = (prev.torrent_id, prev.source.get());
+                    break;
+                }
+                spent = spent.saturating_add(cost);
                 let found = judge_hashes(
                     &engine,
                     &hashes,

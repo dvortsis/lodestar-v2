@@ -2566,7 +2566,11 @@ fn promote(
         let hold = match &item.claims {
             Some(c) => {
                 let adult = promo.ctx.adult.any(item.sources) || promo.ctx.adult.has(item.source);
-                unverified::judge(promo.engine, h.0, c, promo.ctx.sealer, adult, now)
+                // A details section is judged with the verified name too,
+                // as at ingest and in the refile (ENR-9b): which arrived
+                // first must not decide whether the pair is judged.
+                let context = c.details.is_some().then_some(r.torrent.name.as_str());
+                unverified::judge_in(promo.engine, h.0, c, context, promo.ctx.sealer, adult, now)
             }
             None => None,
         };
