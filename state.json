@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T16:30:00Z",
+  "updated_at": "2026-11-06T16:25:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5210,6 +5210,10 @@
     {
       "at": "2026-11-06T16:30:00Z",
       "note": "#535 merged (cea2b506): Windows setup token + error 3 docs. #534 X-legal-docs-r2 CHANGES relayed (drop v0.5.1 exemption in \u00a72.48; 05-use-lodestar private-source promise; revisions 2.3). OWNER QUESTION sent 16:30Z: v0.5.1 notice v2 has slips (data folder, half hour, AGPL \u00a716 reading, section 9) -> (a) text-only rc.5 (recommended; delta rule: no re-soak/re-MSI; legal tests + Release dry run) or (b) ship v2. v0.5.1 go now also waits on this answer. MSI pass rule adjusted (runner): stored>0 OR dht.restart_check suppressing reason + nodes>0; monitoring ends ~16:52Z; recursive icacls cleanup after."
+    },
+    {
+      "at": "2026-11-06T16:25:00Z",
+      "note": "OWNER (direct, runner chat ~16:22Z): \"No, do the text-only rc.5 (a)\" - supersedes relayed \"b\" (16:19Z). R-rc5-notice asked of X-legal-docs-r2 session (session_01MMjhn9HcpxXjrtFJYUbxyn): branch release/rc5-notice -> release/v0.5.1, notice files only + rc5 delta doc; NOTICE_VERSION by substance test (if 3 on release, main -> 4). Then fresh Opus review, merge, Release dry run on rc.5 commit, send owner the tag commit. v0.5.1 tag moves from dba1a5c0 to the rc.5 commit; rc.4 soak/gluetun/MSI evidence carries over (text-only delta). Record in \u00a72.48 via #534; update dashboard G-v051 text in the gluetun verdict PR."
     }
   ],
   "main_health": [
