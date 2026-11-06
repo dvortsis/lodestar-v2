@@ -398,6 +398,10 @@ pub const MAX_REDIRECTS: usize = 5;
 /// up. This paces a plugin's retry loop while the kill switch is down
 /// (SRC-14b), which a host's back-off can't: the host isn't at fault.
 pub const DOWN_DELAY_MIN: Duration = Duration::from_secs(1);
+/// The longest a client waits for its source's stored state before each
+/// request ([`EgressCredentials::source_enabled`]); no answer in time is
+/// a refusal.
+pub const STATE_WAIT: Duration = Duration::from_secs(2);
 /// The longest a refusal waits before it comes back.
 pub const DOWN_DELAY_MAX: Duration = Duration::from_secs(30);
 
@@ -871,7 +875,11 @@ impl PluginEgress {
         let Some(states) = &self.states else {
             return Ok(());
         };
-        if matches!(states.source_enabled(&self.plugin).await, Ok(true)) {
+        // Bounded: this runs after the plugin's own send-time check, so a
+        // store that's slow to answer must not widen the gap between that
+        // check and the send. No answer in time sends nothing.
+        let answer = tokio::time::timeout(STATE_WAIT, states.source_enabled(&self.plugin)).await;
+        if matches!(answer, Ok(Ok(true))) {
             return Ok(());
         }
         Counters::bump(&self.counters.policy_refusals);

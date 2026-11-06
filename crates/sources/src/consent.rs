@@ -835,4 +835,36 @@ mod tests {
         assert!(s.source_consent("probe").unwrap().is_none());
         assert!(s.source_secret_names("probe").unwrap().is_empty());
     }
+
+    /// The egress's source-state check reads the store's own row for the
+    /// plugin, by its id: Enabled only, never another plugin's row
+    /// (X-tcache-recheck).
+    #[tokio::test]
+    async fn source_enabled_reads_the_plugins_own_row() {
+        let (c, store, id) = creds();
+        let other = store
+            .lock()
+            .unwrap()
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.plugin == "other")
+            .unwrap()
+            .id;
+        assert_eq!(c.source_enabled("probe").await, Ok(false));
+        store.lock().unwrap().enable_source(other, None).unwrap();
+        assert_eq!(c.source_enabled("probe").await, Ok(false), "another's row");
+        assert_eq!(c.source_enabled("other").await, Ok(true));
+        store.lock().unwrap().enable_source(id, None).unwrap();
+        assert_eq!(c.source_enabled("probe").await, Ok(true));
+        for state in [
+            SourceState::Paused,
+            SourceState::Disabled,
+            SourceState::Purged,
+        ] {
+            store.lock().unwrap().set_source_state(id, state).unwrap();
+            assert_eq!(c.source_enabled("probe").await, Ok(false), "{state:?}");
+        }
+        assert_eq!(c.source_enabled("nobody").await, Ok(false));
+    }
 }

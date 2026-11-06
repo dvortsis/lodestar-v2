@@ -258,9 +258,9 @@ fn the_check_sees_what_changed_after_a_key_was_queued() {
     for k in [[1; 20], [2; 20], [3; 20], [4; 20]] {
         assert_eq!(check(&store, &filter, k), Ok(()));
     }
-    // The floor's hash list in the store: the item goes with it.
+    // The floor's hash list in the store (the item goes with it).
     store.add_cs_hashes(&[[1; 20]], 0, T).unwrap();
-    assert_eq!(check(&store, &filter, [1; 20]), Err(Withheld::Gone));
+    assert_eq!(check(&store, &filter, [1; 20]), Err(Withheld::Held));
     // The floor in the filter, before the store has it.
     filter.update(|c| c.cs.add_hash([2; 20], lodestar_filter::Origin::Confirmed));
     assert_eq!(check(&store, &filter, [2; 20]), Err(Withheld::Blocked));
@@ -313,6 +313,68 @@ fn the_check_reads_a_stored_torrents_flags_and_holds() {
     // On the filter's floor after it was stored.
     filter.update(|c| c.cs.add_hash(partial, lodestar_filter::Origin::Confirmed));
     assert_eq!(check(&store, &filter, partial), Err(Withheld::Blocked));
+}
+
+/// The store's floor list counts even before the filter has it (a
+/// confirmation writes the store's list, releases the hold, then updates
+/// the filter), and for a stored torrent's other hash too.
+#[test]
+fn the_stores_floor_list_counts_before_the_filter_has_it() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let raw = info_bytes("Partial");
+    let info = Info::parse(&raw).unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap();
+    let key = info.primary_hash().0;
+    let filter = stand_in();
+    assert_eq!(check(&store, &filter, key), Ok(()));
+    store.add_cs_hashes(&[key], 0, T).unwrap();
+    assert_eq!(check(&store, &filter, key), Err(Withheld::Held));
+}
+
+/// An item a private source reported keeps its key private beside a
+/// public partial import stored under the same key.
+#[test]
+fn a_private_item_beside_a_public_import_stays_private() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let raw = info_bytes("Partial");
+    let info = Info::parse(&raw).unwrap();
+    let key = info.primary_hash().0;
+    let c = claims("Plain Film 2020");
+    store
+        .put_unverified(&[NewUnverified {
+            network: Network::Bt,
+            key: &key,
+            source: src,
+            private_source: true,
+            claims: Some(&c),
+            at: T,
+        }])
+        .unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap();
+    assert!(store.unverified(Network::Bt, &key).unwrap().is_some());
+    assert_eq!(check(&store, &stand_in(), key), Err(Withheld::Private));
 }
 
 /// The cursor runs the same check: a key the filter blocks isn't offered,

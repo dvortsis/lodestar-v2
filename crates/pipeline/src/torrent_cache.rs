@@ -132,6 +132,23 @@ impl Gate<'_> {
     }
 }
 
+/// Whether any of `hashes` is on the store's floor list (`cs_hashes`).
+/// `Store::held_among` reads tombstones and quarantine only, and the
+/// filter's copy of the floor can trail the store's: confirming a held
+/// hash writes the store's list, releases the hold, and only then updates
+/// the filter, in separate steps.
+fn floored(store: &Store, hashes: &[[u8; 20]]) -> Result<bool, lodestar_store::Error> {
+    let mut stmt = store
+        .connection()
+        .prepare_cached("SELECT 1 FROM cs_hashes WHERE hash = ?1")?;
+    for h in hashes {
+        if stmt.exists([&h[..]])? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn cache_on(sources: &[lodestar_store::SourceRow], plugin: &str) -> bool {
     sources
         .iter()
@@ -162,12 +179,23 @@ fn key_check(
     if engine.blocked_hash(&hashes).is_some() {
         return Ok(Err(Withheld::Blocked));
     }
-    if store.held_among(&hashes)?.into_iter().any(|h| h) {
+    if store.held_among(&hashes)?.into_iter().any(|h| h) || floored(store, &hashes)? {
         return Ok(Err(Withheld::Held));
     }
     if let Some((row, _)) = stored {
         if row.flags & (flags::PRIVATE_SOURCE | flags::PRIVATE) != 0 {
             return Ok(Err(Withheld::Private));
+        }
+        // An item a private source reported under any of its hashes keeps
+        // the key private, even beside a public import (`Store::insert`
+        // leaves the item where it is), as `interest` always held.
+        for h in &hashes {
+            if store
+                .unverified(Network::Bt, h)?
+                .is_some_and(|i| i.private_source)
+            {
+                return Ok(Err(Withheld::Private));
+            }
         }
         if row.flags & flags::HIDDEN != 0 {
             return Ok(Err(Withheld::Hidden));

@@ -1107,8 +1107,9 @@ impl Control {
     }
 
     /// Enables or disables a source and sets its priority. The priority
-    /// applies at once; whether the source runs changes at the next
-    /// start. Enabling checks the source's class condition (§18.7,
+    /// applies at once. Disabling stops its plugin at once
+    /// ([`stop_disabled`](Self::stop_disabled)); enabling it takes effect
+    /// at the next start. Enabling checks the source's class condition (§18.7,
     /// [`consent::need`]) against the store under the store's lock, and
     /// writes a new acknowledgement and the state in one transaction:
     /// - External, Restricted and Overlay need `change.consent` and
@@ -1147,6 +1148,7 @@ impl Control {
             ),
         };
         let this = self.clone();
+        let rt = tokio::runtime::Handle::current();
         let disabled = tokio::task::spawn_blocking(move || {
             let mut store = this.inner.store.lock().expect("store lock");
             let current = store
@@ -1230,12 +1232,16 @@ impl Control {
                     state = crate::log_events::state(state)
                 );
             }
-            Ok::<_, SourceError>(state == Some(SourceState::Disabled))
+            // Spawned here, right after the commit, so the stop runs even
+            // if the caller goes away while this waits.
+            Ok::<_, SourceError>(
+                (state == Some(SourceState::Disabled)).then(|| this.stop_disabled(&rt, id)),
+            )
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;
-        if disabled {
-            self.stop_disabled(id).await;
+        if let Some(stop) = disabled {
+            let _ = stop.await;
         }
         if let Some(p) = priority {
             self.state().priorities.insert(id, p);
@@ -1263,6 +1269,7 @@ impl Control {
         }
         let this = self.clone();
         let sealer = sealer.clone();
+        let rt = tokio::runtime::Handle::current();
         let disabled = tokio::task::spawn_blocking(move || {
             // Sealed before the store's lock is taken: it may create the
             // key file.
@@ -1315,12 +1322,13 @@ impl Control {
                     state = crate::log_events::state(state)
                 );
             }
-            Ok::<_, SourceError>(lapses)
+            // As in `update_source`: spawned right after the commit.
+            Ok::<_, SourceError>(lapses.then(|| this.stop_disabled(&rt, id)))
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;
-        if disabled {
-            self.stop_disabled(id).await;
+        if let Some(stop) = disabled {
+            let _ = stop.await;
         }
         self.view(id).await
     }
@@ -1332,8 +1340,17 @@ impl Control {
     /// already says Disabled, so a key it emits meanwhile isn't written
     /// (SRC-14b). Enabling it again isn't blocked by this: it runs from
     /// the next start, as every enable does.
-    async fn stop_disabled(&self, id: SourceId) {
-        self.inner.monitor.stop_source(id).await;
+    ///
+    /// Spawned on `rt`, not awaited in place, so a dropped request can't
+    /// leave a Disabled source running. Called from the blocking pool
+    /// right after the write commits.
+    fn stop_disabled(
+        &self,
+        rt: &tokio::runtime::Handle,
+        id: SourceId,
+    ) -> tokio::task::JoinHandle<usize> {
+        let monitor = self.inner.monitor.clone();
+        rt.spawn(async move { monitor.stop_source(id).await })
     }
 
     /// Starts purging source `id` (§18.1, SRC-14b), or starts it over: the
