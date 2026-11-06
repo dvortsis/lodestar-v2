@@ -116,9 +116,10 @@ pub fn slot(id: &NodeId) -> u8 {
 ///
 /// For one address, distinct slots always give distinct 21-bit prefixes:
 /// the prefix is the top of a CRC-32C over the masked address with the
-/// slot in its top 3 bits, CRC is linear, so two slots' prefixes differ by
-/// the CRC of their XOR alone, whatever the address, and none of the 7
-/// possible XORs has a CRC whose top 21 bits are zero (the
+/// slot in its top 3 bits. CRC-32C is affine for a fixed length, so two
+/// slots' hashes differ by `crc(d << 29) ^ crc(0)` (`<< 61` for IPv6), with
+/// `d` the XOR of the slots, whatever the address, and for none of the 7
+/// possible `d` are that difference's top 21 bits zero (the
 /// `slot_prefixes_differ_for_every_address` test checks all 7 for both
 /// families). So nodes behind one IP with disjoint slot sets never mint
 /// the same prefix.

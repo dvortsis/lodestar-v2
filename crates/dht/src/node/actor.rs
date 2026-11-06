@@ -593,12 +593,19 @@ fn sharded_ids(
     };
     match s.external_ip.filter(|ip| !secure_id::is_exempt(ip)) {
         Some(ip) => {
-            let keep = s.ids.len() >= want
-                && s.ids[..want]
-                    .iter()
-                    .all(|id| secure_id::is_valid(id, &ip) && shard.has_slot(secure_id::slot(id)));
+            let first = s.ids.get(..want).unwrap_or_default();
+            // Valid, in the shard, and one per slot (a hand-edited or
+            // corrupt state file could repeat one).
+            let mut used = 0u8;
+            let keep = first.len() == want
+                && first.iter().all(|id| {
+                    let bit = 1 << secure_id::slot(id);
+                    let fresh = used & bit == 0;
+                    used |= bit;
+                    fresh && secure_id::is_valid(id, &ip) && shard.has_slot(secure_id::slot(id))
+                });
             if keep {
-                s.ids[..want].to_vec()
+                first.to_vec()
             } else {
                 secure_id::virtual_ids_in(&ip, shard.id_slots(), want, rng)
             }
@@ -708,10 +715,11 @@ impl Actor {
             unsolicited_from: UnsolicitedFrom::default(),
             paused: cfg.paused,
             hints: cfg.responder_hints.then(Hints::default),
-            // A sub-range shard walks its range whatever the switch says.
-            prefixes: match &shard {
-                Some(s) => Some(Prefixes::in_range(family_count, s.prefixes())),
-                None => cfg.target_prefixes.then(|| Prefixes::new(family_count)),
+            // A shard narrower than the 256 prefixes walks its range
+            // whatever the switch says; otherwise the switch decides.
+            prefixes: match shard.as_ref().map(Shard::prefixes) {
+                Some(r) if r != (0..256) => Some(Prefixes::in_range(family_count, r)),
+                _ => cfg.target_prefixes.then(|| Prefixes::new(family_count)),
             },
             shard,
             proof: Proof::new(

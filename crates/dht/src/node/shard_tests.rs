@@ -203,6 +203,26 @@ fn a_sub_range_shard_samples_only_its_prefixes_with_the_switch_off() {
 }
 
 #[test]
+fn a_shard_over_every_prefix_leaves_targets_to_the_switch() {
+    // Fewer slots but the whole range: no cursor is needed to stay in
+    // range, so targets are drawn as without a shard.
+    let shard = Shard::new(0..256, 0b0000_0011).unwrap();
+    for switch in [false, true] {
+        let mut a = idle(None, switch, 2, None, 4);
+        let mut b = idle(Some(shard), switch, 2, None, 4);
+        assert!(
+            b.shard.is_some(),
+            "still a sub-range shard: its slots are capped"
+        );
+        assert_eq!(a.prefixes.is_some(), switch);
+        assert_eq!(b.prefixes.is_some(), switch);
+        for kind in TargetKind::ALL {
+            assert_eq!(a.routing_target(0, kind), b.routing_target(0, kind));
+        }
+    }
+}
+
+#[test]
 fn a_sub_range_shard_caps_its_ids_at_its_slots() {
     let shard = Shard::new(0..128, 0b1010_0000).unwrap();
     for want in [1, 2, 4, 16] {
@@ -233,6 +253,18 @@ fn saved_ids_outside_the_shard_are_regenerated() {
         a.ids.iter().all(|id| !saved.ids.contains(id)),
         "all regenerated"
     );
+
+    // Valid and in the shard's slots, but two in one slot (only a
+    // hand-edited or corrupt file holds that): regenerated.
+    let twice = secure_id::virtual_ids_in(&ip, 0b0000_0100, 2, &mut StdRng::seed_from_u64(4));
+    assert_eq!(secure_id::slot(&twice[0]), secure_id::slot(&twice[1]));
+    let repeated = State {
+        ids: twice.clone(),
+        ..saved.clone()
+    };
+    let e = idle(Some(shard), false, 4, Some(&repeated), 3);
+    let slots: Vec<u8> = e.ids.iter().map(secure_id::slot).collect();
+    assert_eq!(slots, [2, 3]);
 
     // Saved ids already in the shard and valid are kept.
     let kept = State {
@@ -310,9 +342,29 @@ fn the_re_id_on_an_address_change_honours_the_shard() {
     assert!(a.ids.iter().all(|id| secure_id::is_valid(id, &moved)));
 }
 
-/// Two disjoint shards: prefixes `0..split` and `split..256`, and two
-/// disjoint, non-empty slot sets.
+/// Two disjoint shards: prefix ranges that don't overlap (adjacent, or
+/// with a gap, in either order) and two disjoint, non-empty slot sets.
 fn disjoint() -> impl Strategy<Value = (Shard, Shard)> {
+    (
+        proptest::collection::vec(0..=256u16, 4),
+        1..=255u8,
+        any::<u8>(),
+        any::<bool>(),
+    )
+        .prop_filter_map(
+            "two non-empty ranges and slot sets",
+            |(mut cut, m, r, swap)| {
+                cut.sort_unstable();
+                let a = Shard::new(cut[0]..cut[1], m).ok()?;
+                let b = Shard::new(cut[2]..cut[3], r & !m).ok()?;
+                Some(if swap { (b, a) } else { (a, b) })
+            },
+        )
+}
+
+/// Two disjoint shards that cover the keyspace between them: prefixes
+/// `0..split` and `split..256`.
+fn complementary() -> impl Strategy<Value = (Shard, Shard)> {
     (1..256u16, 1..=255u8, any::<u8>()).prop_filter_map(
         "two non-empty slot sets",
         |(split, m, r)| {
@@ -354,7 +406,21 @@ proptest! {
             prop_assert!(p1.iter().all(|&p| s1.has_prefix(p)));
             prop_assert!(p2.iter().all(|&p| s2.has_prefix(p)));
             prop_assert!(p1.iter().all(|p| !p2.contains(p)));
-            prop_assert_eq!(p1.len() + p2.len(), 256, "between them, every prefix once");
+            prop_assert_eq!(p1.len(), s1.prefixes().len(), "each prefix in range once");
+            prop_assert_eq!(p2.len(), s2.prefixes().len());
+        }
+    }
+
+    #[test]
+    fn complementary_shards_cover_every_prefix_once_between_them(
+        (s1, s2) in complementary(),
+        seed: u64,
+    ) {
+        for kind in TargetKind::ALL {
+            let mut all = one_pass(&mut idle(Some(s1), false, 4, None, seed), kind);
+            all.extend(one_pass(&mut idle(Some(s2), false, 4, None, seed), kind));
+            all.sort_unstable();
+            prop_assert_eq!(all, (0..=255u8).collect::<Vec<u8>>());
         }
     }
 
@@ -376,11 +442,11 @@ proptest! {
             let mut d = idle(Some(s2), false, want, None, seed);
             vote_for(&mut c, ip);
             vote_for(&mut d, ip);
-            for (x, y, s) in [(&a.ids, &b.ids, s1), (&c.ids, &d.ids, s1)] {
-                prop_assert!(x.iter().all(|id| secure_id::is_valid(id, &ip)));
-                prop_assert!(x.iter().all(|id| s.has_slot(secure_id::slot(id))));
+            for (x, y) in [(&a.ids, &b.ids), (&c.ids, &d.ids)] {
+                prop_assert!(x.iter().chain(y.iter()).all(|id| secure_id::is_valid(id, &ip)));
+                prop_assert!(x.iter().all(|id| s1.has_slot(secure_id::slot(id))));
                 prop_assert!(y.iter().all(|id| s2.has_slot(secure_id::slot(id))));
-                prop_assert!(x.len() <= s.slot_count() && y.len() <= s2.slot_count());
+                prop_assert!(x.len() <= s1.slot_count() && y.len() <= s2.slot_count());
                 let px: Vec<u32> = x.iter().map(bep42_prefix).collect();
                 prop_assert!(y.iter().all(|id| !px.contains(&bep42_prefix(id))), "{}", ip);
             }

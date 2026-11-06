@@ -373,7 +373,8 @@ pub struct Stats {
     /// the switch on or off.
     pub target_novel_nodes: [AtomicU64; TargetKind::ALL.len()],
     /// Queries sent with a prefix target, by [`TargetKind`], and full
-    /// passes over the 256 prefixes. Only with `target_prefixes` on.
+    /// passes over the 256 prefixes (over a WK-4 shard's narrower range,
+    /// when one is set). Only with `target_prefixes` on or such a shard.
     pub target_prefix_queries: [AtomicU64; TargetKind::ALL.len()],
     pub target_prefix_cycles: AtomicU64,
 }
