@@ -238,7 +238,11 @@ pub fn stored_trackers(raw: &[String], room: usize) -> Vec<String> {
 
 /// The store's claims for a discovery: the source's claims and
 /// provenance, already clamped by the emitter, with no `external_ref` and
-/// no trackers for a `private_source` find. `None` when it has none.
+/// no trackers for a `private_source` find, and the details section only
+/// where the store takes it ([`attach_details`]). `None` when it has none.
+///
+/// Nothing here is judged: every caller judges what this returns
+/// ([`judge`]) before it's stored, details section included.
 pub fn store_claims(d: &Discovery) -> Option<Claims> {
     let c = d.found.claims.as_deref()?;
     let p = d.found.provenance.as_deref();
@@ -280,10 +284,11 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         },
         // Judged, as extra evidence, before it's stored ([`judge_in`]).
         adult: c.adult.clone(),
-        // Not stored until ENR-10 judges it before storage, like the
-        // adult section ([`judge_in`]).
+        // Below, once the rest is in place.
         details: None,
     };
+    // Judged before it's stored, each text as a name ([`details_texts`]).
+    attach_details(c, &mut out);
     // The trackers last, in the room the rest leaves under the total.
     // None for a private find: a private tracker's announce URL can carry
     // a passkey, which the host guard doesn't look for (runner, L3).
@@ -292,6 +297,45 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         out.trackers = stored_trackers(&c.trackers, room);
     }
     Some(out)
+}
+
+/// Puts the details section (ENR-9) in `out`, the rest of a discovery's
+/// claims: the source's section as its clamp left it, or none when it
+/// can't be stored beside them. Whatever a source sends,
+/// the section either goes in with claims the store accepts or is
+/// dropped, so a feed can't make [`Claims::check`] refuse its other
+/// claims by adding one.
+///
+/// - **Never beside an adult section** (one section a row, ENR-9). The
+///   clamp drops it there already; this doesn't rely on that.
+/// - **Never beside a description or publisher**, which the store refuses
+///   there (`details claims`): either could name a person. The clamp drops
+///   those when a section survives, so on a clamped input this keeps the
+///   section; on any other it keeps what v1 stored.
+/// - **Only when the claims, section included, pass [`Claims::check`]**
+///   (its limits, `enrichment ids`, the total). Checked before the
+///   trackers go in: they're fitted to the room the section leaves.
+///
+/// `private_source` changes nothing here (`2026-11-06-ENR-9b.md`): no field
+/// is a credential or a link, unlike `external_ref` and the trackers, and
+/// the row carries the private flag that keeps it local, as it does for
+/// the claimed name and files.
+fn attach_details(c: &lodestar_sources::Claims, out: &mut Claims) {
+    debug_assert!(out.trackers.is_empty(), "the trackers go in after");
+    out.details = None;
+    let Some(d) = &c.details else {
+        return;
+    };
+    if c.adult.is_some() || out.adult.is_some() {
+        return;
+    }
+    if out.description.is_some() || out.publisher.is_some() {
+        return;
+    }
+    out.details = Some(d.clone());
+    if out.check().is_err() {
+        out.details = None;
+    }
 }
 
 /// A claim a rule holds back. No name in the clear: only the sealed one,
@@ -366,8 +410,9 @@ pub fn claimed_files(c: &Claims) -> Vec<FileInfo> {
 /// claimed file path together, classified as they claim, with your
 /// classification rules; then the claimed description and the publisher,
 /// each judged as a name the same way (runner, #383: every claim text that
-/// is stored passes the filter). Tracker URLs aren't names: they're
-/// validated as URLs instead ([`store_claims`]).
+/// is stored passes the filter); then the details section's texts
+/// ([`details_texts`], ENR-9b), each judged as a name the same way. Tracker
+/// URLs aren't names: they're validated as URLs instead ([`store_claims`]).
 ///
 /// `Some` when the claims must not be stored:
 /// - a floor or core (CS) rule matched any of the texts: [`Hold::core`],
@@ -444,6 +489,21 @@ pub fn judge_in(
         }
         found.get_or_insert(h);
     }
+    // The details section's texts, as names, the same way (ENR-9b).
+    for text in c
+        .details
+        .as_deref()
+        .map(|d| details_texts(d, c.name.as_deref()))
+        .unwrap_or_default()
+    {
+        let Some(h) = judge_text(engine, &hashes, &text, &[], size, sealer, adult, now) else {
+            continue;
+        };
+        if h.core {
+            return Some(h);
+        }
+        found.get_or_insert(h);
+    }
     for text in c
         .adult
         .as_ref()
@@ -488,6 +548,44 @@ pub fn enrichment_texts(a: &claims::AdultEnrichment, context: Option<&str>) -> V
         if alone.len() > 1 {
             out.push(format!("{name} {together}"));
         }
+    }
+    out
+}
+
+/// The texts of a details section (ENR-9) that [`judge`] judges, each as
+/// a name: the canonical title, each alternative title, the source
+/// category, each genre and each newsgroup alone; then, when there's more
+/// than one, all of them together; then `name` (the claimed name) with all
+/// of them, since a feed's category or a plugin's genre describes that
+/// very name. Empty texts are left out.
+///
+/// **Stricter only**, as for the adult section: the joined texts can only
+/// add a hold. A rule that one text alone meets is met on its own.
+///
+/// **Not judged, because they aren't text:** the posting time, the year
+/// and the match confidence are numbers, and an alternative title's
+/// language is a BCP 47 tag the store checks the shape of. The external
+/// ids beside the section are scheme and value pairs the store checks
+/// (`id_ok`), as for every claim.
+pub fn details_texts(d: &claims::Details, name: Option<&str>) -> Vec<String> {
+    let mut alone: Vec<&str> =
+        Vec::with_capacity(2 + d.alt_titles.len() + d.genres.len() + d.newsgroups.len());
+    alone.extend(d.canonical_title.as_deref());
+    alone.extend(d.alt_titles.iter().map(|a| a.title.as_str()));
+    alone.extend(d.source_category.as_deref());
+    alone.extend(d.genres.iter().map(String::as_str));
+    alone.extend(d.newsgroups.iter().map(String::as_str));
+    alone.retain(|t| !t.trim().is_empty());
+    if alone.is_empty() {
+        return Vec::new();
+    }
+    let together = alone.join(" ");
+    let mut out: Vec<String> = alone.iter().map(|t| (*t).to_owned()).collect();
+    if alone.len() > 1 {
+        out.push(together.clone());
+    }
+    if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
+        out.push(format!("{name} {together}"));
     }
     out
 }
