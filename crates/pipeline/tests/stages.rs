@@ -17,8 +17,8 @@ use lodestar_pipeline::default_filter;
 use lodestar_pipeline::gate::GateStats;
 use lodestar_pipeline::source_adult::AdultSources;
 use lodestar_pipeline::stages::{
-    ByteReceiver, ByteSender, OUTBOUND_BYTES, Queues, Reports, Results, Running, Weigh,
-    WorkerLeases, WorkerStages, byte_queue,
+    ByteReceiver, ByteSender, FETCHED_BYTES, OUTBOUND_BYTES, Queues, Reports, Results, Running,
+    Weigh, WorkerLeases, WorkerStages, byte_queue,
 };
 use lodestar_sources::{
     BoxFuture, Discovery, Fetcher, Found, FunnelCounts, Loss, PoolConfig, Shutdown,
@@ -47,10 +47,11 @@ fn key_of(raw: &[u8]) -> InfoHash {
     InfoHash(lodestar_peer_wire::testing::Seed::v1(raw.to_vec()).info_hash)
 }
 
-/// Serves each key's dict from memory, counting fetches.
+/// Serves each key's dict from memory, counting fetches; a key mapped to
+/// `None` is too large to fetch.
 #[derive(Default)]
 struct MapFetch {
-    infos: Mutex<HashMap<InfoHash, Vec<u8>>>,
+    infos: Mutex<HashMap<InfoHash, Option<Vec<u8>>>>,
     calls: AtomicUsize,
 }
 
@@ -63,14 +64,17 @@ impl Fetcher for MapFetch {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let info = self.infos.lock().unwrap().get(&key).cloned();
         Box::pin(async move {
-            info.map(|info| Fetched {
-                info,
-                v2: false,
-                encrypted: false,
-                pex: Vec::new(),
-                client: None,
-            })
-            .ok_or(FailureKind::Refused)
+            match info {
+                Some(Some(info)) => Ok(Fetched {
+                    info,
+                    v2: false,
+                    encrypted: false,
+                    pex: Vec::new(),
+                    client: None,
+                }),
+                Some(None) => Err(FailureKind::Oversize),
+                None => Err(FailureKind::Refused),
+            }
         })
     }
 }
@@ -180,9 +184,10 @@ async fn recv(rx: &mut ByteReceiver<Results>) -> Results {
 }
 
 /// A worker fetches, prepares and judges with no store: a usable dict
-/// becomes its result under the lease's token and the worker's id, a hash
-/// on the floor's list and unusable metainfo are reported lost under
-/// their tokens, and no lease is left behind.
+/// becomes its result under the lease's token and the worker's id; a hash
+/// on the floor's list and unusable metainfo (the prepare stage's losses)
+/// and a dict too large to fetch (the pool's, through the funnel) are
+/// reported lost under their tokens; and no lease is left behind.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_worker_prepares_without_a_store() {
     let fetcher = Arc::new(MapFetch::default());
@@ -191,8 +196,10 @@ async fn a_worker_prepares_without_a_store() {
     let raws = [info("Fine", 16), info("Floor", 16), b"de".to_vec()];
     let keys: Vec<InfoHash> = raws.iter().map(|r| key_of(r)).collect();
     for (k, r) in keys.iter().zip(&raws) {
-        fetcher.infos.lock().unwrap().insert(*k, r.clone());
+        fetcher.infos.lock().unwrap().insert(*k, Some(r.clone()));
     }
+    let huge = InfoHash([0xee; 20]);
+    fetcher.infos.lock().unwrap().insert(huge, None);
     filter.update(|core| {
         core.cs
             .add_hash(keys[1].0, lodestar_filter::Origin::Imported)
@@ -209,6 +216,7 @@ async fn a_worker_prepares_without_a_store() {
     for (n, k) in keys.iter().enumerate() {
         w.found(*k, 100 + n as u64).await;
     }
+    w.found(huge, 103).await;
     let r = recv(&mut rx).await;
     assert_eq!(r.key, keys[0]);
     assert_eq!(r.token, Token(100));
@@ -217,8 +225,8 @@ async fn a_worker_prepares_without_a_store() {
     assert_eq!(r.torrent.files.dict_id, None);
     assert!(r.weigh() > 16, "a result weighs its heap");
     until(
-        "both losses reported",
-        || told.0.lock().unwrap().len() == 2,
+        "the three losses reported",
+        || told.0.lock().unwrap().len() == 3,
         || format!("{:?}", told.0.lock().unwrap()),
     )
     .await;
@@ -229,6 +237,7 @@ async fn a_worker_prepares_without_a_store() {
         vec![
             (keys[1], Token(101), Loss::Blocked),
             (keys[2], Token(102), Loss::Invalid),
+            (huge, Token(103), Loss::Oversize),
         ]
     );
     assert!(w.leases.is_empty());
@@ -248,7 +257,11 @@ async fn a_worker_prepares_without_a_store() {
 /// the coordinator, the queue stays within its cap and the pool stops at
 /// what the two capped queues and its sockets can hold, far short of what
 /// was found. Once the link moves again every key arrives.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+///
+/// On paused time: the fetcher answers at once, so the clock moves only
+/// when every task is idle (and no prepare batch is running), which is
+/// the point where the pool has stalled.
+#[tokio::test(start_paused = true)]
 async fn a_stalled_link_pauses_fetching() {
     const KEYS: usize = 400;
     const PAD: usize = 4096;
@@ -260,7 +273,7 @@ async fn a_stalled_link_pauses_fetching() {
         .map(|i| {
             let raw = info(&format!("Torrent {i}"), PAD);
             let k = key_of(&raw);
-            fetcher.infos.lock().unwrap().insert(k, raw);
+            fetcher.infos.lock().unwrap().insert(k, Some(raw));
             k
         })
         .collect();
@@ -294,12 +307,9 @@ async fn a_stalled_link_pauses_fetching() {
         || format!("{} bytes", out.queued_bytes()),
     )
     .await;
-    // Let the pool run on as far as it can.
-    for _ in 0..200 {
-        tokio::task::yield_now().await;
-        tokio::time::sleep(Duration::from_millis(1)).await;
-        assert!(out.queued_bytes() <= CAP, "{} > {CAP}", out.queued_bytes());
-    }
+    // The pool runs on as far as it can before the paused clock moves.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(out.queued_bytes() <= CAP, "{} > {CAP}", out.queued_bytes());
     let calls = fetcher.calls.load(Ordering::SeqCst);
     assert!(
         calls <= bound,
@@ -322,33 +332,47 @@ async fn a_stalled_link_pauses_fetching() {
     assert!(w.leases.is_empty());
 }
 
-/// What the stages hold on a remote worker at defaults, in the worst case:
-/// one info dict in the pool's channel and one in the forwarder's hand,
-/// the fetched queue (whatever is being prepared included) and what its
-/// prepared rows hold, and the outbound queue. A queue holds its cap, or
-/// one item larger than it alone. Beside the plan's Q5 estimates for the
-/// rest (pool ≤ 46, have-filter ≤ 31 during a swap, DHT ≤ 60, runtime ≤
-/// 30, inbound events 8 MiB) it stays inside the 256 MB budget (owner
-/// §1.6.5).
+/// What a remote worker's stages add to plan Q5's memory estimate, against
+/// the owner's 256 MB (§1.6.5; MB = 10⁶ bytes, the stricter reading).
+///
+/// Q5 already counts the outbound queue (8 MiB) and "prepare and filter
+/// snapshot ≤ 40 MiB", which takes the prepared rows (about 3× their
+/// dicts at most: a file is a `FileInfo` with its own strings). The stages
+/// add the fetched queue. Q5 with a have-filter swap is 223 MiB; with the
+/// fetched queue it's 227 MiB, about 238 MB.
+///
+/// Not in it, and WK-10's to cap: one dict in the pool's channel, one in
+/// the forwarder's hand, and the dict of every fetch the pool finished
+/// while waiting on its output (up to `max_sockets`), each up to
+/// `max_metadata`. At today's defaults (400 sockets, 16 MiB) that's
+/// about 6.3 GiB, so a worker needs its own cap on them; the test states
+/// the headroom that leaves.
 #[test]
 fn the_worker_queues_fit_the_budget() {
     const MIB: usize = 1 << 20;
+    const BUDGET: usize = 256 * 1_000_000;
     let q = Queues::worker();
-    let fetched = q.fetched_bytes.expect("a worker caps fetched dicts");
-    assert_eq!(fetched, 8 * MIB);
+    assert_eq!(q.fetched_bytes, Some(FETCHED_BYTES));
+    assert_eq!(FETCHED_BYTES, 4 * MIB);
     assert_eq!(OUTBOUND_BYTES, 8 * MIB);
-    let largest = FetchOptions::default().max_metadata;
-    let typical = 2 * fetched + OUTBOUND_BYTES;
-    let worst = 2 * largest + 2 * fetched.max(largest) + OUTBOUND_BYTES.max(largest);
-    let others = (46 + 31 + 60 + 30 + 8) * MIB;
-    assert!(
-        typical + others <= 256 * 1_000_000,
-        "{}",
-        (typical + others) / MIB
+    // Q5: pool 46, have-filter 31 during a swap, inbound 8, outbound 8,
+    // DHT and routing 60, prepare and filter snapshot 40, runtime 30.
+    let q5 = (46 + 31 + 8 + OUTBOUND_BYTES / MIB + 60 + 40 + 30) * MIB;
+    assert_eq!(q5, 223 * MIB);
+    let steady = q5 + FETCHED_BYTES;
+    assert!(steady <= BUDGET, "{} MB", steady / 1_000_000);
+    // The fetched queue's rows fit in Q5's prepare line.
+    const { assert!(3 * FETCHED_BYTES <= 40 * MIB) };
+
+    // The pool's side at today's defaults doesn't fit…
+    let held_by_pool = |sockets: usize, max_metadata: usize| (2 + sockets) * max_metadata;
+    let defaults = held_by_pool(
+        PoolConfig::default().max_sockets,
+        FetchOptions::default().max_metadata,
     );
-    assert!(
-        worst + others <= 256 * MIB,
-        "{} MiB",
-        (worst + others) / MIB
-    );
+    assert!(steady + defaults > BUDGET, "WK-10 must cap it");
+    // What's left for it: about 18 MB, so WK-10 caps the bytes the pool
+    // holds in finished fetches, not only their count.
+    let headroom = BUDGET - steady;
+    assert!(headroom >= 16 * 1_000_000, "{} MB", headroom / 1_000_000);
 }

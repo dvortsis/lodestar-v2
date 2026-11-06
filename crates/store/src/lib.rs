@@ -1540,6 +1540,7 @@ mod tests {
             "{plan:?}"
         );
     }
+
     /// A preparer built from the active dictionary's bytes prepares the
     /// same bytes as the store's own, with and without a dictionary and
     /// with archiving on (WK-7: a worker gets the dictionary, not a store).

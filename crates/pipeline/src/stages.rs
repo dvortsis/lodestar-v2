@@ -50,9 +50,13 @@ pub use crate::worker::{Results, WorkerLeases};
 pub const CLAIM_BATCH: usize = MAX_CLAIM_BATCH;
 /// The longest a claim waits for its batch to fill (§19.2).
 pub const CLAIM_WAIT: Duration = Duration::from_millis(250);
-/// Default cap on bytes queued for the coordinator (plan §4.3 WK-7), and
-/// on fetched info dicts waiting to be prepared, on a remote worker.
+/// Default cap on bytes queued for the coordinator on a remote worker
+/// (plan §4.3 WK-7).
 pub const OUTBOUND_BYTES: usize = 8 << 20;
+/// Default cap on fetched info dicts waiting to be prepared or being
+/// prepared, on a remote worker. Their prepared rows (up to about 3× a
+/// dict: each file becomes a `FileInfo`) count in plan Q5's "prepare ≤ 40".
+pub const FETCHED_BYTES: usize = 4 << 20;
 
 /// How a worker reports a lease's terminal loss. The coordinator counts
 /// it once, under the lease's current token (§19.3).
@@ -63,7 +67,10 @@ pub const OUTBOUND_BYTES: usize = 8 << 20;
 pub trait Reports: Send + Sync + 'static {
     /// The holder lost `key`. True if the loss counts (the token was
     /// current), so the caller's own counters stay in step with the
-    /// funnel's. A remote worker can't know yet and says true.
+    /// funnel's. A remote worker can't know yet and says true; it must
+    /// queue the report without dropping it (exactly-once, §19.3), in a
+    /// queue whose length the leases it holds bound, which the worker's
+    /// pool cap bounds (plan Q5).
     fn lost(&self, key: &InfoHash, token: Token, loss: Loss) -> bool;
 }
 
@@ -92,7 +99,9 @@ pub async fn next_batch<T: Send + 'static>(
     Some(collect(first, rx, max.max(1), wait).await)
 }
 
-/// An upper estimate of the memory a queued item holds, heap included.
+/// An estimate of the memory a queued item holds, heap included. It counts
+/// every buffer whose size the item's source controls; small fixed-size
+/// parts may be approximated.
 pub trait Weigh {
     fn weigh(&self) -> usize;
 }
@@ -116,17 +125,15 @@ impl Weigh for Results {
     fn weigh(&self) -> usize {
         let t = &self.torrent;
         let vec = |v: &Option<Vec<u8>>| v.as_ref().map_or(0, Vec::capacity);
-        let files: usize = self
-            .files
-            .iter()
-            .map(|f| {
-                size_of_val(f)
-                    + f.path
-                        .iter()
-                        .map(|s| size_of::<String>() + s.capacity())
-                        .sum::<usize>()
-            })
-            .sum();
+        let files: usize = self.files.capacity() * size_of::<lodestar_classify::FileInfo>()
+            + self
+                .files
+                .iter()
+                .map(|f| {
+                    f.path.capacity() * size_of::<String>()
+                        + f.path.iter().map(String::capacity).sum::<usize>()
+                })
+                .sum::<usize>();
         size_of::<Self>()
             + t.name.capacity()
             + t.name_raw.as_ref().map_or(0, |(v, _)| v.capacity())
@@ -137,7 +144,8 @@ impl Weigh for Results {
                 .as_ref()
                 .map_or(0, |e| e.comp.capacity() + e.data.capacity())
             + files
-            // The classification, verdict and trail: small and bounded.
+            // The classification's, verdict's and trail's heap: a few
+            // hundred bytes, independent of the torrent's size.
             + 512
     }
 }
@@ -146,11 +154,11 @@ impl Weigh for Results {
 /// count. A sender waits for room; an item larger than the whole cap
 /// waits for the queue to empty and then passes alone. An item's bytes are
 /// held until the [`Held`] the receiver hands out is dropped, so whatever
-/// the consumer is still working on counts too. At most `bytes` (1 to
-/// 4 GiB) and `count` (≥ 1) items.
+/// the consumer is still working on counts too. At most `bytes` (≥ 1,
+/// clamped to what a semaphore and a `u32` hold) and `count` (≥ 1) items.
 pub fn byte_queue<T: Weigh>(bytes: usize, count: usize) -> (ByteSender<T>, ByteReceiver<T>) {
     // Each send takes its bytes as one `u32` count of permits.
-    let bytes = bytes.clamp(1, u32::MAX as usize);
+    let bytes = bytes.clamp(1, Semaphore::MAX_PERMITS.min(u32::MAX as usize));
     let budget = Arc::new(Semaphore::new(bytes));
     let (tx, rx) = mpsc::channel(count.max(1));
     (
@@ -203,7 +211,7 @@ impl<T: Weigh + Send> ByteSender<T> {
         self.tx
             .send(Held {
                 item,
-                permit: Some(permit),
+                _permit: permit,
             })
             .await
             .map_err(|_| Closed)
@@ -251,7 +259,7 @@ impl<T> Drop for ByteReceiver<T> {
 #[derive(Debug)]
 pub struct Held<T> {
     item: T,
-    permit: Option<OwnedSemaphorePermit>,
+    _permit: OwnedSemaphorePermit,
 }
 
 impl<T> Held<T> {
@@ -262,11 +270,6 @@ impl<T> Held<T> {
     /// The item; its bytes leave the queue's count.
     pub fn into_inner(self) -> T {
         self.item
-    }
-
-    /// True while the item still counts against its queue.
-    pub fn holds_bytes(&self) -> bool {
-        self.permit.is_some()
     }
 }
 
@@ -352,11 +355,11 @@ impl Queues {
     }
 
     /// A remote worker's: fetched info dicts capped at
-    /// [`OUTBOUND_BYTES`] whether waiting or being prepared.
+    /// [`FETCHED_BYTES`] whether waiting or being prepared.
     pub const fn worker() -> Queues {
         Queues {
             fetched: 64,
-            fetched_bytes: Some(OUTBOUND_BYTES),
+            fetched_bytes: Some(FETCHED_BYTES),
             batch_max: 64,
             batch_wait: Duration::from_millis(20),
         }
@@ -421,6 +424,11 @@ pub struct Running {
 impl WorkerStages {
     /// Starts the pool on `discoveries` and the prepare stage into `out`.
     /// Must be called in a Tokio runtime.
+    ///
+    /// `out` must live as long as the stages: once it's closed the prepare
+    /// stage ends, and keys fetched after that keep their leases until the
+    /// coordinator expires them. A remote worker keeps one outbound queue
+    /// across session reconnects (or spools), never one per session.
     pub fn spawn<O: Outbox<Results>>(
         self,
         discoveries: mpsc::Receiver<Discovery>,
@@ -468,10 +476,11 @@ impl WorkerStages {
             None => tokio::spawn(stage.run(fetched_rx, out)),
             Some(bytes) => {
                 let (tx, rx) = byte_queue(bytes, q.fetched);
+                let forward = tokio::spawn(forward(fetched_rx, tx));
                 tokio::spawn(async move {
-                    let forward = forward(fetched_rx, tx);
-                    let run = stage.run(rx, out);
-                    tokio::join!(forward, run);
+                    stage.run(rx, out).await;
+                    // `out` closed: nothing more is taken from the pool.
+                    forward.abort();
                 })
             }
         };
@@ -559,7 +568,6 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert!(!blocked.is_finished(), "a full queue makes the sender wait");
         let held = rx.recv().await.unwrap();
-        assert!(held.holds_bytes());
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert!(!blocked.is_finished(), "a held item still counts");
         drop(held);
