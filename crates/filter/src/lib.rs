@@ -40,7 +40,7 @@ pub use crate::core::{
     Action, Core, CoreRule, CsList, Evidence, Field, Fixture, Hit, Item, Lists, Locked, MAX_FILES,
     Origin, Switches,
 };
-pub use engine::{Decision, Engine, Handle, ListLayer, RuleRef, Verdict};
+pub use engine::{Decision, Engine, Handle, ListLayer, RuleRef, Trail, Verdict};
 pub use hash::{TermSet, TermSetError, term_hash};
 pub use held::{HeldSet, Pending};
 pub use matcher::{Doc, Facts};

@@ -283,6 +283,9 @@ impl Committing {
                 class: a.class,
                 verdict: a.verdict,
                 version: a.version,
+                // Judged in the cache's own pass: the commit's second
+                // judgment, where one is needed, judges in full.
+                trail: lodestar_filter::Trail::default(),
                 fix: a.fix,
                 // A private key is never looked up (§18.7); whether a
                 // private source stored it since is read at the commit's
@@ -1984,12 +1987,15 @@ fn source_adult(store: &Store, adult: AdultSources, c: &Committing, unverified: 
 /// Judges a torrent again at commit (a remote worker's, one prepared
 /// under an older rule set, or one an always-adult source found that its
 /// worker didn't see), and stores what the classification rules (and the
-/// source) say now if they changed since prepare (§20.9).
+/// source) say now if they changed since prepare (§20.9). Its trail
+/// replaces the worker's, for the commit's second judgment.
 pub(crate) fn rejudge(engine: &Engine, r: &mut Results, discovered_at: i64, now: i64) -> Verdict {
     // An always-adult source found it: adult whatever the rules say.
+    let mut trail = lodestar_filter::Trail::default();
     let (verdict, fix) = with_item(r, discovered_at, now, |item, facts| {
-        crate::source_adult::judge_maybe(engine, item, facts, r.source_adult, now)
+        crate::source_adult::judge_kept(engine, item, facts, r.source_adult, now, Some(&mut trail))
     });
+    r.trail = trail;
     if fix != r.fix {
         r.torrent.enrichment = Some(crate::enrich::enrich_with_rule(
             &r.torrent.name,
@@ -2258,7 +2264,8 @@ impl Flooding {
 /// A commit judged again with SP-3 at its level and SP-4 inheriting its
 /// original, as `at` says ([`Engine::judge_at_commit`]), read as
 /// [`rejudge`] reads it ([`with_item`]), an always-adult source's find as
-/// adult too.
+/// adult too. From the first judgment's trail where it holds
+/// ([`Engine::judge_at_commit_reusing`]): the verdict is the same.
 fn judge_at_commit(
     engine: &Engine,
     r: &Results,
@@ -2267,7 +2274,7 @@ fn judge_at_commit(
     now: i64,
 ) -> Verdict {
     with_item(r, discovered_at, now, |item, facts| {
-        engine.judge_at_commit(item, facts, now, at, r.source_adult)
+        engine.judge_at_commit_reusing(&r.trail, item, facts, now, at, r.source_adult)
     })
 }
 
@@ -2732,6 +2739,7 @@ mod tests {
             class,
             verdict: Verdict::default(),
             version: 0,
+            trail: lodestar_filter::Trail::default(),
             fix: None,
             private_source: false,
             source_adult: false,

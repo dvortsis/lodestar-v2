@@ -20,7 +20,7 @@ use lodestar_classify::{Classification, FileInfo};
 
 use crate::source_adult::AdultSources;
 use lodestar_cluster::{Token, WorkerId};
-use lodestar_filter::{Engine, Facts, Handle, Item, Verdict};
+use lodestar_filter::{Engine, Facts, Handle, Item, Trail, Verdict};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_peer_wire::FailureKind;
 use lodestar_sources::{FetchedKey, Funnel, FunnelCounts, Loss, Stage};
@@ -142,6 +142,10 @@ pub(crate) struct Results {
     /// The worker's filter verdict, and the rule-set version it used.
     pub verdict: Verdict,
     pub version: u64,
+    /// What the verdict's judgment found above the pack layer, for the
+    /// writer's second judgment with SP-3 or SP-4 matching
+    /// ([`lodestar_filter::Engine::judge_at_commit_reusing`]).
+    pub trail: Trail,
     /// The classification rule applied to the stored enrichment (§20.9):
     /// Is adult or Not adult, where it differs from detection.
     pub fix: Option<bool>,
@@ -215,6 +219,7 @@ impl PrepareStage {
                             class: done.class,
                             verdict: done.verdict,
                             version: done.version,
+                            trail: done.trail,
                             fix: done.fix,
                             private_source: fk.private_source,
                             source_adult: done.source_adult,
@@ -246,6 +251,7 @@ struct Done {
     class: Classification,
     verdict: Verdict,
     version: u64,
+    trail: Trail,
     fix: Option<bool>,
     source_adult: bool,
 }
@@ -299,7 +305,9 @@ fn prepare_one(
     // Your classification rules change what's stored; an Is adult one
     // also makes the torrent meet the Adult-only core (§20.9). So does an
     // always-adult source, which no Not adult rule undoes.
-    let (verdict, fix) = crate::source_adult::judge_maybe(engine, &item, &facts, source_adult, now);
+    let mut trail = Trail::default();
+    let (verdict, fix) =
+        crate::source_adult::judge_kept(engine, &item, &facts, source_adult, now, Some(&mut trail));
     if fix.is_some() {
         prepared.enrichment = Some(crate::enrich::enrich_with_rule(&prepared.name, &files, fix));
     }
@@ -309,6 +317,7 @@ fn prepare_one(
         class,
         verdict,
         version: engine.version,
+        trail,
         fix,
         source_adult,
     })

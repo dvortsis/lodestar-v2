@@ -1833,6 +1833,9 @@ struct RuleIndex {
     clauses: Clauses,
     /// The rules' NEAR terms, whose nearness a torrent's scan records.
     near: Option<std::sync::Arc<NearTerms>>,
+    /// Which rules' query or `unless` reads tags ([`Compiled::reads_tags`]),
+    /// by position.
+    reads_tags: Vec<bool>,
 }
 
 impl RuleList {
@@ -1842,7 +1845,10 @@ impl RuleList {
             for (i, r) in self.rules.iter().enumerate() {
                 let query = compile(&r.query);
                 let g = gate(&query, &mut ix.clauses);
-                ix.compiled.push((query, r.unless.as_ref().map(compile)));
+                let unless = r.unless.as_ref().map(compile);
+                ix.reads_tags
+                    .push(query.reads_tags() || unless.as_ref().is_some_and(Compiled::reads_tags));
+                ix.compiled.push((query, unless));
                 let i = i as u32;
                 // A switch changes the list, which builds the index again,
                 // so rules switched off are simply left out.
@@ -1898,6 +1904,11 @@ impl RuleList {
     /// The rules' NEAR terms ([`NearTerms`]), if any rule has a NEAR.
     pub(crate) fn near_terms(&self) -> Option<&std::sync::Arc<NearTerms>> {
         self.index().near.as_ref()
+    }
+
+    /// Whether rule `i`'s query or `unless` reads tags.
+    pub(crate) fn reads_tags(&self, i: u32) -> bool {
+        self.index().reads_tags[i as usize]
     }
 
     /// Rule `i`'s query and `unless`, compiled.
@@ -1975,6 +1986,132 @@ impl RuleList {
             }
         }
         at
+    }
+}
+
+impl RuleList {
+    /// [`RuleList::candidates`] for two readings of one torrent that differ
+    /// only in their tags (`tags.0` and `tags.1`, the Adult reading's): the
+    /// text's keys are walked once, and every gate but a tag gate is
+    /// answered once for both, as `gates` answers it. Each list is what
+    /// [`RuleList::candidates`] returns with that reading's tags.
+    pub(crate) fn candidates_pair(
+        &self,
+        keys: &DocKeys,
+        tags: (&IdSet, &IdSet),
+        gates: impl Fn(Gate, &[Compiled]) -> bool,
+    ) -> (Vec<u32>, Vec<u32>) {
+        let ix = self.index();
+        let words = self.rules.len().div_ceil(64);
+        // Marked for both readings, then for each alone: through a tag
+        // gate, or a tag one reading has.
+        let mut both = vec![0u64; words];
+        let mut own = [vec![0u64; words], vec![0u64; words]];
+        if !ix.always_fuzzy.is_empty() {
+            let windows = keys.length_windows();
+            let have = keys.char_pairs();
+            for g in &ix.always_fuzzy {
+                let pass = g.could(windows, have);
+                both[g.rule as usize / 64] |= u64::from(pass) << (g.rule % 64);
+            }
+        }
+        // Each gate's answer, as [`RuleList::candidates`] keeps it
+        // (unknown, no or yes), or that it's a tag gate, which each
+        // reading answers from its own tags.
+        const TAG: u8 = 3;
+        let mut memo = vec![0u8; ix.gates.list.len()];
+        memo[NO_GATE as usize] = 2;
+        // Marks rule `i` for the readings in `sides` (a bit each) whose
+        // answer to its gate is yes. Any gate but a tag gate reads the
+        // same in both. A macro, so the hot loops keep it inline.
+        macro_rules! mark {
+            ($i:expr, $g:expr, $sides:expr) => {{
+                let (i, g, sides): (u32, u32, u8) = ($i, $g, $sides);
+                let m = &mut memo[g as usize];
+                if *m == 0 {
+                    *m = match ix.gates.list[g as usize] {
+                        Gate::Tag(_) => TAG,
+                        gate => 1 + u8::from(gates(gate, &ix.clauses.list)),
+                    };
+                }
+                let (w, bit) = (i as usize / 64, 1u64 << (i % 64));
+                match (*m, sides) {
+                    (2, 3) => both[w] |= bit,
+                    (2, s) => own[usize::from(s - 1)][w] |= bit,
+                    (TAG, s) => {
+                        let Gate::Tag(k) = ix.gates.list[g as usize] else {
+                            unreachable!("a tag gate")
+                        };
+                        if s & 1 != 0 && tags.0.contains(&k) {
+                            own[0][w] |= bit;
+                        }
+                        if s & 2 != 0 && tags.1.contains(&k) {
+                            own[1][w] |= bit;
+                        }
+                    }
+                    _ => {}
+                }
+            }};
+        }
+        for &(i, g) in &ix.always {
+            mark!(i, g, 3);
+        }
+        for run in ix.always_prefix.chunk_by(|a, b| (a.0, a.1) == (b.0, b.1)) {
+            let (key, n, ..) = run[0];
+            if !keys.could_start(key) {
+                continue;
+            }
+            for (_, _, i, prefix) in run {
+                if !prefix.is_empty()
+                    && keys
+                        .texts_starting(n, key)
+                        .any(|t| t.starts_with(&**prefix))
+                {
+                    mark!(*i, NO_GATE, 3);
+                }
+            }
+        }
+        if !ix.by_key.is_empty() {
+            // The text's keys and the tags both readings have, then the
+            // tags only one has.
+            let walk = keys
+                .text
+                .keys()
+                .map(|k| (k, 3))
+                .chain(
+                    tags.0
+                        .iter()
+                        .map(|k| (k, if tags.1.contains(k) { 3 } else { 1 })),
+                )
+                .chain(
+                    tags.1
+                        .iter()
+                        .filter(|k| !tags.0.contains(*k))
+                        .map(|k| (k, 2)),
+                );
+            for (k, sides) in walk {
+                if !ix.filter.may_have(*k) {
+                    continue;
+                }
+                if let Some(rules) = ix.by_key.get(k) {
+                    for &(i, g) in rules {
+                        mark!(i, g, sides);
+                    }
+                }
+            }
+        }
+        let [a, b] = own.map(|own| {
+            let mut at = Vec::with_capacity(64);
+            for (w, (mut bits, shared)) in own.into_iter().zip(&both).enumerate() {
+                bits |= shared;
+                while bits != 0 {
+                    at.push(w as u32 * 64 + bits.trailing_zeros());
+                    bits &= bits - 1;
+                }
+            }
+            at
+        });
+        (a, b)
     }
 }
 

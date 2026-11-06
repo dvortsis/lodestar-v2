@@ -482,6 +482,7 @@ placement:
   - ENR-*
   - X-enr-page-flag
   - X-sp4-followups
+  - X-commit-rejudge-reuse
   - LEGAL-1
   - LEGAL-2
 - ws: ws-imp-tools
