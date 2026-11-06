@@ -148,6 +148,7 @@ fn found(clock: &dyn Clock, keys: &[u8]) -> Vec<ClaimItem> {
             source: 1,
             strategy: 2,
             discovered_ms: clock.now_ms(),
+            hints: vec![],
         })
         .collect()
 }
@@ -159,11 +160,12 @@ fn token_of(item: &GrantItem) -> u64 {
     }
 }
 
+/// A terminal outcome. (`Fetched` keeps the lease until its commit, WK-0.)
 fn fetched(key: [u8; 20], token: u64) -> OutcomeItem {
     OutcomeItem {
         key,
         token,
-        outcome: Outcome::Fetched,
+        outcome: Outcome::PeerFound { reason: 10 },
     }
 }
 
@@ -761,7 +763,7 @@ async fn a_malformed_claim_stops_the_session() {
         // Source 64 doesn't exist (sources are a 64-bit set).
         let bad = ClaimItem {
             source: 64,
-            ..found(&*c.clock, &[1])[0]
+            ..found(&*c.clock, &[1])[0].clone()
         };
         link.send(ToCoordinator::Claim(ClaimBatch {
             batch: 1,
