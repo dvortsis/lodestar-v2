@@ -5397,7 +5397,8 @@
         "P-v052-cut notes: docs/releases/v0.5.2.md is 500/450 words (material-composer cap); main was 508 before #553; trim at the cut",
         "slices.yaml WK-2 owns: add crates/lodestar/src/cli/mod.rs and main.rs (one variant/arm/mod line each; runner 23:14Z)",
         "Owner \u00a72.19 flag at WK-2 merge: `lodestar worker --rotate-key` (worker stopped; rotate->reseal->retire)",
-        "WK-2 shared: crates/lodestar/Cargo.toml dev-deps tokio test-util (no lock change; accepted 23:26Z, same pattern as WK-7). WK-2 also reads LODESTAR_JOIN (address, not secret) beside LODESTAR_TOKEN per Unraid template"
+        "WK-2 shared: crates/lodestar/Cargo.toml dev-deps tokio test-util (no lock change; accepted 23:26Z, same pattern as WK-7). WK-2 also reads LODESTAR_JOIN (address, not secret) beside LODESTAR_TOKEN per Unraid template",
+        "Add slices.yaml X-fetch-meta-reserve: note it is required for workers (WK-10 budget), plus the shutdown drain deadline"
       ],
       "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
     },
@@ -5411,6 +5412,17 @@
         "zh empty-list doubled full stop: strip '\u3002' as well as '.' (ConsentDialog.svelte:93)",
         ".size-limit.mjs comment: 30.55 KB, not 30.54",
         "{name}/{egress} filled before the ** split: escape or render as text nodes (cosmetic; manifest-sourced)"
+      ]
+    },
+    {
+      "id": "fetch-pool-notes",
+      "from": "#554 review (non-blocking) 23:30Z; \u00a72.26 numbers accepted: max_held_bytes 64 MiB, max_metadata 16 MiB single-machine, 4 MiB proposed for workers (WK-10 decides)",
+      "items": [
+        "WK-10/X-fetch-meta-reserve: pool shutdown drain needs a deadline for a remote worker (link consumer): narrow race where a just-finished Ok fetch lands in the outbox at shutdown and out.send never returns when the consumer is stalled; requeue the rest after the deadline as out_closed does",
+        "WK-10: worker held budget 4 MiB + WK-7's 227 MiB ~= 231 MiB (242 MB) of 256 MB; sizing max_sockets alone leaves ~3 sockets, so X-fetch-meta-reserve is effectively required for workers",
+        "fetch_held_full_total help text (metrics.rs) should say it counts estimate stops too and not outbox backpressure",
+        "tests: estimate gate (flying x estimate) and receiver closing while running",
+        "pool.rs drop_source on outbox: also remove from recent_order; snapshot comment at ~799 overstates restore filtering; doc comment on PoolIo::out (pool must be only sender)"
       ]
     }
   ],
