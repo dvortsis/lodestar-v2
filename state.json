@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T16:52:00Z",
+  "updated_at": "2026-11-06T17:15:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5224,6 +5224,10 @@
     {
       "at": "2026-11-06T16:52:00Z",
       "note": "#536 WK-4 merged (db7b48bd); session archived. Review non-blocking: (1) actor.rs on_external_ip `fits` does not reject duplicate slots among kept saved ids (needs hand-crafted state; one-line fix) -> fold into CR-1c (next actor.rs slice); (2) WK-10: shard fixed per node lifetime, so a live Assign change restarts the DHT node, not the process; (3) shard_tests assumes >=4 samples/tick. WK-10 notes also get the docs/metrics.md target-prefix update. ENR-9 launched slot 3."
+    },
+    {
+      "at": "2026-11-06T17:15:00Z",
+      "note": "rc.4 MSI check: runner verdict PASS pending the dht.restart_check line (suppressing reason) from the 15:52:04Z start: 70 min one PID, no errors, UI up, intake_received 30 (DHT alive), stored 0 explained by 6 h first_start suppression + PIA VPN no inbound. Recursive icacls cleanup still owed. X-win-refusal-ux additions: (a) Event 7024 renders ServiceSpecific(3) as \"The system cannot find the path specified\" (service.rs already uses ServiceSpecific) - write the real reason to the Event Log, consider a customer-bit code; guide error-3 row should quote that text; (b) guide Ch.4: MSI firewall rule opens DHT on Private profile only (keep: security default); explain Public networks/VPN adapters crawl slower, how to mark a trusted network Private, never widen to Public. #540 R-rc5-notice review running; X-flake-states-clock helper running (e2e insights-paused snapshot broke ~12:00Z, deterministic)."
     }
   ],
   "main_health": [
