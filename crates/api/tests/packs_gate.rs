@@ -9,8 +9,9 @@
 //!
 //! The list of operations is checked against [`Change`] with an
 //! exhaustive match ([`new_since_rp0`]), so an operation added later
-//! fails to compile here until it's classified, and the scenarios must
-//! cover every one marked new.
+//! fails to compile here until it's classified. The scenarios must cover
+//! one example of each operation marked new, kept by hand in `all`
+//! beside the scenarios: whoever marks a new arm adds its example there.
 //!
 //! The corpora, the budget and the upgrade test are in `crates/filter`
 //! (`tests/packs_gate.rs` and `tests/props.rs`).
@@ -387,6 +388,69 @@ async fn every_new_op_that_weakens_needs_the_password() {
         .collect();
     assert_eq!(new.len(), 4);
     assert_eq!(covered, new, "every new operation has a weakening scenario");
+}
+
+/// Every row of the tables that hold or release: the review queue, the
+/// tombstones and the filter hits.
+fn holds(f: &Fixture) -> Vec<String> {
+    let store = f.api.store.lock().unwrap();
+    [
+        "SELECT hex(hash) || ' ' || rule || ' ' || at || ' ' || expires_at AS r FROM quarantine ORDER BY hash",
+        "SELECT hex(hash) || ' ' || rule || ' ' || at AS r FROM tombstones ORDER BY hash",
+        "SELECT id || ' ' || hex(hash) || ' ' || rule || ' ' || action || ' ' || at AS r FROM filter_hits ORDER BY id",
+    ]
+    .iter()
+    .map(|q| {
+        let rows: Option<String> = store
+            .connection()
+            .query_row(&format!("SELECT group_concat(r, ',') FROM ({q})"), [], |r| r.get(0))
+            .unwrap();
+        rows.unwrap_or_default()
+    })
+    .collect()
+}
+
+/// Accepting a narrowing version through the API, confirmed with the
+/// password, releases nothing it held: the review queue, the tombstones
+/// and the filter hits are as they were, row for row (Q7; RP-3's review
+/// queue then marks what the new version wouldn't hold).
+#[tokio::test]
+async fn accepting_through_the_api_releases_nothing() {
+    let f = fixture(true);
+    {
+        let s = f.api.store.lock().unwrap();
+        let c = s.connection();
+        let at = 1_700_000_000i64;
+        c.execute(
+            "INSERT INTO quarantine (hash, rule, sealed, at, expires_at) VALUES (?1, 'MW-2', NULL, ?2, 9999999999)",
+            (vec![9u8; 20], at),
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'FK-2', ?2)",
+            (vec![8u8; 20], at),
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO filter_hits (hash, rule, action, at, evidence) VALUES (?1, 'MW-2', ?2, ?3, x'')",
+            (vec![9u8; 20], Action::Hide.code() as i64, at),
+        )
+        .unwrap();
+    }
+    let before = holds(&f);
+    let c = logged_in(&f).await;
+    for rule in ["MW-2", "FK-2"] {
+        gated(
+            &f,
+            &c,
+            json!({ "op": "accept_pack_versions", "rules": [rule] }),
+        )
+        .await;
+        assert_eq!(holds(&f), before, "accepting {rule} releases nothing");
+    }
+    let e = f.api.engine.current();
+    assert!(!e.pack_versions.state(PackRule::Mw2).pending());
+    assert!(!e.pack_versions.state(PackRule::Fk2).pending());
 }
 
 /// Strengthening forms of the same operations need no password, so the

@@ -253,12 +253,15 @@ function serve(mock: OpenApiMock): State {
 		if (a.confirm && password !== PW) {
 			return { status: 401, body: { error: { code: 'bad_password', message: 'Wrong.' } } };
 		}
-		// What the server checks before it applies a weakening change.
-		if (change.op === 'accept_pack_versions' && a.confirm) {
-			expect(change.versions).toEqual(a.pack_versions);
-		}
-		if (change.op === 'set_pack_override' && a.confirm) {
-			expect(change.base).toBe(a.pack_base);
+		// What the server checks before it applies a weakening change: a 409, which the spec's
+		// own checks of what was sent then explain.
+		if (
+			a.confirm &&
+			((change.op === 'accept_pack_versions' &&
+				JSON.stringify(change.versions) !== JSON.stringify(a.pack_versions)) ||
+				(change.op === 'set_pack_override' && change.base !== a.pack_base))
+		) {
+			return { status: 409, body: { error: { code: 'changed_since_preview', message: 'Moved.' } } };
 		}
 		switch (change.op) {
 			case 'accept_pack_versions':
@@ -362,11 +365,16 @@ test('a weakening change asks for the password; a wrong one sends nothing furthe
 	await page.getByTestId('change-apply').click();
 	await expect(page.getByTestId('change-password')).toHaveAttribute('aria-invalid', 'true');
 	await expect(page.getByRole('alert')).toContainText('That password is wrong');
+	// The wrong one went once, with the previewed base, and changed nothing.
+	expect(sent(mock)).toHaveLength(1);
+	expect(sent(mock)[0].password).toBe('not the password');
+	expect(sent(mock)[0].change).toMatchObject({ op: 'set_pack_override', base: 1 });
 	expect(s.mw1).toBeNull();
 	await password.fill(PW);
 	await page.getByTestId('change-apply').click();
 	await expect(applied(page)).toBeVisible();
-	const override = sent(mock).at(-1)!;
+	expect(sent(mock)).toHaveLength(2);
+	const override = sent(mock)[1];
 	expect(override.change).toEqual({
 		op: 'set_pack_override',
 		rule: 'MW-1',
@@ -386,7 +394,8 @@ test('a weakening change asks for the password; a wrong one sends nothing furthe
 	await page.getByLabel('Password').fill(PW);
 	await page.getByTestId('change-apply').click();
 	await expect(applied(page)).toBeVisible();
-	const accept = sent(mock).at(-1)!;
+	expect(sent(mock)).toHaveLength(3);
+	const accept = sent(mock)[2];
 	expect(accept.change).toEqual({
 		op: 'accept_pack_versions',
 		rules: ['MW-2'],

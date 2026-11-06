@@ -994,7 +994,7 @@ fn sigs_at_cap(items: &[Item]) -> std::sync::Arc<lodestar_filter::spam_sigs::Spa
 /// looked up, so the clones inherit their original's hide). The held sets
 /// are timed again, both ways, on an install an earlier build set up,
 /// whose new versions are pending and judged in shadow ([`installed`]).
-/// The budget is per judgment, as RP-4 set it (#495): a flooded commit's
+/// The budget is per judgment, as RP-4 set it (#495): a flooded or cloned commit's
 /// two judgments together are reported, not held
 /// (`docs/decisions/2026-11-06-RP-G.md`).
 ///
@@ -1155,17 +1155,34 @@ fn budget() {
     assert!(clones >= items.len() / 10, "{clones} clones");
     {
         let e = installed(false, &sigs);
+        let mut inherited = 0;
         for (i, item) in items.iter().enumerate() {
             let sig = lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(item.files));
             if sig.and_then(|s| sigs.get(s)).is_some() {
+                // SP-4 decides, unless prepare's own decision was already
+                // at least a hide.
                 let d = at_commit(&e, item, &facts[i]).decision;
+                let before = e.judge(item, Some(&facts[i]), 0).decision;
+                let sp4 = d.as_ref().is_some_and(|d| {
+                    d.rule == lodestar_filter::RuleRef::Pack(lodestar_filter::PackRule::Sp4)
+                });
+                let held = before
+                    .as_ref()
+                    .is_some_and(|d| d.action >= lodestar_filter::Action::Hide);
                 assert!(
-                    d.as_ref()
-                        .is_some_and(|d| d.action >= lodestar_filter::Action::Hide),
-                    "a clone inherits its original's hide at commit: {d:?}"
+                    sp4 || held,
+                    "a clone inherits its original's hide through SP-4 at commit: {d:?}"
                 );
+                inherited += usize::from(sp4);
             }
         }
+        println!("SP-4 decides {inherited} of the {clones} clones at commit");
+        // The rest are already hidden in prepare by other packs (the
+        // budget's names are scene-style, which UC-3 reads).
+        assert!(
+            inherited >= items.len() / 10,
+            "SP-4 decides a tenth of the set at commit: {inherited}"
+        );
     }
     let mut drifted = Vec::new();
     // The fastest calibration of any attempt so far, and whether a busy
@@ -1209,17 +1226,24 @@ fn budget() {
             sets.push((what, shape_rules(shape), false));
         }
         // Prepare's judgment of each torrent, then (`commit`) the writer's
-        // second one.
-        let prepare = |e: &lodestar_filter::Engine, what: &str| {
+        // second one. `none`: assert that no rule of yours decides (the
+        // rule sets alone; with words neutralized a negation can match).
+        let prepare = |e: &lodestar_filter::Engine, what: &str, none: bool| {
             time(what, &|i| {
                 let v = e.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
-                no_rule_of_yours(&v, what);
+                if none {
+                    no_rule_of_yours(&v, what);
+                }
+                std::hint::black_box(v);
             })
         };
-        let commit = |e: &lodestar_filter::Engine, what: &str| {
+        let commit = |e: &lodestar_filter::Engine, what: &str, none: bool| {
             time(what, &|i| {
                 let v = at_commit(e, std::hint::black_box(&items[i]), &facts[i]);
-                no_rule_of_yours(&v, what);
+                if none {
+                    no_rule_of_yours(&v, what);
+                }
+                std::hint::black_box(v);
             })
         };
         let counts = |e: &lodestar_filter::Engine, what: &str| {
@@ -1236,15 +1260,21 @@ fn budget() {
         for (what, rules, held) in &sets {
             engine.rules = rules.clone().into();
             counts(&engine, what);
-            cases.push((what.clone(), prepare(&engine, what), *held));
+            cases.push((what.clone(), prepare(&engine, what, true), *held));
             if *held {
                 let what = format!("{what}, at commit");
-                cases.push((what.clone(), commit(&engine, &what), true));
+                cases.push((what.clone(), commit(&engine, &what, true), true));
             }
         }
-        // A flooded clone's commit pays both judgments: reported, not
-        // held, since the budget is per judgment (RP-4, #495).
-        let what = "engine, packs on, 10,000 rules, mixed, a flooded commit's two judgments";
+        // The cases below are all on the mixed set, as on `main` before
+        // RP-G: the loop above left the last shape's rules in place.
+        engine.rules = mixed_rules().into();
+        // A flooded or cloned commit pays both judgments: the writer
+        // judges again whenever SP-3's level or SP-4's set applies.
+        // Reported, not held, since the budget is per judgment (RP-4,
+        // #495).
+        let what =
+            "engine, packs on, 10,000 rules, mixed, a flooded or cloned commit's two judgments";
         let t = time(what, &|i| {
             std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
             std::hint::black_box(at_commit(
@@ -1288,9 +1318,9 @@ fn budget() {
             "every override bound to the version that applies"
         );
         let what = "engine, packs on, 10,000 rules, mixed, 4 pack overrides (1 with unless)";
-        cases.push((what.to_owned(), prepare(&engine, what), true));
+        cases.push((what.to_owned(), prepare(&engine, what, false), true));
         let what = format!("{what}, at commit");
-        cases.push((what.clone(), commit(&engine, &what), true));
+        cases.push((what.clone(), commit(&engine, &what, false), true));
         engine.pack_overrides = Default::default();
         // The mixed set again with common words neutralized (CSX-5
         // *Neutralize term*): every keyword entry reads the name and
@@ -1308,9 +1338,9 @@ fn budget() {
             })
             .collect();
         let what = "engine, packs on, 10,000 rules, mixed, 5 common words neutralized";
-        cases.push((what.to_owned(), prepare(&engine, what), true));
+        cases.push((what.to_owned(), prepare(&engine, what, false), true));
         let what = format!("{what}, at commit");
-        cases.push((what.clone(), commit(&engine, &what), true));
+        cases.push((what.clone(), commit(&engine, &what, false), true));
         drop(engine);
         // An install an earlier build set up (RP-G): the versions this
         // build changed or added (MW-2@2, FK-2@2, SP-4) pending, judged in
@@ -1319,9 +1349,9 @@ fn budget() {
         for (what, rules, held) in sets.iter().filter(|(_, _, held)| *held) {
             pending.rules = rules.clone().into();
             let what = what.replacen("packs on", "packs on, versions pending in shadow", 1);
-            cases.push((what.clone(), prepare(&pending, &what), *held));
+            cases.push((what.clone(), prepare(&pending, &what, true), *held));
             let what = format!("{what}, at commit");
-            cases.push((what.clone(), commit(&pending, &what), true));
+            cases.push((what.clone(), commit(&pending, &what, true), true));
         }
         drop(pending);
         let after = calibration("after");
