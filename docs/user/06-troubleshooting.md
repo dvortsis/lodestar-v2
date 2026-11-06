@@ -54,7 +54,8 @@ If you can't run magneticod again, write the changes in on a copy with the `sqli
 
 These steps apply once the Windows installer is published. At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is private: only SYSTEM, Administrators and `NT SERVICE\Lodestar` have permissions, nothing is inherited, and nothing inside is a link. If the check fails, the service refuses to start. Windows shows only "service-specific error 3". The reason goes to `C:\Windows\Temp\lodestar-service.log`, which only administrators can read.
 
-The installer's Repair doesn't fix this case. It also refuses a folder that isn't private and already holds data.
+> [!WARNING]
+> Don't delete the folder, even if the log suggests it: it holds your library, your password and your keys. Don't run the installer's Repair either: it also refuses a folder that isn't private and already holds data. The steps below remove only the extra account.
 
 To fix it:
 
@@ -64,19 +65,21 @@ To fix it:
     Get-Content "C:\Windows\Temp\lodestar-service.log" -Tail 20
     ```
 
-   **Result:** The last line says the folder isn't private and why.
+   **Result:** The last line says the folder isn't private and why, for example that it grants access to an account shown as a long `S-1-5-21-…` number. It also suggests Repair or deleting the folder. Do neither: Repair refuses this folder, and deleting it loses your library and keys.
 2. See which account was added. Replace `<user name>` with your Windows user name:
 
     ```powershell
     icacls "C:\ProgramData\Lodestar" /T | Select-String "<user name>"
     ```
 
-   **Result:** Lines show your account with its rights.
-3. Remove only that account. Replace `<COMPUTER>` with your computer's name and `<user name>` with your user name:
+   **Result:** Lines show your account with its rights, such as `C:\ProgramData\Lodestar DESKTOP-1\alex:(OI)(CI)(F)`. The account name is the text after the path and before `:(`.
+3. Remove only that account. Replace `<account>` with the account name exactly as step 2 printed it, for example `DESKTOP-1\alex` or `AzureAD\AlexSmith`:
 
     ```powershell
-    icacls "C:\ProgramData\Lodestar" /remove "<COMPUTER>\<user name>" /T /C
+    icacls "C:\ProgramData\Lodestar" /remove "<account>" /T /C
     ```
+
+   If step 2 printed nothing, use the `S-1-5-21-…` number from the log in step 1 instead, with a `*` in front: `/remove "*S-1-5-21-…"`.
 
    **Result:** `icacls` reports the files it processed. It removes that one account's entries and changes nothing else.
 4. Start the service:
@@ -85,9 +88,15 @@ To fix it:
     Start-Service Lodestar
     ```
 
-   **Result:** The service runs, and the web page loads.
+   Wait about 10 seconds, then check that it is still running:
 
-If the log names something else, such as a link inside the folder, the same check applies to it. Don't delete the folder: it holds your library.
+    ```powershell
+    Get-Service Lodestar
+    ```
+
+   **Result:** `Status` shows `Running`, and the web page loads. If it shows `Stopped`, the check refused again: repeat step 1 and read the new reason.
+
+The check also needs the folder's owner, and the owner of each item directly inside it, to be SYSTEM, Administrators or the service. It also refuses any link or junction inside the folder. If the log names one of those, don't change it yourself: ask for help ([section 6.4](#64-get-help)).
 
 ## 6.4 Get help
 

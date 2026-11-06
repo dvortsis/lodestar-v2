@@ -7,6 +7,7 @@ Windows and Linux installs are **(planned)**: nothing is published yet. This cha
 > - Explain why Windows shows "Windows protected your PC" for Lodestar.
 > - Check a download against its [checksum](glossary.md#checksum) with PowerShell.
 > - Decide when to run the file and when to stop.
+> - Find the [setup token](glossary.md#setup-token) on Windows without changing the data folder's permissions.
 
 ## 4.1 Understand the SmartScreen warning
 <!-- index: SmartScreen; unsigned; code signing -->
