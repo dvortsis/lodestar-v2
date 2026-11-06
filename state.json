@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T03:28:57Z",
+  "updated_at": "2026-11-06T03:32:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5136,6 +5136,10 @@
     {
       "at": "2026-11-06T03:28:57Z",
       "note": "Runner decision (#527 review): file:mkv v8 deferred. Design A preferred; bundle with the next slice needing v8 or take at G-v1-10m on the reference runner. A drops the ext split tokens (mp, 4) and keeps phrase/word matches, with a differential test. Also: 10M rerun of X-search-files-6's final head (cold, warm, NRT, fresh store) if the session couldn't."
+    },
+    {
+      "at": "2026-11-06T03:32:56Z",
+      "note": "Small API doc fix: crates/api/src/dto/ops.rs restart_required doc still says 'starts, stops or picks up its new settings at the next restart'; since #525 a stop is immediate. Regenerate openapi.json + schema.d.ts. Fold into X-egress-state-watch or the next api-touching slice."
     }
   ],
   "main_health": [
