@@ -5334,6 +5334,17 @@
         "After SRC-15b merges: Opus slice flips consent_text_approved (crates/pipeline/src/control.rs) per class whose dialog ships the \u00a72.49 text; update ops/tests.rs + consent_gate.rs; fold into X-consent-gate-polish (add dep SRC-15b + control.rs owns) in next runner PR",
         "Settle text_version(Account) from SRC-15b's decisions note"
       ]
+    },
+    {
+      "id": "runner-pr-next-sources",
+      "from": "SRC-15b API gaps 2026-11-06T21:30Z",
+      "items": [
+        "slices.yaml: X-sources-api-spec (opus, core, /security-review): manifest credential spec (names, labels, kind secret|username, required) + expose in GET /sources; expose config_schema; purge preview count (dry-run) endpoint; openapi regen",
+        "slices.yaml: SRC-15c (sonnet): Account consent dialog from credential spec + generated config forms from config_schema + purge preview counts; deps SRC-15b, X-sources-api-spec",
+        "SRC-15b narrowed: External/Restricted/Overlay dialogs + purge + all-four strings test",
+        "Docs mismatch: server requires admin password for purge vs \u00a710.10.7/plan Q13 'no password' \u2014 settle docs (server stricter = safe side)",
+        "X-consent-gate-polish/lift: Account isn't gated today"
+      ]
     }
   ],
   "main_health": [
