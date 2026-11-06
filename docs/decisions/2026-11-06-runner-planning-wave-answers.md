@@ -21,7 +21,7 @@ Runner, 2026-11-06. The owner answered owner-queue item 10, the planning-wave qu
 | v0.8 Q3, per-worker consent wording | The runner drafts it in PL-5's decisions file: today's text plus which machine's IP the requests leave from. **Approving the text stays with the owner**, as for the Q1 consent texts, so `owner-v08-q3` stays unmet. | Consent text is the owner's to approve (§2.37's Q1 item). | PL-7b, once the text is approved |
 
 ## Not covered by this reply (the owner confirms each one by name)
-**Answered 2026-11-06T05:23Z**, and confirmed to the runner directly (owner-decisions §2.47): "Go with the runner's recommendation on all". Each recommendation below is now the decision. Only OQ6's `SECURITY.md` contact is still to be named.
+**Answered 2026-11-06T05:23Z**, and confirmed to the runner directly (owner-decisions §2.47): "Go with the runner's recommendation on all". Each recommendation below is now the decision. OQ6's contact is GitHub private vulnerability reporting only, with no email address (§2.47).
 
 | Question | Why it stays with the owner | The plan's recommendation, offered again |
 |---|---|---|

@@ -808,7 +808,7 @@ conditions:
     who: you
     label: You decide whether 1.0 also gets a Linux Docker soak (M8 OQ4)
   owner-m8-q6:
-    met: false
+    met: true
     who: you
     label: You choose how security findings are disclosed, and SECURITY.md's contact (M8 OQ6)
   bench-runner:
@@ -1343,9 +1343,9 @@ owner_queue:
   when: When convenient
 - n: 10
   type: action
-  action: 'Name the security contact for SECURITY.md and switch on GitHub private vulnerability reporting (M8 OQ6; you accepted the rest, §2.47). Also yours when you want: winget after 1.0 (M6 Q6)'
-  unblocks: M8-SEC-0 (SECURITY.md) and, through it, the 1.0 security reviews
-  when: Before M8-SEC-0
+  action: Submit Lodestar to winget, if you want it (M6 Q6)
+  unblocks: A winget listing for Windows users
+  when: After 1.0, optional
 gates:
 - id: G-v05
   name: v0.5 MVP exit

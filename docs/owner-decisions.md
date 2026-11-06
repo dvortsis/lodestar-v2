@@ -508,7 +508,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **v0.8 Q3:** the runner drafts the per-worker consent wording. Approving the text stays with the owner, as for the Q1 consent texts, so `owner-v08-q3` stays unmet.
     - **Still the owner's own steps:** M6 Q6 (winget, after 1.0 if wanted), Q8 (the nightly signing key, owner-queue item 5) and Q14 (the G-m6 manual installs and the release approval, `owner-m6-manual`).
 
-47. **The runner's recommendation on every question §2.46 left with the owner** (owner, 2026-11-06T05:23Z, relayed by the dashboard session): "Go with the runner's recommendation on all". The dashboard session showed each of the 16 questions with the plan's recommendation. The owner then confirmed it directly to the runner (runner chat, 2026-11-06 about 05:26Z), with the security and content-safety loosenings named: "Yes, record all 16". Each question is now decided as the recommendation in `docs/decisions/2026-11-06-runner-planning-wave-answers.md`, "Not covered":
+47. **The runner's recommendation on every question §2.46 left with the owner** (owner, 2026-11-06T05:23Z, relayed by the dashboard session): "Go with the runner's recommendation on all". The dashboard session showed each of the 16 questions with the plan's recommendation. The owner then confirmed it directly to the runner (runner chat, 2026-11-06 about 05:26Z), with the security and content-safety loosenings named: "Yes, record all 16". The owner also confirmed the five largest loosenings by name, relayed by the dashboard session at about 05:27Z: "I confirm these: * The Stremio CORS rule and URL-path token. * The privileged MSI updater helper. * `LODESTAR_TOKEN` accepted from the environment on Docker and Unraid. * Sealed names kept on worker disks. * The companion running under Lodestar's own account." Each question is now decided as the recommendation in `docs/decisions/2026-11-06-runner-planning-wave-answers.md`, "Not covered":
     - **v0.7:**
       - **Q1:** the Stremio addon ships, off by default. It has a dedicated read-only, revocable `stremio` key in the URL path, redacted from logs, and CORS `*` on the addon routes only. Every filter and pack applies.
       - **Q2:** private-tracker IRC announces ship off, with Account consent and `private_source`. There's no shipped definition for a tracker whose rules forbid bots.
@@ -525,13 +525,13 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - **wkq2:** `LODESTAR_TOKEN` is accepted only for the first join.
     - **M8:**
       - **OQ1:** the self-hosted bench runner, with mitigations (a)–(d).
-      - **OQ6:** private vulnerability reporting, a named contact in `SECURITY.md`, and unfixed findings listed publicly by id and severity only.
+      - **OQ6:** private vulnerability reporting, with unfixed findings listed publicly by id and severity only. **The contact** (owner, relayed about 05:28Z): "GitHub private vulnerability reporting only. This should have been activated." So `SECURITY.md` names no email address and points to the repository's "Report a vulnerability" button. The runner checked on 2026-11-06: the repository's private vulnerability reporting is on (`GET /repos/dvortsis/lodestar-v2/private-vulnerability-reporting` returns `enabled: true`).
     - **M6 Q13:** the privileged MSI helper with its six rules, so the PK plan's main branch stands.
     - **v0.8:**
       - **Q1:** public Nostr events and Lemmy posts only.
       - **Q4:** a third-party adult claim only hides an item until local detection runs.
 
-    Every one of these conditions holds except `owner-m8-q6`. That one waits on the owner naming the `SECURITY.md` contact and switching on private vulnerability reporting (owner-queue item 10). The owner's own steps M6 Q6, Q8 and Q14 are unchanged.
+    Every one of these conditions holds, `owner-m8-q6` included. The owner's own steps M6 Q6, Q8 and Q14 are unchanged.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.

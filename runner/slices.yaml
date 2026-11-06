@@ -120,7 +120,7 @@ external:
     check: "The owner has answered plan 2026-11-06 (M8) OQ3 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-m8-q4:  # M8 plan §5 OQ4 (a Linux Docker soak on the RC); gates G-v1-soak-linux; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (M8) OQ4 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-m8-q6:  # M8 plan §5 OQ6 (disclosure and SECURITY.md); gates M8-SEC-0
+  owner-m8-q6:  # M8 plan §5 OQ6 (disclosure and SECURITY.md); gates M8-SEC-0; answered by owner-decisions §2.47 (2026-11-06): holds
     check: "The owner has answered plan 2026-11-06 (M8) OQ6 (recorded in docs/owner-decisions.md or a decisions file)"
   bench-runner:  # M8 plan §4.1; gates G-v1-10m
     check: "The dedicated runner is registered with the label approved under M8 OQ1, and a manual bench-10m run on main passed its smoke step"
