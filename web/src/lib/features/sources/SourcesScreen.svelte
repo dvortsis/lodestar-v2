@@ -1,7 +1,8 @@
 <script lang="ts">
 	// Settings → Sources (§18.8, §10.10): every source plugin of this build, grouped by kind, with its
-	// status, enable toggle, priority and 24 h yield. Consent dialogs, credentials and purge are
-	// SRC-15b. This screen shows the server's last answer and replaces a row with the PATCH's reply.
+	// status, enable toggle, priority and 24 h yield, and the consent, credentials and purge dialogs
+	// (SRC-15b), loaded on first use. Until a dialog's chunk arrives the screen simply stays as it is. This screen shows the server's last answer and replaces a row
+	// with the PATCH's reply.
 	import { onDestroy, onMount } from 'svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
@@ -29,6 +30,27 @@
 	// Counts the PATCH replies taken in: a list read that started before the latest reply is older
 	// than it, so its answer is dropped instead of undoing that change.
 	let replies = 0;
+	type Dialog = { kind: 'consent' | 'purge'; id: number } | null;
+	let dialog = $state.raw<Dialog>(null);
+	let dialogOpen = $state(false);
+	const target = $derived(dialog ? (sources?.find((x) => x.id === dialog!.id) ?? null) : null);
+	// Each dialog's code is fetched on first use; until it arrives the screen stays as it is.
+	let ConsentDialog = $state.raw<typeof import('./ConsentDialog.svelte').default | null>(null);
+	let PurgeDialog = $state.raw<typeof import('./PurgeDialog.svelte').default | null>(null);
+	async function show(kind: NonNullable<Dialog>['kind'], s: Source) {
+		try {
+			const root = await import('./dialogs-root');
+			if (kind === 'consent') ConsentDialog ??= await root.consentDialog();
+			else PurgeDialog ??= await root.purgeDialog();
+		} catch {
+			problem = m.sources_error_network();
+			return;
+		}
+		dialog = { kind, id: s.id };
+		dialogOpen = true;
+	}
+	/** The enable body a dialog sends: the PATCH schema has no `password` (it is never returned). */
+	type EnableBody = SourcePatch & { password?: string };
 
 	const groups = $derived(sources ? group(sources) : []);
 
@@ -48,6 +70,15 @@
 	const mark = (id: number, on: boolean) =>
 		(busy = on ? [...busy, id] : busy.filter((x) => x !== id));
 
+	/** Sends one change and takes the reply as the row; throws what the server refused with. */
+	async function apply(s: Source, body: EnableBody): Promise<void> {
+		const updated = await api.patch('/sources/{id}', { path: { id: s.id }, body });
+		if (destroyed) return;
+		replies++;
+		sources = sources!.map((x) => (x.id === s.id ? updated : x));
+		announce = m.sources_saved({ name: s.name });
+	}
+
 	/** Sends one change; the reply replaces the row. Resolves to whether the server took it. */
 	async function change(s: Source, body: SourcePatch): Promise<boolean> {
 		if (busy.includes(s.id)) return false;
@@ -55,11 +86,7 @@
 		announce = '';
 		mark(s.id, true);
 		try {
-			const updated = await api.patch('/sources/{id}', { path: { id: s.id }, body });
-			if (destroyed) return true;
-			replies++;
-			sources = sources!.map((x) => (x.id === s.id ? updated : x));
-			announce = m.sources_saved({ name: s.name });
+			await apply(s, body);
 			return true;
 		} catch (e) {
 			if (destroyed) return false;
@@ -84,6 +111,18 @@
 
 {#if problem}
 	<div data-testid="sources-problem"><Banner kind="error">{problem}</Banner></div>
+{/if}
+
+{#if target && dialog}
+	{#if dialog.kind === 'consent' && ConsentDialog && target.consent !== 'none' && target.consent !== 'account'}
+		<ConsentDialog
+			bind:open={dialogOpen}
+			source={target}
+			onenable={(body) => apply(target, { enabled: true, ...body })}
+		/>
+	{:else if dialog.kind === 'purge' && PurgeDialog}
+		<PurgeDialog bind:open={dialogOpen} source={target} onfinished={load} />
+	{/if}
 {/if}
 
 {#if sources}
@@ -116,6 +155,8 @@
 								busy={busy.includes(s.id)}
 								onenable={(enabled) => change(s, { enabled })}
 								onpriority={(priority: Priority) => change(s, { priority })}
+								onsetup={() => show('consent', s)}
+								onpurge={() => show('purge', s)}
 							/>
 						{/each}
 					</ul>

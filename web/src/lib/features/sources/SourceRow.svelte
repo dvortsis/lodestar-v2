@@ -1,12 +1,13 @@
 <script lang="ts">
 	// One source (§18.8): name, status, risk and consent class, enable toggle, priority and the 24 h
-	// yield. The toggle never asks the server to turn on a source that still needs setup (consent,
-	// credentials, password): the dialogs for those are SRC-15b, and the server's gate (§18.7) stays
-	// the only judge. While a change is in flight the controls stay focusable (a disabled control
+	// yield. Turning on a source that still needs setup (consent or password) opens its
+	// dialog; an Account source that needs credentials waits for SRC-15c instead of sending anything; the dialog sends the enable, and the server's gate (§18.7)
+	// stays the only judge. While a change is in flight the controls stay focusable (a disabled control
 	// would drop the keyboard user's place) and simply ignore input.
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import Button from '$lib/ui/controls/Button.svelte';
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import Select from '$lib/ui/fields/Select.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
@@ -30,12 +31,17 @@
 		/** Resolves to whether the server took the change. */
 		onenable: (enabled: boolean) => Promise<boolean>;
 		onpriority: (priority: Priority) => Promise<boolean>;
+		/** Opens the consent dialog for this source's class. */
+		onsetup: () => void;
+		onpurge: () => void;
 	}
-	let { source: s, busy, onenable, onpriority }: Props = $props();
+	let { source: s, busy, onenable, onpriority, onsetup, onpurge }: Props = $props();
 
 	const id = $derived(`source-${s.id}`);
 	const status = $derived(statusOf(s));
 	const need = $derived(setupNeed(s));
+	// The switch shows the server's state: a change it didn't take is put back by assigning this.
+	let on = $derived(s.enabled);
 	const locale = () => currentLocale();
 	const options = $derived(PRIORITIES.map((p) => ({ value: p, label: priorityText(p) })));
 	const canPrioritise = $derived(s.editable.includes('priority'));
@@ -52,13 +58,13 @@
 	async function toggled(e: Event & { currentTarget: HTMLInputElement }) {
 		const el = e.currentTarget;
 		const want = el.checked;
-		// Turning on is the server's gate; a source that needs setup, or a change already in
-		// flight, never reaches it.
+		// A source that needs setup opens its dialog; a change already in flight is ignored.
 		if (busy || (want && need !== null)) {
-			el.checked = !want;
+			el.checked = on = !want;
+			if (!busy) onsetup();
 			return;
 		}
-		if (!(await onenable(want))) el.checked = !want;
+		if (!(await onenable(want))) el.checked = on = !want;
 	}
 
 	async function prioritised(e: Event & { currentTarget: HTMLSelectElement }) {
@@ -87,8 +93,8 @@
 			<Toggle
 				label={m.sources_enable()}
 				aria-label={m.sources_toggle_name({ name: s.name })}
-				checked={s.enabled}
-				disabled={!canEnable || (need !== null && !s.enabled)}
+				bind:checked={on}
+				disabled={!canEnable || (need === 'credentials' && !s.enabled)}
 				aria-busy={busy}
 				aria-describedby={need !== null ? `${id}-need` : undefined}
 				onchange={toggled}
@@ -139,5 +145,10 @@
 		<span data-testid="{id}-found">{m.sources_found({ count: found })}</span>
 		<span aria-hidden="true">·</span>
 		<span data-testid="{id}-stored">{m.sources_stored({ count: stored })}</span>
+		{#if s.state !== 'purged'}
+			<Button dense class="ms-auto" onclick={onpurge} data-testid="{id}-purge">
+				{m.sources_purge_action()}<span class="sr-only"> {s.name}</span>
+			</Button>
+		{/if}
 	</div>
 </li>

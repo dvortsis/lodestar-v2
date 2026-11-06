@@ -35,14 +35,16 @@ describe('Sources screen', () => {
 		expect(writes()).toHaveLength(0);
 	});
 
-	it('shows needs-setup and never sends an enable for a source the gate would refuse', async () => {
+	it('shows needs-setup and opens the consent dialog instead of sending an enable', async () => {
 		setup();
 		await screen.findByTestId('source-1');
 		expect(screen.getByTestId('source-1-status').textContent).toContain('Needs setup');
 		expect(screen.getByTestId('source-1-need').textContent).toContain('sites it contacts');
 		const toggle = within(screen.getByTestId('source-1')).getByRole('switch') as HTMLInputElement;
-		expect(toggle.disabled).toBe(true);
+		expect(toggle.disabled).toBe(false);
 		await fireEvent.click(toggle);
+		await screen.findByTestId('consent-text');
+		expect(toggle.checked).toBe(false);
 		expect(writes()).toHaveLength(0);
 	});
 
