@@ -21,4 +21,4 @@
 - These pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test` for the crates you touch and their dependants (per crate if the disk is short; say so), any fuzz target the plan names (10 minutes), `cd tools/status-connector && npm test`, and `/security-review` if the notes ask for it.
 - No fixed sleeps: wait on a condition with a deadline of at least 10 s.
 
-Branch `slice/WK-6`. Open the PR titled "WK-6: Results and Counters codecs: versioned, bounded, fuzzed, no ". Follow `.claude/skills/steward/SKILL.md`. Never merge. Push once per round. Message the runner (session_01EYhgh4JX3AmHzKXPjYCoUg) with the PR number and head, using the `send_message` tool of the Claude Code Remote MCP server.
+Branch `slice/WK-6`. Open the PR titled "WK-6: <a short imperative title, under 60 characters>". Follow `.claude/skills/steward/SKILL.md`. Never merge. Push once per round. Message the runner (session_01EYhgh4JX3AmHzKXPjYCoUg) with the PR number and head, using the `send_message` tool of the Claude Code Remote MCP server.
