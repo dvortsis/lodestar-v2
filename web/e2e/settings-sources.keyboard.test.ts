@@ -1,6 +1,6 @@
 // Settings → Sources (SRC-15a) against the OpenAPI mock, by keyboard alone, with axe: rows grouped
-// by kind, status as icon and text, a source that needs setup keeps its switch off and sends
-// nothing, and a switch or priority change shows only what the server answers.
+// by kind, status as icon and text, a source that needs setup opens its consent dialog and sends
+// nothing until asked, and a switch or priority change shows only what the server answers.
 // Waits are conditions only.
 import { expectNoA11yViolations } from './a11y';
 import { expect as baseExpect, test } from './support/test';
@@ -68,10 +68,22 @@ test.describe('keyboard: Settings → Sources', () => {
 		await expectNoA11yViolations(page);
 	});
 
-	test('never sends an enable for a source that needs setup', async ({ page, go }) => {
+	test('a source that needs setup opens its consent dialog and sends nothing until asked', async ({
+		page,
+		go
+	}) => {
 		await go('/settings/sources');
 		const toggle = page.getByRole('switch', { name: 'Nyaa: on' });
-		await expect(toggle).toBeDisabled();
+		await expect(toggle).toBeEnabled();
+		await toggle.focus();
+		await page.keyboard.press('Space');
+		const dialog = page.getByRole('dialog', { name: 'Nyaa connects to outside services.' });
+		await expect(dialog).toBeVisible();
+		await expect(toggle).not.toBeChecked();
+		await expectNoA11yViolations(page);
+		await page.keyboard.press('Escape');
+		await expect(dialog).toBeHidden();
+		await expect(toggle).toBeFocused();
 		await expect(toggle).not.toBeChecked();
 		expect(sent).toEqual([]);
 	});

@@ -75,3 +75,35 @@ export const prowlarr = source({
 	health: { harvested_24h: 12, last_error: 'timeout', last_run: 1, running: false, stored_24h: 0 }
 });
 export const sourceList = (...sources: Source[]) => ({ sources });
+
+// SRC-15b: one source of each consent class that asks for something.
+export const lime = source({
+	id: 3,
+	name: 'LimeTorrents',
+	kinds: ['discovery'],
+	consent: 'restricted',
+	consent_required: true,
+	consent_version: 'v1-ab',
+	needs: 'consent',
+	password_required: true,
+	endpoints: ['https://lime.example/search?q={q}']
+});
+export const darknet = source({
+	id: 4,
+	name: 'Darknet',
+	kinds: ['network'],
+	consent: 'overlay',
+	consent_required: true,
+	consent_version: 'v1-cd',
+	needs: 'consent',
+	password_required: true,
+	networks: ['bt_i2p']
+});
+export const tracker = source({
+	id: 5,
+	name: 'Private Tracker',
+	kinds: ['importer'],
+	consent: 'account',
+	needs: 'credentials',
+	endpoints: ['https://tracker.example/api', 'https://tracker.example/rss']
+});
