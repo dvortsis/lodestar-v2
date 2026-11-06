@@ -1,0 +1,121 @@
+# Golden corpus for the Results size gate (WK-6, architecture §19.8).
+# Real-shaped torrents with invented names: the mix of single-file videos,
+# seasons, albums, software, packs and one large dataset a DHT crawl sees.
+#
+#   s <piece KiB> <bytes> <name>      a single-file torrent
+#   m <piece KiB> <name>              a multi-file torrent; its files follow:
+#   f <bytes> <path>                  one file (segments split on "/")
+#   r <count> <bytes> <pattern>       <count> files, {n} = 01, 02, ...
+#
+# Change it only with the size figures in docs/decisions/2026-11-06-WK-6.md.
+
+s 2048 2147483648 Harbor.Lights.2019.1080p.BluRay.x264-NOVALINE.mkv
+s 4096 4831838208 The.Quiet.Orchard.2021.1080p.WEB-DL.DDP5.1.H.264-FLUXCAT.mkv
+s 1024 734003200 Paper.Kites.S02E07.720p.HDTV.x264-ORBIT.mkv
+s 8192 15032385536 Northbound.Signal.2018.2160p.UHD.BluRay.HDR.HEVC-STRATA.mkv
+s 512 367001600 cooking_with_mara_ep14_sd.mp4
+s 2048 1503238553 Glass.River.S01E03.1080p.WEB.h264-LANTERN.mkv
+s 1024 1073741824 Midnight.Atlas.2016.720p.BRRip.x264.AAC-ROVER.mp4
+s 4096 6442450944 Iron.Meadow.2022.1080p.BluRay.DTS-HD.MA.5.1.x264-QUARTZ.mkv
+s 256 157286400 lecture_linear_algebra_week03.mp4
+s 2048 2684354560 Saltwater.Nights.2020.1080p.AMZN.WEB-DL.DDP5.1.H.264-TIDE.mkv
+s 1024 943718400 Copper.Hills.S03E11.720p.WEB.x264-PINECONE.mkv
+s 16384 32212254720 Silent.Frontier.2017.REMUX.2160p.UHD.BluRay.TrueHD.Atmos-VAULT.mkv
+s 512 524288000 Weekend.Garden.Show.2023.11.04.480p.x264-SPROUT.mkv
+s 2048 1932735283 The.Long.Field.2015.1080p.BluRay.x265.10bit-MOSAIC.mkv
+s 1024 805306368 Dune.Walkers.S01E01.Pilot.720p.HDTV.x264-ECHO.mkv
+s 4096 4294967296 Autumn.Protocol.2023.1080p.WEB-DL.H.264.AAC-HALCYON.mp4
+s 4096 4700372992 ubuntu-like-distro-24.04-desktop-amd64.iso
+s 1024 1288490188 OpenWorld_Sandbox_Game_v1.4.2_Setup.zip
+s 256 104857600 field_recordings_2019_mix.flac
+s 1024 1395864371 Lantern.Bay.S05E02.1080p.WEB.H264-CANDLE.mkv
+
+m 2048 Paper.Kites.S01.1080p.WEB-DL.DDP5.1.H.264-ORBIT
+r 10 1610612736 Paper.Kites.S01E{n}.1080p.WEB-DL.DDP5.1.H.264-ORBIT.mkv
+f 1024 Paper.Kites.S01.nfo
+
+m 1024 Glass.River.Complete.Season.2.720p.HDTV.x264
+r 13 734003200 Glass.River.S02E{n}.720p.HDTV.x264.mkv
+r 13 51200 Subs/Glass.River.S02E{n}.en.srt
+
+m 4096 Northbound.Signal.S01.2160p.NF.WEB-DL.DDP5.1.HDR.HEVC-STRATA
+r 8 6442450944 Northbound.Signal.S01E{n}.2160p.NF.WEB-DL.DDP5.1.HDR.HEVC-STRATA.mkv
+
+m 512 Copper.Hills.S04.480p.x264-PINECONE
+r 22 367001600 Copper.Hills.S04E{n}.480p.x264-PINECONE.mkv
+f 2048 Copper.Hills.S04.nfo
+f 65536 Sample/copper.hills.s04e01.sample.mkv
+
+m 2048 Weekly.Science.Hour.2024.Complete.1080p.WEB.h264
+r 24 1288490188 Weekly.Science.Hour.2024.E{n}.1080p.WEB.h264.mkv
+
+m 1024 Dune.Walkers.S02.720p.BluRay.x264-ECHO
+r 12 1073741824 Dune.Walkers.S02E{n}.720p.BluRay.x264-ECHO.mkv
+f 3072 dune.walkers.s02.720p.bluray.x264-echo.nfo
+
+m 256 The Velvet Owls - Lanterns on the Water (2018) [FLAC]
+r 11 31457280 {n} - The Velvet Owls - Track {n}.flac
+f 524288 cover.jpg
+f 2048 The Velvet Owls - Lanterns on the Water.cue
+f 4096 The Velvet Owls - Lanterns on the Water.log
+
+m 128 Mira Castell - Night Trains (2021) [MP3 320]
+r 14 9437184 {n}. Mira Castell - Night Trains Part {n}.mp3
+f 262144 folder.jpg
+
+m 256 Various Artists - Deep Coast Sessions Vol. 3 (2CD) [FLAC]
+r 12 36700160 CD1/{n} - Deep Coast Artist {n} - Session Cut {n}.flac
+r 11 36700160 CD2/{n} - Deep Coast Artist {n} - Session Cut {n}.flac
+f 786432 Artwork/front.jpg
+f 655360 Artwork/back.jpg
+
+m 128 Low Harbor - Static Bloom EP (2023) [WEB FLAC]
+r 5 41943040 Low Harbor - Static Bloom EP - {n} Bloom {n}.flac
+f 1048576 cover.png
+
+m 256 The Paper Lanterns - Discography (2009-2020) [MP3 V0]
+r 12 8388608 2009 - First Light/{n} - Song {n}.mp3
+r 10 8388608 2013 - Second Tide/{n} - Song {n}.mp3
+r 11 8388608 2017 - Third Shore/{n} - Song {n}.mp3
+r 9 8388608 2020 - Fourth Wind/{n} - Song {n}.mp3
+
+m 128 Ambient Rooms - Rain Study (2022)
+r 6 52428800 Ambient Rooms - Rain Study - Part {n}.wav
+
+m 4096 Skyline Builder Deluxe Edition v2.1-GOG
+f 1048576 setup_skyline_builder_2.1.exe
+r 24 2147483648 setup_skyline_builder_2.1-{n}.bin
+f 524288 Extras/manual.pdf
+f 2097152 Extras/soundtrack_sample.mp3
+
+m 1024 PhotoKit Studio 12.3 x64 Multilingual
+f 734003200 PhotoKit_Studio_12.3_x64.exe
+f 2048 Readme.txt
+r 40 102400 Presets/Portrait/preset_{n}.xmp
+r 40 102400 Presets/Landscape/preset_{n}.xmp
+r 30 51200 Locales/lang_{n}.dll
+
+m 2048 Starfall Outpost v0.9.7 (Early Access)
+r 120 33554432 Data/Textures/tex_pack_{n}.pak
+r 80 8388608 Data/Audio/ambience_{n}.bank
+r 60 1048576 Data/Scripts/module_{n}.lua
+r 25 4194304 Engine/Binaries/lib_{n}.dll
+f 104857600 StarfallOutpost.exe
+
+m 512 Classic Novels Collection - 250 Titles [EPUB]
+r 250 1048576 Classic Novel Title Number {n} - Author Name {n}.epub
+
+m 256 Programming Reference Pack 2024 [PDF]
+r 64 15728640 Programming Topic {n} - A Practical Guide (Edition {n}).pdf
+
+m 512 Coastline Photography Set 2023 [JPG]
+r 120 8388608 IMG_20230{n}.jpg
+
+m 256 Wallpapers 4K Mixed Pack 07
+r 90 6291456 wallpaper_4k_{n}.png
+f 1024 info.txt
+
+m 4096 Open Weather Archive 2000-2023 (CSV)
+r 24 1073741824 {n}/stations_{n}.csv.gz
+r 2000 4194304 stations/station_{n}.csv
+f 65536 README.md
