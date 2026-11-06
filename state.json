@@ -5433,6 +5433,15 @@
         "tests: estimate gate (flying x estimate) and receiver closing while running",
         "pool.rs drop_source on outbox: also remove from recent_order; snapshot comment at ~799 overstates restore filtering; doc comment on PoolIo::out (pool must be only sender)"
       ]
+    },
+    {
+      "id": "X-win-log-held-open-notes",
+      "from": "#555 review (non-blocking); \u00a72.26 ceiling accepted 23:50Z: current lodestar.log stops at 2x cap, pair <= 4x cap (64 MiB)",
+      "items": [
+        "Count refused console records and write one marker line after rotation resumes; console byte metric counts refused bytes as written",
+        "Doc wording: 'lodestar.log and lodestar.log.1 together hold at most 4x the cap' (not 'the folder')",
+        "Decisions note: setup-token line can be refused from lodestar.log in the held-file edge case (still in lodestar.jsonl)"
+      ]
     }
   ],
   "main_health": [
