@@ -863,6 +863,125 @@ fn a_provisional_skew_still_scales_and_warns() {
     assert!(s.notes.iter().any(|n| n.contains("% off")));
 }
 
+/// An engine with the shipped core, every pack on and the pack versions
+/// an install has (RP-G), sharing `sigs` as SP-4's set. `upgraded`: a
+/// store an earlier build set up with every pack on, so the versions
+/// this build changed or added are pending, judged in shadow until
+/// accepted; otherwise a fresh store, which applies every current
+/// version.
+fn installed(
+    upgraded: bool,
+    sigs: &std::sync::Arc<lodestar_filter::spam_sigs::SpamSigs>,
+) -> lodestar_filter::Engine {
+    use lodestar_filter::packs::manifest::Manifest;
+    use lodestar_filter::packs::upgrade::{self, FRESH_KEY};
+    use lodestar_store::{Store, StoreConfig};
+    let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+    if upgraded {
+        s.update_settings_text(&[], &[FRESH_KEY]).unwrap();
+        for p in lodestar_filter::packs::Pack::ALL {
+            s.set_pack_switch(p.as_str(), true).unwrap();
+        }
+    }
+    upgrade::ensure_seeded(&mut s, &Manifest::builtin(), 0).unwrap();
+    let mut e = lodestar_filter::Engine::new(shipped());
+    let notes = e.load_rules(&s.rule_set().unwrap());
+    assert!(notes.is_empty(), "{notes:?}");
+    e.packs = lodestar_filter::PackSwitches::all();
+    e.spam_sigs = sigs.clone();
+    let pending: Vec<&str> = e.pack_versions.pending().map(|(r, _)| r.id()).collect();
+    if upgraded {
+        // The shipped versions an earlier install hadn't accepted.
+        for id in ["MW-2", "FK-2", "SP-4"] {
+            assert!(pending.contains(&id), "{id} pending: {pending:?}");
+        }
+        println!("versions pending in shadow: {pending:?}");
+    } else {
+        assert!(pending.is_empty(), "a fresh install: {pending:?}");
+    }
+    e
+}
+
+/// The writer's second judgment of a commit (RP-4's entry point,
+/// [`lodestar_filter::Engine::judge_at_commit`]), at its worst: SP-3 at its
+/// demote level, as in a flood, so every torrent pays it, and SP-4 looked
+/// up in its set as the writer does (the payload signature, then one map
+/// read).
+fn at_commit(
+    e: &lodestar_filter::Engine,
+    item: &Item,
+    facts: &lodestar_filter::Facts,
+) -> lodestar_filter::Verdict {
+    at_commit_as(e, item, facts, false)
+}
+
+/// [`at_commit`] for a find from a source that's always adult (`adult`):
+/// the engine also reads a torrent not classified Adult as Adult, a second
+/// reading of the whole engine (`Engine::judge_at_commit`).
+fn at_commit_as(
+    e: &lodestar_filter::Engine,
+    item: &Item,
+    facts: &lodestar_filter::Facts,
+    adult: bool,
+) -> lodestar_filter::Verdict {
+    use lodestar_filter::spam_sigs::usable;
+    let clone_of =
+        usable(lodestar_filter::payload_sig(item.files)).and_then(|s| e.spam_sigs.get(s));
+    let at = lodestar_filter::packs::sp4::AtCommit {
+        flood: Some(lodestar_filter::flood::Level::Demote),
+        clone_of,
+    };
+    e.judge_at_commit(item, facts, 0, at, adult)
+}
+
+/// None of the budget's 10,000 rules matches its torrents, so every rule
+/// is checked to the end.
+fn no_rule_of_yours(v: &lodestar_filter::Verdict, what: &str) {
+    assert!(
+        v.decision
+            .as_ref()
+            .is_none_or(|d| !matches!(d.rule, lodestar_filter::RuleRef::User(_))),
+        "no rule of yours matches the set: {what}: {:?}",
+        v.decision
+    );
+}
+
+/// Distinct signatures, spread as hashes are, for filling SP-4's set.
+fn spread(i: u64) -> u64 {
+    let mut x = i.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// SP-4's set at its cap (RP-G), shared by every engine of the budget:
+/// filler, then the signatures of every tenth torrent of `items` whose
+/// payload is specific, added last so the cap keeps them. Many of the
+/// budget's torrents share a payload, so most of them are clones: the
+/// at-commit cases judge SP-4 inheriting a hide on most torrents.
+fn sigs_at_cap(items: &[Item]) -> std::sync::Arc<lodestar_filter::spam_sigs::SpamSigs> {
+    use lodestar_filter::spam_sigs::{CAP, Original, SpamSigs, usable};
+    let hid = Original {
+        rule: lodestar_filter::PackRule::Sp2,
+        action: lodestar_filter::Action::Hide,
+    };
+    let originals: std::collections::BTreeSet<u64> = items
+        .iter()
+        .step_by(10)
+        .filter_map(|i| usable(lodestar_filter::payload_sig(i.files)))
+        .collect();
+    let sigs = std::sync::Arc::new(SpamSigs::with_cap(CAP));
+    for i in 0..(CAP - originals.len()) as u64 {
+        sigs.add(spread(i), hid);
+    }
+    for s in &originals {
+        sigs.add(*s, hid);
+    }
+    assert_eq!(sigs.len(), CAP, "the set at its cap");
+    assert!(originals.iter().all(|s| sigs.get(*s) == Some(hid)));
+    sigs
+}
+
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
 /// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
 /// `filter budget` job): `cargo test --release -p lodestar-filter --test
@@ -877,6 +996,20 @@ fn a_provisional_skew_still_scales_and_warns() {
 /// the mixed set and the mixed set neutralized; 25% and each shape at 10%
 /// are measured and reported, not held. Every rule shape counts (§2.21,
 /// owner-delegated, 2026-10-23).
+///
+/// **The rule-pack gate (RP-G, plan 2026-11-04 §4.3):** every engine case
+/// runs with every pack on at the versions a fresh install applies, and
+/// with SP-4's set at its 1,000,000 cap, shared as the writer shares it
+/// ([`sigs_at_cap`]). Each held engine case is timed twice: as prepare
+/// judges, and as the writer judges the commit again through RP-4's entry
+/// point at its worst ([`at_commit`]: SP-3 at its demote level and SP-4
+/// looked up, so the clones inherit their original's hide). The held sets
+/// are timed again, both ways, on an install an earlier build set up,
+/// whose new versions are pending and judged in shadow ([`installed`]).
+/// The budget is per judgment, as RP-4 set it (#495): a flooded or cloned commit's
+/// two judgments together are reported, not held, and so is an
+/// always-adult source's find at commit, which the engine reads twice
+/// (`docs/decisions/2026-11-06-RP-G.md`).
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
 /// `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ
@@ -1016,6 +1149,54 @@ fn budget() {
     // too: noise only adds time to a case, so a later attempt passes only
     // if the engine reads under budget. A steady case over budget fails
     // at once.
+    // SP-4's set at its cap (RP-G), and how many torrents are clones of
+    // an original in it: each of those inherits its hide at commit.
+    let sigs = sigs_at_cap(&items);
+    let clones = items
+        .iter()
+        .filter(|i| {
+            lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(i.files))
+                .and_then(|s| sigs.get(s))
+                .is_some()
+        })
+        .count();
+    println!(
+        "SP-4's set: {} signatures (its cap); {clones} of the {} torrents are clones",
+        sigs.len(),
+        items.len()
+    );
+    assert!(clones >= items.len() / 10, "{clones} clones");
+    {
+        let e = installed(false, &sigs);
+        let mut inherited = 0;
+        for (i, item) in items.iter().enumerate() {
+            let sig = lodestar_filter::spam_sigs::usable(lodestar_filter::payload_sig(item.files));
+            if sig.and_then(|s| sigs.get(s)).is_some() {
+                // SP-4 decides, unless prepare's own decision was already
+                // at least a hide.
+                let d = at_commit(&e, item, &facts[i]).decision;
+                let before = e.judge(item, Some(&facts[i]), 0).decision;
+                let sp4 = d.as_ref().is_some_and(|d| {
+                    d.rule == lodestar_filter::RuleRef::Pack(lodestar_filter::PackRule::Sp4)
+                });
+                let held = before
+                    .as_ref()
+                    .is_some_and(|d| d.action >= lodestar_filter::Action::Hide);
+                assert!(
+                    sp4 || held,
+                    "a clone inherits its original's hide through SP-4 at commit: {d:?}"
+                );
+                inherited += usize::from(sp4);
+            }
+        }
+        println!("SP-4 decides {inherited} of the {clones} clones at commit");
+        // The rest are already hidden in prepare by other packs (the
+        // budget's names are scene-style, which UC-3 reads).
+        assert!(
+            inherited >= items.len() / 10,
+            "SP-4 decides a tenth of the set at commit: {inherited}"
+        );
+    }
     let mut drifted = Vec::new();
     // The fastest calibration of any attempt so far, and whether a busy
     // attempt over budget has measured again: from then on that fastest
@@ -1032,10 +1213,14 @@ fn budget() {
         });
         let mut cases = vec![("core".to_owned(), t, true)];
 
-        // The whole engine: the core, every pack, and 10,000 of your rules,
-        // reading the classification as ingest does.
-        let mut engine = lodestar_filter::Engine::new(core);
-        engine.packs = lodestar_filter::PackSwitches::all();
+        drop(core);
+        // The whole engine (RP-G): the core, every pack at the versions a
+        // fresh install applies, SP-4's set at its cap, and 10,000 of your
+        // rules, reading the classification as ingest does. Each case is
+        // timed as prepare judges ([`Engine::judge`]); a held case is also
+        // timed as the writer judges a commit again, through RP-4's entry
+        // point ([`at_commit`]).
+        let mut engine = installed(false, &sigs);
         let mut sets: Vec<(String, Vec<lodestar_filter::UserRule>, bool)> =
             [(1, true), (10, true), (25, false)]
                 .into_iter()
@@ -1053,10 +1238,30 @@ fn budget() {
             let what = format!("engine, packs on, 10,000 rules, 10% {shape:?}");
             sets.push((what, shape_rules(shape), false));
         }
-        for (what, rules, held) in sets {
-            engine.rules = rules.into();
+        // Prepare's judgment of each torrent, then (`commit`) the writer's
+        // second one. `none`: assert that no rule of yours decides (the
+        // rule sets alone; with words neutralized a negation can match).
+        let prepare = |e: &lodestar_filter::Engine, what: &str, none: bool| {
+            time(what, &|i| {
+                let v = e.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
+                if none {
+                    no_rule_of_yours(&v, what);
+                }
+                std::hint::black_box(v);
+            })
+        };
+        let commit = |e: &lodestar_filter::Engine, what: &str, none: bool| {
+            time(what, &|i| {
+                let v = at_commit(e, std::hint::black_box(&items[i]), &facts[i]);
+                if none {
+                    no_rule_of_yours(&v, what);
+                }
+                std::hint::black_box(v);
+            })
+        };
+        let counts = |e: &lodestar_filter::Engine, what: &str| {
             let (met, full) = (0..items.len()).fold((0, 0), |(m, f), i| {
-                let (a, b) = engine.rule_counts(&items[i], Some(&facts[i]));
+                let (a, b) = e.rule_counts(&items[i], Some(&facts[i]));
                 (m + a, f + b)
             });
             println!(
@@ -1064,52 +1269,96 @@ fn budget() {
                 met as f64 / items.len() as f64,
                 full as f64 / items.len() as f64
             );
-            let t = time(&what, &|i| {
-                let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
-                assert!(
-                    v.decision
-                        .as_ref()
-                        .is_none_or(|d| !matches!(d.rule, lodestar_filter::RuleRef::User(_))),
-                    "no rule of yours matches the set: {what}: {:?}",
-                    v.decision
-                );
-            });
-            cases.push((what, t, held));
+        };
+        for (what, rules, held) in &sets {
+            engine.rules = rules.clone().into();
+            counts(&engine, what);
+            cases.push((what.clone(), prepare(&engine, what, true), *held));
+            if *held {
+                let what = format!("{what}, at commit");
+                cases.push((what.clone(), commit(&engine, &what, true), true));
+            }
         }
+        // The cases below are all on the mixed set, as on `main` before
+        // RP-G: the loop above left the last shape's rules in place.
+        engine.rules = mixed_rules().into();
+        // A flooded or cloned commit pays both judgments: the writer
+        // judges again whenever SP-3's level or SP-4's set applies.
+        // Reported, not held, since the budget is per judgment (RP-4,
+        // #495).
+        let what =
+            "engine, packs on, 10,000 rules, mixed, a flooded or cloned commit's two judgments";
+        let t = time(what, &|i| {
+            std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
+            std::hint::black_box(at_commit(
+                &engine,
+                std::hint::black_box(&items[i]),
+                &facts[i],
+            ));
+        });
+        cases.push((what.to_owned(), t, false));
+        // An always-adult source's find at commit: the engine reads the
+        // torrent as found and again as Adult (none of the budget's
+        // torrents is classified Adult, so every one pays both readings).
+        // Reported, not held, as the two judgments are: it's a second
+        // reading of one judgment (RP-G, runner's review of #526).
+        assert!(
+            items
+                .iter()
+                .all(|i| i.content_type != lodestar_classify::ContentType::Adult),
+            "none of the budget's torrents is classified Adult, so each pays the Adult reading"
+        );
+        let what = "engine, packs on, 10,000 rules, mixed, at commit, from an always-adult source";
+        let t = time(what, &|i| {
+            std::hint::black_box(at_commit_as(
+                &engine,
+                std::hint::black_box(&items[i]),
+                &facts[i],
+                true,
+            ));
+        });
+        cases.push((what.to_owned(), t, false));
         // The mixed set with pack-rule overrides (RP-2): a lighter
         // action, a heavier one, one with an `unless`, and one on a rule
         // that flags.
-        engine.rules = mixed_rules().into();
+        let rows: Vec<_> = [
+            ("MW-2", "demote", None),
+            ("SP-1", "hide", None),
+            ("LU-2", "flag", Some("sample OR trailer")),
+            ("FK-2", "drop", None),
+        ]
+        .into_iter()
+        .map(|(id, action, unless)| {
+            let rule = lodestar_filter::PackRule::from_id(id).expect("a pack rule");
+            let row = lodestar_filter::packs::overrides::PackOverride {
+                base: lodestar_filter::packs::overrides::current_base(&engine.pack_versions, rule),
+                action: lodestar_filter::packs::overrides::action_named(action).unwrap(),
+                unless: unless.map(str::to_owned),
+            };
+            (id.to_owned(), Ok(row.encode()))
+        })
+        .collect();
         engine.pack_overrides = lodestar_filter::packs::overrides::PackOverrides::resolve(
             &engine.manifest,
             &engine.pack_versions,
-            &[
-                ("MW-2".to_owned(), Ok("1\n1\ndemote".to_owned())),
-                ("SP-1".to_owned(), Ok("1\n1\nhide".to_owned())),
-                (
-                    "LU-2".to_owned(),
-                    Ok("1\n1\nflag\nsample OR trailer".to_owned()),
-                ),
-                ("FK-2".to_owned(), Ok("1\n1\ndrop".to_owned())),
-            ],
+            &rows,
         );
         assert_eq!(engine.pack_overrides.iter().count(), 4);
         assert!(
             engine
                 .pack_overrides
                 .iter()
-                .all(|o| !o.unreadable() && !o.changed)
+                .all(|o| !o.unreadable() && !o.changed && !o.paused),
+            "every override bound to the version that applies"
         );
         let what = "engine, packs on, 10,000 rules, mixed, 4 pack overrides (1 with unless)";
-        let t = time(what, &|i| {
-            std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
-        });
-        cases.push((what.to_owned(), t, true));
+        cases.push((what.to_owned(), prepare(&engine, what, false), true));
+        let what = format!("{what}, at commit");
+        cases.push((what.clone(), commit(&engine, &what, false), true));
         engine.pack_overrides = Default::default();
         // The mixed set again with common words neutralized (CSX-5
         // *Neutralize term*): every keyword entry reads the name and
         // paths, and every text clause checks the words.
-        engine.rules = mixed_rules().into();
         engine.overrides = ["web", "webrip", "hevc", "mkv", "sample"]
             .iter()
             .zip(1..)
@@ -1123,11 +1372,22 @@ fn budget() {
             })
             .collect();
         let what = "engine, packs on, 10,000 rules, mixed, 5 common words neutralized";
-        let t = time(what, &|i| {
-            std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
-        });
-        cases.push((what.to_owned(), t, true));
+        cases.push((what.to_owned(), prepare(&engine, what, false), true));
+        let what = format!("{what}, at commit");
+        cases.push((what.clone(), commit(&engine, &what, false), true));
         drop(engine);
+        // An install an earlier build set up (RP-G): the versions this
+        // build changed or added (MW-2@2, FK-2@2, SP-4) pending, judged in
+        // shadow beside the applied ones, for the held sets.
+        let mut pending = installed(true, &sigs);
+        for (what, rules, held) in sets.iter().filter(|(_, _, held)| *held) {
+            pending.rules = rules.clone().into();
+            let what = what.replacen("packs on", "packs on, versions pending in shadow", 1);
+            cases.push((what.clone(), prepare(&pending, &what, true), *held));
+            let what = format!("{what}, at commit");
+            cases.push((what.clone(), commit(&pending, &what, true), true));
+        }
+        drop(pending);
         let after = calibration("after");
 
         let calib_us = before.min(after);
