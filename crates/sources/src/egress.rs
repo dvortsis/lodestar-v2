@@ -174,7 +174,7 @@ impl EgressCredentials for NoCredentials {
 pub struct Endpoints {
     policy: NetPolicy,
     /// The origins the plugin may reach; `None` for any host.
-    hosts: Option<Vec<Origin>>,
+    origins: Option<Vec<Origin>>,
     /// The hosts are the manifest's own ([`Endpoints::manifest`]), not ones
     /// the user entered.
     pinned: bool,
@@ -214,7 +214,7 @@ impl Endpoints {
     /// subdomains), each over the scheme it's declared with, on that
     /// scheme's default port.
     pub fn manifest(endpoints: &[Endpoint]) -> Endpoints {
-        let hosts = endpoints
+        let origins = endpoints
             .iter()
             .filter_map(|e| {
                 let scheme = ["http", "https"]
@@ -225,7 +225,7 @@ impl Endpoints {
             .collect();
         Endpoints {
             policy: NetPolicy::notification(false),
-            hosts: Some(hosts),
+            origins: Some(origins),
             pinned: true,
         }
     }
@@ -235,7 +235,7 @@ impl Endpoints {
     pub fn user_entered(policy: NetPolicy) -> Endpoints {
         Endpoints {
             policy,
-            hosts: None,
+            origins: None,
             pinned: false,
         }
     }
@@ -244,7 +244,7 @@ impl Endpoints {
     /// one's scheme, host and port (the scheme's default when it names
     /// none). A URL that isn't `http`/`https` adds nothing.
     pub fn only_origins<S: AsRef<str>>(mut self, urls: &[S]) -> Endpoints {
-        self.hosts = Some(urls.iter().filter_map(|u| Origin::of(u.as_ref())).collect());
+        self.origins = Some(urls.iter().filter_map(|u| Origin::of(u.as_ref())).collect());
         self
     }
 
@@ -269,11 +269,11 @@ impl Endpoints {
     fn check(&self, url: &str) -> Result<(), NetError> {
         let parsed = url::Url::parse(url).map_err(|_| NetError::InvalidUrl("it doesn't parse"))?;
         net::check_url(&parsed, self.policy)?;
-        if let Some(hosts) = &self.hosts {
+        if let Some(origins) = &self.origins {
             let origin = Origin::of(url).ok_or(NetError::InvalidUrl("it has no host"))?;
-            if !hosts.contains(&origin) {
+            if !origins.contains(&origin) {
                 return Err(NetError::InvalidUrl(
-                    "the host isn't one of the plugin's endpoints",
+                    "the address isn't one of the plugin's endpoints",
                 ));
             }
         }

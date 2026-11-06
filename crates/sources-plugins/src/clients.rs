@@ -158,9 +158,10 @@ impl Clients {
     }
 
     /// Where the plugin's egress may send requests (SRC-5): the client
-    /// address's origin only (scheme, host and port), under the download-client policy (LAN and loopback
-    /// allowed; link-local and metadata addresses never). `None` until a
-    /// client is set up, so nothing may be reached.
+    /// address's origin only (scheme, host and port), under the
+    /// download-client policy (LAN and loopback allowed; link-local and
+    /// metadata addresses never). `None` until a client is set up, so
+    /// nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         let url = url_of(self.config.as_ref()?);
         host_key(url)?;

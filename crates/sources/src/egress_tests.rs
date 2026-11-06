@@ -1038,6 +1038,29 @@ async fn refusals_while_down_are_paced_and_bounded() {
 // ---------------------------------------------------------------- policy
 
 #[tokio::test]
+async fn a_redirect_to_another_port_on_the_listed_host_is_refused() {
+    // Another service on the same loopback host: reachable by address, but
+    // not one of the plugin's endpoints.
+    let other = serve(|_| ok("other")).await;
+    let to = other.url("/");
+    let server = serve(move |_| redirect(302, &to)).await;
+    let egress = Arc::new(
+        factory(Scripted::new(&[]))
+            .build("p", &Egress::Direct, lan().only_origins(&[server.url("/")]))
+            .await,
+    );
+    let client = Client::new(Arc::clone(&egress), HostLimiter::new(fast_limits()));
+    let err = transport(send_following(&client, Request::get(server.url("/start"))).await);
+    assert!(
+        err.contains("the address isn't one of the plugin's endpoints"),
+        "{err}"
+    );
+    assert_eq!(egress.status().counters.answered, 1, "the first hop went");
+    assert_eq!(egress.status().counters.policy_refusals, 1);
+    assert_eq!(other.conns(), 0, "the other port was never connected to");
+}
+
+#[tokio::test]
 async fn redirects_to_forbidden_addresses_are_refused_before_connecting() {
     let server = serve(|line| {
         if line.contains("/meta") {
