@@ -1639,9 +1639,12 @@ dependencies = [
 name = "lodestar-companions"
 version = "0.5.0"
 dependencies = [
+ "lodestar-companions",
  "lodestar-integrations",
  "lodestar-log",
  "proptest",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
