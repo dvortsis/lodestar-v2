@@ -913,6 +913,89 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn which_stops_end_the_worker() {
+        let table = [
+            (StopReason::Revoked, Some(Exit::Revoked)),
+            (
+                StopReason::VersionMismatch {
+                    coordinator_major: 2,
+                },
+                Some(Exit::Outdated {
+                    coordinator_major: 2,
+                }),
+            ),
+            (StopReason::IdentityMismatch, Some(Exit::IdentityMismatch)),
+            (StopReason::Drained, Some(Exit::Drained)),
+            (StopReason::Replaced, Some(Exit::Replaced)),
+            // Passing: connect again.
+            (StopReason::Protocol, None),
+            (StopReason::HeartbeatTimeout, None),
+            (StopReason::Shutdown, None),
+        ];
+        for (reason, want) in table {
+            assert_eq!(exit_for(reason), want, "{reason:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_revocation_after_the_certificate_ran_out_reads_as_expired() {
+        let s = joined().await;
+        let worker = Worker {
+            layout: s.layout.clone(),
+            creds: s.layout.load().unwrap().unwrap(),
+            connect: s.dial.clone(),
+            clock: s.clock.clone(),
+            settings: settings(),
+            report: s.lines.report(),
+            jitter: || 0,
+        };
+        assert_eq!(worker.or_expired(Exit::Revoked), Exit::Revoked);
+        assert_eq!(worker.or_expired(Exit::Drained), Exit::Drained);
+        s.clock.advance(Duration::from_secs(
+            u64::try_from(LEAF_LIFETIME_SECS + 1).unwrap(),
+        ));
+        assert_eq!(worker.or_expired(Exit::Revoked), Exit::Expired);
+        assert_eq!(worker.or_expired(Exit::Replaced), Exit::Replaced);
+    }
+
+    #[tokio::test]
+    async fn a_renewal_that_cant_be_saved_is_kept_and_saved_later() {
+        let s = joined().await;
+        let not_after = s.layout.load().unwrap().unwrap().not_after();
+        let running = s.run(Idle);
+        s.until_connected(&s.coord).await;
+        let sessions = s.coord.server.snapshot().sessions;
+        // The save can't replace its temporary file.
+        let blocker = s.layout.cluster().join("credentials.tmp");
+        std::fs::create_dir(&blocker).unwrap();
+        std::fs::write(blocker.join("x"), b"").unwrap();
+        s.clock.advance(Duration::from_secs(
+            u64::try_from(LEAF_LIFETIME_SECS / 2).unwrap(),
+        ));
+        until("connected on the unsaved renewal", || {
+            let snap = s.coord.server.snapshot();
+            (
+                snap.sessions > sessions
+                    && s.coord.connected(s.worker)
+                    && s.lines
+                        .all()
+                        .contains("couldn't save the renewed credentials"),
+                snap.sessions,
+            )
+        })
+        .await;
+        assert_eq!(s.layout.load().unwrap().unwrap().not_after(), not_after);
+        // Fixed: the next check saves it.
+        std::fs::remove_dir_all(&blocker).unwrap();
+        until("saved", || {
+            let now = s.layout.load().unwrap().unwrap().not_after();
+            (now > not_after, now)
+        })
+        .await;
+        assert_eq!(running.shutdown().await, Exit::Shutdown);
+    }
+
+    #[test]
     fn backoff_doubles_to_the_cap_with_bounded_jitter() {
         let mut b = Backoff::new(Duration::from_secs(1), Duration::from_secs(120));
         let low: Vec<u64> = (0..10).map(|_| b.next(0).as_millis() as u64).collect();
@@ -982,7 +1065,15 @@ pub(crate) mod tests {
         let exit = tokio::spawn(worker.run(Idle, async move {
             let _ = rx.await;
         }));
+        // Bounded in virtual time: the waits add up to 15.5 s.
+        let start = tokio::time::Instant::now();
         while attempts.lock().unwrap().len() < 7 {
+            assert!(!exit.is_finished(), "stopped early: {}", lines.all());
+            assert!(
+                start.elapsed() < Duration::from_secs(1000),
+                "only {:?}",
+                attempts.lock().unwrap()
+            );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         let _ = stop.send(());

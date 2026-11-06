@@ -84,7 +84,16 @@ fn main() -> ExitCode {
         Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
         Command::Lists => None,
     };
-    let dropped = match scope.map(|s| privdrop::run(s, |k| std::env::var(k).ok())) {
+    // `lodestar worker --data <dir>`: that folder is the one to own.
+    let worker_data = match &command {
+        Command::Worker(a) => a.data.as_ref().and_then(|d| d.to_str()).map(str::to_owned),
+        _ => None,
+    };
+    let env = |k: &str| match (k, &worker_data) {
+        ("LODESTAR_DATA_DIR", Some(d)) => Some(d.clone()),
+        _ => std::env::var(k).ok(),
+    };
+    let dropped = match scope.map(|s| privdrop::run(s, env)) {
         Some(Ok(report)) => report,
         Some(Err(e)) => {
             eprintln!("PUID/PGID: {e}");

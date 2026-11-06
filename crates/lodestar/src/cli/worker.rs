@@ -50,12 +50,21 @@ pub struct WorkerArgs {
 const JOIN_AGAIN: &str = "make a new join token in Settings → Workers → Add worker, then run \
      `lodestar worker --join https://<coordinator>:8091 --token-file <file>`";
 
-/// Where a join's token comes from.
-#[derive(Debug, PartialEq, Eq)]
+/// Where a join's token comes from. Its `Debug` never shows the token.
+#[derive(PartialEq, Eq)]
 enum TokenSource {
     File(PathBuf),
     /// `LODESTAR_TOKEN`, first join only.
     Env(String),
+}
+
+impl std::fmt::Debug for TokenSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenSource::File(p) => f.debug_tuple("File").field(p).finish(),
+            TokenSource::Env(_) => f.write_str("Env(***)"),
+        }
+    }
 }
 
 /// Whether to join first, and with what.
@@ -66,7 +75,9 @@ struct Plan {
     warnings: Vec<&'static str>,
 }
 
-const ENV_TOKEN_STALE: &str = "LODESTAR_TOKEN is still set, but this worker has already joined,      so it's ignored. Remove it from the container's settings: a token works only once.";
+const ENV_TOKEN_STALE: &str = "LODESTAR_TOKEN is still set, but this worker has already joined, \
+     so it's ignored. Remove it from the container's settings: a token works only once.";
+const JOIN_IGNORED: &str = "--join is ignored: this folder has already joined a coordinator.";
 const ENV_TOKEN_UNUSED: &str = "LODESTAR_TOKEN is ignored: --token-file was given.";
 
 /// Decides whether to join: `--token-file` always does (with `--join`);
@@ -90,6 +101,9 @@ fn plan(args: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>, joined: bool) -
     match env_token {
         Some(_) if joined => {
             warnings.push(ENV_TOKEN_STALE);
+            if args.join.is_some() {
+                warnings.push(JOIN_IGNORED);
+            }
             Ok(Plan {
                 join: None,
                 warnings,
@@ -219,7 +233,12 @@ async fn join(
         worker::parse_coordinator(url).map_err(|e| Failure::Failed(format!("--join: {e}")))?;
     let token = match source {
         TokenSource::File(path) if path == Path::new("-") => {
-            read_join_token(std::io::stdin().lock()).map_err(|e| Failure::Failed(e.to_string()))
+            use std::io::IsTerminal;
+            let stdin = std::io::stdin();
+            if stdin.is_terminal() {
+                report("paste the join token, press Enter, then Ctrl-D");
+            }
+            read_join_token(stdin.lock()).map_err(|e| Failure::Failed(e.to_string()))
         }
         TokenSource::File(path) => {
             read_join_token_file(&path).map_err(|e| Failure::Failed(e.to_string()))
@@ -396,6 +415,25 @@ mod tests {
         for w in [ENV_TOKEN_STALE, ENV_TOKEN_UNUSED] {
             assert!(!w.contains(&token));
         }
+    }
+
+    #[test]
+    fn a_plan_never_prints_the_token() {
+        let env = |k: &str| (k == "LODESTAR_TOKEN").then(|| "lsj1secretvalue".to_owned());
+        let plan = plan(&args(Some("https://c"), None), &env, false).unwrap();
+        let shown = format!("{plan:?}");
+        assert!(
+            !shown.contains("secretvalue") && shown.contains("Env(***)"),
+            "{shown}"
+        );
+        // Joined: both the variable and --join are said to be ignored.
+        let joined = plan_warnings(&args(Some("https://c"), None), &env);
+        assert_eq!(joined, vec![ENV_TOKEN_STALE, JOIN_IGNORED]);
+        assert!(!ENV_TOKEN_STALE.contains("  "), "{ENV_TOKEN_STALE}");
+    }
+
+    fn plan_warnings(a: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>) -> Vec<&'static str> {
+        plan(a, env, true).unwrap().warnings
     }
 
     #[test]

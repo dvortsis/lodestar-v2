@@ -95,7 +95,13 @@ impl Layout {
         file.write_all(format!("{ADDRESS_MAGIC}\naddr {addr}\n").as_bytes())
             .and_then(|()| file.sync_all())
             .map_err(io("write the coordinator's address"))?;
-        fs::rename(&tmp, dir.join(ADDRESS_FILE)).map_err(io("write the coordinator's address"))
+        fs::rename(&tmp, dir.join(ADDRESS_FILE)).map_err(io("write the coordinator's address"))?;
+        // Make the rename itself durable, as the credentials' save does.
+        #[cfg(unix)]
+        fs::File::open(&dir)
+            .and_then(|d| d.sync_all())
+            .map_err(io("write the coordinator's address"))?;
+        Ok(())
     }
 
     /// The saved address, or `None` before the first join.
@@ -253,6 +259,8 @@ pub enum JoinFailure {
     /// coordinator gives every refusal the same answer (V6-cluster1).
     Refused,
     Unreachable(ClientError),
+    /// The worker's key pair couldn't be made (before any network call).
+    Key(ClusterError),
     Save(ClusterError),
 }
 
@@ -261,6 +269,7 @@ impl std::fmt::Display for JoinFailure {
         match self {
             JoinFailure::Refused => f.write_str(REFUSED),
             JoinFailure::Unreachable(e) => write!(f, "couldn't join: {e}"),
+            JoinFailure::Key(e) => write!(f, "couldn't make the worker's key: {e}"),
             JoinFailure::Save(e) => write!(f, "joined, but couldn't save the credentials: {e}"),
         }
     }
@@ -280,14 +289,16 @@ pub async fn join(
     token: JoinToken,
     clock: Arc<dyn Clock>,
 ) -> Result<Credentials, JoinFailure> {
-    let joining = Joining::new(token).map_err(JoinFailure::Save)?;
+    let joining = Joining::new(token).map_err(JoinFailure::Key)?;
     let creds = match lodestar_cluster::join(addr, joining, clock, JOIN_TIMEOUT).await {
         Ok(c) => c,
         Err(ClientError::Refused) => return Err(JoinFailure::Refused),
         Err(e) => return Err(JoinFailure::Unreachable(e)),
     };
-    layout.save(&creds).map_err(JoinFailure::Save)?;
+    // The address first: "joined" means the credentials file exists, so a
+    // crash between the two leaves an address alone, which is harmless.
     layout.save_address(addr).map_err(JoinFailure::Save)?;
+    layout.save(&creds).map_err(JoinFailure::Save)?;
     Ok(creds)
 }
 
@@ -393,6 +404,20 @@ pub(crate) mod tests {
         Credentials::reseal(&layout.cluster(), &layout.secrets().unwrap()).unwrap();
         assert!(layout.load().unwrap().is_some()); // crashed after "reseal"
         assert_eq!(layout.secrets().unwrap().key_count(), 2);
+        assert!(rotate_key(&layout).unwrap());
+        assert_eq!(layout.secrets().unwrap().key_count(), 1);
+        assert!(layout.load().unwrap().is_some());
+
+        // A reseal that fails (here its temporary file can't be replaced)
+        // fails the rotation and retires nothing: both keys stay, and the
+        // credentials open. Once the fault is gone, it finishes.
+        let blocker = layout.cluster().join("credentials.tmp");
+        fs::create_dir(&blocker).unwrap();
+        fs::write(blocker.join("x"), b"").unwrap();
+        assert!(rotate_key(&layout).is_err());
+        assert_eq!(layout.secrets().unwrap().key_count(), 2);
+        assert!(layout.load().unwrap().is_some());
+        fs::remove_dir_all(&blocker).unwrap();
         assert!(rotate_key(&layout).unwrap());
         assert_eq!(layout.secrets().unwrap().key_count(), 1);
         assert!(layout.load().unwrap().is_some());

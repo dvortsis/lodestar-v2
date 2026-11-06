@@ -30,13 +30,28 @@ struct Proc {
     log: JoinHandle<String>,
 }
 
-fn spawn(mut cmd: Command) -> Proc {
+fn spawn(cmd: Command) -> Proc {
+    spawn_with(cmd, None)
+}
+
+/// Spawns `cmd`, writing `stdin` to it and closing it when given.
+fn spawn_with(mut cmd: Command, stdin: Option<&str>) -> Proc {
     let mut child = cmd
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    if let Some(text) = stdin {
+        use std::io::Write;
+        let mut pipe = child.stdin.take().unwrap();
+        pipe.write_all(text.as_bytes()).unwrap();
+        // Dropped: closed, so the reader sees the end.
+    }
     let stderr = child.stderr.take().unwrap();
     let (tx, lines) = channel();
     let log = std::thread::spawn(move || {
@@ -91,8 +106,23 @@ impl Proc {
         (exit, self.log.join().unwrap())
     }
 
+    /// Waits for it to exit by itself (killed past the deadline).
     fn finish(mut self) -> (std::process::ExitStatus, String) {
-        let exit = self.child.wait().unwrap();
+        let start = std::time::Instant::now();
+        let exit = loop {
+            if let Some(exit) = self.child.try_wait().unwrap() {
+                break exit;
+            }
+            if start.elapsed() > DEADLINE {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                panic!(
+                    "still running after {DEADLINE:?}: {}",
+                    self.log.join().unwrap()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
         (exit, self.log.join().unwrap())
     }
 }
@@ -229,6 +259,26 @@ fn joins_restarts_and_never_shows_the_token() {
     assert!(exit.success(), "{exit:?}: {log}");
     assert!(!log.contains("joined 127.0.0.1"), "no second join: {log}");
     assert!(!leaks(&log, &second), "{log}");
+
+    // A token on stdin (`--token-file -`).
+    let third = make_token(coord_dir.path(), "w3");
+    let piped = tempfile::tempdir().unwrap();
+    let mut on_stdin = spawn_with(
+        worker(piped.path(), &["--join", url.as_str(), "--token-file", "-"]),
+        Some(&format!("{third}\n")),
+    );
+    on_stdin.wait_for("connected as worker w3");
+    #[cfg(target_os = "linux")]
+    for part in ["cmdline", "environ"] {
+        let bytes = std::fs::read(format!("/proc/{}/{part}", on_stdin.child.id())).unwrap();
+        assert!(
+            !leaks(&String::from_utf8_lossy(&bytes), &third),
+            "the token is in the worker's {part}"
+        );
+    }
+    let (exit, log) = on_stdin.stop();
+    assert!(exit.success(), "{exit:?}: {log}");
+    assert!(!leaks(&log, &third), "{log}");
 
     let (exit, log) = server.stop();
     assert!(exit.success(), "{exit:?}: {log}");
