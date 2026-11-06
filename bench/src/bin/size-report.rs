@@ -187,7 +187,16 @@ struct Report {
 
 impl Report {
     fn passed(&self) -> bool {
-        self.invalid.is_empty() && self.checks.iter().all(|c| c.verdict() == Verdict::Pass)
+        self.trustworthy() && self.checks.iter().all(|c| c.verdict() == Verdict::Pass)
+    }
+
+    /// Every value was measured and the indexes cover the whole corpus.
+    fn trustworthy(&self) -> bool {
+        self.invalid.is_empty()
+            && self
+                .checks
+                .iter()
+                .all(|c| c.verdict() != Verdict::Unmeasured)
     }
 
     fn markdown(&self) -> String {
@@ -583,29 +592,35 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let summary = args.summary.as_deref();
-    let (passed, text) = match run(&args) {
-        Ok(report) => (report.passed(), report.markdown()),
+    let result = run(&args);
+    let text = match &result {
+        Ok(report) => report.markdown(),
         Err(e) => {
             eprintln!("error: {e}");
-            // There is nothing to report, so this fails with or without --gate.
-            let text = format!(
-                "### Size budget (§3): FAIL\n\n**FAIL: size-report could not measure.** {e}"
-            );
-            if let Err(e) = write_summary(summary, &text) {
-                eprintln!("error: writing the summary: {e}");
-            }
-            return ExitCode::FAILURE;
+            format!("### Size budget (§3): FAIL\n\n**FAIL: size-report could not measure.** {e}")
         }
     };
-    if let Err(e) = write_summary(summary, &text) {
+    let written = write_summary(args.summary.as_deref(), &text);
+    if let Err(e) = &written {
         eprintln!("error: writing the summary: {e}");
-        return ExitCode::FAILURE;
     }
-    if passed || !args.gate {
+    if succeeds(args.gate, &result, written.is_ok()) {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+/// Whether the run exits 0. It fails closed: an error, a value that wasn't
+/// measured, an index that doesn't cover the corpus or a summary that
+/// couldn't be written fail with or without `--gate`; only being over a
+/// budget needs `--gate` to fail.
+fn succeeds<E>(gate: bool, result: &Result<Report, E>, summary_written: bool) -> bool {
+    match result {
+        Err(_) => false,
+        Ok(_) if !summary_written => false,
+        Ok(report) if !report.trustworthy() => false,
+        Ok(report) => report.passed() || !gate,
     }
 }
 
@@ -664,6 +679,26 @@ mod tests {
             "{md}"
         );
         assert!(md.contains("50,000"), "{md}");
+    }
+
+    #[test]
+    fn exit_codes_fail_closed() {
+        let ok = || Ok::<_, ()>(report(391.0, vec![]));
+        let over = || Ok::<_, ()>(report(600.0, vec![]));
+        let unmeasured = || Ok::<_, ()>(report(0.0, vec![]));
+        let partial = || Ok::<_, ()>(report(391.0, vec!["partial".into()]));
+        for gate in [false, true] {
+            assert!(succeeds(gate, &ok(), true), "gate {gate}");
+            assert!(
+                !succeeds(gate, &ok(), false),
+                "unwritten summary, gate {gate}"
+            );
+            assert!(!succeeds(gate, &unmeasured(), true), "gate {gate}");
+            assert!(!succeeds(gate, &partial(), true), "gate {gate}");
+            assert!(!succeeds(gate, &Err::<Report, _>(()), true), "gate {gate}");
+        }
+        assert!(succeeds(false, &over(), true), "a report without --gate");
+        assert!(!succeeds(true, &over(), true));
     }
 
     #[test]

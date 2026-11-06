@@ -231,15 +231,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Each step has its own $GITHUB_STEP_SUMMARY, so the report goes to a
+      # file the next step can read.
       - name: size-report --gate
-        run: cargo run --release -p lodestar-bench --bin size-report -- --torrents 50000 --gate --summary "$GITHUB_STEP_SUMMARY"
-      # A build failure or a crash before the report leaves no table.
-      - name: explain a failure without a report
-        if: failure()
+        run: cargo run --release -p lodestar-bench --bin size-report -- --torrents 50000 --gate --summary "$RUNNER_TEMP/size-report.md"
+      - name: job summary
+        if: always()
         shell: bash
         run: |
-          if ! grep -q "Size budget" "$GITHUB_STEP_SUMMARY" 2>/dev/null; then
-            printf '### Size budget (§3): FAIL\n\nsize-report did not produce a report (build failure or crash): see the step log.\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$RUNNER_TEMP/size-report.md" ]; then
+            cat "$RUNNER_TEMP/size-report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '### Size budget (§3): FAIL\n\nsize-report did not run or produce a report (setup, build or crash): see the step log.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
 
   search-latency:
