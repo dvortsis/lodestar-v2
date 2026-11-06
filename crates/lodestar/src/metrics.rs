@@ -169,8 +169,20 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     o.one(
         "fetch_held_full_total",
         "counter",
-        "Times the held-bytes budget stopped new fetches.",
+        "Times the byte budget or a waiting reservation stopped new fetches.",
         get(&p.held_full),
+    );
+    o.one(
+        "fetch_reserved_bytes",
+        "gauge",
+        "Bytes fetches in flight have reserved for their results.",
+        get(&p.reserved_bytes),
+    );
+    o.one(
+        "fetch_reserve_timeouts_total",
+        "counter",
+        "Fetches whose deadline ran out while they waited for a reservation.",
+        get(&p.reserve_timeouts),
     );
     for (name, value) in [
         ("fetch_finder_full_total", &p.finder_full),
@@ -1601,12 +1613,17 @@ mod tests {
         }
     }
 
-    /// The pool's held-bytes families (X-fetch-pool-bytes) have their
-    /// rows in docs/metrics.md.
+    /// The pool's held- and reserved-bytes families (X-fetch-pool-bytes,
+    /// X-fetch-meta-reserve) have their rows in docs/metrics.md.
     #[test]
     fn held_bytes_families_are_documented() {
         let doc = include_str!("../../../docs/metrics.md");
-        for family in ["fetch_held_bytes", "fetch_held_full_total"] {
+        for family in [
+            "fetch_held_bytes",
+            "fetch_held_full_total",
+            "fetch_reserved_bytes",
+            "fetch_reserve_timeouts_total",
+        ] {
             let row = format!("| `{family}`");
             assert!(
                 doc.lines().any(|l| l.starts_with(&row)),

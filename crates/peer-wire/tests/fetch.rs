@@ -7,8 +7,11 @@ use std::time::Duration;
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
-use lodestar_peer_wire::{Deny, Encryption, Error, FetchOptions, fetch};
+use lodestar_peer_wire::{Deny, Encryption, Error, FetchOptions, Fetched, Reserve, fetch, message};
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// A realistic info dict of roughly `size` bytes (grown via file entries).
 fn info_dict(size: usize) -> Vec<u8> {
@@ -225,4 +228,334 @@ async fn denied_addresses_are_never_connected_to() {
     assert!(matches!(err, Error::Denied), "{err}");
     o.deny = Some(Deny(Arc::new(|_| false)));
     assert!(fetch(peer.addr(), hash, &o).await.is_ok());
+}
+
+// X-fetch-meta-reserve: the fetch reserves its result's bytes once the
+// size is announced, before it requests any piece.
+
+/// A byte budget for the tests: a semaphore of one permit per byte. Each
+/// fetch keeps what it reserved in `held` until the test drops it, as the
+/// pool's claim does until its fetch ends.
+#[derive(Clone)]
+struct TestBudget {
+    permits: Arc<Semaphore>,
+    total: usize,
+    calls: Arc<std::sync::Mutex<Vec<usize>>>,
+}
+
+impl TestBudget {
+    fn new(total: usize) -> TestBudget {
+        TestBudget {
+            permits: Arc::new(Semaphore::new(total)),
+            total,
+            calls: Arc::default(),
+        }
+    }
+
+    fn reserved(&self) -> usize {
+        self.total - self.permits.available_permits()
+    }
+
+    /// Options whose hook reserves into `held`, keeping the largest.
+    fn opts(&self, held: Arc<std::sync::Mutex<Vec<OwnedSemaphorePermit>>>) -> FetchOptions {
+        let budget = self.clone();
+        let mut o = opts(Encryption::Disable);
+        o.reserve = Some(Reserve(Arc::new(move |bytes| {
+            let (budget, held) = (budget.clone(), held.clone());
+            Box::pin(async move {
+                budget.calls.lock().unwrap().push(bytes);
+                let n = u32::try_from(bytes.min(budget.total)).unwrap();
+                let permit = budget.permits.clone().acquire_many_owned(n).await.unwrap();
+                held.lock().unwrap().push(permit);
+            })
+        })));
+        o
+    }
+}
+
+/// An info dict of about `size` bytes, built in linear time: its
+/// `pieces` string carries the bulk.
+fn sized_dict(size: usize) -> Vec<u8> {
+    let mut d = std::collections::BTreeMap::new();
+    d.insert(b"length".to_vec(), OwnedValue::Int(size as i64));
+    d.insert(b"name".to_vec(), OwnedValue::from("Large Pack"));
+    d.insert(b"piece length".to_vec(), OwnedValue::Int(1 << 14));
+    d.insert(
+        b"pieces".to_vec(),
+        OwnedValue::Bytes(vec![7; size / 20 * 20]),
+    );
+    to_vec(&OwnedValue::Dict(d))
+}
+
+/// The bytes a result's heap holds, as the pool weighs them.
+fn heap(f: &Fetched) -> usize {
+    f.info.capacity()
+        + f.pex.capacity() * std::mem::size_of::<SocketAddr>()
+        + f.client.as_ref().map_or(0, String::capacity)
+}
+
+/// Many peers announce large dicts against a budget that fits two: the
+/// fetches wait for room rather than download, what's reserved never
+/// passes the budget, and each result fits what its fetch reserved.
+#[tokio::test]
+async fn fetches_wait_for_room_and_stay_within_their_reservations() {
+    const PEERS: usize = 8;
+    let size = 200_000;
+    let budget = TestBudget::new(2 * size + 2 * 16_384);
+    let mut peers = Vec::new();
+    for i in 0..PEERS {
+        // Distinct dicts, so each peer serves its own key.
+        let seed = Seed::v1(sized_dict(size + i));
+        peers.push((
+            FakePeer::spawn(vec![seed.clone()], Accept::Both, Behavior::Honest, vec![]).await,
+            seed,
+        ));
+    }
+    // The budget starts full, so every fetch must wait at its hook.
+    let blocker = budget
+        .permits
+        .clone()
+        .acquire_many_owned(budget.total as u32)
+        .await
+        .unwrap();
+    let max = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut tasks = Vec::new();
+    for (peer, seed) in &peers {
+        let (budget, max) = (budget.clone(), max.clone());
+        let (addr, hash, want) = (peer.addr(), InfoHash(seed.info_hash), seed.info.clone());
+        tasks.push(tokio::spawn(async move {
+            let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut o = budget.opts(held.clone());
+            o.timeout = Duration::from_secs(30);
+            let got = fetch(addr, hash, &o).await.expect("fetched");
+            max.fetch_max(budget.reserved(), std::sync::atomic::Ordering::SeqCst);
+            let mine: usize = held.lock().unwrap().iter().map(|p| p.num_permits()).sum();
+            assert_eq!(got.info, want);
+            assert!(
+                heap(&got) <= mine,
+                "{} bytes over the {mine} reserved",
+                heap(&got)
+            );
+            // Released as the fetch ends.
+            drop(held);
+        }));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while budget.calls.lock().unwrap().len() < PEERS {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "every fetch reaches its hook"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(tasks.iter().all(|t| !t.is_finished()), "none downloads yet");
+    drop(blocker);
+    for t in tasks {
+        t.await.unwrap();
+    }
+    assert!(max.load(std::sync::atomic::Ordering::SeqCst) <= budget.total);
+    assert_eq!(budget.reserved(), 0);
+    let calls = budget.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), PEERS, "one reservation per fetch: {calls:?}");
+    assert!(calls.iter().all(|&c| c >= size), "{calls:?}");
+}
+
+/// A peer that announces a size, then never sends a piece: its fetch ends
+/// at the deadline, and what it reserved goes with it.
+#[tokio::test]
+async fn a_peer_that_announces_then_stalls_ends_at_the_deadline() {
+    let seed = Seed::v1(info_dict(20_000));
+    let peer = FakePeer::spawn(vec![seed.clone()], Accept::Both, Behavior::Stall, vec![]).await;
+    let budget = TestBudget::new(1 << 20);
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut o = budget.opts(held.clone());
+    o.timeout = Duration::from_millis(500);
+    let r = fetch(peer.addr(), InfoHash(seed.info_hash), &o).await;
+    assert!(matches!(r, Err(Error::Timeout)), "{r:?}");
+    assert!(
+        budget.reserved() >= seed.info.len(),
+        "reserved before it stalled"
+    );
+    drop((o, held));
+    assert_eq!(budget.reserved(), 0, "freed when the fetch ended");
+}
+
+/// A peer that sends more than it announced is refused before its pieces
+/// can pass the size the fetch reserved for.
+#[tokio::test]
+async fn a_peer_that_sends_more_than_it_announced_is_refused() {
+    let seed = Seed::v1(info_dict(20_000));
+    let peer = FakePeer::spawn(
+        vec![seed.clone()],
+        Accept::Both,
+        Behavior::LieAboutSize(1000),
+        vec![],
+    )
+    .await;
+    let budget = TestBudget::new(1 << 20);
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let r = fetch(
+        peer.addr(),
+        InfoHash(seed.info_hash),
+        &budget.opts(held.clone()),
+    )
+    .await;
+    assert!(matches!(r, Err(Error::Protocol(_))), "{r:?}");
+    let calls = budget.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        calls[0] < 20_000,
+        "reserved for the announced 1000: {calls:?}"
+    );
+    drop(held);
+    assert_eq!(budget.reserved(), 0);
+}
+
+/// A minimal plaintext peer: it answers the handshakes, announcing
+/// `size`, then either hangs up or reports whether a metadata request
+/// came before `gate` opened.
+async fn announcing_peer(
+    info_hash: [u8; 20],
+    size: usize,
+    close: bool,
+    gate: Arc<tokio::sync::Notify>,
+) -> (SocketAddr, tokio::task::JoinHandle<Option<bool>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.unwrap();
+        let mut theirs = [0u8; message::HANDSHAKE_LEN];
+        s.read_exact(&mut theirs).await.unwrap();
+        s.write_all(&message::handshake(
+            &info_hash,
+            b"-RW0001-rawrawrawraw",
+            true,
+        ))
+        .await
+        .unwrap();
+        let ext = message::our_extended_handshake(Some(size));
+        let mut frame = ((ext.len() + 2) as u32).to_be_bytes().to_vec();
+        frame.extend([20, 0]);
+        frame.extend(ext);
+        s.write_all(&frame).await.unwrap();
+        if close {
+            return None;
+        }
+        // Read messages until the first metadata request (extended id
+        // OUR_UT_METADATA, the id this peer told the fetch to use).
+        let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = opened.clone();
+        let watcher = tokio::spawn(async move {
+            gate.notified().await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        loop {
+            let mut len = [0u8; 4];
+            if s.read_exact(&mut len).await.is_err() {
+                watcher.abort();
+                return Some(false);
+            }
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            s.read_exact(&mut body).await.unwrap();
+            if body.len() >= 2 && body[0] == 20 && body[1] == message::OUR_UT_METADATA {
+                watcher.abort();
+                return Some(opened.load(std::sync::atomic::Ordering::SeqCst));
+            }
+        }
+    });
+    (addr, task)
+}
+
+/// No piece is requested until the reservation is granted.
+#[tokio::test]
+async fn no_piece_is_requested_before_the_reservation() {
+    let hash = [7u8; 20];
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let (addr, peer) = announcing_peer(hash, 50_000, false, gate.clone()).await;
+    let called = Arc::new(tokio::sync::Notify::new());
+    let mut o = opts(Encryption::Disable);
+    let (g, c) = (gate.clone(), called.clone());
+    o.reserve = Some(Reserve(Arc::new(move |_| {
+        let (g, c) = (g.clone(), c.clone());
+        Box::pin(async move {
+            c.notify_one();
+            // Granted only once the peer has been told to watch.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            g.notify_one();
+        })
+    })));
+    o.timeout = Duration::from_secs(10);
+    let fetching = tokio::spawn(async move { fetch(addr, InfoHash(hash), &o).await });
+    tokio::time::timeout(Duration::from_secs(10), called.notified())
+        .await
+        .expect("the hook is called");
+    let requested_after_grant = tokio::time::timeout(Duration::from_secs(10), peer)
+        .await
+        .expect("the peer sees a request")
+        .unwrap();
+    assert_eq!(
+        requested_after_grant,
+        Some(true),
+        "requested only after the grant"
+    );
+    fetching.abort();
+}
+
+/// A peer that announces a size and hangs up: the fetch fails at once,
+/// and its reservation is freed with it.
+#[tokio::test]
+async fn a_peer_that_announces_then_closes_frees_its_reservation() {
+    let hash = [8u8; 20];
+    let (addr, peer) =
+        announcing_peer(hash, 300_000, true, Arc::new(tokio::sync::Notify::new())).await;
+    let budget = TestBudget::new(1 << 20);
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut o = budget.opts(held.clone());
+    o.timeout = Duration::from_secs(10);
+    let r = fetch(addr, InfoHash(hash), &o).await;
+    assert!(matches!(r, Err(Error::Io(_))), "{r:?}");
+    assert_eq!(peer.await.unwrap(), None);
+    assert_eq!(budget.calls.lock().unwrap().len(), 1, "it had reserved");
+    assert!(budget.reserved() >= 300_000);
+    drop((o, held));
+    assert_eq!(budget.reserved(), 0);
+}
+
+/// The reservation is the result's heap bound, not the raw announced
+/// size: for a peer announcing exactly `max_metadata`, the size plus its
+/// client name plus a full PEX list (200 addresses), and nothing more.
+/// One byte over the cap is refused before anything is reserved.
+#[tokio::test]
+async fn a_peer_announcing_max_metadata_reserves_exactly_its_bound() {
+    const MAX: usize = 256 << 10;
+    let seed = Seed::v1(info_dict(20_000));
+    let hash = InfoHash(seed.info_hash);
+    let pex_bound = 200 * std::mem::size_of::<SocketAddr>();
+    let client = "FakePeer 1.0".len();
+    for (announced, reserves) in [(MAX, true), (MAX + 1, false)] {
+        let peer = FakePeer::spawn(
+            vec![seed.clone()],
+            Accept::Both,
+            Behavior::LieAboutSize(announced as i64),
+            vec![],
+        )
+        .await;
+        let budget = TestBudget::new(1 << 20);
+        let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut o = budget.opts(held.clone());
+        o.max_metadata = MAX;
+        // The real pieces don't match the claimed size, so it fails after
+        // the reservation; only the reservation matters here.
+        let r = fetch(peer.addr(), hash, &o).await;
+        assert!(r.is_err());
+        let calls = budget.calls.lock().unwrap().clone();
+        if reserves {
+            assert_eq!(calls, vec![MAX + client + pex_bound]);
+        } else {
+            assert!(matches!(r, Err(Error::MetadataSize(_))), "{r:?}");
+            assert!(calls.is_empty(), "nothing reserved over the cap");
+        }
+        drop((o, held));
+        assert_eq!(budget.reserved(), 0);
+    }
 }

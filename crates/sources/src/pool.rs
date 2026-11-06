@@ -14,25 +14,28 @@
 //!
 //! One task owns all the state. Fetches run as child tasks and report back.
 //!
-//! Finished info dicts are held to a byte budget (`max_held_bytes`): the
-//! pool counts what it holds from the moment a fetch finishes until the
-//! consumer takes it from the output channel, and starts no fetch while
-//! that's over the budget or while a result waits for a channel slot.
+//! Info dicts are held to a byte budget (`max_held_bytes`). A fetch
+//! reserves its result's bytes once the peer has announced the size, before
+//! it downloads any (X-fetch-meta-reserve), and waits while the budget is
+//! full. The pool counts a finished result from then until the consumer
+//! takes it from the output channel, and starts no fetch while the budget
+//! is full, while a reservation waits or while a result waits for a
+//! channel slot.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
-use lodestar_peer_wire::{FailureKind, FetchOptions, Fetched};
+use lodestar_peer_wire::{FailureKind, FetchOptions, Fetched, Reserve};
 use lodestar_store::{QueuedKey, SourceId};
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::{Id, JoinHandle, JoinSet};
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep_until, timeout_at};
 
 use crate::funnel::{Funnel, Loss, Stage};
 use crate::plugin::{BoxFuture, Discovery, LookupSession, PeerRequest, Shutdown, Terminal};
@@ -60,6 +63,21 @@ pub trait Fetcher: Send + Sync + 'static {
         peer: SocketAddr,
         key: InfoHash,
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>>;
+
+    /// [`fetch`](Self::fetch), reserving the result's bytes from the pool's
+    /// budget before downloading them ([`Reservation::reserve`]). The pool
+    /// always calls this one. By default it reserves nothing, and the pool
+    /// counts the result's bytes once it's finished, so the budget then
+    /// holds only after the fact.
+    fn fetch_reserving(
+        &self,
+        peer: SocketAddr,
+        key: InfoHash,
+        reservation: Reservation,
+    ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+        drop(reservation);
+        self.fetch(peer, key)
+    }
 }
 
 /// The real fetcher: TCP with MSE (§6).
@@ -77,6 +95,26 @@ impl Fetcher for PeerWireFetcher {
         key: InfoHash,
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
         let opts = self.0.clone();
+        Box::pin(async move {
+            lodestar_peer_wire::fetch(peer, key, &opts)
+                .await
+                .map_err(|e| e.kind())
+        })
+    }
+
+    /// Peer-wire reserves at the extended handshake, with the bound of
+    /// what its result can hold (`lodestar_peer_wire::Reserve`).
+    fn fetch_reserving(
+        &self,
+        peer: SocketAddr,
+        key: InfoHash,
+        reservation: Reservation,
+    ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+        let mut opts = self.0.clone();
+        opts.reserve = Some(Reserve(Arc::new(move |heap| {
+            let r = reservation.clone();
+            Box::pin(async move { r.reserve(heap).await })
+        })));
         Box::pin(async move {
             lodestar_peer_wire::fetch(peer, key, &opts)
                 .await
@@ -120,25 +158,23 @@ pub struct PoolConfig {
     /// lookup keeps its slot until it ends. Off, the pool behaves exactly
     /// as before the switch existed.
     pub streaming_peers: bool,
-    /// The bytes of finished fetches the pool may hold before it stops
-    /// starting fetches (X-fetch-pool-bytes): results not yet joined, results
-    /// waiting for a slot in the output channel, and results in the channel
-    /// the consumer hasn't taken. Each is weighed by [`weigh`]. A fetch
-    /// already running when the budget fills still finishes and is kept, so
-    /// the held bytes can pass the budget by what those fetches bring
-    /// (at most one `max_metadata` each); the pool also limits fetches in
-    /// flight by an estimate of their bytes, so a run of large dicts slows
-    /// fetching down before it fills the budget. See
-    /// `docs/decisions/2026-11-06-X-fetch-pool-bytes.md`.
+    /// The byte budget for info dicts (X-fetch-pool-bytes,
+    /// X-fetch-meta-reserve): what fetches in flight have reserved for
+    /// their results, plus finished results not yet joined, waiting for a
+    /// slot in the output channel, or in the channel and not yet taken.
+    /// Each is weighed by [`weigh`]. A fetch reserves once its peer has
+    /// announced the size and before it downloads, and waits while the
+    /// budget is full, so with [`PeerWireFetcher`] the total never passes
+    /// the budget, except by one dict larger than the whole budget, which
+    /// is fetched alone. A [`Fetcher`] that doesn't reserve is counted once
+    /// its result is in, so then the total can pass the budget by what its
+    /// fetches in flight bring. See
+    /// `docs/decisions/2026-11-06-X-fetch-meta-reserve.md`.
     pub max_held_bytes: usize,
 }
 
 /// [`PoolConfig::max_held_bytes`]'s default: 64 MiB.
 pub const MAX_HELD_BYTES: usize = 64 << 20;
-
-/// The per-fetch byte estimate a new pool starts from: a large ordinary
-/// info dict (architecture §3: `pieces` makes them 10–60 KB).
-const INITIAL_ESTIMATE: u64 = 64 << 10;
 
 /// The bytes a fetched key holds: an upper estimate, with its heap.
 pub fn weigh(fetched: &Fetched) -> u64 {
@@ -146,6 +182,224 @@ pub fn weigh(fetched: &Fetched) -> u64 {
         + fetched.pex.capacity() * std::mem::size_of::<SocketAddr>()
         + fetched.client.as_ref().map_or(0, String::capacity);
     (std::mem::size_of::<FetchedKey>() + heap) as u64
+}
+
+/// How long a stopping pool waits for its consumer to take the results it
+/// still holds. After that the rest go back into the saved queue, as they
+/// do when the consumer is gone.
+pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(5);
+
+/// The pool's byte budget (X-fetch-meta-reserve): what fetches in flight
+/// have reserved for their results, plus the bytes of finished results the
+/// pool holds, against [`PoolConfig::max_held_bytes`]. Both are in
+/// [`weigh`]'s units.
+#[derive(Debug)]
+struct Budget {
+    limit: u64,
+    state: std::sync::Mutex<BudgetState>,
+    /// Woken whenever bytes are released, for reservations waiting.
+    freed: Notify,
+    /// Woken when a reservation stops waiting, so the pool can dispatch.
+    settled: Notify,
+}
+
+#[derive(Debug, Default)]
+struct BudgetState {
+    reserved: u64,
+    held: u64,
+    /// Waiting reservations, oldest first, by claim id. Only the oldest
+    /// may take room, so a large one isn't starved by small ones.
+    queue: VecDeque<u64>,
+    next_id: u64,
+}
+
+impl Budget {
+    fn new(limit: usize) -> Budget {
+        Budget {
+            limit: limit as u64,
+            state: std::sync::Mutex::new(BudgetState::default()),
+            freed: Notify::new(),
+            settled: Notify::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BudgetState> {
+        // Nothing under it panics (the counts saturate), so a poisoned
+        // lock would still hold the best counts known.
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Held and reserved bytes, read together.
+    fn usage(&self) -> (u64, u64) {
+        let s = self.lock();
+        (s.held, s.reserved)
+    }
+
+    /// Room for another fetch: under the budget and nothing waiting.
+    fn has_room(&self) -> bool {
+        let s = self.lock();
+        s.queue.is_empty() && s.reserved.saturating_add(s.held) < self.limit
+    }
+
+    /// Bytes the pool no longer holds.
+    fn release_held(&self, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        let mut s = self.lock();
+        s.held = s.held.saturating_sub(bytes);
+        drop(s);
+        self.freed.notify_waiters();
+    }
+}
+
+/// One fetch's claim on the pool's byte budget, handed to
+/// [`Fetcher::fetch_reserving`]. Clones share one claim, released when the
+/// last of them is dropped: whether the fetch succeeded, failed, timed
+/// out, was cancelled or panicked. A success turns the claim into the
+/// held bytes of its result instead.
+#[derive(Debug, Clone)]
+pub struct Reservation(Arc<Claim>);
+
+#[derive(Debug)]
+struct Claim {
+    budget: Arc<Budget>,
+    id: u64,
+    /// Bytes reserved; changed only under the budget's lock.
+    bytes: AtomicU64,
+    /// Set while waiting for room and left set if the wait never ended:
+    /// the fetch ran out of time waiting, not because of its peer.
+    waited_out: AtomicBool,
+}
+
+impl Reservation {
+    fn new(budget: Arc<Budget>) -> Reservation {
+        let id = {
+            let mut s = budget.lock();
+            s.next_id += 1;
+            s.next_id
+        };
+        Reservation(Arc::new(Claim {
+            budget,
+            id,
+            bytes: AtomicU64::new(0),
+            waited_out: AtomicBool::new(false),
+        }))
+    }
+
+    /// Reserves room for a result whose heap holds at most `heap` bytes
+    /// (with the [`FetchedKey`] itself, [`weigh`]'s units), waiting while
+    /// the budget is full. Called again, it keeps the larger reservation.
+    ///
+    /// The first fetch to find the budget empty of everything else always
+    /// gets its room, so even a dict larger than the whole budget is
+    /// fetched, alone. Waiting reservations are served oldest first.
+    /// Cancel-safe: dropped while waiting, it leaves the queue and has
+    /// taken nothing.
+    pub async fn reserve(&self, heap: usize) {
+        let want = (std::mem::size_of::<FetchedKey>() as u64).saturating_add(heap as u64);
+        let claim = &*self.0;
+        let budget = &*claim.budget;
+        let mut queued: Option<Queued<'_>> = None;
+        loop {
+            let freed = budget.freed.notified();
+            tokio::pin!(freed);
+            freed.as_mut().enable();
+            if self.try_grow(want) {
+                if let Some(q) = queued.take() {
+                    claim.waited_out.store(false, Ordering::Relaxed);
+                    q.leave();
+                }
+                return;
+            }
+            if queued.is_none() {
+                claim.waited_out.store(true, Ordering::Relaxed);
+                budget.lock().queue.push_back(claim.id);
+                queued = Some(Queued(claim));
+            }
+            freed.await;
+        }
+    }
+
+    /// Takes the room for `want` bytes if it fits, or if nothing else is
+    /// reserved or held; never ahead of an older waiting reservation.
+    fn try_grow(&self, want: u64) -> bool {
+        let claim = &*self.0;
+        let mut s = claim.budget.lock();
+        let mine = claim.bytes.load(Ordering::Relaxed);
+        if mine >= want {
+            return true;
+        }
+        if s.queue.front().is_some_and(|&id| id != claim.id) {
+            return false;
+        }
+        let used = s.reserved.saturating_add(s.held);
+        let others = used.saturating_sub(mine);
+        let extra = want - mine;
+        if others > 0 && used.saturating_add(extra) > claim.budget.limit {
+            return false;
+        }
+        s.reserved += extra;
+        claim.bytes.store(want, Ordering::Relaxed);
+        true
+    }
+
+    /// The bytes reserved.
+    pub fn bytes(&self) -> u64 {
+        self.0.bytes.load(Ordering::Relaxed)
+    }
+
+    /// The fetch's result weighs `weight`: its reservation becomes held
+    /// bytes. A fetcher that reserved less (or nothing) adds the rest here,
+    /// after the fact.
+    fn settle(&self, weight: u64) {
+        let claim = &*self.0;
+        let mut s = claim.budget.lock();
+        let mine = claim.bytes.swap(0, Ordering::Relaxed);
+        s.reserved = s.reserved.saturating_sub(mine);
+        s.held = s.held.saturating_add(weight);
+        drop(s);
+        if weight < mine {
+            claim.budget.freed.notify_waiters();
+        }
+    }
+
+    fn waited_out(&self) -> bool {
+        self.0.waited_out.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let mine = *self.bytes.get_mut();
+        if mine > 0 {
+            let mut s = self.budget.lock();
+            s.reserved = s.reserved.saturating_sub(mine);
+            drop(s);
+            self.budget.freed.notify_waiters();
+        }
+    }
+}
+
+/// A claim's place in the budget's queue; leaving it (or being dropped
+/// with a cancelled wait) wakes the next waiter and the pool.
+struct Queued<'a>(&'a Claim);
+
+impl Queued<'_> {
+    fn leave(self) {}
+}
+
+impl Drop for Queued<'_> {
+    fn drop(&mut self) {
+        let budget = &*self.0.budget;
+        let mut s = budget.lock();
+        if let Some(i) = s.queue.iter().position(|&id| id == self.0.id) {
+            s.queue.remove(i);
+        }
+        drop(s);
+        budget.freed.notify_waiters();
+        budget.settled.notify_one();
+    }
 }
 
 impl Default for PoolConfig {
@@ -240,9 +494,15 @@ pub struct PoolStats {
     /// Gauge: the bytes of finished fetches the pool holds (see
     /// [`PoolConfig::max_held_bytes`]).
     pub held_bytes: AtomicU64,
-    /// Times the held-bytes budget, or the estimate of what fetches in
-    /// flight will bring, stopped the pool starting fetches.
+    /// Times the budget (held plus reserved bytes) or a waiting
+    /// reservation stopped the pool starting fetches. A result waiting for
+    /// an output slot stops it too, but isn't counted here.
     pub held_full: AtomicU64,
+    /// Gauge: the bytes fetches in flight have reserved for their results.
+    pub reserved_bytes: AtomicU64,
+    /// Fetches whose deadline ran out while they waited for a reservation.
+    /// The peer isn't charged: it's tried again later.
+    pub reserve_timeouts: AtomicU64,
 }
 
 impl PoolStats {
@@ -347,6 +607,10 @@ pub struct PoolIo {
     pub discoveries: mpsc::Receiver<Discovery>,
     /// Peer-finder plugins' request channels.
     pub peer_finders: Vec<mpsc::Sender<PeerRequest>>,
+    /// Where fetched keys go. The pool must be this channel's only sender:
+    /// it reads the channel's length to tell which of its results the
+    /// consumer still hasn't taken, and another sender's items would be
+    /// counted as the pool's (an overcount, which only slows fetching).
     pub out: mpsc::Sender<FetchedKey>,
     pub funnel: Arc<dyn Funnel>,
     pub shutdown: Shutdown,
@@ -375,6 +639,7 @@ pub fn spawn(
     let admission = config
         .coordinated_admission
         .then(|| Admission::new(io.peer_finders.len(), config.finder_capacity.max(1)));
+    let budget = Arc::new(Budget::new(config.max_held_bytes));
     let mut pool = Pool {
         cfg: config,
         fetcher,
@@ -401,15 +666,12 @@ pub fn spawn(
         recent: HashSet::new(),
         recent_order: VecDeque::new(),
         first_batch: HashMap::new(),
-        finished: Arc::new(AtomicU64::new(0)),
         outbox: VecDeque::new(),
-        outbox_bytes: 0,
         sent: VecDeque::new(),
-        sent_bytes: 0,
         permits: Vec::new(),
         out_closed: false,
-        estimate: INITIAL_ESTIMATE,
         full: false,
+        budget,
     };
     for (source, weight) in weights {
         pool.source(source).weight = weight.max(1);
@@ -542,7 +804,9 @@ struct Pool {
     lookups: usize,
     requests: RequestMap,
     per_ip: HashMap<IpAddr, usize>,
-    tasks: JoinSet<Result<Fetched, FailureKind>>,
+    /// Each fetch's result, and whether it ran out of time waiting for a
+    /// reservation.
+    tasks: JoinSet<(Result<Fetched, FailureKind>, bool)>,
     /// What each fetch task is fetching, so even a panicked task is
     /// accounted for.
     task_keys: HashMap<Id, (InfoHash, SocketAddr)>,
@@ -551,20 +815,14 @@ struct Pool {
     /// Streaming peers: when keys not yet fetched got their first batch,
     /// for the first-batch-to-fetch time. At most one per entry.
     first_batch: HashMap<InfoHash, Instant>,
-    /// The bytes of fetches that finished and haven't been joined yet. A
-    /// fetch task adds its result's weight as it finishes; joining it
-    /// takes the weight off again.
-    finished: Arc<AtomicU64>,
     /// Joined results waiting for a slot in the output channel, oldest
     /// first, with their weights.
     outbox: VecDeque<Waiting>,
-    outbox_bytes: u64,
     /// The weights of results sent into the output channel, oldest first,
     /// back to the oldest the consumer may not have taken yet. The pool is
     /// the channel's only sender, so the channel's length says how many of
     /// these it still holds ([`settle`](Self::settle)).
     sent: VecDeque<u64>,
-    sent_bytes: u64,
     /// Output slots reserved and not yet used. Each reservation completes
     /// when the consumer has taken an item, which is what wakes the pool to
     /// release that item's bytes.
@@ -572,11 +830,12 @@ struct Pool {
     /// The output channel's receiver is gone; results wait in the outbox
     /// and go back to the queue at shutdown.
     out_closed: bool,
-    /// The bytes a fetch in flight is expected to bring: a moving average
-    /// over finished fetches, a failure counting as 0.
-    estimate: u64,
     /// The budget stopped fetching at the last dispatch.
     full: bool,
+    /// Bytes reserved by fetches in flight and held in finished results,
+    /// from the moment a fetch finishes (its reservation becomes the
+    /// result's weight) until the consumer takes it or the pool drops it.
+    budget: Arc<Budget>,
 }
 
 /// A queued copy still stands for its entry: the entry waits for a
@@ -606,6 +865,7 @@ impl Pool {
         // A second handle on the output, for reserving slots while the
         // pool's own state is borrowed by the other branches.
         let reserver = self.out.clone();
+        let budget = self.budget.clone();
         loop {
             self.flush();
             self.dispatch();
@@ -624,12 +884,14 @@ impl Pool {
                 _ = shutdown.requested() => break,
                 Some(joined) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
                     match joined {
-                        Ok((id, result)) => self.joined(id, result),
+                        Ok((id, (result, waited_out))) => self.joined(id, result, waited_out),
                         // Only a panic ends a fetch task early: a bug, but
                         // one peer's bytes mustn't take the pool down.
-                        Err(e) => self.joined(e.id(), Err(FailureKind::Invalid)),
+                        Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false),
                     }
                 }
+                // A reservation stopped waiting: dispatch may start again.
+                () = budget.settled.notified(), if self.full => {}
                 permit = async { reserver.clone().reserve_owned().await }, if reserve => {
                     match permit {
                         Ok(permit) => self.permits.push(permit),
@@ -671,11 +933,12 @@ impl Pool {
         // with the queue.
         while let Some(joined) = self.tasks.join_next_with_id().await {
             match joined {
-                Ok((id, result)) => self.joined(id, result),
+                Ok((id, (result, waited_out))) => self.joined(id, result, waited_out),
+                // Its reservation went with the task.
                 Err(e) if e.is_cancelled() => {
                     self.task_keys.remove(&e.id());
                 }
-                Err(e) => self.joined(e.id(), Err(FailureKind::Invalid)),
+                Err(e) => self.joined(e.id(), Err(FailureKind::Invalid), false),
             }
         }
         if let Some(a) = &mut self.admission {
@@ -683,17 +946,29 @@ impl Pool {
             self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
         }
         // Drain what's waiting for the consumer, which runs until the pool
-        // ends (the pipeline stops the pool first). Without a consumer, a
-        // result goes back to the queue, to be fetched again next run.
+        // ends (the pipeline stops the pool first). Without a consumer, or
+        // with one that hasn't taken them by the deadline, a result goes
+        // back to the queue, to be fetched again next run.
         self.flush();
+        let drain_by = Instant::now() + SHUTDOWN_DRAIN;
         let mut requeued = Vec::new();
         while let Some(w) = self.outbox.pop_front() {
-            self.outbox_bytes -= w.weight;
+            self.budget.release_held(w.weight);
             if self.out_closed {
                 requeued.push(w.queued());
-            } else if let Err(e) = self.out.send(w.out).await {
-                self.out_closed = true;
-                requeued.push(queued(&e.0, w.interest));
+                continue;
+            }
+            match timeout_at(drain_by, self.out.reserve()).await {
+                Ok(Ok(permit)) => permit.send(w.out),
+                Ok(Err(_)) => {
+                    self.out_closed = true;
+                    requeued.push(w.queued());
+                }
+                Err(_) => {
+                    // The consumer is stalled: the rest go back too.
+                    self.out_closed = true;
+                    requeued.push(w.queued());
+                }
             }
         }
         self.permits.clear();
@@ -705,14 +980,16 @@ impl Pool {
         queue
     }
 
-    /// Takes a joined fetch's weight off [`finished`](Self::finished) and
-    /// handles its result.
-    fn joined(&mut self, id: Id, result: Result<Fetched, FailureKind>) {
-        if let Ok(fetched) = &result {
-            self.finished.fetch_sub(weigh(fetched), Ordering::Relaxed);
-        }
-        if let Some((key, peer)) = self.task_keys.remove(&id) {
-            self.on_result(key, peer, result);
+    /// Handles a joined fetch's result. Its bytes are already held in the
+    /// budget (the task settled its reservation as it finished).
+    fn joined(&mut self, id: Id, result: Result<Fetched, FailureKind>, waited_out: bool) {
+        match self.task_keys.remove(&id) {
+            Some((key, peer)) => self.on_result(key, peer, result, waited_out),
+            None => {
+                if let Ok(fetched) = &result {
+                    self.budget.release_held(weigh(fetched));
+                }
+            }
         }
     }
 
@@ -732,10 +1009,8 @@ impl Pool {
                 },
             };
             let w = self.outbox.pop_front().expect("not empty");
-            self.outbox_bytes -= w.weight;
             permit.send(w.out);
             self.sent.push_back(w.weight);
-            self.sent_bytes += w.weight;
         }
         self.settle();
     }
@@ -750,28 +1025,11 @@ impl Pool {
         } else {
             self.out.max_capacity().saturating_sub(free)
         };
+        let mut taken = 0;
         while self.sent.len() > queued {
-            let weight = self.sent.pop_front().expect("longer than queued");
-            self.sent_bytes -= weight;
+            taken += self.sent.pop_front().expect("longer than queued");
         }
-    }
-
-    /// The bytes of finished fetches the pool holds.
-    fn held(&self) -> u64 {
-        self.finished.load(Ordering::Relaxed) + self.outbox_bytes + self.sent_bytes
-    }
-
-    /// Whether the budget has room for one more fetch: what's held is
-    /// under it, and so is that plus what the fetches in flight, this one
-    /// included, are expected to bring. The first fetch always has room,
-    /// so a budget smaller than one dict still makes progress.
-    fn has_room(&self, held: u64) -> bool {
-        let budget = self.cfg.max_held_bytes as u64;
-        if held >= budget {
-            return false;
-        }
-        let flying = self.tasks.len() as u64 + 1;
-        self.tasks.is_empty() || held.saturating_add(flying.saturating_mul(self.estimate)) <= budget
+        self.budget.release_held(taken);
     }
 
     fn source(&mut self, id: SourceId) -> &mut SourceQueue {
@@ -796,8 +1054,9 @@ impl Pool {
             Cmd::Snapshot(reply) => {
                 // Results not yet handed over are saved too: a crash
                 // before they're sent would otherwise lose them silently.
-                // One stored meanwhile is skipped on restore, as a key
-                // fetching when the queue was saved is.
+                // Nothing filters one stored after this save: restore skips
+                // only keys already queued, so it's fetched again next run,
+                // as a key fetching when the queue was saved is.
                 let mut queue = self.snapshot();
                 if !self.outbox.is_empty() {
                     queue.extend(self.outbox.iter().map(Waiting::queued));
@@ -1714,11 +1973,13 @@ impl Pool {
             return;
         }
         self.settle();
-        let held = self.held();
         let mut full = false;
         let mut deferred = Vec::new();
         while self.tasks.len() < self.cfg.max_sockets {
-            if !self.has_room(held) {
+            // The budget is checked before each start: a fetch reserves
+            // only at its handshake, so this can't foresee its bytes, but a
+            // full budget or a reservation waiting stops more starting.
+            if !self.budget.has_room() {
                 // Counted only when a key may be waiting for a socket.
                 full = !self.interest.is_empty() || !self.rotation.is_empty();
                 break;
@@ -1751,15 +2012,17 @@ impl Pool {
                     .fetch_add(1, Ordering::Relaxed);
             }
             *self.per_ip.entry(peer.ip()).or_insert(0) += 1;
-            let fetch = self.fetcher.fetch(peer, key);
-            let finished = self.finished.clone();
+            let reservation = Reservation::new(self.budget.clone());
+            let fetch = self.fetcher.fetch_reserving(peer, key, reservation.clone());
             let handle = self.tasks.spawn(async move {
                 let result = fetch.await;
-                // Counted from the moment it finishes, joined or not.
+                // Held from the moment it finishes, joined or not; on any
+                // other ending the reservation is released as it drops.
                 if let Ok(fetched) = &result {
-                    finished.fetch_add(weigh(fetched), Ordering::Relaxed);
+                    reservation.settle(weigh(fetched));
                 }
-                result
+                let waited_out = result.is_err() && reservation.waited_out();
+                (result, waited_out)
             });
             self.task_keys.insert(handle.id(), (key, peer));
         }
@@ -1849,7 +2112,13 @@ impl Pool {
         None
     }
 
-    fn on_result(&mut self, key: InfoHash, peer: SocketAddr, result: Result<Fetched, FailureKind>) {
+    fn on_result(
+        &mut self,
+        key: InfoHash,
+        peer: SocketAddr,
+        result: Result<Fetched, FailureKind>,
+        waited_out: bool,
+    ) {
         if let Some(n) = self.per_ip.get_mut(&peer.ip()) {
             *n -= 1;
             if *n == 0 {
@@ -1857,10 +2126,27 @@ impl Pool {
             }
         }
         let weight = result.as_ref().map_or(0, weigh);
-        self.estimate = (self.estimate - self.estimate / 16 + weight / 16).max(1);
         let Some(e) = self.entries.get_mut(&key) else {
+            // Abandoned (a purge): its bytes go with it.
+            self.budget.release_held(weight);
             return;
         };
+        if waited_out {
+            // The deadline ran out while it waited for room in the budget:
+            // not the peer's failure. The peer is tried again, and no
+            // attempt is used.
+            self.stats.reserve_timeouts.fetch_add(1, Ordering::Relaxed);
+            if let Some(i) = e.peers[..e.tried].iter().position(|p| *p == peer) {
+                e.peers.swap(i, e.tried - 1);
+                e.tried -= 1;
+            }
+            if e.has_untried() {
+                self.make_ready(key);
+            } else {
+                self.back_off(key);
+            }
+            return;
+        }
         match result {
             Ok(fetched) => {
                 let e = self.entries.remove(&key).expect("present");
@@ -1890,7 +2176,6 @@ impl Pool {
                     weight,
                     interest,
                 });
-                self.outbox_bytes += weight;
             }
             Err(kind) => {
                 self.stats.failures[failure_index(kind)].fetch_add(1, Ordering::Relaxed);
@@ -1983,7 +2268,7 @@ impl Pool {
         }
         // Results waiting for an output slot are still the pool's: the
         // same rule applies to them, as to the fetch they came from.
-        let mut dropped = 0;
+        let mut dropped = HashSet::new();
         let mut kept = VecDeque::with_capacity(self.outbox.len());
         for mut w in std::mem::take(&mut self.outbox) {
             let out = &mut w.out;
@@ -1993,8 +2278,8 @@ impl Pool {
             }
             let rest = out.sources & !bit;
             if rest == 0 {
-                self.outbox_bytes -= w.weight;
-                dropped += 1;
+                self.budget.release_held(w.weight);
+                dropped.insert(out.key);
                 // Found again by another source, it's new, not a duplicate.
                 self.recent.remove(&out.key);
                 self.stats.evicted_service[3].fetch_add(1, Ordering::Relaxed);
@@ -2010,7 +2295,12 @@ impl Pool {
             kept.push_back(w);
         }
         self.outbox = kept;
-        only.len() + dropped
+        if !dropped.is_empty() {
+            // Its place in the recent order goes too, or ageing it out
+            // later would forget the key if it's fetched again.
+            self.recent_order.retain(|k| !dropped.contains(k));
+        }
+        only.len() + dropped.len()
     }
 
     fn lose(&mut self, key: InfoHash, loss: Loss) {
@@ -2085,7 +2375,9 @@ impl Pool {
     fn publish_stats(&mut self) {
         self.settle();
         let s = &self.stats;
-        s.held_bytes.store(self.held(), Ordering::Relaxed);
+        let (held, reserved) = self.budget.usage();
+        s.held_bytes.store(held, Ordering::Relaxed);
+        s.reserved_bytes.store(reserved, Ordering::Relaxed);
         let waiting = self.entries.len().saturating_sub(self.tasks.len());
         s.pending
             .store(self.entries.len() as u64, Ordering::Relaxed);
@@ -2111,7 +2403,7 @@ fn queue_order(q: &QueuedKey) -> (Reverse<u8>, i64, [u8; 20]) {
 /// A fetched result waiting for a slot in the output channel.
 struct Waiting {
     out: FetchedKey,
-    /// Its [`weigh`]t, counted in `outbox_bytes`.
+    /// Its [`weigh`]t, held in the budget.
     weight: u64,
     /// A user asked for it; kept if it goes back to the queue.
     interest: bool,
@@ -2331,5 +2623,126 @@ mod pause_cancel {
         assert_eq!(handle.stats().retry_unaccepted.load(Ordering::Relaxed), 0);
         stop.send(true).unwrap();
         task.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod budget {
+    //! The byte budget's claims (X-fetch-meta-reserve): each is released
+    //! exactly once, whichever way its fetch ends.
+    use super::*;
+
+    const KEY: u64 = std::mem::size_of::<FetchedKey>() as u64;
+
+    fn used(b: &Budget) -> u64 {
+        let (held, reserved) = b.usage();
+        held + reserved
+    }
+
+    #[tokio::test]
+    async fn a_claim_is_released_once_when_its_last_clone_drops() {
+        let b = Arc::new(Budget::new(1000));
+        let r = Reservation::new(b.clone());
+        let copy = r.clone();
+        r.reserve(100).await;
+        // Again, smaller: it keeps the larger reservation.
+        copy.reserve(50).await;
+        assert_eq!(r.bytes(), KEY + 100);
+        assert_eq!(b.usage(), (0, KEY + 100));
+        drop(r);
+        assert_eq!(b.usage(), (0, KEY + 100), "a clone still holds it");
+        drop(copy);
+        assert_eq!(b.usage(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn a_settled_claim_becomes_held_bytes_and_releases_the_rest() {
+        let b = Arc::new(Budget::new(1000));
+        let r = Reservation::new(b.clone());
+        r.reserve(200).await;
+        r.settle(KEY + 150);
+        assert_eq!(b.usage(), (KEY + 150, 0));
+        drop(r);
+        assert_eq!(b.usage(), (KEY + 150, 0), "nothing released twice");
+        b.release_held(KEY + 150);
+        assert_eq!(used(&b), 0);
+        // A fetcher that reserved nothing is counted after the fact.
+        let r = Reservation::new(b.clone());
+        r.settle(500);
+        drop(r);
+        assert_eq!(b.usage(), (500, 0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_full_budget_makes_reservations_wait_oldest_first() {
+        let b = Arc::new(Budget::new(4 * KEY as usize + 300));
+        let first = Reservation::new(b.clone());
+        first.reserve(2 * KEY as usize + 250).await;
+        assert!(b.has_room());
+        // Too large to fit beside the first: it waits, and so does a small
+        // one after it that would fit beside the first.
+        let big = Reservation::new(b.clone());
+        let small = Reservation::new(b.clone());
+        let mut big_wait = tokio::spawn({
+            let big = big.clone();
+            async move { big.reserve(KEY as usize + 40).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let mut small_wait = tokio::spawn({
+            let small = small.clone();
+            async move { small.reserve(10).await }
+        });
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert!(!big_wait.is_finished() && !small_wait.is_finished());
+        assert!(!b.has_room(), "no fetch starts while one waits");
+        assert!(big.0.waited_out.load(Ordering::Relaxed));
+        // The first ends: the big one goes first, then the small one fits.
+        drop(first);
+        (&mut big_wait).await.unwrap();
+        assert!(!big.0.waited_out.load(Ordering::Relaxed));
+        (&mut small_wait).await.unwrap();
+        assert_eq!(used(&b), big.bytes() + small.bytes());
+        assert!(used(&b) <= 4 * KEY + 300);
+        drop((big, small));
+        assert_eq!(used(&b), 0);
+        assert!(b.has_room());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_wait_leaves_the_queue_and_takes_nothing() {
+        let b = Arc::new(Budget::new(KEY as usize + 100));
+        let first = Reservation::new(b.clone());
+        first.reserve(100).await;
+        let waiting = Reservation::new(b.clone());
+        let timed_out = tokio::time::timeout(Duration::from_secs(8), waiting.reserve(100)).await;
+        assert!(timed_out.is_err());
+        assert!(waiting.waited_out(), "ran out of time waiting");
+        assert_eq!(waiting.bytes(), 0);
+        assert!(b.lock().queue.is_empty(), "left the queue");
+        drop(waiting);
+        assert_eq!(used(&b), KEY + 100);
+        // Another can still go once the first ends.
+        drop(first);
+        let next = Reservation::new(b.clone());
+        next.reserve(100).await;
+        assert_eq!(used(&b), KEY + 100);
+    }
+
+    /// A dict larger than the whole budget is reserved once nothing else
+    /// is reserved or held, so it's fetched alone rather than never.
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_over_the_budget_passes_alone() {
+        let b = Arc::new(Budget::new(100));
+        let r = Reservation::new(b.clone());
+        r.reserve(10_000).await;
+        assert_eq!(used(&b), KEY + 10_000);
+        r.settle(KEY + 10_000);
+        drop(r);
+        let next = Reservation::new(b.clone());
+        let wait = tokio::time::timeout(Duration::from_secs(8), next.reserve(1)).await;
+        assert!(wait.is_err(), "waits while the big one is held");
+        b.release_held(KEY + 10_000);
+        next.reserve(1).await;
+        assert_eq!(used(&b), KEY + 1);
     }
 }
