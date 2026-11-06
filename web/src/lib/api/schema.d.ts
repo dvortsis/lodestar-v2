@@ -8333,7 +8333,9 @@ export interface components {
             purge_pending: boolean;
             /**
              * @description Its stored state or saved settings differ from what's running: it
-             *     starts, stops or picks up its new settings at the next restart.
+             *     starts or picks up its new settings at the next restart. Turning
+             *     it off stops it at once: for that, this stays true only until it
+             *     has stopped.
              */
             restart_required: boolean;
             /** @enum {string} */
@@ -8470,8 +8472,8 @@ export interface components {
         };
         /**
          * @description `PATCH /sources/{id}`. Fields left out keep their values. A new
-         *     priority applies at once; enabling or disabling takes effect at the
-         *     next start (`restart_required`).
+         *     priority applies at once, and disabling stops the source at once;
+         *     enabling takes effect at the next start (`restart_required`).
          * @example {
          *       "enabled": true,
          *       "priority": "high"

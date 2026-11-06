@@ -325,6 +325,10 @@ enum Keys {
 
 struct Inner {
     store: Arc<Mutex<Store>>,
+    /// Where [`EgressCredentials::source_enabled`] reads the source's
+    /// state: `store` unless [`SourceCredentials::reading_states_from`]
+    /// gave it a connection of its own (X-egress-state-watch).
+    states: Arc<Mutex<Store>>,
     keys: Keys,
 }
 
@@ -342,10 +346,13 @@ impl std::fmt::Debug for SourceCredentials {
 }
 
 impl SourceCredentials {
-    /// Over the install's key file in `data_dir`.
+    /// Over the install's key file in `data_dir`. Source states are read
+    /// from `store` too, until [`reading_states_from`](Self::reading_states_from)
+    /// says otherwise.
     pub fn new(store: Arc<Mutex<Store>>, data_dir: PathBuf) -> SourceCredentials {
         SourceCredentials {
             inner: Arc::new(Inner {
+                states: store.clone(),
                 store,
                 keys: Keys::Dir(data_dir, Mutex::new(None)),
             }),
@@ -356,8 +363,33 @@ impl SourceCredentials {
     pub fn with_keys(store: Arc<Mutex<Store>>, keys: Arc<SecretStore>) -> SourceCredentials {
         SourceCredentials {
             inner: Arc::new(Inner {
+                states: store.clone(),
                 store,
                 keys: Keys::Fixed(keys),
+            }),
+        }
+    }
+
+    /// Reads source states for egress from `reader`, a read-only
+    /// connection to the same database ([`Store::open_reader`]) that only
+    /// this check uses, so a long API or Control operation holding the
+    /// shared store's lock can't hold back a plugin's requests
+    /// (X-egress-state-watch). The reader takes a fresh WAL snapshot for
+    /// every read, so a state any writer commits is seen by the next
+    /// request: there's no second copy to keep in step. Call it before
+    /// cloning: a clone of `self` keeps reading states under the shared
+    /// store's lock.
+    pub fn reading_states_from(self, reader: Arc<Mutex<Store>>) -> SourceCredentials {
+        let keys = match &self.inner.keys {
+            Keys::Fixed(k) => Keys::Fixed(k.clone()),
+            // Opened again on first use, from the same file.
+            Keys::Dir(dir, _) => Keys::Dir(dir.clone(), Mutex::new(None)),
+        };
+        SourceCredentials {
+            inner: Arc::new(Inner {
+                store: self.inner.store.clone(),
+                states: reader,
+                keys,
             }),
         }
     }
@@ -442,7 +474,8 @@ impl EgressCredentials for SourceCredentials {
         })
     }
 
-    /// The source's row in the store, read now: Enabled or not.
+    /// The source's row in the store, read now on the states connection:
+    /// Enabled or not. A missing row or a read error is never Enabled.
     fn source_enabled<'a>(
         &'a self,
         source: &'a str,
@@ -453,7 +486,7 @@ impl EgressCredentials for SourceCredentials {
             tokio::task::spawn_blocking(move || {
                 let rows = this
                     .inner
-                    .store
+                    .states
                     .lock()
                     .map_err(|_| CredentialError)?
                     .sources()
