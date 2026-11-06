@@ -2,7 +2,14 @@
 //! (with the first run's setup token, §12) goes to
 //! `<data>/logs/lodestar.log`. The file is capped: past [`MAX_BYTES`] it
 //! becomes `lodestar.log.1` (replacing the previous one) and a new file
-//! starts, so the folder never holds more than twice the cap.
+//! starts, so the folder normally holds no more than twice the cap.
+//!
+//! While another program holds the file without sharing delete (a log
+//! viewer, say), Windows refuses the rename. Records then go on into the
+//! current file, and the rename is tried again only after
+//! [`ROTATION_RETRY`], as the JSONL file sink does. The current file
+//! stops at twice the cap ([`LogFile`] has the bound), so the folder holds
+//! at most three times the cap.
 //!
 //! Since B-log1b the service's logging runtime writes its console here
 //! ([`Console`]), beside the structured `lodestar.jsonl`.
@@ -11,11 +18,16 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use tracing_subscriber::fmt::MakeWriter;
 
 /// One file's cap (§12.1's default rotation size).
 pub const MAX_BYTES: u64 = 16 << 20;
+
+/// How long after a failed rotation the next one is tried: the value and
+/// meaning of the JSONL file sink's (`logging::file`).
+pub const ROTATION_RETRY: Duration = Duration::from_secs(60);
 
 /// `<data>/logs/lodestar.log`.
 pub fn path(data_dir: &Path) -> PathBuf {
@@ -61,6 +73,16 @@ fn create_private(dir: &Path) -> io::Result<()> {
 }
 
 /// An append-only log file that rotates once at `max` bytes.
+///
+/// **Bound while a rotation waits.** A failed rename (another program
+/// holds the file) isn't tried again for [`ROTATION_RETRY`]; records keep
+/// landing whole and in order in the current file meanwhile. So the file
+/// reaches the cap plus what [`ROTATION_RETRY`] of writes adds, and grows
+/// by that again for each further failed attempt, but never past twice
+/// the cap: a record that would take a non-empty file past that is
+/// refused (an error, as the JSONL sink refuses lines at its total cap)
+/// until a rotation succeeds. The folder then holds at most three times
+/// the cap.
 #[derive(Debug)]
 pub struct LogFile {
     path: PathBuf,
@@ -73,6 +95,11 @@ struct Inner {
     /// `None` after a failed reopen; the next write tries again.
     file: Option<File>,
     size: u64,
+    /// No rotation before this, after one failed.
+    retry_at: Option<Instant>,
+    /// Rename attempts so far.
+    #[cfg(test)]
+    renames: u32,
 }
 
 impl LogFile {
@@ -89,6 +116,9 @@ impl LogFile {
             inner: Mutex::new(Inner {
                 file: Some(file),
                 size,
+                retry_at: None,
+                #[cfg(test)]
+                renames: 0,
             }),
         })
     }
@@ -102,26 +132,53 @@ impl LogFile {
 
     /// Writes one record whole, rotating first if it would pass the cap.
     fn write_record(&self, buf: &[u8]) -> io::Result<()> {
+        self.write_record_at(buf, Instant::now())
+    }
+
+    /// [`write_record`](Self::write_record) at `now`, the tests' clock.
+    fn write_record_at(&self, buf: &[u8], now: Instant) -> io::Result<()> {
         let mut inner = self.lock();
-        if inner.size > 0 && inner.size + buf.len() as u64 > self.max {
+        let len = buf.len() as u64;
+        let over = inner.size > 0 && inner.size + len > self.max;
+        // As in the JSONL sink, only a successful rename ends the wait.
+        if over && inner.retry_at.is_none_or(|t| now >= t) {
             // Closed before the rename: Windows won't rename an open file
             // unless every handle allows it.
             inner.file = None;
-            // If the rename fails (another program has the file open),
-            // keep appending rather than lose records; the next record
-            // tries again.
-            let _ = fs::rename(&self.path, self.rotated_path());
-            inner.size = 0;
+            #[cfg(test)]
+            {
+                inner.renames += 1;
+            }
+            match fs::rename(&self.path, self.rotated_path()) {
+                Ok(()) => {
+                    inner.size = 0;
+                    inner.retry_at = None;
+                }
+                // Another program has the file open: keep appending
+                // rather than lose records, and don't pay for a close,
+                // a rename and a reopen on every record meanwhile.
+                Err(_) => inner.retry_at = Some(now + ROTATION_RETRY),
+            }
         }
         if inner.file.is_none() {
             let file = append(&self.path)?;
             inner.size = file.metadata()?.len();
             inner.file = Some(file);
         }
+        if inner.size > 0 && inner.size + len > self.ceiling() {
+            return Err(io::Error::other(
+                "the log file is at twice its cap and can't rotate yet",
+            ));
+        }
         let file = inner.file.as_mut().expect("opened above");
         file.write_all(buf)?;
-        inner.size += buf.len() as u64;
+        inner.size += len;
         Ok(())
+    }
+
+    /// Where a file that can't rotate stops: twice the cap.
+    fn ceiling(&self) -> u64 {
+        self.max.saturating_mul(2)
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -264,6 +321,148 @@ mod tests {
         fs::create_dir_all(dir.path().join("logs")).unwrap();
         write(&log, "cccc\n");
         assert_eq!(fs::read_to_string(&p).unwrap(), "cccc\n");
+    }
+
+    fn write_at(log: &LogFile, s: &str, now: Instant) {
+        log.write_record_at(s.as_bytes(), now).unwrap();
+    }
+
+    fn renames(log: &LogFile) -> u32 {
+        log.lock().renames
+    }
+
+    /// Makes every rename fail on any platform: the rotated name is a
+    /// folder that isn't empty. Returns what lifts it.
+    fn block_rotation(log: &LogFile) -> impl FnOnce() {
+        let blocker = log.rotated_path();
+        fs::create_dir(&blocker).unwrap();
+        fs::write(blocker.join("held"), b"").unwrap();
+        move || fs::remove_dir_all(&blocker).unwrap()
+    }
+
+    #[test]
+    fn a_failed_rotation_waits_before_trying_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = path(dir.path());
+        let log = LogFile::open(p.clone(), 10).unwrap();
+        let t0 = Instant::now();
+        write_at(&log, "aaaa\n", t0);
+        write_at(&log, "bbbb\n", t0);
+        let lift = block_rotation(&log);
+        write_at(&log, "cccc\n", t0); // past the cap: the rename fails
+        assert_eq!(renames(&log), 1);
+        write_at(&log, "d\n", t0 + Duration::from_secs(1));
+        lift();
+        // Free again, but the delay hasn't passed: no attempt.
+        write_at(&log, "e\n", t0 + ROTATION_RETRY - Duration::from_millis(1));
+        assert_eq!(renames(&log), 1);
+        assert!(!log.rotated_path().exists());
+        assert_eq!(fs::read_to_string(&p).unwrap(), "aaaa\nbbbb\ncccc\nd\ne\n");
+        // Once it has, the next record rotates first.
+        write_at(&log, "ffff\n", t0 + ROTATION_RETRY);
+        assert_eq!(renames(&log), 2);
+        assert_eq!(
+            fs::read_to_string(log.rotated_path()).unwrap(),
+            "aaaa\nbbbb\ncccc\nd\ne\n"
+        );
+        assert_eq!(fs::read_to_string(&p).unwrap(), "ffff\n");
+        // The wait is over: the next cap rotates at once.
+        write_at(&log, "gggg\n", t0 + ROTATION_RETRY);
+        write_at(&log, "hhhh\n", t0 + ROTATION_RETRY);
+        assert_eq!(renames(&log), 3);
+        assert_eq!(fs::read_to_string(&p).unwrap(), "hhhh\n");
+    }
+
+    #[test]
+    fn each_failed_attempt_starts_a_new_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = LogFile::open(path(dir.path()), 10).unwrap();
+        let t0 = Instant::now();
+        write_at(&log, "aaaaaaaa\n", t0);
+        let lift = block_rotation(&log);
+        write_at(&log, "b\n", t0);
+        let t1 = t0 + ROTATION_RETRY;
+        write_at(&log, "c\n", t1); // tried again, failed again
+        assert_eq!(renames(&log), 2);
+        write_at(&log, "d\n", t1 + ROTATION_RETRY - Duration::from_millis(1));
+        assert_eq!(renames(&log), 2);
+        lift();
+        write_at(&log, "e\n", t1 + ROTATION_RETRY);
+        assert_eq!(renames(&log), 3);
+        assert_eq!(
+            fs::read_to_string(log.rotated_path()).unwrap(),
+            "aaaaaaaa\nb\nc\nd\n"
+        );
+    }
+
+    /// The current file never passes twice the cap; records refused at
+    /// that ceiling are the only ones lost, and only while it can't
+    /// rotate.
+    #[test]
+    fn a_file_that_cant_rotate_stops_at_twice_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = path(dir.path());
+        let log = LogFile::open(p.clone(), 10).unwrap();
+        let t0 = Instant::now();
+        let lift = block_rotation(&log);
+        for line in ["aaaa\n", "bbbb\n", "cccc\n", "dddd\n"] {
+            write_at(&log, line, t0);
+        }
+        assert_eq!(fs::metadata(&p).unwrap().len(), 20);
+        assert!(log.write_record_at(b"e\n", t0).is_err());
+        assert_eq!(fs::metadata(&p).unwrap().len(), 20);
+        lift();
+        write_at(&log, "ffff\n", t0 + ROTATION_RETRY);
+        assert_eq!(
+            fs::read_to_string(log.rotated_path()).unwrap(),
+            "aaaa\nbbbb\ncccc\ndddd\n"
+        );
+        assert_eq!(fs::read_to_string(&p).unwrap(), "ffff\n");
+    }
+
+    /// A reader that holds `lodestar.log` without sharing delete, as a
+    /// log viewer may: the rename fails, every record still lands, and
+    /// the rename isn't tried again until the delay has passed. Once the
+    /// reader lets go and the delay is over, the file rotates.
+    #[cfg(windows)]
+    #[test]
+    fn a_reader_holding_the_file_delays_rotation() {
+        use std::io::Read;
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+
+        let dir = tempfile::tempdir().unwrap();
+        let p = path(dir.path());
+        let log = LogFile::open(p.clone(), 20).unwrap();
+        let t0 = Instant::now();
+        for line in ["aaaa\n", "bbbb\n", "cccc\n", "dddd\n"] {
+            write_at(&log, line, t0);
+        }
+        let mut reader = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&p)
+            .unwrap();
+        write_at(&log, "eeee\n", t0); // past the cap: refused by Windows
+        assert_eq!(renames(&log), 1);
+        assert!(!log.rotated_path().exists());
+        write_at(&log, "ffff\n", t0 + Duration::from_secs(30));
+        write_at(
+            &log,
+            "gggg\n",
+            t0 + ROTATION_RETRY - Duration::from_millis(1),
+        );
+        assert_eq!(renames(&log), 1);
+        let all = "aaaa\nbbbb\ncccc\ndddd\neeee\nffff\ngggg\n";
+        let mut seen = String::new();
+        reader.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, all);
+        drop(reader);
+        write_at(&log, "hhhh\n", t0 + ROTATION_RETRY);
+        assert_eq!(renames(&log), 2);
+        assert_eq!(fs::read_to_string(log.rotated_path()).unwrap(), all);
+        assert_eq!(fs::read_to_string(&p).unwrap(), "hhhh\n");
     }
 
     /// A logs folder made here is private even inside a data folder that
