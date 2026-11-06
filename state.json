@@ -3487,6 +3487,15 @@
       "status": "merged",
       "pr": 547,
       "merge": "0051d2bf"
+    },
+    "GS-gate": {
+      "status": "merged",
+      "pr": 546,
+      "merge": "d586e741"
+    },
+    "SRC-15b": {
+      "status": "running",
+      "session": "session_01MMjhnAVcRo5JpndpMaiznS"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5307,6 +5316,24 @@
       "notes_for": {
         "CMP-7": "health.path is RequestPath (allows $ ( ) ' ! & * and query): escape $$ / argv form when rendering compose healthcheck, or narrow the type"
       }
+    },
+    {
+      "id": "X-gs-gate-polish",
+      "from": "#546 review (non-blocking)",
+      "items": [
+        "size-budget timeout-minutes ~40",
+        "size-report.rs doc comment: --summary is $RUNNER_TEMP/size-report.md",
+        "decisions wording: within ~0.2 B, not hardware-independent exactly",
+        "dir_size non-recursive: watch new subdirs under torrent index (GS-2, RX-1 reviews)"
+      ]
+    },
+    {
+      "id": "X-consent-gate-lift",
+      "from": "runner 2026-11-06T21:25Z",
+      "items": [
+        "After SRC-15b merges: Opus slice flips consent_text_approved (crates/pipeline/src/control.rs) per class whose dialog ships the \u00a72.49 text; update ops/tests.rs + consent_gate.rs; fold into X-consent-gate-polish (add dep SRC-15b + control.rs owns) in next runner PR",
+        "Settle text_version(Account) from SRC-15b's decisions note"
+      ]
     }
   ],
   "main_health": [
@@ -5990,7 +6017,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T20:59Z",
+    "updated": "2026-11-06T21:19Z",
     "items": [
       {
         "slot": 1,
@@ -6002,11 +6029,11 @@
       },
       {
         "slot": 2,
-        "slice": "GS-gate",
+        "slice": "SRC-15b",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #546 at 52eee6a5, in review (session_01MMjhnBqrrw3veNp36dCF4G)",
-        "since": "2026-11-06T19:18:00Z"
+        "doing": "consent dialogs, credentials, config forms, purge (session_01MMjhnAVcRo5JpndpMaiznS, Sonnet)",
+        "since": "2026-11-06T21:19Z"
       },
       {
         "slot": 3,
