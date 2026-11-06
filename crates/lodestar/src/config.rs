@@ -39,6 +39,7 @@ pub struct Config {
     pub blocklist: Blocklist,
     pub subscriptions: Subscriptions,
     pub updates: Updates,
+    pub cluster: Cluster,
 }
 
 impl Default for Config {
@@ -58,6 +59,7 @@ impl Default for Config {
             blocklist: Blocklist::default(),
             subscriptions: Subscriptions::default(),
             updates: Updates::default(),
+            cluster: Cluster::default(),
         }
     }
 }
@@ -492,6 +494,77 @@ impl Updates {
     }
 }
 
+/// Remote workers' cluster port (architecture §19.2, §19.6). Off by
+/// default: until `enabled` ("Allow workers") is on, nothing is bound and
+/// no cluster CA is opened or created (workers plan Q3).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Cluster {
+    /// Allow workers: bind the cluster port and open the cluster PKI.
+    pub enabled: bool,
+    /// The cluster port's address (§19.2: `8091/tcp`). Port 0 takes any
+    /// free port and logs it (tests).
+    pub listen: SocketAddr,
+    /// A worker whose clock is further off than this is flagged (§19.3).
+    pub max_skew_ms: i64,
+    /// A connection must finish its TLS handshake (and its upgrade or
+    /// join request) within this.
+    pub handshake_timeout_secs: u64,
+    /// Connections in their handshake at once, in total and from one
+    /// address (IPv6 by /64).
+    pub max_pending: usize,
+    pub max_pending_per_ip: usize,
+    /// Bytes queued to one worker's session.
+    pub session_queue_mib: usize,
+}
+
+impl Default for Cluster {
+    fn default() -> Self {
+        Cluster {
+            enabled: false,
+            listen: SocketAddr::from(([0, 0, 0, 0], 8091)),
+            max_skew_ms: 60_000,
+            handshake_timeout_secs: 10,
+            max_pending: 256,
+            max_pending_per_ip: 8,
+            session_queue_mib: 8,
+        }
+    }
+}
+
+impl Cluster {
+    /// Every number in range, so nothing out of range reaches the server
+    /// (whose skew check takes `max_skew_ms.abs()`).
+    pub fn check(&self) -> Result<(), ConfigError> {
+        let range = |name: &str, v: i128, low: i128, high: i128| {
+            if (low..=high).contains(&v) {
+                Ok(())
+            } else {
+                Err(ConfigError(format!(
+                    "cluster.{name}: {v} is outside {low}..={high}"
+                )))
+            }
+        };
+        range("max_skew_ms", self.max_skew_ms.into(), 1_000, 3_600_000)?;
+        range(
+            "handshake_timeout_secs",
+            self.handshake_timeout_secs.into(),
+            1,
+            120,
+        )?;
+        let max_pending = self.max_pending as i128;
+        range("max_pending", max_pending, 1, 4096)?;
+        range(
+            "max_pending_per_ip",
+            self.max_pending_per_ip as i128,
+            1,
+            max_pending,
+        )?;
+        range("session_queue_mib", self.session_queue_mib as i128, 1, 256)?;
+        Ok(())
+    }
+}
+
 /// `off` (the default), `notify` (check and notify), `auto` (install
 /// automatically) or `image` (the container image updates it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -734,6 +807,7 @@ impl Config {
         config.updates_from_env(&env)?;
         config.ranking.check()?;
         config.updates.check()?;
+        config.cluster.check()?;
         Ok(config)
     }
 
@@ -1408,5 +1482,57 @@ mod tests {
             let empty = |k: &str| (k == "HOME").then(String::new);
             assert_eq!(default_witness_dir(&empty), None);
         }
+    }
+
+    #[test]
+    fn the_cluster_port_is_off_until_allowed() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.cluster.enabled);
+        assert_eq!(c.cluster.listen, SocketAddr::from(([0, 0, 0, 0], 8091)));
+        assert_eq!(c.cluster.max_skew_ms, 60_000);
+    }
+
+    #[test]
+    fn cluster_numbers_out_of_range_are_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let load = |body: &str| {
+            std::fs::write(&path, format!("[cluster]\n{body}\n")).unwrap();
+            Config::load(Some(&path), no_env)
+        };
+        let ok = load("enabled = true\nlisten = \"127.0.0.1:9100\"\nmax_skew_ms = 1000").unwrap();
+        assert!(ok.cluster.enabled);
+        assert_eq!(ok.cluster.listen.port(), 9100);
+        for (body, name) in [
+            // `abs()` of this would panic in the server.
+            (format!("max_skew_ms = {}", i64::MIN), "max_skew_ms"),
+            ("max_skew_ms = -60000".to_string(), "max_skew_ms"),
+            ("max_skew_ms = 0".to_string(), "max_skew_ms"),
+            ("max_skew_ms = 3600001".to_string(), "max_skew_ms"),
+            (
+                "handshake_timeout_secs = 0".to_string(),
+                "handshake_timeout_secs",
+            ),
+            (
+                "handshake_timeout_secs = 121".to_string(),
+                "handshake_timeout_secs",
+            ),
+            ("max_pending = 0".to_string(), "max_pending"),
+            ("max_pending = 4097".to_string(), "max_pending"),
+            ("max_pending_per_ip = 0".to_string(), "max_pending_per_ip"),
+            (
+                "max_pending = 4\nmax_pending_per_ip = 5".to_string(),
+                "max_pending_per_ip",
+            ),
+            ("session_queue_mib = 0".to_string(), "session_queue_mib"),
+            ("session_queue_mib = 257".to_string(), "session_queue_mib"),
+        ] {
+            let e = load(&body).expect_err(&body).0;
+            assert!(e.starts_with(&format!("cluster.{name}: ")), "{body}: {e}");
+        }
+        // Unknown keys and wrong types are refused like every section's.
+        assert!(load("enable = true").is_err());
+        assert!(load("max_pending = -1").is_err());
+        assert!(load("listen = \"nowhere\"").is_err());
     }
 }
