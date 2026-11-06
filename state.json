@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T00:12:16Z",
+  "updated_at": "2026-11-06T00:14:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5070,6 +5070,18 @@
       "from": "X-sp4-followups design 00:05Z",
       "note": "SP-4 pre-hiding guard deferred (runner, Option C now): build later on the M7 payload_sig producer (search index, gen 1, GS-* chain) via an injected trait into the writer plus a batch-local map; lags commits, errs loose. Rejected now: store column + partial index (V16, ~25-30 B/torrent, ~300 MB at 10M, extra B-tree insert). Flag to owner at X-sp4-followups merge.",
       "added": "2026-11-06T00:05Z"
+    },
+    {
+      "at": "2026-11-06T00:14:44Z",
+      "note": "dashboard-paste PR: P-v07 IRC-0 deps += NOS-2a (runner call on #517 I5)"
+    },
+    {
+      "at": "2026-11-06T00:14:44Z",
+      "note": "owner batch: P-v06-workers Q6 (worker RAM at 40-50M) joins Q1/Q2; P-v08 Q-o4 (third-party adult claims hide-only) joins Q-o1/Q-o3"
+    },
+    {
+      "at": "2026-11-06T00:14:44Z",
+      "note": "#522 delta after review: CLAUDE.md + web/e2e/README.md Chromium path -> /opt/pw-browsers/chromium (verified in container)"
     }
   ],
   "main_health": [
