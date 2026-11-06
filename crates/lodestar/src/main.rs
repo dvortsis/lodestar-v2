@@ -32,6 +32,7 @@ mod web;
 #[cfg(test)]
 mod web_build;
 mod windows;
+mod worker;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -78,7 +79,8 @@ fn main() -> ExitCode {
         | Command::Rollback(_)
         | Command::Vacuum
         | Command::Reindex
-        | Command::Rollup(_) => Some(privdrop::Scope::DataDir),
+        | Command::Rollup(_)
+        | Command::Worker(_) => Some(privdrop::Scope::DataDir),
         Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
         Command::Lists => None,
     };

@@ -25,6 +25,7 @@ mod rollup;
 mod stats;
 pub(crate) mod util;
 mod vacuum;
+mod worker;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -113,6 +114,9 @@ pub enum Command {
     /// was tracked. Hourly detail older than 30 days is folded into days,
     /// so those days are repaired at daily grain.
     Rollup(RollupArgs),
+    /// Run as a remote worker: join a coordinator with a one-time token
+    /// (--join, --token-file), then run from the saved credentials
+    Worker(worker::WorkerArgs),
 }
 
 /// Where the bitmagnet database is. The password comes from
@@ -232,6 +236,7 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         Command::Rollup(a) => ("rollup", rollup::run(&config, a.since)),
         Command::Import(a) => ("import", import::run(&config, a)),
         Command::ImportBitmagnet(a) => ("import-bitmagnet", import::legacy(&config, a)),
+        Command::Worker(a) => ("worker", worker::run(&config, a)),
         Command::Serve { .. } | Command::Healthcheck | Command::Lists => {
             unreachable!("main.rs runs these")
         }
