@@ -4,7 +4,7 @@
 import { expectNoA11yViolations } from './a11y';
 import { snapshotName } from './support/policy';
 import { ROUTES } from './support/routes';
-import { expectPageSnapshot } from './snapshot';
+import { expectPageSnapshot, freezeClock } from './snapshot';
 import { ALL_THEMES } from './support/themes';
 import { expect, test } from './support/test';
 
@@ -13,6 +13,7 @@ for (const theme of ALL_THEMES) {
 		test.use({ themeId: theme.id, colorMode: theme.mode, shots: 'themes' });
 		for (const route of ROUTES) {
 			test(`axe ${route.name}`, async ({ page, go, mock, density, shots }) => {
+				await freezeClock(page);
 				route.mock?.(mock);
 				await go(route.path);
 				await expect(page.locator('html')).toHaveAttribute('data-theme', theme.id);

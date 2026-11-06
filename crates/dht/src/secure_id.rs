@@ -98,11 +98,44 @@ pub fn is_valid(id: &NodeId, ip: &IpAddr) -> bool {
 /// prefixes BEP 42 allows (8 per address; beyond that ids share a prefix
 /// and differ in their random bits).
 pub fn virtual_ids(ip: &IpAddr, count: usize, rng: &mut impl RngExt) -> Vec<NodeId> {
+    virtual_ids_in(ip, ALL_SLOTS, count, rng)
+}
+
+/// Every one of the 8 slots, for [`virtual_ids_in`].
+pub const ALL_SLOTS: u8 = 0xff;
+
+/// The BEP 42 slot of `id`: the low 3 bits of `r`, its last byte, which
+/// pick its prefix among the 8 an address allows.
+pub fn slot(id: &NodeId) -> u8 {
+    id.0[19] & 7
+}
+
+/// [`virtual_ids`] restricted to the slots set in `slots` (WK-4's shard):
+/// id `i` takes the `i mod n`-th of the `n` slots, in ascending order.
+/// With every slot this is [`virtual_ids`], draw for draw.
+///
+/// For one address, distinct slots always give distinct 21-bit prefixes:
+/// the prefix is the top of a CRC-32C over the masked address with the
+/// slot in its top 3 bits. CRC-32C is affine for a fixed length, so two
+/// slots' hashes differ by `crc(d << 29) ^ crc(0)` (`<< 61` for IPv6), with
+/// `d` the XOR of the slots, whatever the address, and for none of the 7
+/// possible `d` are that difference's top 21 bits zero (the
+/// `slot_prefixes_differ_for_every_address` test checks all 7 for both
+/// families). So nodes behind one IP with disjoint slot sets never mint
+/// the same prefix.
+///
+/// # Panics
+/// If `slots` is 0.
+pub fn virtual_ids_in(ip: &IpAddr, slots: u8, count: usize, rng: &mut impl RngExt) -> Vec<NodeId> {
+    assert!(slots != 0, "at least one BEP 42 slot");
+    let list: Vec<u8> = (0..8u8).filter(|s| slots & (1 << s) != 0).collect();
+    let n = list.len();
     (0..count)
         .map(|i| {
             // The low 3 bits pick the prefix; bits 3–5 keep the last bytes
-            // of ids that share a prefix distinct (up to 64 ids).
-            let r = (i % 64) as u8 | (rng.random::<u8>() & 0xc0);
+            // of ids that share a prefix distinct (up to 8 per slot). With
+            // every slot, this is `i % 64`.
+            let r = list[i % n] | ((((i / n) % 8) as u8) << 3) | (rng.random::<u8>() & 0xc0);
             generate(ip, r, rng)
         })
         .collect()
@@ -179,6 +212,95 @@ mod tests {
             assert!(is_valid(&NodeId([0; 20]), &ip));
         }
         assert!(!is_exempt(&"1.1.1.1".parse().unwrap()));
+    }
+
+    /// The 21 bits of a prefix hash a secure id starts with.
+    fn top21(crc: u32) -> u32 {
+        crc >> 11
+    }
+
+    #[test]
+    fn slot_prefixes_differ_for_every_address() {
+        // CRC-32C is affine over GF(2) for a fixed length: crc(a) ^ crc(b)
+        // = crc(a ^ b) ^ crc(0). Two slots' inputs differ only in the top
+        // 3 bits, so their prefixes differ by an amount that depends on
+        // the XOR of the slots alone. Checking the 7 XORs for each length
+        // covers every address.
+        let zero4 = crc32c(&[0; 4]);
+        let zero8 = crc32c(&[0; 8]);
+        for d in 1..8u32 {
+            let v4 = crc32c(&(d << 29).to_be_bytes()) ^ zero4;
+            assert_ne!(top21(v4), 0, "IPv4 slots differing by {d}");
+            let v6 = crc32c(&(u64::from(d) << 61).to_be_bytes()) ^ zero8;
+            assert_ne!(top21(v6), 0, "IPv6 slots differing by {d}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn distinct_slots_never_share_a_prefix(v4: u32, v6: u128, a in 0..8u8, b in 0..8u8) {
+            proptest::prop_assume!(a != b);
+            for ip in [IpAddr::from(v4.to_be_bytes()), IpAddr::from(v6.to_be_bytes())] {
+                let (x, y) = (prefix_hash(&ip, a) >> 11, prefix_hash(&ip, b) >> 11);
+                proptest::prop_assert_ne!(x, y, "{} slots {} and {}", ip, a, b);
+            }
+        }
+
+        #[test]
+        fn ids_use_only_their_slots(v4: u32, slots in 1..=255u8, count in 0..40usize, seed: u64) {
+            let ip = IpAddr::from(v4.to_be_bytes());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let ids = virtual_ids_in(&ip, slots, count, &mut rng);
+            proptest::prop_assert_eq!(ids.len(), count);
+            let n = slots.count_ones() as usize;
+            for (i, id) in ids.iter().enumerate() {
+                proptest::prop_assert!(slots & (1 << slot(id)) != 0);
+                proptest::prop_assert!(is_valid(id, &ip) || is_exempt(&ip));
+                if i < n {
+                    // The first n ids take n different slots.
+                    proptest::prop_assert!(ids[..i].iter().all(|o| slot(o) != slot(id)));
+                }
+            }
+            // Up to 8 ids per slot keep distinct last bytes.
+            if count <= n * 8 {
+                let last: std::collections::HashSet<_> = ids.iter().map(|id| id.0[19] & 0x3f).collect();
+                proptest::prop_assert_eq!(last.len(), count);
+            }
+        }
+    }
+
+    #[test]
+    fn every_slot_is_virtual_ids_draw_for_draw() {
+        for ip in ["93.184.216.34", "2001:db8::1", "10.0.0.1"] {
+            let ip: IpAddr = ip.parse().unwrap();
+            for count in [0, 1, 4, 8, 9, 64, 70] {
+                let a = virtual_ids(&ip, count, &mut rand::rngs::StdRng::seed_from_u64(9));
+                let mut r = rand::rngs::StdRng::seed_from_u64(9);
+                let b = virtual_ids_in(&ip, ALL_SLOTS, count, &mut r);
+                assert_eq!(a, b, "{ip} × {count}");
+            }
+        }
+        // And the scheme before WK-4, written out: r = i % 64 plus two
+        // random top bits.
+        let ip: IpAddr = "93.184.216.34".parse().unwrap();
+        let mut r1 = rand::rngs::StdRng::seed_from_u64(5);
+        let old: Vec<NodeId> = (0..70)
+            .map(|i| {
+                let r = (i % 64) as u8 | (r1.random::<u8>() & 0xc0);
+                generate(&ip, r, &mut r1)
+            })
+            .collect();
+        assert_eq!(
+            virtual_ids(&ip, 70, &mut rand::rngs::StdRng::seed_from_u64(5)),
+            old
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one BEP 42 slot")]
+    fn no_slots_is_refused() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+        let _ = virtual_ids_in(&"1.2.3.4".parse().unwrap(), 0, 1, &mut rng);
     }
 
     #[test]

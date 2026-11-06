@@ -105,8 +105,7 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    assert!(on_ran.load(Ordering::SeqCst));
+    until("the None source runs", || on_ran.load(Ordering::SeqCst)).await;
     assert!(!fresh_ran.load(Ordering::SeqCst), "off by default");
     assert!(
         !off_ran.load(Ordering::SeqCst),
@@ -135,86 +134,97 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     )
     .await
     .unwrap();
-    // A Restricted source needs consent to its own class, at the current
-    // version, accepted with the password.
-    let version = consent::version(&probe("off", Consent::Restricted).0.manifest);
-    let enable = |consent, version: Option<&str>, password_confirmed| SourceChange {
+    // No consent text is owner-approved yet (X-consent-gate-052): a source
+    // whose class is enabled by acknowledging one is refused, whatever the
+    // request names, and nothing is written.
+    let enable = |consent, version: Option<String>, password_confirmed| SourceChange {
         enabled: Some(true),
         consent,
-        consent_version: version.map(String::from),
+        consent_version: version,
         password_confirmed,
         ..SourceChange::default()
     };
-    for (consent, v) in [
-        (None, None),
-        (Some(Consent::Restricted), None),
-        (Some(Consent::Restricted), Some("0-0000000000000000")),
-        (Some(Consent::External), Some(version.as_str())),
-        (Some(Consent::Overlay), Some(version.as_str())),
-    ] {
-        assert!(
-            matches!(
-                control.update_source(off, enable(consent, v, true)).await,
-                Err(SourceError::ConsentRequired { class: Consent::Restricted, version: ref want })
-                    if *want == version
-            ),
-            "{consent:?} {v:?}"
-        );
-    }
-    assert!(matches!(
-        control
-            .update_source(
-                off,
-                enable(Some(Consent::Restricted), Some(&version), false)
-            )
-            .await,
-        Err(SourceError::PasswordRequired)
-    ));
-    let view = control
-        .update_source(off, enable(Some(Consent::Restricted), Some(&version), true))
-        .await
-        .unwrap();
-    assert_eq!(view.state, SourceState::Enabled);
-    assert_eq!(view.need, None);
-    assert!(!view.status.running, "it starts at the next start");
-    // Switched off and on again: the acknowledgement stands, but the
-    // password is asked every time.
-    let off_change = SourceChange {
-        enabled: Some(false),
-        ..SourceChange::default()
-    };
-    control
-        .update_source(off, off_change.clone())
-        .await
-        .unwrap();
-    assert!(matches!(
-        control.update_source(off, enable(None, None, false)).await,
-        Err(SourceError::PasswordRequired)
-    ));
-    let view = control
-        .update_source(off, enable(None, None, true))
-        .await
-        .unwrap();
-    assert_eq!(view.state, SourceState::Enabled);
-    // An External source needs its endpoint list acknowledged, with no
-    // password.
-    assert!(matches!(
-        control.update_source(held, enable(None, None, false)).await,
-        Err(SourceError::ConsentRequired {
-            class: Consent::External,
-            ..
-        })
-    ));
-    let external = consent::version(&probe("held", Consent::External).0.manifest);
-    let view = control
-        .update_source(
-            held,
-            enable(Some(Consent::External), Some(&external), false),
+    let gated = |r: Result<_, SourceError>| {
+        matches!(
+            r,
+            Err(SourceError::Invalid { field: "enabled", ref reason })
+                if reason == lodestar_pipeline::control::CONSENT_GATE_REASON
         )
-        .await
+    };
+    let fresh_id = pipeline
+        .sources()
+        .iter()
+        .find(|s| s.plugin == "fresh")
+        .unwrap()
+        .id;
+    for (id, plugin, class) in [
+        (off, "off", Consent::Restricted),
+        (held, "held", Consent::External),
+        (fresh_id, "fresh", Consent::Overlay),
+    ] {
+        let version = consent::version(&probe(plugin, class).0.manifest);
+        for (c, v) in [
+            (None, None),
+            (Some(class), None),
+            (Some(class), Some("0-0000000000000000".to_owned())),
+            (Some(Consent::None), Some(version.clone())),
+            // What enabling it asked for before this slice, in full.
+            (Some(class), Some(version.clone())),
+        ] {
+            for password in [false, true] {
+                let r = control
+                    .update_source(id, enable(c, v.clone(), password))
+                    .await;
+                assert!(gated(r), "{plugin}: {c:?} {v:?} {password}");
+            }
+        }
+        // Refused together with other changes: none of them is saved.
+        let r = control
+            .update_source(
+                id,
+                SourceChange {
+                    priority: Some(Priority::Max),
+                    ..enable(Some(class), Some(version), true)
+                },
+            )
+            .await;
+        assert!(gated(r), "{plugin}");
+        let view = control
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|v| v.status.id == id)
+            .unwrap();
+        assert_ne!(view.state, SourceState::Enabled, "{plugin}");
+        assert_eq!(view.priority, Priority::Low, "{plugin}");
+        assert!(view.need.is_some(), "{plugin}: still asks");
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        assert_eq!(store.source_consent(plugin).unwrap(), None, "{plugin}");
+    }
+    // An acknowledgement already stored (a build before this one, or a
+    // hand edit) doesn't open it either.
+    {
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let ack = Ack::of(&probe("held", Consent::External).0.manifest).encode();
+        store.enable_source(held, Some(&ack)).unwrap();
+        store.set_source_state(held, SourceState::Paused).unwrap();
+    }
+    let view = control
+        .sources()
+        .unwrap()
+        .into_iter()
+        .find(|v| v.status.id == held)
         .unwrap();
-    assert_eq!(view.state, SourceState::Enabled);
-    // Disabling needs no consent; an unknown id is refused.
+    assert_eq!(view.need, None, "the stored acknowledgement covers it");
+    assert!(gated(
+        control.update_source(held, enable(None, None, true)).await
+    ));
+    // Disabling needs no consent, even for a gated source a build before
+    // this one left on; an unknown id is refused.
+    Store::open(&db, StoreConfig::default())
+        .unwrap()
+        .enable_source(held, None)
+        .unwrap();
     let view = control
         .update_source(
             held,
@@ -243,7 +253,7 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     drop(store);
 
     // At the next start the stored states and the saved priority hold.
-    let (on, _) = probe_with("on", Consent::None, true);
+    let (on, on_ran) = probe_with("on", Consent::None, true);
     let (disabled, off_ran) = probe("off", Consent::Restricted);
     let (paused, held_ran) = probe("held", Consent::External);
     let pipeline = Pipeline::start_with(
@@ -254,10 +264,8 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     )
     .await
     .unwrap();
-    until("the consented source runs", || {
-        off_ran.load(Ordering::SeqCst)
-    })
-    .await;
+    until("the None source runs", || on_ran.load(Ordering::SeqCst)).await;
+    assert!(!off_ran.load(Ordering::SeqCst), "never turned on");
     assert!(!held_ran.load(Ordering::SeqCst));
     let statuses = pipeline.sources();
     let held = statuses.iter().find(|s| s.plugin == "held").unwrap();
@@ -334,8 +342,10 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         ("restr", Consent::Restricted),
         ("over", Consent::Overlay),
         ("current", Consent::Restricted),
+        ("ext_current", Consent::External),
+        ("acct_ready", Consent::Account),
     ];
-    {
+    let (ack, ext_ack) = {
         // Enabled some other way (an older build, a hand edit, an import
         // that registered it): no record, or a stale one.
         let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -353,10 +363,22 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         store
             .enable_source(restr, Some(&stale(Consent::Restricted)))
             .unwrap();
-        // One with a current acknowledgement stays on.
+        // A current acknowledgement, as a nightly build before
+        // X-consent-gate-052 could store one: still switched off, because
+        // no consent text is approved yet, and the record is kept.
         let current = store.sources().unwrap()[4].id;
         let ack = Ack::of(&probe("current", Consent::Restricted).0.manifest).encode();
         store.enable_source(current, Some(&ack)).unwrap();
+        let ext_current = store.sources().unwrap()[5].id;
+        let ext_ack = Ack::of(&probe("ext_current", Consent::External).0.manifest).encode();
+        store.enable_source(ext_current, Some(&ext_ack)).unwrap();
+        // An Account source with its credentials stays on: it has no
+        // consent text.
+        let ready = store.sources().unwrap()[6].id;
+        store
+            .update_source_secrets(ready, &[("api_key", b"sealed")], &[], None)
+            .unwrap();
+        store.enable_source(ready, None).unwrap();
         // A declined one counts as none.
         let over = store.sources().unwrap()[3].id;
         let declined = Ack {
@@ -369,7 +391,8 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         store
             .update_source_secrets(acct, &[(consent::SOCKS5_USERNAME, b"sealed")], &[], None)
             .unwrap();
-    }
+        (ack, ext_ack)
+    };
     let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
     let mut ran = Vec::new();
     for (id, class) in classes {
@@ -385,21 +408,25 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
     )
     .await
     .unwrap();
-    let (_, current_ran) = &ran[4];
-    until("the acknowledged source runs", || {
-        current_ran.load(Ordering::SeqCst)
+    let (_, ready_ran) = &ran[6];
+    until("the Account source with credentials runs", || {
+        ready_ran.load(Ordering::SeqCst)
     })
     .await;
     for s in pipeline.sources() {
-        assert_eq!(s.enabled, s.plugin == "current", "{}", s.plugin);
+        assert_eq!(s.enabled, s.plugin == "acct_ready", "{}", s.plugin);
     }
-    for (id, r) in &ran[..4] {
+    for (id, r) in &ran[..6] {
         assert!(!r.load(Ordering::SeqCst), "{id} ran");
     }
     drop(pipeline.shutdown().await.unwrap());
-    for (id, _) in &classes[..4] {
+    for (id, _) in &classes[..6] {
         assert_eq!(stored(&db, id), SourceState::Disabled, "{id}");
     }
+    // The acknowledgements are kept for when approved text ships.
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    assert_eq!(store.source_consent("current").unwrap(), Some(ack));
+    assert_eq!(store.source_consent("ext_current").unwrap(), Some(ext_ack));
 }
 
 #[tokio::test]

@@ -11,12 +11,14 @@ import {
 	showAdultSettings
 } from '../src/lib/features/discover/testing';
 import { indexState } from './search-results.fixtures';
-import { expectPageSnapshot } from './snapshot';
+import { expectPageSnapshot, freezeClock } from './snapshot';
 import { crawlerEvent, engage, liveEvents } from './support/events-server';
 import { interact } from './support/interact';
 import { expect as baseExpect, test } from './support/test';
 
 const expect = baseExpect.configure({ timeout: 10_000 });
+
+test.beforeEach(async ({ page }) => freezeClock(page));
 
 /** Waits for the scene inside `scope` to decode, then axe, then a Comfortable-only baseline. */
 async function settle(page: Page, density: string, scope: string, name: string) {

@@ -18,6 +18,7 @@ mod prefixes;
 mod proof;
 mod sampler;
 mod seen;
+pub mod shard;
 mod stream;
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -173,6 +174,10 @@ pub struct Config {
     /// hands it every datagram that [`lodestar_utp::classify`] calls uTP.
     /// `None` (the default) handles every datagram as KRPC, as before.
     pub utp: Option<lodestar_utp::SharedPort>,
+    /// WK-4's keyspace shard (§19.5): the target prefixes and BEP 42 id
+    /// slots this node walks. `None`, or [`shard::Shard::FULL`], is the
+    /// whole keyspace, as before.
+    pub shard: Option<shard::Shard>,
 }
 
 /// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
@@ -241,6 +246,7 @@ impl Default for Config {
             responder_hints: false,
             target_prefixes: false,
             utp: None,
+            shard: None,
         }
     }
 }
@@ -367,7 +373,8 @@ pub struct Stats {
     /// the switch on or off.
     pub target_novel_nodes: [AtomicU64; TargetKind::ALL.len()],
     /// Queries sent with a prefix target, by [`TargetKind`], and full
-    /// passes over the 256 prefixes. Only with `target_prefixes` on.
+    /// passes over the 256 prefixes (over a WK-4 shard's narrower range,
+    /// when one is set). Only with `target_prefixes` on or such a shard.
     pub target_prefix_queries: [AtomicU64; TargetKind::ALL.len()],
     pub target_prefix_cycles: AtomicU64,
 }
