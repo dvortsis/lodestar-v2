@@ -438,6 +438,13 @@ enum Flow {
     Stop(StopReason),
 }
 
+/// Resolves once the shutdown flag is set, including when it was set
+/// before this receiver was first polled (`subscribe` marks the value
+/// then as seen, so `changed` alone would wait forever).
+async fn stopped(stop: &mut watch::Receiver<bool>) {
+    let _ = stop.wait_for(|s| *s).await;
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -844,7 +851,7 @@ impl ClusterServer {
                 every.tick().await;
                 loop {
                     tokio::select! {
-                        _ = stop.changed() => return,
+                        _ = stopped(&mut stop) => return,
                         _ = every.tick() => me.tick().await,
                     }
                 }
@@ -852,7 +859,7 @@ impl ClusterServer {
         }
         loop {
             let accepted = tokio::select! {
-                _ = stop.changed() => break,
+                _ = stopped(&mut stop) => break,
                 a = listener.accept() => a,
             };
             let (tcp, addr) = match accepted {

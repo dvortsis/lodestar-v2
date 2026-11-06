@@ -1039,6 +1039,31 @@ mod tests {
         cluster.shutdown().await;
     }
 
+    /// "Off" right after "on" (before `serve` was first polled) still
+    /// closes the port, and shutdown returns: the server notices a
+    /// shutdown flag set before it subscribed.
+    #[tokio::test]
+    async fn off_right_after_on_closes_and_shuts_down() {
+        for _ in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            let cluster = Cluster::start(wiring(dir.path(), false, any_port()))
+                .await
+                .unwrap();
+            let h = cluster.handle();
+            h.set_allowed(true);
+            until("the PKI opening", || {
+                let made = dir.path().join("lodestar.db").exists();
+                (made, made)
+            })
+            .await;
+            h.set_allowed(false);
+            tokio::time::timeout(DEADLINE, cluster.shutdown())
+                .await
+                .expect("shutdown returned");
+            assert_eq!(h.local_addr(), None);
+        }
+    }
+
     /// A rotation that forgets the cluster's reseal doesn't pass quietly:
     /// once the old key is retired the PKI no longer opens, and turning
     /// workers on fails with the reason.

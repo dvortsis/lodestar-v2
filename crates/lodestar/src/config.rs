@@ -502,8 +502,8 @@ impl Updates {
 pub struct Cluster {
     /// Allow workers: bind the cluster port and open the cluster PKI.
     pub enabled: bool,
-    /// The cluster port's address (§19.2: `8091/tcp`). Port 0 takes any
-    /// free port and logs it (tests).
+    /// The cluster port's address (§19.2: `8091/tcp`). The port can't be 0
+    /// (only the binary's own unit tests use any free port).
     pub listen: SocketAddr,
     /// A worker whose clock is further off than this is flagged (§19.3).
     pub max_skew_ms: i64,
@@ -545,6 +545,12 @@ impl Cluster {
                 )))
             }
         };
+        // Workers dial a fixed port; 0 (any free port) is for tests only.
+        if self.listen.port() == 0 && !cfg!(test) {
+            return Err(ConfigError(
+                "cluster.listen: the port can't be 0; workers need a fixed port".into(),
+            ));
+        }
         range("max_skew_ms", self.max_skew_ms.into(), 1_000, 3_600_000)?;
         range(
             "handshake_timeout_secs",

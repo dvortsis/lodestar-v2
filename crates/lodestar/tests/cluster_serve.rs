@@ -217,3 +217,26 @@ fn the_cluster_port_is_off_until_workers_are_allowed() {
     assert!(!ca.contains("PRIVATE KEY"));
     assert!(dir.path().join("secrets.key").exists());
 }
+
+#[test]
+fn a_cluster_port_of_zero_is_refused_at_start() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "[cluster]\nenabled = true\nlisten = \"127.0.0.1:0\"\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_lodestar"))
+        .env("LODESTAR_DATA_DIR", dir.path())
+        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
+        .env("LODESTAR_DHT_ENABLED", "false")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cluster.listen: the port can't be 0"),
+        "{stderr}"
+    );
+    assert!(!dir.path().join("lodestar.db").exists());
+}
