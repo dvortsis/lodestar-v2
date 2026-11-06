@@ -839,19 +839,19 @@ conditions:
 roadmap:
   steps:
   - id: soak
-    label: Unraid memory test (r3 and r4 failed, r5 running on rc.4)
-    plain: The 24-hour tests of release candidates 2 and 3 failed on memory growth (1.88 and 29.35 MiB an hour; bar 2.0). Release candidate 4 carries the allocator fix, and its fresh test (r5) is running; its measured window ends 2026-11-06T13:12Z.
+    label: Unraid memory test (r5 passed on rc.4)
+    plain: 'Release candidate 4 passed its 24-hour memory test: 0.91 MiB an hour, upper bound 1.35, against a bar of 2.0. Release candidates 2 and 3 had failed (1.88 and 29.35 MiB an hour).'
     col: 0
     row: 2
     members: []
-    override: active
+    override: done
   - id: gluetun
-    label: VPN (gluetun) leg, 2 h
-    plain: You approve and run a 2-hour test through the VPN.
+    label: VPN (gluetun) leg, running
+    plain: 'A separate run through the VPN: 6 h settling, 30 min warm-up, then a 2-hour measured baseline, about 8.5 h in all. Started about 2026-11-06T15:00Z, so it ends about 23:30Z. Then the Windows MSI check (at least 1 h).'
     col: 1
     row: 2
     members: []
-    override: you
+    override: active
   - id: tag
     label: Tag v0.5.1
     plain: You tag the release and publish it.
@@ -870,7 +870,7 @@ roadmap:
     - X-consent-gate-052
   - id: unhold
     label: Soak verdict starts the planned tracks
-    plain: Workers, companions, packaging, the early v0.8 parsers and the 1.0 tooling were sliced on 2026-11-06. Their first slices wait for the memory test verdict.
+    plain: Workers, companions, packaging, the early v0.8 parsers and the 1.0 tooling were sliced on 2026-11-06. The memory test passed on 2026-11-06, so their first slices are starting, at most four at a time.
     col: 2
     row: 4
     members: []
@@ -1303,7 +1303,7 @@ owner_queue:
   type: action
   action: Soak r5 on rc.4 passed (0.91 MiB/h, bar 2.0). The gluetun leg is running (about 8.5 h from about 15:00Z). Still to do the Windows MSI check on rc.4 (at least 1 h), then tag v0.5.1 on dba1a5c0 once the runner gives the go
   unblocks: The v0.5.1 release
-  when: Today, after the gluetun leg
+  when: After the gluetun leg ends (about 2026-11-06T23:30Z) and the Windows MSI check
 - n: 2
   type: action
   action: Name the experiment host for crawler tests, and when it is free
@@ -1556,7 +1556,7 @@ notes:
   updated: '2026-11-06'
   now:
   - label: Soak r5 passed on release candidate 4
-    text: Release candidate 4's 24-hour memory test passed at 0.91 MiB an hour (upper bound 1.35, bar 2.0), clean for the full 24 hours. The VPN (gluetun) leg runs next, then the Windows MSI check and the v0.5.1 tag. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
+    text: Release candidate 4's 24-hour memory test passed at 0.91 MiB an hour (upper bound 1.35, bar 2.0), clean for the full 24 hours. The VPN (gluetun) leg is running (about 8.5 h from about 15:00 UTC); then the Windows MSI check and the v0.5.1 tag. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
       The live tests wait for an experiment host you name.
@@ -1568,7 +1568,7 @@ notes:
     text: 'By your instruction at most four worker slots run at once from 2026-11-06T00:00Z, filled only when ready work fits the plan (owner-decisions §2.42). The slices launched in your no-limit window (§2.45) finish under it, and nothing new launches until fewer than four are running. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: Finish v0.5.1
-    text: Soak r5 on release candidate 4 is running (Appdata Backup stays off until all soaks are done); its measured window ends 2026-11-06T13:12Z. Then the short Windows smoke on the rc.4 installer, the 2-hour VPN (gluetun) leg, and the v0.5.1 tag.
+    text: Soak r5 on release candidate 4 passed. The VPN (gluetun) leg is running, about 8.5 h from about 2026-11-06T15:00Z (Appdata Backup stays off until it's done). Then the Windows MSI check on the rc.4 installer (at least 1 h), and the v0.5.1 tag once the runner gives the go.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Also for you
