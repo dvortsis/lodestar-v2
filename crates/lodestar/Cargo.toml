@@ -21,6 +21,9 @@ flate2 = { version = "1.1.10", default-features = false, features = ["rust_backe
 getrandom = "0.3.4"
 hmac = "0.13.0"
 lodestar-api.workspace = true
+# The cluster port (WK-1, src/cluster): already in the binary through
+# lodestar-pipeline.
+lodestar-cluster.workspace = true
 lodestar-companions.workspace = true
 # `serve --fixture`'s data set (src/fixture.rs), behind `fixture`.
 lodestar-bench = { path = "../../bench", optional = true }
@@ -29,6 +32,7 @@ lodestar-filter.workspace = true
 # The log folder's Windows ACL (`secret::restrict_dir_acl`).
 lodestar-integrations.workspace = true
 lodestar-log.workspace = true
+lodestar-metainfo.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-pipeline.workspace = true
 lodestar-search.workspace = true

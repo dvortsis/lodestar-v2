@@ -39,6 +39,8 @@ pub struct AppState {
     pub torrent_cache: Option<Arc<lodestar_sources_plugins::torrent_cache::Stats>>,
     /// The crawler's pause and why (LEGAL-2's setup hold).
     pub crawl: Option<lodestar_pipeline::Control>,
+    /// The cluster port (WK-1), for its `lodestar_cluster_*` series.
+    pub cluster: Option<crate::cluster::ClusterHandle>,
 }
 
 #[derive(Clone)]
@@ -134,6 +136,9 @@ async fn prometheus(State(s): State<AppState>) -> Response {
     }
     if let Some(filter) = &s.filter {
         metrics::render_filter(&mut body, &filter.current().unreadable);
+    }
+    if let Some(cluster) = &s.cluster {
+        cluster.render(&mut body);
     }
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }

@@ -4,6 +4,7 @@
 //! `cli`, which also runs the maintenance commands.
 
 mod cli;
+mod cluster;
 mod config;
 mod filter_load;
 mod fixture;

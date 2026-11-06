@@ -1506,6 +1506,7 @@ dependencies = [
  "lodestar-api",
  "lodestar-bench",
  "lodestar-classify",
+ "lodestar-cluster",
  "lodestar-companions",
  "lodestar-dht",
  "lodestar-filter",
