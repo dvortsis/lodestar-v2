@@ -218,7 +218,7 @@ pub(crate) fn bucket_edges(of: &Node) -> Option<Node> {
 /// from the file index driven by the words' postings) and none without
 /// (checked in the file index on the suspects' files only). The file
 /// pass computes the bad set ([`crate::files::bad_torrents`]) and
-/// stores it under [`rescued_key`]; when it doesn't (a common word, or
+/// stores it under [`bad_key`]; when it doesn't (a common word, or
 /// the bucket terms not ready), the clause runs on the file index whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NegatedWords {
@@ -228,6 +228,9 @@ pub(crate) struct NegatedWords {
 }
 
 pub(crate) fn negated_words(of: &Node) -> Option<NegatedWords> {
+    if !negated_shape(of) {
+        return None;
+    }
     let Node::And { of } = of else {
         return None;
     };
@@ -249,8 +252,34 @@ pub(crate) fn negated_words(of: &Node) -> Option<NegatedWords> {
     (!words.is_empty() && !exts.is_empty()).then_some(NegatedWords { exts, words })
 }
 
+/// Whether `of` is a [`negated_words`] clause, without building one:
+/// one extension atom and at least one negated word not on the title.
+fn negated_shape(of: &Node) -> bool {
+    fn exts_only(n: &Node) -> bool {
+        match n {
+            Node::Ext { any } => !any.is_empty(),
+            Node::Or { of } => !of.is_empty() && of.iter().all(exts_only),
+            _ => false,
+        }
+    }
+    let Node::And { of } = of else {
+        return false;
+    };
+    let (mut exts, mut words) = (0, 0);
+    for n in of {
+        match n {
+            Node::Not { of: w } if matches!(**w, Node::Word { field, .. } if field != TextField::Title) => {
+                words += 1
+            }
+            n if exts_only(n) => exts += 1,
+            _ => return false,
+        }
+    }
+    exts == 1 && words > 0
+}
+
 /// The [`FileSets`] key of a [`negated_words`] clause's bad torrents.
-pub(crate) fn rescued_key(of: &Node) -> String {
+pub(crate) fn bad_key(of: &Node) -> String {
     format!("{of:?}@bad")
 }
 
@@ -263,7 +292,7 @@ fn torrent_level(of: &Node, f: &Cx<'_>) -> bool {
     file_exts(of).is_some()
         || (f.buckets
             && (bucket_clause(of).is_some()
-                || (negated_words(of).is_some() && f.files.contains_key(&rescued_key(of)))))
+                || (negated_shape(of) && f.files.contains_key(&bad_key(of)))))
 }
 
 /// The torrent-index query for a [`torrent_level`] clause, unscored.
@@ -272,7 +301,7 @@ fn torrent_level_query(of: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
         return compile_opt(&Node::Ext { any }, f, now);
     }
     if let Some(neg) = negated_words(of) {
-        return Some(negated_query(&neg, f, f.files.get(&rescued_key(of))?));
+        return Some(negated_query(&neg, f, f.files.get(&bad_key(of))?));
     }
     let b = bucket_clause(of)?;
     let (codes, _) = crate::files::code_plan(b.lo, b.hi);
@@ -328,8 +357,13 @@ fn negated_query(neg: &NegatedWords, f: &Cx<'_>, bad: &IdSet) -> Q {
         Ok(q) => Box::new(q),
         Err(_) => return Box::new(EmptyQuery),
     };
+    // Every index that opens has `id` (since v1); one without can't
+    // leave the bad torrents out, so it matches nothing.
+    if f.id == ABSENT {
+        return Box::new(EmptyQuery);
+    }
     let bad = bad.to_vec();
-    if bad.is_empty() || f.id == ABSENT {
+    if bad.is_empty() {
         return candidates;
     }
     let ids = TermSetQuery::new(bad.into_iter().map(|id| Term::from_field_u64(f.id, id)));

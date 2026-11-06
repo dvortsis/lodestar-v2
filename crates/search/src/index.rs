@@ -740,10 +740,10 @@ impl SearchIndex {
         let mut s = SearchIndex::wrap(index, fields, file_index, file_fields, vec![main, file])?;
         s.read_only = compat == Compat::ReadOnly;
         if s.read_only {
-            s.population = Arc::new(RwLock::new(PopView::new(read_only_population(
-                &s.index,
-                &s.files.index,
-            )?)));
+            s.population = Arc::new(RwLock::new(PopView::new(
+                read_only_population(&s.index, &s.files.index)?,
+                last_ids(&s.index, &s.files.index)?,
+            )));
         }
         s.missing = absent
             .into_iter()
@@ -801,11 +801,10 @@ impl SearchIndex {
         // Opening read every live segment's files: start from them.
         mmaps.prune();
         let generations = Arc::new(Generations::current());
-        let population = Arc::new(RwLock::new(PopView::new(read_population(
-            &index,
-            &file_index,
-            &generations,
-        )?)));
+        let population = Arc::new(RwLock::new(PopView::new(
+            read_population(&index, &file_index, &generations)?,
+            last_ids(&index, &file_index)?,
+        )));
         Ok(SearchIndex {
             index,
             reader,
@@ -922,7 +921,8 @@ impl SearchIndex {
             read_population(&self.index, &self.files.index, &generations)?
         };
         self.generations = Arc::new(generations);
-        self.population = Arc::new(RwLock::new(PopView::new(state)));
+        let ids = last_ids(&self.index, &self.files.index)?;
+        self.population = Arc::new(RwLock::new(PopView::new(state, ids)));
         Ok(self)
     }
 
@@ -1365,27 +1365,27 @@ impl SearchIndex {
         let mut clauses = Vec::new();
         compile::search_file_clauses(node, buckets, &mut clauses);
         let mut sets = compile::FileSets::new();
+        // Read before the file searcher is taken, so it holds at least
+        // the files these say it does ([`PopView::last_ids`]).
+        let files_caught_up = {
+            let view = self
+                .population
+                .read()
+                .unwrap_or_else(PoisonError::into_inner);
+            view.last_ids[1] >= view.last_ids[0]
+        };
         let files_searcher = self.files.reader.searcher();
-        let mut files_caught_up: Option<bool> = None;
         for of in &clauses {
             let key = format!("{of:?}");
             cancel.check()?;
             // A clause of extensions less rare words: the bad torrents
             // only, read through the words (X-search-files-6).
             // Only once the file index has every torrent the torrent
-            // index has: while it lags (a crash between their commits,
-            // until the catch-up) a lagging torrent's files would be
-            // missing from the bad set, and the candidates would let it
-            // in whatever its files hold.
-            let neg = compile::negated_words(of).filter(|_| buckets);
-            if let Some(neg) = neg.filter(|_| {
-                *files_caught_up.get_or_insert_with(|| {
-                    matches!(
-                        (self.watermark(), self.files_watermark()),
-                        (Ok(t), Ok(f)) if f >= t
-                    )
-                })
-            }) {
+            // index has: while it lags (rebuilt or recreated behind the
+            // torrent index, until it catches up) a lagging torrent's
+            // files would be missing from the bad set, and the candidates
+            // would let it in whatever its files hold.
+            if let Some(neg) = compile::negated_words(of).filter(|_| buckets && files_caught_up) {
                 match files::bad_torrents(
                     &files_searcher,
                     &self.files.fields,
@@ -1394,7 +1394,7 @@ impl SearchIndex {
                     cancel,
                 ) {
                     Ok(Some(bad)) => {
-                        sets.insert(compile::rescued_key(of), Arc::new(bad));
+                        sets.insert(compile::bad_key(of), Arc::new(bad));
                         continue;
                     }
                     Ok(None) => {}
@@ -1845,6 +1845,11 @@ fn stored_adult(store: &mut Store, id: i64) -> Result<bool> {
 #[derive(Debug, Default)]
 struct PopView {
     states: [PopState; 2],
+    /// The torrent and file indexes' `last_id`s, as of the readers'
+    /// latest reload: set at open, and by the writer after both reloads,
+    /// so a file searcher taken after reading them holds at least the
+    /// files of every torrent up to the second (X-search-files-6).
+    last_ids: [i64; 2],
     /// The generation, and what the field was just before (its walk's
     /// last `Backfilling`), for what [`SearchIndex::availability_in`]
     /// tells a lease on an older snapshot.
@@ -1852,9 +1857,10 @@ struct PopView {
 }
 
 impl PopView {
-    fn new(states: [PopState; 2]) -> PopView {
+    fn new(states: [PopState; 2], last_ids: [i64; 2]) -> PopView {
         PopView {
             states,
+            last_ids,
             ready_since: Default::default(),
         }
     }
@@ -1875,6 +1881,11 @@ fn read_only_population(index: &Index, files: &Index) -> Result<[PopState; 2]> {
         payload_of(index)?.population.unwrap_or_default(),
         payload_of(files)?.population.unwrap_or_default(),
     ])
+}
+
+/// Both indexes' committed `last_id`s, for [`PopView::last_ids`].
+fn last_ids(index: &Index, files: &Index) -> Result<[i64; 2]> {
+    Ok([payload_of(index)?.last_id, payload_of(files)?.last_id])
 }
 
 /// Both indexes' population states, brought up to `gens`.
@@ -2198,6 +2209,9 @@ impl Indexer {
             }
         }
         view.states = states;
+        // After both reloads: a reader of these sees searchers at least
+        // as new (X-search-files-6).
+        view.last_ids = [self.torrents.last_id, self.files.last_id];
         drop(view);
         // After both reloads, so the files they replaced are unmapped
         // unless a searcher still holds them.
@@ -2324,6 +2338,62 @@ mod population_tests {
                 .unwrap();
         }
         store
+    }
+
+    /// A file index catching up behind the torrent index (recreated):
+    /// once its commit is on disk but before its reader reloads, a
+    /// search still has the old, empty file snapshot. An extension less
+    /// a word must not read the torrent's terms then, or the bad set
+    /// (from that snapshot) would be empty and every candidate would
+    /// match. It runs on the file index whole until the writer has
+    /// reloaded both and published their watermarks (X-search-files-6).
+    #[test]
+    fn a_stale_file_snapshot_never_meets_the_words_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::index_dir(dir.path());
+        let mut s = store(20);
+        {
+            let index = SearchIndex::open(&path).unwrap();
+            let mut w = index.writer(HEAP).unwrap();
+            while w.catch_up(&mut s, 100).unwrap() > 0 {}
+            w.commit().unwrap();
+        }
+        std::fs::remove_dir_all(path.join("files")).unwrap();
+        let index = SearchIndex::open(&path).unwrap();
+        // `Walk.7.mkv` is torrent 8's only file: `7` is a rare word.
+        let node = crate::parse("file:(ext:mkv -7)").unwrap();
+        let ids = |index: &SearchIndex| {
+            let mut ids: Vec<u64> = index
+                .search(&index.query(&node, 0), 100)
+                .unwrap()
+                .hits
+                .iter()
+                .map(|h| h.id)
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+        assert!(ids(&index).is_empty(), "behind");
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(&mut s, 100).unwrap() > 0 {}
+        // The file index's commit, as `Side::commit` writes it, with no
+        // reload yet: on disk it has caught up, its reader hasn't.
+        let mut prepared = w.files.writer.prepare_commit().unwrap();
+        prepared.set_payload(&format!(
+            "{PAYLOAD_PREFIX}{};reindex:{};pop:{}",
+            w.files.last_id,
+            w.files.reindex_seq,
+            w.files.population.encode()
+        ));
+        prepared.commit().unwrap();
+        assert_eq!(index.files_watermark().unwrap(), 20, "on disk");
+        assert_eq!(index.num_files(), 0, "the snapshot is stale");
+        assert!(ids(&index).is_empty(), "a stale snapshot");
+        w.commit().unwrap();
+        let mut want: Vec<u64> = (1..=20).collect();
+        want.retain(|&id| id != 8);
+        assert_eq!(ids(&index), want);
+        assert!(format!("{:?}", index.query(&node, 0)).contains("RegexQuery"));
     }
 
     /// The bucket terms answer a query only when they're complete in the

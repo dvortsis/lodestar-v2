@@ -693,8 +693,12 @@ fn negated_words_answer_as_the_file_index_does() {
     let mut store = store_with(&torrents);
     let index = SearchIndex::in_memory().unwrap();
     let mut w = index.writer(60 << 20).unwrap();
-    w.catch_up(&mut store, 100_000).unwrap();
+    // Several segments: a few torrents a commit.
+    while w.catch_up(&mut store, 7).unwrap() > 0 {
+        w.commit().unwrap();
+    }
     w.commit().unwrap();
+    assert!(index.segment_counts()[1] > 1);
 
     let exts = |any: &[&str]| Node::Ext {
         any: any.iter().map(|e| (*e).to_owned()).collect(),
@@ -808,6 +812,80 @@ fn negated_words_wait_for_a_lagging_file_index() {
     w.commit().unwrap();
     assert_eq!(ids(&index, &q), (2..=11).collect::<Vec<u64>>());
     assert!(format!("{:?}", index.query(&q, NOW)).contains("RegexQuery"));
+}
+
+/// An index #505 built (`file_bucket` and `file_ext_bucket` at
+/// generation 1, the old codes) opened by this build (generation 2):
+/// both backfill, bucket and negated-word clauses answer from the file
+/// index meanwhile, and from the new terms once the walk completes,
+/// with the same torrents throughout (X-search-files-6).
+#[test]
+fn a_generation_1_index_backfills_the_new_codes() {
+    use lodestar_search::{Availability, Generations};
+    let sizes: Vec<u64> = boundary_sizes()
+        .into_iter()
+        .filter(|s| *s < 1 << 40)
+        .collect();
+    let torrents: Vec<Vec<u8>> = sizes
+        .iter()
+        .enumerate()
+        .map(|(i, s)| sized(&format!("torrent {i}"), &[(format!("f{i}.bin"), *s as i64)]))
+        .collect();
+    let mut store = store_with(&torrents);
+    let old = Generations::current()
+        .with("file_bucket", 1)
+        .with("file_ext_bucket", 1);
+    let index = SearchIndex::in_memory()
+        .unwrap()
+        .with_generations(old)
+        .unwrap();
+    let mut w = index.writer(60 << 20).unwrap();
+    w.catch_up(&mut store, 100_000).unwrap();
+    w.commit().unwrap();
+    drop(w);
+    let index = index.with_generations(Generations::current()).unwrap();
+    for f in ["file_bucket", "file_ext_bucket"] {
+        assert!(
+            matches!(index.availability(f), Availability::Backfilling { .. }),
+            "{f}"
+        );
+    }
+    let queries = [
+        file(range(Some((100 << 20) + 1), None)),
+        file(Node::And {
+            of: vec![ext("bin"), range(Some(500 << 20), None)],
+        }),
+        file(Node::And {
+            of: vec![
+                ext("bin"),
+                Node::Not {
+                    of: Box::new(word(TextField::Any, "f5")),
+                },
+            ],
+        }),
+    ];
+    let want: Vec<Vec<(u64, f32)>> = queries
+        .iter()
+        .map(|q| by_id(&ranked(&index, &on_the_file_index(q))))
+        .collect();
+    let plan = |q: &Node| format!("{:?}", index.query(q, NOW));
+    for (q, want) in queries.iter().zip(&want) {
+        assert_eq!(&by_id(&ranked(&index, q)), want, "before the walk {q:?}");
+    }
+    assert!(
+        !plan(&queries[2]).contains("RegexQuery"),
+        "the file index meanwhile"
+    );
+    let mut w = index.writer(60 << 20).unwrap();
+    while w.catch_up(&mut store, 100_000).unwrap() > 0 {}
+    w.commit().unwrap();
+    for f in ["file_bucket", "file_ext_bucket"] {
+        assert_eq!(index.availability(f), Availability::Ready, "{f}");
+    }
+    for (q, want) in queries.iter().zip(&want) {
+        assert_eq!(&by_id(&ranked(&index, q)), want, "after the walk {q:?}");
+    }
+    assert!(plan(&queries[2]).contains("RegexQuery"), "the terms after");
 }
 
 /// While the bucket terms are backfilled (a build shipping a new
