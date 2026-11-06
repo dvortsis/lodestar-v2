@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-05T23:58Z",
+ "updated_at": "2026-11-06T00:02Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3257,13 +3257,14 @@
    "merge": "d32d4d08"
   },
   "RP-5": {
-   "status": "changes requested",
+   "status": "merged",
    "session": "session_01MMjhnBfKMN7CfvitFcUrq2",
    "since": "2026-11-05T19:21Z",
    "brief": "briefs/RP-5.md",
    "note": "fresh session (RP-4 session declined a new branch); handoff in brief",
    "pr": 510,
-   "head": "ca2aa9d1"
+   "head": "ca2aa9d1",
+   "merge": "381b2e04"
   },
   "X-enr-page-flag": {
    "status": "merged",
@@ -3284,7 +3285,7 @@
    "merge": "01d956f3"
   },
   "P-v07": {
-   "status": "in review",
+   "status": "changes requested",
    "brief": "briefs/P-v07.md",
    "note": "launch first after the 00:00Z usage reset",
    "session": "session_01MMjhnCcXx6GNpK4VimTstF",
@@ -3311,7 +3312,7 @@
    "launched": "2026-11-05T23:37Z"
   },
   "P-v06-companions": {
-   "status": "in review",
+   "status": "changes requested",
    "session": "session_01MMjhnAtULt1rsaDYpC2MGM",
    "brief": "briefs/P-v06-companions.md",
    "launched": "2026-11-05T23:37Z",
@@ -3331,7 +3332,7 @@
    "launched": "2026-11-05T23:37Z"
   },
   "P-m8": {
-   "status": "in review",
+   "status": "changes requested",
    "session": "session_01MMjhnAY429C9qruAYakZtm",
    "brief": "briefs/P-m8.md",
    "launched": "2026-11-05T23:37Z",
@@ -3355,6 +3356,18 @@
    "session": "session_01MMjhn9dpWGKRy1HvxiCaet",
    "brief": "briefs/X-sources-low.md",
    "launched": "2026-11-05T23:51Z"
+  },
+  "RP-G": {
+   "status": "running",
+   "session": "session_01MMjhn9KD5JH1gK2rcmNCVM",
+   "brief": "briefs/RP-G.md",
+   "launched": "2026-11-06T00:02Z"
+  },
+  "X-sp4-followups": {
+   "status": "running",
+   "session": "session_01MMjhn9toR888c1KtXVNwiz",
+   "brief": "briefs/X-sp4-followups.md",
+   "launched": "2026-11-06T00:02Z"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3744,7 +3757,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-11-05T21:39Z",
+ "last_heartbeat": "2026-11-06T00:02Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
@@ -5035,6 +5048,11 @@
    "id": "runner-dashboard-plans",
    "note": "Owner 23:58Z: \"Update the dashboard to incorporate all the new plans\". As each planning PR merges (P-v07 #514, P-m8 #515, P-v06-companions #516, P-m6-audit #518, P-v06-workers, P-v052-manifest, P-v08): one runner PR adds its slices to slices.yaml with placement rules, replaces the one-step roadmap items, adds the ext conditions and gate entries in dashboard.yaml, then npm test. Also fix the G-v051 measure text and the soak roadmap label (r5 running, baseline ends 2026-11-06T13:12:25Z).",
    "added": "2026-11-05T23:58Z"
+  },
+  {
+   "id": "owner-flag-RP-5",
+   "note": "sent 00:02Z at merge",
+   "added": "2026-11-06T00:02Z"
   }
  ],
  "main_health": [
@@ -5698,7 +5716,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-05T23:58Z",
+  "updated": "2026-11-06T00:02Z",
   "items": [
    {
     "slot": 1,
@@ -5738,11 +5756,12 @@
    },
    {
     "slot": 5,
-    "slice": "RP-5",
+    "slice": "RP-G",
     "role": "build",
     "agent": "claude",
-    "doing": "Rule packs: SP-4, clones of hidden spam inherit the original's action",
-    "since": "2026-11-05T19:21Z"
+    "doing": "Rule packs: the gate (corpora, precision, budget with every pack incl. SP-4 at cap, upgrade, guardrails, e2e)",
+    "since": "2026-11-06T00:02Z",
+    "session": "session_01MMjhn9KD5JH1gK2rcmNCVM"
    },
    {
     "slot": 7,
@@ -5806,10 +5825,19 @@
     "doing": "Security: egress port check, redirect header strip, shared title cleaner (pre-audit L1, L2, L4)",
     "since": "2026-11-05T23:51Z",
     "session": "session_01MMjhn9dpWGKRy1HvxiCaet"
+   },
+   {
+    "slot": 17,
+    "slice": "X-sp4-followups",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Rule packs: SP-4 pre-hiding guard and a tighter set index",
+    "since": "2026-11-06T00:02Z",
+    "session": "session_01MMjhn9toR888c1KtXVNwiz"
    }
   ],
   "limit": 8,
-  "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged. | Owner 2026-11-05T23:35Z: \"Use as many resources as needed to get as much done in the next 30 mins as possible.\" Owner ~23:45Z in the runner chat: \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Six planning slices launched 23:36-23:37Z; they finish under the 4-slot limit from 00:00Z."
+  "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged. | Owner 2026-11-05T23:35Z: \"Use as many resources as needed to get as much done in the next 30 mins as possible.\" Owner ~23:45Z in the runner chat: \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Six planning slices launched 23:36-23:37Z; they finish under the 4-slot limit from 00:00Z. | 00:01Z: the weekly usage limit reset (status allowed). From ~00:15Z the 4-slot limit applies; running slices finish."
  },
  "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail."
 }
