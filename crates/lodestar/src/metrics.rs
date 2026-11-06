@@ -160,6 +160,18 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Keys waiting for a lookup slot.",
         get(&p.lookup_backlog),
     );
+    o.one(
+        "fetch_held_bytes",
+        "gauge",
+        "Bytes of finished fetches the pool holds for the consumer.",
+        get(&p.held_bytes),
+    );
+    o.one(
+        "fetch_held_full_total",
+        "counter",
+        "Times the held-bytes budget stopped new fetches.",
+        get(&p.held_full),
+    );
     for (name, value) in [
         ("fetch_finder_full_total", &p.finder_full),
         ("fetch_finder_closed_total", &p.finder_closed),
@@ -1582,6 +1594,20 @@ mod tests {
         let doc = include_str!("../../../docs/metrics.md");
         for family in MEMORY_FAMILIES.iter().chain(&["search_segments"]) {
             let row = format!("| `{family}");
+            assert!(
+                doc.lines().any(|l| l.starts_with(&row)),
+                "docs/metrics.md has no row for {family}"
+            );
+        }
+    }
+
+    /// The pool's held-bytes families (X-fetch-pool-bytes) have their
+    /// rows in docs/metrics.md.
+    #[test]
+    fn held_bytes_families_are_documented() {
+        let doc = include_str!("../../../docs/metrics.md");
+        for family in ["fetch_held_bytes", "fetch_held_full_total"] {
+            let row = format!("| `{family}`");
             assert!(
                 doc.lines().any(|l| l.starts_with(&row)),
                 "docs/metrics.md has no row for {family}"
