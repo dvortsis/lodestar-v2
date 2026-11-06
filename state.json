@@ -5349,6 +5349,7 @@
       "id": "X-consent-gate-lift",
       "from": "runner 2026-11-06T21:25Z",
       "items": [
+        "SUPERSEDED 22:00Z by #550: gate lift is its own slice X-consent-gate-lift (deps SRC-15b, X-consent-gate-polish, P-v052-cut; v0.6). Polish (before cut) also closes Account until its dialog ships.",
         "After SRC-15b merges: Opus slice flips consent_text_approved (crates/pipeline/src/control.rs) per class whose dialog ships the \u00a72.49 text; update ops/tests.rs + consent_gate.rs; fold into X-consent-gate-polish (add dep SRC-15b + control.rs owns) in next runner PR",
         "Settle text_version(Account) from SRC-15b's decisions note"
       ]
