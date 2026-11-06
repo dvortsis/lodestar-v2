@@ -720,19 +720,19 @@ conditions:
     who: you
     label: You decide on AniDB, srrDB, PreDB and debrid lookups (v0.7 Q4)
   owner-v07-q5:
-    met: false
+    met: true
     who: you
     label: You decide what general enrichment may send (v0.7 Q5; every enrichment slice waits on it)
   owner-v07-q6:
-    met: false
+    met: true
     who: you
     label: You decide how usenet results are shown (v0.7 Q6)
   owner-cq1:
-    met: false
+    met: true
     who: you
     label: You choose the companion catalogue's trust root (companions Q1)
   owner-cq2:
-    met: false
+    met: true
     who: you
     label: You decide how upstream signatures are checked (companions Q2)
   owner-cq3:
@@ -740,7 +740,7 @@ conditions:
     who: you
     label: You decide what least privilege means for native companions (companions Q3)
   owner-cq4:
-    met: false
+    met: true
     who: you
     label: You decide how qBittorrent installs on Windows (companions Q4)
   owner-cq5:
@@ -752,7 +752,7 @@ conditions:
     who: you
     label: You approve the v0.6 companion catalogue and whose binaries run (companions Q15)
   owner-cq7:
-    met: false
+    met: true
     who: you
     label: You decide whether the systemd unit may be relaxed for companions (companions Q20)
   owner-cq8:
@@ -760,7 +760,7 @@ conditions:
     who: you
     label: You decide whether FlareSolverr is offered, opt-in only (companions Q21)
   owner-wkq1:
-    met: false
+    met: true
     who: you
     label: You decide what filter data a worker holds and spools (workers Q1)
   owner-wkq2:
@@ -768,7 +768,7 @@ conditions:
     who: you
     label: You decide how the join token is passed in Docker and Unraid (workers Q2)
   owner-wkq3:
-    met: false
+    met: true
     who: you
     label: You decide the worker's RAM budget at your corpus size (workers Q6)
   owner-m6q13:
@@ -796,15 +796,15 @@ conditions:
     who: you
     label: You decide on a dedicated benchmark runner and its safeguards (M8 OQ1)
   owner-m8-q2:
-    met: false
+    met: true
     who: you
     label: You decide how relevance is judged on real data (M8 OQ2)
   owner-m8-q3:
-    met: false
+    met: true
     who: you
     label: You confirm the Windows soak rules for 1.0 (M8 OQ3)
   owner-m8-q4:
-    met: false
+    met: true
     who: you
     label: You decide whether 1.0 also gets a Linux Docker soak (M8 OQ4)
   owner-m8-q6:
@@ -1343,9 +1343,9 @@ owner_queue:
   when: When convenient
 - n: 10
   type: decision
-  action: 'Planning-wave questions (2026-11-06T00:30Z): v07 Q1–Q6 and Q10(d), companions cq1–cq6, Q20 and Q21, M8 OQ1–OQ6, M6 Q6, Q8, Q10 and Q13, workers wkq1–3, v08 Q1, Q3 and Q4. Relayed by the dashboard session with the runner''s recommendations'
-  unblocks: The owner-gated slices of v0.7, the companion manager, remote workers, M6 packaging, v0.8 and 1.0
-  when: Q5 (v0.7 enrichment) and M6 Q13 first; the rest before their slices
+  action: 'Confirm by name the planning-wave questions your 04:26Z reply ("Have the runner decide based on what''s best for performance and UX") does not cover, because they touch security, content safety or a source''s terms (§2.46): v07 Q1 (Stremio addon), Q2, Q3 and Q4 (source terms), companions cq3, cq5, cq6 and Q21 (FlareSolverr), M8 OQ1 and OQ6, M6 Q13 (MSI helper), workers wkq2, v08 Q1 and Q4. The rest the runner decided (docs/decisions/2026-11-06-runner-planning-wave-answers.md)'
+  unblocks: The remaining owner-gated slices of v0.7, the companion manager, remote workers, M6 packaging, v0.8 and 1.0
+  when: M6 Q13 and v07 Q4 first; the rest before their slices
 gates:
 - id: G-v05
   name: v0.5 MVP exit

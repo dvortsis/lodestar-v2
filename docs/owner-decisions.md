@@ -486,6 +486,28 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Launched in the window:** P-v07, P-v06-workers, P-v06-companions, P-m6-audit, P-v052-manifest, P-m8, P-v08, X-tcache-recheck, X-sources-low, RP-G and X-sp4-followups, plus a read-only security pre-audit of the v0.6 sources code.
     - **They run to completion under §2.42.** No new slice launches until fewer than four are running.
 
+46. **The runner decides the planning-wave questions on performance and UX** (owner, 2026-11-06T04:26Z, relayed to the runner by the dashboard session): "Have the runner decide based on what's best for performance and UX. Provide a summary of the decisions." It answers owner-queue item 10, the planning-wave list (v0.7 Q1–Q6 and Q10(d), companions cq1–cq6, Q20 and Q21, M8 OQ1–OQ6, M6 Q6, Q8, Q10, Q13 and Q14, workers wkq1–3, v0.8 Q1, Q3 and Q4). Each question's decision and reason are in `docs/decisions/2026-11-06-runner-planning-wave-answers.md`.
+    - **Decided by the runner under this delegation,** each as the plan's own recommendation. None of them loosens an owner decision, weakens security or content safety, or raises an owner-set number:
+      - v0.7 Q5 (`owner-v07-q5`) and Q6 (`owner-v07-q6`);
+      - companions cq1 (`owner-cq1`), cq2 (`owner-cq2`), cq4 (`owner-cq4`) and Q20 (`owner-cq7`);
+      - workers wkq1 (`owner-wkq1`) and wkq3 (`owner-wkq3`);
+      - M8 OQ2 (`owner-m8-q2`), OQ3 (`owner-m8-q3`), OQ4 (`owner-m8-q4`) and OQ5 (it gates nothing);
+      - M6 Q10;
+      - v0.8 Q3's drafting.
+
+      Those conditions hold.
+    - **Not covered by this reply, so they stay with the owner** (CLAUDE.md: the runner doesn't loosen owner decisions, weaken security or content safety, decide a source's terms or consent, or raise an owner-set number on its own). The dashboard session asks the owner to confirm each one by name:
+      - v0.7 Q1 (the Stremio addon: a URL-path token and CORS, and whether it ships at all);
+      - v0.7 Q2, Q3 and Q4 (source terms);
+      - companions cq3 (a companion under Lodestar's own account can read its secrets), cq5 (revealing a generated credential), cq6 (whose third-party binaries run) and Q21 (FlareSolverr);
+      - M8 OQ1 (a self-hosted runner on a public repository) and OQ6 (disclosure and the `SECURITY.md` contact);
+      - M6 Q13 (the privileged MSI helper);
+      - workers wkq2 (accepting the join token from the environment);
+      - v0.8 Q1 (Nostr and Lemmy terms) and Q4 (third-party adult claims).
+    - **v0.7 Q10(d) isn't needed yet.** Steps (a)–(c) shrink the producers first, under §2.26. If they don't bring the torrent index under 512 B, step (d) trades one owner number for another (trigrams off by default against "Regex < 500 ms"), so it comes back to the owner by name, with the measured numbers.
+    - **v0.8 Q3:** the runner drafts the per-worker consent wording. Approving the text stays with the owner, as for the Q1 consent texts, so `owner-v08-q3` stays unmet.
+    - **Still the owner's own steps:** M6 Q6 (winget, after 1.0 if wanted), Q8 (the nightly signing key, owner-queue item 5) and Q14 (the G-m6 manual installs and the release approval, `owner-m6-manual`).
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

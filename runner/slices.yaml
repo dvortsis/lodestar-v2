@@ -76,31 +76,31 @@ external:
     check: "The owner has answered plan 2026-11-05 Q3 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-v07-q4:  # plan 2026-11-05-v07-m7 §6 Q4 (AniDB, srrDB, PreDB, debrid terms); gates the four grey enrichment plugins
     check: "The owner has answered plan 2026-11-05 Q4 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-v07-q5:  # plan 2026-11-05-v07-m7 §6 Q5 (what general enrichment may send); gates ENR-10 and every enrichment slice after it
+  owner-v07-q5:  # plan 2026-11-05-v07-m7 §6 Q5 (what general enrichment may send); gates ENR-10 and every enrichment slice after it; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-05 Q5 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-v07-q6:  # plan 2026-11-05-v07-m7 §6 Q6 (usenet visibility); gates UN-3
+  owner-v07-q6:  # plan 2026-11-05-v07-m7 §6 Q6 (usenet visibility); gates UN-3; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-05 Q6 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-cq1:  # plan 2026-11-06-v06-companions §5 Q1 (the catalogue's trust root); gates CMP-0
+  owner-cq1:  # plan 2026-11-06-v06-companions §5 Q1 (the catalogue's trust root); gates CMP-0; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (companions) Q1 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-cq2:  # companions plan §5 Q2 (upstream signatures); gates CMP-1 and CMP-13
+  owner-cq2:  # companions plan §5 Q2 (upstream signatures); gates CMP-1 and CMP-13; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (companions) Q2 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-cq3:  # companions plan §5 Q3 (least privilege natively); gates CMP-4a
     check: "The owner has answered plan 2026-11-06 (companions) Q3 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-cq4:  # companions plan §5 Q4 (qBittorrent on Windows); gates CMP-11
+  owner-cq4:  # companions plan §5 Q4 (qBittorrent on Windows); gates CMP-11; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (companions) Q4 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-cq5:  # companions plan §5 Q5 (revealing a generated credential); gates CMP-6
     check: "The owner has answered plan 2026-11-06 (companions) Q5 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-cq6:  # companions plan §5 Q15 (v0.6 catalogue contents, whose binaries run); gates CMP-0
     check: "The owner has answered plan 2026-11-06 (companions) Q15 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-cq7:  # companions plan §5 Q20 (the shipped systemd unit and companions); gates CMP-G
+  owner-cq7:  # companions plan §5 Q20 (the shipped systemd unit and companions); gates CMP-G; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (companions) Q20 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-cq8:  # companions plan §5 Q21 (FlareSolverr, opt-in only); gates CMP-12
     check: "The owner has answered plan 2026-11-06 (companions) Q21 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-wkq1:  # plan 2026-11-06-v06-workers §5 Q1 (what filter data a worker holds); gates WK-8
+  owner-wkq1:  # plan 2026-11-06-v06-workers §5 Q1 (what filter data a worker holds); gates WK-8; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (workers) Q1 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-wkq2:  # workers plan §5 Q2 (the join token in Docker and Unraid); gates WK-18
     check: "The owner has answered plan 2026-11-06 (workers) Q2 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-wkq3:  # workers plan §5 Q6 (the worker's RAM budget at the owner's corpus); gates WK-G
+  owner-wkq3:  # workers plan §5 Q6 (the worker's RAM budget at the owner's corpus); gates WK-G; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (workers) Q6 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-m6q13:  # plan 2026-11-06-m6-gap-audit §5 Q13 (Windows MSI updater rights); gates PK-win-upd-2. If declined, the plan's §4.1 alternative entries apply
     check: "The owner has answered plan 2026-11-06 (M6) Q13 (recorded in docs/owner-decisions.md or a decisions file)"
@@ -114,11 +114,11 @@ external:
     check: "The owner has answered plan 2026-11-06-v08 Q-o4 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-m8-q1:  # plan 2026-11-06-m8-hardening §5 OQ1 (a dedicated benchmark runner); gates M8-PERF-3
     check: "The owner has answered plan 2026-11-06 (M8) OQ1 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-m8-q2:  # M8 plan §5 OQ2 (relevance on real data); gates M8-REL-2
+  owner-m8-q2:  # M8 plan §5 OQ2 (relevance on real data); gates M8-REL-2; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (M8) OQ2 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-m8-q3:  # M8 plan §5 OQ3 (the Windows soak); gates M8-WIN-1
+  owner-m8-q3:  # M8 plan §5 OQ3 (the Windows soak); gates M8-WIN-1; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (M8) OQ3 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-m8-q4:  # M8 plan §5 OQ4 (a Linux Docker soak on the RC); gates G-v1-soak-linux
+  owner-m8-q4:  # M8 plan §5 OQ4 (a Linux Docker soak on the RC); gates G-v1-soak-linux; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (M8) OQ4 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-m8-q6:  # M8 plan §5 OQ6 (disclosure and SECURITY.md); gates M8-SEC-0
     check: "The owner has answered plan 2026-11-06 (M8) OQ6 (recorded in docs/owner-decisions.md or a decisions file)"
