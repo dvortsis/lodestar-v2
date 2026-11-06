@@ -4580,6 +4580,59 @@ mod negated_props {
         }
     }
 
+    /// The bad set cached for a file snapshot isn't served to a later
+    /// one that only deletes (same segments, more deleted documents):
+    /// a bad torrent deleted is bad no more (X-search-files-6).
+    #[test]
+    fn a_cached_bad_set_follows_a_delete() {
+        let (schema, f) = schema();
+        let index = tantivy::Index::create_in_ram(schema);
+        index
+            .tokenizers()
+            .register(NAME_TOKENIZER, tokenizer::NameTokenizer::default());
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        for (torrent, sample) in [(1, true), (2, false), (3, true)] {
+            let doc = FileDoc {
+                torrent,
+                index: 0,
+                name: "f.mkv".into(),
+                dirs: if sample {
+                    vec!["Sample".into()]
+                } else {
+                    Vec::new()
+                },
+                ext: Some("mkv".into()),
+                size: 10,
+                category: Category::Other,
+                pieces_root: None,
+            };
+            writer.add_document(doc.to_document(&f)).unwrap();
+        }
+        writer.commit().unwrap();
+        let reader = index.reader().unwrap();
+        let neg = crate::compile::NegatedWords {
+            exts: vec!["mkv".into()],
+            words: vec![word(TextField::Path, "sample")],
+        };
+        let cache = FileSetCache::default();
+        let bad = |s: &Searcher| {
+            bad_torrents_at(s, &f, &neg, &cache, &crate::CancelToken::new(), OPEN)
+                .unwrap()
+                .unwrap()
+                .to_vec()
+        };
+        assert_eq!(bad(&reader.searcher()), [1, 3]);
+        writer.delete_term(Term::from_field_u64(f.torrent, 1));
+        writer.commit().unwrap();
+        reader.reload().unwrap();
+        let searcher = reader.searcher();
+        assert_eq!(searcher.segment_readers().len(), 1);
+        assert_eq!(bad(&searcher), [3]);
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(256))]
 

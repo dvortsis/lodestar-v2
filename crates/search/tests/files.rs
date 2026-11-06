@@ -771,8 +771,9 @@ fn negated_words_answer_as_the_file_index_does() {
     assert!(!plan(&common).contains("RegexQuery"), "{}", plan(&common));
 }
 
-/// While the file index lags the torrent index (a crash between their
-/// commits, until the catch-up), an extension less a word doesn't read
+/// While the file index lags the torrent index (rebuilt or recreated
+/// behind it, until it catches up; a crash leaves it ahead, as it
+/// commits first), an extension less a word doesn't read
 /// the torrent's terms: the bad set would miss the lagging torrents'
 /// files and let in one whose only video is a sample. It runs on the
 /// file index, which has nothing yet, as on `main`; after the catch-up
@@ -886,6 +887,67 @@ fn a_generation_1_index_backfills_the_new_codes() {
         assert_eq!(&by_id(&ranked(&index, q)), want, "after the walk {q:?}");
     }
     assert!(plan(&queries[2]).contains("RegexQuery"), "the terms after");
+}
+
+/// The bad set cached for a file snapshot follows the index on one
+/// handle: a new torrent whose only video is a sample stays out once
+/// committed, and a torrent deleted from the store (a `reindex_log`
+/// entry, no new documents) leaves the answer (X-search-files-6).
+#[test]
+fn the_cached_bad_set_follows_new_torrents_and_deletes() {
+    let film = |i: usize| with_attrs(&format!("film {i}"), &[(format!("f{i}.mkv"), 1 << 30, "")]);
+    let sample = |name: &str| with_attrs(name, &[("Sample/s.mkv".into(), 1 << 25, "")]);
+    // Films enough that `sample` stays rare (`NEGATED_RATIO`) with two.
+    let mut torrents: Vec<Vec<u8>> = (0..40).map(film).collect();
+    torrents.push(sample("only sample"));
+    let mut store = store_with(&torrents);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(30 << 20).unwrap();
+    w.catch_up(&mut store, 1_000).unwrap();
+    w.commit().unwrap();
+    let q = file(Node::And {
+        of: vec![
+            ext("mkv"),
+            Node::Not {
+                of: Box::new(word(TextField::Path, "sample")),
+            },
+        ],
+    });
+    let words_path =
+        |index: &SearchIndex| format!("{:?}", index.query(&q, NOW)).contains("RegexQuery");
+    // (a) On the words' path, twice: the second from the cache.
+    assert!(words_path(&index));
+    let films: Vec<u64> = (1..=40).collect();
+    assert_eq!(ids(&index, &q), films);
+    assert_eq!(ids(&index, &q), films);
+    // (b) A new torrent whose only video is a sample.
+    let info_raw = sample("another sample");
+    let info = Info::parse(&info_raw).unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&info_raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_001,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+        }])
+        .unwrap();
+    w.catch_up(&mut store, 1_000).unwrap();
+    w.commit().unwrap();
+    assert!(words_path(&index));
+    assert_eq!(ids(&index, &q), films, "the new sample stays out");
+    // (c) A film deleted from the store: deletes only, no new segment.
+    let hash = store.torrent(3).unwrap().unwrap().info_hash.0;
+    assert_eq!(store.delete_torrents(&[hash]).unwrap(), [3]);
+    let segments = index.segment_counts();
+    w.catch_up(&mut store, 1_000).unwrap();
+    w.commit().unwrap();
+    assert_eq!(index.segment_counts(), segments, "no new segment");
+    assert!(words_path(&index));
+    let mut left = films.clone();
+    left.retain(|&id| id != 3);
+    assert_eq!(ids(&index, &q), left);
 }
 
 /// While the bucket terms are backfilled (a build shipping a new
