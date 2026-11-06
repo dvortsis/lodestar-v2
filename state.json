@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T12:42:17Z",
+ "updated_at": "2026-11-06T14:43:50Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -5824,6 +5824,10 @@
   {
    "at": "2026-11-06T06:29:30Z",
    "note": "r5 h17.2 (06:26Z): clean, 0 restarts; provisional h12-17.2 fit -0.12 [-1.62,1.38] (313 samples, ~43% of window); per-1k-commits -0.13; mimalloc committed flat 568; files-index segment slope eased 2.13->0.90/h (13 now). Next check after ~10:00Z (folder file counts); final analyzer after 13:13Z."
+  },
+  {
+   "at": "2026-11-06T14:43:50Z",
+   "note": "r5 FINAL (agent summary, 13:20Z report): gate evidence yes; h12-24 719 samples complete; private slope 0.91 MiB/h CI [0.47,1.35] meets bar; 24.00 h coverage, clean exit 0, 0 restarts/OOM/failures. Runner reading: PASS provisional, pending full report (analyzer sha256 + cmdline, collector rev >=6cf0519c in run.json, stop reason from collect.py, baseline start header). Gluetun leg OK'd to start now. Note: private 244->299 MiB h16->h24, watch in 1.0 soak."
   }
  ],
  "limits": {
