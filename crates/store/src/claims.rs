@@ -11,26 +11,33 @@
 //! store file can be corrupt or crafted, so [`decode`] trusts nothing:
 //!
 //! ```text
-//! blob   = version:u8 (1 or 2) · codec:u8 (0 raw, 1 zstd) · body
+//! blob   = version:u8 (1, 2 or 3) · codec:u8 (0 raw, 1 zstd) · body
 //! plain  = present:u8 · confidence:u8
 //!          [name:str] [size:uvar] [description:str] [publisher:str]
 //!          [external_ref:str] [published_at:svar]
 //!          files:uvar  (path:str0 · has_size:u8 · [size:uvar])*
 //!          trackers:uvar (str)*
 //!          ids:uvar (scheme:str · value:str)*
-//!          [adult]
+//!          [adult] [details]
 //! adult  = kind:u8 (0 none, 1 scene, 2 movie, 3 VR) · flags:u8
 //!          scene_id:str [title:str] [studio:str] [released:date]
 //!          performers:uvar (name:str)*
 //! date   = year:u16 big-endian (1–9999) · month:u8 (0 none, 1–12)
 //!          · day:u8 (0 none, else a day of that month; only with a month)
+//! details = flags:u8 [source_category:str] [posted_at:svar]
+//!          [canonical_title:str] [year:u16 big-endian (1–9999)]
+//!          [match_confidence:u8 (0–100)]
+//!          newsgroups:uvar (str)*
+//!          alt_titles:uvar (language:str · title:str)*
+//!          genres:uvar (str)*
 //! str    = len:uvar (≥ 1) · UTF-8 bytes;  str0 allows len 0 (paths)
 //! uvar   = LEB128, at most 10 bytes, minimal (no trailing zero groups)
 //! svar   = uvar of the zigzag value
 //! ```
 //!
 //! - `present` has one bit per optional field, in the order above, then
-//!   bit 6 for the adult section; bit 7 is zero.
+//!   bit 6 for the adult section and bit 7 for the details section. Every
+//!   bit is spoken for: a new top-level field takes a new layout.
 //! - Claims with an adult section hold no description, publisher or
 //!   external ids (`present` bits 2 and 3 clear, `ids` 0): those fields
 //!   could otherwise carry a scene description (plan Q3) or a performer id
@@ -43,6 +50,22 @@
 //!   has one blob version and claims without enrichment keep the bytes
 //!   (and hashes) they had before ENR-0. The plain layer is the same for
 //!   both: bit 6 says whether the section follows.
+//! - **Version 3 is version 1 plus the details section ([`Details`],
+//!   ENR-9), and only that.** It's written exactly when there's a details
+//!   section, so claims without one keep their version 1 bytes. A row holds
+//!   at most one section: claims with an adult section have no details
+//!   section. The section's `flags` has bit 0 for the category, 1 the
+//!   posting time, 2 the canonical title, 3 the year and 4 the match
+//!   confidence; bits 5–7 are zero. A section claiming nothing is refused.
+//! - **Beside a details section, `ids` hold only enrichment ids**: the
+//!   schemes in [`ENRICHMENT_SCHEMES`], each value in its one spelling
+//!   ([`id_ok`]), no duplicates. IDs stay in `ids`; the section has none.
+//! - Details entries are in stored form: language tags lower case
+//!   ([`language_ok`]), newsgroups as RFC 5536 names ([`newsgroup_ok`]),
+//!   genres normalised ([`genre_ok`]), no duplicate entry in any list.
+//!   The section counts toward [`MAX_TOTAL`] at [`Details::charged_len`]:
+//!   its text plus a fixed charge for itself and each entry, so the
+//!   in-memory size `unverified::MAX_ROW` bounds still holds.
 //! - Every length and count is checked against its limit before anything
 //!   is allocated, the text total (the adult section's included) against
 //!   [`MAX_TOTAL`], the body against
@@ -57,6 +80,9 @@
 //!   no id that could link one across items, and there's no field for a
 //!   birth date, a description or anything else about a person. The type
 //!   has nowhere to put one.
+//! - **The details section describes a work, never a person**: no cast,
+//!   crew, author, uploader or poster address, and the id rules refuse
+//!   person ids (IMDb `nm`, Open Library authors, Discogs artists).
 
 use std::fmt;
 
@@ -106,8 +132,9 @@ const _: () = assert!(
 pub const MAX_TOTAL: usize = 1024 * 1024;
 /// The largest plain body: the text, the external reference, and the
 /// framing: at most 13 bytes a file (a 2-byte path length, the size flag
-/// and a 10-byte size) and under 3 KiB for the rest, the adult section's
-/// ~140 bytes of framing included.
+/// and a 10-byte size) and under 3 KiB for the rest, either section's
+/// framing included (the adult section's ~140 bytes, the details
+/// section's ~150).
 pub const MAX_PLAIN: usize = MAX_TOTAL + MAX_EXTERNAL_REF + MAX_FILES * 13 + 4096;
 /// The largest stored blob: a body is stored raw when zstd doesn't make it
 /// smaller. The schema's `CHECK` holds the same number.
@@ -117,6 +144,8 @@ pub const MAX_STORED: usize = MAX_PLAIN + 2;
 pub const VERSION: u8 = 1;
 /// Version 1 plus the adult section.
 pub const VERSION_ADULT: u8 = 2;
+/// Version 1 plus the details section (ENR-9).
+pub const VERSION_DETAILS: u8 = 3;
 const RAW: u8 = 0;
 const ZSTD: u8 = 1;
 
@@ -127,7 +156,14 @@ const PUBLISHER: u8 = 1 << 3;
 const EXTERNAL_REF: u8 = 1 << 4;
 const PUBLISHED_AT: u8 = 1 << 5;
 const ADULT: u8 = 1 << 6;
-const KNOWN: u8 = (1 << 7) - 1;
+const DETAILS: u8 = 1 << 7;
+
+const CATEGORY: u8 = 1 << 0;
+const POSTED_AT: u8 = 1 << 1;
+const CANONICAL: u8 = 1 << 2;
+const YEAR: u8 = 1 << 3;
+const MATCH_CONFIDENCE: u8 = 1 << 4;
+const DETAILS_KNOWN: u8 = (1 << 5) - 1;
 
 const TITLE: u8 = 1 << 0;
 const STUDIO: u8 = 1 << 1;
@@ -377,6 +413,301 @@ pub fn scene_id_ok(s: &str) -> bool {
         && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
+/// Bytes in a source's own category string (`TV > HD`, `5040`).
+pub const MAX_CATEGORY: usize = 256;
+/// Newsgroups one usenet item names.
+pub const MAX_NEWSGROUPS: usize = 8;
+/// Bytes in one newsgroup name.
+pub const MAX_NEWSGROUP: usize = 128;
+/// Alternative titles in one details section. ENR-11 indexes at most 8.
+pub const MAX_ALT_TITLES: usize = 32;
+/// Bytes in one alternative title.
+pub const MAX_ALT_TITLE: usize = 512;
+/// Bytes in a BCP 47 language tag. RFC 5646 §4.4.1 sizes buffers at 35
+/// for every tag short of extensions and private use.
+pub const MAX_LANGUAGE: usize = 35;
+/// Bytes in a canonical title.
+pub const MAX_CANONICAL_TITLE: usize = MAX_NAME;
+/// Genres in one details section.
+pub const MAX_GENRES: usize = 16;
+/// Bytes in one genre.
+pub const MAX_GENRE: usize = 64;
+/// The highest match confidence: a percentage.
+pub const MAX_MATCH_CONFIDENCE: u8 = 100;
+
+/// What the details section counts toward [`MAX_TOTAL`] beyond its text:
+/// the section itself, and each list entry. Fixed numbers rather than
+/// `size_of`, so a blob one build accepts every build accepts; the asserts
+/// below keep them at least the real sizes, so `unverified::MAX_ROW`
+/// still bounds [`Claims::decoded_size`].
+const DETAILS_COST: usize = 256;
+const ALT_TITLE_COST: usize = 48;
+const STRING_COST: usize = 24;
+const _: () = assert!(std::mem::size_of::<Details>() <= DETAILS_COST);
+const _: () = assert!(std::mem::size_of::<AltTitle>() <= ALT_TITLE_COST);
+const _: () = assert!(std::mem::size_of::<String>() <= STRING_COST);
+
+/// The external-ID schemes claims with a details section may carry, the
+/// ones enrichment writes (plan §4.3 ENR-9). Each value is checked by
+/// [`id_ok`]. None of them names a person: IMDb `nm` ids, Open Library
+/// authors and Discogs artists are refused.
+pub const ENRICHMENT_SCHEMES: [&str; 11] = [
+    "imdb", "tmdb", "tvdb", "anidb", "anilist", "mbid", "olid", "igdb", "discogs", "steam",
+    "wikidata",
+];
+
+/// Whether `value` is a well-formed id in `scheme`, one of
+/// [`ENRICHMENT_SCHEMES`]:
+///
+/// - `imdb`: a title, `tt` and 7–10 digits;
+/// - `tmdb`, `tvdb`, `anidb`, `anilist`, `igdb`, `steam`: 1–20 digits,
+///   no leading zero;
+/// - `mbid`: a lower-case UUID, `8-4-4-4-12` hex;
+/// - `olid`: `OL`, digits, then `M` (an edition) or `W` (a work);
+/// - `discogs`: `r` (a release) or `m` (a master) and digits;
+/// - `wikidata`: an item, `Q` and digits.
+///
+/// Every form is ASCII, and digits never start with a zero unless the
+/// scheme pads (IMDb does), so each id has one spelling.
+pub fn id_ok(scheme: &str, value: &str) -> bool {
+    fn num(s: &str) -> bool {
+        (1..=20).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit()) && !s.starts_with('0')
+    }
+    match scheme {
+        "imdb" => value
+            .strip_prefix("tt")
+            .is_some_and(|d| (7..=10).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit())),
+        "tmdb" | "tvdb" | "anidb" | "anilist" | "igdb" | "steam" => num(value),
+        "mbid" => {
+            let b = value.as_bytes();
+            b.len() == 36
+                && b.iter().enumerate().all(|(i, &c)| match i {
+                    8 | 13 | 18 | 23 => c == b'-',
+                    _ => c.is_ascii_digit() || (b'a'..=b'f').contains(&c),
+                })
+        }
+        "olid" => value
+            .strip_prefix("OL")
+            .and_then(|r| r.strip_suffix('M').or_else(|| r.strip_suffix('W')))
+            .is_some_and(num),
+        "discogs" => value
+            .strip_prefix('r')
+            .or_else(|| value.strip_prefix('m'))
+            .is_some_and(num),
+        "wikidata" => value.strip_prefix('Q').is_some_and(num),
+        _ => false,
+    }
+}
+
+/// Whether `s` is a well-formed BCP 47 tag as stored: 1–[`MAX_LANGUAGE`]
+/// bytes of `-`-separated subtags of 1–8 lower-case ASCII letters and
+/// digits, the first 2–8 letters (`en`, `zh-hant-tw`, `und` for not
+/// known). It checks the shape, not the registry, so a tag a newer
+/// registry adds still fits. Lower case is the stored form: tags compare
+/// without case (RFC 5646 §2.1.1), so one spelling each keeps the body
+/// canonical.
+pub fn language_ok(s: &str) -> bool {
+    if s.is_empty() || s.len() > MAX_LANGUAGE {
+        return false;
+    }
+    s.split('-').enumerate().all(|(i, t)| {
+        (1..=8).contains(&t.len())
+            && t.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            && (i > 0 || (t.len() >= 2 && t.bytes().all(|b| b.is_ascii_lowercase())))
+    })
+}
+
+/// Whether `s` is a newsgroup name: 1–[`MAX_NEWSGROUP`] bytes of
+/// `.`-separated components, each ASCII letters, digits, `+`, `-` or `_`
+/// (RFC 5536 §3.1.4). Names are kept as the source spells them, never
+/// cut or re-cased, since either could name another group.
+pub fn newsgroup_ok(s: &str) -> bool {
+    (1..=MAX_NEWSGROUP).contains(&s.len())
+        && s.split('.').all(|c| {
+            !c.is_empty()
+                && c.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'_'))
+        })
+}
+
+/// Whether `s` is a genre in its normalised form: 1–[`MAX_GENRE`] bytes,
+/// no ASCII upper case, no control characters, and words separated by one
+/// ASCII space with none at either end. `lodestar_sources` normalises with
+/// full Unicode lower-casing; the check stops at ASCII so a Unicode update
+/// can never turn a stored genre invalid.
+pub fn genre_ok(s: &str) -> bool {
+    (1..=MAX_GENRE).contains(&s.len())
+        && !s.starts_with(' ')
+        && !s.ends_with(' ')
+        && !s.contains("  ")
+        && s.chars()
+            .all(|c| !c.is_ascii_uppercase() && !c.is_control() && (c == ' ' || !c.is_whitespace()))
+}
+
+/// One alternative title with its language.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AltTitle {
+    /// A BCP 47 tag in stored form ([`language_ok`]); `und` when the
+    /// source doesn't say.
+    pub language: String,
+    /// 1–[`MAX_ALT_TITLE`] bytes.
+    pub title: String,
+}
+
+/// The language, but the title's length only.
+impl fmt::Debug for AltTitle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AltTitle")
+            .field("language", &self.language)
+            .field("title_len", &self.title.len())
+            .finish()
+    }
+}
+
+/// The version 3 section (ENR-9, plan §4.3): what an enrichment plugin
+/// resolved an item to, and what a feed says beyond a name and files (a
+/// usenet item's groups, an IRC announce's category). Every field is the
+/// source's claim. External IDs stay in [`Claims::ids`], restricted to
+/// [`ENRICHMENT_SCHEMES`] when this section is present.
+///
+/// **It describes a work, never a person** (owner §2.37, plan §4.3): there
+/// is no field for cast, crew, an author, an uploader or a poster's
+/// address. A new field here is a new layout and needs the owner if it
+/// could hold a personal detail.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct Details {
+    /// The source's own category string, as the feed states it
+    /// (1–[`MAX_CATEGORY`] bytes).
+    pub source_category: Option<String>,
+    /// When a usenet item says it was posted, Unix seconds.
+    pub posted_at: Option<i64>,
+    /// The groups a usenet item was posted to, in the source's order, no
+    /// duplicates ([`newsgroup_ok`]).
+    pub newsgroups: Vec<String>,
+    /// Other titles the work is known by, no duplicate pairs.
+    pub alt_titles: Vec<AltTitle>,
+    /// The work's own title as the plugin's database holds it.
+    pub canonical_title: Option<String>,
+    /// Normalised genres ([`genre_ok`]), in the source's order, no
+    /// duplicates.
+    pub genres: Vec<String>,
+    /// The work's year, 1–9999.
+    pub year: Option<u16>,
+    /// How sure the plugin is that the match is right, 0–100 percent.
+    /// The row's [`Provenance::confidence`] is how far the source is
+    /// trusted at all; this is how well this one match fits.
+    pub match_confidence: Option<u8>,
+}
+
+/// Counts and the year only: titles and groups can name what a rule
+/// holds.
+impl fmt::Debug for Details {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Details")
+            .field("source_category", &self.source_category.is_some())
+            .field("posted_at", &self.posted_at.is_some())
+            .field("newsgroups", &self.newsgroups.len())
+            .field("alt_titles", &self.alt_titles)
+            .field("canonical_title", &self.canonical_title.is_some())
+            .field("genres", &self.genres.len())
+            .field("year", &self.year)
+            .field("match_confidence", &self.match_confidence)
+            .finish()
+    }
+}
+
+impl Details {
+    /// True when the section claims nothing; such a section isn't stored.
+    pub fn is_empty(&self) -> bool {
+        self.source_category.is_none()
+            && self.posted_at.is_none()
+            && self.newsgroups.is_empty()
+            && self.alt_titles.is_empty()
+            && self.canonical_title.is_none()
+            && self.genres.is_empty()
+            && self.year.is_none()
+            && self.match_confidence.is_none()
+    }
+
+    /// Bytes of text held.
+    pub fn text_len(&self) -> usize {
+        let len = |s: &Option<String>| s.as_ref().map_or(0, String::len);
+        len(&self.source_category)
+            + len(&self.canonical_title)
+            + self.newsgroups.iter().map(String::len).sum::<usize>()
+            + self
+                .alt_titles
+                .iter()
+                .map(|a| a.language.len() + a.title.len())
+                .sum::<usize>()
+            + self.genres.iter().map(String::len).sum::<usize>()
+    }
+
+    /// What the section counts toward [`MAX_TOTAL`]: its text plus a fixed
+    /// charge for the section and each entry, so a row's
+    /// [`Claims::decoded_size`] stays within `unverified::MAX_ROW`.
+    pub fn charged_len(&self) -> usize {
+        DETAILS_COST
+            + self.text_len()
+            + self.alt_titles.len() * ALT_TITLE_COST
+            + (self.newsgroups.len() + self.genres.len()) * STRING_COST
+    }
+
+    /// Whether the section is within every limit, in its stored form.
+    pub fn check(&self) -> Result<(), ClaimsError> {
+        if self.is_empty() {
+            return Err(ClaimsError::Limit("empty details"));
+        }
+        let opt = |s: &Option<String>, max, what| match s {
+            Some(v) if v.is_empty() || v.len() > max => Err(ClaimsError::Limit(what)),
+            _ => Ok(()),
+        };
+        opt(&self.source_category, MAX_CATEGORY, "source category")?;
+        opt(
+            &self.canonical_title,
+            MAX_CANONICAL_TITLE,
+            "canonical title",
+        )?;
+        if self.newsgroups.len() > MAX_NEWSGROUPS
+            || !self.newsgroups.iter().all(|g| newsgroup_ok(g))
+            || has_duplicates(&self.newsgroups)
+        {
+            return Err(ClaimsError::Limit("newsgroups"));
+        }
+        if self.alt_titles.len() > MAX_ALT_TITLES
+            || !self
+                .alt_titles
+                .iter()
+                .all(|a| language_ok(&a.language) && (1..=MAX_ALT_TITLE).contains(&a.title.len()))
+            || has_duplicates(&self.alt_titles)
+        {
+            return Err(ClaimsError::Limit("alternative titles"));
+        }
+        if self.genres.len() > MAX_GENRES
+            || !self.genres.iter().all(|g| genre_ok(g))
+            || has_duplicates(&self.genres)
+        {
+            return Err(ClaimsError::Limit("genres"));
+        }
+        if self.year.is_some_and(|y| !(1..=9999).contains(&y)) {
+            return Err(ClaimsError::Limit("year"));
+        }
+        if self
+            .match_confidence
+            .is_some_and(|c| c > MAX_MATCH_CONFIDENCE)
+        {
+            return Err(ClaimsError::Limit("match confidence"));
+        }
+        Ok(())
+    }
+}
+
+/// Whether `v` repeats an entry. The lists are at most 32 long.
+fn has_duplicates<T: PartialEq>(v: &[T]) -> bool {
+    v.iter().enumerate().any(|(i, a)| v[..i].contains(a))
+}
+
 /// Everything one source asserted about one key.
 #[derive(Clone, PartialEq, Eq, Default)]
 pub struct Claims {
@@ -391,6 +722,9 @@ pub struct Claims {
     /// An adult-enrichment match (ENR-0). Claims with one are stored as
     /// version 2.
     pub adult: Option<AdultEnrichment>,
+    /// The details section (ENR-9). Claims with one are stored as version
+    /// 3. Boxed: most claims have none, and they're held by the page.
+    pub details: Option<Box<Details>>,
 }
 
 /// No text: claims can hold a name a rule holds, and that mustn't reach a
@@ -402,6 +736,7 @@ impl fmt::Debug for Claims {
             .field("files", &self.files.len())
             .field("text_len", &self.text_len())
             .field("adult", &self.adult)
+            .field("details", &self.details)
             .finish_non_exhaustive()
     }
 }
@@ -425,10 +760,13 @@ impl Claims {
                 .map_or(0, |a| a.performers.len() * size_of::<String>())
     }
 
-    /// Bytes of text held, the measure [`MAX_TOTAL`] bounds.
+    /// Bytes of text held, the measure [`MAX_TOTAL`] bounds. The details
+    /// section counts at [`Details::charged_len`], its text plus a fixed
+    /// charge per entry.
     pub fn text_len(&self) -> usize {
         let len = |s: &Option<String>| s.as_ref().map_or(0, String::len);
-        len(&self.name)
+        self.details.as_ref().map_or(0, |d| d.charged_len())
+            + len(&self.name)
             + len(&self.description)
             + len(&self.publisher)
             + self.trackers.iter().map(String::len).sum::<usize>()
@@ -449,10 +787,13 @@ impl Claims {
         self.description.is_none() && self.publisher.is_none() && self.ids.is_empty()
     }
 
-    /// The blob version these claims encode as: [`VERSION_ADULT`] with an
-    /// adult section, else [`VERSION`].
+    /// The blob version these claims encode as: [`VERSION_DETAILS`] with a
+    /// details section, [`VERSION_ADULT`] with an adult section, else
+    /// [`VERSION`]. [`Claims::check`] refuses both sections at once.
     pub fn version(&self) -> u8 {
-        if self.adult.is_some() {
+        if self.details.is_some() {
+            VERSION_DETAILS
+        } else if self.adult.is_some() {
             VERSION_ADULT
         } else {
             VERSION
@@ -498,8 +839,14 @@ impl Claims {
         }
         if let Some(a) = &self.adult {
             a.check()?;
-            if !self.enrichment_only() {
+            if !self.enrichment_only() || self.details.is_some() {
                 return Err(ClaimsError::Limit("enrichment claims"));
+            }
+        }
+        if let Some(d) = &self.details {
+            d.check()?;
+            if !self.ids.iter().all(|i| id_ok(&i.scheme, &i.value)) || has_duplicates(&self.ids) {
+                return Err(ClaimsError::Limit("enrichment ids"));
             }
         }
         if self.text_len() > MAX_TOTAL {
@@ -564,18 +911,18 @@ pub fn encode(claims: &Claims, level: i32) -> Result<Vec<u8>, ClaimsError> {
     Ok(out)
 }
 
-/// Reads a stored blob back, version 1 or 2. Bounded: it never holds more
-/// than [`MAX_PLAIN`] bytes of body.
+/// Reads a stored blob back, version 1, 2 or 3. Bounded: it never holds
+/// more than [`MAX_PLAIN`] bytes of body.
 pub fn decode(blob: &[u8]) -> Result<Claims, ClaimsError> {
     let (&version, rest) = blob.split_first().ok_or(ClaimsError::Truncated)?;
-    if version != VERSION && version != VERSION_ADULT {
+    if !matches!(version, VERSION | VERSION_ADULT | VERSION_DETAILS) {
         return Err(ClaimsError::Version(version));
     }
     let (&codec, body) = rest.split_first().ok_or(ClaimsError::Truncated)?;
     let claims = decode_body(codec, body)?;
-    // One version per value: the section is what version 2 adds.
+    // One version per value: a section is what versions 2 and 3 add.
     if claims.version() != version {
-        return Err(ClaimsError::Malformed("adult section and version disagree"));
+        return Err(ClaimsError::Malformed("section and version disagree"));
     }
     Ok(claims)
 }
@@ -620,6 +967,7 @@ pub fn encode_plain(claims: &Claims) -> Result<Vec<u8>, ClaimsError> {
         (p.external_ref.is_some(), EXTERNAL_REF),
         (p.published_at.is_some(), PUBLISHED_AT),
         (c.adult.is_some(), ADULT),
+        (c.details.is_some(), DETAILS),
     ] {
         if on {
             present |= bit;
@@ -701,6 +1049,49 @@ pub fn encode_plain(claims: &Claims) -> Result<Vec<u8>, ClaimsError> {
             put_str(&mut out, p);
         }
     }
+    if let Some(d) = &c.details {
+        let mut flags = 0;
+        for (on, bit) in [
+            (d.source_category.is_some(), CATEGORY),
+            (d.posted_at.is_some(), POSTED_AT),
+            (d.canonical_title.is_some(), CANONICAL),
+            (d.year.is_some(), YEAR),
+            (d.match_confidence.is_some(), MATCH_CONFIDENCE),
+        ] {
+            if on {
+                flags |= bit;
+            }
+        }
+        out.push(flags);
+        if let Some(s) = &d.source_category {
+            put_str(&mut out, s);
+        }
+        if let Some(t) = d.posted_at {
+            put_uvar(&mut out, ((t << 1) ^ (t >> 63)) as u64);
+        }
+        if let Some(s) = &d.canonical_title {
+            put_str(&mut out, s);
+        }
+        if let Some(y) = d.year {
+            out.extend_from_slice(&y.to_be_bytes());
+        }
+        if let Some(m) = d.match_confidence {
+            out.push(m);
+        }
+        put_uvar(&mut out, d.newsgroups.len() as u64);
+        for g in &d.newsgroups {
+            put_str(&mut out, g);
+        }
+        put_uvar(&mut out, d.alt_titles.len() as u64);
+        for a in &d.alt_titles {
+            put_str(&mut out, &a.language);
+            put_str(&mut out, &a.title);
+        }
+        put_uvar(&mut out, d.genres.len() as u64);
+        for g in &d.genres {
+            put_str(&mut out, g);
+        }
+    }
     if out.len() > MAX_PLAIN {
         return Err(ClaimsError::Limit("body"));
     }
@@ -717,10 +1108,8 @@ pub fn decode_plain(body: &[u8]) -> Result<Claims, ClaimsError> {
         rest: body,
         text: 0,
     };
+    // Every bit of `present` is a field now; a new one takes a new byte.
     let present = r.byte()?;
-    if present & !KNOWN != 0 {
-        return Err(ClaimsError::Malformed("unknown field bits"));
-    }
     let confidence = match r.byte()? {
         0 => Confidence::Low,
         1 => Confidence::Medium,
@@ -775,8 +1164,16 @@ pub fn decode_plain(body: &[u8]) -> Result<Claims, ClaimsError> {
         ids.push(ExternalId { scheme, value });
     }
     let adult = has(ADULT).then(|| r.adult()).transpose()?;
-    if adult.is_some() && (description.is_some() || publisher.is_some() || !ids.is_empty()) {
+    if adult.is_some()
+        && (description.is_some() || publisher.is_some() || !ids.is_empty() || has(DETAILS))
+    {
         return Err(ClaimsError::Malformed("enrichment claims"));
+    }
+    let details = has(DETAILS).then(|| r.details()).transpose()?;
+    if details.is_some()
+        && (!ids.iter().all(|i| id_ok(&i.scheme, &i.value)) || has_duplicates(&ids))
+    {
+        return Err(ClaimsError::Malformed("enrichment ids"));
     }
     if !r.rest.is_empty() {
         return Err(ClaimsError::Trailing);
@@ -795,6 +1192,7 @@ pub fn decode_plain(body: &[u8]) -> Result<Claims, ClaimsError> {
             confidence,
         },
         adult,
+        details: details.map(Box::new),
     })
 }
 
@@ -914,6 +1312,108 @@ impl<'a> Reader<'a> {
         })
     }
 
+    /// Counts `n` bytes toward [`MAX_TOTAL`] without reading them.
+    fn charge(&mut self, n: usize) -> Result<(), ClaimsError> {
+        self.text += n;
+        if self.text > MAX_TOTAL {
+            return Err(ClaimsError::Limit("total"));
+        }
+        Ok(())
+    }
+
+    /// The details section, checked as [`Details::check`] would. Each
+    /// entry's fixed charge counts before its list is reserved.
+    fn details(&mut self) -> Result<Details, ClaimsError> {
+        self.charge(DETAILS_COST)?;
+        let flags = self.byte()?;
+        if flags & !DETAILS_KNOWN != 0 {
+            return Err(ClaimsError::Malformed("unknown details bits"));
+        }
+        let has = |bit| flags & bit != 0;
+        let source_category = has(CATEGORY)
+            .then(|| self.text(1, MAX_CATEGORY, "source category"))
+            .transpose()?;
+        let posted_at = has(POSTED_AT)
+            .then(|| self.uvar().map(|z| ((z >> 1) as i64) ^ -((z & 1) as i64)))
+            .transpose()?;
+        let canonical_title = has(CANONICAL)
+            .then(|| self.text(1, MAX_CANONICAL_TITLE, "canonical title"))
+            .transpose()?;
+        let year = has(YEAR)
+            .then(|| {
+                let b = self.take(2)?;
+                let y = u16::from_be_bytes([b[0], b[1]]);
+                if (1..=9999).contains(&y) {
+                    Ok(y)
+                } else {
+                    Err(ClaimsError::Malformed("year"))
+                }
+            })
+            .transpose()?;
+        let match_confidence = has(MATCH_CONFIDENCE)
+            .then(|| match self.byte()? {
+                m if m <= MAX_MATCH_CONFIDENCE => Ok(m),
+                _ => Err(ClaimsError::Malformed("match confidence")),
+            })
+            .transpose()?;
+
+        let n = self.count(MAX_NEWSGROUPS, 2, "newsgroups")?;
+        self.charge(n * STRING_COST)?;
+        let mut newsgroups = Vec::with_capacity(n);
+        for _ in 0..n {
+            let g = self.text(1, MAX_NEWSGROUP, "newsgroup")?;
+            if !newsgroup_ok(&g) {
+                return Err(ClaimsError::Malformed("newsgroup"));
+            }
+            if newsgroups.contains(&g) {
+                return Err(ClaimsError::Malformed("duplicate newsgroup"));
+            }
+            newsgroups.push(g);
+        }
+        let n = self.count(MAX_ALT_TITLES, 4, "alternative titles")?;
+        self.charge(n * ALT_TITLE_COST)?;
+        let mut alt_titles = Vec::with_capacity(n);
+        for _ in 0..n {
+            let language = self.text(1, MAX_LANGUAGE, "language")?;
+            if !language_ok(&language) {
+                return Err(ClaimsError::Malformed("language"));
+            }
+            let title = self.text(1, MAX_ALT_TITLE, "alternative title")?;
+            let a = AltTitle { language, title };
+            if alt_titles.contains(&a) {
+                return Err(ClaimsError::Malformed("duplicate alternative title"));
+            }
+            alt_titles.push(a);
+        }
+        let n = self.count(MAX_GENRES, 2, "genres")?;
+        self.charge(n * STRING_COST)?;
+        let mut genres = Vec::with_capacity(n);
+        for _ in 0..n {
+            let g = self.text(1, MAX_GENRE, "genre")?;
+            if !genre_ok(&g) {
+                return Err(ClaimsError::Malformed("genre"));
+            }
+            if genres.contains(&g) {
+                return Err(ClaimsError::Malformed("duplicate genre"));
+            }
+            genres.push(g);
+        }
+        let d = Details {
+            source_category,
+            posted_at,
+            newsgroups,
+            alt_titles,
+            canonical_title,
+            genres,
+            year,
+            match_confidence,
+        };
+        if d.is_empty() {
+            return Err(ClaimsError::Malformed("empty details"));
+        }
+        Ok(d)
+    }
+
     fn text(&mut self, min: usize, max: usize, what: &'static str) -> Result<String, ClaimsError> {
         let n = self.uvar()?;
         if n < min as u64 || n > max as u64 {
@@ -962,6 +1462,7 @@ mod tests {
                 confidence: Confidence::Medium,
             },
             adult: None,
+            details: None,
         }
     }
 
@@ -1052,17 +1553,18 @@ mod tests {
             blob.extend_from_slice(body);
             assert_eq!(
                 decode(&blob),
-                Err(ClaimsError::Malformed("adult section and version disagree"))
+                Err(ClaimsError::Malformed("section and version disagree"))
             );
             let mut z = vec![version, ZSTD];
             z.extend_from_slice(&zstd::bulk::compress(body, 3).unwrap());
             assert!(decode(&z).is_err());
         }
-        assert_eq!(decode(&[3, 0]), Err(ClaimsError::Version(3)));
+        assert_eq!(decode(&[4, 0]), Err(ClaimsError::Version(4)));
         assert_eq!(decode(&[0, 0]), Err(ClaimsError::Version(0)));
+        // Bit 7 is the details section now: an empty one is refused.
         assert_eq!(
-            decode_plain(&[0x80, 0, 0, 0, 0]),
-            Err(ClaimsError::Malformed("unknown field bits"))
+            decode_plain(&[DETAILS, 0, 0, 0, 0, 0, 0, 0, 0]),
+            Err(ClaimsError::Malformed("empty details"))
         );
     }
 
@@ -1587,14 +2089,12 @@ mod tests {
     #[test]
     fn refuses_what_it_does_not_know() {
         assert_eq!(decode(&[]), Err(ClaimsError::Truncated));
-        assert_eq!(decode(&[3, 0]), Err(ClaimsError::Version(3)));
+        for v in [0, 4, 5, 0xff] {
+            assert_eq!(decode(&[v, 0]), Err(ClaimsError::Version(v)));
+        }
         assert_eq!(decode(&[1]), Err(ClaimsError::Truncated));
         assert_eq!(decode(&[1, 9, 0]), Err(ClaimsError::Codec(9)));
         assert_eq!(decode(&[1, 1, 0, 1, 2]), Err(ClaimsError::Compression));
-        assert_eq!(
-            decode_plain(&[0x80, 0, 0, 0, 0]),
-            Err(ClaimsError::Malformed("unknown field bits"))
-        );
         assert_eq!(
             decode_plain(&[0, 3, 0, 0, 0]),
             Err(ClaimsError::Malformed("confidence"))
@@ -1722,9 +2222,16 @@ mod tests {
                 performers: vec!["p".repeat(MAX_PERFORMER); MAX_PERFORMERS],
                 performers_truncated: true,
             }),
+            details: None,
         };
         let v1 = Claims {
             adult: None,
+            ..full.clone()
+        };
+        let v3 = Claims {
+            adult: None,
+            ids: v3::full_ids(),
+            details: Some(Box::new(v3::full_details())),
             ..full.clone()
         };
         let v2 = Claims {
@@ -1733,7 +2240,7 @@ mod tests {
             publisher: None,
             ..full
         };
-        for mut c in [v1, v2] {
+        for mut c in [v1, v2, v3] {
             let room = MAX_TOTAL - c.text_len();
             let short = room / MAX_FILES;
             c.files = vec![
@@ -1781,24 +2288,34 @@ mod tests {
                 }),
                 ..Claims::default()
             };
-            let long = (MAX_TOTAL - c.text_len()) / 128;
-            c.files = (0..MAX_FILES)
-                .map(|i| ClaimedFile {
-                    path: if i < long {
-                        path.clone()
-                    } else {
-                        String::new()
-                    },
-                    size: Some(u64::MAX),
-                })
-                .collect();
-            assert!(c.check().is_ok());
-            let plain = encode_plain(&c).unwrap();
-            assert!(plain.len() <= MAX_PLAIN, "{} > {MAX_PLAIN}", plain.len());
-            let blob = encode(&c, 3).unwrap();
-            assert!(blob.len() <= MAX_STORED);
-            assert_eq!(decode(&blob).unwrap(), c);
+            for details in [None, Some(v3::most_framing())] {
+                if let Some(d) = details {
+                    c.adult = None;
+                    c.details = Some(Box::new(d));
+                }
+                worst_framing(c.clone(), &path);
+            }
         }
+    }
+
+    fn worst_framing(mut c: Claims, path: &str) {
+        let long = (MAX_TOTAL - c.text_len()) / 128;
+        c.files = (0..MAX_FILES)
+            .map(|i| ClaimedFile {
+                path: if i < long {
+                    path.to_owned()
+                } else {
+                    String::new()
+                },
+                size: Some(u64::MAX),
+            })
+            .collect();
+        assert!(c.check().is_ok());
+        let plain = encode_plain(&c).unwrap();
+        assert!(plain.len() <= MAX_PLAIN, "{} > {MAX_PLAIN}", plain.len());
+        let blob = encode(&c, 3).unwrap();
+        assert!(blob.len() <= MAX_STORED);
+        assert_eq!(decode(&blob).unwrap(), c);
     }
 
     #[test]
@@ -1810,6 +2327,915 @@ mod tests {
         assert!(!s.contains("uploader"), "{s}");
         for t in ["0b9e4c1a", "Scene Title", "Studio", "Performer"] {
             assert!(!s.contains(t), "{s}");
+        }
+    }
+
+    /// Version 3, the details section (ENR-9).
+    mod v3 {
+        use super::super::*;
+        use super::{put_uvar, sample, str_bytes, unchecked_v1};
+
+        pub(super) fn details() -> Details {
+            Details {
+                source_category: Some("TV > HD".into()),
+                posted_at: Some(1_700_000_000),
+                newsgroups: vec!["alt.binaries.example".into(), "alt.binaries.hdtv".into()],
+                alt_titles: vec![
+                    AltTitle {
+                        language: "ja".into(),
+                        title: "某番組".into(),
+                    },
+                    AltTitle {
+                        language: "zh-hant-tw".into(),
+                        title: "某節目".into(),
+                    },
+                    AltTitle {
+                        language: "und".into(),
+                        title: "Some Show".into(),
+                    },
+                ],
+                canonical_title: Some("Some Show".into()),
+                genres: vec!["drama".into(), "science fiction".into(), "ドラマ".into()],
+                year: Some(2011),
+                match_confidence: Some(87),
+            }
+        }
+
+        /// A usenet item's claims with an enrichment-shaped section.
+        pub(super) fn v3_sample() -> Claims {
+            Claims {
+                ids: vec![
+                    ExternalId {
+                        scheme: "imdb".into(),
+                        value: "tt0111161".into(),
+                    },
+                    ExternalId {
+                        scheme: "tmdb".into(),
+                        value: "278".into(),
+                    },
+                ],
+                details: Some(Box::new(details())),
+                ..sample()
+            }
+        }
+
+        /// 32 distinct valid ids, each as long as its scheme allows.
+        pub(super) fn full_ids() -> Vec<ExternalId> {
+            (0..MAX_IDS as u64)
+                .map(|i| ExternalId {
+                    scheme: "steam".into(),
+                    value: format!("{}", 10_000_000_000_000_000_000u64 + i),
+                })
+                .collect()
+        }
+
+        /// Every field at its cap.
+        pub(super) fn full_details() -> Details {
+            Details {
+                source_category: Some("c".repeat(MAX_CATEGORY)),
+                posted_at: Some(i64::MIN),
+                newsgroups: (0..MAX_NEWSGROUPS)
+                    .map(|i| format!("{i}{}", "g".repeat(MAX_NEWSGROUP - 1)))
+                    .collect(),
+                alt_titles: (0..MAX_ALT_TITLES)
+                    .map(|i| AltTitle {
+                        // 2 + 3 × 9 + 6 = 35 bytes.
+                        language: format!("en{}-abcde", "-abcdefgh".repeat(3)),
+                        title: format!("{i:02}{}", "t".repeat(MAX_ALT_TITLE - 2)),
+                    })
+                    .collect(),
+                canonical_title: Some("n".repeat(MAX_CANONICAL_TITLE)),
+                genres: (0..MAX_GENRES)
+                    .map(|i| format!("{i:02}{}", "g".repeat(MAX_GENRE - 2)))
+                    .collect(),
+                year: Some(9999),
+                match_confidence: Some(MAX_MATCH_CONFIDENCE),
+            }
+        }
+
+        /// The most framing for the least text: every flag, 2-byte
+        /// lengths for the strings, and every list at its count cap.
+        pub(super) fn most_framing() -> Details {
+            Details {
+                source_category: Some("c".repeat(128)),
+                posted_at: Some(i64::MIN),
+                newsgroups: (b'a'..b'a' + MAX_NEWSGROUPS as u8)
+                    .map(|c| (c as char).to_string())
+                    .collect(),
+                alt_titles: (0..MAX_ALT_TITLES)
+                    .map(|i| AltTitle {
+                        language: "en".into(),
+                        title: format!("{i:02}{}", "t".repeat(126)),
+                    })
+                    .collect(),
+                canonical_title: Some("n".repeat(128)),
+                genres: (0..MAX_GENRES).map(|i| format!("{i}")).collect(),
+                year: Some(1),
+                match_confidence: Some(0),
+            }
+        }
+
+        /// The plain body laid out without [`Claims::check`], to craft
+        /// bodies the encoder refuses.
+        pub(super) fn unchecked(c: &Claims) -> Vec<u8> {
+            let d = c.details.as_ref().unwrap();
+            let mut out = unchecked_v1(c);
+            out[0] |= DETAILS;
+            out.push(
+                (u8::from(d.source_category.is_some()) * CATEGORY)
+                    | (u8::from(d.posted_at.is_some()) * POSTED_AT)
+                    | (u8::from(d.canonical_title.is_some()) * CANONICAL)
+                    | (u8::from(d.year.is_some()) * YEAR)
+                    | (u8::from(d.match_confidence.is_some()) * MATCH_CONFIDENCE),
+            );
+            if let Some(s) = &d.source_category {
+                out.extend(str_bytes(s.as_bytes()));
+            }
+            if let Some(t) = d.posted_at {
+                put_uvar(&mut out, ((t << 1) ^ (t >> 63)) as u64);
+            }
+            if let Some(s) = &d.canonical_title {
+                out.extend(str_bytes(s.as_bytes()));
+            }
+            if let Some(y) = d.year {
+                out.extend(y.to_be_bytes());
+            }
+            if let Some(m) = d.match_confidence {
+                out.push(m);
+            }
+            put_uvar(&mut out, d.newsgroups.len() as u64);
+            for g in &d.newsgroups {
+                out.extend(str_bytes(g.as_bytes()));
+            }
+            put_uvar(&mut out, d.alt_titles.len() as u64);
+            for a in &d.alt_titles {
+                out.extend(str_bytes(a.language.as_bytes()));
+                out.extend(str_bytes(a.title.as_bytes()));
+            }
+            put_uvar(&mut out, d.genres.len() as u64);
+            for g in &d.genres {
+                out.extend(str_bytes(g.as_bytes()));
+            }
+            out
+        }
+
+        fn only(d: Details) -> Claims {
+            Claims {
+                details: Some(Box::new(d)),
+                ..Claims::default()
+            }
+        }
+
+        #[test]
+        fn the_helpers_are_valid() {
+            assert!(full_details().check().is_ok());
+            assert!(most_framing().check().is_ok());
+            assert!(full_ids().iter().all(|i| id_ok(&i.scheme, &i.value)));
+            let d = full_details();
+            assert!(
+                d.alt_titles
+                    .iter()
+                    .all(|a| a.language.len() == MAX_LANGUAGE)
+            );
+            assert!(d.newsgroups.iter().all(|g| g.len() == MAX_NEWSGROUP));
+            let c = v3_sample();
+            assert_eq!(unchecked(&c), encode_plain(&c).unwrap());
+            let c = Claims {
+                ids: full_ids(),
+                details: Some(Box::new(full_details())),
+                ..Claims::default()
+            };
+            assert_eq!(unchecked(&c), encode_plain(&c).unwrap());
+        }
+
+        #[test]
+        fn round_trips_as_version_3() {
+            let minimal = only(Details {
+                year: Some(1999),
+                ..Details::default()
+            });
+            for c in [v3_sample(), minimal, only(full_details())] {
+                let blob = encode(&c, 3).unwrap();
+                assert_eq!(blob[0], VERSION_DETAILS);
+                assert_eq!(decode(&blob).unwrap(), c);
+                let plain = encode_plain(&c).unwrap();
+                assert_eq!(decode_plain(&plain).unwrap(), c);
+                let mut raw = vec![VERSION_DETAILS, RAW];
+                raw.extend_from_slice(&plain);
+                assert_eq!(decode(&raw).unwrap(), c);
+            }
+            // Without the section the same claims stay version 1, byte
+            // for byte as before ENR-9.
+            let mut c = v3_sample();
+            c.details = None;
+            let blob = encode(&c, 3).unwrap();
+            assert_eq!(blob[0], VERSION);
+            assert_eq!(decode(&blob).unwrap(), c);
+        }
+
+        #[test]
+        fn the_smallest_section() {
+            let c = only(Details {
+                match_confidence: Some(5),
+                ..Details::default()
+            });
+            assert_eq!(
+                encode(&c, 3).unwrap(),
+                [
+                    VERSION_DETAILS,
+                    RAW,
+                    DETAILS,
+                    0,
+                    0,
+                    0,
+                    0,
+                    MATCH_CONFIDENCE,
+                    5,
+                    0,
+                    0,
+                    0
+                ]
+            );
+        }
+
+        #[test]
+        fn version_and_section_must_agree() {
+            let v3 = encode_plain(&v3_sample()).unwrap();
+            let v2 = encode_plain(&super::adult_sample()).unwrap();
+            let v1 = encode_plain(&sample()).unwrap();
+            for (version, body) in [
+                (VERSION, &v3),
+                (VERSION_ADULT, &v3),
+                (VERSION_DETAILS, &v1),
+                (VERSION_DETAILS, &v2),
+            ] {
+                let mut blob = vec![version, RAW];
+                blob.extend_from_slice(body);
+                assert_eq!(
+                    decode(&blob),
+                    Err(ClaimsError::Malformed("section and version disagree")),
+                    "{version}"
+                );
+                let mut z = vec![version, ZSTD];
+                z.extend_from_slice(&zstd::bulk::compress(body, 3).unwrap());
+                assert!(decode(&z).is_err());
+            }
+        }
+
+        /// One section a row: an adult match and a details section never
+        /// share claims, on either side.
+        #[test]
+        fn no_adult_section_beside_details() {
+            let c = Claims {
+                details: Some(Box::new(details())),
+                ..super::adult_sample()
+            };
+            assert_eq!(encode(&c, 3), Err(ClaimsError::Limit("enrichment claims")));
+            let mut body = super::unchecked_plain(&Claims {
+                details: None,
+                ..c.clone()
+            });
+            body[0] |= DETAILS;
+            let tail = unchecked(&Claims {
+                details: c.details.clone(),
+                ..Claims::default()
+            });
+            body.extend_from_slice(&tail[5..]);
+            assert_eq!(
+                decode_plain(&body),
+                Err(ClaimsError::Malformed("enrichment claims"))
+            );
+        }
+
+        #[test]
+        fn ids_beside_details_are_enrichment_ids() {
+            let bad = [
+                ("stashdb-performer", "0b9e4c1a"),
+                ("imdb", "nm0000151"),
+                ("imdb", "tt1"),
+                ("tmdb", "0278"),
+                ("olid", "OL23919A"),
+                ("discogs", "a1"),
+                ("wikidata", "P31"),
+                ("mbid", "F27EC8DB-AF05-4F36-916E-3D57F91ECF5E"),
+            ];
+            for (scheme, value) in bad {
+                let mut c = v3_sample();
+                c.ids.push(ExternalId {
+                    scheme: scheme.into(),
+                    value: value.into(),
+                });
+                assert_eq!(
+                    encode(&c, 3),
+                    Err(ClaimsError::Limit("enrichment ids")),
+                    "{scheme}:{value}"
+                );
+                assert_eq!(
+                    decode_plain(&unchecked(&c)),
+                    Err(ClaimsError::Malformed("enrichment ids")),
+                    "{scheme}:{value}"
+                );
+                // Version 1 claims keep any scheme, as before.
+                c.details = None;
+                assert!(encode(&c, 3).is_ok());
+            }
+            let mut c = v3_sample();
+            c.ids.push(c.ids[0].clone());
+            assert_eq!(encode(&c, 3), Err(ClaimsError::Limit("enrichment ids")));
+            assert_eq!(
+                decode_plain(&unchecked(&c)),
+                Err(ClaimsError::Malformed("enrichment ids"))
+            );
+        }
+
+        #[test]
+        fn id_forms_are_one_spelling_each() {
+            let good = [
+                ("imdb", "tt0111161"),
+                ("imdb", "tt1234567890"),
+                ("tmdb", "278"),
+                ("tvdb", "81189"),
+                ("anidb", "1"),
+                ("anilist", "21"),
+                ("igdb", "1020"),
+                ("steam", "570"),
+                ("steam", "99999999999999999999"),
+                ("mbid", "f27ec8db-af05-4f36-916e-3d57f91ecf5e"),
+                ("olid", "OL7353617M"),
+                ("olid", "OL45804W"),
+                ("discogs", "r249504"),
+                ("discogs", "m33876"),
+                ("wikidata", "Q42"),
+            ];
+            for (s, v) in good {
+                assert!(id_ok(s, v), "{s}:{v}");
+                assert!(ENRICHMENT_SCHEMES.contains(&s));
+            }
+            let bad = [
+                ("imdb", "tt123456"),
+                ("imdb", "tt12345678901"),
+                ("imdb", "0111161"),
+                ("imdb", "TT0111161"),
+                ("imdb", "nm0000151"),
+                ("imdb", "tt011116a"),
+                ("tmdb", ""),
+                ("tmdb", "0"),
+                ("tmdb", "01"),
+                ("tmdb", "-1"),
+                ("tmdb", "+1"),
+                ("tmdb", "1 "),
+                ("tmdb", "١٢"),
+                ("tmdb", "123456789012345678901"),
+                ("mbid", "f27ec8db-af05-4f36-916e-3d57f91ecf5"),
+                ("mbid", "f27ec8dbaaf05-4f36-916e-3d57f91ecf5e"),
+                ("mbid", "g27ec8db-af05-4f36-916e-3d57f91ecf5e"),
+                ("olid", "OL123A"),
+                ("olid", "OLM"),
+                ("olid", "ol123M"),
+                ("discogs", "123"),
+                ("discogs", "r"),
+                ("discogs", "a123"),
+                ("wikidata", "q42"),
+                ("wikidata", "L1"),
+                ("wikidata", "Q042"),
+                ("tvrage", "1"),
+                ("", "1"),
+            ];
+            for (s, v) in bad {
+                assert!(!id_ok(s, v), "{s}:{v}");
+            }
+        }
+
+        #[test]
+        fn shapes_of_languages_groups_and_genres() {
+            for t in [
+                "en",
+                "und",
+                "zh-hant-tw",
+                "sr-latn-rs",
+                "es-419",
+                "en-us-x-a",
+            ] {
+                assert!(language_ok(t), "{t}");
+            }
+            let long = format!("en{}", "-abcdefgh".repeat(4));
+            for t in [
+                "",
+                "e",
+                "EN",
+                "en-US",
+                "en_us",
+                "en--us",
+                "-en",
+                "en-",
+                "1a",
+                "en-abcdefghi",
+                "é",
+                "en us",
+                &long,
+            ] {
+                assert!(!language_ok(t), "{t}");
+            }
+            for g in ["alt.binaries.hdtv", "a", "a.b+c-d_e", "Alt.Binaries.X"] {
+                assert!(newsgroup_ok(g), "{g}");
+            }
+            let long = "g".repeat(MAX_NEWSGROUP + 1);
+            for g in [
+                "", ".a", "a.", "a..b", "a b", "a,b", "a/b", "é", "a*", &long,
+            ] {
+                assert!(!newsgroup_ok(g), "{g}");
+            }
+            for g in [
+                "drama",
+                "science fiction",
+                "ドラマ",
+                "sci-fi & fantasy",
+                "é",
+            ] {
+                assert!(genre_ok(g), "{g}");
+            }
+            let long = "g".repeat(MAX_GENRE + 1);
+            for g in [
+                "", " drama", "drama ", "sci  fi", "Drama", "a\tb", "a\nb", "a\u{0}", "a\u{a0}b",
+                &long,
+            ] {
+                assert!(!genre_ok(g), "{g}");
+            }
+        }
+
+        /// Every cap: at it encodes and decodes; one over (or a bad
+        /// entry) is refused by the encoder, and by the decoder when
+        /// written by hand.
+        #[test]
+        fn every_v3_cap_holds_at_the_cap_and_one_over() {
+            type Set = fn(&mut Details, bool);
+            let caps: [(&str, Set); 11] = [
+                ("category", |d, over| {
+                    d.source_category = Some("c".repeat(MAX_CATEGORY + usize::from(over)))
+                }),
+                ("canonical", |d, over| {
+                    d.canonical_title = Some("n".repeat(MAX_CANONICAL_TITLE + usize::from(over)))
+                }),
+                ("newsgroups", |d, over| {
+                    d.newsgroups = (0..MAX_NEWSGROUPS + usize::from(over))
+                        .map(|i| format!("g{i}"))
+                        .collect()
+                }),
+                ("newsgroup", |d, over| {
+                    d.newsgroups = vec!["g".repeat(MAX_NEWSGROUP + usize::from(over))]
+                }),
+                ("alt titles", |d, over| {
+                    d.alt_titles = (0..MAX_ALT_TITLES + usize::from(over))
+                        .map(|i| AltTitle {
+                            language: "en".into(),
+                            title: format!("t{i}"),
+                        })
+                        .collect()
+                }),
+                ("alt title", |d, over| {
+                    d.alt_titles = vec![AltTitle {
+                        language: "en".into(),
+                        title: "t".repeat(MAX_ALT_TITLE + usize::from(over)),
+                    }]
+                }),
+                ("language", |d, over| {
+                    d.alt_titles = vec![AltTitle {
+                        language: if over {
+                            "en-".repeat(12) + "a"
+                        } else {
+                            "en-".repeat(11) + "ab"
+                        },
+                        title: "t".into(),
+                    }]
+                }),
+                ("genres", |d, over| {
+                    d.genres = (0..MAX_GENRES + usize::from(over))
+                        .map(|i| format!("g{i}"))
+                        .collect()
+                }),
+                ("genre", |d, over| {
+                    d.genres = vec!["g".repeat(MAX_GENRE + usize::from(over))]
+                }),
+                ("year", |d, over| {
+                    d.year = Some(if over { 10_000 } else { 9999 })
+                }),
+                ("confidence", |d, over| {
+                    d.match_confidence = Some(MAX_MATCH_CONFIDENCE + u8::from(over))
+                }),
+            ];
+            for (what, set) in caps {
+                let mut d = Details::default();
+                set(&mut d, false);
+                let c = only(d.clone());
+                let plain = encode_plain(&c).unwrap_or_else(|e| panic!("{what} at cap: {e}"));
+                assert_eq!(decode_plain(&plain).unwrap(), c, "{what}");
+                assert_eq!(decode(&encode(&c, 3).unwrap()).unwrap(), c, "{what}");
+
+                set(&mut d, true);
+                let c = only(d);
+                assert!(encode(&c, 3).is_err(), "{what} over cap encodes");
+                let bytes = unchecked(&c);
+                assert!(decode_plain(&bytes).is_err(), "{what} over cap decodes");
+                let mut blob = vec![VERSION_DETAILS, RAW];
+                blob.extend_from_slice(&bytes);
+                assert!(decode(&blob).is_err(), "{what} over cap decodes");
+            }
+            // Year 0 is no year, not a year.
+            let c = only(Details {
+                year: Some(0),
+                ..Details::default()
+            });
+            assert_eq!(encode(&c, 3), Err(ClaimsError::Limit("year")));
+            assert_eq!(
+                decode_plain(&unchecked(&c)),
+                Err(ClaimsError::Malformed("year"))
+            );
+        }
+
+        /// Refused entries and duplicates, on both sides.
+        #[test]
+        fn bad_entries_are_refused() {
+            type Set = fn(&mut Details);
+            let bad: [(Set, ClaimsError, ClaimsError); 12] = [
+                (
+                    |d| d.source_category = Some(String::new()),
+                    ClaimsError::Limit("source category"),
+                    ClaimsError::Limit("source category"),
+                ),
+                (
+                    |d| d.canonical_title = Some(String::new()),
+                    ClaimsError::Limit("canonical title"),
+                    ClaimsError::Limit("canonical title"),
+                ),
+                (
+                    |d| d.newsgroups = vec!["a b".into()],
+                    ClaimsError::Limit("newsgroups"),
+                    ClaimsError::Malformed("newsgroup"),
+                ),
+                (
+                    |d| d.newsgroups = vec!["a.b".into(), "a.b".into()],
+                    ClaimsError::Limit("newsgroups"),
+                    ClaimsError::Malformed("duplicate newsgroup"),
+                ),
+                (
+                    |d| d.newsgroups = vec![String::new()],
+                    ClaimsError::Limit("newsgroups"),
+                    ClaimsError::Limit("newsgroup"),
+                ),
+                (
+                    |d| {
+                        d.alt_titles = vec![AltTitle {
+                            language: "EN".into(),
+                            title: "t".into(),
+                        }]
+                    },
+                    ClaimsError::Limit("alternative titles"),
+                    ClaimsError::Malformed("language"),
+                ),
+                (
+                    |d| {
+                        d.alt_titles = vec![AltTitle {
+                            language: String::new(),
+                            title: "t".into(),
+                        }]
+                    },
+                    ClaimsError::Limit("alternative titles"),
+                    ClaimsError::Limit("language"),
+                ),
+                (
+                    |d| {
+                        d.alt_titles = vec![AltTitle {
+                            language: "en".into(),
+                            title: String::new(),
+                        }]
+                    },
+                    ClaimsError::Limit("alternative titles"),
+                    ClaimsError::Limit("alternative title"),
+                ),
+                (
+                    |d| {
+                        let a = AltTitle {
+                            language: "en".into(),
+                            title: "t".into(),
+                        };
+                        d.alt_titles = vec![a.clone(), a]
+                    },
+                    ClaimsError::Limit("alternative titles"),
+                    ClaimsError::Malformed("duplicate alternative title"),
+                ),
+                (
+                    |d| d.genres = vec!["Drama".into()],
+                    ClaimsError::Limit("genres"),
+                    ClaimsError::Malformed("genre"),
+                ),
+                (
+                    |d| d.genres = vec!["drama".into(), "drama".into()],
+                    ClaimsError::Limit("genres"),
+                    ClaimsError::Malformed("duplicate genre"),
+                ),
+                (
+                    |d| *d = Details::default(),
+                    ClaimsError::Limit("empty details"),
+                    ClaimsError::Malformed("empty details"),
+                ),
+            ];
+            for (set, enc, dec) in bad {
+                let mut d = Details {
+                    year: Some(2000),
+                    ..Details::default()
+                };
+                set(&mut d);
+                let c = only(d);
+                assert_eq!(encode(&c, 3), Err(enc));
+                assert_eq!(decode_plain(&unchecked(&c)), Err(dec), "{enc:?}");
+            }
+            // The same title in two languages is two entries.
+            let c = only(Details {
+                alt_titles: ["en", "de"]
+                    .map(|l| AltTitle {
+                        language: l.into(),
+                        title: "Same".into(),
+                    })
+                    .to_vec(),
+                ..Details::default()
+            });
+            assert_eq!(decode(&encode(&c, 3).unwrap()).unwrap(), c);
+        }
+
+        /// An empty-claims body with a details section of these bytes.
+        fn section(bytes: &[u8]) -> Vec<u8> {
+            let mut b = vec![DETAILS, 0, 0, 0, 0];
+            b.extend_from_slice(bytes);
+            b
+        }
+
+        #[test]
+        fn malformed_sections_are_refused() {
+            let cases: Vec<(Vec<u8>, ClaimsError)> = vec![
+                (
+                    vec![0x20, 0, 0, 0],
+                    ClaimsError::Malformed("unknown details bits"),
+                ),
+                (
+                    vec![0x80, 0, 0, 0],
+                    ClaimsError::Malformed("unknown details bits"),
+                ),
+                (vec![YEAR, 0, 0, 0, 0, 0], ClaimsError::Malformed("year")),
+                (
+                    vec![YEAR, 0x27, 0x10, 0, 0, 0],
+                    ClaimsError::Malformed("year"),
+                ),
+                (vec![YEAR, 0x07], ClaimsError::Truncated),
+                (
+                    vec![MATCH_CONFIDENCE, 101, 0, 0, 0],
+                    ClaimsError::Malformed("match confidence"),
+                ),
+                (
+                    vec![MATCH_CONFIDENCE, 0xff, 0, 0, 0],
+                    ClaimsError::Malformed("match confidence"),
+                ),
+                (
+                    vec![POSTED_AT, 0x80, 0, 0, 0, 0],
+                    ClaimsError::Malformed("varint not minimal"),
+                ),
+                (
+                    vec![CATEGORY, 0, 0, 0, 0],
+                    ClaimsError::Limit("source category"),
+                ),
+                (
+                    [&[CATEGORY][..], &str_bytes(&[0xff]), &[0, 0, 0]].concat(),
+                    ClaimsError::Malformed("utf-8"),
+                ),
+                // Counts past their cap or past what's left.
+                (vec![0, 9, 0, 0], ClaimsError::Limit("newsgroups")),
+                (vec![0, 0, 33, 0], ClaimsError::Limit("alternative titles")),
+                (vec![0, 0, 0, 17], ClaimsError::Limit("genres")),
+                (vec![0, 3, 1, b'a'], ClaimsError::Truncated),
+                (
+                    vec![0, 0, 2, 2, b'e', b'n', 1, b't'],
+                    ClaimsError::Truncated,
+                ),
+                (
+                    [&[0, 0, 1][..], &str_bytes(b"en"), &str_bytes(&[0xc3]), &[0]].concat(),
+                    ClaimsError::Malformed("utf-8"),
+                ),
+                // A whole valid section with a byte after it.
+                (vec![YEAR, 0x07, 0xd0, 0, 0, 0, 0], ClaimsError::Trailing),
+                (vec![0, 0, 0, 0], ClaimsError::Malformed("empty details")),
+            ];
+            for (bytes, want) in cases {
+                assert_eq!(decode_plain(&section(&bytes)), Err(want), "{bytes:?}");
+            }
+            assert!(decode_plain(&section(&[YEAR, 0x07, 0xd0, 0, 0, 0])).is_ok());
+        }
+
+        #[test]
+        fn a_cut_section_is_refused_at_every_byte() {
+            let plain = encode_plain(&v3_sample()).unwrap();
+            for n in 0..plain.len() {
+                assert!(decode_plain(&plain[..n]).is_err(), "{n}");
+                let mut blob = vec![VERSION_DETAILS, RAW];
+                blob.extend_from_slice(&plain[..n]);
+                assert!(decode(&blob).is_err(), "{n}");
+            }
+        }
+
+        /// The section counts toward the total at its charged size, so a
+        /// row stays within `unverified::MAX_ROW` and the files make room.
+        #[test]
+        fn the_section_counts_toward_the_total() {
+            let d = full_details();
+            assert!(d.charged_len() > d.text_len());
+            let mut c = Claims {
+                ids: full_ids(),
+                details: Some(Box::new(d)),
+                files: vec![
+                    ClaimedFile {
+                        path: "f".repeat(MAX_PATH),
+                        size: None
+                    };
+                    MAX_TOTAL / MAX_PATH
+                ],
+                ..Claims::default()
+            };
+            assert_eq!(encode(&c, 3), Err(ClaimsError::Limit("total")));
+            let bytes = unchecked(&c);
+            assert_eq!(decode_plain(&bytes), Err(ClaimsError::Limit("total")));
+            // Exactly at the total, both sides accept it.
+            let room = MAX_TOTAL - (c.text_len() - c.files.len() * MAX_PATH);
+            c.files.truncate(room / MAX_PATH);
+            c.files.push(ClaimedFile {
+                path: "f".repeat(room % MAX_PATH),
+                size: None,
+            });
+            assert_eq!(c.text_len(), MAX_TOTAL);
+            let blob = encode(&c, 3).unwrap();
+            assert_eq!(decode(&blob).unwrap(), c);
+            assert!(c.decoded_size() <= crate::unverified::MAX_ROW);
+        }
+
+        #[test]
+        fn the_largest_v3_row_fits_max_row() {
+            let mut c = Claims {
+                trackers: vec!["t".into(); MAX_TRACKERS],
+                ids: full_ids(),
+                details: Some(Box::new(most_framing())),
+                ..Claims::default()
+            };
+            let room = MAX_TOTAL - c.text_len();
+            c.files = vec![
+                ClaimedFile {
+                    path: String::new(),
+                    size: None
+                };
+                MAX_FILES
+            ];
+            c.name = Some("n".repeat(room.min(MAX_NAME)));
+            assert!(c.check().is_ok());
+            assert!(
+                c.decoded_size() <= crate::unverified::MAX_ROW,
+                "{} > {}",
+                c.decoded_size(),
+                crate::unverified::MAX_ROW
+            );
+        }
+
+        #[test]
+        fn debug_shows_no_text() {
+            let c = v3_sample();
+            let s = format!("{c:?}");
+            for t in [
+                "某",
+                "Some Show",
+                "drama",
+                "alt.binaries",
+                "TV > HD",
+                "tt0111161",
+            ] {
+                assert!(!s.contains(t), "{s}");
+            }
+            assert!(s.contains("zh-hant-tw"), "languages are shown: {s}");
+        }
+
+        /// The section has nowhere to put a person: this lists every
+        /// field, so adding one fails to compile here first.
+        #[test]
+        fn the_section_has_nowhere_to_put_a_person() {
+            let Details {
+                source_category: _,
+                posted_at: _,
+                newsgroups: _,
+                alt_titles: _,
+                canonical_title: _,
+                genres: _,
+                year: _,
+                match_confidence: _,
+            } = details();
+            let AltTitle {
+                language: _,
+                title: _,
+            } = details().alt_titles[0].clone();
+        }
+
+        mod props {
+            use super::super::super::*;
+            use super::{full_ids, section};
+            use proptest::prelude::*;
+
+            fn text(max: usize) -> impl Strategy<Value = String> {
+                prop_oneof![
+                    4 => proptest::string::string_regex("(.|\\n){1,24}")
+                        .unwrap()
+                        .prop_filter("within", move |s| s.len() <= max),
+                    1 => Just("x".repeat(max)),
+                ]
+            }
+
+            fn dedup<T: PartialEq>(v: Vec<T>) -> Vec<T> {
+                let mut out = Vec::new();
+                for x in v {
+                    if !out.contains(&x) {
+                        out.push(x);
+                    }
+                }
+                out
+            }
+
+            fn details() -> impl Strategy<Value = Details> {
+                (
+                    (
+                        proptest::option::of(text(MAX_CATEGORY)),
+                        proptest::option::of(any::<i64>()),
+                        proptest::collection::vec(
+                            "[a-z0-9+_-]{1,10}(\\.[a-zA-Z0-9]{1,10}){0,3}",
+                            0..=MAX_NEWSGROUPS,
+                        ),
+                        proptest::collection::vec(
+                            ("[a-z]{2,3}(-[a-z0-9]{1,8}){0,3}", text(MAX_ALT_TITLE))
+                                .prop_map(|(language, title)| AltTitle { language, title }),
+                            0..6,
+                        ),
+                    ),
+                    (
+                        proptest::option::of(text(MAX_CANONICAL_TITLE)),
+                        proptest::collection::vec(
+                            "[a-z0-9&]{1,10}( [a-z\\p{Han}]{1,6}){0,2}",
+                            0..=MAX_GENRES,
+                        ),
+                        proptest::option::of(1u16..=9999),
+                        proptest::option::of(0u8..=MAX_MATCH_CONFIDENCE),
+                    ),
+                )
+                    .prop_map(
+                        |(
+                            (source_category, posted_at, ng, alt),
+                            (canonical_title, genres, year, m),
+                        )| Details {
+                            source_category,
+                            posted_at,
+                            newsgroups: dedup(ng),
+                            alt_titles: dedup(alt),
+                            canonical_title,
+                            genres: dedup(genres),
+                            year,
+                            match_confidence: m,
+                        },
+                    )
+                    .prop_filter("not empty", |d| !d.is_empty())
+            }
+
+            proptest! {
+                #![proptest_config(ProptestConfig::with_cases(512))]
+
+                /// Version 3: round-trips, stays version 3, and is
+                /// canonical.
+                #[test]
+                fn v3_round_trips(d in details(), ids in 0usize..4, level in 1i32..6) {
+                    let c = Claims {
+                        name: Some("n".into()),
+                        ids: full_ids()[..ids].to_vec(),
+                        details: Some(Box::new(d)),
+                        ..Claims::default()
+                    };
+                    prop_assert!(c.check().is_ok(), "{:?}", c);
+                    let blob = encode(&c, level).unwrap();
+                    prop_assert_eq!(blob[0], VERSION_DETAILS);
+                    prop_assert_eq!(&decode(&blob).unwrap(), &c);
+                    let plain = encode_plain(&c).unwrap();
+                    prop_assert_eq!(encode_plain(&decode_plain(&plain).unwrap()).unwrap(), plain);
+                }
+
+                /// Whatever bytes follow a details prefix, decoding never
+                /// panics and what it accepts is canonical.
+                #[test]
+                fn any_section_bytes_are_safe(tail in proptest::collection::vec(any::<u8>(), 0..64)) {
+                    let body = section(&tail);
+                    if let Ok(c) = decode_plain(&body) {
+                        prop_assert!(c.check().is_ok());
+                        prop_assert_eq!(encode_plain(&c).unwrap(), body);
+                    }
+                }
+            }
         }
     }
 

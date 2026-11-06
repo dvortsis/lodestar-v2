@@ -26,12 +26,24 @@
 //! `performers_truncated`), and a section whose scene id isn't valid is
 //! dropped whole, since a cut id points at another scene.
 //!
+//! **The details section** ([`Details`], ENR-9) is shared the same way:
+//! alternative titles, a canonical title, genres, a year and a match
+//! confidence from an enrichment plugin, and a feed's category, posting
+//! time and newsgroups. It describes a work, never a person. Clamping it
+//! cuts free text (titles, the category) and drops what can't be cut
+//! without changing its meaning (a language tag, a newsgroup, an id), and
+//! claims with a details section keep only the external ids
+//! [`id_ok`] accepts.
+//!
 //! [`Emitter`]: crate::Emitter
 
 use lodestar_store::claims::scene_id_ok;
 pub use lodestar_store::claims::{
-    AdultEnrichment, AdultKind, MAX_PERFORMER, MAX_PERFORMERS, MAX_SCENE_ID, MAX_SCENE_TITLE,
-    MAX_STUDIO, ReleaseDate,
+    AdultEnrichment, AdultKind, AltTitle, Details, ENRICHMENT_SCHEMES, MAX_ALT_TITLE,
+    MAX_ALT_TITLES, MAX_CANONICAL_TITLE, MAX_CATEGORY, MAX_GENRE, MAX_GENRES, MAX_LANGUAGE,
+    MAX_MATCH_CONFIDENCE, MAX_NEWSGROUP, MAX_NEWSGROUPS, MAX_PERFORMER, MAX_PERFORMERS,
+    MAX_SCENE_ID, MAX_SCENE_TITLE, MAX_STUDIO, ReleaseDate, genre_ok, id_ok, language_ok,
+    newsgroup_ok,
 };
 
 /// Bytes in a claimed name.
@@ -91,6 +103,9 @@ pub struct Claims {
     /// An adult-enrichment match (ENR-0, architecture §20.9), from an
     /// enrichment source only.
     pub adult: Option<AdultEnrichment>,
+    /// The details section (ENR-9): what an enrichment plugin resolved
+    /// the item to, or what a feed says beyond a name and files.
+    pub details: Option<Box<Details>>,
 }
 
 impl Claims {
@@ -104,6 +119,7 @@ impl Claims {
             && self.description.is_none()
             && self.publisher.is_none()
             && self.adult.is_none()
+            && self.details.is_none()
     }
 
     /// Cuts every field to its limit and the whole to [`MAX_TOTAL`].
@@ -136,6 +152,23 @@ impl Claims {
                 self.ids = Vec::new();
             } else {
                 self.adult = None;
+            }
+            // One section a row: an adult match carries nothing else.
+            self.details = None;
+        }
+        if let Some(d) = &mut self.details {
+            clamp_details(d);
+            if d.is_empty() {
+                self.details = None;
+            } else {
+                // The ids enrichment writes, each once (store: `id_ok`).
+                let mut kept: Vec<ExternalId> = Vec::with_capacity(self.ids.len());
+                for id in std::mem::take(&mut self.ids) {
+                    if id_ok(&id.scheme, &id.value) && !kept.contains(&id) {
+                        kept.push(id);
+                    }
+                }
+                self.ids = kept;
             }
         }
         let mut total = self.fixed_len();
@@ -173,7 +206,65 @@ impl Claims {
                 .map(|i| i.scheme.len() + i.value.len())
                 .sum::<usize>()
             + self.adult.as_ref().map_or(0, AdultEnrichment::text_len)
+            + self.details.as_ref().map_or(0, |d| d.charged_len())
     }
+}
+
+/// Bounds `d` in place, in the store's form: free text cut, a language
+/// tag lower-cased, genres normalised, and every entry that still isn't
+/// valid dropped, as are duplicates. May leave it empty.
+fn clamp_details(d: &mut Details) {
+    clamp_opt(&mut d.source_category, MAX_CATEGORY);
+    clamp_opt(&mut d.canonical_title, MAX_CANONICAL_TITLE);
+    if d.year.is_some_and(|y| !(1..=9999).contains(&y)) {
+        d.year = None;
+    }
+    if d.match_confidence.is_some_and(|c| c > MAX_MATCH_CONFIDENCE) {
+        d.match_confidence = None;
+    }
+    let mut groups: Vec<String> = Vec::new();
+    for g in std::mem::take(&mut d.newsgroups) {
+        if groups.len() < MAX_NEWSGROUPS && newsgroup_ok(&g) && !groups.contains(&g) {
+            groups.push(g);
+        }
+    }
+    d.newsgroups = groups;
+    let mut titles: Vec<AltTitle> = Vec::new();
+    for mut a in std::mem::take(&mut d.alt_titles) {
+        if titles.len() >= MAX_ALT_TITLES {
+            break;
+        }
+        a.language.make_ascii_lowercase();
+        truncate(&mut a.title, MAX_ALT_TITLE);
+        if language_ok(&a.language) && !a.title.is_empty() && !titles.contains(&a) {
+            titles.push(a);
+        }
+    }
+    d.alt_titles = titles;
+    let mut genres: Vec<String> = Vec::new();
+    for g in std::mem::take(&mut d.genres) {
+        if genres.len() >= MAX_GENRES {
+            break;
+        }
+        if let Some(g) = normalise_genre(&g).filter(|g| !genres.contains(g)) {
+            genres.push(g);
+        }
+    }
+    d.genres = genres;
+}
+
+/// A genre in its stored form ([`genre_ok`]): lower case, control
+/// characters gone, words joined by one space, cut to [`MAX_GENRE`].
+fn normalise_genre(g: &str) -> Option<String> {
+    let lower: String = g
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .to_lowercase();
+    let mut out = lower.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate(&mut out, MAX_GENRE);
+    let out = out.trim_end().to_owned();
+    genre_ok(&out).then_some(out)
 }
 
 /// Bounds `a` in place; false when it can't be kept (a bad scene id).
@@ -291,6 +382,7 @@ mod tests {
             description: Some(long.clone()),
             publisher: Some(long),
             adult: None,
+            details: None,
         };
         c.clamp();
         assert_eq!(c.name.as_ref().unwrap().len(), MAX_NAME);
@@ -365,6 +457,7 @@ mod tests {
             publisher: c.publisher.clone(),
             provenance: s::Provenance::default(),
             adult: c.adult.clone(),
+            details: c.details.clone(),
         }
     }
 
@@ -428,6 +521,181 @@ mod tests {
         assert!(c.text_len() <= MAX_TOTAL);
         assert!(c.files.len() < MAX_TOTAL / MAX_PATH, "files make room");
         assert_eq!(c.adult.as_ref().unwrap().performers.len(), MAX_PERFORMERS);
+        assert!(lodestar_store::claims::encode(&to_store(&c), 3).is_ok());
+    }
+
+    #[test]
+    fn clamp_bounds_the_details_section() {
+        let mut c = Claims {
+            name: Some("n".into()),
+            ids: vec![
+                ExternalId {
+                    scheme: "IMDB".into(),
+                    value: "tt0111161".into(),
+                },
+                ExternalId {
+                    scheme: "imdb".into(),
+                    value: "tt0111161".into(),
+                },
+                ExternalId {
+                    scheme: "imdb".into(),
+                    value: "nm0000151".into(),
+                },
+                ExternalId {
+                    scheme: "rage".into(),
+                    value: "1".into(),
+                },
+                ExternalId {
+                    scheme: "tmdb".into(),
+                    value: "278".into(),
+                },
+            ],
+            details: Some(Box::new(Details {
+                source_category: Some("c".repeat(MAX_CATEGORY + 9)),
+                posted_at: Some(-1),
+                newsgroups: (0..20)
+                    .map(|i| format!("alt.g{}", i % 10))
+                    .chain(["bad group".into()])
+                    .collect(),
+                alt_titles: [
+                    ("EN-US", "Title"),
+                    ("en-us", "Title"),
+                    ("en_US", "Bad tag"),
+                    ("ja", ""),
+                    ("de", &"é".repeat(MAX_ALT_TITLE)),
+                ]
+                .into_iter()
+                .map(|(l, t)| AltTitle {
+                    language: l.into(),
+                    title: t.into(),
+                })
+                .chain((0..40).map(|i| AltTitle {
+                    language: "und".into(),
+                    title: format!("t{i}"),
+                }))
+                .collect(),
+                canonical_title: Some("n".repeat(MAX_CANONICAL_TITLE + 1)),
+                genres: [
+                    "  Science   Fiction ",
+                    "science fiction",
+                    "DRAMA\u{7}",
+                    "\t",
+                    "ÉPOPÉE",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .chain((0..30).map(|i| format!("g{i}")))
+                .chain(["x ".repeat(MAX_GENRE)])
+                .collect(),
+                year: Some(10_000),
+                match_confidence: Some(101),
+            })),
+            ..Claims::default()
+        };
+        c.clamp();
+        let d = c.details.as_deref().unwrap();
+        assert_eq!(d.source_category.as_ref().unwrap().len(), MAX_CATEGORY);
+        assert_eq!(d.posted_at, Some(-1));
+        assert_eq!(d.newsgroups.len(), MAX_NEWSGROUPS);
+        assert_eq!(d.newsgroups[0], "alt.g0");
+        assert_eq!(d.alt_titles.len(), MAX_ALT_TITLES);
+        assert_eq!(d.alt_titles[0].language, "en-us");
+        assert_eq!(d.alt_titles[0].title, "Title");
+        assert_eq!(d.alt_titles[1].language, "de");
+        assert!(d.alt_titles[1].title.len() <= MAX_ALT_TITLE);
+        assert_eq!(d.alt_titles[2].title, "t0");
+        assert_eq!(
+            d.canonical_title.as_ref().unwrap().len(),
+            MAX_CANONICAL_TITLE
+        );
+        assert_eq!(d.genres.len(), MAX_GENRES);
+        assert_eq!(d.genres[..3], ["science fiction", "drama", "épopée"]);
+        assert_eq!(d.year, None);
+        assert_eq!(d.match_confidence, None);
+        // Only enrichment ids, each once.
+        let ids: Vec<_> = c.ids.iter().map(|i| (&*i.scheme, &*i.value)).collect();
+        assert_eq!(ids, [("imdb", "tt0111161"), ("tmdb", "278")]);
+        let blob = lodestar_store::claims::encode(&to_store(&c), 3).unwrap();
+        assert_eq!(blob[0], lodestar_store::claims::VERSION_DETAILS);
+    }
+
+    #[test]
+    fn a_genre_cut_at_the_cap_loses_its_trailing_space() {
+        let mut c = Claims {
+            details: Some(Box::new(Details {
+                genres: vec![format!("{} b", "a".repeat(MAX_GENRE - 1))],
+                ..Details::default()
+            })),
+            ..Claims::default()
+        };
+        c.clamp();
+        assert_eq!(c.details.unwrap().genres, ["a".repeat(MAX_GENRE - 1)]);
+    }
+
+    #[test]
+    fn clamp_drops_an_empty_or_shared_details_section() {
+        let bad = Details {
+            year: Some(0),
+            match_confidence: Some(200),
+            newsgroups: vec!["..".into()],
+            alt_titles: vec![AltTitle {
+                language: "x".into(),
+                title: "t".into(),
+            }],
+            genres: vec![" ".into()],
+            ..Details::default()
+        };
+        let mut c = Claims {
+            ids: vec![ExternalId {
+                scheme: "rage".into(),
+                value: "1".into(),
+            }],
+            details: Some(Box::new(bad)),
+            ..Claims::default()
+        };
+        c.clamp();
+        assert!(c.details.is_none());
+        assert_eq!(c.ids.len(), 1, "no section: any id stays");
+
+        // An adult match carries nothing beside it.
+        let mut c = Claims {
+            adult: Some(AdultEnrichment::new("1")),
+            details: Some(Box::new(Details {
+                year: Some(2000),
+                ..Details::default()
+            })),
+            ..Claims::default()
+        };
+        c.clamp();
+        assert!(c.adult.is_some() && c.details.is_none());
+        assert!(lodestar_store::claims::encode(&to_store(&c), 3).is_ok());
+    }
+
+    #[test]
+    fn the_details_section_counts_toward_the_total() {
+        let mut c = Claims {
+            files: vec![
+                ClaimedFile {
+                    path: "f".repeat(MAX_PATH),
+                    size: None
+                };
+                MAX_TOTAL / MAX_PATH
+            ],
+            details: Some(Box::new(Details {
+                alt_titles: (0..MAX_ALT_TITLES)
+                    .map(|i| AltTitle {
+                        language: "en".into(),
+                        title: format!("{i:02}{}", "t".repeat(MAX_ALT_TITLE - 2)),
+                    })
+                    .collect(),
+                ..Details::default()
+            })),
+            ..Claims::default()
+        };
+        c.clamp();
+        assert!(c.text_len() <= MAX_TOTAL);
+        assert!(c.files.len() < MAX_TOTAL / MAX_PATH, "files make room");
+        assert_eq!(c.details.as_ref().unwrap().alt_titles.len(), MAX_ALT_TITLES);
         assert!(lodestar_store::claims::encode(&to_store(&c), 3).is_ok());
     }
 
