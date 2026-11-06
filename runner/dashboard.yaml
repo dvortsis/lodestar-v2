@@ -272,7 +272,6 @@ placement:
   - X-fuzz-cache-1105
   - X-claim-trackers
   - X-claim-store
-  - X-tcache-recheck
   - X-adult-catalogue
   - D-sources-guide
   - L4-followups
