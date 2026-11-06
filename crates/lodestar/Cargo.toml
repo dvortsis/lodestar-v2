@@ -21,6 +21,7 @@ flate2 = { version = "1.1.10", default-features = false, features = ["rust_backe
 getrandom = "0.3.4"
 hmac = "0.13.0"
 lodestar-api.workspace = true
+lodestar-companions.workspace = true
 # `serve --fixture`'s data set (src/fixture.rs), behind `fixture`.
 lodestar-bench = { path = "../../bench", optional = true }
 lodestar-dht.workspace = true
