@@ -24,7 +24,7 @@ Taking part in the DHT means other nodes and peers can see your public IP addres
 - **Restricted** sources announce your IP address to a torrent's other peers, or reach other high-risk services. They ask for your password every time they're turned on. None is built yet.
 - **Overlay** sources join other peer-to-peer networks, with their own participants and content. None is built yet.
 
-**What a private source finds is marked private for as long as only private sources have reported it.** A private item is never served through feeds or integrations, included in shareable exports, or used in public peer lookups. If a public network later reports the same torrent, Lodestar treats it as public from then on, because its description is public knowledge by then; what stays private is what only your private sources told you.
+**What a private source finds is marked private for as long as only private sources have reported it.** A private item is never served through feeds or integrations, included in shareable exports, or used in public peer lookups. If a public source later reports the same torrent, the DHT or an import for example, Lodestar treats it as public from then on, because its description is public knowledge by then; what stays private is what only your private sources told you.
 
 A future version may add a verification mode that fetches small fragments of a torrent's content **(planned, not built)**. If it ships, it will be off by default, behind its own notice and your password.
 
@@ -46,11 +46,11 @@ Lodestar sends nothing to its makers: no telemetry, no crash reports, no usage d
 
 - the index of torrent metadata and swarm counts;
 - your settings, saved searches and alerts;
-- API keys, kept as hashes, and the credentials for the integrations and proxies you set up (and, when they ship, Account sources), encrypted with a key file kept outside the database;
+- API keys, kept as hashes, and the secrets for the integrations, proxies and notification channels you set up (and, when they ship, Account sources), encrypted with a key file kept outside the database;
 - logs, which leave out torrent names unless you turn that on;
 - a **query log** of searches, which is **off by default**, and which you can clear.
 
-Credentials are encrypted at rest with a key file (`secrets.key`) stored separately from the database; Lodestar decrypts them when it uses them, so access to both the database and that file can expose them. **A backup made with `lodestar backup` contains the database, the configuration file, the admin password hash with the sign-in sessions and API keys, and the key that unseals quarantined names (`seal.key`).** It does not contain `secrets.key`: restoring it to a new installation brings the sessions and API keys back, and leaves stored integration and proxy credentials unreadable until you enter them again. Keep the backup on private storage, as the user guide says. A full copy of the data folder also contains the logs and every key file, `secrets.key` included. Shareable search exports exclude private findings.
+Credentials are encrypted at rest with a key file (`secrets.key`) stored separately from the database; Lodestar decrypts them when it uses them, so access to both the database and that file can expose them. **A backup made with `lodestar backup` contains the database, the configuration file, the admin password hash with the sign-in sessions and API keys, and the key that unseals quarantined names (`seal.key`).** It does not contain `secrets.key`: restoring it to a new installation brings the sessions and API keys back, and leaves the stored integration, proxy and notification secrets unreadable until you enter them again. Keep the backup on private storage, as the user guide says. A full copy of the data folder also contains the logs and every key file, `secrets.key` included. Shareable search exports exclude private findings.
 
 Lodestar contacts the internet for the DHT and peers; for swarm counts from a built-in list of public trackers; for the sources you turn on; for blocklist downloads you choose; for notification channels you set up (ntfy, Discord, email, webhooks); and for update checks if you turn them on (those contact GitHub). The **Diagnostics** panel in Settings → About shows versions, platform and the names of changed settings, with no values, paths or torrent details; you can copy it, and nothing is sent unless you paste it somewhere.
 

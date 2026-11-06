@@ -175,7 +175,7 @@ API keys, which let other apps such as Torznab clients talk to Lodestar, are **(
 | `seal.key` | The key that unseals the names Lodestar holds back for review. |
 | `config.toml` | Your settings file, if you made one. |
 
-The search index isn't in the backup. Lodestar rebuilds it from the database. `secrets.key` isn't in it either. That file protects the credentials you entered for integrations and proxies. After a restore to a new server, enter them again.
+The search index isn't in the backup. Lodestar rebuilds it from the database. `secrets.key` isn't in it either. That file protects the secrets you entered for integrations, proxies and notification channels. After a restore to a new server, enter them again.
 
 > [!WARNING]
 > The backup holds `seal.key` and `auth.json`. Keep it on a private share. Never place it on a share that is public over SMB.

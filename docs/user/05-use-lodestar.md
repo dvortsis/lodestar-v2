@@ -128,6 +128,8 @@ If you run Sonarr or Radarr, each can tell Lodestar about every release it grabs
 
 Everything that comes this way is **private**. Your indexers may be private trackers, so Lodestar never looks these torrents up in the DHT or on public trackers. It never serves them through feeds or shareable exports either.
 
+The private mark lasts while only private sources have reported the torrent. If a public source later reports it, for example the DHT or an import, Lodestar treats it as public from then on.
+
 Each app proves who it is with a **webhook token**: a long secret that only that app knows. Sonarr and Radarr each get their own.
 
 **Step 1: turn the source on.**

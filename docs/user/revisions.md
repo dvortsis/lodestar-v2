@@ -2,9 +2,9 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 2.3 | 2026-11-06 | Section 3.7: `seal.key` unseals held-back names; `secrets.key` is not in the backup, so integration, proxy and notification secrets are entered again after a restore to a new server. Section 5.5: a webhook find becomes public once a public source reports it. |
 | 2.2 | 2026-11-06 | Added section 4.4 on finding the setup token on Windows, section 6.3 on Windows service error 3 and three rows in section 6.1, and a glossary entry. Install on Linux is now 4.5, Get help is now 6.4. |
 | 2.1 | 2026-11-05 | Added section 5.5 on connecting Sonarr and Radarr, a glossary entry, and corrected the list of sources in section 5.4. |
-| 2.1 | 2026-11-06 | Section 3.7: `seal.key` unseals held-back names, and `secrets.key` is not in the backup, so integration credentials are entered again after a restore to a new server. |
 | 2.0 | 2026-11-05 | Section 2.5: nothing connects to the network until setup is done; the crawler starts on its own after setup. |
 | 1.9 | 2026-11-05 | Added a section in 3.6 on pack versions, why a new version asks for your password, what "in doubt" means and overrides. |
 | 1.8 | 2026-11-05 | Section 2.5: setup opens on the Legal Notice; reading it again in Settings → About; the one-time showing at sign-in. Section 1.2 no longer marks the setup step planned. |
