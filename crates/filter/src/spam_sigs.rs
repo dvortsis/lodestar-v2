@@ -45,12 +45,26 @@
 //! anything it can hold: everything in it would have gone by then.
 //!
 //! # Memory
-//! About 45 MB at the cap: 8 bytes an entry as it's held, and an index from
-//! signature to entry. Keys are hashed with SipHash under keys drawn at
+//! About 17 MB at the cap (X-sp4-followups; RP-5's `HashMap` index took
+//! 45 MB): 8 bytes an entry as it's held, and an index of 4-byte
+//! locations (`Index`), at most half full, so 2M buckets (8 MB) at 1M
+//! signatures. A location names a row by its place in memory and an entry
+//! by its index there; the key is read back from the entry, so the index
+//! doesn't hold it again. Buckets come from SipHash under keys drawn at
 //! start, because file sizes, and so signatures, are the sender's to
-//! choose.
+//! choose. A load sizes the index once.
+//!
+//! **Rows held at once:** a location has room for 524,288 rows
+//! (`MAX_HELD_ROWS`): 2,000 or so hold the cap. Past that, which no set
+//! reaches in practice, a row that can't be held is treated like one that
+//! doesn't read (lost, listed and left alone) and a new row like the row
+//! numbers running out (the set stops changing, and says so). The first
+//! loses that row's signatures, as a row that doesn't read does; the
+//! second errs strict.
 
+use std::collections::hash_map::RandomState;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::BuildHasher;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -159,41 +173,309 @@ pub fn usable(sig: Option<PayloadSig>) -> Option<u64> {
     sig.filter(|s| s.specific).map(|s| s.sig)
 }
 
-/// Where a live add is: its row, its index there, and its flags, packed
-/// as `row << 19 | index << 3 | flags`.
+/// Where a live add is: its row, its index there, and its flags (the
+/// entry's own).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Loc(u64);
+struct Loc {
+    row: u64,
+    index: usize,
+    flags: u64,
+}
 
 impl Loc {
-    fn new(row: u64, index: usize, flags: u64) -> Loc {
-        Loc(row << 19 | (index as u64) << 3 | (flags & FLAGS))
-    }
     fn row(self) -> u64 {
-        self.0 >> 19
+        self.row
     }
     fn index(self) -> usize {
-        ((self.0 >> 3) & 0xffff) as usize
+        self.index
     }
     fn flags(self) -> u64 {
-        self.0 & FLAGS
+        self.flags
     }
 }
 
 #[derive(Debug, Clone, Default)]
 struct Row {
+    /// Its number, `filter.sp4.sigs.<n>`.
+    n: u64,
     entries: Vec<u64>,
     /// Entries that no longer count: adds no longer live, and removals
     /// (each one dead from the start, but kept while it's needed).
     dead: usize,
 }
 
+/// Bits of a [`Slot`] that give an entry's index in its row: a row as
+/// read holds at most 8,191 entries ([`MAX_ROW_BYTES`]).
+const INDEX_BITS: u32 = 13;
+/// Rows held at once: the rest of a [`Slot`]'s bits.
+const MAX_HELD_ROWS: usize = 1 << (32 - INDEX_BITS);
+const _: () = assert!((MAX_ROW_BYTES - 1) / 8 < (1 << INDEX_BITS));
+
+/// Where an entry is, as the index holds it in 4 bytes: the place of its
+/// row in [`Rows::held`], then its index in that row. The largest
+/// (`u32::MAX`, an index of 8,191) can't be an entry, so it marks an
+/// empty bucket.
+type Slot = u32;
+const EMPTY: Slot = Slot::MAX;
+
+/// The rows that read, held by place, and their numbers in order.
+#[derive(Debug, Clone)]
+struct Rows {
+    /// At most this many held at once: [`MAX_HELD_ROWS`], lower in tests.
+    limit: usize,
+    /// Row number to its place in `held`.
+    order: BTreeMap<u64, u32>,
+    held: Vec<Row>,
+    /// Places a deleted row left, for the next row.
+    free: Vec<u32>,
+}
+
+impl Rows {
+    fn new(limit: usize) -> Rows {
+        Rows {
+            limit: limit.min(MAX_HELD_ROWS),
+            order: BTreeMap::new(),
+            held: Vec::new(),
+            free: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    fn get(&self, n: u64) -> Option<&Row> {
+        self.order.get(&n).map(|p| &self.held[*p as usize])
+    }
+
+    fn get_mut(&mut self, n: u64) -> Option<&mut Row> {
+        self.order.get(&n).map(|p| &mut self.held[*p as usize])
+    }
+
+    /// Holds a new row `n`. Returns its place, or `None` when no more
+    /// rows can be held ([`MAX_HELD_ROWS`]).
+    fn insert(&mut self, n: u64, entries: Vec<u64>) -> Option<u32> {
+        debug_assert!(!self.order.contains_key(&n), "row {n} held twice");
+        let row = Row {
+            n,
+            entries,
+            dead: 0,
+        };
+        let place = match self.free.pop() {
+            Some(p) => {
+                self.held[p as usize] = row;
+                p
+            }
+            None if self.held.len() < self.limit => {
+                self.held.push(row);
+                (self.held.len() - 1) as u32
+            }
+            None => return None,
+        };
+        self.order.insert(n, place);
+        Some(place)
+    }
+
+    fn remove(&mut self, n: u64) {
+        if let Some(p) = self.order.remove(&n) {
+            self.held[p as usize] = Row::default();
+            self.free.push(p);
+        }
+    }
+
+    fn place(&self, n: u64) -> Option<u32> {
+        self.order.get(&n).copied()
+    }
+
+    fn range(
+        &self,
+        r: impl std::ops::RangeBounds<u64>,
+    ) -> impl DoubleEndedIterator<Item = (u64, &Row)> {
+        self.order
+            .range(r)
+            .map(|(n, p)| (*n, &self.held[*p as usize]))
+    }
+
+    fn iter(&self) -> impl DoubleEndedIterator<Item = (u64, &Row)> {
+        self.range(..)
+    }
+
+    fn slot(place: u32, index: usize) -> Slot {
+        place << INDEX_BITS | index as u32
+    }
+
+    /// The entry a slot points at.
+    fn entry(&self, s: Slot) -> u64 {
+        self.held[(s >> INDEX_BITS) as usize].entries[(s & ((1 << INDEX_BITS) - 1)) as usize]
+    }
+
+    fn loc(&self, s: Slot) -> Loc {
+        let row = &self.held[(s >> INDEX_BITS) as usize];
+        let index = (s & ((1 << INDEX_BITS) - 1)) as usize;
+        Loc {
+            row: row.n,
+            index,
+            flags: row.entries[index] & FLAGS,
+        }
+    }
+}
+
+/// The live signatures: an open-addressed table of [`Slot`]s, 4 bytes a
+/// bucket, the key read back from the entry a slot points at. Probed
+/// linearly; a removal shifts the run after it back, so there are no
+/// tombstones. At most half full, so a probe reads about two buckets.
+///
+/// **Hash flooding:** a signature is a hash of file sizes the sender
+/// chooses (and `fmix64` can be inverted), so buckets come from SipHash
+/// under keys drawn at start ([`RandomState`]), never from the
+/// signature's own bits.
+#[derive(Debug, Clone)]
+struct Index {
+    buckets: Vec<Slot>,
+    len: usize,
+    keys: RandomState,
+}
+
+impl Index {
+    fn new() -> Index {
+        Index {
+            buckets: Vec::new(),
+            len: 0,
+            keys: RandomState::new(),
+        }
+    }
+
+    /// Room for `n` live signatures without growing: a load sizes it
+    /// once, so the tables it would outgrow on the way never stay
+    /// resident.
+    fn reserve(&mut self, n: usize, rows: &Rows) {
+        let size = n.saturating_mul(2).next_power_of_two().max(16);
+        if size > self.buckets.len() {
+            self.resize(size, rows);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn home(&self, k: u64) -> usize {
+        self.keys.hash_one(k) as usize & (self.buckets.len() - 1)
+    }
+
+    /// The bucket that holds `k`.
+    fn find(&self, k: u64, rows: &Rows) -> Option<usize> {
+        if self.buckets.is_empty() {
+            return None;
+        }
+        let mask = self.buckets.len() - 1;
+        let mut b = self.home(k);
+        loop {
+            let s = self.buckets[b];
+            if s == EMPTY {
+                return None;
+            }
+            if key(rows.entry(s)) == k {
+                return Some(b);
+            }
+            b = (b + 1) & mask;
+        }
+    }
+
+    fn get(&self, k: u64, rows: &Rows) -> Option<Loc> {
+        self.find(k, rows).map(|b| rows.loc(self.buckets[b]))
+    }
+
+    /// Whether `k` is live at `s`.
+    fn at(&self, k: u64, s: Slot, rows: &Rows) -> bool {
+        self.find(k, rows).is_some_and(|b| self.buckets[b] == s)
+    }
+
+    /// Points `k` at `s`, which must hold an add of `k`. Returns where it
+    /// was.
+    fn put(&mut self, k: u64, s: Slot, rows: &Rows) -> Option<Loc> {
+        if let Some(b) = self.find(k, rows) {
+            let old = rows.loc(self.buckets[b]);
+            self.buckets[b] = s;
+            return Some(old);
+        }
+        if (self.len + 1) * 2 > self.buckets.len() {
+            self.grow(rows);
+        }
+        let mask = self.buckets.len() - 1;
+        let mut b = self.home(k);
+        while self.buckets[b] != EMPTY {
+            b = (b + 1) & mask;
+        }
+        self.buckets[b] = s;
+        self.len += 1;
+        None
+    }
+
+    fn grow(&mut self, rows: &Rows) {
+        self.resize((self.buckets.len() * 2).max(16), rows);
+    }
+
+    fn resize(&mut self, size: usize, rows: &Rows) {
+        debug_assert!(size.is_power_of_two() && size >= self.len * 2);
+        let old = std::mem::replace(&mut self.buckets, vec![EMPTY; size]);
+        let mask = size - 1;
+        for s in old.into_iter().filter(|s| *s != EMPTY) {
+            let mut b = self.home(key(rows.entry(s)));
+            while self.buckets[b] != EMPTY {
+                b = (b + 1) & mask;
+            }
+            self.buckets[b] = s;
+        }
+    }
+
+    /// Takes `k` out. Returns where it was.
+    fn remove(&mut self, k: u64, rows: &Rows) -> Option<Loc> {
+        let at = self.find(k, rows)?;
+        let old = rows.loc(self.buckets[at]);
+        let mask = self.buckets.len() - 1;
+        let mut hole = at;
+        let mut b = at;
+        loop {
+            b = (b + 1) & mask;
+            let s = self.buckets[b];
+            if s == EMPTY {
+                break;
+            }
+            // It moves into the hole unless its home lies after the hole,
+            // up to it: it would be found no more.
+            let home = self.home(key(rows.entry(s)));
+            if b.wrapping_sub(home) & mask >= b.wrapping_sub(hole) & mask {
+                self.buckets[hole] = s;
+                hole = b;
+            }
+        }
+        self.buckets[hole] = EMPTY;
+        self.len -= 1;
+        Some(old)
+    }
+
+    /// Every live signature and where it is: for tests.
+    #[cfg(test)]
+    fn iter<'a>(&'a self, rows: &'a Rows) -> impl Iterator<Item = (u64, Loc)> + 'a {
+        self.buckets
+            .iter()
+            .filter(|s| **s != EMPTY)
+            .map(|s| (key(rows.entry(*s)), rows.loc(*s)))
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Inner {
     cap: usize,
     /// The rows that read, by number.
-    rows: BTreeMap<u64, Row>,
+    rows: Rows,
     /// Live signatures, by [`key`].
-    live: HashMap<u64, Loc>,
+    live: Index,
     /// How many adds no longer live each signature still has stored: a
     /// removal of it is needed while there's one ([`Inner::compact`]).
     stale: HashMap<u64, u32>,
@@ -215,11 +497,11 @@ struct Inner {
 }
 
 impl Inner {
-    fn new(cap: usize) -> Inner {
+    fn new(cap: usize, row_limit: usize) -> Inner {
         Inner {
             cap,
-            rows: BTreeMap::new(),
-            live: HashMap::new(),
+            rows: Rows::new(row_limit),
+            live: Index::new(),
             stale: HashMap::new(),
             lost_rows: BTreeSet::new(),
             lost_other: BTreeSet::new(),
@@ -238,27 +520,29 @@ impl Inner {
     fn append(&mut self, entry: u64) -> Option<(u64, usize)> {
         let open = self.tail.filter(|t| {
             self.rows
-                .get(t)
+                .get(*t)
                 .is_some_and(|r| r.entries.len() < ROW_ENTRIES)
         });
         let n = match open {
             Some(n) => n,
             None => {
                 let n = self.next;
-                if n >= ROW_BAND {
+                // Past the band, or more rows than memory can address
+                // (never, in practice: 524,288 rows).
+                if n >= ROW_BAND || self.rows.insert(n, Vec::new()).is_none() {
                     self.out_of_numbers = true;
                     return None;
                 }
                 self.next = n + 1;
-                self.rows.insert(n, Row::default());
                 self.tail = Some(n);
                 n
             }
         };
-        let row = self.rows.get_mut(&n).expect("open row");
+        let row = self.rows.get_mut(n).expect("open row");
         row.entries.push(entry);
+        let i = row.entries.len() - 1;
         self.dirty.insert(n);
-        Some((n, row.entries.len() - 1))
+        Some((n, i))
     }
 
     /// Counts a stored add of `k` that no longer lives.
@@ -278,7 +562,7 @@ impl Inner {
 
     /// Marks one entry of row `n` dead.
     fn kill(&mut self, n: u64, touched: &mut BTreeSet<u64>) {
-        if let Some(r) = self.rows.get_mut(&n) {
+        if let Some(r) = self.rows.get_mut(n) {
             r.dead += 1;
             touched.insert(n);
         }
@@ -292,18 +576,18 @@ impl Inner {
             return;
         };
         let mut touched = BTreeSet::new();
-        if let Some(old) = self.live.remove(&k) {
+        let place = self.rows.place(n).expect("the open row");
+        if let Some(old) = self.live.put(k, Rows::slot(place, i), &self.rows) {
             self.kill(old.row(), &mut touched);
             self.went_stale(k);
         }
-        self.live.insert(k, Loc::new(n, i, flags));
         while self.live.len() > self.cap && self.evict(&mut touched) {}
         self.compact(touched);
     }
 
     fn remove(&mut self, sig: u64, rule: Option<PackRule>) -> bool {
         let k = key(sig);
-        let Some(loc) = self.live.get(&k).copied() else {
+        let Some(loc) = self.live.get(k, &self.rows) else {
             // Dropped by the cap but still stored, it would come back on
             // load (the module docs): a removal cancels it. Only entries
             // before the eviction point can be such adds; that's at most
@@ -324,7 +608,7 @@ impl Inner {
         let Some((n, _)) = self.append(k | REMOVED) else {
             return false;
         };
-        self.live.remove(&k);
+        self.live.remove(k, &self.rows);
         self.went_stale(k);
         let mut touched = BTreeSet::new();
         self.kill(loc.row(), &mut touched);
@@ -342,7 +626,7 @@ impl Inner {
         let (on, oi) = self.oldest;
         let mut last = None;
         for (n, r) in self.rows.range(..=on) {
-            let upto = if *n == on {
+            let upto = if n == on {
                 oi.min(r.entries.len())
             } else {
                 r.entries.len()
@@ -361,7 +645,7 @@ impl Inner {
             .rows
             .range(on..)
             .flat_map(|(n, r)| {
-                let from = if *n == on { oi.min(r.entries.len()) } else { 0 };
+                let from = if n == on { oi.min(r.entries.len()) } else { 0 };
                 r.entries[from..].iter()
             })
             .any(|x| key(*x) == k);
@@ -373,7 +657,7 @@ impl Inner {
     fn evict(&mut self, touched: &mut BTreeSet<u64>) -> bool {
         let (mut n, mut i) = self.oldest;
         let (n, i, k) = 'search: loop {
-            let Some((&rn, row)) = self.rows.range(n..).next() else {
+            let Some((rn, row)) = self.rows.range(n..).next() else {
                 debug_assert!(self.live.is_empty(), "a live entry the rows don't hold");
                 return false;
             };
@@ -386,7 +670,7 @@ impl Inner {
                 if e & REMOVED == 0
                     && self
                         .live
-                        .get(&k)
+                        .get(k, &self.rows)
                         .is_some_and(|l| l.row() == n && l.index() == i)
                 {
                     break 'search (n, i, k);
@@ -398,7 +682,7 @@ impl Inner {
             };
             (n, i) = (after, 0);
         };
-        self.live.remove(&k);
+        self.live.remove(k, &self.rows);
         self.went_stale(k);
         self.oldest = (n, i + 1);
         self.kill(n, touched);
@@ -416,9 +700,10 @@ impl Inner {
     /// Rewrites each touched row once a quarter of it is dead.
     fn compact(&mut self, touched: BTreeSet<u64>) {
         for n in touched {
-            let Some(row) = self.rows.get(&n) else {
+            let Some(place) = self.rows.place(n) else {
                 continue;
             };
+            let row = &self.rows.held[place as usize];
             if row.dead == 0 || row.dead * 4 < row.entries.len() {
                 continue;
             }
@@ -428,6 +713,11 @@ impl Inner {
             // cancels anyway.) The stale adds this row drops are counted
             // first, so a removal beside its own add goes with it.
             let mut kept = Vec::with_capacity(row.entries.len() - row.dead);
+            // The index's bucket of each live add kept, in order: they're
+            // pointed at the add's new place once the row is rewritten.
+            // Buckets don't move until the index changes, which it
+            // doesn't here.
+            let mut buckets = Vec::with_capacity(row.entries.len() - row.dead);
             let mut dropped_adds = Vec::new();
             let mut removals = Vec::new();
             for (i, e) in row.entries.iter().enumerate() {
@@ -435,11 +725,12 @@ impl Inner {
                 if *e & REMOVED != 0 {
                     removals.push(kept.len());
                     kept.push(*e);
-                } else if self
+                } else if let Some(b) = self
                     .live
-                    .get(&k)
-                    .is_some_and(|l| l.row() == n && l.index() == i)
+                    .find(k, &self.rows)
+                    .filter(|b| self.live.buckets[*b] == Rows::slot(place, i))
                 {
+                    buckets.push(b);
                     kept.push(*e);
                 } else {
                     dropped_adds.push(k);
@@ -465,7 +756,8 @@ impl Inner {
                 self.oldest.1 = 0;
             }
             if kept.is_empty() {
-                self.rows.remove(&n);
+                debug_assert!(buckets.is_empty(), "a live add dropped");
+                self.rows.remove(n);
                 self.dirty.remove(&n);
                 self.gone.insert(n);
                 if self.tail == Some(n) {
@@ -473,20 +765,18 @@ impl Inner {
                 }
                 continue;
             }
+            let mut buckets = buckets.into_iter();
             for (i, e) in kept.iter().enumerate() {
                 if e & REMOVED == 0 {
-                    self.live.insert(key(*e), Loc::new(n, i, *e));
+                    let b = buckets.next().expect("a bucket for each live add");
+                    self.live.buckets[b] = Rows::slot(place, i);
                 }
             }
             // A kept removal still counts as dead: it's no live add.
             let dead = kept.iter().filter(|e| *e & REMOVED != 0).count();
-            self.rows.insert(
-                n,
-                Row {
-                    entries: kept,
-                    dead,
-                },
-            );
+            let row = &mut self.rows.held[place as usize];
+            row.entries = kept;
+            row.dead = dead;
             self.dirty.insert(n);
         }
     }
@@ -533,7 +823,7 @@ impl SpamSigs {
     /// [`CAP`]; tests use a smaller one through the same code.
     pub fn with_cap(cap: usize) -> SpamSigs {
         SpamSigs {
-            inner: Mutex::new(Inner::new(cap.max(1))),
+            inner: Mutex::new(Inner::new(cap.max(1), MAX_HELD_ROWS)),
             len: AtomicUsize::new(0),
             pending: AtomicBool::new(false),
         }
@@ -571,7 +861,7 @@ impl SpamSigs {
         let inner = self.lock();
         inner
             .live
-            .get(&key(sig))
+            .get(key(sig), &inner.rows)
             .map(|l| Original::from_flags(l.flags()))
     }
 
@@ -608,7 +898,7 @@ impl SpamSigs {
             .filter_map(|n| {
                 inner
                     .rows
-                    .get(n)
+                    .get(*n)
                     .map(|r| (format!("{PREFIX}{n}"), encode(&r.entries)))
             })
             .collect();
@@ -646,7 +936,10 @@ impl SpamSigs {
     /// doesn't read is skipped and reported; the rest load. Nothing is
     /// written.
     pub fn load(&self, rows: &[RawSetting]) -> Loaded {
-        let mut inner = Inner::new(self.lock().cap);
+        let mut inner = {
+            let held = self.lock();
+            Inner::new(held.cap, held.rows.limit)
+        };
         let mut readable: Vec<(u64, Vec<u64>)> = Vec::new();
         for (k, v) in rows {
             let Some(suffix) = k.strip_prefix(PREFIX) else {
@@ -667,46 +960,61 @@ impl SpamSigs {
         }
         // Keys sort as text; rows go by number.
         readable.sort_unstable_by_key(|(n, _)| *n);
+        let adds = readable
+            .iter()
+            .map(|(_, e)| e.iter().filter(|e| *e & REMOVED == 0).count())
+            .sum::<usize>();
+        inner.live.reserve(adds.min(inner.cap), &inner.rows);
         let mut touched = BTreeSet::new();
         for (n, entries) in readable {
-            let mut row = Row::default();
-            for (i, e) in entries.iter().enumerate() {
-                let k = key(*e);
-                if let Some(old) = inner.live.remove(&k) {
+            let len = entries.len();
+            // More rows than memory can address (never, in practice:
+            // 524,288 rows): the rest are lost, as a row that doesn't read.
+            let Some(place) = inner.rows.insert(n, entries) else {
+                inner.lost_rows.insert(n);
+                continue;
+            };
+            let mut dead = 0;
+            for i in 0..len {
+                let e = inner.rows.held[place as usize].entries[i];
+                let k = key(e);
+                let old = if e & REMOVED != 0 {
+                    inner.live.remove(k, &inner.rows)
+                } else {
+                    inner.live.put(k, Rows::slot(place, i), &inner.rows)
+                };
+                if let Some(old) = old {
                     if old.row() == n {
-                        row.dead += 1;
+                        dead += 1;
                     } else {
                         inner.kill(old.row(), &mut touched);
                     }
                 }
                 if e & REMOVED != 0 {
-                    row.dead += 1;
-                } else {
-                    inner.live.insert(k, Loc::new(n, i, *e));
+                    dead += 1;
                 }
             }
-            row.entries = entries;
-            inner.rows.insert(n, row);
+            inner.rows.held[place as usize].dead = dead;
         }
-        for (n, row) in &inner.rows {
+        let mut stale: HashMap<u64, u32> = HashMap::new();
+        for (n, row) in inner.rows.iter() {
+            let place = inner.rows.place(n).expect("held");
             for (i, e) in row.entries.iter().enumerate() {
                 let k = key(*e);
-                let live = inner
-                    .live
-                    .get(&k)
-                    .is_some_and(|l| l.row() == *n && l.index() == i);
-                if *e & REMOVED == 0 && !live {
-                    *inner.stale.entry(k).or_default() += 1;
+                if *e & REMOVED == 0 && !inner.live.at(k, Rows::slot(place, i), &inner.rows) {
+                    *stale.entry(k).or_default() += 1;
                 }
             }
         }
-        inner.oldest = inner.rows.keys().next().map_or((0, 0), |n| (*n, 0));
+        inner.stale = stale;
+        inner.oldest = inner.rows.iter().next().map_or((0, 0), |(n, _)| (n, 0));
         let max_seen = inner.next.checked_sub(1);
         inner.tail = inner
             .rows
-            .last_key_value()
-            .filter(|(n, r)| Some(**n) == max_seen && r.entries.len() < ROW_ENTRIES)
-            .map(|(n, _)| *n);
+            .iter()
+            .next_back()
+            .filter(|(n, r)| Some(*n) == max_seen && r.entries.len() < ROW_ENTRIES)
+            .map(|(n, _)| n);
         let mut evicted = BTreeSet::new();
         while inner.live.len() > inner.cap && inner.evict(&mut evicted) {}
         // Dead entries found here are compacted on the next change to
@@ -741,7 +1049,7 @@ impl SpamSigs {
         let inner = self.lock();
         (
             inner.rows.len(),
-            inner.rows.values().map(|r| r.entries.len()).sum(),
+            inner.rows.iter().map(|(_, r)| r.entries.len()).sum(),
         )
     }
 }
@@ -883,13 +1191,14 @@ mod tests {
         assert_eq!(s.get(0x18), None);
     }
 
-    #[test]
-    fn the_index_and_the_rows_agree_after_any_ops() {
-        let s = SpamSigs::with_cap(50);
+    /// Random adds and removals of `keys` signatures under `cap`, then
+    /// every check that the index and the rows agree.
+    fn agree_after(cap: usize, keys: u64, ops: usize) {
+        let s = SpamSigs::with_cap(cap);
         let mut rng = 7u64;
-        for _ in 0..20_000 {
+        for _ in 0..ops {
             rng = crate::hash::fmix64(rng);
-            let i = rng % 120;
+            let i = rng % keys;
             if rng.is_multiple_of(5) {
                 s.lock().remove(sig(i), None);
             } else {
@@ -897,16 +1206,77 @@ mod tests {
             }
         }
         let inner = s.lock();
-        assert!(inner.live.len() <= 50);
-        for (k, l) in &inner.live {
-            let e = inner.rows[&l.row()].entries[l.index()];
-            assert_eq!(key(e), *k);
-            assert_eq!(e & REMOVED, 0);
+        assert!(inner.live.len() <= cap);
+        assert!(
+            inner.live.len() * 2 <= inner.live.buckets.len(),
+            "at most half full"
+        );
+        // A signature never added is never found.
+        for i in keys..keys + 1_000 {
+            assert_eq!(inner.live.get(key(sig(i)), &inner.rows), None);
         }
-        for (n, r) in &inner.rows {
-            let live = inner.live.values().filter(|l| l.row() == *n).count();
+        assert_eq!(inner.live.iter(&inner.rows).count(), inner.live.len());
+        for (k, l) in inner.live.iter(&inner.rows) {
+            let e = inner.rows.get(l.row()).unwrap().entries[l.index()];
+            assert_eq!(key(e), k);
+            assert_eq!(e & REMOVED, 0);
+            assert_eq!(inner.live.get(k, &inner.rows), Some(l), "found");
+        }
+        for (n, r) in inner.rows.iter() {
+            let live = inner
+                .live
+                .iter(&inner.rows)
+                .filter(|(_, l)| l.row() == n)
+                .count();
             assert_eq!(r.entries.len() - r.dead, live, "row {n}");
             assert!(r.entries.len() <= ROW_ENTRIES);
         }
+    }
+
+    #[test]
+    fn the_index_and_the_rows_agree_after_any_ops() {
+        agree_after(50, 120, 20_000);
+        // Long probe runs, removals shifting them back, rows compacted
+        // and deleted with their places reused.
+        agree_after(5_000, 12_000, 200_000);
+    }
+
+    #[test]
+    fn a_slot_never_reads_as_empty() {
+        let last = Rows::slot((MAX_HELD_ROWS - 1) as u32, (MAX_ROW_BYTES - 1) / 8 - 1);
+        assert_ne!(last, EMPTY);
+        assert_eq!(Rows::slot(1, 0), 1 << INDEX_BITS);
+    }
+
+    #[test]
+    fn rows_past_what_memory_holds_are_lost_or_never_started() {
+        // A cap above what three rows hold, so none is dropped or deleted.
+        let s = SpamSigs::with_cap(10_000);
+        s.lock().rows.limit = 3;
+        // Adding: a fourth row can't be started, so the set stops
+        // changing and says so, as when the numbers run out.
+        for i in 0..(3 * ROW_ENTRIES as u64) {
+            s.add(sig(i), HID);
+        }
+        assert!(s.labels().is_empty());
+        s.add(sig(1 << 30), HID);
+        assert_eq!(s.get(sig(1 << 30)), None);
+        assert_eq!(s.labels(), ["packs.sp4.row.numbers"]);
+        // Loading: a row past the limit is lost, its signatures with it,
+        // and listed; the rows before it load.
+        let rows: Vec<RawSetting> = (0..4u64)
+            .map(|n| (format!("{PREFIX}{n}"), Err(encode(&[key(sig(n)) | HIDE]))))
+            .collect();
+        let again = SpamSigs::with_cap(100);
+        again.lock().rows.limit = 3;
+        let loaded = again.load(&rows);
+        assert_eq!(loaded.len, 3);
+        assert_eq!(loaded.lost, ["3"]);
+        assert!(again.get(sig(2)).is_some() && again.get(sig(3)).is_none());
+        // A deleted row's place is taken again.
+        let mut inner = again.lock();
+        inner.rows.remove(0);
+        assert_eq!(inner.rows.insert(9, Vec::new()), Some(0));
+        assert_eq!(inner.rows.insert(10, Vec::new()), None);
     }
 }
