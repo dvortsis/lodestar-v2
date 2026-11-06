@@ -2109,3 +2109,218 @@ async fn a_source_switched_off_sends_nothing() {
     assert_eq!(server.conns(), 1, "a switched-off source connected");
     assert_eq!(egress.status().counters.policy_refusals, 3);
 }
+
+/// A database file of its own, removed when dropped.
+struct TempDb(std::path::PathBuf);
+
+impl TempDb {
+    fn new(tag: &str) -> TempDb {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("lodestar-egress-{tag}-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TempDb(dir)
+    }
+
+    fn path(&self) -> std::path::PathBuf {
+        self.0.join("lodestar.db")
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The host's wiring (X-egress-state-watch): the shared writer store
+/// behind a mutex, with plugin `p` registered Enabled, and source states
+/// read on a read-only connection of their own.
+fn store_states(
+    db: &TempDb,
+) -> (
+    Arc<std::sync::Mutex<lodestar_store::Store>>,
+    lodestar_store::SourceId,
+    crate::consent::SourceCredentials,
+) {
+    use lodestar_store::{SourceState, Store, StoreConfig};
+    let mut writer = Store::open(db.path(), StoreConfig::default()).unwrap();
+    let id = writer
+        .register_source_as("p", "1", SourceState::Disabled, 0)
+        .unwrap();
+    writer.enable_source(id, None).unwrap();
+    let reader = Store::open_reader(db.path(), StoreConfig::default()).unwrap();
+    let shared = Arc::new(std::sync::Mutex::new(writer));
+    let keys = Arc::new(crate::consent::SecretStore::from_key(&[5; 32]));
+    let creds = crate::consent::SourceCredentials::with_keys(shared.clone(), keys)
+        .reading_states_from(Arc::new(std::sync::Mutex::new(reader)));
+    (shared, id, creds)
+}
+
+/// Holds `store`'s lock on a thread of its own, as a long API or Control
+/// operation would, until the returned sender is dropped or sent to.
+fn hold_lock(
+    store: &Arc<std::sync::Mutex<lodestar_store::Store>>,
+) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+    let store = store.clone();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let t = std::thread::spawn(move || {
+        let _guard = store.lock().unwrap();
+        held_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the lock wasn't taken");
+    (release_tx, t)
+}
+
+/// While the shared store's lock is held past `STATE_WAIT`, an enabled
+/// source's requests still go out: the check reads its own connection
+/// (X-egress-state-watch). The same check on the shared lock refuses,
+/// which is what this slice fixes.
+#[tokio::test]
+async fn a_held_store_lock_does_not_hold_back_an_enabled_source() {
+    let server = serve(|_| ok("hello")).await;
+    let db = TempDb::new("held");
+    let (shared, _, creds) = store_states(&db);
+    let egress = EgressFactory::with_resolver(Arc::new(creds), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let req = Request::get(server.url("/"));
+
+    let (release, holder) = hold_lock(&shared);
+    let held_since = Instant::now();
+    for _ in 0..3 {
+        assert_eq!(egress.fetch(&req).await.unwrap().status, 200);
+    }
+    // The old wiring, the check on the shared lock, for contrast: it
+    // waits out `STATE_WAIT` and refuses.
+    let keys = Arc::new(crate::consent::SecretStore::from_key(&[5; 32]));
+    let on_shared = EgressFactory::with_resolver(
+        Arc::new(crate::consent::SourceCredentials::with_keys(
+            shared.clone(),
+            keys,
+        )),
+        Scripted::new(&[]),
+    )
+    .with_timeout(DEADLINE)
+    .build("p", &Egress::Direct, lan())
+    .await;
+    assert!(matches!(
+        on_shared.fetch(&req).await,
+        Err(HttpError::NoEgress)
+    ));
+    let held = held_since.elapsed();
+    assert!(held > STATE_WAIT, "the lock was held for only {held:?}");
+    // Still held, and still answered.
+    assert_eq!(egress.fetch(&req).await.unwrap().status, 200);
+    drop(release);
+    holder.join().unwrap();
+    assert_eq!(server.conns(), 4);
+    assert_eq!(egress.status().counters.policy_refusals, 0);
+}
+
+/// A state any writer commits on the shared store is read by the very
+/// next request: off is refused at the transport and nothing connects;
+/// on again sends. A missing row refuses too (X-egress-state-watch).
+#[tokio::test]
+async fn the_states_reader_sees_each_commit_at_once() {
+    use lodestar_store::SourceState;
+    let server = serve(|_| ok("hello")).await;
+    let db = TempDb::new("commit");
+    let (shared, id, creds) = store_states(&db);
+    // Credentials are still read from the shared store.
+    assert!(matches!(creds.socks5_now("p"), Ok(None)));
+    let creds = Arc::new(creds);
+    let egress = EgressFactory::with_resolver(creds.clone(), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let req = Request::get(server.url("/"));
+    assert_eq!(egress.fetch(&req).await.unwrap().status, 200);
+
+    for state in [
+        SourceState::Disabled,
+        SourceState::Paused,
+        SourceState::Purged,
+    ] {
+        shared.lock().unwrap().set_source_state(id, state).unwrap();
+        assert!(
+            matches!(egress.fetch(&req).await, Err(HttpError::NoEgress)),
+            "{state:?}"
+        );
+        shared.lock().unwrap().enable_source(id, None).unwrap();
+        assert_eq!(egress.fetch(&req).await.unwrap().status, 200, "{state:?}");
+    }
+    assert_eq!(server.conns(), 4, "a switched-off source connected");
+
+    // No row for the plugin: refused.
+    let nobody = EgressFactory::with_resolver(creds, Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("nobody", &Egress::Direct, lan())
+        .await;
+    assert!(matches!(nobody.fetch(&req).await, Err(HttpError::NoEgress)));
+    assert_eq!(server.conns(), 4);
+    assert_eq!(egress.status().counters.policy_refusals, 3);
+    assert_eq!(nobody.status().counters.policy_refusals, 1);
+}
+
+/// A states connection that can't be read refuses every request
+/// (X-egress-state-watch keeps #525's fail-closed rule): a row the
+/// reader can't decode, then a reader whose lock is poisoned.
+#[tokio::test]
+async fn an_unreadable_states_reader_sends_nothing() {
+    use lodestar_store::{Store, StoreConfig};
+    let server = serve(|_| ok("hello")).await;
+    let db = TempDb::new("broken");
+    let (shared, id, creds) = store_states(&db);
+    let egress = EgressFactory::with_resolver(Arc::new(creds), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let req = Request::get(server.url("/"));
+
+    // A state no build knows: the reader's read fails, not just a lock.
+    shared
+        .lock()
+        .unwrap()
+        .connection()
+        .execute(
+            "UPDATE sources SET state = 99 WHERE id = ?1",
+            [i64::from(id.get())],
+        )
+        .unwrap();
+    assert!(matches!(egress.fetch(&req).await, Err(HttpError::NoEgress)));
+    assert_eq!(server.conns(), 0);
+    assert_eq!(egress.status().counters.policy_refusals, 1);
+
+    // A reader poisoned by a panic while it was held can't be read.
+    let reader = Arc::new(std::sync::Mutex::new(
+        Store::open_reader(db.path(), StoreConfig::default()).unwrap(),
+    ));
+    let poison = reader.clone();
+    let _ = std::thread::spawn(move || {
+        let _g = poison.lock().unwrap();
+        panic!("poisons the states reader");
+    })
+    .join();
+    assert!(reader.is_poisoned());
+    let keys = Arc::new(crate::consent::SecretStore::from_key(&[5; 32]));
+    let creds =
+        crate::consent::SourceCredentials::with_keys(shared, keys).reading_states_from(reader);
+    let poisoned = EgressFactory::with_resolver(Arc::new(creds), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    assert!(matches!(
+        poisoned.fetch(&req).await,
+        Err(HttpError::NoEgress)
+    ));
+    assert_eq!(server.conns(), 0);
+    assert_eq!(poisoned.status().counters.policy_refusals, 1);
+}

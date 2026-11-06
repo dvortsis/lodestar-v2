@@ -320,14 +320,23 @@ impl Services {
         // setting, with its SOCKS5 credentials from the per-source store
         // (SRC-4, SRC-5). A fixture is served offline: plugins get no
         // egress, so nothing leaves the machine.
-        pipeline_config.egress = (!crate::fixture::active()).then(|| {
-            lodestar_sources::EgressFactory::new(Arc::new(
+        // Whether a source is on is read before each request on a
+        // read-only connection of its own, so a long hold of the shared
+        // store's lock can't stall plugins' requests (X-egress-state-watch).
+        pipeline_config.egress = if crate::fixture::active() {
+            None
+        } else {
+            let (db, store_config) = (config.db_path(), config.store_config());
+            let states =
+                tokio::task::spawn_blocking(move || Store::open_reader(db, store_config)).await??;
+            Some(lodestar_sources::EgressFactory::new(Arc::new(
                 lodestar_sources::consent::SourceCredentials::new(
                     control.clone(),
                     config.data_dir.clone(),
-                ),
-            ))
-        });
+                )
+                .reading_states_from(Arc::new(Mutex::new(states))),
+            )))
+        };
         // The setup hold (LEGAL-2): until someone sets the instance up,
         // no source starts (the DHT doesn't even bind), no tracker is
         // scraped and nothing is fetched. An instance with a password

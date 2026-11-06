@@ -448,7 +448,9 @@ pub struct Source {
     /// off until a purge run again finishes it.
     pub purge_pending: bool,
     /// Its stored state or saved settings differ from what's running: it
-    /// starts, stops or picks up its new settings at the next restart.
+    /// starts or picks up its new settings at the next restart. Turning
+    /// it off stops it at once: for that, this stays true only until it
+    /// has stopped.
     pub restart_required: bool,
     #[schema(inline)]
     pub risk: RiskLevel,
@@ -508,8 +510,8 @@ pub struct SourceList {
 }
 
 /// `PATCH /sources/{id}`. Fields left out keep their values. A new
-/// priority applies at once; enabling or disabling takes effect at the
-/// next start (`restart_required`).
+/// priority applies at once, and disabling stops the source at once;
+/// enabling takes effect at the next start (`restart_required`).
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(example = json!({ "enabled": true, "priority": "high" }))]

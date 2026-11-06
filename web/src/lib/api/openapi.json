@@ -20220,7 +20220,7 @@
           },
           "restart_required": {
             "type": "boolean",
-            "description": "Its stored state or saved settings differ from what's running: it\nstarts, stops or picks up its new settings at the next restart."
+            "description": "Its stored state or saved settings differ from what's running: it\nstarts or picks up its new settings at the next restart. Turning\nit off stops it at once: for that, this stays true only until it\nhas stopped."
           },
           "risk": {
             "type": "string",
@@ -20420,7 +20420,7 @@
       },
       "SourcePatch": {
         "type": "object",
-        "description": "`PATCH /sources/{id}`. Fields left out keep their values. A new\npriority applies at once; enabling or disabling takes effect at the\nnext start (`restart_required`).",
+        "description": "`PATCH /sources/{id}`. Fields left out keep their values. A new\npriority applies at once, and disabling stops the source at once;\nenabling takes effect at the next start (`restart_required`).",
         "properties": {
           "agents": {
             "type": "integer",
