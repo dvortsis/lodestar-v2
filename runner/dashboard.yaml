@@ -337,6 +337,7 @@ placement:
   - X-fuzz-cache-1105
   - X-claim-trackers
   - X-claim-store
+  - X-claim-store-polish
   - X-adult-catalogue
   - D-sources-guide
   - L4-followups
