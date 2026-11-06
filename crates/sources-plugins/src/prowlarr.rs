@@ -145,7 +145,7 @@ pub enum Manager {
 pub struct Config {
     /// `scheme://host[:port][/path]`, no trailing slash.
     base: String,
-    /// The limiter's and the egress host list's key for `base`.
+    /// The limiter's key for `base` (the egress list takes `base` itself).
     host: String,
     manager: Manager,
     agents: u8,

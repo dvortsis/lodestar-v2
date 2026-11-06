@@ -248,6 +248,13 @@ impl Endpoints {
         self
     }
 
+    /// Whether a request to `url` passes these endpoints' DNS-free checks:
+    /// the guard's URL rules and the origin list. What [`PluginEgress`]
+    /// checks first; a resolved address can still be refused after.
+    pub fn permits(&self, url: &str) -> bool {
+        self.check(url).is_ok()
+    }
+
     pub fn policy(&self) -> NetPolicy {
         self.policy
     }

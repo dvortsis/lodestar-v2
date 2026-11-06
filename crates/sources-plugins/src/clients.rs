@@ -50,7 +50,7 @@ use lodestar_integrations::clients::{
 use lodestar_integrations::net::NetPolicy;
 use lodestar_metainfo::{InfoHash, TorrentFile};
 use lodestar_sources::claims::{self, ClaimedFile, Claims, Confidence, Provenance};
-use lodestar_sources::http::Method;
+use lodestar_sources::http::{Method, host_key};
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Client, Consent, Distribution, Emitter, Endpoints, Found, HostRate,
     HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx,
@@ -157,12 +157,13 @@ impl Clients {
         }
     }
 
-    /// Where the plugin's egress may send requests (SRC-5): the client's
-    /// host only, under the download-client policy (LAN and loopback
+    /// Where the plugin's egress may send requests (SRC-5): the client
+    /// address's origin only (scheme, host and port), under the download-client policy (LAN and loopback
     /// allowed; link-local and metadata addresses never). `None` until a
     /// client is set up, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         let url = url_of(self.config.as_ref()?);
+        host_key(url)?;
         Some(Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[url]))
     }
 

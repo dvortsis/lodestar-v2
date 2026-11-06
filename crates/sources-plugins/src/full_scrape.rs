@@ -151,7 +151,7 @@ pub struct Tracker {
     announce: String,
     /// The scrape URL, with no query.
     scrape: String,
-    /// The limiter's, the state's and the egress host list's key.
+    /// The limiter's and the state's key.
     host: String,
 }
 
@@ -440,7 +440,8 @@ impl FullScrape {
     }
 
     /// Where the plugin's egress may send requests (SRC-5): the
-    /// configured trackers' hosts only, on public addresses. `None` until
+    /// configured trackers' scrape origins only (scheme, host and port),
+    /// on public addresses. `None` until
     /// it's set up, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         let c = self.config.as_ref()?;

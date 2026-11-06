@@ -367,9 +367,9 @@ fn push_id(ids: &mut Vec<(&'static str, String)>, scheme: &'static str, v: &str)
 }
 
 /// Hidden characters ([`hidden_char`]: controls, format characters, tag
-/// characters) removed, whitespace runs made one
-/// space, trimmed, and cut to [`MAX_TITLE`] bytes on a character
-/// boundary. `None` if nothing is left.
+/// characters) removed, whitespace runs made one space, trimmed, and cut
+/// to [`MAX_TITLE`] bytes on a character boundary. `None` if nothing is
+/// left.
 fn clean_title(raw: &str) -> Option<String> {
     let mut out = String::with_capacity(raw.len().min(MAX_TITLE));
     let mut space = false;

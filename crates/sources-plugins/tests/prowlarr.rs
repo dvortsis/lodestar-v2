@@ -341,6 +341,12 @@ fn endpoints_are_the_configured_host_only() {
         )
         .only_origins(&["http://prowlarr.example:9696"])
     );
+    // The plugin's own requests pass; another port or scheme doesn't.
+    assert!(e.permits("http://prowlarr.example:9696/sub/api/v1/indexer"));
+    assert!(e.permits("http://prowlarr.example:9696/sub/api/v1/search?query=x"));
+    assert!(!e.permits("http://prowlarr.example:9697/sub/api/v1/indexer"));
+    assert!(!e.permits("http://prowlarr.example/sub/api/v1/indexer"));
+    assert!(!e.permits("https://prowlarr.example:9696/sub/api/v1/indexer"));
 }
 
 #[test]

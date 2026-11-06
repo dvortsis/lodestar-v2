@@ -1151,6 +1151,8 @@ fn a_host_list_is_keyed_on_scheme_host_and_port() {
         .only_origins(&["http://127.0.0.1:9696/sub"]);
     assert!(listed(&e, "http://127.0.0.1:9696/api/v1/search"));
     assert!(listed(&e, "http://[::ffff:127.0.0.1]:9696/"));
+    assert!(e.permits("http://127.0.0.1:9696/"));
+    assert!(!e.permits("http://127.0.0.1:9697/"));
     for url in [
         "http://127.0.0.1/",
         "http://127.0.0.1:80/",
@@ -1160,6 +1162,12 @@ fn a_host_list_is_keyed_on_scheme_host_and_port() {
     ] {
         assert!(!listed(&e, url), "{url}");
     }
+    let e =
+        Endpoints::user_entered(NetPolicy::download_client()).only_origins(&["http://[::1]:9696/"]);
+    assert!(listed(&e, "http://[::1]:9696/x"));
+    assert!(listed(&e, "http://[0:0::1]:9696/x"));
+    assert!(!listed(&e, "http://[::1]:9697/"));
+    assert!(!listed(&e, "http://127.0.0.1:9696/"));
     // No port given: the scheme's default, written or not.
     let e = Endpoints::user_entered(NetPolicy::download_client())
         .only_origins(&["http://nas.lan", "https://Client.LAN./x"]);
