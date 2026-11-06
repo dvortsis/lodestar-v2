@@ -1380,7 +1380,7 @@ async fn turning_a_running_source_off_stops_it_at_once() {
 /// the start before it runs. X-consent-gate-lift brings back the running
 /// leg when it opens Account.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn losing_a_credential_stops_the_running_plugin() {
+async fn an_account_source_never_runs_and_losing_its_credential_keeps_it_off() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     {

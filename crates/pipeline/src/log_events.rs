@@ -77,8 +77,8 @@ lodestar_log::catalogue! {
         fields: { what: Label, error: Error },
     }
     /// A source was enabled or disabled. When a start switches one off,
-    /// `reason` says why: `consent_text_unapproved` (its class's consent
-    /// text isn't approved in this build) or `consent_lapsed` (its class
+    /// `reason` says why: `consent_text_unapproved` (this build can't show
+    /// its class's consent dialog yet) or `consent_lapsed` (its class
     /// condition no longer holds, §18.7). A change made through the API
     /// carries none.
     SOURCE_STATE_CHANGED {

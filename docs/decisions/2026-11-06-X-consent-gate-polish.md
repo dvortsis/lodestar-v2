@@ -24,7 +24,7 @@ This PR tightens the gate. It loosens nothing.
   - the torrent cache (External, already closed);
   - the Sonarr/Radarr webhooks (`crates/sources-plugins/src/arr.rs`, None).
 
-  The Account plugins in `crates/sources-plugins` (Prowlarr, StashDB, TPDB) are built and tested there, but none is registered.
+  The Account plugins in `crates/sources-plugins` are built and tested there, but none is registered: Prowlarr (`prowlarr.rs`), StashDB (`stashdb.rs`), TPDB (`tpdb.rs`) and the download-client sources (`clients.rs`).
 
 ## The start switch-off says why
 - **When a start turns a source off, `pipeline.source_state_changed` carries `reason`:**
@@ -37,7 +37,7 @@ This PR tightens the gate. It loosens nothing.
 
 ## The v0.5.2 release notes
 - **They now say the torrent cache can't be turned on yet** (Known Issues), and that a source needing consent, one a pre-release build turned on included, stays off until a later version asks (Changed). Before, the notes said it stays off "until their checks pass", and that a pre-release build's source "asks again". This build refuses it, so nothing can ask again.
-- **The word cap:** the `material-composer` gate (`lint_material.py --style`) reports `WORD_LIMIT` 500 words of 450. `main` was already at 508 before this PR, and these two bullets cut 8. The rest is over the cap outside these bullets, so this PR leaves it for the release-notes owner (P-v052-cut).
+- **The word cap:** the `material-composer` gate (`lint_material.py --style`) reports `WORD_LIMIT` 502 words of 450. `main` was already at 508 before this PR, and these two bullets cut 6. The rest is over the cap outside these bullets, so this PR leaves it for the release-notes owner (P-v052-cut).
 
 ## Files outside the slice's owns
 - **`crates/pipeline/src/lib.rs`:** only the start's condition loop is deleted, because it moved into `control::switch_off_unapproved`. The one-line call stays. Runner, 2026-11-06T22:05Z.
@@ -46,7 +46,8 @@ This PR tightens the gate. It loosens nothing.
 ## OpenAPI wording
 - **`Source.consent_required` and `SourcePatch.consent`** now say two things:
   - This build refuses to enable any source whose class isn't `none` (`400 invalid_setting` on `enabled`), whatever the request sends.
-  - Once a later version ships the class's approved text, the field is used as it was described before.
+  - Once a later version shows the class's consent text, the field is used as it was described before.
+- **The wording says this version can't show the text, never that it isn't approved.** Owner §2.49 approved all four texts. The gate holds only because the dialogs that show them haven't shipped (runner's review, 2026-11-06T23:20Z). The internal reason name `consent_text_unapproved` stays, because it names the gate function `consent_text_approved`.
 
   `openapi.json` and `schema.d.ts` were regenerated with the repo's tooling. #537 left this as a follow-up.
 
@@ -55,7 +56,7 @@ This PR tightens the gate. It loosens nothing.
 - **`crates/pipeline/tests/control.rs`:**
   - `a_restart_switches_off_a_source_whose_condition_no_longer_holds`: `acct_ready` (credentials stored, enabled) is now switched off and never runs. A None source, on by default, is what the test waits for. Its credentials are kept.
   - `an_account_source_needs_credentials_and_losing_them_disables_it`: enabling is refused before and after the credentials are stored, and `need` goes from `Credentials` to none. The credential checks are unchanged (a bad name, the stored name, the value never shown, removal and the limit of 16). The credential-removal leg seeds an enabled state, as an earlier build could leave it.
-  - `losing_a_credential_stops_the_running_plugin`: enabling is refused. A seeded enabled state is switched off at the start, so the plugin never runs. Removing the credential leaves it off.
+  - `losing_a_credential_stops_the_running_plugin`, renamed `an_account_source_never_runs_and_losing_its_credential_keeps_it_off`: enabling is refused. A seeded enabled state is switched off at the start, so the plugin never runs. Removing the credential leaves it off.
 - **`crates/lodestar/src/ops/tests.rs`, `no_class_can_be_enabled_past_its_condition`:** Account gets the gate's `400` with and without credentials. `needs` goes from `credentials` to null. The credential write, the bad-name refusal, the export and plaintext checks, and the removal that switches an enabled (seeded) source off are unchanged.
 - **The `control.rs` unit test** asserts that only None is approved, and that every refused class has a dialog to show.
 - **No test was deleted.**
@@ -64,7 +65,7 @@ This PR tightens the gate. It loosens nothing.
 - **External, Restricted and Overlay** (with SRC-15b's dialogs): the acceptance assertions #537 replaced, as its decisions file lists them.
 - **Account** (its second PR, with SRC-15c's dialog):
   1. `crates/pipeline/tests/control.rs`, `an_account_source_needs_credentials_and_losing_them_disables_it`: enabling without credentials is `SourceError::CredentialsRequired` again. With them, `update_source` succeeds with `SourceState::Enabled`. Drop the seeded `enable_source` before the removal.
-  2. `crates/pipeline/tests/control.rs`, `losing_a_credential_stops_the_running_plugin`: enabling through `update_source` succeeds. After the restart, wait until the ticker has sent at least 3 times. Removing the credential stops the running plugin at once (`running` false). Drop the seeded state and the "never ran" asserts.
+  2. `crates/pipeline/tests/control.rs`, `an_account_source_never_runs_and_losing_its_credential_keeps_it_off`: rename it back to `losing_a_credential_stops_the_running_plugin`. Enabling through `update_source` succeeds. After the restart, wait until the ticker has sent at least 3 times. Removing the credential stops the running plugin at once (`running` false). Drop the seeded state and the "never ran" asserts.
   3. `crates/pipeline/tests/control.rs`, `a_restart_switches_off_a_source_whose_condition_no_longer_holds`: `acct_ready` stays on and runs. The other six are off.
   4. `crates/lodestar/src/ops/tests.rs`, `no_class_can_be_enabled_past_its_condition`: `409 credentials_required` before the credentials are stored, `200` after. Drop the seeded enable.
   5. `crates/pipeline/src/control.rs`, `only_a_class_with_no_consent_dialog_can_be_turned_on`: Account goes back to `true`.

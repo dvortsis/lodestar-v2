@@ -8171,8 +8171,8 @@ export interface components {
              *
              *     This build refuses to enable any source whose class isn't `none`
              *     (`400 invalid_setting` on `enabled`), this one included, whatever
-             *     the request sends: it ships no approved consent text yet. Once a
-             *     later version ships the class's approved text, enabling a source
+             *     the request sends: it can't show its consent text yet. Once a
+             *     later version shows the class's consent text, enabling a source
              *     with this set sends `"consent"` naming the class and
              *     `"consent_version"`, unless that version is already acknowledged.
              */
@@ -8505,8 +8505,8 @@ export interface components {
              *
              *     This build refuses to enable any source whose class isn't `none`
              *     (`400 invalid_setting` on `enabled`), with or without this field: it
-             *     ships no approved consent text yet, so nothing is acknowledged or
-             *     stored. Once a later version ships the class's approved text, this
+             *     can't show its consent text yet, so nothing is acknowledged or
+             *     stored. Once a later version shows the class's consent text, this
              *     is needed to enable a source whose `needs` is `endpoints_ack` or
              *     `consent`, and must be its class.
              */
