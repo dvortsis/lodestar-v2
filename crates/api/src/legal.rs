@@ -20,7 +20,7 @@ use crate::error::{ApiResult, internal};
 use crate::extract::{Json, same_origin_json};
 
 /// The Legal Notice's version. See the module docs before changing it.
-pub const NOTICE_VERSION: u32 = 2;
+pub const NOTICE_VERSION: u32 = 3;
 
 /// The Legal Notice, as Markdown.
 pub const NOTICE: &str = include_str!("legal/notice.md");
