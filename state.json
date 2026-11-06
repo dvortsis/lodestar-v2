@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T03:38:46Z",
+  "updated_at": "2026-11-06T03:49:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5119,7 +5119,7 @@
     },
     {
       "at": "2026-11-06T03:03:38Z",
-      "note": "X-commit-rejudge-reuse (Opus, core): at commit, reuse prepare's verdict except the pack layer, so a flood/clone or SP-4-payload commit's double judgment (86.2-86.4 us per RP-G #526) comes under the owner's 50 us per torrent. Owns crates/pipeline/src/writer.rs + crates/filter/src/engine.rs judgment path. Owner flag (\u00a72.19) at RP-G merge."
+      "note": "X-commit-rejudge-reuse (Opus, core): at commit, reuse prepare's verdict except the pack layer, so a flood/clone or SP-4-payload commit's double judgment (86.2-86.4 us per RP-G #526) comes under the owner's 50 us per torrent. Owns crates/pipeline/src/writer.rs + crates/filter/src/engine.rs judgment path. Owner flag (\u00a72.19) at RP-G merge. ALSO the always-adult source path: judge_at_commit(adult:true) re-reads Adult on every torrent, ~88-89 us scaled (RP-G #526 round 2); bring it under 50 us per torrent too."
     },
     {
       "at": "2026-11-06T03:03:38Z",
