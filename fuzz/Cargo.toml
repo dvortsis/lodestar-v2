@@ -17,6 +17,7 @@ lodestar-dht = { path = "../crates/dht" }
 lodestar-filter = { path = "../crates/filter" }
 lodestar-integrations = { path = "../crates/integrations" }
 lodestar-metainfo = { path = "../crates/metainfo" }
+lodestar-pipeline = { path = "../crates/pipeline" }
 lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
 lodestar-sources = { path = "../crates/sources" }
@@ -115,6 +116,13 @@ bench = false
 [[bin]]
 name = "cluster_frame"
 path = "fuzz_targets/cluster_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cluster_results"
+path = "fuzz_targets/cluster_results.rs"
 test = false
 doc = false
 bench = false
