@@ -9,7 +9,7 @@
 1. Make the source-on check independent of the shared lock, without letting it go stale. **Preferred design (a):** read the source's state on a dedicated read-only store connection, such as the one the torrent cache's re-check already uses, or a new one opened beside it. A committed write by *any* writer is then seen at once, whether that's the toggle, a credential lapse, a purge or the startup disables in `crates/pipeline/src/lib.rs`, and there's no second copy to keep in step.
    - **Alternative (b), only if (a) can't work:** an in-memory `watch` of source states, published by every writer of `SourceState`. On disable, publish before the store write; on enable, publish after the commit. A test must cover each writer. If you choose (b), say in the decisions file why (a) wasn't possible.
 2. **Keep fail-closed exactly as #525 has it:** no answer within `STATE_WAIT`, a read error, or a missing row all mean refuse.
-3. **Fold in an API doc fix:** the `restart_required` doc in `crates/api/src/dto/ops.rs` still says a source "starts, stops or picks up its new settings at the next restart". Since #525, a stop is immediate. Fix the doc, then regenerate `openapi.json` and `web/src/lib/api/schema.d.ts` with the repo's own tooling, never by hand.
+3. **Fold in an API doc fix:** the `restart_required` doc in `crates/api/src/dto/ops.rs` still says a source "starts, stops or picks up its new settings at the next restart". Since #525, a stop is immediate. Fix the doc, then regenerate `web/src/lib/api/openapi.json` and `web/src/lib/api/schema.d.ts` with the repo's own tooling, never by hand.
 4. **Tests**, with no fixed sleeps and every wait a condition with a deadline of 10 s or more:
    - with the shared store mutex held by the test for longer than `STATE_WAIT`, an enabled source's request still goes out;
    - a source turned off is refused on the next request, at the transport;
@@ -22,7 +22,7 @@
 - `crates/sources/src/egress.rs`: only `source_on`, `STATE_WAIT` and `EgressCredentials` if the trait has to change;
 - `crates/lodestar/src/services.rs`: the wiring lines only;
 - a reader-connection helper in `crates/store`, if you need one. Keep it small, and add no schema change;
-- `crates/api/src/dto/ops.rs` (the doc line), `openapi.json` and `web/src/lib/api/schema.d.ts` (regenerated);
+- `crates/api/src/dto/ops.rs` (the doc line), `web/src/lib/api/openapi.json` and `web/src/lib/api/schema.d.ts` (regenerated);
 - their tests, the decisions file, and your own `runner/slices.yaml` entry. Use the one-line flow style with `deps: []`, under the X-tcache-recheck follow-ups. Add a `runner/dashboard.yaml` placement only if no rule covers it.
 
 Don't touch `crates/pipeline/src/control.rs`: X-consent-gate-052 owns it next. If design (b) needs it, stop and message the runner.
