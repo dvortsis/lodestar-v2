@@ -21,8 +21,9 @@ These are the runner's calls, auto-approved as best practice (`docs/owner-decisi
 - **SRC-15b is a Sonnet slice, so it doesn't change the server gate.** CLAUDE.md keeps security-sensitive code off Sonnet, and the gate is X-consent-gate-052's `consent_text_approved` in `crates/pipeline/src/control.rs`.
 - **v0.5.2 keeps every consent source off.** The v0.5.2 manifest (`docs/plan/2026-11-06-v052-feature-manifest.md` §3.4, the torrent cache row and Q4) says no source that needs consent can be turned on in v0.5.2. The lift is therefore its own slice, **X-consent-gate-lift** (Opus), which depends on SRC-15b, X-consent-gate-polish and P-v052-cut, so it lands in v0.6.
   - It lets External, Restricted and Overlay through once SRC-15b's dialogs ship their §2.49 texts.
-  - It opens Account in a second PR, once SRC-15c's dialog ships.
-  - It settles `text_version(Account)` from SRC-15b's decisions note.
+  - It opens Account, and settles `text_version(Account)`, in a second PR once SRC-15c's dialog ships.
+  - It comes after X-sources-api-spec, which also edits `crates/sources/src/consent.rs`.
+- **P-v052-cut now depends on X-consent-gate-polish,** so v0.5.2 is cut with Account closed too.
 - **Account is closed until its dialog ships.** Today `consent_text_approved(Account)` is true. §2.49 lets a class through only once its dialog shows the approved text. **X-consent-gate-polish** (before the cut) closes Account too. No Account plugin is registered in `crates/lodestar/src/services.rs` today, so nothing changes for users.
 - **The result:** no source class opens before its approved dialog has merged and the lift has been reviewed, and none opens in v0.5.2.
 
