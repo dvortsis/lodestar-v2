@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T05:19:02Z",
+ "updated_at": "2026-11-06T05:33:28Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -5141,8 +5141,8 @@
    "note": "Possible flake: crates/search live::tests::the_mmap_caches_keep_only_live_files_across_commits_and_merges failed once in a full `-p lodestar-search --lib` run in X-search-files-6's container (passed 3x alone, 2 more full runs; message not captured). Watch CI for recurrence; if it recurs, one Opus flake slice (deadline-based wait, no sleeps). Not #527's."
   },
   {
-   "at": "2026-11-06T04:40:16Z",
-   "note": "Owner \u00a72.46 (#528): send owner the not-covered list by name via dashboard (done 04:4xZ); record answers as they arrive (ext:owner-v07-q1..q4, cq3, cq4, cq5, cq6, cq8, wkq1, wkq2, m6q13, m8-q1, m8-q6, v08-q1, v08-q4). Runner drafts v08 Q3 text in PL-5's decisions file."
+   "at": "2026-11-06T05:33:28Z",
+   "note": "After PK-win-upd-2/3 (Q13 helper, approved \u00a72.47): a small slice to move Windows Restart now onto the privileged helper and lift M6 Q10's once-per-24h limit (plan m6-gap-audit Q10). Add to slices.yaml in a runner PR when PK-win-upd lands."
   }
  ],
  "main_health": [
