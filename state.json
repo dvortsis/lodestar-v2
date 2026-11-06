@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T01:05:11Z",
+  "updated_at": "2026-11-06T01:26:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3302,10 +3302,13 @@
       "launched": "2026-11-05T22:18Z"
     },
     "X-claim-store-polish": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhn9BtnKc4evPFE9banG",
       "brief": "briefs/X-claim-store-polish.md",
-      "launched": "2026-11-05T23:26Z"
+      "launched": "2026-11-05T23:26Z",
+      "pr": 513,
+      "merge": "af921bc7",
+      "at": "2026-11-06T01:26:40Z"
     },
     "P-v06-workers": {
       "status": "merged",
@@ -5773,7 +5776,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T00:39:20Z",
+    "updated": "2026-11-06T01:26:40Z",
     "items": [
       {
         "slot": 3,
@@ -5792,15 +5795,6 @@
         "doing": "Rule packs: the gate (corpora, precision, budget with every pack incl. SP-4 at cap, upgrade, guardrails, e2e)",
         "since": "2026-11-06T00:02Z",
         "session": "session_01MMjhn9KD5JH1gK2rcmNCVM"
-      },
-      {
-        "slot": 9,
-        "slice": "X-claim-store-polish",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Security: property test for the tracker guard path, plus #512 doc fixes",
-        "since": "2026-11-05T23:26Z",
-        "session": "session_01MMjhn9BtnKc4evPFE9banG"
       },
       {
         "slot": 15,
