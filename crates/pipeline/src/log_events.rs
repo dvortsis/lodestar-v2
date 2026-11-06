@@ -111,7 +111,8 @@ lodestar_log::catalogue! {
     /// A stored filter rule was skipped: `what` (`rule`, `override`,
     /// `exception`, `always_allow`, `class_rule`, `pack_override`, or
     /// `sp4_row` for a row of SP-4's signature set) and its id, never its
-    /// terms.
+    /// terms. `reason` is `rows_full` for an SP-4 row dropped because
+    /// memory held as many rows as it can, at start or after a flush.
     FILTER_RULE_SKIPPED {
         id: "pipeline.filter_rule_skipped",
         component: Filters,
@@ -339,6 +340,8 @@ pub fn filter_note(note: &str) -> (&'static str, u64, &'static str) {
         "no_longer_parses"
     } else if rest.ends_with("unreadable") {
         "unreadable"
+    } else if rest.ends_with(lodestar_filter::spam_sigs::ROWS_FULL) {
+        "rows_full"
     } else {
         "other"
     };
@@ -387,6 +390,10 @@ mod tests {
             (
                 "SP-4 signature row 12 skipped: unreadable",
                 ("sp4_row", 12, "unreadable"),
+            ),
+            (
+                "SP-4 signature row 3 dropped: more rows than memory holds",
+                ("sp4_row", 3, "rows_full"),
             ),
             ("rule about sometermhere", ("other", 0, "other")),
         ] {

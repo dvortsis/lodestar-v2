@@ -1132,3 +1132,177 @@ fn budget_with_the_set_at_its_cap() {
     assert!(full < 50.0, "the 50 µs budget");
     assert!(lookup < 1.0, "the lookup");
 }
+
+// ---------------------------------------------------------------------
+// Memory (X-sp4-followups): the set at its cap.
+
+/// The process's resident memory in bytes (Linux), or `None` elsewhere.
+fn resident() -> Option<f64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let kb: f64 = status
+        .lines()
+        .find_map(|l| l.strip_prefix("VmRSS:"))?
+        .trim()
+        .strip_suffix("kB")?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(kb * 1024.0)
+}
+
+/// The rows a set at its cap stores, built directly: full rows of adds,
+/// as this build writes them.
+fn rows_at_the_cap() -> Vec<RawSetting> {
+    (0..CAP as u64)
+        .collect::<Vec<_>>()
+        .chunks(ROW_ENTRIES)
+        .enumerate()
+        .map(|(n, c)| {
+            let mut b = vec![spam_sigs::FORMAT];
+            for i in c {
+                b.extend_from_slice(&((sig(*i) & !7) | spam_sigs::HIDE).to_le_bytes());
+            }
+            (format!("{PREFIX}{n}"), Err(b))
+        })
+        .collect()
+}
+
+/// The set's memory at its cap, loaded from its rows, as resident memory
+/// grows; and the time of a lookup
+/// that hits and one that misses, over keys spread across the whole set,
+/// so the caches don't hide the index's reads. The brief's gate: at most
+/// 25 MB at the cap. Linux only. Run alone, in its own process and in
+/// release: `cargo test --release -p lodestar-filter --test sp4 --
+/// --ignored --nocapture --exact memory_at_the_cap_loaded`.
+#[test]
+#[ignore = "a measurement: run alone, in release"]
+fn memory_at_the_cap_loaded() {
+    use std::time::Instant;
+    if resident().is_none() {
+        return;
+    }
+    let stored = rows_at_the_cap();
+    let before = resident().unwrap();
+    let loaded = SpamSigs::default();
+    assert_eq!(loaded.load(&stored).len, CAP);
+    let mb = (resident().unwrap() - before) / 1e6;
+    let held = loaded.held_bytes() as f64 / 1e6;
+    let probes: Vec<u64> = (0..1_000_000u64)
+        .map(|i| sig(sig(i) % CAP as u64))
+        .collect();
+    let misses: Vec<u64> = (0..1_000_000u64).map(|i| sig(1 << 40 | i)).collect();
+    let time = |keys: &[u64]| {
+        let t = Instant::now();
+        let mut found = 0usize;
+        for k in keys {
+            found += usize::from(std::hint::black_box(loaded.get(*k)).is_some());
+        }
+        (t.elapsed().as_secs_f64() * 1e9 / keys.len() as f64, found)
+    };
+    time(&probes);
+    let (hit, found) = time(&probes);
+    let (miss, none) = time(&misses);
+    assert_eq!((found, none), (probes.len(), 0));
+    println!(
+        "loaded at the cap ({CAP}): {mb:.1} MB resident, {held:.1} MB held; a lookup: {hit:.0} ns a hit, {miss:.0} ns a miss"
+    );
+    assert!(mb <= 25.0, "the 25 MB gate");
+}
+
+/// The set's memory at its cap, filled by adds (and 10,000 past it, so
+/// the cap's evictions and compactions run), as resident memory grows.
+/// Run alone, in its own process and in release: `cargo test --release
+/// -p lodestar-filter --test sp4 -- --ignored --nocapture --exact
+/// memory_at_the_cap_added`.
+#[test]
+#[ignore = "a measurement: run alone, in release"]
+fn memory_at_the_cap_added() {
+    if resident().is_none() {
+        return;
+    }
+    let before = resident().unwrap();
+    let added = SpamSigs::default();
+    for i in 0..(CAP as u64 + 10_000) {
+        added.add(sig(i), HID);
+    }
+    assert_eq!(added.len(), CAP);
+    let mb = (resident().unwrap() - before) / 1e6;
+    let held = added.held_bytes() as f64 / 1e6;
+    println!("added at the cap ({CAP}): {mb:.1} MB resident, {held:.1} MB held");
+    assert!(mb <= 25.0, "the 25 MB gate");
+}
+
+/// The set's memory at its cap after re-adds spread over it: a third of
+/// its signatures hidden again in random order, each leaving a stale add
+/// in its old row (counted per signature) until that row is a quarter
+/// dead and compacted. The clean sets above hold none. The gate is on
+/// the bytes the set holds ([`SpamSigs::held_bytes`]): under glibc,
+/// resident memory also keeps the holes compaction's reallocations leave,
+/// about 4.4 MB more here. Run alone, in its
+/// own process and in release: `cargo test --release -p lodestar-filter
+/// --test sp4 -- --ignored --nocapture --exact memory_at_the_cap_readded`.
+#[test]
+#[ignore = "a measurement: run alone, in release"]
+fn memory_at_the_cap_readded() {
+    if resident().is_none() {
+        return;
+    }
+    let before = resident().unwrap();
+    let s = SpamSigs::default();
+    for i in 0..CAP as u64 {
+        s.add(sig(i), HID);
+    }
+    for i in 0..(CAP as u64 / 3) {
+        s.add(sig(sig(i) % CAP as u64), HID);
+    }
+    assert_eq!(s.len(), CAP);
+    let mb = (resident().unwrap() - before) / 1e6;
+    let held = s.held_bytes() as f64 / 1e6;
+    let (rows, entries) = s.shape();
+    println!(
+        "re-added at the cap ({CAP}): {held:.1} MB held, {mb:.1} MB resident; \
+         {rows} rows of {entries} entries"
+    );
+    assert!(held <= 25.0, "the 25 MB gate");
+}
+
+/// The set's memory at its cap after releases spread over it: a third of
+/// its signatures released at random, each appending a removal kept
+/// while the add it cancels is stored, then as many new hides, so the set
+/// is back at its cap. The gate is on the bytes the set holds, which
+/// count about 32 bytes per stored removal for the removals index. Run
+/// alone, in its own process and in release: `cargo test --release -p
+/// lodestar-filter --test sp4 -- --ignored --nocapture --exact
+/// memory_at_the_cap_released`.
+#[test]
+#[ignore = "a measurement: run alone, in release"]
+fn memory_at_the_cap_released() {
+    if resident().is_none() {
+        return;
+    }
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let before = resident().unwrap();
+    let s = SpamSigs::default();
+    for i in 0..CAP as u64 {
+        s.add(sig(i), HID);
+    }
+    let released: Vec<u64> = (0..(CAP as u64 / 3))
+        .map(|i| sig(sig(i) % CAP as u64))
+        .collect();
+    let mut gone = 0;
+    for chunk in released.chunks(1_000) {
+        gone += s.release(&mut store, chunk, None).unwrap();
+    }
+    for i in 0..gone as u64 {
+        s.add(sig(1 << 42 | i), HID);
+    }
+    assert_eq!(s.len(), CAP);
+    let mb = (resident().unwrap() - before) / 1e6;
+    let held = s.held_bytes() as f64 / 1e6;
+    let (rows, entries) = s.shape();
+    println!(
+        "released at the cap ({CAP}): {gone} released, then as many added; {held:.1} MB held, \
+         {mb:.1} MB resident (the store's pages too); {rows} rows of {entries} entries"
+    );
+    assert!(held <= 25.0, "the 25 MB gate");
+}
