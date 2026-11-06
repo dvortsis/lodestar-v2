@@ -194,7 +194,7 @@ pub struct Cache {
     /// The template after it.
     tail: String,
     upper: bool,
-    /// The limiter's, the poll unit's and the egress host list's key.
+    /// The limiter's and the poll unit's key.
     host: String,
     /// The template as entered, trimmed: what's saved, what the consent
     /// dialog shows and what an acknowledgement covers
@@ -774,14 +774,19 @@ impl TorrentCache {
     }
 
     /// Where the plugin's egress may send requests (SRC-5): the listed
-    /// caches' hosts, on public addresses only. `None` while the list is
+    /// caches' origins (scheme, host and port), on public addresses only. `None` while the list is
     /// empty, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         if self.config.caches.is_empty() {
             return None;
         }
-        let hosts: Vec<&str> = self.config.caches.iter().map(|c| c.host.as_str()).collect();
-        Some(Endpoints::user_entered(NetPolicy::notification(false)).only_hosts(&hosts))
+        let urls: Vec<&str> = self
+            .config
+            .caches
+            .iter()
+            .map(|c| c.same.0.as_str())
+            .collect();
+        Some(Endpoints::user_entered(NetPolicy::notification(false)).only_origins(&urls))
     }
 
     /// The request for `lookup` at `cache`. It takes a [`Lookup`], so it
@@ -997,7 +1002,7 @@ impl SourcePlugin for TorrentCache {
         &POLICY
     }
 
-    /// The listed caches' hosts, public addresses only; `None` while the
+    /// The listed caches' origins, public addresses only; `None` while the
     /// list is empty, so nothing is reachable.
     fn endpoints(&self) -> Option<Endpoints> {
         TorrentCache::endpoints(self)

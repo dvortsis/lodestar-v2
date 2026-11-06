@@ -162,27 +162,87 @@ workstreams:
   ws-workers:
     phase: ph-platform
     name: Remote workers
-    plain: Run crawling and fetching on other machines. A library exists; nothing wires it yet.
+    plain: Run crawling and fetching on other machines. Sliced into WK-0 to WK-G (P-v06-workers); building starts after the memory test's verdict.
   ws-companions:
     phase: ph-platform
     name: Companion manager
-    plain: Manage helper apps (VPN, clients) from inside Lodestar. No code yet.
+    plain: Manage helper apps (VPN, clients) from inside Lodestar. Sliced into CMP-0 to CMP-G (P-v06-companions); building starts after the memory test's verdict.
   ws-m6:
     phase: ph-platform
     name: Packaging
-    plain: Docker, Unraid, Windows installer and the user guide, audited for gaps.
+    plain: Docker, Unraid, Windows installer and updates, and the user guide. The gap audit sliced it into PK-* and the M6 exit gate.
   ws-m7-built:
     phase: ph-m7
     name: Already built
     plain: Download clients, notifiers, email and the uTP library.
   ws-m7-todo:
     phase: ph-m7
-    name: To plan
-    plain: The v0.7 epic and the one search-schema change it needs.
+    name: Plan and schema change
+    plain: The v0.7 epic, its plan, and the one search-schema change it needs.
+  ws-m7-w1:
+    phase: ph-m7
+    name: 'Wave 1: first slices'
+    plain: Claims format v3 (heads the enrichment path), the index size gate, the regex parser; after the v0.5.2 cut, Torznab, upload and payload signatures.
+  ws-m7-w2:
+    phase: ph-m7
+    name: 'Wave 2: harness and outputs'
+    plain: The enrichment harness (needs your answer to Q5), identical-payload siblings, bitmagnet export, folder watch, usenet storage and the IRC client.
+  ws-m7-w3:
+    phase: ph-m7
+    name: 'Wave 3: grouping and plug-in pattern'
+    plain: Grouping, the Wikidata plug-in that sets the pattern, Prowlarr usenet results, usenet clients, IRC announces and the Outputs screen.
+  ws-m7-w4:
+    phase: ph-m7
+    name: 'Wave 4: regex, collapse, plug-ins'
+    plain: Regex search, collapse by group, the detail API and the enrichment plug-ins, two at a time.
+  ws-m7-w5:
+    phase: ph-m7
+    name: 'Wave 5: search enrichment and screens'
+    plain: Alternative titles and IDs in search, the Related and Identified-as sections, and the collapse toggle.
+  ws-m7-w6:
+    phase: ph-m7
+    name: 'Wave 6: tails waiting on you'
+    plain: Searchable usenet and unverified items (one migration), the Stremio addon and IRC plug-ins, each after your answer.
+  ws-m7-gates:
+    phase: ph-m7
+    name: v0.7 gates
+    plain: The 10M scale run on your import host, then the v0.7 gate.
   ws-v10:
     phase: ph-v10
-    name: Later milestones
-    plain: v0.8 and the hardening to 1.0.
+    name: Plans and epics
+    plain: The v0.8 and 1.0 epics and the plans that sliced them.
+  ws-v08-workers:
+    phase: ph-v10
+    name: 'v0.8: plug-ins and companions on workers'
+    plain: Source plug-ins and companions running on remote workers, with placement, fleet-wide politeness, consent and credentials per worker.
+  ws-v08-feeds:
+    phase: ph-v10
+    name: 'v0.8: Nostr and Lemmy'
+    plain: Nostr and Lemmy as sources, and how third-party adult tags are treated. The parsers may land early, switched off.
+  ws-v08-gate:
+    phase: ph-v10
+    name: 'v0.8: guide and gate'
+    plain: The user-guide chapters and the v0.8 gate.
+  ws-m8-tooling:
+    phase: ph-v10
+    name: Benchmarks, relevance and CI
+    plain: The 10M benchmark, real-name relevance sets, the in-process network test and the weekly gate run.
+  ws-m8-chaos:
+    phase: ph-v10
+    name: Workers under failure
+    plain: Kills, partitions and restarts against a coordinator and its workers.
+  ws-m8-review:
+    phase: ph-v10
+    name: Security, audits, design
+    plain: Eight security reviews, the politeness and purge audits, and the 1.0 design review.
+  ws-m8-docs:
+    phase: ph-v10
+    name: 1.0 docs
+    plain: The user guide, query language, relevance and themes at 1.0, then the README and release notes.
+  ws-m8-release:
+    phase: ph-v10
+    name: Release candidate and gates
+    plain: Cut release/v1.0, you tag the release candidate, every 1.0 gate runs on it, then you tag v1.0.0.
   ws-small:
     phase: ph-polish
     name: Planned follow-ups
@@ -236,6 +296,11 @@ placement:
   - B11a
   - B11b
   - B11c
+- ws: ws-workers
+  match:
+  - E-v06-workers
+  - P-v06-workers
+  - WK-*
 - ws: ws-web
   match:
   - W*
@@ -272,10 +337,13 @@ placement:
   - X-fuzz-cache-1105
   - X-claim-trackers
   - X-claim-store
+  - X-claim-store-polish
   - X-adult-catalogue
   - D-sources-guide
   - L4-followups
   - S-settings-reconcile
+  - X-tcache-recheck
+  - X-sources-low
 - ws: ws-cut
   match:
   - CR-COL
@@ -297,6 +365,8 @@ placement:
   - G-v051
   - D-v051-main
   - P-v052-cut
+  - P-v052-manifest
+  - X-consent-gate-052
 - ws: ws-cr-build
   match:
   - CR-SIM
@@ -354,6 +424,56 @@ placement:
   - SRC-G
   - X-egress-copy
   - D-egress-note
+- ws: ws-m7-w1
+  match:
+  - GS-gate
+  - RX-0
+  - TZ-0
+  - UP-0
+  - ENR-9
+  - GS-0
+- ws: ws-m7-w2
+  match:
+  - GS-1
+  - OUT-0
+  - UP-1
+  - UN-0
+  - IRC-0
+  - ENR-10
+- ws: ws-m7-w3
+  match:
+  - GS-2
+  - ENR-14
+  - UN-1
+  - UN-2
+  - IRC-1
+  - OUT-2
+- ws: ws-m7-w4
+  match:
+  - RX-1
+  - GS-3
+  - ENR-12
+  - UP-2
+  - /^ENR-[a-z]+$/
+- ws: ws-m7-w5
+  match:
+  - ENR-11
+  - GS-4
+  - GS-5
+  - ENR-13
+- ws: ws-m7-w6
+  match:
+  - SRC-3b
+  - UN-3
+  - UN-4
+  - OUT-1
+  - OUT-3
+  - IRC-2
+  - IRC-3
+- ws: ws-m7-gates
+  match:
+  - G-v07-scale
+  - G-v07
 - ws: ws-src-plan
   match:
   - E-v06-sources
@@ -361,6 +481,7 @@ placement:
   - RP-*
   - ENR-*
   - X-enr-page-flag
+  - X-sp4-followups
   - LEGAL-1
   - LEGAL-2
 - ws: ws-imp-tools
@@ -372,19 +493,22 @@ placement:
   - X-search-files-3
   - X-search-files-4
   - X-search-files-5
+  - X-search-files-6
   - G-import-*
   - CR-3
   - G-rebuild-10M
-- ws: ws-workers
-  match:
-  - E-v06-workers
 - ws: ws-companions
   match:
   - E-v06-companions
+  - P-v06-companions
+  - CMP-*
 - ws: ws-m6
   match:
   - E-M6
+  - P-m6-audit
   - X-pack-static
+  - PK-*
+  - G-m6
 - ws: ws-m7-built
   match:
   - X-utp
@@ -395,12 +519,52 @@ placement:
 - ws: ws-m7-todo
   match:
   - E-M7
+  - P-v07
   - SB-6
   - SB-6b
 - ws: ws-v10
   match:
   - E-v08
   - E-M8
+  - P-v08
+  - P-m8
+- ws: ws-v08-workers
+  match:
+  - PL-*
+  - CW-*
+- ws: ws-v08-feeds
+  match:
+  - NOS-*
+  - LEM-*
+  - ADH-*
+- ws: ws-v08-gate
+  match:
+  - DOC-v08
+  - G-v08
+- ws: ws-m8-tooling
+  match:
+  - M8-REL-*
+  - M8-PERF-*
+  - M8-THEME
+  - M8-CI
+  - M8-NET-E2E
+  - M8-WIN-1
+- ws: ws-m8-chaos
+  match:
+  - M8-CHAOS-*
+- ws: ws-m8-review
+  match:
+  - M8-SEC-*
+  - M8-POL
+  - M8-PURGE
+  - M8-DR
+- ws: ws-m8-docs
+  match:
+  - M8-DOC-*
+- ws: ws-m8-release
+  match:
+  - R-v1-cut
+  - G-v1*
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -415,12 +579,15 @@ pinned:
   X-strip-format-chars: ws-small
   i9-stage2: ws-small
   openapi-example-size: ws-small
-held:
-- E-M6
-- E-v06-companions
-- E-v06-workers
+held: []
 expanded:
 - E-v06-sources
+- E-M6
+- E-v06-workers
+- E-v06-companions
+- E-M7
+- E-v08
+- E-M8
 state_override:
   G-v051: active
   R-rc3-cut: done
@@ -536,11 +703,141 @@ conditions:
     met: false
     who: time
     label: A release that reads the new range syntax has shipped
+  owner-v07-q1:
+    met: false
+    who: you
+    label: You decide whether the Stremio addon ships, and its access terms (v0.7 Q1)
+  owner-v07-q2:
+    met: false
+    who: you
+    label: You decide the terms for private-tracker IRC announces (v0.7 Q2)
+  owner-v07-q3:
+    met: false
+    who: you
+    label: You decide whether PreDB's live IRC feed may be used (v0.7 Q3)
+  owner-v07-q4:
+    met: false
+    who: you
+    label: You decide on AniDB, srrDB, PreDB and debrid lookups (v0.7 Q4)
+  owner-v07-q5:
+    met: false
+    who: you
+    label: You decide what general enrichment may send (v0.7 Q5; every enrichment slice waits on it)
+  owner-v07-q6:
+    met: false
+    who: you
+    label: You decide how usenet results are shown (v0.7 Q6)
+  owner-cq1:
+    met: false
+    who: you
+    label: You choose the companion catalogue's trust root (companions Q1)
+  owner-cq2:
+    met: false
+    who: you
+    label: You decide how upstream signatures are checked (companions Q2)
+  owner-cq3:
+    met: false
+    who: you
+    label: You decide what least privilege means for native companions (companions Q3)
+  owner-cq4:
+    met: false
+    who: you
+    label: You decide how qBittorrent installs on Windows (companions Q4)
+  owner-cq5:
+    met: false
+    who: you
+    label: You decide whether a generated companion credential may be revealed (companions Q5)
+  owner-cq6:
+    met: false
+    who: you
+    label: You approve the v0.6 companion catalogue and whose binaries run (companions Q15)
+  owner-cq7:
+    met: false
+    who: you
+    label: You decide whether the systemd unit may be relaxed for companions (companions Q20)
+  owner-cq8:
+    met: false
+    who: you
+    label: You decide whether FlareSolverr is offered, opt-in only (companions Q21)
+  owner-wkq1:
+    met: false
+    who: you
+    label: You decide what filter data a worker holds and spools (workers Q1)
+  owner-wkq2:
+    met: false
+    who: you
+    label: You decide how the join token is passed in Docker and Unraid (workers Q2)
+  owner-wkq3:
+    met: false
+    who: you
+    label: You decide the worker's RAM budget at your corpus size (workers Q6)
+  owner-m6q13:
+    met: false
+    who: you
+    label: You decide how the Windows MSI updater gets its install rights (M6 Q13)
+  owner-m6-manual:
+    met: false
+    who: you
+    label: You do the M6 manual Unraid and MSI installs and approve the rc's signing (M6 Q14)
+  owner-v08-q1:
+    met: false
+    who: you
+    label: You decide the terms position for Nostr relays and Lemmy instances (v0.8 Q-o1)
+  owner-v08-q3:
+    met: false
+    who: you
+    label: You approve the per-worker consent wording (v0.8 Q-o3)
+  owner-v08-q4:
+    met: false
+    who: you
+    label: You decide how third-party adult tags are treated (v0.8 Q-o4)
+  owner-m8-q1:
+    met: false
+    who: you
+    label: You decide on a dedicated benchmark runner and its safeguards (M8 OQ1)
+  owner-m8-q2:
+    met: false
+    who: you
+    label: You decide how relevance is judged on real data (M8 OQ2)
+  owner-m8-q3:
+    met: false
+    who: you
+    label: You confirm the Windows soak rules for 1.0 (M8 OQ3)
+  owner-m8-q4:
+    met: false
+    who: you
+    label: You decide whether 1.0 also gets a Linux Docker soak (M8 OQ4)
+  owner-m8-q6:
+    met: false
+    who: you
+    label: You choose how security findings are disclosed, and SECURITY.md's contact (M8 OQ6)
+  bench-runner:
+    met: false
+    who: you
+    label: You register the dedicated benchmark runner and a first run passes
+  windows-soak-host:
+    met: false
+    who: you
+    label: You name the Windows host for the 1.0 soak
+  unraid-soak-host:
+    met: false
+    who: you
+    label: Your Unraid host is free for the 1.0 Linux soak
+  owner-v1-rc:
+    met: false
+    who: you
+    label: You tag the 1.0 release candidate
+    auto: tag:v1.0.0-rc.1
+  v1-tagged:
+    met: false
+    who: you
+    label: You tag and publish v1.0.0
+    auto: tag:v1.0.0
 roadmap:
   steps:
   - id: soak
-    label: Unraid memory test (r3 and r4 failed, r5 next on rc.4)
-    plain: The 24-hour tests of release candidates 2 and 3 failed on memory growth (1.88 and 29.35 MiB an hour; bar 2.0). Release candidate 4 carries the allocator fix, and its fresh test (r5) runs next.
+    label: Unraid memory test (r3 and r4 failed, r5 running on rc.4)
+    plain: The 24-hour tests of release candidates 2 and 3 failed on memory growth (1.88 and 29.35 MiB an hour; bar 2.0). Release candidate 4 carries the allocator fix, and its fresh test (r5) is running; its measured window ends 2026-11-06T13:12Z.
     col: 0
     row: 2
     members: []
@@ -562,20 +859,18 @@ roadmap:
     override: you
   - id: v052
     label: Cut v0.5.2
-    plain: A new release branch from main, soon after v0.5.1.
+    plain: A new release branch from main, soon after v0.5.1. First, a fix stops sources that need consent being turned on before the consent texts ship.
     col: 3
     row: 2
     members:
     - P-v052-cut
+    - X-consent-gate-052
   - id: unhold
-    label: Unhold workers, companions, packaging
-    plain: The three held epics get broken into slices once the soak verdict is in.
+    label: Soak verdict starts the planned tracks
+    plain: Workers, companions, packaging, the early v0.8 parsers and the 1.0 tooling were sliced on 2026-11-06. Their first slices wait for the memory test verdict.
     col: 2
     row: 4
-    members:
-    - E-M6
-    - E-v06-workers
-    - E-v06-companions
+    members: []
   - id: cr4
     label: Build crawler experiments
     plain: Admission, hints, streaming, prefixes and uTP, each behind an off switch.
@@ -713,18 +1008,82 @@ roadmap:
     - G-import-50M
   - id: workers
     label: Remote workers
-    plain: Wire the cluster library into a worker command.
+    plain: The cluster library wired into a worker command, then the chaos gate (WK-G).
     col: 3
     row: 4
     members:
-    - E-v06-workers
+    - WK-0
+    - WK-1
+    - WK-2
+    - WK-3
+    - WK-4
+    - WK-5
+    - WK-6
+    - WK-7
+    - WK-8
+    - WK-9
+    - WK-10
+    - WK-11
+    - WK-12
+    - WK-13
+    - WK-14
+    - WK-15
+    - WK-16
+    - WK-17
+    - WK-18
+    - WK-19
+    - WK-20
+    - WK-G
   - id: comp
     label: Companion manager
-    plain: Helper apps managed inside Lodestar.
+    plain: Helper apps installed, checked and supervised inside Lodestar, then the companion gate (CMP-G).
     col: 3
     row: 5
     members:
-    - E-v06-companions
+    - CMP-0
+    - CMP-1
+    - CMP-13
+    - CMP-2
+    - CMP-3
+    - CMP-4a
+    - CMP-4b
+    - CMP-5
+    - CMP-5g
+    - CMP-6
+    - CMP-7
+    - CMP-8a
+    - CMP-8b
+    - CMP-9a
+    - CMP-9b
+    - CMP-9c
+    - CMP-10
+    - CMP-11
+    - CMP-12
+    - CMP-D
+    - CMP-G
+  - id: m6
+    label: Packaging (M6)
+    plain: Windows updates and Restart now, the release manifest, the settings CLI, the install smoke and the user guide, then the M6 exit gate.
+    col: 3
+    row: 3
+    members:
+    - PK-cli
+    - PK-exc
+    - PK-ui
+    - PK-win-restart
+    - PK-manifest
+    - PK-win-upd-1
+    - PK-win-upd-2
+    - PK-win-upd-3
+    - PK-win-portable-upd
+    - PK-win-soak-ci
+    - PK-smoke
+    - PK-unraid
+    - PK-ops
+    - PK-guide-1
+    - PK-guide-2
+    - PK-guide-3
+    - G-m6
   - id: v06
     label: v0.6 tag
     plain: Crawler gate, sources gate, workers and companions all green.
@@ -733,25 +1092,142 @@ roadmap:
     members: []
   - id: m7
     label: v0.7 / M7
-    plain: Torznab server, upload, grouping, regex, enrichment.
+    plain: Grouping, regex, Torznab, outputs, upload, enrichment plug-ins, usenet and IRC, then the v0.7 gate.
     col: 5
     row: 7
     members:
-    - E-M7
+    - GS-gate
+    - GS-0
+    - GS-1
+    - GS-2
+    - GS-3
+    - GS-4
+    - GS-5
+    - RX-0
+    - RX-1
+    - TZ-0
+    - OUT-0
+    - OUT-1
+    - OUT-2
+    - OUT-3
+    - UP-0
+    - UP-1
+    - UP-2
+    - ENR-9
+    - ENR-10
+    - ENR-11
+    - ENR-12
+    - ENR-13
+    - ENR-14
+    - ENR-tmdb
+    - ENR-tvdb
+    - ENR-anilist
+    - ENR-anidb
+    - ENR-mb
+    - ENR-ol
+    - ENR-igdb
+    - ENR-discogs
+    - ENR-steam
+    - ENR-srrdb
+    - ENR-predb
+    - ENR-debrid
+    - UN-0
+    - UN-1
+    - UN-2
+    - UN-3
+    - UN-4
+    - IRC-0
+    - IRC-1
+    - IRC-2
+    - IRC-3
+    - SRC-3b
+    - G-v07-scale
+    - G-v07
   - id: v08
     label: v0.8
-    plain: Plug-ins on workers; restricted importers.
+    plain: Plug-ins and companions on workers; Nostr and Lemmy.
     col: 6
     row: 5
     members:
-    - E-v08
+    - PL-0
+    - PL-1
+    - PL-2
+    - PL-3
+    - PL-4
+    - PL-5
+    - PL-6
+    - PL-7a
+    - PL-7b
+    - PL-8
+    - CW-0
+    - CW-3
+    - CW-1
+    - CW-2
+    - NOS-0
+    - NOS-1
+    - NOS-2a
+    - NOS-2b
+    - NOS-3
+    - LEM-0
+    - LEM-1
+    - ADH-0
+    - DOC-v08
+    - G-v08
   - id: m8
     label: Hardening to 1.0
-    plain: Relevance, 10M/50M performance, security review, chaos.
+    plain: Relevance, 10M performance, chaos tests, eight security reviews, audits, design review and the 1.0 docs.
     col: 7
     row: 5
     members:
-    - E-M8
+    - M8-REL-1
+    - M8-REL-2
+    - M8-PERF-1
+    - M8-PERF-2
+    - M8-PERF-3
+    - M8-NET-E2E
+    - M8-CHAOS-1
+    - M8-CHAOS-2
+    - M8-CHAOS-3
+    - M8-CHAOS-4
+    - M8-POL
+    - M8-PURGE
+    - M8-THEME
+    - M8-CI
+    - M8-WIN-1
+    - M8-DR
+    - M8-SEC-0
+    - M8-SEC-1
+    - M8-SEC-2
+    - M8-SEC-3
+    - M8-SEC-4
+    - M8-SEC-5
+    - M8-SEC-6
+    - M8-SEC-7
+    - M8-SEC-8
+    - M8-DOC-1
+    - M8-DOC-2
+    - M8-DOC-3a
+    - M8-DOC-3b
+    - M8-DOC-4
+  - id: v1
+    label: 1.0 release candidate and gates
+    plain: Cut release/v1.0; you tag the rc; every 1.0 gate runs on it; then you tag v1.0.0.
+    col: 8
+    row: 5
+    members:
+    - R-v1-cut
+    - G-v1-ci
+    - G-v1-relevance
+    - G-v1-10m
+    - G-v1-crawler
+    - G-v1-windows
+    - G-v1-soak-linux
+    - G-v1-chaos
+    - G-v1-audits
+    - G-v1-security
+    - G-v1-design
+    - G-v1-ui
+    - G-v1
   arrows:
   - - soak
     - gluetun
@@ -811,12 +1287,20 @@ roadmap:
     - m8
   - - i50
     - m8
+  - - unhold
+    - m6
+  - - m6
+    - m8
+  - - v052
+    - m7
+  - - m8
+    - v1
 owner_queue:
 - n: 1
   type: action
-  action: Soak r4 on rc.3 failed its memory gate. rc.4 (the memory fixes and the Legal Notice, §2.40) is being built; then you tag rc.4 and run soak r5, the gluetun leg, the Windows smoke and the tag
+  action: Soak r5 on rc.4 (the memory fixes and the Legal Notice, §2.40) is running. Then the gluetun leg, the Windows smoke on rc.4 and the v0.5.1 tag
   unblocks: v0.5.1 release; the three held epics
-  when: The runner sends the rc.4 tag steps
+  when: After the r5 verdict (measured window ends 2026-11-06T13:12Z)
 - n: 2
   type: action
   action: Name the experiment host for crawler tests, and when it is free
@@ -857,6 +1341,11 @@ owner_queue:
   action: Have Colorado counsel review docs/legal/legal-notice.md and docs/legal/operator-guidance.md (advisory, not a gate on the v0.5.1 tag; §2.38)
   unblocks: Counsel's comments on the Legal Notice
   when: When convenient
+- n: 10
+  type: decision
+  action: 'Planning-wave questions (2026-11-06T00:30Z): v07 Q1–Q6 and Q10(d), companions cq1–cq6, Q20 and Q21, M8 OQ1–OQ6, M6 Q6, Q8, Q10 and Q13, workers wkq1–3, v08 Q1, Q3 and Q4. Relayed by the dashboard session with the runner''s recommendations'
+  unblocks: The owner-gated slices of v0.7, the companion manager, remote workers, M6 packaging, v0.8 and 1.0
+  when: Q5 (v0.7 enrichment) and M6 Q13 first; the rest before their slices
 gates:
 - id: G-v05
   name: v0.5 MVP exit
@@ -876,7 +1365,7 @@ gates:
   name: v0.5.1 release
   plain: Memory test passes, VPN leg runs, you tag it.
   slice: G-v051
-  measure: Soak r3 running; baseline ends 2026-11-02 22:16 UTC
+  measure: Soak r5 running on rc.4; baseline ends 2026-11-06T13:12:25Z (r4 on rc.3 ended at 29.35 MiB/h)
   target: Memory slope upper 95% bound <= 2.0 MiB/h over hours 12-24
   where: build-plan 0.4
 - id: G-v06-crawler
@@ -900,13 +1389,41 @@ gates:
   measure: 'Only a synthetic figure: 100k at about 13,900/s'
   target: Import >= 2,000/s offline; about 2.3 KB per torrent all-in; cold file search p95 <= 150 ms at 10M
   where: build-plan 0.6
+- id: CMP-G
+  name: Companion manager gate (v0.6)
+  plain: Lodestar only runs companion programs it has verified, keeps them on your VPN, and keeps their passwords safe.
+  slice: CMP-G
+  measure: ''
+  target: See docs/plan/2026-11-06-v06-companions.md section 4.3
+  where: plan
 - id: G-chaos
   name: Remote workers chaos gates
-  plain: Workers survive crashes, partitions and restarts.
-  status: not started
+  plain: "First pass (v0.6): workers survive crashes, partitions and restarts. The 1.0 re-run is G-v1-chaos."
+  slice: WK-G
   measure: ''
   target: architecture 19.8
-  where: architecture
+  where: docs/plan/2026-11-06-v06-workers.md
+- id: G-m6
+  name: Milestone 6 exit
+  plain: Clean install, crawling and search on Docker/Unraid, Linux and Windows, with Windows updates and the guide.
+  slice: G-m6
+  measure: ''
+  target: architecture 14 M6 exit criteria
+  where: docs/plan/2026-11-06-m6-gap-audit.md
+- id: G-v07
+  name: v0.7 gate
+  plain: Outputs and enrichment never carry private, held or hidden adult items; uploads go through the safety floor.
+  slice: G-v07
+  measure: ''
+  target: architecture 14 M7 exit criteria and 18.9
+  where: docs/plan/2026-11-05-v07-m7.md
+- id: G-v08
+  name: v0.8 gate
+  plain: Plug-ins and companions on workers stay polite, private and consented; Nostr and Lemmy are safe.
+  slice: G-v08
+  measure: ''
+  target: architecture 19.8 and 18.9
+  where: docs/plan/2026-11-06-v08.md
 - id: G-filter-budget
   name: Filter speed budget
   plain: Judging a torrent against the rules stays fast.
@@ -914,13 +1431,90 @@ gates:
   measure: About 55 us in one case on Intel 8573C runners
   target: 50 us (reported, not held)
   where: architecture 20.8
-- id: G-10
+- id: G-v1
   name: 1.0 gates
-  plain: Relevance, 10M performance and size, Windows soak, full security review, chaos, politeness audits.
-  status: not started
+  plain: Every 1.0 gate below green on the release candidate, the 50M numbers approved, then you tag v1.0.0.
+  slice: G-v1
   measure: ''
   target: architecture 17
-  where: architecture
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-ci
+  name: '1.0: full CI on the RC'
+  plain: Every workflow green on the release candidate, with no regenerated baselines.
+  slice: G-v1-ci
+  measure: ''
+  target: architecture 17
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-relevance
+  name: '1.0: relevance'
+  plain: Search ranks the right torrents first on the committed sets; the held-out score is reported to you.
+  slice: G-v1-relevance
+  measure: 'Synthetic set NDCG@10 0.9186'
+  target: Regression tolerance 0.001; synthetic set >= 0.90 (plan RQ2)
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-10m
+  name: '1.0: 10M performance and size'
+  plain: Every speed, size and memory number in architecture 3 at 10 million torrents, on the dedicated runner.
+  slice: G-v1-10m
+  measure: ''
+  target: architecture 3 p95 table, size and memory; worker budgets (owner 1.6.5)
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-crawler
+  name: '1.0: crawler re-measured'
+  plain: The v0.6 crawler gate measured again on the release candidate.
+  slice: G-v1-crawler
+  measure: ''
+  target: 24 h mean >= 100/min, no hour < 70, p95 discovery-to-searchable <= 10 min
+  where: build-plan 0.6
+- id: G-v1-windows
+  name: '1.0: Windows soak'
+  plain: 24 hours in MSI service mode on your Windows PC, plus upgrade and uninstall.
+  slice: G-v1-windows
+  measure: ''
+  target: Memory slope upper 95% bound <= 2.0 MiB/h over hours 12-24 (CR-0 rule)
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-soak-linux
+  name: '1.0: Linux Docker soak'
+  plain: 24 hours on your Unraid host under the v0.5.1 rules.
+  slice: G-v1-soak-linux
+  measure: ''
+  target: Memory slope upper 95% bound <= 2.0 MiB/h over hours 12-24
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-chaos
+  name: '1.0: chaos gates'
+  plain: Every architecture 19.8 failure test, long seeds and the in-process network, on the release candidate.
+  slice: G-v1-chaos
+  measure: ''
+  target: architecture 19.8
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-audits
+  name: '1.0: politeness, purge and filter gates'
+  plain: The politeness and purge audits complete, the sources, rule-pack and enrichment gates re-run, and the filter speed budget (G-filter-budget) checked on the reference CPU.
+  slice: G-v1-audits
+  measure: ''
+  target: 18.9, 20.8; 50 us on the 2.20 reference CPU
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-security
+  name: '1.0: security'
+  plain: The eight security reviews done, a delta review to the RC, no open blocking or important findings.
+  slice: G-v1-security
+  measure: ''
+  target: runner/standards.md 5
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-design
+  name: '1.0: design review'
+  plain: No blocking design findings on the release candidate.
+  slice: G-v1-design
+  measure: ''
+  target: architecture 10.17
+  where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-ui
+  name: '1.0: UI gates'
+  plain: Numbers checked against the data, reporting overhead, every theme, and the page-size and speed budgets.
+  slice: G-v1-ui
+  measure: ''
+  target: architecture 10.1, 10.17, 17
+  where: docs/plan/2026-11-06-m8-hardening.md
 crawler:
 - label: CR-0, 24 h on Linux
   value: 12.3
@@ -956,7 +1550,7 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-05'
+  updated: '2026-11-06'
   now:
   - label: Soak r5 is running on release candidate 4
     text: Release candidate 4 is tagged and its 24-hour memory test started at 06:42 UTC on 5 November; the deciding window ends about 13:12 UTC on 6 November. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
@@ -967,11 +1561,11 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Up to twelve slots
-    text: 'By your instruction up to twelve worker slots run at once, filled only when ready work fits the plan, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33, §2.36). The runner keeps the current list in its state file, shown on the slots view.'
+  - label: Four slots
+    text: 'By your instruction at most four worker slots run at once from 2026-11-06T00:00Z, filled only when ready work fits the plan (owner-decisions §2.42). The slices launched in your no-limit window (§2.45) finish under it, and nothing new launches until fewer than four are running. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: Finish v0.5.1
-    text: The runner sends the rc.4 tag steps when release candidate 4 is ready. Then soak r5 on rc.4 (Appdata Backup stays off until all soaks are done), the short Windows smoke on the rc.4 installer, the 2-hour VPN (gluetun) leg, and the v0.5.1 tag.
+    text: Soak r5 on release candidate 4 is running (Appdata Backup stays off until all soaks are done); its measured window ends 2026-11-06T13:12Z. Then the short Windows smoke on the rc.4 installer, the 2-hour VPN (gluetun) leg, and the v0.5.1 tag.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Also for you

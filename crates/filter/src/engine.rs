@@ -29,6 +29,7 @@ use crate::hash::TermSet;
 use crate::matcher::{Doc, Facts, Reading};
 use crate::packs::manifest::Manifest;
 use crate::packs::overrides::{self, PackOverrides};
+use crate::packs::sp4::AtCommit;
 use crate::packs::upgrade::{PackShadow, PackVersions};
 use crate::packs::{self, PackRule, PackSwitches};
 use crate::prefilter::RuleList;
@@ -157,6 +158,10 @@ pub struct Engine {
     /// Your rules that are stand-ins for unreadable rows, or lost their
     /// `unless`, by id: usually none.
     pub stand_ins: Vec<u32>,
+    /// SP-4's signature set (RP-5): shared by every version of the engine,
+    /// the writer that adds to it and the API that releases from it, so a
+    /// reload never copies it. [`crate::load`] fills it at start.
+    pub spam_sigs: Arc<crate::spam_sigs::SpamSigs>,
     pub version: u64,
 }
 
@@ -177,6 +182,7 @@ impl Engine {
             class_rules: ClassRules::default(),
             unreadable: Vec::new(),
             stand_ins: Vec::new(),
+            spam_sigs: Arc::default(),
             version: 1,
         }
     }
@@ -213,7 +219,9 @@ impl Engine {
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
         let correction = self.class_rules.decide(&doc);
-        let v = self.judge_doc(item, facts, &doc, now, None).0;
+        let v = self
+            .judge_doc(item, facts, &doc, now, AtCommit::default())
+            .0;
         if correction != Some(true) || item.content_type == ContentType::Adult {
             return (v, correction);
         }
@@ -255,17 +263,39 @@ impl Engine {
             return (v, Vec::new());
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
-        self.judge_doc(item, facts, &doc, now, None)
+        self.judge_doc(item, facts, &doc, now, AtCommit::default())
     }
 
-    /// The writer's verdict for a torrent whose publisher, or source, is
-    /// flooding (SP-3, RP-4): the torrent judged again with SP-3 matching
-    /// at `level`, inside the engine's precedence. The floor is final; a
+    /// [`Engine::judge_at_commit`] with SP-3 at `level` alone (RP-4).
+    pub fn judge_flooded(
+        &self,
+        item: &Item,
+        facts: &Facts,
+        now: i64,
+        level: crate::flood::Level,
+        adult: bool,
+    ) -> Verdict {
+        let at = AtCommit {
+            flood: Some(level),
+            clone_of: None,
+        };
+        self.judge_at_commit(item, facts, now, at, adult)
+    }
+
+    /// The writer's verdict for a torrent the rules that depend on state
+    /// match: one whose publisher, or source, is flooding (SP-3 at
+    /// `at.flood`, RP-4), or a clone of hidden spam (SP-4 inheriting
+    /// `at.clone_of`, RP-5). The torrent is judged again with them
+    /// matching, inside the engine's precedence. The floor is final; a
     /// CSX-5 Override, *Always allow*, a core hit or one of your rules
     /// decides before the pack layer is reached, and an exception for
-    /// SP-3, its switches and your override of it apply as for any pack
-    /// rule; in the pack layer the strongest action wins. Pending, SP-3
-    /// runs in shadow ([`crate::packs::upgrade`]).
+    /// SP-3 or SP-4, their switches and your overrides of them apply as
+    /// for any pack rule; in the pack layer the strongest action wins.
+    /// Pending, they run in shadow ([`crate::packs::upgrade`]).
+    ///
+    /// SP-4 follows its original: it matches only while the original's
+    /// rule (SP-2 or SP-3) is on, and not where an exception to that rule
+    /// covers this torrent too.
     ///
     /// `adult`: an always-adult source found it, so it's judged as adult
     /// too, as the writer's other verdicts are
@@ -274,14 +304,14 @@ impl Engine {
     /// verdict stands. Nothing here changes what the classification rules
     /// say: the writer keeps that from its first verdict.
     ///
-    /// Adding SP-3 only adds to the pack layer, so this is never weaker
-    /// than the verdict without it.
-    pub fn judge_flooded(
+    /// Adding SP-3 or SP-4 only adds to the pack layer, so this is never
+    /// weaker than the verdict without them.
+    pub fn judge_at_commit(
         &self,
         item: &Item,
         facts: &Facts,
         now: i64,
-        level: crate::flood::Level,
+        at: AtCommit,
         adult: bool,
     ) -> Verdict {
         if let Some(hit) = self.core.floor_hit(item) {
@@ -292,7 +322,7 @@ impl Engine {
         }
         let doc = Doc::new(item, Some(facts)).with_near(self.rules.near_terms());
         let correction = self.class_rules.decide(&doc);
-        let v = self.judge_doc(item, Some(facts), &doc, now, Some(level)).0;
+        let v = self.judge_doc(item, Some(facts), &doc, now, at).0;
         if !(adult || correction == Some(true)) || item.content_type == ContentType::Adult {
             return v;
         }
@@ -314,7 +344,7 @@ impl Engine {
             None => {
                 let doc =
                     Doc::new(&adult_item, Some(&adult_facts)).with_near(self.rules.near_terms());
-                self.judge_doc(&adult_item, Some(&adult_facts), &doc, now, Some(level))
+                self.judge_doc(&adult_item, Some(&adult_facts), &doc, now, at)
                     .0
             }
         };
@@ -356,26 +386,20 @@ impl Engine {
     /// docs/decisions/2026-11-02-F-visible-format-two-readings.md).
     /// Elsewhere the two judgments are the same, so one is made.
     ///
-    /// `flood`: SP-3's level, from the writer ([`Engine::judge_flooded`]);
-    /// `None` everywhere else, where SP-3 never matches.
+    /// `at`: SP-3's level and SP-4's original, from the writer
+    /// ([`Engine::judge_at_commit`]); `default()` everywhere else, where
+    /// neither matches.
     fn judge_doc(
         &self,
         item: &Item,
         facts: Option<&Facts>,
         doc: &Doc,
         now: i64,
-        flood: Option<crate::flood::Level>,
+        at: AtCommit,
     ) -> (Verdict, Vec<PackShadow>) {
         let mut pack_shadow = Vec::new();
-        let (mut v, mut released) = self.judge_reading(
-            item,
-            facts,
-            doc,
-            now,
-            Reading::Joined,
-            flood,
-            &mut pack_shadow,
-        );
+        let (mut v, mut released) =
+            self.judge_reading(item, facts, doc, now, Reading::Joined, at, &mut pack_shadow);
         if doc.reads_twice() || self.keywords_differ(item, doc) {
             let mut before_shadow = Vec::new();
             let (before, also) = self.judge_reading(
@@ -384,7 +408,7 @@ impl Engine {
                 doc,
                 now,
                 Reading::Before,
-                flood,
+                at,
                 &mut before_shadow,
             );
             v = stricter(before, v);
@@ -444,7 +468,7 @@ impl Engine {
         doc: &Doc,
         now: i64,
         reading: Reading,
-        flood: Option<crate::flood::Level>,
+        at: AtCommit,
         pack_shadow: &mut Vec<PackShadow>,
     ) -> (Verdict, Vec<u32>) {
         let mut v = Verdict::default();
@@ -463,7 +487,7 @@ impl Engine {
                 &neutral_words,
                 now,
                 reading,
-                flood,
+                at,
                 &mut v.shadow,
                 pack_shadow,
             );
@@ -481,7 +505,7 @@ impl Engine {
         neutral_words: &[String],
         now: i64,
         reading: Reading,
-        flood: Option<crate::flood::Level>,
+        at: AtCommit,
         shadow: &mut Vec<Decision>,
         pack_shadow: &mut Vec<PackShadow>,
     ) -> Option<Decision> {
@@ -536,14 +560,28 @@ impl Engine {
             }
             return stronger_of(held, Some(d));
         }
-        let ctx = facts.map(|f| packs::Ctx::new(item, f, neutral_words).with_flood(flood));
+        // SP-4 follows its original: while the rule that hid it is on,
+        // and not where your exception to that rule covers this torrent.
+        let at = AtCommit {
+            clone_of: at.clone_of.filter(|o| {
+                self.packs.is_on(o.rule)
+                    && !self.excepted(RuleRef::Pack(o.rule), item, doc, reading)
+            }),
+            ..at
+        };
+        let ctx = facts.map(|f| {
+            packs::Ctx::new(item, f, neutral_words)
+                .with_flood(at.flood)
+                .with_clone(at.clone_of)
+        });
         let mut packs = Vec::new();
         if let Some(ctx) = &ctx {
             for r in PackRule::ALL.into_iter().filter(|r| self.packs.is_on(*r)) {
                 let pv = &self.pack_versions;
-                // SP-3 flags below its demote level ([`packs::sp3::cap`]),
-                // in both versions' results.
-                let cap = |a: Option<Action>| a.map(|a| packs::sp3::cap(r, flood, a));
+                // SP-3 flags below its demote level and SP-4 takes its
+                // original's action ([`packs::sp4::cap`]), in both
+                // versions' results.
+                let cap = |a: Option<Action>| a.map(|a| packs::sp4::cap(r, at, a));
                 let applied = cap(pv.applied_action(&self.manifest, r, ctx));
                 // A pending version runs in shadow where the rule isn't
                 // excepted: nothing it holds is applied.

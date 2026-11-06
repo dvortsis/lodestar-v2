@@ -32,6 +32,7 @@ mod prefilter;
 pub mod reclassify;
 mod rules;
 mod seal;
+pub mod spam_sigs;
 pub mod strictness;
 mod work;
 

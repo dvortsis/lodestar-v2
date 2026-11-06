@@ -194,8 +194,8 @@ impl UnverifiedStats {
 /// whitespace and control characters: the `url` crate would repair those
 /// (`http:1.1` reads as `http://1.0.0.1/`, a tab is removed) rather than
 /// refuse them. The canonical form is held to the same limit, since it can
-/// be longer (IDNA, percent-encoding). Tracker
-/// URLs aren't names, so they aren't judged as text (runner, #383).
+/// be longer (IDNA, percent-encoding). Tracker URLs aren't names, so they
+/// aren't judged as text (runner, #383).
 ///
 /// The form is a fixed point: it maps to itself (X-claim-store).
 ///
@@ -237,7 +237,8 @@ pub fn stored_trackers(raw: &[String], room: usize) -> Vec<String> {
 }
 
 /// The store's claims for a discovery: the source's claims and
-/// provenance, already clamped by the emitter. `None` when it has none.
+/// provenance, already clamped by the emitter, with no `external_ref` and
+/// no trackers for a `private_source` find. `None` when it has none.
 pub fn store_claims(d: &Discovery) -> Option<Claims> {
     let c = d.found.claims.as_deref()?;
     let p = d.found.provenance.as_deref();
@@ -264,7 +265,12 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         description: c.description.clone(),
         publisher: c.publisher.clone(),
         provenance: claims::Provenance {
-            external_ref: p.and_then(|p| p.external_ref.clone()),
+            // Never for a private find: a private tracker's reference can
+            // be a passkey URL. Plugins drop it too; this enforces it in
+            // one place (runner, security pre-audit L3).
+            external_ref: p
+                .filter(|_| !d.found.private_source)
+                .and_then(|p| p.external_ref.clone()),
             published_at: p.and_then(|p| p.published_at),
             confidence: match p.map(|p| p.confidence) {
                 Some(lodestar_sources::Confidence::High) => claims::Confidence::High,
@@ -276,8 +282,12 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         adult: c.adult.clone(),
     };
     // The trackers last, in the room the rest leaves under the total.
-    let room = claims::MAX_TOTAL.saturating_sub(out.text_len());
-    out.trackers = stored_trackers(&c.trackers, room);
+    // None for a private find: a private tracker's announce URL can carry
+    // a passkey, which the host guard doesn't look for (runner, L3).
+    if !d.found.private_source {
+        let room = claims::MAX_TOTAL.saturating_sub(out.text_len());
+        out.trackers = stored_trackers(&c.trackers, room);
+    }
     Some(out)
 }
 
