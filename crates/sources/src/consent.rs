@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use lodestar_integrations::SealedSecret;
 use lodestar_integrations::net::SocksAuth;
 pub use lodestar_integrations::{Secret, SecretStore};
-use lodestar_store::Store;
+use lodestar_store::{SourceState, Store};
 
 use crate::egress::{CredentialError, EgressCredentials};
 use crate::manifest::{Consent, Manifest};
@@ -439,6 +439,31 @@ impl EgressCredentials for SourceCredentials {
             tokio::task::spawn_blocking(move || this.socks5_now(&source))
                 .await
                 .map_err(|_| CredentialError)?
+        })
+    }
+
+    /// The source's row in the store, read now: Enabled or not.
+    fn source_enabled<'a>(
+        &'a self,
+        source: &'a str,
+    ) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        let this = self.clone();
+        let source = source.to_string();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let rows = this
+                    .inner
+                    .store
+                    .lock()
+                    .map_err(|_| CredentialError)?
+                    .sources()
+                    .map_err(|_| CredentialError)?;
+                Ok(rows
+                    .iter()
+                    .any(|r| r.plugin == source && r.state == SourceState::Enabled))
+            })
+            .await
+            .map_err(|_| CredentialError)?
         })
     }
 }

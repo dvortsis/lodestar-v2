@@ -1208,3 +1208,156 @@ async fn settings_are_capped_checked_by_the_plugin_and_pending_until_a_start() {
     assert!(!same.config_pending, "the running settings, saved again");
     pipeline.shutdown().await.unwrap();
 }
+
+/// Sends one "request" (a count) every 10 ms while it runs: the stand-in
+/// for a plugin whose lookups go out until it's stopped.
+struct Ticker {
+    manifest: Manifest,
+    sent: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl SourcePlugin for Ticker {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        let sent = self.sent.clone();
+        Box::pin(async move {
+            loop {
+                tokio::select! {
+                    () = ctx.shutdown.requested() => return Ok(()),
+                    () = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                        sent.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        })
+    }
+}
+
+fn ticker(id: &'static str, consent: Consent) -> (Arc<Ticker>, Arc<std::sync::atomic::AtomicU64>) {
+    let sent = Arc::default();
+    let (p, _) = probe_with(id, consent, true);
+    (
+        Arc::new(Ticker {
+            manifest: p.manifest.clone(),
+            sent: Arc::clone(&sent),
+        }),
+        sent,
+    )
+}
+
+async fn started(
+    db: &std::path::Path,
+    plugin: Arc<dyn SourcePlugin>,
+) -> (Pipeline, Control, Arc<Mutex<Store>>) {
+    let pipeline = Pipeline::start_with(
+        PipelineConfig::default(),
+        Store::open(db, StoreConfig::default()).unwrap(),
+        vec![plugin],
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    let store = Arc::new(Mutex::new(Store::open(db, StoreConfig::default()).unwrap()));
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        store.clone(),
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    (pipeline, control, store)
+}
+
+/// Turning a running source off stops its plugin at once, not at the next
+/// start (X-tcache-recheck, superseding "applies at the next start" for
+/// disabling): once the change returns it has ended, so nothing more goes
+/// out. Turning it back on isn't blocked by that stop, and it runs again
+/// from the next start, as every enable does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_a_running_source_off_stops_it_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let (p, sent) = ticker("nyaa", Consent::None);
+    let (pipeline, control, _) = started(&db, p).await;
+    until("it sends", || sent.load(Ordering::SeqCst) >= 3).await;
+    let id = pipeline.sources()[0].id;
+    let off = SourceChange {
+        enabled: Some(false),
+        ..SourceChange::default()
+    };
+    let view = control.update_source(id, off).await.unwrap();
+    assert_eq!(view.state, SourceState::Disabled);
+    // Ended by the time the change returned: its `run` has returned, so
+    // nothing more can go out (no wait needed to show it).
+    assert!(!pipeline.sources()[0].running, "still running after off");
+
+    // On again: allowed, and it runs from the next start.
+    let on = SourceChange {
+        enabled: Some(true),
+        ..SourceChange::default()
+    };
+    assert_eq!(
+        control.update_source(id, on).await.unwrap().state,
+        SourceState::Enabled
+    );
+    drop(control);
+    pipeline.shutdown().await.unwrap();
+    let (p, sent) = ticker("nyaa", Consent::None);
+    let (pipeline, _control, _) = started(&db, p).await;
+    until("it sends again after the start", || {
+        sent.load(Ordering::SeqCst) >= 1
+    })
+    .await;
+    pipeline.shutdown().await.unwrap();
+}
+
+/// Removing the credential an enabled Account source needs disables it
+/// and stops its running plugin at once (a key read once at start, as
+/// Prowlarr's is, isn't used again).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn losing_a_credential_stops_the_running_plugin() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    {
+        let (p, _) = ticker("acct", Consent::Account);
+        let (pipeline, control, store) = started(&db, p).await;
+        let id = pipeline.sources()[0].id;
+        let creds = SourceCredentials::with_keys(store, Arc::new(SecretStore::from_key(&[3; 32])));
+        control
+            .update_credentials(
+                id,
+                &creds,
+                vec![("api_key".into(), Some(Secret::new("the-key-value")))],
+            )
+            .await
+            .unwrap();
+        let on = SourceChange {
+            enabled: Some(true),
+            consent: Some(Consent::Account),
+            ..SourceChange::default()
+        };
+        control.update_source(id, on).await.unwrap();
+        drop(control);
+        pipeline.shutdown().await.unwrap();
+    }
+    let (p, sent) = ticker("acct", Consent::Account);
+    let (pipeline, control, store) = started(&db, p).await;
+    until("it runs with its key", || sent.load(Ordering::SeqCst) >= 3).await;
+    let id = pipeline.sources()[0].id;
+    let creds = SourceCredentials::with_keys(store, Arc::new(SecretStore::from_key(&[3; 32])));
+    let view = control
+        .update_credentials(id, &creds, vec![("api_key".into(), None)])
+        .await
+        .unwrap();
+    assert_eq!(view.state, SourceState::Disabled);
+    assert!(
+        !pipeline.sources()[0].running,
+        "still running without its key"
+    );
+    pipeline.shutdown().await.unwrap();
+}

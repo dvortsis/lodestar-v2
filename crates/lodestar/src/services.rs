@@ -309,6 +309,8 @@ impl Services {
             );
         }
         let filter = pipeline_config.filter.clone();
+        // The torrent cache's checks read the same rules (X-tcache-recheck).
+        let cache_filter = filter.clone();
         let held = pipeline_config.held.clone();
         let sealer = pipeline_config.sealer.clone();
         let reenrich = pipeline_config.reenrich.clone();
@@ -384,6 +386,8 @@ impl Services {
                 let (stop, stopped) = watch::channel(false);
                 let task = crate::torrent_cache::run(
                     crate::torrent_cache::Wiring {
+                        plugin: cache.plugin.clone(),
+                        filter: cache_filter,
                         feed,
                         verified: cache.verified,
                         queue: cache.queue,

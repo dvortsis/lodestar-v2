@@ -1147,7 +1147,7 @@ impl Control {
             ),
         };
         let this = self.clone();
-        tokio::task::spawn_blocking(move || {
+        let disabled = tokio::task::spawn_blocking(move || {
             let mut store = this.inner.store.lock().expect("store lock");
             let current = store
                 .sources()?
@@ -1230,10 +1230,13 @@ impl Control {
                     state = crate::log_events::state(state)
                 );
             }
-            Ok::<_, SourceError>(())
+            Ok::<_, SourceError>(state == Some(SourceState::Disabled))
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;
+        if disabled {
+            self.stop_disabled(id).await;
+        }
         if let Some(p) = priority {
             self.state().priorities.insert(id, p);
             self.inner.monitor.pool().set_weight(id, p.weight()).await;
@@ -1260,7 +1263,7 @@ impl Control {
         }
         let this = self.clone();
         let sealer = sealer.clone();
-        tokio::task::spawn_blocking(move || {
+        let disabled = tokio::task::spawn_blocking(move || {
             // Sealed before the store's lock is taken: it may create the
             // key file.
             let mut set = Vec::new();
@@ -1312,11 +1315,25 @@ impl Control {
                     state = crate::log_events::state(state)
                 );
             }
-            Ok::<_, SourceError>(())
+            Ok::<_, SourceError>(lapses)
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;
+        if disabled {
+            self.stop_disabled(id).await;
+        }
         self.view(id).await
+    }
+
+    /// Stops source `id`'s plugin now that it's Disabled, as
+    /// [`begin_purge`](Self::begin_purge) does but with no purge
+    /// (X-tcache-recheck): its stop, up to the plugin stop timeout, then
+    /// an abort, and its keys dropped from the fetch pool. The store
+    /// already says Disabled, so a key it emits meanwhile isn't written
+    /// (SRC-14b). Enabling it again isn't blocked by this: it runs from
+    /// the next start, as every enable does.
+    async fn stop_disabled(&self, id: SourceId) {
+        self.inner.monitor.stop_source(id).await;
     }
 
     /// Starts purging source `id` (§18.1, SRC-14b), or starts it over: the
