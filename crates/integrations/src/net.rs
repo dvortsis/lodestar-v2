@@ -820,8 +820,9 @@ impl GuardedClient {
     /// responses are returned as they are: turning a POST into a GET would
     /// report a notification as delivered when its payload was dropped.
     /// A downgrade from `https` to `http` is refused. A hop to another
-    /// origin (scheme, host or port) keeps only [`CROSS_ORIGIN_HEADERS`]
-    /// and drops every other header the request set, so no credential
+    /// origin (scheme, host or port) keeps only `accept`,
+    /// `accept-language`, `content-type`, `content-length` and `user-agent`
+    /// (`CROSS_ORIGIN_HEADERS`) and drops every other header the request set, so no credential
     /// (`Authorization`, `Cookie`, `Proxy-Authorization`, `X-Api-Key`, or
     /// one a later channel names) follows it to another party. A hop on
     /// the same origin keeps every header.
@@ -1803,6 +1804,46 @@ pub(crate) mod tests {
             assert_dropped(seen);
             assert_kept_allowed(seen);
         }
+    }
+
+    #[tokio::test]
+    async fn credentials_dropped_on_the_way_out_dont_come_back() {
+        // A -> B -> A: each hop starts from the request already filtered,
+        // so the return to A carries only the allow list too.
+        let a_port = Arc::new(std::sync::OnceLock::<u16>::new());
+        let at = Arc::clone(&a_port);
+        let (b_addr, b_seen) = serve_recording(move |path| match path {
+            "/back" => redirect_with(
+                307,
+                &format!("http://local.example:{}/home", at.get().unwrap()),
+            ),
+            _ => axum::response::Response::new("unexpected".into()),
+        })
+        .await;
+        let to_b = format!("http://local.example:{}/back", b_addr.port());
+        let (a_addr, a_seen) = serve_recording(move |path| match path {
+            "/start" => redirect_with(307, &to_b),
+            _ => axum::response::Response::new("fine".into()),
+        })
+        .await;
+        a_port.set(a_addr.port()).unwrap();
+        let client = hop_client();
+        let url = format!("http://local.example:{}/start", a_addr.port());
+        let resp = client
+            .send_following(hop_request(&client, &url))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let a_seen = a_seen.lock().unwrap();
+        let paths: Vec<&str> = a_seen.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, ["/start", "/home"]);
+        assert_eq!(b_seen.lock().unwrap().len(), 1);
+        assert_dropped(&b_seen.lock().unwrap()[0]);
+        let home = &a_seen[1];
+        assert!(home.headers.get("authorization").is_none());
+        assert!(home.headers.get("x-custom-secret").is_none());
+        assert_dropped(home);
+        assert_kept_allowed(home);
     }
 
     #[tokio::test]
