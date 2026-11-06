@@ -278,7 +278,7 @@ async fn accepting_a_version_releases_no_stored_hold() {
     let before = holds(&store);
 
     // Accepted, as the API accepts it, and the pipeline started again
-    // under version 2: its sweeps re-judge through the rule-change path.
+    // under version 2.
     upgrade::accept(
         &mut store,
         &Manifest::builtin(),

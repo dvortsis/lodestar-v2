@@ -1,6 +1,6 @@
 # X-commit-rejudge-reuse decisions
 
-Runner brief 2026-11-06T04:45Z, the follow-up to RP-G (#526, `docs/decisions/2026-11-06-RP-G.md`); architecture §20.1, §20.4, §20.6, §20.8, §20.9. No verdict changes, no migration, no owner decision, security or content-safety decision, or owner-set number changes. Two figures go to the runner (the last section).
+Runner brief 2026-11-06T04:45Z, the follow-up to RP-G (#526, `docs/decisions/2026-11-06-RP-G.md`); architecture §20.1, §20.4, §20.6, §20.8, §20.9. No verdict changes, no migration, no owner decision, security or content-safety decision, or owner-set number changes. One figure goes to the runner ("For the runner", under Measured).
 
 ## What was repeated
 - **A flooded or cloned commit** was judged twice in full: prepare's `Engine::judge`, then the writer's `Engine::judge_at_commit` with SP-3 or SP-4 matching. The second differs from the first only in the pack layer, and there only in SP-3 and SP-4: they're the only rules that read the writer's state (`Ctx::with_flood`, `Ctx::with_clone`), and without it neither matches.
@@ -30,6 +30,8 @@ Runner brief 2026-11-06T04:45Z, the follow-up to RP-G (#526, `docs/decisions/202
 ## Tests
 - **The differential property** (`crates/filter/tests/props.rs`, `reuse::the_second_judgment_is_the_full_one`, 3,000 cases): prepare's judgment as the worker makes it, then the commit's from its trail, against `judge_at_commit_unshared`, the full judgment as it was, kept callable as the oracle. It draws flood levels (none, flag, demote), clones of SP-2 and SP-3 originals at demote and hide, an always-adult source at prepare and at commit apart, Is adult and Not adult rules, torrents already Adult, fresh and upgraded installs (versions pending in shadow), pack overrides with and without an `unless`, exceptions to SP-2, SP-3, SP-4, MW-6, CS-4a, a list and your rules, your rules with tags, dates, sizes, negations, shadow periods and stand-ins, CSX-5 entries with expiries and shadow periods, *Always allow*, a hiding list, the floor's hash, `now` and `discovered_at` on either side of those instants, and a change of rules between prepare and commit, after which the trail must not be read. Each first judgment (`judge_classified_with`, `judge_source_adult_with`) and the shared `judge_at_commit` are checked against their unshared oracles in the same cases.
 - `reuse::the_property_reads_trails`: the trail is read in most cases (all but the floor's hash, a date read or `now` across an instant), and those include SP-3 and SP-4 deciding and the Adult reading replayed, so the property tests the path it's about.
+- `reuse::a_trail_is_never_read_for_another_torrent`: another name, other hashes, flags, size or classification don't read the trail, and the commit judges in full.
+- `reuse::each_reading_neutralizes_its_own_words`: a Neutralize entry scoped to the reading as found; the Adult reading meets your rule the found one doesn't, as the full judgment does.
 - `reuse::the_floor_is_judged_again_under_a_trail`: with a trail that fits (the engine edited in place, which no running engine is), a hash put on the floor after prepare decides at commit, as found and as Adult.
 - **In `budget`**, before timing: on the budget's own 512 torrents, the trail holds for every one and the commit from it equals the full judgment, as found and from an always-adult source.
 - **RP-G's guardrail** `the_core_and_the_adult_floor_hold_under_every_pack_state` passes unchanged.
@@ -38,10 +40,41 @@ Runner brief 2026-11-06T04:45Z, the follow-up to RP-G (#526, `docs/decisions/202
 ### Mutations
 Each run against the new path, then reverted (the reuse tests above, and RP-G's core and adult-floor guardrail):
 
-MUTATIONS_TABLE
+| Mutation | Caught by |
+|---|---|
+| The floor skipped on reuse | `the_floor_is_judged_again_under_a_trail` |
+| Reused across a rule change (generation and version unchecked) | the property (`holds_for` after a change) |
+| `now` across an expiry or a shadow period's end | the property |
+| A date read at another time | the property |
+| A rule that reads tags reused in the Adult reading | the property |
+| The Adult reading's candidates from the found reading's tags | the property |
+| SP-3 not judged again at commit | the property |
+| The Adult reading's core judged as found | the property, and RP-G's guardrail |
+| SP-3's and SP-4's pending shadows dropped at commit | the property |
+| Exceptions to SP-3 and SP-4 ignored at commit | the property |
+| Neutralize words not compared before reuse | `each_reading_neutralizes_its_own_words` |
+| The fingerprint unchecked | `a_trail_is_never_read_for_another_torrent` |
+| The Adult reading's floor skipped on reuse | none: an equivalent mutant. The floor doesn't read the content type, so the Adult reading's floor is the found reading's, judged just before; it stays judged again as defence in depth. |
+
+The first run of the property built its trails before the engine went into a `Handle`, which stamps a new generation, so no trail was read and seven mutations passed. That's fixed: prepare and commit share the handle's engine, and the property now asserts the trail holds wherever nothing should stop it.
 
 ## Measured
-NUMBERS
+**In this session's container** (an Intel Xeon @ 2.30 GHz, scaled by the calibration, 0.68–0.70× the reference; it reads 7–10% above the reference runner, as RP-G found), release build, reference-runner µs per torrent at 10,000 rules, mixed:
+
+| Case | Before (RP-G) | After |
+|---|---|---|
+| at commit, one judgment (held) | 47.3–47.9 | 47.4–49.4 (unchanged code path) |
+| a flooded or cloned commit's two judgments (held) | 86.2–88.4 | 48.8–49.9 |
+| at commit, from an always-adult source, from prepare's trail (held, new label) | — | 0.9–1.0 |
+| an always-adult source's find read as found and as Adult (reported; RP-G's "at commit, from an always-adult source", measured the same way) | 88.4–89.1 | 51.9–53.4 |
+| an always-adult source's flooded or cloned find's two judgments (reported) | — | 54.1–55.2 |
+
+Every held case passed in this container. In instructions (callgrind), the two judgments cost 1.02–1.05× one, and the two-way reading 1.075–1.09× one, from 1.96×.
+
+**On the reference runner**: from this PR's CI `filter budget` job, added once it has run.
+
+### For the runner
+- **The always-adult case is measured as the writer now judges it, under a new label.** RP-G's 82.3 µs case was `judge_at_commit(.., adult: true)` in full. The writer now makes that judgment from prepare's trail wherever one holds (every commit but a torrent cache's file, or one after a rule change or a date read), and that is the held case. The full two-way reading is still measured, under its own label, reported, not held: it is prepare's judgment of an always-adult find (and the commit's where no trail holds), one judgment read twice. It came down from 82.3 to about 48 µs on the reference runner (estimated from the container; CI's figure to follow), close to the budget but not held under it. The runner may want to flag it to the owner under §2.19, or hold it once CI shows a margin.
 
 ## Outside the brief's listed paths
 The brief owns `engine.rs`, the writer's commit judgment calls, `props.rs`, `packs_gate.rs`, new pipeline tests and this file. The design needs small changes in the judgment path beside them, each only what it states:

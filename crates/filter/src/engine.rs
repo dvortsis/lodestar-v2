@@ -396,10 +396,14 @@ impl Trail {
     }
 }
 
-/// What a trail is checked against, so it's never read for another
-/// torrent: the hashes, name and file count, and the facts the layers
-/// read but the times (`now`, `discovered_at`), which [`Trail`] checks on
-/// its own. The hashes name the info dict, so its files with them.
+/// What a trail is checked against, so it isn't read for another
+/// torrent: the hashes, name and file count, and some of the facts (size,
+/// piece length, flags, and the classification's type, confidence, adult
+/// kind, junk score, structure, depth and extensions). It's a guard, not a
+/// proof: the trail travels inside its own torrent's record, whose name,
+/// files and classification the writer never changes, and the
+/// classification is derived from the name and files. The times are
+/// checked on their own ([`Trail`]).
 fn fingerprint(item: &Item, facts: &Facts) -> u64 {
     // A quick mix, not a defence: the trail travels inside the torrent's
     // own record, so this only catches a record handed the wrong trail.

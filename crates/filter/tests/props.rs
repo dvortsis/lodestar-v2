@@ -1369,7 +1369,7 @@ fn budget() {
             .zip(&facts)
             .map(|(item, facts)| prepared(&engine, item, facts, true).1)
             .collect();
-        let what = "engine, packs on, 10,000 rules, mixed, at commit, from an always-adult source";
+        let what = "engine, packs on, 10,000 rules, mixed, at commit, from an always-adult source, from prepare's trail";
         let t = time(what, &|i| {
             std::hint::black_box(at_commit_reusing(
                 &engine,
@@ -2202,6 +2202,92 @@ mod reuse {
                 floored.judge_at_commit_unshared(&item, &facts, 0, at, adult)
             );
         }
+    }
+
+    /// A trail is read only for the torrent it was kept for: another
+    /// torrent's, or the same one with other facts, judges in full.
+    #[test]
+    fn a_trail_is_never_read_for_another_torrent() {
+        let e = Handle::new(build(&Setup {
+            pending: false,
+            packs_off: vec![],
+            rules: vec![(0, 2, None, None)],
+            stand_in: None,
+            overrides: vec![],
+            allow: None,
+            exceptions: vec![],
+            class: vec![],
+            pack_overrides: vec![],
+            listed: None,
+        }))
+        .current();
+        let files = vec![FileInfo::new(vec!["a.mkv".into()], 1_234_567_891)];
+        let (a, b) = (
+            "Plain 2024 1080p".to_owned(),
+            "Holiday 2024 1080p".to_owned(),
+        );
+        let (ca, cb) = (
+            lodestar_classify::classify(&a, &files),
+            lodestar_classify::classify(&b, &files),
+        );
+        let hashes = [[3u8; 20]];
+        let item_a = Item {
+            hashes: &hashes,
+            name: &a,
+            files: &files,
+            content_type: ca.content_type,
+        };
+        let item_b = Item {
+            hashes: &hashes,
+            name: &b,
+            files: &files,
+            content_type: cb.content_type,
+        };
+        let facts = |class| Facts {
+            class,
+            size: 1,
+            piece_len: 1,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        };
+        let at = AtCommit {
+            flood: Some(Level::Flag),
+            clone_of: None,
+        };
+        let (_, trail) = prepare(&e, &item_a, &facts(&ca), 0, false);
+        assert!(trail.holds_for(&e, &item_a, &facts(&ca), 0));
+        // Another name: torrent A's trail says nothing of your rule on it.
+        assert!(!trail.holds_for(&e, &item_b, &facts(&cb), 0));
+        let v = e.judge_at_commit_reusing(&trail, &item_b, &facts(&cb), 0, at, false);
+        assert_eq!(
+            v,
+            e.judge_at_commit_unshared(&item_b, &facts(&cb), 0, at, false)
+        );
+        assert_eq!(v.decision.map(|d| d.rule), Some(RuleRef::User(1)));
+        // Other hashes, flags, size or classification.
+        let other = [[4u8; 20]];
+        assert!(!trail.holds_for(
+            &e,
+            &Item {
+                hashes: &other,
+                ..item_a
+            },
+            &facts(&ca),
+            0
+        ));
+        let flagged = Facts {
+            flags: 1,
+            ..facts(&ca)
+        };
+        assert!(!trail.holds_for(&e, &item_a, &flagged, 0));
+        let bigger = Facts {
+            size: 2,
+            ..facts(&ca)
+        };
+        assert!(!trail.holds_for(&e, &item_a, &bigger, 0));
+        let adult = ca.as_adult();
+        assert!(!trail.holds_for(&e, &item_a, &facts(&adult), 0));
     }
 
     /// A Neutralize entry whose scope reads tags applies in one reading and
