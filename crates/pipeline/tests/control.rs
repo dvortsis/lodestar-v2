@@ -220,7 +220,12 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     assert!(gated(
         control.update_source(held, enable(None, None, true)).await
     ));
-    // Disabling needs no consent; an unknown id is refused.
+    // Disabling needs no consent, even for a gated source a build before
+    // this one left on; an unknown id is refused.
+    Store::open(&db, StoreConfig::default())
+        .unwrap()
+        .enable_source(held, None)
+        .unwrap();
     let view = control
         .update_source(
             held,
