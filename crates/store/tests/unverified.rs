@@ -57,6 +57,7 @@ fn named(name: &str) -> Claims {
             confidence: Confidence::Medium,
         },
         adult: None,
+        details: None,
     }
 }
 

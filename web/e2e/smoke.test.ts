@@ -4,11 +4,12 @@
 import { expectNoA11yViolations } from './a11y';
 import { snapshotName } from './support/policy';
 import { ROUTES } from './support/routes';
-import { expectPageSnapshot } from './snapshot';
+import { expectPageSnapshot, freezeClock } from './snapshot';
 import { expect, test } from './support/test';
 
 for (const route of ROUTES) {
 	test(`smoke ${route.name}`, async ({ page, go, mock, themeId, colorMode, density, shots }) => {
+		await freezeClock(page);
 		route.mock?.(mock);
 		await go(route.path);
 		await expect(page.locator('html')).toHaveAttribute('data-theme', themeId);
