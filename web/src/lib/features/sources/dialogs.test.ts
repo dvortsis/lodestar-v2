@@ -369,9 +369,7 @@ describe('purge', () => {
 			target: { value: 'pw-pw-pw' }
 		});
 		await fireEvent.click(screen.getByTestId('purge-confirm'));
-		expect((await screen.findByTestId('purge-problem')).textContent).toContain(
-			'already running'
-		);
+		expect((await screen.findByTestId('purge-problem')).textContent).toContain('already running');
 	});
 
 	it('says what is left when the purge is cancelled', async () => {
