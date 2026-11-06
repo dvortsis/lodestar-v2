@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T00:22:21Z",
+  "updated_at": "2026-11-06T00:24:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3308,10 +3308,13 @@
       "launched": "2026-11-05T23:26Z"
     },
     "P-v06-workers": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnAPwroUfgPM64rXajy",
       "brief": "briefs/P-v06-workers.md",
-      "launched": "2026-11-05T23:37Z"
+      "launched": "2026-11-05T23:37Z",
+      "pr": 519,
+      "merge": "60167b56",
+      "at": "2026-11-06T00:24:04Z"
     },
     "P-v06-companions": {
       "status": "merged",
@@ -5749,17 +5752,8 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T00:12:16Z",
+    "updated": "2026-11-06T00:24:04Z",
     "items": [
-      {
-        "slot": 1,
-        "slice": "P-v06-workers",
-        "role": "docs",
-        "agent": "claude",
-        "doing": "Plan: remote-workers epic into slices (docs only)",
-        "since": "2026-11-05T23:37Z",
-        "session": "session_01MMjhnAPwroUfgPM64rXajy"
-      },
       {
         "slot": 3,
         "slice": "X-search-files-6",
