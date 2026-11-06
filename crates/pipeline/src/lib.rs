@@ -1301,6 +1301,7 @@ fn prepare(
     // (§18.7, §18.9): one whose consent text or endpoints changed since
     // it was acknowledged, whose credentials are gone, or that was
     // enabled some other way, is switched off before it can run.
+    control::switch_off_unapproved(&mut store, manifests.iter().map(|r| &r.manifest).zip(&ids))?;
     let rows = store.sources()?;
     for (r, id) in manifests.iter().zip(&ids) {
         let enabled = rows

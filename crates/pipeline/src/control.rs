@@ -572,6 +572,52 @@ pub fn egress_warnings(
     out
 }
 
+/// Why enabling a source whose class needs consent is refused, as the
+/// API's message says it (X-consent-gate-052).
+pub const CONSENT_GATE_REASON: &str = "this source asks for your consent before it's turned \
+     on, and this version of Lodestar can't show you an approved consent text yet, so it stays \
+     off. It can be turned on in a later version";
+
+/// Whether this build may turn on a source of `class` through
+/// [`Control::update_source`]. A class that needs nothing acknowledged
+/// (None, Account) may. External, Restricted and Overlay are enabled by
+/// accepting a consent text ([`consent::needs_ack`]), and none of those
+/// texts is owner-approved yet: until SRC-15b ships one, acknowledging a
+/// draft nobody is shown isn't consent, so they stay off
+/// (`docs/plan/2026-11-06-v052-feature-manifest.md` §3.4,
+/// `docs/decisions/2026-11-06-X-consent-gate-052.md`). SRC-15b changes
+/// this function, and only for the classes whose text it ships.
+pub const fn consent_text_approved(class: Consent) -> bool {
+    !consent::needs_ack(class)
+}
+
+/// Switches off, at a start and before anything runs, every enabled
+/// source whose class's consent text isn't approved
+/// ([`consent_text_approved`]): one turned on by a build before the gate
+/// (a nightly, or a backup restored from one) doesn't run. Its stored
+/// acknowledgement is left as it is: when SRC-15b ships the approved text,
+/// `consent::need_in` decides whether it covers it (blocking).
+pub(crate) fn switch_off_unapproved<'a>(
+    store: &mut Store,
+    sources: impl IntoIterator<Item = (&'a lodestar_sources::Manifest, &'a SourceId)>,
+) -> Result<(), lodestar_store::Error> {
+    let rows = store.sources()?;
+    for (manifest, id) in sources {
+        let enabled = rows
+            .iter()
+            .any(|r| r.id == *id && r.state == SourceState::Enabled);
+        if enabled && !consent_text_approved(manifest.consent) {
+            store.set_source_state(*id, SourceState::Disabled)?;
+            lodestar_log::log_event!(
+                crate::log_events::SOURCE_STATE_CHANGED,
+                plugin = manifest.id,
+                state = crate::log_events::state(SourceState::Disabled)
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The largest settings document `PATCH /sources/{id}` takes, in bytes.
 /// A plugin's own rules are tighter (a torrent cache's list is at most
 /// about 4 KiB); this bounds what reaches them.
@@ -1131,6 +1177,12 @@ impl Control {
     ///   and Overlay also need `change.password_confirmed`, every time
     ///   they're enabled.
     /// - Account needs credentials stored ([`Control::update_credentials`]).
+    ///
+    /// Until a class's consent text is owner-approved
+    /// ([`consent_text_approved`]), enabling a source of that class is
+    /// refused before anything else is checked, as an invalid `enabled`
+    /// naming [`CONSENT_GATE_REASON`]: today External, Restricted and
+    /// Overlay, so only None and Account sources can be turned on.
     pub async fn update_source(
         &self,
         id: SourceId,
@@ -1172,6 +1224,16 @@ impl Control {
             let mut ack = None;
             let state = match change.enabled {
                 Some(true) if current != SourceState::Enabled => {
+                    // No consent text is owner-approved yet: a source whose
+                    // class is enabled by acknowledging one is refused,
+                    // with or without a stored acknowledgement
+                    // (X-consent-gate-052).
+                    if !consent_text_approved(manifest.consent) {
+                        return Err(SourceError::Invalid {
+                            field: "enabled",
+                            reason: CONSENT_GATE_REASON.into(),
+                        });
+                    }
                     // A purge under way finishes first (SRC-14b).
                     if store.source_purge_started(manifest.id)?.is_some() {
                         return Err(SourceError::Invalid {
@@ -1597,6 +1659,24 @@ mod tests {
                 routing_nodes,
             }),
         }
+    }
+
+    #[test]
+    fn only_classes_with_nothing_to_acknowledge_can_be_turned_on() {
+        for (class, allowed) in [
+            (Consent::None, true),
+            (Consent::Account, true),
+            (Consent::External, false),
+            (Consent::Restricted, false),
+            (Consent::Overlay, false),
+        ] {
+            assert_eq!(consent_text_approved(class), allowed, "{class:?}");
+            // Every class that's refused is one that asks for consent.
+            assert_eq!(!allowed, consent::needs_ack(class), "{class:?}");
+        }
+        // The message names no address and no version.
+        assert!(!CONSENT_GATE_REASON.contains("://"));
+        assert!(!CONSENT_GATE_REASON.ends_with('.'), "the API adds the stop");
     }
 
     #[test]
