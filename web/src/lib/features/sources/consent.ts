@@ -1,5 +1,5 @@
 // The approved consent texts (SRC-4 "Draft consent texts" with owner §2.49's Account change), filled
-// from the API's row. The wording lives in en.json; `consent.test.ts` compares what the dialogs
+// from the API's row. The wording lives in en.json; `dialogs.test.ts` compares what the dialogs
 // show with a copy of the approved section. This file only chooses which message and fills it in.
 // It never decides that consent is satisfied: the server's answer is the truth.
 import { ApiError } from '$lib/api/client';
@@ -17,20 +17,12 @@ export interface ConsentBlocks {
 	confirm: string;
 }
 
-/** The distinct host names of the source's endpoints (a bare host is kept as it is). */
-export function hostsOf(endpoints: readonly string[]): string {
-	const seen = new Set<string>();
-	for (const e of endpoints) {
-		let host = e;
-		try {
-			host = new URL(e).host;
-		} catch {
-			// not a URL: show it as the server gave it
-		}
-		seen.add(host);
-	}
-	return [...seen].join(', ');
-}
+/**
+ * Stands for the address list inside a filled message. The dialog swaps it for the full addresses
+ * the acknowledgement covers (`Source.endpoints`, exactly as the server compares them), set as text
+ * so an address can't be read as markup or bold marks.
+ */
+export const ADDRESSES_MARK = '\uE000';
 
 type Route = NonNullable<Source['egress']['setting']>['route'];
 
@@ -58,7 +50,7 @@ const NETWORK_NAMES: Record<string, string> = {
 
 export function blocksFor(s: Source, cls: ConsentClass): ConsentBlocks {
 	const name = s.name;
-	const hosts = hostsOf(s.endpoints);
+	const hosts = ADDRESSES_MARK;
 	switch (cls) {
 		case 'external':
 			return {
@@ -102,9 +94,13 @@ export function blocksFor(s: Source, cls: ConsentClass): ConsentBlocks {
 	}
 }
 
-/** Splits `**bold**` runs: odd parts are bold. */
-export const richParts = (text: string): { text: string; bold: boolean }[] =>
-	text.split('**').map((t, i) => ({ text: t, bold: i % 2 === 1 }));
+/**
+ * Splits `**bold**` runs (odd parts are bold), and each run at the address mark: the pieces between
+ * marks are text, and an address list belongs at each gap. The marks are split on the template
+ * before any address is put in, so an address with `**` in it stays literal.
+ */
+export const richParts = (text: string): { pieces: string[]; bold: boolean }[] =>
+	text.split('**').map((t, i) => ({ pieces: t.split(ADDRESSES_MARK), bold: i % 2 === 1 }));
 
 /** A restricted or overlay source is enabled with the admin password (Q13). */
 export const needsPassword = (cls: ConsentClass): boolean =>

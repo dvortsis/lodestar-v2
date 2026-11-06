@@ -28,6 +28,7 @@
 	}
 	let { open = $bindable(false), source: s, onenable, onstale }: Props = $props();
 
+	const SEPARATOR = ', ';
 	const cls = $derived(s.consent as ConsentClass);
 	const blocks = $derived(blocksFor(s, cls));
 	const asksPassword = $derived(needsPassword(cls));
@@ -39,11 +40,14 @@
 	let passwordError = $state('');
 	let problem = $state('');
 	let busy = $state(false);
+	// A changed notice: Confirm stays off until the dialog is reopened, so the new list is read first.
+	let stale = $state(false);
 
 	function reset() {
 		password = '';
 		passwordError = '';
 		problem = '';
+		stale = false;
 	}
 	// The password never outlives the dialog: opening and closing both start from an empty field.
 	$effect(() => {
@@ -74,16 +78,33 @@
 			const r = enableRefusal(err);
 			problem = r.text;
 			if (r.password) password = '';
-			if (r.stale) onstale();
+			if (r.stale) {
+				stale = true;
+				onstale();
+			}
 		} finally {
 			busy = false;
 		}
 	}
 </script>
 
+{#snippet addresses()}
+	{#if s.endpoints.length === 0}
+		{m.sources_addresses_none().replace(/\.$/, '')}
+	{:else}
+		{#each s.endpoints as address, k (k)}{#if k > 0}{SEPARATOR}{/if}<code
+				class="font-mono break-all">{address}</code
+			>{/each}
+	{/if}
+{/snippet}
+
+{#snippet pieces(list: string[])}
+	{#each list as piece, k (k)}{#if k > 0}{@render addresses()}{/if}{piece}{/each}
+{/snippet}
+
 {#snippet rich(text: string)}
-	{#each richParts(text) as part, i (i)}{#if part.bold}<strong>{part.text}</strong
-			>{:else}{part.text}{/if}{/each}
+	{#each richParts(text) as part, i (i)}{#if part.bold}<strong>{@render pieces(part.pieces)}</strong
+			>{:else}{@render pieces(part.pieces)}{/if}{/each}
 {/snippet}
 
 <Dialog
@@ -137,6 +158,7 @@
 			type="submit"
 			form={formId}
 			loading={busy}
+			disabled={stale}
 			data-testid="consent-confirm"
 		>
 			{blocks.confirm}

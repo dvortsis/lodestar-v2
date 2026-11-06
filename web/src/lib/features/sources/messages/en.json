@@ -101,9 +101,13 @@
 	"sources_purge_stage_finishing": "Finishing",
 	"sources_purge_stage_purged": "Purged",
 	"sources_purge_done": "{name} was purged.",
-	"sources_purge_result": "{deleted} torrents and {unverified} unverified items deleted; {kept} kept because others found them too.",
 	"sources_purge_cancelled": "The purge was cancelled. What it deleted stays deleted, and {name} stays off. Purge again to finish.",
 	"sources_purge_failed": "The purge stopped before it finished. What it deleted stays deleted, and {name} stays off. Purge again to finish.",
 	"sources_purge_wait": "The purge is still running. You can close this window; it keeps going.",
-	"sources_purge_busy": "A purge is already running for this source. Nothing was changed."
+	"sources_purge_busy": "A purge is already running for this source. Nothing was changed.",
+	"sources_purge_result_heading": "What the purge deleted",
+	"sources_purge_result_torrents": "Torrents deleted: {count}",
+	"sources_purge_result_unverified": "Unverified items deleted: {count}",
+	"sources_purge_result_kept": "Kept because other sources found them too: {count}",
+	"sources_purge_lost": "Couldn't check on the purge. It may still be running. Close this window and look at this source's status here in a minute; if it says \"Purge unfinished\", purge it again."
 }

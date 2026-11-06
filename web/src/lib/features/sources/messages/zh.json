@@ -101,9 +101,13 @@
 	"sources_purge_stage_finishing": "即将完成",
 	"sources_purge_stage_purged": "已清除",
 	"sources_purge_done": "{name} 已清除。",
-	"sources_purge_result": "已删除 {deleted} 个种子和 {unverified} 个未验证条目；另有 {kept} 个因其他来源也找到而保留。",
 	"sources_purge_cancelled": "清除已取消。已删除的内容不会恢复，{name} 保持关闭。再次清除即可完成。",
 	"sources_purge_failed": "清除在完成前停止。已删除的内容不会恢复，{name} 保持关闭。再次清除即可完成。",
 	"sources_purge_wait": "清除仍在进行。你可以关闭此窗口，它会继续运行。",
-	"sources_purge_busy": "此来源已有清除任务正在运行。未做任何更改。"
+	"sources_purge_busy": "此来源已有清除任务正在运行。未做任何更改。",
+	"sources_purge_result_heading": "清除删除了什么",
+	"sources_purge_result_torrents": "已删除的种子：{count}",
+	"sources_purge_result_unverified": "已删除的未验证条目：{count}",
+	"sources_purge_result_kept": "因其他来源也找到而保留：{count}",
+	"sources_purge_lost": "无法查看清除进度。它可能仍在运行。请关闭此窗口，过一分钟再来这里查看此来源的状态；如果显示“清除未完成”，请再次清除。"
 }

@@ -1257,7 +1257,7 @@ export default [
 	// measured) back under the §10.1 45 KB route cap, so it has the default limit again.
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-15b: the Sources first view measured 30.54 KB (was 29.97 KB: the dialogs' loader, their state
-	// and the purge button), limit = measured + ~1.2%; the dialogs load on demand, 35.6 KB, limit 36 KB.
+	// and the purge button), limit = measured + ~1.2%; the dialogs load on demand, 36.2 KB, limit 37 KB.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
@@ -1287,7 +1287,7 @@ export default [
 	entry('Filters packs list (on demand)', filtersPacksLazy, '1.85 KB'), // measured 1.27 KB + ~25% for later packs; RP-6: +0.38 KB for the mount of the pack panels (measured 1.68 KB; 1.79 KB with the {:catch})
 	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '9 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
-	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '36 KB'),
+	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '37 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.

@@ -13,7 +13,8 @@
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import type { components } from '$lib/api/schema';
-	import { refusalText, type Source } from './sources';
+	import IconSpinner from '~icons/ph/circle-notch';
+	import type { Source } from './sources';
 
 	type Job = components['schemas']['BackgroundJob'];
 	type Stage = components['schemas']['PurgeStage'];
@@ -35,6 +36,8 @@
 	let passwordError = $state('');
 	let problem = $state('');
 	let busy = $state(false);
+	// Lost track of the job (the poll failed): what the user should do is said once, in `lost`.
+	let lost = $state(false);
 	let job = $state.raw<Job | null>(null);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let ctl: AbortController | undefined;
@@ -48,7 +51,9 @@
 		}
 	});
 
-	const running = $derived(job !== null && (job.state === 'running' || job.state === 'paused'));
+	const running = $derived(
+		job !== null && !lost && (job.state === 'running' || job.state === 'paused')
+	);
 	const stage = $derived<Stage>(job?.purge?.stage ?? 'stopping');
 	const stageText = $derived(
 		{
@@ -73,7 +78,7 @@
 			if (destroyed || isAbort(e)) return;
 			// The job list keeps finished jobs for 10 minutes; losing track of it isn't a failure of
 			// the purge itself, and the list reload shows where the source stands.
-			problem = m.sources_purge_wait();
+			lost = true;
 			onfinished();
 		}
 	}
@@ -98,18 +103,19 @@
 			if (started.state === 'running' || started.state === 'paused') void poll(started.id);
 			else onfinished();
 		} catch (err) {
-			if (
-				err instanceof ApiError &&
-				(err.code === 'bad_password' || err.code === 'confirm_required')
-			) {
+			// The server's own sentence says what happened and what to do; it never repeats a secret.
+			// (Not shared with the consent dialog: a module both import would sit in a chunk of its own,
+			// which the size gate's on-demand rule doesn't know.)
+			if (!(err instanceof ApiError) || err.status === 0) problem = m.sources_error_network();
+			else if (err.code === 'bad_password' || err.code === 'confirm_required') {
 				passwordError =
 					err.code === 'bad_password'
 						? m.sources_cx_wrong_password()
 						: m.sources_cx_password_needed();
 				password = '';
-			} else if (err instanceof ApiError && err.code === 'purge_running') {
-				problem = m.sources_purge_busy();
-			} else problem = refusalText(err);
+			} else if (err.code === 'purge_running') problem = m.sources_purge_busy();
+			else if (err.message) problem = m.sources_cx_gate({ reason: err.message });
+			else problem = m.sources_error_code({ code: err.code });
 		} finally {
 			busy = false;
 		}
@@ -121,6 +127,7 @@
 	$effect(() => {
 		if (!open && !running) {
 			job = null;
+			lost = false;
 			password = '';
 		}
 	});
@@ -140,6 +147,16 @@
 	closeLabel={m.sources_cx_close()}
 	initialFocus={() => document.getElementById(cancelId)}
 >
+	<!-- Present from the start, so a change to its content is announced. -->
+	<div role="status" data-testid="purge-status">
+		{#if running}
+			<p class="flex items-center gap-2">
+				<IconSpinner class="size-5 shrink-0 motion-safe:animate-spin" aria-hidden="true" />
+				{m.sources_purge_running({ name: s.name })}
+			</p>
+			<p class="ms-7" data-testid="purge-stage">{stageText}</p>
+		{/if}
+	</div>
 	{#if job === null}
 		<form id={formId} class="flex flex-col gap-4" onsubmit={submit} autocomplete="off" novalidate>
 			<div class="flex flex-col gap-2" data-testid="purge-text">
@@ -175,26 +192,32 @@
 	{:else}
 		<div class="flex flex-col gap-3" data-testid="purge-progress">
 			{#if running}
-				<p role="status">{m.sources_purge_running({ name: s.name })}</p>
-				<p data-testid="purge-stage">{stageText}</p>
 				<p class="text-muted-text">{m.sources_purge_wait()}</p>
+			{:else if lost}
+				<Banner kind="warning">{m.sources_purge_lost()}</Banner>
 			{:else if job.state === 'done'}
 				<Banner kind="success">{m.sources_purge_done({ name: s.name })}</Banner>
 				{#if job.purge}
-					<p data-testid="purge-result">
-						{m.sources_purge_result({
-							deleted: count(job.purge.torrents_deleted),
-							unverified: count(job.purge.unverified_deleted),
-							kept: count(job.purge.kept)
-						})}
-					</p>
+					<div data-testid="purge-result">
+						<p class="font-semibold">{m.sources_purge_result_heading()}</p>
+						<ul class="ms-5 list-disc">
+							<li data-testid="purge-torrents">
+								{m.sources_purge_result_torrents({ count: count(job.purge.torrents_deleted) })}
+							</li>
+							<li data-testid="purge-unverified">
+								{m.sources_purge_result_unverified({ count: count(job.purge.unverified_deleted) })}
+							</li>
+							<li data-testid="purge-kept">
+								{m.sources_purge_result_kept({ count: count(job.purge.kept) })}
+							</li>
+						</ul>
+					</div>
 				{/if}
 			{:else if job.state === 'cancelled'}
 				<Banner kind="warning">{m.sources_purge_cancelled({ name: s.name })}</Banner>
 			{:else}
 				<Banner kind="error">{m.sources_purge_failed({ name: s.name })}</Banner>
 			{/if}
-			{#if problem}<p class="text-muted-text">{problem}</p>{/if}
 		</div>
 	{/if}
 	{#snippet footer()}

@@ -1,8 +1,9 @@
 // A copy of the approved consent texts: `docs/decisions/2026-11-02-SRC-4.md` "Draft consent texts"
 // with owner §2.49's one change to the Account text applied. Kept apart from en.json on purpose, so
-// a reworded message fails `consent.test.ts` until the owner has approved the new wording. Each text
+// a reworded message fails `dialogs.test.ts` until the owner has approved the new wording. Each text
 // is `title`, the paragraphs and bullets in page order (`**bold**` marks stay), then the button.
-// `{name}`, `{hosts}`, `{egress}` and `{network}` are filled in from the API.
+// `{name}`, `{egress}` and `{network}` are filled in from the API. `{hosts}` is the full address list
+// (`Source.endpoints`) in a mono face, as the acknowledgement covers whole addresses.
 export const approved = {
 	external: {
 		lines: [

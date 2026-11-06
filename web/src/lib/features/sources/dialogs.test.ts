@@ -3,7 +3,7 @@ import { configure, fireEvent, render, screen, waitFor, within } from '@testing-
 import { mockFetch } from '../filters/flows/testing/fetch';
 import SourcesScreen from './SourcesScreen.svelte';
 import { approved } from './consent-approved.fixture';
-import { blocksFor } from './consent';
+import { ADDRESSES_MARK, blocksFor } from './consent';
 import { darknet, dht, lime, nyaa, source, sourceList, tracker } from './fixtures';
 
 configure({ defaultHidden: true, asyncUtilTimeout: 10_000 });
@@ -55,8 +55,11 @@ describe('consent dialogs: the approved texts', () => {
 	const cases = [
 		{
 			cls: 'external' as const,
-			s: { ...nyaa, endpoints: ['https://nyaa.example/a', 'https://api.nyaa.example/b'] },
-			vals: { hosts: 'nyaa.example, api.nyaa.example', egress: 'direct connection' }
+			s: { ...nyaa, endpoints: ['https://nyaa.example/a', 'http://api.nyaa.example/~me/b'] },
+			vals: {
+				hosts: 'https://nyaa.example/a, http://api.nyaa.example/~me/b',
+				egress: 'direct connection'
+			}
 		},
 		{ cls: 'restricted' as const, s: lime, vals: {} },
 		{ cls: 'overlay' as const, s: darknet, vals: { network: 'I2P' } }
@@ -74,11 +77,41 @@ describe('consent dialogs: the approved texts', () => {
 
 	it('account: the approved text (shown by SRC-15c) is in the messages and matches', () => {
 		const b = blocksFor(tracker, 'account');
-		const got = [b.title, ...b.paragraphs, b.confirm].map((x) => x.replaceAll('**', ''));
+		const got = [b.title, ...b.paragraphs, b.confirm].map((x) =>
+			x
+				.replaceAll('**', '')
+				.replaceAll(ADDRESSES_MARK, 'https://tracker.example/api, https://tracker.example/rss')
+		);
 		const want = approved.account;
 		expect(got).toEqual(
-			[...want.lines, want.buttons[0]].map((x) => fill(x, tracker, { hosts: 'tracker.example' }))
+			[...want.lines, want.buttons[0]].map((x) =>
+				fill(x, tracker, { hosts: 'https://tracker.example/api, https://tracker.example/rss' })
+			)
 		);
+	});
+
+	it('shows the full addresses the acknowledgement covers, so a changed path is seen', async () => {
+		const a = source({ ...nyaa, endpoints: ['https://cache.example/~me/{hash}.torrent'] });
+		setup(a);
+		await open(1);
+		const code = () =>
+			[...screen.getByTestId('consent-text').querySelectorAll('code')].map((c) => c.textContent);
+		expect(code()).toEqual(['https://cache.example/~me/{hash}.torrent']);
+	});
+
+	it('sets an address with bold marks literally and never turns it bold', async () => {
+		setup(source({ ...nyaa, endpoints: ['https://x.example/**a**/b'] }));
+		await open(1);
+		const text = screen.getByTestId('consent-text');
+		expect(text.querySelector('code')!.textContent).toBe('https://x.example/**a**/b');
+		expect(text.querySelectorAll('strong')).toHaveLength(0);
+	});
+
+	it('says so when no address is listed', async () => {
+		setup(source({ ...nyaa, endpoints: [] }));
+		await open(1);
+		const p = screen.getByTestId('consent-text').textContent!;
+		expect(p).toContain('on your behalf: No address is listed yet. They can see');
 	});
 
 	it('keeps the bold the approved text marks', async () => {
@@ -200,6 +233,26 @@ describe('consent dialogs: other refusals', () => {
 		await waitFor(() =>
 			expect(net.sent.filter((s) => s.method === 'GET').length).toBeGreaterThan(before)
 		);
+		// Confirm stays off until the dialog is reopened, so the new notice is read first.
+		const confirm = screen.getByTestId('consent-confirm') as HTMLButtonElement;
+		expect(confirm.disabled).toBe(true);
+		await fireEvent.click(confirm);
+		expect(writes()).toHaveLength(1);
+		await fireEvent.click(screen.getByTestId('consent-cancel'));
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		await fireEvent.click(toggleOf(3));
+		await screen.findByRole('dialog');
+		expect((screen.getByTestId('consent-confirm') as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	it('Overlay: keeps its bold and starts on Cancel', async () => {
+		setup(darknet);
+		await open(4);
+		const bold = [...screen.getByTestId('consent-text').querySelectorAll('strong')].map(
+			(b) => b.textContent
+		);
+		expect(bold).toEqual(['Use a VPN', 'Purge']);
+		await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('consent-cancel')));
 	});
 
 	it('Restricted: Escape cancels without sending anything', async () => {
@@ -282,11 +335,14 @@ describe('purge', () => {
 		});
 		await fireEvent.click(screen.getByTestId('purge-confirm'));
 		await screen.findByTestId('purge-stage');
-		expect(screen.getByTestId('purge-progress').textContent).toContain('Purging Nyaa');
+		expect(screen.getByTestId('purge-status').textContent).toContain('Purging Nyaa');
 		const r = await screen.findByTestId('purge-result');
-		expect(r.textContent).toBe(
-			'1,204 torrents and 12 unverified items deleted; 5 kept because others found them too.'
+		expect(screen.getByTestId('purge-torrents').textContent).toContain('Torrents deleted: 1,204');
+		expect(screen.getByTestId('purge-unverified').textContent).toContain(
+			'Unverified items deleted: 12'
 		);
+		expect(screen.getByTestId('purge-kept').textContent).toContain('found them too: 5');
+		expect(r).toBeTruthy();
 		expect(bodyOf()).toEqual({ password: 'hunter2hunter2' });
 	});
 
@@ -313,7 +369,9 @@ describe('purge', () => {
 			target: { value: 'pw-pw-pw' }
 		});
 		await fireEvent.click(screen.getByTestId('purge-confirm'));
-		expect((await screen.findByTestId('purge-problem')).textContent).toContain('already running');
+		expect((await screen.findByTestId('purge-problem')).textContent).toContain(
+			'already running'
+		);
 	});
 
 	it('says what is left when the purge is cancelled', async () => {
