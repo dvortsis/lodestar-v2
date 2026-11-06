@@ -1302,6 +1302,12 @@ fn budget() {
         // torrents is classified Adult, so every one pays both readings).
         // Reported, not held, as the two judgments are: it's a second
         // reading of one judgment (RP-G, runner's review of #526).
+        assert!(
+            items
+                .iter()
+                .all(|i| i.content_type != lodestar_classify::ContentType::Adult),
+            "none of the budget's torrents is classified Adult, so each pays the Adult reading"
+        );
         let what = "engine, packs on, 10,000 rules, mixed, at commit, from an always-adult source";
         let t = time(what, &|i| {
             std::hint::black_box(at_commit_as(

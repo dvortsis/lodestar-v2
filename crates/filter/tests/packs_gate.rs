@@ -692,9 +692,14 @@ fn engine_decides(e: &Engine, t: &Held) -> Vec<(&'static str, Option<(RuleRef, A
         "at commit",
         decided(&e.judge_at_commit(&item, &facts, 0, at, t.adult_source)),
     )];
-    if !t.adult_source {
-        out.push(("prepare", decided(&e.judge(&item, Some(&facts), 0))));
-    }
+    // Prepare's judgment: an always-adult source's find goes through the
+    // production path that also reads it as Adult.
+    let prepare = if t.adult_source {
+        lodestar_filter::reclassify::judge_source_adult(e, &item, &facts, 0).0
+    } else {
+        e.judge(&item, Some(&facts), 0)
+    };
+    out.push(("prepare", decided(&prepare)));
     out
 }
 
