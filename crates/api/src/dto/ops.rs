@@ -392,9 +392,14 @@ pub struct Source {
     #[schema(inline)]
     pub consent: ConsentClass,
     /// Its class is enabled by acknowledging what's shown (`external`,
-    /// `restricted`, `overlay`): enabling it sends `"consent"` naming the
-    /// class and `"consent_version"`, unless that version is already
-    /// acknowledged.
+    /// `restricted`, `overlay`).
+    ///
+    /// This build refuses to enable any source whose class isn't `none`
+    /// (`400 invalid_setting` on `enabled`), this one included, whatever
+    /// the request sends: it ships no approved consent text yet. Once a
+    /// later version ships the class's approved text, enabling a source
+    /// with this set sends `"consent"` naming the class and
+    /// `"consent_version"`, unless that version is already acknowledged.
     pub consent_required: bool,
     /// The version an acknowledgement must name, sent back as it is. It
     /// holds the class's consent-text version and every address in
@@ -516,8 +521,14 @@ pub struct SourceList {
 #[serde(deny_unknown_fields)]
 #[schema(example = json!({ "enabled": true, "priority": "high" }))]
 pub struct SourcePatch {
-    /// The consent class you acknowledge; needed to enable a source whose
-    /// `needs` is `endpoints_ack` or `consent`, and must be its class.
+    /// The consent class you acknowledge.
+    ///
+    /// This build refuses to enable any source whose class isn't `none`
+    /// (`400 invalid_setting` on `enabled`), with or without this field: it
+    /// ships no approved consent text yet, so nothing is acknowledged or
+    /// stored. Once a later version ships the class's approved text, this
+    /// is needed to enable a source whose `needs` is `endpoints_ack` or
+    /// `consent`, and must be its class.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, inline)]
     pub consent: Option<ConsentClass>,

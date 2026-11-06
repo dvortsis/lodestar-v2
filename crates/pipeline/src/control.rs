@@ -579,24 +579,44 @@ pub const CONSENT_GATE_REASON: &str = "this source asks for your consent before 
      off. It can be turned on in a later version";
 
 /// Whether this build may turn on a source of `class` through
-/// [`Control::update_source`]. A class that needs nothing acknowledged
-/// (None, Account) may. External, Restricted and Overlay are enabled by
-/// accepting a consent text ([`consent::needs_ack`]), and none of those
-/// texts is owner-approved yet: until SRC-15b ships one, acknowledging a
-/// draft nobody is shown isn't consent, so they stay off
-/// (`docs/plan/2026-11-06-v052-feature-manifest.md` §3.4,
-/// `docs/decisions/2026-11-06-X-consent-gate-052.md`). SRC-15b changes
-/// this function, and only for the classes whose text it ships.
+/// [`Control::update_source`], and keep one on at a start. Only None,
+/// which shows no consent dialog, may. Every other class is turned on
+/// through a dialog whose text the owner approves (§2.49): External,
+/// Restricted and Overlay by accepting a consent text
+/// ([`consent::needs_ack`]), Account by its credentials dialog. None of
+/// those dialogs ships in this build, so those classes stay off until one
+/// does (`docs/plan/2026-11-06-v052-feature-manifest.md` §3.4,
+/// `docs/decisions/2026-11-06-X-consent-gate-052.md`,
+/// `docs/decisions/2026-11-06-X-consent-gate-polish.md`).
+/// X-consent-gate-lift changes this function, and only for the classes
+/// whose approved dialog has shipped.
 pub const fn consent_text_approved(class: Consent) -> bool {
-    !consent::needs_ack(class)
+    matches!(class, Consent::None)
 }
 
+/// Why a start switched a source off, as its
+/// `pipeline.source_state_changed` event's `reason`: its class's consent
+/// text isn't approved in this build ([`consent_text_approved`]).
+pub const REASON_TEXT_UNAPPROVED: &str = "consent_text_unapproved";
+/// Why a start switched a source off: its class condition no longer
+/// holds (§18.7, §18.9; [`consent::need_in`]): the consent text or
+/// endpoints changed since it was acknowledged, its credentials are gone,
+/// or it was enabled some other way.
+pub const REASON_LAPSED: &str = "consent_lapsed";
+
 /// Switches off, at a start and before anything runs, every enabled
-/// source whose class's consent text isn't approved
-/// ([`consent_text_approved`]): one turned on by a build before the gate
-/// (a nightly, or a backup restored from one) doesn't run. Its stored
-/// acknowledgement is left as it is: when SRC-15b ships the approved text,
-/// `consent::need_in` decides whether it covers it (blocking).
+/// source that may not run, and logs `pipeline.source_state_changed` with
+/// the reason:
+/// - [`REASON_TEXT_UNAPPROVED`]: its class's consent text isn't approved
+///   ([`consent_text_approved`]), so one turned on by a build before the
+///   gate (a nightly, or a backup restored from one) doesn't run. Its
+///   stored acknowledgement is left as it is: once the approved text
+///   ships, `consent::need_in` decides whether it covers it (blocking).
+/// - [`REASON_LAPSED`]: its class condition no longer holds
+///   ([`consent::need_in`], §18.7, §18.9).
+///
+/// The class check comes first, so a source that fails both is logged
+/// once, as unapproved.
 pub(crate) fn switch_off_unapproved<'a>(
     store: &mut Store,
     sources: impl IntoIterator<Item = (&'a lodestar_sources::Manifest, &'a SourceId)>,
@@ -606,16 +626,40 @@ pub(crate) fn switch_off_unapproved<'a>(
         let enabled = rows
             .iter()
             .any(|r| r.id == *id && r.state == SourceState::Enabled);
-        if enabled && !consent_text_approved(manifest.consent) {
-            store.set_source_state(*id, SourceState::Disabled)?;
-            lodestar_log::log_event!(
-                crate::log_events::SOURCE_STATE_CHANGED,
-                plugin = manifest.id,
-                state = crate::log_events::state(SourceState::Disabled)
-            );
+        if !enabled {
+            continue;
         }
+        let approved = consent_text_approved(manifest.consent);
+        let need = if approved {
+            consent::need_in(store, manifest)?
+        } else {
+            None
+        };
+        let Some(reason) = off_reason(approved, need) else {
+            continue;
+        };
+        store.set_source_state(*id, SourceState::Disabled)?;
+        lodestar_log::log_event!(
+            crate::log_events::SOURCE_STATE_CHANGED,
+            plugin = manifest.id,
+            state = crate::log_events::state(SourceState::Disabled),
+            reason = reason
+        );
     }
     Ok(())
+}
+
+/// Why a start switches off an enabled source, if it does: `approved` is
+/// [`consent_text_approved`] for its class, `need` what
+/// [`consent::need_in`] says it still needs.
+fn off_reason(approved: bool, need: Option<Need>) -> Option<&'static str> {
+    if !approved {
+        Some(REASON_TEXT_UNAPPROVED)
+    } else if need.is_some() {
+        Some(REASON_LAPSED)
+    } else {
+        None
+    }
 }
 
 /// The largest settings document `PATCH /sources/{id}` takes, in bytes.
@@ -1180,9 +1224,9 @@ impl Control {
     ///
     /// Until a class's consent text is owner-approved
     /// ([`consent_text_approved`]), enabling a source of that class is
-    /// refused before anything else is checked, as an invalid `enabled`
-    /// naming [`CONSENT_GATE_REASON`]: today External, Restricted and
-    /// Overlay, so only None and Account sources can be turned on.
+    /// refused before anything else is checked, credentials included, as
+    /// an invalid `enabled` naming [`CONSENT_GATE_REASON`]: today every
+    /// class but None, so only None sources can be turned on.
     pub async fn update_source(
         &self,
         id: SourceId,
@@ -1224,10 +1268,10 @@ impl Control {
             let mut ack = None;
             let state = match change.enabled {
                 Some(true) if current != SourceState::Enabled => {
-                    // No consent text is owner-approved yet: a source whose
-                    // class is enabled by acknowledging one is refused,
-                    // with or without a stored acknowledgement
-                    // (X-consent-gate-052).
+                    // No consent text is owner-approved yet: a source of
+                    // any class but None is refused, with or without a
+                    // stored acknowledgement or credentials
+                    // (X-consent-gate-052, X-consent-gate-polish).
                     if !consent_text_approved(manifest.consent) {
                         return Err(SourceError::Invalid {
                             field: "enabled",
@@ -1662,21 +1706,46 @@ mod tests {
     }
 
     #[test]
-    fn only_classes_with_nothing_to_acknowledge_can_be_turned_on() {
+    fn only_a_class_with_no_consent_dialog_can_be_turned_on() {
         for (class, allowed) in [
             (Consent::None, true),
-            (Consent::Account, true),
+            // Its credentials dialog isn't approved text yet (§2.49).
+            (Consent::Account, false),
             (Consent::External, false),
             (Consent::Restricted, false),
             (Consent::Overlay, false),
         ] {
             assert_eq!(consent_text_approved(class), allowed, "{class:?}");
-            // Every class that's refused is one that asks for consent.
-            assert_eq!(!allowed, consent::needs_ack(class), "{class:?}");
+            // Every class that's refused is one with a dialog to show.
+            assert_eq!(
+                !allowed,
+                consent::needs_ack(class) || consent::needs_credentials(class),
+                "{class:?}"
+            );
         }
         // The message names no address and no version.
         assert!(!CONSENT_GATE_REASON.contains("://"));
         assert!(!CONSENT_GATE_REASON.ends_with('.'), "the API adds the stop");
+    }
+
+    #[test]
+    fn a_start_names_why_it_switches_a_source_off() {
+        // The class check comes first: an unapproved class is logged as
+        // that, whatever else it lacks.
+        for need in [
+            None,
+            Some(Need::Credentials),
+            Some(Need::Endpoints),
+            Some(Need::Consent),
+        ] {
+            assert_eq!(off_reason(false, need), Some("consent_text_unapproved"));
+        }
+        for need in [Need::Credentials, Need::Endpoints, Need::Consent] {
+            assert_eq!(off_reason(true, Some(need)), Some("consent_lapsed"));
+        }
+        assert_eq!(off_reason(true, None), None, "it stays on");
+        assert_eq!(REASON_TEXT_UNAPPROVED, "consent_text_unapproved");
+        assert_eq!(REASON_LAPSED, "consent_lapsed");
     }
 
     #[test]

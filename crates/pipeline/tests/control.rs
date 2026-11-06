@@ -372,8 +372,9 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         let ext_current = store.sources().unwrap()[5].id;
         let ext_ack = Ack::of(&probe("ext_current", Consent::External).0.manifest).encode();
         store.enable_source(ext_current, Some(&ext_ack)).unwrap();
-        // An Account source with its credentials stays on: it has no
-        // consent text.
+        // An Account source with its credentials is switched off too:
+        // its credentials dialog isn't approved text yet (§2.49,
+        // X-consent-gate-polish). Its credentials are kept.
         let ready = store.sources().unwrap()[6].id;
         store
             .update_source_secrets(ready, &[("api_key", b"sealed")], &[], None)
@@ -400,6 +401,9 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         plugins.push(p);
         ran.push((id, r));
     }
+    // A None source, on by default, shows the start has run its sources.
+    let (on, on_ran) = probe_with("on", Consent::None, true);
+    plugins.push(on);
     let pipeline = Pipeline::start_with(
         PipelineConfig::default(),
         Store::open(&db, StoreConfig::default()).unwrap(),
@@ -408,25 +412,26 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
     )
     .await
     .unwrap();
-    let (_, ready_ran) = &ran[6];
-    until("the Account source with credentials runs", || {
-        ready_ran.load(Ordering::SeqCst)
-    })
-    .await;
+    until("the None source runs", || on_ran.load(Ordering::SeqCst)).await;
     for s in pipeline.sources() {
-        assert_eq!(s.enabled, s.plugin == "acct_ready", "{}", s.plugin);
+        assert_eq!(s.enabled, s.plugin == "on", "{}", s.plugin);
     }
-    for (id, r) in &ran[..6] {
+    for (id, r) in &ran {
         assert!(!r.load(Ordering::SeqCst), "{id} ran");
     }
     drop(pipeline.shutdown().await.unwrap());
-    for (id, _) in &classes[..6] {
+    for (id, _) in classes {
         assert_eq!(stored(&db, id), SourceState::Disabled, "{id}");
     }
-    // The acknowledgements are kept for when approved text ships.
+    // The acknowledgements and credentials are kept for when approved
+    // text ships.
     let store = Store::open(&db, StoreConfig::default()).unwrap();
     assert_eq!(store.source_consent("current").unwrap(), Some(ack));
     assert_eq!(store.source_consent("ext_current").unwrap(), Some(ext_ack));
+    assert_eq!(
+        store.source_secret_names("acct_ready").unwrap(),
+        ["api_key"]
+    );
 }
 
 #[tokio::test]
@@ -463,10 +468,28 @@ async fn an_account_source_needs_credentials_and_losing_them_disables_it() {
         consent: Some(Consent::Account),
         ..SourceChange::default()
     };
-    assert!(matches!(
-        control.update_source(id, on.clone()).await,
-        Err(SourceError::CredentialsRequired)
-    ));
+    // Account's credentials dialog isn't approved text yet (§2.49,
+    // X-consent-gate-polish): enabling is refused before credentials are
+    // looked at, with or without them. The source still says it needs
+    // them.
+    let gated = |r: Result<_, SourceError>| {
+        matches!(
+            r,
+            Err(SourceError::Invalid { field: "enabled", ref reason })
+                if reason == lodestar_pipeline::control::CONSENT_GATE_REASON
+        )
+    };
+    assert!(gated(control.update_source(id, on.clone()).await));
+    let need = |control: &Control| {
+        control
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|v| v.status.id == id)
+            .unwrap()
+            .need
+    };
+    assert_eq!(need(&control), Some(consent::Need::Credentials));
     // A bad name is refused, naming no value.
     let bad = control
         .update_credentials(
@@ -491,9 +514,12 @@ async fn an_account_source_needs_credentials_and_losing_them_disables_it() {
         creds.get("acct", "api_key").unwrap().unwrap().expose(),
         "the-key-value"
     );
-    let view = control.update_source(id, on).await.unwrap();
-    assert_eq!(view.state, SourceState::Enabled);
-    // Removing it disables the source in the same write.
+    assert_eq!(need(&control), None);
+    assert!(gated(control.update_source(id, on).await));
+    assert_eq!(stored(&db, "acct"), SourceState::Disabled);
+    // One a build before the gate turned on (seeded here, as the API no
+    // longer can): removing its credential disables it in the same write.
+    store.lock().unwrap().enable_source(id, None).unwrap();
     let view = control
         .update_credentials(id, &creds, vec![("api_key".into(), None)])
         .await
@@ -1347,6 +1373,12 @@ async fn turning_a_running_source_off_stops_it_at_once() {
 /// Removing the credential an enabled Account source needs disables it
 /// and stops its running plugin at once (a key read once at start, as
 /// Prowlarr's is, isn't used again).
+///
+/// Until Account's credentials dialog ships approved text (§2.49,
+/// X-consent-gate-polish), no Account source can run: enabling one is
+/// refused, and one a build before the gate turned on is switched off at
+/// the start before it runs. X-consent-gate-lift brings back the running
+/// leg when it opens Account.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn losing_a_credential_stops_the_running_plugin() {
     let dir = tempfile::tempdir().unwrap();
@@ -1355,7 +1387,8 @@ async fn losing_a_credential_stops_the_running_plugin() {
         let (p, _) = ticker("acct", Consent::Account);
         let (pipeline, control, store) = started(&db, p).await;
         let id = pipeline.sources()[0].id;
-        let creds = SourceCredentials::with_keys(store, Arc::new(SecretStore::from_key(&[3; 32])));
+        let creds =
+            SourceCredentials::with_keys(store.clone(), Arc::new(SecretStore::from_key(&[3; 32])));
         control
             .update_credentials(
                 id,
@@ -1369,13 +1402,26 @@ async fn losing_a_credential_stops_the_running_plugin() {
             consent: Some(Consent::Account),
             ..SourceChange::default()
         };
-        control.update_source(id, on).await.unwrap();
+        assert!(matches!(
+            control.update_source(id, on).await,
+            Err(SourceError::Invalid {
+                field: "enabled",
+                ..
+            })
+        ));
+        // As a build before the gate could have left it.
+        store.lock().unwrap().enable_source(id, None).unwrap();
         drop(control);
         pipeline.shutdown().await.unwrap();
     }
     let (p, sent) = ticker("acct", Consent::Account);
     let (pipeline, control, store) = started(&db, p).await;
-    until("it runs with its key", || sent.load(Ordering::SeqCst) >= 3).await;
+    // The start switched it off before running it: `start_with` returns
+    // once its sources are started, so nothing is still on its way.
+    assert!(!pipeline.sources()[0].enabled);
+    assert!(!pipeline.sources()[0].running);
+    assert_eq!(sent.load(Ordering::SeqCst), 0, "it never ran");
+    assert_eq!(stored(&db, "acct"), SourceState::Disabled);
     let id = pipeline.sources()[0].id;
     let creds = SourceCredentials::with_keys(store, Arc::new(SecretStore::from_key(&[3; 32])));
     let view = control

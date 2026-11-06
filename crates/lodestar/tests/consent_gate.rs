@@ -279,14 +279,20 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     let cache = s.source("torrent_cache");
     assert_eq!(cache["enabled"], false, "{cache}");
     assert_ne!(cache["health"]["running"], true, "{cache}");
+    // The stored record covers what's shown, so nothing is left to
+    // acknowledge: it's off because no consent text is approved yet, not
+    // because its consent lapsed. The log names that reason.
+    assert_eq!(cache["needs"], Value::Null, "{cache}");
     {
         let log = s.log.lock().unwrap();
         assert!(
             log.lines().any(|l| l.contains("Source state changed")
                 && l.contains("torrent_cache")
-                && l.contains("disabled")),
+                && l.contains("disabled")
+                && l.contains("consent_text_unapproved")),
             "{log}"
         );
+        assert!(!log.contains("consent_lapsed"), "{log}");
     }
     // The record is kept for when an approved text ships.
     let kept = Store::open_reader(dir.path().join("lodestar.db"), StoreConfig::default())
