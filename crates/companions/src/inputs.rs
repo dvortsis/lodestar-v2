@@ -57,8 +57,14 @@ pub const HOST_PATH_MAX: usize = 255;
 /// and runtime folders (the Docker socket lives under `/run` and
 /// `/var/run`).
 const FORBIDDEN_ROOTS: &[&str] = &[
-    "bin", "boot", "dev", "etc", "lib", "lib64", "proc", "root", "run", "sbin", "sys", "usr",
+    "bin", "boot", "dev", "etc", "lib", "lib32", "lib64", "libx32", "opt", "proc", "root", "run",
+    "sbin", "snap", "sys", "usr", "var",
 ];
+
+/// Folders under `/var` a companion may be given: application data and
+/// spool space. The rest of `/var` holds Docker's and containerd's state
+/// (`/var/lib/docker`) and, on hosts where it isn't a link, `/var/run`.
+const VAR_ALLOWED: &[&str] = &["lib/lodestar", "spool/lodestar"];
 
 /// An absolute host path to mount into a companion's container
 /// (`/mnt/user/appdata/qbittorrent`).
@@ -66,8 +72,10 @@ const FORBIDDEN_ROOTS: &[&str] = &[
 /// Linux paths only: Docker and Unraid hosts are Linux. Components are
 /// ASCII letters, digits, `-`, `_`, `.` and space; no `.` or `..`
 /// component, no trailing `/`, at most [`HOST_PATH_MAX`] bytes. `/`, the
-/// folders in the system list (`/etc`, `/proc`, `/run`, …), `/var/run` and
-/// any path naming `docker.sock` are refused.
+/// folders in the system list (`/etc`, `/proc`, `/run`, `/var`, …) and
+/// any path naming a `*.sock` file are refused. Under `/var`, only
+/// `/var/lib/lodestar` and `/var/spool/lodestar` and what's below them are
+/// accepted, so Docker's state (`/var/lib/docker`) is never mounted.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HostPath(String);
 
@@ -101,11 +109,15 @@ impl HostPath {
             components.push(c);
         }
         let first = components[0];
-        if FORBIDDEN_ROOTS.contains(&first)
-            || (first == "var" && components.get(1) == Some(&"run"))
+        let var_ok = first == "var"
+            && VAR_ALLOWED.iter().any(|a| {
+                let want: Vec<&str> = a.split('/').collect();
+                components.len() >= want.len() + 1 && components[1..=want.len()] == want[..]
+            });
+        if (FORBIDDEN_ROOTS.contains(&first) && !var_ok)
             || components
                 .iter()
-                .any(|c| c.eq_ignore_ascii_case("docker.sock") || c.ends_with(".sock"))
+                .any(|c| c.to_ascii_lowercase().ends_with(".sock"))
         {
             return Err(InputError::Forbidden);
         }
@@ -355,6 +367,17 @@ mod tests {
             ("/srv/containerd.sock", InputError::Forbidden),
             ("/root", InputError::Forbidden),
             ("/sys/fs/cgroup", InputError::Forbidden),
+            ("/var", InputError::Forbidden),
+            ("/var/lib", InputError::Forbidden),
+            ("/var/lib/docker", InputError::Forbidden),
+            ("/var/lib/docker/volumes/x", InputError::Forbidden),
+            ("/var/lib/containerd", InputError::Forbidden),
+            ("/var/lib/lodestarx", InputError::Forbidden),
+            ("/var/spool", InputError::Forbidden),
+            ("/opt", InputError::Forbidden),
+            ("/snap/x", InputError::Forbidden),
+            ("/lib32", InputError::Forbidden),
+            ("/mnt/x.SOCK", InputError::Forbidden),
         ];
         for (s, e) in cases {
             assert_eq!(HostPath::parse(s), Err(*e), "{s:?}");

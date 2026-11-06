@@ -109,7 +109,7 @@ Generated compose services and Unraid templates are built only from these valida
 
 | Type | Accepts | Refuses |
 |---|---|---|
-| `HostPath` | Absolute Linux paths with `[A-Za-z0-9._ -]` components; at most 255 bytes | `/`; `/etc`, `/proc`, `/run` and the other system folders; `/var/run`; any `*.sock` |
+| `HostPath` | Absolute Linux paths with `[A-Za-z0-9._ -]` components; at most 255 bytes | `/`; `/etc`, `/proc`, `/run`, `/opt`, `/var` and the other system folders (under `/var`, only `/var/lib/lodestar` and `/var/spool/lodestar` are allowed); any `*.sock` |
 | `Puid`, `Pgid` | `1..=2147483647` | `0` (root) |
 | `PortNumber` | `1024..=65535` | Anything lower |
 | `ContainerName` | Lower-case Docker names | Anything else |
