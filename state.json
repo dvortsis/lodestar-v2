@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T02:00:07Z",
+  "updated_at": "2026-11-06T03:03:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5116,6 +5116,18 @@
     {
       "at": "2026-11-06T01:05:11Z",
       "note": "X-net-redirect-allowlist (low, Opus, /security-review): crates/integrations/src/net.rs:843-846 GuardedClient::send_following strips only Authorization/Cookie on cross-origin 307/308; reuse X-sources-low's allow-list (CROSS_ORIGIN_HEADERS). Callers (ntfy, webhook) set no other credential header today. From #521 review."
+    },
+    {
+      "at": "2026-11-06T03:03:38Z",
+      "note": "X-commit-rejudge-reuse (Opus, core): at commit, reuse prepare's verdict except the pack layer, so a flood/clone or SP-4-payload commit's double judgment (86.2-86.4 us per RP-G #526) comes under the owner's 50 us per torrent. Owns crates/pipeline/src/writer.rs + crates/filter/src/engine.rs judgment path. Owner flag (\u00a72.19) at RP-G merge."
+    },
+    {
+      "at": "2026-11-06T03:03:38Z",
+      "note": "RP-G follow-up: a 'releases nothing' test against real stored holds (not rowless holds); fold into X-commit-rejudge-reuse or its own slice."
+    },
+    {
+      "at": "2026-11-06T03:03:38Z",
+      "note": "Runner PR: fix rule-pack plan line 94 and RP-G brief to name web/e2e/packs.routes.test.ts and crates/api/tests/packs_gate.rs."
     }
   ],
   "main_health": [
