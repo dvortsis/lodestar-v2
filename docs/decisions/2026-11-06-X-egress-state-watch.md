@@ -17,5 +17,5 @@ Runner brief, 2026-11-06T04:10Z, from the fresh review of #525 (X-tcache-recheck
 - `crates/sources/src/egress_tests.rs`, over a real database file and the host's wiring:
   - with the shared store's lock held past `STATE_WAIT` by another thread, an enabled source's requests still go out, while the old wiring (the check on the shared lock) refuses;
   - each state a writer commits (Disabled, Paused, Purged, then Enabled again) is read by the very next request, refused at the transport with nothing connecting;
-  - a plugin with no row, and a states reader that can't be read, refuse.
+  - a plugin with no row refuses, and so does a row the reader can't decode (a real SQL read error). A reader whose lock is poisoned refuses too: that case runs on its own database with a valid Enabled row, and a request goes out before the poison, so only the poison can refuse.
 - The #525 egress test (`a_source_switched_off_sends_nothing`) and `consent::tests::source_enabled_reads_the_plugins_own_row` are unchanged and pass.

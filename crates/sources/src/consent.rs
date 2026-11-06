@@ -376,7 +376,9 @@ impl SourceCredentials {
     /// shared store's lock can't hold back a plugin's requests
     /// (X-egress-state-watch). The reader takes a fresh WAL snapshot for
     /// every read, so a state any writer commits is seen by the next
-    /// request: there's no second copy to keep in step.
+    /// request: there's no second copy to keep in step. Call it before
+    /// cloning: a clone of `self` keeps reading states under the shared
+    /// store's lock.
     pub fn reading_states_from(self, reader: Arc<Mutex<Store>>) -> SourceCredentials {
         let keys = match &self.inner.keys {
             Keys::Fixed(k) => Keys::Fixed(k.clone()),

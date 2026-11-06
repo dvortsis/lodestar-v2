@@ -2299,10 +2299,22 @@ async fn an_unreadable_states_reader_sends_nothing() {
     assert_eq!(server.conns(), 0);
     assert_eq!(egress.status().counters.policy_refusals, 1);
 
-    // A reader poisoned by a panic while it was held can't be read.
+    // A reader poisoned by a panic while it was held can't be read. Its
+    // own database, with a valid Enabled row, so only the poison refuses.
+    let db = TempDb::new("poisoned");
+    let (shared, _, _) = store_states(&db);
     let reader = Arc::new(std::sync::Mutex::new(
         Store::open_reader(db.path(), StoreConfig::default()).unwrap(),
     ));
+    let keys = Arc::new(crate::consent::SecretStore::from_key(&[5; 32]));
+    let creds = crate::consent::SourceCredentials::with_keys(shared, keys)
+        .reading_states_from(reader.clone());
+    let poisoned = EgressFactory::with_resolver(Arc::new(creds), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    assert_eq!(poisoned.fetch(&req).await.unwrap().status, 200);
+    assert_eq!(server.conns(), 1);
     let poison = reader.clone();
     let _ = std::thread::spawn(move || {
         let _g = poison.lock().unwrap();
@@ -2310,17 +2322,10 @@ async fn an_unreadable_states_reader_sends_nothing() {
     })
     .join();
     assert!(reader.is_poisoned());
-    let keys = Arc::new(crate::consent::SecretStore::from_key(&[5; 32]));
-    let creds =
-        crate::consent::SourceCredentials::with_keys(shared, keys).reading_states_from(reader);
-    let poisoned = EgressFactory::with_resolver(Arc::new(creds), Scripted::new(&[]))
-        .with_timeout(DEADLINE)
-        .build("p", &Egress::Direct, lan())
-        .await;
     assert!(matches!(
         poisoned.fetch(&req).await,
         Err(HttpError::NoEgress)
     ));
-    assert_eq!(server.conns(), 0);
+    assert_eq!(server.conns(), 1, "a poisoned reader connected");
     assert_eq!(poisoned.status().counters.policy_refusals, 1);
 }
