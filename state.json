@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T07:57:21Z",
+ "updated_at": "2026-11-06T08:26:14Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3433,13 +3433,14 @@
    "merge": "0880df5f"
   },
   "X-commit-rejudge-reuse": {
-   "status": "review",
+   "status": "merged",
    "session": "session_01MMjhn8m8GomC4NBwvNxfLX",
    "model": "opus",
    "launched": "2026-11-06T04:42:01Z",
    "brief": "briefs/X-commit-rejudge-reuse.md",
    "pr": 532,
-   "head": "e0a78a37"
+   "head": "e0a78a37",
+   "merge": "d887da44"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5153,6 +5154,18 @@
   {
    "at": "2026-11-06T06:05:56Z",
    "note": "#531 merged 323402da: owner \u00a72.47 (all 16 planning-wave answers; OQ6 contact = GitHub private vulnerability reporting, verified enabled). Only winget (M6 Q6, optional, after 1.0) remains in owner queue item 10."
+  },
+  {
+   "at": "2026-11-06T08:26:14Z",
+   "note": "Engine judgment oracle (from #532 review I2): the differential property's oracle shares the refactored judge_doc; in the next brief touching crates/filter/src/engine.rs, add a frozen test-only copy of pre-#532 below_overrides + pack loop, or a golden-verdict corpus."
+  },
+  {
+   "at": "2026-11-06T08:26:14Z",
+   "note": "#532 polish for the next engine slice: Clock::reached keeps O(overrides x readings) edges; keep only nearest edge below/above now (interval). One cheap release-mode check for the readings-read-the-same invariants (debug-only today). fingerprint doc: note the infohash is the proof."
+  },
+  {
+   "at": "2026-11-06T08:26:14Z",
+   "note": "Budget: hold 'always-adult as-found-plus-Adult reading' (46.8 us at #532, scaled 8370C, provisional skew 1.033x) once an EPYC 7763 reference run confirms the margin; owner told."
   }
  ],
  "main_health": [
@@ -5828,7 +5841,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T07:57:21Z",
+  "updated": "2026-11-06T08:26:14Z",
   "items": [
    {
     "slot": 3,
@@ -5845,8 +5858,9 @@
     "slice": "X-commit-rejudge-reuse",
     "role": "slice",
     "agent": "session_01MMjhn8m8GomC4NBwvNxfLX",
-    "doing": "#532 at e0a78a37 under fresh Opus review",
-    "since": "2026-11-06T04:42:01Z"
+    "doing": "#532 merged d887da44; archived. Idle: no ready slice (rest waits on the v0.5.1 soak verdict)",
+    "since": "2026-11-06T08:26:14Z",
+    "status": "idle"
    },
    {
     "slot": 15,
