@@ -4,8 +4,9 @@
 //! refuses, with a clear error, to turn on a source whose class asks for
 //! consent (the torrent cache, External), even when the request names the
 //! class and version `GET /sources` gives. A source that needs no consent
-//! (Sonarr/Radarr webhooks, None) can still be turned on. Across a restart
-//! the refused source stays off and never runs.
+//! (Sonarr/Radarr webhooks, None) can still be turned on. One an earlier
+//! build turned on with an acknowledgement is switched off at the next
+//! start, before it runs, and the log says so.
 #![cfg(unix)]
 
 use std::io::{BufRead, Read, Write};
@@ -15,6 +16,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use lodestar_store::{Store, StoreConfig};
 use serde_json::Value;
 
 mod common;
@@ -250,8 +252,25 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     s.stop();
     drop(s);
 
-    // At the next start the cache is still off and isn't running; the
-    // webhooks run.
+    // A build before the gate (a nightly) recorded the acknowledgement
+    // and turned the cache on.
+    {
+        let mut store =
+            Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        let id = store
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.plugin == "torrent_cache")
+            .unwrap()
+            .id;
+        store
+            .enable_source(id, Some(&format!("external|{version}|1")))
+            .unwrap();
+    }
+
+    // At the next start the cache is switched off before it runs, and the
+    // log says so; the webhooks run.
     let mut s = Server::start(dir.path(), false);
     wait_for("the webhooks source running", || {
         let v = s.source("arr_webhooks");
@@ -260,6 +279,21 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     let cache = s.source("torrent_cache");
     assert_eq!(cache["enabled"], false, "{cache}");
     assert_ne!(cache["health"]["running"], true, "{cache}");
+    {
+        let log = s.log.lock().unwrap();
+        assert!(
+            log.lines().any(|l| l.contains("Source state changed")
+                && l.contains("torrent_cache")
+                && l.contains("disabled")),
+            "{log}"
+        );
+    }
+    // The record is kept for when an approved text ships.
+    let kept = Store::open_reader(dir.path().join("lodestar.db"), StoreConfig::default())
+        .unwrap()
+        .source_consent("torrent_cache")
+        .unwrap();
+    assert_eq!(kept, Some(format!("external|{version}|1")));
     assert_gated(&s.patch(
         cache_id,
         &format!(r#"{{"enabled":true,"consent":"external","consent_version":"{version}"}}"#),

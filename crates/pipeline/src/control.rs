@@ -591,6 +591,33 @@ pub const fn consent_text_approved(class: Consent) -> bool {
     !consent::needs_ack(class)
 }
 
+/// Switches off, at a start and before anything runs, every enabled
+/// source whose class's consent text isn't approved
+/// ([`consent_text_approved`]): one turned on by a build before the gate
+/// (a nightly, or a backup restored from one) doesn't run. Its stored
+/// acknowledgement is left as it is: when SRC-15b ships the approved text,
+/// `consent::need_in` decides whether it covers it (blocking).
+pub(crate) fn switch_off_unapproved<'a>(
+    store: &mut Store,
+    sources: impl IntoIterator<Item = (&'a lodestar_sources::Manifest, &'a SourceId)>,
+) -> Result<(), lodestar_store::Error> {
+    let rows = store.sources()?;
+    for (manifest, id) in sources {
+        let enabled = rows
+            .iter()
+            .any(|r| r.id == *id && r.state == SourceState::Enabled);
+        if enabled && !consent_text_approved(manifest.consent) {
+            store.set_source_state(*id, SourceState::Disabled)?;
+            lodestar_log::log_event!(
+                crate::log_events::SOURCE_STATE_CHANGED,
+                plugin = manifest.id,
+                state = crate::log_events::state(SourceState::Disabled)
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The largest settings document `PATCH /sources/{id}` takes, in bytes.
 /// A plugin's own rules are tighter (a torrent cache's list is at most
 /// about 4 KiB); this bounds what reaches them.

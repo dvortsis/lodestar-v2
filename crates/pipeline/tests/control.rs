@@ -342,8 +342,10 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         ("restr", Consent::Restricted),
         ("over", Consent::Overlay),
         ("current", Consent::Restricted),
+        ("ext_current", Consent::External),
+        ("acct_ready", Consent::Account),
     ];
-    {
+    let (ack, ext_ack) = {
         // Enabled some other way (an older build, a hand edit, an import
         // that registered it): no record, or a stale one.
         let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -361,10 +363,22 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         store
             .enable_source(restr, Some(&stale(Consent::Restricted)))
             .unwrap();
-        // One with a current acknowledgement stays on.
+        // A current acknowledgement, as a nightly build before
+        // X-consent-gate-052 could store one: still switched off, because
+        // no consent text is approved yet, and the record is kept.
         let current = store.sources().unwrap()[4].id;
         let ack = Ack::of(&probe("current", Consent::Restricted).0.manifest).encode();
         store.enable_source(current, Some(&ack)).unwrap();
+        let ext_current = store.sources().unwrap()[5].id;
+        let ext_ack = Ack::of(&probe("ext_current", Consent::External).0.manifest).encode();
+        store.enable_source(ext_current, Some(&ext_ack)).unwrap();
+        // An Account source with its credentials stays on: it has no
+        // consent text.
+        let ready = store.sources().unwrap()[6].id;
+        store
+            .update_source_secrets(ready, &[("api_key", b"sealed")], &[], None)
+            .unwrap();
+        store.enable_source(ready, None).unwrap();
         // A declined one counts as none.
         let over = store.sources().unwrap()[3].id;
         let declined = Ack {
@@ -377,7 +391,8 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
         store
             .update_source_secrets(acct, &[(consent::SOCKS5_USERNAME, b"sealed")], &[], None)
             .unwrap();
-    }
+        (ack, ext_ack)
+    };
     let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
     let mut ran = Vec::new();
     for (id, class) in classes {
@@ -393,21 +408,25 @@ async fn a_restart_switches_off_a_source_whose_condition_no_longer_holds() {
     )
     .await
     .unwrap();
-    let (_, current_ran) = &ran[4];
-    until("the acknowledged source runs", || {
-        current_ran.load(Ordering::SeqCst)
+    let (_, ready_ran) = &ran[6];
+    until("the Account source with credentials runs", || {
+        ready_ran.load(Ordering::SeqCst)
     })
     .await;
     for s in pipeline.sources() {
-        assert_eq!(s.enabled, s.plugin == "current", "{}", s.plugin);
+        assert_eq!(s.enabled, s.plugin == "acct_ready", "{}", s.plugin);
     }
-    for (id, r) in &ran[..4] {
+    for (id, r) in &ran[..6] {
         assert!(!r.load(Ordering::SeqCst), "{id} ran");
     }
     drop(pipeline.shutdown().await.unwrap());
-    for (id, _) in &classes[..4] {
+    for (id, _) in &classes[..6] {
         assert_eq!(stored(&db, id), SourceState::Disabled, "{id}");
     }
+    // The acknowledgements are kept for when approved text ships.
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    assert_eq!(store.source_consent("current").unwrap(), Some(ack));
+    assert_eq!(store.source_consent("ext_current").unwrap(), Some(ext_ack));
 }
 
 #[tokio::test]
