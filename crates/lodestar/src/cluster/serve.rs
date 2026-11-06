@@ -1039,6 +1039,26 @@ mod tests {
         cluster.shutdown().await;
     }
 
+    /// A rotation that forgets the cluster's reseal doesn't pass quietly:
+    /// once the old key is retired the PKI no longer opens, and turning
+    /// workers on fails with the reason.
+    #[tokio::test]
+    async fn retire_without_reseal_fails_loudly() {
+        let dir = tempfile::tempdir().unwrap();
+        let cluster = Cluster::start(wiring(dir.path(), true, any_port()))
+            .await
+            .unwrap();
+        cluster.shutdown().await;
+        let mut secrets = SecretStore::open_or_create(dir.path()).unwrap();
+        secrets.rotate().unwrap();
+        secrets.retire_old_keys().unwrap();
+        let e = Cluster::start(wiring(dir.path(), true, any_port()))
+            .await
+            .unwrap_err();
+        assert_eq!(e.step, "pki", "{e}");
+        assert!(e.to_string().starts_with("cluster port (pki): "), "{e}");
+    }
+
     /// Every family rendered has its row in docs/metrics.md, and the text
     /// is valid exposition (one TYPE per family, every sample under one).
     #[tokio::test]
