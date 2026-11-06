@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T17:45:00Z",
+  "updated_at": "2026-11-06T18:09:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3443,11 +3443,9 @@
       "merge": "d887da44"
     },
     "WK-0": {
-      "status": "running",
-      "session": "session_01MMjhnAKSF2rTGJ2CQgZhxB",
-      "model": "opus",
-      "launched": "2026-11-06T15:14:15Z",
-      "brief": "briefs/WK-0.md"
+      "status": "merged",
+      "pr": 538,
+      "merge": "62ec1128"
     },
     "WK-6": {
       "status": "running",
@@ -3465,6 +3463,12 @@
       "status": "merged",
       "pr": 537,
       "merge": "23f2e575"
+    },
+    "R-rc5-notice": {
+      "status": "merged",
+      "pr": 540,
+      "merge": "a0eb0a90",
+      "base": "release/v0.5.1"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5234,6 +5238,10 @@
     {
       "at": "2026-11-06T17:45:00Z",
       "note": "WK-9 HARD REQUIREMENTS (from #539 and #538 reviews; add to WK-9 notes in slices.yaml in the next runner PR): (1) CONTENT SAFETY: store the coordinator-rebuilt enrichment (or refuse a record whose content type/adult kind differs); the worker-sent enrichment must never set type:adult/adult: visibility; bound the other-version lag. (2) Counters intake: hour window around coordinator now (offset-corrected), keys in each metric domain, saturating/capped accumulation (rollup_hour STRICT INTEGER overflow + unbounded rows). (3) leased sources/private_source from the lease, not the worker; metadata_at offset-corrected; size/file_count checked vs rebuilt file list. (4) remote commits via LeaseAuthority::commit (holder-checked). (5) filter relayed peer hints with lodestar_network_policy::allows (WK-10 again before dialling). Payload version rule: new version needs protocol major bump or negotiation."
+    },
+    {
+      "at": "2026-11-06T18:09:00Z",
+      "note": "#538 WK-0 merged (62ec1128); archived. WK-1 launched slot 1 (brief: validate max_skew_ms etc. at config load). WK-9 notes add: RECENT_COMMITS re-commit of a key already in recent keeps old eviction slot (key->seq map fix); worker held set never pruned if a batch is never accepted (always call committed / prune past TTL). WK-7 also unblocked by WK-0 (owns pipeline lib.rs, stages.rs, worker.rs) - next launch candidate after WK-6 merges (lib.rs order)."
     }
   ],
   "main_health": [
@@ -5917,15 +5925,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T17:16:00Z",
+    "updated": "2026-11-06T18:09:00Z",
     "items": [
       {
         "slot": 1,
-        "slice": "WK-0",
+        "slice": "WK-1",
         "role": "build",
         "agent": "claude",
-        "doing": "one lease authority (workers critical path) (session_01MMjhnAKSF2rTGJ2CQgZhxB)",
-        "since": "2026-11-06T15:14:15Z"
+        "doing": "coordinator wiring in serve (workers critical path) (session_01MMjhnB46HmXH5Cjrhtf1Jr)",
+        "since": "2026-11-06T18:09:00Z"
       },
       {
         "slot": 2,
