@@ -1,4 +1,4 @@
-# X-consent-gate-052 decisions (PR pending)
+# X-consent-gate-052 decisions (#537)
 
 Spec: `docs/plan/2026-11-06-v052-feature-manifest.md` §3.4 and Q4 (runner's call). Until SRC-15b ships owner-approved consent text, `PATCH /sources/{id}` refuses to turn on a source that needs consent. This tightens §18.7's enabling rule for v0.5.2. It loosens nothing.
 
