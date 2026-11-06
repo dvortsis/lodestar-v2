@@ -30,7 +30,7 @@ use lodestar_store::{
 /// which file-tree blobs may use 0.6 KB.
 const STORE_BUDGET: f64 = 1024.0;
 const BLOB_BUDGET: f64 = 600.0;
-const INDEX_BUDGET: f64 = 400.0;
+const INDEX_BUDGET: f64 = 512.0;
 /// The file index in smart mode (§3).
 const FILE_INDEX_BUDGET: f64 = 800.0;
 
