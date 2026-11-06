@@ -58,7 +58,7 @@ Each entry has at least one of `native` and `container`. An entry needed for `vp
 |---|---|
 | `version` | 1–4 dot-separated decimal numbers, each with no leading zero and at most 9 digits. All pins in an entry name the same version, written identically |
 | `url` | `https`, with no port, user information, query, fragment or percent-encoding. The path is `[A-Za-z0-9-._~/+]` with no empty, `.` or `..` segment. The host must be one of the entry's `hosts`. The file name must match the archive kind: `.zip`; `.tar.gz` or `.tgz`; `.exe` or `.msi` for an installer; for a bare binary, no extension at all on Linux and exactly `.exe` on Windows |
-| `size` | Exact, `1..=536870912` (512 MiB, plan Q16) |
+| `size` | Exact, `1..=536870912`: 512 MiB, plan Q16's "512 MB" read as binary megabytes |
 | `sha256` | 64 lower-case hex digits, and not one digit repeated (a placeholder) |
 | `upstream_sig` | `{"kind": "none"}`, or `{"kind": "verified_at_pin", "fingerprint": "<40 or 64 upper-case hex>"}` |
 
@@ -95,6 +95,7 @@ The v0.6 entries follow owner §2.47 (cq6):
   - `Entry::renderable()` does the same for the container image.
   - `Entry::awaiting_pin()` says whether anything still waits.
 - **A release must not offer to install anything still awaiting its pin.** That gate is CMP-13's release-workflow step, not this crate's.
+
 ## Adapter traits (`adapter`)
 - **`Detect`, `Health` and `Configure`** are object-safe and async, returning boxed futures.
 - **They take a `Target`**, which is one of:
@@ -111,7 +112,7 @@ The v0.6 entries follow owner §2.47 (cq6):
   - **A `ProbeResponse` can't be built over its cap,** and its fields are private.
   - **Paths are `RequestPath`s:** RFC 3986 characters and no fragment. Also refused:
     - `//`, and `.` or `..` segments, including the `%2e` forms;
-    - `%2f`, `%5c` or `;` before the query;
+    - `%2f`, `%5c`, `%25` or `;` before the query, so a server that decodes twice can't be steered;
     - `%00` anywhere.
   - **Headers:**
     - **Names** are `HeaderName` constants. Framing, target and hop-by-hop names are refused in any case: `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-*`, `TE`, `Trailer`, `Upgrade` and `Expect`.
@@ -143,7 +144,7 @@ Generated compose services and Unraid templates are built only from these valida
 | `HostPath` | Absolute Linux paths with `[A-Za-z0-9._-]` components and inner spaces; at most 255 bytes | See below |
 | `Puid`, `Pgid` | `1..=2147483647` | `0` (root) |
 | `PortNumber` | `1024..=65535` | Anything lower |
-| `ContainerName` | A lower-case letter, then `[a-z0-9_-]`; at most 63 bytes. It's looked up as a host, so it can't contain `.` | IP addresses, decimal addresses, domain names. Also the names a container resolves from its own `/etc/hosts` before Docker's DNS (`localhost*`, `ip6-*`), and Lodestar's own (`lodestar`, `lodestar-worker`) |
+| `ContainerName` | A lower-case letter, then `[a-z0-9_-]`; at most 63 bytes. It's looked up as a host, so it can't contain `.` | IP addresses, decimal addresses, domain names. Also the names a container resolves from its own `/etc/hosts` before Docker's DNS (`localhost*`, `ip6-*`, a container-id-shaped name of 12 or 64 hex digits), and Lodestar's own (`lodestar`, `lodestar-worker`) |
 | `NetworkName` | Lower-case Docker names | `host`, `none`, `default`, `bridge` |
 | `NetworkMode` | A named network, or `service:gluetun` | Anything else |
 | `CompanionId` | `[a-z][a-z0-9-]{0,31}`, not ending in `-` | Anything else |
@@ -175,5 +176,6 @@ So CMP-7's compose and Unraid generators must:
 3. **Refuse a `HostPath` inside Lodestar's own data folder on the host.**
    - **Natively:** check against the running instance's real data folder after `canonicalize`, since `LODESTAR_DATA_DIR` can be anywhere.
    - **Under Docker:** Lodestar sees `/data`, not the host folder. Take the host path from the Unraid template's values or ask the user, and cover Unraid's optional hot and cold data paths too.
+   - **Other companions:** refuse a companion's path inside another catalogue companion's `appdata/<name>` folder or host data path. `HostPath` accepts `/mnt/user/appdata/prowlarr`, which is right for Prowlarr, but a qBittorrent container given it could read Prowlarr's `ApiKey`.
 4. **Give `TZ` and `UMASK` closed types, or hard-code them.** No free-form value reaches the output.
 5. **Golden-test** names and paths that look like YAML 1.1 keywords and numbers, and paths with spaces.

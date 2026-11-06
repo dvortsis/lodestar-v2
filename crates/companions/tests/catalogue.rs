@@ -343,6 +343,30 @@ fn refuses_syntax_and_shape() {
     });
 }
 
+/// The VPN route's service is `service:gluetun`, so its name is fixed; and
+/// extensions compare without case.
+#[test]
+fn refuses_a_renamed_vpn_service_and_cased_extensions() {
+    let renamed = BUILTIN.replacen("\"name\": \"gluetun\"}", "\"name\": \"vpn\"}", 1);
+    assert_ne!(renamed, BUILTIN);
+    let e = Catalogue::from_json(&renamed).unwrap_err();
+    assert_eq!(e.rule(), Rule::Name, "{e}");
+    assert_eq!(e.at(), "entries[2].container.name");
+
+    refused(Rule::Archive, |v| {
+        qbit_pin(v)["url"] = json!("https://github.com/x/qbittorrent.EXE");
+    });
+    refused(Rule::Executable, |v| {
+        v["entries"][1]["native"]["artifacts"][1]["executable"] = json!("Prowlarr/Prowlarr.EXE");
+    });
+    let mut v = pinned();
+    prowlarr_zip(&mut v)["executable"] = json!("Prowlarr/Prowlarr.EXE");
+    prowlarr_zip(&mut v)["pin"]["url"] = json!(
+        "https://github.com/Prowlarr/Prowlarr/releases/download/v1.28.2.4885/Prowlarr.master.1.28.2.4885.windows-core-x64.ZIP"
+    );
+    assert!(parse(&v).is_ok());
+}
+
 #[test]
 fn refuses_each_rule() {
     refused(Rule::Format, |v| v["format"] = json!(2));

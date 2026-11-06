@@ -540,13 +540,15 @@ impl PortName {
 
 // ─── The catalogue ──────────────────────────────────────────────────────
 //
-// Every type below is `#[non_exhaustive]`, with read-only access from other
-// crates: an `Entry`, `Pin` or `Container` exists only because validation
-// built it, so a later crate can't write a struct literal that skips the
-// checks (or the `testing` gate on other catalogues).
+// Every type below is `#[non_exhaustive]` and not `Clone`, and the
+// catalogue's entries are private: another crate only ever holds a shared
+// reference to an `Entry`, `Pin` or `Container` that validation built. It
+// can't write a struct literal (which would skip the checks, or the
+// `testing` gate on other catalogues), and it can't clone one and change a
+// field.
 
 /// The parsed, validated catalogue.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Catalogue {
     entries: Vec<Entry>,
 }
@@ -597,7 +599,21 @@ impl fmt::Display for NotAvailable {
 impl std::error::Error for NotAvailable {}
 
 /// One companion.
-#[derive(Debug, Clone)]
+///
+/// Read-only outside this crate: it can't be built, cloned or changed.
+///
+/// ```compile_fail
+/// let c = lodestar_companions::builtin().unwrap();
+/// let mut copy = c.get("qbittorrent").unwrap().clone();
+/// copy.hosts.clear();
+/// ```
+///
+/// ```compile_fail
+/// let c = lodestar_companions::builtin().unwrap();
+/// let a = c.get("qbittorrent").unwrap().native.as_ref().unwrap().artifacts[0].clone();
+/// let _: lodestar_companions::catalogue::Artifact = a;
+/// ```
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Entry {
     pub id: CompanionId,
@@ -677,7 +693,7 @@ impl Entry {
 }
 
 /// A licence: its SPDX expression and where to read it.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Licence {
     pub spdx: String,
@@ -686,7 +702,7 @@ pub struct Licence {
 }
 
 /// The native builds.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Native {
     pub artifacts: Vec<Artifact>,
@@ -712,7 +728,7 @@ impl<T> Pinned<T> {
 }
 
 /// One platform's build.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Artifact {
     pub platform: Platform,
@@ -732,7 +748,7 @@ impl Artifact {
 }
 
 /// What a download must match, byte for byte.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Pin {
     pub version: Version,
@@ -757,7 +773,7 @@ pub enum UpstreamSig {
 }
 
 /// The container image for compose and Unraid.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Container {
     pub image: ImageRef,
@@ -775,7 +791,7 @@ impl Container {
 }
 
 /// A port the companion listens on.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Port {
     pub name: PortName,
@@ -785,7 +801,7 @@ pub struct Port {
 }
 
 /// Where its health is read: an internal TCP port and an HTTP path.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct HealthCheck {
     pub port: PortName,
@@ -1125,6 +1141,17 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
         Rule::Shape,
         &format!("{at}.native"),
     )?;
+    // The VPN route is written as `network_mode: service:gluetun`
+    // (`inputs::NetworkMode::ServiceGluetun`), so its service must be
+    // named `gluetun`.
+    check(
+        !e.needed_for.contains(&Need::VpnRoute)
+            || container
+                .as_ref()
+                .is_some_and(|c| c.name.as_str() == "gluetun"),
+        Rule::Name,
+        &format!("{at}.container.name"),
+    )?;
 
     let at_ports = format!("{at}.ports");
     check(
@@ -1247,7 +1274,7 @@ fn validate_artifact(
     let executable = match (a.archive, a.executable) {
         (ArchiveKind::Zip | ArchiveKind::TarGz, Some(x)) => {
             let x = field(RelPath::parse(&x), &at_x)?;
-            let exe = x.as_str().ends_with(".exe");
+            let exe = x.as_str().to_ascii_lowercase().ends_with(".exe");
             check(
                 exe == (a.platform == Platform::Windows),
                 Rule::Executable,
@@ -1298,7 +1325,10 @@ fn validate_pin(
         Rule::HostNotAllowed,
         &at_u,
     )?;
-    let file = url.file_name();
+    // Extensions compare without case (`X.EXE` is an executable on Windows,
+    // and must not pass as a bare Linux binary).
+    let lower = url.file_name().to_ascii_lowercase();
+    let file = lower.as_str();
     let ext_ok = match archive {
         ArchiveKind::Zip => file.ends_with(".zip"),
         ArchiveKind::TarGz => file.ends_with(".tar.gz") || file.ends_with(".tgz"),

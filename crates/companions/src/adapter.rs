@@ -260,7 +260,7 @@ pub enum Method {
 /// A request path and query (`/api/v2/app/version`,
 /// `/api/v1/system/status?x=1`): `/` first, RFC 3986 characters, well-formed
 /// `%` escapes, no fragment, no `//`, no `.` or `..` segment (encoded or
-/// not), no `%2f`, `%5c` or `;` in the path, no `%00` anywhere, at most 2048
+/// not), no `%2f`, `%5c`, `%25` or `;` in the path, no `%00` anywhere, at most 2048
 /// bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestPath(String);
@@ -285,7 +285,13 @@ impl RequestPath {
         // An encoded `/` or `\\` hides a separator from the checks below,
         // and a `;` starts path parameters (`/a/..;/b`) that some servers
         // strip before routing.
-        if lower.contains("%2f") || lower.contains("%5c") || lower.contains(';') {
+        // `%25` is refused too, so a server that decodes twice can't turn
+        // `%252e` into a `.`.
+        if lower.contains("%2f")
+            || lower.contains("%5c")
+            || lower.contains("%25")
+            || lower.contains(';')
+        {
             return Err(InputError::Character);
         }
         // `//host/…` reads as a network path to some clients.
@@ -312,9 +318,6 @@ const RESERVED_HEADERS: &[&str] = &[
     "transfer-encoding",
     "connection",
     "keep-alive",
-    "proxy-connection",
-    "proxy-authorization",
-    "proxy-authenticate",
     "te",
     "trailer",
     "upgrade",
@@ -354,6 +357,20 @@ impl HeaderName {
                 return None;
             }
             i += 1;
+        }
+        // Every `Proxy-*` header is the client's.
+        if b.len() >= 6 {
+            let mut p = 0;
+            let mut is_proxy = true;
+            while p < 6 {
+                if !b[p].eq_ignore_ascii_case(&b"proxy-"[p]) {
+                    is_proxy = false;
+                }
+                p += 1;
+            }
+            if is_proxy {
+                return None;
+            }
         }
         let mut r = 0;
         while r < RESERVED_HEADERS.len() {
@@ -898,6 +915,7 @@ mod tests {
             ("/a/%2e%2e%5c", InputError::Character),
             ("/a/%00", InputError::Character),
             ("/a?x=%00", InputError::Character),
+            ("/a/%252e%252e/b", InputError::Character),
         ];
         for (s, e) in cases {
             assert_eq!(RequestPath::parse(s), Err(*e), "{s:?}");
@@ -926,6 +944,8 @@ mod tests {
             assert!(HeaderName::new(leaked).is_none(), "{reserved}");
         }
         assert!(HeaderName::new("Hosts").is_some());
+        assert!(HeaderName::new("Proxy").is_some());
+        assert!(HeaderName::new("X-Proxy-Id").is_some());
         assert!(HeaderValue::plain("application/json").is_ok());
         assert!(HeaderValue::plain("a\tb é").is_ok());
         for bad in ["a\r\nb", "a\nb", "a\rb", "a\0b", "a\u{7f}b", "a\u{1b}b"] {

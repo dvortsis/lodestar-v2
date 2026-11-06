@@ -343,7 +343,9 @@ const RESERVED_HOSTS: &[&str] = &["localhost", "lodestar", "lodestar-worker"];
 /// Inside a container a name is looked up in `/etc/hosts` before Docker's
 /// DNS, so the names Docker writes there (`localhost`, `ip6-localhost`,
 /// `ip6-loopback` and the other `ip6-*` names) are refused, and so are
-/// Lodestar's own container names (`lodestar`, `lodestar-worker`).
+/// Lodestar's own container names (`lodestar`, `lodestar-worker`), and
+/// names shaped like a container id (12 or 64 hex digits), which is
+/// Docker's default hostname.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContainerName(String);
 
@@ -355,6 +357,11 @@ impl ContainerName {
             return Err(InputError::Character);
         }
         if RESERVED_HOSTS.contains(&s) || s.starts_with("ip6-") || s.starts_with("localhost") {
+            return Err(InputError::Reserved);
+        }
+        // A container's `/etc/hosts` also maps its own hostname, by default
+        // its id: 12 or 64 hex digits.
+        if (s.len() == 12 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(InputError::Reserved);
         }
         Ok(ContainerName(s.to_owned()))
@@ -712,6 +719,8 @@ mod tests {
             );
         }
         assert!(ContainerName::parse("lodestar-prowlarr").is_ok());
+        assert!(ContainerName::parse("abcdef01234").is_ok());
+        assert!(ContainerName::parse("abcdef0123456").is_ok());
         assert_eq!(ContainerName::parse(""), Err(InputError::Length));
         assert_eq!(
             ContainerName::parse(&"a".repeat(64)),
