@@ -166,12 +166,15 @@ impl fmt::Display for HostPath {
 
 /// Whether `c` (a path split into components, at least one) names a
 /// forbidden folder or one that contains one (see [`HostPath`]).
-fn forbidden(c: &[&str]) -> bool {
+///
+/// Every comparison ignores case: a differently cased spelling is refused
+/// rather than let through, which costs nothing on a case-sensitive host
+/// and matters on a case-insensitive share.
+fn forbidden(original: &[&str]) -> bool {
+    let lower: Vec<String> = original.iter().map(|x| x.to_ascii_lowercase()).collect();
+    let c: Vec<&str> = lower.iter().map(String::as_str).collect();
     // A socket or a `.docker` folder at any depth.
-    if c.iter().any(|x| {
-        let x = x.to_ascii_lowercase();
-        x.ends_with(".sock") || x == ".docker"
-    }) {
+    if c.iter().any(|x| x.ends_with(".sock") || *x == ".docker") {
         return true;
     }
     // Strictly below `prefix`.
@@ -182,26 +185,23 @@ fn forbidden(c: &[&str]) -> bool {
             p.extend_from_slice(a);
             below(&p)
         }),
-        "home" => c.len() <= 2,
+        // `/home` and `/home/<user>` hold every user's `~/.docker`; a dot
+        // folder directly in a home (`~/.ssh`, `~/.local`, `~/.config`)
+        // holds keys and per-user state.
+        "home" => c.len() <= 2 || c[2].starts_with('.'),
         "mnt" => {
             if c.len() < 3 {
                 return true;
             }
-            // Share and folder names compare without case, so a
-            // differently cased spelling refuses rather than slips by.
-            let share = c[2].to_ascii_lowercase();
-            if share == "system" {
-                return true;
-            }
-            if share == "appdata" {
-                if c.len() == 3 {
-                    return true;
+            match c[2] {
+                "system" => true,
+                "appdata" => {
+                    c.len() == 3
+                        || (LODESTAR_APPDATA.contains(&c[3])
+                            && !(c.len() > 5 && c[4] == "companions"))
                 }
-                if LODESTAR_APPDATA.contains(&c[3].to_ascii_lowercase().as_str()) {
-                    return !(c.len() > 5 && c[4] == "companions");
-                }
+                _ => false,
             }
-            false
         }
         first => FORBIDDEN_ROOTS.contains(&first),
     }
@@ -328,14 +328,22 @@ fn check_name(s: &str) -> Result<(), InputError> {
     Ok(())
 }
 
+/// Names a container resolves through its own `/etc/hosts`, or that are
+/// Lodestar's own.
+const RESERVED_HOSTS: &[&str] = &["localhost", "lodestar", "lodestar-worker"];
+
 /// A container name (`qbittorrent`): what detection looks up as a host on
 /// Docker's network, and the compose service's name.
 ///
 /// Because it's used as a host name, it's narrower than Docker's rule: a
 /// lower-case letter first, then lower-case letters, digits, `_` and `-`;
 /// no `.`. So it can never be an IP address (`169.254.169.254`,
-/// `2130706433`) or a domain name (`qbit.example.com`), and a lookup of it
-/// stays on Docker's own DNS.
+/// `2130706433`) or a domain name (`qbit.example.com`).
+///
+/// Inside a container a name is looked up in `/etc/hosts` before Docker's
+/// DNS, so the names Docker writes there (`localhost`, `ip6-localhost`,
+/// `ip6-loopback` and the other `ip6-*` names) are refused, and so are
+/// Lodestar's own container names (`lodestar`, `lodestar-worker`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContainerName(String);
 
@@ -345,6 +353,9 @@ impl ContainerName {
         let b = s.as_bytes();
         if !b[0].is_ascii_lowercase() || b.contains(&b'.') {
             return Err(InputError::Character);
+        }
+        if RESERVED_HOSTS.contains(&s) || s.starts_with("ip6-") || s.starts_with("localhost") {
+            return Err(InputError::Reserved);
         }
         Ok(ContainerName(s.to_owned()))
     }
@@ -518,7 +529,7 @@ mod tests {
             "/var/lib/lodestar/companions/qbittorrent",
             "/var/spool/lodestar/x",
             "/home/me/downloads",
-            "/home/me/.config/qbittorrent",
+            "/home/me/media/.cache",
             "/mnt/cache/appdata/prowlarr",
             "/mnt/user/appdata/lodestar/companions/qbittorrent",
             "/mnt/disk1/media",
@@ -609,6 +620,17 @@ mod tests {
             ("/mnt/cache/AppData", InputError::Forbidden),
             ("/home", InputError::Forbidden),
             ("/home/me", InputError::Forbidden),
+            ("/home/me/.ssh", InputError::Forbidden),
+            ("/home/me/.ssh/id_ed25519", InputError::Forbidden),
+            ("/home/me/.local/share/docker", InputError::Forbidden),
+            ("/home/me/.config/qbittorrent", InputError::Forbidden),
+            ("/HOME/me", InputError::Forbidden),
+            ("/Var/Lib/Lodestar", InputError::Forbidden),
+            ("/MNT/user", InputError::Forbidden),
+            (
+                "/mnt/user/appdata/lodestar/Companions",
+                InputError::Forbidden,
+            ),
         ];
         for (s, e) in cases {
             assert_eq!(HostPath::parse(s), Err(*e), "{s:?}");
@@ -670,6 +692,26 @@ mod tests {
             );
         }
         assert!(NetworkName::parse("9lives.net").is_ok());
+        // Resolved through the container's own /etc/hosts, or Lodestar's own.
+        for reserved in [
+            "localhost",
+            "ip6-localhost",
+            "ip6-loopback",
+            "ip6-allnodes",
+            "ip6-allrouters",
+            "ip6-localnet",
+            "ip6-mcastprefix",
+            "lodestar",
+            "lodestar-worker",
+            "localhost4",
+        ] {
+            assert_eq!(
+                ContainerName::parse(reserved),
+                Err(InputError::Reserved),
+                "{reserved}"
+            );
+        }
+        assert!(ContainerName::parse("lodestar-prowlarr").is_ok());
         assert_eq!(ContainerName::parse(""), Err(InputError::Length));
         assert_eq!(
             ContainerName::parse(&"a".repeat(64)),
@@ -788,7 +830,10 @@ mod props {
         "/mnt/user/appdata/lodestar/secrets.key",
         "/mnt/cache/appdata/lodestar/lodestar.db",
         "/mnt/user/appdata/lodestar-worker/certs",
-        "/mnt/user/appdata/prowlarr/config.xml",
+        // Every container's config at once (a companion's own
+        // `appdata/<name>` folder is a legitimate mount).
+        "/mnt/user/appdata",
+        "/home/me/.ssh/id_ed25519",
         "/home/me/.docker/desktop/docker.sock",
         "/home/me/.docker/run/docker.sock",
     ];
@@ -889,6 +934,47 @@ mod props {
             let _ = Version::parse(&s);
             if let Ok(id) = CompanionId::parse(&s) {
                 prop_assert!(!id.as_str().contains(SPECIAL));
+            }
+        }
+    }
+
+    /// Every folder on the way to each sensitive path is refused, the path
+    /// itself included, in any mix of case. The generator above rarely
+    /// reaches depth three, so this walks them all.
+    #[test]
+    fn every_prefix_of_a_sensitive_path_is_refused_in_any_case() {
+        // A fixed xorshift, so the case mixes are the same on every run.
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for s in SENSITIVE {
+            let comps: Vec<&str> = s[1..].split('/').collect();
+            for depth in 1..=comps.len() {
+                let prefix = format!("/{}", comps[..depth].join("/"));
+                for variant in 0..8 {
+                    let p: String = if variant == 0 {
+                        prefix.clone()
+                    } else {
+                        prefix
+                            .chars()
+                            .map(|ch| {
+                                if next() & 1 == 1 {
+                                    ch.to_ascii_uppercase()
+                                } else {
+                                    ch
+                                }
+                            })
+                            .collect()
+                    };
+                    assert!(
+                        HostPath::parse(&p).is_err(),
+                        "{p} (towards {s}) was accepted"
+                    );
+                }
             }
         }
     }

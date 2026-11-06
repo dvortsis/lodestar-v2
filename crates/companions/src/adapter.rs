@@ -104,7 +104,8 @@ fn percent_ok(s: &str) -> bool {
 ///
 /// **Checked for shape only:**
 /// - `http` or `https`;
-/// - RFC 3986 characters only, with well-formed `%` escapes;
+/// - RFC 3986 characters only, with well-formed `%` escapes, and no query
+///   or fragment: it's a base that request paths are joined to;
 /// - a host of letters, digits, `.` and `-`, or a bracketed IPv6 address;
 /// - no user information;
 /// - a port, if given, of `1..=65535`;
@@ -126,7 +127,9 @@ impl EnteredUrl {
         if s.is_empty() || s.len() > ENTERED_URL_MAX {
             return Err(InputError::Length);
         }
-        if !s.bytes().all(uri_char) || !percent_ok(s) {
+        // A base URL with a query or fragment would swallow the request
+        // path joined to it (`http://h/#` + `/api` stays `http://h/`).
+        if !s.bytes().all(uri_char) || !percent_ok(s) || s.contains(['?', '#']) {
             return Err(InputError::Character);
         }
         let lower = s.to_ascii_lowercase();
@@ -256,7 +259,9 @@ pub enum Method {
 
 /// A request path and query (`/api/v2/app/version`,
 /// `/api/v1/system/status?x=1`): `/` first, RFC 3986 characters, well-formed
-/// `%` escapes, no fragment, no `.` or `..` segment, at most 2048 bytes.
+/// `%` escapes, no fragment, no `//`, no `.` or `..` segment (encoded or
+/// not), no `%2f`, `%5c` or `;` in the path, no `%00` anywhere, at most 2048
+/// bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestPath(String);
 
@@ -271,8 +276,18 @@ impl RequestPath {
         if !s.bytes().all(uri_char) || s.contains(['#', '[', ']', '@']) || !percent_ok(s) {
             return Err(InputError::Character);
         }
+        // A NUL anywhere ends a string in some servers.
+        if s.to_ascii_lowercase().contains("%00") {
+            return Err(InputError::Character);
+        }
         let path = s.split('?').next().unwrap_or("");
         let lower = path.to_ascii_lowercase();
+        // An encoded `/` or `\\` hides a separator from the checks below,
+        // and a `;` starts path parameters (`/a/..;/b`) that some servers
+        // strip before routing.
+        if lower.contains("%2f") || lower.contains("%5c") || lower.contains(';') {
+            return Err(InputError::Character);
+        }
         // `//host/…` reads as a network path to some clients.
         if lower.contains("//")
             || lower.split('/').any(|g| {
@@ -289,8 +304,41 @@ impl RequestPath {
     }
 }
 
+/// Header names an adapter may never set: message framing, the target,
+/// and hop-by-hop headers. The client sets those itself.
+const RESERVED_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "proxy-authorization",
+    "proxy-authenticate",
+    "te",
+    "trailer",
+    "upgrade",
+    "expect",
+];
+
+const fn eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if !a[i].eq_ignore_ascii_case(&b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// A request header's name, from the adapter's own constants: an HTTP
-/// token of letters, digits and `-`, at most 64 bytes.
+/// token of letters, digits and `-`, at most 64 bytes, and not one of the
+/// framing or hop-by-hop names (`Host`, `Content-Length`,
+/// `Transfer-Encoding`, `Connection`, …) in any case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeaderName(&'static str);
 
@@ -307,6 +355,13 @@ impl HeaderName {
             }
             i += 1;
         }
+        let mut r = 0;
+        while r < RESERVED_HEADERS.len() {
+            if eq_ignore_case(b, RESERVED_HEADERS[r].as_bytes()) {
+                return None;
+            }
+            r += 1;
+        }
         Some(HeaderName(name))
     }
 
@@ -315,47 +370,67 @@ impl HeaderName {
     }
 }
 
-/// A request header's value. A credential goes in as [`HeaderValue::Secret`]
-/// and stays a [`Secret`] until the client writes it.
-pub enum HeaderValue {
-    /// Printable ASCII and spaces only (no CR or LF), at most 4096 bytes.
-    Plain(PlainHeader),
+/// The longest header value accepted, in bytes.
+pub const HEADER_VALUE_MAX: usize = 4096;
+
+/// A request header's value, checked when it's built: a plain value and a
+/// credential alike hold only tab, space and printable characters (no CR,
+/// LF, NUL or other control), so no value can end its line and start
+/// another header. A credential stays a [`Secret`] until the client writes
+/// it.
+pub struct HeaderValue(HeaderInner);
+
+enum HeaderInner {
+    Plain(String),
     Secret(Secret),
 }
 
-/// A checked non-secret header value.
-#[derive(Clone, PartialEq, Eq)]
-pub struct PlainHeader(String);
+/// A field value's bytes (RFC 9110 §5.5): tab, space, visible ASCII and
+/// bytes from `0x80`; never CR, LF, NUL, another control or DEL.
+fn field_value(s: &str) -> Result<(), InputError> {
+    if s.len() > HEADER_VALUE_MAX {
+        return Err(InputError::Length);
+    }
+    if !s.bytes().all(|b| b == b'\t' || (b >= 0x20 && b != 0x7f)) {
+        return Err(InputError::Character);
+    }
+    Ok(())
+}
 
-impl PlainHeader {
-    pub fn parse(s: &str) -> Result<PlainHeader, InputError> {
-        if s.len() > 4096 {
-            return Err(InputError::Length);
-        }
-        if !s.bytes().all(|b| b == b' ' || b.is_ascii_graphic()) {
-            return Err(InputError::Character);
-        }
-        Ok(PlainHeader(s.to_owned()))
+impl HeaderValue {
+    pub fn plain(s: &str) -> Result<HeaderValue, InputError> {
+        field_value(s)?;
+        Ok(HeaderValue(HeaderInner::Plain(s.to_owned())))
     }
 
-    pub fn as_str(&self) -> &str {
-        &self.0
+    /// A credential: refused, like a plain value, if it holds CR, LF, NUL
+    /// or another control character.
+    pub fn secret(secret: Secret) -> Result<HeaderValue, InputError> {
+        field_value(secret.expose())?;
+        Ok(HeaderValue(HeaderInner::Secret(secret)))
+    }
+
+    pub fn is_secret(&self) -> bool {
+        matches!(self.0, HeaderInner::Secret(_))
+    }
+
+    /// The value, for the [`GuardedHttp`] implementation that writes it.
+    pub fn expose(&self) -> &str {
+        match &self.0 {
+            HeaderInner::Plain(s) => s,
+            HeaderInner::Secret(s) => s.expose(),
+        }
     }
 }
 
 /// Values may carry a session or a token, so `Debug` shows only their kind.
 impl fmt::Debug for HeaderValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            HeaderValue::Plain(_) => "Plain(…)",
-            HeaderValue::Secret(_) => "Secret(…)",
+        f.write_str(if self.is_secret() {
+            "Secret(…)"
+        } else {
+            "Plain(…)"
         })
-    }
-}
-
-impl fmt::Debug for PlainHeader {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("PlainHeader(…)")
     }
 }
 
@@ -624,14 +699,31 @@ impl fmt::Debug for ConfigureInput<'_> {
     }
 }
 
+/// A plan that [`dyn Configure::apply`](Configure) has checked belongs to
+/// the companion it's applied to. Only this module can make one, so an
+/// implementation's `apply_plan` can't be reached with an unchecked plan.
+#[derive(Debug, Clone, Copy)]
+pub struct CheckedPlan<'a> {
+    plan: &'a ConfigPlan,
+}
+
+impl<'a> CheckedPlan<'a> {
+    pub fn plan(&self) -> &'a ConfigPlan {
+        self.plan
+    }
+}
+
 /// Configures a companion through its own API, through `http` only. Each
 /// change is idempotent: applying the same plan twice leaves the same
 /// state.
+///
+/// Callers apply a plan with `apply`, an inherent method on
+/// `dyn Configure` that implementations can't override. It refuses another
+/// companion's plan, then calls `apply_plan` with a [`CheckedPlan`].
 pub trait Configure: Send + Sync {
     fn companion(&self) -> &CompanionId;
 
-    /// The settings [`Configure::apply`] would change, without changing
-    /// anything.
+    /// The settings `apply` would change, without changing anything.
     fn plan<'a>(
         &'a self,
         http: &'a dyn GuardedHttp,
@@ -639,21 +731,21 @@ pub trait Configure: Send + Sync {
         input: &'a ConfigureInput<'a>,
     ) -> BoxFuture<'a, Result<ConfigPlan, AdapterError>>;
 
-    /// What implementations write: applies `plan`, changing nothing it
-    /// doesn't list. Callers use [`Configure::apply`], which checks the
-    /// plan is this companion's first.
+    /// What implementations write: applies the checked plan, changing
+    /// nothing it doesn't list.
     fn apply_plan<'a>(
         &'a self,
         http: &'a dyn GuardedHttp,
         target: &'a Target,
         input: &'a ConfigureInput<'a>,
-        plan: &'a ConfigPlan,
+        plan: CheckedPlan<'a>,
     ) -> BoxFuture<'a, Result<(), AdapterError>>;
+}
 
+impl dyn Configure + '_ {
     /// Applies a plan from [`Configure::plan`]. A plan made for another
-    /// companion is refused before anything is sent. Implementations don't
-    /// override this.
-    fn apply<'a>(
+    /// companion is refused before anything is sent.
+    pub fn apply<'a>(
         &'a self,
         http: &'a dyn GuardedHttp,
         target: &'a Target,
@@ -665,7 +757,7 @@ pub trait Configure: Send + Sync {
                 Err(AdapterError::Refused("the plan is for another companion"))
             });
         }
-        self.apply_plan(http, target, input, plan)
+        self.apply_plan(http, target, input, CheckedPlan { plan })
     }
 }
 
@@ -680,7 +772,7 @@ mod tests {
             "http://192.168.1.10:8080",
             "https://qbit.example.lan/",
             "HTTP://Box:9696/prowlarr",
-            "http://[::1]:8080/x?y=1",
+            "http://[::1]:8080/x",
             "http://[fe80::1]",
             "http://host:65535/a%20b",
             "http://host/a@b",
@@ -698,6 +790,9 @@ mod tests {
             ("http://", InputError::Length),
             ("http://:8080", InputError::Length),
             ("http://[]:8080", InputError::Character),
+            ("http://host/x?y=1", InputError::Character),
+            ("http://host/#", InputError::Character),
+            ("http://host?", InputError::Character),
             ("http://[::1", InputError::Character),
             ("http://[::1]x", InputError::Character),
             ("http://[::1]:0", InputError::Range),
@@ -796,6 +891,13 @@ mod tests {
             ("/x\r\nHost: evil", InputError::Character),
             ("/x y", InputError::Character),
             ("/@evil", InputError::Character),
+            ("/a%2f..%2fb", InputError::Character),
+            ("/a%2F..", InputError::Character),
+            ("/a/..;/b", InputError::Character),
+            ("/a;x/b", InputError::Character),
+            ("/a/%2e%2e%5c", InputError::Character),
+            ("/a/%00", InputError::Character),
+            ("/a?x=%00", InputError::Character),
         ];
         for (s, e) in cases {
             assert_eq!(RequestPath::parse(s), Err(*e), "{s:?}");
@@ -804,15 +906,54 @@ mod tests {
         assert!(HeaderName::new("Bad Header").is_none());
         assert!(HeaderName::new("X:y").is_none());
         assert!(HeaderName::new("").is_none());
-        assert!(PlainHeader::parse("application/json").is_ok());
-        assert_eq!(PlainHeader::parse("a\r\nb"), Err(InputError::Character));
+        // Framing, the target and hop-by-hop names are the client's, in any
+        // case.
+        for reserved in [
+            "Host",
+            "HOST",
+            "Content-Length",
+            "content-length",
+            "Transfer-Encoding",
+            "Connection",
+            "Keep-Alive",
+            "Proxy-Authorization",
+            "TE",
+            "Trailer",
+            "Upgrade",
+            "Expect",
+        ] {
+            let leaked: &'static str = Box::leak(reserved.to_owned().into_boxed_str());
+            assert!(HeaderName::new(leaked).is_none(), "{reserved}");
+        }
+        assert!(HeaderName::new("Hosts").is_some());
+        assert!(HeaderValue::plain("application/json").is_ok());
+        assert!(HeaderValue::plain("a\tb é").is_ok());
+        for bad in ["a\r\nb", "a\nb", "a\rb", "a\0b", "a\u{7f}b", "a\u{1b}b"] {
+            assert_eq!(
+                HeaderValue::plain(bad).unwrap_err(),
+                InputError::Character,
+                "{bad:?}"
+            );
+            assert_eq!(
+                HeaderValue::secret(Secret::new(bad)).unwrap_err(),
+                InputError::Character,
+                "{bad:?}"
+            );
+        }
         assert_eq!(
-            PlainHeader::parse(&"a".repeat(4097)),
-            Err(InputError::Length)
+            HeaderValue::secret(Secret::new("k\r\nX-Evil: 1")).unwrap_err(),
+            InputError::Character
         );
-        let v = HeaderValue::Secret(Secret::new("hunter2"));
+        assert_eq!(
+            HeaderValue::plain(&"a".repeat(HEADER_VALUE_MAX + 1)).unwrap_err(),
+            InputError::Length
+        );
+        let v = HeaderValue::secret(Secret::new("hunter2")).unwrap();
+        assert!(v.is_secret());
+        assert_eq!(v.expose(), "hunter2");
         assert_eq!(format!("{v:?}"), "Secret(…)");
-        let v = HeaderValue::Plain(PlainHeader::parse("SID=abc").unwrap());
+        let v = HeaderValue::plain("SID=abc").unwrap();
+        assert!(!v.is_secret());
         assert!(!format!("{v:?}").contains("abc"));
     }
 
@@ -971,9 +1112,10 @@ mod tests {
             http: &'a dyn GuardedHttp,
             target: &'a Target,
             input: &'a ConfigureInput<'a>,
-            plan: &'a ConfigPlan,
+            plan: CheckedPlan<'a>,
         ) -> BoxFuture<'a, Result<(), AdapterError>> {
             Box::pin(async move {
+                let plan = plan.plan();
                 let password = input
                     .credentials
                     .get("password")?
@@ -982,7 +1124,11 @@ mod tests {
                     .map_err(|_| AdapterError::Protocol("path"))?;
                 let req = ProbeRequest::new(target, path, Limits::PROBE)
                     .post(b"json={}".to_vec())
-                    .header(PASSWORD, HeaderValue::Secret(password));
+                    .header(
+                        PASSWORD,
+                        HeaderValue::secret(password)
+                            .map_err(|_| AdapterError::Protocol("credential"))?,
+                    );
                 http.send(req).await?;
                 let mut applied = self.applied.lock().unwrap();
                 for c in &plan.changes {
