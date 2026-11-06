@@ -767,6 +767,49 @@ fn negated_words_answer_as_the_file_index_does() {
     assert!(!plan(&common).contains("RegexQuery"), "{}", plan(&common));
 }
 
+/// While the file index lags the torrent index (a crash between their
+/// commits, until the catch-up), an extension less a word doesn't read
+/// the torrent's terms: the bad set would miss the lagging torrents'
+/// files and let in one whose only video is a sample. It runs on the
+/// file index, which has nothing yet, as on `main`; after the catch-up
+/// it answers from the terms (X-search-files-6).
+#[test]
+fn negated_words_wait_for_a_lagging_file_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = lodestar_search::index_dir(dir.path());
+    // Films enough that `sample` is rare (`NEGATED_RATIO`).
+    let mut torrents = vec![with_attrs(
+        "only sample",
+        &[("Sample/s.mkv".into(), 1 << 25, "")],
+    )];
+    torrents.extend(
+        (0..10).map(|i| with_attrs(&format!("film {i}"), &[(format!("f{i}.mkv"), 1 << 30, "")])),
+    );
+    let mut store = store_with(&torrents);
+    {
+        let index = SearchIndex::open(&path).unwrap();
+        let mut w = index.writer(30 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+    }
+    std::fs::remove_dir_all(path.join("files")).unwrap();
+    let index = SearchIndex::open(&path).unwrap();
+    let q = file(Node::And {
+        of: vec![
+            ext("mkv"),
+            Node::Not {
+                of: Box::new(word(TextField::Path, "sample")),
+            },
+        ],
+    });
+    assert!(ids(&index, &q).is_empty(), "nothing while behind");
+    let mut w = index.writer(30 << 20).unwrap();
+    w.catch_up(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    assert_eq!(ids(&index, &q), (2..=11).collect::<Vec<u64>>());
+    assert!(format!("{:?}", index.query(&q, NOW)).contains("RegexQuery"));
+}
+
 /// While the bucket terms are backfilled (a build shipping a new
 /// generation of `file_bucket`), every bucket clause runs on the file
 /// index, so a document the walk hasn't reached can't be missed; once
@@ -812,6 +855,16 @@ fn bucket_clauses_fall_back_while_their_terms_are_backfilled() {
             }),
         ]
     })
+    // An extension less a rare word reads `file_ext_bucket` too
+    // (X-search-files-6).
+    .chain([file(Node::And {
+        of: vec![
+            ext("bin"),
+            Node::Not {
+                of: Box::new(word(TextField::Any, "f5")),
+            },
+        ],
+    })])
     .collect();
     let want: Vec<Vec<(u64, f32)>> = queries
         .iter()

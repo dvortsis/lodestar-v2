@@ -1231,3 +1231,45 @@ pub(crate) fn has_stem_alternative(node: &Node) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod negated_tests {
+    use super::*;
+
+    fn inner(q: &str) -> Node {
+        match crate::parse(q).unwrap() {
+            Node::File { of } => *of,
+            n => panic!("{n:?}"),
+        }
+    }
+
+    /// One extension atom and negated words not on the title, in any
+    /// order; nothing else (X-search-files-6).
+    #[test]
+    fn negated_words_takes_only_its_shape() {
+        let n = negated_words(&inner("file:(ext:mkv,mp4 -path:sample)")).unwrap();
+        assert_eq!(n.exts, ["mkv", "mp4"]);
+        assert_eq!(n.words.len(), 1);
+        let n = negated_words(&inner("file:(-sample -name:x ext:mkv)")).unwrap();
+        assert_eq!(n.words.len(), 2);
+        assert!(negated_words(&inner("file:((ext:a | ext:b) -x)")).is_some());
+        for q in [
+            "file:(ext:mkv)",
+            "file:(-sample)",
+            "file:(-a -b)",
+            "file:(ext:mkv ext:mp4 -sample)",
+            "file:(ext:mkv -title:sample)",
+            "file:(ext:mkv -\"a sample\")",
+            "file:(ext:mkv -samp*)",
+            "file:(ext:mkv -sample size:>1MB)",
+            "file:(ext:mkv sample)",
+            "file:(ext:mkv -(a | b))",
+        ] {
+            // The parser refuses some of these already (`title:`).
+            let Ok(Node::File { of }) = crate::parse(q) else {
+                continue;
+            };
+            assert_eq!(negated_words(&of), None, "{q}");
+        }
+    }
+}

@@ -2478,7 +2478,7 @@ fn bad_torrents_at(
         (Occur::Must, Box::new(theirs) as Q),
         (Occur::Must, Box::new(rescue) as Q),
     ]);
-    let rescued = searcher.search(&exact, &Torrents)?;
+    let rescued = exact_torrents(searcher, &exact, cancel)?;
     cancel.check()?;
     Ok(Some(IdSet::from_ids(
         undecided
@@ -2512,23 +2512,31 @@ fn undecided_in(
     // The first document not yet checked against `rescue`.
     let mut next = 0;
     let mut last: Option<u64> = None;
-    let mut seen = 0u32;
+    // Steps (suspect files and run documents), for the stop check.
+    let mut steps = 0u32;
+    let stop = |steps: &mut u32| {
+        *steps = steps.wrapping_add(1);
+        if steps.is_multiple_of(4096) && (cancel.is_stopped() || failed.load(Ordering::Acquire)) {
+            Err(crate::cancel::interrupted())
+        } else {
+            Ok(())
+        }
+    };
     let mut doc = sus.doc();
     while doc != TERMINATED {
-        seen += 1;
-        if seen.is_multiple_of(4096) && (cancel.is_stopped() || failed.load(Ordering::Acquire)) {
-            return Err(crate::cancel::interrupted());
-        }
+        stop(&mut steps)?;
         if let Some(t) = torrent(doc).filter(|_| alive(doc))
             && last != Some(t)
         {
             last = Some(t);
             let mut d = doc;
             while d > next && torrent(d - 1) == Some(t) {
+                stop(&mut steps)?;
                 d -= 1;
             }
             let mut rescued = false;
             while d < seg.max_doc() && torrent(d) == Some(t) {
+                stop(&mut steps)?;
                 if d >= next {
                     if res.doc() < d {
                         res.seek(d);
@@ -2566,32 +2574,36 @@ fn doc_freq(searcher: &Searcher, terms: &[Term]) -> crate::index::Result<u64> {
     Ok(n)
 }
 
-/// Collects the torrent ids of the matching documents, sorted and
-/// distinct.
-struct Torrents;
-
-impl Collector for Torrents {
-    type Fruit = Vec<u64>;
-    type Child = FileIndexesSegment;
-
-    fn for_segment(
-        &self,
-        _ord: SegmentOrdinal,
-        reader: &SegmentReader,
-    ) -> tantivy::Result<FileIndexesSegment> {
-        Ok(FileIndexesSegment {
-            column: reader.fast_fields().u64("torrent")?,
-            found: Vec::new(),
-        })
+/// The torrent ids of the live documents matching `query`, sorted and
+/// distinct, a segment at a time, stopping within 4,096 documents of
+/// `cancel` stopping.
+fn exact_torrents(
+    searcher: &Searcher,
+    query: &dyn Query,
+    cancel: &crate::CancelToken,
+) -> crate::index::Result<Vec<u64>> {
+    let weight = query.weight(EnableScoring::disabled_from_searcher(searcher))?;
+    let mut out = Vec::new();
+    for seg in searcher.segment_readers() {
+        cancel.check()?;
+        let column = seg.fast_fields().u64("torrent")?;
+        let mut scorer = weight.scorer(seg, 1.0)?;
+        let mut doc = scorer.doc();
+        let mut n = 0u32;
+        while doc != TERMINATED {
+            n = n.wrapping_add(1);
+            if n.is_multiple_of(4096) {
+                cancel.check()?;
+            }
+            if seg.alive_bitset().is_none_or(|a| a.is_alive(doc)) {
+                out.extend(column.first(doc));
+            }
+            doc = scorer.advance();
+        }
     }
-
-    fn requires_scoring(&self) -> bool {
-        false
-    }
-
-    fn merge_fruits(&self, fruits: Vec<Vec<u64>>) -> tantivy::Result<Vec<u64>> {
-        FileIndexes.merge_fruits(fruits)
-    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
 }
 
 /// Collects the file positions of the matching documents.
@@ -4487,6 +4499,13 @@ mod negated_props {
                     .to_vec();
                 prop_assert_eq!(&got, &want);
             }
+            // A stopped search stops here too, rather than falling back.
+            let stopped = crate::CancelToken::new();
+            stopped.cancel();
+            prop_assert!(matches!(
+                bad_torrents_at(&searcher, &f, &neg, &FileSetCache::default(), &stopped, 0),
+                Err(crate::index::Error::Cancelled)
+            ));
         }
     }
 }

@@ -1366,12 +1366,26 @@ impl SearchIndex {
         compile::search_file_clauses(node, buckets, &mut clauses);
         let mut sets = compile::FileSets::new();
         let files_searcher = self.files.reader.searcher();
+        let mut files_caught_up: Option<bool> = None;
         for of in &clauses {
             let key = format!("{of:?}");
             cancel.check()?;
             // A clause of extensions less rare words: the bad torrents
             // only, read through the words (X-search-files-6).
-            if let Some(neg) = compile::negated_words(of).filter(|_| buckets) {
+            // Only once the file index has every torrent the torrent
+            // index has: while it lags (a crash between their commits,
+            // until the catch-up) a lagging torrent's files would be
+            // missing from the bad set, and the candidates would let it
+            // in whatever its files hold.
+            let neg = compile::negated_words(of).filter(|_| buckets);
+            if let Some(neg) = neg.filter(|_| {
+                *files_caught_up.get_or_insert_with(|| {
+                    matches!(
+                        (self.watermark(), self.files_watermark()),
+                        (Ok(t), Ok(f)) if f >= t
+                    )
+                })
+            }) {
                 match files::bad_torrents(
                     &files_searcher,
                     &self.files.fields,
@@ -1386,7 +1400,12 @@ impl SearchIndex {
                     Ok(None) => {}
                     Err(e @ (Error::Cancelled | Error::OutOfTime)) => return Err(e),
                     // The whole clause on the file index, below.
-                    Err(_) => {}
+                    Err(_) => {
+                        lodestar_log::log_event!(
+                            crate::log_events::FILE_SEARCH_FAILED,
+                            error = lodestar_log::Error::kind("tantivy")
+                        );
+                    }
                 }
             }
             let query = files::compile(of, &self.files.fields);
