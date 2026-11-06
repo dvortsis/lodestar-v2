@@ -326,7 +326,7 @@ fn attach_details(c: &lodestar_sources::Claims, out: &mut Claims) {
     let Some(d) = &c.details else {
         return;
     };
-    if c.adult.is_some() || out.adult.is_some() {
+    if out.adult.is_some() {
         return;
     }
     if out.description.is_some() || out.publisher.is_some() {
@@ -450,6 +450,10 @@ pub fn judge(
 /// that name with them. Every one is judged as adult, since only Adult
 /// items are looked up (Q2), so the Adult-only core's thresholds apply.
 ///
+/// `context` is also joined with the details section's texts, as the
+/// claimed name is ([`details_texts`]); those are judged as adult only
+/// when `adult` says so, like the claimed name.
+///
 /// **Stricter only.** The section's texts are judged as extra items: a
 /// hit adds a hold (a core one holds the hash, as for any claim), and
 /// nothing they hold can cancel a decision on another text. They're never
@@ -493,7 +497,7 @@ pub fn judge_in(
     for text in c
         .details
         .as_deref()
-        .map(|d| details_texts(d, c.name.as_deref()))
+        .map(|d| details_texts(d, &[c.name.as_deref(), context]))
         .unwrap_or_default()
     {
         let Some(h) = judge_text(engine, &hashes, &text, &[], size, sealer, adult, now) else {
@@ -552,22 +556,27 @@ pub fn enrichment_texts(a: &claims::AdultEnrichment, context: Option<&str>) -> V
     out
 }
 
-/// The texts of a details section (ENR-9) that [`judge`] judges, each as
-/// a name: the canonical title, each alternative title, the source
+/// The texts of a details section (ENR-9) that [`judge_in`] judges, each
+/// as a name: the canonical title, each alternative title, the source
 /// category, each genre and each newsgroup alone; then, when there's more
-/// than one, all of them together; then `name` (the claimed name) with all
-/// of them, since a feed's category or a plugin's genre describes that
-/// very name. Empty texts are left out.
+/// than one, all of them together; then each of `names` (the claimed name,
+/// and the verified name of the torrent the claims are on) with each text
+/// and with all of them, since a feed's category or a plugin's genre
+/// describes that very item. Each pair is its own text, as for the adult
+/// section ([`enrichment_texts`]): the core's pair rules look within a few
+/// words, so joining every text to a name in one string would let padding
+/// in one field hide another. Empty texts and names, and a name given
+/// twice, are left out.
 ///
 /// **Stricter only**, as for the adult section: the joined texts can only
-/// add a hold. A rule that one text alone meets is met on its own.
+/// add a hold. Every text is still judged alone.
 ///
 /// **Not judged, because they aren't text:** the posting time, the year
 /// and the match confidence are numbers, and an alternative title's
 /// language is a BCP 47 tag the store checks the shape of. The external
 /// ids beside the section are scheme and value pairs the store checks
 /// (`id_ok`), as for every claim.
-pub fn details_texts(d: &claims::Details, name: Option<&str>) -> Vec<String> {
+pub fn details_texts(d: &claims::Details, names: &[Option<&str>]) -> Vec<String> {
     let mut alone: Vec<&str> =
         Vec::with_capacity(2 + d.alt_titles.len() + d.genres.len() + d.newsgroups.len());
     alone.extend(d.canonical_title.as_deref());
@@ -584,8 +593,16 @@ pub fn details_texts(d: &claims::Details, name: Option<&str>) -> Vec<String> {
     if alone.len() > 1 {
         out.push(together.clone());
     }
-    if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
-        out.push(format!("{name} {together}"));
+    let mut seen: Vec<&str> = Vec::with_capacity(names.len());
+    for name in names.iter().flatten() {
+        if name.trim().is_empty() || seen.contains(name) {
+            continue;
+        }
+        seen.push(name);
+        out.extend(alone.iter().map(|t| format!("{name} {t}")));
+        if alone.len() > 1 {
+            out.push(format!("{name} {together}"));
+        }
     }
     out
 }
@@ -789,7 +806,19 @@ pub fn ingest(
                 Some((id, store.torrent(id)?.map(|r| r.name)))
             }
         };
-        let context = on.as_ref().and_then(|(_, name)| name.as_deref());
+        // A details section is judged with the verified name of a torrent
+        // stored under the key too, as an adult section is (ENR-9b).
+        let verified = match (&on, &c.details) {
+            (None, Some(_)) => match store.find(&d.found.key)? {
+                Some(id) => store.torrent(id)?.map(|r| r.name),
+                None => None,
+            },
+            _ => None,
+        };
+        let context = on
+            .as_ref()
+            .and_then(|(_, name)| name.as_deref())
+            .or(verified.as_deref());
         let Some(mut h) = judge_in(engine, d.found.key.0, &c, context, ctx.sealer, adult, now)
         else {
             match on {
@@ -1132,11 +1161,12 @@ pub fn refile_step(
                 };
                 // Claims an always-adult source made: judged as adult too.
                 let adult = ctx.adult.has(c.source);
-                // An enrichment match is judged with the torrent's name,
-                // as at ingest (ENR-1).
-                let context = match &claims.adult {
-                    Some(_) => store.torrent(c.torrent_id)?.map(|r| r.name),
-                    None => None,
+                // An enrichment match or a details section is judged with
+                // the torrent's name, as at ingest (ENR-1, ENR-9b).
+                let context = if claims.adult.is_some() || claims.details.is_some() {
+                    store.torrent(c.torrent_id)?.map(|r| r.name)
+                } else {
+                    None
                 };
                 let found = judge_hashes(
                     &engine,

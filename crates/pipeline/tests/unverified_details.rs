@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_filter::{Action, Core, CsList, Engine, Handle, Lists, Sealer, Switches, TermSet};
 use lodestar_metainfo::{Info, InfoHash};
+use lodestar_pipeline::source_adult::AdultSources;
 use lodestar_pipeline::unverified::{
     self, Ctx, Phase, UnverifiedStats, claims_kib, details_texts, store_claims,
 };
@@ -122,10 +123,22 @@ fn ingest(
     sealer: Option<&Sealer>,
     batch: &[Discovery],
 ) -> UnverifiedStats {
+    ingest_as(store, filter, sealer, AdultSources::default(), batch)
+}
+
+/// [`ingest`] with `adult` the always-adult sources.
+fn ingest_as(
+    store: &mut Store,
+    filter: &Handle,
+    sealer: Option<&Sealer>,
+    adult: AdultSources,
+    batch: &[Discovery],
+) -> UnverifiedStats {
     let stats = UnverifiedStats::default();
     let ctx = Ctx {
         sealer,
         quarantine_secs: 86_400,
+        adult,
         ..Ctx::default()
     };
     unverified::ingest(store, &filter.current(), ctx, batch, &stats, T, &|_, _| {}).unwrap();
@@ -428,22 +441,30 @@ fn a_private_find_keeps_its_section() {
 #[test]
 fn the_judged_texts_are_every_free_text_field() {
     let d = details();
-    let texts = details_texts(&d, Some("Name"));
-    for t in [
+    let fields = [
         "Some Show",
         "某番組",
         "TV > HD",
         "drama",
         "alt.binaries.hdtv",
-    ] {
+    ];
+    let texts = details_texts(&d, &[Some("Name"), Some("Verified"), Some("Name"), None]);
+    let together = fields.join(" ");
+    for t in fields {
         assert!(texts.iter().any(|x| x == t), "{t} alone");
+        for name in ["Name", "Verified"] {
+            let pair = format!("{name} {t}");
+            assert_eq!(texts.iter().filter(|x| **x == pair).count(), 1, "{pair}");
+        }
     }
-    let together = "Some Show 某番組 TV > HD drama alt.binaries.hdtv";
-    assert!(texts.iter().any(|x| x == together));
-    assert!(texts.iter().any(|x| x == &format!("Name {together}")));
+    assert!(texts.contains(&together));
+    assert!(texts.iter().any(|x| *x == format!("Verified {together}")));
+    // 5 alone, together, and 6 for each distinct name.
+    assert_eq!(texts.len(), 5 + 1 + 2 * 6);
     // Numbers and language tags aren't text: never judged.
     assert!(!texts.iter().any(|x| x.contains("2011") || x.contains("ja")));
-    assert!(details_texts(&claims::Details::default(), Some("Name")).is_empty());
+    assert!(details_texts(&claims::Details::default(), &[Some("Name")]).is_empty());
+    assert_eq!(details_texts(&d, &[]).len(), 6);
 }
 
 /// Your rule on any one free-text field drops the source's claims and
@@ -504,6 +525,15 @@ fn a_pattern_split_across_the_name_and_a_field_holds() {
     let (mut store, _, feed) = mem();
     let filter = stand_in();
     let mut d = details();
+    // Padding in another field doesn't hide it: each text is joined with
+    // the name on its own.
+    d.canonical_title = Some("one two three four five six seven eight nine ten".into());
+    d.alt_titles = (0..claims::MAX_ALT_TITLES)
+        .map(|i| claims::AltTitle {
+            language: "en".into(),
+            title: format!("filler title number {i}"),
+        })
+        .collect();
     d.genres = vec!["rolea".into()];
     let stats = ingest(
         &mut store,
@@ -520,6 +550,72 @@ fn a_pattern_split_across_the_name_and_a_field_holds() {
     assert!(held(&store, key(1)));
     assert!(stored_item(&store, key(2)).is_some());
     assert!(stored_item(&store, key(3)).is_some());
+}
+
+/// A section on a stored torrent is judged with the torrent's verified
+/// name as well, at ingest and in the refile: a child-role genre on a
+/// torrent whose verified name is sexual holds it, though neither the
+/// claims (which name nothing) nor the torrent alone would.
+#[test]
+fn the_section_is_judged_with_the_verified_name() {
+    let (mut store, dht, feed) = mem();
+    let (id, h) = crawled(&mut store, "Lexa Film", dht);
+    let genre = |g: &str| {
+        let mut c = with_details(
+            "ignored",
+            claims::Details {
+                genres: vec![g.into()],
+                match_confidence: Some(80),
+                ..claims::Details::default()
+            },
+        );
+        c.name = None;
+        c
+    };
+    let filter = stand_in();
+    let stats = ingest(&mut store, &filter, None, &[found(h, feed, genre("rolea"))]);
+    assert_eq!(n(&stats.held), 1);
+    assert!(held(&store, h));
+    assert!(store.torrent(id).unwrap().is_none());
+
+    // The refile: stored while the core didn't know the role term.
+    let (mut store, dht, feed) = mem();
+    let (id, h) = crawled(&mut store, "Lexa Film", dht);
+    let stats = ingest(&mut store, &filter, None, &[found(h, feed, genre("roleb"))]);
+    assert_eq!(n(&stats.on_torrent), 1);
+    assert_eq!(sweep(&mut store, &filter), 0);
+    filter.update(|c| {
+        let mut lists = c.lists().clone();
+        lists.child_roles = TermSet::of(&["rolea", "roleb"]);
+        c.set_lists(lists);
+    });
+    assert_eq!(sweep(&mut store, &filter), 1);
+    assert!(held(&store, h));
+    assert!(store.torrent(id).unwrap().is_none());
+}
+
+/// An always-adult source's section is judged as adult too, and the
+/// stricter verdict stands: a pair the Adult-only core's wider window
+/// catches holds there, and is stored from any other source.
+#[test]
+fn an_always_adult_sources_section_is_judged_as_adult() {
+    // Ten words apart: only the Adult-only CS-5a (window 12) catches
+    // them, as in `source_adult.rs`.
+    let spread = "Studiox Rolea one two three four five six seven eight nine Lexa";
+    let mut d = details();
+    d.source_category = Some(spread.into());
+    let c = with_details("Plain Show", d);
+    let filter = stand_in();
+
+    let (mut store, _, feed) = mem();
+    let stats = ingest(&mut store, &filter, None, &[found(key(1), feed, c.clone())]);
+    assert_eq!((n(&stats.stored), n(&stats.held)), (1, 0), "not adult");
+
+    let (mut store, _, feed) = mem();
+    let adult = AdultSources(1 << feed.get());
+    let stats = ingest_as(&mut store, &filter, None, adult, &[found(key(1), feed, c)]);
+    assert_eq!((n(&stats.stored), n(&stats.held)), (0, 1), "adult");
+    assert!(held(&store, key(1)));
 }
 
 /// The refile: a rule added after storage blocks a key through an
@@ -728,8 +824,70 @@ fn any_claims() -> impl Strategy<Value = claims::Claims> {
         )
 }
 
+/// Sections the store takes as they are: valid entries only, no
+/// duplicates, at least `match_confidence`.
+fn good_details() -> impl Strategy<Value = claims::Details> {
+    (
+        proptest::option::of("[a-zA-Z0-9 >]{1,40}"),
+        proptest::option::of(0..=claims::MAX_POSTED_AT),
+        proptest::collection::btree_set("alt\\.binaries\\.[a-z]{1,10}", 0..=claims::MAX_NEWSGROUPS),
+        proptest::collection::btree_set(
+            ("(en|ja|und|zh-hant)", "\\PC{1,40}"),
+            0..=claims::MAX_ALT_TITLES,
+        ),
+        proptest::option::of("\\PC{1,80}"),
+        proptest::collection::btree_set("[a-z]{1,12}( [a-z]{1,12})?", 0..=claims::MAX_GENRES),
+        proptest::option::of(1u16..=9999),
+        0..=claims::MAX_MATCH_CONFIDENCE,
+    )
+        .prop_map(
+            |(source_category, posted_at, groups, alt, canonical_title, genres, year, conf)| {
+                claims::Details {
+                    source_category,
+                    posted_at,
+                    newsgroups: groups.into_iter().collect(),
+                    alt_titles: alt
+                        .into_iter()
+                        .map(|(language, title)| claims::AltTitle { language, title })
+                        .collect(),
+                    canonical_title,
+                    genres: genres.into_iter().collect(),
+                    year,
+                    match_confidence: Some(conf),
+                }
+            },
+        )
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// A well-formed section beside clean claims is stored exactly as
+    /// sent, clamped or not, and round-trips as version 3.
+    #[test]
+    fn a_well_formed_section_is_stored_as_sent(
+        d in good_details(),
+        name in proptest::option::of("[a-zA-Z0-9 .]{1,40}"),
+        private in proptest::bool::ANY,
+    ) {
+        let c = claims::Claims {
+            name,
+            details: Some(Box::new(d.clone())),
+            ..with_details("x", claims::Details::default())
+        };
+        for clamp in [false, true] {
+            let mut sent = raw(key(1), SourceId::new(1).unwrap(), c.clone());
+            if clamp {
+                sent = found(key(1), SourceId::new(1).unwrap(), c.clone());
+            }
+            sent.found.private_source = private;
+            let s = store_claims(&sent).unwrap();
+            prop_assert_eq!(s.details.as_deref(), Some(&d));
+            let blob = stored::encode(&s, 3).unwrap();
+            prop_assert_eq!(blob[0], stored::VERSION_DETAILS);
+            prop_assert_eq!(stored::decode(&blob).unwrap(), s);
+        }
+    }
 
     /// Whatever a source sends, `store_claims` yields claims the store
     /// accepts, or drops the section: never an error or a panic.
