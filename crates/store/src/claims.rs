@@ -57,6 +57,10 @@
 //!   section. The section's `flags` has bit 0 for the category, 1 the
 //!   posting time, 2 the canonical title, 3 the year and 4 the match
 //!   confidence; bits 5–7 are zero. A section claiming nothing is refused.
+//! - **Beside a details section there's no description or publisher**:
+//!   a plugin's overview could name the cast, and a usenet poster is often
+//!   an email address. The row says what the work is, never who made or
+//!   posted it.
 //! - **Beside a details section, `ids` hold only enrichment ids**: the
 //!   schemes in [`ENRICHMENT_SCHEMES`], each value in its one spelling
 //!   ([`id_ok`]), no duplicates. IDs stay in `ids`; the section has none.
@@ -459,7 +463,8 @@ pub const ENRICHMENT_SCHEMES: [&str; 11] = [
 /// Whether `value` is a well-formed id in `scheme`, one of
 /// [`ENRICHMENT_SCHEMES`]:
 ///
-/// - `imdb`: a title, `tt` and 7–10 digits;
+/// - `imdb`: a title, `tt` and 7 digits (zero-padded), or 8–10 with no
+///   leading zero;
 /// - `tmdb`, `tvdb`, `anidb`, `anilist`, `igdb`, `steam`: 1–20 digits,
 ///   no leading zero;
 /// - `mbid`: a lower-case UUID, `8-4-4-4-12` hex;
@@ -474,9 +479,12 @@ pub fn id_ok(scheme: &str, value: &str) -> bool {
         (1..=20).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit()) && !s.starts_with('0')
     }
     match scheme {
-        "imdb" => value
-            .strip_prefix("tt")
-            .is_some_and(|d| (7..=10).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit())),
+        // Seven digits padded with zeros, or more with no padding: the
+        // form IMDb itself prints.
+        "imdb" => value.strip_prefix("tt").is_some_and(|d| {
+            d.bytes().all(|b| b.is_ascii_digit())
+                && (d.len() == 7 || ((8..=10).contains(&d.len()) && !d.starts_with('0')))
+        }),
         "tmdb" | "tvdb" | "anidb" | "anilist" | "igdb" | "steam" => num(value),
         "mbid" => {
             let b = value.as_bytes();
@@ -532,17 +540,20 @@ pub fn newsgroup_ok(s: &str) -> bool {
 }
 
 /// Whether `s` is a genre in its normalised form: 1–[`MAX_GENRE`] bytes,
-/// no ASCII upper case, no control characters, and words separated by one
-/// ASCII space with none at either end. `lodestar_sources` normalises with
-/// full Unicode lower-casing; the check stops at ASCII so a Unicode update
-/// can never turn a stored genre invalid.
+/// no ASCII upper case, no control characters (`Cc`, a fixed set), no
+/// ASCII whitespace but the space, and words separated by one space with
+/// none at either end. `lodestar_sources` normalises further, with full
+/// Unicode lower-casing and whitespace folding; the check uses no Unicode
+/// property that can change, so a Unicode update can never turn a stored
+/// genre invalid.
 pub fn genre_ok(s: &str) -> bool {
     (1..=MAX_GENRE).contains(&s.len())
         && !s.starts_with(' ')
         && !s.ends_with(' ')
         && !s.contains("  ")
-        && s.chars()
-            .all(|c| !c.is_ascii_uppercase() && !c.is_control() && (c == ' ' || !c.is_whitespace()))
+        && s.chars().all(|c| {
+            !c.is_ascii_uppercase() && !c.is_control() && (c == ' ' || !c.is_ascii_whitespace())
+        })
 }
 
 /// One alternative title with its language.
@@ -569,7 +580,8 @@ impl fmt::Debug for AltTitle {
 /// resolved an item to, and what a feed says beyond a name and files (a
 /// usenet item's groups, an IRC announce's category). Every field is the
 /// source's claim. External IDs stay in [`Claims::ids`], restricted to
-/// [`ENRICHMENT_SCHEMES`] when this section is present.
+/// [`ENRICHMENT_SCHEMES`] when this section is present, and the row then
+/// has no description or publisher.
 ///
 /// **It describes a work, never a person** (owner §2.37, plan §4.3): there
 /// is no field for cast, crew, an author, an uploader or a poster's
@@ -845,6 +857,9 @@ impl Claims {
         }
         if let Some(d) = &self.details {
             d.check()?;
+            if self.description.is_some() || self.publisher.is_some() {
+                return Err(ClaimsError::Limit("details claims"));
+            }
             if !self.ids.iter().all(|i| id_ok(&i.scheme, &i.value)) || has_duplicates(&self.ids) {
                 return Err(ClaimsError::Limit("enrichment ids"));
             }
@@ -1168,6 +1183,9 @@ pub fn decode_plain(body: &[u8]) -> Result<Claims, ClaimsError> {
         && (description.is_some() || publisher.is_some() || !ids.is_empty() || has(DETAILS))
     {
         return Err(ClaimsError::Malformed("enrichment claims"));
+    }
+    if has(DETAILS) && (description.is_some() || publisher.is_some()) {
+        return Err(ClaimsError::Malformed("details claims"));
     }
     let details = has(DETAILS).then(|| r.details()).transpose()?;
     if details.is_some()
@@ -2230,6 +2248,8 @@ mod tests {
         };
         let v3 = Claims {
             adult: None,
+            description: None,
+            publisher: None,
             ids: v3::full_ids(),
             details: Some(Box::new(v3::full_details())),
             ..full.clone()
@@ -2374,6 +2394,8 @@ mod tests {
                         value: "278".into(),
                     },
                 ],
+                description: None,
+                publisher: None,
                 details: Some(Box::new(details())),
                 ..sample()
             }
@@ -2607,6 +2629,27 @@ mod tests {
             );
         }
 
+        /// No overview or poster beside a details section, on either side:
+        /// either could name a person (plan §4.3, owner §2.37).
+        #[test]
+        fn details_claims_carry_no_description_or_publisher() {
+            let set: [fn(&mut Claims); 2] = [
+                |c| c.description = Some("d".into()),
+                |c| c.publisher = Some("poster@example.com".into()),
+            ];
+            for f in set {
+                let mut c = v3_sample();
+                f(&mut c);
+                assert_eq!(encode(&c, 3), Err(ClaimsError::Limit("details claims")));
+                assert_eq!(
+                    decode_plain(&unchecked(&c)),
+                    Err(ClaimsError::Malformed("details claims"))
+                );
+                c.details = None;
+                assert!(encode(&c, 3).is_ok(), "fine without the section");
+            }
+        }
+
         #[test]
         fn ids_beside_details_are_enrichment_ids() {
             let bad = [
@@ -2653,6 +2696,7 @@ mod tests {
             let good = [
                 ("imdb", "tt0111161"),
                 ("imdb", "tt1234567890"),
+                ("imdb", "tt10872600"),
                 ("tmdb", "278"),
                 ("tvdb", "81189"),
                 ("anidb", "1"),
@@ -2674,6 +2718,8 @@ mod tests {
             let bad = [
                 ("imdb", "tt123456"),
                 ("imdb", "tt12345678901"),
+                ("imdb", "tt00111161"),
+                ("imdb", "tt0000111161"),
                 ("imdb", "0111161"),
                 ("imdb", "TT0111161"),
                 ("imdb", "nm0000151"),
@@ -2751,12 +2797,15 @@ mod tests {
                 "ドラマ",
                 "sci-fi & fantasy",
                 "é",
+                // Non-ASCII whitespace is the normaliser's to fold, not
+                // the check's: its Unicode property can change.
+                "a\u{a0}b",
             ] {
                 assert!(genre_ok(g), "{g}");
             }
             let long = "g".repeat(MAX_GENRE + 1);
             for g in [
-                "", " drama", "drama ", "sci  fi", "Drama", "a\tb", "a\nb", "a\u{0}", "a\u{a0}b",
+                "", " drama", "drama ", "sci  fi", "Drama", "a\tb", "a\nb", "a\u{0}", "a\u{85}b",
                 &long,
             ] {
                 assert!(!genre_ok(g), "{g}");

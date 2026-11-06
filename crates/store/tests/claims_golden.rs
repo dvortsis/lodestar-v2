@@ -64,9 +64,12 @@ fn v2() -> Claims {
     }
 }
 
-/// A usenet item a plugin enriched: every details field set.
+/// A usenet item a plugin enriched: every details field set. No
+/// description or publisher: the store refuses them beside the section.
 fn v3() -> Claims {
     Claims {
+        description: None,
+        publisher: None,
         ids: vec![
             ExternalId {
                 scheme: "imdb".into(),

@@ -4,7 +4,8 @@
 //! limit, a canonical plain body (it re-encodes to the same bytes), one
 //! blob version per value (version 2 exactly when there's an
 //! adult-enrichment section, 3 exactly when there's a details section,
-//! never both), enrichment ids only beside a details section, and a blob
+//! never both), enrichment ids and no description or publisher beside a
+//! details section, and a blob
 //! that round-trips through the encoder.
 //!
 //! Seeds: `fuzz/seeds/claims/` (version 1, 2 and 3 blobs and plain bodies,
@@ -33,6 +34,7 @@ fn promises(c: &Claims) {
         assert!(d.genres.iter().all(|g| claims::genre_ok(g)));
         assert!(d.newsgroups.iter().all(|g| claims::newsgroup_ok(g)));
         assert!(c.ids.iter().all(|i| claims::id_ok(&i.scheme, &i.value)));
+        assert!(c.description.is_none() && c.publisher.is_none(), "nothing personal beside details");
     }
 }
 

@@ -140,7 +140,6 @@ impl Claims {
         }
         self.ids
             .retain(|id| !id.scheme.is_empty() && !id.value.is_empty());
-        self.ids.truncate(MAX_IDS);
         clamp_opt(&mut self.description, MAX_DESCRIPTION);
         clamp_opt(&mut self.publisher, MAX_PUBLISHER);
         if let Some(a) = &mut self.adult {
@@ -153,7 +152,8 @@ impl Claims {
             } else {
                 self.adult = None;
             }
-            // One section a row: an adult match carries nothing else.
+            // One section a row: claims that came with an adult section
+            // carry no details, whether or not the section itself is kept.
             self.details = None;
         }
         if let Some(d) = &mut self.details {
@@ -161,9 +161,20 @@ impl Claims {
             if d.is_empty() {
                 self.details = None;
             } else {
-                // The ids enrichment writes, each once (store: `id_ok`).
-                let mut kept: Vec<ExternalId> = Vec::with_capacity(self.ids.len());
-                for id in std::mem::take(&mut self.ids) {
+                // No overview or poster beside the section (the store
+                // refuses them): either could name a person.
+                self.description = None;
+                self.publisher = None;
+                // The ids enrichment writes, each once (store: `id_ok`),
+                // filtered before the cut so bad ones can't crowd them out.
+                let mut kept: Vec<ExternalId> = Vec::new();
+                for mut id in std::mem::take(&mut self.ids) {
+                    if kept.len() == MAX_IDS {
+                        break;
+                    }
+                    if id.scheme == "mbid" {
+                        id.value.make_ascii_lowercase();
+                    }
                     if id_ok(&id.scheme, &id.value) && !kept.contains(&id) {
                         kept.push(id);
                     }
@@ -171,6 +182,7 @@ impl Claims {
                 self.ids = kept;
             }
         }
+        self.ids.truncate(MAX_IDS);
         let mut total = self.fixed_len();
         self.files.truncate(MAX_FILES);
         let mut keep = 0;
@@ -549,7 +561,13 @@ mod tests {
                     scheme: "tmdb".into(),
                     value: "278".into(),
                 },
+                ExternalId {
+                    scheme: "mbid".into(),
+                    value: "F27EC8DB-AF05-4F36-916E-3D57F91ECF5E".into(),
+                },
             ],
+            description: Some("An overview naming the cast".into()),
+            publisher: Some("poster@example.com".into()),
             details: Some(Box::new(Details {
                 source_category: Some("c".repeat(MAX_CATEGORY + 9)),
                 posted_at: Some(-1),
@@ -614,7 +632,16 @@ mod tests {
         assert_eq!(d.match_confidence, None);
         // Only enrichment ids, each once.
         let ids: Vec<_> = c.ids.iter().map(|i| (&*i.scheme, &*i.value)).collect();
-        assert_eq!(ids, [("imdb", "tt0111161"), ("tmdb", "278")]);
+        assert_eq!(
+            ids,
+            [
+                ("imdb", "tt0111161"),
+                ("tmdb", "278"),
+                ("mbid", "f27ec8db-af05-4f36-916e-3d57f91ecf5e")
+            ]
+        );
+        assert!(c.description.is_none() && c.publisher.is_none());
+        assert_eq!(c.name.as_deref(), Some("n"));
         let blob = lodestar_store::claims::encode(&to_store(&c), 3).unwrap();
         assert_eq!(blob[0], lodestar_store::claims::VERSION_DETAILS);
     }
@@ -697,6 +724,146 @@ mod tests {
         assert!(c.files.len() < MAX_TOTAL / MAX_PATH, "files make room");
         assert_eq!(c.details.as_ref().unwrap().alt_titles.len(), MAX_ALT_TITLES);
         assert!(lodestar_store::claims::encode(&to_store(&c), 3).is_ok());
+    }
+
+    #[test]
+    fn bad_ids_cannot_crowd_out_good_ones() {
+        let mut ids = vec![
+            ExternalId {
+                scheme: "rage".into(),
+                value: "1".into(),
+            };
+            MAX_IDS * 2
+        ];
+        ids.push(ExternalId {
+            scheme: "tmdb".into(),
+            value: "278".into(),
+        });
+        let mut c = Claims {
+            ids,
+            details: Some(Box::new(Details {
+                year: Some(2000),
+                ..Details::default()
+            })),
+            ..Claims::default()
+        };
+        c.clamp();
+        assert_eq!(c.ids.len(), 1);
+        assert_eq!(c.ids[0].value, "278");
+    }
+
+    mod props {
+        use super::super::*;
+        use super::to_store;
+        use proptest::prelude::*;
+
+        fn any_text() -> impl Strategy<Value = String> {
+            prop_oneof![
+                4 => proptest::string::string_regex("(.|\\s){0,12}").unwrap(),
+                1 => "[A-Za-z .+_-]{0,12}",
+                1 => (1usize..1200).prop_map(|n| "é".repeat(n)),
+            ]
+        }
+
+        fn any_details() -> impl Strategy<Value = Details> {
+            (
+                (
+                    proptest::option::of(any_text()),
+                    proptest::option::of(any::<i64>()),
+                    proptest::collection::vec(any_text(), 0..12),
+                    proptest::collection::vec(
+                        (any_text(), any_text())
+                            .prop_map(|(language, title)| AltTitle { language, title }),
+                        0..40,
+                    ),
+                ),
+                (
+                    proptest::option::of(any_text()),
+                    proptest::collection::vec(any_text(), 0..20),
+                    proptest::option::of(any::<u16>()),
+                    proptest::option::of(any::<u8>()),
+                ),
+            )
+                .prop_map(
+                    |(
+                        (source_category, posted_at, newsgroups, alt_titles),
+                        (canonical_title, genres, year, m),
+                    )| {
+                        Details {
+                            source_category,
+                            posted_at,
+                            newsgroups,
+                            alt_titles,
+                            canonical_title,
+                            genres,
+                            year,
+                            match_confidence: m,
+                        }
+                    },
+                )
+        }
+
+        fn any_ids() -> impl Strategy<Value = Vec<ExternalId>> {
+            proptest::collection::vec(
+                (
+                    prop_oneof![
+                        Just("imdb".to_owned()),
+                        Just("TMDB".to_owned()),
+                        Just("mbid".to_owned()),
+                        "[a-z]{0,6}",
+                    ],
+                    prop_oneof![
+                        Just("tt0111161".to_owned()),
+                        Just("278".to_owned()),
+                        "[0-9a-fA-F-]{0,36}",
+                        any_text(),
+                    ],
+                )
+                    .prop_map(|(scheme, value)| ExternalId { scheme, value }),
+                0..40,
+            )
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            /// Whatever a source sends, the clamp leaves claims the store
+            /// accepts, round-trips, and stores as version 3 exactly when a
+            /// details section survives.
+            #[test]
+            fn clamped_details_always_encode(
+                d in any_details(),
+                ids in any_ids(),
+                description in proptest::option::of(any_text()),
+                publisher in proptest::option::of(any_text()),
+                adult in any::<bool>(),
+            ) {
+                let mut c = Claims {
+                    name: Some("n".into()),
+                    ids,
+                    description,
+                    publisher,
+                    adult: adult.then(|| AdultEnrichment::new("1")),
+                    details: Some(Box::new(d)),
+                    ..Claims::default()
+                };
+                c.clamp();
+                let s = to_store(&c);
+                let blob = lodestar_store::claims::encode(&s, 1);
+                prop_assert!(blob.is_ok(), "{:?}: {:?}", blob, c);
+                let blob = blob.unwrap();
+                prop_assert_eq!(&lodestar_store::claims::decode(&blob).unwrap(), &s);
+                prop_assert_eq!(
+                    blob[0] == lodestar_store::claims::VERSION_DETAILS,
+                    c.details.is_some()
+                );
+                prop_assert!(!(adult && c.details.is_some()));
+                // Clamping twice changes nothing.
+                let mut again = c.clone();
+                again.clamp();
+                prop_assert_eq!(again, c);
+            }
+        }
     }
 
     #[test]
