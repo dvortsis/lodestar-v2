@@ -5378,7 +5378,8 @@
         "slices.yaml X-fetch-pool-bytes owns: add crates/lodestar/src/metrics.rs, docs/metrics.md (runner yes 21:52Z)",
         "NEW SLICE X-fetch-meta-reserve (Opus, peer-wire + Fetcher trait, /security-review): reserve announced metadata_size against the pool byte budget before requesting pieces; closes in-flight max_sockets x max_metadata peak left by X-fetch-pool-bytes; deps X-fetch-pool-bytes; WK-10 depends on it",
         "slices.yaml X-consent-gate-polish owns: add crates/pipeline/src/lib.rs (prepare's condition loop moved into control::switch_off_unapproved; runner '1' 22:05Z)",
-        "slices.yaml X-consent-gate-polish owns: add docs/releases/v0.5.2.md (runner yes 22:19Z: torrent cache can't be turned on; 'Exact consent' bullet corrected)"
+        "slices.yaml X-consent-gate-polish owns: add docs/releases/v0.5.2.md (runner yes 22:19Z: torrent cache can't be turned on; 'Exact consent' bullet corrected)",
+        "slices.yaml SRC-15b owns: add web/e2e/settings-sources.keyboard.test.ts"
       ],
       "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
     }
@@ -6071,7 +6072,7 @@
         "slice": "ENR-9b",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #551 at f99066f5, in review (session_01MMjhnBVncrzXCiFejzp8vp)",
+        "doing": "PR #551 at f007c839, delta review (session_01MMjhnBVncrzXCiFejzp8vp)",
         "since": "2026-11-06T21:29Z"
       },
       {
@@ -6079,7 +6080,7 @@
         "slice": "SRC-15b",
         "role": "build",
         "agent": "claude",
-        "doing": "consent dialogs, credentials, config forms, purge (session_01MMjhnAVcRo5JpndpMaiznS, Sonnet)",
+        "doing": "PR #552 at 187ac9a9, in review (session_01MMjhnAVcRo5JpndpMaiznS)",
         "since": "2026-11-06T21:19Z"
       },
       {
