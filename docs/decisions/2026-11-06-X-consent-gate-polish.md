@@ -9,6 +9,11 @@ Spec:
 
 This PR tightens the gate. It loosens nothing.
 
+**What it supersedes:**
+- In `docs/decisions/2026-11-06-X-consent-gate-052.md`: that an Account source with stored credentials can be turned on, and stays on at a start.
+- The same file's "the log event carries no reason field".
+- In `docs/plan/2026-11-06-v052-feature-manifest.md` §7: "keep the current wording" for the Known Issues line on the torrent cache. The runner approved the new wording (below).
+
 ## Account is closed too
 - **`control::consent_text_approved` now passes only None.** Owner §2.49 lets a class through only once its dialog shows the approved text. Account's dialog (the credentials form, SRC-15c) hasn't shipped, so Account now waits like External, Restricted and Overlay. #537 had let it through once its credentials were stored, because it has no consent text to acknowledge.
   - **`PATCH /sources/{id}` refuses `enabled: true` for an Account source before its credentials are looked at.** The answer is the same `400 invalid_setting` on `enabled` with `CONSENT_GATE_REASON`, whether or not credentials are stored. `409 credentials_required` can't be reached in this build. The gate stays the first check, so every closed class answers the same way, and "add your credentials" isn't suggested when adding them wouldn't turn the source on.
@@ -32,7 +37,7 @@ This PR tightens the gate. It loosens nothing.
 
 ## The v0.5.2 release notes
 - **They now say the torrent cache can't be turned on yet** (Known Issues), and that a source needing consent, one a pre-release build turned on included, stays off until a later version asks (Changed). Before, the notes said it stays off "until their checks pass", and that a pre-release build's source "asks again". This build refuses it, so nothing can ask again.
-- **The word cap:** the `material-composer` gate (`lint_material.py --style`) reports `WORD_LIMIT` 503 words of 450. `main` was already at 508 before this PR, and these two bullets cut 5. The rest is over the cap outside these bullets, so this PR leaves it for the release-notes owner (P-v052-cut).
+- **The word cap:** the `material-composer` gate (`lint_material.py --style`) reports `WORD_LIMIT` 500 words of 450. `main` was already at 508 before this PR, and these two bullets cut 8. The rest is over the cap outside these bullets, so this PR leaves it for the release-notes owner (P-v052-cut).
 
 ## Files outside the slice's owns
 - **`crates/pipeline/src/lib.rs`:** only the start's condition loop is deleted, because it moved into `control::switch_off_unapproved`. The one-line call stays. Runner, 2026-11-06T22:05Z.

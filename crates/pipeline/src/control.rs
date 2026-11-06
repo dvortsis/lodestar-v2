@@ -605,7 +605,8 @@ pub const REASON_TEXT_UNAPPROVED: &str = "consent_text_unapproved";
 pub const REASON_LAPSED: &str = "consent_lapsed";
 
 /// Switches off, at a start and before anything runs, every enabled
-/// source that may not run, and logs `pipeline.source_state_changed` with
+/// source that may not run (both start checks live here; the name is
+/// from when it held only the class check), and logs `pipeline.source_state_changed` with
 /// the reason:
 /// - [`REASON_TEXT_UNAPPROVED`]: its class's consent text isn't approved
 ///   ([`consent_text_approved`]), so one turned on by a build before the
