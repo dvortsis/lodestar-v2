@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T04:40:16Z",
+ "updated_at": "2026-11-06T04:42:01Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3385,10 +3385,12 @@
    "at": "2026-11-06T01:47:38Z"
   },
   "RP-G": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhn9KD5JH1gK2rcmNCVM",
    "brief": "briefs/RP-G.md",
-   "launched": "2026-11-06T00:02Z"
+   "launched": "2026-11-06T00:02Z",
+   "pr": 526,
+   "merge": "636ac941"
   },
   "X-sp4-followups": {
    "status": "merged",
@@ -3423,6 +3425,13 @@
    "model": "opus",
    "launched": "2026-11-06T04:14:37Z",
    "brief": "briefs/X-net-redirect-allowlist.md"
+  },
+  "X-commit-rejudge-reuse": {
+   "status": "running",
+   "session": "session_01MMjhn8m8GomC4NBwvNxfLX",
+   "model": "opus",
+   "launched": "2026-11-06T04:42:01Z",
+   "brief": "briefs/X-commit-rejudge-reuse.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5133,14 +5142,6 @@
   },
   {
    "at": "2026-11-06T03:03:38Z",
-   "note": "X-commit-rejudge-reuse (Opus, core): at commit, reuse prepare's verdict except the pack layer, so a flood/clone or SP-4-payload commit's double judgment (86.2-86.4 us per RP-G #526) comes under the owner's 50 us per torrent. Owns crates/pipeline/src/writer.rs + crates/filter/src/engine.rs judgment path. Owner flag (\u00a72.19) at RP-G merge. ALSO the always-adult source path: judge_at_commit(adult:true) re-reads Adult on every torrent, ~88-89 us scaled (RP-G #526 round 2); bring it under 50 us per torrent too."
-  },
-  {
-   "at": "2026-11-06T03:03:38Z",
-   "note": "RP-G follow-up: a 'releases nothing' test against real stored holds (not rowless holds); fold into X-commit-rejudge-reuse or its own slice."
-  },
-  {
-   "at": "2026-11-06T03:03:38Z",
    "note": "Runner PR: fix rule-pack plan line 94 and RP-G brief to name web/e2e/packs.routes.test.ts and crates/api/tests/packs_gate.rs."
   },
   {
@@ -5825,7 +5826,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T04:14:37Z",
+  "updated": "2026-11-06T04:42:01Z",
   "items": [
    {
     "slot": 3,
@@ -5838,12 +5839,11 @@
    },
    {
     "slot": 5,
-    "slice": "RP-G",
-    "role": "build",
-    "agent": "claude",
-    "doing": "Rule packs: the gate (corpora, precision, budget with every pack incl. SP-4 at cap, upgrade, guardrails, e2e)",
-    "since": "2026-11-06T00:02Z",
-    "session": "session_01MMjhn9KD5JH1gK2rcmNCVM"
+    "slice": "X-commit-rejudge-reuse",
+    "role": "slice",
+    "agent": "session_01MMjhn8m8GomC4NBwvNxfLX",
+    "doing": "commit's second judgment under 50 us (flood/clone, always-adult)",
+    "since": "2026-11-06T04:42:01Z"
    },
    {
     "slot": 15,
