@@ -1231,3 +1231,348 @@ fn two_coordinators_on_one_database_spend_a_token_once() {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
     }
 }
+
+/// The byte caps on the queues between a coordinator, its sessions and a
+/// worker's caller (WK-0, plan Q5): a reader that stops reading never makes
+/// the other side hold more than the cap.
+mod queues {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use crate::proto::*;
+    use crate::{
+        Clock, ClusterServer, LeaseAuthority, ManualClock, NoEvents, Pki, SendError, ServerConfig,
+        ServerHooks, WorkerConfig, WorkerEvent, WorkerId, WorkerSession, local_pair,
+    };
+
+    const WAIT: Duration = Duration::from_secs(15);
+    const CAP: usize = 256 * 1024;
+    const PAYLOAD: usize = 100_000;
+
+    fn assign() -> ToWorker {
+        ToWorker::Assign(Assign {
+            revision: 1,
+            payload: vec![7; PAYLOAD],
+        })
+    }
+
+    /// Waits for a condition with a deadline (no fixed sleeps).
+    async fn until(what: &str, f: impl Fn() -> bool) {
+        tokio::time::timeout(WAIT, async {
+            while !f() {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("never reached: {what}"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_caller_holds_at_most_the_event_byte_cap() {
+        let (mut coord, worker) = local_pair(16);
+        let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(1_000_000));
+        let config = WorkerConfig {
+            auto_heartbeat: false,
+            event_queue_bytes: CAP,
+            ..WorkerConfig::default()
+        };
+        let (session, ()) = tokio::join!(
+            WorkerSession::start(
+                worker,
+                Hello::new(0, Capabilities::default()),
+                clock,
+                config
+            ),
+            async {
+                assert!(matches!(
+                    coord.recv().await,
+                    Ok(Some(ToCoordinator::Hello(_)))
+                ));
+                coord
+                    .send(ToWorker::Welcome(Welcome {
+                        major: PROTOCOL_MAJOR,
+                        minor: PROTOCOL_MINOR,
+                        worker: 0,
+                        heartbeat_ms: 5_000,
+                        lease_ttl_secs: 600,
+                        renew_now: false,
+                    }))
+                    .await
+                    .unwrap();
+            }
+        );
+        let mut session = session.unwrap();
+        let sent = Arc::new(AtomicUsize::new(0));
+        let total = 40;
+        let sender = {
+            let sent = sent.clone();
+            tokio::spawn(async move {
+                for _ in 0..total {
+                    coord.send(assign()).await.unwrap();
+                    sent.fetch_add(1, Ordering::SeqCst);
+                }
+                coord
+            })
+        };
+        // Two events fit under the cap, one waits for room, and the link
+        // holds 16 more: then the sender is stuck.
+        until("the link fills", || sent.load(Ordering::SeqCst) >= 18).await;
+        assert!(session.queued_bytes() > PAYLOAD);
+        assert!(session.queued_bytes() <= CAP, "{}", session.queued_bytes());
+        assert!(sent.load(Ordering::SeqCst) < total, "the stall pushed back");
+        for _ in 0..total {
+            let event = tokio::time::timeout(WAIT, session.next_event())
+                .await
+                .unwrap();
+            assert!(matches!(event, Some(WorkerEvent::Assign(_))));
+            assert!(session.queued_bytes() <= CAP);
+        }
+        let _coord = sender.await.unwrap();
+        assert_eq!(session.queued_bytes(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_session_queues_at_most_its_byte_cap() {
+        let c = super::cluster(1);
+        let clock = Arc::new(ManualClock::new(super::T0 * 1000));
+        let pki = Pki {
+            coordinator: c.coord,
+            store: c.store,
+            secrets: c.secrets,
+        };
+        let config = ServerConfig {
+            auto_tick: false,
+            session_queue: 4,
+            session_queue_bytes: CAP,
+            ..ServerConfig::default()
+        };
+        let hooks = ServerHooks {
+            authority: Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents))),
+            stored: None,
+            sink: None,
+            admission: None,
+        };
+        let server = ClusterServer::with_hooks(pki, clock, config, hooks).unwrap();
+        assert_eq!(
+            server.send(WorkerId::LOCAL, assign()),
+            Err(SendError::NotConnected)
+        );
+        let mut link = server.connect_local();
+        link.send(ToCoordinator::Hello(Hello::new(0, Capabilities::default())))
+            .await
+            .unwrap();
+        assert!(matches!(link.recv().await, Ok(Some(ToWorker::Welcome(_)))));
+        assert!(matches!(link.recv().await, Ok(Some(ToWorker::Assign(_)))));
+        until("the session is registered", || {
+            server.queued_bytes(WorkerId::LOCAL).is_some()
+        })
+        .await;
+        assert_eq!(
+            server.send(
+                WorkerId::LOCAL,
+                ToWorker::Grants(GrantBatch {
+                    batch: 1,
+                    items: vec![]
+                })
+            ),
+            Err(SendError::Invalid),
+            "grants are the server's own"
+        );
+        assert_eq!(
+            server.send(
+                WorkerId::LOCAL,
+                ToWorker::HaveSnapshot(vec![0; MAX_OPAQUE + 1])
+            ),
+            Err(SendError::Invalid)
+        );
+
+        // The worker stops reading. However the session task interleaves,
+        // what's queued stays under the cap, and the link (4 messages) and
+        // the one message being sent hold the rest.
+        let (mut ok, mut full) = (0usize, 0usize);
+        for _ in 0..200 {
+            match server.send(WorkerId::LOCAL, assign()) {
+                Ok(()) => ok += 1,
+                Err(SendError::Full) => full += 1,
+                Err(e) => panic!("{e:?}"),
+            }
+            assert!(server.queued_bytes(WorkerId::LOCAL).unwrap() <= CAP);
+            tokio::task::yield_now().await;
+        }
+        let per = assign().approx_size();
+        assert!(ok <= CAP / per + 4 + 1, "{ok} queued");
+        assert!(full > 0);
+        assert_eq!(server.broadcast(&assign()), Ok(vec![WorkerId::LOCAL]));
+
+        // Reading again drains it all.
+        for _ in 0..ok {
+            let msg = tokio::time::timeout(WAIT, link.recv()).await.unwrap();
+            assert!(matches!(msg, Ok(Some(ToWorker::Assign(_)))));
+        }
+        until("the queue drains", || {
+            server.queued_bytes(WorkerId::LOCAL) == Some(0)
+        })
+        .await;
+        server.shutdown();
+    }
+
+    fn server(config: ServerConfig, authority: Arc<LeaseAuthority>) -> Arc<ClusterServer> {
+        let c = super::cluster(2);
+        let pki = Pki {
+            coordinator: c.coord,
+            store: c.store,
+            secrets: c.secrets,
+        };
+        let clock = Arc::new(ManualClock::new(super::T0 * 1000));
+        let hooks = ServerHooks {
+            authority,
+            stored: None,
+            sink: None,
+            admission: None,
+        };
+        ClusterServer::with_hooks(pki, clock, config, hooks).unwrap()
+    }
+
+    async fn event(session: &mut WorkerSession) -> WorkerEvent {
+        loop {
+            match tokio::time::timeout(WAIT, session.next_event())
+                .await
+                .unwrap()
+            {
+                Some(WorkerEvent::Assign(_)) => {}
+                Some(e) => return e,
+                None => panic!("events ended"),
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fetched_keeps_the_lease_and_results_need_a_sink() {
+        let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
+        let config = ServerConfig {
+            auto_tick: false,
+            // The authority's TTL wins: workers are told what's enforced.
+            lease_ttl_secs: 5,
+            ..ServerConfig::default()
+        };
+        let server = server(config, authority.clone());
+        let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(super::T0 * 1000));
+        let worker_config = WorkerConfig {
+            auto_heartbeat: false,
+            ..WorkerConfig::default()
+        };
+        let mut s = WorkerSession::start(
+            server.connect_local(),
+            Hello::new(0, Capabilities::default()),
+            clock.clone(),
+            worker_config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.welcome().lease_ttl_secs, 600);
+        let item = |n: u8| ClaimItem {
+            key: [n; 20],
+            source: 1,
+            strategy: 0,
+            discovered_ms: clock.now_ms(),
+            hints: vec![],
+        };
+        let grants = s.claim(vec![item(1), item(2)]).await.unwrap();
+        let token = |g: &GrantItem| match g {
+            GrantItem::Granted {
+                token, ttl_secs, ..
+            } => {
+                assert_eq!(*ttl_secs, 600);
+                *token
+            }
+            other => panic!("{other:?}"),
+        };
+        let (t1, t2) = (token(&grants[0]), token(&grants[1]));
+        let report = |key: u8, token: u64, outcome| OutcomeItem {
+            key: [key; 20],
+            token,
+            outcome,
+        };
+        s.report(vec![
+            report(1, t1, Outcome::Fetched),
+            report(2, t2, Outcome::Lost { reason: 1 }),
+            report(1, t1 + 99, Outcome::Fetched),
+        ])
+        .await
+        .unwrap();
+        s.heartbeat().await.unwrap();
+        let snap = server.snapshot();
+        assert_eq!(
+            (snap.fetched, snap.outcomes, snap.stale_reports, snap.leases),
+            (1, 1, 1, 1)
+        );
+        // The commit ends a fetched lease, under its token.
+        let key = lodestar_metainfo::InfoHash([1; 20]);
+        assert!(authority.release(&key, crate::Token(t1)).is_some());
+
+        // No sink: a batch is refused, never acknowledged and dropped.
+        s.send(ToCoordinator::Results(Payload {
+            batch: 7,
+            bytes: vec![1, 2, 3],
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            event(&mut s).await,
+            WorkerEvent::Accepted {
+                batch: 7,
+                accepted: false
+            }
+        );
+        assert_eq!(server.snapshot().inbound_refused, 1);
+        assert!(
+            s.send(ToCoordinator::Drained).await.is_err(),
+            "only the payload messages go through send"
+        );
+        server.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_drain_is_never_crowded_out_by_a_full_queue() {
+        let authority = Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents)));
+        let config = ServerConfig {
+            auto_tick: false,
+            session_queue: 2,
+            ..ServerConfig::default()
+        };
+        let server = server(config, authority);
+        let mut link = server.connect_local();
+        link.send(ToCoordinator::Hello(Hello::new(0, Capabilities::default())))
+            .await
+            .unwrap();
+        assert!(matches!(link.recv().await, Ok(Some(ToWorker::Welcome(_)))));
+        assert!(matches!(link.recv().await, Ok(Some(ToWorker::Assign(_)))));
+        until("registered", || {
+            server.queued_bytes(WorkerId::LOCAL).is_some()
+        })
+        .await;
+        // Fill the session's queue and the link behind it.
+        let mut queued = 0;
+        for _ in 0..50 {
+            if server.send(WorkerId::LOCAL, assign()).is_ok() {
+                queued += 1;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(server.send(WorkerId::LOCAL, assign()), Err(SendError::Full));
+        assert!(server.drain(WorkerId::LOCAL));
+        // Reading again: the drain arrives (not a stop), with every Assign.
+        let mut drains = 0;
+        for _ in 0..queued + 1 {
+            match tokio::time::timeout(WAIT, link.recv()).await.unwrap() {
+                Ok(Some(ToWorker::Drain)) => drains += 1,
+                Ok(Some(ToWorker::Assign(_))) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(drains, 1);
+        assert!(server.snapshot().workers[0].draining);
+        server.shutdown();
+    }
+}

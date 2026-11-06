@@ -196,6 +196,7 @@ mod tests {
                     source: 3,
                     strategy: 1,
                     discovered_ms: 1_800_000_000_000 + i as i64,
+                    hints: vec![],
                 })
                 .collect(),
         })
@@ -310,6 +311,149 @@ mod tests {
         assert_eq!(decode::<ToWorker>(&frame), Err(FrameError::Trailing));
     }
 
+    fn widest_addr() -> std::net::SocketAddr {
+        std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from([0xff; 16]),
+            u16::MAX,
+            // Flow info and scope aren't on the wire (serde writes the
+            // address and port).
+            0,
+            0,
+        ))
+    }
+
+    #[test]
+    fn the_new_messages_check_their_limits() {
+        let addr = widest_addr();
+        let mut c = match claim(1) {
+            ToCoordinator::Claim(c) => c,
+            _ => unreachable!(),
+        };
+        c.items[0].hints = vec![addr; MAX_HINTS + 1];
+        assert!(!ToCoordinator::Claim(c).validate());
+        let hint = |hints| {
+            ToWorker::Hints(vec![HintItem {
+                key: [1; 20],
+                token: 1,
+                hints,
+            }])
+        };
+        assert!(hint(vec![addr]).validate());
+        assert!(!hint(vec![]).validate(), "a relay with no hints");
+        assert!(!ToWorker::Hints(vec![]).validate());
+        let chunk = |seq, total, len| {
+            ToWorker::Snapshot(SnapshotChunk {
+                kind: SnapshotKind::Dictionary,
+                version: 1,
+                seq,
+                total,
+                bytes: vec![0; len],
+            })
+        };
+        assert!(chunk(0, 1, MAX_CHUNK).validate());
+        assert!(!chunk(1, 1, 0).validate(), "seq past total");
+        assert!(!chunk(0, 0, 0).validate());
+        assert!(!chunk(0, MAX_CHUNKS + 1, 0).validate());
+        assert!(!chunk(0, 1, MAX_CHUNK + 1).validate());
+        let payload = |batch, len| Payload {
+            batch,
+            bytes: vec![0; len],
+        };
+        assert!(!ToCoordinator::Results(payload(0, 1)).validate(), "batch 0");
+        assert!(!ToCoordinator::Counters(payload(1, MAX_OPAQUE + 1)).validate());
+        assert!(
+            !ToWorker::Accepted {
+                batch: 0,
+                accepted: true
+            }
+            .validate()
+        );
+        let reverify = |id, n| {
+            ToWorker::Reverify(ReverifyRequest {
+                id,
+                keys: vec![[0; 20]; n],
+            })
+        };
+        assert!(!reverify(0, 1).validate());
+        assert!(!reverify(1, 0).validate());
+        assert!(!reverify(1, MAX_REVERIFY + 1).validate());
+        assert!(
+            !ToCoordinator::Reverified(ReverifyReply {
+                id: 0,
+                payload: vec![]
+            })
+            .validate()
+        );
+        assert!(
+            !ToCoordinator::SnapshotAck(SnapshotAck {
+                kind: SnapshotKind::Filter,
+                version: 1,
+                seq: MAX_CHUNKS
+            })
+            .validate()
+        );
+    }
+
+    #[test]
+    fn approximate_sizes_bound_the_encoded_size() {
+        let msgs = [
+            claim(MAX_CLAIM_BATCH),
+            ToCoordinator::Results(Payload {
+                batch: 1,
+                bytes: vec![1; 1000],
+            }),
+        ];
+        for m in &msgs {
+            assert!(postcard::to_allocvec(m).unwrap().len() <= m.approx_size());
+        }
+        let hints = ToWorker::Hints(vec![
+            HintItem {
+                key: [1; 20],
+                token: u64::MAX,
+                hints: vec![widest_addr(); MAX_HINTS],
+            };
+            16
+        ]);
+        assert!(postcard::to_allocvec(&hints).unwrap().len() <= hints.approx_size());
+        let to_worker = [
+            ToWorker::Grants(GrantBatch {
+                batch: u64::MAX,
+                items: vec![
+                    GrantItem::Granted {
+                        key: [9; 20],
+                        token: u64::MAX,
+                        ttl_secs: u32::MAX,
+                    };
+                    MAX_GRANT_BATCH
+                ],
+            }),
+            ToWorker::Snapshot(SnapshotChunk {
+                kind: SnapshotKind::HaveFilter,
+                version: u64::MAX,
+                seq: u32::MAX - 1,
+                total: u32::MAX,
+                bytes: vec![1; 4096],
+            }),
+            ToWorker::Reverify(ReverifyRequest {
+                id: u64::MAX,
+                keys: vec![[3; 20]; MAX_REVERIFY],
+            }),
+            ToWorker::Renewed(Box::new(WireGrant {
+                worker: u32::MAX,
+                name: "a".repeat(63),
+                cert: vec![1; MAX_CERT],
+                not_after: i64::MAX,
+                cas: vec![vec![2; MAX_CERT]; MAX_CAS],
+            })),
+        ];
+        for m in &to_worker {
+            assert!(
+                postcard::to_allocvec(m).unwrap().len() <= m.approx_size(),
+                "{m:?}"
+            );
+        }
+    }
+
     #[test]
     fn every_message_within_its_limits_fits_in_a_frame() {
         // Incompressible bytes, so the frame is as large as it gets.
@@ -349,6 +493,26 @@ mod tests {
                 payload: noise(MAX_OPAQUE),
             }),
             ToWorker::HaveSnapshot(noise(MAX_OPAQUE)),
+            ToWorker::Hints(
+                (0..MAX_HINT_BATCH)
+                    .map(|_| HintItem {
+                        key: next_key(),
+                        token: u64::MAX,
+                        hints: vec![widest_addr(); MAX_HINTS],
+                    })
+                    .collect(),
+            ),
+            ToWorker::Snapshot(SnapshotChunk {
+                kind: SnapshotKind::Filter,
+                version: u64::MAX,
+                seq: MAX_CHUNKS - 1,
+                total: MAX_CHUNKS,
+                bytes: noise(MAX_CHUNK),
+            }),
+            ToWorker::Reverify(ReverifyRequest {
+                id: u64::MAX,
+                keys: (0..MAX_REVERIFY).map(|_| next_key()).collect(),
+            }),
         ];
         for msg in to_worker {
             assert!(msg.validate());
@@ -363,6 +527,7 @@ mod tests {
                         source: 63,
                         strategy: u8::MAX,
                         discovered_ms: i64::MIN,
+                        hints: vec![widest_addr(); MAX_HINTS],
                     })
                     .collect(),
             }),
@@ -375,7 +540,14 @@ mod tests {
                     })
                     .collect(),
             }),
-            ToCoordinator::Results(noise(MAX_OPAQUE)),
+            ToCoordinator::Results(Payload {
+                batch: u64::MAX,
+                bytes: noise(MAX_OPAQUE),
+            }),
+            ToCoordinator::Reverified(ReverifyReply {
+                id: u64::MAX,
+                payload: noise(MAX_OPAQUE),
+            }),
         ];
         for msg in to_coordinator {
             assert!(msg.validate());
@@ -421,14 +593,27 @@ mod tests {
     }
 
     fn any_to_coordinator() -> impl Strategy<Value = ToCoordinator> {
-        let item = (any_key(), any::<u8>(), any::<u8>(), any::<i64>()).prop_map(
-            |(key, source, strategy, discovered_ms)| ClaimItem {
+        let addr = (any::<[u8; 16]>(), any::<u16>(), any::<bool>()).prop_map(|(ip, port, v4)| {
+            if v4 {
+                std::net::SocketAddr::from(([ip[0], ip[1], ip[2], ip[3]], port))
+            } else {
+                std::net::SocketAddr::from((ip, port))
+            }
+        });
+        let item = (
+            any_key(),
+            any::<u8>(),
+            any::<u8>(),
+            any::<i64>(),
+            proptest::collection::vec(addr, 0..10),
+        )
+            .prop_map(|(key, source, strategy, discovered_ms, hints)| ClaimItem {
                 key,
                 source,
                 strategy,
                 discovered_ms,
-            },
-        );
+                hints,
+            });
         let outcome =
             (any_key(), any::<u64>(), 0u8..3, any::<u8>()).prop_map(|(key, token, k, r)| {
                 OutcomeItem {
@@ -484,7 +669,26 @@ mod tests {
                 .prop_map(|items| ToCoordinator::Outcome(OutcomeBatch { items })),
             any::<[u8; 32]>().prop_map(|public_key| ToCoordinator::Renew { public_key }),
             Just(ToCoordinator::Drained),
-            proptest::collection::vec(any::<u8>(), 0..2000).prop_map(ToCoordinator::Results),
+            (
+                any::<u64>(),
+                proptest::collection::vec(any::<u8>(), 0..2000)
+            )
+                .prop_map(|(batch, bytes)| ToCoordinator::Results(Payload { batch, bytes })),
+            (any::<u64>(), proptest::collection::vec(any::<u8>(), 0..200))
+                .prop_map(|(batch, bytes)| ToCoordinator::Counters(Payload { batch, bytes })),
+            (0u8..3, any::<u64>(), any::<u32>()).prop_map(|(k, version, seq)| {
+                ToCoordinator::SnapshotAck(SnapshotAck {
+                    kind: [
+                        SnapshotKind::Filter,
+                        SnapshotKind::Dictionary,
+                        SnapshotKind::HaveFilter,
+                    ][usize::from(k)],
+                    version,
+                    seq,
+                })
+            }),
+            (any::<u64>(), proptest::collection::vec(any::<u8>(), 0..200))
+                .prop_map(|(id, payload)| ToCoordinator::Reverified(ReverifyReply { id, payload })),
         ]
     }
 
