@@ -55,23 +55,23 @@ Release build, this session's container, each run in its own process, three runs
 
 | At the cap (1M signatures) | RP-5 (`HashMap`), resident | Now, resident | Now, held |
 |---|---|---|---|
-| Loaded from its rows (`memory_at_the_cap_loaded`) | 53.1 to 53.2 MB | 17.0 to 17.1 MB | 16.5 MB |
-| Filled by adds, 10,000 past the cap (`memory_at_the_cap_added`) | 44.5 to 44.6 MB | 17.2 to 17.4 MB | 16.6 MB |
+| Loaded from its rows (`memory_at_the_cap_loaded`) | 53.1 to 53.2 MB | 17.0 to 17.3 MB | 16.5 MB |
+| Filled by adds, 10,000 past the cap (`memory_at_the_cap_added`) | 44.5 to 44.6 MB | 17.2 to 17.5 MB | 16.6 MB |
 | Filled by adds, then a third of them re-added at random (`memory_at_the_cap_readded`) | not measured | 26.0 to 26.5 MB | 21.8 MB |
-| A lookup that hits, keys spread over the set | 101 to 114 ns | 111 to 173 ns | |
-| A lookup that misses | 38 to 43 ns | 95 to 148 ns | |
+| A lookup that hits, keys spread over the set | 101 to 114 ns | 87 to 173 ns | |
+| A lookup that misses | 38 to 43 ns | 73 to 148 ns | |
 
 - **The clean sets are a best case.** A re-add (a payload hidden again) leaves a stale add in its old row until that row is a quarter dead and compacted. The set counts stale adds per signature in a std map. The re-added case covers that: 81,557 dead entries in 2,610 rows, and 75,913 signatures in the stale map. RP-5 had the same map, so it isn't new here.
 - **The 25 MB gate holds on what the set holds** in all three cases, and on resident memory for the clean ones. These are `#[ignore]` tests, run by hand as RP-5's measurements are, not an automated CI gate. Under glibc, the re-added case is about 4.4 MB over resident: the holes compaction's reallocations leave. Two things were tried, and neither changed it by more than noise: rewriting a row in its own buffer, and starting each row at full capacity. Release builds on musl use mimalloc (`crates/store/src/memstats.rs`), which this container didn't measure.
 - **Running them:** they're `#[ignore]` measurements. `cargo test --release -p lodestar-filter --test sp4 -- --ignored --nocapture --exact memory_at_the_cap_loaded` (and `…_added`, `…_readded`).
 - **Lookups are slower,** mostly misses: each bucket a probe passes costs a read of the entry it points at, where the std table matched a control byte. On the writer that's 0.08 µs a crawl commit, about 0.3% of an insert:
 
-| `sp4_writer_cost` (release; RP-5's code run twice here, this PR's three times) | RP-5 | Now |
+| `sp4_writer_cost` (release; RP-5's code run twice here, this PR's five times, two after the runner's round) | RP-5 | Now |
 |---|---|---|
 | Per insert | 26.2 to 26.4 µs | 24.8 to 30.3 µs |
-| A crawl commit, set at its cap | 0.23 µs (0.9%) | 0.31 to 0.32 µs (1.0 to 1.3%) |
-| A batch with hides, set at its cap | 199 to 217 µs a batch (3.0 to 3.2%) | 173 to 202 µs a batch (2.6 to 2.7%) |
-| A flood of one payload after a release | 8.0 to 8.2 µs a batch | 7.6 to 7.9 µs a batch |
+| A crawl commit, set at its cap | 0.23 µs (0.9%) | 0.24 to 0.32 µs (0.9 to 1.3%) |
+| A batch with hides, set at its cap | 199 to 217 µs a batch (3.0 to 3.2%) | 173 to 202 µs a batch (2.5 to 2.7%) |
+| A flood of one payload after a release | 8.0 to 8.2 µs a batch | 7.2 to 7.9 µs a batch |
 
 - Both are within RP-5's 5% gate. A tag byte per bucket would bring the miss back to about one read, for 2 MB more. It isn't worth it at 0.3% of an insert.
 
