@@ -19,8 +19,9 @@
 //! **Versions:** each payload starts with its format version, and a decoder
 //! reads only its own. `Hello` refuses only a different protocol major
 //! (`lodestar_cluster::proto`), so a new payload version needs a protocol
-//! major bump, or a payload version in `Hello`'s capabilities that the
-//! coordinator checks. Without one, a worker on another payload version
+//! major bump, or a protocol minor (`Hello.minor`) that the coordinator
+//! checks. A new field in `Hello`'s capabilities wouldn't do: adding one to
+//! a postcard struct is itself a breaking change. Without either, a worker on another payload version
 //! would join and then have every batch refused.
 //!
 //! The worker's id is not in either payload: the coordinator takes it from

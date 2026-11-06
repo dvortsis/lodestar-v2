@@ -437,6 +437,20 @@ fn unknown_flag_bits_and_bad_codes_are_refused() {
         b.records[1].torrent.name_raw = Some(raw);
         assert_eq!(b.encode(), Err(Error::Invalid("raw name")));
     }
+    // Encodings metainfo never picks for a name.
+    let id = |name: &str| {
+        (0..=u8::MAX)
+            .find(|&i| {
+                lodestar_metainfo::TextEncoding::from_id(i)
+                    .is_some_and(|e| e.encoding().name() == name)
+            })
+            .unwrap()
+    };
+    for name in ["UTF-16BE", "UTF-16LE", "x-user-defined", "replacement"] {
+        let mut b = golden_results();
+        b.records[1].torrent.name_raw = Some((vec![b'x'], id(name)));
+        assert_eq!(b.encode(), Err(Error::Invalid("name encoding")), "{name}");
+    }
     let mut b = golden_results();
     b.records[0].torrent.files.dict_id = Some(1);
     assert_eq!(b.encode(), Err(Error::Invalid("dictionary")));
@@ -812,10 +826,14 @@ fn arb_record() -> impl Strategy<Value = ResultRecord> {
                 (private, adult, enrich, tflags),
                 blob,
             )| {
-                // A plain ASCII name, or a legacy one kept raw beside its decoding.
-                let enc = lodestar_metainfo::TextEncoding::from_id(WINDOWS_1252).unwrap();
+                // A plain UTF-8 name, or one kept raw beside its decoding.
+                // UTF-8 (lossy, so invalid bytes are kept raw), GBK,
+                // Shift_JIS and Windows-1252, as metainfo picks them.
+                let id = [0u8, 1, 4, WINDOWS_1252][raw_name.len() % 4];
+                let enc = lodestar_metainfo::TextEncoding::from_id(id).unwrap();
                 let name = enc.decode(&raw_name).into_owned();
-                let name_raw = (!raw_name.is_ascii()).then(|| (raw_name.clone(), WINDOWS_1252));
+                let plain = id == 0 && name.as_bytes() == raw_name.as_slice();
+                let name_raw = (!plain).then(|| (raw_name.clone(), id));
                 let files: Vec<_> = files
                     .into_iter()
                     .enumerate()

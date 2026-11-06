@@ -20,14 +20,19 @@
 //! # What the coordinator must not take from a record as sent
 //! The codec checks shape, not truth: a valid record can still lie. The
 //! intake (WK-9) **must** treat these as the worker's claims:
-//! - **The enrichment.** Search's adult term and tags come from the stored
-//!   enrichment, so storing a worker's content type would let it show
-//!   adult content with "Show adult content" off. The coordinator stores
-//!   the enrichment it rebuilds from the name and blob for every remote
-//!   record, of any enrichment version, or refuses a record whose content
-//!   type or adult kind differs from the rebuilt one. The codec has no
-//!   hook for this: the rebuild needs the coordinator's classifier and
-//!   rules.
+//! - **The enrichment.** Search builds its adult term and tags from the
+//!   stored record bytes (`Enriched::data`, decoded by the index), so
+//!   storing a worker's record would let it show adult content with "Show
+//!   adult content" off. The coordinator **stores the enrichment it
+//!   rebuilds** from the name and blob. For a record of its own
+//!   `ENRICHMENT_VERSION` only, it may instead refuse the record when the
+//!   decoded record's content type or adult kind differs from the rebuilt
+//!   one: the codec has checked that such a record decodes and that its
+//!   content type and junk score match the hot columns. A record of any
+//!   other version is never kept: the codec checks only its hot columns'
+//!   range, and its bytes may say anything or not decode at all. The codec
+//!   has no hook for this, since the rebuild needs the coordinator's
+//!   classifier and rules.
 //! - **The provenance:** `sources` and `private_source` merge with the
 //!   lease, which is authoritative (§19.3); `metadata_at` is corrected by
 //!   the worker's clock offset.
@@ -88,6 +93,9 @@ pub const MAX_BLOB: usize = MAX_PAYLOAD;
 const _: () = assert!(MAX_NAME_RAW == Limits::DEFAULT.max_name_bytes);
 const _: () = assert!(MAX_NAME >= 4 * Limits::DEFAULT.max_name_bytes);
 const _: () = assert!(MAX_EXTRA == Limits::DEFAULT.max_extra_bytes);
+
+/// Encodings metainfo never picks for a name (its `is_name_encoding`).
+const NOT_NAME_ENCODINGS: [&str; 4] = ["UTF-16BE", "UTF-16LE", "x-user-defined", "replacement"];
 
 /// The torrent flags `Preparer` derives from the info dict alone. The
 /// others (imported, backfill, partial file list, private source, and the
@@ -437,7 +445,9 @@ fn check_strings(t: &Prepared) -> Result<()> {
     cap(t.name.len(), MAX_NAME, "name")?;
     if let Some((raw, enc)) = &t.name_raw {
         cap(raw.len(), MAX_NAME_RAW, "raw name")?;
-        let enc = TextEncoding::from_id(*enc).ok_or(Error::Invalid("name encoding"))?;
+        let enc = TextEncoding::from_id(*enc)
+            .filter(|e| !NOT_NAME_ENCODINGS.contains(&e.encoding().name()))
+            .ok_or(Error::Invalid("name encoding"))?;
         // `Preparer` keeps the raw name only when it isn't plain UTF-8,
         // and `name` is always its decoding.
         if (enc == TextEncoding::UTF8 && raw.as_slice() == t.name.as_bytes())
