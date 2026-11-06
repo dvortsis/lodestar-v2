@@ -9,6 +9,7 @@
 			"lodestar-bencode",
 			"lodestar-classify",
 			"lodestar-cluster",
+			"lodestar-companions",
 			"lodestar-dht",
 			"lodestar-filter",
 			"lodestar-integrations",
