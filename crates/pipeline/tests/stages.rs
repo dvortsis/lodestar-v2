@@ -20,6 +20,7 @@ use lodestar_pipeline::stages::{
     ByteReceiver, ByteSender, FETCHED_BYTES, OUTBOUND_BYTES, Queues, Reports, Results, Running,
     Weigh, WorkerLeases, WorkerStages, byte_queue,
 };
+use lodestar_pipeline::wire::ResultsBatch;
 use lodestar_sources::{
     BoxFuture, Discovery, Fetcher, Found, FunnelCounts, Loss, PoolConfig, Shutdown,
 };
@@ -224,6 +225,18 @@ async fn a_worker_prepares_without_a_store() {
     assert_eq!(r.torrent.name, "Fine");
     assert_eq!(r.torrent.files.dict_id, None);
     assert!(r.weigh() > 16, "a result weighs its heap");
+    let torrent = r.torrent.clone();
+    let (key, token) = (r.key, r.token);
+    // It fits the wire: WK-6's codec carries it and gives it back.
+    let batch = ResultsBatch {
+        batch: 1,
+        records: vec![r.into_record()],
+    };
+    let back = ResultsBatch::decode(&batch.encode().unwrap()).unwrap();
+    assert_eq!(back, batch);
+    let rec = &back.records[0];
+    assert_eq!((rec.key, rec.token, &rec.torrent), (key, token, &torrent));
+    assert_eq!(rec.action, None);
     until(
         "the three losses reported",
         || told.0.lock().unwrap().len() == 3,
@@ -341,12 +354,20 @@ async fn a_stalled_link_pauses_fetching() {
 /// add the fetched queue. Q5 with a have-filter swap is 223 MiB; with the
 /// fetched queue it's 227 MiB, about 238 MB.
 ///
-/// Not in it, and WK-10's to cap: one dict in the pool's channel, one in
-/// the forwarder's hand, and the dict of every fetch the pool finished
-/// while waiting on its output (up to `max_sockets`), each up to
-/// `max_metadata`. At today's defaults (400 sockets, 16 MiB) that's
-/// about 6.3 GiB, so a worker needs its own cap on them; the test states
-/// the headroom that leaves.
+/// **It assumes no dict is larger than `FETCHED_BYTES`.** A queue lets an
+/// item over its cap through alone, so the real fetched cap is
+/// `max(FETCHED_BYTES, max_metadata)`, and an oversized dict's rows
+/// (about 3×) and its result (past the outbound cap) come with it: with
+/// today's 16 MiB `max_metadata`, about 64–112 MiB more. WK-10 caps it:
+/// a worker `max_metadata` of at most `FETCHED_BYTES`, or a budget that
+/// covers the oversized case.
+///
+/// Not in it either, and capped by `X-fetch-pool-bytes`: one dict in the
+/// pool's channel, one in the forwarder's hand, and the dict of every
+/// fetch the pool finished while waiting on its output (up to
+/// `max_sockets`), each up to `max_metadata`. At today's defaults (400
+/// sockets, 16 MiB) that's about 6.3 GiB; the test states the headroom
+/// that leaves.
 #[test]
 fn the_worker_queues_fit_the_budget() {
     const MIB: usize = 1 << 20;
@@ -363,6 +384,14 @@ fn the_worker_queues_fit_the_budget() {
     assert!(steady <= BUDGET, "{} MB", steady / 1_000_000);
     // The fetched queue's rows fit in Q5's prepare line.
     const { assert!(3 * FETCHED_BYTES <= 40 * MIB) };
+    // The assumption: a dict over the fetched cap passes it alone, so the
+    // estimate holds only for dicts of at most FETCHED_BYTES. Today's
+    // default allows larger ones; WK-10 lowers it on a worker or budgets
+    // for them.
+    let largest = FetchOptions::default().max_metadata;
+    assert!(largest > FETCHED_BYTES, "the oversized case is WK-10's");
+    let oversized = largest.max(FETCHED_BYTES) * 4 + largest.max(OUTBOUND_BYTES) - FETCHED_BYTES;
+    assert!(steady + oversized > BUDGET, "and it doesn't fit as is");
 
     // The pool's side at today's defaults doesn't fit…
     let held_by_pool = |sockets: usize, max_metadata: usize| (2 + sockets) * max_metadata;
@@ -370,9 +399,9 @@ fn the_worker_queues_fit_the_budget() {
         PoolConfig::default().max_sockets,
         FetchOptions::default().max_metadata,
     );
-    assert!(steady + defaults > BUDGET, "WK-10 must cap it");
-    // What's left for it: about 18 MB, so WK-10 caps the bytes the pool
-    // holds in finished fetches, not only their count.
+    assert!(steady + defaults > BUDGET, "X-fetch-pool-bytes caps it");
+    // What's left for it: about 18 MB, so the pool's cap is on the bytes
+    // it holds in finished fetches, not only their count.
     let headroom = BUDGET - steady;
     assert!(headroom >= 16 * 1_000_000, "{} MB", headroom / 1_000_000);
 }

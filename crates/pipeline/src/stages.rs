@@ -85,11 +85,17 @@ impl Reports for Coordinator {
 /// `None` once the channel is closed and empty. A remote worker sends each
 /// batch as one `Claim` (WK-10); the built-in worker claims key by key,
 /// since its lease authority is a function call away (plan Q4).
+///
+/// **Not cancel-safe:** dropping the future while a batch is gathering
+/// (a `select!` with shutdown, a timeout) loses the claims it took from
+/// the channel, so their keys are never claimed or reported. Await it to
+/// the end; to stop, close the channel and drain what's left.
 pub async fn next_claims<T: Send + 'static>(rx: &mut mpsc::Receiver<T>) -> Option<Vec<T>> {
     next_batch(rx, CLAIM_BATCH, CLAIM_WAIT).await
 }
 
-/// [`next_claims`] with its own limits (`max` ≥ 1).
+/// [`next_claims`] with its own limits (`max` ≥ 1). Not cancel-safe
+/// either.
 pub async fn next_batch<T: Send + 'static>(
     rx: &mut mpsc::Receiver<T>,
     max: usize,
@@ -488,6 +494,26 @@ impl WorkerStages {
             pool,
             pool_task,
             prepare,
+        }
+    }
+}
+
+impl Results {
+    /// The record WK-6's `Results` codec sends for this torrent
+    /// ([`crate::wire::ResultsBatch`]). The coordinator re-judges at
+    /// commit, so only the verdict's action and rule version travel.
+    pub fn into_record(self) -> crate::wire::ResultRecord {
+        crate::wire::ResultRecord {
+            key: self.key,
+            token: self.token,
+            torrent: self.torrent,
+            sources: self.sources,
+            metadata_at: self.metadata_at,
+            action: self.verdict.decision.map(|d| d.action),
+            rule_version: self.version,
+            fix: self.fix,
+            private_source: self.private_source,
+            source_adult: self.source_adult,
         }
     }
 }

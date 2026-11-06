@@ -342,7 +342,8 @@ fn prepare_one(
 }
 
 /// Gathers more items for the same batch, briefly: at most `max`, for at
-/// most `wait` after the first.
+/// most `wait` after the first. Not cancel-safe: dropped while it waits,
+/// the items gathered so far are lost.
 pub(crate) async fn collect<I: Inbox>(
     first: I::Item,
     rx: &mut I,
