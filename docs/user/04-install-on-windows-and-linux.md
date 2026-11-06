@@ -7,6 +7,7 @@ Windows and Linux installs are **(planned)**: nothing is published yet. This cha
 > - Explain why Windows shows "Windows protected your PC" for Lodestar.
 > - Check a download against its [checksum](glossary.md#checksum) with PowerShell.
 > - Decide when to run the file and when to stop.
+> - Find the [setup token](glossary.md#setup-token) on Windows without changing the data folder's permissions.
 
 ## 4.1 Understand the SmartScreen warning
 <!-- index: SmartScreen; unsigned; code signing -->
@@ -79,7 +80,31 @@ If the hashes differ, stop. Delete the file and download it again from the offic
 > [!TIP]
 > Select **Run anyway** only after the hashes match. Never turn off SmartScreen or Defender to get past the warning.
 
-## 4.4 Install on Linux
+## 4.4 Find the setup token on Windows
+<!-- index: setup token; Windows service; elevated PowerShell; Run as administrator; ProgramData; File Explorer -->
+
+These steps apply once the Windows installer is published. Lodestar runs as a Windows service. On first run it writes a one-time [setup token](glossary.md#setup-token) to `C:\ProgramData\Lodestar\logs\lodestar.log`. That folder is private on purpose: only SYSTEM and Administrators can open it, so a normal window can't read the log.
+
+To find the token:
+
+1. Open the Start menu. Right-click **Windows PowerShell** or **Terminal**, then select **Run as administrator**. Confirm the prompt.
+   **Result:** You have an [elevated PowerShell](glossary.md#elevated-powershell) window.
+2. Paste this command:
+
+    ```powershell
+    Get-Content "C:\ProgramData\Lodestar\logs\lodestar.log" | Select-String "enter setup token"
+    ```
+
+   **Result:** PowerShell prints one line per start that needed a token.
+3. In the newest line, copy the word right after `enter setup token`.
+4. Open `http://localhost:8090` in your browser. Enter the token when setup asks for it, then create the admin password as in [section 2.5](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password).
+
+The token works once and stops working when the admin password exists ([section 3.2](03-keep-lodestar-safe.md#32-protect-the-setup-token-and-the-password)). Once you've signed in, the **Logs** screen in Lodestar shows the log, so you don't need PowerShell again.
+
+> [!WARNING]
+> Don't open `C:\ProgramData\Lodestar` in File Explorer, and never select **Continue** on its permission prompt ("You don't currently have permission to access this folder"). **Continue** adds your account to the folder's permissions for good. The folder is then no longer private, and Lodestar refuses to start. Use the elevated PowerShell command instead. If it already happened, see [section 6.3](06-troubleshooting.md#63-fix-windows-service-error-3).
+
+## 4.5 Install on Linux
 
 For Linux, `packaging/systemd/README.md` describes the service unit. Release files are **(planned)**.
 
@@ -88,6 +113,7 @@ For Linux, `packaging/systemd/README.md` describes the service unit. Release fil
 > - Windows builds are unsigned, so SmartScreen warns.
 > - Compare the `Get-FileHash` value with the checksum before you run anything.
 > - If the hashes differ, don't run the file.
+> - On Windows, read the setup token from an elevated PowerShell. Never open the data folder in File Explorer.
 
 <!-- nav:start -->
 ---

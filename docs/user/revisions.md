@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 2.2 | 2026-11-06 | Added section 4.4 on finding the setup token on Windows, section 6.3 on Windows service error 3 and three rows in section 6.1, and a glossary entry. Install on Linux is now 4.5, Get help is now 6.4. |
 | 2.1 | 2026-11-05 | Added section 5.5 on connecting Sonarr and Radarr, a glossary entry, and corrected the list of sources in section 5.4. |
 | 2.0 | 2026-11-05 | Section 2.5: nothing connects to the network until setup is done; the crawler starts on its own after setup. |
 | 1.9 | 2026-11-05 | Added a section in 3.6 on pack versions, why a new version asks for your password, what "in doubt" means and overrides. |
