@@ -5292,6 +5292,21 @@
     {
       "at": "2026-11-06T20:45:00Z",
       "note": "NEW SLICE X-fetch-pool-bytes (Opus core, v0.5.2, /security-review): crates/sources/src/pool.rs holds finished fetches in its task set while on_result awaits out.send; max_sockets 400 x max_metadata 16 MiB => ~6.3 GiB worst case, plus the 64-dict channel and 64-dict prepare batch (~1 GiB each) on single-machine installs today (pre-existing, also in v0.5.1). Needs crafted large info dicts announced on DHT; not seen in soaks (real dicts are small). Fix: a global byte budget over in-flight + finished fetches (and channel), and review max_metadata (16 MiB) vs real dict sizes. Runner call: not a v0.5.1 blocker (pre-existing; bounded; realistic memory proven by soak r5); flag to owner. Also: CMP-13 owns catalogue.json + tests/catalogue.rs (next runner PR); v052 manifest notice-version lines."
+    },
+    {
+      "id": "X-cmp0-polish",
+      "from": "#548 CMP-0 delta review 2026-11-06T21:10Z (non-blocking)",
+      "items": [
+        "FlareSolverr name check: match contains('flaresolverr') on id/container/image segment, not exact",
+        "path_ok: refuse %3b like literal ';'",
+        "templates tied by id (not only role) before a second download client",
+        "Native.release: require github.com /<owner>/<project>/releases/download/ shape",
+        "compile_fail doctests name E0624/E0616",
+        "testing-feature ConfigPlan constructor for tests/ fakes (CMP-5g)"
+      ],
+      "notes_for": {
+        "CMP-7": "health.path is RequestPath (allows $ ( ) ' ! & * and query): escape $$ / argv form when rendering compose healthcheck, or narrow the type"
+      }
     }
   ],
   "main_health": [
