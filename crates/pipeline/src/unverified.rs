@@ -237,8 +237,8 @@ pub fn stored_trackers(raw: &[String], room: usize) -> Vec<String> {
 }
 
 /// The store's claims for a discovery: the source's claims and
-/// provenance, already clamped by the emitter, with no `external_ref` for
-/// a `private_source` find. `None` when it has none.
+/// provenance, already clamped by the emitter, with no `external_ref` and
+/// no trackers for a `private_source` find. `None` when it has none.
 pub fn store_claims(d: &Discovery) -> Option<Claims> {
     let c = d.found.claims.as_deref()?;
     let p = d.found.provenance.as_deref();
@@ -282,8 +282,12 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         adult: c.adult.clone(),
     };
     // The trackers last, in the room the rest leaves under the total.
-    let room = claims::MAX_TOTAL.saturating_sub(out.text_len());
-    out.trackers = stored_trackers(&c.trackers, room);
+    // None for a private find: a private tracker's announce URL can carry
+    // a passkey, which the host guard doesn't look for (runner, L3).
+    if !d.found.private_source {
+        let room = claims::MAX_TOTAL.saturating_sub(out.text_len());
+        out.trackers = stored_trackers(&c.trackers, room);
+    }
     Some(out)
 }
 

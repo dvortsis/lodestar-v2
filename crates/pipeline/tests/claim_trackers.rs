@@ -212,10 +212,11 @@ fn store_claims_stores_the_canonical_trackers() {
     );
 }
 
-/// A private find's own reference can be a passkey URL: it's never
-/// stored, whatever the plugin sent; a public find's is (runner, L3).
+/// A private find's own reference and its trackers can carry a passkey:
+/// neither is stored, whatever the plugin sent; a public find's are
+/// (runner, L3).
 #[test]
-fn a_private_finds_external_ref_is_not_stored() {
+fn a_private_finds_external_ref_and_trackers_are_not_stored() {
     for private in [false, true] {
         let mut found = Found::key(InfoHash([8; 20]), 0).with_provenance(claims::Provenance {
             external_ref: Some("https://t.example/details?passkey=secret".into()),
@@ -225,6 +226,7 @@ fn a_private_finds_external_ref_is_not_stored() {
         found.private_source = private;
         found.claims = Some(Box::new(claims::Claims {
             name: Some("Sintel".into()),
+            trackers: vec!["https://t.example/announce/0123456789abcdef".into()],
             ..claims::Claims::default()
         }));
         let d = Discovery {
@@ -236,6 +238,12 @@ fn a_private_finds_external_ref_is_not_stored() {
         let c = store_claims(&d).expect("claims");
         let want = (!private).then(|| "https://t.example/details?passkey=secret".to_owned());
         assert_eq!(c.provenance.external_ref, want, "private {private}");
+        let want: &[&str] = if private {
+            &[]
+        } else {
+            &["https://t.example/announce/0123456789abcdef"]
+        };
+        assert_eq!(c.trackers, want, "private {private}");
         // The rest of the provenance is kept either way.
         assert_eq!(c.provenance.published_at, Some(1_600_000_000));
         assert_eq!(c.name.as_deref(), Some("Sintel"));
@@ -451,7 +459,14 @@ mod props {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+        #![proptest_config(ProptestConfig {
+            cases: 256,
+            // Failing cases are saved beside this file for replay.
+            failure_persistence: Some(Box::new(
+                proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+            )),
+            ..ProptestConfig::default()
+        })]
 
         #[test]
         fn a_kept_tracker_is_a_fixed_point_within_the_limit(raw in tracker()) {
