@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T00:39:20Z",
+  "updated_at": "2026-11-06T01:05:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3393,6 +3393,12 @@
       "pr": 522,
       "merge": "96e421dd",
       "at": "2026-11-06T00:39:20Z"
+    },
+    "runner-dashboard-planning-wave": {
+      "status": "merged",
+      "pr": 523,
+      "merge": "2c8628bb",
+      "at": "2026-11-06T01:05:11Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5100,6 +5106,10 @@
     {
       "at": "2026-11-06T00:22:21Z",
       "note": "dashboard-paste PR: add X-consent-gate-052 (Opus, /security-review; PATCH /sources refuses consent-needing sources until SRC-15b's owner-approved text; real-binary test) as a dep of P-v052-cut; runner call on #520 Q4"
+    },
+    {
+      "at": "2026-11-06T01:05:11Z",
+      "note": "X-net-redirect-allowlist (low, Opus, /security-review): crates/integrations/src/net.rs:843-846 GuardedClient::send_following strips only Authorization/Cookie on cross-origin 307/308; reuse X-sources-low's allow-list (CROSS_ORIGIN_HEADERS). Callers (ntfy, webhook) set no other credential header today. From #521 review."
     }
   ],
   "main_health": [
