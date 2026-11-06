@@ -5380,7 +5380,9 @@
         "slices.yaml X-consent-gate-polish owns: add crates/pipeline/src/lib.rs (prepare's condition loop moved into control::switch_off_unapproved; runner '1' 22:05Z)",
         "slices.yaml X-consent-gate-polish owns: add docs/releases/v0.5.2.md (runner yes 22:19Z: torrent cache can't be turned on; 'Exact consent' bullet corrected)",
         "slices.yaml SRC-15b owns: add web/e2e/settings-sources.keyboard.test.ts",
-        "Runner decisions note superseding ENR-9b's cost numbers (#551 delta review): ingest worst case ~150 MB judged text per step (batch_max 256 x ~0.6 MB full section, 4 KB names; ~2x on hybrids), not 40-70 MB; verified names are capped at 4,096 raw bytes but decoded names can be ~12 KiB (legacy encodings), worst refile row ~1.3 MB; refile real work up to ~2x REFILE_JUDGED_BYTES (swarm hashes); adult-section pairs not counted (pre-existing). Add to ENR-10 and UN-1 notes: a judged-bytes budget at ingest before any plugin sends sections; Items-phase budget test."
+        "Runner decisions note superseding ENR-9b's cost numbers (#551 delta review): ingest worst case ~150 MB judged text per step (batch_max 256 x ~0.6 MB full section, 4 KB names; ~2x on hybrids), not 40-70 MB; verified names are capped at 4,096 raw bytes but decoded names can be ~12 KiB (legacy encodings), worst refile row ~1.3 MB; refile real work up to ~2x REFILE_JUDGED_BYTES (swarm hashes); adult-section pairs not counted (pre-existing). Add to ENR-10 and UN-1 notes: a judged-bytes budget at ingest before any plugin sends sections; Items-phase budget test.",
+        "X-sources-api-spec notes: crates/api/src/ops.rs patchSource description (~693-701) still says Account gets 409 credentials_required and describes consent flow as live; fix wording (from #553)",
+        "P-v052-cut notes: docs/releases/v0.5.2.md is 500/450 words (material-composer cap); main was 508 before #553; trim at the cut"
       ],
       "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
     }
@@ -6089,7 +6091,7 @@
         "slice": "X-consent-gate-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "consent gate follow-ups, Account closed (session_01MMjhnA1MJreiFSjF8iDbmz)",
+        "doing": "PR #553 at 74bfddb3, in review (session_01MMjhnA1MJreiFSjF8iDbmz)",
         "since": "2026-11-06T22:01Z"
       },
       {
