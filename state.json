@@ -3496,6 +3496,15 @@
     "SRC-15b": {
       "status": "running",
       "session": "session_01MMjhnAVcRo5JpndpMaiznS"
+    },
+    "WK-1": {
+      "status": "merged",
+      "pr": 544,
+      "merge": "be6076d8"
+    },
+    "ENR-9b": {
+      "status": "running",
+      "session": "session_01MMjhnBVncrzXCiFejzp8vp"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5343,7 +5352,8 @@
         "slices.yaml: SRC-15c (sonnet): Account consent dialog from credential spec + generated config forms from config_schema + purge preview counts; deps SRC-15b, X-sources-api-spec",
         "SRC-15b narrowed: External/Restricted/Overlay dialogs + purge + all-four strings test",
         "Docs mismatch: server requires admin password for purge vs \u00a710.10.7/plan Q13 'no password' \u2014 settle docs (server stricter = safe side)",
-        "X-consent-gate-polish/lift: Account isn't gated today"
+        "X-consent-gate-polish/lift: Account isn't gated today",
+        "slices.yaml ENR-9b owns: add crates/pipeline/tests/claims_v3_inactive.rs"
       ]
     }
   ],
@@ -6028,15 +6038,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T21:19Z",
+    "updated": "2026-11-06T21:29Z",
     "items": [
       {
         "slot": 1,
-        "slice": "WK-1",
+        "slice": "ENR-9b",
         "role": "build",
         "agent": "claude",
-        "doing": "coordinator wiring in serve (workers critical path) (session_01MMjhnB46HmXH5Cjrhtf1Jr)",
-        "since": "2026-11-06T18:09:00Z"
+        "doing": "store v3 claim details, judged before storage (session_01MMjhnBVncrzXCiFejzp8vp)",
+        "since": "2026-11-06T21:29Z"
       },
       {
         "slot": 2,
