@@ -1,4 +1,4 @@
-# X-consent-gate-polish decisions (PR pending)
+# X-consent-gate-polish decisions (#553)
 
 Spec:
 - `runner/slices.yaml`, entry `X-consent-gate-polish`.
