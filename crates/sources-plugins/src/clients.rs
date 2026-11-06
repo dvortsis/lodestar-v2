@@ -50,7 +50,7 @@ use lodestar_integrations::clients::{
 use lodestar_integrations::net::NetPolicy;
 use lodestar_metainfo::{InfoHash, TorrentFile};
 use lodestar_sources::claims::{self, ClaimedFile, Claims, Confidence, Provenance};
-use lodestar_sources::http::{Method, host_key};
+use lodestar_sources::http::Method;
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Client, Consent, Distribution, Emitter, Endpoints, Found, HostRate,
     HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, SourceCtx,
@@ -162,8 +162,8 @@ impl Clients {
     /// allowed; link-local and metadata addresses never). `None` until a
     /// client is set up, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
-        let host = host_key(url_of(self.config.as_ref()?))?;
-        Some(Endpoints::user_entered(NetPolicy::download_client()).only_hosts(&[host]))
+        let url = url_of(self.config.as_ref()?);
+        Some(Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[url]))
     }
 
     /// List entries the last poll skipped: malformed, or past

@@ -741,8 +741,13 @@ impl TorrentCache {
         if self.config.caches.is_empty() {
             return None;
         }
-        let hosts: Vec<&str> = self.config.caches.iter().map(|c| c.host.as_str()).collect();
-        Some(Endpoints::user_entered(NetPolicy::notification(false)).only_hosts(&hosts))
+        let urls: Vec<&str> = self
+            .config
+            .caches
+            .iter()
+            .map(|c| c.same.0.as_str())
+            .collect();
+        Some(Endpoints::user_entered(NetPolicy::notification(false)).only_origins(&urls))
     }
 
     /// The request for `lookup` at `cache`. It takes a [`Lookup`], so it

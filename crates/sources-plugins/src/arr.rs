@@ -34,7 +34,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use lodestar_metainfo::InfoHash;
+use lodestar_metainfo::{InfoHash, hidden_char};
 use lodestar_sources::claims::{Claims, Confidence, ExternalId, Provenance};
 use lodestar_sources::{
     BoxFuture, Consent, Emitter, Found, Kind, Manifest, Network, PluginError, Policy, Priority,
@@ -366,7 +366,8 @@ fn push_id(ids: &mut Vec<(&'static str, String)>, scheme: &'static str, v: &str)
     ids.push((scheme, v));
 }
 
-/// Control and format characters removed, whitespace runs made one
+/// Hidden characters ([`hidden_char`]: controls, format characters, tag
+/// characters) removed, whitespace runs made one
 /// space, trimmed, and cut to [`MAX_TITLE`] bytes on a character
 /// boundary. `None` if nothing is left.
 fn clean_title(raw: &str) -> Option<String> {
@@ -377,7 +378,7 @@ fn clean_title(raw: &str) -> Option<String> {
             space = !out.is_empty();
             continue;
         }
-        if c.is_control() || is_format(c) {
+        if hidden_char(c) {
             continue;
         }
         let need = c.len_utf8() + usize::from(space);
@@ -391,12 +392,6 @@ fn clean_title(raw: &str) -> Option<String> {
         out.push(c);
     }
     (!out.is_empty()).then_some(out)
-}
-
-/// Invisible formatting characters a title has no use for: bidi controls
-/// (which can disguise a name) and zero-width ones.
-fn is_format(c: char) -> bool {
-    matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
 }
 
 /// A Grab or Download event as a discovery: always `private_source`, with
@@ -619,6 +614,27 @@ mod tests {
             Some("Big Buck Bunny")
         );
         assert_eq!(clean_title("\u{200b} \u{7}"), None);
+        // The shared display set (`lodestar_metainfo::hidden_char`), not a
+        // narrower list of its own.
+        for c in [
+            '\u{00AD}',
+            '\u{061C}',
+            '\u{180E}',
+            '\u{FFF9}',
+            '\u{FFFA}',
+            '\u{FFFB}',
+            '\u{E0001}',
+            '\u{E0020}',
+            '\u{E0041}',
+            '\u{E007F}',
+        ] {
+            assert_eq!(
+                clean_title(&format!("Big{c}Buck{c} Bunny")).as_deref(),
+                Some("BigBuck Bunny"),
+                "U+{:04X}",
+                c as u32
+            );
+        }
         let long = "é".repeat(MAX_TITLE);
         let t = clean_title(&long).unwrap();
         assert!(t.len() <= MAX_TITLE && t.len() >= MAX_TITLE - 1);

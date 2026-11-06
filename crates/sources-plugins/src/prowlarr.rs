@@ -255,7 +255,7 @@ impl Prowlarr {
     /// until it's set up, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         let c = self.config.as_ref()?;
-        Some(Endpoints::user_entered(NetPolicy::download_client()).only_hosts(&[&c.host]))
+        Some(Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&c.base]))
     }
 }
 

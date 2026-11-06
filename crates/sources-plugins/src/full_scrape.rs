@@ -444,8 +444,8 @@ impl FullScrape {
     /// it's set up, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         let c = self.config.as_ref()?;
-        let hosts: Vec<&str> = c.trackers.iter().map(|t| t.host.as_str()).collect();
-        Some(Endpoints::user_entered(NetPolicy::notification(false)).only_hosts(&hosts))
+        let urls: Vec<&str> = c.trackers.iter().map(|t| t.scrape.as_str()).collect();
+        Some(Endpoints::user_entered(NetPolicy::notification(false)).only_origins(&urls))
     }
 }
 

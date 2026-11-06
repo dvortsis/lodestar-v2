@@ -339,7 +339,7 @@ fn endpoints_are_the_configured_host_only() {
         lodestar_sources::Endpoints::user_entered(
             lodestar_integrations::net::NetPolicy::download_client()
         )
-        .only_hosts(&["prowlarr.example"])
+        .only_origins(&["http://prowlarr.example:9696"])
     );
 }
 
