@@ -7,7 +7,7 @@ Source plugins that poll outside services (architecture §18.1, §18.2). Prowlar
 One module per plugin, `src/<plugin>.rs`, with one `pub mod` line in `src/lib.rs`. It holds:
 
 1. **A manifest and a policy.**
-   - The manifest gives the id (never renamed), the kinds, the consent class (§18.7, SRC-4) and the endpoints. A plugin that talks only to an address the user enters lists no endpoints, and offers an `endpoints()` that narrows its egress to that host (`Endpoints::user_entered(..).only_hosts(..)`).
+   - The manifest gives the id (never renamed), the kinds, the consent class (§18.7, SRC-4) and the endpoints. A plugin that talks only to an address the user enters lists no endpoints, and offers an `endpoints()` that narrows its egress to that address's origin, scheme, host and port (`Endpoints::user_entered(..).only_origins(..)`).
    - Write the policy as `Policy { caps: …, ..Policy::STRICT }`. Set the caps from §18.1 or the plan's Q4: the poll interval, the per-host rate, the back-off.
    - The config schema marks every secret `"writeOnly": true`.
 2. **A config parser** that checks every field and names the rule it broke, never the value. Credentials are never config: they come from the [`Credentials`](src/lib.rs) trait (SRC-4's store), read once at start.

@@ -1038,6 +1038,29 @@ async fn refusals_while_down_are_paced_and_bounded() {
 // ---------------------------------------------------------------- policy
 
 #[tokio::test]
+async fn a_redirect_to_another_port_on_the_listed_host_is_refused() {
+    // Another service on the same loopback host: reachable by address, but
+    // not one of the plugin's endpoints.
+    let other = serve(|_| ok("other")).await;
+    let to = other.url("/");
+    let server = serve(move |_| redirect(302, &to)).await;
+    let egress = Arc::new(
+        factory(Scripted::new(&[]))
+            .build("p", &Egress::Direct, lan().only_origins(&[server.url("/")]))
+            .await,
+    );
+    let client = Client::new(Arc::clone(&egress), HostLimiter::new(fast_limits()));
+    let err = transport(send_following(&client, Request::get(server.url("/start"))).await);
+    assert!(
+        err.contains("the address isn't one of the plugin's endpoints"),
+        "{err}"
+    );
+    assert_eq!(egress.status().counters.answered, 1, "the first hop went");
+    assert_eq!(egress.status().counters.policy_refusals, 1);
+    assert_eq!(other.conns(), 0, "the other port was never connected to");
+}
+
+#[tokio::test]
 async fn redirects_to_forbidden_addresses_are_refused_before_connecting() {
     let server = serve(|line| {
         if line.contains("/meta") {
@@ -1130,6 +1153,78 @@ async fn manifest_endpoints_are_public_only_and_limited_to_declared_hosts() {
     let err = transport(egress.fetch(&Request::get("http://nyaa.si/")).await);
     assert!(err.contains("isn't one of the plugin's endpoints"), "{err}");
     assert_eq!(resolver.lookups(), 1);
+}
+
+#[test]
+fn a_host_list_is_keyed_on_scheme_host_and_port() {
+    let listed = |e: &Endpoints, url: &str| match e.check(url) {
+        Ok(()) => true,
+        Err(err) => {
+            assert!(
+                err.to_string()
+                    .contains("isn't one of the plugin's endpoints"),
+                "{url}: {err}"
+            );
+            false
+        }
+    };
+    // A user-entered address on loopback: another service on the same
+    // host (another port) isn't reachable through it.
+    let e = Endpoints::user_entered(NetPolicy::download_client())
+        .only_origins(&["http://127.0.0.1:9696/sub"]);
+    assert!(listed(&e, "http://127.0.0.1:9696/api/v1/search"));
+    assert!(listed(&e, "http://[::ffff:127.0.0.1]:9696/"));
+    assert!(e.permits("http://127.0.0.1:9696/"));
+    assert!(!e.permits("http://127.0.0.1:9697/"));
+    for url in [
+        "http://127.0.0.1/",
+        "http://127.0.0.1:80/",
+        "http://127.0.0.1:9697/",
+        "http://127.0.0.1:6379/",
+        "https://127.0.0.1:9696/",
+    ] {
+        assert!(!listed(&e, url), "{url}");
+    }
+    let e =
+        Endpoints::user_entered(NetPolicy::download_client()).only_origins(&["http://[::1]:9696/"]);
+    assert!(listed(&e, "http://[::1]:9696/x"));
+    assert!(listed(&e, "http://[0:0::1]:9696/x"));
+    assert!(!listed(&e, "http://[::1]:9697/"));
+    assert!(!listed(&e, "http://127.0.0.1:9696/"));
+    // No port given: the scheme's default, written or not.
+    let e = Endpoints::user_entered(NetPolicy::download_client())
+        .only_origins(&["http://nas.lan", "https://Client.LAN./x"]);
+    for url in [
+        "http://nas.lan/",
+        "http://nas.lan:80/",
+        "https://client.lan/",
+        "https://client.lan:443/",
+    ] {
+        assert!(listed(&e, url), "{url}");
+    }
+    for url in [
+        "http://nas.lan:8080/",
+        "https://nas.lan/",
+        "http://client.lan/",
+        "https://client.lan:8443/",
+    ] {
+        assert!(!listed(&e, url), "{url}");
+    }
+    // An explicit default port in the list matches a URL without one.
+    let e = Endpoints::user_entered(NetPolicy::download_client())
+        .only_origins(&["https://client.lan:443/"]);
+    assert!(listed(&e, "https://client.lan/"));
+    // Something that isn't an http(s) URL adds nothing.
+    let e = Endpoints::user_entered(NetPolicy::download_client())
+        .only_origins(&["client.lan", "ftp://client.lan/"]);
+    assert!(!listed(&e, "http://client.lan/"));
+    // A manifest's hosts are on their scheme's default port only.
+    let e = Endpoints::manifest(&[Endpoint {
+        protocol: "https",
+        host: "nyaa.si",
+    }]);
+    assert!(listed(&e, "https://nyaa.si:443/"));
+    assert!(!listed(&e, "https://nyaa.si:8443/"));
 }
 
 #[tokio::test]
@@ -1265,6 +1360,46 @@ async fn redirects_drop_credentials_across_origins_and_refuse_downgrades() {
     // 303 turns it into a GET without a body.
     assert_eq!(hops[3].method, Method::Get);
     assert!(hops[3].body.is_empty());
+
+    // Every header the request set goes across origins, under any name
+    // (StashDB's `ApiKey`, a cookie, a custom one), and stays gone if a
+    // later hop comes back; only the non-credential ones are kept.
+    let (client, t) = table(&[
+        ("https://a.example/1", moved(307, "https://b.example/2")),
+        ("https://b.example/2", moved(302, "https://a.example/3")),
+    ]);
+    let mut req = Request::get("https://a.example/1")
+        .header("ApiKey", "stash-secret")
+        .header("apikey", "lower")
+        .header("Cookie", "s=1")
+        .header("Proxy-Authorization", "Basic x")
+        .header("X-Plugin-Token", "t")
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", "Lodestar");
+    req.method = Method::Post;
+    req.body = b"{}".to_vec();
+    send_following(&client, req).await.unwrap();
+    let hops = seen(&t);
+    assert_eq!(hops.len(), 3);
+    assert_eq!(hops[0].headers.len(), 8);
+    let kept = vec![
+        ("Accept".to_owned(), "application/json".to_owned()),
+        ("Content-Type".to_owned(), "application/json".to_owned()),
+        ("User-Agent".to_owned(), "Lodestar".to_owned()),
+    ];
+    assert_eq!(hops[1].headers, kept);
+    assert_eq!(hops[1].body, b"{}");
+    // 302 makes it a GET and drops the body's headers; back on the first
+    // origin, nothing that was dropped returns.
+    assert_eq!(hops[2].url, "https://a.example/3");
+    assert_eq!(
+        hops[2].headers,
+        vec![
+            ("Accept".to_owned(), "application/json".to_owned()),
+            ("User-Agent".to_owned(), "Lodestar".to_owned()),
+        ]
+    );
 
     let (client, _) = table(&[("https://a.example/", moved(302, "http://a.example/"))]);
     let err = transport(send_following(&client, Request::get("https://a.example/")).await);

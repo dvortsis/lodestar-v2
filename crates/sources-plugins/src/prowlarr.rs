@@ -145,7 +145,7 @@ pub enum Manager {
 pub struct Config {
     /// `scheme://host[:port][/path]`, no trailing slash.
     base: String,
-    /// The limiter's and the egress host list's key for `base`.
+    /// The limiter's key for `base` (the egress list takes `base` itself).
     host: String,
     manager: Manager,
     agents: u8,
@@ -255,7 +255,7 @@ impl Prowlarr {
     /// until it's set up, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         let c = self.config.as_ref()?;
-        Some(Endpoints::user_entered(NetPolicy::download_client()).only_hosts(&[&c.host]))
+        Some(Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&c.base]))
     }
 }
 

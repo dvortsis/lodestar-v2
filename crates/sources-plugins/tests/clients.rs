@@ -311,7 +311,10 @@ fn caps_consent_and_endpoints() {
     assert!(policy.limits(&fast).poll_interval >= POLL);
     assert_eq!(policy.distribution, Distribution::Coordinator);
     assert!(!policy.config_schema.contains("password"));
-    assert!(p.endpoints().is_some());
+    let e = p.endpoints().unwrap();
+    assert!(e.permits("http://qbittorrent.example:8080/api/v2/torrents/info"));
+    assert!(!e.permits("http://qbittorrent.example:8081/api/v2/torrents/info"));
+    assert!(!e.permits("http://qbittorrent.example/api/v2/torrents/info"));
     assert!(Clients::unconfigured().endpoints().is_none());
     let debug = format!("{p:?}");
     assert!(!debug.contains("REDACTED") && debug.contains("qbittorrent.example"));
