@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T00:26:09Z",
+  "updated_at": "2026-11-06T00:26:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3336,12 +3336,14 @@
       "at": "2026-11-06T00:12:16Z"
     },
     "P-v052-manifest": {
-      "status": "in review",
+      "status": "merged",
       "session": "session_01MMjhnBEDz5cnZumgyb58AH",
       "brief": "briefs/P-v052-manifest.md",
       "launched": "2026-11-05T23:37Z",
       "pr": 520,
-      "head": "b475ba06"
+      "head": "b475ba06",
+      "merge": "a7039e77",
+      "at": "2026-11-06T00:26:27Z"
     },
     "P-m8": {
       "status": "merged",
@@ -5755,7 +5757,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T00:26:09Z",
+    "updated": "2026-11-06T00:26:27Z",
     "items": [
       {
         "slot": 3,
@@ -5783,15 +5785,6 @@
         "doing": "Security: property test for the tracker guard path, plus #512 doc fixes",
         "since": "2026-11-05T23:26Z",
         "session": "session_01MMjhn9BtnKc4evPFE9banG"
-      },
-      {
-        "slot": 12,
-        "slice": "P-v052-manifest",
-        "role": "docs",
-        "agent": "claude",
-        "doing": "Plan: v0.5.2 feature manifest, the freeze list (docs only)",
-        "since": "2026-11-05T23:37Z",
-        "session": "session_01MMjhnBEDz5cnZumgyb58AH"
       },
       {
         "slot": 15,
