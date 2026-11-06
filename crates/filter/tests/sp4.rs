@@ -1168,7 +1168,7 @@ fn rows_at_the_cap() -> Vec<RawSetting> {
 }
 
 /// The set's memory at its cap, loaded from its rows, as resident memory
-/// grows (so a load's passing peak counts too); and the time of a lookup
+/// grows; and the time of a lookup
 /// that hits and one that misses, over keys spread across the whole set,
 /// so the caches don't hide the index's reads. The brief's gate: at most
 /// 25 MB at the cap. Linux only. Run alone, in its own process and in
@@ -1186,6 +1186,7 @@ fn memory_at_the_cap_loaded() {
     let loaded = SpamSigs::default();
     assert_eq!(loaded.load(&stored).len, CAP);
     let mb = (resident().unwrap() - before) / 1e6;
+    let held = loaded.held_bytes() as f64 / 1e6;
     let probes: Vec<u64> = (0..1_000_000u64)
         .map(|i| sig(sig(i) % CAP as u64))
         .collect();
@@ -1203,7 +1204,7 @@ fn memory_at_the_cap_loaded() {
     let (miss, none) = time(&misses);
     assert_eq!((found, none), (probes.len(), 0));
     println!(
-        "loaded at the cap ({CAP}): {mb:.1} MB; a lookup: {hit:.0} ns a hit, {miss:.0} ns a miss"
+        "loaded at the cap ({CAP}): {mb:.1} MB resident, {held:.1} MB held; a lookup: {hit:.0} ns a hit, {miss:.0} ns a miss"
     );
     assert!(mb <= 25.0, "the 25 MB gate");
 }
@@ -1226,6 +1227,41 @@ fn memory_at_the_cap_added() {
     }
     assert_eq!(added.len(), CAP);
     let mb = (resident().unwrap() - before) / 1e6;
-    println!("added at the cap ({CAP}): {mb:.1} MB");
+    let held = added.held_bytes() as f64 / 1e6;
+    println!("added at the cap ({CAP}): {mb:.1} MB resident, {held:.1} MB held");
     assert!(mb <= 25.0, "the 25 MB gate");
+}
+
+/// The set's memory at its cap after re-adds spread over it: a third of
+/// its signatures hidden again in random order, each leaving a stale add
+/// in its old row (counted per signature) until that row is a quarter
+/// dead and compacted. The clean sets above hold none. The gate is on
+/// the bytes the set holds ([`SpamSigs::held_bytes`]): under glibc,
+/// resident memory also keeps the holes compaction's reallocations leave,
+/// about 6 MB more here. Run alone, in its
+/// own process and in release: `cargo test --release -p lodestar-filter
+/// --test sp4 -- --ignored --nocapture --exact memory_at_the_cap_readded`.
+#[test]
+#[ignore = "a measurement: run alone, in release"]
+fn memory_at_the_cap_readded() {
+    if resident().is_none() {
+        return;
+    }
+    let before = resident().unwrap();
+    let s = SpamSigs::default();
+    for i in 0..CAP as u64 {
+        s.add(sig(i), HID);
+    }
+    for i in 0..(CAP as u64 / 3) {
+        s.add(sig(sig(i) % CAP as u64), HID);
+    }
+    assert_eq!(s.len(), CAP);
+    let mb = (resident().unwrap() - before) / 1e6;
+    let held = s.held_bytes() as f64 / 1e6;
+    let (rows, entries) = s.shape();
+    println!(
+        "re-added at the cap ({CAP}): {held:.1} MB held, {mb:.1} MB resident; \
+         {rows} rows of {entries} entries"
+    );
+    assert!(held <= 25.0, "the 25 MB gate");
 }

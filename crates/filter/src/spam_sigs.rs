@@ -90,7 +90,7 @@ pub const ROW_BYTES: usize = 4 << 10;
 pub const FORMAT: u8 = 1;
 /// Entries in a full row: 511.
 pub const ROW_ENTRIES: usize = (ROW_BYTES - 1) / 8;
-/// The index packs a row number in 45 bits; rows stay well below.
+/// A bound on row numbers, kept from RP-5: [`ROW_BAND`] is half of it.
 pub const MAX_ROW: u64 = 1 << 40;
 /// Row numbers are below this, read or written: a key at or past it is
 /// listed as a lost key and never sets where numbering starts, and no
@@ -528,7 +528,10 @@ impl Inner {
             None => {
                 let n = self.next;
                 // Past the band, or more rows than memory can address
-                // (never, in practice: 524,288 rows).
+                // (never, in practice: 524,288 rows). Either lasts until a
+                // restart: every change appends first (an add, a removal,
+                // and so the evictions and compactions that would delete
+                // a row), so a full set can't free a row either.
                 if n >= ROW_BAND || self.rows.insert(n, Vec::new()).is_none() {
                     self.out_of_numbers = true;
                     return None;
@@ -1042,6 +1045,36 @@ impl SpamSigs {
             .collect()
     }
 
+    /// The heap bytes the set holds, counted from its structures'
+    /// capacities: the entries, the index, the rows and the stale counts
+    /// (a std map's buckets as `hashbrown` sizes them), and the ordered
+    /// sets at 32 bytes an item. What the allocator keeps beside them
+    /// isn't counted. For the measurements.
+    #[doc(hidden)]
+    pub fn held_bytes(&self) -> usize {
+        let inner = self.lock();
+        let rows = &inner.rows;
+        let stale_buckets = match inner.stale.capacity() {
+            0 => 0,
+            c => (c * 8 / 7).next_power_of_two(),
+        };
+        let small = inner.dirty.len()
+            + inner.gone.len()
+            + inner.lost_rows.len()
+            + inner.lost_other.len()
+            + rows.order.len();
+        inner.live.buckets.capacity() * size_of::<Slot>()
+            + rows.held.capacity() * size_of::<Row>()
+            + rows
+                .held
+                .iter()
+                .map(|r| r.entries.capacity() * 8)
+                .sum::<usize>()
+            + rows.free.capacity() * size_of::<u32>()
+            + stale_buckets * (size_of::<(u64, u32)>() + 1)
+            + small * 32
+    }
+
     /// How many rows the set holds, and how many entries in them: for
     /// tests and the measurements.
     #[doc(hidden)]
@@ -1205,7 +1238,21 @@ mod tests {
                 s.add(sig(i), HID);
             }
         }
-        let inner = s.lock();
+        check(&s.lock(), cap, keys);
+        // The rows it stores, loaded again, agree as well.
+        let stored: Vec<RawSetting> = s
+            .lock()
+            .rows
+            .iter()
+            .map(|(n, r)| (format!("{PREFIX}{n}"), Err(encode(&r.entries))))
+            .collect();
+        let again = SpamSigs::with_cap(cap);
+        again.load(&stored);
+        check(&again.lock(), cap, keys);
+    }
+
+    /// Every check that the index and the rows agree.
+    fn check(inner: &Inner, cap: usize, keys: u64) {
         assert!(inner.live.len() <= cap);
         assert!(
             inner.live.len() * 2 <= inner.live.buckets.len(),
@@ -1273,10 +1320,18 @@ mod tests {
         assert_eq!(loaded.len, 3);
         assert_eq!(loaded.lost, ["3"]);
         assert!(again.get(sig(2)).is_some() && again.get(sig(3)).is_none());
-        // A deleted row's place is taken again.
-        let mut inner = again.lock();
-        inner.rows.remove(0);
-        assert_eq!(inner.rows.insert(9, Vec::new()), Some(0));
-        assert_eq!(inner.rows.insert(10, Vec::new()), None);
+        // A deleted row's place is taken again (on rows of their own: the
+        // set never deletes a row a live slot points into).
+        let mut rows = Rows::new(3);
+        for n in 0..3 {
+            assert_eq!(rows.insert(n, Vec::new()), Some(n as u32));
+        }
+        assert_eq!(rows.insert(3, Vec::new()), None);
+        rows.remove(0);
+        assert_eq!(rows.insert(9, Vec::new()), Some(0));
+        assert_eq!(rows.insert(10, Vec::new()), None);
+        // A full set stays as it is: a release appends too.
+        assert!(!s.lock().remove(sig(0), None));
+        assert!(s.get(sig(0)).is_some());
     }
 }

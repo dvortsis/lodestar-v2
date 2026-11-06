@@ -39,20 +39,26 @@ The brief asked for a guard: don't add a payload signature to SP-4's set while t
 - **Refinement, flagged (§2.19): at most 524,288 rows held at once** (`MAX_HELD_ROWS`, the slot's 19 bits). About 2,000 rows hold the cap, and no set reaches the limit in practice. Past it:
   - A row a load can't hold is treated like a row that doesn't read: lost, listed as `packs.sp4.row.<n>`, left alone and never written over. That loses its signatures, as a row that doesn't read does.
   - A row that can't be started is treated like the row numbers running out: the set stops changing and lists `packs.sp4.row.numbers`. That errs strict.
+  - Either lasts until a restart. Every change appends first: an add, a removal, and so the evictions and compactions that could delete a row. So a full set can't free a row either.
   - `rows_past_what_memory_holds_are_lost_or_never_started` checks both, with a lower limit.
-- **Unchanged:** the stored rows and their format, the load rules (fail closed per row, last entry wins, the cap applied again), compaction, releases, and every SP-4 behaviour. RP-5's tests in `crates/filter/tests/sp4.rs` pass unchanged, including the reload property test `a_reload_holds_what_memory_held`. The unit test that checks the index against the rows now also runs at 5,000 signatures, with long probe runs and reused places.
+- **Unchanged:** the stored rows and their format, the load rules (fail closed per row, last entry wins, the cap applied again), compaction, releases, and every SP-4 behaviour. RP-5's tests in `crates/filter/tests/sp4.rs` pass unchanged, including the reload property test `a_reload_holds_what_memory_held`. The unit test that checks the index against the rows now also runs at 5,000 signatures, with long probe runs and reused places, and checks the same again on its rows loaded into a fresh set.
 
 ## Measurements
-Release build, this session's container, each run in its own process, three runs each. Memory is the growth in resident memory (VmRSS), which counts a load's passing peak. It's measured that way because the workspace forbids `unsafe`, which a counting allocator would need.
+Release build, this session's container, each run in its own process, three runs each. Memory is measured two ways, since the workspace forbids `unsafe`, which a counting allocator would need:
+- **Resident:** the growth in resident memory (VmRSS) while the set is built. That's what the process holds at the end, the allocator's holes included. It isn't the peak.
+- **Held:** the bytes the set's structures hold, counted from their capacities (`SpamSigs::held_bytes`, which errs high on the stale map).
 
-| At the cap (1M signatures) | RP-5 (`HashMap`) | Now |
-|---|---|---|
-| Loaded from its rows (`memory_at_the_cap_loaded`) | 53.1 to 53.2 MB | 17.1 MB |
-| Filled by adds, 10,000 past the cap (`memory_at_the_cap_added`) | 44.5 to 44.6 MB | 17.2 to 17.4 MB |
-| A lookup that hits, keys spread over the set | 101 to 114 ns | 125 to 173 ns |
-| A lookup that misses | 38 to 43 ns | 103 to 148 ns |
+| At the cap (1M signatures) | RP-5 (`HashMap`), resident | Now, resident | Now, held |
+|---|---|---|---|
+| Loaded from its rows (`memory_at_the_cap_loaded`) | 53.1 to 53.2 MB | 17.0 to 17.1 MB | 16.5 MB |
+| Filled by adds, 10,000 past the cap (`memory_at_the_cap_added`) | 44.5 to 44.6 MB | 17.2 to 17.4 MB | 16.6 MB |
+| Filled by adds, then a third of them re-added at random (`memory_at_the_cap_readded`) | not measured | 26.0 to 26.5 MB | 21.8 MB |
+| A lookup that hits, keys spread over the set | 101 to 114 ns | 111 to 173 ns | |
+| A lookup that misses | 38 to 43 ns | 95 to 148 ns | |
 
-- **The 25 MB gate holds,** and both tests assert it. They're `#[ignore]` measurements: `cargo test --release -p lodestar-filter --test sp4 -- --ignored --nocapture --exact memory_at_the_cap_loaded` (and `…_added`).
+- **The clean sets are a best case.** A re-add (a payload hidden again) leaves a stale add in its old row until that row is a quarter dead and compacted. The set counts stale adds per signature in a std map. The re-added case covers that: 81,557 dead entries in 2,610 rows, and 75,913 signatures in the stale map. RP-5 had the same map, so it isn't new here.
+- **The 25 MB gate holds on what the set holds** in all three cases, and on resident memory for the clean ones. The tests assert it. Under glibc, the re-added case is about 4 MB over resident: the holes compaction's reallocations leave. Two things were tried, and neither changed it by more than noise: rewriting a row in its own buffer, and starting each row at full capacity. Release builds on musl use mimalloc (`crates/store/src/memstats.rs`), which this container didn't measure.
+- **Running them:** they're `#[ignore]` measurements. `cargo test --release -p lodestar-filter --test sp4 -- --ignored --nocapture --exact memory_at_the_cap_loaded` (and `…_added`, `…_readded`).
 - **Lookups are slower,** mostly misses: each bucket a probe passes costs a read of the entry it points at, where the std table matched a control byte. On the writer that's 0.08 µs a crawl commit, about 0.3% of an insert:
 
 | `sp4_writer_cost` (release; RP-5's code run twice here, this PR's three times) | RP-5 | Now |
