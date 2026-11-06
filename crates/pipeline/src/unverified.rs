@@ -280,6 +280,9 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         },
         // Judged, as extra evidence, before it's stored ([`judge_in`]).
         adult: c.adult.clone(),
+        // Not stored until ENR-10 judges it before storage, like the
+        // adult section ([`judge_in`]).
+        details: None,
     };
     // The trackers last, in the room the rest leaves under the total.
     // None for a private find: a private tracker's announce URL can carry
