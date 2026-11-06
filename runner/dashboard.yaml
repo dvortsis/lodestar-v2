@@ -1312,7 +1312,7 @@ owner_queue:
   type: action
   action: Soak r5 on rc.4 passed (0.91 MiB/h, bar 2.0) and the Windows MSI check on rc.4 passed (2026-11-06). rc.5 (text-only Legal Notice v3, #540) is green. The gluetun leg is running, with its final report about 23:50Z. Then tag v0.5.1 on a0eb0a9087c2474ef4285416403eacbf8a475111 (rc.5) once the runner gives the go
   unblocks: The v0.5.1 release
-  when: After the gluetun leg ends (about 2026-11-06T23:30Z) and the Windows MSI check
+  when: After the gluetun leg's final report (about 2026-11-06T23:50Z)
 - n: 2
   type: action
   action: Name the experiment host for crawler tests, and when it is free
