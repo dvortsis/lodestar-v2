@@ -5396,7 +5396,8 @@
         "X-sources-api-spec notes: crates/api/src/ops.rs patchSource description (~693-701) still says Account gets 409 credentials_required and describes consent flow as live; fix wording (from #553)",
         "P-v052-cut notes: docs/releases/v0.5.2.md is 500/450 words (material-composer cap); main was 508 before #553; trim at the cut",
         "slices.yaml WK-2 owns: add crates/lodestar/src/cli/mod.rs and main.rs (one variant/arm/mod line each; runner 23:14Z)",
-        "Owner \u00a72.19 flag at WK-2 merge: `lodestar worker --rotate-key` (worker stopped; rotate->reseal->retire)"
+        "Owner \u00a72.19 flag at WK-2 merge: `lodestar worker --rotate-key` (worker stopped; rotate->reseal->retire)",
+        "WK-2 shared: crates/lodestar/Cargo.toml dev-deps tokio test-util (no lock change; accepted 23:26Z, same pattern as WK-7). WK-2 also reads LODESTAR_JOIN (address, not secret) beside LODESTAR_TOKEN per Unraid template"
       ],
       "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
     },
