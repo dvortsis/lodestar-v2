@@ -239,8 +239,8 @@ function serve(mock: OpenApiMock): State {
 		return { status: 202, body: { job: 1 } };
 	});
 	mock.on('getFilterPreviewJob', () => ({
-		state: 'done',
-		progress: { phase: 'done', done: 1, total: 1 },
+		state: 'done' as const,
+		progress: { phase: 'done' as const, done: 1, total: 1 },
 		assessment: assess(previewed!)
 	}));
 	mock.on('cancelFilterPreviewJob', { ok: true });
