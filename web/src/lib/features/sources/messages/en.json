@@ -1,7 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"sources_title": "Sources",
-	"sources_purpose": "Where Lodestar finds torrents: the DHT and the other sources. Each source can be turned on or off and given a share of the fetch work. Turning one on or off takes effect at the next start.",
+	"sources_purpose": "Where Lodestar finds torrents: the DHT and the other sources. Each source can be turned on or off and given a share of the fetch work. Turning one off stops it at once; turning one on takes effect at the next start.",
 	"sources_loading": "Loading your sources…",
 	"sources_load_failed": "Couldn't load the sources. Nothing was changed.",
 	"sources_retry": "Try again",

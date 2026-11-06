@@ -608,13 +608,29 @@ async fn sources_and_the_network_check() {
         .send(req("PATCH", &uri, c, Some(r#"{"enabled":false}"#)))
         .await;
     assert_eq!(status, 200);
+    // Off stops it at once (X-tcache-recheck), so nothing is pending.
     assert_eq!(
         (off["state"].clone(), off["restart_required"].clone()),
-        (json!("disabled"), json!(true))
+        (json!("disabled"), json!(false))
     );
-    // Off stops it at once (X-tcache-recheck); `restart_required` still
-    // compares the stored state with the one it started with.
     assert_eq!(off["health"]["running"], json!(false), "it stops at once");
+    // On again: it runs only from the next start, and says so.
+    let (status, on) = f
+        .send(req("PATCH", &uri, c, Some(r#"{"enabled":true}"#)))
+        .await;
+    assert_eq!(status, 200, "{on}");
+    assert_eq!(
+        (
+            on["state"].clone(),
+            on["restart_required"].clone(),
+            on["health"]["running"].clone()
+        ),
+        (json!("enabled"), json!(true), json!(false))
+    );
+    let (status, _) = f
+        .send(req("PATCH", &uri, c, Some(r#"{"enabled":false}"#)))
+        .await;
+    assert_eq!(status, 200);
     // Purge waits for SRC-14b.
     let (status, e) = f
         .send(req("PATCH", &uri, c, Some(r#"{"purge":true}"#)))

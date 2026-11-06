@@ -1301,10 +1301,11 @@ async fn turning_a_running_source_off_stops_it_at_once() {
         enabled: Some(true),
         ..SourceChange::default()
     };
-    assert_eq!(
-        control.update_source(id, on).await.unwrap().state,
-        SourceState::Enabled
-    );
+    let view = control.update_source(id, on).await.unwrap();
+    assert_eq!(view.state, SourceState::Enabled);
+    // It says it was stopped since this start, so the API can show it
+    // runs only from the next one.
+    assert!(view.stopped && !view.status.running, "{view:?}");
     drop(control);
     pipeline.shutdown().await.unwrap();
     let (p, sent) = ticker("nyaa", Consent::None);
@@ -1359,5 +1360,34 @@ async fn losing_a_credential_stops_the_running_plugin() {
         !pipeline.sources()[0].running,
         "still running without its key"
     );
+    pipeline.shutdown().await.unwrap();
+}
+
+/// Off, on and off again in one run: each change returns, the source ends
+/// up off and stopped, and stopping a plugin that's already stopped is
+/// harmless.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn off_on_off_leaves_the_source_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let (p, sent) = ticker("nyaa", Consent::None);
+    let (pipeline, control, _) = started(&db, p).await;
+    until("it sends", || sent.load(Ordering::SeqCst) >= 1).await;
+    let id = pipeline.sources()[0].id;
+    let set = |enabled: bool| SourceChange {
+        enabled: Some(enabled),
+        ..SourceChange::default()
+    };
+    for (on, state) in [
+        (false, SourceState::Disabled),
+        (true, SourceState::Enabled),
+        (false, SourceState::Disabled),
+    ] {
+        let view = control.update_source(id, set(on)).await.unwrap();
+        assert_eq!(view.state, state);
+        assert!(view.stopped, "{view:?}");
+        assert!(!pipeline.sources()[0].running);
+    }
+    assert_eq!(stored(&db, "nyaa"), SourceState::Disabled);
     pipeline.shutdown().await.unwrap();
 }

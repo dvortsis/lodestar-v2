@@ -377,6 +377,81 @@ fn a_private_item_beside_a_public_import_stays_private() {
     assert_eq!(check(&store, &stand_in(), key), Err(Withheld::Private));
 }
 
+/// A key that passed when it was queued, then tombstoned or quarantined:
+/// refused as held, by the store's holds (`held_among`), before the
+/// item's deletion is ever looked at. Raw rows, as the writer's hold
+/// leaves them.
+#[test]
+fn a_hold_added_after_a_key_was_queued_refuses_it_as_held() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    items(&mut store, src, &[[1; 20]]);
+    let raw = info_bytes("Partial");
+    let info = Info::parse(&raw).unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap();
+    let stored = info.primary_hash().0;
+    let filter = stand_in();
+    // Queued: both may be sent.
+    assert_eq!(check(&store, &filter, [1; 20]), Ok(()));
+    assert_eq!(check(&store, &filter, stored), Ok(()));
+    let conn = store.connection();
+    conn.execute(
+        "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'R-1', ?2)",
+        rusqlite_params(&[1; 20]),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+         VALUES (?1, 'R-1', NULL, ?2, ?2 + 3600)",
+        rusqlite_params(&stored),
+    )
+    .unwrap();
+    assert_eq!(store.held_among(&[[1; 20], stored]).unwrap(), [true, true]);
+    assert_eq!(check(&store, &filter, [1; 20]), Err(Withheld::Held));
+    assert_eq!(check(&store, &filter, stored), Err(Withheld::Held));
+}
+
+/// A public item's key that passed when it was queued, then a private
+/// (BEP 27) torrent stored under it: refused as private.
+#[test]
+fn a_private_torrent_stored_after_a_key_was_queued_refuses_it() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let raw = info_bytes("Later Private");
+    let info = Info::parse(&raw).unwrap();
+    let key = info.primary_hash().0;
+    items(&mut store, src, &[key]);
+    let filter = stand_in();
+    assert_eq!(check(&store, &filter, key), Ok(()));
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL | flags::PRIVATE,
+            source: src,
+        }])
+        .unwrap();
+    assert_eq!(check(&store, &filter, key), Err(Withheld::Private));
+}
+
+/// `?1` a hash, `?2` the test's clock.
+fn rusqlite_params(h: &[u8; 20]) -> (Vec<u8>, i64) {
+    (h.to_vec(), T)
+}
+
 /// The cursor runs the same check: a key the filter blocks isn't offered,
 /// and while the cache is off it offers nothing and stays where it is.
 #[test]

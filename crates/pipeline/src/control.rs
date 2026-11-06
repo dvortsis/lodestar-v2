@@ -513,6 +513,10 @@ pub struct SourceView {
     /// Its saved settings differ from the ones it was built with at this
     /// start: they apply at the next one.
     pub config_pending: bool,
+    /// Its plugin was stopped since this start, because it was turned off
+    /// or purged (X-tcache-recheck). Turned on again, it runs only from
+    /// the next start.
+    pub stopped: bool,
 }
 
 /// `HTTPS_PROXY` or `ALL_PROXY` is set while a source connects directly.
@@ -691,6 +695,10 @@ struct State {
     /// The last intensity recorded, so a repeat writes no event.
     intensity: Intensity,
     priorities: HashMap<SourceId, Priority>,
+    /// Sources whose plugin was stopped since this start (turned off or
+    /// purged): one runs again only from the next start
+    /// ([`SourceView::stopped`]).
+    stopped: std::collections::HashSet<SourceId>,
 }
 
 struct Inner {
@@ -791,6 +799,7 @@ impl Control {
                     since,
                     intensity,
                     priorities,
+                    stopped: Default::default(),
                 }),
                 samples: Mutex::default(),
             }),
@@ -1051,7 +1060,10 @@ impl Control {
                 .collect::<Result<HashMap<_, _>, Error>>()?;
             (store.sources()?, store.cohorts(hour - 23, hour + 1)?, gates)
         };
-        let priorities = self.state().priorities.clone();
+        let (priorities, stopped) = {
+            let state = self.state();
+            (state.priorities.clone(), state.stopped.clone())
+        };
         let started_at = self.inner.monitor.started_at();
         let proxy_env = crate::egress::proxy_env_set();
         Ok(statuses
@@ -1100,6 +1112,7 @@ impl Control {
                     egress_warnings,
                     purge_pending,
                     config_pending,
+                    stopped: stopped.contains(&status.id),
                     status,
                 }
             })
@@ -1349,8 +1362,14 @@ impl Control {
         rt: &tokio::runtime::Handle,
         id: SourceId,
     ) -> tokio::task::JoinHandle<usize> {
-        let monitor = self.inner.monitor.clone();
-        rt.spawn(async move { monitor.stop_source(id).await })
+        let this = self.clone();
+        rt.spawn(async move { this.stop_now(id).await })
+    }
+
+    /// Stops `id`'s plugin and remembers it stopped, for the view.
+    async fn stop_now(&self, id: SourceId) -> usize {
+        self.state().stopped.insert(id);
+        self.inner.monitor.stop_source(id).await
     }
 
     /// Starts purging source `id` (§18.1, SRC-14b), or starts it over: the
@@ -1382,7 +1401,7 @@ impl Control {
             plugin = manifest.id,
             state = crate::log_events::state(SourceState::Disabled)
         );
-        Ok(self.inner.monitor.stop_source(id).await as u64)
+        Ok(self.stop_now(id).await as u64)
     }
 
     /// One step of the purge: at most `MAX_PURGE_STEP` rows, in one
