@@ -17,10 +17,12 @@ Runner, 2026-11-06. The owner answered owner-queue item 10, the planning-wave qu
 | M8 OQ3, the Windows soak for 1.0 (`owner-m8-q3`) | 24 h in MSI service mode on the RC, under CR-0's memory rule, plus no crash or service restart, an upgrade from the last public release and a clean uninstall, on the owner's Windows PC. | It's the same rule as v0.5.1, so results compare, and service mode is how users run it. Naming the host stays the owner's (`windows-soak-host`). | M8-WIN-1 |
 | M8 OQ4, a Linux Docker soak on the RC (`owner-m8-q4`) | Yes, 24 h on the Unraid host under the v0.5.1 rules, alongside the Windows soak. | 1.0 adds workers, companions and the v0.7–v0.8 code to the Docker image, and r3 and r4 found memory problems only a soak showed. The host stays the owner's (`unraid-soak-host`). | G-v1-soak-linux |
 | M8 OQ5, a second-vendor security pass | Optional, on SEC-1 and SEC-2, run by the owner if wanted. It gates nothing. | No condition or slice waits on it. | — |
-| M6 Q10, Windows Restart now | Lodestar keeps its own count and offers Restart now only when no recovery was used in the last 24 h. | A crash always has an automatic recovery left. It's the approved design (§10.10.6), with no new grant. If the owner approves Q13's helper, a later change can lift the limit. | PK-win-restart (already ready on the soak verdict) |
+| M6 Q10, Windows Restart now | Lodestar keeps its own count and offers Restart now only when no recovery was used in the last 24 h. | A crash always has an automatic recovery left. It's the approved design (§10.10.6), with no new grant. Q13's helper is now approved (§2.47), so a later change can move Restart now onto it and lift the limit. | PK-win-restart (already ready on the soak verdict) |
 | v0.8 Q3, per-worker consent wording | The runner drafts it in PL-5's decisions file: today's text plus which machine's IP the requests leave from. **Approving the text stays with the owner**, as for the Q1 consent texts, so `owner-v08-q3` stays unmet. | Consent text is the owner's to approve (§2.37's Q1 item). | PL-7b, once the text is approved |
 
 ## Not covered by this reply (the owner confirms each one by name)
+**Answered 2026-11-06T05:23Z**, and confirmed to the runner directly (owner-decisions §2.47): "Go with the runner's recommendation on all". Each recommendation below is now the decision. OQ6's contact is GitHub private vulnerability reporting only, with no email address (§2.47).
+
 | Question | Why it stays with the owner | The plan's recommendation, offered again |
 |---|---|---|
 | v0.7 Q1, the Stremio addon | A token in the URL path and `Access-Control-Allow-Origin: *` loosen the API's auth rules. Shipping it at all is an inducement question. | Off by default. A dedicated read-only, revocable `stremio` key, redacted from logs. CORS only on the addon paths. LAN only recommended. Every filter and pack applies. |
@@ -37,7 +39,7 @@ Runner, 2026-11-06. The owner answered owner-queue item 10, the planning-wave qu
 | M8 OQ6, disclosure and `SECURITY.md` | Security policy, and the owner's own contact | Private vulnerability reporting, a named contact, unfixed findings listed publicly by id and severity only. |
 | M6 Q13, how the MSI updater gets install rights | A privileged helper is a new elevated surface. | The helper, with its six rules. If declined, MSI installs stay by hand. |
 | Workers wkq2, the join token in Docker and Unraid | It loosens a security decision. | Accept `LODESTAR_TOKEN` only for the first join, then ignore it, warn, and never log it. The token is single-use, bound to a name and expires in 15 min. |
-| v0.8 Q1, Nostr relays and Lemmy instances | A source's terms | Public events only. Relays that need auth or payment show "blocked by source". |
+| v0.8 Q1, Nostr relays and Lemmy instances | A source's terms | Both lists are the user's and start empty. Nostr may suggest general-purpose relays, each only after a recorded check of its published policy. Lemmy suggests nothing: the user enters their own instance and communities and accepts its terms. Relays that need auth or payment show "blocked by source". |
 | v0.8 Q4, third-party adult claims | Content safety | A claim may only hide an item until local detection runs. It never feeds the child-safety tombstone path and never moves a title into Adult on its own. |
 
 ## Not needed yet
