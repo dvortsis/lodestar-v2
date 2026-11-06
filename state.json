@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T05:33:28Z",
+ "updated_at": "2026-11-06T06:05:56Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3422,11 +3422,13 @@
    "brief": "briefs/X-egress-state-watch.md"
   },
   "X-net-redirect-allowlist": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhnCvmobeWXtYZsWjaMy",
    "model": "opus",
    "launched": "2026-11-06T04:14:37Z",
-   "brief": "briefs/X-net-redirect-allowlist.md"
+   "brief": "briefs/X-net-redirect-allowlist.md",
+   "pr": 529,
+   "merge": "0880df5f"
   },
   "X-commit-rejudge-reuse": {
    "status": "running",
@@ -5143,6 +5145,10 @@
   {
    "at": "2026-11-06T05:33:28Z",
    "note": "After PK-win-upd-2/3 (Q13 helper, approved \u00a72.47): a small slice to move Windows Restart now onto the privileged helper and lift M6 Q10's once-per-24h limit (plan m6-gap-audit Q10). Add to slices.yaml in a runner PR when PK-win-upd lands."
+  },
+  {
+   "at": "2026-11-06T06:05:56Z",
+   "note": "#531 merged 323402da: owner \u00a72.47 (all 16 planning-wave answers; OQ6 contact = GitHub private vulnerability reporting, verified enabled). Only winget (M6 Q6, optional, after 1.0) remains in owner queue item 10."
   }
  ],
  "main_health": [
@@ -5814,7 +5820,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T05:19:02Z",
+  "updated": "2026-11-06T06:05:56Z",
   "items": [
    {
     "slot": 3,
@@ -5847,8 +5853,9 @@
     "slice": "X-net-redirect-allowlist",
     "role": "slice",
     "agent": "session_01MMjhnCvmobeWXtYZsWjaMy",
-    "doing": "allow-list headers on cross-origin redirects (integrations net.rs)",
-    "since": "2026-11-06T04:14:37Z"
+    "doing": "#529 merged 0880df5f; archived. Idle: no ready slice (rest waits on the v0.5.1 soak verdict)",
+    "since": "2026-11-06T06:05:56Z",
+    "status": "idle"
    }
   ],
   "limit": 8,
