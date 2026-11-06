@@ -171,7 +171,7 @@ test.describe('setup', () => {
 			new URL('../../../docs/legal/legal-notice.md', import.meta.url),
 			'utf8'
 		);
-		mock.on('getLegalNotice', { version: 3, text });
+		mock.on('getLegalNotice', { version: 4, text });
 		await go('/setup');
 		await expect(page.getByRole('region', { name: 'Legal Notice' })).toBeVisible();
 		await ready(page);

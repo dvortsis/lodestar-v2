@@ -1,8 +1,8 @@
 # Lodestar Legal Notice and Network Risks
 
-**Version 3 · 2026-11-06**
+**Version 4 · 2026-11-06**
 
-*Applies to Lodestar 0.5.2 and the development builds that lead to it (the `main` branch). Where this notice says "this version", it means that software (a development build may report an earlier version number). The v0.5.1 release carries its own copy of this notice, version 2, written for what that build does.*
+*Applies to Lodestar 0.5.2 and the development builds that lead to it (the `main` branch). Where this notice says "this version", it means that software (a development build may report an earlier version number). The v0.5.1 release carries its own copy of this notice, version 3, written for what that build does.*
 
 Lodestar shows this notice before first use, and again whenever its version is raised, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
 

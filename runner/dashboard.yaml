@@ -355,6 +355,7 @@ placement:
   - D-v051
   - X-legal-docs
   - X-legal-docs-r2
+  - X-notice-v4
   - X-mmap-cache-prune
   - X-merge-policy
   - X-thp-off

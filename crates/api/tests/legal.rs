@@ -453,13 +453,13 @@ async fn an_install_from_before_the_notice_sees_it_once() {
     assert_eq!(status, StatusCode::OK);
 }
 
-/// The upgrade from v0.5.1 (LEGAL-1r stored `notice_version: 2`): this
-/// build's notice 3 shows once at sign-in, a stale accept of 2 is
-/// refused, and after accepting 3 a fresh sign-in passes straight
+/// The upgrade from v0.5.1 (R-rc5-notice stored `notice_version: 3`): this
+/// build's notice 4 shows once at sign-in, a stale accept of 3 is
+/// refused, and after accepting 4 a fresh sign-in passes straight
 /// through, after a restart too.
 #[tokio::test]
 async fn a_v0_5_1_install_sees_the_new_notice_once_at_login() {
-    assert_eq!(NOTICE_VERSION, 3);
+    assert_eq!(NOTICE_VERSION, 4);
     let dir = tempfile::tempdir().unwrap();
     let a = app(dir.path(), NOTICE_VERSION);
     let (status, body, _) = send(
@@ -472,7 +472,7 @@ async fn a_v0_5_1_install_sees_the_new_notice_once_at_login() {
     drop(a);
     let path = dir.path().join("auth.json");
     let mut file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    file["notice_version"] = json!(2);
+    file["notice_version"] = json!(3);
     std::fs::write(&path, file.to_string()).unwrap();
 
     let a = app(dir.path(), NOTICE_VERSION);
@@ -485,7 +485,7 @@ async fn a_v0_5_1_install_sees_the_new_notice_once_at_login() {
         post(
             "/api/v1/legal/accept",
             Some(&cookie),
-            json!({ "version": 2 }),
+            json!({ "version": 3 }),
         ),
         None,
     )
@@ -500,7 +500,7 @@ async fn a_v0_5_1_install_sees_the_new_notice_once_at_login() {
         post(
             "/api/v1/legal/accept",
             Some(&cookie),
-            json!({ "version": 3 }),
+            json!({ "version": 4 }),
         ),
         None,
     )
@@ -514,7 +514,7 @@ async fn a_v0_5_1_install_sees_the_new_notice_once_at_login() {
     let (status, _, _) = send(&a, get("/api/v1/keys", Some(&cookie)), None).await;
     assert_eq!(status, StatusCode::OK);
     let file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(file["notice_version"], 3);
+    assert_eq!(file["notice_version"], 4);
 }
 
 /// API keys aren't browsers: a connected app keeps working through an
