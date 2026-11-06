@@ -1,0 +1,75 @@
+{
+  "format": 1,
+  "entries": [
+    {
+      "id": "qbittorrent",
+      "name": "qBittorrent",
+      "licence": {
+        "spdx": "GPL-2.0-or-later",
+        "url": "https://github.com/qbittorrent/qBittorrent/blob/master/COPYING"
+      },
+      "homepage": "https://www.qbittorrent.org/",
+      "needed_for": ["download_client"],
+      "opt_in": false,
+      "hosts": ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
+      "native": {
+        "artifacts": [
+          {"platform": "linux", "arch": "x86_64", "archive": "binary", "executable": null, "pin": null},
+          {"platform": "linux", "arch": "aarch64", "archive": "binary", "executable": null, "pin": null}
+        ]
+      },
+      "container": {"image": "lscr.io/linuxserver/qbittorrent", "digest": null, "name": "qbittorrent"},
+      "ports": [
+        {"name": "webui", "port": 8080, "proto": "tcp", "exposure": "internal"},
+        {"name": "p2p", "port": 6881, "proto": "tcp", "exposure": "p2p"},
+        {"name": "p2p_udp", "port": 6881, "proto": "udp", "exposure": "p2p"}
+      ],
+      "health": {"port": "webui", "path": "/api/v2/app/version"},
+      "templates": ["qbittorrent_conf", "compose_service", "unraid_template"]
+    },
+    {
+      "id": "prowlarr",
+      "name": "Prowlarr",
+      "licence": {
+        "spdx": "GPL-3.0-only",
+        "url": "https://github.com/Prowlarr/Prowlarr/blob/develop/LICENSE.md"
+      },
+      "homepage": "https://prowlarr.com/",
+      "needed_for": ["indexer_manager"],
+      "opt_in": false,
+      "hosts": ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
+      "native": {
+        "artifacts": [
+          {"platform": "linux", "arch": "x86_64", "archive": "tar_gz", "executable": "Prowlarr/Prowlarr", "pin": null},
+          {"platform": "linux", "arch": "aarch64", "archive": "tar_gz", "executable": "Prowlarr/Prowlarr", "pin": null},
+          {"platform": "windows", "arch": "x86_64", "archive": "zip", "executable": "Prowlarr/Prowlarr.exe", "pin": null}
+        ]
+      },
+      "container": {"image": "lscr.io/linuxserver/prowlarr", "digest": null, "name": "prowlarr"},
+      "ports": [
+        {"name": "webui", "port": 9696, "proto": "tcp", "exposure": "internal"}
+      ],
+      "health": {"port": "webui", "path": "/ping"},
+      "templates": ["prowlarr_config_xml", "compose_service", "unraid_template"]
+    },
+    {
+      "id": "gluetun",
+      "name": "gluetun",
+      "licence": {
+        "spdx": "MIT",
+        "url": "https://github.com/qdm12/gluetun/blob/master/LICENSE"
+      },
+      "homepage": "https://github.com/qdm12/gluetun",
+      "needed_for": ["vpn_route"],
+      "opt_in": false,
+      "hosts": [],
+      "native": null,
+      "container": {"image": "docker.io/qmcgaw/gluetun", "digest": null, "name": "gluetun"},
+      "ports": [
+        {"name": "control", "port": 8000, "proto": "tcp", "exposure": "internal"}
+      ],
+      "health": null,
+      "templates": ["compose_service", "unraid_template"]
+    }
+  ]
+}
