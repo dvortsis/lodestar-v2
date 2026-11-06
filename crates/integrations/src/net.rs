@@ -34,7 +34,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{AUTHORIZATION, COOKIE, LOCATION};
+use reqwest::header::{HeaderMap, HeaderName, LOCATION};
 use reqwest::{Method, Request, Response, Url};
 
 use crate::BoxFuture;
@@ -819,8 +819,13 @@ impl GuardedClient {
     /// redirects (307/308), each checked like the first URL. Other 3xx
     /// responses are returned as they are: turning a POST into a GET would
     /// report a notification as delivered when its payload was dropped.
-    /// Credentials headers are dropped on a cross-origin hop, and a
-    /// downgrade from `https` to `http` is refused.
+    /// A downgrade from `https` to `http` is refused. A hop to another
+    /// origin (scheme, host or port) keeps only `accept`,
+    /// `accept-language`, `content-type`, `content-length` and `user-agent`
+    /// (`CROSS_ORIGIN_HEADERS`) and drops every other header the request set, so no credential
+    /// (`Authorization`, `Cookie`, `Proxy-Authorization`, `X-Api-Key`, or
+    /// one a later channel names) follows it to another party. A hop on
+    /// the same origin keeps every header.
     pub async fn send_following(&self, mut req: Request) -> Result<Response, NetError> {
         for _ in 0..=MAX_REDIRECTS {
             let again = req.try_clone();
@@ -841,13 +846,38 @@ impl GuardedClient {
                 return Err(NetError::Redirect);
             }
             if target.origin() != resp.url().origin() {
-                next.headers_mut().remove(AUTHORIZATION);
-                next.headers_mut().remove(COOKIE);
+                keep_cross_origin_headers(next.headers_mut());
             }
             *next.url_mut() = target;
             req = next;
         }
         Err(NetError::Redirect)
+    }
+}
+
+/// The headers a redirect to another origin keeps: content negotiation and
+/// the body's description, none of which can carry a credential. Every
+/// other header goes (an allow list, so a credential header under a name
+/// nobody listed can't leak). The same list as the sources egress
+/// (`CROSS_ORIGIN_HEADERS` in `crates/sources/src/egress.rs`); keep the two
+/// in step. Lowercase, as `HeaderName::as_str` gives them.
+const CROSS_ORIGIN_HEADERS: [&str; 5] = [
+    "accept",
+    "accept-language",
+    "content-type",
+    "content-length",
+    "user-agent",
+];
+
+/// Drops every header not in [`CROSS_ORIGIN_HEADERS`].
+fn keep_cross_origin_headers(headers: &mut HeaderMap) {
+    let gone: Vec<HeaderName> = headers
+        .keys()
+        .filter(|name| !CROSS_ORIGIN_HEADERS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    for name in gone {
+        headers.remove(name);
     }
 }
 
@@ -1386,11 +1416,7 @@ pub(crate) mod tests {
     }
 
     fn redirect_to(location: &str) -> axum::response::Response {
-        axum::response::Response::builder()
-            .status(307)
-            .header("location", location)
-            .body(axum::body::Body::empty())
-            .unwrap()
+        redirect_with(307, location)
     }
 
     #[tokio::test]
@@ -1593,6 +1619,283 @@ pub(crate) mod tests {
         // to-private, to-metadata-name, to-metadata: 1 each; loop: 4;
         // to-ok: 2; see-other: 1.
         assert_eq!(hits.load(Ordering::SeqCst), 10);
+    }
+
+    /// One request a [`serve_recording`] server saw.
+    struct Seen {
+        path: String,
+        headers: axum::http::HeaderMap,
+        body: Vec<u8>,
+    }
+
+    /// A local server that records every request (path, headers, body)
+    /// before answering it with `respond`, so a request is on record once
+    /// its response has arrived.
+    async fn serve_recording(
+        respond: impl Fn(&str) -> axum::response::Response + Send + Sync + 'static,
+    ) -> (SocketAddr, Arc<Mutex<Vec<Seen>>>) {
+        use axum::extract::Request as AxReq;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let respond = Arc::new(respond);
+        let app = axum::Router::new().fallback(move |req: AxReq| {
+            let respond = Arc::clone(&respond);
+            let log = Arc::clone(&log);
+            async move {
+                let (parts, body) = req.into_parts();
+                let body = axum::body::to_bytes(body, 1 << 20).await.unwrap();
+                log.lock().unwrap().push(Seen {
+                    path: parts.uri.path().to_string(),
+                    headers: parts.headers,
+                    body: body.to_vec(),
+                });
+                respond(parts.uri.path())
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (addr, seen)
+    }
+
+    fn redirect_with(status: u16, location: &str) -> axum::response::Response {
+        axum::response::Response::builder()
+            .status(status)
+            .header("location", location)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    /// The headers a test request sets that may carry a credential, or that
+    /// no allow list names.
+    const NOT_ALLOWED: [(&str, &str); 6] = [
+        ("authorization", "Bearer secret-token"),
+        ("cookie", "session=secret"),
+        ("proxy-authorization", "Basic c2VjcmV0"),
+        ("x-api-key", "secret-key"),
+        ("x-custom-secret", "anything"),
+        ("x-lodestar-delivery", "n-1"),
+    ];
+    /// Allow-listed headers a test request sets, with their values.
+    const ALLOWED: [(&str, &str); 4] = [
+        ("accept", "application/json"),
+        ("accept-language", "en"),
+        ("content-type", "application/json"),
+        ("user-agent", "lodestar-test"),
+    ];
+    const BODY: &str = r#"{"id":"n-1"}"#;
+
+    fn hop_client() -> GuardedClient {
+        let r = ScriptedResolver::new(&[
+            ("local.example", &[&["127.0.0.1"]]),
+            ("other.example", &[&["127.0.0.1"]]),
+        ]);
+        GuardedClient::with_resolver(NetPolicy::loopback_for_tests(), Duration::from_secs(5), r)
+            .unwrap()
+    }
+
+    fn hop_request(client: &GuardedClient, url: &str) -> Request {
+        let mut req = client
+            .request(Method::POST, Url::parse(url).unwrap())
+            .body(BODY);
+        for (name, value) in NOT_ALLOWED.iter().chain(ALLOWED.iter()) {
+            req = req.header(*name, *value);
+        }
+        req.build().unwrap()
+    }
+
+    /// The landing request kept the allow-listed headers and the body.
+    fn assert_kept_allowed(seen: &Seen) {
+        for (name, value) in ALLOWED {
+            assert_eq!(
+                seen.headers.get(name).unwrap(),
+                value,
+                "{name} on {}",
+                seen.path
+            );
+        }
+        assert_eq!(seen.body, BODY.as_bytes(), "body on {}", seen.path);
+    }
+
+    /// The landing request carried none of the headers outside the list.
+    fn assert_dropped(seen: &Seen) {
+        for (name, _) in NOT_ALLOWED {
+            assert!(
+                seen.headers.get(name).is_none(),
+                "{name} followed a cross-origin redirect to {}",
+                seen.path
+            );
+        }
+        for name in seen.headers.keys() {
+            assert!(
+                CROSS_ORIGIN_HEADERS.contains(&name.as_str()) || name == "host",
+                "{name} followed a cross-origin redirect to {}",
+                seen.path
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cross_host_redirect_keeps_only_allow_listed_headers() {
+        // Same scheme and port, another host: another origin.
+        let port = Arc::new(std::sync::OnceLock::<u16>::new());
+        let at = Arc::clone(&port);
+        let (addr, seen) = serve_recording(move |path| {
+            let port = at.get().unwrap();
+            match path {
+                "/307" => redirect_with(307, &format!("http://other.example:{port}/land-307")),
+                "/308" => redirect_with(308, &format!("http://other.example:{port}/land-308")),
+                _ => axum::response::Response::new("fine".into()),
+            }
+        })
+        .await;
+        port.set(addr.port()).unwrap();
+        let client = hop_client();
+        for status in [307, 308] {
+            let url = format!("http://local.example:{}/{status}", addr.port());
+            let resp = client
+                .send_following(hop_request(&client, &url))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+        let seen = seen.lock().unwrap();
+        let paths: Vec<&str> = seen.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, ["/307", "/land-307", "/308", "/land-308"]);
+        // The first hop got everything; the landing only the allow list.
+        for (name, value) in NOT_ALLOWED {
+            assert_eq!(seen[0].headers.get(name).unwrap(), value);
+        }
+        for landing in [&seen[1], &seen[3]] {
+            assert_eq!(
+                landing.headers.get("host").unwrap(),
+                &format!("other.example:{}", addr.port())
+            );
+            assert_dropped(landing);
+            assert_kept_allowed(landing);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_change_of_port_alone_is_another_origin() {
+        let (landing_addr, landing) =
+            serve_recording(|_| axum::response::Response::new("fine".into())).await;
+        let target = format!("http://local.example:{}/land", landing_addr.port());
+        let (first_addr, first) = serve_recording(move |path| match path {
+            "/307" => redirect_with(307, &target),
+            "/308" => redirect_with(308, &target),
+            _ => axum::response::Response::new("unexpected".into()),
+        })
+        .await;
+        let client = hop_client();
+        for status in [307, 308] {
+            let url = format!("http://local.example:{}/{status}", first_addr.port());
+            let resp = client
+                .send_following(hop_request(&client, &url))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+        assert_eq!(first.lock().unwrap().len(), 2);
+        let landing = landing.lock().unwrap();
+        assert_eq!(landing.len(), 2);
+        for seen in landing.iter() {
+            assert_eq!(seen.path, "/land");
+            assert_dropped(seen);
+            assert_kept_allowed(seen);
+        }
+    }
+
+    #[tokio::test]
+    async fn credentials_dropped_on_the_way_out_dont_come_back() {
+        // A -> B -> A: each hop starts from the request already filtered,
+        // so the return to A carries only the allow list too.
+        let a_port = Arc::new(std::sync::OnceLock::<u16>::new());
+        let at = Arc::clone(&a_port);
+        let (b_addr, b_seen) = serve_recording(move |path| match path {
+            "/back" => redirect_with(
+                307,
+                &format!("http://local.example:{}/home", at.get().unwrap()),
+            ),
+            _ => axum::response::Response::new("unexpected".into()),
+        })
+        .await;
+        let to_b = format!("http://local.example:{}/back", b_addr.port());
+        let (a_addr, a_seen) = serve_recording(move |path| match path {
+            "/start" => redirect_with(307, &to_b),
+            _ => axum::response::Response::new("fine".into()),
+        })
+        .await;
+        a_port.set(a_addr.port()).unwrap();
+        let client = hop_client();
+        let url = format!("http://local.example:{}/start", a_addr.port());
+        let resp = client
+            .send_following(hop_request(&client, &url))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let a_seen = a_seen.lock().unwrap();
+        let paths: Vec<&str> = a_seen.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, ["/start", "/home"]);
+        assert_eq!(b_seen.lock().unwrap().len(), 1);
+        assert_dropped(&b_seen.lock().unwrap()[0]);
+        let home = &a_seen[1];
+        assert!(home.headers.get("authorization").is_none());
+        assert!(home.headers.get("x-custom-secret").is_none());
+        assert_dropped(home);
+        assert_kept_allowed(home);
+    }
+
+    #[tokio::test]
+    async fn a_same_origin_redirect_keeps_every_header() {
+        let port = Arc::new(std::sync::OnceLock::<u16>::new());
+        let at = Arc::clone(&port);
+        let (addr, seen) = serve_recording(move |path| match path {
+            "/307" => redirect_with(307, "/land-307"),
+            // An absolute URL naming the same origin is still the same origin.
+            "/308" => redirect_with(
+                308,
+                &format!("http://local.example:{}/land-308", at.get().unwrap()),
+            ),
+            _ => axum::response::Response::new("fine".into()),
+        })
+        .await;
+        port.set(addr.port()).unwrap();
+        let client = hop_client();
+        for status in [307, 308] {
+            let url = format!("http://local.example:{}/{status}", addr.port());
+            let resp = client
+                .send_following(hop_request(&client, &url))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+        let seen = seen.lock().unwrap();
+        let paths: Vec<&str> = seen.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, ["/307", "/land-307", "/308", "/land-308"]);
+        for landing in [&seen[1], &seen[3]] {
+            for (name, value) in NOT_ALLOWED.iter().chain(ALLOWED.iter()) {
+                assert_eq!(landing.headers.get(*name).unwrap(), value, "{name}");
+            }
+            assert_eq!(landing.body, BODY.as_bytes());
+        }
+    }
+
+    #[test]
+    fn the_cross_origin_list_drops_everything_else() {
+        let mut headers = HeaderMap::new();
+        for (name, value) in NOT_ALLOWED.iter().chain(ALLOWED.iter()) {
+            headers.insert(*name, value.parse().unwrap());
+        }
+        headers.insert("content-length", "12".parse().unwrap());
+        // A repeated header goes whole.
+        headers.append("x-api-key", "second".parse().unwrap());
+        keep_cross_origin_headers(&mut headers);
+        let mut names: Vec<&str> = headers.keys().map(HeaderName::as_str).collect();
+        names.sort_unstable();
+        let mut want = CROSS_ORIGIN_HEADERS.to_vec();
+        want.sort_unstable();
+        assert_eq!(names, want);
     }
 
     #[tokio::test]
