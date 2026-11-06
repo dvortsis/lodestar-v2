@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T01:26:40Z",
+  "updated_at": "2026-11-06T01:47:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3374,10 +3374,13 @@
       "launched": "2026-11-05T23:51Z"
     },
     "X-sources-low": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhn9dpWGKRy1HvxiCaet",
       "brief": "briefs/X-sources-low.md",
-      "launched": "2026-11-05T23:51Z"
+      "launched": "2026-11-05T23:51Z",
+      "pr": 521,
+      "merge": "f5b12523",
+      "at": "2026-11-06T01:47:38Z"
     },
     "RP-G": {
       "status": "running",
@@ -5776,7 +5779,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T01:26:40Z",
+    "updated": "2026-11-06T01:47:38Z",
     "items": [
       {
         "slot": 3,
@@ -5804,15 +5807,6 @@
         "doing": "Security: re-check torrent-cache lookups at send; stop a source when it is turned off (pre-audit M1, M2)",
         "since": "2026-11-05T23:51Z",
         "session": "session_01MMjhnCPUNw7cymdGSLRHSf"
-      },
-      {
-        "slot": 16,
-        "slice": "X-sources-low",
-        "role": "build",
-        "agent": "claude",
-        "doing": "Security: egress port check, redirect header strip, shared title cleaner (pre-audit L1, L2, L4)",
-        "since": "2026-11-05T23:51Z",
-        "session": "session_01MMjhn9dpWGKRy1HvxiCaet"
       },
       {
         "slot": 17,
