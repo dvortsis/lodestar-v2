@@ -5393,6 +5393,18 @@
         "Owner \u00a72.19 flag at WK-2 merge: `lodestar worker --rotate-key` (worker stopped; rotate->reseal->retire)"
       ],
       "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
+    },
+    {
+      "id": "SRC-15c-notes",
+      "from": "#552 delta review (non-blocking) 23:20Z",
+      "items": [
+        "Account dialog renders tracker.endpoints through the same addresses snippet + a DOM test like External's (today's Account test only checks the placeholder)",
+        "ConsentDialog submit(): add `if (busy || stale) return;` guard (don't rely on native disabled only)",
+        "Disable Confirm when s.consent_version changes while the dialog is open (close/reopen race)",
+        "zh empty-list doubled full stop: strip '\u3002' as well as '.' (ConsentDialog.svelte:93)",
+        ".size-limit.mjs comment: 30.55 KB, not 30.54",
+        "{name}/{egress} filled before the ** split: escape or render as text nodes (cosmetic; manifest-sourced)"
+      ]
     }
   ],
   "main_health": [
