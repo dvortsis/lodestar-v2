@@ -518,6 +518,29 @@ async fn local_and_remote_workers_share_one_authority_and_the_funnel_reconciles(
     assert_eq!(authority.len() + authority.pending(), 3);
     let in_flight = stats.outstanding.load(Ordering::Relaxed);
     assert_eq!(in_flight, 3);
+
+    // The remote worker goes silent after `Fetched` and never commits: its
+    // lease expires and the key waits, still in flight, not lost.
+    r.clock.advance(Duration::from_secs(601));
+    r.server.tick().await;
+    assert!(authority.get(&key(3)).is_none());
+    assert_eq!(authority.pending(), 1);
+    // The built-in worker finds it again: re-issued under a new token, not
+    // harvested again.
+    feed_tx.send(Found::key(key(3), 0)).await.unwrap();
+    until("key 3 re-issued locally", || {
+        authority.get(&key(3)).is_some()
+    })
+    .await;
+    let reissued = authority.get(&key(3)).unwrap();
+    assert_eq!(reissued.holder, WorkerId::LOCAL);
+    assert_ne!(reissued.token, Token(t3));
+    assert_eq!(granted(), 4);
+    // A late commit under the expired token is refused; the new one stands.
+    assert!(authority.release(&key(3), Token(t3)).is_none());
+    assert!(authority.current(&key(3), reissued.token).is_some());
+    let in_flight = stats.outstanding.load(Ordering::Relaxed);
+    assert_eq!(in_flight, 3);
     r.server.shutdown();
 
     let store = pipeline.shutdown().await.unwrap();

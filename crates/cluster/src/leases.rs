@@ -905,6 +905,39 @@ mod tests {
     }
 
     #[test]
+    fn a_fetched_lease_lasts_until_its_commit_or_expiry() {
+        let (a, ev) = counted();
+        let key = InfoHash([1; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        // `Fetched` only checks the lease; it stays for the commit.
+        assert!(a.held(A, &key, t).is_some());
+        assert!(a.held(B, &key, t).is_none());
+        assert!(a.current(&key, t).is_some());
+        // Committed under its token: ended once.
+        assert!(a.release(&key, t).is_some());
+        assert!(a.release(&key, t).is_none());
+
+        // Fetched, then silent with no commit: expired and re-issued.
+        let Claimed::Granted(t) = a.claim(A, claim(2, 0), 0) else {
+            panic!()
+        };
+        let key = InfoHash([2; 20]);
+        assert!(a.held(A, &key, t).is_some());
+        assert_eq!(a.expire(601), 1);
+        let out = a.regrant_pending(&[B], 10, 601);
+        let new = out[0].1[0].1;
+        assert_ne!(new, t);
+        // A late commit or report under the old token is refused.
+        assert!(a.release(&key, t).is_none());
+        assert!(a.report(A, &key, t, Some(1)).is_none());
+        assert!(a.held(A, &key, t).is_none());
+        assert!(a.release(&key, new).is_some());
+        assert_eq!((get(&ev.harvested), get(&ev.lost)), (2, 0));
+    }
+
+    #[test]
     fn the_built_in_worker_never_expires() {
         let (a, _) = counted();
         a.claim(WorkerId::LOCAL, claim(1, 0), 0);
