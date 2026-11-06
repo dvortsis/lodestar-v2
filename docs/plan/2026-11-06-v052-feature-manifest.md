@@ -16,7 +16,7 @@ The cut itself waits for the v0.5.1 tag (`ext:v051-tagged`, gate `P-v052-cut` in
 | v0.5.1 release branch | `dba1a5c0` (rc.4 docs, #463) | rc.4: the cut plus the ports below |
 | This manifest | `origin/main` at `63a2c6df` (#511, 2026-11-05) | The 297 first-parent merges in `c3f6341a..63a2c6df` |
 
-**Already on the release branch.** These PRs were ported to `release/v0.5.1`, so v0.5.1's own gate covers them: R-gauges (#219, rc.2), #357 (rc.3), #402 and #406 (rc.3), and #432, #433, #434, #442 and #448 (rc.4). LEGAL-1r (#457 on the release branch) is the release-branch build of the notice gate. `main`'s LEGAL-1 (#472) differs from it: notice version 3, shown as the first wizard step.
+**Already on the release branch.** These PRs were ported to `release/v0.5.1`, so v0.5.1's own gate covers them: R-gauges (#219, rc.2), #357 (rc.3), #402 and #406 (rc.3), and #432, #433, #434, #442 and #448 (rc.4). LEGAL-1r (#457 on the release branch) is the release-branch build of the notice gate. `main`'s LEGAL-1 (#472) differs from it: it shows the notice as the first wizard step, and `main`'s notice is version 4 (#547) while v0.5.1 ships version 3 (rc.5, #540).
 
 **Classes.** Every merge falls in exactly one class:
 
@@ -324,7 +324,7 @@ Docs, plans, runner records, CI, flake and test fixes, tooling, benches and prod
 | Fresh-store marker `packs.fresh` (a `settings` row, not a migration) | written only when a store is created | #454 RP-DEF | n/a | an upgraded store never gets it |
 | Search `SCHEMA_VERSION` | 5 → 7, one blue/green rebuild (v6 SB-6 #415/#418, v7 X-search-files-5 #505) | #415, #418, #505 | yes: the v5 index is deleted after the swap | can't read v7; after `lodestar rollback` it rebuilds v5 from the restored store |
 | `CLASSIFY_VERSION` | 3 → 4: stored rows re-derived in the background, resumable, no migration | #469 RP-UC | no: the snapshot holds the v3 rows | n/a |
-| Legal Notice `NOTICE_VERSION` (`crates/api/src/legal.rs:23`) | 2 → 3, stored in `auth.json` | #472 LEGAL-1 | `auth.json` isn't in the store snapshot | reads 3 as accepted and skips the notice: release/v0.5.1 `crates/api/src/auth.rs:266` asks only when the stored version is lower than its own (2), and `AuthFile` is unchanged (Q3) |
+| Legal Notice `NOTICE_VERSION` (`crates/api/src/legal.rs`) | 3 → 4 on `main` (#547; v0.5.1 ships 3 since rc.5, #540), stored in `auth.json` | #472 LEGAL-1, #547 X-notice-v4 | `auth.json` isn't in the store snapshot | reads 4 as accepted and skips the notice: release/v0.5.1 asks only when the stored version is lower than its own (3), and `AuthFile` is unchanged (Q3) |
 | Claims blob v2, pack overrides `FORMAT` "1", import contract v1, DHT restart proof v1 | new | #444, #465, #210, #208/#216 | written only by v0.5.2 | inside V13/V14 tables or `settings` rows, which the snapshot predates. The restart-proof files sit in the data folder; whether v0.5.1 ignores them is to confirm in the rollback check |
 
 **The snapshot.** `migrate_creating` takes one snapshot before the first pending migration and names it after that version (`crates/store/src/schema.rs:1059-1063`, `take_snapshot` at `:1092`). A V12 store upgraded straight to V14 therefore writes one file, `<db>.pre-v13.db`. A repeat snapshot is named `pre-v13.<k>.db`. Snapshots are kept 90 days (`crates/store/src/snapshots.rs:57`).
@@ -351,7 +351,7 @@ The gate's two checks below are new work for P-v052-cut.
    - d. `search.swapped` is logged, with `disk_high_water_bytes`;
    - e. re-classification finishes, `CLASSIFY_VERSION` 4;
    - f. pack state matches step 1, every pack without a row reads off, and `unauthorised-copy` is off;
-   - g. after login the Legal Notice v3 shows once (rc.4 accepted v2);
+   - g. after login the Legal Notice v4 shows once (the folder accepted v2 on rc.4, or v3 on v0.5.1; both are below 4);
    - h. to give §5.3 something to test, delete one torrent and record one hold, and note both.
 3. Pass: every check in step 2 holds, and the counts from step 1 match. The only allowed change is torrents that `CLASSIFY_VERSION` 3 → 4 re-classifies as adult (`reclassify.rs` re-judges only those; RP-UC is off on an upgraded store and MW-6 is shadow-only). Any other change in the counts is a failure.
 4. Run it once on Docker and once on **Windows** with a real v0.5.1 data folder (runner's call). The Windows leg covers V14, the pre-v13 snapshot, deleting the old index on NTFS and `lodestar rollback` on Windows. The MSI check in `release.yml` runs the same binary twice, so it doesn't count.
@@ -395,7 +395,7 @@ No change touches `crates/network-policy`. No allocator change follows #448, whi
 
 **Before each clock starts:**
 - finish setup (LEGAL-2);
-- on the upgraded folder, accept Legal Notice v3. Until then every session route answers `409 notice_required`, which `docs/soak/tools/linux/collect.py` doesn't handle. Recommendation: the collector fails loudly on a 409 rather than recording gaps;
+- on the upgraded folder, accept Legal Notice v4. Until then every session route answers `409 notice_required`, which `docs/soak/tools/linux/collect.py` doesn't handle. Recommendation: the collector fails loudly on a 409 rather than recording gaps;
 - on the upgraded Docker folder, turn every pack on after the upgrade (runner's call), and record the pack state in the run record.
 
 The SP-3 flood map (#495) isn't a reason for the fresh leg: it stays empty while every source is off.
@@ -421,7 +421,7 @@ For P-v052-cut, which finishes `docs/releases/v0.5.2.md`:
 |---|---|---|---|
 | Q1 | runner | The freeze point: this manifest is at `63a2c6df`, and the cut is later | Cut from `main` at the v0.5.1 tag. P-v052-cut classifies every later merge in its delta report, and anything default-on, a migration or a re-soak trigger gets an addendum here before the cut (D2). Hold new migrations (V15 is reserved for CR-3) until the branch exists |
 | Q2 | runner | Close G1–G4 (§3.3) before the cut? | Yes: one small Opus test-only slice, or part of P-v052-cut. G1 matters most, because a plugin added to `services.rs` would otherwise reach the release unnoticed |
-| Q3 | runner | Does v0.5.1 accept an `auth.json` notice acknowledgement of version 3 after rollback? | **Answered by the code:** yes. release/v0.5.1 `crates/api/src/auth.rs:266` asks for the notice only when the stored version is lower than its own (2), and `AuthFile` has the same fields on both branches, so v0.5.1 starts and skips the notice. §5.3 step 3 confirms it on the real binary |
+| Q3 | runner | Does v0.5.1 accept an `auth.json` notice acknowledgement of version 4 after rollback? | **Answered by the code:** yes. release/v0.5.1 asks for the notice only when the stored version is lower than its own (3), and `AuthFile` has the same fields on both branches, so v0.5.1 starts and skips the notice. §5.3 step 3 confirms it on the real binary |
 | Q4 | runner | Torrent cache and Sonarr/Radarr webhooks in v0.5.2 | **Decided by the runner:** no source that needs consent can be turned on in v0.5.2 (X-consent-gate-052, §3.4), so the torrent cache stays off. The webhooks need no consent and stay opt-in, advanced, API only. The release notes keep "built but not connected yet / come later" and add "advanced: API only" for the webhooks |
-| Q5 | runner | Soak plan under the delta rule | §6: 24 h Docker soak on an upgraded folder (binding), every pack turned on after the upgrade; ≥ 6 h Windows run on a fresh folder; a Windows upgrade and rollback leg (§5.2 step 4). Each clock starts after setup, and on an upgraded folder after Legal Notice v3 is accepted. The collector should fail loudly on `409 notice_required`. The rebuild runs in the first hours, mostly before the memory window (hours 12–24); report its disk high-water mark |
+| Q5 | runner | Soak plan under the delta rule | §6: 24 h Docker soak on an upgraded folder (binding), every pack turned on after the upgrade; ≥ 6 h Windows run on a fresh folder; a Windows upgrade and rollback leg (§5.2 step 4). Each clock starts after setup, and on an upgraded folder after Legal Notice v4 is accepted. The collector should fail loudly on `409 notice_required`. The rebuild runs in the first hours, mostly before the memory window (hours 12–24); report its disk high-water mark |
 | Q6 | owner | None blocks the manifest | Packs on for new installs, the unauthorised-copy pack and the v0.5.2 placement are owner decisions already (§2.39, §2.40). Crawler switches staying off is build-plan §0.4. Nothing here reverses or loosens an owner decision |

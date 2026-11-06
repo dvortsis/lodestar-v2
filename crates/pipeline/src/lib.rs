@@ -31,6 +31,7 @@ pub mod log_events;
 mod rollups;
 mod setup_hold;
 pub mod source_adult;
+pub mod stages;
 pub mod torrent_cache;
 pub mod unverified;
 pub mod wire;
@@ -49,10 +50,10 @@ use lodestar_filter::{
     Core, CoreRule, CsList, Engine, Handle, HeldSet, Lists, Origin, Sealer, Switches,
 };
 use lodestar_peer_wire::FetchOptions;
-use lodestar_sources::pool::{self, PeerWireFetcher};
+use lodestar_sources::pool::PeerWireFetcher;
 use lodestar_sources::{
     Discovery, Emitter, Fetcher, FunnelCounts, Kind, Loss, Manifest, PluginError, PoolConfig,
-    PoolHandle, PoolIo, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
+    PoolHandle, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
 };
 use lodestar_store::{
     Event, FilterState, HotColumns, QueuedKey, RuleSet, SourceId, SourceState, Store, StoreConfig,
@@ -64,7 +65,8 @@ use tokio::task::JoinHandle;
 
 use crate::coordinator::Coordinator;
 use crate::health::{HealthConfig, HealthHandle};
-use crate::worker::{PrepareStage, WorkerFunnel, WorkerLeases};
+use crate::stages::{Queues, WorkerStages};
+use crate::worker::WorkerLeases;
 
 pub use control::Control;
 pub use coordinator::LeaseStats;
@@ -745,8 +747,7 @@ impl Pipeline {
         let claims_budget = Arc::new(tokio::sync::Semaphore::new(
             unverified::CLAIMS_BUDGET_KIB as usize,
         ));
-        // Small: each entry holds a whole info dictionary or prepared row.
-        let (out_tx, out_rx) = mpsc::channel(64);
+        // Small: each entry holds a whole prepared row.
         let (results_tx, results_rx) = mpsc::channel(64);
         let (queue_tx, queue_rx) = mpsc::channel(1);
         let (finish_tx, finish_rx) = oneshot::channel();
@@ -908,24 +909,28 @@ impl Pipeline {
         // Held until setup, the pool starts paused; `Control` lifts it.
         let mut pool_config = config.pool.clone();
         pool_config.paused |= setup_hold::held(config.setup_done.as_ref());
-        let (pool, pool_task) = pool::spawn(
-            pool_config,
+        // The pool, the prepare stage and the worker's funnel, built as a
+        // remote worker builds them (WK-7), on today's queues.
+        let writer_stats = Arc::new(WriterStats::default());
+        let stages = WorkerStages {
+            worker: WorkerId::LOCAL,
+            pool: pool_config,
             fetcher,
-            PoolIo {
-                discoveries: pool_rx,
-                peer_finders: finders,
-                out: out_tx,
-                funnel: Arc::new(WorkerFunnel {
-                    counts: funnel.clone(),
-                    coordinator: coordinator.clone(),
-                    leases: leases.clone(),
-                    gate: gate.clone(),
-                }),
-                shutdown: pool_shutdown,
-            },
+            peer_finders: finders,
             weights,
-            queue,
-        );
+            restore: queue,
+            preparer,
+            filter: config.filter.clone(),
+            reports: coordinator.clone(),
+            leases: leases.clone(),
+            funnel: funnel.clone(),
+            gate: gate.clone(),
+            stats: writer_stats.clone(),
+            adult,
+            queues: Queues::local(),
+        }
+        .spawn(pool_rx, pool_shutdown, results_tx);
+        let (pool, pool_task, prepare) = (stages.pool, stages.pool_task, stages.prepare);
 
         let intake_stats = Arc::new(IntakeStats::default());
         let intake = tokio::spawn(intake(
@@ -947,22 +952,6 @@ impl Pipeline {
             },
             intake_shutdown,
         ));
-
-        let writer_stats = Arc::new(WriterStats::default());
-        let prepare = tokio::spawn(
-            PrepareStage {
-                preparer,
-                filter: config.filter.clone(),
-                coordinator: coordinator.clone(),
-                leases: leases.clone(),
-                stats: writer_stats.clone(),
-                gate: gate.clone(),
-                adult,
-                batch_max: 64,
-                batch_wait: Duration::from_millis(20),
-            }
-            .run(out_rx, results_tx),
-        );
 
         // The built-in worker's heartbeat, and the authority's expiry tick
         // (the built-in worker's own leases never expire).

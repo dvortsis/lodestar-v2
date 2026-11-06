@@ -338,6 +338,8 @@ placement:
   - X-claim-trackers
   - X-claim-store
   - X-claim-store-polish
+  - X-fetch-pool-bytes
+  - X-gs-gate-polish
   - X-adult-catalogue
   - D-sources-guide
   - L4-followups
@@ -376,6 +378,7 @@ placement:
   - P-v052-manifest
   - X-consent-gate-052
   - X-consent-gate-polish
+  - X-consent-gate-lift
   - LEGAL-3a
 - ws: ws-cr-build
   match:
@@ -428,6 +431,7 @@ placement:
   - SRC-14a
   - SRC-14b
   - SRC-15*
+  - X-sources-api-spec
   - SRC-16
   - SRC-17
   - SRC-17a
@@ -514,6 +518,7 @@ placement:
   - E-v06-companions
   - P-v06-companions
   - CMP-*
+  - X-cmp0-polish
 - ws: ws-m6
   match:
   - E-M6
@@ -974,6 +979,8 @@ roadmap:
     - SRC-14b
     - SRC-15a
     - SRC-15b
+    - X-sources-api-spec
+    - SRC-15c
     - SRC-16
     - SRC-17
   - id: srcg
