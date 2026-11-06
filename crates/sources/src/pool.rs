@@ -13,6 +13,11 @@
 //! exactly once: fetched, or lost with a reason recorded in the funnel.
 //!
 //! One task owns all the state. Fetches run as child tasks and report back.
+//!
+//! Finished info dicts are held to a byte budget (`max_held_bytes`): the
+//! pool counts what it holds from the moment a fetch finishes until the
+//! consumer takes it from the output channel, and starts no fetch while
+//! that's over the budget or while a result waits for a channel slot.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
@@ -24,6 +29,7 @@ use std::time::Duration;
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, FetchOptions, Fetched};
 use lodestar_store::{QueuedKey, SourceId};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{Id, JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
@@ -114,6 +120,32 @@ pub struct PoolConfig {
     /// lookup keeps its slot until it ends. Off, the pool behaves exactly
     /// as before the switch existed.
     pub streaming_peers: bool,
+    /// The bytes of finished fetches the pool may hold before it stops
+    /// starting fetches (X-fetch-pool-bytes): results not yet joined, results
+    /// waiting for a slot in the output channel, and results in the channel
+    /// the consumer hasn't taken. Each is weighed by [`weigh`]. A fetch
+    /// already running when the budget fills still finishes and is kept, so
+    /// the held bytes can pass the budget by what those fetches bring
+    /// (at most one `max_metadata` each); the pool also limits fetches in
+    /// flight by an estimate of their bytes, so a run of large dicts slows
+    /// fetching down before it fills the budget. See
+    /// `docs/decisions/2026-11-06-X-fetch-pool-bytes.md`.
+    pub max_held_bytes: usize,
+}
+
+/// [`PoolConfig::max_held_bytes`]'s default: 64 MiB.
+pub const MAX_HELD_BYTES: usize = 64 << 20;
+
+/// The per-fetch byte estimate a new pool starts from: a large ordinary
+/// info dict (architecture §3: `pieces` makes them 10–60 KB).
+const INITIAL_ESTIMATE: u64 = 64 << 10;
+
+/// The bytes a fetched key holds: an upper estimate, with its heap.
+pub fn weigh(fetched: &Fetched) -> u64 {
+    let heap = fetched.info.capacity()
+        + fetched.pex.capacity() * std::mem::size_of::<SocketAddr>()
+        + fetched.client.as_ref().map_or(0, String::capacity);
+    (std::mem::size_of::<FetchedKey>() + heap) as u64
 }
 
 impl Default for PoolConfig {
@@ -132,6 +164,7 @@ impl Default for PoolConfig {
             coordinated_admission: false,
             finder_capacity: 32,
             streaming_peers: false,
+            max_held_bytes: MAX_HELD_BYTES,
         }
     }
 }
@@ -204,6 +237,12 @@ pub struct PoolStats {
     /// milliseconds, and its count.
     pub stream_first_fetch_millis: AtomicU64,
     pub stream_first_fetches: AtomicU64,
+    /// Gauge: the bytes of finished fetches the pool holds (see
+    /// [`PoolConfig::max_held_bytes`]).
+    pub held_bytes: AtomicU64,
+    /// Times the held-bytes budget, or the estimate of what fetches in
+    /// flight will bring, stopped the pool starting fetches.
+    pub held_full: AtomicU64,
 }
 
 impl PoolStats {
@@ -362,6 +401,15 @@ pub fn spawn(
         recent: HashSet::new(),
         recent_order: VecDeque::new(),
         first_batch: HashMap::new(),
+        finished: Arc::new(AtomicU64::new(0)),
+        outbox: VecDeque::new(),
+        outbox_bytes: 0,
+        sent: VecDeque::new(),
+        sent_bytes: 0,
+        permits: Vec::new(),
+        out_closed: false,
+        estimate: INITIAL_ESTIMATE,
+        full: false,
     };
     for (source, weight) in weights {
         pool.source(source).weight = weight.max(1);
@@ -503,6 +551,32 @@ struct Pool {
     /// Streaming peers: when keys not yet fetched got their first batch,
     /// for the first-batch-to-fetch time. At most one per entry.
     first_batch: HashMap<InfoHash, Instant>,
+    /// The bytes of fetches that finished and haven't been joined yet. A
+    /// fetch task adds its result's weight as it finishes; joining it
+    /// takes the weight off again.
+    finished: Arc<AtomicU64>,
+    /// Joined results waiting for a slot in the output channel, oldest
+    /// first, with their weights.
+    outbox: VecDeque<(FetchedKey, u64)>,
+    outbox_bytes: u64,
+    /// The weights of results sent into the output channel, oldest first,
+    /// back to the oldest the consumer may not have taken yet. The pool is
+    /// the channel's only sender, so the channel's length says how many of
+    /// these it still holds ([`settle`](Self::settle)).
+    sent: VecDeque<u64>,
+    sent_bytes: u64,
+    /// Output slots reserved and not yet used. Each reservation completes
+    /// when the consumer has taken an item, which is what wakes a pool the
+    /// budget stopped.
+    permits: Vec<mpsc::OwnedPermit<FetchedKey>>,
+    /// The output channel's receiver is gone; results wait in the outbox
+    /// and go back to the queue at shutdown.
+    out_closed: bool,
+    /// The bytes a fetch in flight is expected to bring: a moving average
+    /// over finished fetches, a failure counting as 0.
+    estimate: u64,
+    /// The budget stopped fetching at the last dispatch.
+    full: bool,
 }
 
 /// A queued copy still stands for its entry: the entry waits for a
@@ -529,23 +603,35 @@ impl Pool {
     ) -> Vec<QueuedKey> {
         let mut replies = tokio::time::interval(Duration::from_millis(25));
         replies.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // A second handle on the output, for reserving slots while the
+        // pool's own state is borrowed by the other branches.
+        let reserver = self.out.clone();
         loop {
+            self.flush();
             self.dispatch();
             self.publish_stats();
             let wake = self.timers.peek().map(|Reverse((at, ..))| *at);
             let credit = self.credit_target();
+            // Wait for an output slot while a result waits for one, or
+            // while the budget is stopped by results still in the channel:
+            // a slot freeing up means the consumer took one.
+            let reserve = !self.out_closed
+                && (!self.outbox.is_empty() || (self.full && !self.sent.is_empty()));
             tokio::select! {
                 biased;
                 _ = shutdown.requested() => break,
                 Some(joined) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
-                    let (id, result) = match joined {
-                        Ok((id, result)) => (id, result),
+                    match joined {
+                        Ok((id, result)) => self.joined(id, result),
                         // Only a panic ends a fetch task early: a bug, but
                         // one peer's bytes mustn't take the pool down.
-                        Err(e) => (e.id(), Err(FailureKind::Invalid)),
-                    };
-                    if let Some((key, peer)) = self.task_keys.remove(&id) {
-                        self.on_result(key, peer, result).await;
+                        Err(e) => self.joined(e.id(), Err(FailureKind::Invalid)),
+                    }
+                }
+                permit = async { reserver.clone().reserve_owned().await }, if reserve => {
+                    match permit {
+                        Ok(permit) => self.permits.push(permit),
+                        Err(_) => self.out_closed = true,
                     }
                 }
                 _ = replies.tick(), if !self.requests.is_empty() => self.poll_replies(),
@@ -578,11 +664,111 @@ impl Pool {
             }
         }
         self.tasks.abort_all();
+        // A fetch that finished before the abort is delivered like any
+        // other; one the abort cancelled keeps its entry, so it's saved
+        // with the queue.
+        while let Some(joined) = self.tasks.join_next_with_id().await {
+            match joined {
+                Ok((id, result)) => self.joined(id, result),
+                Err(e) if e.is_cancelled() => {
+                    self.task_keys.remove(&e.id());
+                }
+                Err(e) => self.joined(e.id(), Err(FailureKind::Invalid)),
+            }
+        }
         if let Some(a) = &mut self.admission {
             let unused = a.drop_held();
             self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
         }
-        self.snapshot()
+        // Drain what's waiting for the consumer, which runs until the pool
+        // ends (the pipeline stops the pool first). Without a consumer, a
+        // result goes back to the queue, to be fetched again next run.
+        self.flush();
+        let mut requeued = Vec::new();
+        while let Some((out, weight)) = self.outbox.pop_front() {
+            self.outbox_bytes -= weight;
+            if self.out_closed {
+                requeued.push(out);
+            } else if let Err(e) = self.out.send(out).await {
+                self.out_closed = true;
+                requeued.push(e.0);
+            }
+        }
+        self.permits.clear();
+        let mut queue = self.snapshot();
+        if !requeued.is_empty() {
+            queue.extend(requeued.iter().map(requeue));
+            queue.sort_by_key(queue_order);
+        }
+        queue
+    }
+
+    /// Takes a joined fetch's weight off [`finished`](Self::finished) and
+    /// handles its result.
+    fn joined(&mut self, id: Id, result: Result<Fetched, FailureKind>) {
+        if let Ok(fetched) = &result {
+            self.finished.fetch_sub(weigh(fetched), Ordering::Relaxed);
+        }
+        if let Some((key, peer)) = self.task_keys.remove(&id) {
+            self.on_result(key, peer, result);
+        }
+    }
+
+    /// Moves the oldest results waiting into the output channel, as far
+    /// as it has room.
+    fn flush(&mut self) {
+        while !self.outbox.is_empty() && !self.out_closed {
+            let permit = match self.permits.pop() {
+                Some(permit) => permit,
+                None => match self.out.clone().try_reserve_owned() {
+                    Ok(permit) => permit,
+                    Err(TrySendError::Full(_)) => break,
+                    Err(TrySendError::Closed(_)) => {
+                        self.out_closed = true;
+                        break;
+                    }
+                },
+            };
+            let (out, weight) = self.outbox.pop_front().expect("not empty");
+            self.outbox_bytes -= weight;
+            permit.send(out);
+            self.sent.push_back(weight);
+            self.sent_bytes += weight;
+        }
+    }
+
+    /// Forgets the weights of results the consumer has taken from the
+    /// channel. Items in it are the last ones sent: its length is its
+    /// capacity less the free slots and the slots the pool has reserved.
+    fn settle(&mut self) {
+        let free = self.out.capacity() + self.permits.len();
+        let queued = if self.out_closed {
+            0
+        } else {
+            self.out.max_capacity().saturating_sub(free)
+        };
+        while self.sent.len() > queued {
+            let weight = self.sent.pop_front().expect("longer than queued");
+            self.sent_bytes -= weight;
+        }
+    }
+
+    /// The bytes of finished fetches the pool holds.
+    fn held(&self) -> u64 {
+        self.finished.load(Ordering::Relaxed) + self.outbox_bytes + self.sent_bytes
+    }
+
+    /// Whether the budget has room for one more fetch: what's held is
+    /// under it, and so is that plus what the fetches in flight, this one
+    /// included, are expected to bring. The first fetch always has room,
+    /// so a budget smaller than one dict still makes progress.
+    fn has_room(&self, held: u64) -> bool {
+        let budget = self.cfg.max_held_bytes as u64;
+        if held >= budget {
+            return false;
+        }
+        let flying = self.tasks.len() as u64 + 1;
+        self.tasks.is_empty() || held.saturating_add(flying.saturating_mul(self.estimate)) <= budget
     }
 
     fn source(&mut self, id: SourceId) -> &mut SourceQueue {
@@ -1510,8 +1696,20 @@ impl Pool {
         // take permits: private ones, and all of them once no finder is
         // open.
         self.drain_lookup_backlog();
+        // A result still waiting for a channel slot means the consumer is
+        // behind: start nothing more (the backpressure from a slow writer).
+        if !self.outbox.is_empty() {
+            return;
+        }
+        self.settle();
+        let held = self.held();
+        let mut full = false;
         let mut deferred = Vec::new();
         while self.tasks.len() < self.cfg.max_sockets {
+            if !self.has_room(held) {
+                full = true;
+                break;
+            }
             let Some(key) = self.next_ready() else {
                 break;
             };
@@ -1540,9 +1738,22 @@ impl Pool {
                     .fetch_add(1, Ordering::Relaxed);
             }
             *self.per_ip.entry(peer.ip()).or_insert(0) += 1;
-            let handle = self.tasks.spawn(self.fetcher.fetch(peer, key));
+            let fetch = self.fetcher.fetch(peer, key);
+            let finished = self.finished.clone();
+            let handle = self.tasks.spawn(async move {
+                let result = fetch.await;
+                // Counted from the moment it finishes, joined or not.
+                if let Ok(fetched) = &result {
+                    finished.fetch_add(weigh(fetched), Ordering::Relaxed);
+                }
+                result
+            });
             self.task_keys.insert(handle.id(), (key, peer));
         }
+        if full && !self.full {
+            self.stats.held_full.fetch_add(1, Ordering::Relaxed);
+        }
+        self.full = full;
         for key in deferred {
             // Still `Ready`; back into the queue it came from.
             let e = &self.entries[&key];
@@ -1625,18 +1836,15 @@ impl Pool {
         None
     }
 
-    async fn on_result(
-        &mut self,
-        key: InfoHash,
-        peer: SocketAddr,
-        result: Result<Fetched, FailureKind>,
-    ) {
+    fn on_result(&mut self, key: InfoHash, peer: SocketAddr, result: Result<Fetched, FailureKind>) {
         if let Some(n) = self.per_ip.get_mut(&peer.ip()) {
             *n -= 1;
             if *n == 0 {
                 self.per_ip.remove(&peer.ip());
             }
         }
+        let weight = result.as_ref().map_or(0, weigh);
+        self.estimate = (self.estimate - self.estimate / 16 + weight / 16).max(1);
         let Some(e) = self.entries.get_mut(&key) else {
             return;
         };
@@ -1661,8 +1869,10 @@ impl Pool {
                     discovered_at: e.discovered_at,
                     private_source: e.private,
                 };
-                // Waiting here is the backpressure from a slow writer.
-                let _ = self.out.send(out).await;
+                // Sent at the loop's next flush; until it's sent, no
+                // fetch starts (the backpressure from a slow writer).
+                self.outbox.push_back((out, weight));
+                self.outbox_bytes += weight;
             }
             Err(kind) => {
                 self.stats.failures[failure_index(kind)].fetch_add(1, Ordering::Relaxed);
@@ -1753,7 +1963,32 @@ impl Pool {
         for key in &only {
             self.lose(*key, Loss::Evicted);
         }
-        only.len()
+        // Results waiting for an output slot are still the pool's: the
+        // same rule applies to them, as to the fetch they came from.
+        let mut dropped = 0;
+        let mut kept = VecDeque::with_capacity(self.outbox.len());
+        for (mut out, weight) in std::mem::take(&mut self.outbox) {
+            if out.sources & bit == 0 && out.source != source {
+                kept.push_back((out, weight));
+                continue;
+            }
+            let rest = out.sources & !bit;
+            if rest == 0 {
+                self.outbox_bytes -= weight;
+                dropped += 1;
+                self.stats.evicted_service[3].fetch_add(1, Ordering::Relaxed);
+                self.lose_untracked(&out.key, out.cohort, out.source, Loss::Evicted, None);
+                continue;
+            }
+            out.sources = rest;
+            out.private_source = true;
+            if out.source == source {
+                out.source = SourceId::new(rest.trailing_zeros() as u8).expect("bit under 64");
+            }
+            kept.push_back((out, weight));
+        }
+        self.outbox = kept;
+        only.len() + dropped
     }
 
     fn lose(&mut self, key: InfoHash, loss: Loss) {
@@ -1821,12 +2056,13 @@ impl Pool {
                 private_source: e.private,
             })
             .collect();
-        out.sort_by_key(|q| (Reverse(q.priority), q.cohort, q.info_hash.0));
+        out.sort_by_key(queue_order);
         out
     }
 
     fn publish_stats(&self) {
         let s = &self.stats;
+        s.held_bytes.store(self.held(), Ordering::Relaxed);
         let waiting = self.entries.len().saturating_sub(self.tasks.len());
         s.pending
             .store(self.entries.len() as u64, Ordering::Relaxed);
@@ -1841,6 +2077,24 @@ impl Pool {
             s.admission_permits_in_use
                 .store(a.in_use() as u64, Ordering::Relaxed);
         }
+    }
+}
+
+/// The saved queue's order: interest first, then the oldest cohort.
+fn queue_order(q: &QueuedKey) -> (Reverse<u8>, i64, [u8; 20]) {
+    (Reverse(q.priority), q.cohort, q.info_hash.0)
+}
+
+/// A fetched key the consumer never took, saved to be fetched again.
+fn requeue(k: &FetchedKey) -> QueuedKey {
+    QueuedKey {
+        info_hash: k.key,
+        source: k.source,
+        cohort: k.cohort,
+        strategy: k.strategy,
+        priority: 0,
+        attempts: 0,
+        private_source: k.private_source,
     }
 }
 
