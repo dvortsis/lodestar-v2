@@ -71,10 +71,20 @@ The first run of the property built its trails before the engine went into a `Ha
 
 Every held case passed in this container. In instructions (callgrind), the two judgments cost 1.02–1.05× one, and the two-way reading 1.075–1.09× one, from 1.96×.
 
-**On the reference runner**: from this PR's CI `filter budget` job, added once it has run.
+**From CI** (`filter budget` job 127755868647 on #532 at `fcbe86e9`). It ran on an Intel Xeon Platinum 8370C, not the EPYC 7763, so the times are scaled to the reference: the calibration × the 8370C's skew, 1.033×, which the job marks provisional (from 4 jobs). Reference-runner µs per torrent at 10,000 rules, mixed:
+
+| Case | Before (RP-G, EPYC 7763) | After |
+|---|---|---|
+| at commit, one judgment (held) | 44.0 | 42.2 |
+| a flooded or cloned commit's two judgments (held) | 81.3–82.0 | 43.3 |
+| at commit, from an always-adult source, from prepare's trail (held, new label) | — | 0.9 |
+| an always-adult source's find read as found and as Adult (reported) | 82.3 | 46.8 |
+| an always-adult source's flooded or cloned find's two judgments (reported) | — | 48.2 |
+
+Every held case is under 50 µs; the tightest of the brief's two, the two judgments, at 43.3 µs. A run on the EPYC 7763 itself is still wanted to confirm.
 
 ### For the runner
-- **The always-adult case is measured as the writer now judges it, under a new label.** RP-G's 82.3 µs case was `judge_at_commit(.., adult: true)` in full. The writer now makes that judgment from prepare's trail wherever one holds (every commit but a torrent cache's file, or one after a rule change or a date read), and that is the held case. The full two-way reading is still measured, under its own label, reported, not held: it is prepare's judgment of an always-adult find (and the commit's where no trail holds), one judgment read twice. It came down from 82.3 to about 48 µs on the reference runner (estimated from the container; CI's figure to follow), close to the budget but not held under it. The runner may want to flag it to the owner under §2.19, or hold it once CI shows a margin.
+- **The always-adult case is measured as the writer now judges it, under a new label.** RP-G's 82.3 µs case was `judge_at_commit(.., adult: true)` in full. The writer now makes that judgment from prepare's trail wherever one holds (every commit but a torrent cache's file, or one after a rule change or a date read), and that is the held case. The full two-way reading is still measured, under its own label, reported, not held: it is prepare's judgment of an always-adult find (and the commit's where no trail holds), one judgment read twice. It came down from 82.3 to 46.8 µs (CI, scaled from an 8370C), under the budget but by less than 7%, so it's reported rather than held. The runner may want to flag it to the owner under §2.19, or hold it once CI shows a margin.
 
 ## Outside the brief's listed paths
 The brief owns `engine.rs`, the writer's commit judgment calls, `props.rs`, `packs_gate.rs`, new pipeline tests and this file. The design needs small changes in the judgment path beside them, each only what it states:
