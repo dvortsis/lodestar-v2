@@ -9,8 +9,14 @@
 
 ## Do
 1. **`lodestar worker --join <url> --token-file <path|->`** joins and saves the credentials. After that, **`lodestar worker --data <dir>`** runs from the saved credentials.
-   - The token comes only from a file or from stdin (`-`). Never take it from argv or the environment. Plan Q2 is still open with the owner (`ext:owner-wkq2`), and its alternative that reads `LODESTAR_TOKEN` waits for that answer.
-   - The token and the credentials never reach logs, error text, a panic message, argv or the environment. A test greps the captured logs and errors for the token.
+   - The token comes from a file or from stdin (`-`), never from argv.
+   - **Plan Q2 is answered (owner §2.47, `owner-wkq2` holds; corrected by the runner at 23:15Z):** also accept `LODESTAR_TOKEN` from the environment, exactly as the plan's Q2 row gives it.
+     - Only for the first join, while no credentials exist.
+     - Ignore it afterwards, logging a warning to remove it.
+     - Never log its value.
+     - The token is single-use, name-bound and expires in 15 minutes; the coordinator side already enforces this, so check it.
+     - The plan row is the decision. Read `docs/plan/2026-11-06-v06-workers.md` §5 Q2 and owner §2.47.
+   - The token and the credentials never reach logs, error text, a panic message or argv. A test greps the captured logs and errors for the token. Another test shows `LODESTAR_TOKEN` is ignored, with the warning, once credentials exist.
 2. **Connect** over the cluster library's mTLS session.
    - Reconnect with capped exponential back-off and jitter, and make the waits testable with paused time.
    - Renew the certificate at half-life.
@@ -27,7 +33,7 @@
    - reseal then retire;
    - a revoked worker stops within one heartbeat;
    - a reused or expired token fails with one message;
-   - the token never appears in logs, argv or the environment.
+   - the token never appears in logs or argv; `LODESTAR_TOKEN` works for the first join only (Q2, §2.47).
 
    Test these in-process against a real `ClusterServer` from WK-1, plus one real-binary test if it's cheap. Real-binary tests are `#[cfg(unix)]`, like `tests/cluster_serve.rs`.
 7. **Decisions file:** `docs/decisions/2026-11-06-WK-2.md`, with notes for WK-3, WK-10 and WK-18.
