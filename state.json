@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T00:02Z",
+ "updated_at": "2026-11-06T00:05Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3285,13 +3285,13 @@
    "merge": "01d956f3"
   },
   "P-v07": {
-   "status": "changes requested",
+   "status": "delta to self-check",
    "brief": "briefs/P-v07.md",
    "note": "launch first after the 00:00Z usage reset",
    "session": "session_01MMjhnCcXx6GNpK4VimTstF",
    "launched": "2026-11-05T23:24Z",
    "pr": 514,
-   "head": "e8d5f69b"
+   "head": "06c07f85"
   },
   "X-search-files-6": {
    "status": "running",
@@ -3326,10 +3326,12 @@
    "launched": "2026-11-05T23:37Z"
   },
   "P-v052-manifest": {
-   "status": "running",
+   "status": "in review",
    "session": "session_01MMjhnBEDz5cnZumgyb58AH",
    "brief": "briefs/P-v052-manifest.md",
-   "launched": "2026-11-05T23:37Z"
+   "launched": "2026-11-05T23:37Z",
+   "pr": 520,
+   "head": "b475ba06"
   },
   "P-m8": {
    "status": "changes requested",
@@ -5053,6 +5055,12 @@
    "id": "owner-flag-RP-5",
    "note": "sent 00:02Z at merge",
    "added": "2026-11-06T00:02Z"
+  },
+  {
+   "id": "X-sp4-guard",
+   "from": "X-sp4-followups design 00:05Z",
+   "note": "SP-4 pre-hiding guard deferred (runner, Option C now): build later on the M7 payload_sig producer (search index, gen 1, GS-* chain) via an injected trait into the writer plus a batch-local map; lags commits, errs loose. Rejected now: store column + partial index (V16, ~25-30 B/torrent, ~300 MB at 10M, extra B-tree insert). Flag to owner at X-sp4-followups merge.",
+   "added": "2026-11-06T00:05Z"
   }
  ],
  "main_health": [
