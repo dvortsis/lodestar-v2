@@ -29,13 +29,13 @@ Status as of `main` at `0c1931ae` (2026-11-02 03:22Z; CR-4 merged at `bcb9d4fa`)
 **All findings the 2026-10-30 plan listed as open are fixed** (A1-1..4, A2-1, A3-1..3, DUR-26), except S04 (uTP), which CR-4 addresses, and S03 (admission), which CR-ADM addresses behind its switch.
 
 ### 0.2 Order of work and tracks
-**Concurrency:** at most **twelve slices at a time in total**: Opus, helper and docs slices alike (owner, §2.36, replacing §2.33's eight). Filling every slot isn't required: a slot stays empty when no ready work fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap. The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
+**Concurrency:** at most **four slices at a time in total** from 2026-11-06T00:00Z: Opus, helper and docs slices alike (owner, §2.42, replacing §2.36's twelve and §2.43's interim eight). Slices running at the cut finish normally, including those launched in the owner's no-limit window (§2.45), and nothing new launches until fewer than four are running. Filling every slot isn't required: a slot stays empty when no ready work fits, when a slice's `owns` would overlap a running one, or when starting it doesn't make sense for the roadmap. The `runner/slices.yaml` limits (16 Opus + 16 helpers, §2.15) are the ceiling once the owner lifts that. The cap is in `runner/slices.yaml` as `limits.phase_total` so the launch procedure enforces it (`runner/README.md` step 7). **The ladder decides between ready slices;** a slice being ready in the graph doesn't jump the ladder.
 
 **The ladder** (fill free slots in this order; the owner can reorder it in one line):
 1. **Close v0.5.1** (Track R): rc.4 (§2.40: the memory fixes and the release-branch Legal Notice), soak r5, the gluetun leg, the Windows smoke, the tag.
 2. **The crawler's live evidence** (Track C): CR-SPEC, then CR-COL-3 (no host needed, so they start now), then the comparator and the A/B runs on the owner's experiment host, up to Checkpoint 1.
 3. **The Sources critical path** (Track S): SRC-1 → SRC-2 → SRC-7 (Q2/Q15 answered by §2.28).
-4. **Unhold the epics** once the soak verdict is in: expand E-M6 (gap audit), E-v06-workers, E-v06-companions.
+4. **Unhold the epics** once the soak verdict is in: build E-M6, E-v06-workers and E-v06-companions from their plans (the planning wave below expands them now).
 5. **Expand E-M7**, starting with the schema-bump convergence slice SB-6.
 6. **Import pilots** (Track I), on the owner's import host, never alongside an A/B run.
 7. **Backlog and polish** (Track B).
@@ -318,12 +318,12 @@ flowchart LR
 | Owner answers arrive late | Owner actions (host, keys, tags) gate whole tracks | §2.28 delegates decisions to the runner's recommendation; ask once for actions, and fill the slots with Sources, Track B and the epics meanwhile |
 
 ### 0.9 Next actions
-In order, as slots allow (twelve slices in total, §2.36; no two with overlapping `owns`). **2026-11-04:** SB-6, SRC-11, SRC-12, SRC-10b, SRC-10c, SRC-10d and P-v06-rulepacks launched. The eighth slot goes to the E-M7 expansion's first ready slice, or to L4-followups once SB-6 merges (L4-followups and SB-6 both own `crates/search/src/files.rs`). Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
+In order, as slots allow (four slices in total from 2026-11-06T00:00Z, §2.42; no two with overlapping `owns`). **2026-11-05 planning wave** (§2.44, §2.45): the epics are expanded into slices now, so building can start the moment the soak verdict allows: P-v07 (E-M7), P-m8 (E-M8), P-v08 (E-v08), P-v06-workers (E-v06-workers), P-v06-companions (E-v06-companions), P-m6-audit (E-M6) and P-v052-manifest (the v0.5.2 freeze list for P-v052-cut). The runner adds their slices to `runner/slices.yaml` after review. Building the held epics (E-M6, E-v06-workers, E-v06-companions) still waits for the soak verdict. Track C's next steps after CR-4 need the owner's experiment host, which is why Sources slices fill slots first:
 1. Finish the in-flight work: F-filter-standin-undo (#367), openapi-example-size (#368), S-blocklists (#370), X-strip-format-chars (4 of 4 slots on 2026-11-02 03:22Z; all merged since).
 2. Launch **CR-SPEC**, then **CR-COL-3** (ladder rung 2): they gate every booked crawler run, and the host calendar is the longest path to v0.6. X-strip-format-chars has merged as #373 (it was a recorded exception: it shared `crates/api/src/digest.rs` with #367, which merged first).
 3. Launch SRC-1 (V14; §2.28 lifted the migration hold), SRC-4, SRC-5 and SRC-9 as slots free (rung 3), critical path first. 2026-11-04: SB-6 merged; P-v06-rulepacks merged (19 slices added); next on Track S: SRC-3 after SB-6b, SRC-12b, and SRC-10d after SRC-8b. SRC-10b (AnimeTosho) is dropped: the site stopped ingesting in May 2026.
-4. r3 and r4 failed (memory). R3″ (rc.4 = R-rc4-cut + LEGAL-1r, §2.40) is being built; then R1″ (soak r5 on rc.4), the gluetun leg, the Windows smoke and the tag (owner queue #1). Ask for the experiment host and its calendar (#2) in the same message.
-5. On the soak verdict: expand E-M6 (gap audit first), E-v06-workers, E-v06-companions.
+4. r3 and r4 failed (memory). R3″ (rc.4 = R-rc4-cut + LEGAL-1r, §2.40) is tagged and R1″ (soak r5 on rc.4) is running; then the gluetun leg, the Windows smoke and the tag (owner queue #1). Ask for the experiment host and its calendar (#2) in the same message.
+5. On the soak verdict: build E-M6, E-v06-workers and E-v06-companions from the planning wave's slices (P-m6-audit, P-v06-workers, P-v06-companions).
 6. Launch SB-6 when SRC-2 merges; expand the rest of E-M7; launch P-v06-rulepacks.
 7. Launch the 10k/100k import smoke stages; X-search-files-3 after SB-6; G-rebuild-10M's v5 corpus is built with a pinned pre-SB-6 binary, so it can be prepared whenever the import host is free.
 8. Drain Track B with whatever slots remain, X-required-web-checks first (the owner's ruleset change waits for it).
@@ -368,7 +368,7 @@ A non-Claude agent picking up the work maps this to "use your strongest model fo
 ### 1.2 How a helper runs
 - **Launch:** the runner starts each slice in its own cloud session (`runner/README.md`). Inside a session, a helper is an Agent with `isolation: "worktree"`, `run_in_background: true` and the model above, branched from `main`.
 - **Brief:** every slice gets one, using the template in §7. The runner keeps them on the `runner-state` branch under `briefs/`.
-- **Cap:** at most twelve slices in total at a time in the current phase (owner §2.36), and filling them all isn't required. `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
+- **Cap:** at most four slices in total at a time in the current phase, from 2026-11-06T00:00Z (owner §2.42), and filling them all isn't required. `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
 - **Review gate** (for every result):
   - read the whole diff;
   - run `npm run check`, `npx vitest run`, `npx size-limit` and the affected Playwright specs;
