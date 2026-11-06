@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use lodestar_cluster::{Claim, Claimed, RestoredLease, WorkerId};
+use lodestar_cluster::{Claim, Claimed, LeaseAuthority, RestoredLease, WorkerId};
 use lodestar_dht::node::NodeHandle;
 use lodestar_filter::{
     Core, CoreRule, CsList, Engine, Handle, HeldSet, Lists, Origin, Sealer, Switches,
@@ -394,6 +394,7 @@ pub struct Monitor {
     intake: Arc<IntakeStats>,
     writer: Arc<WriterStats>,
     leases: Arc<LeaseStats>,
+    authority: Arc<LeaseAuthority>,
     have: Arc<Have>,
     sources: Arc<Vec<SourceEntry>>,
     stored_at_start: u64,
@@ -471,6 +472,14 @@ impl Monitor {
     /// The coordinator's in-flight leases.
     pub fn lease_stats(&self) -> &LeaseStats {
         &self.leases
+    }
+
+    /// The coordinator's one lease authority (§19.3), for the cluster
+    /// server once remote workers are allowed (`ClusterServer::with_hooks`).
+    /// The built-in worker uses it directly; nothing here opens a cluster
+    /// CA or binds a port.
+    pub fn lease_authority(&self) -> &Arc<LeaseAuthority> {
+        &self.authority
     }
 
     pub fn have(&self) -> &Have {
@@ -954,18 +963,17 @@ impl Pipeline {
             .run(out_rx, results_tx),
         );
 
-        // The built-in worker's heartbeat. It can't really go silent, but
-        // if its leases ever expired they'd come straight back to it.
+        // The built-in worker's heartbeat, and the authority's expiry tick
+        // (the built-in worker's own leases never expire).
         let heartbeat = {
             let coordinator = coordinator.clone();
-            let leases = leases.clone();
             tokio::spawn(async move {
                 loop {
                     let now = unix_now();
                     coordinator.heartbeat(WorkerId::LOCAL, now);
-                    for (key, token) in coordinator.expire_to(WorkerId::LOCAL, now) {
-                        leases.insert(key, token);
-                    }
+                    // Remote workers' expired leases wait in the authority
+                    // for the cluster server to grant them again.
+                    coordinator.expire(now);
                     tokio::time::sleep(HEARTBEAT_EVERY).await;
                 }
             })
@@ -1041,6 +1049,7 @@ impl Pipeline {
         });
         drop(cache_tx);
         let lease_stats = coordinator.stats.clone();
+        let authority = coordinator.authority().clone();
         let rollups_handle = rollups.clone();
         let writer = writer::Writer {
             store: Some(store),
@@ -1102,6 +1111,7 @@ impl Pipeline {
                 intake: intake_stats,
                 writer: writer_stats,
                 leases: lease_stats,
+                authority,
                 have,
                 sources: Arc::new(sources),
                 stored_at_start,
@@ -1512,10 +1522,11 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
                 io.leases.insert(d.found.key, token);
                 io.stats.to_pool.fetch_add(1, Ordering::Relaxed);
             }
-            // Leased already (in M3 always to this worker): its source is
-            // on the lease, and its peers go to the holder's pool as a
+            // Leased already, to this worker or a remote one: its source is
+            // on the lease, and its peers go to this worker's pool as a
             // reply, so the pool merges them but never admits the key
-            // again once it has left.
+            // again once it has left (relaying them to a remote holder is
+            // the intake's, WK-9).
             Claimed::Held { .. } => d.reply = true,
         }
         // Waiting here backs up into the emitters: live sources drop and

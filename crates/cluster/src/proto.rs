@@ -7,21 +7,28 @@
 //! | C → W | [`ToWorker::Welcome`] | the accepted version and the session's timings |
 //! | C → W | [`ToWorker::Assign`] | shape only: a revision and an opaque payload |
 //! | C ↔ W | [`ToCoordinator::Heartbeat`] / [`ToWorker::HeartbeatAck`] | every 5 s: stats, clock offset, lease renewal |
-//! | W → C | [`ToCoordinator::Claim`] | up to [`MAX_CLAIM_BATCH`] new keys |
+//! | W → C | [`ToCoordinator::Claim`] | up to [`MAX_CLAIM_BATCH`] new keys, each with up to [`MAX_HINTS`] peer hints |
 //! | C → W | [`ToWorker::Grants`] | per key a grant (fencing token, TTL) or a denial; batch 0 carries re-grants |
+//! | C → W | [`ToWorker::Hints`] | peer hints another worker found for a key this worker holds (in memory only, §18.7) |
 //! | W → C | [`ToCoordinator::Outcome`] | terminal outcomes; stale tokens are ignored |
+//! | W → C | [`ToCoordinator::Results`] / [`ToCoordinator::Counters`] | an opaque, batch-numbered payload (WK-6's codecs) |
+//! | C → W | [`ToWorker::Accepted`] | a `Results` or `Counters` batch was taken, or refused for now |
+//! | C → W | [`ToWorker::Snapshot`] / W → C [`ToCoordinator::SnapshotAck`] | a versioned, chunked snapshot (the filter, the dictionary), paced by acknowledgements |
+//! | C → W | [`ToWorker::Reverify`] / W → C [`ToCoordinator::Reverified`] | re-verification of sampled keys (§19.4) |
 //! | W → C | [`ToCoordinator::Renew`] / C → W [`ToWorker::Renewed`] | certificate renewal, rate-limited |
 //! | C → W | [`ToWorker::Drain`] / [`ToWorker::Stop`] | graceful drain; a stop with its reason |
 //! | W → C | [`ToCoordinator::Drained`] | the drain finished |
 //!
-//! `Results`, `Counters`, `HaveSnapshot`, `HaveDelta` and `Update` exist
-//! with opaque payloads so the enum layout is fixed; nothing sends or acts
-//! on them yet (V6-cluster3 and cluster5).
+//! Every v1 message exists (WK-0). The payloads other slices define stay
+//! opaque bytes here: `Assign`'s (WK-5), `Results` and `Counters` (WK-6),
+//! `HaveSnapshot` and `HaveDelta` (WK-3), the snapshot chunks' content
+//! (WK-3, WK-8), the re-verification reply (WK-13) and `Update` (later).
+//! Until WK-G freezes protocol 1.0 they may still change (plan Q11).
 //!
 //! Every limit a message can break is checked by `validate`, on both
 //! transports, so the in-process worker goes through the same checks.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +47,15 @@ pub const MAX_GRANT_BATCH: usize = 1024;
 pub const MAX_EXTERNAL_IPS: usize = 8;
 /// Opaque payloads of the messages later slices fill in.
 pub const MAX_OPAQUE: usize = 512 * 1024;
+/// Peer hints per claimed key, and keys per hint relay.
+pub const MAX_HINTS: usize = 8;
+pub const MAX_HINT_BATCH: usize = 1024;
+/// Bytes in one snapshot chunk (the rest of a frame is headroom).
+pub const MAX_CHUNK: usize = 512 * 1024;
+/// Chunks in one snapshot: 64 GiB at most, far above any real filter.
+pub const MAX_CHUNKS: u32 = 1 << 17;
+/// Keys in one re-verification request.
+pub const MAX_REVERIFY: usize = 256;
 /// CA certificates in a renewal grant (current and previous).
 pub const MAX_CAS: usize = 4;
 pub const MAX_CERT: usize = 4096;
@@ -146,7 +162,7 @@ pub struct ClaimBatch {
     pub items: Vec<ClaimItem>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimItem {
     pub key: [u8; 20],
     pub source: u8,
@@ -154,6 +170,75 @@ pub struct ClaimItem {
     /// The worker's clock when it found the key; the coordinator corrects
     /// it by the worker's measured offset.
     pub discovered_ms: i64,
+    /// Peers that announced the key, at most [`MAX_HINTS`]. If another
+    /// worker holds the key they are relayed to it in memory and never
+    /// stored (§19.3, §18.7).
+    pub hints: Vec<SocketAddr>,
+}
+
+/// Peer hints for a key the receiving worker holds, found by another worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HintItem {
+    pub key: [u8; 20],
+    /// The holder's fencing token, so a hint for a lease that has since
+    /// moved is dropped.
+    pub token: u64,
+    pub hints: Vec<SocketAddr>,
+}
+
+/// An opaque payload with the worker's batch id (never 0), acknowledged by
+/// [`ToWorker::Accepted`]; replaying a batch is idempotent (§19.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Payload {
+    pub batch: u64,
+    pub bytes: Vec<u8>,
+}
+
+/// What a snapshot carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SnapshotKind {
+    /// What the commit judges with (WK-8).
+    Filter,
+    /// The file-tree zstd dictionary (WK-8).
+    Dictionary,
+    /// The have-filter (WK-3), if it travels in chunks rather than in
+    /// `HaveSnapshot`.
+    HaveFilter,
+}
+
+/// One chunk of a versioned snapshot. Chunk `seq` of `total`, in order;
+/// the worker acknowledges each with [`ToCoordinator::SnapshotAck`] and the
+/// coordinator sends the next only after it, so a snapshot never fills a
+/// queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotChunk {
+    pub kind: SnapshotKind,
+    pub version: u64,
+    pub seq: u32,
+    pub total: u32,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotAck {
+    pub kind: SnapshotKind,
+    pub version: u64,
+    pub seq: u32,
+}
+
+/// Fetch these keys again and report their derived fields (§19.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReverifyRequest {
+    /// Chosen by the coordinator, never 0; the reply carries it back.
+    pub id: u64,
+    pub keys: Vec<[u8; 20]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReverifyReply {
+    pub id: u64,
+    /// The derived fields per key, in WK-13's encoding.
+    pub payload: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +279,9 @@ pub enum DenyReason {
     HeldElsewhere,
     /// The worker is draining and gets no new leases.
     Draining,
+    /// The coordinator is behind (its writer's queue is full, §19.5):
+    /// claim again later.
+    Busy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,9 +297,12 @@ pub struct OutcomeItem {
     pub outcome: Outcome,
 }
 
-/// A leased key's terminal funnel outcome (§19.3).
+/// A leased key's terminal funnel outcome (§19.3). Each ends the lease;
+/// `PeerFound` and `Lost` are losses, and their `reason` is the funnel's
+/// loss code (`lodestar_sources::Loss as u8`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Outcome {
+    /// The metadata arrived; the torrent travels in `Results`.
     Fetched,
     /// Peers were found, but the metadata wasn't fetched.
     PeerFound {
@@ -304,10 +395,12 @@ pub enum ToCoordinator {
         public_key: [u8; 32],
     },
     Drained,
-    /// V6-cluster5: processed torrents (§19.4).
-    Results(Vec<u8>),
-    /// V6-cluster5: rollup deltas.
-    Counters(Vec<u8>),
+    /// Processed torrents (§19.4), WK-6's encoding.
+    Results(Payload),
+    /// Rollup deltas, WK-6's encoding.
+    Counters(Payload),
+    SnapshotAck(SnapshotAck),
+    Reverified(ReverifyReply),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,11 +413,39 @@ pub enum ToWorker {
     RenewRefused(RenewRefusal),
     Drain,
     Stop(StopReason),
-    /// V6-cluster3: the replicated have-filter (§19.3).
+    /// The replicated have-filter (§19.3), WK-3's encoding.
     HaveSnapshot(Vec<u8>),
     HaveDelta(Vec<u8>),
     /// A signed update offer (§19.6), later.
     Update(Vec<u8>),
+    Hints(Vec<HintItem>),
+    /// A `Results` or `Counters` batch: taken (`true`), or refused for now
+    /// because the coordinator is behind (send it again later).
+    Accepted {
+        batch: u64,
+        accepted: bool,
+    },
+    Snapshot(SnapshotChunk),
+    Reverify(ReverifyRequest),
+}
+
+fn hints_valid(hints: &[SocketAddr]) -> bool {
+    hints.len() <= MAX_HINTS
+}
+
+impl Payload {
+    fn valid(&self) -> bool {
+        self.batch != 0 && self.bytes.len() <= MAX_OPAQUE
+    }
+}
+
+impl SnapshotChunk {
+    fn valid(&self) -> bool {
+        self.total != 0
+            && self.total <= MAX_CHUNKS
+            && self.seq < self.total
+            && self.bytes.len() <= MAX_CHUNK
+    }
 }
 
 impl ToCoordinator {
@@ -336,10 +457,34 @@ impl ToCoordinator {
                 true
             }
             ToCoordinator::Claim(c) => {
-                c.batch != 0 && !c.items.is_empty() && c.items.len() <= MAX_CLAIM_BATCH
+                c.batch != 0
+                    && !c.items.is_empty()
+                    && c.items.len() <= MAX_CLAIM_BATCH
+                    && c.items.iter().all(|i| hints_valid(&i.hints))
             }
             ToCoordinator::Outcome(o) => !o.items.is_empty() && o.items.len() <= MAX_OUTCOME_BATCH,
-            ToCoordinator::Results(p) | ToCoordinator::Counters(p) => p.len() <= MAX_OPAQUE,
+            ToCoordinator::Results(p) | ToCoordinator::Counters(p) => p.valid(),
+            ToCoordinator::SnapshotAck(a) => a.seq < MAX_CHUNKS,
+            ToCoordinator::Reverified(r) => r.id != 0 && r.payload.len() <= MAX_OPAQUE,
+        }
+    }
+
+    /// An upper bound on the message's encoded size (tested against
+    /// postcard), for byte-capped queues: a budget, not exact memory.
+    pub fn approx_size(&self) -> usize {
+        const BASE: usize = 64;
+        BASE + match self {
+            ToCoordinator::Hello(h) => h.capabilities.external_ips.len() * 17,
+            ToCoordinator::Heartbeat(_) | ToCoordinator::Renew { .. } | ToCoordinator::Drained => 0,
+            ToCoordinator::Claim(c) => c
+                .items
+                .iter()
+                .map(|i| 48 + i.hints.len() * 32)
+                .sum::<usize>(),
+            ToCoordinator::Outcome(o) => o.items.len() * 40,
+            ToCoordinator::Results(p) | ToCoordinator::Counters(p) => p.bytes.len(),
+            ToCoordinator::SnapshotAck(_) => 0,
+            ToCoordinator::Reverified(r) => r.payload.len(),
         }
     }
 }
@@ -348,6 +493,17 @@ impl ToWorker {
     pub fn validate(&self) -> bool {
         match self {
             ToWorker::Grants(g) => g.items.len() <= MAX_GRANT_BATCH,
+            ToWorker::Hints(h) => {
+                !h.is_empty()
+                    && h.len() <= MAX_HINT_BATCH
+                    && h.iter()
+                        .all(|i| !i.hints.is_empty() && hints_valid(&i.hints))
+            }
+            ToWorker::Accepted { batch, .. } => *batch != 0,
+            ToWorker::Snapshot(c) => c.valid(),
+            ToWorker::Reverify(r) => {
+                r.id != 0 && !r.keys.is_empty() && r.keys.len() <= MAX_REVERIFY
+            }
             ToWorker::Renewed(g) => g.valid(),
             ToWorker::Assign(a) => a.payload.len() <= MAX_OPAQUE,
             ToWorker::HaveSnapshot(p) | ToWorker::HaveDelta(p) | ToWorker::Update(p) => {
@@ -358,6 +514,29 @@ impl ToWorker {
             | ToWorker::RenewRefused(_)
             | ToWorker::Drain
             | ToWorker::Stop(_) => true,
+        }
+    }
+
+    /// An upper bound on the message's encoded size (tested against
+    /// postcard), for byte-capped queues: a budget, not exact memory.
+    pub fn approx_size(&self) -> usize {
+        const BASE: usize = 64;
+        BASE + match self {
+            ToWorker::Grants(g) => g.items.len() * 40,
+            ToWorker::Renewed(g) => {
+                g.name.len() + g.cert.len() + g.cas.iter().map(|c| c.len() + 8).sum::<usize>()
+            }
+            ToWorker::Assign(a) => a.payload.len(),
+            ToWorker::HaveSnapshot(p) | ToWorker::HaveDelta(p) | ToWorker::Update(p) => p.len(),
+            ToWorker::Hints(h) => h.iter().map(|i| 40 + i.hints.len() * 32).sum::<usize>(),
+            ToWorker::Snapshot(c) => c.bytes.len(),
+            ToWorker::Reverify(r) => r.keys.len() * 20,
+            ToWorker::Welcome(_)
+            | ToWorker::HeartbeatAck(_)
+            | ToWorker::RenewRefused(_)
+            | ToWorker::Drain
+            | ToWorker::Stop(_)
+            | ToWorker::Accepted { .. } => 0,
         }
     }
 }
