@@ -354,6 +354,7 @@ placement:
   - CR-0f
   - D-v051
   - X-legal-docs
+  - X-legal-docs-r2
   - X-mmap-cache-prune
   - X-merge-policy
   - X-thp-off
