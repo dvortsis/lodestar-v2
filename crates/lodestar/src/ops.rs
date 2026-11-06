@@ -405,7 +405,14 @@ fn source(v: SourceView) -> Source {
         plugin: m.id.to_string(),
         purge_pending: v.purge_pending,
         priority: priority(v.priority),
-        restart_required: enabled != v.status.enabled || v.config_pending,
+        // On: it didn't run at this start, or it was stopped since (turned
+        // off and on again). Off: only while it's still running, as a stop
+        // that's already happened leaves nothing pending.
+        restart_required: if enabled {
+            !v.status.enabled || v.stopped
+        } else {
+            v.status.running
+        } || v.config_pending,
         risk: match m.risk {
             Risk::Low => RiskLevel::Low,
             Risk::Medium => RiskLevel::Medium,

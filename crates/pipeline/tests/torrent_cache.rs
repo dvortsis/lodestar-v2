@@ -6,11 +6,11 @@
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_filter::{Action, Core, CsList, Engine, Handle, Lists, Switches, TermSet};
 use lodestar_metainfo::{Info, InfoHash};
-use lodestar_pipeline::torrent_cache::{self, Cursor, Judged, PAGE, Refusal};
+use lodestar_pipeline::torrent_cache::{self, Cursor, Gate, Judged, PAGE, Refusal, Withheld};
 use lodestar_pipeline::unverified::VERIFY_ROUND_SECS;
 use lodestar_store::claims::Claims;
 use lodestar_store::unverified::{Network, NewUnverified};
-use lodestar_store::{Store, StoreConfig};
+use lodestar_store::{NewTorrent, SourceState, Store, StoreConfig, flags};
 
 const T: i64 = 1_700_000_000;
 
@@ -135,9 +135,26 @@ fn claims(name: &str) -> Claims {
     }
 }
 
+/// The cache plugin's id, as the host registers it.
+const CACHE: &str = "torrent_cache";
+
+/// Registers the cache plugin's source, enabled.
+fn cache_on(store: &mut Store) -> lodestar_store::SourceId {
+    store
+        .register_source_as(CACHE, "1", SourceState::Enabled, T)
+        .unwrap()
+}
+
 #[test]
 fn the_cursor_never_offers_a_private_source_key() {
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let filter = stand_in();
+    let engine = filter.current();
+    let gate = Gate {
+        engine: &engine,
+        plugin: CACHE,
+    };
     let src = store.register_source("nyaa", "1", T).unwrap();
     let c = claims("Plain Film 2020");
     let keys: Vec<([u8; 20], bool)> = (1..=5u8).map(|i| ([i; 20], i % 2 == 0)).collect();
@@ -155,17 +172,25 @@ fn the_cursor_never_offers_a_private_source_key() {
     store.put_unverified(&items).unwrap();
 
     let mut cursor = Cursor::default();
-    let page = cursor.next(&store, 2, T).unwrap();
+    let page = cursor.next(&store, &gate, 2, T).unwrap();
     assert_eq!(page.keys, [InfoHash([1; 20])]);
     assert_eq!(page.private, 1);
-    let page = cursor.next(&store, PAGE, T).unwrap();
+    let page = cursor.next(&store, &gate, PAGE, T).unwrap();
     assert_eq!(page.keys, [InfoHash([3; 20]), InfoHash([5; 20])]);
     assert_eq!(page.private, 1);
 
     // The end: the round rests, then starts over.
-    assert!(cursor.next(&store, PAGE, T).unwrap().keys.is_empty());
-    assert!(cursor.next(&store, PAGE, T + 60).unwrap().keys.is_empty());
-    let again = cursor.next(&store, PAGE, T + VERIFY_ROUND_SECS).unwrap();
+    assert!(cursor.next(&store, &gate, PAGE, T).unwrap().keys.is_empty());
+    assert!(
+        cursor
+            .next(&store, &gate, PAGE, T + 60)
+            .unwrap()
+            .keys
+            .is_empty()
+    );
+    let again = cursor
+        .next(&store, &gate, PAGE, T + VERIFY_ROUND_SECS)
+        .unwrap();
     assert_eq!(again.keys.len(), 3);
     assert!(
         !again
@@ -190,6 +215,348 @@ fn a_key_on_the_floors_hash_list_is_refused_before_preparing() {
     let store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let j = torrent_cache::judge(&engine, &mut store.preparer(), key, &raw, T);
     assert!(matches!(j, Judged::Refused(Refusal::Blocked)));
+}
+
+/// Unverified items for `keys` from source `src`, public.
+fn items(store: &mut Store, src: lodestar_store::SourceId, keys: &[[u8; 20]]) {
+    let c = claims("Plain Film 2020");
+    let rows: Vec<NewUnverified<'_>> = keys
+        .iter()
+        .map(|k| NewUnverified {
+            network: Network::Bt,
+            key: k,
+            source: src,
+            private_source: false,
+            claims: Some(&c),
+            at: T,
+        })
+        .collect();
+    store.put_unverified(&rows).unwrap();
+}
+
+fn check(store: &Store, filter: &Handle, k: [u8; 20]) -> Result<(), Withheld> {
+    let engine = filter.current();
+    let gate = Gate {
+        engine: &engine,
+        plugin: CACHE,
+    };
+    gate.check(store, InfoHash(k)).unwrap()
+}
+
+/// The send-time check (X-tcache-recheck) sees what changed after a key
+/// was queued: the floor in the store or the filter, the item's source or
+/// the cache itself switched off.
+#[test]
+fn the_check_sees_what_changed_after_a_key_was_queued() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let cache = cache_on(&mut store);
+    let filter = stand_in();
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let other = store.register_source("feed", "1", T).unwrap();
+    items(&mut store, src, &[[1; 20], [2; 20], [3; 20]]);
+    items(&mut store, other, &[[4; 20]]);
+    for k in [[1; 20], [2; 20], [3; 20], [4; 20]] {
+        assert_eq!(check(&store, &filter, k), Ok(()));
+    }
+    // The floor's hash list in the store (the item goes with it).
+    store.add_cs_hashes(&[[1; 20]], 0, T).unwrap();
+    assert_eq!(check(&store, &filter, [1; 20]), Err(Withheld::Held));
+    // The floor in the filter, before the store has it.
+    filter.update(|c| c.cs.add_hash([2; 20], lodestar_filter::Origin::Confirmed));
+    assert_eq!(check(&store, &filter, [2; 20]), Err(Withheld::Blocked));
+    // The item's source switched off.
+    store
+        .set_source_state(other, SourceState::Disabled)
+        .unwrap();
+    assert_eq!(check(&store, &filter, [4; 20]), Err(Withheld::SourceOff));
+    // A key the store never had.
+    assert_eq!(check(&store, &filter, [9; 20]), Err(Withheld::Gone));
+    // The cache itself switched off: nothing passes.
+    assert_eq!(check(&store, &filter, [3; 20]), Ok(()));
+    store
+        .set_source_state(cache, SourceState::Disabled)
+        .unwrap();
+    assert_eq!(check(&store, &filter, [3; 20]), Err(Withheld::CacheOff));
+}
+
+/// A stored torrent under the key: held, hidden, private or complete
+/// torrents aren't sent; a public partial import is.
+#[test]
+fn the_check_reads_a_stored_torrents_flags_and_holds() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let filter = stand_in();
+    let mut put = |name: &str, extra: i64| {
+        let raw = info_bytes(name);
+        let info = Info::parse(&raw).unwrap();
+        store
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: T,
+                metadata_at: T,
+                extra_flags: extra,
+                source: src,
+            }])
+            .unwrap();
+        info.primary_hash().0
+    };
+    let partial = put("Partial", flags::FILES_PARTIAL);
+    let hidden = put("Hidden", flags::FILES_PARTIAL | flags::HIDDEN);
+    let private = put("Private", flags::FILES_PARTIAL | flags::PRIVATE_SOURCE);
+    let complete = put("Complete", 0);
+    assert_eq!(check(&store, &filter, partial), Ok(()));
+    assert_eq!(check(&store, &filter, hidden), Err(Withheld::Hidden));
+    assert_eq!(check(&store, &filter, private), Err(Withheld::Private));
+    assert_eq!(check(&store, &filter, complete), Err(Withheld::Complete));
+    // On the filter's floor after it was stored.
+    filter.update(|c| c.cs.add_hash(partial, lodestar_filter::Origin::Confirmed));
+    assert_eq!(check(&store, &filter, partial), Err(Withheld::Blocked));
+}
+
+/// The store's floor list counts even before the filter has it (a
+/// confirmation writes the store's list, releases the hold, then updates
+/// the filter), and for a stored torrent's other hash too.
+#[test]
+fn the_stores_floor_list_counts_before_the_filter_has_it() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let raw = info_bytes("Partial");
+    let info = Info::parse(&raw).unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap();
+    let key = info.primary_hash().0;
+    let filter = stand_in();
+    assert_eq!(check(&store, &filter, key), Ok(()));
+    store.add_cs_hashes(&[key], 0, T).unwrap();
+    assert_eq!(check(&store, &filter, key), Err(Withheld::Held));
+}
+
+/// An item a private source reported keeps its key private beside a
+/// public partial import stored under the same key.
+#[test]
+fn a_private_item_beside_a_public_import_stays_private() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let raw = info_bytes("Partial");
+    let info = Info::parse(&raw).unwrap();
+    let key = info.primary_hash().0;
+    let c = claims("Plain Film 2020");
+    store
+        .put_unverified(&[NewUnverified {
+            network: Network::Bt,
+            key: &key,
+            source: src,
+            private_source: true,
+            claims: Some(&c),
+            at: T,
+        }])
+        .unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap();
+    assert!(store.unverified(Network::Bt, &key).unwrap().is_some());
+    assert_eq!(check(&store, &stand_in(), key), Err(Withheld::Private));
+}
+
+/// A key that passed when it was queued, then tombstoned or quarantined:
+/// refused as held, by the store's holds (`held_among`), before the
+/// item's deletion is ever looked at. Raw rows, as the writer's hold
+/// leaves them.
+#[test]
+fn a_hold_added_after_a_key_was_queued_refuses_it_as_held() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    items(&mut store, src, &[[1; 20]]);
+    let raw = info_bytes("Partial");
+    let info = Info::parse(&raw).unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap();
+    let stored = info.primary_hash().0;
+    let filter = stand_in();
+    // Queued: both may be sent.
+    assert_eq!(check(&store, &filter, [1; 20]), Ok(()));
+    assert_eq!(check(&store, &filter, stored), Ok(()));
+    let conn = store.connection();
+    conn.execute(
+        "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'R-1', ?2)",
+        rusqlite_params(&[1; 20]),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+         VALUES (?1, 'R-1', NULL, ?2, ?2 + 3600)",
+        rusqlite_params(&stored),
+    )
+    .unwrap();
+    assert_eq!(store.held_among(&[[1; 20], stored]).unwrap(), [true, true]);
+    assert_eq!(check(&store, &filter, [1; 20]), Err(Withheld::Held));
+    assert_eq!(check(&store, &filter, stored), Err(Withheld::Held));
+}
+
+/// A public item's key that passed when it was queued, then a private
+/// (BEP 27) torrent stored under it: refused as private.
+#[test]
+fn a_private_torrent_stored_after_a_key_was_queued_refuses_it() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let raw = info_bytes("Later Private");
+    let info = Info::parse(&raw).unwrap();
+    let key = info.primary_hash().0;
+    items(&mut store, src, &[key]);
+    let filter = stand_in();
+    assert_eq!(check(&store, &filter, key), Ok(()));
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL | flags::PRIVATE,
+            source: src,
+        }])
+        .unwrap();
+    assert_eq!(check(&store, &filter, key), Err(Withheld::Private));
+}
+
+/// `?1` a hash, `?2` the test's clock.
+fn rusqlite_params(h: &[u8; 20]) -> (Vec<u8>, i64) {
+    (h.to_vec(), T)
+}
+
+/// The cursor runs the same check: a key the filter blocks isn't offered,
+/// and while the cache is off it offers nothing and stays where it is.
+#[test]
+fn the_cursor_offers_only_keys_that_pass_the_check() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let cache = cache_on(&mut store);
+    let filter = stand_in();
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    items(&mut store, src, &[[1; 20], [2; 20]]);
+    filter.update(|c| c.cs.add_hash([1; 20], lodestar_filter::Origin::Confirmed));
+    let engine = filter.current();
+    let gate = Gate {
+        engine: &engine,
+        plugin: CACHE,
+    };
+    store
+        .set_source_state(cache, SourceState::Disabled)
+        .unwrap();
+    let mut cursor = Cursor::default();
+    assert_eq!(
+        cursor.next(&store, &gate, PAGE, T).unwrap(),
+        Default::default()
+    );
+    assert_eq!(cursor, Cursor::default(), "the cursor moved while off");
+    store.enable_source(cache, None).unwrap();
+    let page = cursor.next(&store, &gate, PAGE, T).unwrap();
+    assert_eq!(page.keys, [InfoHash([2; 20])]);
+    assert_eq!(page.withheld, 1);
+}
+
+fn dict(entries: Vec<(&str, OwnedValue)>) -> OwnedValue {
+    OwnedValue::Dict(
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.as_bytes().to_vec(), v))
+            .collect(),
+    )
+}
+
+/// A hybrid torrent's second hash (X-tcache-recheck, task 3). An item can
+/// sit under one swarm hash while the torrent is stored under the other:
+/// a source reports the v2 key, then the store takes the torrent by its
+/// v1 hash through a path that doesn't promote items (an import's insert,
+/// or a promotion with no live finder). The check finds the torrent by
+/// either hash, so its BEP 27 private flag keeps the item's key from
+/// being offered, looked up for interest, or sent.
+#[test]
+fn an_item_under_a_hybrids_other_hash_sees_its_private_flag() {
+    let leaf = dict(vec![
+        ("length", OwnedValue::Int(100)),
+        ("pieces root", OwnedValue::Bytes(vec![5; 32])),
+    ]);
+    let tree = dict(vec![("a.bin", dict(vec![("", leaf)]))]);
+    let raw = to_vec(&dict(vec![
+        ("file tree", tree),
+        ("length", OwnedValue::Int(100)),
+        ("meta version", OwnedValue::Int(2)),
+        ("name", OwnedValue::Bytes(b"a.bin".to_vec())),
+        ("piece length", OwnedValue::Int(16_384)),
+        ("pieces", OwnedValue::Bytes(vec![0; 20])),
+        ("private", OwnedValue::Int(1)),
+    ]));
+    let info = Info::parse(&raw).unwrap();
+    let (v1, v2) = (info.v1.unwrap(), info.v2.unwrap().truncated());
+    assert_ne!(v1, v2);
+
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    items(&mut store, src, &[v2.0]);
+    let id = store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap()[0]
+        .id();
+    // They co-exist: the item under the v2 hash, the torrent under v1.
+    let item = store.unverified(Network::Bt, &v2.0).unwrap().unwrap().id;
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(row.info_hash, v1);
+    assert_ne!(row.flags & flags::PRIVATE, 0);
+
+    let filter = stand_in();
+    assert_eq!(check(&store, &filter, v2.0), Err(Withheld::Private));
+    let engine = filter.current();
+    let gate = Gate {
+        engine: &engine,
+        plugin: CACHE,
+    };
+    let page = Cursor::default().next(&store, &gate, PAGE, T).unwrap();
+    assert!(
+        page.keys.is_empty(),
+        "the private hybrid's other hash was offered"
+    );
+    assert_eq!(page.private, 1);
+    // Interest in the item gives it as private, which the plugin refuses.
+    let i = torrent_cache::interest(&store, &gate, item)
+        .unwrap()
+        .unwrap();
+    assert!(i.private_source);
 }
 
 /// The plugin's recorded cache reply, judged whole: the file the

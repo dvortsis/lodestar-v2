@@ -86,10 +86,10 @@ To see them, select **Settings**, then **Sources** under **Crawling**.
 **Turn a source on or off.** Use the **On** switch on its row.
 
 1. Select the switch. Lodestar saves the change at once, with no **Undo**.
-2. The row shows **Applies at next start**.
-3. The source starts or stops the next time Lodestar restarts. A restart can include the six-hour DHT wait; see [section 3.8](03-keep-lodestar-safe.md#38-restart-without-the-six-hour-wait).
+2. **Off** stops the source straight away. It sends nothing more, and its row shows it stopped.
+3. **On** takes effect the next time Lodestar restarts, and until then the row shows **Applies at next start**. This includes a source you turned off and on again: it stays stopped until the restart. A restart can include the six-hour DHT wait; see [section 3.8](03-keep-lodestar-safe.md#38-restart-without-the-six-hour-wait).
 
-Until that restart, the status shows your saved choice, not what is running.
+Turning off the **Mainline DHT** source stops the crawl at once, and Lodestar drops the torrents it was waiting to fetch from it.
 
 **Needs setup.** Some sources must be set up before they can be turned on. Setup means reading and accepting what a source does, accepting the sites it contacts, adding account details, or typing your admin password. Their switch stays off and the row says what is missing. Setting these up is not on this screen yet. It is coming in a later version, so leave those sources off for now.
 

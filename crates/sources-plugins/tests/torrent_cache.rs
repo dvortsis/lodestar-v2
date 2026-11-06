@@ -18,7 +18,8 @@ use lodestar_sources::{
     SourcePlugin, UserLimits,
 };
 use lodestar_sources_plugins::torrent_cache::{
-    self, CONFIG_SCHEMA, Config, Lookup, Miss, SUGGESTED, TorrentCache, Verified, Why,
+    self, CONFIG_SCHEMA, Config, Lookup, Miss, Queue, Recheck, SUGGESTED, TorrentCache, Verified,
+    Why,
 };
 use lodestar_store::SourceId;
 use tokio::sync::mpsc;
@@ -129,6 +130,15 @@ impl FakeCache {
             .collect()
     }
 
+    fn sent_at(&self) -> Vec<Instant> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(t, _)| *t)
+            .collect()
+    }
+
     fn answer(&self, req: &Request) -> Answer {
         self.requests
             .lock()
@@ -223,6 +233,30 @@ impl Fetch for FakeCache {
 
 // ---- running the plugin ----
 
+/// The host's send-time check, as a test sets it: every key in `refused`
+/// is refused; every check is recorded.
+#[derive(Default)]
+struct Checks {
+    refused: Mutex<Vec<InfoHash>>,
+    asked: Mutex<Vec<InfoHash>>,
+}
+
+impl Recheck for Checks {
+    fn allows(&self, lookup: Lookup) -> BoxFuture<'_, bool> {
+        self.asked.lock().unwrap().push(lookup.key());
+        let ok = !self.refused.lock().unwrap().contains(&lookup.key());
+        Box::pin(async move { ok })
+    }
+}
+
+/// The plugin with a check that allows everything installed, as the
+/// host installs its own (`TorrentCache::set_recheck`).
+fn checked(config: Config) -> (TorrentCache, Queue, mpsc::Receiver<Verified>) {
+    let (p, q, rx) = TorrentCache::new(config);
+    assert!(p.set_recheck(Arc::new(Checks::default())));
+    (p, q, rx)
+}
+
 struct Run {
     plugin: Arc<TorrentCache>,
     verified: mpsc::Receiver<Verified>,
@@ -231,7 +265,7 @@ struct Run {
 }
 
 fn start(templates: &[&str], fetch: Arc<dyn Fetch>, before: &[Lookup]) -> Run {
-    let (plugin, queue, verified) = TorrentCache::new(Config::new(templates).unwrap());
+    let (plugin, queue, verified) = checked(Config::new(templates).unwrap());
     for l in before {
         assert!(queue.push(*l));
     }
@@ -412,7 +446,7 @@ async fn only_queued_public_keys_are_requested() {
 
 #[test]
 fn manifest_is_external_consent_and_off_by_default() {
-    let (p, _, _) = TorrentCache::new(Config::default());
+    let (p, _, _) = checked(Config::default());
     let m = p.manifest();
     assert_eq!(m.id, "torrent_cache");
     assert_eq!(m.consent, Consent::External);
@@ -429,7 +463,7 @@ fn manifest_is_external_consent_and_off_by_default() {
 
 #[test]
 fn policy_limits_are_within_the_floors() {
-    let (p, _, _) = TorrentCache::new(Config::default());
+    let (p, _, _) = checked(Config::default());
     let caps = p.policy().caps;
     let limits = p.policy().limits(&UserLimits::default());
     assert!(limits.within(&caps));
@@ -440,7 +474,7 @@ fn policy_limits_are_within_the_floors() {
 #[tokio::test(start_paused = true)]
 async fn an_empty_list_fails_before_any_request() {
     let fake = FakeCache::new(&[]);
-    let (plugin, queue, _rx) = TorrentCache::new(Config::default());
+    let (plugin, queue, _rx) = checked(Config::default());
     assert!(queue.push(unverified(InfoHash([1; 20]))));
     let plugin = Arc::new(plugin);
     let mut ctx = FakeCtx::with_fetch(&*plugin, SourceId::new(9).unwrap(), fake.clone());
@@ -539,7 +573,7 @@ fn config_refusals_name_the_rule() {
 
 #[test]
 fn endpoints_are_the_listed_hosts() {
-    let (p, _, _) = TorrentCache::new(
+    let (p, _, _) = checked(
         Config::new(&["https://a.example/{hash}", "https://b.example/x?h={HASH}"]).unwrap(),
     );
     assert!(p.endpoints().is_some());
@@ -608,8 +642,7 @@ async fn a_full_lane_drops_and_counts() {
     // The plugin is running but stuck on its first lookup (a stalled
     // reply), so nothing drains the lane behind it.
     let fake = FakeCache::new(&[("c.example", Answer::Stall)]);
-    let (plugin, queue, _rx) =
-        TorrentCache::new(Config::new(&["https://c.example/{hash}"]).unwrap());
+    let (plugin, queue, _rx) = checked(Config::new(&["https://c.example/{hash}"]).unwrap());
     let plugin = Arc::new(plugin);
     let mut ctx = FakeCtx::with_fetch(&*plugin, SourceId::new(9).unwrap(), fake.clone());
     let running = ctx.start(plugin.clone());
@@ -714,9 +747,8 @@ async fn it_stops_mid_lookup() {
 #[tokio::test(start_paused = true)]
 async fn the_egress_being_down_ends_a_lookup_without_asking_further() {
     // `NoEgress` stands for a route that's down: nothing is sent.
-    let (plugin, queue, _rx) = TorrentCache::new(
-        Config::new(&["https://a.example/{hash}", "https://b.example/{hash}"]).unwrap(),
-    );
+    let (plugin, queue, _rx) =
+        checked(Config::new(&["https://a.example/{hash}", "https://b.example/{hash}"]).unwrap());
     let plugin = Arc::new(plugin);
     let mut ctx = FakeCtx::new(&*plugin, SourceId::new(9).unwrap());
     let ctx_ = ctx.take();
@@ -829,7 +861,7 @@ fn debug_never_shows_the_key() {
 // ---- consent covers the listed hosts (SRC-13b) ----
 
 fn built(templates: &[&str]) -> TorrentCache {
-    TorrentCache::new(Config::new(templates).unwrap()).0
+    checked(Config::new(templates).unwrap()).0
 }
 
 #[test]
@@ -975,7 +1007,7 @@ fn the_egress_reaches_only_the_listed_hosts_through_the_plugin_trait() {
 
 #[test]
 fn the_queue_says_how_much_room_each_lane_has() {
-    let (_p, queue, _rx) = TorrentCache::new(Config::default());
+    let (_p, queue, _rx) = checked(Config::default());
     assert_eq!(queue.room(Why::Unverified), torrent_cache::QUEUE);
     assert!(queue.push(unverified(InfoHash([1; 20]))));
     assert_eq!(queue.room(Why::Unverified), torrent_cache::QUEUE - 1);
@@ -1065,4 +1097,100 @@ async fn the_async_lookup_and_verify_body_agree_on_the_fuzz_seeds() {
         run.running.stop_within().await.unwrap();
     }
     assert!(hits > 0 && misses > 0, "{hits} hits, {misses} misses");
+}
+
+// ---- the send-time check (X-tcache-recheck) ----
+
+/// A key the host's check refuses after it was queued is never sent, and
+/// no other cache is asked for it; the next key goes out as usual.
+#[tokio::test(start_paused = true)]
+async fn a_key_refused_at_send_time_never_reaches_a_cache() {
+    let refused = InfoHash([0x61; 20]);
+    let allowed = InfoHash([0x62; 20]);
+    let fake = FakeCache::new(&[]);
+    let (plugin, queue, _rx) = TorrentCache::new(
+        Config::new(&["https://a.example/{hash}", "https://b.example/{hash}"]).unwrap(),
+    );
+    let checks = Arc::new(Checks::default());
+    // Queued while it may be sent, refused by the time it would be.
+    assert!(queue.push(unverified(refused)));
+    assert!(queue.push(unverified(allowed)));
+    checks.refused.lock().unwrap().push(refused);
+    assert!(plugin.set_recheck(checks.clone()));
+    assert!(
+        !plugin.set_recheck(Arc::new(Checks::default())),
+        "set twice"
+    );
+    let plugin = Arc::new(plugin);
+    let mut ctx = FakeCtx::with_fetch(&*plugin, SourceId::new(9).unwrap(), fake.clone());
+    let running = ctx.start(plugin.clone());
+    wait_for("the allowed key at both caches", || fake.urls().len() == 2).await;
+    wait_for("its lookup to end", || n(&plugin.stats().missed) == 1).await;
+    for url in fake.urls() {
+        assert!(
+            !url.contains(&refused.to_string()),
+            "a refused key was sent"
+        );
+        assert!(url.contains(&allowed.to_string()));
+    }
+    assert_eq!(n(&plugin.stats().withheld), 1);
+    // Checked once for the refused key (no second cache), once per cache
+    // for the other.
+    assert_eq!(*checks.asked.lock().unwrap(), [refused, allowed, allowed]);
+    drop(queue);
+    running.stop_within().await.unwrap();
+}
+
+/// With no check installed, nothing is sent (fail closed).
+#[tokio::test(start_paused = true)]
+async fn with_no_check_installed_nothing_is_sent() {
+    let fake = FakeCache::new(&[]);
+    let (plugin, queue, _rx) =
+        TorrentCache::new(Config::new(&["https://c.example/{hash}"]).unwrap());
+    assert!(queue.push(unverified(InfoHash([0x63; 20]))));
+    let plugin = Arc::new(plugin);
+    let mut ctx = FakeCtx::with_fetch(&*plugin, SourceId::new(9).unwrap(), fake.clone());
+    let running = ctx.start(plugin.clone());
+    wait_for("the lookup to be withheld", || {
+        n(&plugin.stats().withheld) == 1
+    })
+    .await;
+    assert!(fake.urls().is_empty());
+    drop(queue);
+    running.stop_within().await.unwrap();
+}
+
+/// The plugin waits out a cache's poll interval before the check, so the
+/// kit's poll gate adds no wait between the check and the request: two
+/// lookups at one cache are checked a whole interval apart, each right
+/// before its request.
+#[tokio::test(start_paused = true)]
+async fn the_check_runs_after_the_poll_interval_not_before() {
+    let fake = FakeCache::new(&[]);
+    let (plugin, queue, _rx) =
+        TorrentCache::new(Config::new(&["https://c.example/{hash}"]).unwrap());
+    let times: Arc<Mutex<Vec<Instant>>> = Arc::default();
+    struct Timed(Arc<Mutex<Vec<Instant>>>);
+    impl Recheck for Timed {
+        fn allows(&self, _: Lookup) -> BoxFuture<'_, bool> {
+            self.0.lock().unwrap().push(Instant::now());
+            Box::pin(async { true })
+        }
+    }
+    assert!(plugin.set_recheck(Arc::new(Timed(times.clone()))));
+    assert!(queue.push(unverified(InfoHash([0x64; 20]))));
+    assert!(queue.push(unverified(InfoHash([0x65; 20]))));
+    let plugin = Arc::new(plugin);
+    let mut ctx = FakeCtx::with_fetch(&*plugin, SourceId::new(9).unwrap(), fake.clone());
+    let running = ctx.start(plugin.clone());
+    wait_for("both lookups", || n(&plugin.stats().missed) == 2).await;
+    let times = times.lock().unwrap().clone();
+    let sent = fake.sent_at();
+    assert_eq!((times.len(), sent.len()), (2, 2));
+    assert!(times[1] - times[0] >= std::time::Duration::from_secs(60));
+    for (checked, sent) in times.iter().zip(&sent) {
+        assert!(*sent - *checked < std::time::Duration::from_secs(1));
+    }
+    drop(queue);
+    running.stop_within().await.unwrap();
 }

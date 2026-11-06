@@ -1,7 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"sources_title": "来源",
-	"sources_purpose": "Lodestar 发现种子的途径：DHT 和其他来源。每个来源都可以开启或关闭，并分得一部分获取任务。开启或关闭会在下次启动时生效。",
+	"sources_purpose": "Lodestar 发现种子的途径：DHT 和其他来源。每个来源都可以开启或关闭，并分得一部分获取任务。关闭会立即停止该来源；开启会在下次启动时生效。",
 	"sources_loading": "正在加载来源…",
 	"sources_load_failed": "无法加载来源。未做任何更改。",
 	"sources_retry": "重试",

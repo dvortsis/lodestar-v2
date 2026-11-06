@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use lodestar_integrations::SealedSecret;
 use lodestar_integrations::net::SocksAuth;
 pub use lodestar_integrations::{Secret, SecretStore};
-use lodestar_store::Store;
+use lodestar_store::{SourceState, Store};
 
 use crate::egress::{CredentialError, EgressCredentials};
 use crate::manifest::{Consent, Manifest};
@@ -441,6 +441,31 @@ impl EgressCredentials for SourceCredentials {
                 .map_err(|_| CredentialError)?
         })
     }
+
+    /// The source's row in the store, read now: Enabled or not.
+    fn source_enabled<'a>(
+        &'a self,
+        source: &'a str,
+    ) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        let this = self.clone();
+        let source = source.to_string();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let rows = this
+                    .inner
+                    .store
+                    .lock()
+                    .map_err(|_| CredentialError)?
+                    .sources()
+                    .map_err(|_| CredentialError)?;
+                Ok(rows
+                    .iter()
+                    .any(|r| r.plugin == source && r.state == SourceState::Enabled))
+            })
+            .await
+            .map_err(|_| CredentialError)?
+        })
+    }
 }
 
 #[cfg(test)]
@@ -809,5 +834,37 @@ mod tests {
         s.set_source_state(id, SourceState::Purged).unwrap();
         assert!(s.source_consent("probe").unwrap().is_none());
         assert!(s.source_secret_names("probe").unwrap().is_empty());
+    }
+
+    /// The egress's source-state check reads the store's own row for the
+    /// plugin, by its id: Enabled only, never another plugin's row
+    /// (X-tcache-recheck).
+    #[tokio::test]
+    async fn source_enabled_reads_the_plugins_own_row() {
+        let (c, store, id) = creds();
+        let other = store
+            .lock()
+            .unwrap()
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.plugin == "other")
+            .unwrap()
+            .id;
+        assert_eq!(c.source_enabled("probe").await, Ok(false));
+        store.lock().unwrap().enable_source(other, None).unwrap();
+        assert_eq!(c.source_enabled("probe").await, Ok(false), "another's row");
+        assert_eq!(c.source_enabled("other").await, Ok(true));
+        store.lock().unwrap().enable_source(id, None).unwrap();
+        assert_eq!(c.source_enabled("probe").await, Ok(true));
+        for state in [
+            SourceState::Paused,
+            SourceState::Disabled,
+            SourceState::Purged,
+        ] {
+            store.lock().unwrap().set_source_state(id, state).unwrap();
+            assert_eq!(c.source_enabled("probe").await, Ok(false), "{state:?}");
+        }
+        assert_eq!(c.source_enabled("nobody").await, Ok(false));
     }
 }

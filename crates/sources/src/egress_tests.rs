@@ -372,6 +372,10 @@ impl EgressCredentials for Creds {
         });
         Box::pin(async move { Ok(auth) })
     }
+
+    fn source_enabled<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        Box::pin(async { Ok(true) })
+    }
 }
 
 struct BrokenStore;
@@ -381,6 +385,10 @@ impl EgressCredentials for BrokenStore {
         &'a self,
         _: &'a str,
     ) -> BoxFuture<'a, Result<Option<SocksAuth>, CredentialError>> {
+        Box::pin(async { Err(CredentialError) })
+    }
+
+    fn source_enabled<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<bool, CredentialError>> {
         Box::pin(async { Err(CredentialError) })
     }
 }
@@ -2037,4 +2045,67 @@ async fn a_refusal_comes_back_within_the_streams_timeout() {
             .state(&host_key(&url).unwrap(), Instant::now()),
         crate::http::HostState::Ready
     );
+}
+
+// ---------------------------------------------------------------- source state
+
+/// A store of source states a test switches: `on`, or unreadable.
+struct States {
+    on: AtomicBool,
+    broken: AtomicBool,
+}
+
+impl EgressCredentials for States {
+    fn socks5<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SocksAuth>, CredentialError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn source_enabled<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        let r = if self.broken.load(Ordering::SeqCst) {
+            Err(CredentialError)
+        } else {
+            Ok(self.on.load(Ordering::SeqCst))
+        };
+        Box::pin(async move { r })
+    }
+}
+
+/// Defence in depth behind stopping a source when it's switched off
+/// (X-tcache-recheck): a client the factory built sends nothing while the
+/// store says its source is off, or can't say, whether the request is
+/// buffered or streamed. Nothing connects.
+#[tokio::test]
+async fn a_source_switched_off_sends_nothing() {
+    let server = serve(|_| ok("hello")).await;
+    let states = Arc::new(States {
+        on: AtomicBool::new(true),
+        broken: AtomicBool::new(false),
+    });
+    let egress = EgressFactory::with_resolver(states.clone(), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let req = Request::get(server.url("/"));
+    assert_eq!(egress.fetch(&req).await.unwrap().status, 200);
+    assert_eq!(server.conns(), 1);
+
+    states.on.store(false, Ordering::SeqCst);
+    assert!(matches!(egress.fetch(&req).await, Err(HttpError::NoEgress)));
+    let limits = StreamLimits {
+        max_bytes: 1024,
+        timeout: Duration::from_secs(10),
+        idle: Duration::from_secs(5),
+    };
+    assert!(matches!(
+        egress.fetch_stream(&req, limits).await,
+        Err(HttpError::NoEgress)
+    ));
+    states.on.store(true, Ordering::SeqCst);
+    states.broken.store(true, Ordering::SeqCst);
+    assert!(matches!(egress.fetch(&req).await, Err(HttpError::NoEgress)));
+    assert_eq!(server.conns(), 1, "a switched-off source connected");
+    assert_eq!(egress.status().counters.policy_refusals, 3);
 }

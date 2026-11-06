@@ -141,6 +141,15 @@ pub trait EgressCredentials: Send + Sync {
         &'a self,
         source: &'a str,
     ) -> BoxFuture<'a, Result<Option<SocksAuth>, CredentialError>>;
+
+    /// Whether `source`'s stored state is Enabled, read now. A client the
+    /// factory built refuses every request while it isn't, or while this
+    /// can't be read (X-tcache-recheck): defence in depth behind stopping
+    /// the plugin when it's switched off.
+    fn source_enabled<'a>(
+        &'a self,
+        source: &'a str,
+    ) -> BoxFuture<'a, Result<bool, CredentialError>>;
 }
 
 /// The store couldn't produce a credential. Carries nothing secret.
@@ -166,6 +175,13 @@ impl EgressCredentials for NoCredentials {
         _: &'a str,
     ) -> BoxFuture<'a, Result<Option<SocksAuth>, CredentialError>> {
         Box::pin(async { Ok(None) })
+    }
+
+    /// No store of source states: every source counts as enabled. Only
+    /// for tests and tools; the host's factory uses the store's
+    /// (`consent::SourceCredentials`).
+    fn source_enabled<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        Box::pin(async { Ok(true) })
     }
 }
 
@@ -411,6 +427,10 @@ pub const MAX_REDIRECTS: usize = 5;
 /// up. This paces a plugin's retry loop while the kill switch is down
 /// (SRC-14b), which a host's back-off can't: the host isn't at fault.
 pub const DOWN_DELAY_MIN: Duration = Duration::from_secs(1);
+/// The longest a client waits for its source's stored state before each
+/// request ([`EgressCredentials::source_enabled`]); no answer in time is
+/// a refusal.
+pub const STATE_WAIT: Duration = Duration::from_secs(2);
 /// The longest a refusal waits before it comes back.
 pub const DOWN_DELAY_MAX: Duration = Duration::from_secs(30);
 
@@ -474,6 +494,7 @@ impl EgressFactory {
         let mut built =
             PluginEgress::new(plugin, egress.kind(), client, Arc::new(probe), endpoints);
         built.notice = notice(egress);
+        built.states = Some(Arc::clone(&self.credentials));
         built
     }
 
@@ -702,6 +723,9 @@ pub struct PluginEgress {
     /// Refusals before sending since the route last let a request
     /// through, for [`down_delay`].
     down_streak: AtomicU32,
+    /// Where the source's stored state is read before each request
+    /// ([`EgressCredentials::source_enabled`]); set by the factory.
+    states: Option<Arc<dyn EgressCredentials>>,
 }
 
 impl fmt::Debug for PluginEgress {
@@ -734,6 +758,7 @@ impl PluginEgress {
             notice: None,
             counters: Arc::default(),
             down_streak: Default::default(),
+            states: None,
         };
         match egress.client {
             Err(reason) => egress.publish(RouteState::Down(reason)),
@@ -843,6 +868,7 @@ impl PluginEgress {
         match self.gate().await {
             Ok(c) => {
                 self.down_streak.store(0, Ordering::Relaxed);
+                self.source_on(pace_by).await?;
                 Ok(c)
             }
             Err(reason) => {
@@ -868,6 +894,27 @@ impl PluginEgress {
                 Err(HttpError::EgressDown(reason.to_string()))
             }
         }
+    }
+
+    /// The source's stored state, after the kill switch let the request
+    /// through: a source that's off, or a state that can't be read, sends
+    /// nothing. The refusal is paced by [`DOWN_DELAY_MIN`] (or `pace_by`,
+    /// sooner), so a plugin that retries at once can't spin on the store.
+    async fn source_on(&self, pace_by: Option<Instant>) -> Result<(), HttpError> {
+        let Some(states) = &self.states else {
+            return Ok(());
+        };
+        // Bounded: this runs after the plugin's own send-time check, so a
+        // store that's slow to answer must not widen the gap between that
+        // check and the send. No answer in time sends nothing.
+        let answer = tokio::time::timeout(STATE_WAIT, states.source_enabled(&self.plugin)).await;
+        if matches!(answer, Ok(Ok(true))) {
+            return Ok(());
+        }
+        Counters::bump(&self.counters.policy_refusals);
+        let paced = Instant::now() + DOWN_DELAY_MIN;
+        tokio::time::sleep_until(pace_by.map_or(paced, |by| by.min(paced))).await;
+        Err(HttpError::NoEgress)
     }
 
     async fn send(&self, req: &Request) -> Result<Response, HttpError> {
