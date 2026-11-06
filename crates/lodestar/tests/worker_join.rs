@@ -287,3 +287,60 @@ fn joins_restarts_and_never_shows_the_token() {
         "the token is in the coordinator's log"
     );
 }
+
+/// `--data` and `LODESTAR_DATA_DIR` naming different folders is refused
+/// before anything is created or owned.
+#[test]
+fn data_and_the_variable_must_agree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lodestar"));
+    cmd.arg("worker")
+        .arg("--data")
+        .arg(&a)
+        .env("LODESTAR_DATA_DIR", &b)
+        .env_remove("LODESTAR_TOKEN");
+    let (exit, log) = spawn(cmd).finish();
+    assert_eq!(exit.code(), Some(2), "{log}");
+    assert!(log.contains("name different folders"), "{log}");
+    assert!(!a.exists() && !b.exists());
+}
+
+/// Started as root, `--data` gets the privilege drop's own checks, the same
+/// as `LODESTAR_DATA_DIR`: the filesystem root and a symlink are refused,
+/// and nothing is owned. (Skipped when not root, like `tests/privdrop.rs`.)
+#[cfg(target_os = "linux")]
+#[test]
+fn data_goes_through_the_privilege_drops_checks() {
+    if !rustix::process::geteuid().is_root() {
+        eprintln!("skipping: the drop only happens when started as root");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    for (dir, says) in [
+        (Path::new("/"), "filesystem root"),
+        (link.as_path(), "symlink"),
+    ] {
+        let by_flag = {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_lodestar"));
+            c.env_clear().arg("worker").arg("--data").arg(dir);
+            spawn(c).finish()
+        };
+        let by_var = {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_lodestar"));
+            c.env_clear().env("LODESTAR_DATA_DIR", dir).arg("worker");
+            spawn(c).finish()
+        };
+        for (how, (exit, log)) in [("--data", by_flag), ("LODESTAR_DATA_DIR", by_var)] {
+            assert!(!exit.success(), "{how} {dir:?}: {log}");
+            assert!(log.contains(says), "{how} {dir:?}: {log}");
+        }
+    }
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(std::fs::metadata(&real).unwrap().uid(), 0, "nothing owned");
+    assert!(!real.join("cluster").exists());
+}
