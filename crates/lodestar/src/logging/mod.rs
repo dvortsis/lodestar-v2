@@ -74,6 +74,7 @@ pub static CATALOGUES: &[&Catalogue] = &[
     &lodestar_dht::log_events::CATALOGUE,
     &lodestar_peer_wire::log_events::CATALOGUE,
     &crate::update::log_events::CATALOGUE,
+    &lodestar_companions::log_events::CATALOGUE,
 ];
 
 /// A registered event by id.
@@ -118,6 +119,7 @@ pub const TARGETS: &[(&str, Component)] = &[
     ("lodestar_network_policy", Component::Filters),
     ("lodestar_integrations", Component::Integrations),
     ("lodestar_cluster", Component::Workers),
+    ("lodestar_companions", Component::Companions),
 ];
 
 /// Whether `target` is Lodestar's own code.
