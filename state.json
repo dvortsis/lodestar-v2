@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T03:52:35Z",
+ "updated_at": "2026-11-06T03:55:39Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -5140,6 +5140,10 @@
   {
    "at": "2026-11-06T03:32:56Z",
    "note": "Small API doc fix: crates/api/src/dto/ops.rs restart_required doc still says 'starts, stops or picks up its new settings at the next restart'; since #525 a stop is immediate. Regenerate openapi.json + schema.d.ts. Fold into X-egress-state-watch or the next api-touching slice."
+  },
+  {
+   "at": "2026-11-06T03:55:39Z",
+   "note": "If #526 merges without another RP-G push: the runner PR fixing plan line 94 also updates RP-G's decisions file: replace 'the next CI run reports it' with the CI number, always-adult at commit 82.3 us (EPYC 7763, job 127699073103), two judgments 81.3 us."
   }
  ],
  "main_health": [
