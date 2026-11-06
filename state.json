@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T17:16:00Z",
+  "updated_at": "2026-11-06T17:45:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5230,6 +5230,10 @@
     {
       "at": "2026-11-06T17:16:00Z",
       "note": "#537 X-consent-gate-052 merged (23f2e575); archived. Follow-up slice before P-v052-cut: X-consent-gate-polish (small): (1) a reason on the start switch-off log event (consent_text_unapproved / consent_lapsed) - log_events.rs, logs golden catalogue, web logging messages en/zh + event-names.ts; (2) OpenAPI wording for consent_required / SourcePatch.consent in crates/api/src/dto/ops.rs + regenerate openapi.json/schema.d.ts; (3) consent_gate.rs restart leg asserts needs==null; v0.5.2 release notes: the torrent cache cannot be turned on yet. WK-0 (#538) is second on pipeline lib.rs: after its review, it brings main in. CMP-0 launched slot 4."
+    },
+    {
+      "at": "2026-11-06T17:45:00Z",
+      "note": "WK-9 HARD REQUIREMENTS (from #539 and #538 reviews; add to WK-9 notes in slices.yaml in the next runner PR): (1) CONTENT SAFETY: store the coordinator-rebuilt enrichment (or refuse a record whose content type/adult kind differs); the worker-sent enrichment must never set type:adult/adult: visibility; bound the other-version lag. (2) Counters intake: hour window around coordinator now (offset-corrected), keys in each metric domain, saturating/capped accumulation (rollup_hour STRICT INTEGER overflow + unbounded rows). (3) leased sources/private_source from the lease, not the worker; metadata_at offset-corrected; size/file_count checked vs rebuilt file list. (4) remote commits via LeaseAuthority::commit (holder-checked). (5) filter relayed peer hints with lodestar_network_policy::allows (WK-10 again before dialling). Payload version rule: new version needs protocol major bump or negotiation."
     }
   ],
   "main_health": [
