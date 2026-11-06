@@ -810,7 +810,7 @@ conditions:
   owner-m8-q6:
     met: true
     who: you
-    label: You choose how security findings are disclosed, and SECURITY.md's contact (M8 OQ6)
+    label: You choose SECURITY.md's contact and switch on private vulnerability reporting (M8 OQ6)
   bench-runner:
     met: false
     who: you

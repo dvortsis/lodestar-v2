@@ -508,30 +508,54 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **v0.8 Q3:** the runner drafts the per-worker consent wording. Approving the text stays with the owner, as for the Q1 consent texts, so `owner-v08-q3` stays unmet.
     - **Still the owner's own steps:** M6 Q6 (winget, after 1.0 if wanted), Q8 (the nightly signing key, owner-queue item 5) and Q14 (the G-m6 manual installs and the release approval, `owner-m6-manual`).
 
-47. **The runner's recommendation on every question §2.46 left with the owner** (owner, 2026-11-06T05:23Z, relayed by the dashboard session): "Go with the runner's recommendation on all". The dashboard session showed each of the 16 questions with the plan's recommendation. The owner then confirmed it directly to the runner (runner chat, 2026-11-06 about 05:26Z), with the security and content-safety loosenings named: "Yes, record all 16". The owner also confirmed the five largest loosenings by name, relayed by the dashboard session at about 05:27Z: "I confirm these: * The Stremio CORS rule and URL-path token. * The privileged MSI updater helper. * `LODESTAR_TOKEN` accepted from the environment on Docker and Unraid. * Sealed names kept on worker disks. * The companion running under Lodestar's own account." Each question is now decided as the recommendation in `docs/decisions/2026-11-06-runner-planning-wave-answers.md`, "Not covered":
+47. **The runner's recommendation on every question §2.46 left with the owner** (owner, 2026-11-06T05:23Z, relayed by the dashboard session): "Go with the runner's recommendation on all". The dashboard session showed each of the 16 questions with the plan's recommendation. The owner then confirmed it directly to the runner (runner chat, about 2026-11-06T05:26Z), with the security and content-safety loosenings named: "Yes, record all 16". The owner also confirmed the five largest loosenings by name, relayed by the dashboard session at about 05:27Z: "I confirm these: * The Stremio CORS rule and URL-path token. * The privileged MSI updater helper. * `LODESTAR_TOKEN` accepted from the environment on Docker and Unraid. * Sealed names kept on worker disks. * The companion running under Lodestar's own account." Each question is now decided as **the plan's recommendation in full, as its plan row gives it**: `docs/plan/2026-11-05-v07-m7.md` §6 Q1–Q4, `docs/plan/2026-11-06-v06-companions.md` §5 Q3–Q6 and Q21, `docs/plan/2026-11-06-v06-workers.md` §5 Q1–Q2, `docs/plan/2026-11-06-m8-hardening.md` §5 OQ1 and OQ6, `docs/plan/2026-11-06-m6-gap-audit.md` §5 Q13, and `docs/plan/2026-11-06-v08.md` §6 Q-o1 and Q-o4. The bullets below summarise those rows and keep every safeguard. Where a bullet and a plan row differ, the plan row wins.
     - **v0.7:**
-      - **Q1:** the Stremio addon ships, off by default. It has a dedicated read-only, revocable `stremio` key in the URL path, redacted from logs, and CORS `*` on the addon routes only. Every filter and pack applies.
-      - **Q2:** private-tracker IRC announces ship off, with Account consent and `private_source`. There's no shipped definition for a tracker whose rules forbid bots.
-      - **Q3:** a PreDB IRC network ships only if its operators say read-only clients are fine.
-      - **Q4:** AniDB (at most 1 request every 2 s), srrDB and PreDB (at most 1 a second). Debrid only for a provider with a cache check today, including its hash lookups of verified public items.
+      - **Q1:** the Stremio addon ships, off by default.
+        - A dedicated `stremio` key scope: read-only, shown once and revocable.
+        - The token appears only in the addon's own paths (`/stremio/{token}/…`) and is redacted from logs.
+        - CORS `*` on those paths only, never with credentials.
+        - The user guide says HTTPS needs the user's own reverse proxy, and recommends LAN only.
+        - Inducement guard: the addon's catalogues and help text never suggest infringing use, and every filter and pack applies.
+      - **Q2:** private-tracker IRC announces ship off, with Account consent and `private_source`.
+        - There's no shipped definition for a tracker whose published rules forbid announce bots.
+        - The settings text and the user guide tell the user to follow their tracker's rules.
+        - `.torrent` files are fetched only on explicit interest.
+      - **Q3:** IRC-3 ships a network and channel only if its operators publish that read-only clients are fine, recorded in IRC-3's decisions file. Otherwise the user enters their own, and the text says to check the channel's rules.
+      - **Q4:** yes for the four grey enrichment services, each slice recording its terms check.
+        - AniDB: a registered client, at most 1 request every 2 s, interest-only.
+        - srrDB and PreDB: at most 1 a second, user interest first.
+        - Debrid: only for a provider that offers a cache check today and whose terms allow it, otherwise dropped from v0.7. Its hash lookups of verified public items are allowed (v0.7 Q5's exception).
     - **Companions:**
       - **cq3:** the same account, sandboxed. A plain warning shows where no sandbox applies. Never root or administrator.
       - **cq4:** a guided install for qBittorrent on Windows only, as the one exception to §1.7.2's fully automatic installs.
       - **cq5:** a credential can be revealed after the password is re-entered, as a logged event. It never appears in exports, backups or support bundles.
-      - **cq6:** the plan's sources, every one pinned.
+      - **cq6:** every binary pinned by SHA-256 or image digest, from these sources:
+        - the userdocs static `qbittorrent-nox` builds on Linux;
+        - Prowlarr from upstream;
+        - linuxserver.io's qBittorrent and Prowlarr images over hotio's;
+        - gluetun and FlareSolverr from their own projects.
       - **Q21:** FlareSolverr is opt-in only.
     - **Workers:**
       - **wkq1:** drop happens on the worker; the other actions are marked there and applied at commit. Sealed names may sit in the spool up to 1 GB or 24 h. This widens architecture §19.6's list.
-      - **wkq2:** `LODESTAR_TOKEN` is accepted only for the first join.
+      - **wkq2:** `LODESTAR_TOKEN` is accepted only for the first join, while no credentials exist.
+        - Afterwards it's ignored, with a warning to remove it.
+        - Its value is never logged.
+        - The token is single-use, bound to a name, and expires in 15 minutes.
     - **M8:**
       - **OQ1:** the self-hosted bench runner, with mitigations (a)–(d).
       - **OQ6:** private vulnerability reporting, with unfixed findings listed publicly by id and severity only. **The contact** (owner, relayed about 05:28Z): "GitHub private vulnerability reporting only. This should have been activated." So `SECURITY.md` names no email address and points to the repository's "Report a vulnerability" button. The runner checked on 2026-11-06: the repository's private vulnerability reporting is on (`GET /repos/dvortsis/lodestar-v2/private-vulnerability-reporting` returns `enabled: true`).
     - **M6 Q13:** the privileged MSI helper with its six rules, so the PK plan's main branch stands.
     - **v0.8:**
-      - **Q1:** public Nostr events and Lemmy posts only.
-      - **Q4:** a third-party adult claim only hides an item until local detection runs.
+      - **Q-o1:** both lists are the user's and start empty.
+        - Nostr may suggest general-purpose relays, each only after a recorded check of its published policy.
+        - Lemmy suggests nothing: the user enters their own instance and communities, and accepts that instance's terms.
+        - Relays that need auth or payment show "blocked by source".
+      - **Q-o4:** yes, narrowly (ADH-0). A third-party adult claim may only hide an item, pending local detection, and only while Show adult content is off.
+        - It never feeds CS-5 or tombstones.
+        - It never moves a title that detection reads as mainstream into Adult.
+        - It never touches a torrent another source found.
 
-    Every one of these conditions holds, `owner-m8-q6` included. The owner's own steps M6 Q6, Q8 and Q14 are unchanged.
+    These conditions hold: `owner-v07-q1`–`q4`, `owner-cq3`, `owner-cq4`, `owner-cq5`, `owner-cq6`, `owner-cq8`, `owner-wkq1`, `owner-wkq2`, `owner-m8-q1`, `owner-m8-q6`, `owner-m6q13`, `owner-v08-q1` and `owner-v08-q4`. The owner's own steps M6 Q6, Q8 and Q14 are unchanged.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
