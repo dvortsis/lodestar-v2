@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T18:40:00Z",
+  "updated_at": "2026-11-06T19:05:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3469,6 +3469,16 @@
       "pr": 540,
       "merge": "a0eb0a90",
       "base": "release/v0.5.1"
+    },
+    "ENR-9": {
+      "status": "merged",
+      "pr": 542,
+      "merge": "f907139d"
+    },
+    "X-flake-states-clock": {
+      "status": "merged",
+      "pr": 541,
+      "merge": "7cf25127"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5246,6 +5256,10 @@
     {
       "at": "2026-11-06T18:30:00Z",
       "note": "#541 X-flake-states-clock reviewed MERGE (merge when playwright green). Follow-up X-e2e-baseline-refresh (Sonnet, small): web/e2e/README.md line ~60 add \"call freezeClock(page) before go() in any spec that takes a snapshot\"; regenerate the other Insights state baselines that still hold stale text (\"Last updated last week\", \"hashes\") via e2e.yml dispatch update_snapshots (all mode limited to insights) - margins are eaten. Add X-flake-states-clock to slices.yaml in the runner PR."
+    },
+    {
+      "at": "2026-11-06T19:05:00Z",
+      "note": "#541 merged (7cf25127), #542 ENR-9 merged (f907139d; archived). rc.5 a0eb0a90: Release dry run 42265893762 success, CI 42265898601 success -> v0.5.1 tag target confirmed green; go waits on gluetun leg (~23:42Z) + MSI dht.restart_check line. #534 asked to bring main in for e2e. WK-7 launched slot 3. ENR-9b now ready (deps ENR-9) once in slices.yaml."
     }
   ],
   "main_health": [
@@ -5929,7 +5943,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T18:40:00Z",
+    "updated": "2026-11-06T19:05:00Z",
     "items": [
       {
         "slot": 1,
@@ -5949,15 +5963,15 @@
       },
       {
         "slot": 3,
-        "slice": "ENR-9",
+        "slice": "WK-7",
         "role": "build",
         "agent": "claude",
-        "doing": "claim encoding v3 (enrichment; on-disk format) (session_01MMjhn9Viqhw3iZdh2uGVcR)",
-        "since": "2026-11-06T16:52:00Z"
+        "doing": "store-free worker stages (workers critical path) (session_01MMjhn9kmTceZxQ9gZgNY1V)",
+        "since": "2026-11-06T19:05:00Z"
       },
       {
         "slot": 4,
-        "slice": "CMP-0",
+        "slice": "CMP-0a",
         "role": "build",
         "agent": "claude",
         "doing": "companions crate + compiled-in catalogue (companions root; 2R) (session_01MMjhnCLJ8wemnkM7h8H2xG)",
