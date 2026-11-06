@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T00:26:27Z",
+  "updated_at": "2026-11-06T00:39:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3387,6 +3387,12 @@
       "session": "session_01MMjhn9toR888c1KtXVNwiz",
       "brief": "briefs/X-sp4-followups.md",
       "launched": "2026-11-06T00:02Z"
+    },
+    "runner-slot-limit-4": {
+      "status": "merged",
+      "pr": 522,
+      "merge": "96e421dd",
+      "at": "2026-11-06T00:39:20Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3776,7 +3782,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-06T00:02Z",
+  "last_heartbeat": "2026-11-06T00:39:20Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -5757,7 +5763,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T00:26:27Z",
+    "updated": "2026-11-06T00:39:20Z",
     "items": [
       {
         "slot": 3,
