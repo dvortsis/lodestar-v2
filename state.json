@@ -3503,8 +3503,10 @@
       "merge": "be6076d8"
     },
     "ENR-9b": {
-      "status": "running",
-      "session": "session_01MMjhnBVncrzXCiFejzp8vp"
+      "status": "merged",
+      "session": "session_01MMjhnBVncrzXCiFejzp8vp",
+      "pr": 551,
+      "merge": "a786b46c"
     },
     "CMP-0": {
       "status": "merged",
@@ -3523,6 +3525,10 @@
     "X-consent-gate-polish": {
       "status": "running",
       "session": "session_01MMjhnA1MJreiFSjF8iDbmz"
+    },
+    "WK-2": {
+      "status": "running",
+      "session": "session_01MMjhnBWxp745BwvUruYDGs"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6068,22 +6074,22 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T22:01Z",
+    "updated": "2026-11-06T23:08Z",
     "items": [
       {
         "slot": 1,
-        "slice": "ENR-9b",
+        "slice": "WK-2",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #551 at f007c839, delta review (session_01MMjhnBVncrzXCiFejzp8vp)",
-        "since": "2026-11-06T21:29Z"
+        "doing": "lodestar worker join/connect/renew/drain (session_01MMjhnBWxp745BwvUruYDGs)",
+        "since": "2026-11-06T23:08Z"
       },
       {
         "slot": 2,
         "slice": "SRC-15b",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #552 at 187ac9a9, in review (session_01MMjhnAVcRo5JpndpMaiznS)",
+        "doing": "PR #552 at e6d6b7ea, delta review (session_01MMjhnAVcRo5JpndpMaiznS)",
         "since": "2026-11-06T21:19Z"
       },
       {
@@ -6099,7 +6105,7 @@
         "slice": "X-fetch-pool-bytes",
         "role": "build",
         "agent": "claude",
-        "doing": "cap fetch pool held bytes (session_01MMjhn99r1XH9VGBNE9VYji)",
+        "doing": "PR #554 at 8904812c, in review (session_01MMjhn99r1XH9VGBNE9VYji)",
         "since": "2026-11-06T21:44Z"
       }
     ],
