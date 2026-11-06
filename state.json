@@ -5362,7 +5362,8 @@
         "SRC-15b narrowed: External/Restricted/Overlay dialogs + purge + all-four strings test",
         "Docs mismatch: server requires admin password for purge vs \u00a710.10.7/plan Q13 'no password' \u2014 settle docs (server stricter = safe side)",
         "X-consent-gate-polish/lift: Account isn't gated today",
-        "slices.yaml ENR-9b owns: add crates/pipeline/tests/claims_v3_inactive.rs"
+        "slices.yaml ENR-9b owns: add crates/pipeline/tests/claims_v3_inactive.rs",
+        "slices.yaml SRC-15b owns: add web/.size-limit.mjs (runner A, 21:46Z: lazy dialogs, sourcesLater exemption, on-demand entry)"
       ]
     }
   ],
