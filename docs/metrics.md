@@ -869,7 +869,7 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 | `cluster_listening` | gauge | 1 while the cluster port is bound and served. 0 with `cluster_allowed 1` means it couldn't open: see `cluster_start_failures_total` and the `cluster.start_failed` log line. |
 | `cluster_workers_connected` | gauge | Remote workers with a live session. |
 | `cluster_handshaking` | gauge | Connections still in their pre-authentication handshake (TLS, then the WebSocket upgrade or a join request). |
-| `cluster_leases_held` | gauge | Leases remote workers hold now. The built-in worker's are in `leases_outstanding`. |
+| `cluster_leases_held` | gauge | Leases remote workers hold now. `leases_outstanding` counts every lease, local and remote, plus keys waiting for a re-grant. |
 | `cluster_leases_waiting` | gauge | Keys whose lease ended without an outcome (a worker went silent, was revoked or drained), waiting to be granted again. |
 | `cluster_sessions_total` | counter | Worker sessions started. |
 | `cluster_preauth_refused_total{reason}` | counter | Connections closed before authentication: `capacity` (over the pending caps, closed on accept), `handshake_timeout` (not finished within `handshake_timeout_secs`), `handshake_failed` (not TLS, no certificate this cluster's CA issued, a revoked or expired one, or a bad upgrade). |

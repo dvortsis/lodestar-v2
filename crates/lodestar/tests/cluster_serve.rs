@@ -204,8 +204,16 @@ fn the_cluster_port_is_off_until_workers_are_allowed() {
     ] {
         assert!(rows.iter().any(|(k, _)| k == key), "{key} in {rows:?}");
     }
-    // Private keys are sealed, never stored in the clear: the CA row
-    // holds a certificate and a sealed key, and the database alone opens
-    // neither without `secrets.key`.
+    // Private keys are sealed, never stored in the clear: the CA row is
+    // `v1 <cert> <sealed key>`, and the sealed key needs `secrets.key`.
+    let ca = &rows
+        .iter()
+        .find(|(k, _)| k == "cluster.ca.current")
+        .unwrap()
+        .1;
+    let fields: Vec<&str> = ca.split(' ').collect();
+    assert_eq!(fields.len(), 3, "{ca}");
+    assert_eq!(fields[0], "v1");
+    assert!(!ca.contains("PRIVATE KEY"));
     assert!(dir.path().join("secrets.key").exists());
 }

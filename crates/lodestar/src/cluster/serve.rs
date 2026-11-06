@@ -210,8 +210,9 @@ fn open_pki(w: &Wiring, errors: Arc<AtomicU64>) -> Result<(Pki, StoreCheck), Sta
 
 /// Seals the cluster's keys again with the key file's primary key, if a
 /// cluster PKI exists; `Ok(false)` (and nothing written) if it never did.
-/// Blocking; the server must not be running.
-fn reseal_pki(w: &Wiring) -> Result<bool, ClusterError> {
+/// Blocking; no server may be running on this database (an offline
+/// rotation, with `serve` stopped, can call it directly).
+pub(crate) fn reseal_pki(w: &Wiring) -> Result<bool, ClusterError> {
     let mut store = Store::open(&w.db, w.store.clone())?;
     if store.settings_with_prefix(PKI_PREFIX)?.is_empty() {
         return Ok(false);
@@ -771,22 +772,34 @@ mod tests {
             .unwrap()
     }
 
-    /// Whether `creds` gets a session (TLS, the upgrade, then `Hello` and
-    /// `Welcome`).
-    async fn connects(h: &ClusterHandle, creds: &Credentials) -> bool {
-        let addr = h.local_addr().unwrap().to_string();
-        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let Ok(link) = lodestar_cluster::connect(&addr, creds, clock.clone(), WAIT).await else {
-            return false;
-        };
+    /// A mutual-TLS link, upgraded, before `Hello`.
+    async fn link(h: &ClusterHandle, creds: &Credentials) -> Option<lodestar_cluster::WorkerLink> {
+        let addr = h.local_addr()?.to_string();
+        lodestar_cluster::connect(&addr, creds, Arc::new(SystemClock), WAIT)
+            .await
+            .ok()
+    }
+
+    /// `Hello`, then `Welcome`, on `link`.
+    async fn hello(
+        link: lodestar_cluster::WorkerLink,
+        creds: &Credentials,
+    ) -> Result<lodestar_cluster::WorkerSession, lodestar_cluster::ClientError> {
         let hello = lodestar_cluster::proto::Hello::new(creds.worker().0, Default::default());
         let config = lodestar_cluster::WorkerConfig {
             auto_heartbeat: false,
             ..lodestar_cluster::WorkerConfig::default()
         };
-        lodestar_cluster::WorkerSession::start(link, hello, clock, config)
-            .await
-            .is_ok()
+        lodestar_cluster::WorkerSession::start(link, hello, Arc::new(SystemClock), config).await
+    }
+
+    /// Whether `creds` gets a session (TLS, the upgrade, then `Hello` and
+    /// `Welcome`).
+    async fn connects(h: &ClusterHandle, creds: &Credentials) -> bool {
+        match link(h, creds).await {
+            Some(l) => hello(l, creds).await.is_ok(),
+            None => false,
+        }
     }
 
     #[tokio::test]
@@ -895,6 +908,51 @@ mod tests {
         b.shutdown().await;
     }
 
+    /// Turning workers off ends live sessions with `Stop(Shutdown)`, and a
+    /// connection still before its `Hello` gets no session afterwards.
+    #[tokio::test]
+    async fn off_ends_every_session_and_every_handshake() {
+        let dir = tempfile::tempdir().unwrap();
+        let cluster = Cluster::start(wiring(dir.path(), true, any_port()))
+            .await
+            .unwrap();
+        let h = cluster.handle();
+        let (one, two) = (join(&h, "w1").await, join(&h, "w2").await);
+        let held = link(&h, &one).await.expect("a link");
+        let mut live = hello(link(&h, &two).await.unwrap(), &two).await.unwrap();
+        until("connected", || {
+            let n = series(&metrics(&h), "lodestar_cluster_workers_connected");
+            (n == 1, n)
+        })
+        .await;
+
+        h.set_allowed(false);
+        let ended = tokio::time::timeout(DEADLINE, async {
+            loop {
+                match live.next_event().await {
+                    Some(lodestar_cluster::WorkerEvent::Ended(reason)) => return reason,
+                    Some(_) => continue,
+                    None => return None,
+                }
+            }
+        })
+        .await
+        .expect("the live session ended");
+        assert_eq!(
+            ended,
+            Some(lodestar_cluster::proto::StopReason::Shutdown),
+            "told why"
+        );
+        until("closed", || (h.local_addr().is_none(), h.local_addr())).await;
+        // The link that was through TLS and the upgrade, but hadn't said
+        // `Hello`, is refused now.
+        assert!(hello(held, &one).await.is_err());
+        let m = metrics(&h);
+        assert_eq!(series(&m, "lodestar_cluster_workers_connected"), 0);
+        assert_eq!(series(&m, "lodestar_cluster_sessions_total"), 1, "{m}");
+        cluster.shutdown().await;
+    }
+
     #[tokio::test]
     async fn a_taken_port_fails_the_start_and_creates_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -967,6 +1025,17 @@ mod tests {
         })
         .await;
         assert!(connects(&h, &creds).await);
+
+        // Off with a PKI: it's resealed, and the port stays closed.
+        h.set_allowed(false);
+        until("closed", || (h.local_addr().is_none(), h.local_addr())).await;
+        let mut secrets = SecretStore::open_or_create(dir.path()).unwrap();
+        secrets.rotate().unwrap();
+        assert!(h.reseal().await.unwrap());
+        secrets.retire_old_keys().unwrap();
+        assert_eq!(h.local_addr(), None);
+        let fresh = SecretStore::open_or_create(dir.path()).unwrap();
+        assert_eq!(fingerprint(&fresh).unwrap(), before);
         cluster.shutdown().await;
     }
 

@@ -816,9 +816,12 @@ impl ClusterServer {
     }
 
     /// Stops the listener, the ticks and every session.
+    /// A connection still in its handshake when this runs gets no session
+    /// and redeems no token afterwards: the flag is set under the fleet
+    /// lock, which registration checks it under.
     pub fn shutdown(&self) {
-        self.shutdown.send_replace(true);
         let fleet = lock(&self.fleet);
+        self.shutdown.send_replace(true);
         for state in fleet.workers.values() {
             if let Some(slot) = &state.session {
                 slot.stop(StopReason::Shutdown);
@@ -827,13 +830,15 @@ impl ClusterServer {
     }
 
     /// Serves the cluster port until [`shutdown`](Self::shutdown), ticking
-    /// every heartbeat unless `auto_tick` is off.
+    /// every heartbeat unless `auto_tick` is off. It returns once the
+    /// listener is closed and no tick is running.
     pub async fn serve(self: Arc<Self>, listener: TcpListener) {
         let mut stop = self.shutdown.subscribe();
+        let mut ticks = None;
         if self.config.auto_tick {
             let me = self.clone();
             let mut stop = self.shutdown.subscribe();
-            tokio::spawn(async move {
+            ticks = Some(tokio::spawn(async move {
                 let mut every = tokio::time::interval(me.config.heartbeat);
                 every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 every.tick().await;
@@ -843,11 +848,11 @@ impl ClusterServer {
                         _ = every.tick() => me.tick().await,
                     }
                 }
-            });
+            }));
         }
         loop {
             let accepted = tokio::select! {
-                _ = stop.changed() => return,
+                _ = stop.changed() => break,
                 a = listener.accept() => a,
             };
             let (tcp, addr) = match accepted {
@@ -865,6 +870,12 @@ impl ClusterServer {
             };
             let me = self.clone();
             tokio::spawn(async move { me.connection(tcp, permit).await });
+        }
+        // A tick under way (an hourly `maintain` writing the PKI) finishes
+        // before this returns, so a caller that waits for `serve` (a
+        // secrets-key reseal) knows nothing writes the PKI after.
+        if let Some(ticks) = ticks {
+            let _ = ticks.await;
         }
     }
 
@@ -960,6 +971,9 @@ impl ClusterServer {
     }
 
     async fn redeem(&self, token: JoinToken, public_key: [u8; 32]) -> JoinReply {
+        if *self.shutdown.borrow() {
+            return JoinReply::Refused;
+        }
         let now = self.clock.now_secs();
         let grant = self
             .with_pki(move |p| {
@@ -1039,6 +1053,11 @@ impl ClusterServer {
         let state_draining;
         {
             let mut fleet = lock(&self.fleet);
+            if *self.shutdown.borrow() {
+                drop(fleet);
+                self.finish(&mut link, Some(StopReason::Shutdown)).await;
+                return;
+            }
             let state = fleet
                 .workers
                 .entry(peer.worker)
