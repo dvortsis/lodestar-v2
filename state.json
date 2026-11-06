@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T16:25:00Z",
+  "updated_at": "2026-11-06T16:40:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5214,6 +5214,10 @@
     {
       "at": "2026-11-06T16:25:00Z",
       "note": "OWNER (direct, runner chat ~16:22Z): \"No, do the text-only rc.5 (a)\" - supersedes relayed \"b\" (16:19Z). R-rc5-notice asked of X-legal-docs-r2 session (session_01MMjhn9HcpxXjrtFJYUbxyn): branch release/rc5-notice -> release/v0.5.1, notice files only + rc5 delta doc; NOTICE_VERSION by substance test (if 3 on release, main -> 4). Then fresh Opus review, merge, Release dry run on rc.5 commit, send owner the tag commit. v0.5.1 tag moves from dba1a5c0 to the rc.5 commit; rc.4 soak/gluetun/MSI evidence carries over (text-only delta). Record in \u00a72.48 via #534; update dashboard G-v051 text in the gluetun verdict PR."
+    },
+    {
+      "at": "2026-11-06T16:40:00Z",
+      "note": "OWNER (direct, runner chat ~16:35Z) approved SRC-4 consent texts (Q1): \"Approve, bound that sentence (Recommended)\" after relay 16:20Z \"...#L79 looks good\". Account text: \"Results found only through your account stay on this server... If a public source reports the same torrent, it's treated as public.\" Record \u00a72.49 + ext:owner-q1 met + drop owner-queue item 3 in the runner PR right after #534 merges (with \u00a70 \u00a72.48 checklist step, slices LEGAL-3a, X-win-refusal-ux, X-win-log-held-open). Unblocks SRC-15b (Sonnet; verbatim strings check). X-consent-gate-052 still ships first; SRC-15b lets a class through once its dialog exists."
     }
   ],
   "main_health": [
