@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T16:45:00Z",
+  "updated_at": "2026-11-06T16:52:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3457,11 +3457,9 @@
       "brief": "briefs/WK-6.md"
     },
     "WK-4": {
-      "status": "running",
-      "session": "session_01MMjhnCbXRqyZhP2RFoU9NJ",
-      "model": "opus",
-      "launched": "2026-11-06T15:14:15Z",
-      "brief": "briefs/WK-4.md"
+      "status": "merged",
+      "pr": 536,
+      "merge": "db7b48bd"
     },
     "X-consent-gate-052": {
       "status": "running",
@@ -5222,6 +5220,10 @@
     {
       "at": "2026-11-06T16:45:00Z",
       "note": "Found via #534: settings.logging.event_log_errors (default true, shown in Settings -> Logging) is read by no code; no Windows Event Log writer exists. A visible setting that does nothing. Fold into X-win-refusal-ux (v0.5.2): implement Event Log writes for errors + the service refusal reason (Event Log source registered by the MSI), or hide the setting until it works. Runner decided NOTICE_VERSION=3 on release/v0.5.1 (rc.5), main -> 4 follow-up PR after #534."
+    },
+    {
+      "at": "2026-11-06T16:52:00Z",
+      "note": "#536 WK-4 merged (db7b48bd); session archived. Review non-blocking: (1) actor.rs on_external_ip `fits` does not reject duplicate slots among kept saved ids (needs hand-crafted state; one-line fix) -> fold into CR-1c (next actor.rs slice); (2) WK-10: shard fixed per node lifetime, so a live Assign change restarts the DHT node, not the process; (3) shard_tests assumes >=4 samples/tick. WK-10 notes also get the docs/metrics.md target-prefix update. ENR-9 launched slot 3."
     }
   ],
   "main_health": [
@@ -5905,7 +5907,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T15:40:00Z",
+    "updated": "2026-11-06T16:52:00Z",
     "items": [
       {
         "slot": 1,
@@ -5925,11 +5927,11 @@
       },
       {
         "slot": 3,
-        "slice": "WK-4",
+        "slice": "ENR-9",
         "role": "build",
         "agent": "claude",
-        "doing": "DHT keyspace shard (workers) (session_01MMjhnCbXRqyZhP2RFoU9NJ)",
-        "since": "2026-11-06T15:14:15Z"
+        "doing": "claim encoding v3 (enrichment; on-disk format) (session_01MMjhn9Viqhw3iZdh2uGVcR)",
+        "since": "2026-11-06T16:52:00Z"
       },
       {
         "slot": 4,
