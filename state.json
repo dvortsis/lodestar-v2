@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T03:55:39Z",
+ "updated_at": "2026-11-06T04:06:55Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3368,10 +3368,12 @@
    "at": "2026-11-06T00:26:09Z"
   },
   "X-tcache-recheck": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhnCPUNw7cymdGSLRHSf",
    "brief": "briefs/X-tcache-recheck.md",
-   "launched": "2026-11-05T23:51Z"
+   "launched": "2026-11-05T23:51Z",
+   "pr": 525,
+   "merge": "50519837"
   },
   "X-sources-low": {
    "status": "merged",
@@ -5815,7 +5817,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T03:38:46Z",
+  "updated": "2026-11-06T04:06:55Z",
   "items": [
    {
     "slot": 3,
@@ -5840,9 +5842,10 @@
     "slice": "X-tcache-recheck",
     "role": "build",
     "agent": "claude",
-    "doing": "Security: re-check torrent-cache lookups at send; stop a source when it is turned off (pre-audit M1, M2)",
-    "since": "2026-11-05T23:51Z",
-    "session": "session_01MMjhnCPUNw7cymdGSLRHSf"
+    "doing": "#525 merged 50519837; session archived",
+    "since": "2026-11-06T04:06:55Z",
+    "session": "session_01MMjhnCPUNw7cymdGSLRHSf",
+    "status": "idle"
    },
    {
     "slot": 17,
