@@ -36,11 +36,16 @@ The brief asked for a guard: don't add a payload signature to SP-4's set while t
 - **Rows are held by place:** `Rows` keeps them in a `Vec` and maps row numbers to places in a `BTreeMap`, which gives the ordered walks the cap and compaction need. A deleted row's place is reused.
   - Compaction rewrites a row in place. It finds each live add's bucket before the rewrite and points that bucket at the add's new index afterwards. Buckets don't move in between.
 - **A load sizes the index once,** for the adds it reads up to the cap. Growing step by step left each outgrown table resident under glibc: 8 MB more after a load than after the same set filled by adds.
-- **Refinement, flagged (§2.19): at most 524,288 rows held at once** (`MAX_HELD_ROWS`, the slot's 19 bits). About 2,000 rows hold the cap, and no set reaches the limit in practice. Past it:
-  - A row a load can't hold is treated like a row that doesn't read: lost, listed as `packs.sp4.row.<n>`, left alone and never written over. That loses its signatures, as a row that doesn't read does.
-  - A row that can't be started is treated like the row numbers running out: the set stops changing and lists `packs.sp4.row.numbers`. That errs strict.
-  - Either lasts until a restart. Every change appends first: an add, a removal, and so the evictions and compactions that could delete a row. So a full set can't free a row either.
-  - `rows_past_what_memory_holds_are_lost_or_never_started` checks both, with a lower limit.
+- **Refinement, flagged (§2.19): at most 524,288 rows held at once** (`MAX_HELD_ROWS`, the slot's 19 bits). About 2,600 rows hold the cap after churn, and filling the limit would take about 268M releases (the runner's review of #524). Past it, **the oldest row goes to make room** (runner, #524):
+  - Its live signatures go, as the cap drops the oldest, and it's deleted at the next flush. That errs loose, like the cap. Its removals cancel nothing older, since no held row is older, and the lost rows older than it go too, as an eviction past them does.
+  - A load does the same for rows past the limit (another build's), so nothing is listed as unreadable for it. The note is `SP-4 signature row <n> dropped: more rows than memory holds`, logged as `pipeline.filter_rule_skipped` with `reason: rows_full`. At run time, the writer logs the same after its flush, for rows a batch or a release dropped (`SpamSigs::take_dropped`).
+  - The set keeps changing. An earlier version of this PR stopped it, and a restart didn't clear that, since a load doesn't compact. The runner ruled a permanent stop the wrong failure.
+  - `past_what_memory_holds_the_oldest_row_goes` drives the limit with a lower test-only limit. Adds and releases keep working past it and across a reload. `a_load_past_what_memory_holds_drops_the_oldest_rows` checks the load.
+- **Rows of removals no longer leak** (RP-5's known limit; runner, #524). A removal is kept while a stale add of its signature is still stored. A tail row that took a run of releases was compacted while those adds were still stored, then never touched again once they went.
+  - Now a set of stored removals by signature and row (`removals`) finds that row once the signature's last stale add goes, and compaction runs on it.
+  - It costs a tree lookup per stale signature dropped, and about 32 bytes per stored removal.
+  - `rows_of_removals_dont_outlive_what_they_cancel`: 60 rounds of 2,555 hides with every fifth released. Before this change, 33,763 entries in 67 rows, still growing. Now it stays within twice the cap plus four rows.
+- **A load of more than the cap shrinks the index back** once the cap is applied (`Index::fit`, runner's optional item, #524). So rows another cap wrote don't leave a 16 MB table (`a_load_of_more_than_the_cap_shrinks_the_index_back`).
 - **Unchanged:** the stored rows and their format, the load rules (fail closed per row, last entry wins, the cap applied again), compaction, releases, and every SP-4 behaviour. RP-5's tests in `crates/filter/tests/sp4.rs` pass unchanged, including the reload property test `a_reload_holds_what_memory_held`. The unit test that checks the index against the rows now also runs at 5,000 signatures, with long probe runs and reused places, and checks the same again on its rows loaded into a fresh set.
 
 ## Measurements
@@ -57,7 +62,7 @@ Release build, this session's container, each run in its own process, three runs
 | A lookup that misses | 38 to 43 ns | 95 to 148 ns | |
 
 - **The clean sets are a best case.** A re-add (a payload hidden again) leaves a stale add in its old row until that row is a quarter dead and compacted. The set counts stale adds per signature in a std map. The re-added case covers that: 81,557 dead entries in 2,610 rows, and 75,913 signatures in the stale map. RP-5 had the same map, so it isn't new here.
-- **The 25 MB gate holds on what the set holds** in all three cases, and on resident memory for the clean ones. The tests assert it. Under glibc, the re-added case is about 4 MB over resident: the holes compaction's reallocations leave. Two things were tried, and neither changed it by more than noise: rewriting a row in its own buffer, and starting each row at full capacity. Release builds on musl use mimalloc (`crates/store/src/memstats.rs`), which this container didn't measure.
+- **The 25 MB gate holds on what the set holds** in all three cases, and on resident memory for the clean ones. These are `#[ignore]` tests, run by hand as RP-5's measurements are, not an automated CI gate. Under glibc, the re-added case is about 4.4 MB over resident: the holes compaction's reallocations leave. Two things were tried, and neither changed it by more than noise: rewriting a row in its own buffer, and starting each row at full capacity. Release builds on musl use mimalloc (`crates/store/src/memstats.rs`), which this container didn't measure.
 - **Running them:** they're `#[ignore]` measurements. `cargo test --release -p lodestar-filter --test sp4 -- --ignored --nocapture --exact memory_at_the_cap_loaded` (and `…_added`, `…_readded`).
 - **Lookups are slower,** mostly misses: each bucket a probe passes costs a read of the entry it points at, where the std table matched a control byte. On the writer that's 0.08 µs a crawl commit, about 0.3% of an insert:
 
@@ -71,4 +76,9 @@ Release build, this session's container, each run in its own process, three runs
 - Both are within RP-5's 5% gate. A tag byte per bucket would bring the miss back to about one read, for 2 MB more. It isn't worth it at 0.3% of an insert.
 
 ## Outside the brief's listed paths
-None. `runner/slices.yaml` and `runner/dashboard.yaml` are left to runner PR #522 (runner, 2026-11-06T00:13Z).
+These are the runner's round on #524:
+- `crates/filter/src/load.rs`: `load_spam_sigs` notes a dropped row with its own reason.
+- `crates/pipeline/src/log_events.rs`: `filter_note` maps it to `rows_full`, and `FILTER_RULE_SKIPPED`'s doc names that reason.
+- `crates/pipeline/src/writer.rs`: the SP-4 flush logs the rows dropped since the last flush.
+
+`runner/slices.yaml` and `runner/dashboard.yaml` are left to runner PR #522 (runner, 2026-11-06T00:13Z).

@@ -1238,7 +1238,7 @@ fn memory_at_the_cap_added() {
 /// dead and compacted. The clean sets above hold none. The gate is on
 /// the bytes the set holds ([`SpamSigs::held_bytes`]): under glibc,
 /// resident memory also keeps the holes compaction's reallocations leave,
-/// about 6 MB more here. Run alone, in its
+/// about 4.4 MB more here. Run alone, in its
 /// own process and in release: `cargo test --release -p lodestar-filter
 /// --test sp4 -- --ignored --nocapture --exact memory_at_the_cap_readded`.
 #[test]

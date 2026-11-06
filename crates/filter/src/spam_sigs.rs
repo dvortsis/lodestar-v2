@@ -28,6 +28,9 @@
 //!   added again later, or dropped by the cap), that row alone is
 //!   rewritten without them, or deleted when nothing in it is left. A
 //!   removal is kept while an older row still holds an add it cancels.
+//!   Once that add goes, the removal's own row is compacted too, so a row
+//!   of removals nothing else touches still goes (X-sp4-followups; RP-5
+//!   left such rows until something else in them changed).
 //! - **The cap isn't written:** it's applied again on load, oldest first.
 //!   Dropped entries go when their row is compacted. Until then a restart
 //!   after releases took the set below its cap can bring a few of them
@@ -56,11 +59,10 @@
 //!
 //! **Rows held at once:** a location has room for 524,288 rows
 //! (`MAX_HELD_ROWS`): 2,000 or so hold the cap. Past that, which no set
-//! reaches in practice, a row that can't be held is treated like one that
-//! doesn't read (lost, listed and left alone) and a new row like the row
-//! numbers running out (the set stops changing, and says so). The first
-//! loses that row's signatures, as a row that doesn't read does; the
-//! second errs strict.
+//! reaches in practice, the oldest row goes to make room, at run time or
+//! on a load: its signatures go as the cap drops the oldest, it's deleted
+//! at the next flush, and it's logged (`rows_full`). That errs loose, as
+//! the cap does, and the set keeps changing.
 
 use std::collections::hash_map::RandomState;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -101,6 +103,9 @@ pub const MAX_ROW: u64 = 1 << 40;
 /// row a restart wouldn't read: no signature is added, and no release
 /// takes effect either (that errs strict).
 pub const ROW_BAND: u64 = MAX_ROW / 2;
+/// Why a row was dropped, in the note a load returns and the log: memory
+/// held as many rows as it can (`MAX_HELD_ROWS`).
+pub const ROWS_FULL: &str = "more rows than memory holds";
 /// The label suffix when the row numbers ran out ([`ROW_BAND`]).
 const OUT_OF_NUMBERS: &str = "numbers";
 /// The `filter.stand_ins` label prefix of a row that doesn't read.
@@ -416,6 +421,14 @@ impl Index {
         None
     }
 
+    /// Shrinks the table to the size its signatures need, if it's larger.
+    fn fit(&mut self, rows: &Rows) {
+        let size = self.len.saturating_mul(2).next_power_of_two().max(16);
+        if size < self.buckets.len() {
+            self.resize(size, rows);
+        }
+    }
+
     fn grow(&mut self, rows: &Rows) {
         self.resize((self.buckets.len() * 2).max(16), rows);
     }
@@ -494,6 +507,16 @@ struct Inner {
     gone: BTreeSet<u64>,
     /// A row couldn't be started: the numbers ran out ([`ROW_BAND`]).
     out_of_numbers: bool,
+    /// The removals stored, by signature and row: a removal is needed only
+    /// while a stale add of its signature is, and these find its row once
+    /// none is ([`Inner::dropped_stale`]).
+    removals: BTreeSet<(u64, u64)>,
+    /// Signatures whose last stale add just went: their removals' rows
+    /// are compacted next ([`Inner::compact`]).
+    freed: Vec<u64>,
+    /// Rows dropped because memory held `MAX_HELD_ROWS` ([`Inner::append`]),
+    /// to be logged ([`SpamSigs::take_dropped`]).
+    dropped: Vec<u64>,
 }
 
 impl Inner {
@@ -511,6 +534,9 @@ impl Inner {
             dirty: BTreeSet::new(),
             gone: BTreeSet::new(),
             out_of_numbers: false,
+            removals: BTreeSet::new(),
+            freed: Vec::new(),
+            dropped: Vec::new(),
         }
     }
 
@@ -527,12 +553,17 @@ impl Inner {
             Some(n) => n,
             None => {
                 let n = self.next;
-                // Past the band, or more rows than memory can address
-                // (never, in practice: 524,288 rows). Either lasts until a
-                // restart: every change appends first (an add, a removal,
-                // and so the evictions and compactions that would delete
-                // a row), so a full set can't free a row either.
-                if n >= ROW_BAND || self.rows.insert(n, Vec::new()).is_none() {
+                if n >= ROW_BAND {
+                    self.out_of_numbers = true;
+                    return None;
+                }
+                // More rows than memory can address (never, in practice:
+                // 524,288 rows): the oldest row goes, its signatures with
+                // it, as the cap drops the oldest. That errs loose, and
+                // it's logged.
+                if self.rows.insert(n, Vec::new()).is_none()
+                    && !(self.drop_oldest_row() && self.rows.insert(n, Vec::new()).is_some())
+                {
                     self.out_of_numbers = true;
                     return None;
                 }
@@ -559,6 +590,7 @@ impl Inner {
             *c -= 1;
             if *c == 0 {
                 self.stale.remove(&k);
+                self.freed.push(k);
             }
         }
     }
@@ -598,6 +630,7 @@ impl Inner {
             if self.dropped_add(k, rule)
                 && let Some((n, _)) = self.append(k | REMOVED)
             {
+                self.removals.insert((k, n));
                 let mut touched = BTreeSet::new();
                 self.kill(n, &mut touched);
                 self.compact(touched);
@@ -611,10 +644,14 @@ impl Inner {
         let Some((n, _)) = self.append(k | REMOVED) else {
             return false;
         };
-        self.live.remove(k, &self.rows);
-        self.went_stale(k);
+        self.removals.insert((k, n));
         let mut touched = BTreeSet::new();
-        self.kill(loc.row(), &mut touched);
+        // Found again: starting a row for the removal may have dropped the
+        // oldest row, and the add with it ([`Inner::drop_oldest_row`]).
+        if let Some(loc) = self.live.remove(k, &self.rows) {
+            self.went_stale(k);
+            self.kill(loc.row(), &mut touched);
+        }
         self.kill(n, &mut touched);
         self.compact(touched);
         true
@@ -700,8 +737,63 @@ impl Inner {
         true
     }
 
-    /// Rewrites each touched row once a quarter of it is dead.
-    fn compact(&mut self, touched: BTreeSet<u64>) {
+    /// Drops the oldest row and everything in it, when memory holds
+    /// `MAX_HELD_ROWS` and a row must start. Its live adds go as the cap
+    /// drops the oldest; its removals cancel nothing older, since no held
+    /// row is older and the lost rows older than it go too, as an
+    /// eviction past them does. Returns whether there was a row.
+    fn drop_oldest_row(&mut self) -> bool {
+        let Some((n, _)) = self.rows.iter().next() else {
+            return false;
+        };
+        let place = self.rows.place(n).expect("held");
+        let entries = self.rows.held[place as usize].entries.clone();
+        for (i, e) in entries.iter().enumerate() {
+            let k = key(*e);
+            if e & REMOVED != 0 {
+                self.removals.remove(&(k, n));
+            } else if self.live.at(k, Rows::slot(place, i), &self.rows) {
+                self.live.remove(k, &self.rows);
+            } else {
+                self.dropped_stale(k);
+            }
+        }
+        self.rows.remove(n);
+        self.dirty.remove(&n);
+        self.gone.insert(n);
+        if self.tail == Some(n) {
+            self.tail = None;
+        }
+        if self.oldest.0 <= n {
+            self.oldest = (n.saturating_add(1), 0);
+        }
+        let older: Vec<u64> = self.lost_rows.range(..n).copied().collect();
+        for l in older {
+            self.lost_rows.remove(&l);
+            self.gone.insert(l);
+        }
+        self.dropped.push(n);
+        true
+    }
+
+    /// Rewrites each touched row once a quarter of it is dead. A removal
+    /// whose last stale add goes on the way touches its own row too, so a
+    /// row of removals no longer needed goes, though nothing else would
+    /// touch it again.
+    fn compact(&mut self, mut touched: BTreeSet<u64>) {
+        loop {
+            self.compact_rows(touched);
+            if self.freed.is_empty() {
+                return;
+            }
+            touched = BTreeSet::new();
+            for k in std::mem::take(&mut self.freed) {
+                touched.extend(self.removals.range((k, 0)..=(k, u64::MAX)).map(|(_, n)| *n));
+            }
+        }
+    }
+
+    fn compact_rows(&mut self, touched: BTreeSet<u64>) {
         for n in touched {
             let Some(place) = self.rows.place(n) else {
                 continue;
@@ -743,6 +835,7 @@ impl Inner {
                 self.dropped_stale(k);
             }
             let stale = &self.stale;
+            let held = &mut self.removals;
             let mut at = 0;
             let mut r = removals.into_iter().peekable();
             kept.retain(|e| {
@@ -750,7 +843,11 @@ impl Inner {
                 at += 1;
                 if r.peek() == Some(&i) {
                     r.next();
-                    stale.contains_key(&key(*e))
+                    let needed = stale.contains_key(&key(*e));
+                    if !needed {
+                        held.remove(&(key(*e), n));
+                    }
+                    needed
                 } else {
                     true
                 }
@@ -819,6 +916,10 @@ pub struct Loaded {
     pub len: usize,
     /// The rows that didn't read, by their keys' suffixes.
     pub lost: Vec<String>,
+    /// Rows dropped, oldest first, because memory can't hold that many
+    /// (never, in practice): their signatures go, as the cap drops the
+    /// oldest, and the rows are deleted at the next flush.
+    pub dropped: Vec<u64>,
 }
 
 impl SpamSigs {
@@ -972,11 +1073,18 @@ impl SpamSigs {
         for (n, entries) in readable {
             let len = entries.len();
             // More rows than memory can address (never, in practice:
-            // 524,288 rows): the rest are lost, as a row that doesn't read.
-            let Some(place) = inner.rows.insert(n, entries) else {
-                inner.lost_rows.insert(n);
-                continue;
+            // 524,288 rows): the oldest goes, as at run time.
+            let place = match inner.rows.insert(n, Vec::new()) {
+                Some(p) => p,
+                None if inner.drop_oldest_row() => {
+                    inner.rows.insert(n, Vec::new()).expect("a place freed")
+                }
+                None => {
+                    inner.lost_rows.insert(n);
+                    continue;
+                }
             };
+            inner.rows.held[place as usize].entries = entries;
             let mut dead = 0;
             for i in 0..len {
                 let e = inner.rows.held[place as usize].entries[i];
@@ -1010,6 +1118,17 @@ impl SpamSigs {
             }
         }
         inner.stale = stale;
+        inner.freed.clear();
+        inner.removals = inner
+            .rows
+            .iter()
+            .flat_map(|(n, r)| {
+                r.entries
+                    .iter()
+                    .filter(|e| *e & REMOVED != 0)
+                    .map(move |e| (key(*e), n))
+            })
+            .collect();
         inner.oldest = inner.rows.iter().next().map_or((0, 0), |(n, _)| (n, 0));
         let max_seen = inner.next.checked_sub(1);
         inner.tail = inner
@@ -1023,16 +1142,33 @@ impl SpamSigs {
         // Dead entries found here are compacted on the next change to
         // their row: a load writes nothing. Lost rows the cap passed are
         // still listed until then.
-        let passed = std::mem::take(&mut inner.gone);
-        inner.lost_rows.extend(passed);
+        // A table sized for more than the cap (rows another cap wrote)
+        // shrinks back once the cap is applied.
+        inner.live.fit(&inner.rows);
+        let dropped = std::mem::take(&mut inner.dropped);
+        for n in std::mem::take(&mut inner.gone) {
+            if dropped.contains(&n) {
+                inner.gone.insert(n);
+            } else {
+                inner.lost_rows.insert(n);
+            }
+        }
         let loaded = Loaded {
             len: inner.live.len(),
             lost: inner.lost_names(),
+            dropped,
         };
         let mut slot = self.lock();
         *slot = inner;
         self.settle(&slot);
         loaded
+    }
+
+    /// The rows dropped since the last call because memory held
+    /// `MAX_HELD_ROWS` (never, in practice), oldest first: for the writer
+    /// to log after its flush.
+    pub fn take_dropped(&self) -> Vec<u64> {
+        std::mem::take(&mut self.lock().dropped)
     }
 
     /// The `filter.stand_ins` labels of the rows that didn't read:
@@ -1071,6 +1207,7 @@ impl SpamSigs {
                 .map(|r| r.entries.capacity() * 8)
                 .sum::<usize>()
             + rows.free.capacity() * size_of::<u32>()
+            + inner.removals.len() * 32
             + stale_buckets * (size_of::<(u64, u32)>() + 1)
             + small * 32
     }
@@ -1240,20 +1377,27 @@ mod tests {
         }
         check(&s.lock(), cap, keys);
         // The rows it stores, loaded again, agree as well.
-        let stored: Vec<RawSetting> = s
-            .lock()
-            .rows
-            .iter()
-            .map(|(n, r)| (format!("{PREFIX}{n}"), Err(encode(&r.entries))))
-            .collect();
         let again = SpamSigs::with_cap(cap);
-        again.load(&stored);
+        again.load(&stored(&s));
         check(&again.lock(), cap, keys);
     }
 
     /// Every check that the index and the rows agree.
     fn check(inner: &Inner, cap: usize, keys: u64) {
         assert!(inner.live.len() <= cap);
+        // The removals index names every stored removal, and only those.
+        let removals: BTreeSet<(u64, u64)> = inner
+            .rows
+            .iter()
+            .flat_map(|(n, r)| {
+                r.entries
+                    .iter()
+                    .filter(|e| *e & REMOVED != 0)
+                    .map(move |e| (key(*e), n))
+            })
+            .collect();
+        assert_eq!(removals, inner.removals);
+        assert!(inner.freed.is_empty());
         assert!(
             inner.live.len() * 2 <= inner.live.buckets.len(),
             "at most half full"
@@ -1288,6 +1432,35 @@ mod tests {
         agree_after(5_000, 12_000, 200_000);
     }
 
+    /// Rounds of hides, then a release of every fifth of them: each run
+    /// of releases fills a row with removals only, while the rows of the
+    /// adds they cancel stay under a quarter dead, so each removal is
+    /// still needed. The cap later drops those adds and compacts their
+    /// rows; the rows of removals then go too, so what's stored stays
+    /// bounded however long it churns.
+    #[test]
+    fn rows_of_removals_dont_outlive_what_they_cancel() {
+        let cap = 3_000;
+        let s = SpamSigs::with_cap(cap);
+        let per_round = 5 * ROW_ENTRIES as u64;
+        let mut most = 0;
+        for round in 0..60u64 {
+            let first = round * per_round;
+            for i in first..first + per_round {
+                s.add(sig(i), HID);
+            }
+            for i in (first..first + per_round).step_by(5) {
+                assert!(s.lock().remove(sig(i), None), "round {round}: {i}");
+            }
+            most = most.max(s.shape().1);
+        }
+        let (rows, entries) = s.shape();
+        assert!(
+            most <= 2 * cap + 4 * ROW_ENTRIES,
+            "{most} entries at most, {entries} in {rows} rows at the end"
+        );
+    }
+
     #[test]
     fn a_slot_never_reads_as_empty() {
         let last = Rows::slot((MAX_HELD_ROWS - 1) as u32, (MAX_ROW_BYTES - 1) / 8 - 1);
@@ -1295,33 +1468,85 @@ mod tests {
         assert_eq!(Rows::slot(1, 0), 1 << INDEX_BITS);
     }
 
+    /// The stored rows as they'd read on a restart: for reload checks.
+    fn stored(s: &SpamSigs) -> Vec<RawSetting> {
+        s.lock()
+            .rows
+            .iter()
+            .map(|(n, r)| (format!("{PREFIX}{n}"), Err(encode(&r.entries))))
+            .collect()
+    }
+
     #[test]
-    fn rows_past_what_memory_holds_are_lost_or_never_started() {
-        // A cap above what three rows hold, so none is dropped or deleted.
+    fn past_what_memory_holds_the_oldest_row_goes() {
+        // A cap above what three rows hold, so only the limit drops rows.
         let s = SpamSigs::with_cap(10_000);
         s.lock().rows.limit = 3;
-        // Adding: a fourth row can't be started, so the set stops
-        // changing and says so, as when the numbers run out.
-        for i in 0..(3 * ROW_ENTRIES as u64) {
+        let full = 3 * ROW_ENTRIES as u64;
+        for i in 0..full {
             s.add(sig(i), HID);
         }
+        assert!(s.take_dropped().is_empty());
+        // A fourth row drops the first, its signatures with it, as the cap
+        // drops the oldest. Nothing is listed: it's logged instead.
+        s.add(sig(full), HID);
+        assert_eq!(s.take_dropped(), [0]);
+        assert!(s.take_dropped().is_empty(), "taken once");
+        assert_eq!(s.get(sig(0)), None);
+        assert_eq!(s.get(sig(ROW_ENTRIES as u64 - 1)), None);
+        assert!(s.get(sig(ROW_ENTRIES as u64)).is_some() && s.get(sig(full)).is_some());
+        assert_eq!(s.len(), 2 * ROW_ENTRIES + 1);
         assert!(s.labels().is_empty());
-        s.add(sig(1 << 30), HID);
-        assert_eq!(s.get(sig(1 << 30)), None);
-        assert_eq!(s.labels(), ["packs.sp4.row.numbers"]);
-        // Loading: a row past the limit is lost, its signatures with it,
-        // and listed; the rows before it load.
-        let rows: Vec<RawSetting> = (0..4u64)
+        assert!(s.lock().gone.contains(&0), "deleted at the next flush");
+        // It keeps changing: releases, then more adds, each dropping the
+        // oldest row whenever a new one must start.
+        for i in ROW_ENTRIES as u64..ROW_ENTRIES as u64 + 600 {
+            assert!(s.lock().remove(sig(i), None), "{i}");
+            assert_eq!(s.get(sig(i)), None);
+        }
+        for i in full + 1..full + 2_000 {
+            s.add(sig(i), HID);
+            assert!(s.get(sig(i)).is_some(), "{i}");
+        }
+        assert!(s.labels().is_empty());
+        assert!(s.lock().rows.len() <= 3);
+        check(&s.lock(), 10_000, full + 2_000);
+        // Across a reload, with the same limit: the same signatures, and
+        // it still takes adds and releases.
+        let again = SpamSigs::with_cap(10_000);
+        again.lock().rows.limit = 3;
+        let loaded = again.load(&stored(&s));
+        assert!(loaded.lost.is_empty() && loaded.dropped.is_empty());
+        assert_eq!(loaded.len, s.len());
+        for i in 0..full + 2_000 {
+            assert_eq!(again.get(sig(i)), s.get(sig(i)), "{i}");
+        }
+        for i in full + 2_000..full + 3_000 {
+            again.add(sig(i), HID);
+            assert!(again.get(sig(i)).is_some(), "{i}");
+        }
+        assert!(again.lock().remove(sig(full + 2_500), None));
+        assert!(again.labels().is_empty());
+        check(&again.lock(), 10_000, full + 3_000);
+    }
+
+    #[test]
+    fn a_load_past_what_memory_holds_drops_the_oldest_rows() {
+        let rows: Vec<RawSetting> = (0..5u64)
             .map(|n| (format!("{PREFIX}{n}"), Err(encode(&[key(sig(n)) | HIDE]))))
             .collect();
-        let again = SpamSigs::with_cap(100);
-        again.lock().rows.limit = 3;
-        let loaded = again.load(&rows);
+        let s = SpamSigs::with_cap(100);
+        s.lock().rows.limit = 3;
+        let loaded = s.load(&rows);
         assert_eq!(loaded.len, 3);
-        assert_eq!(loaded.lost, ["3"]);
-        assert!(again.get(sig(2)).is_some() && again.get(sig(3)).is_none());
-        // A deleted row's place is taken again (on rows of their own: the
-        // set never deletes a row a live slot points into).
+        assert!(loaded.lost.is_empty(), "nothing listed as unreadable");
+        assert_eq!(loaded.dropped, [0, 1]);
+        assert!(s.get(sig(1)).is_none() && s.get(sig(2)).is_some());
+        // Deleted at the next flush, and the set keeps working.
+        assert_eq!(s.lock().gone, BTreeSet::from([0, 1]));
+        s.add(sig(99), HID);
+        assert!(s.get(sig(99)).is_some());
+        // A deleted row's place is taken again.
         let mut rows = Rows::new(3);
         for n in 0..3 {
             assert_eq!(rows.insert(n, Vec::new()), Some(n as u32));
@@ -1330,8 +1555,22 @@ mod tests {
         rows.remove(0);
         assert_eq!(rows.insert(9, Vec::new()), Some(0));
         assert_eq!(rows.insert(10, Vec::new()), None);
-        // A full set stays as it is: a release appends too.
-        assert!(!s.lock().remove(sig(0), None));
-        assert!(s.get(sig(0)).is_some());
+    }
+
+    #[test]
+    fn a_load_of_more_than_the_cap_shrinks_the_index_back() {
+        let big = SpamSigs::with_cap(20_000);
+        for i in 0..20_000 {
+            big.add(sig(i), HID);
+        }
+        let s = SpamSigs::with_cap(5_000);
+        assert_eq!(s.load(&stored(&big)).len, 5_000);
+        let inner = s.lock();
+        assert_eq!(
+            inner.live.buckets.len(),
+            16_384,
+            "sized for 5,000, not 20,000"
+        );
+        check(&inner, 5_000, 20_000);
     }
 }
