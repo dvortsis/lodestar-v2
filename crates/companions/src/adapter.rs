@@ -169,6 +169,12 @@ impl EnteredUrl {
         if host.is_empty() {
             return Err(InputError::Length);
         }
+        // The base path follows the same rules as a request path, so
+        // joining the two can't reach elsewhere.
+        let base_path = &rest[authority.len()..];
+        if !base_path.is_empty() {
+            path_ok(base_path)?;
+        }
         if !authority.starts_with('[')
             && !host
                 .bytes()
@@ -265,6 +271,42 @@ pub enum Method {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestPath(String);
 
+/// The checks a path (without its query) passes, shared by
+/// [`RequestPath`] and [`EnteredUrl`]'s base path.
+///
+/// - No `%2f` or `%5c` (an encoded separator hides from the checks), no
+///   `%25` (a server that decodes twice would turn `%252e` into `.`), no
+///   `;` (path parameters like `/a/..;/b` that some servers strip), no
+///   `%00`.
+/// - No encoded byte from `0x80`: that covers overlong and fullwidth
+///   spellings of `.` and `/` (`%c0%ae`, `%ef%bc%8e`), which some servers
+///   normalise.
+/// - No `//`, and no `.` or `..` segment, plain or with `%2e`.
+fn path_ok(path: &str) -> Result<(), InputError> {
+    let lower = path.to_ascii_lowercase();
+    if lower.contains("%2f")
+        || lower.contains("%5c")
+        || lower.contains("%25")
+        || lower.contains("%00")
+        || lower.contains(';')
+    {
+        return Err(InputError::Character);
+    }
+    let b = lower.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() && matches!(b[i + 1], b'8'..=b'9' | b'a'..=b'f') {
+            return Err(InputError::Character);
+        }
+        i += 1;
+    }
+    let decoded = lower.replace("%2e", ".");
+    if decoded.contains("//") || decoded.split('/').any(|g| g == "." || g == "..") {
+        return Err(InputError::Component);
+    }
+    Ok(())
+}
+
 impl RequestPath {
     pub fn parse(s: &str) -> Result<RequestPath, InputError> {
         if s.is_empty() || s.len() > 2048 {
@@ -280,28 +322,7 @@ impl RequestPath {
         if s.to_ascii_lowercase().contains("%00") {
             return Err(InputError::Character);
         }
-        let path = s.split('?').next().unwrap_or("");
-        let lower = path.to_ascii_lowercase();
-        // An encoded `/` or `\\` hides a separator from the checks below,
-        // and a `;` starts path parameters (`/a/..;/b`) that some servers
-        // strip before routing.
-        // `%25` is refused too, so a server that decodes twice can't turn
-        // `%252e` into a `.`.
-        if lower.contains("%2f")
-            || lower.contains("%5c")
-            || lower.contains("%25")
-            || lower.contains(';')
-        {
-            return Err(InputError::Character);
-        }
-        // `//host/…` reads as a network path to some clients.
-        if lower.contains("//")
-            || lower.split('/').any(|g| {
-                g == "." || g == ".." || g == "%2e" || g == "%2e%2e" || g == ".%2e" || g == "%2e."
-            })
-        {
-            return Err(InputError::Component);
-        }
+        path_ok(s.split('?').next().unwrap_or(""))?;
         Ok(RequestPath(s.to_owned()))
     }
 
@@ -322,6 +343,8 @@ const RESERVED_HEADERS: &[&str] = &[
     "trailer",
     "upgrade",
     "expect",
+    "http2-settings",
+    "proxy",
 ];
 
 const fn eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
@@ -660,10 +683,38 @@ impl SettingKey {
 
 /// What a configuration run will change, shown to you before it runs
 /// (plan §4.3, CMP-5g) and logged by name as it's applied.
+///
+/// Only [`Configure::plan`] makes one: the constructor is crate-private, so
+/// no caller can forge a plan for a companion or add a change to one.
+///
+/// ```compile_fail
+/// use lodestar_companions::{adapter::ConfigPlan, CompanionId};
+/// let _ = ConfigPlan::new(CompanionId::parse("prowlarr").unwrap(), Vec::new());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigPlan {
-    pub companion: CompanionId,
-    pub changes: Vec<SettingKey>,
+    companion: CompanionId,
+    changes: Vec<SettingKey>,
+}
+
+impl ConfigPlan {
+    /// For this crate's adapters (CMP-8b). Only the tests call it until
+    /// CMP-8b's adapters land.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "CMP-8b's adapters are its first callers")
+    )]
+    pub(crate) fn new(companion: CompanionId, changes: Vec<SettingKey>) -> ConfigPlan {
+        ConfigPlan { companion, changes }
+    }
+
+    pub fn companion(&self) -> &CompanionId {
+        &self.companion
+    }
+
+    pub fn changes(&self) -> &[SettingKey] {
+        &self.changes
+    }
 }
 
 /// A stored credential couldn't be read. Distinct from "there is none",
@@ -778,6 +829,21 @@ impl dyn Configure + '_ {
     }
 }
 
+/// The same `apply` for `Arc<dyn Configure + Send + Sync>` and the like,
+/// which is a distinct type to the compiler.
+impl dyn Configure + Send + Sync + '_ {
+    pub fn apply<'a>(
+        &'a self,
+        http: &'a dyn GuardedHttp,
+        target: &'a Target,
+        input: &'a ConfigureInput<'a>,
+        plan: &'a ConfigPlan,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        let this: &'a (dyn Configure + 'a) = self;
+        this.apply(http, target, input, plan)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,6 +876,11 @@ mod tests {
             ("http://host/x?y=1", InputError::Character),
             ("http://host/#", InputError::Character),
             ("http://host?", InputError::Character),
+            ("http://host/a/../b", InputError::Component),
+            ("http://host/a/%2e%2e/b", InputError::Component),
+            ("http://host/a%00", InputError::Character),
+            ("http://host//x", InputError::Component),
+            ("http://host/a;b", InputError::Character),
             ("http://[::1", InputError::Character),
             ("http://[::1]x", InputError::Character),
             ("http://[::1]:0", InputError::Range),
@@ -916,6 +987,11 @@ mod tests {
             ("/a/%00", InputError::Character),
             ("/a?x=%00", InputError::Character),
             ("/a/%252e%252e/b", InputError::Character),
+            // Overlong and fullwidth spellings of `.` and `/`.
+            ("/a/%c0%ae%c0%ae/b", InputError::Character),
+            ("/a/%ef%bc%8e%ef%bc%8e/b", InputError::Character),
+            ("/a/%C0%AF", InputError::Character),
+            ("/a/%80", InputError::Character),
         ];
         for (s, e) in cases {
             assert_eq!(RequestPath::parse(s), Err(*e), "{s:?}");
@@ -944,7 +1020,9 @@ mod tests {
             assert!(HeaderName::new(leaked).is_none(), "{reserved}");
         }
         assert!(HeaderName::new("Hosts").is_some());
-        assert!(HeaderName::new("Proxy").is_some());
+        assert!(HeaderName::new("Proxy").is_none());
+        assert!(HeaderName::new("HTTP2-Settings").is_none());
+        assert!(HeaderName::new("Proxyish").is_some());
         assert!(HeaderName::new("X-Proxy-Id").is_some());
         assert!(HeaderValue::plain("application/json").is_ok());
         assert!(HeaderValue::plain("a\tb é").is_ok());
@@ -1121,10 +1199,10 @@ mod tests {
                 if input.credentials.get("password")?.is_none() {
                     return Err(AdapterError::Unauthorized);
                 }
-                Ok(ConfigPlan {
-                    companion: self.id.clone(),
-                    changes: vec![SettingKey::new("webui.bind_address").unwrap()],
-                })
+                Ok(ConfigPlan::new(
+                    self.id.clone(),
+                    vec![SettingKey::new("webui.bind_address").unwrap()],
+                ))
             })
         }
         fn apply_plan<'a>(
@@ -1151,7 +1229,7 @@ mod tests {
                     );
                 http.send(req).await?;
                 let mut applied = self.applied.lock().unwrap();
-                for c in &plan.changes {
+                for c in plan.changes() {
                     if !applied.contains(&c.as_str()) {
                         applied.push(c.as_str());
                     }
@@ -1173,6 +1251,8 @@ mod tests {
         let detect: std::sync::Arc<dyn Detect> = fake.clone();
         let health: std::sync::Arc<dyn Health> = fake.clone();
         let configure: std::sync::Arc<dyn Configure> = fake.clone();
+        // The same `apply` works on a `Send + Sync` trait object.
+        let shared: std::sync::Arc<dyn Configure + Send + Sync> = fake.clone();
         assert_eq!(detect.companion().as_str(), "qbittorrent");
 
         let here = Target::Loopback(PortNumber::new(8080).unwrap());
@@ -1214,14 +1294,15 @@ mod tests {
         let plan = configure.plan(&http, &here, &input).await.unwrap();
         configure.apply(&http, &here, &input, &plan).await.unwrap();
         configure.apply(&http, &here, &input, &plan).await.unwrap();
+        shared.apply(&http, &here, &input, &plan).await.unwrap();
         assert_eq!(*fake.applied.lock().unwrap(), ["webui.bind_address"]);
 
         // Another companion's plan is refused before anything is sent.
         let sent_before = http.sent.lock().unwrap().len();
-        let foreign = ConfigPlan {
-            companion: CompanionId::parse("prowlarr").unwrap(),
-            changes: plan.changes.clone(),
-        };
+        let foreign = ConfigPlan::new(
+            CompanionId::parse("prowlarr").unwrap(),
+            plan.changes().to_vec(),
+        );
         assert_eq!(
             configure.apply(&http, &here, &input, &foreign).await,
             Err(AdapterError::Refused("the plan is for another companion"))
@@ -1233,7 +1314,7 @@ mod tests {
         let sent = http.sent.lock().unwrap();
         assert!(sent.iter().all(|(_, p, _)| p.starts_with("/api/v2/")));
         let posts: Vec<_> = sent.iter().filter(|(m, _, _)| *m == Method::Post).collect();
-        assert_eq!(posts.len(), 2);
+        assert_eq!(posts.len(), 3);
         assert!(posts.iter().all(|(_, _, h)| h == &vec!["X-Password"]));
     }
 

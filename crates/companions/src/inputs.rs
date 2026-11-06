@@ -330,7 +330,10 @@ fn check_name(s: &str) -> Result<(), InputError> {
 
 /// Names a container resolves through its own `/etc/hosts`, or that are
 /// Lodestar's own.
-const RESERVED_HOSTS: &[&str] = &["localhost", "lodestar", "lodestar-worker"];
+/// (Every `lodestar*` name is refused as well: Lodestar's own containers
+/// are named `lodestar`, `lodestar-worker`, `lodestar-gluetun`, … in its
+/// templates.)
+const RESERVED_HOSTS: &[&str] = &["localhost"];
 
 /// A container name (`qbittorrent`): what detection looks up as a host on
 /// Docker's network, and the compose service's name.
@@ -343,7 +346,7 @@ const RESERVED_HOSTS: &[&str] = &["localhost", "lodestar", "lodestar-worker"];
 /// Inside a container a name is looked up in `/etc/hosts` before Docker's
 /// DNS, so the names Docker writes there (`localhost`, `ip6-localhost`,
 /// `ip6-loopback` and the other `ip6-*` names) are refused, and so are
-/// Lodestar's own container names (`lodestar`, `lodestar-worker`), and
+/// every `lodestar*` name, which Lodestar's own containers use, and
 /// names shaped like a container id (12 or 64 hex digits), which is
 /// Docker's default hostname.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -356,7 +359,11 @@ impl ContainerName {
         if !b[0].is_ascii_lowercase() || b.contains(&b'.') {
             return Err(InputError::Character);
         }
-        if RESERVED_HOSTS.contains(&s) || s.starts_with("ip6-") || s.starts_with("localhost") {
+        if RESERVED_HOSTS.contains(&s)
+            || s.starts_with("ip6-")
+            || s.starts_with("localhost")
+            || s.starts_with("lodestar")
+        {
             return Err(InputError::Reserved);
         }
         // A container's `/etc/hosts` also maps its own hostname, by default
@@ -683,7 +690,7 @@ mod tests {
     #[test]
     fn names() {
         assert!(ContainerName::parse("qbittorrent").is_ok());
-        assert!(ContainerName::parse("lodestar-prowlarr_1").is_ok());
+        assert!(ContainerName::parse("prowlarr_1").is_ok());
         // Never an address or a domain: it's looked up as a host.
         for host in [
             "169.254.169.254",
@@ -718,7 +725,19 @@ mod tests {
                 "{reserved}"
             );
         }
-        assert!(ContainerName::parse("lodestar-prowlarr").is_ok());
+        for own in [
+            "lodestar-prowlarr",
+            "lodestar-gluetun",
+            "lodestar_worker",
+            "lodestarx",
+        ] {
+            assert_eq!(
+                ContainerName::parse(own),
+                Err(InputError::Reserved),
+                "{own}"
+            );
+        }
+        assert!(ContainerName::parse("my-lodestar").is_ok());
         assert!(ContainerName::parse("abcdef01234").is_ok());
         assert!(ContainerName::parse("abcdef0123456").is_ok());
         assert_eq!(ContainerName::parse(""), Err(InputError::Length));

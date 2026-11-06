@@ -13,6 +13,7 @@
       "opt_in": false,
       "hosts": ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
       "native": {
+        "release": "https://github.com/userdocs/qbittorrent-nox-static/releases/download/",
         "artifacts": [
           {"platform": "linux", "arch": "x86_64", "archive": "binary", "executable": null, "pin": null},
           {"platform": "linux", "arch": "aarch64", "archive": "binary", "executable": null, "pin": null}
@@ -39,6 +40,7 @@
       "opt_in": false,
       "hosts": ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
       "native": {
+        "release": "https://github.com/Prowlarr/Prowlarr/releases/download/",
         "artifacts": [
           {"platform": "linux", "arch": "x86_64", "archive": "tar_gz", "executable": "Prowlarr/Prowlarr", "pin": null},
           {"platform": "linux", "arch": "aarch64", "archive": "tar_gz", "executable": "Prowlarr/Prowlarr", "pin": null},

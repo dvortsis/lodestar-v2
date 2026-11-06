@@ -39,6 +39,7 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+use crate::adapter::RequestPath;
 use crate::inputs::{CompanionId, ContainerName, PortNumber, Version};
 use crate::log_events::CATALOGUE_INVALID;
 
@@ -390,7 +391,7 @@ fn windows_reserved(c: &str) -> bool {
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || ((stem.starts_with("COM") || stem.starts_with("LPT"))
             && stem.len() == 4
-            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+            && stem.as_bytes()[3].is_ascii_digit())
 }
 
 impl RelPath {
@@ -613,6 +614,14 @@ impl std::error::Error for NotAvailable {}
 /// let a = c.get("qbittorrent").unwrap().native.as_ref().unwrap().artifacts[0].clone();
 /// let _: lodestar_companions::catalogue::Artifact = a;
 /// ```
+///
+/// An image can't be read before it's pinned, except through
+/// [`Entry::renderable`]:
+///
+/// ```compile_fail
+/// let c = lodestar_companions::builtin().unwrap();
+/// let _ = &c.get("qbittorrent").unwrap().container.as_ref().unwrap().image;
+/// ```
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Entry {
@@ -661,11 +670,18 @@ impl Entry {
         Ok((a, a.pin()?))
     }
 
-    /// The container image and its digest: the one thing CMP-7 may render.
+    /// The container and its pinned image: the one thing CMP-7 may render.
     /// An unpinned image is refused with [`NotAvailable::AwaitingPin`].
-    pub fn renderable(&self) -> Result<(&Container, &Sha256), NotAvailable> {
+    pub fn renderable(&self) -> Result<(&Container, PinnedImage<'_>), NotAvailable> {
         let c = self.container.as_ref().ok_or(NotAvailable::NoBuild)?;
-        Ok((c, c.digest()?))
+        let digest = c.digest()?;
+        Ok((
+            c,
+            PinnedImage {
+                image: &c.image,
+                digest,
+            },
+        ))
     }
 
     /// Whether any artifact or the image still waits for its pin.
@@ -705,6 +721,9 @@ pub struct Licence {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Native {
+    /// The release folder every pin comes from
+    /// (`https://github.com/userdocs/qbittorrent-nox-static/releases/download/`).
+    pub release: HttpsUrl,
     pub artifacts: Vec<Artifact>,
 }
 
@@ -773,20 +792,61 @@ pub enum UpstreamSig {
 }
 
 /// The container image for compose and Unraid.
+///
+/// The image and its digest are private: CMP-7 gets them only through
+/// [`Entry::renderable`], as a [`PinnedImage`] that writes
+/// `image@sha256:…`, so an unpinned image can't be rendered and no output
+/// can fall back to an implicit `:latest`.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Container {
-    pub image: ImageRef,
+    image: ImageRef,
     digest: Pinned<Sha256>,
-    /// The container and compose service name detection looks for.
-    pub name: ContainerName,
+    name: ContainerName,
 }
 
 impl Container {
-    /// Its digest, or [`NotAvailable::AwaitingPin`]. Nothing is generated
-    /// from an unpinned image.
+    /// The container and compose service name detection looks for. Usable
+    /// before the image is pinned, to find a companion you already run.
+    pub fn name(&self) -> &ContainerName {
+        &self.name
+    }
+
+    /// Its digest, or [`NotAvailable::AwaitingPin`].
     pub fn digest(&self) -> Result<&Sha256, NotAvailable> {
         self.digest.get()
+    }
+}
+
+/// A pinned image, the only form an image is rendered in.
+#[derive(Debug, Clone, Copy)]
+pub struct PinnedImage<'a> {
+    image: &'a ImageRef,
+    digest: &'a Sha256,
+}
+
+impl PinnedImage<'_> {
+    pub fn registry(&self) -> &str {
+        self.image.registry()
+    }
+
+    pub fn repository(&self) -> &str {
+        self.image.repository()
+    }
+
+    pub fn digest(&self) -> &Sha256 {
+        self.digest
+    }
+
+    /// `registry/repository@sha256:<hex>`, what compose and Unraid get.
+    pub fn reference(&self) -> String {
+        format!("{}@sha256:{}", self.image.as_str(), self.digest.to_hex())
+    }
+}
+
+impl fmt::Display for PinnedImage<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.reference())
     }
 }
 
@@ -805,8 +865,8 @@ pub struct Port {
 #[non_exhaustive]
 pub struct HealthCheck {
     pub port: PortName,
-    /// Starts with `/`; letters, digits and `/._-` only.
-    pub path: String,
+    /// A [`RequestPath`], the same grammar every adapter request uses.
+    pub path: RequestPath,
 }
 
 // ─── Errors ─────────────────────────────────────────────────────────────
@@ -841,6 +901,7 @@ pub enum Rule {
     Template,
     Need,
     Shape,
+    Source,
 }
 
 impl Rule {
@@ -873,6 +934,7 @@ impl Rule {
             Rule::Template => "template",
             Rule::Need => "need",
             Rule::Shape => "shape",
+            Rule::Source => "source",
         }
     }
 }
@@ -954,6 +1016,7 @@ struct RawLicence {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawNative {
+    release: String,
     artifacts: Vec<RawArtifact>,
 }
 
@@ -1134,6 +1197,23 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
         None => None,
     };
     check(native.is_some() || container.is_some(), Rule::Shape, at)?;
+    // FlareSolverr can't be made a default by labelling it as something
+    // else (owner §2.47, Q21): whatever names it — the id, the container
+    // name or the image — it must be a `challenge_solver` and opt-in.
+    let names_flaresolverr = id.as_str() == "flaresolverr"
+        || container.as_ref().is_some_and(|c| {
+            c.name.as_str() == "flaresolverr"
+                || c.image
+                    .repository()
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|r| r.eq_ignore_ascii_case("flaresolverr"))
+        });
+    check(
+        !names_flaresolverr || (e.opt_in && e.needed_for.contains(&Need::ChallengeSolver)),
+        Rule::Need,
+        &format!("{at}.opt_in"),
+    )?;
     // The VPN route is gluetun in a container; the native VPN is v1.x
     // (plan §2).
     check(
@@ -1198,8 +1278,9 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
                 Rule::Health,
                 &format!("{at_hc}.port"),
             )?;
-            check(health_path(&h.path), Rule::Health, &format!("{at_hc}.path"))?;
-            Some(HealthCheck { port, path: h.path })
+            let path = RequestPath::parse(&h.path)
+                .map_err(|_| CatalogueError::new(Rule::Health, format!("{at_hc}.path")))?;
+            Some(HealthCheck { port, path })
         }
         None => None,
     };
@@ -1208,10 +1289,16 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
     check(e.templates.len() <= MAX_TEMPLATES, Rule::Count, &at_t)?;
     check(unique(e.templates.iter()), Rule::Duplicate, &at_t)?;
     for (j, t) in e.templates.iter().enumerate() {
-        let ok = if t.is_native_config() {
-            native.is_some()
-        } else {
-            container.is_some()
+        // A companion's own config file goes only with that kind of
+        // companion, and with a native build to write it for.
+        let ok = match t {
+            TemplateId::QbittorrentConf => {
+                native.is_some() && e.needed_for.contains(&Need::DownloadClient)
+            }
+            TemplateId::ProwlarrConfigXml => {
+                native.is_some() && e.needed_for.contains(&Need::IndexerManager)
+            }
+            TemplateId::ComposeService | TemplateId::UnraidTemplate => container.is_some(),
         };
         check(ok, Rule::Template, &format!("{at_t}[{j}]"))?;
     }
@@ -1233,6 +1320,21 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
 }
 
 fn validate_native(n: RawNative, hosts: &[Hostname], at: &str) -> Result<Native, CatalogueError> {
+    let at_r = format!("{at}.release");
+    let release = field(HttpsUrl::parse(&n.release), &at_r)?;
+    check(
+        hosts.iter().any(|h| h.as_str() == release.host()),
+        Rule::HostNotAllowed,
+        &at_r,
+    )?;
+    // A release folder, not a host: `/<owner>/<project>/…/` with at least
+    // two segments and a closing `/`, so a pin can't come from another
+    // owner or project on the same host (owner §2.47, cq6).
+    check(
+        release.path().ends_with('/') && release.path()[1..].split('/').count() >= 3,
+        Rule::Source,
+        &at_r,
+    )?;
     let at_a = format!("{at}.artifacts");
     check(
         !n.artifacts.is_empty() && n.artifacts.len() <= MAX_ARTIFACTS,
@@ -1241,7 +1343,12 @@ fn validate_native(n: RawNative, hosts: &[Hostname], at: &str) -> Result<Native,
     )?;
     let mut artifacts = Vec::with_capacity(n.artifacts.len());
     for (j, a) in n.artifacts.into_iter().enumerate() {
-        artifacts.push(validate_artifact(a, hosts, &format!("{at_a}[{j}]"))?);
+        artifacts.push(validate_artifact(
+            a,
+            hosts,
+            &release,
+            &format!("{at_a}[{j}]"),
+        )?);
     }
     check(
         unique(artifacts.iter().map(|a| (a.platform, a.arch))),
@@ -1257,12 +1364,13 @@ fn validate_native(n: RawNative, hosts: &[Hostname], at: &str) -> Result<Native,
     if let Some(first) = versions.next() {
         check(versions.all(|v| v == first), Rule::Version, &at_a)?;
     }
-    Ok(Native { artifacts })
+    Ok(Native { release, artifacts })
 }
 
 fn validate_artifact(
     a: RawArtifact,
     hosts: &[Hostname],
+    release: &HttpsUrl,
     at: &str,
 ) -> Result<Artifact, CatalogueError> {
     check(
@@ -1296,6 +1404,7 @@ fn validate_artifact(
             a.platform,
             a.archive,
             hosts,
+            release,
             &format!("{at}.pin"),
         )?),
         None => Pinned::AwaitingPin,
@@ -1314,6 +1423,7 @@ fn validate_pin(
     platform: Platform,
     archive: ArchiveKind,
     hosts: &[Hostname],
+    release: &HttpsUrl,
     at: &str,
 ) -> Result<Pin, CatalogueError> {
     let version = Version::parse(&p.version)
@@ -1359,6 +1469,13 @@ fn validate_pin(
         },
         _ => return Err(CatalogueError::new(Rule::Fingerprint, at_s)),
     };
+    // From the entry's own release folder (cq6: whose binaries run), and
+    // a file in it rather than the folder itself.
+    check(
+        url.as_str().len() > release.as_str().len() && url.as_str().starts_with(release.as_str()),
+        Rule::Source,
+        &at_u,
+    )?;
     Ok(Pin {
         version,
         url,
@@ -1419,25 +1536,6 @@ fn spdx(s: &str) -> bool {
     }) && s.split(' ').count() % 2 == 1
 }
 
-/// `/` then letters, digits and `/._-`; no empty, `.` or `..` segment
-/// except a trailing `/`; at most 128 bytes.
-fn health_path(s: &str) -> bool {
-    if s.is_empty() || s.len() > 128 || !s.starts_with('/') {
-        return false;
-    }
-    if !s
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
-    {
-        return false;
-    }
-    let segs: Vec<&str> = s[1..].split('/').collect();
-    let last = segs.len() - 1;
-    segs.iter()
-        .enumerate()
-        .all(|(i, g)| *g != "." && *g != ".." && (!g.is_empty() || i == last))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1446,6 +1544,39 @@ mod tests {
     fn builtin_parses() {
         let c = builtin().expect("data/catalogue.json must validate");
         assert!(c.get("qbittorrent").is_some());
+        // Owner §2.47 (cq6): whose images (readable here, inside the crate,
+        // even while they await their pins).
+        let image = |id: &str| {
+            c.get(id)
+                .unwrap()
+                .container
+                .as_ref()
+                .unwrap()
+                .image
+                .as_str()
+                .to_owned()
+        };
+        assert_eq!(image("qbittorrent"), "lscr.io/linuxserver/qbittorrent");
+        assert_eq!(image("prowlarr"), "lscr.io/linuxserver/prowlarr");
+        assert_eq!(image("gluetun"), "docker.io/qmcgaw/gluetun");
+        let release = |id: &str| {
+            c.get(id)
+                .unwrap()
+                .native
+                .as_ref()
+                .unwrap()
+                .release
+                .as_str()
+                .to_owned()
+        };
+        assert_eq!(
+            release("qbittorrent"),
+            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/"
+        );
+        assert_eq!(
+            release("prowlarr"),
+            "https://github.com/Prowlarr/Prowlarr/releases/download/"
+        );
         // Parsed once: the same catalogue every time.
         assert!(std::ptr::eq(c, builtin().unwrap()));
     }
@@ -1660,12 +1791,6 @@ mod tests {
         ] {
             assert!(!spdx(bad), "{bad}");
         }
-        assert!(health_path("/ping"));
-        assert!(health_path("/api/v2/app/version"));
-        assert!(health_path("/"));
-        for bad in ["", "ping", "/a/../b", "//", "/a?b", "/a b", "/a//b"] {
-            assert!(!health_path(bad), "{bad}");
-        }
         assert!(Fingerprint::parse(&"A".repeat(40)).is_ok());
         assert!(Fingerprint::parse(&"0".repeat(64)).is_ok());
         assert!(Fingerprint::parse(&"a".repeat(40)).is_err());
@@ -1703,6 +1828,7 @@ mod tests {
             Rule::Template,
             Rule::Need,
             Rule::Shape,
+            Rule::Source,
         ];
         assert!(unique(all.iter().map(|r| r.code())));
     }

@@ -29,7 +29,7 @@ fn pinned() -> Value {
                 "needed_for": ["download_client"],
                 "opt_in": false,
                 "hosts": ["github.com", "release-assets.githubusercontent.com"],
-                "native": {"artifacts": [
+                "native": {"release": "https://github.com/userdocs/qbittorrent-nox-static/releases/download/", "artifacts": [
                     {"platform": "linux", "arch": "x86_64", "archive": "binary", "executable": null,
                      "pin": {"version": "5.0.3",
                              "url": "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.0.3_v2.0.11/x86_64-qbittorrent-nox",
@@ -53,7 +53,7 @@ fn pinned() -> Value {
                 "needed_for": ["indexer_manager"],
                 "opt_in": false,
                 "hosts": ["github.com"],
-                "native": {"artifacts": [
+                "native": {"release": "https://github.com/Prowlarr/Prowlarr/releases/download/", "artifacts": [
                     {"platform": "windows", "arch": "x86_64", "archive": "zip", "executable": "Prowlarr/Prowlarr.exe",
                      "pin": {"version": "1.28.2.4885",
                              "url": "https://github.com/Prowlarr/Prowlarr/releases/download/v1.28.2.4885/Prowlarr.master.1.28.2.4885.windows-core-x64.zip",
@@ -133,24 +133,21 @@ fn builtin_entries_follow_the_owner_decisions() {
     for a in &q.native.as_ref().unwrap().artifacts {
         assert_eq!(a.archive, ArchiveKind::Binary);
     }
-    assert_eq!(
-        q.container.as_ref().unwrap().image.as_str(),
-        "lscr.io/linuxserver/qbittorrent"
-    );
+    // The image itself is readable only once pinned (the crate's own
+    // unit test checks it's lscr.io/linuxserver/qbittorrent).
+    assert!(q.container.is_some());
 
     let p = c.get("prowlarr").unwrap();
     assert_eq!(p.native.as_ref().unwrap().artifacts.len(), 3);
-    assert_eq!(
-        p.container.as_ref().unwrap().image.as_str(),
-        "lscr.io/linuxserver/prowlarr"
-    );
+    // The image itself is readable only once pinned (the crate's own
+    // unit test checks it's lscr.io/linuxserver/prowlarr).
+    assert!(p.container.is_some());
 
     let g = c.get("gluetun").unwrap();
     assert!(g.native.is_none(), "the native VPN is v1.x");
-    assert_eq!(
-        g.container.as_ref().unwrap().image.as_str(),
-        "docker.io/qmcgaw/gluetun"
-    );
+    // The image itself is readable only once pinned (the crate's own
+    // unit test checks it's docker.io/qmcgaw/gluetun).
+    assert!(g.container.is_some());
     assert!(g.needs(Need::VpnRoute));
 
     // FlareSolverr arrives with CMP-12, opt-in.
@@ -161,8 +158,7 @@ fn builtin_entries_follow_the_owner_decisions() {
             assert!(DOWNLOAD_HOSTS.contains(&h.as_str()));
         }
         if let Some(ct) = &e.container {
-            assert!(REGISTRIES.contains(&ct.image.registry()));
-            assert_eq!(ct.name.as_str(), e.id.as_str());
+            assert_eq!(ct.name().as_str(), e.id.as_str());
         }
         // Every non-P2P port is internal, and only the download client
         // has P2P ports.
@@ -225,8 +221,9 @@ fn builtin_pins_are_well_formed_where_present() {
                 assert_eq!(pin.sha256.to_hex().len(), 64);
             }
         }
-        if let Ok((_, d)) = e.renderable() {
-            assert_eq!(d.to_hex().len(), 64);
+        if let Ok((_, image)) = e.renderable() {
+            assert!(REGISTRIES.contains(&image.registry()));
+            assert!(image.reference().contains("@sha256:"));
         }
     }
 }
@@ -257,13 +254,23 @@ fn reads_a_pinned_catalogue() {
     assert!(q.awaiting_pin());
     assert!(q.allows_host("release-assets.githubusercontent.com"));
     assert!(!q.allows_host("objects.githubusercontent.com"));
-    assert_eq!(q.renderable().unwrap().1.to_hex(), SHA2);
+    let (_, image) = q.renderable().unwrap();
+    assert_eq!(image.digest().to_hex(), SHA2);
+    // Rendered only as image@digest, never by tag.
+    assert_eq!(
+        image.reference(),
+        format!("lscr.io/linuxserver/qbittorrent@sha256:{SHA2}")
+    );
+    assert_eq!(image.to_string(), image.reference());
     let webui = q.port("webui").unwrap();
     assert_eq!(
         (webui.number.get(), webui.proto, webui.exposure),
         (8080, Proto::Tcp, Exposure::Internal)
     );
-    assert_eq!(q.health.as_ref().unwrap().path, "/api/v2/app/version");
+    assert_eq!(
+        q.health.as_ref().unwrap().path.as_str(),
+        "/api/v2/app/version"
+    );
     assert!(q.templates.contains(&TemplateId::QbittorrentConf));
 
     let p = c.get("prowlarr").unwrap();
@@ -367,6 +374,91 @@ fn refuses_a_renamed_vpn_service_and_cased_extensions() {
     assert!(parse(&v).is_ok());
 }
 
+/// cq6: pins come from the entry's own release folder, never another owner
+/// or project on the same host.
+#[test]
+fn refuses_pins_from_another_source() {
+    refused(Rule::Source, |v| {
+        qbit_pin(v)["url"] = json!(
+            "https://github.com/anyone/qbittorrent-nox-static/releases/download/release-5.0.3_v2.0.11/x86_64-qbittorrent-nox"
+        );
+    });
+    refused(Rule::Source, |v| {
+        qbit_pin(v)["url"] = json!(
+            "https://github.com/userdocs/other-project/releases/download/r1/x86_64-qbittorrent-nox"
+        );
+    });
+    refused(Rule::Source, |v| {
+        prowlarr_zip(v)["pin"]["url"] =
+            json!("https://github.com/Prowlarr/Prowlarr/archive/refs/tags/Prowlarr.zip");
+    });
+    // The release folder must be on the entry's hosts, and a folder.
+    refused(Rule::HostNotAllowed, |v| {
+        qbit(v)["native"]["release"] = json!("https://objects.githubusercontent.com/a/b/c/");
+    });
+    refused(Rule::Source, |v| {
+        qbit(v)["native"]["release"] = json!("https://github.com/userdocs/");
+    });
+    refused(Rule::Source, |v| {
+        qbit(v)["native"]["release"] =
+            json!("https://github.com/userdocs/qbittorrent-nox-static/releases/download");
+    });
+    refused(Rule::Url, |v| {
+        qbit(v)["native"]["release"] = json!("http://github.com/a/b/c/")
+    });
+    refused(Rule::Syntax, |v| {
+        qbit(v)["native"].as_object_mut().unwrap().remove("release");
+    });
+}
+
+/// Q21: FlareSolverr is opt-in, whatever it's labelled.
+#[test]
+fn refuses_flaresolverr_made_default_by_labelling() {
+    let as_indexer = |v: &mut Value, id: &str, name: &str, image: &str| {
+        let e = &mut v["entries"][2];
+        e["id"] = json!(id);
+        e["needed_for"] = json!(["indexer_manager"]);
+        e["opt_in"] = json!(false);
+        e["container"]["name"] = json!(name);
+        e["container"]["image"] = json!(image);
+    };
+    refused(Rule::Need, |v| {
+        as_indexer(v, "flaresolverr", "solver", "ghcr.io/someone/solver")
+    });
+    refused(Rule::Need, |v| {
+        as_indexer(v, "solver", "flaresolverr", "ghcr.io/someone/solver")
+    });
+    refused(Rule::Need, |v| {
+        as_indexer(v, "solver", "solver", "ghcr.io/flaresolverr/flaresolverr")
+    });
+    refused(Rule::Need, |v| {
+        as_indexer(v, "solver", "solver", "docker.io/someone/flaresolverr")
+    });
+    // Opt-in but not a challenge solver: still refused.
+    refused(Rule::Need, |v| {
+        as_indexer(
+            v,
+            "flaresolverr",
+            "flaresolverr",
+            "ghcr.io/flaresolverr/flaresolverr",
+        );
+        v["entries"][2]["opt_in"] = json!(true);
+    });
+    // The real thing, opt-in and a challenge solver, is fine.
+    assert!(parse(&pinned()).is_ok());
+}
+
+/// A companion's own config template goes only with that kind of companion.
+#[test]
+fn refuses_config_templates_on_the_wrong_companion() {
+    refused(Rule::Template, |v| {
+        v["entries"][1]["templates"] = json!(["qbittorrent_conf"]);
+    });
+    refused(Rule::Template, |v| {
+        qbit(v)["templates"] = json!(["prowlarr_config_xml"]);
+    });
+}
+
 #[test]
 fn refuses_each_rule() {
     refused(Rule::Format, |v| v["format"] = json!(2));
@@ -426,7 +518,9 @@ fn refuses_each_rule() {
     refused(Rule::Shape, |v| {
         v["entries"][2]["hosts"] = json!(["github.com"])
     });
-    refused(Rule::Shape, |v| {
+    // Native builds with no hosts: their release folder's host isn't
+    // allowed, which is checked first.
+    refused(Rule::HostNotAllowed, |v| {
         qbit(v)["hosts"] = json!([]);
         *qbit_pin(v) = Value::Null;
     });
@@ -572,9 +666,7 @@ fn refuses_each_rule() {
     refused(Rule::Health, |v| {
         qbit(v)["health"]["path"] = json!("/../admin")
     });
-    refused(Rule::Health, |v| {
-        qbit(v)["health"]["path"] = json!("/x?y=1")
-    });
+    refused(Rule::Health, |v| qbit(v)["health"]["path"] = json!("/x#y"));
 
     // Templates.
     refused(Rule::Duplicate, |v| {
@@ -827,17 +919,17 @@ fn assert_invariants(c: &Catalogue) {
                 }
             }
         }
-        if let Some(ct) = &e.container {
-            assert!(REGISTRIES.contains(&ct.image.registry()));
-            assert!(!ct.image.as_str().contains([':', '@']));
+        if let Ok((_, image)) = e.renderable() {
+            assert!(REGISTRIES.contains(&image.registry()));
+            assert!(!image.repository().contains([':', '@']));
         }
         for p in &e.ports {
             assert!(p.number.get() >= 1024);
             assert!(p.exposure == Exposure::Internal || e.needs(Need::DownloadClient));
         }
         if let Some(h) = &e.health {
-            assert!(h.path.starts_with('/'));
-            assert!(!h.path.contains(".."));
+            assert!(h.path.as_str().starts_with('/'));
+            assert!(!h.path.as_str().contains(".."));
         }
     }
 }
