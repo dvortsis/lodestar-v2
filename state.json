@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T15:14:15Z",
+ "updated_at": "2026-11-06T15:17:24Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -5877,38 +5877,38 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T15:14:15Z",
+  "updated": "2026-11-06T15:17:24Z",
   "items": [
    {
     "slot": 1,
     "slice": "WK-0",
-    "role": "slice",
-    "agent": "session_01MMjhnAKSF2rTGJ2CQgZhxB",
-    "doing": "one lease authority (workers critical path)",
+    "role": "build",
+    "agent": "claude",
+    "doing": "one lease authority (workers critical path) (session_01MMjhnAKSF2rTGJ2CQgZhxB)",
     "since": "2026-11-06T15:14:15Z"
    },
    {
     "slot": 2,
     "slice": "WK-6",
-    "role": "slice",
-    "agent": "session_01MMjhnBwVhLRrZgSFudUxY4",
-    "doing": "Results and Counters codecs (workers)",
+    "role": "build",
+    "agent": "claude",
+    "doing": "Results and Counters codecs (workers) (session_01MMjhnBwVhLRrZgSFudUxY4)",
     "since": "2026-11-06T15:14:15Z"
    },
    {
     "slot": 3,
     "slice": "WK-4",
-    "role": "slice",
-    "agent": "session_01MMjhnCbXRqyZhP2RFoU9NJ",
-    "doing": "DHT keyspace shard (workers)",
+    "role": "build",
+    "agent": "claude",
+    "doing": "DHT keyspace shard (workers) (session_01MMjhnCbXRqyZhP2RFoU9NJ)",
     "since": "2026-11-06T15:14:15Z"
    },
    {
     "slot": 4,
     "slice": "X-consent-gate-052",
-    "role": "slice",
-    "agent": "session_01MMjhn9ojZGQM4WLCLJyR2v",
-    "doing": "refuse consent-needing sources until approved text (before v0.5.2 cut)",
+    "role": "build",
+    "agent": "claude",
+    "doing": "refuse consent-needing sources until approved text (before v0.5.2 cut) (session_01MMjhn9ojZGQM4WLCLJyR2v)",
     "since": "2026-11-06T15:14:15Z"
    }
   ],
