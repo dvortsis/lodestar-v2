@@ -912,6 +912,18 @@ fn at_commit(
     item: &Item,
     facts: &lodestar_filter::Facts,
 ) -> lodestar_filter::Verdict {
+    at_commit_as(e, item, facts, false)
+}
+
+/// [`at_commit`] for a find from a source that's always adult (`adult`):
+/// the engine also reads a torrent not classified Adult as Adult, a second
+/// reading of the whole engine (`Engine::judge_at_commit`).
+fn at_commit_as(
+    e: &lodestar_filter::Engine,
+    item: &Item,
+    facts: &lodestar_filter::Facts,
+    adult: bool,
+) -> lodestar_filter::Verdict {
     use lodestar_filter::spam_sigs::usable;
     let clone_of =
         usable(lodestar_filter::payload_sig(item.files)).and_then(|s| e.spam_sigs.get(s));
@@ -919,7 +931,7 @@ fn at_commit(
         flood: Some(lodestar_filter::flood::Level::Demote),
         clone_of,
     };
-    e.judge_at_commit(item, facts, 0, at, false)
+    e.judge_at_commit(item, facts, 0, at, adult)
 }
 
 /// None of the budget's 10,000 rules matches its torrents, so every rule
@@ -995,7 +1007,8 @@ fn sigs_at_cap(items: &[Item]) -> std::sync::Arc<lodestar_filter::spam_sigs::Spa
 /// are timed again, both ways, on an install an earlier build set up,
 /// whose new versions are pending and judged in shadow ([`installed`]).
 /// The budget is per judgment, as RP-4 set it (#495): a flooded or cloned commit's
-/// two judgments together are reported, not held
+/// two judgments together are reported, not held, and so is an
+/// always-adult source's find at commit, which the engine reads twice
 /// (`docs/decisions/2026-11-06-RP-G.md`).
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
@@ -1281,6 +1294,21 @@ fn budget() {
                 &engine,
                 std::hint::black_box(&items[i]),
                 &facts[i],
+            ));
+        });
+        cases.push((what.to_owned(), t, false));
+        // An always-adult source's find at commit: the engine reads the
+        // torrent as found and again as Adult (none of the budget's
+        // torrents is classified Adult, so every one pays both readings).
+        // Reported, not held, as the two judgments are: it's a second
+        // reading of one judgment (RP-G, runner's review of #526).
+        let what = "engine, packs on, 10,000 rules, mixed, at commit, from an always-adult source";
+        let t = time(what, &|i| {
+            std::hint::black_box(at_commit_as(
+                &engine,
+                std::hint::black_box(&items[i]),
+                &facts[i],
+                true,
             ));
         });
         cases.push((what.to_owned(), t, false));

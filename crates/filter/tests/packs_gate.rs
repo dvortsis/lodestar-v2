@@ -13,6 +13,11 @@
 //!   Accepting releases nothing it held, pauses the overrides that weaken
 //!   the new version and keeps the ones that strengthen it.
 //!
+//! - **The child-safety core and the adult floor:** with every pack on,
+//!   every pack rule overridden to its weakest, versions pending and
+//!   versions just accepted, the core still decides what it decides alone,
+//!   at least as heavily, in prepare and at commit.
+//!
 //! The budget with every pack on is `props.rs`'s `budget`; the guardrails
 //! through the API are `crates/api/tests/packs_gate.rs`.
 
@@ -530,4 +535,233 @@ fn an_upgrade_stays_pending_releases_nothing_and_pauses_weakening_overrides() {
         e.pack_versions.pending().count()
     );
     assert_eq!(holds(&s), before);
+}
+
+// ---------------------------------------------------------------------
+// The child-safety core and the adult floor, never loosened by the packs
+// (runner's review of #526): with every pack on, with overrides on every
+// pack rule, with versions pending and with them just accepted, the core
+// still decides what it decides alone, at least as heavily. The core's
+// rules are driven with its neutral stand-in words (`lexa`, `rolea`,
+// `codex`, as `tests/core.rs` does), so no indicative text is needed; the
+// shipped lists' hashed must-match fixtures are `core.rs`'s
+// `shipped_must_match_fixtures`, which only the core reads.
+
+const FLOOR_HASH: [u8; 20] = [0xc5; 20];
+
+fn stand_in_core() -> Core {
+    use lodestar_filter::{Origin, TermSet, payload_sig};
+    let lists = Lists {
+        sexual: TermSet::of(&["lexa"]),
+        child_roles: TermSet::of(&["rolea"]),
+        codes: TermSet::of(&["codex"]),
+    };
+    let mut cs = CsList::default();
+    cs.add_hash(FLOOR_HASH, Origin::Confirmed);
+    cs.add_sig(payload_sig(&floor_payload()).unwrap().sig);
+    Core::new(lists, cs, Switches::default())
+}
+
+/// A payload CS-8a holds (specific: two files of distinctive size).
+fn floor_payload() -> Vec<lodestar_classify::FileInfo> {
+    files(&[("x/a.mkv", 734_003_201), ("x/b.srt", 81_233)])
+}
+
+fn files(paths: &[(&str, u64)]) -> Vec<lodestar_classify::FileInfo> {
+    paths
+        .iter()
+        .map(|(p, s)| {
+            lodestar_classify::FileInfo::new(p.split('/').map(str::to_owned).collect(), *s)
+        })
+        .collect()
+}
+
+/// One torrent the core holds alone: its hashes, name, files and the type
+/// it's judged as, and whether its source is always adult.
+struct Held {
+    what: &'static str,
+    hashes: [[u8; 20]; 1],
+    name: &'static str,
+    files: Vec<lodestar_classify::FileInfo>,
+    content_type: lodestar_classify::ContentType,
+    adult_source: bool,
+}
+
+fn held() -> Vec<Held> {
+    use lodestar_classify::ContentType::{Adult, Images, Movie};
+    let plain = || files(&[("a.mkv", 1 << 30)]);
+    let h = |what, name, files, content_type, adult_source| Held {
+        what,
+        hashes: [[0x11; 20]],
+        name,
+        files,
+        content_type,
+        adult_source,
+    };
+    let mut floor = h("CS-1a, a confirmed hash", "Anything", plain(), Movie, false);
+    floor.hashes = [FLOOR_HASH];
+    vec![
+        floor,
+        h("CS-8a, a payload", "Renamed", floor_payload(), Movie, false),
+        h("CS-2a, an age", "Title 15yo lexa", plain(), Movie, false),
+        h("CS-3a, a code", "Title codex", plain(), Movie, false),
+        h(
+            "CS-3b, a code in files",
+            "Plain Title",
+            files(&[("Folder codex/a.jpg", 1), ("b.jpg", 1)]),
+            Images,
+            false,
+        ),
+        h("CS-4a, a role", "rolea Title lexa", plain(), Movie, false),
+        h(
+            "CS-5a, Adult's wider window",
+            "rolea a b c d e f g h i lexa",
+            files(&[("a.mp4", 1 << 30)]),
+            Adult,
+            false,
+        ),
+        h(
+            "CS-5b, Adult's wider window",
+            "15yo a b c d e f g h i lexa",
+            files(&[("a.mp4", 1 << 30)]),
+            Adult,
+            false,
+        ),
+        // The adult floor at commit: a find from a source that's always
+        // adult is read as Adult too, so Adult's wider window holds it.
+        h(
+            "CS-5a, read as Adult for an always-adult source",
+            "rolea a b c d e f g h i lexa",
+            files(&[("a.mp4", 1 << 30)]),
+            Movie,
+            true,
+        ),
+    ]
+}
+
+/// What the core alone decides about `t`: as found, or as Adult for an
+/// always-adult source.
+fn core_alone(core: &Core, t: &Held) -> (lodestar_filter::CoreRule, Action) {
+    let item = Item {
+        hashes: &t.hashes,
+        name: t.name,
+        files: &t.files,
+        content_type: if t.adult_source {
+            lodestar_classify::ContentType::Adult
+        } else {
+            t.content_type
+        },
+    };
+    let hit = core
+        .verdict(&item)
+        .unwrap_or_else(|| panic!("the core alone holds {}", t.what));
+    (hit.rule, hit.action)
+}
+
+/// The engine's decisions on `t`: prepare's, and the writer's at commit
+/// (in a flood, as a clone of hidden spam, and for an always-adult source
+/// with its Adult reading).
+fn engine_decides(e: &Engine, t: &Held) -> Vec<(&'static str, Option<(RuleRef, Action)>)> {
+    use lodestar_filter::flood::Level;
+    use lodestar_filter::packs::sp4::AtCommit;
+    use lodestar_filter::spam_sigs::Original;
+    let mut class = classify(t.name, &t.files);
+    class.content_type = t.content_type;
+    let facts = Facts {
+        class: &class,
+        size: t.files.iter().map(|f| f.size).sum(),
+        piece_len: 1 << 20,
+        flags: 0,
+        discovered_at: 0,
+        now: 0,
+    };
+    let item = Item {
+        hashes: &t.hashes,
+        name: t.name,
+        files: &t.files,
+        content_type: t.content_type,
+    };
+    let at = AtCommit {
+        flood: Some(Level::Demote),
+        clone_of: Some(Original {
+            rule: PackRule::Sp2,
+            action: Action::Hide,
+        }),
+    };
+    let mut out = vec![(
+        "at commit",
+        decided(&e.judge_at_commit(&item, &facts, 0, at, t.adult_source)),
+    )];
+    if !t.adult_source {
+        out.push(("prepare", decided(&e.judge(&item, Some(&facts), 0))));
+    }
+    out
+}
+
+/// Every stateless and stateful pack rule overridden to flag, with an
+/// `unless` that every held torrent meets: the most an override can
+/// weaken.
+fn weakest_overrides(store: &mut Store, e: &Engine) {
+    for r in PackRule::ALL {
+        let row = PackOverride {
+            base: current_base(&e.pack_versions, r),
+            action: Action::Flag,
+            unless: Some("lexa OR codex OR rolea OR anything OR renamed".to_owned()),
+        };
+        store
+            .set_pack_override(r.id(), Some(&row.encode()))
+            .unwrap();
+    }
+}
+
+fn load_with(core: &Core, store: &Store) -> Engine {
+    let mut e = Engine::new(core.clone());
+    let notes = e.load_rules(&store.rule_set().unwrap());
+    assert!(notes.is_empty(), "{notes:?}");
+    e.packs = PackSwitches::all();
+    e
+}
+
+#[test]
+fn the_core_and_the_adult_floor_hold_under_every_pack_state() {
+    let core = stand_in_core();
+    let mut states: Vec<(&str, Engine)> = Vec::new();
+    let fresh = install(false);
+    states.push(("every pack on", load_with(&core, &fresh)));
+    let mut overridden = install(false);
+    let e = load_with(&core, &overridden);
+    weakest_overrides(&mut overridden, &e);
+    let e = load_with(&core, &overridden);
+    assert_eq!(e.pack_overrides.iter().count(), PackRule::COUNT);
+    states.push(("every pack rule overridden to flag, with an unless", e));
+    let mut upgraded = install(true);
+    let e = load_with(&core, &upgraded);
+    let pending: Vec<PackRule> = e.pack_versions.pending().map(|(r, _)| r).collect();
+    assert!(!pending.is_empty());
+    weakest_overrides(&mut upgraded, &e);
+    states.push((
+        "versions pending, overrides set",
+        load_with(&core, &upgraded),
+    ));
+    upgrade::accept(&mut upgraded, &Manifest::builtin(), &pending, 0).unwrap();
+    let e = load_with(&core, &upgraded);
+    assert_eq!(e.pack_versions.pending().count(), 0);
+    states.push(("versions just accepted, overrides set", e));
+
+    let mut wrong = Vec::new();
+    for t in held() {
+        let (rule, action) = core_alone(&core, &t);
+        for (state, e) in &states {
+            for (when, got) in engine_decides(e, &t) {
+                let ok = got.is_some_and(|(r, a)| r == RuleRef::Core(rule) && a >= action);
+                if !ok {
+                    wrong.push(format!(
+                        "{}: {state}, {when}: {got:?}, the core alone: {rule:?} {action:?}",
+                        t.what
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "the core loosened:\n{}", wrong.join("\n"));
 }

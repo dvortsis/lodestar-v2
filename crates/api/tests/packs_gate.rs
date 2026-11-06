@@ -453,31 +453,58 @@ async fn accepting_through_the_api_releases_nothing() {
     assert!(!e.pack_versions.state(PackRule::Fk2).pending());
 }
 
+/// A scenario's setup before the change, on its fixture.
+type Setup<'a> = &'a dyn Fn(&Fixture);
+
 /// Strengthening forms of the same operations need no password, so the
 /// gate above isn't passing because everything asks for one.
 #[tokio::test]
 async fn strengthening_forms_need_no_password() {
-    for (upgraded, change) in [
+    let none = |_: &Fixture| {};
+    // SP-4 stored off first, so turning it on is a real change.
+    let sp4_off = |f: &Fixture| {
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .set_pack_switch("SP-4", false)
+            .unwrap();
+        reload(&f.api);
+        let e = f.api.engine.current();
+        assert!(e.packs.rules_off.contains(&PackRule::Sp4), "SP-4 off");
+    };
+    let cases: [(bool, Setup, Value); 3] = [
         (
             false,
+            &none,
             json!({ "op": "set_pack_override", "rule": "MW-1", "action": "drop" }),
         ),
         (
             false,
+            &sp4_off,
             json!({ "op": "pack_switch", "id": "SP-4", "on": true }),
         ),
         // SP-4 widens (it was added): accepted without a password while
         // its shadow agrees.
         (
             true,
+            &none,
             json!({ "op": "accept_pack_versions", "rules": ["SP-4"] }),
         ),
-    ] {
+    ];
+    for (upgraded, setup, change) in cases {
         let f = fixture(upgraded);
+        setup(&f);
         let c = logged_in(&f).await;
         let p = preview(&f, &c, &change).await;
         assert_eq!(p["weakening"], json!(false), "{change}: {p}");
+        let before = rule_set(&f);
         let (status, body) = apply(&f, &c, &change, None).await;
         assert_eq!(status, StatusCode::OK, "{change}: {body}");
+        assert_ne!(
+            rule_set(&f),
+            before,
+            "{change}: applied, without a password"
+        );
     }
 }
