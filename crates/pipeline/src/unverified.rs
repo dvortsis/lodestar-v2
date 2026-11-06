@@ -57,6 +57,15 @@ pub const SEARCHABLE: SearchableCodes = SearchableCodes {
 /// Rows one refile step judges: one store page at most.
 pub const REFILE_PAGE: usize = MAX_PAGE;
 
+/// Bytes of text one refile step judges at most ([`judged_len`]), past the
+/// first row. A page's decoded claims are bounded (SRC-1's `PAGE_BYTES`),
+/// but a details section is judged joined with the claimed and verified
+/// names (ENR-9b), so small sections on torrents with long names could
+/// otherwise make one step judge hundreds of megabytes while the writer
+/// waits. A step that reaches it ends early, and the next goes on from the
+/// last row it judged.
+pub const REFILE_JUDGED_BYTES: usize = 32 << 20;
+
 /// Keys the verification cursor hands to intake per flush (every 5 s by
 /// default, so about 13 a second). The crawler commits thousands a
 /// minute, so verification takes a few percent of the writer at most
@@ -557,54 +566,112 @@ pub fn enrichment_texts(a: &claims::AdultEnrichment, context: Option<&str>) -> V
 }
 
 /// The texts of a details section (ENR-9) that [`judge_in`] judges, each
-/// as a name: the canonical title, each alternative title, the source
-/// category, each genre and each newsgroup alone; then, when there's more
-/// than one, all of them together; then each of `names` (the claimed name,
-/// and the verified name of the torrent the claims are on) with each text
-/// and with all of them, since a feed's category or a plugin's genre
-/// describes that very item. Each pair is its own text, as for the adult
-/// section ([`enrichment_texts`]): the core's pair rules look within a few
-/// words, so joining every text to a name in one string would let padding
-/// in one field hide another. Empty texts and names, and a name given
-/// twice, are left out.
+/// as a name: the canonical title, each alternative title, each distinct
+/// language tag of an alternative title with its `-`s read as spaces (a
+/// tag's subtags can carry short words, as a scene id's slug can), the
+/// source category, each genre and each newsgroup alone; then, when
+/// there's more than one, all of them together; then each of `names` (the
+/// claimed name, and the verified name of the torrent the claims are on)
+/// with each text and with all of them, since a feed's category or a
+/// plugin's genre describes that very item. Each pair is its own text, as
+/// for the adult section ([`enrichment_texts`]): the core's pair rules look
+/// within a few words, so joining every text to a name in one string would
+/// let padding in one field hide another. Empty texts and names, and a name
+/// given twice, are left out.
 ///
 /// **Stricter only**, as for the adult section: the joined texts can only
 /// add a hold. Every text is still judged alone.
 ///
 /// **Not judged, because they aren't text:** the posting time, the year
-/// and the match confidence are numbers, and an alternative title's
-/// language is a BCP 47 tag the store checks the shape of. The external
-/// ids beside the section are scheme and value pairs the store checks
-/// (`id_ok`), as for every claim.
+/// and the match confidence are numbers. The external ids beside the
+/// section are scheme and value pairs the store checks (`id_ok`), as for
+/// every claim.
+///
+/// [`details_judged_len`] gives these texts' total length without building
+/// them.
 pub fn details_texts(d: &claims::Details, names: &[Option<&str>]) -> Vec<String> {
-    let mut alone: Vec<&str> =
-        Vec::with_capacity(2 + d.alt_titles.len() + d.genres.len() + d.newsgroups.len());
-    alone.extend(d.canonical_title.as_deref());
-    alone.extend(d.alt_titles.iter().map(|a| a.title.as_str()));
-    alone.extend(d.source_category.as_deref());
-    alone.extend(d.genres.iter().map(String::as_str));
-    alone.extend(d.newsgroups.iter().map(String::as_str));
-    alone.retain(|t| !t.trim().is_empty());
+    let alone = details_alone(d);
     if alone.is_empty() {
         return Vec::new();
     }
     let together = alone.join(" ");
-    let mut out: Vec<String> = alone.iter().map(|t| (*t).to_owned()).collect();
+    let mut out: Vec<String> = alone.iter().map(|t| t.to_string()).collect();
     if alone.len() > 1 {
         out.push(together.clone());
     }
-    let mut seen: Vec<&str> = Vec::with_capacity(names.len());
-    for name in names.iter().flatten() {
-        if name.trim().is_empty() || seen.contains(name) {
-            continue;
-        }
-        seen.push(name);
+    for name in distinct_names(names) {
         out.extend(alone.iter().map(|t| format!("{name} {t}")));
         if alone.len() > 1 {
             out.push(format!("{name} {together}"));
         }
     }
     out
+}
+
+/// The bytes [`details_texts`] judges for `d` with `names`, counted
+/// without building them, for the refile's per-step budget
+/// ([`REFILE_JUDGED_BYTES`]).
+pub fn details_judged_len(d: &claims::Details, names: &[Option<&str>]) -> usize {
+    let alone = details_alone(d);
+    let (k, l) = (alone.len(), alone.iter().map(|t| t.len()).sum::<usize>());
+    if k == 0 {
+        return 0;
+    }
+    // Alone, then together (`k - 1` spaces).
+    let together = if k > 1 { l + k - 1 } else { 0 };
+    let mut total = l + together;
+    for name in distinct_names(names) {
+        let n = name.len() + 1;
+        total += k * n + l;
+        if k > 1 {
+            total += n + together;
+        }
+    }
+    total
+}
+
+/// The section's texts judged alone, in [`details_texts`]' order.
+fn details_alone(d: &claims::Details) -> Vec<std::borrow::Cow<'_, str>> {
+    use std::borrow::Cow;
+    let mut alone: Vec<Cow<'_, str>> =
+        Vec::with_capacity(2 + 2 * d.alt_titles.len() + d.genres.len() + d.newsgroups.len());
+    alone.extend(d.canonical_title.as_deref().map(Cow::from));
+    alone.extend(d.alt_titles.iter().map(|a| Cow::from(a.title.as_str())));
+    let mut tags: Vec<&str> = Vec::new();
+    for a in &d.alt_titles {
+        if !tags.contains(&a.language.as_str()) {
+            tags.push(&a.language);
+        }
+    }
+    alone.extend(tags.into_iter().map(|t| Cow::from(t.replace('-', " "))));
+    alone.extend(d.source_category.as_deref().map(Cow::from));
+    alone.extend(d.genres.iter().map(|g| Cow::from(g.as_str())));
+    alone.extend(d.newsgroups.iter().map(|g| Cow::from(g.as_str())));
+    alone.retain(|t| !t.trim().is_empty());
+    alone
+}
+
+/// `names` without the empty ones and without repeats, in order.
+fn distinct_names<'a>(names: &[Option<&'a str>]) -> Vec<&'a str> {
+    let mut out: Vec<&str> = Vec::with_capacity(names.len());
+    for name in names.iter().flatten() {
+        if !name.trim().is_empty() && !out.contains(name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// About the bytes of text [`judge_in`] judges for `c` with `context`:
+/// its text once ([`Claims::text_len`]), and its details section's texts
+/// exactly ([`details_judged_len`]). The refile's budget
+/// ([`REFILE_JUDGED_BYTES`]) counts this.
+pub fn judged_len(c: &Claims, context: Option<&str>) -> usize {
+    c.text_len().saturating_add(
+        c.details
+            .as_deref()
+            .map_or(0, |d| details_judged_len(d, &[c.name.as_deref(), context])),
+    )
 }
 
 /// [`judge`] for one text, as a torrent's name, with `files`.
@@ -1105,10 +1172,17 @@ pub fn refile_step(
                     ..Step::default()
                 });
             };
-            let judged: Vec<(i64, Option<Hold>)> = page
-                .iter()
-                .filter_map(|i| judge_item(&engine, i, ctx, now))
-                .collect();
+            // Up to the judging budget: the rest is the next step's.
+            let (mut judged, mut spent, mut last) = (Vec::new(), 0usize, last);
+            for (n, i) in page.iter().enumerate() {
+                let cost = i.claims.as_ref().map_or(0, |c| judged_len(c, None));
+                if n > 0 && spent.saturating_add(cost) > REFILE_JUDGED_BYTES {
+                    last = page[n - 1].id;
+                    break;
+                }
+                spent = spent.saturating_add(cost);
+                judged.extend(judge_item(&engine, i, ctx, now));
+            }
             let refiled: Vec<RefiledUnverified<'_>> = judged
                 .iter()
                 .map(|(id, h)| RefiledUnverified {
@@ -1142,7 +1216,7 @@ pub fn refile_step(
         Phase::Claims => {
             let source = SourceId::new(after_claims.1).unwrap_or(SourceId::new(0).expect("0"));
             let page = store.claims_after((after_claims.0, source), REFILE_PAGE)?;
-            let Some(last) = page.last().map(|c| (c.torrent_id, c.source.get())) else {
+            let Some(mut last) = page.last().map(|c| (c.torrent_id, c.source.get())) else {
                 return Ok(Step {
                     end: true,
                     after_item,
@@ -1151,7 +1225,8 @@ pub fn refile_step(
                 });
             };
             let mut judged: Vec<(i64, SourceId, Option<Hold>)> = Vec::new();
-            for c in &page {
+            let mut spent = 0usize;
+            for (n, c) in page.iter().enumerate() {
                 let Some(claims) = &c.claims else {
                     judged.push((c.torrent_id, c.source, None));
                     continue;
@@ -1168,6 +1243,14 @@ pub fn refile_step(
                 } else {
                     None
                 };
+                // Up to the judging budget: the rest is the next step's.
+                let cost = judged_len(claims, context.as_deref());
+                if n > 0 && spent.saturating_add(cost) > REFILE_JUDGED_BYTES {
+                    let prev = &page[n - 1];
+                    last = (prev.torrent_id, prev.source.get());
+                    break;
+                }
+                spent = spent.saturating_add(cost);
                 let found = judge_hashes(
                     &engine,
                     &hashes,

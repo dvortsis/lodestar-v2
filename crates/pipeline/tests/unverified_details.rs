@@ -12,7 +12,8 @@ use lodestar_filter::{Action, Core, CsList, Engine, Handle, Lists, Sealer, Switc
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_pipeline::source_adult::AdultSources;
 use lodestar_pipeline::unverified::{
-    self, Ctx, Phase, UnverifiedStats, claims_kib, details_texts, store_claims,
+    self, Ctx, Phase, REFILE_JUDGED_BYTES, UnverifiedStats, claims_kib, details_judged_len,
+    details_texts, judged_len, store_claims,
 };
 use lodestar_sources::{Discovery, Found, Provenance, claims};
 use lodestar_store::claims as stored;
@@ -444,6 +445,7 @@ fn the_judged_texts_are_every_free_text_field() {
     let fields = [
         "Some Show",
         "某番組",
+        "ja",
         "TV > HD",
         "drama",
         "alt.binaries.hdtv",
@@ -459,12 +461,151 @@ fn the_judged_texts_are_every_free_text_field() {
     }
     assert!(texts.contains(&together));
     assert!(texts.iter().any(|x| *x == format!("Verified {together}")));
-    // 5 alone, together, and 6 for each distinct name.
-    assert_eq!(texts.len(), 5 + 1 + 2 * 6);
-    // Numbers and language tags aren't text: never judged.
-    assert!(!texts.iter().any(|x| x.contains("2011") || x.contains("ja")));
+    // 6 alone, together, and 7 for each distinct name.
+    assert_eq!(texts.len(), 6 + 1 + 2 * 7);
+    // Numbers aren't text: never judged.
+    assert!(!texts.iter().any(|x| x.contains("2011") || x.contains("90")));
     assert!(details_texts(&claims::Details::default(), &[Some("Name")]).is_empty());
-    assert_eq!(details_texts(&d, &[]).len(), 6);
+    assert_eq!(details_texts(&d, &[]).len(), 7);
+
+    // Each distinct language tag once, its `-`s read as spaces.
+    let mut d = details();
+    for (language, title) in [("zh-hant-tw", "a"), ("zh-hant-tw", "b"), ("ja", "c")] {
+        d.alt_titles.push(claims::AltTitle {
+            language: language.into(),
+            title: title.into(),
+        });
+    }
+    let texts = details_texts(&d, &[]);
+    assert_eq!(texts.iter().filter(|x| *x == "zh hant tw").count(), 1);
+    assert_eq!(texts.iter().filter(|x| *x == "ja").count(), 1);
+}
+
+/// `details_judged_len` counts exactly the bytes `details_texts` builds.
+fn judged_len_is_exact(d: &claims::Details, names: &[Option<&str>]) {
+    let built: usize = details_texts(d, names).iter().map(String::len).sum();
+    assert_eq!(details_judged_len(d, names), built);
+}
+
+#[test]
+fn the_judged_length_is_exact() {
+    judged_len_is_exact(
+        &details(),
+        &[Some("Name"), Some("Verified"), Some("Name"), None],
+    );
+    judged_len_is_exact(&details(), &[]);
+    judged_len_is_exact(&claims::Details::default(), &[Some("Name")]);
+    let one = claims::Details {
+        genres: vec!["drama".into()],
+        ..claims::Details::default()
+    };
+    judged_len_is_exact(&one, &[Some("Name"), Some(" ")]);
+}
+
+/// A language tag is judged too (runner review of #551): its subtags can
+/// carry short words, so a tag alone holds a key beside clean titles.
+#[test]
+fn a_language_tag_alone_holds_the_key() {
+    let (mut store, _, feed) = mem();
+    let mut d = details();
+    d.alt_titles.push(claims::AltTitle {
+        language: "rolea-lexa".into(),
+        title: "Plain".into(),
+    });
+    let c = with_details("Plain Show", d);
+    let s = store_claims(&found(key(1), feed, c.clone())).unwrap();
+    assert!(
+        s.details
+            .as_ref()
+            .unwrap()
+            .alt_titles
+            .iter()
+            .any(|a| a.language == "rolea-lexa")
+    );
+    let stats = ingest(&mut store, &stand_in(), None, &[found(key(1), feed, c)]);
+    assert_eq!((n(&stats.held), n(&stats.stored)), (1, 0));
+    assert!(held(&store, key(1)));
+}
+
+/// A refile step judges at most `REFILE_JUDGED_BYTES` past its first row:
+/// small sections on torrents with long names end the step early, and the
+/// sweep still reaches every row and judges each once.
+#[test]
+fn a_refile_step_stops_at_its_judging_budget() {
+    let (mut store, dht, feed) = mem();
+    let section = claims::Details {
+        alt_titles: (0..claims::MAX_ALT_TITLES)
+            .map(|i| claims::AltTitle {
+                // 32 distinct tags: each is judged as well.
+                language: format!(
+                    "x{}{}",
+                    char::from(b'a' + (i % 26) as u8),
+                    "x".repeat(i / 26)
+                ),
+                title: format!("title {i}"),
+            })
+            .collect(),
+        genres: (0..claims::MAX_GENRES)
+            .map(|i| format!("genre {i}"))
+            .collect(),
+        newsgroups: (0..claims::MAX_NEWSGROUPS)
+            .map(|i| format!("alt.binaries.g{i}"))
+            .collect(),
+        ..details()
+    };
+    let long = |i: usize| format!("{i:03} {}", "word ".repeat(810));
+    let stored = with_details("Plain Show", section.clone());
+    let cost = {
+        let mut c = stored.clone();
+        c.clamp();
+        let mut d = raw(key(1), feed, c);
+        d.found.key = InfoHash(key(1));
+        judged_len(&store_claims(&d).unwrap(), Some(&long(0)))
+    };
+    let rows = 2 * REFILE_JUDGED_BYTES / cost + 2;
+    assert!(rows < 200, "each row costs {cost}");
+    let mut batch = Vec::new();
+    let mut hashes = Vec::new();
+    for i in 0..rows {
+        let (_, h) = crawled(&mut store, &long(i), dht);
+        hashes.push(h);
+        batch.push(found(h, feed, stored.clone()));
+    }
+    let filter = stand_in();
+    let stats = ingest(&mut store, &filter, None, &batch);
+    assert_eq!(n(&stats.on_torrent), rows as u64);
+
+    let ctx = Ctx {
+        quarantine_secs: 86_400,
+        ..Ctx::default()
+    };
+    let version = filter.current().version;
+    let (mut after, mut steps) = ((0, 0), 0);
+    loop {
+        let s = unverified::refile_step(
+            &mut store,
+            &filter,
+            version,
+            Phase::Claims,
+            0,
+            after,
+            ctx,
+            T,
+            &|_, _| {},
+        )
+        .unwrap();
+        assert!(!s.rejected);
+        if s.end {
+            break;
+        }
+        assert_ne!(s.after_claims, after, "every step goes on");
+        after = s.after_claims;
+        steps += 1;
+    }
+    assert!(steps >= 3, "{rows} rows of {cost} bytes took {steps} steps");
+    // Nothing matched, so nothing was removed; a rule now reaches all.
+    rule(&filter, "plain", Action::Drop);
+    assert_eq!(sweep(&mut store, &filter), rows);
 }
 
 /// Your rule on any one free-text field drops the source's claims and
@@ -925,6 +1066,11 @@ proptest! {
             prop_assert_eq!(Some(got), c.details.as_ref());
         }
         prop_assert!(stored::encode(&s, 3).is_ok());
+        if let Some(d) = &c.details {
+            let names = [c.name.as_deref(), Some("Verified name")];
+            let built: usize = details_texts(d, &names).iter().map(String::len).sum();
+            prop_assert_eq!(details_judged_len(d, &names), built);
+        }
     }
 }
 
