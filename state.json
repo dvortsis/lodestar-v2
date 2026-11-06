@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T04:14:37Z",
+ "updated_at": "2026-11-06T04:40:16Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -5146,6 +5146,14 @@
   {
    "at": "2026-11-06T03:28:57Z",
    "note": "Runner decision (#527 review): file:mkv v8 deferred. Design A preferred; bundle with the next slice needing v8 or take at G-v1-10m on the reference runner. A drops the ext split tokens (mp, 4) and keeps phrase/word matches, with a differential test. Also: 10M rerun of X-search-files-6's final head (cold, warm, NRT, fresh store) if the session couldn't."
+  },
+  {
+   "at": "2026-11-06T04:40:16Z",
+   "note": "Possible flake: crates/search live::tests::the_mmap_caches_keep_only_live_files_across_commits_and_merges failed once in a full `-p lodestar-search --lib` run in X-search-files-6's container (passed 3x alone, 2 more full runs; message not captured). Watch CI for recurrence; if it recurs, one Opus flake slice (deadline-based wait, no sleeps). Not #527's."
+  },
+  {
+   "at": "2026-11-06T04:40:16Z",
+   "note": "Owner \u00a72.46 (#528): send owner the not-covered list by name via dashboard (done 04:4xZ); record answers as they arrive (ext:owner-v07-q1..q4, cq3, cq4, cq5, cq6, cq8, wkq1, wkq2, m6q13, m8-q1, m8-q6, v08-q1, v08-q4). Runner drafts v08 Q3 text in PL-5's decisions file."
   }
  ],
  "main_health": [
