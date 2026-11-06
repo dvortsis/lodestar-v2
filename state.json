@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T04:42:01Z",
+ "updated_at": "2026-11-06T05:19:02Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3296,10 +3296,12 @@
    "at": "2026-11-06T00:10:56Z"
   },
   "X-search-files-6": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhnAMPZTrQgedhh4nNLA",
    "brief": "briefs/X-search-files-6.md",
-   "launched": "2026-11-05T22:18Z"
+   "launched": "2026-11-05T22:18Z",
+   "pr": 527,
+   "merge": "e42322b6"
   },
   "X-claim-store-polish": {
    "status": "merged",
@@ -5063,20 +5065,10 @@
    "added": "2026-11-05T21:38Z"
   },
   {
-   "id": "runner-docs-enr45-pointer",
-   "note": "Runner docs PR: add a pointer from the ENR-4/ENR-5 decisions bodies to the X-enr-page-flag decisions file (#511), which supersedes their stopgaps.",
-   "added": "2026-11-05T21:39Z"
-  },
-  {
    "id": "X-claim-store-polish",
    "from": "#512 review",
    "note": "P1 pipeline proptest for tracker_url/stored_trackers (fixed point, <=64, within room, no dups); P2 reword fuzz/fuzz_targets/verified_claims.rs:226-232 comment; P3 decisions clause on first-fit trade in near-full pack; P4 doc wrap unverified.rs:196-197. Carry into the next slice touching crates/pipeline/src/unverified.rs.",
    "added": "2026-11-05T22:11Z"
-  },
-  {
-   "id": "runner-docs-g-v051-measure",
-   "note": "dashboard.yaml G-v051 gate measure still reads \"Soak r3 running...\"; update to soak r5 (rc.4, baseline ends 2026-11-06T13:12:25Z; r4 ended 29.35 MiB/h) in the 00:00Z runner docs PR.",
-   "added": "2026-11-05T22:18Z"
   },
   {
    "id": "owner-flag-X-claim-store",
@@ -5139,10 +5131,6 @@
   {
    "at": "2026-11-06T00:22:21Z",
    "note": "dashboard-paste PR: add X-consent-gate-052 (Opus, /security-review; PATCH /sources refuses consent-needing sources until SRC-15b's owner-approved text; real-binary test) as a dep of P-v052-cut; runner call on #520 Q4"
-  },
-  {
-   "at": "2026-11-06T03:03:38Z",
-   "note": "Runner PR: fix rule-pack plan line 94 and RP-G brief to name web/e2e/packs.routes.test.ts and crates/api/tests/packs_gate.rs."
   },
   {
    "at": "2026-11-06T03:28:57Z",
@@ -5826,16 +5814,17 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T04:42:01Z",
+  "updated": "2026-11-06T05:19:02Z",
   "items": [
    {
     "slot": 3,
     "slice": "X-search-files-6",
     "role": "build",
     "agent": "claude",
-    "doing": "Search: close the 10M file-search gate (negated words in file clauses, finer size codes); runner design call in the brief",
-    "since": "2026-11-05T22:18Z",
-    "session": "session_01MMjhnAMPZTrQgedhh4nNLA"
+    "doing": "#527 merged e42322b6; idle: no ready slice on the dashboard (the rest waits on the v0.5.1 soak verdict or owner answers); small follow-ups not worth a slot",
+    "since": "2026-11-06T05:19:02Z",
+    "session": "session_01MMjhnAMPZTrQgedhh4nNLA",
+    "status": "idle"
    },
    {
     "slot": 5,
