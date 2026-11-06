@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T03:03:38Z",
+  "updated_at": "2026-11-06T03:09:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5128,6 +5128,10 @@
     {
       "at": "2026-11-06T03:03:38Z",
       "note": "Runner PR: fix rule-pack plan line 94 and RP-G brief to name web/e2e/packs.routes.test.ts and crates/api/tests/packs_gate.rs."
+    },
+    {
+      "at": "2026-11-06T03:09:52Z",
+      "note": "X-egress-state-watch (Opus): PluginEgress's source-state read (consent.rs:445, wired services.rs:325) uses the API's shared Mutex<Store>; >2 s contention refuses every HTTP plugin request (fails closed, costs availability, noisy policy_refusals). Have Control publish source state in memory (watch). From #525 review."
     }
   ],
   "main_health": [
