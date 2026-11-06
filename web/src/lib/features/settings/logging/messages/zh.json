@@ -409,6 +409,8 @@
 	"settings_logging_ev_auth_dir_sync_failed_h": "无法将登录数据文件夹写入磁盘。",
 	"settings_logging_ev_filters_ip_lists_broad_n": "IP 列表范围过广",
 	"settings_logging_ev_filters_ip_lists_broad_h": "某个 IP 屏蔽列表覆盖的范围非常大。",
+	"settings_logging_ev_companions_catalogue_invalid_n": "伴随程序目录无效",
+	"settings_logging_ev_companions_catalogue_invalid_h": "内置的伴随程序目录未通过检查，因此已停止安装伴随程序。",
 	"settings_logging_ev_integrations_client_request_n": "下载器请求",
 	"settings_logging_ev_integrations_client_request_h": "向你的下载器发出的请求。",
 	"settings_logging_ev_integrations_client_left_paused_n": "种子保持暂停",

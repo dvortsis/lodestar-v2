@@ -34,6 +34,7 @@ lodestar-sources-plugins = { path = "crates/sources-plugins" }
 lodestar-integrations = { path = "crates/integrations" }
 lodestar-log = { path = "crates/log" }
 lodestar-update = { path = "crates/update" }
+lodestar-companions = { path = "crates/companions" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -409,6 +409,8 @@
 	"settings_logging_ev_auth_dir_sync_failed_h": "The sign-in data folder couldn't be flushed to disk.",
 	"settings_logging_ev_filters_ip_lists_broad_n": "IP list very broad",
 	"settings_logging_ev_filters_ip_lists_broad_h": "An IP block list covers a very large range.",
+	"settings_logging_ev_companions_catalogue_invalid_n": "Companion catalogue invalid",
+	"settings_logging_ev_companions_catalogue_invalid_h": "The built-in companion catalogue didn't pass its checks, so companion installs are off.",
 	"settings_logging_ev_integrations_client_request_n": "Torrent client request",
 	"settings_logging_ev_integrations_client_request_h": "A request to your torrent client.",
 	"settings_logging_ev_integrations_client_left_paused_n": "Torrent left paused",

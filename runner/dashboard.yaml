@@ -346,6 +346,10 @@ placement:
   - X-sources-low
   - X-egress-state-watch
   - X-net-redirect-allowlist
+  - X-win-refusal-ux
+  - X-win-log-held-open
+  - X-flake-states-clock
+  - X-e2e-baseline-refresh
 - ws: ws-cut
   match:
   - CR-COL
@@ -354,6 +358,7 @@ placement:
   - CR-0f
   - D-v051
   - X-legal-docs
+  - X-legal-docs-r2
   - X-mmap-cache-prune
   - X-merge-policy
   - X-thp-off
@@ -369,6 +374,8 @@ placement:
   - P-v052-cut
   - P-v052-manifest
   - X-consent-gate-052
+  - X-consent-gate-polish
+  - LEGAL-3a
 - ws: ws-cr-build
   match:
   - CR-SIM
@@ -433,6 +440,7 @@ placement:
   - TZ-0
   - UP-0
   - ENR-9
+  - ENR-9b
   - GS-0
 - ws: ws-m7-w2
   match:
@@ -642,9 +650,10 @@ conditions:
     who: you
     label: You decide how performers are handled and that no age data is used (rule-pack Q4, Q5)
   owner-q1:
-    met: false
+    met: true
     who: you
     label: You approve the consent wording (Q1)
+    note: Approved 2026-11-06, docs/owner-decisions.md §2.49 (all four drafts, the Account sentence bounded)
   owner-q2:
     met: true
     who: you
@@ -1301,50 +1310,45 @@ roadmap:
 owner_queue:
 - n: 1
   type: action
-  action: Soak r5 on rc.4 passed (0.91 MiB/h, bar 2.0). The gluetun leg is running (about 8.5 h from about 15:00Z). Still to do the Windows MSI check on rc.4 (at least 1 h), then tag v0.5.1 on dba1a5c0 once the runner gives the go
+  action: Soak r5 on rc.4 passed (0.91 MiB/h, bar 2.0) and the Windows MSI check on rc.4 passed (2026-11-06). rc.5 (text-only Legal Notice v3, #540) is green. The gluetun leg is running, with its final report about 23:50Z. Then tag v0.5.1 on a0eb0a9087c2474ef4285416403eacbf8a475111 (rc.5) once the runner gives the go
   unblocks: The v0.5.1 release
-  when: After the gluetun leg ends (about 2026-11-06T23:30Z) and the Windows MSI check
+  when: After the gluetun leg's final report (about 2026-11-06T23:50Z)
 - n: 2
   type: action
   action: Name the experiment host for crawler tests, and when it is free
   unblocks: All live crawler measurement and the v0.6 tag
   when: Before CR-4 lands
 - n: 3
-  type: decision
-  action: Approve the plain-language consent texts SRC-4 drafted (Q1), at https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md?plain=1#L79 ("Draft consent texts")
-  unblocks: The consent dialogs and credentials screen (SRC-15b)
-  when: Before SRC-15b
-- n: 4
   type: action
   action: Add web-ok and e2e-ok to the main ruleset's required checks, next to ci-ok (you said yes, §2.37)
   unblocks: Safer merges
   when: Any time
-- n: 5
+- n: 4
   type: action
   action: Create the nightly signing key and its environment (skipped for v0.5.1)
   unblocks: Update checks on the Nightly channel
   when: Optional
-- n: 6
+- n: 5
   type: decision
   action: 'Checkpoint 1: re-decide the crawler gate if the projection falls short'
   unblocks: The v0.6 tag
   when: After the A/B runs
-- n: 7
+- n: 6
   type: action
   action: Fix your Backups share minimum free space (500 GB) on the Unraid box
   unblocks: Appdata Backup protection for the soak
   when: Optional
-- n: 8
+- n: 7
   type: action
   action: Submit to Unraid Community Apps
   unblocks: The Unraid app-store listing
   when: After the 1.0 release is complete (§2.37)
-- n: 9
+- n: 8
   type: action
   action: Have Colorado counsel review docs/legal/legal-notice.md and docs/legal/operator-guidance.md (advisory, not a gate on the v0.5.1 tag; §2.38)
   unblocks: Counsel's comments on the Legal Notice
   when: When convenient
-- n: 10
+- n: 9
   type: action
   action: Submit Lodestar to winget, if you want it (M6 Q6)
   unblocks: A winget listing for Windows users
@@ -1572,4 +1576,4 @@ notes:
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Also for you
-    text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Review the draft consent texts (https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md?plain=1#L79). The nightly signing key and the Unraid Backups share minimum free space are optional.
+    text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). The nightly signing key and the Unraid Backups share minimum free space are optional.

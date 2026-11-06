@@ -776,5 +776,9 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'update.probation_failed': [
 		m.settings_logging_ev_update_probation_failed_n,
 		m.settings_logging_ev_update_probation_failed_h
+	],
+	'companions.catalogue_invalid': [
+		m.settings_logging_ev_companions_catalogue_invalid_n,
+		m.settings_logging_ev_companions_catalogue_invalid_h
 	]
 };

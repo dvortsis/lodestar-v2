@@ -1,0 +1,26 @@
+[package]
+name = "lodestar-companions"
+description = "Companion manager core: the closed input types templates use, the adapter traits and, from CMP-0, the compiled-in companion catalogue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[features]
+# Test-only hooks for this crate's tests and later crates' dev-dependencies.
+# Nothing is behind it yet: CMP-0 puts the catalogue override behind it.
+# Never enabled by a shipped build.
+testing = []
+
+[dependencies]
+lodestar-integrations.workspace = true
+lodestar-log.workspace = true
+
+[dev-dependencies]
+proptest = "=1.11.0"
+tokio = { version = "=1.54.0", features = ["rt", "macros"] }
+
+[lints]
+workspace = true
