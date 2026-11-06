@@ -8,8 +8,9 @@
 //! viewer, say), Windows refuses the rename. Records then go on into the
 //! current file, and the rename is tried again only after
 //! [`ROTATION_RETRY`], as the JSONL file sink does. The current file
-//! stops at twice the cap ([`LogFile`] has the bound), so the folder holds
-//! at most three times the cap.
+//! stops at twice the cap ([`LogFile`] has the bound). That whole file
+//! may become `lodestar.log.1`, so the folder holds at most four times the
+//! cap.
 //!
 //! Since B-log1b the service's logging runtime writes its console here
 //! ([`Console`]), beside the structured `lodestar.jsonl`.
@@ -81,8 +82,9 @@ fn create_private(dir: &Path) -> io::Result<()> {
 /// by that again for each further failed attempt, but never past twice
 /// the cap: a record that would take a non-empty file past that is
 /// refused (an error, as the JSONL sink refuses lines at its total cap)
-/// until a rotation succeeds. The folder then holds at most three times
-/// the cap.
+/// until a rotation succeeds. Either file can reach twice the cap (a
+/// rotation moves the whole current file), so the folder holds at most
+/// four times the cap.
 #[derive(Debug)]
 pub struct LogFile {
     path: PathBuf,
