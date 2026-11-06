@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T03:09:52Z",
+  "updated_at": "2026-11-06T03:28:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5132,6 +5132,10 @@
     {
       "at": "2026-11-06T03:09:52Z",
       "note": "X-egress-state-watch (Opus): PluginEgress's source-state read (consent.rs:445, wired services.rs:325) uses the API's shared Mutex<Store>; >2 s contention refuses every HTTP plugin request (fails closed, costs availability, noisy policy_refusals). Have Control publish source state in memory (watch). From #525 review."
+    },
+    {
+      "at": "2026-11-06T03:28:57Z",
+      "note": "Runner decision (#527 review): file:mkv v8 deferred. Design A preferred; bundle with the next slice needing v8 or take at G-v1-10m on the reference runner. A drops the ext split tokens (mp, 4) and keeps phrase/word matches, with a differential test. Also: 10M rerun of X-search-files-6's final head (cold, warm, NRT, fresh store) if the session couldn't."
     }
   ],
   "main_health": [
