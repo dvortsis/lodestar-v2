@@ -276,6 +276,8 @@ placement:
   - D-sources-guide
   - L4-followups
   - S-settings-reconcile
+  - X-tcache-recheck
+  - X-sources-low
 - ws: ws-cut
   match:
   - CR-COL
@@ -297,6 +299,7 @@ placement:
   - G-v051
   - D-v051-main
   - P-v052-cut
+  - P-v052-manifest
 - ws: ws-cr-build
   match:
   - CR-SIM
@@ -361,6 +364,7 @@ placement:
   - RP-*
   - ENR-*
   - X-enr-page-flag
+  - X-sp4-followups
   - LEGAL-1
   - LEGAL-2
 - ws: ws-imp-tools
@@ -372,18 +376,22 @@ placement:
   - X-search-files-3
   - X-search-files-4
   - X-search-files-5
+  - X-search-files-6
   - G-import-*
   - CR-3
   - G-rebuild-10M
 - ws: ws-workers
   match:
   - E-v06-workers
+  - P-v06-workers
 - ws: ws-companions
   match:
   - E-v06-companions
+  - P-v06-companions
 - ws: ws-m6
   match:
   - E-M6
+  - P-m6-audit
   - X-pack-static
 - ws: ws-m7-built
   match:
@@ -395,12 +403,15 @@ placement:
 - ws: ws-m7-todo
   match:
   - E-M7
+  - P-v07
   - SB-6
   - SB-6b
 - ws: ws-v10
   match:
   - E-v08
   - E-M8
+  - P-v08
+  - P-m8
 unplaced_workstream: ws-small
 pinned:
   X-required-web-checks: ws-small
@@ -539,8 +550,8 @@ conditions:
 roadmap:
   steps:
   - id: soak
-    label: Unraid memory test (r3 and r4 failed, r5 next on rc.4)
-    plain: The 24-hour tests of release candidates 2 and 3 failed on memory growth (1.88 and 29.35 MiB an hour; bar 2.0). Release candidate 4 carries the allocator fix, and its fresh test (r5) runs next.
+    label: Unraid memory test (r3 and r4 failed, r5 running on rc.4)
+    plain: The 24-hour tests of release candidates 2 and 3 failed on memory growth (1.88 and 29.35 MiB an hour; bar 2.0). Release candidate 4 carries the allocator fix, and its fresh test (r5) is running; its measured window ends 2026-11-06T13:12Z.
     col: 0
     row: 2
     members: []
@@ -814,9 +825,9 @@ roadmap:
 owner_queue:
 - n: 1
   type: action
-  action: Soak r4 on rc.3 failed its memory gate. rc.4 (the memory fixes and the Legal Notice, §2.40) is being built; then you tag rc.4 and run soak r5, the gluetun leg, the Windows smoke and the tag
+  action: Soak r5 on rc.4 (the memory fixes and the Legal Notice, §2.40) is running. Then the gluetun leg, the Windows smoke on rc.4 and the v0.5.1 tag
   unblocks: v0.5.1 release; the three held epics
-  when: The runner sends the rc.4 tag steps
+  when: After the r5 verdict (measured window ends 2026-11-06T13:12Z)
 - n: 2
   type: action
   action: Name the experiment host for crawler tests, and when it is free
@@ -876,7 +887,7 @@ gates:
   name: v0.5.1 release
   plain: Memory test passes, VPN leg runs, you tag it.
   slice: G-v051
-  measure: Soak r3 running; baseline ends 2026-11-02 22:16 UTC
+  measure: Soak r5 running on rc.4; baseline ends 2026-11-06T13:12:25Z (r4 on rc.3 ended at 29.35 MiB/h)
   target: Memory slope upper 95% bound <= 2.0 MiB/h over hours 12-24
   where: build-plan 0.4
 - id: G-v06-crawler
@@ -956,7 +967,7 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-05'
+  updated: '2026-11-06'
   now:
   - label: Soak r5 is running on release candidate 4
     text: Release candidate 4 is tagged and its 24-hour memory test started at 06:42 UTC on 5 November; the deciding window ends about 13:12 UTC on 6 November. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
@@ -967,11 +978,11 @@ notes:
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Up to twelve slots
-    text: 'By your instruction up to twelve worker slots run at once, filled only when ready work fits the plan, and the runner approves best-practice UX and performance decisions itself, listing them in the daily summary (owner-decisions §2.33, §2.36). The runner keeps the current list in its state file, shown on the slots view.'
+  - label: Four slots
+    text: 'By your instruction at most four worker slots run at once from 2026-11-06T00:00Z, filled only when ready work fits the plan (owner-decisions §2.42). The slices launched in your no-limit window (§2.45) finish under it, and nothing new launches until fewer than four are running. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: Finish v0.5.1
-    text: The runner sends the rc.4 tag steps when release candidate 4 is ready. Then soak r5 on rc.4 (Appdata Backup stays off until all soaks are done), the short Windows smoke on the rc.4 installer, the 2-hour VPN (gluetun) leg, and the v0.5.1 tag.
+    text: Soak r5 on release candidate 4 is running (Appdata Backup stays off until all soaks are done); its measured window ends 2026-11-06T13:12Z. Then the short Windows smoke on the rc.4 installer, the 2-hour VPN (gluetun) leg, and the v0.5.1 tag.
   - label: Name the experiment host
     text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
   - label: Also for you
