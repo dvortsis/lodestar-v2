@@ -5368,7 +5368,8 @@
         "slices.yaml ENR-9b owns: add crates/pipeline/src/writer.rs (promote call site only; runner yes 21:48Z, content-safety pair at promotion)",
         "slices.yaml X-fetch-pool-bytes owns: add crates/lodestar/src/metrics.rs, docs/metrics.md (runner yes 21:52Z)",
         "NEW SLICE X-fetch-meta-reserve (Opus, peer-wire + Fetcher trait, /security-review): reserve announced metadata_size against the pool byte budget before requesting pieces; closes in-flight max_sockets x max_metadata peak left by X-fetch-pool-bytes; deps X-fetch-pool-bytes; WK-10 depends on it"
-      ]
+      ],
+      "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
     }
   ],
   "main_health": [
