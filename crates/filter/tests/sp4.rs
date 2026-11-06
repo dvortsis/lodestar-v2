@@ -1265,3 +1265,44 @@ fn memory_at_the_cap_readded() {
     );
     assert!(held <= 25.0, "the 25 MB gate");
 }
+
+/// The set's memory at its cap after releases spread over it: a third of
+/// its signatures released at random, each appending a removal kept
+/// while the add it cancels is stored, then as many new hides, so the set
+/// is back at its cap. The gate is on the bytes the set holds, which
+/// count about 32 bytes per stored removal for the removals index. Run
+/// alone, in its own process and in release: `cargo test --release -p
+/// lodestar-filter --test sp4 -- --ignored --nocapture --exact
+/// memory_at_the_cap_released`.
+#[test]
+#[ignore = "a measurement: run alone, in release"]
+fn memory_at_the_cap_released() {
+    if resident().is_none() {
+        return;
+    }
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let before = resident().unwrap();
+    let s = SpamSigs::default();
+    for i in 0..CAP as u64 {
+        s.add(sig(i), HID);
+    }
+    let released: Vec<u64> = (0..(CAP as u64 / 3))
+        .map(|i| sig(sig(i) % CAP as u64))
+        .collect();
+    let mut gone = 0;
+    for chunk in released.chunks(1_000) {
+        gone += s.release(&mut store, chunk, None).unwrap();
+    }
+    for i in 0..gone as u64 {
+        s.add(sig(1 << 42 | i), HID);
+    }
+    assert_eq!(s.len(), CAP);
+    let mb = (resident().unwrap() - before) / 1e6;
+    let held = s.held_bytes() as f64 / 1e6;
+    let (rows, entries) = s.shape();
+    println!(
+        "released at the cap ({CAP}): {gone} released, then as many added; {held:.1} MB held, \
+         {mb:.1} MB resident (the store's pages too); {rows} rows of {entries} entries"
+    );
+    assert!(held <= 25.0, "the 25 MB gate");
+}

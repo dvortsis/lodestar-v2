@@ -39,11 +39,18 @@ The brief asked for a guard: don't add a payload signature to SP-4's set while t
 - **Refinement, flagged (§2.19): at most 524,288 rows held at once** (`MAX_HELD_ROWS`, the slot's 19 bits). About 2,600 rows hold the cap after churn, and filling the limit would take about 268M releases (the runner's review of #524). Past it, **the oldest row goes to make room** (runner, #524):
   - Its live signatures go, as the cap drops the oldest, and it's deleted at the next flush. That errs loose, like the cap. Its removals cancel nothing older, since no held row is older, and the lost rows older than it go too, as an eviction past them does.
   - A load does the same for rows past the limit (another build's), so nothing is listed as unreadable for it. The note is `SP-4 signature row <n> dropped: more rows than memory holds`, logged as `pipeline.filter_rule_skipped` with `reason: rows_full`. At run time, the writer logs the same after its flush, for rows a batch or a release dropped (`SpamSigs::take_dropped`).
+    - That check is an atomic load while nothing was dropped, as `pending` is. So the writer never takes the set's lock for it, which an API release can hold across its store write (runner, #524).
+    - The lost rows older than a dropped row are deleted with it, on a load as at run time. A newer build must never read adds whose removals were dropped. Lost rows only the cap passed stay listed until their turn, as RP-5 left them.
   - The set keeps changing. An earlier version of this PR stopped it, and a restart didn't clear that, since a load doesn't compact. The runner ruled a permanent stop the wrong failure.
   - `past_what_memory_holds_the_oldest_row_goes` drives the limit with a lower test-only limit. Adds and releases keep working past it and across a reload. `a_load_past_what_memory_holds_drops_the_oldest_rows` checks the load.
+  - `a_release_that_drops_its_own_add_leaves_nothing_behind` covers a release at the limit whose removal starts a row, which drops the row holding the released add. `remove` looks the add up again after its append, so nothing counts it as stale (runner, #524).
+  - The index check now also requires the stale counts to equal the stored adds that aren't live, exactly. Both tests fail with the old unconditional `went_stale`.
+  - A writer test of the `rows_full` log is left out (the runner's optional item). The limit can only be lowered from the filter crate's own unit tests, and adding a hook from the pipeline isn't worth it for a path no set reaches.
 - **Rows of removals no longer leak** (RP-5's known limit; runner, #524). A removal is kept while a stale add of its signature is still stored. A tail row that took a run of releases was compacted while those adds were still stored, then never touched again once they went.
   - Now a set of stored removals by signature and row (`removals`) finds that row once the signature's last stale add goes, and compaction runs on it.
   - It costs a tree lookup per stale signature dropped, and about 32 bytes per stored removal.
+  - A removal is stored only while an add it cancels is, so removals are bounded by the dead entries rows may hold: under a quarter of each row, plus rows of removals awaiting their adds' compaction.
+  - Measured with a third of the set released at random and then refilled to the cap (`memory_at_the_cap_released`): 283,385 releases, 87,107 dead entries in 3,062 rows, and 21.1 MB held.
   - `rows_of_removals_dont_outlive_what_they_cancel`: 60 rounds of 2,555 hides with every fifth released. Before this change, 33,763 entries in 67 rows, still growing. Now it stays within twice the cap plus four rows.
 - **A load of more than the cap shrinks the index back** once the cap is applied (`Index::fit`, runner's optional item, #524). So rows another cap wrote don't leave a 16 MB table (`a_load_of_more_than_the_cap_shrinks_the_index_back`).
 - **Unchanged:** the stored rows and their format, the load rules (fail closed per row, last entry wins, the cap applied again), compaction, releases, and every SP-4 behaviour. RP-5's tests in `crates/filter/tests/sp4.rs` pass unchanged, including the reload property test `a_reload_holds_what_memory_held`. The unit test that checks the index against the rows now also runs at 5,000 signatures, with long probe runs and reused places, and checks the same again on its rows loaded into a fresh set.
@@ -58,6 +65,7 @@ Release build, this session's container, each run in its own process, three runs
 | Loaded from its rows (`memory_at_the_cap_loaded`) | 53.1 to 53.2 MB | 17.0 to 17.3 MB | 16.5 MB |
 | Filled by adds, 10,000 past the cap (`memory_at_the_cap_added`) | 44.5 to 44.6 MB | 17.2 to 17.5 MB | 16.6 MB |
 | Filled by adds, then a third of them re-added at random (`memory_at_the_cap_readded`) | not measured | 26.0 to 26.5 MB | 21.8 MB |
+| Filled, a third released at random, then refilled to the cap (`memory_at_the_cap_released`) | not measured | not comparable: the in-memory store's pages count too | 21.1 MB |
 | A lookup that hits, keys spread over the set | 101 to 114 ns | 87 to 173 ns | |
 | A lookup that misses | 38 to 43 ns | 73 to 148 ns | |
 

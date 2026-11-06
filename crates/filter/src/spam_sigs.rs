@@ -892,6 +892,10 @@ pub struct SpamSigs {
     len: AtomicUsize,
     /// Something to write.
     pending: AtomicBool,
+    /// Rows dropped to the held limit, not yet taken
+    /// ([`SpamSigs::take_dropped`]): the writer reads this, not the lock,
+    /// after each batch.
+    dropped: AtomicBool,
 }
 
 impl std::fmt::Debug for SpamSigs {
@@ -930,6 +934,7 @@ impl SpamSigs {
             inner: Mutex::new(Inner::new(cap.max(1), MAX_HELD_ROWS)),
             len: AtomicUsize::new(0),
             pending: AtomicBool::new(false),
+            dropped: AtomicBool::new(false),
         }
     }
 
@@ -943,6 +948,8 @@ impl SpamSigs {
             !inner.dirty.is_empty() || !inner.gone.is_empty(),
             Ordering::Release,
         );
+        self.dropped
+            .store(!inner.dropped.is_empty(), Ordering::Release);
     }
 
     pub fn len(&self) -> usize {
@@ -1054,7 +1061,10 @@ impl SpamSigs {
                 continue;
             };
             inner.next = inner.next.max(n + 1);
-            // A row is a blob; text under the prefix isn't this format.
+            // A row is a blob; text under the prefix isn't this format. A
+            // number is never both lost and read: `settings.key` is the
+            // primary key, so each number comes once (and two rows under
+            // one number, which a store can't hold, keep the last below).
             match v.as_ref().err().and_then(|b| decode(b)) {
                 Some(entries) => readable.push((n, entries)),
                 None => {
@@ -1151,8 +1161,14 @@ impl SpamSigs {
         // shrinks back once the cap is applied.
         inner.live.fit(&inner.rows);
         let dropped = std::mem::take(&mut inner.dropped);
+        // Rows dropped to the held limit are deleted at the next flush, and
+        // so are the lost rows older than them, as at run time
+        // ([`Inner::drop_oldest_row`]): a newer build must never read adds
+        // whose removals went with a dropped row. Lost rows only the cap
+        // passed stay listed until their turn, as RP-5 left them.
+        let newest_dropped = dropped.iter().max().copied();
         for n in std::mem::take(&mut inner.gone) {
-            if dropped.contains(&n) {
+            if dropped.contains(&n) || newest_dropped.is_some_and(|d| n < d) {
                 inner.gone.insert(n);
             } else {
                 inner.lost_rows.insert(n);
@@ -1173,7 +1189,15 @@ impl SpamSigs {
     /// `MAX_HELD_ROWS` (never, in practice), oldest first: for the writer
     /// to log after its flush.
     pub fn take_dropped(&self) -> Vec<u64> {
-        std::mem::take(&mut self.lock().dropped)
+        // An atomic load while nothing was dropped (always, in practice):
+        // the lock can be held across an API release's store write.
+        if !self.dropped.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        let mut inner = self.lock();
+        let taken = std::mem::take(&mut inner.dropped);
+        self.settle(&inner);
+        taken
     }
 
     /// The `filter.stand_ins` labels of the rows that didn't read:
@@ -1403,6 +1427,17 @@ mod tests {
             .collect();
         assert_eq!(removals, inner.removals);
         assert!(inner.freed.is_empty());
+        // The stale counts are the stored adds that aren't live, exactly.
+        let mut stale: HashMap<u64, u32> = HashMap::new();
+        for (n, r) in inner.rows.iter() {
+            let place = inner.rows.place(n).unwrap();
+            for (i, e) in r.entries.iter().enumerate() {
+                if *e & REMOVED == 0 && !inner.live.at(key(*e), Rows::slot(place, i), &inner.rows) {
+                    *stale.entry(key(*e)).or_default() += 1;
+                }
+            }
+        }
+        assert_eq!(stale, inner.stale, "stale counts");
         assert!(
             inner.live.len() * 2 <= inner.live.buckets.len(),
             "at most half full"
@@ -1535,20 +1570,65 @@ mod tests {
         check(&again.lock(), 10_000, full + 3_000);
     }
 
+    /// A release whose removal must start a row, at the limit, drops the
+    /// oldest row: when that row held the released add itself, nothing is
+    /// left to count stale or to cancel.
+    #[test]
+    fn a_release_that_drops_its_own_add_leaves_nothing_behind() {
+        let s = SpamSigs::with_cap(10_000);
+        s.lock().rows.limit = 3;
+        let full = 3 * ROW_ENTRIES as u64;
+        for i in 0..full {
+            s.add(sig(i), HID);
+        }
+        // sig(0) is in row 0, the oldest; the tail is full, so its removal
+        // starts row 3 and row 0 goes.
+        {
+            let mut inner = s.lock();
+            assert!(inner.remove(sig(0), None));
+            s.settle(&inner);
+        }
+        assert_eq!(s.take_dropped(), [0]);
+        assert_eq!(s.get(sig(0)), None);
+        {
+            let inner = s.lock();
+            assert!(
+                !inner.stale.contains_key(&key(sig(0))),
+                "no phantom stale add"
+            );
+            assert!(
+                !inner.removals.iter().any(|(k, _)| *k == key(sig(0))),
+                "its removal cancels nothing, so it isn't kept"
+            );
+        }
+        check(&s.lock(), 10_000, full);
+        // And across a reload.
+        let again = SpamSigs::with_cap(10_000);
+        again.lock().rows.limit = 3;
+        again.load(&stored(&s));
+        assert_eq!(again.get(sig(0)), None);
+        assert_eq!(again.len(), s.len());
+        check(&again.lock(), 10_000, full);
+    }
+
     #[test]
     fn a_load_past_what_memory_holds_drops_the_oldest_rows() {
-        let rows: Vec<RawSetting> = (0..5u64)
+        // Row 0 doesn't read; rows 1 to 5 do, one past the limit of 3 plus
+        // the lost row's place being free: rows 1 and 2 are dropped.
+        let mut rows: Vec<RawSetting> = (1..6u64)
             .map(|n| (format!("{PREFIX}{n}"), Err(encode(&[key(sig(n)) | HIDE]))))
             .collect();
+        rows.push((format!("{PREFIX}0"), Err(vec![9, 9])));
         let s = SpamSigs::with_cap(100);
         s.lock().rows.limit = 3;
         let loaded = s.load(&rows);
         assert_eq!(loaded.len, 3);
-        assert!(loaded.lost.is_empty(), "nothing listed as unreadable");
-        assert_eq!(loaded.dropped, [0, 1]);
-        assert!(s.get(sig(1)).is_none() && s.get(sig(2)).is_some());
+        assert_eq!(loaded.dropped, [1, 2]);
+        // The lost row older than a dropped one goes too, not listed.
+        assert!(loaded.lost.is_empty(), "{:?}", loaded.lost);
+        assert!(s.get(sig(2)).is_none() && s.get(sig(3)).is_some());
         // Deleted at the next flush, and the set keeps working.
-        assert_eq!(s.lock().gone, BTreeSet::from([0, 1]));
+        assert_eq!(s.lock().gone, BTreeSet::from([0, 1, 2]));
         s.add(sig(99), HID);
         assert!(s.get(sig(99)).is_some());
         // A deleted row's place is taken again.
