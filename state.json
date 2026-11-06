@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T16:00:00Z",
+  "updated_at": "2026-11-06T16:15:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5202,6 +5202,10 @@
     {
       "at": "2026-11-06T16:00:00Z",
       "note": "NEW SLICE for v0.5.2 (add to slices.yaml in next runner PR): X-win-log-held-open, kind core, model opus, deps [], owns [\"crates/lodestar/src/windows/logfile.rs\"] + one line in docs/user Windows guide. Owner asked 15:25Z if lodestar.log can be written while open: yes (std default share R|W|D; failures never fatal). Gap: a failed rename at the 16 MiB cap (reader without FILE_SHARE_DELETE, e.g. Get-Content -Wait) retries on every record, closing/reopening each time; add a 60 s retry delay like logging/file.rs ROTATION_RETRY, plus a cfg(windows) test holding the file open without delete-sharing: every line lands, rotation catches up after the reader closes. Not v0.5.1."
+    },
+    {
+      "at": "2026-11-06T16:15:00Z",
+      "note": "rc.4 MSI check: exit 3 REFUSED (data-folder ACL check, by design) after the owner most likely used Explorer \"Continue\" on C:\\ProgramData\\Lodestar, which adds the user ACE. Fixed by icacls; running since 15:52Z; 1 h monitoring ends ~17:00Z. Runner call: not a code blocker; docs-only fix on main (helper PR docs/win-first-run, needs fresh Opus review). NEW v0.5.2 slice X-win-refusal-ux (opus, /security-review): refusal reason to the Windows Event Log; message names the extra account + exact icacls fix; correct REPAIR advice (installer Repair also refuses a non-empty folder with an extra ACE); fold in X-win-log-held-open. OWNER QUESTION (later): may installer Repair re-secure a folder whose only defect is an extra Allow ACE for an admin account (loosens the rule) - runner recommends yes, logged. Add both slices to slices.yaml in the next runner PR."
     }
   ],
   "main_health": [
