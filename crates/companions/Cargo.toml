@@ -9,16 +9,19 @@ publish.workspace = true
 repository.workspace = true
 
 [features]
-# Test-only hooks for this crate's tests and later crates' dev-dependencies.
-# Nothing is behind it yet: CMP-0 puts the catalogue override behind it.
-# Never enabled by a shipped build.
+# Lets tests and later crates' dev-dependencies load a catalogue other than
+# the compiled-in one (`Catalogue::from_json`). Never enabled by a shipped
+# build: a release reads only `data/catalogue.json`.
 testing = []
 
 [dependencies]
 lodestar-integrations.workspace = true
 lodestar-log.workspace = true
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
 
 [dev-dependencies]
+lodestar-companions = { path = ".", features = ["testing"] }
 proptest = "=1.11.0"
 tokio = { version = "=1.54.0", features = ["rt", "macros"] }
 
