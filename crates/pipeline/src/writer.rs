@@ -815,6 +815,16 @@ impl Writer {
                     error = crate::log_events::store_error(&e)
                 );
             }
+            // Rows dropped because memory held as many as it can (never,
+            // in practice), by this batch or a release since.
+            for n in engine.spam_sigs.take_dropped() {
+                lodestar_log::log_event!(
+                    crate::log_events::FILTER_RULE_SKIPPED,
+                    what = "sp4_row",
+                    rule = n,
+                    reason = "rows_full"
+                );
+            }
             let promo_pending = promo_pending.into_inner();
             #[cfg(test)]
             if let Some(f) = between

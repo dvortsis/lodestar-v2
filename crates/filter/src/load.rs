@@ -405,13 +405,21 @@ impl Engine {
     /// version of the engine, so a rule reload doesn't load it again. A
     /// row that doesn't read loses only its own signatures; it's kept as
     /// it is and listed ([`Engine::spam_sig_labels`]) for `filter.stand_ins`
-    /// and the Filters & Safety notice. Returns a note for each.
+    /// and the Filters & Safety notice. A row dropped because memory can't
+    /// hold that many rows (never, in practice) loses its signatures as the
+    /// cap drops the oldest. Returns a note for each.
     pub fn load_spam_sigs(&self, rows: &[lodestar_store::RawSetting]) -> Vec<String> {
-        self.spam_sigs
-            .load(rows)
+        let loaded = self.spam_sigs.load(rows);
+        loaded
             .lost
             .iter()
             .map(|n| format!("SP-4 signature row {n} skipped: unreadable"))
+            .chain(loaded.dropped.iter().map(|n| {
+                format!(
+                    "SP-4 signature row {n} dropped: {}",
+                    crate::spam_sigs::ROWS_FULL
+                )
+            }))
             .collect()
     }
 
