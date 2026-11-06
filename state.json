@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T00:24:04Z",
+  "updated_at": "2026-11-06T00:26:09Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3354,10 +3354,13 @@
       "at": "2026-11-06T00:10:56Z"
     },
     "P-v08": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnB8dt8KTygRkyExN9D",
       "brief": "briefs/P-v08.md",
-      "launched": "2026-11-05T23:37Z"
+      "launched": "2026-11-05T23:37Z",
+      "pr": 517,
+      "merge": "9b9af650",
+      "at": "2026-11-06T00:26:09Z"
     },
     "X-tcache-recheck": {
       "status": "running",
@@ -5752,7 +5755,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T00:24:04Z",
+    "updated": "2026-11-06T00:26:09Z",
     "items": [
       {
         "slot": 3,
@@ -5789,15 +5792,6 @@
         "doing": "Plan: v0.5.2 feature manifest, the freeze list (docs only)",
         "since": "2026-11-05T23:37Z",
         "session": "session_01MMjhnBEDz5cnZumgyb58AH"
-      },
-      {
-        "slot": 14,
-        "slice": "P-v08",
-        "role": "docs",
-        "agent": "claude",
-        "doing": "Plan: v0.8 slices (docs only)",
-        "since": "2026-11-05T23:37Z",
-        "session": "session_01MMjhnB8dt8KTygRkyExN9D"
       },
       {
         "slot": 15,
