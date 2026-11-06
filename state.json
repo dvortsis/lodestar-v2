@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T00:10:56Z",
+  "updated_at": "2026-11-06T00:12:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3324,10 +3324,13 @@
       "at": "2026-11-06T00:10:56Z"
     },
     "P-m6-audit": {
-      "status": "running",
+      "status": "merged",
       "session": "session_01MMjhnAv6578FrhAXy861Y1",
       "brief": "briefs/P-m6-audit.md",
-      "launched": "2026-11-05T23:37Z"
+      "launched": "2026-11-05T23:37Z",
+      "pr": 518,
+      "merge": "0fa8e976",
+      "at": "2026-11-06T00:12:16Z"
     },
     "P-v052-manifest": {
       "status": "in review",
@@ -5730,7 +5733,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T00:10:56Z",
+    "updated": "2026-11-06T00:12:16Z",
     "items": [
       {
         "slot": 1,
@@ -5758,15 +5761,6 @@
         "doing": "Rule packs: the gate (corpora, precision, budget with every pack incl. SP-4 at cap, upgrade, guardrails, e2e)",
         "since": "2026-11-06T00:02Z",
         "session": "session_01MMjhn9KD5JH1gK2rcmNCVM"
-      },
-      {
-        "slot": 7,
-        "slice": "P-m6-audit",
-        "role": "docs",
-        "agent": "claude",
-        "doing": "Plan: M6 packaging gap audit and slices (docs only)",
-        "since": "2026-11-05T23:37Z",
-        "session": "session_01MMjhnAv6578FrhAXy861Y1"
       },
       {
         "slot": 9,
