@@ -841,6 +841,15 @@ Either way the rest is neither an upper nor a lower bound. It also holds thread 
 | `mem_anon_huge_bytes` | gauge | `AnonHugePages` from `/proc/self/smaps_rollup`: anonymous memory in transparent huge pages, part of `mem_rss_anon_bytes`. Linux only. |
 | `search_segments{index}` | gauge | Live segments in each index's current searcher, read at scrape: `index` is `main` (torrents) or `files`. Rendered with search on. |
 
+## Fetch pool held bytes (X-fetch-pool-bytes, 2026-11-06)
+
+The fetch pool holds finished info dicts until the consumer takes them. It holds them to a byte budget, `max_held_bytes` (64 MiB by default; see [the decision](decisions/2026-11-06-X-fetch-pool-bytes.md)). It counts each result's dict, PEX list and client name, plus the struct, from the moment its fetch finishes until the consumer takes it from the output channel. Bytes inside a fetch still running are not counted.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `fetch_held_bytes` | gauge | Bytes of finished fetches the pool holds: not yet joined, waiting for an output slot, or in the channel and not yet taken. It can pass the budget by what fetches already running bring when it fills. |
+| `fetch_held_full_total` | counter | Times the budget, or the estimate of what fetches in flight will bring, stopped the pool starting fetches. It counts each time the pool becomes stopped, not each round it stays stopped. |
+
 ## Unreadable filter rows (F-filter-load-fail-closed, 2026-11-01)
 
 See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).

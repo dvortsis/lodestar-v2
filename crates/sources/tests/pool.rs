@@ -62,6 +62,8 @@ struct FakeState {
     per_ip: Mutex<HashMap<IpAddr, usize>>,
     max_per_ip: AtomicUsize,
     started: Mutex<Vec<(InfoHash, SocketAddr)>>,
+    /// The length of every info dict served; 0 serves the key's 20 bytes.
+    info_len: AtomicUsize,
 }
 
 struct Fake(Arc<FakeState>);
@@ -97,8 +99,11 @@ impl Fetcher for Fake {
             sleep(script.delay).await;
             s.active.fetch_sub(1, Ordering::SeqCst);
             *s.per_ip.lock().unwrap().get_mut(&peer.ip()).unwrap() -= 1;
+            let len = s.info_len.load(Ordering::SeqCst).max(20);
+            let mut info = vec![0u8; len];
+            info[..20].copy_from_slice(&key.0);
             script.result.map(|()| Fetched {
-                info: key.0.to_vec(),
+                info,
                 v2: false,
                 encrypted: true,
                 pex: Vec::new(),
@@ -156,6 +161,17 @@ impl Harness {
         restore: Vec<QueuedKey>,
         fake: Arc<FakeState>,
     ) -> Harness {
+        Harness::with_output(config, weights, restore, fake, 4096)
+    }
+
+    /// With an output channel of `capacity` slots.
+    fn with_output(
+        config: PoolConfig,
+        weights: &[(u8, u32)],
+        restore: Vec<QueuedKey>,
+        fake: Arc<FakeState>,
+        capacity: usize,
+    ) -> Harness {
         let (disc, discoveries) = mpsc::channel(4096);
         let (finder, mut requests) = mpsc::channel::<lodestar_sources::PeerRequest>(4096);
         let (keys, lookups) = mpsc::channel(4096);
@@ -170,7 +186,7 @@ impl Harness {
                 }
             }
         });
-        let (out_tx, out) = mpsc::channel(4096);
+        let (out_tx, out) = mpsc::channel(capacity);
         let (stop, shutdown) = Shutdown::new();
         let funnel = Arc::new(FunnelCounts::default());
         let causes = Arc::new(Causes {
@@ -1132,6 +1148,45 @@ async fn drop_source_drops_its_own_keys_and_keeps_shared_ones() {
     assert_eq!(queue.len(), 1);
 }
 
+/// Results fetched but still waiting for an output slot are dropped by
+/// their source like any of its keys, and shared ones pass to the rest.
+#[tokio::test(start_paused = true)]
+async fn drop_source_drops_its_results_waiting_for_the_consumer() {
+    let fake = Arc::new(FakeState::default());
+    let mut h = Harness::with_output(config(), &[], vec![], fake, 1);
+    // Key 1 fills the channel; keys 2 (source 1 only) and 3 (shared) wait.
+    h.script(peer(1, 1), 100, Ok(()));
+    h.script(peer(2, 1), 1_000, Ok(()));
+    h.script(peer(3, 1), 1_000, Ok(()));
+    h.send(found(1, 1, vec![peer(1, 1)]));
+    h.send(found(1, 2, vec![peer(2, 1)]));
+    h.send(found(1, 3, vec![peer(3, 1)]));
+    h.send(found(2, 3, vec![]));
+    let stats = h.handle.stats();
+    until("all three fetched", || {
+        stats.fetched.load(Ordering::Relaxed) == 3 && stats.active.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    assert_eq!(h.handle.drop_source(src(1)).await, 1);
+    assert_eq!(
+        h.causes.lost.lock().unwrap()[..],
+        [(key(2), Loss::Evicted, None)]
+    );
+    let first = h.out.recv().await.unwrap();
+    assert_eq!(first.key, key(1));
+    let shared = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shared.key, key(3));
+    assert_eq!(shared.source, src(2), "the remaining finder takes it");
+    assert_eq!(shared.sources, 1 << 2);
+    assert!(shared.private_source);
+    sleep(Duration::from_secs(10)).await;
+    assert!(h.out.try_recv().is_err(), "nothing for key 2");
+    h.stop().await;
+}
+
 /// A key the dropped source saw publicly and another saw privately is
 /// private from then on: whether it was public came from both (SRC-14b).
 #[tokio::test(start_paused = true)]
@@ -1157,5 +1212,299 @@ async fn drop_source_leaves_a_shared_key_private() {
     h.send(found(2, 9, vec![]));
     sleep(Duration::from_millis(10)).await;
     assert!(!h.handle.snapshot().await[0].private_source);
+    h.stop().await;
+}
+
+// X-fetch-pool-bytes: the byte budget on finished fetches.
+
+const MIB: usize = 1 << 20;
+
+/// What one served dict of `len` bytes weighs in the pool's budget.
+fn weight(len: usize) -> u64 {
+    lodestar_sources::pool::weigh(&Fetched {
+        info: vec![0; len],
+        v2: false,
+        encrypted: true,
+        pex: Vec::new(),
+        client: None,
+    })
+}
+
+/// Polls `done` on the paused clock until it holds, for at most 60 s.
+async fn until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Starts a pool whose fetches all serve `len`-byte dicts after 1 s,
+/// each key with a peer of its own, and queues `keys` keys.
+fn budgeted(sockets: usize, budget: usize, len: usize, capacity: usize, keys: u32) -> Harness {
+    let fake = Arc::new(FakeState::default());
+    fake.info_len.store(len, Ordering::SeqCst);
+    let h = Harness::with_output(
+        PoolConfig {
+            max_sockets: sockets,
+            max_held_bytes: budget,
+            ..config()
+        },
+        &[],
+        vec![],
+        fake,
+        capacity,
+    );
+    for n in 0..keys {
+        h.send(found(0, n, vec![peer(n as u8 + 1, 6881)]));
+    }
+    h
+}
+
+fn started(h: &Harness) -> usize {
+    h.fake.started.lock().unwrap().len()
+}
+
+fn held(h: &Harness) -> u64 {
+    h.handle.stats().held_bytes.load(Ordering::Relaxed)
+}
+
+/// A stalled consumer: the pool fills its budget, stops starting fetches
+/// and stays there; the held bytes never pass the budget by more than the
+/// fetches in flight when it filled. Once the consumer moves, every key
+/// arrives exactly once.
+#[tokio::test(start_paused = true)]
+async fn a_stalled_consumer_pauses_fetching_within_the_budget() {
+    const SOCKETS: usize = 8;
+    const KEYS: u32 = 64;
+    let budget = 4 * MIB;
+    let w = weight(MIB);
+    let bound = budget as u64 + SOCKETS as u64 * w;
+    let mut h = budgeted(SOCKETS, budget, MIB, 16, KEYS);
+
+    until("the budget to stop fetching", || {
+        h.handle.stats().held_full.load(Ordering::Relaxed) > 0
+            && h.handle.stats().active.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    let paused_at = started(&h);
+    assert!(held(&h) >= budget as u64, "{} held", held(&h));
+    assert!(held(&h) <= bound, "{} held, bound {bound}", held(&h));
+    // Time passes with the consumer stalled: nothing more starts.
+    sleep(Duration::from_secs(120)).await;
+    assert_eq!(started(&h), paused_at, "fetching paused");
+    assert!(paused_at < KEYS as usize, "{paused_at} fetches");
+    assert!(held(&h) <= bound, "{} held, bound {bound}", held(&h));
+    assert!(h.causes.lost.lock().unwrap().is_empty(), "nothing lost");
+
+    // The consumer moves: every key arrives once, within the bound.
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < KEYS as usize {
+        let got = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+            .await
+            .expect("the next result")
+            .expect("the pool is running");
+        assert!(seen.insert(got.key), "{:?} twice", got.key);
+        assert!(held(&h) <= bound, "{} held, bound {bound}", held(&h));
+    }
+    assert_eq!(started(&h), KEYS as usize, "each key fetched once");
+    assert!(h.causes.lost.lock().unwrap().is_empty(), "nothing lost");
+    h.stop().await;
+}
+
+/// A dict larger than the whole budget is delivered, not lost, and passes
+/// alone: nothing else starts while it's held.
+#[tokio::test(start_paused = true)]
+async fn a_dict_over_the_budget_passes_alone() {
+    let mut h = budgeted(1, MIB, 4 * MIB, 1, 3);
+    until("the first dict to be held", || held(&h) >= weight(4 * MIB)).await;
+    sleep(Duration::from_secs(120)).await;
+    assert_eq!(started(&h), 1, "nothing else starts");
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < 3 {
+        let got = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+            .await
+            .expect("the next result")
+            .expect("the pool is running");
+        assert_eq!(got.fetched.info.len(), 4 * MIB);
+        assert!(seen.insert(got.key), "once each");
+    }
+    assert!(h.causes.lost.lock().unwrap().is_empty(), "nothing lost");
+    h.stop().await;
+}
+
+/// Shutdown with the budget full: what was fetched is drained to the
+/// consumer, and every other key is saved with the queue or reported lost;
+/// each key exactly once.
+#[tokio::test(start_paused = true)]
+async fn shutdown_with_the_budget_full_drains_or_saves_every_key() {
+    const KEYS: u32 = 64;
+    let h = budgeted(8, 4 * MIB, MIB, 2, KEYS);
+    until("the budget to stop fetching", || {
+        h.handle.stats().held_full.load(Ordering::Relaxed) > 0
+            && h.handle.stats().active.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    let fetched = started(&h);
+    let Harness {
+        mut out,
+        stop,
+        task,
+        causes,
+        ..
+    } = h;
+    stop.send(true).unwrap();
+    // The consumer runs until the pool ends, as the pipeline's does.
+    let consumer = tokio::spawn(async move {
+        let mut got = Vec::new();
+        while let Some(r) = out.recv().await {
+            got.push(r.key);
+        }
+        got
+    });
+    let queue = tokio::time::timeout(Duration::from_secs(60), task)
+        .await
+        .expect("the pool stops")
+        .unwrap();
+    let got = consumer.await.unwrap();
+    assert_eq!(got.len(), fetched, "every fetched dict delivered");
+    let lost: Vec<InfoHash> = causes.lost.lock().unwrap().iter().map(|l| l.0).collect();
+    let mut all: Vec<InfoHash> = got
+        .iter()
+        .copied()
+        .chain(queue.iter().map(|q| q.info_hash))
+        .chain(lost)
+        .collect();
+    all.sort_by_key(|k| k.0);
+    let mut want: Vec<InfoHash> = (0..KEYS).map(key).collect();
+    want.sort_by_key(|k| k.0);
+    assert_eq!(all, want, "each key delivered, saved or lost, once");
+}
+
+/// Shutdown with no consumer left: what the pool fetched and couldn't
+/// hand over goes back into the saved queue instead of vanishing.
+#[tokio::test(start_paused = true)]
+async fn shutdown_without_a_consumer_saves_what_it_fetched() {
+    const KEYS: u32 = 16;
+    let h = budgeted(4, 64 * MIB, 20, 1, KEYS);
+    // One result fills the channel; the rest of the first round waits.
+    until("a round to finish", || {
+        started(&h) >= 4 && h.handle.stats().active.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    let Harness {
+        out,
+        stop,
+        task,
+        causes,
+        ..
+    } = h;
+    // The receiver takes the one in the channel with it.
+    drop(out);
+    stop.send(true).unwrap();
+    let queue = tokio::time::timeout(Duration::from_secs(60), task)
+        .await
+        .expect("the pool stops")
+        .unwrap();
+    assert!(causes.lost.lock().unwrap().is_empty());
+    assert_eq!(
+        queue.len(),
+        KEYS as usize - 1,
+        "all but the one handed over"
+    );
+    let keys: std::collections::HashSet<_> = queue.iter().map(|q| q.info_hash.0).collect();
+    assert_eq!(keys.len(), queue.len(), "once each");
+}
+
+/// Shutdown with fetches still running and results waiting for the
+/// consumer: the running fetches are saved with their attempts unchanged,
+/// the waiting results are delivered, and each key appears once.
+#[tokio::test(start_paused = true)]
+async fn shutdown_saves_running_fetches_and_delivers_waiting_results() {
+    let h = budgeted(4, 64 * MIB, 20, 1, 4);
+    // Keys 0 and 1 finish (one fills the channel, one waits); 2 and 3 run on.
+    h.script(peer(1, 6881), 500, Ok(()));
+    h.script(peer(2, 6881), 500, Ok(()));
+    h.script(peer(3, 6881), 100_000, Ok(()));
+    h.script(peer(4, 6881), 100_000, Ok(()));
+    let stats = h.handle.stats();
+    until("two results", || {
+        stats.fetched.load(Ordering::Relaxed) == 2 && stats.active.load(Ordering::Relaxed) == 2
+    })
+    .await;
+    // A periodic save meanwhile holds the waiting result too.
+    let saved: Vec<InfoHash> = h
+        .handle
+        .snapshot()
+        .await
+        .iter()
+        .map(|q| q.info_hash)
+        .collect();
+    assert_eq!(saved.len(), 3, "two running, one waiting: {saved:?}");
+    let before: HashMap<InfoHash, u16> = h
+        .handle
+        .snapshot()
+        .await
+        .iter()
+        .map(|q| (q.info_hash, q.attempts))
+        .collect();
+    let Harness {
+        mut out,
+        stop,
+        task,
+        causes,
+        handle,
+        ..
+    } = h;
+    stop.send(true).unwrap();
+    let consumer = tokio::spawn(async move {
+        let mut got = Vec::new();
+        while let Some(r) = out.recv().await {
+            got.push(r.key);
+        }
+        got
+    });
+    let queue = tokio::time::timeout(Duration::from_secs(60), task)
+        .await
+        .expect("the pool stops")
+        .unwrap();
+    let mut got = consumer.await.unwrap();
+    got.sort_by_key(|k| k.0);
+    assert_eq!(got, vec![key(0), key(1)], "both results delivered");
+    let mut saved: Vec<(InfoHash, u16)> = queue.iter().map(|q| (q.info_hash, q.attempts)).collect();
+    saved.sort_by_key(|(k, _)| k.0);
+    assert_eq!(
+        saved,
+        vec![(key(2), before[&key(2)]), (key(3), before[&key(3)])],
+        "the running fetches saved, attempts unchanged"
+    );
+    assert!(causes.lost.lock().unwrap().is_empty(), "nothing lost");
+    for kind in [FailureKind::Invalid, FailureKind::TimedOut] {
+        assert_eq!(
+            handle.stats().failure_count(kind),
+            0,
+            "a cancel isn't a failure"
+        );
+    }
+}
+
+/// The held-bytes gauge falls as the consumer takes results, even while
+/// others still wait for a slot.
+#[tokio::test(start_paused = true)]
+async fn held_bytes_fall_as_the_consumer_takes_results() {
+    let mut h = budgeted(4, 64 * MIB, MIB, 1, 4);
+    let w = weight(MIB);
+    let stats = h.handle.stats();
+    until("four results held", || {
+        stats.fetched.load(Ordering::Relaxed) == 4 && held(&h) == 4 * w
+    })
+    .await;
+    for left in (0..4u64).rev() {
+        tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        until("the gauge to follow", || held(&h) == left * w).await;
+    }
     h.stop().await;
 }
