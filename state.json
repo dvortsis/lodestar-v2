@@ -3516,8 +3516,10 @@
       "merge": "b2659158"
     },
     "X-fetch-pool-bytes": {
-      "status": "running",
-      "session": "session_01MMjhn99r1XH9VGBNE9VYji"
+      "status": "merged",
+      "session": "session_01MMjhn99r1XH9VGBNE9VYji",
+      "pr": 554,
+      "merge": "1df1a39b"
     },
     "WK-7": {
       "status": "merged",
@@ -3535,6 +3537,10 @@
     "X-win-log-held-open": {
       "status": "running",
       "session": "session_01MMjhnBTctxueTXBgxFSUev"
+    },
+    "X-fetch-meta-reserve": {
+      "status": "running",
+      "session": "session_01MMjhn9brSHY6bB2g5vzFqq"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5398,7 +5404,8 @@
         "slices.yaml WK-2 owns: add crates/lodestar/src/cli/mod.rs and main.rs (one variant/arm/mod line each; runner 23:14Z)",
         "Owner \u00a72.19 flag at WK-2 merge: `lodestar worker --rotate-key` (worker stopped; rotate->reseal->retire)",
         "WK-2 shared: crates/lodestar/Cargo.toml dev-deps tokio test-util (no lock change; accepted 23:26Z, same pattern as WK-7). WK-2 also reads LODESTAR_JOIN (address, not secret) beside LODESTAR_TOKEN per Unraid template",
-        "Add slices.yaml X-fetch-meta-reserve: note it is required for workers (WK-10 budget), plus the shutdown drain deadline"
+        "Add slices.yaml X-fetch-meta-reserve: note it is required for workers (WK-10 budget), plus the shutdown drain deadline",
+        "slices.yaml X-fetch-meta-reserve entry: owns peer-wire/src/fetch.rs, peer-wire/tests/fetch.rs, sources/src/pool.rs, sources/tests/pool.rs, lodestar/src/metrics.rs, docs/metrics.md, decisions; deps X-fetch-pool-bytes; WK-10 deps add it; launched 23:31Z"
       ],
       "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
     },
@@ -6107,7 +6114,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T23:22Z",
+    "updated": "2026-11-06T23:31Z",
     "items": [
       {
         "slot": 1,
@@ -6135,11 +6142,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-fetch-pool-bytes",
+        "slice": "X-fetch-meta-reserve",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #554 at 8904812c, in review (session_01MMjhn99r1XH9VGBNE9VYji)",
-        "since": "2026-11-06T21:44Z"
+        "doing": "reserve announced metadata size (session_01MMjhn9brSHY6bB2g5vzFqq)",
+        "since": "2026-11-06T23:31Z"
       }
     ],
     "limit": 8,
