@@ -16,6 +16,9 @@ This chapter lists common problems with fixes, explains a Magnetico import that 
 | The database is slow or reports "database is locked" | The data folder is under `/mnt/user` or on a network share | Move the data folder to a pool path such as `/mnt/cache/appdata/lodestar` ([section 2.2](02-install-lodestar-on-unraid-and-docker.md#22-settings-in-the-unraid-template)). |
 | Your home network gets slow | The crawler fills the router's connection table | Set **Intensity** to `low` and raise it step by step. |
 | The gluetun variant stops after a [VPN](glossary.md#vpn) restart | A container that shares a network stays attached to the old one | Restart Lodestar after gluetun restarts. |
+| The Windows service won't start and Windows shows "service-specific error 3" | The data folder `C:\ProgramData\Lodestar` isn't private any more, most often because **Continue** was selected on its permission prompt in File Explorer | Follow [section 6.3](#63-fix-windows-service-error-3). |
+| Windows logs three failure events for one problem | Windows restarts the service twice after it stops with an error, 60 seconds apart, so one problem shows three times | Fix the cause once, as in [section 6.3](#63-fix-windows-service-error-3). The count starts again after a day. |
+| Lodestar logs the warning `logging.folder_shared` on Windows | The `logs` folder has an extra account in its permissions | Remove that account as in step 3 of [section 6.3](#63-fix-windows-service-error-3), then run `Restart-Service Lodestar`. |
 | A Magnetico import is refused with `source_not_quiescent` | magneticod is running, or its last changes are still in the `-wal` file | See [section 6.2](#62-fix-a-magnetico-import-refused-as-in-use). |
 
 ## 6.2 Fix a Magnetico import refused as in use
@@ -46,7 +49,47 @@ If you can't run magneticod again, write the changes in on a copy with the `sqli
 > [!WARNING]
 > Never delete the `-wal` file: that loses the torrents in it. Write its changes in instead, with magneticod or `sqlite3` as above. A copy with its leftover `-wal` file beside it is refused like the original. Run step 2 on the copy before you import it.
 
-## 6.3 Get help
+## 6.3 Fix Windows service error 3
+<!-- index: error 3; Windows service; icacls; folder_shared; service-specific error 3 -->
+
+These steps apply once the Windows installer is published. At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is private: only SYSTEM, Administrators and `NT SERVICE\Lodestar` have permissions, nothing is inherited, and nothing inside is a link. If the check fails, the service refuses to start. Windows shows only "service-specific error 3". The reason goes to `C:\Windows\Temp\lodestar-service.log`, which only administrators can read.
+
+The installer's Repair doesn't fix this case. It also refuses a folder that isn't private and already holds data.
+
+To fix it:
+
+1. Open an [elevated PowerShell](glossary.md#elevated-powershell) ([section 4.4](04-install-on-windows-and-linux.md#44-find-the-setup-token-on-windows)). Read the reason:
+
+    ```powershell
+    Get-Content "C:\Windows\Temp\lodestar-service.log" -Tail 20
+    ```
+
+   **Result:** The last line says the folder isn't private and why.
+2. See which account was added. Replace `<user name>` with your Windows user name:
+
+    ```powershell
+    icacls "C:\ProgramData\Lodestar" /T | Select-String "<user name>"
+    ```
+
+   **Result:** Lines show your account with its rights.
+3. Remove only that account. Replace `<COMPUTER>` with your computer's name and `<user name>` with your user name:
+
+    ```powershell
+    icacls "C:\ProgramData\Lodestar" /remove "<COMPUTER>\<user name>" /T /C
+    ```
+
+   **Result:** `icacls` reports the files it processed. It removes that one account's entries and changes nothing else.
+4. Start the service:
+
+    ```powershell
+    Start-Service Lodestar
+    ```
+
+   **Result:** The service runs, and the web page loads.
+
+If the log names something else, such as a link inside the folder, the same check applies to it. Don't delete the folder: it holds your library.
+
+## 6.4 Get help
 
 Open an issue at <https://github.com/dvortsis/lodestar-v2/issues>. Include your Lodestar version, install method, what you expected and what happened. Add the last lines of the log with the setup token, IP addresses and torrent names removed.
 
