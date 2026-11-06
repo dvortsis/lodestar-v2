@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T17:15:00Z",
+  "updated_at": "2026-11-06T17:16:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3462,11 +3462,9 @@
       "merge": "db7b48bd"
     },
     "X-consent-gate-052": {
-      "status": "running",
-      "session": "session_01MMjhn9ojZGQM4WLCLJyR2v",
-      "model": "opus",
-      "launched": "2026-11-06T15:14:15Z",
-      "brief": "briefs/X-consent-gate-052.md"
+      "status": "merged",
+      "pr": 537,
+      "merge": "23f2e575"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5228,6 +5226,10 @@
     {
       "at": "2026-11-06T17:15:00Z",
       "note": "rc.4 MSI check: runner verdict PASS pending the dht.restart_check line (suppressing reason) from the 15:52:04Z start: 70 min one PID, no errors, UI up, intake_received 30 (DHT alive), stored 0 explained by 6 h first_start suppression + PIA VPN no inbound. Recursive icacls cleanup still owed. X-win-refusal-ux additions: (a) Event 7024 renders ServiceSpecific(3) as \"The system cannot find the path specified\" (service.rs already uses ServiceSpecific) - write the real reason to the Event Log, consider a customer-bit code; guide error-3 row should quote that text; (b) guide Ch.4: MSI firewall rule opens DHT on Private profile only (keep: security default); explain Public networks/VPN adapters crawl slower, how to mark a trusted network Private, never widen to Public. #540 R-rc5-notice review running; X-flake-states-clock helper running (e2e insights-paused snapshot broke ~12:00Z, deterministic)."
+    },
+    {
+      "at": "2026-11-06T17:16:00Z",
+      "note": "#537 X-consent-gate-052 merged (23f2e575); archived. Follow-up slice before P-v052-cut: X-consent-gate-polish (small): (1) a reason on the start switch-off log event (consent_text_unapproved / consent_lapsed) - log_events.rs, logs golden catalogue, web logging messages en/zh + event-names.ts; (2) OpenAPI wording for consent_required / SourcePatch.consent in crates/api/src/dto/ops.rs + regenerate openapi.json/schema.d.ts; (3) consent_gate.rs restart leg asserts needs==null; v0.5.2 release notes: the torrent cache cannot be turned on yet. WK-0 (#538) is second on pipeline lib.rs: after its review, it brings main in. CMP-0 launched slot 4."
     }
   ],
   "main_health": [
@@ -5911,7 +5913,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T16:52:00Z",
+    "updated": "2026-11-06T17:16:00Z",
     "items": [
       {
         "slot": 1,
@@ -5939,11 +5941,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-consent-gate-052",
+        "slice": "CMP-0",
         "role": "build",
         "agent": "claude",
-        "doing": "refuse consent-needing sources until approved text (before v0.5.2 cut) (session_01MMjhn9ojZGQM4WLCLJyR2v)",
-        "since": "2026-11-06T15:14:15Z"
+        "doing": "companions crate + compiled-in catalogue (companions root; 2R) (session_01MMjhnCLJ8wemnkM7h8H2xG)",
+        "since": "2026-11-06T17:16:00Z"
       }
     ],
     "limit": 8,
