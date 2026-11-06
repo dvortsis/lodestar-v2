@@ -33,6 +33,7 @@ mod setup_hold;
 pub mod source_adult;
 pub mod torrent_cache;
 pub mod unverified;
+pub mod wire;
 mod worker;
 mod writer;
 
