@@ -16,7 +16,7 @@ The cut itself waits for the v0.5.1 tag (`ext:v051-tagged`, gate `P-v052-cut` in
 | v0.5.1 release branch | `dba1a5c0` (rc.4 docs, #463) | rc.4: the cut plus the ports below |
 | This manifest | `origin/main` at `63a2c6df` (#511, 2026-11-05) | The 297 first-parent merges in `c3f6341a..63a2c6df` |
 
-**Already on the release branch.** These PRs were ported to `release/v0.5.1`, so v0.5.1's own gate covers them: R-gauges (#219, rc.2), #357 (rc.3), #402 and #406 (rc.3), and #432, #433, #434, #442 and #448 (rc.4). LEGAL-1r (#457 on the release branch) is the release-branch build of the notice gate. `main`'s LEGAL-1 (#472) differs from it: notice version 3, shown as the first wizard step.
+**Already on the release branch.** These PRs were ported to `release/v0.5.1`, so v0.5.1's own gate covers them: R-gauges (#219, rc.2), #357 (rc.3), #402 and #406 (rc.3), and #432, #433, #434, #442 and #448 (rc.4). LEGAL-1r (#457 on the release branch) is the release-branch build of the notice gate. `main`'s LEGAL-1 (#472) differs from it: it shows the notice as the first wizard step, and `main`'s notice is version 4 (#547) while v0.5.1 ships version 3 (rc.5, #540).
 
 **Classes.** Every merge falls in exactly one class:
 
@@ -351,7 +351,7 @@ The gate's two checks below are new work for P-v052-cut.
    - d. `search.swapped` is logged, with `disk_high_water_bytes`;
    - e. re-classification finishes, `CLASSIFY_VERSION` 4;
    - f. pack state matches step 1, every pack without a row reads off, and `unauthorised-copy` is off;
-   - g. after login the Legal Notice v4 shows once (v0.5.1 accepted v3);
+   - g. after login the Legal Notice v4 shows once (the folder accepted v2 on rc.4, or v3 on v0.5.1; both are below 4);
    - h. to give §5.3 something to test, delete one torrent and record one hold, and note both.
 3. Pass: every check in step 2 holds, and the counts from step 1 match. The only allowed change is torrents that `CLASSIFY_VERSION` 3 → 4 re-classifies as adult (`reclassify.rs` re-judges only those; RP-UC is off on an upgraded store and MW-6 is shadow-only). Any other change in the counts is a failure.
 4. Run it once on Docker and once on **Windows** with a real v0.5.1 data folder (runner's call). The Windows leg covers V14, the pre-v13 snapshot, deleting the old index on NTFS and `lodestar rollback` on Windows. The MSI check in `release.yml` runs the same binary twice, so it doesn't count.
@@ -423,5 +423,5 @@ For P-v052-cut, which finishes `docs/releases/v0.5.2.md`:
 | Q2 | runner | Close G1–G4 (§3.3) before the cut? | Yes: one small Opus test-only slice, or part of P-v052-cut. G1 matters most, because a plugin added to `services.rs` would otherwise reach the release unnoticed |
 | Q3 | runner | Does v0.5.1 accept an `auth.json` notice acknowledgement of version 4 after rollback? | **Answered by the code:** yes. release/v0.5.1 asks for the notice only when the stored version is lower than its own (3), and `AuthFile` has the same fields on both branches, so v0.5.1 starts and skips the notice. §5.3 step 3 confirms it on the real binary |
 | Q4 | runner | Torrent cache and Sonarr/Radarr webhooks in v0.5.2 | **Decided by the runner:** no source that needs consent can be turned on in v0.5.2 (X-consent-gate-052, §3.4), so the torrent cache stays off. The webhooks need no consent and stay opt-in, advanced, API only. The release notes keep "built but not connected yet / come later" and add "advanced: API only" for the webhooks |
-| Q5 | runner | Soak plan under the delta rule | §6: 24 h Docker soak on an upgraded folder (binding), every pack turned on after the upgrade; ≥ 6 h Windows run on a fresh folder; a Windows upgrade and rollback leg (§5.2 step 4). Each clock starts after setup, and on an upgraded folder after Legal Notice v3 is accepted. The collector should fail loudly on `409 notice_required`. The rebuild runs in the first hours, mostly before the memory window (hours 12–24); report its disk high-water mark |
+| Q5 | runner | Soak plan under the delta rule | §6: 24 h Docker soak on an upgraded folder (binding), every pack turned on after the upgrade; ≥ 6 h Windows run on a fresh folder; a Windows upgrade and rollback leg (§5.2 step 4). Each clock starts after setup, and on an upgraded folder after Legal Notice v4 is accepted. The collector should fail loudly on `409 notice_required`. The rebuild runs in the first hours, mostly before the memory window (hours 12–24); report its disk high-water mark |
 | Q6 | owner | None blocks the manifest | Packs on for new installs, the unauthorised-copy pack and the v0.5.2 placement are owner decisions already (§2.39, §2.40). Crawler switches staying off is build-plan §0.4. Nothing here reverses or loosens an owner decision |

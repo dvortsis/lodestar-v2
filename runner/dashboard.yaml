@@ -378,6 +378,7 @@ placement:
   - P-v052-manifest
   - X-consent-gate-052
   - X-consent-gate-polish
+  - X-consent-gate-lift
   - LEGAL-3a
 - ws: ws-cr-build
   match:
