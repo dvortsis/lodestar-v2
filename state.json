@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T06:52:23Z",
+ "updated_at": "2026-11-06T07:57:21Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3433,11 +3433,13 @@
    "merge": "0880df5f"
   },
   "X-commit-rejudge-reuse": {
-   "status": "running",
+   "status": "review",
    "session": "session_01MMjhn8m8GomC4NBwvNxfLX",
    "model": "opus",
    "launched": "2026-11-06T04:42:01Z",
-   "brief": "briefs/X-commit-rejudge-reuse.md"
+   "brief": "briefs/X-commit-rejudge-reuse.md",
+   "pr": 532,
+   "head": "e0a78a37"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5826,7 +5828,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T06:52:23Z",
+  "updated": "2026-11-06T07:57:21Z",
   "items": [
    {
     "slot": 3,
@@ -5843,7 +5845,7 @@
     "slice": "X-commit-rejudge-reuse",
     "role": "slice",
     "agent": "session_01MMjhn8m8GomC4NBwvNxfLX",
-    "doing": "commit's second judgment under 50 us (flood/clone, always-adult)",
+    "doing": "#532 at e0a78a37 under fresh Opus review",
     "since": "2026-11-06T04:42:01Z"
    },
    {
