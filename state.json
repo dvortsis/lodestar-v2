@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T14:43:50Z",
+ "updated_at": "2026-11-06T15:14:15Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3441,6 +3441,34 @@
    "pr": 532,
    "head": "e0a78a37",
    "merge": "d887da44"
+  },
+  "WK-0": {
+   "status": "running",
+   "session": "session_01MMjhnAKSF2rTGJ2CQgZhxB",
+   "model": "opus",
+   "launched": "2026-11-06T15:14:15Z",
+   "brief": "briefs/WK-0.md"
+  },
+  "WK-6": {
+   "status": "running",
+   "session": "session_01MMjhnBwVhLRrZgSFudUxY4",
+   "model": "opus",
+   "launched": "2026-11-06T15:14:15Z",
+   "brief": "briefs/WK-6.md"
+  },
+  "WK-4": {
+   "status": "running",
+   "session": "session_01MMjhnCbXRqyZhP2RFoU9NJ",
+   "model": "opus",
+   "launched": "2026-11-06T15:14:15Z",
+   "brief": "briefs/WK-4.md"
+  },
+  "X-consent-gate-052": {
+   "status": "running",
+   "session": "session_01MMjhn9ojZGQM4WLCLJyR2v",
+   "model": "opus",
+   "launched": "2026-11-06T15:14:15Z",
+   "brief": "briefs/X-consent-gate-052.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5828,6 +5856,10 @@
   {
    "at": "2026-11-06T14:43:50Z",
    "note": "r5 FINAL (agent summary, 13:20Z report): gate evidence yes; h12-24 719 samples complete; private slope 0.91 MiB/h CI [0.47,1.35] meets bar; 24.00 h coverage, clean exit 0, 0 restarts/OOM/failures. Runner reading: PASS provisional, pending full report (analyzer sha256 + cmdline, collector rev >=6cf0519c in run.json, stop reason from collect.py, baseline start header). Gluetun leg OK'd to start now. Note: private 244->299 MiB h16->h24, watch in 1.0 soak."
+  },
+  {
+   "at": "2026-11-06T15:14:15Z",
+   "note": "r5 verdict PASS recorded in runner PR #533 (0.91 MiB/h, CI [0.47,1.35]); collector sha fa718caa = collect.py at the pin; analyzer sha 52606248 = analyze_cr0.py at the pin. Gluetun leg started ~15:00Z (PIA OpenVPN), ends ~23:30Z. Windows MSI check still owed."
   }
  ],
  "limits": {
@@ -5845,44 +5877,39 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T12:42:17Z",
+  "updated": "2026-11-06T15:14:15Z",
   "items": [
    {
+    "slot": 1,
+    "slice": "WK-0",
+    "role": "slice",
+    "agent": "session_01MMjhnAKSF2rTGJ2CQgZhxB",
+    "doing": "one lease authority (workers critical path)",
+    "since": "2026-11-06T15:14:15Z"
+   },
+   {
+    "slot": 2,
+    "slice": "WK-6",
+    "role": "slice",
+    "agent": "session_01MMjhnBwVhLRrZgSFudUxY4",
+    "doing": "Results and Counters codecs (workers)",
+    "since": "2026-11-06T15:14:15Z"
+   },
+   {
     "slot": 3,
-    "slice": "X-search-files-6",
-    "role": "build",
-    "agent": "claude",
-    "doing": "#527 merged e42322b6; idle: no ready slice on the dashboard (the rest waits on the v0.5.1 soak verdict or owner answers); small follow-ups not worth a slot",
-    "since": "2026-11-06T05:19:02Z",
-    "session": "session_01MMjhnAMPZTrQgedhh4nNLA",
-    "status": "idle"
+    "slice": "WK-4",
+    "role": "slice",
+    "agent": "session_01MMjhnCbXRqyZhP2RFoU9NJ",
+    "doing": "DHT keyspace shard (workers)",
+    "since": "2026-11-06T15:14:15Z"
    },
    {
-    "slot": 5,
-    "slice": "X-commit-rejudge-reuse",
+    "slot": 4,
+    "slice": "X-consent-gate-052",
     "role": "slice",
-    "agent": "session_01MMjhn8m8GomC4NBwvNxfLX",
-    "doing": "#532 merged d887da44; archived. Idle: no ready slice (rest waits on the v0.5.1 soak verdict)",
-    "since": "2026-11-06T08:26:14Z",
-    "status": "idle"
-   },
-   {
-    "slot": 15,
-    "slice": "X-egress-state-watch",
-    "role": "slice",
-    "agent": "session_01MMjhnC1tMQprsqvJnqLZ17",
-    "doing": "#530 merged 5b7d86be; archived. Idle: no ready slice (rest waits on the v0.5.1 soak verdict)",
-    "since": "2026-11-06T06:52:23Z",
-    "status": "idle"
-   },
-   {
-    "slot": 17,
-    "slice": "X-net-redirect-allowlist",
-    "role": "slice",
-    "agent": "session_01MMjhnCvmobeWXtYZsWjaMy",
-    "doing": "#529 merged 0880df5f; archived. Idle: no ready slice (rest waits on the v0.5.1 soak verdict)",
-    "since": "2026-11-06T06:05:56Z",
-    "status": "idle"
+    "agent": "session_01MMjhn9ojZGQM4WLCLJyR2v",
+    "doing": "refuse consent-needing sources until approved text (before v0.5.2 cut)",
+    "since": "2026-11-06T15:14:15Z"
    }
   ],
   "limit": 8,
