@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T15:40:00Z",
+  "updated_at": "2026-11-06T16:00:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5198,6 +5198,10 @@
     {
       "at": "2026-11-06T15:40:00Z",
       "note": "Scope calls 15:25-15:37Z: WK-4 +3 dht tests (shard: None line); WK-6 +fuzz Cargo.toml/lock/README/seeds; X-consent-gate-052 +lodestar ops/tests.rs and one call line in pipeline lib.rs prepare (shared with WK-0, start-path consent switch-off in control.rs). WK-0 +cluster frame.rs tests, transport.rs hints."
+    },
+    {
+      "at": "2026-11-06T16:00:00Z",
+      "note": "NEW SLICE for v0.5.2 (add to slices.yaml in next runner PR): X-win-log-held-open, kind core, model opus, deps [], owns [\"crates/lodestar/src/windows/logfile.rs\"] + one line in docs/user Windows guide. Owner asked 15:25Z if lodestar.log can be written while open: yes (std default share R|W|D; failures never fatal). Gap: a failed rename at the 16 MiB cap (reader without FILE_SHARE_DELETE, e.g. Get-Content -Wait) retries on every record, closing/reopening each time; add a 60 s retry delay like logging/file.rs ROTATION_RETRY, plus a cfg(windows) test holding the file open without delete-sharing: every line lands, rotation catches up after the reader closes. Not v0.5.1."
     }
   ],
   "main_health": [
