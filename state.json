@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T16:40:00Z",
+  "updated_at": "2026-11-06T16:45:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5218,6 +5218,10 @@
     {
       "at": "2026-11-06T16:40:00Z",
       "note": "OWNER (direct, runner chat ~16:35Z) approved SRC-4 consent texts (Q1): \"Approve, bound that sentence (Recommended)\" after relay 16:20Z \"...#L79 looks good\". Account text: \"Results found only through your account stay on this server... If a public source reports the same torrent, it's treated as public.\" Record \u00a72.49 + ext:owner-q1 met + drop owner-queue item 3 in the runner PR right after #534 merges (with \u00a70 \u00a72.48 checklist step, slices LEGAL-3a, X-win-refusal-ux, X-win-log-held-open). Unblocks SRC-15b (Sonnet; verbatim strings check). X-consent-gate-052 still ships first; SRC-15b lets a class through once its dialog exists."
+    },
+    {
+      "at": "2026-11-06T16:45:00Z",
+      "note": "Found via #534: settings.logging.event_log_errors (default true, shown in Settings -> Logging) is read by no code; no Windows Event Log writer exists. A visible setting that does nothing. Fold into X-win-refusal-ux (v0.5.2): implement Event Log writes for errors + the service refusal reason (Event Log source registered by the MSI), or hide the setting until it works. Runner decided NOTICE_VERSION=3 on release/v0.5.1 (rc.5), main -> 4 follow-up PR after #534."
     }
   ],
   "main_health": [
