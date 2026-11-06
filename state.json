@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T04:08:56Z",
+ "updated_at": "2026-11-06T04:13:40Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3391,10 +3391,12 @@
    "launched": "2026-11-06T00:02Z"
   },
   "X-sp4-followups": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhn9toR888c1KtXVNwiz",
    "brief": "briefs/X-sp4-followups.md",
-   "launched": "2026-11-06T00:02Z"
+   "launched": "2026-11-06T00:02Z",
+   "pr": 524,
+   "merge": "f0b47522"
   },
   "runner-slot-limit-4": {
    "status": "merged",
@@ -5812,7 +5814,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T04:08:56Z",
+  "updated": "2026-11-06T04:13:40Z",
   "items": [
    {
     "slot": 3,
@@ -5845,9 +5847,10 @@
     "slice": "X-sp4-followups",
     "role": "build",
     "agent": "claude",
-    "doing": "Rule packs: SP-4 pre-hiding guard and a tighter set index",
-    "since": "2026-11-06T00:02Z",
-    "session": "session_01MMjhn9toR888c1KtXVNwiz"
+    "doing": "#524 merged f0b47522; session archived",
+    "since": "2026-11-06T04:13:40Z",
+    "session": "session_01MMjhn9toR888c1KtXVNwiz",
+    "status": "idle"
    }
   ],
   "limit": 8,
