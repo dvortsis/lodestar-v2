@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T19:05:00Z",
+  "updated_at": "2026-11-06T19:12:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5260,6 +5260,10 @@
     {
       "at": "2026-11-06T19:05:00Z",
       "note": "#541 merged (7cf25127), #542 ENR-9 merged (f907139d; archived). rc.5 a0eb0a90: Release dry run 42265893762 success, CI 42265898601 success -> v0.5.1 tag target confirmed green; go waits on gluetun leg (~23:42Z) + MSI dht.restart_check line. #534 asked to bring main in for e2e. WK-7 launched slot 3. ENR-9b now ready (deps ENR-9) once in slices.yaml."
+    },
+    {
+      "at": "2026-11-06T19:12:00Z",
+      "note": "rc.4 MSI check PASS (runner verdict): clean install (SHA matches SHA256SUMS), setup + Legal Notice v2, stop/clean restart, PID 74656 Running since 15:52:04Z, no errors, stored 3 by ~19:10Z (intake 76, pill \"Crawling - 3 torrents\"). Refusal at 15:42Z was the extra ACE (owner Explorer Continue), not rc.4. dht.restart_check only logs with dht.safe_restart on (default off) - my pass rule was wrong on that, moot. Owner optional: elevated recursive icacls cleanup of MONDOSHAWAN\\dvort. Record in v0.5.1 release verdict file with the gluetun leg. v0.5.1 go waits only on gluetun Part 2 (~23:50Z)."
     }
   ],
   "main_health": [
