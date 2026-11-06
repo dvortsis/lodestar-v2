@@ -157,13 +157,15 @@ impl Clients {
         }
     }
 
-    /// Where the plugin's egress may send requests (SRC-5): the client's
-    /// host only, under the download-client policy (LAN and loopback
-    /// allowed; link-local and metadata addresses never). `None` until a
-    /// client is set up, so nothing may be reached.
+    /// Where the plugin's egress may send requests (SRC-5): the client
+    /// address's origin only (scheme, host and port), under the
+    /// download-client policy (LAN and loopback allowed; link-local and
+    /// metadata addresses never). `None` until a client is set up, so
+    /// nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
-        let host = host_key(url_of(self.config.as_ref()?))?;
-        Some(Endpoints::user_entered(NetPolicy::download_client()).only_hosts(&[host]))
+        let url = url_of(self.config.as_ref()?);
+        host_key(url)?;
+        Some(Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[url]))
     }
 
     /// List entries the last poll skipped: malformed, or past

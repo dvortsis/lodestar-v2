@@ -339,34 +339,76 @@ impl TorrentDoc {
     }
 }
 
-/// A torrent's title identity, hashed (v7, for B13b; B13's "Known
-/// limit"): the effective title's words as search's tokenizer folds them
-/// (its parts), and the sorted, distinct `year`, `season`, `episode` and
-/// `absolute` spans as the record renders them, an absent set a value of
-/// its own: exactly what `api::compare::identity` compares, so torrents
-/// with one identity share one term. `None` without a title with words.
-/// FNV-1a, so the term is the same in every build; a collision only
-/// over-matches, and the stored records decide.
-pub fn title_identity(record: &Record) -> Option<u64> {
-    let words: Vec<String> = tokenizer::tokenize(record.release("title")?)
+/// A torrent's title identity (B13, `docs/decisions/2026-10-22-B13.md`):
+/// the effective title's words as search's tokenizer folds them (its
+/// parts, so `Spider-Man`, `Spider Man` and `SpiderMan` are all
+/// `spider man`), and the sorted, distinct `year`, `season`, `episode`
+/// and `absolute` spans as the record renders them, an absent set a value
+/// of its own. Two torrents are versions of one work when theirs are
+/// equal. The one definition: `api::compare` builds the identity it shows
+/// and compares from it, and [`title_identity`] hashes it (B13b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleIdentityParts {
+    pub title_words: Vec<String>,
+    pub years: Vec<String>,
+    pub seasons: Vec<String>,
+    pub episodes: Vec<String>,
+    pub absolute: Vec<String>,
+}
+
+impl TitleIdentityParts {
+    /// The identity as one term (v7's `title_identity`): FNV-1a over the
+    /// words and each span set in turn, so it's the same in every build.
+    /// A collision only over-matches; the parts decide.
+    ///
+    /// Changing what this hashes, or how, changes every indexed term:
+    /// bump `population::GENERATIONS["title_identity"]` in the same
+    /// change, so indexes backfill and Siblings use the window meanwhile
+    /// instead of narrowing by stale terms (B13b). The pinned values in
+    /// `title_identity_follows_b13s_rule` catch such a change.
+    pub fn key(&self) -> u64 {
+        let mut key = self.title_words.join(" ");
+        for spans in [&self.years, &self.seasons, &self.episodes, &self.absolute] {
+            key.push('\u{1f}');
+            key.push_str(&spans.join(","));
+        }
+        key.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+}
+
+/// `record`'s [`TitleIdentityParts`]; `None` without a parsed title that
+/// has any words.
+pub fn title_identity_parts(record: &Record) -> Option<TitleIdentityParts> {
+    let title_words: Vec<String> = tokenizer::tokenize(record.release("title")?)
         .into_iter()
         .filter(|t| t.kind == tokenizer::TokKind::Part)
         .map(|t| t.text)
         .collect();
-    if words.is_empty() {
+    if title_words.is_empty() {
         return None;
     }
-    let mut key = words.join(" ");
-    for k in ["year", "season", "episode", "absolute"] {
-        let mut spans: Vec<&str> = record.release_all(k).collect();
-        spans.sort_unstable();
-        spans.dedup();
-        key.push('\u{1f}');
-        key.push_str(&spans.join(","));
-    }
-    Some(key.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    }))
+    let spans = |k: &str| {
+        let mut v: Vec<String> = record.release_all(k).map(str::to_owned).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    Some(TitleIdentityParts {
+        title_words,
+        years: spans("year"),
+        seasons: spans("season"),
+        episodes: spans("episode"),
+        absolute: spans("absolute"),
+    })
+}
+
+/// A torrent's title identity as v7 indexes it: [`TitleIdentityParts::key`]
+/// of [`title_identity_parts`], so torrents with one identity share one
+/// term. `None` without a title with words.
+pub fn title_identity(record: &Record) -> Option<u64> {
+    title_identity_parts(record).map(|p| p.key())
 }
 
 /// The lowercased extension of a file name, if it looks like one.
@@ -504,6 +546,30 @@ mod tests {
         assert_eq!(id(&[("title", "--")]), None);
         // FNV-1a of "show\x1f\x1f\x1f\x1f": a build can't change it.
         assert_eq!(id(&[("title", "Show")]), Some(0xf42e_4ea2_e59f_9558));
+        // With spans, each set sorted and joined by `,` in its own slot
+        // (B13b: Siblings narrow by this term, so a changed encoding
+        // must bump the field's generation, or versions go unfound).
+        // FNV-1a of "spider man\x1f2002\x1f\x1f\x1f".
+        assert_eq!(
+            id(&[("title", "Spider-Man"), ("year", "2002")]),
+            Some(0xb200_e236_36b4_b7e0)
+        );
+        // "show\x1f\x1f1\x1f1-3,5\x1f": a season and a multi-value
+        // episode set, given out of order.
+        assert_eq!(
+            id(&[
+                ("title", "Show"),
+                ("season", "1"),
+                ("episode", "5"),
+                ("episode", "1-3")
+            ]),
+            Some(0x1ebd_7def_f83f_e767)
+        );
+        // "show\x1f\x1f\x1f\x1f12": absolute numbering in the last slot.
+        assert_eq!(
+            id(&[("title", "Show"), ("absolute", "12")]),
+            Some(0x1e2d_98f2_72dc_ea3b)
+        );
     }
 
     use super::*;

@@ -9,7 +9,7 @@
 use lodestar_metainfo::hidden_char;
 use lodestar_sources_feeds::stashdb::{
     Date, Found, ID_LEN, Kind, LIMITS, Limits, MAX_NAME, MAX_TITLE, Match, Page, Performer, SCENES,
-    Scene, Skipped, Stop, Studio, parse, parse_each,
+    Scene, Seen, Skipped, Stop, Studio, parse, parse_each,
 };
 use proptest::prelude::*;
 
@@ -56,6 +56,10 @@ fn check(f: &Found, limits: &Limits) {
     let p = &f.page;
     assert_eq!(p.kept as usize, f.scenes.len());
     assert!((p.kept + p.skipped.total()) as usize <= limits.max_items);
+    // What the page says it saw agrees with what it kept (X-enr-page-flag).
+    assert!(!p.trailing || p.stop.is_some());
+    let items = p.kept + p.skipped.total();
+    assert!(items == 0 || p.search == Seen::List || p.find);
     let uuid = |s: &str| {
         s.len() == ID_LEN
             && s.bytes().enumerate().all(|(i, b)| match i {
@@ -109,6 +113,10 @@ fn search_answer() {
             },
             stop: None,
             errors: 0,
+            search: Seen::List,
+            find: false,
+            repeated: false,
+            trailing: false,
         }
     );
     assert_eq!(
@@ -200,8 +208,20 @@ fn find_answers() {
             performers_truncated: false,
         }
     );
+    assert!(f.page.find && f.page.search == Seen::Absent);
     // No such scene is no scene, not a skipped one.
-    assert_eq!(parse(&fixture("find_null.json")), Found::default());
+    let none = parse(&fixture("find_null.json"));
+    let page = Page {
+        find: true,
+        ..Page::default()
+    };
+    assert_eq!(
+        none,
+        Found {
+            scenes: vec![],
+            page
+        }
+    );
 }
 
 #[test]
@@ -472,14 +492,25 @@ fn field_faults_skip_or_degrade() {
         assert_eq!(parse(body.as_bytes()).page.skipped.no_id, 1, "{body}");
     }
     // Unknown keys and shapes are read past.
-    for body in [
-        r#"{"data":{"queryScenes":{"scenes":[{"id":"x"}]}}}"#,
-        r#"{"data":{"searchScene":{"id":"x"}}}"#,
-        r#"[{"data":1}]"#,
-        r#"{"extensions":{"cost":1}}"#,
-        r#"null"#,
+    for (body, search) in [
+        (
+            r#"{"data":{"queryScenes":{"scenes":[{"id":"x"}]}}}"#,
+            Seen::Absent,
+        ),
+        (r#"{"data":{"searchScene":{"id":"x"}}}"#, Seen::Object),
+        (r#"[{"data":1}]"#, Seen::Absent),
+        (r#"{"extensions":{"cost":1}}"#, Seen::Absent),
+        (r#"null"#, Seen::Absent),
     ] {
-        assert_eq!(parse(body.as_bytes()), Found::default(), "{body}");
+        let page = Page {
+            search,
+            ..Page::default()
+        };
+        let want = Found {
+            scenes: vec![],
+            page,
+        };
+        assert_eq!(parse(body.as_bytes()), want, "{body}");
     }
 }
 
@@ -905,4 +936,188 @@ fn mutated_corpus() {
     // The mutations leave many answers whole enough to reach the scenes.
     eprintln!("kept {kept} scenes with {performers} performers");
     assert!(kept > 30_000 && performers > 15_000, "{kept} {performers}");
+}
+
+// --- What the parser saw (X-enr-page-flag) ----------------------------------
+
+/// The page reports `data.searchScene`'s kind, any `findScene`, `errors`
+/// wherever the root has them, repeated envelope keys and trailing bytes,
+/// so a caller needs no second read.
+#[test]
+fn the_page_reports_the_envelope() {
+    let page = |b: &str| parse(b.as_bytes()).page;
+    for (body, search) in [
+        (r#"{"data":{"searchScene":[]}}"#, Seen::List),
+        (r#"{"data":{"searchScene":{}}}"#, Seen::Object),
+        (r#"{"data":{"searchScene":null}}"#, Seen::Null),
+        (r#"{"data":{"searchScene":"x"}}"#, Seen::Other),
+        (r#"{"data":{}}"#, Seen::Absent),
+        (r#"{"data":null}"#, Seen::Absent),
+        (r#"{"searchScene":[]}"#, Seen::Absent),
+        (r#"{"data":{"x":{"searchScene":[]}}}"#, Seen::Absent),
+    ] {
+        assert_eq!(page(body).search, search, "{body}");
+    }
+    // `findScene` is reported whatever its value.
+    for body in [
+        r#"{"data":{"findScene":null}}"#,
+        r#"{"data":{"findScene":5}}"#,
+        r#"{"data":{"searchScene":[],"findScene":[]}}"#,
+    ] {
+        assert!(page(body).find, "{body}");
+    }
+    assert!(!page(r#"{"data":{"searchScene":[]},"findScene":null}"#).find);
+    // Every root `errors` counts, before or after `data`, repeated or not.
+    for (body, errors) in [
+        (r#"{"errors":[{},{}],"data":null}"#, 2),
+        (r#"{"data":null,"errors":[{}]}"#, 1),
+        (r#"{"errors":[],"data":null,"errors":[{}]}"#, 1),
+        (r#"{"errors":{},"errors":"x"}"#, 2),
+        (r#"{"errors":null}"#, 0),
+        (r#"{"data":{"errors":[{}]}}"#, 0),
+    ] {
+        assert_eq!(page(body).errors, errors, "{body}");
+    }
+    // A repeat in the root or in `data`, of any key; the first is read.
+    let d = id(1);
+    for body in [
+        r#"{"data":{"searchScene":[]},"data":null}"#.to_owned(),
+        r#"{"x":1,"x":2}"#.to_owned(),
+        r#"{"errors":[],"errors":[]}"#.to_owned(),
+        r#"{"data":{"searchScene":[],"searchScene":[]}}"#.to_owned(),
+        r#"{"data":{"findScene":null,"findScene":null}}"#.to_owned(),
+        r#"{"data":{"y":1,"y":1}}"#.to_owned(),
+        format!(r#"{{"data":{{"searchScene":null,"searchScene":[{{"id":"{d}"}}]}}}}"#),
+        format!(r#"{{"data":{{"findScene":null,"findScene":{{"id":"{d}"}}}}}}"#),
+    ] {
+        let f = parse(body.as_bytes());
+        assert!(f.page.repeated, "{body}");
+        assert!(f.scenes.is_empty(), "the first is read: {body}");
+    }
+    // Envelope keys are compared unescaped (`~` stands for a backslash).
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    let p = page(&esc(r#"{"d~u0061ta":{"s~u0065archScene":[]}}"#));
+    assert_eq!((p.search, p.repeated), (Seen::List, false));
+    assert!(page(&esc(r#"{"data":{"searchScene":[],"f~u0069ndScene":[]}}"#)).find);
+    assert_eq!(page(&esc(r#"{"~u0065rrors":[{}]}"#)).errors, 1);
+    for body in [
+        r#"{"data":{"searchScene":[]},"d~u0061ta":null}"#,
+        r#"{"errors":[],"err~u006frs":[]}"#,
+        r#"{"data":{"searchScene":[],"s~u0065archScene":[]}}"#,
+        r#"{"a":1,"~u0061":2}"#,
+    ] {
+        assert!(page(&esc(body)).repeated, "{body}");
+    }
+    let f = parse(
+        esc(&format!(
+            r#"{{"data":{{"searchScene":null,"searchSc~u0065ne":[{{"id":"{d}"}}]}}}}"#
+        ))
+        .as_bytes(),
+    );
+    assert!(f.page.repeated && f.scenes.is_empty() && f.page.search == Seen::Null);
+    for body in [
+        r#"{"data":{"searchScene":[],"x":{"y":1}},"x":{"y":1}}"#,
+        r#"{"data":{"searchScene":[{"a":1,"b":{"a":1}},{"a":1}]}}"#,
+    ] {
+        assert!(!page(body).repeated, "{body}");
+    }
+    // Trailing bytes.
+    for (body, trailing) in [
+        (r#"{"data":null} x"#, true),
+        (r#"{"data":null}{}"#, true),
+        ("{\"data\":null}\r\n", false),
+        (r#"{"data":null"#, false),
+    ] {
+        let p = page(body);
+        assert_eq!(p.trailing, trailing, "{body}");
+        if trailing {
+            assert_eq!(p.stop, Some(Stop::Malformed), "{body}");
+        }
+    }
+    // A well-formed answer reports only what it is.
+    let p = parse(&fixture("search.json")).page;
+    assert_eq!(
+        (p.search, p.find, p.repeated, p.trailing, p.errors),
+        (Seen::List, false, false, false, 0)
+    );
+}
+
+/// Past the item cap, the rest of the document is still read: a later
+/// `errors`, fault, repeat or trailing byte is reported, and a fault
+/// replaces the cap's stop.
+#[test]
+fn the_rest_is_read_past_the_item_cap() {
+    let one = Limits {
+        max_items: 1,
+        ..LIMITS
+    };
+    let (a, b) = (id(1), id(2));
+    let at = |s: String| with(s.as_bytes(), &one);
+    let two = format!(r#"[{{"id":"{a}"}},{{"id":"{b}","release_date":"bad"}}]"#);
+    let f = at(format!(
+        r#"{{"data":{{"searchScene":{two}}},"errors":[{{}}]}}"#
+    ));
+    assert_eq!(
+        (f.page.stop, f.page.kept, f.page.errors),
+        (Some(Stop::Items), 1, 1)
+    );
+    assert_eq!(f.page.skipped.total(), 0, "past the cap nothing is decoded");
+    let f = at(format!(
+        r#"{{"data":{{"searchScene":{two},"findScene":null}}}}"#
+    ));
+    assert_eq!((f.page.stop, f.page.find), (Some(Stop::Items), true));
+    let f = at(format!(r#"{{"data":{{"searchScene":{two}}},"data":1}}"#));
+    assert_eq!((f.page.stop, f.page.repeated), (Some(Stop::Items), true));
+    let f = at(format!(r#"{{"data":{{"searchScene":{two}}}}} x"#));
+    assert_eq!(
+        (f.page.stop, f.page.trailing),
+        (Some(Stop::Malformed), true)
+    );
+    for cut in [
+        format!(r#"{{"data":{{"searchScene":[{{"id":"{a}"}},{{"id":"#),
+        format!(r#"{{"data":{{"searchScene":{two}}}"#),
+        format!(r#"{{"data":{{"searchScene":[{{"id":"{a}"}},{{"id":tru}}]}}}}"#),
+    ] {
+        let f = at(cut.clone());
+        assert_eq!(
+            (f.page.stop, f.page.kept),
+            (Some(Stop::Malformed), 1),
+            "{cut}"
+        );
+    }
+    let deep = format!(
+        r#"{{"data":{{"searchScene":[{{"id":"{a}"}},{}1{}]}}}}"#,
+        "[".repeat(20),
+        "]".repeat(20)
+    );
+    assert_eq!(at(deep).page.stop, Some(Stop::Depth));
+}
+
+/// A key written with an escape anywhere in a scene (its own keys, its
+/// studio's, a performer's) spoils the scene, so an escaped repeat can't
+/// dodge the repeat rule (runner, #511 review). `~` stands for a backslash.
+#[test]
+fn an_escaped_key_in_a_scene_spoils_it() {
+    let esc = |s: &str| s.replace('~', &char::from(92).to_string());
+    let (a, b, s) = (id(1), id(2), id(3));
+    for scene in [
+        format!(r#"{{"id":"{a}","~u0069d":"{b}"}}"#),
+        format!(r#"{{"~u0069d":"{b}","id":"{a}"}}"#),
+        format!(r#"{{"id":"{a}","t~u0069tle":"x"}}"#),
+        format!(r#"{{"id":"{a}","unread~u0020key":1}}"#),
+        format!(r#"{{"id":"{a}","studio":{{"id":"{s}","n~u0061me":"S"}}}}"#),
+        format!(r#"{{"id":"{a}","performers":[{{"p~u0065rformer":{{"name":"P"}}}}]}}"#),
+        format!(r#"{{"id":"{a}","performers":[{{"performer":{{"name":"P","n~u0061me":"Q"}}}}]}}"#),
+    ] {
+        let body = esc(&format!(r#"{{"data":{{"searchScene":[{scene}]}}}}"#));
+        let f = parse(body.as_bytes());
+        assert_eq!((f.page.kept, f.page.skipped.malformed), (0, 1), "{body}");
+    }
+    // An escape inside a value is fine, and the next scene starts clean.
+    let body = esc(&format!(
+        r#"{{"data":{{"searchScene":[{{"id":"{a}","t~u0069tle":1}},{{"id":"{b}","title":"~u0041"}}]}}}}"#
+    ));
+    let f = parse(body.as_bytes());
+    assert_eq!((f.page.kept, f.page.skipped.malformed), (1, 1));
+    assert_eq!(f.scenes[0].matched.title.as_deref(), Some("A"));
 }

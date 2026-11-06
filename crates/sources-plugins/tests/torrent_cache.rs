@@ -545,6 +545,14 @@ fn endpoints_are_the_listed_hosts() {
     assert!(p.endpoints().is_some());
     let hosts: Vec<&str> = p.config().caches().iter().map(|c| c.host()).collect();
     assert_eq!(hosts, ["a.example", "b.example"]);
+    // A cache on another port: its requests pass, the host's default port
+    // and any other don't.
+    let (p, _, _) = TorrentCache::new(Config::new(&["https://c.example:8443/t/{hash}"]).unwrap());
+    let e = p.endpoints().unwrap();
+    let req = TorrentCache::request(&p.config().caches()[0], &unverified(InfoHash([7; 20])));
+    assert!(e.permits(&req.url), "{}", req.url);
+    assert!(!e.permits(&req.url.replace(":8443", "")));
+    assert!(!e.permits(&req.url.replace(":8443", ":8444")));
 }
 
 // ---- order, claims and stopping ----
@@ -731,6 +739,9 @@ proptest::proptest! {
             let lookup = unverified(key);
             let req = TorrentCache::request(cache, &lookup);
             proptest::prop_assert!(req.url.starts_with("https://"));
+            // Every request the cache sends passes its own endpoint list.
+            let (p, _, _) = TorrentCache::new(c.clone());
+            proptest::prop_assert!(p.endpoints().unwrap().permits(&req.url), "{}", req.url);
             let host = req.host();
             proptest::prop_assert_eq!(host.as_deref(), Some(cache.host()));
             proptest::prop_assert!(req.url.to_ascii_lowercase().contains(&key.to_string()));

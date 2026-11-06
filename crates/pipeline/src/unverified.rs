@@ -183,31 +183,66 @@ impl UnverifiedStats {
     }
 }
 
-/// Whether a claimed tracker is a plausible tracker URL: an `http`,
-/// `https`, `udp` or `wss` scheme, a host, at most the claims' tracker
-/// limit, and no whitespace or control characters. Tracker URLs aren't
-/// names, so they aren't judged as text (runner, #383); anything else a
-/// feed puts there is dropped before storage.
-pub fn tracker_url(t: &str) -> bool {
-    let Some((scheme, rest)) = t.split_once("://") else {
-        return false;
-    };
-    matches!(
-        scheme.to_ascii_lowercase().as_str(),
-        "http" | "https" | "udp" | "wss"
-    ) && t.len() <= claims::MAX_TRACKER
-        && !rest.is_empty()
-        && !rest.starts_with('/')
-        && !t.chars().any(|c| c.is_whitespace() || c.is_control())
-        && lodestar_integrations::net::public_tracker_url(t).as_deref() == Some(t)
+/// The form a claimed tracker is stored in, or `None` when it's dropped:
+/// the shared guard's canonical form ([`public_tracker_url`]), the address
+/// it judged. That's an `http`, `https` or `udp` URL on a public host,
+/// with no user name, the host lower-cased and made only of letters,
+/// digits, `-` and `.` (or an IP literal), and a `udp` host rebuilt as
+/// judged; never a local name, a single label, or a loopback, private or
+/// link-local address (X-claim-trackers). The raw text must also be
+/// `scheme://` and a host, within the claims' tracker limit, and free of
+/// whitespace and control characters: the `url` crate would repair those
+/// (`http:1.1` reads as `http://1.0.0.1/`, a tab is removed) rather than
+/// refuse them. The canonical form is held to the same limit, since it can
+/// be longer (IDNA, percent-encoding). Tracker URLs aren't names, so they
+/// aren't judged as text (runner, #383).
+///
+/// The form is a fixed point: it maps to itself (X-claim-store).
+///
+/// [`public_tracker_url`]: lodestar_integrations::net::public_tracker_url
+pub fn tracker_url(t: &str) -> Option<String> {
+    let (_, rest) = t.split_once("://")?;
+    if rest.is_empty()
+        || rest.starts_with('/')
+        || t.len() > claims::MAX_TRACKER
+        || t.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    lodestar_integrations::net::public_tracker_url(t).filter(|k| k.len() <= claims::MAX_TRACKER)
+}
+
+/// The trackers stored for a claim: each in its [`tracker_url`] form, the
+/// dropped ones left out, once each after canonicalising (the first
+/// spelling's place), in the claim's order, at most the claims' limit, and
+/// at most `room` bytes in all. The canonical form can be longer than the
+/// raw text the emitter's clamp measured, so a tracker that would take the
+/// claims over [`claims::MAX_TOTAL`] is dropped rather than the store
+/// refusing the whole claim set; later, shorter ones may still fit.
+pub fn stored_trackers(raw: &[String], room: usize) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut left = room;
+    raw.iter()
+        .filter_map(|t| tracker_url(t))
+        .filter(|t| seen.insert(t.clone()))
+        .filter(|t| {
+            let fits = t.len() <= left;
+            if fits {
+                left -= t.len();
+            }
+            fits
+        })
+        .take(claims::MAX_TRACKERS)
+        .collect()
 }
 
 /// The store's claims for a discovery: the source's claims and
-/// provenance, already clamped by the emitter. `None` when it has none.
+/// provenance, already clamped by the emitter, with no `external_ref` and
+/// no trackers for a `private_source` find. `None` when it has none.
 pub fn store_claims(d: &Discovery) -> Option<Claims> {
     let c = d.found.claims.as_deref()?;
     let p = d.found.provenance.as_deref();
-    Some(Claims {
+    let mut out = Claims {
         name: c.name.clone(),
         size: c.size,
         files: c
@@ -218,12 +253,7 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
                 size: f.size,
             })
             .collect(),
-        trackers: c
-            .trackers
-            .iter()
-            .filter(|t| tracker_url(t))
-            .cloned()
-            .collect(),
+        trackers: Vec::new(),
         ids: c
             .ids
             .iter()
@@ -235,7 +265,12 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         description: c.description.clone(),
         publisher: c.publisher.clone(),
         provenance: claims::Provenance {
-            external_ref: p.and_then(|p| p.external_ref.clone()),
+            // Never for a private find: a private tracker's reference can
+            // be a passkey URL. Plugins drop it too; this enforces it in
+            // one place (runner, security pre-audit L3).
+            external_ref: p
+                .filter(|_| !d.found.private_source)
+                .and_then(|p| p.external_ref.clone()),
             published_at: p.and_then(|p| p.published_at),
             confidence: match p.map(|p| p.confidence) {
                 Some(lodestar_sources::Confidence::High) => claims::Confidence::High,
@@ -245,7 +280,15 @@ pub fn store_claims(d: &Discovery) -> Option<Claims> {
         },
         // Judged, as extra evidence, before it's stored ([`judge_in`]).
         adult: c.adult.clone(),
-    })
+    };
+    // The trackers last, in the room the rest leaves under the total.
+    // None for a private find: a private tracker's announce URL can carry
+    // a passkey, which the host guard doesn't look for (runner, L3).
+    if !d.found.private_source {
+        let room = claims::MAX_TOTAL.saturating_sub(out.text_len());
+        out.trackers = stored_trackers(&c.trackers, room);
+    }
+    Some(out)
 }
 
 /// A claim a rule holds back. No name in the clear: only the sealed one,
