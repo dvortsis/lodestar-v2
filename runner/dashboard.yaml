@@ -344,6 +344,7 @@ placement:
   - S-settings-reconcile
   - X-tcache-recheck
   - X-sources-low
+  - X-net-redirect-allowlist
 - ws: ws-cut
   match:
   - CR-COL
