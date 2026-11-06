@@ -16,7 +16,7 @@ No id was defined twice across the plans, and no pasted id was already in `slice
 
 ## The runner's additions
 - **(a) IRC-0 depends on NOS-2a.** NOS-2a is the routed, guarded TCP connect that both IRC-0 and NOS-2b call (v08 plan Q-r15).
-- **(b) X-consent-gate-052:** kind core, model opus, deps `ext:v051-soak-verdict`, with the notes "/security-review; runner call on P-v052-manifest Q4; lands before P-v052-cut". P-v052-cut now depends on it. The plan names no owns, so the runner proposes `crates/api/src/ops.rs`, `crates/api/tests/ops.rs` and `crates/lodestar/tests/consent_gate.rs`, and narrows them at launch.
+- **(b) X-consent-gate-052:** kind core, model opus, deps `ext:v051-soak-verdict`, with the notes "/security-review; runner call on P-v052-manifest Q4; lands before P-v052-cut". P-v052-cut now depends on it. The plan names no owns. The consent check lives in `Control::update_source` (`crates/pipeline/src/control.rs`, `consent::need_in` under the store lock), not in the API handler, so the slice owns `crates/pipeline/src/control.rs` (enable path), `crates/pipeline/tests/control.rs` and `crates/lodestar/tests/consent_gate.rs`, and depends on X-tcache-recheck, which owns control.rs's disable paths.
 - **(c) E-v08 depends on E-v06-companions as well** (v08 plan §5.1).
 - **(d) Nothing shows as ready before the soak verdict.** A script went over the whole graph, using the live dashboard's merged states. It found four new slices with no other unmet dep that lacked `ext:v051-soak-verdict`: GS-gate, RX-0, ENR-9 and UN-0. They now carry it. Every other new root already did. No existing slice needed it: B-import-server-2 is held in runner-state, SRC-15b waits on owner Q1, and the slices running now were left alone (X-search-files-6, RP-G, X-claim-store-polish, X-tcache-recheck, X-sources-low and X-sp4-followups).
 
@@ -64,6 +64,6 @@ No id was defined twice across the plans, and no pasted id was already in `slice
 - **Owner queue item 10:** the planning-wave questions, relayed by the dashboard session with the runner's recommendations.
 
 ## Conflicts found
-- **G-chaos.** The workers plan (§4.1) gives the G-chaos gate `slice: WK-G`. The M8 plan (§4.5) links G-chaos to G-v1-chaos. Both are kept, without choosing between them:
+- **G-chaos.** The workers plan (§4.1) gives the G-chaos gate `slice: WK-G`. The M8 plan (§4.5) links G-chaos to G-v1-chaos. The runner keeps both, which refines M8 §4.5 (a runner call, flagged to the owner under §2.19):
   - G-chaos keeps its name ("Remote workers chaos gates"), so it takes WK-G, the v0.6 gate under build-plan §0.6.
   - The 1.0 re-run on the release candidate gets its own G-v1-chaos entry.

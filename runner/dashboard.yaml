@@ -1397,7 +1397,7 @@ gates:
   where: plan
 - id: G-chaos
   name: Remote workers chaos gates
-  plain: Workers survive crashes, partitions and restarts.
+  plain: "First pass (v0.6): workers survive crashes, partitions and restarts. The 1.0 re-run is G-v1-chaos."
   slice: WK-G
   measure: ''
   target: architecture 19.8
