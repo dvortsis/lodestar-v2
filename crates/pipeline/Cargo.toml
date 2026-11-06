@@ -35,4 +35,4 @@ lodestar-metainfo.workspace = true
 lodestar-dht.workspace = true
 lodestar-peer-wire = { workspace = true, features = ["testing"] }
 tempfile = "3.27.0"
-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net"] }
+tokio = { version = "1.54.0", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net", "test-util"] }
