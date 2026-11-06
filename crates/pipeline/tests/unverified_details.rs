@@ -927,3 +927,155 @@ proptest! {
         prop_assert!(stored::encode(&s, 3).is_ok());
     }
 }
+
+/// Promotion through the running pipeline: a feed's details claims arrive
+/// first as an unverified item, then the crawl fetches the torrent. The
+/// item's section is judged with the verified name before it's promoted
+/// (ENR-9b, runner 2026-11-06T21:48Z), so arrival order can't decide
+/// whether the pair is judged.
+mod promotion {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
+    use lodestar_pipeline::{Pipeline, PipelineConfig};
+    use lodestar_sources::{
+        BoxFuture, Consent, Kind, Manifest, Network as SourceNetwork, PluginError, PoolConfig,
+        Priority, Risk, SourceCtx, SourcePlugin,
+    };
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    /// A source the test drives through a channel.
+    struct Scripted {
+        manifest: Manifest,
+        rx: Mutex<Option<mpsc::Receiver<Found>>>,
+    }
+
+    fn scripted(id: &'static str) -> (std::sync::Arc<Scripted>, mpsc::Sender<Found>) {
+        let (tx, rx) = mpsc::channel(8);
+        let s = Scripted {
+            manifest: Manifest {
+                id,
+                name: id,
+                version: "1",
+                kinds: &[Kind::Discovery],
+                networks: &[SourceNetwork::Bt],
+                endpoints: &[],
+                risk: Risk::Low,
+                consent: Consent::None,
+                default_priority: Priority::Normal,
+                enabled_by_default: true,
+                always_adult: false,
+                finds_private: false,
+            },
+            rx: Mutex::new(Some(rx)),
+        };
+        (std::sync::Arc::new(s), tx)
+    }
+
+    impl SourcePlugin for Scripted {
+        fn manifest(&self) -> &Manifest {
+            &self.manifest
+        }
+
+        fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+            let mut rx = self.rx.lock().unwrap().take().expect("run once");
+            Box::pin(async move {
+                loop {
+                    tokio::select! {
+                        _ = ctx.shutdown.requested() => return Ok(()),
+                        Some(f) = rx.recv() => {
+                            ctx.emitter.emit(f).await.map_err(|_| PluginError("closed".into()))?;
+                        }
+                    }
+                }
+            })
+        }
+    }
+
+    fn config() -> PipelineConfig {
+        PipelineConfig {
+            fetch: lodestar_peer_wire::FetchOptions {
+                allow_private: true,
+                ..Default::default()
+            },
+            pool: PoolConfig {
+                lookup_wait: Duration::from_millis(300),
+                retry_backoff: Duration::from_millis(100),
+                max_attempts: 2,
+                ..PoolConfig::default()
+            },
+            flush_every: Duration::from_millis(100),
+            batch_wait: Duration::from_millis(20),
+            filter: std::sync::Arc::new(stand_in()),
+            sealer: Some(std::sync::Arc::new(Sealer::new(&[9; 32]))),
+            ..PipelineConfig::default()
+        }
+    }
+
+    /// Polls for 10 s (standards §2), so the slowest runner passes.
+    async fn until(what: &str, mut f: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            if f() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// A child-role genre claimed first; the verified name, fetched later,
+    /// is sexual. Neither alone is held: the promotion holds the pair, and
+    /// a clean item beside it is promoted as usual.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_details_pair_completed_by_the_verified_name_holds_at_promotion() {
+        let seeds = vec![
+            Seed::v1(info_bytes("Lexa Show")),
+            Seed::v1(info_bytes("Garden Show")),
+        ];
+        let keys: Vec<InfoHash> = seeds.iter().map(|s| InfoHash(s.info_hash)).collect();
+        let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+        let (feed, feed_tx) = scripted("feed");
+        let (crawl, crawl_tx) = scripted("crawl");
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let pipeline = Pipeline::start(config(), store, vec![feed, crawl])
+            .await
+            .unwrap();
+        let mut d = details();
+        d.genres = vec!["rolea".into()];
+        for k in &keys {
+            feed_tx
+                .send(Found::key(*k, 0).with_claims(with_details("Plain Show", d.clone())))
+                .await
+                .unwrap();
+        }
+        until("unverified", || {
+            n(&pipeline.writer_stats().unverified.stored) == 2
+        })
+        .await;
+        for k in &keys {
+            crawl_tx
+                .send(Found::key(*k, 0).with_peers(vec![peer.addr()]))
+                .await
+                .unwrap();
+        }
+        until("held and promoted", || {
+            let u = &pipeline.writer_stats().unverified;
+            n(&u.held) == 1 && n(&u.promoted) == 1
+        })
+        .await;
+        let store = pipeline.shutdown().await.unwrap();
+        assert!(held(&store, keys[0].0));
+        assert_eq!(store.find(&keys[0]).unwrap(), None);
+        assert!(stored_item(&store, keys[0].0).is_none());
+        let q = store.quarantined(10).unwrap();
+        assert_eq!(q.len(), 1);
+        assert!(q[0].hash == keys[0].0 && q[0].rule.starts_with("CS-"));
+        // "Garden Show rolea": clean, promoted with its section.
+        let id = store.find(&keys[1]).unwrap().expect("promoted");
+        let on = store.torrent_claims(id).unwrap();
+        assert_eq!(on[0].claims.as_ref().unwrap().details.as_deref(), Some(&d));
+    }
+}
