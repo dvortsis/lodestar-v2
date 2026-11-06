@@ -1,4 +1,5 @@
 // Keyboard-only M-auth flows (no pointer): first-run setup end to end, and sign-in.
+import { NOTICE_VERSION } from './support/notice';
 import { expect, test } from './support/test';
 import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
 
@@ -38,7 +39,7 @@ test('keyboard: first-run setup from the Legal Notice to /welcome', async ({
 	expect(mock.calls('setup')[0]!.postDataJSON()).toEqual({
 		token: 'AB12-CD34-EF56-7890',
 		password: 'correct horse battery',
-		notice_version: 4
+		notice_version: NOTICE_VERSION
 	});
 });
 
