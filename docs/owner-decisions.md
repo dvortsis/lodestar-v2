@@ -487,22 +487,22 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **They run to completion under §2.42.** No new slice launches until fewer than four are running.
 
 46. **The runner decides the planning-wave questions on performance and UX** (owner, 2026-11-06T04:26Z, relayed to the runner by the dashboard session): "Have the runner decide based on what's best for performance and UX. Provide a summary of the decisions." It answers owner-queue item 10, the planning-wave list (v0.7 Q1–Q6 and Q10(d), companions cq1–cq6, Q20 and Q21, M8 OQ1–OQ6, M6 Q6, Q8, Q10, Q13 and Q14, workers wkq1–3, v0.8 Q1, Q3 and Q4). Each question's decision and reason are in `docs/decisions/2026-11-06-runner-planning-wave-answers.md`.
-    - **Decided by the runner under this delegation,** each as the plan's own recommendation. None of them loosens an owner decision, weakens security or content safety, or raises an owner-set number:
-      - v0.7 Q5 (`owner-v07-q5`) and Q6 (`owner-v07-q6`);
-      - companions cq1 (`owner-cq1`), cq2 (`owner-cq2`), cq4 (`owner-cq4`) and Q20 (`owner-cq7`);
-      - workers wkq1 (`owner-wkq1`) and wkq3 (`owner-wkq3`);
+    - **Decided by the runner under this delegation,** each as the plan's own recommendation. None of them loosens an owner decision, weakens security or content safety, or changes an owner-set number:
+      - v0.7 Q5 (`owner-v07-q5`), except debrid's hash lookups, which go with Q4, and Q6 (`owner-v07-q6`);
+      - companions cq1 (`owner-cq1`), cq2 (`owner-cq2`, with the pin-time signature check flagged under §2.19) and Q20 (`owner-cq7`: no relaxation; each item CMP-G's smoke finds comes back to the owner);
+      - workers wkq3 (`owner-wkq3`; back to the owner if a worker measures over 256 MB at the owner's corpus);
       - M8 OQ2 (`owner-m8-q2`), OQ3 (`owner-m8-q3`), OQ4 (`owner-m8-q4`) and OQ5 (it gates nothing);
       - M6 Q10;
       - v0.8 Q3's drafting.
 
       Those conditions hold.
-    - **Not covered by this reply, so they stay with the owner** (CLAUDE.md: the runner doesn't loosen owner decisions, weaken security or content safety, decide a source's terms or consent, or raise an owner-set number on its own). The dashboard session asks the owner to confirm each one by name:
+    - **Not covered by this reply, so they stay with the owner** (CLAUDE.md: the runner doesn't loosen owner decisions, weaken security or content safety, decide a source's terms or consent, or change an owner-set number on its own). The dashboard session asks the owner to confirm each one by name:
       - v0.7 Q1 (the Stremio addon: a URL-path token and CORS, and whether it ships at all);
       - v0.7 Q2, Q3 and Q4 (source terms);
-      - companions cq3 (a companion under Lodestar's own account can read its secrets), cq5 (revealing a generated credential), cq6 (whose third-party binaries run) and Q21 (FlareSolverr);
+      - companions cq3 (a companion under Lodestar's own account can read its secrets), cq4 (every option loosens §1.7.2's automatic installs on Windows), cq5 (revealing a generated credential), cq6 (whose third-party binaries run) and Q21 (FlareSolverr);
       - M8 OQ1 (a self-hosted runner on a public repository) and OQ6 (disclosure and the `SECURITY.md` contact);
       - M6 Q13 (the privileged MSI helper);
-      - workers wkq2 (accepting the join token from the environment);
+      - workers wkq1 (it widens §19.6's list and leaves sealed names of child-safety matches on a worker's disk) and wkq2 (accepting the join token from the environment);
       - v0.8 Q1 (Nostr and Lemmy terms) and Q4 (third-party adult claims).
     - **v0.7 Q10(d) isn't needed yet.** Steps (a)–(c) shrink the producers first, under §2.26. If they don't bring the torrent index under 512 B, step (d) trades one owner number for another (trigrams off by default against "Regex < 500 ms"), so it comes back to the owner by name, with the measured numbers.
     - **v0.8 Q3:** the runner drafts the per-worker consent wording. Approving the text stays with the owner, as for the Q1 consent texts, so `owner-v08-q3` stays unmet.

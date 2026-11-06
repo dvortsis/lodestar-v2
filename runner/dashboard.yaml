@@ -740,7 +740,7 @@ conditions:
     who: you
     label: You decide what least privilege means for native companions (companions Q3)
   owner-cq4:
-    met: true
+    met: false
     who: you
     label: You decide how qBittorrent installs on Windows (companions Q4)
   owner-cq5:
@@ -760,7 +760,7 @@ conditions:
     who: you
     label: You decide whether FlareSolverr is offered, opt-in only (companions Q21)
   owner-wkq1:
-    met: true
+    met: false
     who: you
     label: You decide what filter data a worker holds and spools (workers Q1)
   owner-wkq2:
@@ -1343,9 +1343,9 @@ owner_queue:
   when: When convenient
 - n: 10
   type: decision
-  action: 'Confirm by name the planning-wave questions your 04:26Z reply ("Have the runner decide based on what''s best for performance and UX") does not cover, because they touch security, content safety or a source''s terms (§2.46): v07 Q1 (Stremio addon), Q2, Q3 and Q4 (source terms), companions cq3, cq5, cq6 and Q21 (FlareSolverr), M8 OQ1 and OQ6, M6 Q13 (MSI helper), workers wkq2, v08 Q1 and Q4. The rest the runner decided (docs/decisions/2026-11-06-runner-planning-wave-answers.md)'
+  action: 'Confirm by name the planning-wave questions your 2026-11-06T04:26Z reply ("Have the runner decide based on what''s best for performance and UX") does not cover, because they touch security, content safety, an owner decision or a source''s terms (§2.46): v07 Q1 (Stremio addon), Q2, Q3 and Q4 (source terms; Q4 includes debrid''s hash lookups), companions cq3, cq4 (qBittorrent on Windows: §1.7.2''s automatic installs), cq5, cq6 and Q21 (FlareSolverr), workers wkq1 (filter snapshot and sealed names on workers) and wkq2, M8 OQ1 and OQ6, M6 Q13 (MSI helper), v08 Q1 and Q4. The rest the runner decided (docs/decisions/2026-11-06-runner-planning-wave-answers.md). Also yours when you want: winget after 1.0 (M6 Q6)'
   unblocks: The remaining owner-gated slices of v0.7, the companion manager, remote workers, M6 packaging, v0.8 and 1.0
-  when: M6 Q13 and v07 Q4 first; the rest before their slices
+  when: cq6 and cq3 (the whole companion track waits on them) and M6 Q13 first; the rest before their slices
 gates:
 - id: G-v05
   name: v0.5 MVP exit
