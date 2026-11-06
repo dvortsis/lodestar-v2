@@ -76,13 +76,13 @@ external:
     check: "The owner has answered plan 2026-11-05 Q3 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-v07-q4:  # plan 2026-11-05-v07-m7 §6 Q4 (AniDB, srrDB, PreDB, debrid terms); gates the four grey enrichment plugins
     check: "The owner has answered plan 2026-11-05 Q4 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-v07-q5:  # plan 2026-11-05-v07-m7 §6 Q5 (what general enrichment may send); gates ENR-10 and every enrichment slice after it
+  owner-v07-q5:  # plan 2026-11-05-v07-m7 §6 Q5 (what general enrichment may send); gates ENR-10 and every enrichment slice after it; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-05 Q5 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-v07-q6:  # plan 2026-11-05-v07-m7 §6 Q6 (usenet visibility); gates UN-3
+  owner-v07-q6:  # plan 2026-11-05-v07-m7 §6 Q6 (usenet visibility); gates UN-3; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-05 Q6 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-cq1:  # plan 2026-11-06-v06-companions §5 Q1 (the catalogue's trust root); gates CMP-0
+  owner-cq1:  # plan 2026-11-06-v06-companions §5 Q1 (the catalogue's trust root); gates CMP-0; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (companions) Q1 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-cq2:  # companions plan §5 Q2 (upstream signatures); gates CMP-1 and CMP-13
+  owner-cq2:  # companions plan §5 Q2 (upstream signatures); gates CMP-1 and CMP-13; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (companions) Q2 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-cq3:  # companions plan §5 Q3 (least privilege natively); gates CMP-4a
     check: "The owner has answered plan 2026-11-06 (companions) Q3 (recorded in docs/owner-decisions.md or a decisions file)"
@@ -92,7 +92,7 @@ external:
     check: "The owner has answered plan 2026-11-06 (companions) Q5 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-cq6:  # companions plan §5 Q15 (v0.6 catalogue contents, whose binaries run); gates CMP-0
     check: "The owner has answered plan 2026-11-06 (companions) Q15 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-cq7:  # companions plan §5 Q20 (the shipped systemd unit and companions); gates CMP-G
+  owner-cq7:  # companions plan §5 Q20 (the shipped systemd unit and companions); gates CMP-G; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (companions) Q20 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-cq8:  # companions plan §5 Q21 (FlareSolverr, opt-in only); gates CMP-12
     check: "The owner has answered plan 2026-11-06 (companions) Q21 (recorded in docs/owner-decisions.md or a decisions file)"
@@ -100,7 +100,7 @@ external:
     check: "The owner has answered plan 2026-11-06 (workers) Q1 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-wkq2:  # workers plan §5 Q2 (the join token in Docker and Unraid); gates WK-18
     check: "The owner has answered plan 2026-11-06 (workers) Q2 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-wkq3:  # workers plan §5 Q6 (the worker's RAM budget at the owner's corpus); gates WK-G
+  owner-wkq3:  # workers plan §5 Q6 (the worker's RAM budget at the owner's corpus); gates WK-G; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (workers) Q6 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-m6q13:  # plan 2026-11-06-m6-gap-audit §5 Q13 (Windows MSI updater rights); gates PK-win-upd-2. If declined, the plan's §4.1 alternative entries apply
     check: "The owner has answered plan 2026-11-06 (M6) Q13 (recorded in docs/owner-decisions.md or a decisions file)"
@@ -114,11 +114,11 @@ external:
     check: "The owner has answered plan 2026-11-06-v08 Q-o4 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-m8-q1:  # plan 2026-11-06-m8-hardening §5 OQ1 (a dedicated benchmark runner); gates M8-PERF-3
     check: "The owner has answered plan 2026-11-06 (M8) OQ1 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-m8-q2:  # M8 plan §5 OQ2 (relevance on real data); gates M8-REL-2
+  owner-m8-q2:  # M8 plan §5 OQ2 (relevance on real data); gates M8-REL-2; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (M8) OQ2 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-m8-q3:  # M8 plan §5 OQ3 (the Windows soak); gates M8-WIN-1
+  owner-m8-q3:  # M8 plan §5 OQ3 (the Windows soak); gates M8-WIN-1; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (M8) OQ3 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-m8-q4:  # M8 plan §5 OQ4 (a Linux Docker soak on the RC); gates G-v1-soak-linux
+  owner-m8-q4:  # M8 plan §5 OQ4 (a Linux Docker soak on the RC); gates G-v1-soak-linux; answered by owner-decisions §2.46 (2026-11-06, runner decided on the owner's delegation): holds
     check: "The owner has answered plan 2026-11-06 (M8) OQ4 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-m8-q6:  # M8 plan §5 OQ6 (disclosure and SECURITY.md); gates M8-SEC-0
     check: "The owner has answered plan 2026-11-06 (M8) OQ6 (recorded in docs/owner-decisions.md or a decisions file)"
@@ -710,7 +710,7 @@ slices:
   - {id: CMP-2, title: "Companion archive extraction and install layout: zip, tar.gz, bounded, fuzzed; versioned dirs, atomic swap, rollback, removal", kind: core, model: opus, deps: [CMP-0], owns: ["crates/companions/src/extract.rs", "crates/companions/src/layout.rs", "crates/companions/tests/extract.rs", "fuzz/fuzz_targets/companion_archive.rs"], spec: ["§12", "§18.10"], notes: "/security-review; unanchored second read; untrusted input; new deps zip and tar (plan Q13); fuzz/Cargo.toml one [[bin]]"}
   - {id: CMP-3, title: "Companion credentials: generated, sealed, rotated, written into each companion's config file", kind: core, model: opus, deps: [CMP-0], owns: ["crates/companions/src/credentials.rs", "crates/companions/src/config_files.rs", "crates/companions/tests/credentials.rs"], spec: ["§12", "§18.7", "§18.10"], notes: "/security-review; uses integrations::secret::SecretStore, context companion:<id>:<field>; new dep pbkdf2, quick-xml for config.xml (plan Q13); plan Q5, Q10, Q19"}
   - {id: CMP-4a, title: "Companion supervisor: minimal-env spawn, restart with backoff, redacted log ring, health loop, ordered shutdown, orphan cleanup", kind: core, model: opus, deps: [CMP-0, "ext:owner-cq3"], owns: ["crates/companions/src/supervise/mod.rs", "crates/companions/src/supervise/process.rs", "crates/companions/src/supervise/logs.rs", "crates/companions/src/supervise/pidfile.rs", "crates/companions/tests/supervise.rs", "crates/lodestar/src/update/supervisor.rs"], spec: ["§11", "§12.2", "§18.10"], notes: "/security-review; concurrency; plan Q3, Q7. update/supervisor.rs: the orphan-kill hook only. No fixed sleeps: tests wait on conditions with >= 10 s deadlines"}
-  - {id: CMP-4b, title: "Companion resource limits and egress: Job Object, prlimit, delegated cgroup v2; stopped while the route is down; systemd unit per Q20", kind: core, model: opus, deps: [CMP-4a], owns: ["crates/companions/src/supervise/limits.rs", "crates/companions/src/supervise/limits_windows.rs", "crates/companions/src/supervise/limits_linux.rs", "crates/companions/src/supervise/egress.rs", "crates/companions/tests/limits.rs", "packaging/systemd/lodestar.service"], spec: ["§11", "§18.4", "§18.10", "docs/owner-decisions.md §1b.5"], notes: "/security-review; no first-party unsafe; new deps per plan Q13; plan Q8, Q9, Q18, Q20. Routes through lodestar_sources::EgressFactory/PluginEgress injected from crates/lodestar; no companions -> pipeline dependency. A unit relaxation only after ext:owner-cq7"}
+  - {id: CMP-4b, title: "Companion resource limits and egress: Job Object, prlimit, delegated cgroup v2; stopped while the route is down; systemd unit per Q20", kind: core, model: opus, deps: [CMP-4a], owns: ["crates/companions/src/supervise/limits.rs", "crates/companions/src/supervise/limits_windows.rs", "crates/companions/src/supervise/limits_linux.rs", "crates/companions/src/supervise/egress.rs", "crates/companions/tests/limits.rs", "packaging/systemd/lodestar.service"], spec: ["§11", "§18.4", "§18.10", "docs/owner-decisions.md §1b.5"], notes: "/security-review; no first-party unsafe; new deps per plan Q13; plan Q8, Q9, Q18, Q20. Routes through lodestar_sources::EgressFactory/PluginEgress injected from crates/lodestar; no companions -> pipeline dependency. No unit relaxation: per Q20 (owner-decisions §2.46) the shipped unit stays as is, and each item CMP-G's smoke finds goes back to the owner by name before any change"}
   - {id: CMP-5, title: "Companion manager: install flow, pinned updates with previous version kept, uninstall, state rows, companion CLI", kind: core, model: opus, deps: [CMP-1, CMP-2, CMP-3, CMP-4b], owns: ["crates/companions/src/manager.rs", "crates/companions/src/state.rs", "crates/companions/tests/manager.rs", "crates/lodestar/src/companions.rs", "crates/lodestar/src/cli/companion.rs"], spec: ["§11", "§18.10"], notes: "/security-review; plan Q6, Q10, Q17, Q18. No Windows qBittorrent entry (CMP-11). services.rs, cli/mod.rs and crates/lodestar/Cargo.toml: one-line shared edits. companions.rs takes CMP-5g's wiring line after it merges"}
   - {id: CMP-5g, title: "Guided and detected companions end to end: add, paste key, confirm configuration endpoints; unsupervised detection and health; adapter wiring", kind: core, model: opus, deps: [CMP-5, CMP-6, CMP-8b], owns: ["crates/companions/src/guided.rs", "crates/companions/src/watch.rs", "crates/companions/tests/guided.rs", "crates/lodestar/src/companion_wiring.rs", "crates/api/src/companions_guided.rs", "crates/api/src/dto/companions_guided.rs", "crates/api/tests/companions_guided.rs"], spec: ["§18.7", "§18.10", "docs/owner-decisions.md §1.7.2"], notes: "/security-review; plan Q12, Q19. Size counts regenerated openapi.json and schema.d.ts. Shared edits: one wiring line in crates/lodestar/src/companions.rs (CMP-5), the api router"}
   - {id: CMP-6, title: "Companions API: list, detail, install/update/remove with confirmation, restart, logs, compose/template, credential reveal; system row", kind: core, model: opus, deps: [CMP-5, CMP-7, CMP-8b, CMP-10, "ext:owner-cq5"], owns: ["crates/api/src/companions.rs", "crates/api/src/dto/companions.rs", "crates/api/tests/companions.rs", "crates/lodestar/src/system.rs", "crates/api/src/dto/system.rs"], spec: ["§10.10.13", "§12", "§18.10"], notes: "/security-review; admin only; ~800 hand-written plus ~400 regenerated openapi.json and schema.d.ts, never hand-merged; api router and dto/mod.rs one-line shared edits; plan Q5"}
