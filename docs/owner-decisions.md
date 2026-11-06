@@ -470,7 +470,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     2. **A dashboard alarm,** "free slots, work ready", built by the dashboard session from `slices.yaml` `owns` against the running slices.
     3. **An hourly check to the runner** from the dashboard session until the cut. On each one, the runner launches a ready slice that fits, or replies with one line giving the reason.
 
-42. **At most four slots from 2026-11-06T00:00Z** (owner, 2026-11-04, runner chat): "Automatically change max number of slots to 4 slots at 5 MST on 11/5". Asked to confirm, the owner gave 5:00 pm that day, which is 2026-11-06T00:00Z, and said that sessions running beyond four at the cut are let finish.
+42. **At most four slots from 2026-11-06T00:00Z** (owner, 2026-11-04, runner chat): "Automatically change max number of slots to 4 slots at 5 MST on 11/5". Asked to confirm, the owner confirmed the cut is 2026-11-06T00:00Z and said that sessions running beyond four at the cut are let finish.
     - **At most four slice sessions at once,** replacing §2.36's twelve (and §2.43's interim eight). `runner/slices.yaml` records it as `limits.phase_total: 4`. §2.41's standing fill rule and hourly check end at the cut.
     - **Nothing is stopped.** Slices running at the cut finish normally, through review and merge. The runner launches nothing new until fewer than four are running.
     - §2.36's other terms stand: filling every slot isn't required, a slot stays empty rather than overlap a running slice's `owns`, and §2.33's auto-approval and "still for the owner" list are unchanged.
@@ -479,11 +479,11 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **At most eight slices at once until the cut,** down from §2.36's twelve. Running slices completed; nothing new launched while eight or more were running. §2.42 supersedes it at 2026-11-06T00:00Z.
 
 44. **Keep running** (owner, 2026-11-05T23:25Z, relayed to the runner by the dashboard session): "Keep running. We have usage available."
-    - **The runner's hold on launches is lifted.** The runner had held new launches only to save the weekly usage budget, which was at its warning level until 2026-11-06T00:00Z.
+    - **The runner's hold on launches is lifted.** The runner had held new launches only to save the weekly usage budget, which was at its warning level until 2026-11-06T00:00Z. X-claim-store-polish launched under this decision, at 23:26Z.
 
 45. **A no-limit window until about 2026-11-06T00:15Z** (owner, 2026-11-05T23:35Z, relayed by the dashboard session): "Use as many resources as needed to get as much done in the next 30 mins as possible." Then, about 23:45Z, in the runner chat: "There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress."
     - **For those 30 minutes, no slot limit applied** to slices or sub-agents that were useful to overall progress. The rules that keep quality stayed: disjoint `owns`, a fresh Opus review before merge, and the order of authority.
-    - **Launched in the window:** P-v07, X-claim-store-polish, P-v06-workers, P-v06-companions, P-m6-audit, P-v052-manifest, P-m8, P-v08, X-tcache-recheck, X-sources-low, RP-G and X-sp4-followups, plus a read-only security pre-audit of the v0.6 sources code.
+    - **Launched in the window:** P-v07, P-v06-workers, P-v06-companions, P-m6-audit, P-v052-manifest, P-m8, P-v08, X-tcache-recheck, X-sources-low, RP-G and X-sp4-followups, plus a read-only security pre-audit of the v0.6 sources code.
     - **They run to completion under §2.42.** No new slice launches until fewer than four are running.
 
 ## 3. Points still open (not decided by the owner)
