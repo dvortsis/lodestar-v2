@@ -3494,8 +3494,10 @@
       "merge": "d586e741"
     },
     "SRC-15b": {
-      "status": "running",
-      "session": "session_01MMjhnAVcRo5JpndpMaiznS"
+      "status": "merged",
+      "session": "session_01MMjhnAVcRo5JpndpMaiznS",
+      "pr": 552,
+      "merge": "7bf27a8f"
     },
     "WK-1": {
       "status": "merged",
@@ -3529,6 +3531,10 @@
     "WK-2": {
       "status": "running",
       "session": "session_01MMjhnBWxp745BwvUruYDGs"
+    },
+    "X-win-log-held-open": {
+      "status": "running",
+      "session": "session_01MMjhnBTctxueTXBgxFSUev"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6088,7 +6094,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T23:08Z",
+    "updated": "2026-11-06T23:22Z",
     "items": [
       {
         "slot": 1,
@@ -6100,18 +6106,18 @@
       },
       {
         "slot": 2,
-        "slice": "SRC-15b",
+        "slice": "X-win-log-held-open",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #552 at e6d6b7ea, delta review (session_01MMjhnAVcRo5JpndpMaiznS)",
-        "since": "2026-11-06T21:19Z"
+        "doing": "lodestar.log rotation retry delay (session_01MMjhnBTctxueTXBgxFSUev)",
+        "since": "2026-11-06T23:22Z"
       },
       {
         "slot": 3,
         "slice": "X-consent-gate-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "PR #553 at 74bfddb3, in review (session_01MMjhnA1MJreiFSjF8iDbmz)",
+        "doing": "PR #553, CHANGES (release-note wording) round (session_01MMjhnA1MJreiFSjF8iDbmz)",
         "since": "2026-11-06T22:01Z"
       },
       {
