@@ -19,7 +19,10 @@ use lodestar_store::claims::{self, Claims};
 fn promises(c: &Claims) {
     assert!(c.check().is_ok());
     assert!(c.text_len() <= claims::MAX_TOTAL);
-    assert!(!(c.adult.is_some() && c.details.is_some()), "one section a row");
+    assert!(
+        !(c.adult.is_some() && c.details.is_some()),
+        "one section a row"
+    );
     if let Some(a) = &c.adult {
         assert!(a.check().is_ok());
         assert!(a.performers.len() <= claims::MAX_PERFORMERS);
@@ -30,11 +33,22 @@ fn promises(c: &Claims) {
         assert!(d.newsgroups.len() <= claims::MAX_NEWSGROUPS);
         assert!(d.alt_titles.len() <= claims::MAX_ALT_TITLES);
         assert!(d.genres.len() <= claims::MAX_GENRES);
-        assert!(d.alt_titles.iter().all(|a| claims::language_ok(&a.language)));
+        assert!(
+            d.posted_at
+                .is_none_or(|t| (0..=claims::MAX_POSTED_AT).contains(&t))
+        );
+        assert!(
+            d.alt_titles
+                .iter()
+                .all(|a| claims::language_ok(&a.language))
+        );
         assert!(d.genres.iter().all(|g| claims::genre_ok(g)));
         assert!(d.newsgroups.iter().all(|g| claims::newsgroup_ok(g)));
         assert!(c.ids.iter().all(|i| claims::id_ok(&i.scheme, &i.value)));
-        assert!(c.description.is_none() && c.publisher.is_none(), "nothing personal beside details");
+        assert!(
+            c.description.is_none() && c.publisher.is_none(),
+            "nothing personal beside details"
+        );
     }
 }
 

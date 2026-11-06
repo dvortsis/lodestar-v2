@@ -24,7 +24,7 @@
 //!          performers:uvar (name:str)*
 //! date   = year:u16 big-endian (1–9999) · month:u8 (0 none, 1–12)
 //!          · day:u8 (0 none, else a day of that month; only with a month)
-//! details = flags:u8 [source_category:str] [posted_at:svar]
+//! details = flags:u8 [source_category:str] [posted_at:svar (0–MAX_POSTED_AT)]
 //!          [canonical_title:str] [year:u16 big-endian (1–9999)]
 //!          [match_confidence:u8 (0–100)]
 //!          newsgroups:uvar (str)*
@@ -436,6 +436,9 @@ pub const MAX_CANONICAL_TITLE: usize = MAX_NAME;
 pub const MAX_GENRES: usize = 16;
 /// Bytes in one genre.
 pub const MAX_GENRE: usize = 64;
+/// The latest posting time, in Unix seconds: the last second of year 9999
+/// UTC. Posting times run from 0 (1970) to this.
+pub const MAX_POSTED_AT: i64 = 253_402_300_799;
 /// The highest match confidence: a percentage.
 pub const MAX_MATCH_CONFIDENCE: u8 = 100;
 
@@ -592,7 +595,8 @@ pub struct Details {
     /// The source's own category string, as the feed states it
     /// (1–[`MAX_CATEGORY`] bytes).
     pub source_category: Option<String>,
-    /// When a usenet item says it was posted, Unix seconds.
+    /// When a usenet item says it was posted, Unix seconds,
+    /// 0–[`MAX_POSTED_AT`].
     pub posted_at: Option<i64>,
     /// The groups a usenet item was posted to, in the source's order, no
     /// duplicates ([`newsgroup_ok`]).
@@ -701,6 +705,12 @@ impl Details {
             || has_duplicates(&self.genres)
         {
             return Err(ClaimsError::Limit("genres"));
+        }
+        if self
+            .posted_at
+            .is_some_and(|t| !(0..=MAX_POSTED_AT).contains(&t))
+        {
+            return Err(ClaimsError::Limit("posted time"));
         }
         if self.year.is_some_and(|y| !(1..=9999).contains(&y)) {
             return Err(ClaimsError::Limit("year"));
@@ -1352,7 +1362,14 @@ impl<'a> Reader<'a> {
             .then(|| self.text(1, MAX_CATEGORY, "source category"))
             .transpose()?;
         let posted_at = has(POSTED_AT)
-            .then(|| self.uvar().map(|z| ((z >> 1) as i64) ^ -((z & 1) as i64)))
+            .then(|| {
+                let t = self.uvar().map(|z| ((z >> 1) as i64) ^ -((z & 1) as i64))?;
+                if (0..=MAX_POSTED_AT).contains(&t) {
+                    Ok(t)
+                } else {
+                    Err(ClaimsError::Malformed("posted time"))
+                }
+            })
             .transpose()?;
         let canonical_title = has(CANONICAL)
             .then(|| self.text(1, MAX_CANONICAL_TITLE, "canonical title"))
@@ -2415,7 +2432,7 @@ mod tests {
         pub(super) fn full_details() -> Details {
             Details {
                 source_category: Some("c".repeat(MAX_CATEGORY)),
-                posted_at: Some(i64::MIN),
+                posted_at: Some(MAX_POSTED_AT),
                 newsgroups: (0..MAX_NEWSGROUPS)
                     .map(|i| format!("{i}{}", "g".repeat(MAX_NEWSGROUP - 1)))
                     .collect(),
@@ -2440,7 +2457,7 @@ mod tests {
         pub(super) fn most_framing() -> Details {
             Details {
                 source_category: Some("c".repeat(128)),
-                posted_at: Some(i64::MIN),
+                posted_at: Some(MAX_POSTED_AT),
                 newsgroups: (b'a'..b'a' + MAX_NEWSGROUPS as u8)
                     .map(|c| (c as char).to_string())
                     .collect(),
@@ -2818,7 +2835,7 @@ mod tests {
         #[test]
         fn every_v3_cap_holds_at_the_cap_and_one_over() {
             type Set = fn(&mut Details, bool);
-            let caps: [(&str, Set); 11] = [
+            let caps: [(&str, Set); 12] = [
                 ("category", |d, over| {
                     d.source_category = Some("c".repeat(MAX_CATEGORY + usize::from(over)))
                 }),
@@ -2871,6 +2888,9 @@ mod tests {
                 ("confidence", |d, over| {
                     d.match_confidence = Some(MAX_MATCH_CONFIDENCE + u8::from(over))
                 }),
+                ("posted time", |d, over| {
+                    d.posted_at = Some(MAX_POSTED_AT + i64::from(over))
+                }),
             ];
             for (what, set) in caps {
                 let mut d = Details::default();
@@ -2889,6 +2909,23 @@ mod tests {
                 blob.extend_from_slice(&bytes);
                 assert!(decode(&blob).is_err(), "{what} over cap decodes");
             }
+            // Before 1970 is refused too, at -1 and at the far end.
+            for t in [-1, i64::MIN] {
+                let c = only(Details {
+                    posted_at: Some(t),
+                    ..Details::default()
+                });
+                assert_eq!(encode(&c, 3), Err(ClaimsError::Limit("posted time")));
+                assert_eq!(
+                    decode_plain(&unchecked(&c)),
+                    Err(ClaimsError::Malformed("posted time"))
+                );
+            }
+            let c = only(Details {
+                posted_at: Some(0),
+                ..Details::default()
+            });
+            assert_eq!(decode(&encode(&c, 3).unwrap()).unwrap(), c);
             // Year 0 is no year, not a year.
             let c = only(Details {
                 year: Some(0),
@@ -3214,7 +3251,7 @@ mod tests {
                 (
                     (
                         proptest::option::of(text(MAX_CATEGORY)),
-                        proptest::option::of(any::<i64>()),
+                        proptest::option::of(0..=MAX_POSTED_AT),
                         proptest::collection::vec(
                             "[a-z0-9+_-]{1,10}(\\.[a-zA-Z0-9]{1,10}){0,3}",
                             0..=MAX_NEWSGROUPS,

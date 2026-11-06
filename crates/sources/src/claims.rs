@@ -42,8 +42,8 @@ pub use lodestar_store::claims::{
     AdultEnrichment, AdultKind, AltTitle, Details, ENRICHMENT_SCHEMES, MAX_ALT_TITLE,
     MAX_ALT_TITLES, MAX_CANONICAL_TITLE, MAX_CATEGORY, MAX_GENRE, MAX_GENRES, MAX_LANGUAGE,
     MAX_MATCH_CONFIDENCE, MAX_NEWSGROUP, MAX_NEWSGROUPS, MAX_PERFORMER, MAX_PERFORMERS,
-    MAX_SCENE_ID, MAX_SCENE_TITLE, MAX_STUDIO, ReleaseDate, genre_ok, id_ok, language_ok,
-    newsgroup_ok,
+    MAX_POSTED_AT, MAX_SCENE_ID, MAX_SCENE_TITLE, MAX_STUDIO, ReleaseDate, genre_ok, id_ok,
+    language_ok, newsgroup_ok,
 };
 
 /// Bytes in a claimed name.
@@ -230,6 +230,11 @@ fn clamp_details(d: &mut Details) {
     clamp_opt(&mut d.canonical_title, MAX_CANONICAL_TITLE);
     if d.year.is_some_and(|y| !(1..=9999).contains(&y)) {
         d.year = None;
+    }
+    if d.posted_at
+        .is_some_and(|t| !(0..=MAX_POSTED_AT).contains(&t))
+    {
+        d.posted_at = None;
     }
     if d.match_confidence.is_some_and(|c| c > MAX_MATCH_CONFIDENCE) {
         d.match_confidence = None;
@@ -570,7 +575,7 @@ mod tests {
             publisher: Some("poster@example.com".into()),
             details: Some(Box::new(Details {
                 source_category: Some("c".repeat(MAX_CATEGORY + 9)),
-                posted_at: Some(-1),
+                posted_at: Some(MAX_POSTED_AT),
                 newsgroups: (0..20)
                     .map(|i| format!("alt.g{}", i % 10))
                     .chain(["bad group".into()])
@@ -613,7 +618,7 @@ mod tests {
         c.clamp();
         let d = c.details.as_deref().unwrap();
         assert_eq!(d.source_category.as_ref().unwrap().len(), MAX_CATEGORY);
-        assert_eq!(d.posted_at, Some(-1));
+        assert_eq!(d.posted_at, Some(MAX_POSTED_AT));
         assert_eq!(d.newsgroups.len(), MAX_NEWSGROUPS);
         assert_eq!(d.newsgroups[0], "alt.g0");
         assert_eq!(d.alt_titles.len(), MAX_ALT_TITLES);
@@ -662,6 +667,7 @@ mod tests {
     #[test]
     fn clamp_drops_an_empty_or_shared_details_section() {
         let bad = Details {
+            posted_at: Some(MAX_POSTED_AT + 1),
             year: Some(0),
             match_confidence: Some(200),
             newsgroups: vec!["..".into()],
