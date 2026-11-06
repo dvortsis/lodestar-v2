@@ -1062,8 +1062,13 @@ impl SpamSigs {
                 }
             }
         }
-        // Keys sort as text; rows go by number.
-        readable.sort_unstable_by_key(|(n, _)| *n);
+        // Keys sort as text; rows go by number. A store holds each key
+        // once, but a load never trusts that: of two rows under one number
+        // the last read stands, and the other is never held.
+        readable.sort_by_key(|(n, _)| *n);
+        readable.reverse();
+        readable.dedup_by_key(|(n, _)| *n);
+        readable.reverse();
         let adds = readable
             .iter()
             .map(|(_, e)| e.iter().filter(|e| *e & REMOVED == 0).count())
@@ -1555,6 +1560,21 @@ mod tests {
         rows.remove(0);
         assert_eq!(rows.insert(9, Vec::new()), Some(0));
         assert_eq!(rows.insert(10, Vec::new()), None);
+    }
+
+    #[test]
+    fn two_rows_under_one_number_load_as_the_last() {
+        let row = |sigs: &[u64]| {
+            let e: Vec<u64> = sigs.iter().map(|i| key(sig(*i)) | HIDE).collect();
+            (format!("{PREFIX}6"), Err(encode(&e)))
+        };
+        let s = SpamSigs::with_cap(16);
+        let loaded = s.load(&[row(&[1, 2]), row(&[3])]);
+        assert_eq!(loaded.len, 1);
+        assert!(s.get(sig(3)).is_some() && s.get(sig(1)).is_none());
+        check(&s.lock(), 16, 10);
+        s.add(sig(4), HID);
+        assert!(s.get(sig(4)).is_some());
     }
 
     #[test]
