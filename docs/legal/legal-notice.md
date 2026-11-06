@@ -24,7 +24,7 @@ Taking part in the DHT means other nodes and peers can see your public IP addres
 - **Restricted** sources announce your IP address to a torrent's other peers, or reach other high-risk services. They ask for your password every time they're turned on. None is built yet.
 - **Overlay** sources join other peer-to-peer networks, with their own participants and content. None is built yet.
 
-**What a private source finds is marked private for as long as only private sources have reported it.** A private item is never served through feeds or integrations, included in shareable exports, or used in public peer lookups. If a public source later reports the same torrent, the DHT or an import for example, Lodestar treats it as public from then on, because its description is public knowledge by then; what stays private is what only your private sources told you.
+**What a private source finds is marked private for as long as only private sources have reported it.** A private item is never served through feeds or integrations, included in shareable exports, or used in public peer lookups. If a public source such as the DHT later reports the same torrent, Lodestar treats it as public from then on (an import doesn't clear the mark), because its description is public knowledge by then; what stays private is what only your private sources told you.
 
 A future version may add a verification mode that fetches small fragments of a torrent's content **(planned, not built)**. If it ships, it will be off by default, behind its own notice and your password.
 
