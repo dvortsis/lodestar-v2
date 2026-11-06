@@ -5970,7 +5970,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-06T20:00:00Z",
+    "updated": "2026-11-06T20:59Z",
     "items": [
       {
         "slot": 1,
@@ -5985,7 +5985,7 @@
         "slice": "GS-gate",
         "role": "build",
         "agent": "claude",
-        "doing": "size gate in ci-ok (budgets enforcement) (session_01MMjhnBqrrw3veNp36dCF4G)",
+        "doing": "PR #546 at 52eee6a5, in review (session_01MMjhnBqrrw3veNp36dCF4G)",
         "since": "2026-11-06T19:18:00Z"
       },
       {
@@ -6001,12 +6001,13 @@
         "slice": "CMP-0",
         "role": "build",
         "agent": "claude",
-        "doing": "companions catalogue (CMP-0a merged #543; carries 8 review items; 2R) (session_01MMjhnCLJ8wemnkM7h8H2xG)",
+        "doing": "PR #548 round 2 at 9dd3c54d, in delta review (session_01MMjhnCLJ8wemnkM7h8H2xG)",
         "since": "2026-11-06T17:16:00Z"
       }
     ],
     "limit": 8,
     "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged. | Owner 2026-11-05T23:35Z: \"Use as many resources as needed to get as much done in the next 30 mins as possible.\" Owner ~23:45Z in the runner chat: \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Six planning slices launched 23:36-23:37Z; they finish under the 4-slot limit from 00:00Z. | 00:01Z: the weekly usage limit reset (status allowed). From ~00:15Z the 4-slot limit applies; running slices finish."
   },
-  "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail."
+  "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail.",
+  "heartbeat": "2026-11-06T20:59Z"
 }
