@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T06:39:10Z",
+ "updated_at": "2026-11-06T06:52:23Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3415,11 +3415,13 @@
    "at": "2026-11-06T01:05:11Z"
   },
   "X-egress-state-watch": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhnC1tMQprsqvJnqLZ17",
    "model": "opus",
    "launched": "2026-11-06T04:08:56Z",
-   "brief": "briefs/X-egress-state-watch.md"
+   "brief": "briefs/X-egress-state-watch.md",
+   "pr": 530,
+   "merge": "5b7d86be"
   },
   "X-net-redirect-allowlist": {
    "status": "merged",
@@ -5824,7 +5826,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T06:39:10Z",
+  "updated": "2026-11-06T06:52:23Z",
   "items": [
    {
     "slot": 3,
@@ -5849,8 +5851,9 @@
     "slice": "X-egress-state-watch",
     "role": "slice",
     "agent": "session_01MMjhnC1tMQprsqvJnqLZ17",
-    "doing": "source-on check off the shared store lock (+ restart_required doc fix)",
-    "since": "2026-11-06T04:08:56Z"
+    "doing": "#530 merged 5b7d86be; archived. Idle: no ready slice (rest waits on the v0.5.1 soak verdict)",
+    "since": "2026-11-06T06:52:23Z",
+    "status": "idle"
    },
    {
     "slot": 17,
