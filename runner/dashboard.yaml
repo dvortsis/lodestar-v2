@@ -704,19 +704,19 @@ conditions:
     who: time
     label: A release that reads the new range syntax has shipped
   owner-v07-q1:
-    met: false
+    met: true
     who: you
     label: You decide whether the Stremio addon ships, and its access terms (v0.7 Q1)
   owner-v07-q2:
-    met: false
+    met: true
     who: you
     label: You decide the terms for private-tracker IRC announces (v0.7 Q2)
   owner-v07-q3:
-    met: false
+    met: true
     who: you
     label: You decide whether PreDB's live IRC feed may be used (v0.7 Q3)
   owner-v07-q4:
-    met: false
+    met: true
     who: you
     label: You decide on AniDB, srrDB, PreDB and debrid lookups (v0.7 Q4)
   owner-v07-q5:
@@ -736,19 +736,19 @@ conditions:
     who: you
     label: You decide how upstream signatures are checked (companions Q2)
   owner-cq3:
-    met: false
+    met: true
     who: you
     label: You decide what least privilege means for native companions (companions Q3)
   owner-cq4:
-    met: false
+    met: true
     who: you
     label: You decide how qBittorrent installs on Windows (companions Q4)
   owner-cq5:
-    met: false
+    met: true
     who: you
     label: You decide whether a generated companion credential may be revealed (companions Q5)
   owner-cq6:
-    met: false
+    met: true
     who: you
     label: You approve the v0.6 companion catalogue and whose binaries run (companions Q15)
   owner-cq7:
@@ -756,15 +756,15 @@ conditions:
     who: you
     label: You decide whether the systemd unit may be relaxed for companions (companions Q20)
   owner-cq8:
-    met: false
+    met: true
     who: you
     label: You decide whether FlareSolverr is offered, opt-in only (companions Q21)
   owner-wkq1:
-    met: false
+    met: true
     who: you
     label: You decide what filter data a worker holds and spools (workers Q1)
   owner-wkq2:
-    met: false
+    met: true
     who: you
     label: You decide how the join token is passed in Docker and Unraid (workers Q2)
   owner-wkq3:
@@ -772,7 +772,7 @@ conditions:
     who: you
     label: You decide the worker's RAM budget at your corpus size (workers Q6)
   owner-m6q13:
-    met: false
+    met: true
     who: you
     label: You decide how the Windows MSI updater gets its install rights (M6 Q13)
   owner-m6-manual:
@@ -780,7 +780,7 @@ conditions:
     who: you
     label: You do the M6 manual Unraid and MSI installs and approve the rc's signing (M6 Q14)
   owner-v08-q1:
-    met: false
+    met: true
     who: you
     label: You decide the terms position for Nostr relays and Lemmy instances (v0.8 Q-o1)
   owner-v08-q3:
@@ -788,11 +788,11 @@ conditions:
     who: you
     label: You approve the per-worker consent wording (v0.8 Q-o3)
   owner-v08-q4:
-    met: false
+    met: true
     who: you
     label: You decide how third-party adult tags are treated (v0.8 Q-o4)
   owner-m8-q1:
-    met: false
+    met: true
     who: you
     label: You decide on a dedicated benchmark runner and its safeguards (M8 OQ1)
   owner-m8-q2:
@@ -1342,10 +1342,10 @@ owner_queue:
   unblocks: Counsel's comments on the Legal Notice
   when: When convenient
 - n: 10
-  type: decision
-  action: 'Confirm by name the planning-wave questions your 2026-11-06T04:26Z reply ("Have the runner decide based on what''s best for performance and UX") does not cover, because they touch security, content safety, an owner decision or a source''s terms (§2.46): v07 Q1 (Stremio addon), Q2, Q3 and Q4 (source terms; Q4 includes debrid''s hash lookups), companions cq3, cq4 (qBittorrent on Windows: §1.7.2''s automatic installs), cq5, cq6 and Q21 (FlareSolverr), workers wkq1 (filter snapshot and sealed names on workers) and wkq2, M8 OQ1 and OQ6, M6 Q13 (MSI helper), v08 Q1 and Q4. The rest the runner decided (docs/decisions/2026-11-06-runner-planning-wave-answers.md). Also yours when you want: winget after 1.0 (M6 Q6)'
-  unblocks: The remaining owner-gated slices of v0.7, the companion manager, remote workers, M6 packaging, v0.8 and 1.0
-  when: cq6 and cq3 (the whole companion track waits on them) and M6 Q13 first; the rest before their slices
+  type: action
+  action: 'Name the security contact for SECURITY.md and switch on GitHub private vulnerability reporting (M8 OQ6; you accepted the rest, §2.47). Also yours when you want: winget after 1.0 (M6 Q6)'
+  unblocks: M8-SEC-0 (SECURITY.md) and, through it, the 1.0 security reviews
+  when: Before M8-SEC-0
 gates:
 - id: G-v05
   name: v0.5 MVP exit

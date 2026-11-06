@@ -508,6 +508,31 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **v0.8 Q3:** the runner drafts the per-worker consent wording. Approving the text stays with the owner, as for the Q1 consent texts, so `owner-v08-q3` stays unmet.
     - **Still the owner's own steps:** M6 Q6 (winget, after 1.0 if wanted), Q8 (the nightly signing key, owner-queue item 5) and Q14 (the G-m6 manual installs and the release approval, `owner-m6-manual`).
 
+47. **The runner's recommendation on every question §2.46 left with the owner** (owner, 2026-11-06T05:23Z, relayed by the dashboard session): "Go with the runner's recommendation on all". The dashboard session showed each of the 16 questions with the plan's recommendation. The owner then confirmed it directly to the runner (runner chat, 2026-11-06 about 05:26Z), with the security and content-safety loosenings named: "Yes, record all 16". Each question is now decided as the recommendation in `docs/decisions/2026-11-06-runner-planning-wave-answers.md`, "Not covered":
+    - **v0.7:**
+      - **Q1:** the Stremio addon ships, off by default. It has a dedicated read-only, revocable `stremio` key in the URL path, redacted from logs, and CORS `*` on the addon routes only. Every filter and pack applies.
+      - **Q2:** private-tracker IRC announces ship off, with Account consent and `private_source`. There's no shipped definition for a tracker whose rules forbid bots.
+      - **Q3:** a PreDB IRC network ships only if its operators say read-only clients are fine.
+      - **Q4:** AniDB (at most 1 request every 2 s), srrDB and PreDB (at most 1 a second). Debrid only for a provider with a cache check today, including its hash lookups of verified public items.
+    - **Companions:**
+      - **cq3:** the same account, sandboxed. A plain warning shows where no sandbox applies. Never root or administrator.
+      - **cq4:** a guided install for qBittorrent on Windows only, as the one exception to §1.7.2's fully automatic installs.
+      - **cq5:** a credential can be revealed after the password is re-entered, as a logged event. It never appears in exports, backups or support bundles.
+      - **cq6:** the plan's sources, every one pinned.
+      - **Q21:** FlareSolverr is opt-in only.
+    - **Workers:**
+      - **wkq1:** drop happens on the worker; the other actions are marked there and applied at commit. Sealed names may sit in the spool up to 1 GB or 24 h. This widens architecture §19.6's list.
+      - **wkq2:** `LODESTAR_TOKEN` is accepted only for the first join.
+    - **M8:**
+      - **OQ1:** the self-hosted bench runner, with mitigations (a)–(d).
+      - **OQ6:** private vulnerability reporting, a named contact in `SECURITY.md`, and unfixed findings listed publicly by id and severity only.
+    - **M6 Q13:** the privileged MSI helper with its six rules, so the PK plan's main branch stands.
+    - **v0.8:**
+      - **Q1:** public Nostr events and Lemmy posts only.
+      - **Q4:** a third-party adult claim only hides an item until local detection runs.
+
+    Every one of these conditions holds except `owner-m8-q6`. That one waits on the owner naming the `SECURITY.md` contact and switching on private vulnerability reporting (owner-queue item 10). The owner's own steps M6 Q6, Q8 and Q14 are unchanged.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
