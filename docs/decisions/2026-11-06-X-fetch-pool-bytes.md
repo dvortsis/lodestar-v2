@@ -14,7 +14,7 @@ Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/202
   - **joined, waiting for a channel slot:** a new outbox, oldest first;
   - **in the channel, not yet taken:** the pool is the channel's only sender (true of `Pipeline::start_with` and WK-7's `WorkerStages`). So the channel's length (`max_capacity − capacity − slots the pool has reserved`) says how many of the last results sent are still there. A queue of their weights is trimmed to that length. If the pool ever stopped being the only sender, it would overcount, never undercount.
 - **When the budget is full, the pool starts no fetch.** Nothing is dropped: every key is still delivered or reported as a `Loss`, exactly once.
-  - **Waking up:** the pool waits to reserve an output slot. The wait ends when the consumer takes an item, and the pool keeps the slot for its next result.
+  - **Waking up:** while any of its results are in the channel, the pool waits to reserve an output slot. The wait ends when the consumer takes an item: the pool releases that item's bytes and keeps the slot for its next result, at most the channel's capacity. That's one wake per item taken, as the blocked send cost before, and it keeps `fetch_held_bytes` current while the pool is otherwise idle.
   - **Commands and shutdown:** the pool no longer blocks in a send, so it answers both while it waits.
 - **Count backpressure is unchanged.** While any result waits for a channel slot, the pool starts nothing, as the blocked send did before. WK-7's `a_stalled_link_pauses_fetching` bound (one result per socket, plus the channel and the forwarder) still holds. The budget only adds a byte limit on top.
 - **An estimate limits fetches in flight.** A fetch adds no bytes until it finishes, so the budget alone would let every free socket start the moment room appears.
@@ -22,6 +22,8 @@ Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/202
   - **The rule:** a fetch starts only while `held + (in flight + 1) × estimate ≤ budget`.
   - **Normal traffic:** most fetches fail (timeouts dominate in soaks) and dicts are small, so the estimate stays far below `budget / max_sockets` and the cap on sockets decides.
   - **A run of large dicts:** the estimate rises, and fewer fetches run at once.
+  - **The trade-off:** peers can steer the estimate. If about 10% of finished fetches are verified 16 MiB dicts, the estimate sits near 1.6 MiB, which allows about 40 fetches in flight against a 64 MiB budget instead of 400. Legitimate large packs do the same for a while. That throttles throughput, never memory, and it ends when the large dicts stop. `X-fetch-meta-reserve` replaces the estimate with real reservations.
+  - **`held_full` counts only when a key is waiting** for a socket, not when the budget is full and nothing is ready.
 - **A dict over the remaining budget still finishes and is delivered.**
   - **When nothing is in flight, one fetch always starts,** so even a budget smaller than one dict makes progress.
   - **A dict larger than the whole budget passes alone:** once it's held, nothing else starts until the consumer has taken it (`a_dict_over_the_budget_passes_alone`).
@@ -32,12 +34,13 @@ Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/202
 - **Shutdown drains or reports every key.**
   - **Fetches:** the pool aborts its fetches and joins them all. One that had already finished is delivered; one the abort cancelled keeps its entry and is saved with the queue.
   - **The outbox:** it's sent to the consumer, which keeps running until the pool ends (`Pipeline::stop` stops the pool before prepare).
-  - **No consumer left:** if the receiver is gone, a waiting result goes back into the saved queue as a `QueuedKey` (priority 0, no attempts used), to be fetched again next run. Before, a failed send dropped it silently.
+  - **No consumer left:** if the receiver is gone, a waiting result goes back into the saved queue as a `QueuedKey` (no attempts used, its interest kept), to be fetched again next run. Before, a failed send dropped it silently.
+  - **The wait has no deadline.** A clean stop now prepares and writes up to the outbox's results before the pool returns (at most `max_sockets` of them, within the budget). This isn't a regression: before, a send blocked on a stalled consumer kept the pool from seeing shutdown at all. It does add up to one round of work to the stop time that Docker's and the Windows service's stop timeouts allow.
   - **The cost:** the funnel counts such a key's `Fetched` stage twice across the two runs. That's accepted for a path only a broken pipeline takes.
   - **What's still dropped:** results already in the channel go with the receiver, as before.
-- **A purge reaches the outbox.** `drop_source` (SRC-14b) applies its rule to results waiting for a slot, as it does to the fetch they came from. A result only the purged source found ends as evicted, and a shared one passes to the lowest remaining finder and becomes private. Before, a finished fetch waited unjoined and was dropped when the pool joined it, so the outbox mustn't let a purged key through (`drop_source_drops_its_results_waiting_for_the_consumer`). Results already in the channel are the consumer's, as before.
+- **A purge reaches the outbox.** `drop_source` (SRC-14b) applies its rule to results waiting for a slot, as it does to the fetch they came from. A result only the purged source found ends as evicted, and a shared one passes to the lowest remaining finder and becomes private. Before, a finished fetch waited unjoined and was dropped when the pool joined it, so the outbox mustn't let a purged key through (`drop_source_drops_its_results_waiting_for_the_consumer`). Results already in the channel are the consumer's, as before. A purged result also leaves the recently-fetched set, so another source finding the key later starts it afresh instead of being turned away as a duplicate.
 - **With the receiver gone, the pool stops fetching.** Its results wait in the outbox, and none can be delivered. Before, it fetched on and dropped every result.
-- **Periodic snapshots are unchanged.** `PoolHandle::snapshot` still lists only keys the pool hasn't fetched. Results in the outbox count as handed over, like those in the channel.
+- **Periodic snapshots include the outbox.** `PoolHandle::snapshot` lists results waiting for a slot as well as unfetched keys. Before, a finished, unjoined fetch kept its entry and was saved, so a crash lost at most the channel's contents and the one being sent. Without this, a crash would silently lose every result in the outbox (up to `max_sockets`). A result stored after the save is skipped on restore, as a key fetching at the save always was. Results in the channel are the consumer's, as before.
 
 ## What's still open (runner, 2026-11-06T21:52Z)
 - **The peak with this PR at today's defaults** is `max_held_bytes + max_sockets × max_metadata`: 64 MiB + 400 × 16 MiB = 6,464 MiB, about 6.3 GiB. At the aggressive preset's 1,000 sockets it's 64 MiB + 16,000 MiB, about 15.7 GiB.
@@ -99,4 +102,7 @@ Approved by the runner (2026-11-06T21:52Z message to this session, which adds bo
   - **`a_dict_over_the_budget_passes_alone`:** 4 MiB dicts against a 1 MiB budget are delivered, and only one is held at a time.
   - **`shutdown_with_the_budget_full_drains_or_saves_every_key`:** every key is delivered, saved or lost, exactly once.
   - **`shutdown_without_a_consumer_saves_what_it_fetched`:** with the receiver gone, the outbox goes back into the saved queue.
+  - **`shutdown_saves_running_fetches_and_delivers_waiting_results`:** fetches still running at shutdown are saved with their attempts unchanged and aren't counted as failures. Results waiting for a slot are delivered, and a periodic snapshot taken before shutdown includes them. Routing a cancelled fetch through the failure path makes this test fail.
+  - **`held_bytes_fall_as_the_consumer_takes_results`:** the gauge follows each item the consumer takes, while other results still wait and once the pool is idle.
+  - **`drop_source_drops_its_results_waiting_for_the_consumer`:** the purge rule on the outbox.
 - **The tests catch a missing budget:** with the budget check disabled, the first three fail.

@@ -1412,7 +1412,99 @@ async fn shutdown_without_a_consumer_saves_what_it_fetched() {
         KEYS as usize - 1,
         "all but the one handed over"
     );
-    let mut keys: Vec<_> = queue.iter().map(|q| q.info_hash.0).collect();
-    keys.dedup();
+    let keys: std::collections::HashSet<_> = queue.iter().map(|q| q.info_hash.0).collect();
     assert_eq!(keys.len(), queue.len(), "once each");
+}
+
+/// Shutdown with fetches still running and results waiting for the
+/// consumer: the running fetches are saved with their attempts unchanged,
+/// the waiting results are delivered, and each key appears once.
+#[tokio::test(start_paused = true)]
+async fn shutdown_saves_running_fetches_and_delivers_waiting_results() {
+    let h = budgeted(4, 64 * MIB, 20, 1, 4);
+    // Keys 0 and 1 finish (one fills the channel, one waits); 2 and 3 run on.
+    h.script(peer(1, 6881), 500, Ok(()));
+    h.script(peer(2, 6881), 500, Ok(()));
+    h.script(peer(3, 6881), 100_000, Ok(()));
+    h.script(peer(4, 6881), 100_000, Ok(()));
+    let stats = h.handle.stats();
+    until("two results", || {
+        stats.fetched.load(Ordering::Relaxed) == 2 && stats.active.load(Ordering::Relaxed) == 2
+    })
+    .await;
+    // A periodic save meanwhile holds the waiting result too.
+    let saved: Vec<InfoHash> = h
+        .handle
+        .snapshot()
+        .await
+        .iter()
+        .map(|q| q.info_hash)
+        .collect();
+    assert_eq!(saved.len(), 3, "two running, one waiting: {saved:?}");
+    let before: HashMap<InfoHash, u16> = h
+        .handle
+        .snapshot()
+        .await
+        .iter()
+        .map(|q| (q.info_hash, q.attempts))
+        .collect();
+    let Harness {
+        mut out,
+        stop,
+        task,
+        causes,
+        handle,
+        ..
+    } = h;
+    stop.send(true).unwrap();
+    let consumer = tokio::spawn(async move {
+        let mut got = Vec::new();
+        while let Some(r) = out.recv().await {
+            got.push(r.key);
+        }
+        got
+    });
+    let queue = tokio::time::timeout(Duration::from_secs(60), task)
+        .await
+        .expect("the pool stops")
+        .unwrap();
+    let mut got = consumer.await.unwrap();
+    got.sort_by_key(|k| k.0);
+    assert_eq!(got, vec![key(0), key(1)], "both results delivered");
+    let mut saved: Vec<(InfoHash, u16)> = queue.iter().map(|q| (q.info_hash, q.attempts)).collect();
+    saved.sort_by_key(|(k, _)| k.0);
+    assert_eq!(
+        saved,
+        vec![(key(2), before[&key(2)]), (key(3), before[&key(3)])],
+        "the running fetches saved, attempts unchanged"
+    );
+    assert!(causes.lost.lock().unwrap().is_empty(), "nothing lost");
+    for kind in [FailureKind::Invalid, FailureKind::TimedOut] {
+        assert_eq!(
+            handle.stats().failure_count(kind),
+            0,
+            "a cancel isn't a failure"
+        );
+    }
+}
+
+/// The held-bytes gauge falls as the consumer takes results, even while
+/// others still wait for a slot.
+#[tokio::test(start_paused = true)]
+async fn held_bytes_fall_as_the_consumer_takes_results() {
+    let mut h = budgeted(4, 64 * MIB, MIB, 1, 4);
+    let w = weight(MIB);
+    let stats = h.handle.stats();
+    until("four results held", || {
+        stats.fetched.load(Ordering::Relaxed) == 4 && held(&h) == 4 * w
+    })
+    .await;
+    for left in (0..4u64).rev() {
+        tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        until("the gauge to follow", || held(&h) == left * w).await;
+    }
+    h.stop().await;
 }

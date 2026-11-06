@@ -557,7 +557,7 @@ struct Pool {
     finished: Arc<AtomicU64>,
     /// Joined results waiting for a slot in the output channel, oldest
     /// first, with their weights.
-    outbox: VecDeque<(FetchedKey, u64)>,
+    outbox: VecDeque<Waiting>,
     outbox_bytes: u64,
     /// The weights of results sent into the output channel, oldest first,
     /// back to the oldest the consumer may not have taken yet. The pool is
@@ -566,8 +566,8 @@ struct Pool {
     sent: VecDeque<u64>,
     sent_bytes: u64,
     /// Output slots reserved and not yet used. Each reservation completes
-    /// when the consumer has taken an item, which is what wakes a pool the
-    /// budget stopped.
+    /// when the consumer has taken an item, which is what wakes the pool to
+    /// release that item's bytes.
     permits: Vec<mpsc::OwnedPermit<FetchedKey>>,
     /// The output channel's receiver is gone; results wait in the outbox
     /// and go back to the queue at shutdown.
@@ -613,10 +613,12 @@ impl Pool {
             let wake = self.timers.peek().map(|Reverse((at, ..))| *at);
             let credit = self.credit_target();
             // Wait for an output slot while a result waits for one, or
-            // while the budget is stopped by results still in the channel:
-            // a slot freeing up means the consumer took one.
-            let reserve = !self.out_closed
-                && (!self.outbox.is_empty() || (self.full && !self.sent.is_empty()));
+            // while results of the pool's are still in the channel: a slot
+            // freeing up means the consumer took one, which releases its
+            // bytes (and may let a stopped budget start fetching again).
+            // The slots taken are kept for the next results, at most the
+            // channel's capacity.
+            let reserve = !self.out_closed && (!self.outbox.is_empty() || !self.sent.is_empty());
             tokio::select! {
                 biased;
                 _ = shutdown.requested() => break,
@@ -685,19 +687,19 @@ impl Pool {
         // result goes back to the queue, to be fetched again next run.
         self.flush();
         let mut requeued = Vec::new();
-        while let Some((out, weight)) = self.outbox.pop_front() {
-            self.outbox_bytes -= weight;
+        while let Some(w) = self.outbox.pop_front() {
+            self.outbox_bytes -= w.weight;
             if self.out_closed {
-                requeued.push(out);
-            } else if let Err(e) = self.out.send(out).await {
+                requeued.push(w.queued());
+            } else if let Err(e) = self.out.send(w.out).await {
                 self.out_closed = true;
-                requeued.push(e.0);
+                requeued.push(queued(&e.0, w.interest));
             }
         }
         self.permits.clear();
         let mut queue = self.snapshot();
         if !requeued.is_empty() {
-            queue.extend(requeued.iter().map(requeue));
+            queue.extend(requeued);
             queue.sort_by_key(queue_order);
         }
         queue
@@ -729,12 +731,13 @@ impl Pool {
                     }
                 },
             };
-            let (out, weight) = self.outbox.pop_front().expect("not empty");
-            self.outbox_bytes -= weight;
-            permit.send(out);
-            self.sent.push_back(weight);
-            self.sent_bytes += weight;
+            let w = self.outbox.pop_front().expect("not empty");
+            self.outbox_bytes -= w.weight;
+            permit.send(w.out);
+            self.sent.push_back(w.weight);
+            self.sent_bytes += w.weight;
         }
+        self.settle();
     }
 
     /// Forgets the weights of results the consumer has taken from the
@@ -791,7 +794,16 @@ impl Pool {
                 let _ = reply.send(found);
             }
             Cmd::Snapshot(reply) => {
-                let _ = reply.send(self.snapshot());
+                // Results not yet handed over are saved too: a crash
+                // before they're sent would otherwise lose them silently.
+                // One stored meanwhile is skipped on restore, as a key
+                // fetching when the queue was saved is.
+                let mut queue = self.snapshot();
+                if !self.outbox.is_empty() {
+                    queue.extend(self.outbox.iter().map(Waiting::queued));
+                    queue.sort_by_key(queue_order);
+                }
+                let _ = reply.send(queue);
             }
             Cmd::SetPaused(paused) => {
                 self.cfg.paused = paused;
@@ -1707,7 +1719,8 @@ impl Pool {
         let mut deferred = Vec::new();
         while self.tasks.len() < self.cfg.max_sockets {
             if !self.has_room(held) {
-                full = true;
+                // Counted only when a key may be waiting for a socket.
+                full = !self.interest.is_empty() || !self.rotation.is_empty();
                 break;
             }
             let Some(key) = self.next_ready() else {
@@ -1859,6 +1872,7 @@ impl Pool {
                 self.stats.fetched.fetch_add(1, Ordering::Relaxed);
                 self.funnel.record(e.cohort, e.source, Stage::Fetched, None);
                 self.remember(key);
+                let interest = e.interest;
                 let out = FetchedKey {
                     key,
                     fetched,
@@ -1871,7 +1885,11 @@ impl Pool {
                 };
                 // Sent at the loop's next flush; until it's sent, no
                 // fetch starts (the backpressure from a slow writer).
-                self.outbox.push_back((out, weight));
+                self.outbox.push_back(Waiting {
+                    out,
+                    weight,
+                    interest,
+                });
                 self.outbox_bytes += weight;
             }
             Err(kind) => {
@@ -1967,17 +1985,21 @@ impl Pool {
         // same rule applies to them, as to the fetch they came from.
         let mut dropped = 0;
         let mut kept = VecDeque::with_capacity(self.outbox.len());
-        for (mut out, weight) in std::mem::take(&mut self.outbox) {
+        for mut w in std::mem::take(&mut self.outbox) {
+            let out = &mut w.out;
             if out.sources & bit == 0 && out.source != source {
-                kept.push_back((out, weight));
+                kept.push_back(w);
                 continue;
             }
             let rest = out.sources & !bit;
             if rest == 0 {
-                self.outbox_bytes -= weight;
+                self.outbox_bytes -= w.weight;
                 dropped += 1;
+                // Found again by another source, it's new, not a duplicate.
+                self.recent.remove(&out.key);
                 self.stats.evicted_service[3].fetch_add(1, Ordering::Relaxed);
-                self.lose_untracked(&out.key, out.cohort, out.source, Loss::Evicted, None);
+                let (key, cohort, source) = (out.key, out.cohort, out.source);
+                self.lose_untracked(&key, cohort, source, Loss::Evicted, None);
                 continue;
             }
             out.sources = rest;
@@ -1985,7 +2007,7 @@ impl Pool {
             if out.source == source {
                 out.source = SourceId::new(rest.trailing_zeros() as u8).expect("bit under 64");
             }
-            kept.push_back((out, weight));
+            kept.push_back(w);
         }
         self.outbox = kept;
         only.len() + dropped
@@ -2060,7 +2082,8 @@ impl Pool {
         out
     }
 
-    fn publish_stats(&self) {
+    fn publish_stats(&mut self) {
+        self.settle();
         let s = &self.stats;
         s.held_bytes.store(self.held(), Ordering::Relaxed);
         let waiting = self.entries.len().saturating_sub(self.tasks.len());
@@ -2085,14 +2108,29 @@ fn queue_order(q: &QueuedKey) -> (Reverse<u8>, i64, [u8; 20]) {
     (Reverse(q.priority), q.cohort, q.info_hash.0)
 }
 
-/// A fetched key the consumer never took, saved to be fetched again.
-fn requeue(k: &FetchedKey) -> QueuedKey {
+/// A fetched result waiting for a slot in the output channel.
+struct Waiting {
+    out: FetchedKey,
+    /// Its [`weigh`]t, counted in `outbox_bytes`.
+    weight: u64,
+    /// A user asked for it; kept if it goes back to the queue.
+    interest: bool,
+}
+
+impl Waiting {
+    fn queued(&self) -> QueuedKey {
+        queued(&self.out, self.interest)
+    }
+}
+
+/// A fetched key not handed over, saved to be fetched again.
+fn queued(k: &FetchedKey, interest: bool) -> QueuedKey {
     QueuedKey {
         info_hash: k.key,
         source: k.source,
         cohort: k.cohort,
         strategy: k.strategy,
-        priority: 0,
+        priority: u8::from(interest),
         attempts: 0,
         private_source: k.private_source,
     }
