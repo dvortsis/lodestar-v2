@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T04:06:55Z",
+ "updated_at": "2026-11-06T04:08:56Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3407,6 +3407,13 @@
    "pr": 523,
    "merge": "2c8628bb",
    "at": "2026-11-06T01:05:11Z"
+  },
+  "X-egress-state-watch": {
+   "status": "running",
+   "session": "session_01MMjhnC1tMQprsqvJnqLZ17",
+   "model": "opus",
+   "launched": "2026-11-06T04:08:56Z",
+   "brief": "briefs/X-egress-state-watch.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5132,20 +5139,8 @@
    "note": "Runner PR: fix rule-pack plan line 94 and RP-G brief to name web/e2e/packs.routes.test.ts and crates/api/tests/packs_gate.rs."
   },
   {
-   "at": "2026-11-06T03:09:52Z",
-   "note": "X-egress-state-watch (Opus): PluginEgress's source-state read (consent.rs:445, wired services.rs:325) uses the API's shared Mutex<Store>; >2 s contention refuses every HTTP plugin request (fails closed, costs availability, noisy policy_refusals). Have Control publish source state in memory (watch). From #525 review."
-  },
-  {
    "at": "2026-11-06T03:28:57Z",
    "note": "Runner decision (#527 review): file:mkv v8 deferred. Design A preferred; bundle with the next slice needing v8 or take at G-v1-10m on the reference runner. A drops the ext split tokens (mp, 4) and keeps phrase/word matches, with a differential test. Also: 10M rerun of X-search-files-6's final head (cold, warm, NRT, fresh store) if the session couldn't."
-  },
-  {
-   "at": "2026-11-06T03:32:56Z",
-   "note": "Small API doc fix: crates/api/src/dto/ops.rs restart_required doc still says 'starts, stops or picks up its new settings at the next restart'; since #525 a stop is immediate. Regenerate openapi.json + schema.d.ts. Fold into X-egress-state-watch or the next api-touching slice."
-  },
-  {
-   "at": "2026-11-06T03:55:39Z",
-   "note": "If #526 merges without another RP-G push: the runner PR fixing plan line 94 also updates RP-G's decisions file: replace 'the next CI run reports it' with the CI number, always-adult at commit 82.3 us (EPYC 7763, job 127699073103), two judgments 81.3 us."
   }
  ],
  "main_health": [
@@ -5817,7 +5812,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-06T04:06:55Z",
+  "updated": "2026-11-06T04:08:56Z",
   "items": [
    {
     "slot": 3,
@@ -5839,13 +5834,11 @@
    },
    {
     "slot": 15,
-    "slice": "X-tcache-recheck",
-    "role": "build",
-    "agent": "claude",
-    "doing": "#525 merged 50519837; session archived",
-    "since": "2026-11-06T04:06:55Z",
-    "session": "session_01MMjhnCPUNw7cymdGSLRHSf",
-    "status": "idle"
+    "slice": "X-egress-state-watch",
+    "role": "slice",
+    "agent": "session_01MMjhnC1tMQprsqvJnqLZ17",
+    "doing": "source-on check off the shared store lock (+ restart_required doc fix)",
+    "since": "2026-11-06T04:08:56Z"
    },
    {
     "slot": 17,
