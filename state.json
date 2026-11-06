@@ -3482,6 +3482,11 @@
       "status": "merged",
       "pr": 543,
       "merge": "b8aa63a0"
+    },
+    "X-notice-v4": {
+      "status": "merged",
+      "pr": 547,
+      "merge": "0051d2bf"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
