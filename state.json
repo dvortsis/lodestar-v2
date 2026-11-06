@@ -5379,7 +5379,8 @@
         "NEW SLICE X-fetch-meta-reserve (Opus, peer-wire + Fetcher trait, /security-review): reserve announced metadata_size against the pool byte budget before requesting pieces; closes in-flight max_sockets x max_metadata peak left by X-fetch-pool-bytes; deps X-fetch-pool-bytes; WK-10 depends on it",
         "slices.yaml X-consent-gate-polish owns: add crates/pipeline/src/lib.rs (prepare's condition loop moved into control::switch_off_unapproved; runner '1' 22:05Z)",
         "slices.yaml X-consent-gate-polish owns: add docs/releases/v0.5.2.md (runner yes 22:19Z: torrent cache can't be turned on; 'Exact consent' bullet corrected)",
-        "slices.yaml SRC-15b owns: add web/e2e/settings-sources.keyboard.test.ts"
+        "slices.yaml SRC-15b owns: add web/e2e/settings-sources.keyboard.test.ts",
+        "Runner decisions note superseding ENR-9b's cost numbers (#551 delta review): ingest worst case ~150 MB judged text per step (batch_max 256 x ~0.6 MB full section, 4 KB names; ~2x on hybrids), not 40-70 MB; verified names are capped at 4,096 raw bytes but decoded names can be ~12 KiB (legacy encodings), worst refile row ~1.3 MB; refile real work up to ~2x REFILE_JUDGED_BYTES (swarm hashes); adult-section pairs not counted (pre-existing). Add to ENR-10 and UN-1 notes: a judged-bytes budget at ingest before any plugin sends sections; Items-phase budget test."
       ],
       "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
     }
