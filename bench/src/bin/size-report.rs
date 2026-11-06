@@ -674,10 +674,8 @@ mod tests {
     fn summary_shows_budget_and_measured_value() {
         let md = report(600.4, vec![]).markdown();
         assert!(md.starts_with("### Size budget (§3): FAIL"), "{md}");
-        assert!(
-            md.contains("| torrent index | 600.4 | 512 | **FAIL: over budget** |"),
-            "{md}"
-        );
+        let line = format!("| torrent index | 600.4 | {INDEX_BUDGET:.0} | **FAIL: over budget** |");
+        assert!(md.contains(&line), "{md}");
         assert!(md.contains("50,000"), "{md}");
     }
 
