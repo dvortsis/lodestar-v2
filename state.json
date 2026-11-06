@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-06T16:15:00Z",
+  "updated_at": "2026-11-06T16:30:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5206,6 +5206,10 @@
     {
       "at": "2026-11-06T16:15:00Z",
       "note": "rc.4 MSI check: exit 3 REFUSED (data-folder ACL check, by design) after the owner most likely used Explorer \"Continue\" on C:\\ProgramData\\Lodestar, which adds the user ACE. Fixed by icacls; running since 15:52Z; 1 h monitoring ends ~17:00Z. Runner call: not a code blocker; docs-only fix on main (helper PR docs/win-first-run, needs fresh Opus review). NEW v0.5.2 slice X-win-refusal-ux (opus, /security-review): refusal reason to the Windows Event Log; message names the extra account + exact icacls fix; correct REPAIR advice (installer Repair also refuses a non-empty folder with an extra ACE); fold in X-win-log-held-open. OWNER QUESTION (later): may installer Repair re-secure a folder whose only defect is an extra Allow ACE for an admin account (loosens the rule) - runner recommends yes, logged. Add both slices to slices.yaml in the next runner PR."
+    },
+    {
+      "at": "2026-11-06T16:30:00Z",
+      "note": "#535 merged (cea2b506): Windows setup token + error 3 docs. #534 X-legal-docs-r2 CHANGES relayed (drop v0.5.1 exemption in \u00a72.48; 05-use-lodestar private-source promise; revisions 2.3). OWNER QUESTION sent 16:30Z: v0.5.1 notice v2 has slips (data folder, half hour, AGPL \u00a716 reading, section 9) -> (a) text-only rc.5 (recommended; delta rule: no re-soak/re-MSI; legal tests + Release dry run) or (b) ship v2. v0.5.1 go now also waits on this answer. MSI pass rule adjusted (runner): stored>0 OR dht.restart_check suppressing reason + nodes>0; monitoring ends ~16:52Z; recursive icacls cleanup after."
     }
   ],
   "main_health": [
