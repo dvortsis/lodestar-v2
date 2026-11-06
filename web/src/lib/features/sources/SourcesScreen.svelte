@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Settings → Sources (§18.8, §10.10): every source plugin of this build, grouped by kind, with its
-	// status, enable toggle, priority and 24 h yield, and the consent, credentials and purge dialogs
+	// status, enable toggle, priority and 24 h yield, and the consent and purge dialogs
 	// (SRC-15b), loaded on first use. Until a dialog's chunk arrives the screen simply stays as it is. This screen shows the server's last answer and replaces a row
 	// with the PATCH's reply.
 	import { onDestroy, onMount } from 'svelte';
@@ -55,6 +55,7 @@
 	const groups = $derived(sources ? group(sources) : []);
 
 	async function load() {
+		if (destroyed) return;
 		ctl?.abort();
 		const mine = (ctl = new AbortController());
 		const seen = replies;
@@ -119,9 +120,12 @@
 			bind:open={dialogOpen}
 			source={target}
 			onenable={(body) => apply(target, { enabled: true, ...body })}
+			onstale={load}
 		/>
 	{:else if dialog.kind === 'purge' && PurgeDialog}
-		<PurgeDialog bind:open={dialogOpen} source={target} onfinished={load} />
+		{#key target.id}
+			<PurgeDialog bind:open={dialogOpen} source={target} onfinished={load} />
+		{/key}
 	{/if}
 {/if}
 

@@ -98,9 +98,14 @@
 			if (started.state === 'running' || started.state === 'paused') void poll(started.id);
 			else onfinished();
 		} catch (err) {
-			if (err instanceof ApiError && (err.status === 401 || err.code === 'confirm_required')) {
+			if (
+				err instanceof ApiError &&
+				(err.code === 'bad_password' || err.code === 'confirm_required')
+			) {
 				passwordError =
-					err.status === 401 ? m.sources_cx_wrong_password() : m.sources_cx_password_needed();
+					err.code === 'bad_password'
+						? m.sources_cx_wrong_password()
+						: m.sources_cx_password_needed();
 				password = '';
 			} else if (err instanceof ApiError && err.code === 'purge_running') {
 				problem = m.sources_purge_busy();
@@ -124,6 +129,8 @@
 		clearTimeout(timer);
 		ctl?.abort();
 		password = '';
+		// Closed with a purge still running: the list shows where the source stands.
+		if (running) onfinished();
 	});
 </script>
 
@@ -166,9 +173,9 @@
 				</div>{/if}
 		</form>
 	{:else}
-		<div class="flex flex-col gap-3" role="status" data-testid="purge-progress">
+		<div class="flex flex-col gap-3" data-testid="purge-progress">
 			{#if running}
-				<p>{m.sources_purge_running({ name: s.name })}</p>
+				<p role="status">{m.sources_purge_running({ name: s.name })}</p>
 				<p data-testid="purge-stage">{stageText}</p>
 				<p class="text-muted-text">{m.sources_purge_wait()}</p>
 			{:else if job.state === 'done'}

@@ -42,8 +42,19 @@ export const routeText = (route: Route | undefined): string =>
 			? m.sources_cx_route_socks5()
 			: m.sources_cx_route_other();
 
-/** The overlay network's name: the first network that isn't BitTorrent, else the source's name. */
-export const networkOf = (s: Source): string => s.networks.find((n) => n !== 'bt') ?? s.name;
+/** The overlay network's name: the first network that isn't plain BitTorrent, else the source's name. */
+export const networkOf = (s: Source): string => {
+	const id = s.networks.find((n) => n !== 'bt');
+	return id === undefined ? s.name : (NETWORK_NAMES[id] ?? id);
+};
+
+/** The API's network ids as the networks are called (proper names, the same in every language). */
+const NETWORK_NAMES: Record<string, string> = {
+	bt_i2p: 'I2P',
+	ed2k: 'eD2k',
+	ipfs: 'IPFS',
+	usenet: 'Usenet'
+};
 
 export function blocksFor(s: Source, cls: ConsentClass): ConsentBlocks {
 	const name = s.name;
@@ -104,23 +115,19 @@ export const needsPassword = (cls: ConsentClass): boolean =>
  * refusal is shown plainly with the server's own reason; so is any other refusal of `enabled`.
  */
 export function enableRefusal(e: unknown): { text: string; stale: boolean; password: boolean } {
-	if (!(e instanceof ApiError) || e.status === 0)
-		return { text: m.sources_error_network(), stale: false, password: false };
-	if (e.status === 401)
-		return { text: m.sources_cx_wrong_password(), stale: false, password: true };
-	if (e.code === 'consent_required')
-		return { text: m.sources_cx_stale(), stale: true, password: false };
-	if (e.status === 400 && e.field === 'enabled')
-		return { text: m.sources_cx_gate({ reason: e.message }), stale: false, password: false };
-	if (e.code === 'confirm_required')
-		return { text: m.sources_cx_password_needed(), stale: false, password: true };
-	if (e.code === 'purge_running')
-		return { text: m.sources_error_purge_running(), stale: false, password: false };
-	return {
-		text: e.message
-			? m.sources_cx_refused({ reason: e.message })
-			: m.sources_error_code({ code: e.code }),
-		stale: false,
-		password: false
-	};
+	const out = (text: string, extra: { stale?: boolean; password?: boolean } = {}) => ({
+		text,
+		stale: extra.stale ?? false,
+		password: extra.password ?? false
+	});
+	if (!(e instanceof ApiError) || e.status === 0) return out(m.sources_error_network());
+	if (e.code === 'bad_password') return out(m.sources_cx_wrong_password(), { password: true });
+	if (e.code === 'confirm_required') return out(m.sources_cx_password_needed(), { password: true });
+	if (e.code === 'consent_required') return out(m.sources_cx_stale(), { stale: true });
+	if (e.code === 'purge_running') return out(m.sources_error_purge_running());
+	// The server's own sentence says what happened and what to do (the consent gate's, "purge it
+	// again", ...); it never repeats a secret.
+	return out(
+		e.message ? m.sources_cx_gate({ reason: e.message }) : m.sources_error_code({ code: e.code })
+	);
 }

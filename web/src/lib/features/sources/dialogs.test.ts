@@ -59,7 +59,7 @@ describe('consent dialogs: the approved texts', () => {
 			vals: { hosts: 'nyaa.example, api.nyaa.example', egress: 'direct connection' }
 		},
 		{ cls: 'restricted' as const, s: lime, vals: {} },
-		{ cls: 'overlay' as const, s: darknet, vals: { network: 'i2p' } }
+		{ cls: 'overlay' as const, s: darknet, vals: { network: 'I2P' } }
 	];
 	for (const { cls, s, vals } of cases) {
 		it(`${cls}: shows exactly the approved text and buttons`, async () => {
@@ -107,13 +107,20 @@ describe('consent dialogs: what is sent', () => {
 		setup(nyaa);
 		net.on('PATCH /sources/{id}', {
 			status: 400,
-			body: { error: { code: 'invalid_argument', field: 'enabled', message: GATE } }
+			body: {
+				error: {
+					code: 'invalid_setting',
+					field: 'enabled',
+					message: `The setting wasn't saved: ${GATE}.`
+				}
+			}
 		});
 		await open(1);
 		await fireEvent.click(screen.getByTestId('consent-confirm'));
 		const p = await screen.findByTestId('consent-problem');
-		expect(p.textContent).toContain("can't show you an approved consent text yet");
-		expect(p.textContent).toContain('Nothing was changed');
+		expect(p.textContent!.replace(/\s+/g, ' ')).toContain(
+			`The setting wasn't saved: ${GATE}. Nothing was changed.`
+		);
 		expect(screen.getByRole('dialog')).toBeTruthy();
 		expect(toggleOf(1).checked).toBe(false);
 		expect(writes()).toHaveLength(1);
@@ -143,7 +150,7 @@ describe('consent dialogs: what is sent', () => {
 
 	it('a wrong password is said plainly, the field is cleared and the dialog stays', async () => {
 		setup(darknet);
-		net.error('PATCH /sources/{id}', 401, 'unauthorized');
+		net.error('PATCH /sources/{id}', 401, 'bad_password');
 		await open(4);
 		const pw = screen.getByTestId('consent-password') as HTMLInputElement;
 		await fireEvent.input(pw, { target: { value: 'nope-nope' } });
@@ -158,6 +165,46 @@ describe('consent dialogs: what is sent', () => {
 	it('Escape closes without sending anything', async () => {
 		setup(darknet);
 		const dlg = await open(4);
+		await fireEvent.keyDown(dlg, { key: 'Escape' });
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(writes()).toHaveLength(0);
+	});
+});
+
+describe('consent dialogs: other refusals', () => {
+	it('an expired session is not called a wrong password', async () => {
+		setup(darknet);
+		net.error('PATCH /sources/{id}', 401, 'login_required');
+		await open(4);
+		await fireEvent.input(screen.getByTestId('consent-password'), {
+			target: { value: 'some-pass' }
+		});
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		const p = await screen.findByTestId('consent-problem');
+		expect(p.textContent).not.toContain('password is wrong');
+	});
+
+	it('a changed notice reloads the list so the next try sends the new version', async () => {
+		setup(lime);
+		net.on('PATCH /sources/{id}', {
+			status: 409,
+			body: { error: { code: 'consent_required', message: 'x' } }
+		});
+		await open(3);
+		await fireEvent.input(screen.getByTestId('consent-password'), {
+			target: { value: 'some-pass' }
+		});
+		const before = net.sent.filter((s) => s.method === 'GET').length;
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		expect((await screen.findByTestId('consent-problem')).textContent).toContain('changed');
+		await waitFor(() =>
+			expect(net.sent.filter((s) => s.method === 'GET').length).toBeGreaterThan(before)
+		);
+	});
+
+	it('Restricted: Escape cancels without sending anything', async () => {
+		setup(lime);
+		const dlg = await open(3);
 		await fireEvent.keyDown(dlg, { key: 'Escape' });
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(writes()).toHaveLength(0);
@@ -245,7 +292,7 @@ describe('purge', () => {
 
 	it('says a wrong password plainly', async () => {
 		setup(nyaa);
-		net.error('POST /sources/{id}/purge', 401, 'unauthorized');
+		net.error('POST /sources/{id}/purge', 401, 'bad_password');
 		await screen.findByTestId('source-1');
 		await fireEvent.click(screen.getByTestId('source-1-purge'));
 		await fireEvent.input(await screen.findByTestId('purge-password'), {
@@ -254,6 +301,32 @@ describe('purge', () => {
 		await fireEvent.click(screen.getByTestId('purge-confirm'));
 		await waitFor(() =>
 			expect(screen.getByRole('dialog').textContent).toContain('password is wrong')
+		);
+	});
+
+	it('says plainly that another purge is running', async () => {
+		setup(nyaa);
+		net.error('POST /sources/{id}/purge', 409, 'purge_running');
+		await screen.findByTestId('source-1');
+		await fireEvent.click(screen.getByTestId('source-1-purge'));
+		await fireEvent.input(await screen.findByTestId('purge-password'), {
+			target: { value: 'pw-pw-pw' }
+		});
+		await fireEvent.click(screen.getByTestId('purge-confirm'));
+		expect((await screen.findByTestId('purge-problem')).textContent).toContain('already running');
+	});
+
+	it('says what is left when the purge is cancelled', async () => {
+		setup(nyaa);
+		net.on('POST /sources/{id}/purge', { status: 202, body: job('cancelled') });
+		await screen.findByTestId('source-1');
+		await fireEvent.click(screen.getByTestId('source-1-purge'));
+		await fireEvent.input(await screen.findByTestId('purge-password'), {
+			target: { value: 'pw-pw-pw' }
+		});
+		await fireEvent.click(screen.getByTestId('purge-confirm'));
+		await waitFor(() =>
+			expect(screen.getByTestId('purge-progress').textContent).toContain('was cancelled')
 		);
 	});
 

@@ -23,8 +23,10 @@
 			consent_version: string;
 			password?: string;
 		}) => Promise<void>;
+		/** The notice changed since the list was read: reload it so the next try sends the new version. */
+		onstale: () => void;
 	}
-	let { open = $bindable(false), source: s, onenable }: Props = $props();
+	let { open = $bindable(false), source: s, onenable, onstale }: Props = $props();
 
 	const cls = $derived(s.consent as ConsentClass);
 	const blocks = $derived(blocksFor(s, cls));
@@ -72,6 +74,7 @@
 			const r = enableRefusal(err);
 			problem = r.text;
 			if (r.password) password = '';
+			if (r.stale) onstale();
 		} finally {
 			busy = false;
 		}

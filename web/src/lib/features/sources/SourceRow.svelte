@@ -1,9 +1,9 @@
 <script lang="ts">
 	// One source (§18.8): name, status, risk and consent class, enable toggle, priority and the 24 h
-	// yield. Turning on a source that still needs setup (consent or password) opens its
-	// dialog; an Account source that needs credentials waits for SRC-15c instead of sending anything; the dialog sends the enable, and the server's gate (§18.7)
-	// stays the only judge. While a change is in flight the controls stay focusable (a disabled control
-	// would drop the keyboard user's place) and simply ignore input.
+	// yield. Turning on a source that needs consent or a password opens its dialog, which sends the
+	// enable; the server's gate (§18.7) stays the only judge. An Account source that needs
+	// credentials waits for SRC-15c. While a change is in flight the controls stay focusable (a
+	// disabled control would drop the keyboard user's place) and simply ignore input.
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';

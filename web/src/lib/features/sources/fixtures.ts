@@ -97,7 +97,7 @@ export const darknet = source({
 	consent_version: 'v1-cd',
 	needs: 'consent',
 	password_required: true,
-	networks: ['i2p']
+	networks: ['bt_i2p']
 });
 export const tracker = source({
 	id: 5,
