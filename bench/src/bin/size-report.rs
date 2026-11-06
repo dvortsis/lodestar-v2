@@ -3,10 +3,17 @@
 //! Generates synthetic torrents, stores them the way the pipeline will
 //! (a first slice without a dictionary, then a trained zstd dictionary,
 //! recompression, and the rest with the dictionary), builds the torrent
-//! index from the store, and reports bytes per torrent against the budgets. With `--gate` it exits non-zero when a budget
-//! is exceeded, which is how CI enforces it.
+//! index from the store, and reports bytes per torrent against the budgets.
+//! With `--gate` it exits non-zero when a budget is exceeded, which is how CI
+//! enforces it (`ci-ok` needs the size-budget job, GS-gate). The gate fails
+//! closed: a measurement that is missing, zero or not finite, or an index
+//! that doesn't hold every generated torrent, fails it too, so a broken
+//! measurement can never pass as "under budget". `--summary PATH` appends
+//! the budgets and the measured values as a Markdown table (CI passes
+//! `$GITHUB_STEP_SUMMARY`).
 
-use std::path::PathBuf;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -16,7 +23,8 @@ use lodestar_store::{
     NewTorrent, Store, StoreConfig, SwarmUpdate, TrackerCounts, WriteBatch, filetree,
 };
 
-/// Budgets in bytes per torrent at a ~30-file average. §3 allows 1.5 KB for
+/// Budgets in bytes per torrent (owner-set, §3; the runner tunes them under
+/// owner-decisions §2.26, a slice never does) at a ~30-file average. §3 allows 1.5 KB for
 /// the canonical store plus the torrent index; M0 reserves 0.5 KB of that
 /// for the index (built in M2), leaving 1 KB for the whole SQLite file, of
 /// which file-tree blobs may use 0.6 KB.
@@ -27,7 +35,7 @@ const INDEX_BUDGET: f64 = 512.0;
 const FILE_INDEX_BUDGET: f64 = 800.0;
 
 const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
-[--dict-size BYTES] [--level L] [--db PATH] [--gate]
+[--dict-size BYTES] [--level L] [--db PATH] [--gate] [--summary PATH]
 
   --torrents N      torrents to generate (default 100000)
   --seed S          generator seed (default 1)
@@ -36,7 +44,8 @@ const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
   --dict-size B     zstd dictionary size (default 114688)
   --level L         zstd level (default: the store default)
   --db PATH         keep the database at PATH instead of a temp dir
-  --gate            exit 1 if a budget is exceeded";
+  --gate            exit 1 if a budget is exceeded or a value can't be measured
+  --summary PATH    append the budget table (Markdown) to PATH";
 
 struct Args {
     torrents: usize,
@@ -46,6 +55,7 @@ struct Args {
     level: Option<i32>,
     db: Option<PathBuf>,
     gate: bool,
+    summary: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -57,6 +67,7 @@ fn parse_args() -> Result<Args, String> {
         level: None,
         db: None,
         gate: false,
+        summary: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -74,6 +85,7 @@ fn parse_args() -> Result<Args, String> {
             "--level" => args.level = Some(value()?.parse().map_err(|e| format!("--level: {e}"))?),
             "--db" => args.db = Some(value()?.into()),
             "--gate" => args.gate = true,
+            "--summary" => args.summary = Some(value()?.into()),
             "-h" | "--help" => return Err(USAGE.to_owned()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
@@ -137,7 +149,95 @@ fn load(
     Ok(())
 }
 
-fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
+/// One budget line: what was measured, its value and its budget, in bytes
+/// per torrent.
+struct Check {
+    what: &'static str,
+    got: f64,
+    budget: f64,
+}
+
+#[derive(Debug, PartialEq)]
+enum Verdict {
+    Pass,
+    Over,
+    /// The value can't be trusted: zero, negative or not finite.
+    Unmeasured,
+}
+
+impl Check {
+    fn verdict(&self) -> Verdict {
+        if !self.got.is_finite() || self.got <= 0.0 {
+            Verdict::Unmeasured
+        } else if self.got <= self.budget {
+            Verdict::Pass
+        } else {
+            Verdict::Over
+        }
+    }
+}
+
+/// The outcome of a run: the budget lines plus any reason the measurement
+/// itself is invalid. It passes only when both are clean.
+struct Report {
+    torrents: usize,
+    checks: Vec<Check>,
+    invalid: Vec<String>,
+}
+
+impl Report {
+    fn passed(&self) -> bool {
+        self.trustworthy() && self.checks.iter().all(|c| c.verdict() == Verdict::Pass)
+    }
+
+    /// Every value was measured and the indexes cover the whole corpus.
+    fn trustworthy(&self) -> bool {
+        self.invalid.is_empty()
+            && self
+                .checks
+                .iter()
+                .all(|c| c.verdict() != Verdict::Unmeasured)
+    }
+
+    fn markdown(&self) -> String {
+        let mut md = format!(
+            "### Size budget (§3): {}\n\n{} synthetic torrents, bytes per torrent.\n\n\
+             | Part | Measured | Budget | Result |\n|---|---:|---:|---|\n",
+            if self.passed() { "pass" } else { "FAIL" },
+            group(self.torrents as u64)
+        );
+        for c in &self.checks {
+            let result = match c.verdict() {
+                Verdict::Pass => "pass",
+                Verdict::Over => "**FAIL: over budget**",
+                Verdict::Unmeasured => "**FAIL: not measured**",
+            };
+            let _ = writeln!(
+                md,
+                "| {} | {:.1} | {:.0} | {result} |",
+                c.what, c.got, c.budget
+            );
+        }
+        for reason in &self.invalid {
+            let _ = writeln!(md, "\n**FAIL: invalid measurement.** {reason}.");
+        }
+        md
+    }
+}
+
+/// Appends `text` to the summary file, if one was asked for. A failure here
+/// fails the run: CI must never lose the reason it went red.
+fn write_summary(path: Option<&Path>, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let Some(path) = path else { return Ok(()) };
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(f, "{text}")
+}
+
+fn run(args: &Args) -> Result<Report, Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let path = args
         .db
@@ -333,27 +433,59 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         n / scrape_time.as_secs_f64()
     );
 
-    let checks = [
-        ("file-tree blob mean", blob_bytes / n, BLOB_BUDGET),
-        ("canonical store", file_bytes / n, STORE_BUDGET),
-        ("torrent index", index_bytes / n, INDEX_BUDGET),
-        (
-            "file index (smart)",
-            file_index_bytes / n,
-            FILE_INDEX_BUDGET,
+    let check = |what, got, budget| Check { what, got, budget };
+    let report = Report {
+        torrents: args.torrents,
+        checks: vec![
+            check("file-tree blob mean", blob_bytes / n, BLOB_BUDGET),
+            check("canonical store", file_bytes / n, STORE_BUDGET),
+            check("torrent index", index_bytes / n, INDEX_BUDGET),
+            check(
+                "file index (smart)",
+                file_index_bytes / n,
+                FILE_INDEX_BUDGET,
+            ),
+        ],
+        invalid: coverage(
+            args.torrents as u64,
+            index.num_docs(),
+            totals.files,
+            index.num_files(),
         ),
-    ];
+    };
     println!("\n  budgets (bytes per torrent)");
-    let mut ok = true;
-    for (what, got, budget) in checks {
-        let pass = got <= budget;
-        ok &= pass;
+    for c in &report.checks {
+        let verdict = match c.verdict() {
+            Verdict::Pass => "PASS",
+            Verdict::Over => "FAIL (over budget)",
+            Verdict::Unmeasured => "FAIL (not measured)",
+        };
         println!(
-            "    {what:<22} {got:>7.0} <= {budget:<6.0} {}",
-            if pass { "PASS" } else { "FAIL" }
+            "    {:<22} {:>7.1} <= {:<6.0} {verdict}",
+            c.what, c.got, c.budget
         );
     }
-    Ok(ok)
+    for reason in &report.invalid {
+        println!("    FAIL (invalid measurement): {reason}");
+    }
+    Ok(report)
+}
+
+/// Reasons the index sizes don't describe the whole generated corpus: an
+/// index missing torrents or files would read as small and pass the budget.
+fn coverage(torrents: u64, docs: u64, files: u64, indexed_files: u64) -> Vec<String> {
+    let mut invalid = Vec::new();
+    if docs != torrents {
+        invalid.push(format!(
+            "the torrent index holds {docs} documents for {torrents} generated torrents"
+        ));
+    }
+    if indexed_files == 0 || indexed_files > files {
+        invalid.push(format!(
+            "the file index holds {indexed_files} files for {files} generated files"
+        ));
+    }
+    invalid
 }
 
 /// Trackers in the synthetic scrape list, about a real default list.
@@ -460,13 +592,120 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match run(&args) {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) if args.gate => ExitCode::FAILURE,
-        Ok(false) => ExitCode::SUCCESS,
+    let result = run(&args);
+    let text = match &result {
+        Ok(report) => report.markdown(),
         Err(e) => {
             eprintln!("error: {e}");
-            ExitCode::FAILURE
+            format!("### Size budget (§3): FAIL\n\n**FAIL: size-report could not measure.** {e}")
         }
+    };
+    let written = write_summary(args.summary.as_deref(), &text);
+    if let Err(e) = &written {
+        eprintln!("error: writing the summary: {e}");
+    }
+    if succeeds(args.gate, &result, written.is_ok()) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Whether the run exits 0. It fails closed: an error, a value that wasn't
+/// measured, an index that doesn't cover the corpus or a summary that
+/// couldn't be written fail with or without `--gate`; only being over a
+/// budget needs `--gate` to fail.
+fn succeeds<E>(gate: bool, result: &Result<Report, E>, summary_written: bool) -> bool {
+    match result {
+        Err(_) => false,
+        Ok(_) if !summary_written => false,
+        Ok(report) if !report.trustworthy() => false,
+        Ok(report) => report.passed() || !gate,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(got: f64, invalid: Vec<String>) -> Report {
+        Report {
+            torrents: 50_000,
+            checks: vec![Check {
+                what: "torrent index",
+                got,
+                budget: INDEX_BUDGET,
+            }],
+            invalid,
+        }
+    }
+
+    #[test]
+    fn verdicts() {
+        assert!(report(391.0, vec![]).passed());
+        assert!(
+            report(INDEX_BUDGET, vec![]).passed(),
+            "the budget itself passes"
+        );
+        assert!(!report(INDEX_BUDGET + 0.1, vec![]).passed());
+    }
+
+    #[test]
+    fn fails_closed_on_values_it_cannot_trust() {
+        for got in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let r = report(got, vec![]);
+            assert!(!r.passed(), "{got} passed");
+            assert!(r.markdown().contains("not measured"), "{got}");
+        }
+        let r = report(391.0, vec!["the torrent index holds 0 documents".into()]);
+        assert!(!r.passed());
+        assert!(r.markdown().contains("invalid measurement"));
+    }
+
+    #[test]
+    fn coverage_flags_a_partial_index() {
+        assert!(coverage(100, 100, 3000, 2900).is_empty());
+        assert_eq!(coverage(100, 99, 3000, 2900).len(), 1);
+        assert_eq!(coverage(100, 100, 3000, 0).len(), 1);
+        assert_eq!(coverage(100, 100, 3000, 3001).len(), 1);
+    }
+
+    #[test]
+    fn summary_shows_budget_and_measured_value() {
+        let md = report(600.4, vec![]).markdown();
+        assert!(md.starts_with("### Size budget (§3): FAIL"), "{md}");
+        let line = format!("| torrent index | 600.4 | {INDEX_BUDGET:.0} | **FAIL: over budget** |");
+        assert!(md.contains(&line), "{md}");
+        assert!(md.contains("50,000"), "{md}");
+    }
+
+    #[test]
+    fn exit_codes_fail_closed() {
+        let ok = || Ok::<_, ()>(report(391.0, vec![]));
+        let over = || Ok::<_, ()>(report(600.0, vec![]));
+        let unmeasured = || Ok::<_, ()>(report(0.0, vec![]));
+        let partial = || Ok::<_, ()>(report(391.0, vec!["partial".into()]));
+        for gate in [false, true] {
+            assert!(succeeds(gate, &ok(), true), "gate {gate}");
+            assert!(
+                !succeeds(gate, &ok(), false),
+                "unwritten summary, gate {gate}"
+            );
+            assert!(!succeeds(gate, &unmeasured(), true), "gate {gate}");
+            assert!(!succeeds(gate, &partial(), true), "gate {gate}");
+            assert!(!succeeds(gate, &Err::<Report, _>(()), true), "gate {gate}");
+        }
+        assert!(succeeds(false, &over(), true), "a report without --gate");
+        assert!(!succeeds(true, &over(), true));
+    }
+
+    #[test]
+    fn summary_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("summary.md");
+        write_summary(Some(&path), "one").unwrap();
+        write_summary(Some(&path), "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo\n");
+        write_summary(None, "ignored").unwrap();
     }
 }
