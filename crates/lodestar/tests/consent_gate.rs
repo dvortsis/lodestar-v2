@@ -159,7 +159,7 @@ impl Server {
         self.send("PATCH", &format!("/api/v1/sources/{id}"), body)
     }
 
-    fn stop(mut self) -> String {
+    fn stop(&mut self) -> String {
         let killed = Command::new("kill")
             .args(["-TERM", &self.child.id().to_string()])
             .status()
@@ -169,6 +169,15 @@ impl Server {
         let log = self.log.lock().unwrap().clone();
         assert!(status.success(), "{log}");
         log
+    }
+}
+
+impl Drop for Server {
+    /// A failed assertion doesn't leave the server running. After
+    /// [`Server::stop`] the process is already reaped and this does nothing.
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -199,7 +208,7 @@ fn assert_gated(r: &str) {
 #[test]
 fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     let dir = tempfile::tempdir().unwrap();
-    let s = Server::start(dir.path(), true);
+    let mut s = Server::start(dir.path(), true);
 
     let cache = s.source("torrent_cache");
     assert_eq!(cache["consent"], "external", "{cache}");
@@ -239,10 +248,11 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     let r = s.patch(arr_id, r#"{"enabled":true}"#);
     assert_eq!(status(&r), 200, "{r}");
     s.stop();
+    drop(s);
 
     // At the next start the cache is still off and isn't running; the
     // webhooks run.
-    let s = Server::start(dir.path(), false);
+    let mut s = Server::start(dir.path(), false);
     wait_for("the webhooks source running", || {
         let v = s.source("arr_webhooks");
         (v["health"]["running"] == true).then_some(())

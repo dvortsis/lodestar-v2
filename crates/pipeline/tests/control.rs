@@ -105,8 +105,7 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    assert!(on_ran.load(Ordering::SeqCst));
+    until("the None source runs", || on_ran.load(Ordering::SeqCst)).await;
     assert!(!fresh_ran.load(Ordering::SeqCst), "off by default");
     assert!(
         !off_ran.load(Ordering::SeqCst),
