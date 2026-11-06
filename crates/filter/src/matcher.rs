@@ -133,6 +133,20 @@ pub(crate) enum Compiled {
     Leaf(Box<Node>),
 }
 
+impl Compiled {
+    /// Whether matching it reads the enrichment's tags (`type:`,
+    /// `adult:`, `res:` …): the only part of a torrent that reads
+    /// differently as Adult ([`Doc::as_adult`]).
+    pub(crate) fn reads_tags(&self) -> bool {
+        match self {
+            Compiled::Tag { .. } => true,
+            Compiled::And(v) | Compiled::Or(v) => v.iter().any(Compiled::reads_tags),
+            Compiled::Not(c) | Compiled::File(c) => c.reads_tags(),
+            _ => false,
+        }
+    }
+}
+
 /// A word inside NEAR: its parts in a row (a phrase), or one token of
 /// its whole text (`webdl` for `web-dl`), as a word matches (§16).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -612,9 +626,10 @@ impl Tri {
 /// #381 newly ignores and the visible format marks
 /// (docs/decisions/2026-11-02-F-visible-format-two-readings.md).
 /// Elsewhere both are the same.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum Reading {
     /// The characters ignored: how text reads now.
+    #[default]
     Joined,
     /// The characters as word breaks: how text read before.
     Before,
@@ -625,12 +640,31 @@ pub(crate) enum Reading {
 pub struct Doc<'a> {
     pub item: &'a Item<'a>,
     pub facts: Option<&'a Facts<'a>>,
+    /// What's read from the name and paths alone, its own or the reading
+    /// as found's ([`Doc::as_adult`]).
+    texts: Texts<'a>,
+    titles: OnceCell<Vec<Text>>,
+    enrichment: OnceCell<Option<DocEnrichment>>,
+    /// The Adult reading's: the reading as found's enrichment, with its
+    /// own tags ([`Doc::as_adult`]).
+    adult: Option<AdultTags<'a>>,
+    /// The rule set's NEAR terms, whose nearness the keys record.
+    near: Option<&'a std::sync::Arc<NearTerms>>,
+    tag_keys: OnceCell<IdSet>,
+    /// A date or time of day was read ([`Doc::read_time`]).
+    read_time: std::cell::Cell<bool>,
+}
+
+/// The parts of a [`Doc`] read from the name and paths alone, the same
+/// in every reading of the classification: the Adult reading of a
+/// torrent shares the reading as found's ([`Doc::as_adult`]).
+#[derive(Default)]
+struct TextCaches {
     name: OnceCell<Text>,
     /// Each file's whole path.
     files: OnceCell<Vec<Text>>,
     /// Each file's own name.
     file_names: OnceCell<Vec<Text>>,
-    titles: OnceCell<Vec<Text>>,
     /// The name and each path in the core's tokens, for keyword entries:
     /// all in one buffer, with where each text ends, and whether each
     /// path reads the same with its segments apart.
@@ -639,13 +673,37 @@ pub struct Doc<'a> {
     /// word breaks are ([`crate::normalize::Tokenizer::splitting`]), if
     /// it differs.
     normalized_split: OnceCell<Option<(Vec<crate::normalize::Token>, Vec<usize>)>>,
-    enrichment: OnceCell<Option<DocEnrichment>>,
     keys: OnceCell<DocKeys>,
-    /// The rule set's NEAR terms, whose nearness the keys record.
-    near: Option<&'a std::sync::Arc<NearTerms>>,
-    tag_keys: OnceCell<IdSet>,
     exts: OnceCell<Vec<lodestar_classify::ext::Ext>>,
     content: OnceCell<Content>,
+}
+
+enum Texts<'a> {
+    Own(Box<TextCaches>),
+    Shared(&'a TextCaches),
+}
+
+/// A torrent's tags read as Adult, from its tags as found (`rest`):
+/// [`DocEnrichment::new`] writes the content type first and then the
+/// adult kind, and nothing else in it reads the classification
+/// differently as Adult ([`Classification::as_adult`]).
+struct AdultTags<'a> {
+    /// The reading as found's enrichment, every field of it but the tags
+    /// the Adult reading's too.
+    found: &'a DocEnrichment,
+    /// `type:adult`, then the adult kind where the reading as found had
+    /// none, then the rest of its tags.
+    first: String,
+    kind: Option<String>,
+    rest: &'a [String],
+}
+
+impl AdultTags<'_> {
+    fn iter(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.first)
+            .chain(self.kind.as_ref())
+            .chain(self.rest)
+    }
 }
 
 /// The content files' count, total size and largest size, and the
@@ -671,29 +729,120 @@ impl<'a> Doc<'a> {
         Doc {
             item,
             facts,
-            name: OnceCell::new(),
-            files: OnceCell::new(),
-            file_names: OnceCell::new(),
+            texts: Texts::Own(Box::default()),
             titles: OnceCell::new(),
-            normalized: OnceCell::new(),
-            normalized_split: OnceCell::new(),
             enrichment: OnceCell::new(),
-            keys: OnceCell::new(),
+            adult: None,
             near: None,
             tag_keys: OnceCell::new(),
-            exts: OnceCell::new(),
-            content: OnceCell::new(),
+            read_time: std::cell::Cell::new(false),
         }
     }
 
+    /// The same torrent read as Adult (`item` and `facts` this one's, with
+    /// the content type Adult and the classification
+    /// [`Classification::as_adult`]), sharing everything read from the
+    /// name and paths: they're the same text. Only the enrichment's tags
+    /// read the classification differently ([`adult_enrichment`]), so
+    /// they're this reading's own.
+    pub(crate) fn as_adult<'b>(
+        &'b self,
+        item: &'b Item<'b>,
+        facts: Option<&'b Facts<'b>>,
+    ) -> Doc<'b>
+    where
+        'a: 'b,
+    {
+        debug_assert!(
+            item.name == self.item.name
+                && std::ptr::eq(item.files, self.item.files)
+                && item.hashes == self.item.hashes,
+            "the Adult reading of another torrent"
+        );
+        let enrichment = OnceCell::new();
+        let tag_keys = OnceCell::new();
+        let adult = match (self.enrichment(), self.facts, facts) {
+            (Some(e), Some(found), Some(adult)) => {
+                adult_tags(e, found.class, adult.class, self.tag_keys())
+            }
+            _ => None,
+        };
+        match adult {
+            Some((tags, keys)) => {
+                let _ = tag_keys.set(keys);
+                Some(tags)
+            }
+            None => {
+                let _ = enrichment.set(facts.map(|f| {
+                    DocEnrichment::new(&Record::new(f.class), Some(&f.class.composition))
+                }));
+                None
+            }
+        }
+        .map_or_else(
+            || Doc {
+                item,
+                facts,
+                texts: Texts::Shared(self.texts()),
+                titles: OnceCell::new(),
+                enrichment,
+                adult: None,
+                near: self.near,
+                tag_keys: OnceCell::new(),
+                read_time: std::cell::Cell::new(false),
+            },
+            |tags| Doc {
+                item,
+                facts,
+                texts: Texts::Shared(self.texts()),
+                titles: OnceCell::new(),
+                enrichment: OnceCell::new(),
+                adult: Some(tags),
+                near: self.near,
+                tag_keys,
+                read_time: std::cell::Cell::new(false),
+            },
+        )
+    }
+
+    fn texts(&self) -> &TextCaches {
+        match &self.texts {
+            Texts::Own(t) => t,
+            Texts::Shared(t) => t,
+        }
+    }
+
+    /// Whether a rule read a date or a time of day here: the only places a
+    /// judgment reads `discovered_at` or `now` from the facts.
+    pub(crate) fn read_time(&self) -> bool {
+        self.read_time.get()
+    }
+
+    /// Notes that a reading of the same torrent read a date or a time of
+    /// day ([`Doc::as_adult`]'s).
+    pub(crate) fn note_read_time(&self) {
+        self.read_time.set(true);
+    }
+
     fn keys(&self) -> &DocKeys {
-        self.keys
+        self.texts()
+            .keys
             .get_or_init(|| DocKeys::with_near(self.item.name, self.item.files, self.near))
     }
 
-    fn tag_keys(&self) -> &IdSet {
+    pub(crate) fn tag_keys(&self) -> &IdSet {
         self.tag_keys
             .get_or_init(|| prefilter::tag_keys(self.enrichment()))
+    }
+
+    /// Whether the torrent has the tag `t` (`res:1080p`).
+    fn has_tag(&self, t: &str) -> bool {
+        match &self.adult {
+            Some(a) => a.iter().any(|x| x == t),
+            None => self
+                .enrichment()
+                .is_some_and(|e| e.tags.iter().any(|x| x == t)),
+        }
     }
 
     fn has_key(&self, t: &Term) -> bool {
@@ -711,6 +860,20 @@ impl<'a> Doc<'a> {
     /// `neutral` words never count (CSX-5 *Neutralize term*).
     pub(crate) fn candidates(&self, rules: &RuleList, neutral: &[String]) -> Vec<u32> {
         rules.candidates(self.keys(), &|| self.tag_keys(), |g, clauses| {
+            self.passes(g, clauses, neutral)
+        })
+    }
+
+    /// [`Doc::candidates`] here and in the Adult reading of the same
+    /// torrent, whose tags are `adult_tags` ([`Doc::as_adult`]), in one
+    /// walk ([`RuleList::candidates_pair`]).
+    pub(crate) fn candidates_pair(
+        &self,
+        rules: &RuleList,
+        neutral: &[String],
+        adult_tags: &IdSet,
+    ) -> (Vec<u32>, Vec<u32>) {
+        rules.candidates_pair(self.keys(), (self.tag_keys(), adult_tags), |g, clauses| {
             self.passes(g, clauses, neutral)
         })
     }
@@ -784,11 +947,13 @@ impl<'a> Doc<'a> {
     }
 
     fn name(&self) -> &Text {
-        self.name.get_or_init(|| fasttok::tokens(self.item.name))
+        self.texts()
+            .name
+            .get_or_init(|| fasttok::tokens(self.item.name))
     }
 
     fn files(&self) -> &[Text] {
-        self.files.get_or_init(|| {
+        self.texts().files.get_or_init(|| {
             self.item
                 .files
                 .iter()
@@ -799,7 +964,7 @@ impl<'a> Doc<'a> {
     }
 
     fn file_names(&self) -> &[Text] {
-        self.file_names.get_or_init(|| {
+        self.texts().file_names.get_or_init(|| {
             self.item
                 .files
                 .iter()
@@ -811,7 +976,7 @@ impl<'a> Doc<'a> {
 
     /// The name, then each path, in the core's tokens.
     pub(crate) fn normalized(&self) -> impl Iterator<Item = &[crate::normalize::Token]> {
-        let (tokens, ends, _) = self.normalized.get_or_init(|| {
+        let (tokens, ends, _) = self.texts().normalized.get_or_init(|| {
             let mut tokens = Vec::new();
             crate::normalize::tokens(self.item.name, &mut tokens);
             let mut ends = vec![tokens.len()];
@@ -846,6 +1011,7 @@ impl<'a> Doc<'a> {
         &self,
     ) -> Option<impl Iterator<Item = &[crate::normalize::Token]>> {
         let (tokens, ends) = self
+            .texts()
             .normalized_split
             .get_or_init(|| {
                 let files = || self.item.files.iter().take(crate::MAX_FILES);
@@ -875,7 +1041,8 @@ impl<'a> Doc<'a> {
     /// The name and paths in the core's tokens, if keyword entries have
     /// read them already, for the core to reuse.
     pub(crate) fn read(&self) -> Option<crate::normalize::Read<'_>> {
-        self.normalized
+        self.texts()
+            .normalized
             .get()
             .map(|(tokens, ends, apart)| crate::normalize::Read {
                 tokens,
@@ -884,7 +1051,13 @@ impl<'a> Doc<'a> {
             })
     }
 
+    /// The enrichment: every field but `tags`, which only
+    /// [`Doc::tag_keys`] and [`Doc::has_tag`] read, since the Adult
+    /// reading's are its own.
     fn enrichment(&self) -> Option<&DocEnrichment> {
+        if let Some(a) = &self.adult {
+            return Some(a.found);
+        }
         self.enrichment
             .get_or_init(|| {
                 let f = self.facts?;
@@ -947,7 +1120,7 @@ impl<'a> Doc<'a> {
     }
 
     fn exts(&self) -> &[lodestar_classify::ext::Ext] {
-        self.exts.get_or_init(|| {
+        self.texts().exts.get_or_init(|| {
             let mut v = Vec::new();
             for f in self.item.files {
                 if let Some(e) = lodestar_classify::ext::extension(f.name())
@@ -1213,9 +1386,7 @@ impl<'a> Doc<'a> {
                     None => self.item.files.iter().any(has),
                 }
             }
-            Compiled::Tag { tags, .. } => self
-                .enrichment()
-                .is_some_and(|e| tags.iter().any(|t| e.tags.contains(t))),
+            Compiled::Tag { tags, .. } => tags.iter().any(|t| self.has_tag(t)),
             Compiled::File(of) => {
                 file.is_none()
                     && (0..self.item.files.len().min(crate::MAX_FILES))
@@ -1248,6 +1419,7 @@ impl<'a> Doc<'a> {
         match node {
             Node::Date { field, from, to } => {
                 let Some(f) = self.facts else { return false };
+                self.read_time.set(true);
                 let at = match field {
                     DateField::Discovered => f.discovered_at,
                     // Swarm health comes after ingest: a rule sees a
@@ -1268,6 +1440,7 @@ impl<'a> Doc<'a> {
             Node::Verified { .. } | Node::Source { .. } | Node::Network { .. } => false,
             // Rules have no time zone: UTC.
             Node::TimeOfDay { from, to } => self.facts.is_some_and(|f| {
+                self.read_time.set(true);
                 lodestar_search::in_time(
                     lodestar_search::minute_of_day(f.discovered_at, 0),
                     *from,
@@ -1320,7 +1493,7 @@ impl<'a> Doc<'a> {
     }
 
     fn content(&self) -> &Content {
-        self.content.get_or_init(|| {
+        self.texts().content.get_or_init(|| {
             let mut c = Content {
                 file_sizes: (u64::MAX, 0),
                 ..Content::default()
@@ -1350,6 +1523,78 @@ impl<'a> Doc<'a> {
         self.facts
             .is_some_and(|f| flag_names(f.flags).any(|n| n == name))
     }
+}
+
+/// The tags of a torrent read as Adult, and their keys, from its
+/// enrichment as found (`e`, with keys `keys`): [`DocEnrichment::new`]
+/// reads the classification only for its first tags, the content type and
+/// then the adult kind, and [`Classification::as_adult`] changes nothing
+/// else it reads (`adult` is `found.as_adult()`). `None` where the tags
+/// aren't laid out so, or two of them share a key, when the Adult reading
+/// builds its enrichment again. Debug builds check them against that.
+fn adult_tags<'a>(
+    e: &'a DocEnrichment,
+    found: &Classification,
+    adult: &Classification,
+    keys: &IdSet,
+) -> Option<(AdultTags<'a>, IdSet)> {
+    use lodestar_search::query::TagKey;
+    let tag = |key: TagKey, value: &str| format!("{}:{}", key.as_str(), value.to_lowercase());
+    let kind = |c: &Classification| c.adult_kind.map(|k| tag(TagKey::Adult, k.as_str()));
+    let adult_kind = kind(adult)?;
+    if *e.tags.first()? != tag(TagKey::Type, found.content_type.as_str())
+        || adult.content_type != lodestar_classify::ContentType::Adult
+        || keys.len() != e.tags.len()
+    {
+        return None;
+    }
+    let (kind, rest) = match kind(found) {
+        // The kind was there already, and stays.
+        Some(k) if e.tags.get(1) == Some(&k) && k == adult_kind => (None, &e.tags[1..]),
+        Some(_) => return None,
+        None if e.tags.contains(&adult_kind) => return None,
+        None => (Some(adult_kind), &e.tags[1..]),
+    };
+    let tags = AdultTags {
+        found: e,
+        first: tag(TagKey::Type, adult.content_type.as_str()),
+        kind,
+        rest,
+    };
+    let mut adult_keys = keys.clone();
+    adult_keys.remove(&prefilter::tag_key(&e.tags[0]));
+    adult_keys.extend(
+        std::iter::once(&tags.first)
+            .chain(tags.kind.as_ref())
+            .map(|t| prefilter::tag_key(t)),
+    );
+    #[cfg(debug_assertions)]
+    {
+        let fresh = DocEnrichment::new(&Record::new(adult), Some(&adult.composition));
+        let derived: Vec<&String> = tags.iter().collect();
+        assert_eq!(
+            derived,
+            fresh.tags.iter().collect::<Vec<_>>(),
+            "the Adult reading's tags"
+        );
+        assert_eq!(
+            DocEnrichment {
+                tags: Vec::new(),
+                ..fresh.clone()
+            },
+            DocEnrichment {
+                tags: Vec::new(),
+                ..e.clone()
+            },
+            "the Adult reading's enrichment"
+        );
+        assert_eq!(
+            adult_keys,
+            prefilter::tag_keys(Some(&fresh)),
+            "the Adult reading's tag keys"
+        );
+    }
+    Some((tags, adult_keys))
 }
 
 fn hex(h: &[u8; 20]) -> String {

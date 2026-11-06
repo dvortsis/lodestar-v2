@@ -297,6 +297,15 @@ fn media(t: ContentType) -> bool {
     )
 }
 
+/// What a [`Ctx`] read from a torrent's name and files alone
+/// ([`Ctx::into_text`]).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CtxText {
+    exts: Vec<Option<Ext>>,
+    name_words: std::cell::OnceCell<Vec<String>>,
+    name_evidence: std::cell::OnceCell<Vec<String>>,
+}
+
 /// One torrent's pack inputs, computed once for all the pack rules:
 /// extensions per file, and words only for the few files rules read.
 pub struct Ctx<'a> {
@@ -347,6 +356,78 @@ impl<'a> Ctx<'a> {
             files,
             name_words: std::cell::OnceCell::new(),
             name_evidence: std::cell::OnceCell::new(),
+            flood: None,
+            clone_of: None,
+        }
+    }
+
+    /// [`Ctx::new`] with nothing read from the files: for SP-3 and SP-4
+    /// alone, whose every version reads only what the writer found
+    /// ([`Ctx::with_flood`], [`Ctx::with_clone`]), at commit
+    /// (`Engine::judge_at_commit_reusing`).
+    pub(crate) fn for_state(
+        item: &'a Item<'a>,
+        facts: &'a Facts<'a>,
+        neutral: &'a [String],
+    ) -> Ctx<'a> {
+        Ctx {
+            item,
+            facts,
+            neutral,
+            files: Vec::new(),
+            name_words: std::cell::OnceCell::new(),
+            name_evidence: std::cell::OnceCell::new(),
+            flood: None,
+            clone_of: None,
+        }
+    }
+
+    /// What this reading read from the name and files, for the same
+    /// torrent read again as Adult ([`Ctx::with_text`]).
+    pub(crate) fn into_text(self) -> CtxText {
+        CtxText {
+            exts: self.files.into_iter().map(|(_, e)| e).collect(),
+            name_words: self.name_words,
+            name_evidence: self.name_evidence,
+        }
+    }
+
+    /// [`Ctx::new`] for a torrent another reading read (`text`, from
+    /// [`Ctx::into_text`]): the same name and files, and the same
+    /// Neutralize entries (`neutral`), read again as Adult
+    /// (`engine::Adult`). Only the item's content type and the facts
+    /// differ, and nothing in `text` reads them.
+    pub(crate) fn with_text(
+        item: &'a Item<'a>,
+        facts: &'a Facts<'a>,
+        neutral: &'a [String],
+        text: CtxText,
+    ) -> Ctx<'a> {
+        let files: Vec<_> = item
+            .files
+            .iter()
+            .take(crate::MAX_FILES)
+            .filter(|x| !x.padding)
+            .zip(text.exts)
+            .collect();
+        debug_assert!(
+            files.len()
+                == item
+                    .files
+                    .iter()
+                    .take(crate::MAX_FILES)
+                    .filter(|x| !x.padding)
+                    .count()
+                && files.iter().all(|(f, e)| *e == ext(f)),
+            "another torrent's text"
+        );
+        Ctx {
+            item,
+            facts,
+            neutral,
+            files,
+            name_words: text.name_words,
+            name_evidence: text.name_evidence,
             flood: None,
             clone_of: None,
         }

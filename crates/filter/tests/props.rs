@@ -934,6 +934,44 @@ fn at_commit_as(
     e.judge_at_commit(item, facts, 0, at, adult)
 }
 
+/// The writer's at-commit judgment as [`at_commit_as`] has it, from the
+/// first judgment's trail (X-commit-rejudge-reuse,
+/// `Engine::judge_at_commit_reusing`).
+fn at_commit_reusing(
+    e: &lodestar_filter::Engine,
+    trail: &lodestar_filter::Trail,
+    item: &Item,
+    facts: &lodestar_filter::Facts,
+    adult: bool,
+) -> lodestar_filter::Verdict {
+    use lodestar_filter::spam_sigs::usable;
+    let clone_of =
+        usable(lodestar_filter::payload_sig(item.files)).and_then(|s| e.spam_sigs.get(s));
+    let at = lodestar_filter::packs::sp4::AtCommit {
+        flood: Some(lodestar_filter::flood::Level::Demote),
+        clone_of,
+    };
+    e.judge_at_commit_reusing(trail, item, facts, 0, at, adult)
+}
+
+/// Prepare's judgment as the worker makes it (`judge_kept`), keeping its
+/// trail: with `adult`, an always-adult source's find, read as Adult too.
+fn prepared(
+    e: &lodestar_filter::Engine,
+    item: &Item,
+    facts: &lodestar_filter::Facts,
+    adult: bool,
+) -> (lodestar_filter::Verdict, lodestar_filter::Trail) {
+    let mut trail = lodestar_filter::Trail::default();
+    let v = if adult {
+        lodestar_filter::reclassify::judge_source_adult_with(e, item, facts, 0, Some(&mut trail)).0
+    } else {
+        e.judge_classified_with(item, Some(facts), 0, false, Some(&mut trail))
+            .0
+    };
+    (v, trail)
+}
+
 /// None of the budget's 10,000 rules matches its torrents, so every rule
 /// is checked to the end.
 fn no_rule_of_yours(v: &lodestar_filter::Verdict, what: &str) {
@@ -1006,10 +1044,16 @@ fn sigs_at_cap(items: &[Item]) -> std::sync::Arc<lodestar_filter::spam_sigs::Spa
 /// looked up, so the clones inherit their original's hide). The held sets
 /// are timed again, both ways, on an install an earlier build set up,
 /// whose new versions are pending and judged in shadow ([`installed`]).
-/// The budget is per judgment, as RP-4 set it (#495): a flooded or cloned commit's
-/// two judgments together are reported, not held, and so is an
-/// always-adult source's find at commit, which the engine reads twice
-/// (`docs/decisions/2026-11-06-RP-G.md`).
+/// The budget is per judgment, as RP-4 set it (#495), and a torrent's
+/// second judgment and second reading are held too
+/// (X-commit-rejudge-reuse, `docs/decisions/2026-11-06-X-commit-rejudge-reuse.md`):
+/// a flooded or cloned commit's two judgments together (prepare's, which
+/// keeps its trail, and the writer's from it,
+/// `Engine::judge_at_commit_reusing`), and an always-adult source's find at
+/// commit, judged from the trail prepare kept of both its readings, as
+/// found and as Adult. The judgment that reads such a find both ways
+/// (prepare's, or the commit's where no trail holds), and that find's two
+/// judgments together, are reported, not held: one judgment read twice.
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
 /// `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ
@@ -1190,6 +1234,22 @@ fn budget() {
             }
         }
         println!("SP-4 decides {inherited} of the {clones} clones at commit");
+        // The second judgment from the trail is the full one, on the
+        // budget's own torrents, and reads the trail for every one.
+        let mut e = installed(false, &sigs);
+        e.rules = mixed_rules().into();
+        let e = lodestar_filter::Handle::new(e).current();
+        for (i, item) in items.iter().enumerate() {
+            for adult in [false, true] {
+                let (_, trail) = prepared(&e, item, &facts[i], adult);
+                assert!(trail.holds_for(&e, item, &facts[i], 0), "the trail holds");
+                assert_eq!(
+                    at_commit_reusing(&e, &trail, item, &facts[i], adult),
+                    at_commit_as(&e, item, &facts[i], adult),
+                    "from the trail as in full"
+                );
+            }
+        }
         // The rest are already hidden in prepare by other packs (the
         // budget's names are scene-style, which UC-3 reads).
         assert!(
@@ -1283,32 +1343,50 @@ fn budget() {
         // RP-G: the loop above left the last shape's rules in place.
         engine.rules = mixed_rules().into();
         // A flooded or cloned commit pays both judgments: the writer
-        // judges again whenever SP-3's level or SP-4's set applies.
-        // Reported, not held, since the budget is per judgment (RP-4,
-        // #495).
+        // judges again whenever SP-3's level or SP-4's set applies, from
+        // the trail prepare's judgment kept, as the worker keeps it.
         let what =
             "engine, packs on, 10,000 rules, mixed, a flooded or cloned commit's two judgments";
         let t = time(what, &|i| {
-            std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
-            std::hint::black_box(at_commit(
-                &engine,
-                std::hint::black_box(&items[i]),
-                &facts[i],
-            ));
+            let (item, facts) = (std::hint::black_box(&items[i]), &facts[i]);
+            let (v, trail) = prepared(&engine, item, facts, false);
+            std::hint::black_box(v);
+            std::hint::black_box(at_commit_reusing(&engine, &trail, item, facts, false));
         });
-        cases.push((what.to_owned(), t, false));
-        // An always-adult source's find at commit: the engine reads the
-        // torrent as found and again as Adult (none of the budget's
-        // torrents is classified Adult, so every one pays both readings).
-        // Reported, not held, as the two judgments are: it's a second
-        // reading of one judgment (RP-G, runner's review of #526).
+        cases.push((what.to_owned(), t, true));
+        // An always-adult source's find at commit, flooded or cloned: the
+        // writer judges it again from the trail prepare's judgment kept
+        // with both readings, as found and as Adult (none of the budget's
+        // torrents is classified Adult, so every one has both).
         assert!(
             items
                 .iter()
                 .all(|i| i.content_type != lodestar_classify::ContentType::Adult),
             "none of the budget's torrents is classified Adult, so each pays the Adult reading"
         );
-        let what = "engine, packs on, 10,000 rules, mixed, at commit, from an always-adult source";
+        let trails: Vec<_> = items
+            .iter()
+            .zip(&facts)
+            .map(|(item, facts)| prepared(&engine, item, facts, true).1)
+            .collect();
+        let what = "engine, packs on, 10,000 rules, mixed, at commit, from an always-adult source, from prepare's trail";
+        let t = time(what, &|i| {
+            std::hint::black_box(at_commit_reusing(
+                &engine,
+                &trails[i],
+                std::hint::black_box(&items[i]),
+                &facts[i],
+                true,
+            ));
+        });
+        cases.push((what.to_owned(), t, true));
+        drop(trails);
+        // The judgment that reads the find as found and again as Adult:
+        // prepare's, and the commit's where no trail holds (a torrent
+        // cache's file, or a rule change between). Reported, not held: one
+        // judgment read twice (RP-G), the Adult reading sharing the reading
+        // as found's work.
+        let what = "engine, packs on, 10,000 rules, mixed, an always-adult source's find read as found and as Adult";
         let t = time(what, &|i| {
             std::hint::black_box(at_commit_as(
                 &engine,
@@ -1316,6 +1394,17 @@ fn budget() {
                 &facts[i],
                 true,
             ));
+        });
+        cases.push((what.to_owned(), t, false));
+        // That find flooded or cloned, both judgments: prepare reads it
+        // both ways and keeps the trail, and the writer's second judgment
+        // reads both from it. Reported, not held, as the judgment above.
+        let what = "engine, packs on, 10,000 rules, mixed, an always-adult source's flooded or cloned find's two judgments";
+        let t = time(what, &|i| {
+            let (item, facts) = (std::hint::black_box(&items[i]), &facts[i]);
+            let (v, trail) = prepared(&engine, item, facts, true);
+            std::hint::black_box(v);
+            std::hint::black_box(at_commit_reusing(&engine, &trail, item, facts, true));
         });
         cases.push((what.to_owned(), t, false));
         // The mixed set with pack-rule overrides (RP-2): a lighter
@@ -1580,4 +1669,775 @@ fn profile() {
         std::hint::black_box(engine.judge(item, Some(facts), 0));
     }
     profile_pass(&engine, &items, &facts);
+}
+
+// ---------------------------------------------------------------------
+// X-commit-rejudge-reuse: the writer's second judgment from the first's
+// trail, and the Adult reading sharing the reading as found's work, each
+// against the full judgment as it was (the `_unshared` oracles).
+
+mod reuse {
+    use super::*;
+    use lodestar_filter::flood::Level;
+    use lodestar_filter::packs::manifest::Manifest;
+    use lodestar_filter::packs::overrides::{
+        PackOverride, PackOverrides, action_named, current_base,
+    };
+    use lodestar_filter::packs::sp4::AtCommit;
+    use lodestar_filter::packs::upgrade::{self, FRESH_KEY};
+    use lodestar_filter::reclassify::{judge_source_adult_unshared, judge_source_adult_with};
+    use lodestar_filter::spam_sigs::Original;
+    use lodestar_filter::{
+        Action, Allow, ClassRule, ClassRules, Engine, Exception, Facts, Handle, ListLayer, Match,
+        Origin, Override, Pack, PackRule, PackSwitches, RuleRef, Strength, TermSet, Trail,
+        UserRule, Verdict,
+    };
+    use lodestar_store::{Store, StoreConfig};
+
+    /// The core with its neutral stand-in words, as `tests/core.rs` drives
+    /// it, and one confirmed hash on the floor.
+    fn core() -> Core {
+        let lists = Lists {
+            sexual: TermSet::of(&["lexa"]),
+            child_roles: TermSet::of(&["rolea"]),
+            codes: TermSet::of(&["codex"]),
+        };
+        let mut c = Core::new(lists, CsList::default(), Switches::default());
+        c.cs.add_hash([9; 20], Origin::Confirmed);
+        c
+    }
+
+    /// An install's packs: a fresh store's versions, or (`pending`) one an
+    /// earlier build set up, whose newer versions run in shadow.
+    fn installed(pending: bool) -> Engine {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        if pending {
+            s.update_settings_text(&[], &[FRESH_KEY]).unwrap();
+            for p in Pack::ALL {
+                s.set_pack_switch(p.as_str(), true).unwrap();
+            }
+        }
+        upgrade::ensure_seeded(&mut s, &Manifest::builtin(), 0).unwrap();
+        let mut e = Engine::new(core());
+        assert!(e.load_rules(&s.rule_set().unwrap()).is_empty());
+        e.packs = PackSwitches::all();
+        e
+    }
+
+    /// Words the torrents are made of: the core's stand-ins and an age,
+    /// pack triggers (a stuffed name, a site advert, an executable), the
+    /// words the rules below read, and plain release words.
+    const WORDS: &[&str] = &[
+        "lexa",
+        "rolea",
+        "codex",
+        "15yo",
+        "documentary",
+        "holiday",
+        "beacon",
+        "amber",
+        "sample",
+        "web",
+        "1080p",
+        "x265",
+        "free",
+        "movie",
+        "download",
+        "www.site.com",
+        "crack",
+        "keygen",
+        "setup",
+        "S01E02",
+        "2024",
+        "studiox",
+    ];
+    const FILES: &[&str] = &[
+        "a.mkv",
+        "b.mp4",
+        "setup.exe",
+        "readme.txt",
+        "song.mp3",
+        "pic.jpg",
+        "x.url",
+        "extras/rolea lexa.mkv",
+        "sample.mkv",
+        "Season 1/ep1.mkv",
+        "password.txt",
+    ];
+
+    /// The queries your rules, exceptions, *Always allow* and the
+    /// classification rules are drawn from: words, tags (the part that
+    /// reads differently as Adult), negations, sizes, dates and times of
+    /// day (the parts that read the time).
+    const QUERIES: &[&str] = &[
+        "holiday",
+        "beacon",
+        "sample",
+        "type:adult",
+        "type:movie",
+        "type:video holiday",
+        "adult:scene",
+        "adult:movie type:adult",
+        "-sample web",
+        "studiox type:adult",
+        "size:>1GB",
+        "files:>2",
+        "discovered:<1d",
+        "discovered:>2024-01-01",
+        // Within the drawn times, so a date reads differently at commit.
+        "discovered:<1m",
+        "discovered:>1m holiday",
+        "amber | beacon",
+        "\"free movie\"",
+    ];
+
+    fn query(i: usize) -> lodestar_search::Node {
+        lodestar_search::parse(QUERIES[i % QUERIES.len()]).unwrap()
+    }
+
+    const ACTIONS: &[Action] = &[
+        Action::Flag,
+        Action::Demote,
+        Action::Hide,
+        Action::Quarantine,
+        Action::Drop,
+    ];
+
+    /// A CSX-5 entry: its word, Neutralize or Override, expiry, end of its
+    /// shadow period and scope.
+    type OverrideDraw = (usize, bool, Option<i64>, Option<i64>, Option<usize>);
+
+    /// What an engine is given beyond its packs, each drawn by index.
+    #[derive(Debug, Clone)]
+    struct Setup {
+        pending: bool,
+        packs_off: Vec<usize>,
+        rules: Vec<(usize, usize, Option<i64>, Option<usize>)>,
+        stand_in: Option<usize>,
+        overrides: Vec<OverrideDraw>,
+        allow: Option<usize>,
+        exceptions: Vec<(usize, usize)>,
+        class: Vec<(usize, bool)>,
+        pack_overrides: Vec<(usize, usize, bool)>,
+        listed: Option<usize>,
+    }
+
+    fn setup() -> impl Strategy<Value = Setup> {
+        let time = || prop::option::of(95i64..106);
+        (
+            any::<bool>(),
+            prop::collection::vec(0usize..32, 0..3),
+            prop::collection::vec(
+                (0usize..64, 0usize..5, time(), prop::option::of(0usize..64)),
+                0..6,
+            ),
+            prop::option::of(0usize..6),
+            prop::collection::vec(
+                (
+                    0usize..8,
+                    any::<bool>(),
+                    time(),
+                    time(),
+                    prop::option::of(0usize..64),
+                ),
+                0..3,
+            ),
+            prop::option::of(0usize..64),
+            prop::collection::vec((0usize..16, 0usize..64), 0..3),
+            prop::collection::vec((0usize..64, any::<bool>()), 0..3),
+            prop::collection::vec((0usize..6, 0usize..5, any::<bool>()), 0..3),
+            prop::option::of(0usize..5),
+        )
+            .prop_map(
+                |(
+                    pending,
+                    packs_off,
+                    rules,
+                    stand_in,
+                    overrides,
+                    allow,
+                    exceptions,
+                    class,
+                    pack_overrides,
+                    listed,
+                )| {
+                    Setup {
+                        pending,
+                        packs_off,
+                        rules,
+                        stand_in,
+                        overrides,
+                        allow,
+                        exceptions,
+                        class,
+                        pack_overrides,
+                        listed,
+                    }
+                },
+            )
+    }
+
+    const OVERRIDE_WORDS: &[&str] = &[
+        "sample", "web", "holiday", "beacon", "lexa", "free", "x265", "amber",
+    ];
+    const PACK_RULES: &[PackRule] = &[
+        PackRule::Sp2,
+        PackRule::Sp3,
+        PackRule::Sp4,
+        PackRule::Mw2,
+        PackRule::Fk2,
+        PackRule::Sp1,
+    ];
+
+    fn build(s: &Setup) -> Engine {
+        let mut e = installed(s.pending);
+        for &i in &s.packs_off {
+            let r = PackRule::ALL[i % PackRule::ALL.len()];
+            if i % 5 == 0 {
+                e.packs.on.remove(&r.pack());
+            } else {
+                e.packs.rules_off.insert(r);
+            }
+        }
+        e.rules = s
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(n, &(q, a, shadow_until, unless))| UserRule {
+                id: n as u32 + 1,
+                query: query(q),
+                action: ACTIONS[a],
+                enabled: true,
+                shadow_until,
+                unless: unless.map(query),
+            })
+            .collect::<Vec<_>>()
+            .into();
+        e.stand_ins = s.stand_in.map(|i| i as u32 + 1).into_iter().collect();
+        e.overrides = s
+            .overrides
+            .iter()
+            .enumerate()
+            .map(
+                |(n, &(w, neutralize, expires_at, shadow_until, scope))| Override {
+                    id: n as u32 + 1,
+                    what: Match::Keyword(OVERRIDE_WORDS[w].into()),
+                    strength: if neutralize {
+                        Strength::Neutralize
+                    } else {
+                        Strength::Override
+                    },
+                    // A scope can read tags, so the two readings can neutralize
+                    // different words.
+                    scope: scope.map(query),
+                    expires_at,
+                    shadow_until,
+                },
+            )
+            .collect();
+        e.allow = s
+            .allow
+            .map(|q| Allow {
+                id: 1,
+                query: query(q),
+            })
+            .into_iter()
+            .collect();
+        e.exceptions = s
+            .exceptions
+            .iter()
+            .enumerate()
+            .map(|(n, &(r, q))| Exception {
+                id: n as u32 + 1,
+                rule: match r {
+                    0..6 => RuleRef::Pack(PACK_RULES[r]),
+                    6 => RuleRef::Core(lodestar_filter::CoreRule::Cs4a),
+                    7 => RuleRef::List(1),
+                    8 => RuleRef::Pack(PackRule::Mw6),
+                    _ => RuleRef::User(r as u32 - 8),
+                },
+                what: Match::Query(query(q)),
+            })
+            .collect();
+        e.class_rules = ClassRules::new(
+            s.class
+                .iter()
+                .enumerate()
+                .map(|(n, &(q, adult))| ClassRule {
+                    id: n as u32 + 1,
+                    query: query(q),
+                    adult,
+                })
+                .collect(),
+        );
+        let rows: Vec<_> = s
+            .pack_overrides
+            .iter()
+            .map(|&(r, a, unless)| {
+                let rule = PACK_RULES[r];
+                let row = PackOverride {
+                    base: current_base(&e.pack_versions, rule),
+                    action: action_named(["flag", "demote", "hide", "quarantine", "drop"][a])
+                        .unwrap(),
+                    unless: unless.then(|| "sample OR holiday".to_owned()),
+                };
+                (rule.id().to_owned(), Ok(row.encode()))
+            })
+            .collect();
+        e.pack_overrides = PackOverrides::resolve(&e.manifest, &e.pack_versions, &rows);
+        if let Some(a) = s.listed {
+            e.set_list(
+                Some(ListLayer {
+                    id: 1,
+                    action: ACTIONS[a],
+                    hashes: std::sync::Arc::new([[2; 20]].into_iter().collect()),
+                }),
+                1,
+            );
+        }
+        e
+    }
+
+    /// A torrent: its name's words, its files, its hash, and whether it's
+    /// already classified Adult.
+    fn torrent() -> impl Strategy<Value = (String, Vec<FileInfo>, [u8; 20], bool)> {
+        (
+            prop::collection::vec(0usize..WORDS.len(), 0..9),
+            any::<bool>(),
+            prop::collection::vec(0usize..FILES.len(), 1..5),
+            prop::sample::select(vec![[1u8; 20], [2; 20], [9; 20]]),
+            prop::bool::weighted(0.2),
+        )
+            .prop_map(|(words, stuffed, files, hash, adult)| {
+                let mut name: Vec<&str> = words.into_iter().map(|w| WORDS[w]).collect();
+                if stuffed {
+                    // A keyword-stuffed name SP-2 hides.
+                    name.extend(std::iter::repeat_n(["free", "movie", "download"], 7).flatten());
+                }
+                let files = files
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, f)| {
+                        let path = FILES[f].split('/').map(str::to_owned).collect();
+                        FileInfo::new(path, 1_234_567_891 + i as u64)
+                    })
+                    .collect();
+                (name.join(" "), files, hash, adult)
+            })
+    }
+
+    /// How the engine changes between prepare and commit, if it does.
+    fn change(e: &mut Engine, how: usize) {
+        match how % 5 {
+            0 => {}
+            1 => {
+                e.packs.rules_off.insert(PackRule::Mw2);
+            }
+            2 => {
+                let mut rules: Vec<UserRule> = e.rules.to_vec();
+                rules.push(UserRule {
+                    id: 99,
+                    query: query(how),
+                    action: Action::Drop,
+                    enabled: true,
+                    shadow_until: None,
+                    unless: None,
+                });
+                e.rules = rules.into();
+            }
+            3 => e.exceptions.clear(),
+            _ => e.overrides = Vec::<Override>::new().into(),
+        }
+    }
+
+    /// What prepare makes of the torrent, as the worker judges it
+    /// (`lodestar_pipeline::source_adult::judge_kept`), with its trail.
+    fn prepare(e: &Engine, item: &Item, facts: &Facts, now: i64, adult: bool) -> (Verdict, Trail) {
+        let mut trail = Trail::default();
+        let v = if adult {
+            judge_source_adult_with(e, item, facts, now, Some(&mut trail)).0
+        } else {
+            e.judge_classified_with(item, Some(facts), now, false, Some(&mut trail))
+                .0
+        };
+        (v, trail)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        /// The writer's second judgment from the first judgment's trail is
+        /// the full judgment as it was, for every input: flood levels and
+        /// clones, an always-adult source at prepare and at commit, an Is
+        /// adult rule, torrents already Adult, pending versions, pack
+        /// overrides and exceptions, the times on either side of a shadow
+        /// period or an expiry, a date read, and a rule change between
+        /// prepare and commit, which judges in full. So is each first
+        /// judgment, whose Adult reading shares the reading as found's work.
+        #[test]
+        fn the_second_judgment_is_the_full_one(
+            s in setup(),
+            (name, files, hash, pre_adult) in torrent(),
+            (adult_then, adult_now) in (any::<bool>(), any::<bool>()),
+            (p, c, d) in (95i64..106, 95i64..106, prop::sample::select(vec![0i64, 95, 100])),
+            flood in prop::option::of(prop::sample::select(vec![Level::Flag, Level::Demote])),
+            clone_of in prop::option::of((prop::sample::select(vec![PackRule::Sp2, PackRule::Sp3]), prop::sample::select(vec![Action::Demote, Action::Hide]))),
+            changed in prop::option::of(0usize..10),
+        ) {
+            // Prepare and commit share the engine, as the worker and the
+            // writer share the handle's.
+            let h = Handle::new(build(&s));
+            let e = h.current();
+            let found = lodestar_classify::classify(&name, &files);
+            let class = if pre_adult { found.as_adult() } else { found };
+            let hashes = [hash];
+            let item = Item { hashes: &hashes, name: &name, files: &files, content_type: class.content_type };
+            let facts_at = |now: i64, discovered_at: i64| Facts {
+                class: &class,
+                size: files.iter().map(|f| f.size).sum(),
+                piece_len: 1 << 20,
+                flags: 0,
+                discovered_at,
+                now,
+            };
+            // Prepare, as the worker does: discovered now.
+            let pf = facts_at(p, p);
+            let (first, trail) = prepare(&e, &item, &pf, p, adult_then);
+            // Each first judgment is the full one.
+            if adult_then {
+                prop_assert_eq!(&first, &judge_source_adult_unshared(&e, &item, &pf, p).0);
+            } else {
+                prop_assert_eq!(
+                    e.judge_classified_with(&item, Some(&pf), p, false, None),
+                    e.judge_classified_unshared(&item, Some(&pf), p)
+                );
+                prop_assert_eq!(&first, &e.judge_classified_unshared(&item, Some(&pf), p).0);
+            }
+            // Commit, with the engine as it is then.
+            drop(e);
+            if let Some(how) = changed {
+                h.update_engine(|e| change(e, how));
+            }
+            let e = h.current();
+            let cf = facts_at(c, d);
+            let at = AtCommit { flood, clone_of: clone_of.map(|(rule, action)| Original { rule, action }) };
+            let full = e.judge_at_commit_unshared(&item, &cf, c, at, adult_now);
+            prop_assert_eq!(&e.judge_at_commit(&item, &cf, c, at, adult_now), &full, "shared");
+            prop_assert_eq!(
+                &e.judge_at_commit_reusing(&trail, &item, &cf, c, at, adult_now),
+                &full,
+                "from the trail: {:?}", s
+            );
+            // A trail is read only for the engine that made it.
+            let holds = trail.holds_for(&e, &item, &cf, c);
+            prop_assert!(!(holds && changed.is_some()), "read across a change of rules");
+            prop_assert!(
+                holds || changed.is_some() || !trail.is_kept() || trail_misses(&s, p, c),
+                "a trail that should hold doesn't: {:?}", s
+            );
+        }
+    }
+
+    /// The floor is judged again on every reading, never taken from a
+    /// trail: even where one fits (here the engine is edited in place,
+    /// which keeps its generation, as no running engine is), a hash put on
+    /// the floor after prepare decides at commit, for the reading as found
+    /// and for the Adult reading.
+    #[test]
+    fn the_floor_is_judged_again_under_a_trail() {
+        let e = Handle::new(build(&Setup {
+            pending: true,
+            packs_off: vec![],
+            rules: vec![(0, 2, None, None)],
+            stand_in: None,
+            overrides: vec![],
+            allow: None,
+            exceptions: vec![],
+            class: vec![],
+            pack_overrides: vec![],
+            listed: None,
+        }))
+        .current();
+        let name = "holiday 2024 1080p".to_owned();
+        let files = vec![FileInfo::new(vec!["a.mkv".into()], 1_234_567_891)];
+        let class = lodestar_classify::classify(&name, &files);
+        let hashes = [[3u8; 20]];
+        let item = Item {
+            hashes: &hashes,
+            name: &name,
+            files: &files,
+            content_type: class.content_type,
+        };
+        let facts = Facts {
+            class: &class,
+            size: 1,
+            piece_len: 1,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        };
+        let at = AtCommit {
+            flood: Some(Level::Demote),
+            clone_of: None,
+        };
+        for adult in [false, true] {
+            let (_, trail) = prepare(&e, &item, &facts, 0, adult);
+            let mut floored = Engine::clone(&e);
+            // A copy is another engine: its trail doesn't fit.
+            assert!(!trail.holds_for(&floored, &item, &facts, 0));
+            let (_, trail) = prepare(&floored, &item, &facts, 0, adult);
+            floored.core.cs.add_hash([3; 20], Origin::Confirmed);
+            assert!(
+                trail.holds_for(&floored, &item, &facts, 0),
+                "edited in place"
+            );
+            let v = floored.judge_at_commit_reusing(&trail, &item, &facts, 0, at, adult);
+            assert_eq!(
+                v.decision.as_ref().map(|d| d.rule),
+                Some(RuleRef::Core(lodestar_filter::CoreRule::Cs1a)),
+                "the floor decides at commit (adult: {adult})"
+            );
+            assert_eq!(
+                v,
+                floored.judge_at_commit_unshared(&item, &facts, 0, at, adult)
+            );
+        }
+    }
+
+    /// A trail is read only for the torrent it was kept for: another
+    /// torrent's, or the same one with other facts, judges in full.
+    #[test]
+    fn a_trail_is_never_read_for_another_torrent() {
+        let e = Handle::new(build(&Setup {
+            pending: false,
+            packs_off: vec![],
+            rules: vec![(0, 2, None, None)],
+            stand_in: None,
+            overrides: vec![],
+            allow: None,
+            exceptions: vec![],
+            class: vec![],
+            pack_overrides: vec![],
+            listed: None,
+        }))
+        .current();
+        let files = vec![FileInfo::new(vec!["a.mkv".into()], 1_234_567_891)];
+        let (a, b) = (
+            "Plain 2024 1080p".to_owned(),
+            "Holiday 2024 1080p".to_owned(),
+        );
+        let (ca, cb) = (
+            lodestar_classify::classify(&a, &files),
+            lodestar_classify::classify(&b, &files),
+        );
+        let hashes = [[3u8; 20]];
+        let item_a = Item {
+            hashes: &hashes,
+            name: &a,
+            files: &files,
+            content_type: ca.content_type,
+        };
+        let item_b = Item {
+            hashes: &hashes,
+            name: &b,
+            files: &files,
+            content_type: cb.content_type,
+        };
+        let facts = |class| Facts {
+            class,
+            size: 1,
+            piece_len: 1,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        };
+        let at = AtCommit {
+            flood: Some(Level::Flag),
+            clone_of: None,
+        };
+        let (_, trail) = prepare(&e, &item_a, &facts(&ca), 0, false);
+        assert!(trail.holds_for(&e, &item_a, &facts(&ca), 0));
+        // Another name: torrent A's trail says nothing of your rule on it.
+        assert!(!trail.holds_for(&e, &item_b, &facts(&cb), 0));
+        let v = e.judge_at_commit_reusing(&trail, &item_b, &facts(&cb), 0, at, false);
+        assert_eq!(
+            v,
+            e.judge_at_commit_unshared(&item_b, &facts(&cb), 0, at, false)
+        );
+        assert_eq!(v.decision.map(|d| d.rule), Some(RuleRef::User(1)));
+        // Other hashes, flags, size or classification.
+        let other = [[4u8; 20]];
+        assert!(!trail.holds_for(
+            &e,
+            &Item {
+                hashes: &other,
+                ..item_a
+            },
+            &facts(&ca),
+            0
+        ));
+        let flagged = Facts {
+            flags: 1,
+            ..facts(&ca)
+        };
+        assert!(!trail.holds_for(&e, &item_a, &flagged, 0));
+        let bigger = Facts {
+            size: 2,
+            ..facts(&ca)
+        };
+        assert!(!trail.holds_for(&e, &item_a, &bigger, 0));
+        let adult = ca.as_adult();
+        assert!(!trail.holds_for(&e, &item_a, &facts(&adult), 0));
+    }
+
+    /// A Neutralize entry whose scope reads tags applies in one reading and
+    /// not the other: the Adult reading reuses nothing the reading as
+    /// found read with other words neutralized. Here `holiday` is
+    /// neutralized only as found, so only the Adult reading meets your rule
+    /// on it, and its hide stands, as the full judgment has it.
+    #[test]
+    fn each_reading_neutralizes_its_own_words() {
+        let mut e = build(&Setup {
+            pending: false,
+            packs_off: vec![],
+            rules: vec![(0, 2, None, None)],
+            stand_in: None,
+            overrides: vec![],
+            allow: None,
+            exceptions: vec![],
+            class: vec![],
+            pack_overrides: vec![],
+            listed: None,
+        });
+        e.overrides = vec![Override {
+            id: 1,
+            what: Match::Keyword("holiday".into()),
+            strength: Strength::Neutralize,
+            scope: Some(lodestar_search::parse("-type:adult").unwrap()),
+            expires_at: None,
+            shadow_until: None,
+        }]
+        .into();
+        let e = Handle::new(e).current();
+        let name = "Holiday 2024 1080p".to_owned();
+        let files = vec![FileInfo::new(vec!["a.mkv".into()], 1_234_567_891)];
+        let class = lodestar_classify::classify(&name, &files);
+        assert_ne!(class.content_type, lodestar_classify::ContentType::Adult);
+        let hashes = [[3u8; 20]];
+        let item = Item {
+            hashes: &hashes,
+            name: &name,
+            files: &files,
+            content_type: class.content_type,
+        };
+        let facts = Facts {
+            class: &class,
+            size: 1,
+            piece_len: 1,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        };
+        let at = AtCommit {
+            flood: Some(Level::Flag),
+            clone_of: None,
+        };
+        let full = e.judge_at_commit_unshared(&item, &facts, 0, at, true);
+        assert_eq!(
+            full.decision.as_ref().map(|d| (d.rule, d.action)),
+            Some((RuleRef::User(1), Action::Hide)),
+            "the Adult reading meets the rule"
+        );
+        assert_eq!(e.judge_at_commit(&item, &facts, 0, at, true), full);
+        let (first, trail) = prepare(&e, &item, &facts, 0, true);
+        assert_eq!(first, judge_source_adult_unshared(&e, &item, &facts, 0).0);
+        assert_eq!(
+            e.judge_at_commit_reusing(&trail, &item, &facts, 0, at, true),
+            full
+        );
+    }
+
+    /// Whether the trail may rightly not hold for a case the property
+    /// draws, the engine unchanged: an instant drawn between the two
+    /// `now`s, or a rule that reads a date.
+    fn trail_misses(s: &Setup, p: i64, c: i64) -> bool {
+        let (lo, hi) = (p.min(c), p.max(c));
+        let between = |t: &Option<i64>| t.is_some_and(|t| lo < t && t <= hi);
+        let dated = |q: usize| QUERIES[q % QUERIES.len()].contains("discovered");
+        s.rules
+            .iter()
+            .any(|r| between(&r.2) || dated(r.0) || r.3.is_some_and(dated))
+            || s.overrides
+                .iter()
+                .any(|o| between(&o.2) || between(&o.3) || o.4.is_some_and(dated))
+            || s.allow.is_some_and(dated)
+            || s.exceptions.iter().any(|x| dated(x.1))
+            || s.class.iter().any(|x| dated(x.0))
+    }
+
+    /// The trail is read in most cases the property draws (all but the
+    /// floor's hash, a date read, or `now` across an instant), and those
+    /// include the Adult reading's and SP-3's and SP-4's decisions, so the
+    /// property tests the path it's about.
+    #[test]
+    fn the_property_reads_trails() {
+        let mut runner = proptest::test_runner::TestRunner::new(ProptestConfig::with_cases(600));
+        let counts = std::cell::Cell::new([0usize; 4]);
+        let cases = (setup(), torrent(), 95i64..106, 95i64..106, any::<bool>());
+        runner
+            .run(&cases, |(s, (name, files, hash, _), p, c, adult)| {
+                if hash == [9; 20] {
+                    return Ok(());
+                }
+                let e = Handle::new(build(&s)).current();
+                let class = lodestar_classify::classify(&name, &files);
+                let hashes = [hash];
+                let item = Item {
+                    hashes: &hashes,
+                    name: &name,
+                    files: &files,
+                    content_type: class.content_type,
+                };
+                let facts = |now| Facts {
+                    class: &class,
+                    size: 1,
+                    piece_len: 1,
+                    flags: 0,
+                    discovered_at: p,
+                    now,
+                };
+                let (_, trail) = prepare(&e, &item, &facts(p), p, adult);
+                let at = AtCommit {
+                    flood: Some(Level::Demote),
+                    clone_of: Some(Original {
+                        rule: PackRule::Sp2,
+                        action: Action::Hide,
+                    }),
+                };
+                let mut n = counts.get();
+                n[0] += 1;
+                if trail.holds_for(&e, &item, &facts(c), c) {
+                    n[1] += 1;
+                    let v = e.judge_at_commit_reusing(&trail, &item, &facts(c), c, at, adult);
+                    let sp = |r| matches!(r, RuleRef::Pack(PackRule::Sp3 | PackRule::Sp4));
+                    n[2] += usize::from(v.decision.is_some_and(|d| sp(d.rule)));
+                    n[3] += usize::from(
+                        adult && class.content_type != lodestar_classify::ContentType::Adult,
+                    );
+                }
+                counts.set(n);
+                Ok(())
+            })
+            .unwrap();
+        let [all, read, sp, adult] = counts.get();
+        assert!(
+            read * 2 > all,
+            "the trail was read in {read} of {all} cases"
+        );
+        assert!(sp * 10 > read, "SP-3 or SP-4 decided {sp} of {read}");
+        assert!(
+            adult * 4 > read,
+            "the Adult reading replayed in {adult} of {read}"
+        );
+    }
 }

@@ -25,7 +25,7 @@ use std::sync::{Arc, RwLock};
 use lodestar_classify::ContentType;
 
 use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
-use crate::hash::TermSet;
+use crate::hash::{IdSet, TermSet};
 use crate::matcher::{Doc, Facts, Reading};
 use crate::packs::manifest::Manifest;
 use crate::packs::overrides::{self, PackOverrides};
@@ -124,6 +124,362 @@ struct Released<'a> {
     shadow: Vec<u32>,
 }
 
+/// `now` as a judgment reads it: each instant compared with it (an
+/// expiry, the end of a shadow period) is noted, so a [`Trail`] can tell
+/// whether another `now` would have decided the same.
+#[derive(Debug)]
+pub(crate) struct Clock {
+    now: i64,
+    edges: std::cell::RefCell<Vec<i64>>,
+}
+
+impl Clock {
+    pub(crate) fn new(now: i64) -> Clock {
+        Clock {
+            now,
+            edges: Default::default(),
+        }
+    }
+
+    /// Whether `now` has reached `t` (`t <= now`).
+    fn reached(&self, t: i64) -> bool {
+        self.edges.borrow_mut().push(t);
+        t <= self.now
+    }
+}
+
+/// Where the layers above the pack layer left a reading.
+#[derive(Debug, Clone)]
+enum Above {
+    /// Decided there (an Override entry, a core hit, *Always allow* or one
+    /// of your rules): the pack layer isn't reached.
+    Settled(Option<Decision>),
+    /// On to the pack layer, with what your stand-in rules hold.
+    Packs(Option<Decision>),
+}
+
+impl Default for Above {
+    fn default() -> Above {
+        Above::Settled(None)
+    }
+}
+
+/// What one reading ([`Reading`]) of a torrent found above the pack layer,
+/// and the pack layer's decisions.
+#[derive(Debug, Clone, Default)]
+struct ReadingRec {
+    reading: Reading,
+    /// The Neutralize entries that applied: their words, and the set the
+    /// core reads.
+    neutral: Vec<String>,
+    neutral_set: TermSet,
+    /// The shadow override entries that matched.
+    released: Vec<u32>,
+    above: Above,
+    /// The shadow decisions logged above the pack layer (your rules').
+    shadow: Vec<Decision>,
+    /// The pack layer's decisions after exceptions, each with its place
+    /// (a pack rule's in [`PackRule::ALL`], then the lists').
+    packs: Vec<(usize, Decision)>,
+    /// The pending versions' shadow decisions, each with its rule's place.
+    pack_shadow: Vec<(usize, Decision)>,
+    /// For the Adult reading of the same torrent, where one follows
+    /// ([`ViewRec::paired`]).
+    paired: Option<Paired>,
+    /// Whether to keep what a [`Trail`] reads (`above` and after).
+    trail: bool,
+}
+
+/// What the reading as found keeps for the Adult reading after it.
+#[derive(Debug, Clone, Default)]
+struct Paired {
+    /// The Adult reading's tags, given.
+    adult_tags: Arc<IdSet>,
+    /// The core's signals (the joined reading's), which the content type
+    /// doesn't change.
+    signals: Option<crate::core::PatternSignals>,
+    /// Which of your rules the Adult reading meets ([`Doc::candidates_pair`]).
+    candidates: Option<Vec<u32>>,
+    /// The last of your rules the reading as found checked, by position
+    /// (`u32::MAX` once it checked them all), where it reached them; and
+    /// those whose query matched and `unless` didn't, in order. A rule
+    /// that reads no tags meets both readings or neither
+    /// ([`Engine::below_overrides`]).
+    checked_to: Option<u32>,
+    matched: Vec<u32>,
+    /// What the pack layer read from the name and files, taken by the
+    /// Adult reading's.
+    pack_text: std::cell::RefCell<Option<packs::CtxText>>,
+}
+
+/// One reading of the classification (as found, or as Adult): the joined
+/// reading, and the earlier one where the torrent is read twice.
+#[derive(Debug, Clone, Default)]
+struct ViewRec {
+    /// The Adult reading's tags, where one follows.
+    adult_tags: Option<Arc<IdSet>>,
+    /// Whether to keep what a [`Trail`] reads.
+    trail: bool,
+    joined: ReadingRec,
+    before: Option<ReadingRec>,
+}
+
+impl ViewRec {
+    /// For a [`Trail`].
+    fn trail() -> ViewRec {
+        ViewRec {
+            trail: true,
+            ..ViewRec::default()
+        }
+    }
+
+    /// For the reading as found, keeping what `adult`'s reading reuses,
+    /// and with `trail` what a [`Trail`] reads.
+    fn paired(adult: &Adult, trail: bool) -> ViewRec {
+        ViewRec {
+            adult_tags: adult.doc.map(|d| Arc::new(d.tag_keys().clone())),
+            trail,
+            ..ViewRec::default()
+        }
+    }
+
+    /// A new record of one of its readings.
+    fn reading(&self, reading: Reading) -> ReadingRec {
+        ReadingRec {
+            reading,
+            trail: self.trail,
+            paired: self.adult_tags.as_ref().map(|t| Paired {
+                adult_tags: t.clone(),
+                ..Paired::default()
+            }),
+            ..ReadingRec::default()
+        }
+    }
+
+    /// Without what only the Adult reading reads.
+    fn for_trail(mut self) -> ViewRec {
+        self.adult_tags = None;
+        for r in std::iter::once(&mut self.joined).chain(self.before.as_mut()) {
+            r.paired = None;
+        }
+        self
+    }
+}
+
+/// A torrent read as Adult beside its reading as found ([`Engine::with_adult`]).
+struct Adult<'x> {
+    item: &'x Item<'x>,
+    facts: Option<&'x Facts<'x>>,
+    /// The floor's hit on it, which is final.
+    floor: Option<Hit>,
+    /// Where the floor didn't decide: the torrent prepared, sharing the
+    /// reading as found's text.
+    doc: Option<&'x Doc<'x>>,
+}
+
+impl Adult<'_> {
+    /// The Adult reading's verdict, after the reading as found (`found`,
+    /// on `doc`, kept with [`ViewRec::paired`]): the floor's hit, or the
+    /// layers, where the core judges the reading as found's signals as
+    /// Adult and your rules' matches that don't read tags are the reading
+    /// as found's. Returns whether `rec` kept a reading (the floor didn't
+    /// decide).
+    fn judge(
+        &self,
+        engine: &Engine,
+        doc: &Doc,
+        found: &ViewRec,
+        clock: &Clock,
+        at: AtCommit,
+        rec: Option<&mut ViewRec>,
+    ) -> (Verdict, bool) {
+        match (&self.floor, self.doc) {
+            (Some(hit), _) => {
+                let v = Verdict {
+                    decision: Some(hit.clone().into()),
+                    shadow: Vec::new(),
+                };
+                (v, false)
+            }
+            (None, Some(d)) => {
+                let v = engine
+                    .judge_doc(self.item, self.facts, d, clock, at, Some(found), rec)
+                    .0;
+                if d.read_time() {
+                    doc.note_read_time();
+                }
+                (v, true)
+            }
+            (None, None) => unreachable!("prepared where the floor didn't decide"),
+        }
+    }
+}
+
+/// What a judgment of a torrent found above the pack layer, kept for the
+/// writer's second judgment of it ([`Engine::judge_at_commit_reusing`]),
+/// with what it depended on. Empty until a judgment fills it
+/// ([`Engine::judge_classified_with`]); an empty one judges in full.
+#[derive(Debug, Clone, Default)]
+pub struct Trail(Option<Box<TrailOf>>);
+
+#[derive(Debug, Clone)]
+struct TrailOf {
+    generation: u64,
+    version: u64,
+    /// The torrent and its facts, but for the times ([`fingerprint`]).
+    fingerprint: u64,
+    now: i64,
+    facts_now: i64,
+    discovered_at: i64,
+    /// The instants `now` was compared with.
+    edges: Vec<i64>,
+    /// A rule read a date or a time of day.
+    read_time: bool,
+    /// What your classification rules said.
+    correction: Option<bool>,
+    found: ViewRec,
+    /// The Adult reading, where it was judged and the floor didn't decide.
+    adult: Option<ViewRec>,
+}
+
+impl Trail {
+    #[allow(clippy::too_many_arguments)]
+    fn of(
+        engine: &Engine,
+        item: &Item,
+        facts: &Facts,
+        clock: &Clock,
+        doc: &Doc,
+        correction: Option<bool>,
+        found: ViewRec,
+        adult: Option<ViewRec>,
+    ) -> Trail {
+        Trail(Some(Box::new(TrailOf {
+            generation: engine.generation,
+            version: engine.version,
+            fingerprint: fingerprint(item, facts),
+            now: clock.now,
+            facts_now: facts.now,
+            discovered_at: facts.discovered_at,
+            edges: clock.edges.take(),
+            read_time: doc.read_time(),
+            correction,
+            found: found.for_trail(),
+            adult: adult.map(ViewRec::for_trail),
+        })))
+    }
+
+    /// Whether a judgment filled it.
+    pub fn is_kept(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether [`Engine::judge_at_commit_reusing`] reads it for this
+    /// engine, torrent and `now` rather than judging in full (where it
+    /// also has the readings that judgment needs). For tests.
+    #[doc(hidden)]
+    pub fn holds_for(&self, engine: &Engine, item: &Item, facts: &Facts, now: i64) -> bool {
+        self.fits(engine, item, facts, now).is_some()
+    }
+
+    /// The trail, if it holds for this engine, torrent and `now`.
+    fn fits(&self, engine: &Engine, item: &Item, facts: &Facts, now: i64) -> Option<&TrailOf> {
+        let t = self.0.as_deref()?;
+        let same_side = |e: &i64| (*e <= t.now) == (*e <= now);
+        (t.generation == engine.generation
+            && t.version == engine.version
+            && t.fingerprint == fingerprint(item, facts)
+            && t.edges.iter().all(same_side)
+            && (!t.read_time
+                || (t.facts_now == facts.now && t.discovered_at == facts.discovered_at)))
+            .then_some(t)
+    }
+}
+
+/// What a trail is checked against, so it isn't read for another
+/// torrent: the hashes, name and file count, and some of the facts (size,
+/// piece length, flags, and the classification's type, confidence, adult
+/// kind, junk score, structure, depth and extensions). It's a guard, not a
+/// proof: the trail travels inside its own torrent's record, whose name,
+/// files and classification the writer never changes, and the
+/// classification is derived from the name and files. The times are
+/// checked on their own ([`Trail`]).
+fn fingerprint(item: &Item, facts: &Facts) -> u64 {
+    // A quick mix, not a defence: the trail travels inside the torrent's
+    // own record, so this only catches a record handed the wrong trail.
+    let mut h: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut mix = |x: u64| {
+        h = (h ^ x).wrapping_mul(0xbf58_476d_1ce4_e5b9).rotate_left(29);
+    };
+    let mut bytes = |b: &[u8]| {
+        mix(b.len() as u64);
+        for c in b.chunks(8) {
+            let mut w = [0u8; 8];
+            w[..c.len()].copy_from_slice(c);
+            mix(u64::from_le_bytes(w));
+        }
+    };
+    for hash in item.hashes {
+        bytes(hash);
+    }
+    bytes(item.name.as_bytes());
+    let c = facts.class;
+    for x in [
+        item.files.len() as u64,
+        u64::from(item.content_type.code()),
+        facts.size,
+        facts.piece_len,
+        facts.flags as u64,
+        u64::from(c.content_type.code()),
+        u64::from(c.confidence),
+        c.adult_kind.map_or(0, |k| k as u64 + 1),
+        u64::from(c.junk.score),
+        u64::from(c.structure.bits()),
+        u64::from(c.depth),
+        u64::from(c.distinct_extensions),
+    ] {
+        mix(x);
+    }
+    h
+}
+
+/// A process-wide number for each engine made or changed, so a [`Trail`]
+/// is never read by another engine that happens to share its version.
+fn next_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Both readings of [`Engine::judge_doc`] as one verdict: the stricter
+/// (the earlier reading's on a tie), and the shadow override entries
+/// either matched, logged once, at the decision that stands.
+fn both_readings(joined: (Verdict, Vec<u32>), before: Option<(Verdict, Vec<u32>)>) -> Verdict {
+    let (mut v, mut released) = joined;
+    if let Some((before, also)) = before {
+        v = stricter(before, v);
+        for id in also {
+            if !released.contains(&id) {
+                released.push(id);
+            }
+        }
+    }
+    if let Some(d) = &v.decision {
+        for id in released {
+            v.shadow.push(Decision {
+                rule: RuleRef::Override(id),
+                action: d.action,
+                evidence: vec![Evidence::Released],
+            });
+        }
+    }
+    v
+}
+
+/// The strongest of the pack layer's decisions, the last of equals.
+fn strongest<D: std::borrow::Borrow<Decision>>(packs: impl Iterator<Item = D>) -> Option<D> {
+    packs.max_by_key(|d| d.borrow().action)
+}
+
 /// A subscribed content list in the pack layer.
 #[derive(Debug, Clone)]
 pub struct ListLayer {
@@ -132,7 +488,7 @@ pub struct ListLayer {
     pub hashes: Arc<HashSet<[u8; 20]>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Engine {
     pub core: Core,
     pub lists: Vec<ListLayer>,
@@ -163,6 +519,35 @@ pub struct Engine {
     /// reload never copies it. [`crate::load`] fills it at start.
     pub spam_sigs: Arc<crate::spam_sigs::SpamSigs>,
     pub version: u64,
+    /// This engine's own number: a new one for every engine made, copied
+    /// or swapped in ([`Handle::update_engine`]), so a [`Trail`] is read
+    /// only by the engine that made it.
+    generation: u64,
+}
+
+impl Clone for Engine {
+    /// A copy is another engine: it gets its own generation, so a trail
+    /// one made is never read by the other, however either changes.
+    fn clone(&self) -> Engine {
+        Engine {
+            core: self.core.clone(),
+            lists: self.lists.clone(),
+            packs: self.packs.clone(),
+            manifest: self.manifest.clone(),
+            pack_versions: self.pack_versions.clone(),
+            pack_overrides: self.pack_overrides.clone(),
+            rules: self.rules.clone(),
+            overrides: self.overrides.clone(),
+            exceptions: self.exceptions.clone(),
+            allow: self.allow.clone(),
+            class_rules: self.class_rules.clone(),
+            unreadable: self.unreadable.clone(),
+            stand_ins: self.stand_ins.clone(),
+            spam_sigs: self.spam_sigs.clone(),
+            version: self.version,
+            generation: next_generation(),
+        }
+    }
 }
 
 impl Engine {
@@ -184,6 +569,7 @@ impl Engine {
             stand_ins: Vec::new(),
             spam_sigs: Arc::default(),
             version: 1,
+            generation: next_generation(),
         }
     }
 
@@ -210,6 +596,27 @@ impl Engine {
         facts: Option<&Facts>,
         now: i64,
     ) -> (Verdict, Option<bool>) {
+        self.judge_classified_with(item, facts, now, false, None)
+    }
+
+    /// [`Engine::judge_classified`], and with `also_adult` (an always-adult
+    /// source found it, [`crate::reclassify::judge_source_adult`]) read as
+    /// Adult too where it didn't already, unless the floor decided: the
+    /// stricter verdict stands. The Adult reading shares what the reading
+    /// as found read from the name and paths, and your rules' matches that
+    /// don't read tags ([`Engine::adult_reading`]).
+    ///
+    /// `trail`: keeps what the judgment found above the pack layer, for
+    /// the writer's second judgment of the torrent
+    /// ([`Engine::judge_at_commit_reusing`]). Kept only with `facts`.
+    pub fn judge_classified_with(
+        &self,
+        item: &Item,
+        facts: Option<&Facts>,
+        now: i64,
+        also_adult: bool,
+        trail: Option<&mut Trail>,
+    ) -> (Verdict, Option<bool>) {
         if let Some(hit) = self.core.floor_hit(item) {
             let v = Verdict {
                 decision: Some(hit.into()),
@@ -217,24 +624,48 @@ impl Engine {
             };
             return (v, None);
         }
+        let clock = Clock::new(now);
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
         let correction = self.class_rules.decide(&doc);
-        let v = self
-            .judge_doc(item, facts, &doc, now, AtCommit::default())
-            .0;
-        if correction != Some(true) || item.content_type == ContentType::Adult {
-            return (v, correction);
-        }
-        let adult_item = Item {
-            content_type: ContentType::Adult,
-            ..*item
+        let as_adult = correction == Some(true) && item.content_type != ContentType::Adult;
+        // An always-adult source's find is read as Adult unless detection
+        // or an Is adult rule made it adult already
+        // (`reclassify::judge_source_adult`).
+        let source_adult = also_adult
+            && !facts.is_some_and(|f| f.class.content_type == ContentType::Adult)
+            && correction != Some(true);
+        let adult_next = as_adult || source_adult;
+        let floor_decided = |v: &Verdict| {
+            v.decision
+                .as_ref()
+                .is_some_and(|d| matches!(d.rule, RuleRef::Core(r) if r.floor()))
         };
-        let adult_class = facts.map(|f| f.class.as_adult());
-        let adult_facts = facts
-            .zip(adult_class.as_ref())
-            .map(|(f, class)| Facts { class, ..*f });
-        let as_adult = self.judge(&adult_item, adult_facts.as_ref(), now);
-        (stricter(v, as_adult), correction)
+        let at = AtCommit::default();
+        let (v, found, adult) = if adult_next {
+            self.with_adult(&doc, item, facts, |adult| {
+                let mut found = ViewRec::paired(&adult, trail.is_some());
+                let v = self
+                    .judge_doc(item, facts, &doc, &clock, at, None, Some(&mut found))
+                    .0;
+                if as_adult || (source_adult && !floor_decided(&v)) {
+                    let mut rec = ViewRec::trail();
+                    let rec_adult = trail.is_some().then_some(&mut rec);
+                    let (a, kept) = adult.judge(self, &doc, &found, &clock, at, rec_adult);
+                    (stricter(v, a), found, kept.then_some(rec))
+                } else {
+                    (v, found, None)
+                }
+            })
+        } else {
+            let mut found = ViewRec::trail();
+            let rec = (trail.is_some() && facts.is_some()).then_some(&mut found);
+            let v = self.judge_doc(item, facts, &doc, &clock, at, None, rec).0;
+            (v, found, None)
+        };
+        if let (Some(t), Some(f)) = (trail, facts) {
+            *t = Trail::of(self, item, f, &clock, &doc, correction, found, adult);
+        }
+        (v, correction)
     }
 
     /// The decision for one torrent. `facts` (classification and the
@@ -263,7 +694,15 @@ impl Engine {
             return (v, Vec::new());
         }
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
-        self.judge_doc(item, facts, &doc, now, AtCommit::default())
+        self.judge_doc(
+            item,
+            facts,
+            &doc,
+            &Clock::new(now),
+            AtCommit::default(),
+            None,
+            None,
+        )
     }
 
     /// [`Engine::judge_at_commit`] with SP-3 at `level` alone (RP-4).
@@ -314,56 +753,255 @@ impl Engine {
         at: AtCommit,
         adult: bool,
     ) -> Verdict {
+        self.at_commit(item, facts, now, at, adult, true)
+    }
+
+    /// [`Engine::judge_at_commit`] as it judged before
+    /// X-commit-rejudge-reuse: the Adult reading on a torrent prepared
+    /// afresh, sharing nothing with the reading as found. The oracle the
+    /// differential tests compare the faster paths with.
+    #[doc(hidden)]
+    pub fn judge_at_commit_unshared(
+        &self,
+        item: &Item,
+        facts: &Facts,
+        now: i64,
+        at: AtCommit,
+        adult: bool,
+    ) -> Verdict {
+        self.at_commit(item, facts, now, at, adult, false)
+    }
+
+    /// [`Engine::judge_classified`] as it judged before
+    /// X-commit-rejudge-reuse, as [`Engine::judge_at_commit_unshared`].
+    #[doc(hidden)]
+    pub fn judge_classified_unshared(
+        &self,
+        item: &Item,
+        facts: Option<&Facts>,
+        now: i64,
+    ) -> (Verdict, Option<bool>) {
+        if let Some(hit) = self.core.floor_hit(item) {
+            let v = Verdict {
+                decision: Some(hit.into()),
+                shadow: Vec::new(),
+            };
+            return (v, None);
+        }
+        let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
+        let correction = self.class_rules.decide(&doc);
+        let clock = Clock::new(now);
+        let v = self
+            .judge_doc(item, facts, &doc, &clock, AtCommit::default(), None, None)
+            .0;
+        if correction != Some(true) || item.content_type == ContentType::Adult {
+            return (v, correction);
+        }
+        let adult_item = Item {
+            content_type: ContentType::Adult,
+            ..*item
+        };
+        let adult_class = facts.map(|f| f.class.as_adult());
+        let adult_facts = facts
+            .zip(adult_class.as_ref())
+            .map(|(f, class)| Facts { class, ..*f });
+        let as_adult = self.judge(&adult_item, adult_facts.as_ref(), now);
+        (stricter(v, as_adult), correction)
+    }
+
+    fn at_commit(
+        &self,
+        item: &Item,
+        facts: &Facts,
+        now: i64,
+        at: AtCommit,
+        adult: bool,
+        share: bool,
+    ) -> Verdict {
         if let Some(hit) = self.core.floor_hit(item) {
             return Verdict {
                 decision: Some(hit.into()),
                 shadow: Vec::new(),
             };
         }
+        let clock = Clock::new(now);
         let doc = Doc::new(item, Some(facts)).with_near(self.rules.near_terms());
         let correction = self.class_rules.decide(&doc);
-        let v = self.judge_doc(item, Some(facts), &doc, now, at).0;
-        if !(adult || correction == Some(true)) || item.content_type == ContentType::Adult {
-            return v;
+        let adult_next =
+            (adult || correction == Some(true)) && item.content_type != ContentType::Adult;
+        if !adult_next {
+            return self
+                .judge_doc(item, Some(facts), &doc, &clock, at, None, None)
+                .0;
         }
+        if !share {
+            let v = self
+                .judge_doc(item, Some(facts), &doc, &clock, at, None, None)
+                .0;
+            return stricter(v, self.adult_unshared(item, Some(facts), &clock, at));
+        }
+        self.with_adult(&doc, item, Some(facts), |adult| {
+            let mut found = ViewRec::paired(&adult, false);
+            let v = self
+                .judge_doc(item, Some(facts), &doc, &clock, at, None, Some(&mut found))
+                .0;
+            let (a, _) = adult.judge(self, &doc, &found, &clock, at, None);
+            stricter(v, a)
+        })
+    }
+
+    /// The writer's second judgment of a torrent ([`Engine::judge_at_commit`]),
+    /// from what its first judgment found above the pack layer (`trail`,
+    /// [`Engine::judge_classified_with`]): the floor is judged again, and
+    /// SP-3 and SP-4, the only rules `at` changes, are judged with it and
+    /// set among the pack layer's other decisions, which stand as they
+    /// were. Everything above the pack layer (CSX-5, *Always allow*, the
+    /// core and your rules) decided as it did; where it settled the
+    /// reading, the pack layer isn't reached, as before.
+    ///
+    /// The trail is used only for the engine that made it (the same
+    /// generation and version: no rule, pack, switch, override or version
+    /// changed), for the same torrent, and where the instants the first
+    /// judgment compared `now` against (expiries, shadow periods) fall on
+    /// the same side of this `now`, and no date or time of day was read
+    /// unless the facts' times are the same. Anywhere else, or where the
+    /// trail lacks a reading this judgment needs, it's
+    /// [`Engine::judge_at_commit`] in full. The verdict is that one's
+    /// either way (docs/decisions/2026-11-06-X-commit-rejudge-reuse.md).
+    pub fn judge_at_commit_reusing(
+        &self,
+        trail: &Trail,
+        item: &Item,
+        facts: &Facts,
+        now: i64,
+        at: AtCommit,
+        adult: bool,
+    ) -> Verdict {
+        let Some(t) = trail.fits(self, item, facts, now) else {
+            return self.judge_at_commit(item, facts, now, at, adult);
+        };
+        if let Some(hit) = self.core.floor_hit(item) {
+            return Verdict {
+                decision: Some(hit.into()),
+                shadow: Vec::new(),
+            };
+        }
+        let adult_next =
+            (adult || t.correction == Some(true)) && item.content_type != ContentType::Adult;
         let adult_item = Item {
             content_type: ContentType::Adult,
             ..*item
         };
-        let adult_class = facts.class.as_adult();
-        let adult_facts = Facts {
-            class: &adult_class,
-            ..*facts
-        };
-        // As [`Engine::judge`] reads the adult side: its floor first.
-        let as_adult = match self.core.floor_hit(&adult_item) {
-            Some(hit) => Verdict {
+        // The Adult reading's floor, judged again as the full path does.
+        let adult_floor = adult_next
+            .then(|| self.core.floor_hit(&adult_item))
+            .flatten();
+        if adult_next && adult_floor.is_none() && t.adult.is_none() {
+            return self.judge_at_commit(item, facts, now, at, adult);
+        }
+        let v = self.replay_view(&t.found, item, facts, at);
+        if !adult_next {
+            return v;
+        }
+        let as_adult = match (adult_floor, &t.adult) {
+            (Some(hit), _) => Verdict {
                 decision: Some(hit.into()),
                 shadow: Vec::new(),
             },
-            None => {
-                let doc =
-                    Doc::new(&adult_item, Some(&adult_facts)).with_near(self.rules.near_terms());
-                self.judge_doc(&adult_item, Some(&adult_facts), &doc, now, at)
-                    .0
+            (None, Some(rec)) => {
+                let adult_class = facts.class.as_adult();
+                let adult_facts = Facts {
+                    class: &adult_class,
+                    ..*facts
+                };
+                self.replay_view(rec, &adult_item, &adult_facts, at)
             }
+            (None, None) => unreachable!("checked above"),
         };
         stricter(v, as_adult)
+    }
+
+    /// The torrent read as Adult, for a judgment that reads it so after
+    /// the reading as found, on `doc`: its floor, judged as
+    /// [`Engine::judge`] judges it first, and where that doesn't decide, a
+    /// [`Doc::as_adult`] of `doc`, sharing what was read from the name and
+    /// paths ([`Adult`]).
+    fn with_adult<R>(
+        &self,
+        doc: &Doc,
+        item: &Item,
+        facts: Option<&Facts>,
+        f: impl FnOnce(Adult<'_>) -> R,
+    ) -> R {
+        let adult_item = Item {
+            content_type: ContentType::Adult,
+            ..*item
+        };
+        let adult_class = facts.map(|f| f.class.as_adult());
+        let adult_facts = facts
+            .zip(adult_class.as_ref())
+            .map(|(f, class)| Facts { class, ..*f });
+        let floor = self.core.floor_hit(&adult_item);
+        let adult_doc = floor
+            .is_none()
+            .then(|| doc.as_adult(&adult_item, adult_facts.as_ref()));
+        f(Adult {
+            item: &adult_item,
+            facts: adult_facts.as_ref(),
+            floor,
+            doc: adult_doc.as_ref(),
+        })
+    }
+
+    /// The Adult reading as it was before X-commit-rejudge-reuse: on a
+    /// torrent prepared afresh.
+    fn adult_unshared(
+        &self,
+        item: &Item,
+        facts: Option<&Facts>,
+        clock: &Clock,
+        at: AtCommit,
+    ) -> Verdict {
+        let adult_item = Item {
+            content_type: ContentType::Adult,
+            ..*item
+        };
+        if let Some(hit) = self.core.floor_hit(&adult_item) {
+            return Verdict {
+                decision: Some(hit.into()),
+                shadow: Vec::new(),
+            };
+        }
+        let adult_class = facts.map(|f| f.class.as_adult());
+        let adult_facts = facts
+            .zip(adult_class.as_ref())
+            .map(|(f, class)| Facts { class, ..*f });
+        let doc = Doc::new(&adult_item, adult_facts.as_ref()).with_near(self.rules.near_terms());
+        self.judge_doc(
+            &adult_item,
+            adult_facts.as_ref(),
+            &doc,
+            clock,
+            at,
+            None,
+            None,
+        )
+        .0
     }
 
     /// The override and neutralize entries that apply to a torrent:
     /// whether an Override entry releases it, the Neutralize entries, and
     /// the entries in shadow mode.
-    fn released(&self, item: &Item, doc: &Doc, now: i64, reading: Reading) -> Released<'_> {
+    fn released(&self, item: &Item, doc: &Doc, clock: &Clock, reading: Reading) -> Released<'_> {
         let mut r = Released::default();
         for (o, p) in self.overrides.prepared() {
-            if o.expires_at.is_some_and(|t| t <= now)
+            if o.expires_at.is_some_and(|t| clock.reached(t))
                 || !rules::override_matches(o, p, item, doc, reading)
                 || o.scope.as_ref().is_some_and(|q| !doc.matches(q, &[]))
             {
                 continue;
             }
-            if o.shadow_until.is_some_and(|t| t > now) {
+            if o.shadow_until.is_some_and(|t| !clock.reached(t)) {
                 r.shadow.push(o.id);
                 continue;
             }
@@ -389,29 +1027,49 @@ impl Engine {
     /// `at`: SP-3's level and SP-4's original, from the writer
     /// ([`Engine::judge_at_commit`]); `default()` everywhere else, where
     /// neither matches.
+    ///
+    /// `seen`: the reading as found's, for the Adult reading ([`Adult`]).
+    /// `rec` keeps what each reading found above the pack layer, and the
+    /// pack layer's decisions ([`Trail`], [`ViewRec::paired`]).
+    #[allow(clippy::too_many_arguments)]
     fn judge_doc(
         &self,
         item: &Item,
         facts: Option<&Facts>,
         doc: &Doc,
-        now: i64,
+        clock: &Clock,
         at: AtCommit,
+        seen: Option<&ViewRec>,
+        rec: Option<&mut ViewRec>,
     ) -> (Verdict, Vec<PackShadow>) {
+        let mut joined_rec = rec.as_ref().map(|r| r.reading(Reading::Joined));
         let mut pack_shadow = Vec::new();
-        let (mut v, mut released) =
-            self.judge_reading(item, facts, doc, now, Reading::Joined, at, &mut pack_shadow);
-        if doc.reads_twice() || self.keywords_differ(item, doc) {
+        let joined = self.judge_reading(
+            item,
+            facts,
+            doc,
+            clock,
+            Reading::Joined,
+            at,
+            &mut pack_shadow,
+            seen.map(|s| &s.joined),
+            joined_rec.as_mut(),
+        );
+        let mut before_rec = None;
+        let before = if doc.reads_twice() || self.keywords_differ(item, doc) {
+            before_rec = rec.as_ref().map(|r| r.reading(Reading::Before));
             let mut before_shadow = Vec::new();
-            let (before, also) = self.judge_reading(
+            let before = self.judge_reading(
                 item,
                 facts,
                 doc,
-                now,
+                clock,
                 Reading::Before,
                 at,
                 &mut before_shadow,
+                seen.and_then(|s| s.before.as_ref()),
+                before_rec.as_mut(),
             );
-            v = stricter(before, v);
             // Each pending rule's stronger side over the two readings.
             for s in before_shadow {
                 match pack_shadow.iter_mut().find(|p| p.rule == s.rule) {
@@ -422,24 +1080,15 @@ impl Engine {
                     None => pack_shadow.push(s),
                 }
             }
-            for id in also {
-                if !released.contains(&id) {
-                    released.push(id);
-                }
-            }
+            Some(before)
+        } else {
+            None
+        };
+        if let Some(r) = rec {
+            r.joined = joined_rec.unwrap_or_default();
+            r.before = before_rec;
         }
-        // Shadow override entries are logged once, at the decision that
-        // stands.
-        if let Some(d) = &v.decision {
-            for id in released {
-                v.shadow.push(Decision {
-                    rule: RuleRef::Override(id),
-                    action: d.action,
-                    evidence: vec![Evidence::Released],
-                });
-            }
-        }
-        (v, pack_shadow)
+        (both_readings(joined, before), pack_shadow)
     }
 
     /// Whether a keyword entry matches this torrent differently in the two
@@ -466,18 +1115,30 @@ impl Engine {
         item: &Item,
         facts: Option<&Facts>,
         doc: &Doc,
-        now: i64,
+        clock: &Clock,
         reading: Reading,
         at: AtCommit,
         pack_shadow: &mut Vec<PackShadow>,
+        seen: Option<&ReadingRec>,
+        mut rec: Option<&mut ReadingRec>,
     ) -> (Verdict, Vec<u32>) {
         let mut v = Verdict::default();
         let Released {
             overridden,
             neutral,
             shadow: shadow_overrides,
-        } = self.released(item, doc, now, reading);
+        } = self.released(item, doc, clock, reading);
         let (neutral_set, neutral_words) = rules::neutral_sets(&neutral);
+        if let Some(r) = rec.as_deref_mut() {
+            r.neutral.clone_from(&neutral_words);
+            r.neutral_set.clone_from(&neutral_set);
+            r.released.clone_from(&shadow_overrides);
+        }
+        // What the reading as found kept holds where the same entries
+        // neutralize the same words.
+        let seen = seen
+            .filter(|s| s.neutral == neutral_words && s.neutral_set == neutral_set)
+            .and_then(|s| s.paired.as_ref());
         if !overridden {
             v.decision = self.below_overrides(
                 item,
@@ -485,16 +1146,23 @@ impl Engine {
                 doc,
                 &neutral_set,
                 &neutral_words,
-                now,
+                clock,
                 reading,
                 at,
                 &mut v.shadow,
                 pack_shadow,
+                seen,
+                rec,
             );
         }
         (v, shadow_overrides)
     }
 
+    /// The layers below CSX-5 in one reading. `seen`: what the reading as
+    /// found kept, for the Adult reading of the same torrent: the core's
+    /// signals, judged here as Adult; which of your rules this reading
+    /// meets; and the matches of your rules that don't read tags, the only
+    /// part of the torrent that reads differently as Adult.
     #[allow(clippy::too_many_arguments)]
     fn below_overrides(
         &self,
@@ -503,20 +1171,41 @@ impl Engine {
         doc: &Doc,
         neutral: &TermSet,
         neutral_words: &[String],
-        now: i64,
+        clock: &Clock,
         reading: Reading,
         at: AtCommit,
         shadow: &mut Vec<Decision>,
         pack_shadow: &mut Vec<PackShadow>,
+        seen: Option<&Paired>,
+        mut rec: Option<&mut ReadingRec>,
     ) -> Option<Decision> {
+        // Where the layers above the pack layer settle the reading.
+        let settle = |rec: Option<&mut ReadingRec>, d: Option<Decision>, shadow: &[Decision]| {
+            if let Some(r) = rec.filter(|r| r.trail) {
+                r.above = Above::Settled(d.clone());
+                r.shadow = shadow.to_vec();
+            }
+            d
+        };
+        let mut paired = rec.as_deref_mut().and_then(|r| r.paired.as_mut());
         let hits = match reading {
             Reading::Before => self.core.pattern_hits_split(item, neutral),
             Reading::Joined => None,
         };
-        let hits = hits.unwrap_or_else(|| self.core.pattern_hits_read(item, neutral, doc.read()));
+        let hits = hits.unwrap_or_else(|| match seen.and_then(|s| s.signals.as_ref()) {
+            Some(s) => self.core.judge_signals(s, item.content_type),
+            None => {
+                let s = self.core.pattern_signals(item, neutral, doc.read());
+                let hits = self.core.judge_signals(&s, item.content_type);
+                if let Some(p) = paired.as_deref_mut() {
+                    p.signals = Some(s);
+                }
+                hits
+            }
+        });
         for hit in hits {
             if hit.on && !self.excepted(RuleRef::Core(hit.rule), item, doc, reading) {
-                return Some(hit.into());
+                return settle(rec, Some(hit.into()), shadow);
             }
         }
         // Neutralizing only takes evidence away: an allow query must
@@ -527,15 +1216,45 @@ impl Engine {
             doc.matches(&a.query, neutral_words)
                 && (neutral_words.is_empty() || doc.matches(&a.query, &[]))
         }) {
-            return None;
+            return settle(rec, None, shadow);
         }
         let mut held: Option<Decision> = None;
-        for i in doc.candidates(&self.rules, neutral_words) {
-            let (query, unless) = self.rules.compiled(i);
-            if !doc.matches_compiled(query, neutral_words)
-                || unless.is_some_and(|u| doc.matches_compiled(u, &[]))
-            {
+        let candidates: std::borrow::Cow<[u32]> = match (
+            seen.and_then(|s| s.candidates.as_ref()),
+            paired.as_deref_mut(),
+        ) {
+            (Some(c), _) => c.into(),
+            (None, Some(p)) => {
+                let (here, adult) = doc.candidates_pair(&self.rules, neutral_words, &p.adult_tags);
+                p.candidates = Some(adult);
+                here.into()
+            }
+            (None, None) => doc.candidates(&self.rules, neutral_words).into(),
+        };
+        // What the reading as found checked: a rule that reads no tags is
+        // narrowed by neither its query's tags nor a tag gate, so it meets
+        // this reading where it met that one, and matches the same.
+        let checked_to = seen.and_then(|s| s.checked_to);
+        let mut known = seen.map_or(&[][..], |s| &s.matched[..]);
+        if let Some(p) = paired.as_deref_mut() {
+            p.checked_to = Some(u32::MAX);
+        }
+        for &i in candidates.iter() {
+            let matched = if checked_to.is_some_and(|c| i <= c) && !self.rules.reads_tags(i) {
+                while known.first().is_some_and(|k| *k < i) {
+                    known = &known[1..];
+                }
+                known.first() == Some(&i)
+            } else {
+                let (query, unless) = self.rules.compiled(i);
+                doc.matches_compiled(query, neutral_words)
+                    && !unless.is_some_and(|u| doc.matches_compiled(u, &[]))
+            };
+            if !matched {
                 continue;
+            }
+            if let Some(p) = paired.as_deref_mut() {
+                p.matched.push(i);
             }
             let r = &self.rules[i as usize];
             if self.excepted(RuleRef::User(r.id), item, doc, reading) {
@@ -546,7 +1265,7 @@ impl Engine {
                 action: r.action,
                 evidence: vec![Evidence::Query],
             };
-            if r.shadow_until.is_some_and(|t| t > now) {
+            if r.shadow_until.is_some_and(|t| !clock.reached(t)) {
                 shadow.push(d);
                 continue;
             }
@@ -558,75 +1277,234 @@ impl Engine {
                 held = stronger_of(held, Some(d));
                 continue;
             }
-            return stronger_of(held, Some(d));
+            if let Some(p) = paired.as_deref_mut() {
+                p.checked_to = Some(i);
+            }
+            return settle(rec, stronger_of(held, Some(d)), shadow);
         }
-        // SP-4 follows its original: while the rule that hid it is on,
-        // and not where your exception to that rule covers this torrent.
-        let at = AtCommit {
+        let trail = rec.as_ref().is_some_and(|r| r.trail);
+        if trail && let Some(r) = rec.as_deref_mut() {
+            r.above = Above::Packs(held.clone());
+            r.shadow = shadow.clone();
+        }
+        let at = self.follows_original(at, item, doc, reading);
+        // The Adult reading's context, from what the reading as found read
+        // from the name and files.
+        let text = seen.and_then(|s| s.pack_text.borrow_mut().take());
+        let ctx = facts.map(|f| {
+            match text {
+                Some(t) => packs::Ctx::with_text(item, f, neutral_words, t),
+                None => packs::Ctx::new(item, f, neutral_words),
+            }
+            .with_flood(at.flood)
+            .with_clone(at.clone_of)
+        });
+        let mut packs: Vec<(usize, Decision)> = Vec::new();
+        if let Some(ctx) = &ctx {
+            for (o, r) in PackRule::ALL.into_iter().enumerate() {
+                if !self.packs.is_on(r) {
+                    continue;
+                }
+                let logged = shadow.len();
+                if let Some(d) = self.pack_rule(r, ctx, at, item, doc, reading, shadow, pack_shadow)
+                {
+                    packs.push((o, d));
+                }
+                if trail && let Some(rec) = rec.as_deref_mut() {
+                    rec.pack_shadow
+                        .extend(shadow[logged..].iter().map(|d| (o, d.clone())));
+                }
+            }
+        }
+        if let (Some(ctx), Some(p)) = (ctx, rec.as_deref_mut().and_then(|r| r.paired.as_mut())) {
+            *p.pack_text.get_mut() = Some(ctx.into_text());
+        }
+        // Each pack and list is excepted on its own (§20.12), before the
+        // strongest action left wins (§20.6): an exception to one list
+        // never lifts another that also has the torrent.
+        let n = PackRule::ALL.len();
+        packs.extend(
+            self.listed(item.hashes)
+                .enumerate()
+                .map(|(i, d)| (n + i, d)),
+        );
+        packs.retain(|(_, d)| !self.excepted(d.rule, item, doc, reading));
+        match rec.filter(|_| trail) {
+            Some(r) => {
+                let best = strongest(packs.iter().map(|p| &p.1)).cloned();
+                r.packs = packs;
+                stronger_of(held, best)
+            }
+            None => stronger_of(held, strongest(packs.into_iter().map(|p| p.1))),
+        }
+    }
+
+    /// SP-4 follows its original: while the rule that hid it is on, and
+    /// not where your exception to that rule covers this torrent.
+    fn follows_original(&self, at: AtCommit, item: &Item, doc: &Doc, reading: Reading) -> AtCommit {
+        AtCommit {
             clone_of: at.clone_of.filter(|o| {
                 self.packs.is_on(o.rule)
                     && !self.excepted(RuleRef::Pack(o.rule), item, doc, reading)
             }),
             ..at
+        }
+    }
+
+    /// One pack rule's decision, before exceptions: the applied versions'
+    /// action with your override over it. A pending version's result is
+    /// logged in `shadow` and `pack_shadow` where the rule isn't excepted.
+    #[allow(clippy::too_many_arguments)]
+    fn pack_rule(
+        &self,
+        r: PackRule,
+        ctx: &packs::Ctx,
+        at: AtCommit,
+        item: &Item,
+        doc: &Doc,
+        reading: Reading,
+        shadow: &mut Vec<Decision>,
+        pack_shadow: &mut Vec<PackShadow>,
+    ) -> Option<Decision> {
+        let pv = &self.pack_versions;
+        // SP-3 flags below its demote level and SP-4 takes its original's
+        // action ([`packs::sp4::cap`]), in both versions' results.
+        let cap = |a: Option<Action>| a.map(|a| packs::sp4::cap(r, at, a));
+        let applied = cap(pv.applied_action(&self.manifest, r, ctx));
+        // A pending version runs in shadow where the rule isn't excepted:
+        // nothing it holds is applied.
+        if pv.state(r).pending()
+            && let Some(mut s) = pv.shadow(&self.manifest, r, ctx, applied)
+            && !self.excepted(RuleRef::Pack(r), item, doc, reading)
+        {
+            s.shadow = cap(s.shadow);
+            if let Some(action) = s.shadow {
+                shadow.push(Decision {
+                    rule: RuleRef::Pack(r),
+                    action,
+                    evidence: vec![Evidence::Pack],
+                });
+            }
+            pack_shadow.push(s);
+        }
+        // Your override, over what the applied versions decided (the
+        // shadow above compares the base rule's sides).
+        let applied = match self.pack_overrides.effect(r) {
+            None => applied,
+            Some(e) => overrides::apply(e, applied, !pv.state(r).unaccepted.is_empty(), |u| {
+                doc.matches(u, &[])
+            }),
         };
-        let ctx = facts.map(|f| {
-            packs::Ctx::new(item, f, neutral_words)
+        applied.map(|action| Decision {
+            rule: RuleRef::Pack(r),
+            action,
+            evidence: vec![Evidence::Pack],
+        })
+    }
+
+    /// A reading the trail kept, judged again with `at` for this torrent.
+    fn replay_view(&self, view: &ViewRec, item: &Item, facts: &Facts, at: AtCommit) -> Verdict {
+        // Read only where an exception or an override's `unless` is.
+        let doc = Doc::new(item, Some(facts)).with_near(self.rules.near_terms());
+        let one = |r: &ReadingRec| {
+            let v = match &r.above {
+                Above::Settled(d) => Verdict {
+                    decision: d.clone(),
+                    shadow: r.shadow.clone(),
+                },
+                Above::Packs(held) => self.replay_packs(r, held.clone(), item, facts, &doc, at),
+            };
+            (v, r.released.clone())
+        };
+        both_readings(one(&view.joined), view.before.as_ref().map(one))
+    }
+
+    /// The pack layer of a kept reading with `at`: SP-3 and SP-4 judged
+    /// (in the first judgment, without `at`, neither matched, so neither
+    /// is among what it kept), and set in their places among the other
+    /// rules' and lists' decisions, which `at` doesn't change.
+    fn replay_packs(
+        &self,
+        r: &ReadingRec,
+        held: Option<Decision>,
+        item: &Item,
+        facts: &Facts,
+        doc: &Doc,
+        at: AtCommit,
+    ) -> Verdict {
+        let mut fresh: Vec<(usize, Decision)> = Vec::new();
+        let mut logged: Vec<(usize, Decision)> = Vec::new();
+        if at.any() {
+            let at = self.follows_original(at, item, doc, r.reading);
+            let ctx = packs::Ctx::for_state(item, facts, &r.neutral)
                 .with_flood(at.flood)
-                .with_clone(at.clone_of)
-        });
-        let mut packs = Vec::new();
-        if let Some(ctx) = &ctx {
-            for r in PackRule::ALL.into_iter().filter(|r| self.packs.is_on(*r)) {
-                let pv = &self.pack_versions;
-                // SP-3 flags below its demote level and SP-4 takes its
-                // original's action ([`packs::sp4::cap`]), in both
-                // versions' results.
-                let cap = |a: Option<Action>| a.map(|a| packs::sp4::cap(r, at, a));
-                let applied = cap(pv.applied_action(&self.manifest, r, ctx));
-                // A pending version runs in shadow where the rule isn't
-                // excepted: nothing it holds is applied.
-                if pv.state(r).pending()
-                    && let Some(mut s) = pv.shadow(&self.manifest, r, ctx, applied)
-                    && !self.excepted(RuleRef::Pack(r), item, doc, reading)
+                .with_clone(at.clone_of);
+            for (o, rule) in PackRule::ALL.into_iter().enumerate() {
+                if !matches!(rule, PackRule::Sp3 | PackRule::Sp4) || !self.packs.is_on(rule) {
+                    continue;
+                }
+                let (mut shadow, mut pack_shadow) = (Vec::new(), Vec::new());
+                let d = self.pack_rule(
+                    rule,
+                    &ctx,
+                    at,
+                    item,
+                    doc,
+                    r.reading,
+                    &mut shadow,
+                    &mut pack_shadow,
+                );
+                #[cfg(debug_assertions)]
                 {
-                    s.shadow = cap(s.shadow);
-                    if let Some(action) = s.shadow {
-                        shadow.push(Decision {
-                            rule: RuleRef::Pack(r),
-                            action,
-                            evidence: vec![Evidence::Pack],
-                        });
-                    }
-                    pack_shadow.push(s);
+                    // Nothing SP-3 and SP-4 read is in the files.
+                    let full = packs::Ctx::new(item, facts, &r.neutral)
+                        .with_flood(at.flood)
+                        .with_clone(at.clone_of);
+                    let (mut s2, mut p2) = (Vec::new(), Vec::new());
+                    let d2 =
+                        self.pack_rule(rule, &full, at, item, doc, r.reading, &mut s2, &mut p2);
+                    assert_eq!(
+                        (&d, &shadow, &pack_shadow),
+                        (&d2, &s2, &p2),
+                        "{rule:?} read the files"
+                    );
                 }
-                // Your override, over what the applied versions decided
-                // (the shadow above compares the base rule's sides).
-                let applied = match self.pack_overrides.effect(r) {
-                    None => applied,
-                    Some(e) => {
-                        overrides::apply(e, applied, !pv.state(r).unaccepted.is_empty(), |u| {
-                            doc.matches(u, &[])
-                        })
-                    }
-                };
-                if let Some(action) = applied {
-                    packs.push(Decision {
-                        rule: RuleRef::Pack(r),
-                        action,
-                        evidence: vec![Evidence::Pack],
-                    });
+                if let Some(d) = d
+                    && !self.excepted(d.rule, item, doc, r.reading)
+                {
+                    fresh.push((o, d));
                 }
+                logged.extend(shadow.into_iter().map(|d| (o, d)));
             }
         }
-        // Each pack and list is excepted on its own (§20.12), before the
-        // strongest action left wins (§20.6): an exception to one list
-        // never lifts another that also has the torrent.
-        let rest = packs
-            .into_iter()
-            .chain(self.listed(item.hashes))
-            .filter(|d| !self.excepted(d.rule, item, doc, reading))
-            .max_by_key(|d| d.action);
-        stronger_of(held, rest)
+        // The kept decisions and the new ones in order, as the full pack
+        // layer has them: the strongest action wins, the last of equals.
+        let mut best: Option<&Decision> = None;
+        let mut kept = r.packs.iter().peekable();
+        let mut new = fresh.iter().peekable();
+        loop {
+            let next = match (kept.peek(), new.peek()) {
+                (Some(k), Some(n)) if n.0 < k.0 => new.next(),
+                (Some(_), _) => kept.next(),
+                (None, _) => new.next(),
+            };
+            let Some((_, d)) = next else { break };
+            if best.is_none_or(|b| d.action >= b.action) {
+                best = Some(d);
+            }
+        }
+        let mut shadow = r.shadow.clone();
+        if logged.is_empty() {
+            shadow.extend(r.pack_shadow.iter().map(|p| p.1.clone()));
+        } else {
+            let mut all: Vec<&(usize, Decision)> = r.pack_shadow.iter().chain(&logged).collect();
+            all.sort_by_key(|p| p.0);
+            shadow.extend(all.into_iter().map(|p| p.1.clone()));
+        }
+        Verdict {
+            decision: stronger_of(held, best.cloned()),
+            shadow,
+        }
     }
 
     /// How many of your rules a torrent meets: those the narrowing
@@ -719,6 +1597,7 @@ impl Engine {
 
     /// Sets (or with `None` removes) a subscribed content list.
     pub fn set_list(&mut self, layer: Option<ListLayer>, id: u32) {
+        self.generation = next_generation();
         self.lists.retain(|l| l.id != id);
         if let Some(l) = layer {
             self.lists.push(l);
@@ -727,6 +1606,7 @@ impl Engine {
 
     /// Keeps only the list layers `keep` names.
     pub fn retain_lists(&mut self, keep: impl Fn(u32) -> bool) {
+        self.generation = next_generation();
         self.lists.retain(|l| keep(l.id));
     }
 }
@@ -761,7 +1641,8 @@ pub(crate) fn stricter(a: Verdict, b: Verdict) -> Verdict {
 pub struct Handle(RwLock<Arc<Engine>>);
 
 impl Handle {
-    pub fn new(engine: Engine) -> Handle {
+    pub fn new(mut engine: Engine) -> Handle {
+        engine.generation = next_generation();
         Handle(RwLock::new(Arc::new(engine)))
     }
 
@@ -781,6 +1662,7 @@ impl Handle {
         let mut next = Engine::clone(&slot);
         let out = f(&mut next);
         next.version += 1;
+        next.generation = next_generation();
         *slot = Arc::new(next);
         out
     }
@@ -1041,7 +1923,7 @@ mod tests {
             e.overrides = list.into();
             for round in 0..2 {
                 let doc = Doc::new(&it, None);
-                let r = e.released(&it, &doc, now, Reading::Joined);
+                let r = e.released(&it, &doc, &Clock::new(now), Reading::Joined);
                 let neutral: Vec<(u64, String)> =
                     r.neutral.iter().map(|p| p.neutral.clone().unwrap()).collect();
                 prop_assert_eq!(

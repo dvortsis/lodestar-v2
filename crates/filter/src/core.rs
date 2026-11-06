@@ -571,8 +571,13 @@ fn lexicon(lists: &Lists) -> IdMap<u16> {
     map
 }
 
+/// The signals of a torrent's name (first) and files, as the pattern
+/// rules read them ([`Core::pattern_signals`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PatternSignals(Vec<(Field, Signals)>);
+
 /// What one text (the name or a file path) contains.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Signals {
     ages: Vec<u32>,
     sexual: Vec<u32>,
@@ -776,18 +781,8 @@ impl Core {
         }
         let mut tok = Tokenizer::splitting();
         let mut scratch = Scratch::default();
-        Some(self.patterns_with(&mut tok, &mut scratch, item, neutral, None))
-    }
-
-    /// [`Core::pattern_hits`], reusing `read`, the item's name and paths
-    /// already in tokens, where it reads the same as the core would.
-    pub(crate) fn pattern_hits_read(
-        &self,
-        item: &Item,
-        neutral: &TermSet,
-        read: Option<normalize::Read<'_>>,
-    ) -> Vec<Hit> {
-        self.patterns(item, neutral, read)
+        let s = self.patterns_with(&mut tok, &mut scratch, item, neutral, None);
+        Some(self.judge_signals(&s, item.content_type))
     }
 
     /// The floor's verdict on bare hashes, before anything is fetched.
@@ -920,6 +915,31 @@ impl Core {
     }
 
     fn patterns(&self, item: &Item, neutral: &TermSet, read: Option<normalize::Read>) -> Vec<Hit> {
+        self.judge_signals(
+            &self.pattern_signals(item, neutral, read),
+            item.content_type,
+        )
+    }
+
+    /// The pattern rules' hits on signals [`Core::pattern_signals`] read,
+    /// for a torrent of `content_type`: what the core's own reading of it
+    /// finds, the content type being the only part of the item the rules
+    /// read after the signals. A torrent read again as Adult reuses its
+    /// signals so (`engine::Adult`).
+    pub(crate) fn judge_signals(&self, s: &PatternSignals, content_type: ContentType) -> Vec<Hit> {
+        self.judge(&s.0, content_type)
+    }
+
+    /// What the name and each file path hold, as the pattern rules read
+    /// it: the same whatever the torrent's content type. `read`: the
+    /// item's name and paths already in tokens, reused where it reads the
+    /// same as the core would.
+    pub(crate) fn pattern_signals(
+        &self,
+        item: &Item,
+        neutral: &TermSet,
+        read: Option<normalize::Read>,
+    ) -> PatternSignals {
         thread_local! {
             // Kept per thread: its buffers carry over between torrents.
             static SCRATCH: std::cell::RefCell<Scratch> = Default::default();
@@ -941,7 +961,7 @@ impl Core {
         item: &Item,
         neutral: &TermSet,
         read: Option<normalize::Read>,
-    ) -> Vec<Hit> {
+    ) -> PatternSignals {
         let Scratch {
             tokens,
             flags,
@@ -1024,7 +1044,7 @@ impl Core {
                 texts.push((Field::File(i as u32), s));
             }
         }
-        self.judge(&texts, item.content_type)
+        PatternSignals(texts)
     }
 
     /// Every pattern rule's hit on a hashed fixture (§20.4): the fixture
