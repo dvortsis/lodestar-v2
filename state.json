@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-06T06:05:56Z",
+ "updated_at": "2026-11-06T06:29:30Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -5803,6 +5803,10 @@
   {
    "at": "2026-11-06T03:52:35Z",
    "note": "r5 h14.6 (03:49Z): clean, 0 restarts; private 239-288 MiB sawtooth h6-h14; provisional h12-14.6 fit 6.58 [2.82,10.35] low weight (starts at trough; r3 analogue 6.66->1.88). mimalloc committed flat 568; mmap cache tracks live files. Watch files-index segments 8->17. Next check after ~07:00Z; window ends 13:12:25Z."
+  },
+  {
+   "at": "2026-11-06T06:29:30Z",
+   "note": "r5 h17.2 (06:26Z): clean, 0 restarts; provisional h12-17.2 fit -0.12 [-1.62,1.38] (313 samples, ~43% of window); per-1k-commits -0.13; mimalloc committed flat 568; files-index segment slope eased 2.13->0.90/h (13 now). Next check after ~10:00Z (folder file counts); final analyzer after 13:13Z."
   }
  ],
  "limits": {
