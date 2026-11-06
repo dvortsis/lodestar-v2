@@ -587,7 +587,7 @@ async fn sources_and_the_network_check() {
     assert_eq!(dht["health"]["running"], json!(true));
     let feed = sources[1]["id"].as_u64().unwrap();
 
-    // Priority applies and is saved; enabling state waits for a restart.
+    // Priority applies and is saved; turning it off stops it at once.
     let uri = format!("/api/v1/sources/{feed}");
     let (status, high) = f
         .send(req("PATCH", &uri, c, Some(r#"{"priority":"high"}"#)))
@@ -612,11 +612,9 @@ async fn sources_and_the_network_check() {
         (off["state"].clone(), off["restart_required"].clone()),
         (json!("disabled"), json!(true))
     );
-    assert_eq!(
-        off["health"]["running"],
-        json!(true),
-        "it stops at the next start"
-    );
+    // Off stops it at once (X-tcache-recheck); `restart_required` still
+    // compares the stored state with the one it started with.
+    assert_eq!(off["health"]["running"], json!(false), "it stops at once");
     // Purge waits for SRC-14b.
     let (status, e) = f
         .send(req("PATCH", &uri, c, Some(r#"{"purge":true}"#)))
