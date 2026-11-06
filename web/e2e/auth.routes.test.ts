@@ -3,13 +3,13 @@
 // screen in Riverstone light and dark.
 import { expectNoA11yViolations } from './a11y';
 import { body } from './search-results.fixtures';
+import { NOTICE_VERSION } from './support/notice';
 import { expect, test } from './support/test';
 
 const TOKEN = 'AB12-CD34-EF56-7890';
 const envelope = (code: string) => ({ error: { code, message: `server text for ${code}` } });
 const signedOut = { logged_in: false, notice_required: false, setup_required: false };
 const fresh = { logged_in: false, notice_required: false, setup_required: true };
-const NOTICE_VERSION = 3;
 
 /** Setup's first step, the Legal Notice: tick the box, then on to the token. */
 async function readNotice(page: import('@playwright/test').Page) {

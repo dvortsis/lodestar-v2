@@ -3,6 +3,7 @@
 // Check now runs the signed check, the diagnostics are shown before they are copied, and a server
 // that doesn't answer still leaves the page standing.
 import { expectNoA11yViolations } from './a11y';
+import { NOTICE_VERSION } from './support/notice';
 import { expect as baseExpect, test } from './support/test';
 import {
 	SettingsBackend,
@@ -184,7 +185,7 @@ test.describe('keyboard: Settings → About', () => {
 		await expect(page.getByRole('heading', { name: 'Legal', exact: true })).toBeVisible();
 		await kbd.tabTo(page.getByRole('button', { name: 'Show the Legal Notice' }), 100);
 		await kbd.press('Enter');
-		await expect(page.getByTestId('about-notice-version')).toHaveText('Version 3');
+		await expect(page.getByTestId('about-notice-version')).toHaveText(`Version ${NOTICE_VERSION}`);
 		await expect(page.getByRole('region', { name: 'Legal Notice' })).toContainText(
 			'Who publishes Lodestar'
 		);

@@ -13,6 +13,7 @@ import {
 	type MockLike
 } from '../../src/lib/features/settings/form/testing/e2e-backend';
 import { body, expect, hits, server } from '../search-results.fixtures';
+import { NOTICE_VERSION } from '../support/notice';
 import { test } from '../support/test';
 import { capture, freeze } from './capture';
 
@@ -171,7 +172,7 @@ test.describe('setup', () => {
 			new URL('../../../docs/legal/legal-notice.md', import.meta.url),
 			'utf8'
 		);
-		mock.on('getLegalNotice', { version: 3, text });
+		mock.on('getLegalNotice', { version: NOTICE_VERSION, text });
 		await go('/setup');
 		await expect(page.getByRole('region', { name: 'Legal Notice' })).toBeVisible();
 		await ready(page);

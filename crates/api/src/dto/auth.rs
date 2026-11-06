@@ -51,8 +51,8 @@ pub struct SetupRequest {
 /// `GET /legal/notice`: the Legal Notice this build shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
-    "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 3 · 2026-11-05**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
-    "version": 3
+    "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 4 · 2026-11-06**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+    "version": 4
 }))]
 pub struct LegalNotice {
     /// Raised only when the notice changes in substance; send it back to
