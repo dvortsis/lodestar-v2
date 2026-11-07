@@ -74,7 +74,11 @@ fn the_two_notice_copies_are_identical() {
 fn peer_ttl_matches_the_thirty_minute_sentence() {
     let n = read(NOTICE);
     let minutes = lodestar_dht::PEER_TTL.as_secs() / 60;
-    assert_eq!(lodestar_dht::PEER_TTL, Duration::from_secs(minutes * 60));
+    assert_eq!(
+        lodestar_dht::PEER_TTL,
+        Duration::from_secs(minutes * 60),
+        "Legal Notice section 2: PEER_TTL is no longer a whole number of minutes"
+    );
     require(
         &n,
         "2 (What Lodestar does on your network)",
@@ -100,7 +104,10 @@ fn registered_sources_and_consent_classes_match_section_2() {
         ("torrent cache", "plugins.push(cache.plugin.clone())"),
         ("Sonarr and Radarr webhooks", "plugins.push(arr)"),
     ] {
-        assert!(services.contains(needle), "{what} is no longer registered");
+        assert!(
+            services.contains(needle),
+            "Legal Notice section 2: {what} is no longer registered"
+        );
     }
     require(
         &n,
@@ -120,17 +127,22 @@ fn registered_sources_and_consent_classes_match_section_2() {
     // contact nothing; the DHT needs none.
     assert_eq!(
         lodestar_sources_plugins::torrent_cache::MANIFEST.consent,
-        Consent::External
+        Consent::External,
+        "Legal Notice section 2: the torrent cache's consent class changed"
     );
     let arr = lodestar_sources_plugins::arr::ArrWebhooks::new();
-    assert_eq!(arr.manifest().consent, Consent::None);
-    assert!(
-        arr.manifest().endpoints.is_empty(),
-        "the webhooks contact nothing"
+    assert_eq!(
+        arr.manifest().consent,
+        Consent::None,
+        "Legal Notice section 2: the webhooks' consent class changed"
     );
     assert!(
-        read("crates/pipeline/src/dht.rs").contains("Consent::None"),
-        "the DHT source's consent changed"
+        arr.manifest().endpoints.is_empty(),
+        "Legal Notice section 2: the webhooks now contact something"
+    );
+    assert!(
+        read("crates/pipeline/src/dht.rs").contains("consent: Consent::None"),
+        "Legal Notice section 2: the DHT source's consent changed"
     );
     require(
         &n,
@@ -193,7 +205,17 @@ fn backup_files_match_section_5() {
         ["lodestar.db", "config.toml", "seal.key", "auth.json"],
         "the backup file list changed; update {s5}'s backup sentence"
     );
-    assert_eq!(SecretStore::KEY_FILE, "secrets.key");
+    assert_eq!(
+        SecretStore::KEY_FILE,
+        "secrets.key",
+        "Legal Notice section 5: the credential key file was renamed"
+    );
+    // The seal key's real path is the one the server uses, not just the
+    // backup list's name for it.
+    assert!(
+        read("crates/lodestar/src/services.rs").contains("data_dir.join(\"seal.key\")"),
+        "Legal Notice section 5: the seal key file was renamed or moved"
+    );
     assert!(
         !files.contains(&SecretStore::KEY_FILE),
         "a backup now holds secrets.key; the notice says it doesn't"
@@ -249,7 +271,11 @@ fn notification_channels_match_the_outbound_list() {
     .into_iter()
     .filter_map(sent)
     .collect();
-    assert_eq!(names, ["webhooks", "ntfy", "Discord", "email"]);
+    assert_eq!(
+        names,
+        ["webhooks", "ntfy", "Discord", "email"],
+        "Legal Notice section 5: the notification channels changed"
+    );
     require(
         &n,
         "5 (Your data)",

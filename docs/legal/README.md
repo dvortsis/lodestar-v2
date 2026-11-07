@@ -17,10 +17,10 @@
 | 2 | `**This version has:** the DHT crawler`, `the **torrent cache**`, `**Sonarr and Radarr webhooks**` | `Services::start` registers exactly three plugins: the DHT, the torrent cache, the webhooks |
 | 2 | `one External source, the **torrent cache**`, `Built: the torrent cache.`, `The torrent cache can't be turned on until you accept the websites it contacts` | torrent cache manifest is `Consent::External` |
 | 2 | `The Sonarr and Radarr webhooks contact nothing and turn on with their switch` | webhooks manifest is `Consent::None` with no endpoints |
-| 2 | `- **External** sources`, `- **Account** sources`, `- **Restricted** sources`, `- **Overlay** sources`, and `None is built yet.` three times | no registered plugin is Account, Restricted or Overlay |
+| 2 | `- **External** sources contact named public websites`, `- **Account** sources`, `- **Restricted** sources`, `- **Overlay** sources`, and `None is built yet.` three times | no registered plugin is Account, Restricted or Overlay |
 | 2 | `marked private for as long as only private sources have reported it`; `If a public source such as the DHT later reports the same torrent, Lodestar treats it as public from then on` | store test: a private then a public sighting clears `flags::PRIVATE_SOURCE` |
-| 5 | `contains the database, the configuration file, the admin password hash with the sign-in sessions and API keys, and the key that unseals quarantined names (`seal.key`)`; `It does not contain `secrets.key`` | `BACKUP_FILES` in `crates/lodestar/src/cli/backup.rs` |
-| 5 | `a key file (`secrets.key`) stored separately from the database` | `SecretStore::KEY_FILE` |
+| 5 | ``contains the database, the configuration file, the admin password hash with the sign-in sessions and API keys, and the key that unseals quarantined names (`seal.key`)``; ``It does not contain `secrets.key` `` | `BACKUP_FILES` in `crates/lodestar/src/cli/backup.rs`, and `services.rs` still opens `seal.key` in the data folder |
+| 5 | ``a key file (`secrets.key`) stored separately from the database`` | `SecretStore::KEY_FILE` |
 | 5 | `for notification channels you set up (ntfy, Discord, email, webhooks)` | `lodestar_integrations::notify::Channel` (RSS is served, not sent) |
 | 5 | `(by default the `logs` folder inside the data folder)` | default `settings.logging.file_folder` in `settings/logging.rs` |
 | 5 | `keeps its restart record in a folder outside the data folder` | `default_witness_dir` in `config.rs` doesn't use the data folder |
