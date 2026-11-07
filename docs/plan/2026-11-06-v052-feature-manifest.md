@@ -569,6 +569,14 @@ The collector and analyzer should know the new series:
 
 None of these is a way to turn something on. The decisions file lists them.
 
+**Known issue in an inactive feature (runner, 2026-11-07):**
+- **The bug:** with streaming peers on (CR-1a-S, #251), a streaming lookup that ends with no peers on its last attempt underflows the pool's `lookups` count (`crates/sources/src/pool.rs`). A debug build panics. A release build stops starting lookups.
+- **The default build isn't exposed:**
+  - `dht.streaming_peers` defaults to `false` (`crates/lodestar/src/config.rs:225`), checked by `config.rs::tests::streaming_peers_is_off_unless_asked_for`.
+  - Only `config.toml` (`[dht] streaming_peers`) or `LODESTAR_DHT_STREAMING_PEERS` (`config.rs:775`) turns it on.
+  - No Settings screen, API or packaging file sets it.
+- **The fix:** it lands on `main` in #579. Backport it into `release/v0.5.2` in rc.1 if #579 has merged by then, otherwise in rc.2 (runner's call).
+
 ### 9.6 Release notes and the Legal Notice
 
 - **The Legal Notice was wrong at the cut, and this PR fixes it.** §2 said the torrent cache "can only be turned on through the API". At the cut the screen exists (#552) and the gate refuses it everywhere (#537, #553).
