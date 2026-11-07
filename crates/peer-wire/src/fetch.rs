@@ -785,9 +785,8 @@ mod tests {
         assert_eq!(result_bound(usize::MAX, None), usize::MAX);
         // The first window is exactly what's requested before any reply.
         let mut a = Assembly::new(FIRST_WINDOW * 3);
-        let first: usize = std::iter::from_fn(|| a.next_request())
-            .map(|p| a.piece_len(p))
-            .sum();
+        let requested: Vec<usize> = std::iter::from_fn(|| a.next_request()).collect();
+        let first: usize = requested.iter().map(|&p| a.piece_len(p)).sum();
         assert_eq!(first, FIRST_WINDOW);
     }
 

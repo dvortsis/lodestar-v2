@@ -2868,7 +2868,9 @@ mod budget {
     #[tokio::test(start_paused = true)]
     async fn growths_go_first_and_always_complete() {
         let (now, total) = (500usize, 2_000usize);
-        let limit = 3 * (KEY + now as u64) + (total - now) as u64;
+        // Room for exactly one small claim beside three grown windows' worth,
+        // so only growth's priority holds the small one back.
+        let limit = 3 * (KEY + now as u64) + (total - now) as u64 + KEY + 1;
         let b = Arc::new(Budget::new(limit as usize));
         let claims: Vec<Reservation> = (0..3).map(|_| Reservation::new(b.clone())).collect();
         for c in &claims {
@@ -2899,7 +2901,10 @@ mod budget {
         });
         tokio::time::sleep(Duration::from_secs(10)).await;
         assert!(waits.iter().all(|w| !w.is_finished()));
-        assert!(!small_wait.is_finished(), "growth goes first");
+        assert!(
+            !small_wait.is_finished(),
+            "growth goes first, though it fits"
+        );
         assert!(!b.has_room());
         let mut claims = claims.into_iter();
         drop(claims.next());

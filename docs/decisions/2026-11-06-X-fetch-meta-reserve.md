@@ -110,7 +110,8 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
   - **`fetches_wait_for_room_and_stay_within_their_reservations`:** 8 peers with 200 KB dicts against a budget that fits two. The budget starts full, so every fetch waits at its hook and none downloads. Once the budget is freed, all complete; the most reserved at once stays within the budget, and each result's heap fits its reservation.
   - **`no_piece_is_requested_before_the_reservation`:** the raw peer sees its first metadata request only after the hook's grant.
   - **`a_peer_announcing_max_metadata_reserves_exactly_its_bound`** (above).
-  - **`a_large_claim_reserves_its_first_window_until_a_piece_arrives`:** a peer claiming 8 MiB that sends wrong-length pieces reserves only the first window; an honest 3 MiB dict reserves the window, then the whole bound.
+  - **`a_large_claim_reserves_its_first_window_until_a_piece_arrives`:** a peer claiming 8 MiB whose pieces don't match its claim reserves only the first window; an honest 3 MiB dict reserves the window, then the whole bound.
+  - **`growth_waits_for_the_whole_first_window`:** a raw peer announcing 4 MiB that sends 1 or 63 valid pieces and then goes silent never gets more than the window reserved; one that sends all 64 does.
   - **`a_peer_that_announces_then_stalls_ends_at_the_deadline`**, **`a_peer_that_announces_then_closes_frees_its_reservation`**, **`a_peer_that_sends_more_than_it_announced_is_refused`:** each one reserved, ended as it should, and left nothing reserved once its holder dropped.
 - **`crates/peer-wire/src/fetch.rs` unit tests:** `Assembly` never grows past the announced size, whatever order pieces arrive in, and the bound covers the name and a full PEX list.
 - **`crates/sources/src/pool.rs` unit tests (`mod budget`)**, the two partial-claim tests above, and:
@@ -131,4 +132,7 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
   - no budget check in `try_grow`;
   - no drain deadline;
   - waited-out fetches charged as failures;
-  - dispatch ignoring waiting reservations.
+  - dispatch ignoring waiting reservations;
+  - growth after the first piece instead of the whole window;
+  - no partial-claim admission rule;
+  - first reservations not waiting behind a growth.

@@ -627,3 +627,91 @@ async fn a_large_claim_reserves_its_first_window_until_a_piece_arrives() {
     drop((o, held));
     assert_eq!(budget.reserved(), 0);
 }
+
+/// A raw plaintext peer that announces `size` and answers the first
+/// `serve` metadata requests with pieces of the right length, then goes
+/// silent (but keeps the connection open) until the test ends.
+async fn serving_peer(info_hash: [u8; 20], size: usize, serve: usize) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.unwrap();
+        let mut theirs = [0u8; message::HANDSHAKE_LEN];
+        s.read_exact(&mut theirs).await.unwrap();
+        s.write_all(&message::handshake(
+            &info_hash,
+            b"-RW0001-rawrawrawraw",
+            true,
+        ))
+        .await
+        .unwrap();
+        let send = |ext_id: u8, body: Vec<u8>| {
+            let mut frame = ((body.len() + 2) as u32).to_be_bytes().to_vec();
+            frame.extend([20, ext_id]);
+            frame.extend(body);
+            frame
+        };
+        s.write_all(&send(0, message::our_extended_handshake(Some(size))))
+            .await
+            .unwrap();
+        let mut served = 0;
+        loop {
+            let mut len = [0u8; 4];
+            if s.read_exact(&mut len).await.is_err() {
+                return;
+            }
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            if s.read_exact(&mut body).await.is_err() {
+                return;
+            }
+            if body.len() < 2 || body[0] != 20 || body[1] != message::OUR_UT_METADATA {
+                continue;
+            }
+            let Ok(message::MetadataMessage::Request { piece }) =
+                message::parse_metadata_message(&body[2..])
+            else {
+                continue;
+            };
+            if served == serve {
+                continue;
+            }
+            served += 1;
+            let piece = piece as usize;
+            let start = piece * message::METADATA_PIECE;
+            let len = (size - start).min(message::METADATA_PIECE);
+            let reply = message::metadata_data(piece, size, &vec![0x55; len]);
+            // The fetch reads it as `ut_metadata` with its own id.
+            s.write_all(&send(1, reply)).await.unwrap();
+        }
+    });
+    addr
+}
+
+/// A peer that sends part of the first window of a large claim never gets
+/// the claim reserved: growth waits for the whole window (1 MiB). Once it
+/// sends the whole window, the fetch reserves the rest.
+#[tokio::test]
+async fn growth_waits_for_the_whole_first_window() {
+    const WINDOW_PIECES: usize = 64;
+    let size = 4 << 20;
+    for (serve, grows) in [
+        (1, false),
+        (WINDOW_PIECES - 1, false),
+        (WINDOW_PIECES, true),
+    ] {
+        let hash = [9u8; 20];
+        let addr = serving_peer(hash, size, serve).await;
+        let budget = TestBudget::new(16 << 20);
+        let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut o = budget.opts(held.clone());
+        o.timeout = Duration::from_secs(3);
+        let r = fetch(addr, InfoHash(hash), &o).await;
+        assert!(matches!(r, Err(Error::Timeout)), "{serve}: {r:?}");
+        let calls = budget.calls.lock().unwrap().clone();
+        let total = calls[0].1;
+        let grew = calls.iter().any(|&(now, _)| now == total);
+        assert_eq!(grew, grows, "{serve} pieces served: {calls:?}");
+        drop((o, held));
+        assert_eq!(budget.reserved(), 0);
+    }
+}
