@@ -316,6 +316,43 @@ impl Preparer {
         self.codec.active()
     }
 
+    /// Whether a blob naming dictionary `id` can be read (and stored:
+    /// [`Store::write`] refuses a blob naming one it doesn't know).
+    pub fn has_dict(&self, id: i64) -> bool {
+        self.codec.has_dict(id)
+    }
+
+    /// Decodes a file-tree blob prepared elsewhere (a remote worker's,
+    /// WK-9), refusing one that decompresses to more than `max` bytes, or
+    /// whose paths would hold more than `max_components` components in
+    /// all, nest deeper than metainfo allows or list more files than it
+    /// allows (checked by [`filetree::shape`] before any path is built).
+    /// Also returns how many bytes it decompressed to and its components.
+    pub fn decode_files(
+        &self,
+        blob: &Compressed,
+        max: usize,
+        max_components: u64,
+    ) -> Result<(FileTree, usize, u64)> {
+        let raw = self
+            .codec
+            .decompress_capped(blob.codec, blob.dict_id, &blob.data, max)?;
+        let shape = filetree::shape(&raw)?;
+        let limits = lodestar_metainfo::Limits::DEFAULT;
+        if shape.depth > limits.max_path_depth
+            || shape.files > limits.max_files
+            || shape.components > max_components
+        {
+            return Err(Error::Corrupt("file tree over its limits"));
+        }
+        Ok((filetree::decode(&raw)?, raw.len(), shape.components))
+    }
+
+    /// Whether raw info dicts are kept (`archive_raw`).
+    pub fn archive_raw(&self) -> bool {
+        self.archive_raw
+    }
+
     /// `raw_info` is the info dict as fetched; it's kept (minus `pieces`)
     /// only when archiving is on.
     pub fn prepare(&mut self, info: &Info, raw_info: Option<&[u8]>) -> Result<Prepared> {
@@ -1605,7 +1642,34 @@ mod tests {
                 assert_eq!(a, b);
                 assert_eq!(b.files.dict_id, with_dict.then_some(7));
                 assert_eq!(b.raw.is_some(), archive_raw);
+                // A worker's blob decodes, under the coordinator's
+                // dictionaries, to the tree the local path stores (WK-9).
+                let (tree, took, parts) = ours.decode_files(&b.files, 1 << 20, 1 << 20).unwrap();
+                assert_eq!(parts, 6, "six files, one component each");
+                assert!(
+                    ours.decode_files(&b.files, 1 << 20, 5).is_err(),
+                    "over its components"
+                );
+                assert_eq!(
+                    tree,
+                    FileTree {
+                        encoding: parsed.path_encoding,
+                        files: parsed.files.clone(),
+                    }
+                );
+                assert_eq!(
+                    took,
+                    filetree::encode(&parsed.files, parsed.path_encoding)
+                        .unwrap()
+                        .len()
+                );
+                assert!(
+                    ours.decode_files(&b.files, took - 1, 1 << 20).is_err(),
+                    "over its cap"
+                );
             }
+            assert_eq!(ours.has_dict(7), with_dict);
+            assert!(!ours.has_dict(8));
         }
     }
 }

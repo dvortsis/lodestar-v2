@@ -340,6 +340,51 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         get(&l.outstanding),
     );
 
+    // Remote workers' results (WK-9), all 0 on a single machine.
+    let r = &m.remote().stats;
+    o.family(
+        "remote_records_total",
+        "counter",
+        "Records in remote workers' Results batches, by what became of them.",
+    );
+    for (label, c) in [
+        ("committed", &r.committed),
+        ("stale", &r.stale),
+        ("late", &r.late),
+        ("late_refused", &r.late_refused),
+        ("purged", &r.purged),
+        ("refused", &r.refused),
+    ] {
+        o.value(
+            "remote_records_total",
+            &format!("outcome=\"{label}\""),
+            get(c),
+        );
+    }
+    o.one(
+        "remote_undecodable_total",
+        "counter",
+        "Results payloads that didn't decode (answered, then dropped).",
+        get(&r.undecodable),
+    );
+    o.one(
+        "remote_backpressure_total",
+        "counter",
+        "Results batches refused for now because the intake's queue was full.",
+        get(&r.backpressure),
+    );
+    o.family(
+        "remote_hints_total",
+        "counter",
+        "Peer hints relayed in memory, or dropped by the network policy.",
+    );
+    o.value("remote_hints_total", "outcome=\"relayed\"", get(&r.hints));
+    o.value(
+        "remote_hints_total",
+        "outcome=\"dropped\"",
+        get(&r.hints_dropped),
+    );
+
     let h = m.have();
     o.one(
         "have_entries",

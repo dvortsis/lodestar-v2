@@ -23,7 +23,7 @@
 //! remote workers are allowed, so a key can never be leased twice (once
 //! locally, once remotely).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use lodestar_metainfo::InfoHash;
@@ -309,6 +309,10 @@ pub struct NoEvents;
 
 impl LeaseEvents for NoEvents {}
 
+/// Recent commits: each key's latest commit number, and `(number, key)` in
+/// commit order.
+type Recent = (HashMap<InfoHash, u64>, VecDeque<(u64, InfoHash)>);
+
 #[derive(Debug)]
 struct AuthorityState {
     table: LeaseTable,
@@ -320,8 +324,11 @@ struct AuthorityState {
     /// they're skipped, and it's cleared whenever `pending` empties.
     order: VecDeque<InfoHash>,
     /// Kept only once remote workers are allowed ([`LeaseAuthority::serve_remote`]),
-    /// so a single machine pays nothing.
-    recent: Option<(HashSet<InfoHash>, VecDeque<InfoHash>)>,
+    /// so a single machine pays nothing. Each key maps to the sequence
+    /// number of its latest commit; the queue holds `(seq, key)` in commit
+    /// order, and an entry is evicted only if it is still that key's latest
+    /// (a re-commit takes a new slot, so its old one never evicts it).
+    recent: Option<Recent>,
     /// Commits remembered so far (a sequence number, see
     /// [`LeaseAuthority::commit_seq`]).
     commits: u64,
@@ -350,19 +357,22 @@ impl AuthorityState {
             && self
                 .recent
                 .as_ref()
-                .is_some_and(|(set, _)| set.contains(key))
+                .is_some_and(|(seqs, _)| seqs.contains_key(key))
     }
 
     fn remember_commit(&mut self, key: InfoHash) {
-        if let Some((set, order)) = &mut self.recent
-            && set.insert(key)
-        {
+        if let Some((seqs, order)) = &mut self.recent {
             self.commits += 1;
-            order.push_back(key);
-            if order.len() > RECENT_COMMITS
-                && let Some(old) = order.pop_front()
-            {
-                set.remove(&old);
+            let seq = self.commits;
+            seqs.insert(key, seq);
+            order.push_back((seq, key));
+            while order.len() > RECENT_COMMITS {
+                let Some((old_seq, old)) = order.pop_front() else {
+                    break;
+                };
+                if seqs.get(&old) == Some(&old_seq) {
+                    seqs.remove(&old);
+                }
             }
         }
     }
@@ -428,7 +438,7 @@ impl LeaseAuthority {
     pub fn serve_remote(&self) {
         let mut s = self.lock();
         if s.recent.is_none() {
-            s.recent = Some((HashSet::new(), VecDeque::new()));
+            s.recent = Some((HashMap::new(), VecDeque::new()));
         }
     }
 
@@ -545,6 +555,26 @@ impl LeaseAuthority {
         let token = s.table.restore(worker, key, lease, now);
         self.gauge(&s);
         token
+    }
+
+    /// [`restore`](Self::restore), only if `key` is neither leased nor
+    /// waiting for a re-grant, checked and done under one lock: the token,
+    /// or `None` and nothing changed. For a late result (plan Q7, WK-9),
+    /// which may never take over a key in flight.
+    pub fn restore_if_free(
+        &self,
+        worker: WorkerId,
+        key: InfoHash,
+        lease: RestoredLease,
+        now: i64,
+    ) -> Option<Token> {
+        let mut s = self.lock();
+        if s.table.get(&key).is_some() || s.pending.contains_key(&key) {
+            return None;
+        }
+        let token = s.table.restore(worker, key, lease, now);
+        self.gauge(&s);
+        Some(token)
     }
 
     pub fn heartbeat(&self, worker: WorkerId, now: i64) {
@@ -733,6 +763,13 @@ impl LeaseAuthority {
         }
         self.gauge(&s);
         true
+    }
+
+    /// Whether `key` is in flight: leased to any worker, or waiting for a
+    /// re-grant (late results, plan Q7).
+    pub fn in_flight(&self, key: &InfoHash) -> bool {
+        let s = self.lock();
+        s.table.get(key).is_some() || s.pending.contains_key(key)
     }
 
     /// Leases held now.
@@ -1148,5 +1185,75 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A key committed again takes a new slot in the recent commits: the
+    /// entry of its first commit, evicted later, never evicts it (WK-9,
+    /// from WK-0's review). Before, a re-commit kept only its first slot,
+    /// so a claim racing the second commit could be granted and harvested
+    /// again once the first slot rolled over.
+    #[test]
+    fn a_re_commit_keeps_its_place_in_the_recent_commits() {
+        let (a, _) = counted();
+        a.serve_remote();
+        let key = |n: u64| {
+            let mut k = [7; 20];
+            k[..8].copy_from_slice(&n.to_le_bytes());
+            InfoHash(k)
+        };
+        let commit = |k: InfoHash| {
+            let c = Claim {
+                key: k,
+                ..claim(1, 0)
+            };
+            let Claimed::Granted(t) = a.claim(WorkerId::LOCAL, c, 1) else {
+                panic!()
+            };
+            assert!(a.release(&k, t).is_some());
+        };
+        let first = InfoHash([1; 20]);
+        commit(first);
+        for n in 0..(RECENT_COMMITS as u64 - 1) {
+            commit(key(n));
+        }
+        // Committed again (a late result, say), then one more commit pushes
+        // its first slot out.
+        commit(first);
+        let seq = a.commit_seq();
+        commit(key(u64::MAX));
+        assert_eq!(
+            a.claim_batch(A, &[claim(1, 0)], 2, None, Some(seq)),
+            vec![BatchAnswer::Committed],
+            "remembered by its second commit"
+        );
+        assert!(!a.in_flight(&first));
+    }
+
+    /// A late result's lease is taken only for a key that is neither held
+    /// nor waiting, in one step: never over a waiting key's lease, and only
+    /// once however often it's asked.
+    #[test]
+    fn a_restore_if_free_never_takes_a_key_in_flight() {
+        let (a, ev) = counted();
+        let lease = RestoredLease {
+            cohort: 2,
+            source: src(1),
+            sources: 2,
+            strategy: 0,
+            discovered_at: 7_200,
+        };
+        let key = InfoHash([3; 20]);
+        let Claimed::Granted(_) = a.claim(B, claim(3, 1), 0) else {
+            panic!()
+        };
+        assert_eq!(a.restore_if_free(A, key, lease, 1), None, "held");
+        assert_eq!(a.evict(B), 1);
+        assert_eq!(a.restore_if_free(A, key, lease, 1), None, "waiting");
+        assert_eq!(a.pending(), 1, "the waiting lease is untouched");
+        let free = InfoHash([4; 20]);
+        let t = a.restore_if_free(A, free, lease, 1).unwrap();
+        assert_eq!(a.restore_if_free(A, free, lease, 1), None, "only once");
+        assert_eq!(a.held(A, &free, t).unwrap().cohort, 2);
+        assert_eq!(get(&ev.harvested), 1, "a restore is never a harvest");
     }
 }

@@ -1,0 +1,811 @@
+//! The coordinator's intake of what remote workers send (architecture
+//! §19.3, §19.4, §19.5, §18.7; workers plan WK-9).
+//!
+//! **Results.** A `Results` payload is decoded with WK-6's codec, all or
+//! nothing. Each record is then fenced against the lease table: a record
+//! whose token isn't the current lease of the worker that sent it is
+//! dropped and counted as stale (§19.3). A survivor is rebuilt before it
+//! goes to the writer, which re-judges it like every remote result
+//! (`writer::rejudge`), so nothing that is stored or judged rests on the
+//! worker's word:
+//! - the file list is decoded from the blob, under a cap derived from the
+//!   row's own `info_size` and metainfo's limits, and a batch-wide budget;
+//! - `size` and `file_count` must match it, and the blob must name a
+//!   dictionary the coordinator has;
+//! - the classification and the enrichment are rebuilt from the name and
+//!   that file list (`enrich_infos`): **the worker's enrichment record is
+//!   never stored**, of any version, since search builds its adult term
+//!   and tags from the stored record bytes;
+//! - `sources` and `private_source` come from the lease, `metadata_at` is
+//!   corrected by the worker's clock offset and kept between the key's
+//!   discovery and now, and the worker's verdict, rule fix and
+//!   always-adult mark are dropped (the writer judges again, and finds an
+//!   always-adult source from the lease's sources);
+//! - a raw dict is kept only while the coordinator's `archive_raw` is on.
+//!
+//! A record refused for its content ends its lease as `Invalid`, once.
+//!
+//! **Late results (plan Q7).** A record under a token from an earlier
+//! epoch (a coordinator restart since) is committed only when its key is
+//! neither stored nor in flight now, under a lease rebuilt from the
+//! coordinator's own record of the key (the fetch queue it started from),
+//! never the worker's. It never counts "harvested" again; the key's
+//! earlier terminal outcome gets a `LATE_RESULTS` correction beside it, so
+//! the funnel still reconciles. A late result from a quarantined, revoked
+//! or purged worker is refused outright, and so is any result older than
+//! that worker's last purge ([`Standing`], which WK-13 fills).
+//!
+//! **The queue (§19.5).** Results wait in a small queue in front of the
+//! writer. While it's full, a batch is refused for now and the worker sends
+//! it again; the sink never blocks the session.
+//!
+//! **Still to come (WK-9b):** counters into the rollups with a worker
+//! dimension, grants held back while the writer is behind (WK-0's
+//! `GrantAdmission`), and remote and waiting leases in the fetch queue.
+//! Until then a `Counters` payload is refused (the worker's spool keeps
+//! it) and no admission hook is set.
+//!
+//! **Peer hints** are relayed in memory only (§18.7), filtered with
+//! `lodestar_network_policy::allows`; nothing here writes one anywhere.
+//!
+//! Every batch that was read is answered `accepted`, stale or refused
+//! records included, so the worker calls `committed` and drops what it
+//! held for it; only the queue being full answers "send it again later".
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
+
+use lodestar_cluster::proto::{HintItem, Outcome, Payload};
+use lodestar_cluster::{
+    ClusterServer, InboundSink, Lease, LeaseAuthority, RestoredLease, StoredKeys, Token, WorkerId,
+};
+use lodestar_filter::{Trail, Verdict};
+use lodestar_metainfo::{InfoHash, Limits};
+use lodestar_sources::{Discovery, Found, Loss};
+use lodestar_store::{Preparer, SourceId};
+use tokio::sync::mpsc;
+
+use crate::rollups::{Rollups, metric};
+use crate::wire::{ResultRecord, ResultsBatch};
+use crate::worker::Results;
+
+/// Payloads waiting in front of the writer, at most (each ≤ 512 KiB).
+pub const INTAKE_QUEUE: usize = 16;
+
+/// A blob may decompress to its info dict's size plus this much (the file
+/// tree is never larger than the dict it was built from, plus its header).
+pub const BLOB_SLACK: usize = 4 << 10;
+
+/// What one blob may decompress to, at most: metainfo's info dict cap.
+pub const MAX_BLOB: usize = Limits::DEFAULT.max_info_bytes;
+
+/// What one batch's blobs may decompress to, in total. A record that would
+/// pass it is refused alone.
+pub const BATCH_BLOBS: usize = 64 << 20;
+
+/// Path components one batch's file trees may hold in all, and so one
+/// record's: metainfo's bencode item cap (`max_items`), which a single
+/// largest torrent fits. Each costs a few dozen bytes once decoded, so a
+/// batch's file lists stay within about 150 MB however its blobs are shaped
+/// (`filetree::decode` copies a directory's path into each child's).
+pub const BATCH_COMPONENTS: u64 = 2_000_000;
+
+/// What the rest of one batch may still decode.
+#[derive(Debug, Clone, Copy)]
+struct Budget {
+    bytes: usize,
+    components: u64,
+}
+
+/// A late result is possible only while a spool can hold one (24 h,
+/// owner §2.17); the start's records are dropped after this.
+pub const LATE_FOR_SECS: i64 = 25 * 3600;
+
+/// Whether a worker's results may still be taken (plan Q7). WK-13 fills it
+/// from quarantine and purge-by-worker; until then [`NoStanding`].
+pub trait Standing: Send + Sync + 'static {
+    /// Every late result from `worker` is refused: it is quarantined,
+    /// revoked or purged.
+    fn refuses_late(&self, worker: WorkerId) -> bool;
+    /// Unix seconds of `worker`'s last purge: any result fetched at or
+    /// before it is refused, late or not.
+    fn last_purge(&self, worker: WorkerId) -> Option<i64>;
+}
+
+/// No quarantine or purge yet (before WK-13).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoStanding;
+
+impl Standing for NoStanding {
+    fn refuses_late(&self, _: WorkerId) -> bool {
+        false
+    }
+    fn last_purge(&self, _: WorkerId) -> Option<i64> {
+        None
+    }
+}
+
+/// Each worker's clock offset as the coordinator measured it (§19.3):
+/// worker clock − coordinator clock, in milliseconds.
+pub trait Clocks: Send + Sync + 'static {
+    fn offset_ms(&self, worker: WorkerId) -> i64;
+}
+
+/// Counters for metrics.
+#[derive(Debug, Default)]
+pub struct RemoteStats {
+    /// `Results` payloads read, and records in them.
+    pub batches: AtomicU64,
+    pub records: AtomicU64,
+    /// Records handed to the writer (late ones included). A resend read
+    /// before the first copy's commit ends the lease is handed over too;
+    /// the writer's own fence stores it once.
+    pub committed: AtomicU64,
+    /// Under a token that isn't the sender's current lease (current epoch),
+    /// or a late result whose key is stored or in flight.
+    pub stale: AtomicU64,
+    /// Late results handed to the writer, and refused outright (Q7).
+    pub late: AtomicU64,
+    pub late_refused: AtomicU64,
+    /// Results fetched before the worker's last purge.
+    pub purged: AtomicU64,
+    /// Records refused for their content (counts, blob, dictionary, a
+    /// hybrid hash naming another stored torrent).
+    pub refused: AtomicU64,
+    /// Payloads that didn't decode (answered, and dropped).
+    pub undecodable: AtomicU64,
+    /// Batches refused for now because the queue was full.
+    pub backpressure: AtomicU64,
+    /// Peer hints relayed to a holder, and dropped by the network policy.
+    pub hints: AtomicU64,
+    pub hints_dropped: AtomicU64,
+}
+
+fn bump(c: &AtomicU64) {
+    c.fetch_add(1, Ordering::Relaxed);
+}
+
+fn epoch_of(token: Token) -> u32 {
+    (token.0 >> 32) as u32
+}
+
+/// The fetch queue the coordinator started from: its own record of keys
+/// in flight before the restart, for late results (Q7).
+///
+/// Kept only when remote workers are allowed at the start; empty
+/// otherwise, so a single machine holds nothing. Bounded by the start
+/// queue, which the pool caps (`PoolConfig::max_pending`, 200,000 keys),
+/// at about 30 bytes a key (the key, its cohort hour, source and
+/// strategy: what the restart restored, so nothing is lost by keeping no
+/// more). It never grows after the start: each key is removed when its
+/// late result is committed, and the whole map is dropped
+/// [`LATE_FOR_SECS`] after the start, when no spool can hold a result
+/// from before it.
+#[derive(Debug, Default)]
+pub struct Prior {
+    keys: HashMap<[u8; 20], (i32, u8, u8)>,
+    until: i64,
+    started_at: i64,
+}
+
+impl Prior {
+    /// `queue`: the fetch queue as the start read it, restored as leases.
+    pub fn new(
+        queue: impl IntoIterator<Item = (InfoHash, RestoredLease)>,
+        started_at: i64,
+    ) -> Prior {
+        let keys = queue
+            .into_iter()
+            .filter_map(|(k, l)| {
+                Some((
+                    k.0,
+                    (i32::try_from(l.cohort).ok()?, l.source.get(), l.strategy),
+                ))
+            })
+            .collect();
+        Prior {
+            keys,
+            until: started_at.saturating_add(LATE_FOR_SECS),
+            started_at,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// The key's lease as the start restored it (`lib.rs`: a refetch's
+    /// discovery is the start's hour).
+    fn get(&mut self, key: &InfoHash, now: i64) -> Option<RestoredLease> {
+        if now > self.until && !self.keys.is_empty() {
+            self.keys = HashMap::new();
+        }
+        let &(cohort, source, strategy) = self.keys.get(&key.0)?;
+        let source = SourceId::new(source)?;
+        let cohort = i64::from(cohort);
+        let discovered_at = if crate::in_funnel(cohort) {
+            cohort * 3600
+        } else {
+            self.started_at.div_euclid(3600) * 3600
+        };
+        Some(RestoredLease {
+            cohort,
+            source,
+            sources: 1u64 << source.get(),
+            strategy,
+            discovered_at,
+        })
+    }
+
+    fn remove(&mut self, key: &InfoHash) {
+        self.keys.remove(&key.0);
+    }
+}
+
+/// What the pipeline gives the intake when it starts.
+pub struct RemoteParts {
+    pub authority: Arc<LeaseAuthority>,
+    /// The writer's input, shared with the built-in worker.
+    pub writer: mpsc::Sender<Results>,
+    /// The built-in worker's pool, for hints a remote worker found.
+    pub pool: mpsc::Sender<Discovery>,
+    pub rollups: Arc<Rollups>,
+    /// The store's dictionaries and `archive_raw`.
+    pub preparer: Preparer,
+    /// This run's first epoch (its start time): a token from below it is
+    /// a late result.
+    pub epoch: u32,
+    pub prior: Prior,
+    /// Sources whose every find is private (`finds_private`), as a bitset.
+    pub private_sources: u64,
+}
+
+impl std::fmt::Debug for RemoteParts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteParts")
+            .field("epoch", &self.epoch)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The coordinator's intake: one per pipeline, shared by every cluster
+/// server built on it ([`RemoteIntake::sink`]).
+pub struct RemoteIntake {
+    authority: Arc<LeaseAuthority>,
+    /// `None` once the pipeline is stopping, so the writer's input closes.
+    writer: RwLock<Option<mpsc::Sender<Results>>>,
+    pool: RwLock<Option<mpsc::Sender<Discovery>>>,
+    rollups: Arc<Rollups>,
+    preparer: Mutex<Preparer>,
+    archive_raw: bool,
+    epoch: u32,
+    prior: Mutex<Prior>,
+    private_sources: u64,
+    /// The server running now, for hints the built-in worker found.
+    server: RwLock<Option<(Weak<ClusterServer>, bool)>>,
+    pub stats: Arc<RemoteStats>,
+}
+
+impl std::fmt::Debug for RemoteIntake {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteIntake")
+            .field("epoch", &self.epoch)
+            .finish_non_exhaustive()
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// What the cluster port gives the intake when it opens.
+pub struct SinkParts {
+    pub standing: Arc<dyn Standing>,
+    pub stored: Arc<dyn StoredKeys>,
+    pub clocks: Arc<dyn Clocks>,
+    /// `lodestar_network_policy::allows`' `allow_private` for hints.
+    pub hints_allow_private: bool,
+}
+
+impl std::fmt::Debug for SinkParts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SinkParts")
+            .field("hints_allow_private", &self.hints_allow_private)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One batch, as decoded and fenced.
+#[derive(Debug, Default)]
+pub struct Taken {
+    /// For the writer.
+    pub results: Vec<Results>,
+}
+
+/// Why a record was refused for its content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    UnknownDictionary,
+    Blob,
+    Counts,
+    OtherHashStored,
+}
+
+impl RemoteIntake {
+    pub fn new(p: RemoteParts) -> RemoteIntake {
+        let archive_raw = p.preparer.archive_raw();
+        RemoteIntake {
+            authority: p.authority,
+            writer: RwLock::new(Some(p.writer)),
+            pool: RwLock::new(Some(p.pool)),
+            rollups: p.rollups,
+            preparer: Mutex::new(p.preparer),
+            archive_raw,
+            epoch: p.epoch,
+            prior: Mutex::new(p.prior),
+            private_sources: p.private_sources,
+            server: RwLock::new(None),
+            stats: Arc::new(RemoteStats::default()),
+        }
+    }
+
+    fn writer(&self) -> Option<mpsc::Sender<Results>> {
+        self.writer
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn pool(&self) -> Option<mpsc::Sender<Discovery>> {
+        self.pool
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The pipeline is stopping: lets go of the writer's and the pool's
+    /// inputs, so they close when the built-in worker's do. Anything still
+    /// arriving is refused (and stays in the worker's spool).
+    pub fn close(&self) {
+        *self.writer.write().unwrap_or_else(PoisonError::into_inner) = None;
+        *self.pool.write().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// Keys of the start's fetch queue still kept for late results (0 with
+    /// workers off at the start, or 25 h after it).
+    pub fn late_records(&self) -> usize {
+        let mut prior = lock(&self.prior);
+        let _ = prior.get(&InfoHash([0; 20]), crate::unix_now());
+        prior.len()
+    }
+
+    /// Whether every source of a key is a private one (§18.7).
+    fn private(&self, sources: u64) -> bool {
+        self.private_sources != 0 && sources & !self.private_sources == 0
+    }
+
+    /// Takes one `Results` payload from `worker`: decodes it, fences every
+    /// record and rebuilds the survivors. Blocking (decompression and, for
+    /// late results, store reads). `None` if it didn't decode.
+    pub fn take(
+        &self,
+        worker: WorkerId,
+        payload: &[u8],
+        parts: &SinkParts,
+        now: i64,
+    ) -> Option<Taken> {
+        let Ok(batch) = ResultsBatch::decode(payload) else {
+            bump(&self.stats.undecodable);
+            return None;
+        };
+        bump(&self.stats.batches);
+        let offset = parts.clocks.offset_ms(worker);
+        let purge = parts.standing.last_purge(worker);
+        let mut budget = Budget {
+            bytes: BATCH_BLOBS,
+            components: BATCH_COMPONENTS,
+        };
+        let mut out = Taken::default();
+        for rec in batch.records {
+            bump(&self.stats.records);
+            let fetched_at = corrected(rec.metadata_at, offset);
+            if purge.is_some_and(|p| fetched_at <= p) {
+                bump(&self.stats.purged);
+                // A current lease of the sender's ends once, so the key
+                // isn't stranded once the worker forgets it.
+                self.authority
+                    .report(worker, &rec.key, rec.token, Some(Loss::Invalid as u8));
+                continue;
+            }
+            let late = epoch_of(rec.token) < self.epoch;
+            if late {
+                if parts.standing.refuses_late(worker) {
+                    bump(&self.stats.late_refused);
+                    continue;
+                }
+                if let Some(r) = self.late(worker, rec, fetched_at, parts, &mut budget, now) {
+                    out.results.push(r);
+                }
+                continue;
+            }
+            let Some(lease) = self.authority.held(worker, &rec.key, rec.token) else {
+                bump(&self.stats.stale);
+                continue;
+            };
+            let (key, token) = (rec.key, rec.token);
+            match self.rebuild(worker, rec, &lease, fetched_at, parts, &mut budget, now) {
+                Ok(r) => {
+                    bump(&self.stats.committed);
+                    out.results.push(r);
+                }
+                Err(_) => {
+                    bump(&self.stats.refused);
+                    // Ends once: the lease is the sender's, under `token`.
+                    self.authority
+                        .report(worker, &key, token, Some(Loss::Invalid as u8));
+                }
+            }
+        }
+        Some(out)
+    }
+
+    /// A late result (Q7): committed under the coordinator's own record of
+    /// the key, only when it's neither stored nor in flight now.
+    fn late(
+        &self,
+        worker: WorkerId,
+        rec: ResultRecord,
+        fetched_at: i64,
+        parts: &SinkParts,
+        budget: &mut Budget,
+        now: i64,
+    ) -> Option<Results> {
+        let key = rec.key;
+        let Some(record) = lock(&self.prior).get(&key, now) else {
+            // No record of ours: nothing to attribute it to.
+            bump(&self.stats.stale);
+            return None;
+        };
+        if self.authority.in_flight(&key) || parts.stored.stored(&[key])[0] {
+            bump(&self.stats.stale);
+            return None;
+        }
+        let lease = Lease {
+            holder: worker,
+            token: Token(0),
+            cohort: record.cohort,
+            source: record.source,
+            sources: record.sources,
+            strategy: record.strategy,
+            discovered_at: record.discovered_at,
+        };
+        // Rebuilt before any lease exists, so a refusal counts nothing.
+        let Ok(mut r) = self.rebuild(worker, rec, &lease, fetched_at, parts, budget, now) else {
+            bump(&self.stats.refused);
+            return None;
+        };
+        // Not a harvest. Leased only if it's still neither held nor waiting,
+        // in one step under the authority's lock: a claim, an expiry or
+        // another feed in between makes this record stale, never a second
+        // lease or a second correction.
+        let Some(token) = self.authority.restore_if_free(worker, key, record, now) else {
+            bump(&self.stats.stale);
+            return None;
+        };
+        lock(&self.prior).remove(&key);
+        r.token = token;
+        // Its first lease ended with a terminal outcome (it isn't stored or
+        // in flight), and this one will end with another: one correction
+        // beside them keeps harvested = Σ terminal − late + in flight.
+        if crate::in_funnel(record.cohort) {
+            self.rollups.add(
+                record.cohort * 3600,
+                metric::LATE_RESULTS,
+                record.source,
+                0,
+                1,
+            );
+        }
+        bump(&self.stats.late);
+        bump(&self.stats.committed);
+        Some(r)
+    }
+
+    /// The record as the coordinator rebuilds it (module docs).
+    #[allow(clippy::too_many_arguments)]
+    fn rebuild(
+        &self,
+        worker: WorkerId,
+        rec: ResultRecord,
+        lease: &Lease,
+        fetched_at: i64,
+        parts: &SinkParts,
+        budget: &mut Budget,
+        now: i64,
+    ) -> Result<Results, Refusal> {
+        let mut torrent = rec.torrent;
+        let files = {
+            let preparer = lock(&self.preparer);
+            if let Some(id) = torrent.files.dict_id
+                && !preparer.has_dict(id)
+            {
+                return Err(Refusal::UnknownDictionary);
+            }
+            let cap = usize::try_from(torrent.info_size)
+                .unwrap_or(usize::MAX)
+                .saturating_add(BLOB_SLACK)
+                .min(MAX_BLOB)
+                .min(budget.bytes);
+            // A refused blob may have taken its whole cap: charged as such,
+            // so a batch of bombs costs the budget, not 1,024 caps.
+            // Its shape is read before any path is built.
+            let decoded = preparer.decode_files(&torrent.files, cap, budget.components);
+            let (took, parts) = decoded.as_ref().map_or((cap, 0), |(_, b, c)| (*b, *c));
+            budget.bytes = budget.bytes.saturating_sub(took);
+            budget.components = budget.components.saturating_sub(parts);
+            let (tree, _, _) = decoded.map_err(|_| Refusal::Blob)?;
+            crate::enrich::file_infos(&tree.files, tree.encoding)
+        };
+        let content = files.iter().filter(|f| !f.padding);
+        let size = content
+            .clone()
+            .try_fold(0u64, |s, f| s.checked_add(f.size))
+            .ok_or(Refusal::Counts)?;
+        if size != torrent.size || content.count() as u64 != torrent.file_count {
+            return Err(Refusal::Counts);
+        }
+        // A hybrid's other hash is the worker's word: a record that would
+        // merge into another stored torrent through it is refused.
+        let other: Vec<InfoHash> = torrent.swarm_hashes().filter(|h| *h != rec.key).collect();
+        if !other.is_empty() && parts.stored.stored(&other).iter().any(|s| *s) {
+            return Err(Refusal::OtherHashStored);
+        }
+        if !self.archive_raw {
+            torrent.raw = None;
+        }
+        // Content safety: the coordinator's own enrichment, never the
+        // worker's bytes (search reads `Enriched::data`).
+        let (enriched, class) = crate::enrich::enrich_infos(&torrent.name, &files);
+        torrent.enrichment = Some(enriched);
+        let sources = lease.sources | (1u64 << lease.source.get());
+        let private_source = self.private(sources);
+        Ok(Results {
+            key: rec.key,
+            token: lease.token,
+            worker,
+            torrent,
+            sources,
+            metadata_at: fetched_at.clamp(lease.discovered_at.min(now), now),
+            files,
+            class,
+            // Judged again at commit, as every remote result is.
+            verdict: Verdict::default(),
+            version: 0,
+            trail: Trail::default(),
+            fix: None,
+            private_source,
+            source_adult: false,
+        })
+    }
+
+    /// Hints the built-in worker found for a key a remote worker holds:
+    /// relayed to it in memory, through the server running now.
+    pub fn relay_local(&self, key: InfoHash, token: Token, peers: &[SocketAddr]) -> bool {
+        let server = self
+            .server
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|(s, private)| s.upgrade().map(|s| (s, *private)));
+        let Some((server, allow_private)) = server else {
+            return false;
+        };
+        let hints = self.allowed(peers, allow_private);
+        if hints.is_empty() {
+            return false;
+        }
+        let sent = server.relay_hints(key, token, hints);
+        if sent {
+            bump(&self.stats.hints);
+        }
+        sent
+    }
+
+    fn allowed(&self, peers: &[SocketAddr], allow_private: bool) -> Vec<SocketAddr> {
+        let kept: Vec<SocketAddr> = peers
+            .iter()
+            .copied()
+            .filter(|a| lodestar_network_policy::allows(*a, allow_private))
+            .collect();
+        let dropped = (peers.len() - kept.len()) as u64;
+        self.stats
+            .hints_dropped
+            .fetch_add(dropped, Ordering::Relaxed);
+        kept
+    }
+
+    /// The sink and admission hook for a cluster server about to be built
+    /// on this pipeline. Spawns the task that feeds the writer; it ends
+    /// when the server (and so the sink) is dropped.
+    pub fn sink(self: &Arc<Self>, parts: SinkParts) -> Arc<RemoteSink> {
+        let (tx, rx) = mpsc::channel(INTAKE_QUEUE);
+        let parts = Arc::new(parts);
+        tokio::spawn(feed(Arc::clone(self), Arc::clone(&parts), rx));
+        Arc::new(RemoteSink {
+            intake: Arc::clone(self),
+            parts,
+            queue: tx,
+        })
+    }
+
+    /// The server now serving, for [`relay_local`](Self::relay_local).
+    pub fn serving(&self, server: Option<&Arc<ClusterServer>>, hints_allow_private: bool) {
+        *self.server.write().unwrap_or_else(PoisonError::into_inner) =
+            server.map(|s| (Arc::downgrade(s), hints_allow_private));
+    }
+}
+
+/// A worker's timestamp on the coordinator's clock (§19.3).
+fn corrected(at: i64, offset_ms: i64) -> i64 {
+    at.saturating_sub(offset_ms.div_euclid(1000))
+}
+
+/// Takes batches off the queue in order, one at a time, and hands their
+/// records to the writer (waiting on it: the queue then fills, and new
+/// batches are refused for now).
+async fn feed(
+    intake: Arc<RemoteIntake>,
+    parts: Arc<SinkParts>,
+    mut rx: mpsc::Receiver<(WorkerId, Payload)>,
+) {
+    while let Some((worker, payload)) = rx.recv().await {
+        let (i, p) = (Arc::clone(&intake), Arc::clone(&parts));
+        let taken = tokio::task::spawn_blocking(move || {
+            i.take(worker, &payload.bytes, &p, crate::unix_now())
+        })
+        .await;
+        // `take` doesn't panic on any input; were it to, that batch's leases
+        // would last while the worker heartbeats, as an undecodable one's do.
+        let Ok(Some(taken)) = taken else { continue };
+        // Stopping: what's taken isn't committed, and its leases (and a late
+        // result's correction) are left as a crash would leave them.
+        let Some(writer) = intake.writer() else {
+            return;
+        };
+        for r in taken.results {
+            if writer.send(r).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// The cluster server's [`InboundSink`] and [`GrantAdmission`].
+pub struct RemoteSink {
+    intake: Arc<RemoteIntake>,
+    parts: Arc<SinkParts>,
+    queue: mpsc::Sender<(WorkerId, Payload)>,
+}
+
+impl std::fmt::Debug for RemoteSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteSink").finish_non_exhaustive()
+    }
+}
+
+impl RemoteSink {
+    /// Batches waiting for the writer.
+    pub fn queued(&self) -> usize {
+        self.queue.max_capacity() - self.queue.capacity()
+    }
+}
+
+impl InboundSink for RemoteSink {
+    fn results(&self, worker: WorkerId, batch: Payload) -> bool {
+        match self.queue.try_send((worker, batch)) {
+            Ok(()) => true,
+            // Full: "send it again later". Closed can't happen while the
+            // sink lives; refusing keeps the batch in the worker's spool.
+            Err(_) => {
+                bump(&self.intake.stats.backpressure);
+                false
+            }
+        }
+    }
+
+    /// The server ended their leases (losses) or kept them (`Fetched`,
+    /// which the commit ends); nothing is stored for them here.
+    fn outcomes(&self, _worker: WorkerId, _accepted: Vec<(InfoHash, Lease, Outcome)>) {}
+
+    /// Hints for keys the built-in worker holds: into its pool as a reply,
+    /// so they're merged into a queued key and never admit one.
+    fn local_hints(&self, hints: Vec<HintItem>) {
+        for item in hints {
+            let key = InfoHash(item.key);
+            let Some(lease) = self.intake.authority.current(&key, Token(item.token)) else {
+                continue;
+            };
+            if lease.holder != WorkerId::LOCAL {
+                continue;
+            }
+            let peers = self
+                .intake
+                .allowed(&item.hints, self.parts.hints_allow_private);
+            if peers.is_empty() {
+                continue;
+            }
+            let mut found = Found::key(key, lease.strategy);
+            found.peers = peers;
+            let d = Discovery {
+                source: lease.source,
+                found,
+                at: crate::unix_now(),
+                reply: true,
+            };
+            if self.intake.pool().is_some_and(|p| p.try_send(d).is_ok()) {
+                bump(&self.intake.stats.hints);
+            }
+        }
+    }
+}
+
+/// The private-sources bitset from sources' manifests.
+pub fn private_sources<'a>(sources: impl IntoIterator<Item = (SourceId, bool)> + 'a) -> u64 {
+    sources
+        .into_iter()
+        .filter(|(_, private)| *private)
+        .fold(0, |m, (id, _)| m | (1u64 << id.get()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_name_their_epoch() {
+        assert_eq!(epoch_of(Token((7u64 << 32) | 9)), 7);
+    }
+
+    #[test]
+    fn timestamps_are_corrected_by_the_offset() {
+        // The worker's clock is 90 s ahead.
+        assert_eq!(corrected(1_000, 90_000), 910);
+        assert_eq!(corrected(1_000, -1_500), 1_002);
+        assert_eq!(corrected(i64::MIN, 1), i64::MIN);
+    }
+
+    #[test]
+    fn the_start_queue_is_kept_only_while_a_spool_can_hold_a_result() {
+        let key = InfoHash([1; 20]);
+        let lease = RestoredLease {
+            cohort: 5,
+            source: SourceId::new(1).unwrap(),
+            sources: 2,
+            strategy: 4,
+            discovered_at: 18_000,
+        };
+        let mut p = Prior::new([(key, lease)], 100);
+        // What the start restored: the cohort's hour, its one source.
+        assert_eq!(p.get(&key, 100 + LATE_FOR_SECS), Some(lease));
+        assert_eq!(p.len(), 1);
+        // 25 h after the start, on the clock it's given: gone, all of it.
+        assert_eq!(p.get(&key, 101 + LATE_FOR_SECS), None);
+        assert!(p.is_empty());
+        assert_eq!(LATE_FOR_SECS, 25 * 3600);
+    }
+
+    #[test]
+    fn private_sources_make_a_bitset() {
+        let s = |n| SourceId::new(n).unwrap();
+        assert_eq!(
+            private_sources([(s(1), true), (s(2), false), (s(5), true)]),
+            0b10_0010
+        );
+    }
+}

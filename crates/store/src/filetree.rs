@@ -161,6 +161,73 @@ pub fn encode(files: &[File], encoding: TextEncoding) -> Result<Vec<u8>, CodecEr
     Ok(out)
 }
 
+/// What a file-tree blob would decode to, read without building any path
+/// ([`decode`] clones each directory's path for every child, so a blob's
+/// decoded size can be far larger than the blob). For blobs from another
+/// machine (WK-9): check the shape, then decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shape {
+    pub dirs: usize,
+    pub files: usize,
+    /// The deepest path, in components (a file at the root is 1).
+    pub depth: usize,
+    /// Path components across every directory and file path.
+    pub components: u64,
+}
+
+/// Reads a blob's [`Shape`]. Allocates one byte per directory, never a
+/// path. An error here means [`decode`] would fail too.
+pub fn shape(blob: &[u8]) -> Result<Shape, CodecError> {
+    let mut r = Reader { buf: blob, pos: 0 };
+    let version = r.u8()?;
+    if version != FORMAT_VERSION {
+        return Err(CodecError::UnsupportedFormat(version));
+    }
+    let flags = r.u8()?;
+    if flags & !KNOWN_FLAGS != 0 {
+        return Err(CodecError::Corrupt("unknown flags"));
+    }
+    TextEncoding::from_id(r.u8()?).ok_or(CodecError::Corrupt("encoding id"))?;
+    let dir_count = r.count()?;
+    let file_count = r.count()?;
+    // Depths saturate at 255: the caller's depth limit is far below.
+    let mut depths: Vec<u8> = Vec::with_capacity(dir_count + 1);
+    depths.push(0);
+    let mut components = 0u64;
+    let mut deepest = 0usize;
+    for i in 0..dir_count {
+        let parent = r.varint()?;
+        if parent > i as u64 {
+            return Err(CodecError::Corrupt("directory parent order"));
+        }
+        let d = depths[parent as usize].saturating_add(1);
+        deepest = deepest.max(usize::from(d));
+        components += u64::from(d);
+        depths.push(d);
+    }
+    // The directory names: a column of lengths, then their bytes.
+    let mut names = 0usize;
+    for _ in 0..dir_count {
+        names = names.saturating_add(r.count()?);
+    }
+    r.bytes(names)?;
+    for _ in 0..file_count {
+        let parent = r.varint()?;
+        if parent > dir_count as u64 {
+            return Err(CodecError::Corrupt("file parent"));
+        }
+        let d = usize::from(depths[parent as usize]) + 1;
+        deepest = deepest.max(d);
+        components += d as u64;
+    }
+    Ok(Shape {
+        dirs: dir_count,
+        files: file_count,
+        depth: deepest,
+        components,
+    })
+}
+
 /// Deserializes a file list. Never panics, whatever the input.
 pub fn decode(blob: &[u8]) -> Result<FileTree, CodecError> {
     let mut r = Reader { buf: blob, pos: 0 };
@@ -467,6 +534,60 @@ mod tests {
             let mut r = Reader { buf: &out, pos: 0 };
             assert_eq!(r.varint().unwrap(), v);
             assert_eq!(r.remaining(), 0);
+        }
+    }
+
+    /// A deep chain of directories is cheap as a blob but expensive to
+    /// decode (each path is its parent's plus one): `shape` measures it
+    /// without building a path.
+    #[test]
+    fn shape_counts_components_without_building_paths() {
+        let mut blob = vec![FORMAT_VERSION, 0, TextEncoding::UTF8.id()];
+        let dirs = 60_000u64;
+        put_varint(&mut blob, dirs);
+        put_varint(&mut blob, 1);
+        for i in 0..dirs {
+            put_varint(&mut blob, i);
+        }
+        for _ in 0..dirs {
+            put_varint(&mut blob, 0);
+        }
+        put_varint(&mut blob, dirs);
+        put_varint(&mut blob, 0);
+        put_varint(&mut blob, 7);
+        assert!(blob.len() < 300 << 10);
+        let s = shape(&blob).unwrap();
+        assert_eq!((s.dirs, s.files), (60_000, 1));
+        assert!(s.depth >= 255, "saturated, not wrapped: {}", s.depth);
+        assert!(s.components > 255 * 59_000);
+        // A real tree agrees with what decode builds.
+        let files = vec![
+            File {
+                path: vec![b"a".to_vec(), b"b".to_vec(), b"c.mkv".to_vec()],
+                size: 1,
+                attrs: FileAttrs::empty(),
+                symlink_target: None,
+                pieces_root: None,
+                hashes: FileHashes::default(),
+            },
+            File {
+                path: vec![b"a".to_vec(), b"d.nfo".to_vec()],
+                size: 2,
+                attrs: FileAttrs::empty(),
+                symlink_target: None,
+                pieces_root: None,
+                hashes: FileHashes::default(),
+            },
+        ];
+        let blob = encode(&files, TextEncoding::UTF8).unwrap();
+        let s = shape(&blob).unwrap();
+        let tree = decode(&blob).unwrap();
+        assert_eq!(s.files, tree.files.len());
+        assert_eq!(s.depth, 3);
+        // Directories a, a/b; files a/b/c.mkv, a/d.nfo.
+        assert_eq!(s.components, 1 + 2 + 3 + 2);
+        for cut in 0..blob.len() {
+            let _ = shape(&blob[..cut]);
         }
     }
 }

@@ -344,6 +344,8 @@ impl Services {
         // scraped and nothing is fetched. An instance with a password
         // starts as before; one without waits for `POST /setup`.
         pipeline_config.setup_done = Some(auth.watch_set_up());
+        // Late results need the queue this run starts from (plan Q7).
+        pipeline_config.remote_workers = config.cluster.enabled;
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
         // The cluster port (WK-1, §19.6, plan Q3): until "Allow workers" is
         // on, nothing is bound and no cluster CA is opened or created. A
@@ -353,6 +355,7 @@ impl Services {
             store: config.store_config(),
             data_dir: config.data_dir.clone(),
             authority: pipeline.monitor().lease_authority().clone(),
+            remote: Some(pipeline.monitor().remote().clone()),
             settings: crate::config::Cluster {
                 enabled: config.cluster.enabled && !crate::fixture::active(),
                 ..config.cluster.clone()
