@@ -5505,7 +5505,8 @@
     "WK-14 notes (from #560 delta review): persist worker prefs (pin, budget) and re-apply after restart; disconnect before Placement::forget (else next tick rejoins with defaults); warn + don't record addresses when a join is refused at MAX_WORKERS (4,096) so it is retried; prefs_mut cap refuses pin silently when full -> surface an error. is_public nit: add 2001:2::/48 and 3fff::/20",
     "After #562 merges: dispatch soak-screen.yml on main (first run = proof); ask owner (via dashboard) to run the new analyzer over private r4 and r5 run dirs and relay only 'screen:' lines; if thresholds move, a small thresholds-only follow-up",
     "slices.yaml SRC-15c owns: add web/e2e/settings-sources*.test.ts and docs/decisions/2026-11-07-SRC-15c.md (runner pre-approved at launch 03:24Z)",
-    "slices.yaml SRC-15c owns: add web/.size-limit.mjs (sourcesLater regex widened to ConfigDialog only; runner yes 03:30Z)"
+    "slices.yaml SRC-15c owns: add web/.size-limit.mjs (sourcesLater regex widened to ConfigDialog only; runner yes 03:30Z)",
+    "X-soak-screen preconditions before relying on in-run screen (P-v052-cut soak): (1) read lodestar_mem_anon_mappings ~1 h in a musl+override container to calibrate the gauge's clean value; (2) owner replays new analyzer over private r4/r5 dirs, relays only 'screen:' lines; thresholds provisional until then"
    ]
   },
   {
