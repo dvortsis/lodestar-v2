@@ -5892,6 +5892,11 @@
       "id": "wk10b-runner-calls",
       "at": "2026-11-07T20:40Z",
       "note": "Runner calls for WK-10b (Q6 delegated \u00a72.46 + \u00a72.26; owner flag \u00a72.19 owed at merge): (1) have-filter: before a complete filter claim everything; once complete, drop maybes locally (count rediscovered) except 1-in-16 random sightings still claimed so false positives (~1-2%) are recovered, not lost; resolves \u00a719.3 internal conflict. (2) floor-drop tombstones: WK-10b reports Lost{Blocked}; coordinator tombstone write (remote.rs RemoteSink::outcomes -> bounded non-blocking writer queue) moves to WK-10c, approved out-of-owns; WK-G checks. WK-10b stacks on slice/WK-10a; PR vs main after #592 merges."
+    },
+    {
+      "id": "X-flake-smoke-torrent-rose-pine",
+      "at": "2026-11-07T20:46Z",
+      "note": "#594 first playwright run: [sample-rose-pine-dark] smoke torrent screenshot diff 23,106 px (~2%) on torrent page (no row menu there); re-run passed. Unrelated to #594. Fix once if it recurs (snapshot determinism on torrent page)."
     }
   ],
   "main_health": [
