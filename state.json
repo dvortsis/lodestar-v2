@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T19:19Z",
+  "updated_at": "2026-11-07T19:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3675,10 +3675,9 @@
       "status": "open"
     },
     "X-flakes-1107": {
-      "status": "running",
-      "session": "session_01MMjhnCVN68eUViVowdQeWw",
-      "model": "sonnet",
-      "brief": "briefs/X-flakes-1107.md"
+      "status": "merged",
+      "pr": 590,
+      "merge": "2bee902a"
     },
     "X-wk15-nits": {
       "status": "running",
@@ -3688,6 +3687,11 @@
       "status": "running",
       "session": "session_01MMjhnAgARNjXHd2povCJ2f",
       "brief": "briefs/WK-10.md"
+    },
+    "X-menu-keyboard-focus": {
+      "status": "running",
+      "session": "session_01MMjhnCVN68eUViVowdQeWw",
+      "brief": "briefs/X-menu-keyboard-focus.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6552,7 +6556,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T19:01Z",
+    "updated": "2026-11-07T19:25Z",
     "items": [
       {
         "slot": 1,
@@ -6564,11 +6568,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-flakes-1107",
+        "slice": "X-menu-keyboard-focus",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVN68eUViVowdQeWw: fix shell unreachable + filters-block keyboard e2e flakes (Sonnet)",
-        "since": "2026-11-07T18:30Z"
+        "doing": "session_01MMjhnCVN68eUViVowdQeWw: keyboard-opened row menu focuses first item (Sonnet); after #590 merged 2bee902a",
+        "since": "2026-11-07T19:25Z"
       },
       {
         "slot": 3,
