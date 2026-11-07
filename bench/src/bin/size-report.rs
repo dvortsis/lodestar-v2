@@ -10,7 +10,8 @@
 //! that doesn't hold every generated torrent, fails it too, so a broken
 //! measurement can never pass as "under budget". `--summary PATH` appends
 //! the budgets and the measured values as a Markdown table (CI passes
-//! `$GITHUB_STEP_SUMMARY`).
+//! `$RUNNER_TEMP/size-report.md`, which a later step copies into the job
+//! summary).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -561,6 +562,10 @@ fn synth_swarm(id: i64, seed: u64, trackers: &[u16]) -> SwarmUpdate {
     u
 }
 
+/// Sum of the sizes of the files directly in `dir`. It does not recurse, on
+/// purpose: the torrent index is measured on `index_path` and the file index
+/// on its `files` subdirectory, so recursing would count the file index twice.
+/// A new subdirectory under a measured folder is therefore not counted.
 fn dir_size(dir: &std::path::Path) -> std::io::Result<u64> {
     let mut total = 0;
     for entry in std::fs::read_dir(dir)? {
