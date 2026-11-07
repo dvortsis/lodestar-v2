@@ -3954,13 +3954,19 @@ export interface components {
              */
             scopes?: components["schemas"]["KeyScope"][];
         };
-        /** @description `POST /workers/tokens`. */
+        /** @description `POST /workers/tokens`. `Debug` redacts the password. */
         CreateWorkerToken: {
             /**
              * @description The new worker's name: 1–63 lowercase letters, digits and hyphens,
              *     not starting or ending with a hyphen. It goes in its certificate.
              */
             name: string;
+            /**
+             * @description The admin password: a join token admits a machine to the cluster,
+             *     so it's confirmed like an API key (428 `confirm_required` without
+             *     it, 401 `bad_password` when wrong).
+             */
+            password?: string;
         };
         /**
          * @description `POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,
@@ -5582,12 +5588,21 @@ export interface components {
             status?: number;
         };
         /**
-         * @description Ready-to-copy ways to join with the token (§19.6). Each holds the
-         *     token, so they're shown once with it.
+         * @description Ready-to-copy ways to join with the token (§19.6). Most hold the
+         *     token, so they're shown once with it. `Debug` redacts every one.
          */
         JoinCommands: {
-            /** @description `lodestar worker`, reading the token from standard input. */
+            /**
+             * @description `lodestar worker`, given the token on standard input. The token is
+             *     in the line, so it lands in the shell's history; it's single use
+             *     and expires in 15 minutes. `cli_read` keeps it out.
+             */
             cli: string;
+            /**
+             * @description The same, reading the token from a hidden prompt (`read -rs`):
+             *     paste the token when asked. Nothing secret is in the line.
+             */
+            cli_read: string;
             /** @description A compose service. */
             compose: string;
             /**
@@ -10198,7 +10213,7 @@ export interface components {
         WorkerStatus: "online" | "draining" | "paused" | "offline";
         /**
          * @description The one response that carries a join token. It can't be read back:
-         *     only its hash is kept.
+         *     only its hash is kept. `Debug` redacts the token and the commands.
          */
         WorkerTokenCreated: {
             /** @description The cluster address workers dial, `https://host:port`. */
@@ -14970,8 +14985,53 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `bad_password`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `workers_off`, `name_in_use` or `too_many_tokens`. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirm_required`: no password. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many password attempts. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15006,6 +15066,15 @@ export interface operations {
                     "application/json": components["schemas"]["Worker"];
                 };
             };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `unknown_worker`. */
             404: {
                 headers: {
@@ -15015,8 +15084,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `too_many_workers`. */
+            /** @description `too_many_workers` or `workers_off`. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15056,6 +15134,15 @@ export interface operations {
                     "application/json": components["schemas"]["Worker"];
                 };
             };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `unknown_worker`. */
             404: {
                 headers: {
@@ -15065,8 +15152,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_offline`. */
+            /** @description `worker_offline` or `workers_off`. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15097,6 +15193,15 @@ export interface operations {
                     "application/json": components["schemas"]["Worker"];
                 };
             };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `unknown_worker`. */
             404: {
                 headers: {
@@ -15106,8 +15211,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_offline`. */
+            /** @description `workers_off`. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15138,8 +15252,35 @@ export interface operations {
                     "application/json": components["schemas"]["Worker"];
                 };
             };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `unknown_worker`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `workers_off`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15170,8 +15311,35 @@ export interface operations {
                     "application/json": components["schemas"]["WorkerRevoked"];
                 };
             };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `unknown_worker`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `workers_off`: turn workers on to revoke one. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

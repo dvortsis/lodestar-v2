@@ -10,8 +10,12 @@
 //! Fields a later slice fills (version, uptime, egress, assigned shards,
 //! per-minute throughput, quarantine) are left out rather than faked.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+use super::REDACTED;
 
 /// A worker's state as Settings → Workers shows it (icon + text).
 /// `quarantined` arrives with WK-13.
@@ -121,21 +125,41 @@ pub struct WorkerList {
     pub workers: Vec<Worker>,
 }
 
-/// `POST /workers/tokens`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+/// `POST /workers/tokens`. `Debug` redacts the password.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateWorkerToken {
     /// The new worker's name: 1–63 lowercase letters, digits and hyphens,
     /// not starting or ending with a hyphen. It goes in its certificate.
     pub name: String,
+    /// The admin password: a join token admits a machine to the cluster,
+    /// so it's confirmed like an API key (428 `confirm_required` without
+    /// it, 401 `bad_password` when wrong).
+    #[serde(default)]
+    #[schema(nullable = false)]
+    pub password: Option<String>,
 }
 
-/// Ready-to-copy ways to join with the token (§19.6). Each holds the
-/// token, so they're shown once with it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+impl fmt::Debug for CreateWorkerToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CreateWorkerToken")
+            .field("name", &self.name)
+            .field("password", &REDACTED)
+            .finish()
+    }
+}
+
+/// Ready-to-copy ways to join with the token (§19.6). Most hold the
+/// token, so they're shown once with it. `Debug` redacts every one.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct JoinCommands {
-    /// `lodestar worker`, reading the token from standard input.
+    /// `lodestar worker`, given the token on standard input. The token is
+    /// in the line, so it lands in the shell's history; it's single use
+    /// and expires in 15 minutes. `cli_read` keeps it out.
     pub cli: String,
+    /// The same, reading the token from a hidden prompt (`read -rs`):
+    /// paste the token when asked. Nothing secret is in the line.
+    pub cli_read: String,
     /// A compose service.
     pub compose: String,
     /// A `docker run` line. Remove `LODESTAR_TOKEN` once the worker has
@@ -148,9 +172,15 @@ pub struct JoinCommands {
     pub windows: String,
 }
 
+impl fmt::Debug for JoinCommands {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JoinCommands").finish_non_exhaustive()
+    }
+}
+
 /// The one response that carries a join token. It can't be read back:
-/// only its hash is kept.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+/// only its hash is kept. `Debug` redacts the token and the commands.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct WorkerTokenCreated {
     /// The cluster address workers dial, `https://host:port`.
     pub address: String,
@@ -160,6 +190,18 @@ pub struct WorkerTokenCreated {
     pub name: String,
     /// The `lsj1…` token: single use, for this name only.
     pub token: String,
+}
+
+impl fmt::Debug for WorkerTokenCreated {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorkerTokenCreated")
+            .field("address", &self.address)
+            .field("commands", &self.commands)
+            .field("expires_at", &self.expires_at)
+            .field("name", &self.name)
+            .field("token", &REDACTED)
+            .finish()
+    }
 }
 
 /// `POST /workers/{id}/revoke`: what revoking did.

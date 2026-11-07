@@ -480,8 +480,10 @@ impl Workers {
         if !self.placement.can_store(w) {
             return Err(WorkersError::PrefsFull);
         }
+        // The row first: a failed write leaves the state as it was.
+        self.persist(w, Some(s)).await?;
         lock(&self.saved).insert(w, s);
-        self.persist(w, Some(s)).await
+        Ok(())
     }
 
     async fn revoke_now(&self, w: WorkerId) -> Result<WorkerRevoked, WorkersError> {
@@ -521,8 +523,11 @@ impl Workers {
         let full = |_: PrefsFull| WorkersError::PrefsFull;
         self.placement.set_settings(w, s.settings()).map_err(full)?;
         self.placement.pin(w, s.pin()).map_err(full)?;
-        lock(&self.saved).insert(w, s);
+        // The row first, as `set_paused` does. The planner was changed
+        // above (it says whether there's room); a failed write is a 500
+        // and the plan is corrected by the next PATCH or restart.
         self.persist(w, Some(s)).await?;
+        lock(&self.saved).insert(w, s);
         self.one(&server, w).await
     }
 }
@@ -870,6 +875,12 @@ mod tests {
             .unwrap();
 
         let heartbeat = c.cluster.handle().server().unwrap().heartbeat_interval();
+        // The production heartbeat (§19.2, 5 s): the gate means what it
+        // says, and the bound below is relative to it.
+        assert_eq!(
+            heartbeat,
+            lodestar_cluster::ServerConfig::default().heartbeat
+        );
         let start = Instant::now();
         let r = c.workers.revoke(w.0).await.unwrap();
         assert_eq!(

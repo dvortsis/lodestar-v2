@@ -21,6 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use lodestar_cluster::assign::{Assignment, Intensity, ShardSpec};
 use lodestar_cluster::placement::{DhtPin, Planner, Replan, Share, WorkerSettings};
@@ -84,9 +85,43 @@ struct State {
     /// snapshot taken before the revocation must not rejoin it with the
     /// defaults (the #560 delta review).
     forgotten: BTreeSet<WorkerId>,
-    /// Workers refused at `MAX_WORKERS` and warned about, so a worker
-    /// that stays refused is logged once, not every sync.
-    warned: BTreeSet<WorkerId>,
+    /// Rate limit for `workers.join_refused`.
+    warned: Refusals,
+}
+
+/// How often one worker's refused join is logged at most.
+const REFUSED_EVERY: Duration = Duration::from_secs(600);
+/// Refused joins logged across the fleet per minute at most.
+const REFUSED_PER_MINUTE: u32 = 10;
+
+/// The rate limit for `workers.join_refused`: each worker at most once
+/// per [`REFUSED_EVERY`], and the fleet at most [`REFUSED_PER_MINUTE`]
+/// a minute, so a worker that flaps (or thousands refused at once) can't
+/// flood the log.
+#[derive(Debug, Default)]
+struct Refusals {
+    last: BTreeMap<WorkerId, Instant>,
+    window: Option<(Instant, u32)>,
+}
+
+impl Refusals {
+    fn allow(&mut self, w: WorkerId, now: Instant) -> bool {
+        self.last
+            .retain(|_, at| now.saturating_duration_since(*at) < REFUSED_EVERY);
+        if self.last.contains_key(&w) {
+            return false;
+        }
+        let (start, n) = self.window.get_or_insert((now, 0));
+        if now.saturating_duration_since(*start) >= Duration::from_secs(60) {
+            (*start, *n) = (now, 0);
+        }
+        if *n >= REFUSED_PER_MINUTE {
+            return false;
+        }
+        *n += 1;
+        self.last.insert(w, now);
+        true
+    }
 }
 
 /// Settings are kept for at most `MAX_WORKERS` workers; this one has none
@@ -119,7 +154,7 @@ impl Placement {
             planner: Planner::starting_at(coordinator_dht, now_ms()),
             addrs: BTreeMap::new(),
             forgotten: BTreeSet::new(),
-            warned: BTreeSet::new(),
+            warned: Refusals::default(),
         }))
     }
 
@@ -257,7 +292,6 @@ impl Placement {
             .filter(|w| !now.contains_key(w))
             .copied()
             .collect();
-        st.warned.retain(|w| now.contains_key(w));
         for w in gone {
             st.addrs.remove(&w);
             last = st.planner.leave(w).or(last);
@@ -268,7 +302,7 @@ impl Placement {
                 if !st.planner.is_member(w) {
                     // Past `MAX_WORKERS`: its addresses aren't recorded,
                     // so the next sync tries again once there's room.
-                    if st.warned.insert(w) {
+                    if st.warned.allow(w, Instant::now()) {
                         lodestar_log::log_event!(
                             events::WORKERS_JOIN_REFUSED,
                             worker = lodestar_log::Count(u64::from(w.0))
@@ -276,7 +310,6 @@ impl Placement {
                     }
                     continue;
                 }
-                st.warned.remove(&w);
                 st.addrs.insert(w, ips);
             }
             last = st.planner.set_draining(w, draining).or(last);
@@ -551,12 +584,29 @@ mod tests {
         // Still full: refused again, and warned about once (`warned`).
         p.update(&fleet);
         assert_eq!(p.assignment(extra), None);
-        assert!(p.state().warned.contains(&extra));
+        assert!(p.state().warned.last.contains_key(&extra));
         // Worker 1 leaves: the same snapshot of the extra one now joins.
         fleet.remove(0);
         p.update(&fleet);
         assert!(p.assignment(extra).is_some(), "tried again");
-        assert!(!p.state().warned.contains(&extra));
+    }
+
+    #[test]
+    fn refused_joins_are_rate_limited_per_worker_and_fleet_wide() {
+        let mut r = Refusals::default();
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        assert!(r.allow(WorkerId(1), at(0)));
+        // Flapping: refused again a minute later, not logged again.
+        assert!(!r.allow(WorkerId(1), at(60)));
+        assert!(!r.allow(WorkerId(1), at(599)));
+        assert!(r.allow(WorkerId(1), at(600)), "once per 10 minutes");
+        // Many workers at once: at most ten a minute.
+        let logged = (100..200)
+            .filter(|&w| r.allow(WorkerId(w), at(700)))
+            .count();
+        assert_eq!(logged, REFUSED_PER_MINUTE as usize);
+        assert!(r.allow(WorkerId(300), at(760)), "a new minute");
     }
 
     #[test]

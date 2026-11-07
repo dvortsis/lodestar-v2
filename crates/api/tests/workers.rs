@@ -114,6 +114,7 @@ impl WorkersApi for Fake {
 
     fn create_token(&self, name: String) -> BoxFuture<'_, Result<NewToken, WorkersError>> {
         Box::pin(async move {
+            self.calls.lock().unwrap().push(format!("token {name}"));
             if name == "taken" {
                 return Err(WorkersError::NameInUse);
             }
@@ -304,7 +305,7 @@ async fn every_route_refuses_callers_who_arent_the_admin() {
     all.push((
         "POST",
         "/api/v1/workers/tokens",
-        Some(json!({ "name": "w1" })),
+        Some(json!({ "name": "w1", "password": PASSWORD })),
     ));
     for (method, path, body) in all {
         let r = send(&f, req(method, path, None, body.clone())).await;
@@ -333,7 +334,7 @@ async fn the_token_is_shown_once_with_its_commands() {
             "POST",
             "/api/v1/workers/tokens",
             Some(&cookie),
-            Some(json!({ "name": "w1" })),
+            Some(json!({ "name": "w1", "password": PASSWORD })),
         ),
     )
     .await;
@@ -344,6 +345,8 @@ async fn the_token_is_shown_once_with_its_commands() {
     assert_eq!(r.body["address"], "https://nas.local:8091");
     assert_eq!(r.body["expires_at"], 1_792_678_500);
     let c = &r.body["commands"];
+    let read = c["cli_read"].as_str().unwrap();
+    assert!(read.contains("read -rs") && !read.contains(TOKEN), "{read}");
     assert_eq!(
         c["cli"],
         format!(
@@ -377,8 +380,8 @@ async fn the_token_is_shown_once_with_its_commands() {
         );
     }
     for body in [
-        json!({ "name": "taken" }),
-        json!({ "name": "Bad Name" }),
+        json!({ "name": "taken", "password": PASSWORD }),
+        json!({ "name": "Bad Name", "password": PASSWORD }),
         json!({ "nope": 1 }),
     ] {
         let r = send(
@@ -401,22 +404,22 @@ async fn token_refusals() {
     let f = fixture();
     let cookie = session(&f);
     let post = |body: Value| req("POST", "/api/v1/workers/tokens", Some(&cookie), Some(body));
-    let r = send(&f, post(json!({ "name": "taken" }))).await;
+    let r = send(&f, post(json!({ "name": "taken", "password": PASSWORD }))).await;
     assert_eq!(
         (r.status, r.body["error"]["code"].as_str()),
         (409, Some("name_in_use"))
     );
     for bad in ["", "-a", "a-", "UPPER", "a b", &"x".repeat(64)] {
-        let r = send(&f, post(json!({ "name": bad }))).await;
+        let r = send(&f, post(json!({ "name": bad, "password": PASSWORD }))).await;
         assert_eq!(r.status, 400, "{bad:?}: {}", r.text);
         assert_eq!(r.body["error"]["code"], "bad_name");
         assert_eq!(r.body["error"]["field"], "name");
     }
     // Not JSON, or cross-site: refused before anything happens.
-    let mut q = post(json!({ "name": "w2" }));
+    let mut q = post(json!({ "name": "w2", "password": PASSWORD }));
     q.headers_mut().remove(header::CONTENT_TYPE);
     assert_eq!(send(&f, q).await.status, 415);
-    let mut q = post(json!({ "name": "w2" }));
+    let mut q = post(json!({ "name": "w2", "password": PASSWORD }));
     q.headers_mut()
         .insert(header::ORIGIN, "https://evil.example".parse().unwrap());
     assert_eq!(send(&f, q).await.status, 403);
@@ -429,7 +432,7 @@ async fn token_refusals() {
             "POST",
             "/api/v1/workers/tokens",
             Some(&cookie),
-            Some(json!({ "name": "w1" })),
+            Some(json!({ "name": "w1", "password": PASSWORD })),
         ),
     )
     .await;
@@ -607,4 +610,102 @@ async fn patch_ranges_are_enforced() {
     )
     .await;
     assert_eq!(r.status, 200, "{}", r.text);
+}
+
+#[tokio::test]
+async fn a_token_needs_the_password_now() {
+    let f = fixture();
+    let cookie = session(&f);
+    let post = |body: Value| req("POST", "/api/v1/workers/tokens", Some(&cookie), Some(body));
+    for (body, status, code) in [
+        (json!({ "name": "w1" }), 428, "confirm_required"),
+        (
+            json!({ "name": "w1", "password": "" }),
+            428,
+            "confirm_required",
+        ),
+        (
+            json!({ "name": "w1", "password": "wrong horse" }),
+            401,
+            "bad_password",
+        ),
+    ] {
+        let r = send(&f, post(body.clone())).await;
+        assert_eq!(
+            (r.status, r.body["error"]["code"].as_str()),
+            (status, Some(code)),
+            "{body}"
+        );
+        assert!(!r.text.contains("lsj1"), "{}", r.text);
+    }
+    // Nothing was created.
+    assert!(f.fake.as_ref().unwrap().calls.lock().unwrap().is_empty());
+    let log = LINES.lock().unwrap().join("\n");
+    assert!(!log.contains(TOKEN), "{log}");
+    let r = send(&f, post(json!({ "name": "w1", "password": PASSWORD }))).await;
+    assert_eq!(r.status, 201, "{}", r.text);
+}
+
+#[tokio::test]
+async fn every_write_refuses_another_origin_and_non_json() {
+    let f = fixture();
+    let cookie = session(&f);
+    let mut writes: Vec<_> = others()
+        .into_iter()
+        .filter(|(m, _, _)| *m != "GET")
+        .collect();
+    writes.push((
+        "POST",
+        "/api/v1/workers/tokens",
+        Some(json!({ "name": "w1", "password": PASSWORD })),
+    ));
+    for (method, path, body) in writes {
+        let mut q = req(method, path, Some(&cookie), body.clone());
+        q.headers_mut()
+            .insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+        let r = send(&f, q).await;
+        assert_eq!(
+            (r.status, r.body["error"]["code"].as_str()),
+            (403, Some("cross_origin")),
+            "{method} {path}"
+        );
+        let mut q = req(method, path, Some(&cookie), body);
+        q.headers_mut().remove(header::CONTENT_TYPE);
+        assert_eq!(send(&f, q).await.status, 415, "{method} {path}");
+    }
+    assert!(
+        f.fake.as_ref().unwrap().calls.lock().unwrap().is_empty(),
+        "nothing reached it"
+    );
+}
+
+#[test]
+fn debug_never_shows_the_token_or_password() {
+    use lodestar_api::dto::workers::{CreateWorkerToken, JoinCommands, WorkerTokenCreated};
+    let commands = JoinCommands {
+        cli: TOKEN.into(),
+        cli_read: "read".into(),
+        compose: TOKEN.into(),
+        docker_run: TOKEN.into(),
+        unraid: "u".into(),
+        windows: "w".into(),
+    };
+    let created = WorkerTokenCreated {
+        address: "https://nas:8091".into(),
+        commands: commands.clone(),
+        expires_at: 1,
+        name: "w1".into(),
+        token: TOKEN.into(),
+    };
+    let req = CreateWorkerToken {
+        name: "w1".into(),
+        password: Some(PASSWORD.into()),
+    };
+    for text in [
+        format!("{created:?}"),
+        format!("{commands:?}"),
+        format!("{req:?}"),
+    ] {
+        assert!(!text.contains("lsj1") && !text.contains(PASSWORD), "{text}");
+    }
 }

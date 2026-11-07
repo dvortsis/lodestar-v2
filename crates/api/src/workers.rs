@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::Extension;
+use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
@@ -40,7 +40,7 @@ use crate::dto::workers::{
     WorkerTokenCreated,
 };
 use crate::error::{ApiError, ApiResult, internal};
-use crate::extract::{self, Path, same_origin_json};
+use crate::extract::{self, ClientIp, Path, same_origin_json};
 use crate::ops::BoxFuture;
 use crate::{ApiState, auth};
 
@@ -256,10 +256,17 @@ pub(crate) async fn list_workers(handle: Handle) -> ApiResult<Json<WorkerList>> 
     responses(
         (status = 201, body = WorkerTokenCreated),
         (status = 400, description = "`bad_name`.", body = ErrorEnvelope),
+        (status = 401, description = "`bad_password`.", body = ErrorEnvelope),
+        (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 409, description = "`workers_off`, `name_in_use` or `too_many_tokens`.", body = ErrorEnvelope),
+        (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
+        (status = 428, description = "`confirm_required`: no password.", body = ErrorEnvelope),
+        (status = 429, description = "`rate_limited`: too many password attempts.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn create_token(
+    State(s): State<ApiState>,
+    ClientIp(ip): ClientIp,
     handle: Handle,
     headers: HeaderMap,
     extract::Json(body): extract::Json<CreateWorkerToken>,
@@ -273,6 +280,9 @@ pub(crate) async fn create_token(
     if !valid_name(&body.name) {
         return Err(WorkersError::BadName.into());
     }
+    // A join token admits a machine to the cluster: confirmed with the
+    // password, as an API key is (§10.10.7 "Security").
+    auth::confirm_fresh_password(&s.auth, ip, body.password).await?;
     let new = api.create_token(body.name).await?;
     let host = request_host(&headers);
     let address = format!("https://{host}:{}", new.port);
@@ -327,6 +337,11 @@ fn request_host(headers: &HeaderMap) -> String {
 fn join_commands(address: &str, token: &str, name: &str) -> JoinCommands {
     JoinCommands {
         cli: format!("printf '%s\\n' '{token}' | lodestar worker --join {address} --token-file -"),
+        cli_read: format!(
+            "read -rs -p 'Join token: ' LODESTAR_JOIN_TOKEN && echo && \
+             printf '%s\\n' \"$LODESTAR_JOIN_TOKEN\" | lodestar worker --join {address} --token-file - ; \
+             unset LODESTAR_JOIN_TOKEN"
+        ),
         // The DHT port as the Unraid worker template maps it: 6882 on the
         // host, beside a main Lodestar on 6881.
         docker_run: format!(
@@ -365,7 +380,9 @@ fn join_commands(address: &str, token: &str, name: &str) -> JoinCommands {
     responses(
         (status = 200, body = Worker),
         (status = 404, description = "`unknown_worker`.", body = ErrorEnvelope),
-        (status = 409, description = "`worker_offline`.", body = ErrorEnvelope),
+        (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
+        (status = 409, description = "`worker_offline` or `workers_off`.", body = ErrorEnvelope),
+        (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn drain_worker(
@@ -387,6 +404,9 @@ pub(crate) async fn drain_worker(
     responses(
         (status = 200, body = Worker),
         (status = 404, description = "`unknown_worker`.", body = ErrorEnvelope),
+        (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
+        (status = 409, description = "`workers_off`.", body = ErrorEnvelope),
+        (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn resume_worker(
@@ -409,7 +429,9 @@ pub(crate) async fn resume_worker(
     responses(
         (status = 200, body = Worker),
         (status = 404, description = "`unknown_worker`.", body = ErrorEnvelope),
-        (status = 409, description = "`worker_offline`.", body = ErrorEnvelope),
+        (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
+        (status = 409, description = "`workers_off`.", body = ErrorEnvelope),
+        (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn pause_worker(
@@ -434,6 +456,9 @@ pub(crate) async fn pause_worker(
     responses(
         (status = 200, body = WorkerRevoked),
         (status = 404, description = "`unknown_worker`.", body = ErrorEnvelope),
+        (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
+        (status = 409, description = "`workers_off`: turn workers on to revoke one.", body = ErrorEnvelope),
+        (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn revoke_worker(
@@ -460,7 +485,9 @@ pub(crate) async fn revoke_worker(
         (status = 200, body = Worker),
         (status = 422, description = "`invalid_value` (with the field) or `bad_body`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_worker`.", body = ErrorEnvelope),
-        (status = 409, description = "`too_many_workers`.", body = ErrorEnvelope),
+        (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
+        (status = 409, description = "`too_many_workers` or `workers_off`.", body = ErrorEnvelope),
+        (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn update_worker(
