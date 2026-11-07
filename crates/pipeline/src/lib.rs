@@ -72,6 +72,7 @@ pub use control::Control;
 pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
+pub use have::{Bloom, HaveObserver, new_key};
 pub use rollups::{Rollups, metric};
 pub use writer::{LIVE_FEEDS, WriterStats};
 
