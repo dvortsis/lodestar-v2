@@ -41,6 +41,8 @@ const GRANTED: i64 = 0;
 const MARGINAL: i64 = 1;
 const COMMITTED: i64 = 2;
 const LOST: i64 = 3;
+const OWN_REDISCOVERED: i64 = 4;
+const OWN_DROPPED: i64 = 5;
 
 fn by_worker_key(metric: u32, dim: u32, key: i64) -> i64 {
     (i64::from(metric) << 16) | (i64::from(dim) << 8) | key
@@ -316,7 +318,9 @@ fn c(hour: i64, metric: u32, dim: u32, key: i64, value: i64) -> Counter {
 /// One hour of a fleet: the built-in crawler (0), worker 3, and worker 4
 /// whose only key was claimed by another worker too (its marginal taken
 /// back in the same hour). The fleet's rediscovered and dropped totals
-/// include the remote workers' own counters, as `Admit` writes them.
+/// include the remote workers' own counters, which the remote intake also
+/// sums per worker under `WORKER_LEASES` (keys 4 and 5). Their packed
+/// `BY_WORKER` rows aren't read by these pages.
 fn fleet_hour(h: i64) -> Vec<Counter> {
     vec![
         c(h, COVERAGE, 1, 0, 3600),
@@ -325,8 +329,9 @@ fn fleet_hour(h: i64) -> Vec<Counter> {
         c(h, BY_WORKER, 3, by_worker_key(REDISCOVERED, 0, 1), 20),
         c(h, BY_WORKER, 3, by_worker_key(DROPPED, 0, 0), 2),
         c(h, BY_WORKER, 4, by_worker_key(REDISCOVERED, 0, 1), 10),
-        // Scrapes (metric 6) per worker: not a Discover number.
-        c(h, BY_WORKER, 4, by_worker_key(6, 1, 0), 99),
+        c(h, LEASES, 3, OWN_REDISCOVERED, 20),
+        c(h, LEASES, 3, OWN_DROPPED, 2),
+        c(h, LEASES, 4, OWN_REDISCOVERED, 10),
         c(h, LEASES, 0, GRANTED, 30),
         c(h, LEASES, 0, MARGINAL, 25),
         c(h, LEASES, 0, COMMITTED, 20),

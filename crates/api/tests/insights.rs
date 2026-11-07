@@ -1195,8 +1195,8 @@ async fn responses_are_cached_per_flush() {
 /// store's API at this size. With `workers`, 8 remote workers' rows at
 /// the most `Admit` lets through (WK-9b): the fleet's 32 rows every hour
 /// (`metric::FLEET_ROWS_PER_DAY`), a new set each day, each also a
-/// `BY_WORKER` row (code 17) for each worker, and WK-15's lease counts
-/// (code 18) for each worker and the built-in one.
+/// `BY_WORKER` row (code 17) for each worker, and WK-15's per-worker
+/// counts (code 18) for each worker and the built-in one.
 fn year_of_rollups(db: &Path, workers: bool) {
     let mut c = rusqlite::Connection::open(db).unwrap();
     let tx = c.transaction().unwrap();
@@ -1255,10 +1255,11 @@ fn year_of_rollups(db: &Path, workers: bool) {
                         r.execute(params![h, 17, 100 + w, k, 7]).unwrap();
                     }
                 }
-                // WK-15's lease counts (code 18), four keys for the
-                // built-in worker and each of the 8.
+                // WK-15's lease counts (code 18): four keys for the
+                // built-in worker, six (its own rediscovered and dropped
+                // too) for each of the 8.
                 for dim in std::iter::once(0).chain(100..108i64) {
-                    for key in 0..4i64 {
+                    for key in 0..if dim == 0 { 4 } else { 6 } {
                         r.execute(params![h, 18, dim, key, 5]).unwrap();
                     }
                 }

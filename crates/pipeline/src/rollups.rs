@@ -90,12 +90,16 @@ pub mod metric {
     /// same counts are in their own metric's row too, so the fleet's
     /// totals read as before; this row only breaks them down.
     pub const BY_WORKER: u32 = 17;
-    /// Each worker's leases, counted by the coordinator once a cluster
-    /// server serves (WK-15, §19.7): dim = the worker id (the built-in
-    /// worker 0), key = `crate::marginal::key` (granted, marginal,
-    /// committed, lost). Never from a worker's `Counters`. Granted and
-    /// marginal land at the discovery hour, committed and lost at the
-    /// lease's end.
+    /// Each worker's counts for Insights, by the coordinator once a remote
+    /// worker has been granted a key (WK-15, §19.7): dim = the worker id
+    /// (the built-in worker 0), key = `crate::marginal::key`, 0–5, append
+    /// only: 0 granted, 1 marginal, 2 committed, 3 lost, 4 rediscovered,
+    /// 5 dropped. Keys 4 and 5 duplicate a remote worker's admitted
+    /// [`BY_WORKER`] rediscovered and dropped rows, so Insights reads stay
+    /// within budget; [`BY_WORKER`] stays the source of truth. Never a
+    /// metric a worker's `Counters` may name. Granted and marginal land at
+    /// the discovery hour, committed and lost at the lease's end, 4 and 5
+    /// at the counter's own hour.
     pub const WORKER_LEASES: u32 = 18;
 
     /// A [`BY_WORKER`] key: the counter's metric, dim and key, each in

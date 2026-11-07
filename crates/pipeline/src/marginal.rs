@@ -12,7 +12,10 @@
 //!   worker would have seen": a key found again only after its commit is a
 //!   rediscovery and doesn't count against it, and Insights labels it so;
 //! - [`key::COMMITTED`] and [`key::LOST`]: its leases that ended in a
-//!   commit or a terminal loss, at the hour they ended.
+//!   commit or a terminal loss, at the hour they ended;
+//! - [`key::REDISCOVERED`] and [`key::DROPPED`]: a remote worker's own
+//!   counters, summed again by the remote intake beside its `BY_WORKER`
+//!   rows, so Discover reads one small metric (the 50 ms budget).
 //!
 //! **Counts only.** Nothing here names a torrent: the map below holds keys
 //! in memory while they are in flight and is never written, so a private
@@ -43,6 +46,21 @@ pub mod key {
     pub const COMMITTED: i64 = 2;
     /// Leases that ended in a terminal loss.
     pub const LOST: i64 = 3;
+    /// A remote worker's own rediscovered counter, as `Admit` let it in
+    /// (the remote intake writes it beside `BY_WORKER`).
+    pub const REDISCOVERED: i64 = 4;
+    /// A remote worker's own dropped counter, likewise.
+    pub const DROPPED: i64 = 5;
+}
+
+/// The [`metric::WORKER_LEASES`] key a remote worker's admitted counter
+/// is also summed under, if Discover shows it per worker.
+pub fn counted_key(counter_metric: u32) -> Option<i64> {
+    match counter_metric {
+        metric::REDISCOVERED => Some(key::REDISCOVERED),
+        metric::DROPPED => Some(key::DROPPED),
+        _ => None,
+    }
 }
 
 /// Keys tracked at most. Far above what the fleet holds in flight (the

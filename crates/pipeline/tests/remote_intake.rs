@@ -1280,6 +1280,90 @@ async fn a_refused_late_result_is_rebuilt_at_most_once() {
     rig.pipeline.shutdown().await.unwrap();
 }
 
+/// WK-15: each remote worker's admitted rediscovered and dropped counters
+/// are summed again in metric 18 (keys 4 and 5), equal per worker to its
+/// metric-17 rows, which stay the source of truth: over several hours of
+/// the window, for a worker with only dropped rows, and never for a
+/// refused counter or one over a row's cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_totals_match_the_packed_rows() {
+    use lodestar_pipeline::marginal::key;
+    use lodestar_pipeline::wire::CountersBatch;
+    use lodestar_store::Counter;
+    let rig = Rig::new(&[], 0).await;
+    let hour = now().div_euclid(3600);
+    let c = |hour, metric, dim, key, value| Counter {
+        hour,
+        metric,
+        dim,
+        key,
+        value,
+    };
+    let other = WorkerId(9);
+    // Two of these pass the row's cap of 2^32 an hour.
+    const BIG: i64 = 3 << 30;
+    let send = |w: WorkerId, batch: u64, counters: Vec<Counter>| {
+        let bytes = CountersBatch { batch, counters }.encode().unwrap();
+        assert!(rig.sink.counters(w, Payload { batch, bytes }));
+    };
+    send(
+        W,
+        1,
+        vec![
+            c(hour, metric::REDISCOVERED, 3, 2, 40),
+            c(hour, metric::REDISCOVERED, 4, 0, 6),
+            c(hour - 5, metric::REDISCOVERED, 3, 2, 11),
+            c(hour - 23, metric::DROPPED, 3, 0, 4),
+            // Refused: outside the window, and outside the domain.
+            c(hour - 30, metric::REDISCOVERED, 3, 2, 1_000),
+            c(hour, metric::DROPPED, 3, 1, 1_000),
+            // Scrapes: per worker in metric 17 only.
+            c(hour, metric::SCRAPED, 1, 0, 3),
+        ],
+    );
+    // A worker with only dropped rows, one of them over its row's cap.
+    send(
+        other,
+        2,
+        vec![
+            c(hour - 1, metric::DROPPED, 3, 0, 2),
+            c(hour - 1, metric::DROPPED, 3, 0, BIG),
+            c(hour - 1, metric::DROPPED, 3, 0, BIG),
+        ],
+    );
+    let db = rig.db.clone();
+    let rows = move |m| reader(&db).rollup(m, 0, i64::MAX).unwrap();
+    until("the counters are flushed", || {
+        rows(metric::WORKER_LEASES).len() >= 4
+    })
+    .await;
+    // Per (worker, key 4 or 5): metric 17's sums, and metric 18's.
+    let mut packed = std::collections::BTreeMap::new();
+    for r in rows(metric::BY_WORKER) {
+        let k = match (r.key >> 16) as u32 {
+            metric::REDISCOVERED => key::REDISCOVERED,
+            metric::DROPPED => key::DROPPED,
+            _ => continue,
+        };
+        *packed.entry((r.dim, k)).or_insert(0i64) += r.value;
+    }
+    let mut totals = std::collections::BTreeMap::new();
+    for r in rows(metric::WORKER_LEASES) {
+        *totals.entry((r.dim, r.key)).or_insert(0i64) += r.value;
+    }
+    assert_eq!(totals, packed);
+    // The row's cap (2^32 per worker per hour) holds the rest back.
+    assert_eq!(
+        totals.into_iter().collect::<Vec<_>>(),
+        [
+            ((W.0, key::REDISCOVERED), 57),
+            ((W.0, key::DROPPED), 4),
+            ((other.0, key::DROPPED), 1 << 32),
+        ]
+    );
+    rig.pipeline.shutdown().await.unwrap();
+}
+
 /// Counters (WK-9b, requirement 2) reach the rollups twice, as the fleet's
 /// row and as the worker's `BY_WORKER` row, whose dim is the session's
 /// worker. They're accepted only within their metric's domain and the
@@ -1355,6 +1439,13 @@ async fn counters_go_into_the_rollups_with_the_worker() {
         .map(|c| (c.hour, c.dim, c.key, c.value))
         .collect();
     assert_eq!(fleet, [(hour, 3, 2, 40)]);
+    // And once more as the worker's rediscovered total (WK-15).
+    let leases: Vec<_> = rows(metric::WORKER_LEASES, 0, i64::MAX)
+        .iter()
+        .map(|c| (c.hour, c.dim, c.key, c.value))
+        .collect();
+    let rediscovered = lodestar_pipeline::marginal::key::REDISCOVERED;
+    assert_eq!(leases, [(hour, W.0, rediscovered, 40)]);
     assert!(rows(metric::HARVESTED, 0, i64::MAX).is_empty());
     rig.pipeline.shutdown().await.unwrap();
 }

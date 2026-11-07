@@ -137,8 +137,7 @@ fn sealed_metric(
 }
 
 /// The metrics the stage pages read by day: summed, and gauges.
-const SUMMED: [u32; 10] = [
-    codes::metric::BY_WORKER,
+const SUMMED: [u32; 9] = [
     codes::metric::WORKER_LEASES,
     codes::metric::COVERAGE,
     codes::metric::HARVESTED,
@@ -434,70 +433,86 @@ fn discover(
 }
 
 /// Each worker's `WORKER_LEASES` sums in a window, by worker and key.
-fn worker_leases(c: &Ctx<'_>) -> lodestar_store::Result<BTreeMap<u32, [u64; 4]>> {
-    let mut out: BTreeMap<u32, [u64; 4]> = BTreeMap::new();
-    for ((_, dim, key), v) in read_metric(c, codes::metric::WORKER_LEASES)? {
-        if let Some(slot) = usize::try_from(key).ok().filter(|&k| k < 4) {
-            let e = out.entry(dim).or_default();
-            // A bucket's marginal can be negative while its take-backs
-            // land; the range's sum can't.
-            e[slot] = (e[slot] as i64).saturating_add(v).max(0) as u64;
+///
+/// Window totals only, so each span is grouped by (worker, key) in SQL
+/// rather than read bucket by bucket as [`read_metric`] does: a year of
+/// compacted days would otherwise bring back every day's rows (the 50 ms
+/// budget). Sealed days come from the cache, as there.
+fn worker_leases(c: &Ctx<'_>) -> lodestar_store::Result<BTreeMap<u32, [u64; 6]>> {
+    const M: u32 = codes::metric::WORKER_LEASES;
+    let (store, w) = (c.store, &c.w);
+    let (cb, split) = spans(c);
+    let mut sums: BTreeMap<(u32, i64), i64> = BTreeMap::new();
+    let mut rows = Vec::new();
+    if cb > w.from_h {
+        rows.extend(store.rollup_day_sums(
+            M,
+            w.from_h.div_euclid(24),
+            cb.div_euclid(24),
+            RollupBy::DimKey,
+        )?);
+        rows.extend(store.rollup_straggler_sums(M, w.from_h, cb, RollupBy::DimKey)?);
+    }
+    rows.extend(store.rollup_sums(M, split, w.to_h, RollupBy::DimKey)?);
+    for r in rows {
+        *sums.entry((r.dim, r.key)).or_default() += r.value;
+    }
+    if split > cb {
+        for (_, day) in sealed_metric(store, &c.sealed, M, false, cb, split)? {
+            for (&k, &v) in day.iter() {
+                *sums.entry(k).or_default() += v;
+            }
+        }
+    }
+    let mut out: BTreeMap<u32, [u64; 6]> = BTreeMap::new();
+    for ((dim, key), v) in sums {
+        if let Some(slot) = usize::try_from(key).ok().filter(|&k| k < 6) {
+            // An hour's marginal is never below 0 once its take-backs
+            // land; a window cut through one in flight is held at 0.
+            out.entry(dim).or_default()[slot] = v.max(0) as u64;
         }
     }
     Ok(out)
 }
 
-/// Discover's `by_worker` (WK-15): `WORKER_LEASES` for every worker, and
-/// remote workers' own rediscovered and dropped counters (`BY_WORKER`).
-/// The built-in crawler's are the fleet's totals less the remote ones.
-/// Empty when no worker counted anything (a single machine).
+/// Discover's `by_worker` (WK-15), all from `WORKER_LEASES`: granted and
+/// marginal for every worker, and remote workers' own rediscovered and
+/// dropped (the remote intake sums them there beside `BY_WORKER`, whose
+/// packed rows are too many to read within the budget). The built-in
+/// crawler's rediscovered and dropped are the fleet's totals less the
+/// remote ones. Empty when no worker counted anything (a single machine).
 fn discover_workers(
     c: &Ctx<'_>,
     rediscovered: u64,
     dropped: u64,
 ) -> lodestar_store::Result<Vec<DiscoverWorker>> {
-    use codes::metric;
-    let leases = worker_leases(c)?;
-    // (rediscovered, dropped) per remote worker.
-    let mut own: BTreeMap<u32, (u64, u64)> = BTreeMap::new();
-    for ((_, dim, key), v) in read_metric(c, metric::BY_WORKER)? {
-        let e = own.entry(dim).or_default();
-        let v = v.max(0) as u64;
-        match u32::try_from(key >> 16) {
-            Ok(metric::REDISCOVERED) => e.0 += v,
-            Ok(metric::DROPPED) => e.1 += v,
-            _ => {}
-        }
-    }
-    if leases.is_empty() && own.is_empty() {
+    let mut leases = worker_leases(c)?;
+    if leases.is_empty() {
         return Ok(Vec::new());
     }
-    let remote = |f: fn(&(u64, u64)) -> u64| {
-        own.iter()
-            .filter(|(w, _)| **w != 0)
-            .map(|(_, e)| f(e))
-            .sum::<u64>()
-    };
-    own.insert(
-        0,
-        (
-            rediscovered.saturating_sub(remote(|e| e.0)),
-            dropped.saturating_sub(remote(|e| e.1)),
-        ),
+    let (red, drop) = (
+        codes::WORKER_REDISCOVERED as usize,
+        codes::WORKER_DROPPED as usize,
     );
-    let ids: std::collections::BTreeSet<u32> = leases.keys().chain(own.keys()).copied().collect();
-    Ok(ids
+    let remote = |i: usize| -> u64 {
+        leases
+            .iter()
+            .filter(|(w, _)| **w != 0)
+            .map(|(_, l)| l[i])
+            .sum()
+    };
+    let (remote_red, remote_drop) = (remote(red), remote(drop));
+    let local = leases.entry(0).or_default();
+    local[red] = rediscovered.saturating_sub(remote_red);
+    local[drop] = dropped.saturating_sub(remote_drop);
+    Ok(leases
         .into_iter()
-        .map(|w| {
-            let l = leases.get(&w).copied().unwrap_or_default();
-            let (rediscovered, dropped) = own.get(&w).copied().unwrap_or_default();
-            DiscoverWorker {
-                dropped,
-                granted: l[codes::WORKER_GRANTED as usize],
-                marginal: l[codes::WORKER_MARGINAL as usize],
-                rediscovered,
-                worker: w,
-            }
+        .map(|(worker, l)| DiscoverWorker {
+            dropped: l[drop],
+            granted: l[codes::WORKER_GRANTED as usize],
+            marginal: l[codes::WORKER_MARGINAL as usize],
+            rediscovered: l[red],
+            worker,
         })
         .collect())
 }

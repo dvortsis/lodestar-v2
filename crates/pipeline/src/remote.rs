@@ -469,6 +469,12 @@ impl RemoteIntake {
                 metric::by_worker_key(c.metric, c.dim, c.key),
                 c.value,
             );
+            // Discover's per-worker totals (WK-15), so its page never
+            // reads the packed rows above.
+            if let Some(key) = crate::marginal::counted_key(c.metric) {
+                self.rollups
+                    .add_dim(c.hour * 3600, metric::WORKER_LEASES, worker.0, key, c.value);
+            }
         }
         true
     }

@@ -114,6 +114,8 @@ pub mod codes {
     pub const WORKER_MARGINAL: i64 = 1;
     pub const WORKER_COMMITTED: i64 = 2;
     pub const WORKER_LOST: i64 = 3;
+    pub const WORKER_REDISCOVERED: i64 = 4;
+    pub const WORKER_DROPPED: i64 = 5;
 
     /// `cohort_hour.stage` (`lodestar_sources::Stage`).
     pub const HARVESTED: u8 = 1;

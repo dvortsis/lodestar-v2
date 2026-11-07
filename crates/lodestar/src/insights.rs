@@ -757,9 +757,18 @@ mod tests {
                     codes::WORKER_GRANTED,
                     codes::WORKER_MARGINAL,
                     codes::WORKER_COMMITTED,
-                    codes::WORKER_LOST
+                    codes::WORKER_LOST,
+                    codes::WORKER_REDISCOVERED,
+                    codes::WORKER_DROPPED
                 ],
-                [key::GRANTED, key::MARGINAL, key::COMMITTED, key::LOST]
+                [
+                    key::GRANTED,
+                    key::MARGINAL,
+                    key::COMMITTED,
+                    key::LOST,
+                    key::REDISCOVERED,
+                    key::DROPPED
+                ]
             );
         }
         assert_eq!(codes::BLOCKED, Loss::Blocked as u8);
