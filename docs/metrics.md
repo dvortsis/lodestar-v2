@@ -862,14 +862,16 @@ Either way the rest is neither an upper nor a lower bound. It also holds thread 
 | `search_segments{index}` | gauge | Live segments in each index's current searcher, read at scrape: `index` is `main` (torrents) or `files`. Rendered with search on. |
 | `mem_anon_mappings{size}` | gauge | Anonymous mappings outside the allocator's arenas, from `/proc/self/maps`, by the kernel's mapping size: `size` is `lt_128k`, `128k_512k`, `512k_2m` or `ge_2m`. A mapping counts when it has no path and inode 0 and isn't `---p` (a guard page or reserved space); a run of adjacent anonymous mappings spanning 256 MiB or more that holds one mapping of 64 MiB or more is an arena and doesn't count (a long run of small mappings still counts). Soak r4's C-heap growth showed as `128k_512k` ([X-soak-screen](decisions/2026-11-07-X-soak-screen.md)). Sampled with the gauges above; all four absent when the file can't be read whole. Linux only. |
 
-## Fetch pool held bytes (X-fetch-pool-bytes, 2026-11-06)
+## Fetch pool held and reserved bytes (X-fetch-pool-bytes, X-fetch-meta-reserve, 2026-11-06)
 
-The fetch pool holds finished info dicts until the consumer takes them. It holds them to a byte budget, `max_held_bytes` (64 MiB by default; see [the decision](decisions/2026-11-06-X-fetch-pool-bytes.md)). It counts each result's dict, PEX list and client name, plus the struct, from the moment its fetch finishes until the consumer takes it from the output channel. Bytes inside a fetch still running are not counted.
+The fetch pool holds info dicts to a byte budget, `max_held_bytes` (64 MiB by default; see [the first decision](decisions/2026-11-06-X-fetch-pool-bytes.md) and [the second](decisions/2026-11-06-X-fetch-meta-reserve.md)). A fetch reserves room for its result once the peer has announced the dict's size and before it downloads any of it: the announced size, the client name, a full PEX list and the struct. While the budget is full the fetch waits. When it finishes, its reservation becomes the result's held bytes: the dict, PEX list and client name, plus the struct, until the consumer takes it from the output channel. Held plus reserved bytes stay within the budget, except for one dict larger than the whole budget, which is fetched alone.
 
 | Series | Type | Meaning |
 | --- | --- | --- |
-| `fetch_held_bytes` | gauge | Bytes of finished fetches the pool holds: not yet joined, waiting for an output slot, or in the channel and not yet taken. It can pass the budget by what fetches already running bring when it fills. |
-| `fetch_held_full_total` | counter | Times the budget, or the estimate of what fetches in flight will bring, stopped the pool starting fetches. It counts each time the pool becomes stopped, not each round it stays stopped. |
+| `fetch_held_bytes` | gauge | Bytes of finished fetches the pool holds: not yet joined, waiting for an output slot, or in the channel and not yet taken. |
+| `fetch_reserved_bytes` | gauge | Bytes that fetches in flight have reserved for their results. Held plus reserved is what the budget limits. |
+| `fetch_held_full_total` | counter | Times the budget (held plus reserved bytes), or a waiting reservation that holds dispatch (a whole dict's, a large dict's remainder, or a large dict's first window that only lacks room), stopped the pool starting fetches. It counts each time the pool becomes stopped, not each round it stays stopped. A result waiting for an output slot also stops fetching (outbox backpressure), but isn't counted here. |
+| `fetch_reserve_timeouts_total` | counter | Fetches whose deadline ran out while they waited for a reservation. The first two for a key aren't counted as failed fetches, and the peer is tried again later; the third is charged as a `timed_out` failure, so a key can't wait out for ever. A steady rise means the budget is too small for the dicts being fetched. |
 
 ## Unreadable filter rows (F-filter-load-fail-closed, 2026-11-01)
 

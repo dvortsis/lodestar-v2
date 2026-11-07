@@ -5,13 +5,13 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
-use lodestar_sources::pool::spawn;
+use lodestar_sources::pool::{Reservation, SHUTDOWN_DRAIN, spawn};
 use lodestar_sources::{
     BoxFuture, Discovery, FetchedKey, Fetcher, Found, Funnel, FunnelCounts, Loss, PoolConfig,
     PoolHandle, PoolIo, Shutdown, Stage,
@@ -64,7 +64,25 @@ struct FakeState {
     started: Mutex<Vec<(InfoHash, SocketAddr)>>,
     /// The length of every info dict served; 0 serves the key's 20 bytes.
     info_len: AtomicUsize,
+    /// Reserve the dict's bytes 100 ms in, as peer-wire does at the
+    /// extended handshake, before the rest of the script's delay.
+    reserving: AtomicBool,
+    /// With `reserving`: how long a fetch may wait for its reservation
+    /// before it times out, as peer-wire's deadline would end it. Zero
+    /// waits for ever.
+    reserve_deadline_ms: AtomicU64,
+    /// Bytes reserved by fetches downloading now, and the most at once.
+    reserved: AtomicU64,
+    max_reserved: AtomicU64,
+    /// With `reserving`: peers that announce this many bytes, reserve as
+    /// peer-wire does (the first 64 KiB, the rest after it arrives), then
+    /// send nothing until peer-wire's 8 s deadline ends them.
+    silent: Mutex<HashMap<SocketAddr, usize>>,
 }
+
+/// Peer-wire's first request window (`FIRST_WINDOW`), and its deadline.
+const WINDOW: usize = 64 << 10;
+const DEADLINE: Duration = Duration::from_secs(8);
 
 struct Fake(Arc<FakeState>);
 
@@ -74,43 +92,105 @@ impl Fetcher for Fake {
         peer: SocketAddr,
         key: InfoHash,
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
-        let s = self.0.clone();
-        Box::pin(async move {
-            let script = s
-                .scripts
-                .lock()
-                .unwrap()
-                .get(&peer)
-                .copied()
-                .unwrap_or(Script {
-                    delay: Duration::from_secs(1),
-                    result: Ok(()),
-                });
-            s.started.lock().unwrap().push((key, peer));
-            let now = s.active.fetch_add(1, Ordering::SeqCst) + 1;
-            s.max_active.fetch_max(now, Ordering::SeqCst);
-            let on_ip = {
-                let mut m = s.per_ip.lock().unwrap();
-                let n = m.entry(peer.ip()).or_insert(0);
-                *n += 1;
-                *n
-            };
-            s.max_per_ip.fetch_max(on_ip, Ordering::SeqCst);
-            sleep(script.delay).await;
+        Box::pin(serve(self.0.clone(), peer, key, None))
+    }
+
+    fn fetch_reserving(
+        &self,
+        peer: SocketAddr,
+        key: InfoHash,
+        reservation: Reservation,
+    ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+        let reserving = self.0.reserving.load(Ordering::SeqCst);
+        Box::pin(serve(
+            self.0.clone(),
+            peer,
+            key,
+            reserving.then_some(reservation),
+        ))
+    }
+}
+
+async fn serve(
+    s: Arc<FakeState>,
+    peer: SocketAddr,
+    key: InfoHash,
+    reservation: Option<Reservation>,
+) -> Result<Fetched, FailureKind> {
+    let script = s
+        .scripts
+        .lock()
+        .unwrap()
+        .get(&peer)
+        .copied()
+        .unwrap_or(Script {
+            delay: Duration::from_secs(1),
+            result: Ok(()),
+        });
+    s.started.lock().unwrap().push((key, peer));
+    let now = s.active.fetch_add(1, Ordering::SeqCst) + 1;
+    s.max_active.fetch_max(now, Ordering::SeqCst);
+    let on_ip = {
+        let mut m = s.per_ip.lock().unwrap();
+        let n = m.entry(peer.ip()).or_insert(0);
+        *n += 1;
+        *n
+    };
+    s.max_per_ip.fetch_max(on_ip, Ordering::SeqCst);
+    let len = s.info_len.load(Ordering::SeqCst).max(20);
+    let mut delay = script.delay;
+    let mut reserved = 0;
+    if let Some(r) = &reservation {
+        let handshake = Duration::from_millis(100);
+        sleep(handshake).await;
+        delay = delay.saturating_sub(handshake);
+        let silent = s.silent.lock().unwrap().get(&peer).copied();
+        if let Some(size) = silent {
+            // Waiting for room counts against the deadline too.
+            let _ = tokio::time::timeout(DEADLINE - handshake, async {
+                r.reserve(size.min(WINDOW), size).await;
+                s.reserved.fetch_add(r.bytes(), Ordering::SeqCst);
+                std::future::pending::<()>().await
+            })
+            .await;
+            if r.bytes() > 0 {
+                s.reserved.fetch_sub(r.bytes(), Ordering::SeqCst);
+            }
             s.active.fetch_sub(1, Ordering::SeqCst);
             *s.per_ip.lock().unwrap().get_mut(&peer.ip()).unwrap() -= 1;
-            let len = s.info_len.load(Ordering::SeqCst).max(20);
-            let mut info = vec![0u8; len];
-            info[..20].copy_from_slice(&key.0);
-            script.result.map(|()| Fetched {
-                info,
-                v2: false,
-                encrypted: true,
-                pex: Vec::new(),
-                client: None,
-            })
-        })
+            return Err(FailureKind::TimedOut);
+        }
+        let deadline = s.reserve_deadline_ms.load(Ordering::SeqCst);
+        let done = if deadline == 0 {
+            r.reserve(len, len).await;
+            true
+        } else {
+            tokio::time::timeout(Duration::from_millis(deadline), r.reserve(len, len))
+                .await
+                .is_ok()
+        };
+        if !done {
+            s.active.fetch_sub(1, Ordering::SeqCst);
+            *s.per_ip.lock().unwrap().get_mut(&peer.ip()).unwrap() -= 1;
+            return Err(FailureKind::TimedOut);
+        }
+        reserved = r.bytes();
+        let now = s.reserved.fetch_add(reserved, Ordering::SeqCst) + reserved;
+        s.max_reserved.fetch_max(now, Ordering::SeqCst);
     }
+    sleep(delay).await;
+    s.reserved.fetch_sub(reserved, Ordering::SeqCst);
+    s.active.fetch_sub(1, Ordering::SeqCst);
+    *s.per_ip.lock().unwrap().get_mut(&peer.ip()).unwrap() -= 1;
+    let mut info = vec![0u8; len];
+    info[..20].copy_from_slice(&key.0);
+    script.result.map(|()| Fetched {
+        info,
+        v2: false,
+        encrypted: true,
+        pex: Vec::new(),
+        client: None,
+    })
 }
 
 /// The funnel's counts, plus each loss's cause as the pool reported it.
@@ -1231,8 +1311,13 @@ fn weight(len: usize) -> u64 {
 }
 
 /// Polls `done` on the paused clock until it holds, for at most 60 s.
-async fn until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(60);
+async fn until(what: &str, done: impl FnMut() -> bool) {
+    until_within(what, 60, done).await;
+}
+
+/// [`until`], for at most `secs` seconds of the paused clock.
+async fn until_within(what: &str, secs: u64, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
     while !done() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         sleep(Duration::from_millis(10)).await;
@@ -1507,4 +1592,590 @@ async fn held_bytes_fall_as_the_consumer_takes_results() {
         until("the gauge to follow", || held(&h) == left * w).await;
     }
     h.stop().await;
+}
+
+// X-fetch-meta-reserve: fetches reserve their result's bytes before they
+// download them.
+
+fn reserved(h: &Harness) -> u64 {
+    h.handle.stats().reserved_bytes.load(Ordering::Relaxed)
+}
+
+/// Like [`budgeted`], with fetches that reserve their dict's bytes 100 ms
+/// in, waiting at most `deadline_ms` (0: for ever).
+fn reserving(
+    sockets: usize,
+    budget: usize,
+    len: usize,
+    capacity: usize,
+    keys: u32,
+    deadline_ms: u64,
+) -> Harness {
+    let fake = Arc::new(FakeState::default());
+    fake.info_len.store(len, Ordering::SeqCst);
+    fake.reserving.store(true, Ordering::SeqCst);
+    fake.reserve_deadline_ms
+        .store(deadline_ms, Ordering::SeqCst);
+    let h = Harness::with_output(
+        PoolConfig {
+            max_sockets: sockets,
+            max_held_bytes: budget,
+            ..config()
+        },
+        &[],
+        vec![],
+        fake,
+        capacity,
+    );
+    for n in 0..keys {
+        h.send(found(0, n, vec![peer(n as u8 + 1, 6881)]));
+    }
+    h
+}
+
+/// Many fetches with large dicts against a small budget: they wait for
+/// room instead of downloading, so what's reserved and held together never
+/// passes the budget, even with the consumer stalled. While a reservation
+/// waits, the pool starts nothing more. Once the consumer moves, every key
+/// arrives once, and no peer was charged for waiting.
+#[tokio::test(start_paused = true)]
+async fn reservations_keep_held_and_reserved_bytes_within_the_budget() {
+    const SOCKETS: usize = 16;
+    const KEYS: u32 = 48;
+    let budget = 4 * MIB;
+    let w = weight(MIB);
+    let mut h = reserving(SOCKETS, budget, MIB, 16, KEYS, 0);
+    let within = |h: &Harness| {
+        let (held, reserved) = (held(h), reserved(h));
+        assert!(
+            held + reserved <= budget as u64,
+            "{held} held + {reserved} reserved over {budget}"
+        );
+        assert!(
+            h.fake.max_reserved.load(Ordering::SeqCst) <= budget as u64,
+            "downloads reserved too much at once"
+        );
+    };
+
+    until("the budget to stop fetching", || {
+        within(&h);
+        h.handle.stats().held_full.load(Ordering::Relaxed) > 0
+            && h.fake.reserved.load(Ordering::SeqCst) == 0
+            && held(&h) > 0
+    })
+    .await;
+    // Only what fits is held: the old bound let every socket's dict in.
+    assert!(held(&h) <= budget as u64, "{} held", held(&h));
+    assert_eq!(held(&h), held(&h) / w * w, "whole dicts");
+    let paused_at = started(&h);
+    assert!(paused_at <= SOCKETS, "{paused_at} started");
+    // Waiting reservations hold their sockets, and nothing else starts.
+    sleep(Duration::from_secs(120)).await;
+    within(&h);
+    assert_eq!(started(&h), paused_at, "fetching paused");
+    assert!(h.handle.stats().active.load(Ordering::Relaxed) > 0);
+
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < KEYS as usize {
+        let got = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+            .await
+            .expect("the next result")
+            .expect("the pool is running");
+        assert!(seen.insert(got.key), "{:?} twice", got.key);
+        within(&h);
+    }
+    assert_eq!(started(&h), KEYS as usize, "each key fetched once");
+    assert!(h.causes.lost.lock().unwrap().is_empty(), "nothing lost");
+    let stats = h.handle.stats();
+    assert_eq!(stats.reserve_timeouts.load(Ordering::Relaxed), 0);
+    until("the reservations released", || reserved(&h) == 0).await;
+    h.stop().await;
+}
+
+/// A fetch whose deadline runs out while it waits for a reservation frees
+/// its place in the queue and holds nothing. Its peer isn't charged: the
+/// key is fetched from the same peer later, and nothing counts as failed.
+#[tokio::test(start_paused = true)]
+async fn a_reservation_that_waits_out_its_deadline_is_freed_and_retried() {
+    const KEYS: u32 = 4;
+    let budget = 2 * MIB;
+    // Two fit; the other two wait 2 s, then time out, while the consumer
+    // is stalled.
+    let mut h = reserving(4, budget, MIB - 4096, 4, KEYS, 2_000);
+    let stats = h.handle.stats();
+    until("a reservation to time out", || {
+        stats.reserve_timeouts.load(Ordering::Relaxed) >= 2
+    })
+    .await;
+    assert!(held(&h) + reserved(&h) <= budget as u64);
+    for kind in [FailureKind::TimedOut, FailureKind::Invalid] {
+        assert_eq!(stats.failure_count(kind), 0, "not the peer's failure");
+    }
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < KEYS as usize {
+        // A key whose only peer waited out backs off `retry_backoff`
+        // (60 s here) before it's retried.
+        let got = tokio::time::timeout(Duration::from_secs(300), h.out.recv())
+            .await
+            .expect("the next result")
+            .expect("the pool is running");
+        assert!(seen.insert(got.key), "{:?} twice", got.key);
+    }
+    assert!(h.causes.lost.lock().unwrap().is_empty(), "nothing lost");
+    assert!(h.drain_lookups().is_empty(), "no lookup: no attempt used");
+    // Retried with the same peer each time, as it was never charged.
+    let started = h.fake.started.lock().unwrap().clone();
+    for (k, p) in &started {
+        let n = u32::from_be_bytes(k.0[..4].try_into().unwrap());
+        assert_eq!(*p, peer(n as u8 + 1, 6881));
+    }
+    assert!(started.len() > KEYS as usize, "some were started again");
+    until("the reservations released", || reserved(&h) == 0).await;
+    h.stop().await;
+}
+
+/// The reservation gate: a waiting reservation stops new fetches, and a
+/// dict larger than the whole budget reserves alone once nothing else is
+/// reserved or held.
+#[tokio::test(start_paused = true)]
+async fn a_reservation_over_the_budget_waits_for_the_budget_to_empty() {
+    let mut h = reserving(4, MIB, 2 * MIB, 4, 3, 0);
+    until("one dict held", || held(&h) >= weight(2 * MIB)).await;
+    sleep(Duration::from_secs(60)).await;
+    // The others started before the first reserved, and wait for room.
+    assert!(started(&h) <= 3);
+    assert_eq!(held(&h), weight(2 * MIB), "only one at a time");
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < 3 {
+        let got = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+            .await
+            .expect("the next result")
+            .expect("the pool is running");
+        assert!(seen.insert(got.key));
+        assert!(held(&h) <= weight(2 * MIB), "{} held", held(&h));
+    }
+    h.stop().await;
+}
+
+/// The receiver goes away while the pool runs: the pool stops fetching,
+/// keeps what it fetched, and saves it with the queue at shutdown.
+#[tokio::test(start_paused = true)]
+async fn a_receiver_closing_while_the_pool_runs_stops_fetching() {
+    const KEYS: u32 = 32;
+    let h = budgeted(4, 64 * MIB, 20, 1, KEYS);
+    let stats = h.handle.stats();
+    until("some fetched", || {
+        stats.fetched.load(Ordering::Relaxed) >= 4
+    })
+    .await;
+    let Harness {
+        out,
+        stop,
+        task,
+        causes,
+        fake,
+        handle,
+        ..
+    } = h;
+    drop(out);
+    // Whatever was running finishes; then nothing more starts.
+    until("the running fetches to end", || {
+        handle.stats().active.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    let after = fake.started.lock().unwrap().len();
+    sleep(Duration::from_secs(120)).await;
+    assert_eq!(fake.started.lock().unwrap().len(), after, "no more fetches");
+    stop.send(true).unwrap();
+    let queue = tokio::time::timeout(Duration::from_secs(60), task)
+        .await
+        .expect("the pool stops")
+        .unwrap();
+    assert!(causes.lost.lock().unwrap().is_empty());
+    let keys: std::collections::HashSet<_> = queue.iter().map(|q| q.info_hash.0).collect();
+    assert_eq!(keys.len(), queue.len(), "once each");
+    // The one in the channel went with the receiver; the rest are saved.
+    assert_eq!(queue.len(), KEYS as usize - 1);
+}
+
+/// A consumer that's alive but stalled at shutdown: the pool waits for it
+/// at most `SHUTDOWN_DRAIN`, then saves what's left with the queue.
+#[tokio::test(start_paused = true)]
+async fn shutdown_with_a_stalled_consumer_saves_the_rest_after_the_deadline() {
+    const KEYS: u32 = 8;
+    let h = budgeted(4, 64 * MIB, 20, 1, KEYS);
+    until("a round to finish", || {
+        started(&h) >= 4 && h.handle.stats().active.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    let Harness {
+        out,
+        stop,
+        task,
+        causes,
+        ..
+    } = h;
+    let stopped_at = Instant::now();
+    stop.send(true).unwrap();
+    let queue = tokio::time::timeout(Duration::from_secs(60), task)
+        .await
+        .expect("the pool stops despite the stalled consumer")
+        .unwrap();
+    let waited = Instant::now() - stopped_at;
+    assert!(waited >= SHUTDOWN_DRAIN, "waited {waited:?}");
+    assert!(
+        waited < SHUTDOWN_DRAIN + Duration::from_secs(1),
+        "{waited:?}"
+    );
+    assert!(causes.lost.lock().unwrap().is_empty());
+    // The receiver still holds the one in the channel; every other key
+    // is saved, once.
+    assert_eq!(out.len(), 1);
+    let keys: std::collections::HashSet<_> = queue.iter().map(|q| q.info_hash.0).collect();
+    assert_eq!(keys.len(), queue.len(), "once each");
+    assert_eq!(queue.len(), KEYS as usize - 1);
+}
+
+/// A result purged while it waits for the consumer leaves the recently
+/// fetched order too, so the key fetched again later stays remembered
+/// for its whole turn there.
+#[tokio::test(start_paused = true)]
+async fn a_purged_result_leaves_the_recent_order() {
+    let fake = Arc::new(FakeState::default());
+    let mut h = Harness::with_output(
+        PoolConfig {
+            recent: 2,
+            ..config()
+        },
+        &[],
+        vec![],
+        fake,
+        1,
+    );
+    // Key 1 fills the channel; key 2 (source 1 only) waits and is purged.
+    h.script(peer(1, 1), 100, Ok(()));
+    h.script(peer(2, 1), 1_000, Ok(()));
+    h.send(found(1, 1, vec![peer(1, 1)]));
+    h.send(found(1, 2, vec![peer(2, 1)]));
+    let stats = h.handle.stats();
+    until("both fetched", || {
+        stats.fetched.load(Ordering::Relaxed) == 2 && stats.active.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    assert_eq!(h.handle.drop_source(src(1)).await, 1);
+    assert_eq!(h.out.recv().await.unwrap().key, key(1));
+    // Source 2 finds key 2 again: fetched afresh, then key 3.
+    h.send(found(2, 2, vec![peer(2, 1)]));
+    let again = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.key, key(2));
+    h.send(found(2, 3, vec![peer(3, 1)]));
+    let third = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(third.key, key(3));
+    // Key 2 is among the two most recent, so a new sighting is a duplicate.
+    let before = stats.duplicates.load(Ordering::Relaxed);
+    h.send(found(0, 2, vec![peer(2, 1)]));
+    until("the sighting counted", || {
+        stats.duplicates.load(Ordering::Relaxed) > before
+    })
+    .await;
+    sleep(Duration::from_secs(10)).await;
+    assert_eq!(
+        stats.fetched.load(Ordering::Relaxed),
+        4,
+        "not fetched again"
+    );
+    h.stop().await;
+}
+
+/// Silent peers that announce a dict and send nothing pin only their first
+/// 64 KiB window each, whether they announce 1 MiB (the old first window, a
+/// partial claim) or 64 KiB (a whole one). Against a 4 MiB worker budget,
+/// 20 of each don't stop small dicts flowing (runner, 2026-11-07).
+#[tokio::test(start_paused = true)]
+async fn silent_claimers_pin_one_small_window_and_small_dicts_still_flow() {
+    const SILENT: u32 = 20;
+    const SMALL: u32 = 64;
+    let budget = 4 * MIB;
+    let fake = Arc::new(FakeState::default());
+    fake.info_len.store(30_000, Ordering::SeqCst);
+    fake.reserving.store(true, Ordering::SeqCst);
+    let mut h = Harness::with_output(
+        PoolConfig {
+            max_sockets: 2 * SILENT as usize + 16,
+            per_ip: 64,
+            max_held_bytes: budget,
+            ..config()
+        },
+        &[],
+        vec![],
+        fake,
+        4096,
+    );
+    // Silent peers first, so they hold their windows when the small ones
+    // come: half announcing the old 1 MiB window, half the new 64 KiB.
+    for n in 0..2 * SILENT {
+        let p = SocketAddr::from(([10, 1, (n / 200) as u8, (n % 200) as u8 + 1], 6881));
+        let announced = if n < SILENT { MIB } else { WINDOW };
+        h.fake.silent.lock().unwrap().insert(p, announced);
+        h.send(found(0, 10_000 + n, vec![p]));
+    }
+    let stats = h.handle.stats();
+    until("the silent peers to reserve", || {
+        h.fake.reserved.load(Ordering::SeqCst) >= 2 * SILENT as u64 * WINDOW as u64
+    })
+    .await;
+    let pinned = h.fake.reserved.load(Ordering::SeqCst);
+    // Each pins its window plus the bound's PEX room and the struct.
+    assert!(
+        pinned <= 2 * SILENT as u64 * (WINDOW as u64 + (8 << 10)),
+        "{pinned}"
+    );
+    for n in 0..SMALL {
+        h.send(found(0, n, vec![peer(n as u8 + 1, 6881)]));
+    }
+    // Every small dict arrives well inside the silent peers' deadline.
+    let started = Instant::now();
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < SMALL as usize {
+        let got = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+            .await
+            .expect("the next small dict")
+            .expect("the pool is running");
+        assert!(seen.insert(got.key));
+        assert!(held(&h) + reserved(&h) <= budget as u64);
+    }
+    assert!(
+        Instant::now() - started < DEADLINE,
+        "they didn't wait for the liars"
+    );
+    assert_eq!(stats.reserve_timeouts.load(Ordering::Relaxed), 0);
+    h.stop().await;
+}
+
+/// A key that keeps waiting out its reservation is charged on the
+/// `RESERVE_WAITS_FREE`th time: the timeout counts as a failed fetch, so
+/// it can't cycle for ever on waits alone.
+#[tokio::test(start_paused = true)]
+async fn the_third_reserve_timeout_is_charged() {
+    use lodestar_sources::pool::RESERVE_WAITS_FREE;
+    // Key 0 fills the budget and stays held (the consumer is stalled);
+    // key 1 waits 2 s each time and times out.
+    let mut h = reserving(2, MIB, MIB - 4096, 4, 2, 2_000);
+    let stats = h.handle.stats();
+    until("the first wait out", || {
+        stats.reserve_timeouts.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    // Backing off with its peer still to try, interest makes it ready at
+    // once: no lookup.
+    assert!(h.handle.interest(key(1)).await);
+    until("it waits out again", || {
+        stats.reserve_timeouts.load(Ordering::Relaxed) == 2
+    })
+    .await;
+    assert!(
+        h.lookups.try_recv().is_err(),
+        "no lookup for a key with a peer"
+    );
+    // The third wait, `retry_backoff` (60 s) later, is charged.
+    until_within("the waits to be charged", 600, || {
+        stats.failure_count(FailureKind::TimedOut) > 0
+    })
+    .await;
+    assert_eq!(
+        stats.reserve_timeouts.load(Ordering::Relaxed),
+        u64::from(RESERVE_WAITS_FREE)
+    );
+    assert_eq!(stats.failure_count(FailureKind::TimedOut), 1);
+    // Charged, its only peer is spent: it looks for more.
+    until("a lookup for key 1", || {
+        h.lookups.try_recv().is_ok_and(|k| k == key(1))
+    })
+    .await;
+    h.stop().await;
+}
+
+/// With streaming peers on, a fetch that waits out its reservation while
+/// the key's stream is still open leaves the stream to bring the key back:
+/// no second lookup (raising interest included), and the lookup count
+/// returns to 0 when the stream ends.
+#[tokio::test(start_paused = true)]
+async fn a_reserve_timeout_under_a_live_stream_starts_no_second_lookup() {
+    reserve_timeout_under_a_live_stream(3).await;
+}
+
+/// The same on the key's last attempt: when the stream ends, the key is
+/// ready with its untried peer, not lost, and the lookup count is
+/// decremented once (runner's review: it underflowed).
+#[tokio::test(start_paused = true)]
+async fn a_reserve_timeout_under_a_stream_on_the_last_attempt_keeps_the_key() {
+    reserve_timeout_under_a_live_stream(1).await;
+}
+
+async fn reserve_timeout_under_a_live_stream(max_attempts: u16) {
+    use lodestar_sources::{LookupSession, PeerRequest, Terminal};
+    let len = MIB - 4096;
+    let fake = Arc::new(FakeState::default());
+    fake.info_len.store(len, Ordering::SeqCst);
+    fake.reserving.store(true, Ordering::SeqCst);
+    fake.reserve_deadline_ms.store(2_000, Ordering::SeqCst);
+    let (disc, discoveries) = mpsc::channel(64);
+    let (finder, mut requests) = mpsc::channel::<PeerRequest>(64);
+    let (out_tx, mut out) = mpsc::channel(4);
+    let (stop, shutdown) = Shutdown::new();
+    let (handle, task) = spawn(
+        PoolConfig {
+            max_sockets: 4,
+            // Room left, but not a third dict's.
+            max_held_bytes: 2 * weight(len) as usize + 1000,
+            streaming_peers: true,
+            max_attempts,
+            ..config()
+        },
+        Arc::new(Fake(fake.clone())),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![finder],
+            out: out_tx,
+            funnel: Arc::new(FunnelCounts::default()),
+            shutdown,
+        },
+        HashMap::new(),
+        Vec::new(),
+    );
+    let stats = handle.stats();
+    // Keys 1 and 2 fill the budget, held while the consumer is stalled.
+    disc.try_send(found(0, 1, vec![peer(1, 6881)])).unwrap();
+    disc.try_send(found(0, 2, vec![peer(2, 6881)])).unwrap();
+    until("the budget full", || {
+        stats.held_bytes.load(Ordering::Relaxed) == 2 * weight(len)
+    })
+    .await;
+    // Key 3 has no peers: its lookup streams one peer and stays open.
+    disc.try_send(found(0, 3, vec![])).unwrap();
+    let request = tokio::time::timeout(Duration::from_secs(60), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(request.key, key(3));
+    let (batches_tx, batches) = mpsc::channel(4);
+    let (terminal_tx, terminal) = tokio::sync::oneshot::channel();
+    request
+        .session
+        .expect("a streaming request")
+        .send(Some(LookupSession { batches, terminal }))
+        .unwrap();
+    batches_tx.send(vec![peer(3, 6881)]).await.unwrap();
+    until("key 3 to wait out its reservation", || {
+        stats.reserve_timeouts.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    assert_eq!(stats.lookups.load(Ordering::Relaxed), 1, "the stream's one");
+    // It waits for the stream, as after a failure, rather than redialling:
+    // interest neither starts a second lookup nor a fetch.
+    let starts = |fake: &FakeState| {
+        fake.started
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(k, _)| *k == key(3))
+            .count()
+    };
+    let before = starts(&fake);
+    assert!(handle.interest(key(3)).await);
+    sleep(Duration::from_secs(1)).await;
+    assert!(requests.try_recv().is_err(), "no second lookup");
+    assert_eq!(starts(&fake), before, "the stream brings it back");
+    assert_eq!(stats.lookups.load(Ordering::Relaxed), 1);
+    // The stream ends; the consumer moves; key 3 is fetched with its peer.
+    drop(batches_tx);
+    terminal_tx.send(Terminal::Complete).unwrap();
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < 3 {
+        let got = tokio::time::timeout(Duration::from_secs(600), out.recv())
+            .await
+            .expect("the next result")
+            .unwrap();
+        seen.insert(got.key);
+    }
+    until("the lookup count back to 0", || {
+        stats.lookups.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    drop(requests);
+    drop(disc);
+    stop.send(true).unwrap();
+    task.await.unwrap();
+}
+
+/// A stream that ends empty on the key's last attempt loses the key as
+/// "no peers", once, and gives its lookup slot back once. CR-1a-S counted
+/// it twice, which underflowed `lookups` (runner's review, a bug already on
+/// `main`).
+#[tokio::test(start_paused = true)]
+async fn a_stream_that_ends_empty_on_the_last_attempt_counts_its_lookup_once() {
+    use lodestar_sources::{LookupSession, PeerRequest, Terminal};
+    let (disc, discoveries) = mpsc::channel(8);
+    let (finder, mut requests) = mpsc::channel::<PeerRequest>(8);
+    let (out_tx, _out) = mpsc::channel(4);
+    let (stop, shutdown) = Shutdown::new();
+    let causes = Arc::new(Causes {
+        counts: Arc::new(FunnelCounts::default()),
+        lost: Mutex::default(),
+    });
+    let (handle, task) = spawn(
+        PoolConfig {
+            streaming_peers: true,
+            max_attempts: 1,
+            ..config()
+        },
+        Arc::new(Fake(Arc::new(FakeState::default()))),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![finder],
+            out: out_tx,
+            funnel: causes.clone(),
+            shutdown,
+        },
+        HashMap::new(),
+        Vec::new(),
+    );
+    disc.try_send(found(0, 1, vec![])).unwrap();
+    let request = tokio::time::timeout(Duration::from_secs(60), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let (batches_tx, batches) = mpsc::channel(4);
+    let (terminal_tx, terminal) = tokio::sync::oneshot::channel();
+    request
+        .session
+        .expect("a streaming request")
+        .send(Some(LookupSession { batches, terminal }))
+        .unwrap();
+    let stats = handle.stats();
+    until("the lookup to start", || {
+        stats.lookups.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    drop(batches_tx);
+    terminal_tx.send(Terminal::Complete).unwrap();
+    until("the key to be lost", || {
+        !causes.lost.lock().unwrap().is_empty()
+    })
+    .await;
+    assert_eq!(
+        causes.lost.lock().unwrap()[..],
+        [(key(1), Loss::NoPeers, None)]
+    );
+    // A round of the pool publishes its stats.
+    handle.queued().await;
+    assert_eq!(stats.lookups.load(Ordering::Relaxed), 0);
+    stop.send(true).unwrap();
+    task.await.unwrap();
 }
