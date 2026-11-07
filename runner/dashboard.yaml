@@ -340,6 +340,7 @@ placement:
   - X-claim-store-polish
   - X-fetch-pool-bytes
   - X-fetch-meta-reserve
+  - X-refetch-private
   - X-gs-gate-polish
   - X-soak-screen
   - X-soak-screen-polish
@@ -1047,6 +1048,7 @@ roadmap:
     - WK-8
     - WK-9
     - WK-9b
+    - WK-9c
     - WK-10
     - WK-11
     - WK-12
