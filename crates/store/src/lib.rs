@@ -116,9 +116,9 @@ pub mod flags {
     pub const FLAGGED: i64 = 1 << 13;
     /// Its info-derived columns came from a remote worker and haven't been
     /// re-verified (WK-9): `PRIVATE` (the dict's BEP 27 bit) is the
-    /// worker's word, so every privacy gate treats the row as private
-    /// until WK-13's re-verification clears this. A refetch by the
-    /// coordinator itself rewrites the flags and clears it too.
+    /// worker's word, so every privacy gate treats the row as private.
+    /// Nothing clears it until WK-13's re-verification does (a complete
+    /// row is never rewritten by a later commit), which errs closed.
     pub const REMOTE_UNVERIFIED: i64 = 1 << 14;
     /// What every §18.7 privacy gate (scrapes, cache lookups, ENR-1, Send
     /// to client) refuses: a BEP 27 private torrent, a private source's
@@ -296,6 +296,10 @@ impl Prepared {
     }
 }
 
+/// [`Preparer::measure_files`]'s refusal of a tree within metainfo's limits
+/// but over the caller's components or path-byte budget.
+pub const OVER_BUDGET: &str = "file tree over its budget";
+
 /// Builds [`Prepared`] records with the store's blob dictionaries, away
 /// from the writer connection.
 #[derive(Debug)]
@@ -348,6 +352,22 @@ impl Preparer {
         max_components: u64,
         max_path_bytes: u64,
     ) -> Result<(FileTree, usize, filetree::Shape)> {
+        let (raw, shape) = self.measure_files(blob, max, max_components, max_path_bytes)?;
+        Ok((filetree::decode(&raw)?, raw.len(), shape))
+    }
+
+    /// The first half of [`decode_files`](Self::decode_files): the blob
+    /// decompressed and its shape checked, with no path built. A caller
+    /// that budgets decoding charges the shape here, then decodes
+    /// (`filetree::decode`), so a blob that passes its shape and then fails
+    /// to decode still costs what decoding it built.
+    pub fn measure_files(
+        &self,
+        blob: &Compressed,
+        max: usize,
+        max_components: u64,
+        max_path_bytes: u64,
+    ) -> Result<(Vec<u8>, filetree::Shape)> {
         let raw = self
             .codec
             .decompress_capped(blob.codec, blob.dict_id, &blob.data, max)?;
@@ -356,14 +376,14 @@ impl Preparer {
         // is refused before the shape reserves anything for them.
         let max_dirs = usize::try_from(max_components).unwrap_or(usize::MAX);
         let shape = filetree::shape(&raw, max_dirs, limits.max_files)?;
-        if shape.depth > limits.max_path_depth
-            || shape.longest_path > limits.max_path_bytes as u64
-            || shape.components > max_components
-            || shape.path_bytes > max_path_bytes
+        if shape.depth > limits.max_path_depth || shape.longest_path > limits.max_path_bytes as u64
         {
             return Err(Error::Corrupt("file tree over its limits"));
         }
-        Ok((filetree::decode(&raw)?, raw.len(), shape))
+        if shape.components > max_components || shape.path_bytes > max_path_bytes {
+            return Err(Error::Corrupt(OVER_BUDGET));
+        }
+        Ok((raw, shape))
     }
 
     /// Whether raw info dicts are kept (`archive_raw`).

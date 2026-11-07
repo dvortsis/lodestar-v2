@@ -1098,3 +1098,136 @@ async fn path_bytes_are_budgeted_per_batch() {
     assert_eq!(kept, keys[..4], "four fit; the fifth passes the budget");
     assert_eq!(stat(&intake, |s| &s.refused), 1);
 }
+
+/// A blob whose shape passes but which fails to decode (a trailing byte
+/// `shape` doesn't read) still costs the batch what decoding it built: one
+/// 4,000-byte folder over 4,100 files is 16.4 MB of paths from a 20 KB
+/// blob. Four of them spend the 64 MiB, and the next four are refused by
+/// their shape, before decoding (the security review).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_blob_that_fails_to_decode_still_spends_the_batch() {
+    use lodestar_pipeline::remote::{NoStanding, Prior, RemoteParts};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap();
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, _p) = tokio::sync::mpsc::channel(8);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+    });
+    let parts = SinkParts {
+        preparer: Mutex::new(store.preparer()),
+        standing: Arc::new(NoStanding),
+        stored: Arc::new(Reader(Mutex::new(store))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    };
+    let ws = Store::open(dir.path().join("w.db"), StoreConfig::default()).unwrap();
+    let mut records = Vec::new();
+    for n in 0..8u8 {
+        let folder = vec![b'a' + n; 4_000];
+        let list: Vec<lodestar_metainfo::File> = (0..4_100)
+            .map(|_| lodestar_metainfo::File {
+                path: vec![folder.clone(), b"f".to_vec()],
+                size: 1,
+                attrs: lodestar_metainfo::FileAttrs::empty(),
+                symlink_target: None,
+                pieces_root: None,
+                hashes: lodestar_metainfo::FileHashes::default(),
+            })
+            .collect();
+        let mut raw =
+            lodestar_store::filetree::encode(&list, lodestar_metainfo::TextEncoding::UTF8).unwrap();
+        raw.push(0);
+        let shape = lodestar_store::filetree::shape(&raw, usize::MAX, usize::MAX).unwrap();
+        assert!(shape.path_bytes > 16_000_000, "{}", shape.path_bytes);
+        assert!(
+            lodestar_store::filetree::decode(&raw).is_err(),
+            "the trailing byte"
+        );
+        let mut t = prepared(&ws, &info(&format!("Trail.{n}.2026.mkv"), GIB));
+        t.info_size = 28_000;
+        assert!(raw.len() < 28_000);
+        t.files = lodestar_store::Compressed {
+            codec: lodestar_store::Codec::Raw,
+            dict_id: None,
+            data: raw,
+        };
+        let c = Claim {
+            key: t.info_hash,
+            source: src(1),
+            strategy: 0,
+            at: now(),
+        };
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(token),
+            ..
+        } = authority.claim_batch(W, &[c], now(), None, None)[0]
+        else {
+            panic!()
+        };
+        records.push(record(t, token));
+    }
+    let bytes = ResultsBatch { batch: 95, records }.encode().unwrap();
+    let taken = intake.take(W, &bytes, &parts, now()).unwrap();
+    assert!(taken.results.is_empty());
+    assert_eq!(stat(&intake, |s| &s.refused), 8);
+    assert_eq!(
+        stat(&intake, |s| &s.over_budget),
+        4,
+        "refused before decoding"
+    );
+}
+
+/// A late result refused for its content uses up the coordinator's record
+/// of the key: replayed in later batches, it finds no record and is stale,
+/// never rebuilt again (the security review: a free key's replays would
+/// otherwise cost a rebuild each, with no lease spent).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_late_result_is_rebuilt_at_most_once() {
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws = Store::open(ws_dir.path().join("w.db"), StoreConfig::default()).unwrap();
+    let mut t = prepared(&ws, &info("Replayed.Late.2026.mkv", GIB));
+    let key = t.info_hash;
+    let queue = [QueuedKey {
+        info_hash: key,
+        source: src(5),
+        cohort: now().div_euclid(3600) - 1,
+        strategy: 3,
+        priority: 0,
+        attempts: 0,
+        private_source: false,
+    }];
+    let rig = Rig::new(&queue, 0).await;
+    let authority = rig.authority();
+    // The built-in worker held it after the restart, then lost it.
+    let l = authority.get(&key).unwrap();
+    assert!(authority.lost(&key, l.token, 1).is_some());
+    // Its counts don't match its file list: refused when rebuilt.
+    t.size += 1;
+    let earlier = Token(((now() as u64 - 3_600) << 32) | 9);
+    for batch in 1..=6 {
+        assert!(
+            rig.sink
+                .results(W, payload(100 + batch, vec![record(t.clone(), earlier)]))
+        );
+    }
+    rig.wait_records(6).await;
+    let remote = rig.remote();
+    assert_eq!(stat(&remote, |s| &s.refused), 1, "rebuilt once");
+    assert_eq!(stat(&remote, |s| &s.stale), 5);
+    assert_eq!(stat(&remote, |s| &s.late), 0);
+    assert!(rig.stored(&key).is_none() && !authority.in_flight(&key));
+    rig.pipeline.shutdown().await.unwrap();
+}

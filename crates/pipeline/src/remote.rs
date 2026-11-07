@@ -93,10 +93,10 @@ pub const BATCH_BLOBS: usize = 64 << 20;
 pub const BATCH_COMPONENTS: u64 = 2_000_000;
 
 /// Bytes of paths one batch's file trees may hold in all (what decoding
-/// copies). With the per-record cap (the record's own byte cap: an info
-/// dict spells out every path in full, so a real tree's paths fit in it),
-/// a remote result's decoded paths are bounded as tightly as a fetched
-/// one's (`docs/decisions/2026-11-07-WK-9.md` has the arithmetic).
+/// copies, charged once a blob's shape passes, whether or not it then
+/// decodes). Each record's are bounded by the largest info dict
+/// ([`MAX_BLOB`], 16 MiB) and by what the batch has left
+/// (`docs/decisions/2026-11-07-WK-9.md` has the arithmetic).
 pub const BATCH_PATH_BYTES: u64 = 64 << 20;
 
 /// What the rest of one batch may still decode.
@@ -172,6 +172,9 @@ pub struct RemoteStats {
     pub undecodable: AtomicU64,
     /// Batches refused for now because the queue was full.
     pub backpressure: AtomicU64,
+    /// Records refused because the batch's decode budget (bytes, path
+    /// bytes, components) was spent before them (also in `refused`).
+    pub over_budget: AtomicU64,
     /// Peer hints relayed to a holder, and dropped by the network policy.
     pub hints: AtomicU64,
     pub hints_dropped: AtomicU64,
@@ -521,7 +524,12 @@ impl RemoteIntake {
             strategy: record.strategy,
             discovered_at: record.discovered_at,
         };
-        // Rebuilt before any lease exists, so a refusal counts nothing.
+        // Its record is used up here, before the costly rebuild: a refused
+        // late result can't be replayed for another rebuild (each replay
+        // finds no record and is stale), and a committed one isn't late
+        // twice. Rebuilt before any lease exists, so a refusal counts
+        // nothing.
+        lock(&self.prior).remove(&key);
         let Ok(mut r) = self.rebuild(worker, rec, &lease, fetched_at, parts, budget, now) else {
             bump(&self.stats.refused);
             return None;
@@ -537,7 +545,6 @@ impl RemoteIntake {
             bump(&self.stats.stale);
             return None;
         };
-        lock(&self.prior).remove(&key);
         r.token = token;
         // Its first lease ended with a terminal outcome (it isn't stored or
         // in flight), and this one will end with another: one correction
@@ -590,17 +597,27 @@ impl RemoteIntake {
             // so a record's paths are bounded by the largest dict, not its
             // own (`MAX_BLOB`, 16 MiB), and the batch's rest.
             let paths = budget.path_bytes.min(MAX_BLOB as u64);
-            let decoded = preparer.decode_files(&torrent.files, cap, budget.components, paths);
-            let (took, shape) = match &decoded {
-                Ok((_, took, shape)) => (*took, Some(*shape)),
-                Err(_) => (cap, None),
+            let measured = preparer.measure_files(&torrent.files, cap, budget.components, paths);
+            let (raw, shape) = match measured {
+                Ok(m) => m,
+                Err(e) => {
+                    budget.bytes = budget.bytes.saturating_sub(cap);
+                    // Over what the batch has left: refused before decoding.
+                    if matches!(e, lodestar_store::Error::Corrupt(why) if why == lodestar_store::OVER_BUDGET)
+                    {
+                        bump(&self.stats.over_budget);
+                    }
+                    return Err(Refusal::Blob);
+                }
             };
-            budget.bytes = budget.bytes.saturating_sub(took);
-            if let Some(shape) = shape {
-                budget.components = budget.components.saturating_sub(shape.components);
-                budget.path_bytes = budget.path_bytes.saturating_sub(shape.path_bytes);
-            }
-            let (tree, _, _) = decoded.map_err(|_| Refusal::Blob)?;
+            // Charged in full once the shape passes: decoding builds every
+            // directory path before it can fail on what `shape` doesn't
+            // read (names, sizes, trailing bytes).
+            budget.bytes = budget.bytes.saturating_sub(raw.len());
+            budget.components = budget.components.saturating_sub(shape.components);
+            budget.path_bytes = budget.path_bytes.saturating_sub(shape.path_bytes);
+            let tree = lodestar_store::filetree::decode(&raw).map_err(|_| Refusal::Blob)?;
+            drop(raw);
             let derived = derived_flags(&tree.files);
             let infos = crate::enrich::file_infos(&tree.files, tree.encoding);
             // The tree goes here: only the file list is kept.
