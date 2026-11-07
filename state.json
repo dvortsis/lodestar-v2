@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T07:52Z",
+  "updated_at": "2026-11-07T08:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5584,6 +5584,10 @@
     {
       "id": "wk10-notes-ops-placement",
       "text": "Runner PR: add to WK-10's slices.yaml notes — WK-14's crates/lodestar/src/cluster/ops.rs owns the one Arc<Placement>; WK-10's serve tick calls its sync hook (see WK-14 decisions 'For WK-10'). Prefs saved before WK-10 reach workers only when WK-10 sends Assign."
+    },
+    {
+      "id": "web-client-union-size",
+      "text": "WK-14: adding 4 body-less POST routes to schema.d.ts makes svelte-check fail with 'union type too complex' at features/alerts/api.ts:35; WK-14 casts there as setPaused already does. Fix web/src/lib/api/client.ts call() typing (per-path generic, not a union over all paths) before WK-13/WK-15 add more routes. Sonnet helper slice."
     }
   ],
   "main_health": [
