@@ -341,6 +341,7 @@ placement:
   - X-fetch-pool-bytes
   - X-fetch-meta-reserve
   - X-gs-gate-polish
+  - X-soak-screen
   - X-adult-catalogue
   - D-sources-guide
   - L4-followups
@@ -697,7 +698,7 @@ conditions:
   experiment-host:
     met: false
     who: you
-    label: You name the experiment host and book it
+    label: You book each crawler run (host named, the Unraid box, §2.51)
   owner-checkpoint-1:
     met: false
     who: you

@@ -573,6 +573,28 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 
     This condition holds: `owner-q1`.
 
+50. **Soak screening: find problems sooner, keep the 24 h gate** (owner, 2026-11-07 about 00:30Z, relayed by the dashboard session): "I'll go with your recommendations. Let's write really good tests that are able to catch any issues if they become apparent." The answer is to the runner's shorter-soaks message, and the owner's words decide it.
+    - **What's approved:**
+      - **a pre-soak memory sweep,** about 1 h, in CI on every release candidate;
+      - **an in-run screen,** at baseline hours 3, 6 and 12, on structural counters, with thresholds frozen before each run.
+
+      Together they're slice **X-soak-screen**. A screen trip means stop and investigate. It can never pass a run.
+    - **An accelerated pre-filled-store run** comes only if those two miss something.
+    - **Unchanged:** the 24 h memory gate (CR-0, `docs/decisions/2026-10-30-CR-0-acceptance.md`) and CR-SPEC (§2.34), including its 6 h segments and two blocks per treatment. Nothing is loosened.
+    - **"Really good tests":** X-soak-screen's tests reproduce the r3 and r4 failures and fail loudly. They show that a clean r5-shaped run doesn't trip, and that the screen can't change a gate verdict. The full list is in its brief and decisions file.
+
+51. **The crawler experiment host is the Unraid box, with the DHT port not forwarded** (owner, 2026-11-07 about 00:35Z, relayed by the dashboard session): "Unraid as host" and "Port is not forwarded".
+    - **One network setup for every run,** from the comparator through CR-COMB:
+      - the DHT UDP port isn't forwarded;
+      - Lodestar's UPnP stays off (the Docker default);
+      - the router and its UPnP state don't change;
+      - the LAN and the public IP stay the same.
+
+      A change to any of these is a network change, so the comparator is re-run before the next gate run (CR-SPEC). The box's addresses aren't recorded here (CR-SPEC rule 7.4).
+    - **What the results can claim:** Checkpoint 1 projects the rate of one node behind NAT with no port forwarding, measured beside bitmagnet on the same network. It doesn't claim what a forwarded install reaches. Forwarding is one of the options the runner puts to the owner if the projection falls short.
+    - **Runs never overlap the soaks** on the same box (build-plan §0.6). The plan's "not the soak PC" means the Windows PC that ran CR-0.
+    - **Bookings:** `ext:experiment-host` still holds per booked run, from the owner's start time for that run. Naming the host doesn't make it hold.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
