@@ -36,6 +36,7 @@ use std::time::Duration;
 use lodestar_integrations::net::{self, NetPolicy};
 use lodestar_integrations::secret::Secret;
 use lodestar_sources::claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
+use lodestar_sources::consent::{CredentialKind, CredentialSpec};
 use lodestar_sources::http::host_key;
 use lodestar_sources::{
     Backoff, BoxFuture, Caps, Client, Consent, Distribution, Emitter, Endpoints, Found, HostRate,
@@ -103,9 +104,10 @@ pub(crate) const MANIFEST: Manifest = Manifest {
     finds_private: true,
 };
 
-/// The settings form (§10.10). `api_key` is write-only: the host stores it
-/// as the `api_key` credential, and [`Config::from_json`] refuses it.
-pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"url":{"type":"string","format":"uri","title":"Address","description":"Your Prowlarr or Jackett address, such as http://prowlarr:9696"},"manager":{"type":"string","enum":["prowlarr","jackett"],"default":"prowlarr","title":"Indexer manager"},"agents":{"type":"integer","minimum":1,"maximum":8,"default":2,"title":"Indexers queried at once"},"api_key":{"type":"string","writeOnly":true,"title":"API key"}},"required":["url","manager","api_key"],"additionalProperties":false}"#;
+/// The settings form (§10.10). The API key isn't a setting: it's the
+/// `api_key` credential the policy declares (X-sources-api-spec), stored
+/// through the credential store, and [`Config::from_json`] refuses it.
+pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"url":{"type":"string","format":"uri","title":"Address","description":"Your Prowlarr or Jackett address, such as http://prowlarr:9696"},"manager":{"type":"string","enum":["prowlarr","jackett"],"default":"prowlarr","title":"Indexer manager"},"agents":{"type":"integer","minimum":1,"maximum":8,"default":2,"title":"Indexers queried at once"}},"required":["url","manager"],"additionalProperties":false}"#;
 
 /// Q4 (runner): each indexer's RSS at most every 15 minutes. The manager
 /// is the user's own, usually on the LAN, and paces its indexers itself;
@@ -130,6 +132,12 @@ const POLICY: Policy = Policy {
     schedule: Schedule::ALWAYS,
     // One agent: the setting can't be changed (SRC-14a).
     max_agents: 1,
+    credentials: &[CredentialSpec {
+        name: API_KEY,
+        label: "API key",
+        kind: CredentialKind::Secret,
+        required: true,
+    }],
 };
 
 /// Which indexer manager is at the address.
@@ -145,7 +153,7 @@ pub enum Manager {
 pub struct Config {
     /// `scheme://host[:port][/path]`, no trailing slash.
     base: String,
-    /// The limiter's and the egress host list's key for `base`.
+    /// The limiter's key for `base` (the egress list takes `base` itself).
     host: String,
     manager: Manager,
     agents: u8,
@@ -255,7 +263,7 @@ impl Prowlarr {
     /// until it's set up, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         let c = self.config.as_ref()?;
-        Some(Endpoints::user_entered(NetPolicy::download_client()).only_hosts(&[&c.host]))
+        Some(Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&c.base]))
     }
 }
 

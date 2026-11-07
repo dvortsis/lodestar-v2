@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use zeroize::{Zeroize, Zeroizing};
@@ -175,6 +175,21 @@ pub enum WorkerEvent {
     /// Finish the leases held, report them, then call
     /// [`WorkerSession::drained`].
     Drain,
+    /// Peer hints another worker found for keys this worker holds. Use
+    /// them in memory only (§18.7); a hint whose token isn't the current
+    /// lease is stale.
+    Hints(Vec<HintItem>),
+    /// The coordinator took a `Results` or `Counters` batch (`accepted`),
+    /// or refused it for now: send it again later.
+    Accepted {
+        batch: u64,
+        accepted: bool,
+    },
+    /// One chunk of a snapshot; acknowledge it with
+    /// [`WorkerSession::send`] and [`ToCoordinator::SnapshotAck`].
+    Snapshot(SnapshotChunk),
+    /// Fetch these keys again and answer with [`ToCoordinator::Reverified`].
+    Reverify(ReverifyRequest),
     /// The coordinator says this worker's clock is more than 60 s off.
     ClockSkewed {
         offset_ms: i64,
@@ -182,6 +197,23 @@ pub enum WorkerEvent {
     /// The session ended: stopped by the coordinator (with its reason) or
     /// the connection closed.
     Ended(Option<StopReason>),
+}
+
+impl WorkerEvent {
+    /// An upper bound on the event's size, for the byte cap.
+    fn approx_size(&self) -> usize {
+        64 + match self {
+            WorkerEvent::Assign(a) => a.payload.len(),
+            WorkerEvent::Regranted(items) => items.len() * 40,
+            WorkerEvent::Hints(h) => h.iter().map(|i| 40 + i.hints.len() * 32).sum::<usize>(),
+            WorkerEvent::Snapshot(c) => c.bytes.len(),
+            WorkerEvent::Reverify(r) => r.keys.len() * 20,
+            WorkerEvent::Accepted { .. }
+            | WorkerEvent::Drain
+            | WorkerEvent::ClockSkewed { .. }
+            | WorkerEvent::Ended(_) => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -193,7 +225,16 @@ pub struct WorkerConfig {
     pub reply_timeout: Duration,
     /// Events queued for the caller.
     pub event_queue: usize,
+    /// Bytes of events queued for the caller (plan Q5: 8 MiB). While the
+    /// caller doesn't read, the session stops reading the connection, so a
+    /// stalled caller holds at most this much (one event larger than the
+    /// cap is let through alone).
+    pub event_queue_bytes: usize,
 }
+
+/// The default byte cap on each queue between a worker and its caller, and
+/// on each coordinator session (plan Q5).
+pub const QUEUE_BYTES: usize = 8 << 20;
 
 impl Default for WorkerConfig {
     fn default() -> WorkerConfig {
@@ -201,6 +242,7 @@ impl Default for WorkerConfig {
             auto_heartbeat: true,
             reply_timeout: Duration::from_secs(15),
             event_queue: 256,
+            event_queue_bytes: QUEUE_BYTES,
         }
     }
 }
@@ -212,14 +254,25 @@ enum Command {
     Renew([u8; 32], oneshot::Sender<Result<JoinGrant, RenewRefusal>>),
     Drained(oneshot::Sender<()>),
     Stats(Stats),
+    Send(ToCoordinator, oneshot::Sender<()>),
+    Committed(Vec<([u8; 20], u64)>, oneshot::Sender<()>),
 }
 
+type Queued = (WorkerEvent, Option<OwnedSemaphorePermit>);
+
 /// A live session with the coordinator.
+///
+/// Read [`next_event`](Self::next_event) from its own task: while the event
+/// queue is at its byte cap the session stops reading the connection, so a
+/// caller that waits on `claim`, `report` or `send` without also reading
+/// events stalls until `reply_timeout`.
 #[derive(Debug)]
 pub struct WorkerSession {
     welcome: Welcome,
     commands: mpsc::Sender<Command>,
-    events: mpsc::Receiver<WorkerEvent>,
+    events: mpsc::Receiver<Queued>,
+    bytes: Arc<Semaphore>,
+    budget: usize,
     leases: Arc<AtomicU32>,
     reply_timeout: Duration,
 }
@@ -254,12 +307,16 @@ impl WorkerSession {
         }
         let (commands, command_rx) = mpsc::channel(64);
         let (event_tx, events) = mpsc::channel(config.event_queue.max(1));
+        let budget = config.event_queue_bytes.clamp(1, u32::MAX as usize);
+        let bytes = Arc::new(Semaphore::new(budget));
         let leases = Arc::new(AtomicU32::new(0));
         let driver = Driver {
             link,
             clock,
             commands: command_rx,
             events: event_tx,
+            bytes: bytes.clone(),
+            budget,
             leases: leases.clone(),
             held: HashMap::new(),
             claims: HashMap::new(),
@@ -279,6 +336,8 @@ impl WorkerSession {
             welcome,
             commands,
             events,
+            bytes,
+            budget,
             leases,
             reply_timeout: config.reply_timeout,
         })
@@ -286,6 +345,12 @@ impl WorkerSession {
 
     pub fn welcome(&self) -> &Welcome {
         &self.welcome
+    }
+
+    /// Bytes of events waiting for [`next_event`](Self::next_event) (at
+    /// most [`WorkerConfig::event_queue_bytes`]).
+    pub fn queued_bytes(&self) -> usize {
+        self.budget.saturating_sub(self.bytes.available_permits())
     }
 
     /// Leases this worker holds.
@@ -317,8 +382,10 @@ impl WorkerSession {
         self.ask(|tx| Command::Claim(items, tx)).await
     }
 
-    /// Reports terminal outcomes (sent once they're on the wire; the
-    /// coordinator doesn't answer).
+    /// Reports outcomes (sent once they're on the wire; the coordinator
+    /// doesn't answer). `PeerFound` and `Lost` end the lease; `Fetched`
+    /// doesn't: the lease stays held until the coordinator commits the
+    /// result (see [`committed`](Self::committed)).
     pub async fn report(&self, items: Vec<OutcomeItem>) -> Result<(), ClientError> {
         if items.is_empty() || items.len() > MAX_OUTCOME_BATCH {
             return Err(ClientError::Invalid);
@@ -350,6 +417,30 @@ impl WorkerSession {
         self.ask(|tx| Command::Renew(public_key, tx)).await
     }
 
+    /// Sends one of the messages that need no reply tracking: `Results`,
+    /// `Counters`, `SnapshotAck` or `Reverified`. Returns once it's on the
+    /// wire. Anything else has its own method and is refused here.
+    pub async fn send(&self, msg: ToCoordinator) -> Result<(), ClientError> {
+        let allowed = matches!(
+            msg,
+            ToCoordinator::Results(_)
+                | ToCoordinator::Counters(_)
+                | ToCoordinator::SnapshotAck(_)
+                | ToCoordinator::Reverified(_)
+        );
+        if !allowed || !msg.validate() {
+            return Err(ClientError::Invalid);
+        }
+        self.ask(|tx| Command::Send(msg, tx)).await
+    }
+
+    /// Forgets leases whose results the coordinator accepted (an
+    /// `Accepted { accepted: true }` for the `Results` batch that carried
+    /// them): their commit ends them. Keys held under another token stay.
+    pub async fn committed(&self, leases: Vec<([u8; 20], u64)>) -> Result<(), ClientError> {
+        self.ask(|tx| Command::Committed(leases, tx)).await
+    }
+
     /// Tells the coordinator the drain is done; it stops the session.
     pub async fn drained(&self) -> Result<(), ClientError> {
         self.ask(Command::Drained).await
@@ -358,7 +449,8 @@ impl WorkerSession {
     /// The next unsolicited message, or `None` after
     /// [`WorkerEvent::Ended`].
     pub async fn next_event(&mut self) -> Option<WorkerEvent> {
-        self.events.recv().await
+        // The permit goes back as the event leaves the queue.
+        self.events.recv().await.map(|(event, _permit)| event)
     }
 }
 
@@ -368,7 +460,10 @@ struct Driver {
     link: WorkerLink,
     clock: Arc<dyn Clock>,
     commands: mpsc::Receiver<Command>,
-    events: mpsc::Sender<WorkerEvent>,
+    events: mpsc::Sender<Queued>,
+    /// The byte cap on queued events, as permits.
+    bytes: Arc<Semaphore>,
+    budget: usize,
     leases: Arc<AtomicU32>,
     /// Leases held: key → fencing token.
     held: HashMap<[u8; 20], u64>,
@@ -421,7 +516,7 @@ impl Driver {
             }
         };
         self.link.close().await;
-        let _ = self.events.send(WorkerEvent::Ended(end)).await;
+        let _ = self.events.send((WorkerEvent::Ended(end), None)).await;
     }
 
     fn sync_leases(&self) {
@@ -485,7 +580,9 @@ impl Driver {
                     .await
             }
             Command::Report(items, reply) => {
-                for item in &items {
+                // `Fetched` keeps the lease (the commit ends it), as on the
+                // coordinator; the losses end it.
+                for item in items.iter().filter(|i| i.outcome != Outcome::Fetched) {
                     if self.held.get(&item.key) == Some(&item.token) {
                         self.held.remove(&item.key);
                     }
@@ -507,6 +604,21 @@ impl Driver {
                 let _ = reply.send(());
                 step
             }
+            Command::Committed(leases, reply) => {
+                for (key, token) in leases {
+                    if self.held.get(&key) == Some(&token) {
+                        self.held.remove(&key);
+                    }
+                }
+                self.sync_leases();
+                let _ = reply.send(());
+                Step::Continue
+            }
+            Command::Send(msg, reply) => {
+                let step = self.send(msg).await;
+                let _ = reply.send(());
+                step
+            }
             Command::Stats(stats) => {
                 self.stats = Stats {
                     claimed: self.stats.claimed,
@@ -517,8 +629,25 @@ impl Driver {
         }
     }
 
+    /// Hints for leases this worker holds under that token; the rest are
+    /// stale and dropped.
+    async fn hint(&mut self, mut items: Vec<HintItem>) -> Step {
+        items.retain(|i| self.held.get(&i.key) == Some(&i.token));
+        if items.is_empty() {
+            Step::Continue
+        } else {
+            self.event(WorkerEvent::Hints(items)).await
+        }
+    }
+
     async fn event(&mut self, event: WorkerEvent) -> Step {
-        match self.events.send(event).await {
+        // Waiting for room stops this loop reading the connection, which
+        // pushes back on the coordinator (its sends time out).
+        let need = u32::try_from(event.approx_size().min(self.budget)).unwrap_or(u32::MAX);
+        let Ok(permit) = self.bytes.clone().acquire_many_owned(need).await else {
+            return Step::End(None);
+        };
+        match self.events.send((event, Some(permit))).await {
             Ok(()) => Step::Continue,
             // Nobody is listening any more.
             Err(_) => Step::End(None),
@@ -601,6 +730,12 @@ impl Driver {
             ToWorker::Drain => self.event(WorkerEvent::Drain).await,
             ToWorker::Stop(reason) => Step::End(Some(reason)),
             ToWorker::Welcome(_) => Step::End(None),
+            ToWorker::Hints(items) => self.hint(items).await,
+            ToWorker::Accepted { batch, accepted } => {
+                self.event(WorkerEvent::Accepted { batch, accepted }).await
+            }
+            ToWorker::Snapshot(chunk) => self.event(WorkerEvent::Snapshot(chunk)).await,
+            ToWorker::Reverify(req) => self.event(WorkerEvent::Reverify(req)).await,
             // Later slices.
             ToWorker::HaveSnapshot(_) | ToWorker::HaveDelta(_) | ToWorker::Update(_) => {
                 Step::Continue

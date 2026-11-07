@@ -164,6 +164,31 @@ pub enum SourceState {
     Purged,
 }
 
+/// How a credential field is entered: `secret` (a password, API key or
+/// token) is masked, `username` isn't. Neither is returned once stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialKind {
+    Secret,
+    Username,
+}
+
+/// One credential a source reads, as its plugin declares it: what the
+/// Account dialog asks for. It describes the field and never holds a
+/// value. Store it with `PATCH /sources/{id}/credentials` under `name`;
+/// `credentials` then lists the name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CredentialField {
+    #[schema(inline)]
+    pub kind: CredentialKind,
+    /// What to call it, in English, such as "API key".
+    pub label: String,
+    /// The name it's stored under, such as `api_key`.
+    pub name: String,
+    /// Enabling the source needs it stored.
+    pub required: bool,
+}
+
 /// What enabling a source requires (§18.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -389,18 +414,40 @@ pub struct SourceSchedule {
 pub struct Source {
     #[schema(inline)]
     pub agents: SourceAgents,
+    /// The JSON Schema (draft 2020-12) of its settings, as its plugin
+    /// declares it: the settings form is generated from it, and `config`
+    /// in `PATCH /sources/{id}` is checked against the plugin's own rules
+    /// (when `editable` lists `config`). Read-only, and the same for every
+    /// install: it holds no setting's value. Secrets are never in it: they
+    /// are `credential_spec`'s.
+    // Always sent. `default` only lets a client or test fixture written
+    // before this field read a `Source` (X-sources-api-spec).
+    #[serde(default)]
+    #[schema(value_type = std::collections::BTreeMap<String, Value>, required = true)]
+    pub config_schema: Value,
     #[schema(inline)]
     pub consent: ConsentClass,
     /// Its class is enabled by acknowledging what's shown (`external`,
-    /// `restricted`, `overlay`): enabling it sends `"consent"` naming the
-    /// class and `"consent_version"`, unless that version is already
-    /// acknowledged.
+    /// `restricted`, `overlay`).
+    ///
+    /// This build refuses to enable any source whose class isn't `none`
+    /// (`400 invalid_setting` on `enabled`), this one included, whatever
+    /// the request sends: it can't show its consent text yet. Once a
+    /// later version shows the class's consent text, enabling a source
+    /// with this set sends `"consent"` naming the class and
+    /// `"consent_version"`, unless that version is already acknowledged.
     pub consent_required: bool,
     /// The version an acknowledgement must name, sent back as it is. It
     /// holds the class's consent-text version and every address in
     /// `endpoints`, so it changes when either does, and then the source
     /// asks again. Empty for `none` and `account`.
     pub consent_version: String,
+    /// The credentials its plugin reads, in the order to ask for them;
+    /// empty for a source that reads none. It describes the fields, never
+    /// a value.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub credential_spec: Vec<CredentialField>,
     /// The names of its stored credentials; their values are never
     /// returned.
     pub credentials: Vec<String>,
@@ -448,7 +495,9 @@ pub struct Source {
     /// off until a purge run again finishes it.
     pub purge_pending: bool,
     /// Its stored state or saved settings differ from what's running: it
-    /// starts, stops or picks up its new settings at the next restart.
+    /// starts or picks up its new settings at the next restart. Turning
+    /// it off stops it at once: for that, this stays true only until it
+    /// has stopped.
     pub restart_required: bool,
     #[schema(inline)]
     pub risk: RiskLevel,
@@ -464,9 +513,14 @@ pub struct Source {
 #[schema(example = json!({
     "sources": [{
         "agents": { "count": 1, "enforced": false, "max": 1 },
+        "config_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object", "properties": {}, "additionalProperties": false
+        },
         "consent": "none",
         "consent_required": false,
         "consent_version": "",
+        "credential_spec": [],
         "credentials": [],
         "editable": ["agents", "egress", "enabled", "priority", "schedule"],
         "egress": {
@@ -508,14 +562,20 @@ pub struct SourceList {
 }
 
 /// `PATCH /sources/{id}`. Fields left out keep their values. A new
-/// priority applies at once; enabling or disabling takes effect at the
-/// next start (`restart_required`).
+/// priority applies at once, and disabling stops the source at once;
+/// enabling takes effect at the next start (`restart_required`).
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(example = json!({ "enabled": true, "priority": "high" }))]
 pub struct SourcePatch {
-    /// The consent class you acknowledge; needed to enable a source whose
-    /// `needs` is `endpoints_ack` or `consent`, and must be its class.
+    /// The consent class you acknowledge.
+    ///
+    /// This build refuses to enable any source whose class isn't `none`
+    /// (`400 invalid_setting` on `enabled`), with or without this field: it
+    /// can't show its consent text yet, so nothing is acknowledged or
+    /// stored. Once a later version shows the class's consent text, this
+    /// is needed to enable a source whose `needs` is `endpoints_ack` or
+    /// `consent`, and must be its class.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, inline)]
     pub consent: Option<ConsentClass>,

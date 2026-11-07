@@ -8,7 +8,8 @@
 //! have-filter on top of the same pieces.
 //!
 //! This crate holds the parts that don't depend on how the two sides talk:
-//! - the fleet-wide [`LeaseTable`] with its fencing tokens;
+//! - the fleet-wide [`LeaseAuthority`] (a [`LeaseTable`] with its fencing
+//!   tokens and re-grant queue), shared by the pipeline and the server;
 //! - the cluster PKI (§19.6): the [`Coordinator`]'s CA with rotation, its
 //!   issued and revoked certificates and one-time [`JoinToken`]s, and the
 //!   worker's [`Joining`] and [`Credentials`];
@@ -20,6 +21,7 @@
 //!   heartbeats, clock offsets, leases and re-grants, revocation) and the
 //!   worker's [`WorkerSession`].
 
+pub mod assign;
 mod client;
 mod clock;
 mod coordinator;
@@ -28,6 +30,7 @@ mod hex;
 mod join;
 mod leases;
 mod link;
+pub mod placement;
 pub mod proto;
 mod server;
 mod tls;
@@ -39,7 +42,9 @@ mod tests;
 
 use std::fmt;
 
-pub use client::{ClientError, WorkerConfig, WorkerEvent, WorkerSession, connect, join};
+pub use client::{
+    ClientError, QUEUE_BYTES, WorkerConfig, WorkerEvent, WorkerSession, connect, join,
+};
 pub use clock::{Clock, ClockTime, ManualClock, OffsetClock, SystemClock};
 pub use coordinator::{
     CA_LIFETIME_SECS, Coordinator, IssuedCert, JOIN_TOKEN_TTL_SECS, JoinError, JoinGrant,
@@ -49,10 +54,14 @@ pub use join::{
     JoinToken, TokenFormatError, TokenInputError, read_join_token, read_join_token_file,
     valid_worker_name,
 };
-pub use leases::{Claim, Claimed, Lease, LeaseTable, RestoredLease, Token, WorkerId};
+pub use leases::{
+    BatchAnswer, Claim, Claimed, Lease, LeaseAuthority, LeaseEvents, LeaseTable, NoEvents,
+    RECENT_COMMITS, Regranted, RestoredLease, Token, WorkerId,
+};
 pub use link::{CoordinatorLink, Link, LinkError, WorkerLink, local_pair};
 pub use server::{
-    CLUSTER_PATH, ClusterServer, FleetSnapshot, Pki, ServerConfig, StoredKeys, WorkerStatus,
+    CLUSTER_PATH, ClusterServer, FleetSnapshot, GrantAdmission, InboundSink, Pki, SendError,
+    ServerConfig, ServerHooks, StoredKeys, WorkerStatus,
 };
 pub use tls::{ALPN_CLUSTER, ALPN_JOIN, CoordinatorTls, PeerIdentity, coordinator_server_name};
 pub use worker::{Credentials, Joining, Renewal};

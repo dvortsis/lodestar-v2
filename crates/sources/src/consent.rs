@@ -32,10 +32,11 @@ use std::sync::{Arc, Mutex};
 use lodestar_integrations::SealedSecret;
 use lodestar_integrations::net::SocksAuth;
 pub use lodestar_integrations::{Secret, SecretStore};
-use lodestar_store::Store;
+use lodestar_store::{SourceState, Store};
 
 use crate::egress::{CredentialError, EgressCredentials};
 use crate::manifest::{Consent, Manifest};
+pub use crate::manifest::{CredentialKind, CredentialSpec};
 use crate::plugin::BoxFuture;
 
 /// The current version of each class's consent text. Raise a class's
@@ -250,6 +251,63 @@ fn is_egress_name(name: &str) -> bool {
     name == SOCKS5_USERNAME || name == SOCKS5_PASSWORD
 }
 
+/// Why a plugin's declared credentials ([`CredentialSpec`]) are wrong.
+/// A test failure, never a user's: the spec is compiled in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpecError {
+    /// The name can't be stored: [`check_name`] refuses it.
+    Name(&'static str),
+    /// The name is one of the egress names (`egress.socks5.*`), which
+    /// belong to the egress setting, not to the plugin.
+    Egress(&'static str),
+    /// Declared twice.
+    Repeated(&'static str),
+    /// No label to show.
+    Label(&'static str),
+    /// More than [`MAX_CREDENTIALS`] declared.
+    TooMany,
+    /// An Account source whose required credentials, all stored, still
+    /// leave [`need`] asking for credentials. Today's `need` takes any
+    /// non-egress name, so this can't happen yet; it guards the stricter
+    /// `need` X-consent-gate-lift brings.
+    NotEnough,
+}
+
+/// Checks `spec` against what the credential store takes and what
+/// [`need`] accepts for `manifest`: each name passes [`check_name`], isn't
+/// an egress name and is declared once with a label, and for an Account
+/// source, storing every required one satisfies [`need`].
+pub fn check_spec(manifest: &Manifest, spec: &[CredentialSpec]) -> Result<(), SpecError> {
+    if spec.len() > MAX_CREDENTIALS {
+        return Err(SpecError::TooMany);
+    }
+    for (i, c) in spec.iter().enumerate() {
+        if is_egress_name(c.name) {
+            return Err(SpecError::Egress(c.name));
+        }
+        if check_name(c.name).is_err() {
+            return Err(SpecError::Name(c.name));
+        }
+        if spec[..i].iter().any(|o| o.name == c.name) {
+            return Err(SpecError::Repeated(c.name));
+        }
+        if c.label.trim().is_empty() {
+            return Err(SpecError::Label(c.name));
+        }
+    }
+    if needs_credentials(manifest.consent) && spec.iter().any(|c| c.required) {
+        let names: Vec<String> = spec
+            .iter()
+            .filter(|c| c.required)
+            .map(|c| c.name.to_string())
+            .collect();
+        if need(manifest, Some(&Ack::of(manifest)), &names) == Some(Need::Credentials) {
+            return Err(SpecError::NotEnough);
+        }
+    }
+    Ok(())
+}
+
 /// Why a credential change was refused. Carries no value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialRefusal {
@@ -325,6 +383,10 @@ enum Keys {
 
 struct Inner {
     store: Arc<Mutex<Store>>,
+    /// Where [`EgressCredentials::source_enabled`] reads the source's
+    /// state: `store` unless [`SourceCredentials::reading_states_from`]
+    /// gave it a connection of its own (X-egress-state-watch).
+    states: Arc<Mutex<Store>>,
     keys: Keys,
 }
 
@@ -342,10 +404,13 @@ impl std::fmt::Debug for SourceCredentials {
 }
 
 impl SourceCredentials {
-    /// Over the install's key file in `data_dir`.
+    /// Over the install's key file in `data_dir`. Source states are read
+    /// from `store` too, until [`reading_states_from`](Self::reading_states_from)
+    /// says otherwise.
     pub fn new(store: Arc<Mutex<Store>>, data_dir: PathBuf) -> SourceCredentials {
         SourceCredentials {
             inner: Arc::new(Inner {
+                states: store.clone(),
                 store,
                 keys: Keys::Dir(data_dir, Mutex::new(None)),
             }),
@@ -356,8 +421,33 @@ impl SourceCredentials {
     pub fn with_keys(store: Arc<Mutex<Store>>, keys: Arc<SecretStore>) -> SourceCredentials {
         SourceCredentials {
             inner: Arc::new(Inner {
+                states: store.clone(),
                 store,
                 keys: Keys::Fixed(keys),
+            }),
+        }
+    }
+
+    /// Reads source states for egress from `reader`, a read-only
+    /// connection to the same database ([`Store::open_reader`]) that only
+    /// this check uses, so a long API or Control operation holding the
+    /// shared store's lock can't hold back a plugin's requests
+    /// (X-egress-state-watch). The reader takes a fresh WAL snapshot for
+    /// every read, so a state any writer commits is seen by the next
+    /// request: there's no second copy to keep in step. Call it before
+    /// cloning: a clone of `self` keeps reading states under the shared
+    /// store's lock.
+    pub fn reading_states_from(self, reader: Arc<Mutex<Store>>) -> SourceCredentials {
+        let keys = match &self.inner.keys {
+            Keys::Fixed(k) => Keys::Fixed(k.clone()),
+            // Opened again on first use, from the same file.
+            Keys::Dir(dir, _) => Keys::Dir(dir.clone(), Mutex::new(None)),
+        };
+        SourceCredentials {
+            inner: Arc::new(Inner {
+                store: self.inner.store.clone(),
+                states: reader,
+                keys,
             }),
         }
     }
@@ -439,6 +529,32 @@ impl EgressCredentials for SourceCredentials {
             tokio::task::spawn_blocking(move || this.socks5_now(&source))
                 .await
                 .map_err(|_| CredentialError)?
+        })
+    }
+
+    /// The source's row in the store, read now on the states connection:
+    /// Enabled or not. A missing row or a read error is never Enabled.
+    fn source_enabled<'a>(
+        &'a self,
+        source: &'a str,
+    ) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        let this = self.clone();
+        let source = source.to_string();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let rows = this
+                    .inner
+                    .states
+                    .lock()
+                    .map_err(|_| CredentialError)?
+                    .sources()
+                    .map_err(|_| CredentialError)?;
+                Ok(rows
+                    .iter()
+                    .any(|r| r.plugin == source && r.state == SourceState::Enabled))
+            })
+            .await
+            .map_err(|_| CredentialError)?
         })
     }
 }
@@ -705,6 +821,73 @@ mod tests {
         }
     }
 
+    const fn field(name: &'static str, required: bool) -> CredentialSpec {
+        CredentialSpec {
+            name,
+            label: "API key",
+            kind: CredentialKind::Secret,
+            required,
+        }
+    }
+
+    #[test]
+    fn a_spec_is_checked_against_the_store_and_need() {
+        let account = manifest(Consent::Account);
+        assert_eq!(check_spec(&account, &[field("api_key", true)]), Ok(()));
+        assert_eq!(
+            check_spec(
+                &account,
+                &[
+                    field("user", true),
+                    CredentialSpec {
+                        kind: CredentialKind::Username,
+                        ..field("password", false)
+                    }
+                ]
+            ),
+            Ok(())
+        );
+        // Nothing declared, and an optional credential on a class that
+        // never needs one, are both fine.
+        assert_eq!(check_spec(&account, &[]), Ok(()));
+        assert_eq!(
+            check_spec(&manifest(Consent::None), &[field("token", false)]),
+            Ok(())
+        );
+        // Names the store refuses, or that belong to the egress setting.
+        for bad in ["", "Api", "a.b", "a-b"] {
+            assert_eq!(
+                check_spec(&account, &[field(bad, true)]),
+                Err(SpecError::Name(bad))
+            );
+        }
+        for egress in [SOCKS5_USERNAME, SOCKS5_PASSWORD] {
+            assert_eq!(
+                check_spec(&account, &[field(egress, true)]),
+                Err(SpecError::Egress(egress))
+            );
+        }
+        assert_eq!(
+            check_spec(&account, &[field("k", true), field("k", false)]),
+            Err(SpecError::Repeated("k"))
+        );
+        let unlabelled = CredentialSpec {
+            label: " ",
+            ..field("k", true)
+        };
+        assert_eq!(
+            check_spec(&account, &[unlabelled]),
+            Err(SpecError::Label("k"))
+        );
+        let many: Vec<CredentialSpec> = (0..=MAX_CREDENTIALS)
+            .map(|i| field(Box::leak(format!("k{i}").into_boxed_str()), false))
+            .collect();
+        assert_eq!(check_spec(&account, &many), Err(SpecError::TooMany));
+        // Every required credential stored satisfies `need`.
+        let names = vec!["api_key".to_string()];
+        assert_eq!(need(&account, None, &names), None);
+    }
+
     #[test]
     fn names_and_values_are_checked() {
         for ok in ["api_key", "a", SOCKS5_USERNAME, SOCKS5_PASSWORD] {
@@ -809,5 +992,37 @@ mod tests {
         s.set_source_state(id, SourceState::Purged).unwrap();
         assert!(s.source_consent("probe").unwrap().is_none());
         assert!(s.source_secret_names("probe").unwrap().is_empty());
+    }
+
+    /// The egress's source-state check reads the store's own row for the
+    /// plugin, by its id: Enabled only, never another plugin's row
+    /// (X-tcache-recheck).
+    #[tokio::test]
+    async fn source_enabled_reads_the_plugins_own_row() {
+        let (c, store, id) = creds();
+        let other = store
+            .lock()
+            .unwrap()
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.plugin == "other")
+            .unwrap()
+            .id;
+        assert_eq!(c.source_enabled("probe").await, Ok(false));
+        store.lock().unwrap().enable_source(other, None).unwrap();
+        assert_eq!(c.source_enabled("probe").await, Ok(false), "another's row");
+        assert_eq!(c.source_enabled("other").await, Ok(true));
+        store.lock().unwrap().enable_source(id, None).unwrap();
+        assert_eq!(c.source_enabled("probe").await, Ok(true));
+        for state in [
+            SourceState::Paused,
+            SourceState::Disabled,
+            SourceState::Purged,
+        ] {
+            store.lock().unwrap().set_source_state(id, state).unwrap();
+            assert_eq!(c.source_enabled("probe").await, Ok(false), "{state:?}");
+        }
+        assert_eq!(c.source_enabled("nobody").await, Ok(false));
     }
 }

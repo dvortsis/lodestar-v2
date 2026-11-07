@@ -6,7 +6,7 @@
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
-use lodestar_search::files::{bucket_floor, size_bucket};
+use lodestar_search::files::{bucket_floor, code_floor, code_floor_count, size_bucket};
 use lodestar_search::query::{NumField, TextField};
 use lodestar_search::{Node, SearchIndex};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
@@ -64,13 +64,14 @@ fn store_with(torrents: &[Vec<u8>]) -> Store {
     store
 }
 
-/// The sizes at every bucket boundary that a store can hold (lengths are
+/// The sizes at every bucket and size-code boundary that a store can hold (lengths are
 /// signed 64-bit in bencode), each with its neighbours, plus 0, 1 and
 /// the largest length.
 fn boundary_sizes() -> Vec<u64> {
     let max = i64::MAX as u64;
     let mut sizes: Vec<u64> = (0..128)
         .map(bucket_floor)
+        .chain((0..code_floor_count()).filter_map(code_floor))
         .filter(|f| *f <= max)
         .flat_map(|f| [f.saturating_sub(1), f, f.saturating_add(1)])
         .chain([0, 1, 2, max - 1, max])
@@ -402,18 +403,13 @@ fn one_atom_extension_clauses_cover_every_file_and_words_stay_on_the_file_index(
     assert_eq!(ids(&index, &word(TextField::Path, "cover")), vec![2]);
 }
 
-/// `node` with a never-matching exclusion added inside every `file:(…)`
-/// clause but a lone extension's (which is the torrent's own `ext`, by
-/// X-search-files-4's accepted rule): the same files, but no bucket
-/// clause, so each runs on the file index (the path before
-/// X-search-files-5).
+/// `node` with an always-matching atom (`Node::All`) added inside every
+/// `file:(…)` clause but a lone extension's (which is the torrent's own
+/// `ext`, by X-search-files-4's accepted rule): the same files, but no
+/// bucket clause or negated-word clause, so each runs on the file index
+/// (the path before X-search-files-5 and -6).
 fn on_the_file_index(node: &Node) -> Node {
-    let never = Node::Not {
-        of: Box::new(Node::Word {
-            field: TextField::Any,
-            word: "zzqxnever".into(),
-        }),
-    };
+    let never = Node::All;
     match node {
         Node::And { of } => Node::And {
             of: of.iter().map(on_the_file_index).collect(),
@@ -530,7 +526,27 @@ fn bucket_terms_answer_as_the_file_index_does() {
             (Some(floor.saturating_sub(1)), Some(next + 1)),
         ]);
     }
+    // The same about the decimal floors of the torrent's size codes
+    // (X-search-files-6), and one between two of them.
+    for floor in [50 << 10, 100 * MIB, 500 * MIB, 5 << 30, 200 << 30] {
+        let next = code_floor(
+            (0..code_floor_count())
+                .find(|&i| code_floor(i) > Some(floor))
+                .unwrap(),
+        )
+        .unwrap();
+        ranges.extend([
+            (Some(floor), None),
+            (Some(floor + 1), None),
+            (None, Some(floor)),
+            (None, Some(floor - 1)),
+            (Some(floor), Some(next - 1)),
+            (Some(floor + 1), Some(next - 2)),
+            (Some(floor - 1), Some(next + 1)),
+        ]);
+    }
     ranges.extend([
+        (Some(700 * MIB + 1), None),
         (Some(100 * MIB + 1), None),
         (Some((1 << 30) + 1), None),
         (Some(0), Some(0)),
@@ -613,6 +629,327 @@ fn bucket_terms_answer_as_the_file_index_does() {
     assert!(checked > 1_000, "{checked}");
 }
 
+/// A `file:(ext:… -word)` clause (X-search-files-6) gives exactly what the
+/// file index does — the same torrents, order and scores — whether the
+/// bad torrents come through the word's postings (a rare word) or the
+/// clause runs whole on the file index (a common one): a torrent whose
+/// only matching file has the word, one with both kinds, one with the
+/// word in the name rather than a directory, a pack whose small images
+/// coverage leaves out, a hidden video, and several words.
+#[test]
+fn negated_words_answer_as_the_file_index_does() {
+    const MIB: u64 = 1 << 20;
+    let file3 = |p: &str, len: u64| (p.to_owned(), len as i64, "");
+    let mut torrents = vec![
+        // 1: its only video is a sample.
+        with_attrs(
+            "only sample",
+            &[file3("Sample/s.mkv", 40 * MIB), file3("a.txt", 9)],
+        ),
+        // 2: a sample and the film.
+        with_attrs(
+            "both",
+            &[file3("sample/s.mkv", 40 * MIB), file3("film.mkv", 2 << 30)],
+        ),
+        // 3: the film only.
+        with_attrs("film only", &[file3("film.mp4", 700 * MIB)]),
+        // 4: `sample` in the name, not a directory.
+        with_attrs("named", &[file3("film.sample.avi", 50 * MIB)]),
+        // 5: no video.
+        with_attrs("subs", &[file3("sample/x.srt", 1000)]),
+        // 6: a hidden video and a sample.
+        with_attrs(
+            "hidden",
+            &[
+                ("c.mkv".to_owned(), (700 * MIB) as i64, "h"),
+                file3("sample/c.mkv", 30 * MIB),
+            ],
+        ),
+        // 7: `web-dl` in a directory, a compound word.
+        with_attrs(
+            "webdl",
+            &[file3("web-dl/x.mkv", 900 * MIB), file3("y.srt", 5)],
+        ),
+    ];
+    // A pack of small images in `sample/`, which coverage leaves out,
+    // and one covered video.
+    let mut pack: Vec<(String, i64, &str)> = (0..1_200)
+        .map(|i| (format!("sample/p{i:04}.jpg"), (3 * MIB) as i64, ""))
+        .collect();
+    pack.push(file3("big.mkv", 2 << 30));
+    torrents.push(with_attrs("pack", &pack));
+    // Many videos in `common/`, so `common` is too common for its
+    // postings (the clause falls back to the file index whole).
+    for i in 0..40 {
+        torrents.push(with_attrs(
+            &format!("filler {i}"),
+            &[
+                file3(&format!("common/f{i}.mkv"), (i + 1) * MIB),
+                file3(&format!("v{i}.mp4"), 3 * MIB),
+            ],
+        ));
+    }
+    torrents.push(with_attrs("common only", &[file3("common/z.mkv", 5 * MIB)]));
+    let mut store = store_with(&torrents);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(60 << 20).unwrap();
+    // Several segments: a few torrents a commit.
+    while w.catch_up(&mut store, 7).unwrap() > 0 {
+        w.commit().unwrap();
+    }
+    w.commit().unwrap();
+    assert!(index.segment_counts()[1] > 1);
+
+    let exts = |any: &[&str]| Node::Ext {
+        any: any.iter().map(|e| (*e).to_owned()).collect(),
+    };
+    let not = |n: Node| Node::Not { of: Box::new(n) };
+    let clause = |of: Vec<Node>| file(Node::And { of });
+    let video = || exts(&["mkv", "mp4", "avi"]);
+    let mut shapes = Vec::new();
+    for w in [
+        word(TextField::Path, "sample"),
+        word(TextField::Any, "sample"),
+        word(TextField::Name, "sample"),
+        word(TextField::Path, "web-dl"),
+        word(TextField::Path, "common"),
+        word(TextField::Any, "zzqxabsent"),
+    ] {
+        let c = clause(vec![video(), not(w.clone())]);
+        shapes.extend([
+            c.clone(),
+            clause(vec![not(w.clone()), exts(&["mkv"])]),
+            clause(vec![
+                Node::Or {
+                    of: vec![exts(&["mkv"]), exts(&["jpg"])],
+                },
+                not(w.clone()),
+            ]),
+            clause(vec![
+                video(),
+                not(w.clone()),
+                not(word(TextField::Path, "sample")),
+            ]),
+            Node::And {
+                of: vec![word(TextField::Any, "film"), c.clone()],
+            },
+            Node::And {
+                of: vec![c.clone(), range(Some(MIB), None)],
+            },
+            Node::And {
+                of: vec![c.clone(), file(exts(&["srt"]))],
+            },
+            Node::Or {
+                of: vec![c.clone(), word(TextField::Any, "subs")],
+            },
+            Node::And {
+                of: vec![word(TextField::Any, "film"), not(c.clone())],
+            },
+        ]);
+    }
+    for q in &shapes {
+        let reference = on_the_file_index(q);
+        assert_eq!(ranked(&index, q), ranked(&index, &reference), "{q:?}");
+    }
+    // The answers themselves, for the cases named above.
+    let path_sample = clause(vec![video(), not(word(TextField::Path, "sample"))]);
+    let got: Vec<u64> = by_id(&ranked(&index, &path_sample))
+        .into_iter()
+        .map(|h| h.0)
+        .collect();
+    assert_eq!(&got[..6], [2, 3, 4, 7, 8, 9], "{got:?}");
+    assert!(!got.contains(&1) && !got.contains(&6));
+    // The rare word goes through its postings (the candidates are the
+    // torrent's `file_ext_bucket` terms); the common one doesn't.
+    let plan = |q: &Node| format!("{:?}", index.query(q, NOW));
+    assert!(
+        plan(&path_sample).contains("RegexQuery"),
+        "{}",
+        plan(&path_sample)
+    );
+    let common = clause(vec![video(), not(word(TextField::Path, "common"))]);
+    assert!(!plan(&common).contains("RegexQuery"), "{}", plan(&common));
+}
+
+/// While the file index lags the torrent index (rebuilt or recreated
+/// behind it, until it catches up; a crash leaves it ahead, as it
+/// commits first), an extension less a word doesn't read
+/// the torrent's terms: the bad set would miss the lagging torrents'
+/// files and let in one whose only video is a sample. It runs on the
+/// file index, which has nothing yet, as on `main`; after the catch-up
+/// it answers from the terms (X-search-files-6).
+#[test]
+fn negated_words_wait_for_a_lagging_file_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = lodestar_search::index_dir(dir.path());
+    // Films enough that `sample` is rare (`NEGATED_RATIO`).
+    let mut torrents = vec![with_attrs(
+        "only sample",
+        &[("Sample/s.mkv".into(), 1 << 25, "")],
+    )];
+    torrents.extend(
+        (0..10).map(|i| with_attrs(&format!("film {i}"), &[(format!("f{i}.mkv"), 1 << 30, "")])),
+    );
+    let mut store = store_with(&torrents);
+    {
+        let index = SearchIndex::open(&path).unwrap();
+        let mut w = index.writer(30 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+    }
+    std::fs::remove_dir_all(path.join("files")).unwrap();
+    let index = SearchIndex::open(&path).unwrap();
+    let q = file(Node::And {
+        of: vec![
+            ext("mkv"),
+            Node::Not {
+                of: Box::new(word(TextField::Path, "sample")),
+            },
+        ],
+    });
+    assert!(ids(&index, &q).is_empty(), "nothing while behind");
+    let mut w = index.writer(30 << 20).unwrap();
+    w.catch_up(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    assert_eq!(ids(&index, &q), (2..=11).collect::<Vec<u64>>());
+    assert!(format!("{:?}", index.query(&q, NOW)).contains("RegexQuery"));
+}
+
+/// An index #505 built (`file_bucket` and `file_ext_bucket` at
+/// generation 1, the old codes) opened by this build (generation 2):
+/// both backfill, bucket and negated-word clauses answer from the file
+/// index meanwhile, and from the new terms once the walk completes,
+/// with the same torrents throughout (X-search-files-6).
+#[test]
+fn a_generation_1_index_backfills_the_new_codes() {
+    use lodestar_search::{Availability, Generations};
+    let sizes: Vec<u64> = boundary_sizes()
+        .into_iter()
+        .filter(|s| *s < 1 << 40)
+        .collect();
+    let torrents: Vec<Vec<u8>> = sizes
+        .iter()
+        .enumerate()
+        .map(|(i, s)| sized(&format!("torrent {i}"), &[(format!("f{i}.bin"), *s as i64)]))
+        .collect();
+    let mut store = store_with(&torrents);
+    let old = Generations::current()
+        .with("file_bucket", 1)
+        .with("file_ext_bucket", 1);
+    let index = SearchIndex::in_memory()
+        .unwrap()
+        .with_generations(old)
+        .unwrap();
+    let mut w = index.writer(60 << 20).unwrap();
+    w.catch_up(&mut store, 100_000).unwrap();
+    w.commit().unwrap();
+    drop(w);
+    let index = index.with_generations(Generations::current()).unwrap();
+    for f in ["file_bucket", "file_ext_bucket"] {
+        assert!(
+            matches!(index.availability(f), Availability::Backfilling { .. }),
+            "{f}"
+        );
+    }
+    let queries = [
+        file(range(Some((100 << 20) + 1), None)),
+        file(Node::And {
+            of: vec![ext("bin"), range(Some(500 << 20), None)],
+        }),
+        file(Node::And {
+            of: vec![
+                ext("bin"),
+                Node::Not {
+                    of: Box::new(word(TextField::Any, "f5")),
+                },
+            ],
+        }),
+    ];
+    let want: Vec<Vec<(u64, f32)>> = queries
+        .iter()
+        .map(|q| by_id(&ranked(&index, &on_the_file_index(q))))
+        .collect();
+    let plan = |q: &Node| format!("{:?}", index.query(q, NOW));
+    for (q, want) in queries.iter().zip(&want) {
+        assert_eq!(&by_id(&ranked(&index, q)), want, "before the walk {q:?}");
+    }
+    assert!(
+        !plan(&queries[2]).contains("RegexQuery"),
+        "the file index meanwhile"
+    );
+    let mut w = index.writer(60 << 20).unwrap();
+    while w.catch_up(&mut store, 100_000).unwrap() > 0 {}
+    w.commit().unwrap();
+    for f in ["file_bucket", "file_ext_bucket"] {
+        assert_eq!(index.availability(f), Availability::Ready, "{f}");
+    }
+    for (q, want) in queries.iter().zip(&want) {
+        assert_eq!(&by_id(&ranked(&index, q)), want, "after the walk {q:?}");
+    }
+    assert!(plan(&queries[2]).contains("RegexQuery"), "the terms after");
+}
+
+/// The bad set cached for a file snapshot follows the index on one
+/// handle: a new torrent whose only video is a sample stays out once
+/// committed, and a torrent deleted from the store (a `reindex_log`
+/// entry, no new documents) leaves the answer (X-search-files-6).
+#[test]
+fn the_cached_bad_set_follows_new_torrents_and_deletes() {
+    let film = |i: usize| with_attrs(&format!("film {i}"), &[(format!("f{i}.mkv"), 1 << 30, "")]);
+    let sample = |name: &str| with_attrs(name, &[("Sample/s.mkv".into(), 1 << 25, "")]);
+    // Films enough that `sample` stays rare (`NEGATED_RATIO`) with two.
+    let mut torrents: Vec<Vec<u8>> = (0..40).map(film).collect();
+    torrents.push(sample("only sample"));
+    let mut store = store_with(&torrents);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(30 << 20).unwrap();
+    w.catch_up(&mut store, 1_000).unwrap();
+    w.commit().unwrap();
+    let q = file(Node::And {
+        of: vec![
+            ext("mkv"),
+            Node::Not {
+                of: Box::new(word(TextField::Path, "sample")),
+            },
+        ],
+    });
+    let words_path =
+        |index: &SearchIndex| format!("{:?}", index.query(&q, NOW)).contains("RegexQuery");
+    // (a) On the words' path, twice: the second from the cache.
+    assert!(words_path(&index));
+    let films: Vec<u64> = (1..=40).collect();
+    assert_eq!(ids(&index, &q), films);
+    assert_eq!(ids(&index, &q), films);
+    // (b) A new torrent whose only video is a sample.
+    let info_raw = sample("another sample");
+    let info = Info::parse(&info_raw).unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&info_raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_001,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+        }])
+        .unwrap();
+    w.catch_up(&mut store, 1_000).unwrap();
+    w.commit().unwrap();
+    assert!(words_path(&index));
+    assert_eq!(ids(&index, &q), films, "the new sample stays out");
+    // (c) A film deleted from the store: deletes only, no new segment.
+    let hash = store.torrent(3).unwrap().unwrap().info_hash.0;
+    assert_eq!(store.delete_torrents(&[hash]).unwrap(), [3]);
+    let segments = index.segment_counts();
+    w.catch_up(&mut store, 1_000).unwrap();
+    w.commit().unwrap();
+    assert_eq!(index.segment_counts(), segments, "no new segment");
+    assert!(words_path(&index));
+    let mut left = films.clone();
+    left.retain(|&id| id != 3);
+    assert_eq!(ids(&index, &q), left);
+}
+
 /// While the bucket terms are backfilled (a build shipping a new
 /// generation of `file_bucket`), every bucket clause runs on the file
 /// index, so a document the walk hasn't reached can't be missed; once
@@ -658,6 +995,16 @@ fn bucket_clauses_fall_back_while_their_terms_are_backfilled() {
             }),
         ]
     })
+    // An extension less a rare word reads `file_ext_bucket` too
+    // (X-search-files-6).
+    .chain([file(Node::And {
+        of: vec![
+            ext("bin"),
+            Node::Not {
+                of: Box::new(word(TextField::Any, "f5")),
+            },
+        ],
+    })])
     .collect();
     let want: Vec<Vec<(u64, f32)>> = queries
         .iter()

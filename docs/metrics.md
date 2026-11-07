@@ -841,6 +841,15 @@ Either way the rest is neither an upper nor a lower bound. It also holds thread 
 | `mem_anon_huge_bytes` | gauge | `AnonHugePages` from `/proc/self/smaps_rollup`: anonymous memory in transparent huge pages, part of `mem_rss_anon_bytes`. Linux only. |
 | `search_segments{index}` | gauge | Live segments in each index's current searcher, read at scrape: `index` is `main` (torrents) or `files`. Rendered with search on. |
 
+## Fetch pool held bytes (X-fetch-pool-bytes, 2026-11-06)
+
+The fetch pool holds finished info dicts until the consumer takes them. It holds them to a byte budget, `max_held_bytes` (64 MiB by default; see [the decision](decisions/2026-11-06-X-fetch-pool-bytes.md)). It counts each result's dict, PEX list and client name, plus the struct, from the moment its fetch finishes until the consumer takes it from the output channel. Bytes inside a fetch still running are not counted.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `fetch_held_bytes` | gauge | Bytes of finished fetches the pool holds: not yet joined, waiting for an output slot, or in the channel and not yet taken. It can pass the budget by what fetches already running bring when it fills. |
+| `fetch_held_full_total` | counter | Times the budget, or the estimate of what fetches in flight will bring, stopped the pool starting fetches. It counts each time the pool becomes stopped, not each round it stays stopped. |
+
 ## Unreadable filter rows (F-filter-load-fail-closed, 2026-11-01)
 
 See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
@@ -858,3 +867,30 @@ See [the decision](decisions/2026-11-02-SRC-5.md). `PluginEgress::status()` give
 | `source_egress_up{plugin,route}` | gauge | 1 when the plugin's route is up (or direct), 0 when the kill switch is down or the route hasn't been checked yet. A down route also gives its reason in the Sources API. |
 | `source_egress_requests_total{plugin,outcome}` | counter | Requests by outcome: `answered`, `kill_switch_refused` (refused before sending because the route was down), `kill_switch_aborted` (abandoned in flight when the route went down), `policy_refused` (SSRF guard or the plugin's host list), `transport_failed`. |
 | `source_egress_trips_total{plugin}` | counter | Times the route went from up or unchecked to down. |
+
+## Cluster port (WK-1, 2026-11-06)
+
+See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every install, so a dashboard can tell "off" from "missing". With "Allow workers" off (the default, `[cluster] enabled = false`) they're all 0. Counters are process-lifetime and summed over every time the port was opened, so turning workers off and on never sends them backwards. No series carries a worker name, address or certificate.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `cluster_allowed` | gauge | 1 when Allow workers is on. |
+| `cluster_listening` | gauge | 1 while the cluster port is bound and served. 0 with `cluster_allowed 1` means it couldn't open: see `cluster_start_failures_total` and the `cluster.start_failed` log line. |
+| `cluster_workers_connected` | gauge | Remote workers with a live session. |
+| `cluster_handshaking` | gauge | Connections still in their pre-authentication handshake (TLS, then the WebSocket upgrade or a join request). |
+| `cluster_leases_held` | gauge | Leases remote workers hold now. `leases_outstanding` counts every lease, local and remote, plus keys waiting for a re-grant. |
+| `cluster_leases_waiting` | gauge | Keys whose lease ended without an outcome (a worker went silent, was revoked or drained), waiting to be granted again. |
+| `cluster_sessions_total` | counter | Worker sessions started. |
+| `cluster_preauth_refused_total{reason}` | counter | Connections closed before authentication: `capacity` (over the pending caps, closed on accept), `handshake_timeout` (not finished within `handshake_timeout_secs`), `handshake_failed` (not TLS, no certificate this cluster's CA issued, a revoked or expired one, or a bad upgrade). |
+| `cluster_join_requests_total` | counter | Join requests answered, granted or refused. |
+| `cluster_granted_total` | counter | Keys granted to remote workers for the first time ("harvested" at grant, §19.3). |
+| `cluster_regrants_total` | counter | Keys granted again after their lease ended without an outcome. |
+| `cluster_busy_total` | counter | Claimed keys denied because grants were held back (§19.5 backpressure). |
+| `cluster_stale_reports_total` | counter | Worker reports with a stale fencing token, ignored. |
+| `cluster_revoked_total` | counter | Sessions closed because their certificate was revoked or expired. |
+| `cluster_protocol_errors_total` | counter | Sessions closed for a protocol error. |
+| `cluster_version_refused_total` | counter | Workers refused for a protocol major version mismatch. |
+| `cluster_skew_flags_total` | counter | Times a worker's clock was flagged as more than `max_skew_ms` off. |
+| `cluster_pki_errors_total` | counter | Heartbeat ticks whose PKI reload or hourly upkeep failed; the previous state stays in force. |
+| `cluster_start_failures_total` | counter | Times turning the port on failed (binding it or opening the PKI). |
+| `cluster_store_check_errors_total` | counter | Claimed keys whose "already stored?" read failed. They're granted; the commit refuses a duplicate. |

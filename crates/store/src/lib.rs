@@ -54,8 +54,8 @@ pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
-    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow, Quarantined, Refiled, SHADOW,
-    Tombstone,
+    FLOOR_RULES, FilterHit, FilterState, Filtered, Held, HoldRow, LATEST_HITS_CHUNK, Quarantined,
+    Refiled, SHADOW, Tombstone,
 };
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
@@ -78,6 +78,7 @@ pub use saved::{
     Alert, PromotedDue, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits,
 };
 pub use schema::{PACKS_DEFAULTS_KEY, PACKS_FRESH_KEY, latest_schema_version};
+pub use settings::RawSetting;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceSetting, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
 pub use swarm::{
@@ -294,6 +295,27 @@ pub struct Preparer {
 }
 
 impl Preparer {
+    /// A preparer from one file-tree dictionary's id and bytes, wherever
+    /// they came from: the store on the coordinator, or the snapshot a
+    /// remote worker was sent (§19.4, WK-8). New blobs are compressed with
+    /// it and name its id; `None` compresses without a dictionary. With
+    /// the store's active dictionary, its level and its `archive_raw`, it
+    /// prepares exactly what [`Store::preparer`] does.
+    pub fn from_dict(dict: Option<(i64, Vec<u8>)>, level: i32, archive_raw: bool) -> Preparer {
+        let mut codec = BlobCodec::new(level);
+        let active = dict.map(|(id, bytes)| {
+            codec.add_dict(id, bytes);
+            id
+        });
+        codec.set_active(active);
+        Preparer { codec, archive_raw }
+    }
+
+    /// The dictionary new blobs name, if any.
+    pub fn dict_id(&self) -> Option<i64> {
+        self.codec.active()
+    }
+
     /// `raw_info` is the info dict as fetched; it's kept (minus `pieces`)
     /// only when archiving is on.
     pub fn prepare(&mut self, info: &Info, raw_info: Option<&[u8]>) -> Result<Prepared> {
@@ -1517,5 +1539,73 @@ mod tests {
             plan.iter().any(|step| step.contains("torrents_v2")),
             "{plan:?}"
         );
+    }
+
+    /// A preparer built from the active dictionary's bytes prepares the
+    /// same bytes as the store's own, with and without a dictionary and
+    /// with archiving on (WK-7: a worker gets the dictionary, not a store).
+    #[test]
+    fn a_preparer_from_the_dictionary_matches_the_stores() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let info = |i: usize| {
+            let files = (0..6)
+                .map(|f| {
+                    OwnedValue::Dict(
+                        [
+                            (b"length".to_vec(), OwnedValue::Int(1 << 20)),
+                            (
+                                b"path".to_vec(),
+                                OwnedValue::List(vec![OwnedValue::from(
+                                    format!("Show.S01E{f:02}.1080p.WEB-DL-{i}.mkv").as_str(),
+                                )]),
+                            ),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )
+                })
+                .collect();
+            to_vec(&OwnedValue::Dict(
+                [
+                    (b"files".to_vec(), OwnedValue::List(files)),
+                    (
+                        b"name".to_vec(),
+                        OwnedValue::from(format!("Show {i}").as_str()),
+                    ),
+                    (b"piece length".to_vec(), OwnedValue::Int(1 << 18)),
+                    (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20 * 24])),
+                    (b"x-extra".to_vec(), OwnedValue::Int(i as i64)),
+                ]
+                .into_iter()
+                .collect(),
+            ))
+        };
+        let raws: Vec<Vec<u8>> = (0..400).map(info).collect();
+        let samples: Vec<Vec<u8>> = raws.iter().map(|r| r[..r.len() - 520].to_vec()).collect();
+        let dict = compress::train(&samples, 8 << 10).unwrap();
+        for (archive_raw, with_dict) in [(false, false), (false, true), (true, true)] {
+            let config = StoreConfig {
+                archive_raw,
+                ..StoreConfig::default()
+            };
+            let mut store = Store::open_in_memory(config.clone()).unwrap();
+            let shipped = with_dict.then(|| {
+                store.codec.add_dict(7, dict.clone());
+                store.codec.set_active(Some(7));
+                (7, dict.clone())
+            });
+            let mut ours = store.preparer();
+            let mut theirs =
+                Preparer::from_dict(shipped, config.compression_level, config.archive_raw);
+            assert_eq!(theirs.dict_id(), with_dict.then_some(7));
+            for raw in raws.iter().take(20) {
+                let parsed = Info::parse(raw).unwrap();
+                let a = ours.prepare(&parsed, Some(raw)).unwrap();
+                let b = theirs.prepare(&parsed, Some(raw)).unwrap();
+                assert_eq!(a, b);
+                assert_eq!(b.files.dict_id, with_dict.then_some(7));
+                assert_eq!(b.raw.is_some(), archive_raw);
+            }
+        }
     }
 }

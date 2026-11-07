@@ -30,8 +30,22 @@
 //!   leases, and every session silent for three heartbeats;
 //! - expires leases of workers silent past the TTL and grants the keys to
 //!   live workers under new fencing tokens.
+//!
+//! **Leases** live in a [`LeaseAuthority`] the server shares with the
+//! pipeline ([`ServerHooks::authority`], WK-0): the pipeline builds it for
+//! its built-in worker and hands an `Arc` to the server only when remote
+//! workers are allowed, so a key is never leased twice and a single-machine
+//! install opens no cluster CA. Lock order: the fleet, then the authority.
+//!
+//! **Hooks** for the slices that build on the protocol: an
+//! [`InboundSink`] for what workers send (results, counters, outcomes,
+//! snapshot acknowledgements, re-verification replies, hints for the
+//! built-in worker), a [`GrantAdmission`] check for backpressure, and
+//! [`ClusterServer::send`] / [`ClusterServer::broadcast`]. Each session's
+//! outgoing queue is capped by count and by bytes
+//! ([`ServerConfig::session_queue_bytes`]).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -42,7 +56,7 @@ use lodestar_metainfo::InfoHash;
 use lodestar_store::{SourceId, Store};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::time::timeout;
 use tokio_rustls::LazyConfigAcceptor;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
@@ -53,8 +67,8 @@ use crate::frame::{self, MAX_JOIN_REQUEST};
 use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_config};
 use crate::proto::*;
 use crate::{
-    ALPN_JOIN, Claim, Claimed, ClusterError, Coordinator, CoordinatorTls, JoinToken, Lease,
-    LeaseTable, PeerIdentity, Token, WorkerId,
+    ALPN_JOIN, BatchAnswer, Claim, Claimed, ClusterError, Coordinator, CoordinatorTls, JoinToken,
+    Lease, LeaseAuthority, NoEvents, PeerIdentity, QUEUE_BYTES, Token, WorkerId,
 };
 
 /// The WebSocket path on the cluster port.
@@ -74,6 +88,10 @@ pub struct ServerConfig {
     pub max_pending_per_ip: usize,
     /// Messages queued to one session.
     pub session_queue: usize,
+    /// Bytes queued to one session (plan Q5: 8 MiB). A message that
+    /// doesn't fit is refused ([`SendError::Full`]); one larger than the
+    /// cap goes only into an empty queue.
+    pub session_queue_bytes: usize,
     /// §19.3: a worker more than 60 s off is flagged.
     pub max_skew_ms: i64,
     pub maintain_every_secs: i64,
@@ -92,6 +110,7 @@ impl Default for ServerConfig {
             max_pending: 256,
             max_pending_per_ip: 8,
             session_queue: 256,
+            session_queue_bytes: QUEUE_BYTES,
             max_skew_ms: 60_000,
             maintain_every_secs: 3600,
             auto_tick: true,
@@ -103,6 +122,71 @@ impl Default for ServerConfig {
 /// grant, §19.3). It runs on a blocking thread.
 pub trait StoredKeys: Send + Sync + 'static {
     fn stored(&self, keys: &[InfoHash]) -> Vec<bool>;
+}
+
+/// Where the server hands what workers send. Every method runs on the
+/// session's task with no lock held, so it must not block: queue the work
+/// (a bounded channel's `try_send`) and return. By default results and
+/// counters are refused (never acknowledged and lost) and the rest dropped.
+pub trait InboundSink: Send + Sync + 'static {
+    /// A `Results` batch. `false` refuses it for now (backpressure): the
+    /// worker is told to send it again later.
+    fn results(&self, _worker: WorkerId, _batch: Payload) -> bool {
+        false
+    }
+    /// A `Counters` batch, as [`results`](Self::results).
+    fn counters(&self, _worker: WorkerId, _batch: Payload) -> bool {
+        false
+    }
+    /// Outcomes under the holder's current token (stale ones never get
+    /// here). `PeerFound` and `Lost` ended the lease; `Fetched` didn't: the
+    /// commit of its result ends it.
+    fn outcomes(&self, _worker: WorkerId, _accepted: Vec<(InfoHash, Lease, Outcome)>) {}
+    fn snapshot_ack(&self, _worker: WorkerId, _ack: SnapshotAck) {}
+    fn reverified(&self, _worker: WorkerId, _reply: ReverifyReply) {}
+    /// Hints a remote worker found for keys the built-in worker holds.
+    /// In memory only (§18.7).
+    fn local_hints(&self, _hints: Vec<HintItem>) {}
+}
+
+/// Whether grants may go out now (§19.5 backpressure): of `wanted` keys
+/// that would get a new lease (keys already held don't count), how many to
+/// grant. The rest are denied as [`DenyReason::Busy`]. It runs under the
+/// fleet and lease locks, so it must only read a number.
+pub trait GrantAdmission: Send + Sync + 'static {
+    fn admit(&self, worker: WorkerId, wanted: usize) -> usize;
+}
+
+/// What the server shares with the rest of the coordinator.
+#[derive(Clone)]
+pub struct ServerHooks {
+    /// The pipeline's lease authority.
+    pub authority: Arc<LeaseAuthority>,
+    pub stored: Option<Arc<dyn StoredKeys>>,
+    pub sink: Option<Arc<dyn InboundSink>>,
+    pub admission: Option<Arc<dyn GrantAdmission>>,
+}
+
+impl std::fmt::Debug for ServerHooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerHooks")
+            .field("authority", &self.authority)
+            .field("stored", &self.stored.is_some())
+            .field("sink", &self.sink.is_some())
+            .field("admission", &self.admission.is_some())
+            .finish()
+    }
+}
+
+/// Why [`ClusterServer::send`] didn't queue a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendError {
+    /// The worker has no session.
+    NotConnected,
+    /// The session's queue is at its count or byte cap.
+    Full,
+    /// Over a protocol limit, or a message only the server sends.
+    Invalid,
 }
 
 /// What the PKI needs: its state, the database and the secrets key.
@@ -135,16 +219,46 @@ impl PkiState {
     }
 }
 
+/// A message queued to a session, holding its share of the byte cap.
+type Queued = (ToWorker, OwnedSemaphorePermit);
+
 struct SessionSlot {
     id: u64,
-    ctl: mpsc::Sender<ToWorker>,
+    ctl: mpsc::Sender<Queued>,
+    bytes: Arc<Semaphore>,
+    budget: usize,
     stop: mpsc::Sender<StopReason>,
+    /// A drain request, ahead of everything queued: it can't be crowded out.
+    drain: mpsc::Sender<()>,
 }
 
 impl SessionSlot {
+    /// Queues a best-effort message (hints) only while the queue is under
+    /// half its count and byte caps, so it never crowds out grants or
+    /// snapshot chunks.
+    fn try_send_spare(&self, msg: ToWorker) -> bool {
+        let half_bytes = self.bytes.available_permits() >= self.budget / 2;
+        let half_count = self.ctl.capacity() >= self.ctl.max_capacity() / 2;
+        half_bytes && half_count && self.try_send(msg).is_ok()
+    }
+
     fn stop(&self, reason: StopReason) {
         // Capacity one: if it's full, a stop is already on its way.
         let _ = self.stop.try_send(reason);
+    }
+
+    /// Queues a message if it fits under both caps. Never waits.
+    fn try_send(&self, msg: ToWorker) -> Result<(), SendError> {
+        let need = u32::try_from(msg.approx_size().min(self.budget)).unwrap_or(u32::MAX);
+        let permit = self
+            .bytes
+            .clone()
+            .try_acquire_many_owned(need)
+            .map_err(|_| SendError::Full)?;
+        self.ctl.try_send((msg, permit)).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => SendError::Full,
+            mpsc::error::TrySendError::Closed(_) => SendError::NotConnected,
+        })
     }
 }
 
@@ -162,10 +276,7 @@ struct WorkerState {
 }
 
 struct Fleet {
-    leases: LeaseTable,
     workers: HashMap<WorkerId, WorkerState>,
-    /// Leases that ended without an outcome, waiting for a live worker.
-    pending: VecDeque<(InfoHash, Lease)>,
 }
 
 impl Fleet {
@@ -198,6 +309,10 @@ struct Counters {
     outcomes: AtomicU64,
     stale_reports: AtomicU64,
     regrants: AtomicU64,
+    busy: AtomicU64,
+    hints_relayed: AtomicU64,
+    inbound_refused: AtomicU64,
+    fetched: AtomicU64,
     skew_flags: AtomicU64,
     pki_errors: AtomicU64,
     ticks: AtomicU64,
@@ -218,6 +333,9 @@ pub struct WorkerStatus {
     pub leases: usize,
     pub last_seen_ms: i64,
     pub stats: Stats,
+    /// The public addresses the worker reported in `Hello` (at most
+    /// `MAX_EXTERNAL_IPS`): a placement hint, its own word (WK-5).
+    pub external_ips: Vec<IpAddr>,
 }
 
 /// A consistent view of the fleet and the server's counters.
@@ -232,11 +350,19 @@ pub struct FleetSnapshot {
     pub handshaking: usize,
     /// Keys granted for the first time ("harvested", §19.3).
     pub harvested: u64,
-    /// Terminal outcomes accepted.
+    /// Terminal outcomes accepted (losses; they end the lease).
     pub outcomes: u64,
+    /// `Fetched` reports accepted (the lease stays until the commit).
+    pub fetched: u64,
     /// Reports with a stale fencing token, ignored.
     pub stale_reports: u64,
     pub regrants: u64,
+    /// Claimed keys denied because grants were held back (§19.5).
+    pub busy: u64,
+    /// Keys whose peer hints were relayed to their holder.
+    pub hints_relayed: u64,
+    /// `Results` and `Counters` batches the sink refused for now.
+    pub inbound_refused: u64,
     pub refused: u64,
     pub handshake_timeouts: u64,
     pub handshake_failures: u64,
@@ -268,8 +394,11 @@ pub struct ClusterServer {
     tls: CoordinatorTls,
     pki: Arc<Mutex<PkiState>>,
     fleet: Mutex<Fleet>,
+    leases: Arc<LeaseAuthority>,
     gate: Mutex<Gate>,
     stored: Option<Arc<dyn StoredKeys>>,
+    sink: Option<Arc<dyn InboundSink>>,
+    admission: Option<Arc<dyn GrantAdmission>>,
     counters: Counters,
     next_session: AtomicU64,
     shutdown: watch::Sender<bool>,
@@ -310,6 +439,13 @@ enum Accepted {
 enum Flow {
     Continue,
     Stop(StopReason),
+}
+
+/// Resolves once the shutdown flag is set, including when it was set
+/// before this receiver was first polled (`subscribe` marks the value
+/// then as seen, so `changed` alone would wait forever).
+async fn stopped(stop: &mut watch::Receiver<bool>) {
+    let _ = stop.wait_for(|s| *s).await;
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -355,31 +491,70 @@ fn ip_key(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// A peer hint worth relaying: a real unicast address with a port.
+fn usable_hint(a: &std::net::SocketAddr) -> bool {
+    let ip = a.ip();
+    a.port() != 0
+        && !ip.is_unspecified()
+        && !ip.is_multicast()
+        && ip != IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
+}
+
 fn clamp(v: i128) -> i64 {
     i64::try_from(v).unwrap_or(if v < 0 { i64::MIN } else { i64::MAX })
 }
 
 impl ClusterServer {
+    /// A server with a lease authority of its own and no accounting (for a
+    /// server on its own; the coordinator uses [`with_hooks`](Self::with_hooks)).
     pub fn new(
         pki: Pki,
         clock: Arc<dyn Clock>,
         config: ServerConfig,
         stored: Option<Arc<dyn StoredKeys>>,
     ) -> Result<Arc<ClusterServer>, ClusterError> {
+        // The lease epoch is the start time, so tokens never repeat across
+        // restarts (leases.rs).
+        let epoch = u32::try_from(clock.now_secs().rem_euclid(1 << 32)).unwrap_or(0);
+        let authority = Arc::new(LeaseAuthority::new(
+            epoch,
+            config.lease_ttl_secs,
+            Arc::new(NoEvents),
+        ));
+        let hooks = ServerHooks {
+            authority,
+            stored,
+            sink: None,
+            admission: None,
+        };
+        ClusterServer::with_hooks(pki, clock, config, hooks)
+    }
+
+    /// A server on the coordinator's lease authority, with its hooks.
+    /// Building one needs the PKI, so call it only once workers are
+    /// allowed (§19.6: a single-machine install never opens a cluster CA).
+    /// The lease TTL is the authority's, whatever `config` says, so workers
+    /// are told the TTL that's enforced.
+    pub fn with_hooks(
+        pki: Pki,
+        clock: Arc<dyn Clock>,
+        mut config: ServerConfig,
+        hooks: ServerHooks,
+    ) -> Result<Arc<ClusterServer>, ClusterError> {
+        config.lease_ttl_secs = hooks.authority.ttl_secs();
+        hooks.authority.serve_remote();
         let tls = pki
             .coordinator
             .tls()
             .with_time_provider(Arc::new(ClockTime(clock.clone())))?;
         let now = clock.now_secs();
-        // The lease epoch is the start time, so tokens never repeat across
-        // restarts (leases.rs).
-        let epoch = u32::try_from(now.rem_euclid(1 << 32)).unwrap_or(0);
         Ok(Arc::new(ClusterServer {
             fleet: Mutex::new(Fleet {
-                leases: LeaseTable::new(epoch, config.lease_ttl_secs),
                 workers: HashMap::new(),
-                pending: VecDeque::new(),
             }),
+            leases: hooks.authority,
+            sink: hooks.sink,
+            admission: hooks.admission,
             config,
             clock,
             tls,
@@ -389,7 +564,7 @@ impl ClusterServer {
                 last_maintain: now,
             })),
             gate: Mutex::new(Gate::default()),
-            stored,
+            stored: hooks.stored,
             counters: Counters::default(),
             next_session: AtomicU64::new(1),
             shutdown: watch::channel(false).0,
@@ -437,8 +612,7 @@ impl ClusterServer {
             .unwrap_or(Err(ClusterError::Corrupt("the PKI task failed")))?;
         let mut fleet = lock(&self.fleet);
         // Connected or not, its leases go back now (§19.6).
-        let leases = fleet.leases.evict(worker);
-        fleet.pending.extend(leases);
+        self.leases.evict(worker);
         self.sweep(&mut fleet, self.clock.now_ms());
         Ok(n)
     }
@@ -458,11 +632,8 @@ impl ClusterServer {
             return false;
         };
         state.draining = true;
-        if slot.ctl.try_send(ToWorker::Drain).is_err() {
-            // A worker that can't take the request is stopped instead; its
-            // leases expire as usual.
-            slot.stop(StopReason::Protocol);
-        }
+        // Full means a drain request is already on its way.
+        let _ = slot.drain.try_send(());
         true
     }
 
@@ -488,30 +659,40 @@ impl ClusterServer {
         let c = &self.counters;
         let get = |a: &AtomicU64| a.load(Ordering::Relaxed);
         let fleet = lock(&self.fleet);
-        let mut workers: Vec<WorkerStatus> = fleet
-            .workers
+        let ids: Vec<WorkerId> = fleet.workers.keys().copied().collect();
+        let held = self.leases.held_by_each(&ids);
+        let mut workers: Vec<WorkerStatus> = ids
             .iter()
-            .map(|(&worker, s)| WorkerStatus {
-                worker,
-                connected: s.session.is_some(),
-                draining: s.draining,
-                offset_ms: s.offset_ms,
-                skewed: s.skewed,
-                leases: fleet.leases.held_by(worker),
-                last_seen_ms: s.last_seen_ms,
-                stats: s.stats,
+            .zip(held)
+            .map(|(worker, leases)| {
+                let s = &fleet.workers[worker];
+                WorkerStatus {
+                    worker: *worker,
+                    connected: s.session.is_some(),
+                    draining: s.draining,
+                    offset_ms: s.offset_ms,
+                    skewed: s.skewed,
+                    leases,
+                    last_seen_ms: s.last_seen_ms,
+                    stats: s.stats,
+                    external_ips: s.capabilities.external_ips.clone(),
+                }
             })
             .collect();
         workers.sort_by_key(|w| w.worker);
         FleetSnapshot {
             workers,
-            leases: fleet.leases.len(),
-            pending: fleet.pending.len(),
+            leases: self.leases.len(),
+            pending: self.leases.pending(),
             handshaking: lock(&self.gate).total,
             harvested: get(&c.harvested),
             outcomes: get(&c.outcomes),
             stale_reports: get(&c.stale_reports),
             regrants: get(&c.regrants),
+            busy: get(&c.busy),
+            fetched: get(&c.fetched),
+            hints_relayed: get(&c.hints_relayed),
+            inbound_refused: get(&c.inbound_refused),
             refused: get(&c.refused),
             handshake_timeouts: get(&c.handshake_timeouts),
             handshake_failures: get(&c.handshake_failures),
@@ -528,13 +709,130 @@ impl ClusterServer {
 
     /// The lease on a key, if one is held.
     pub fn lease(&self, key: &InfoHash) -> Option<Lease> {
-        lock(&self.fleet).leases.get(key).copied()
+        self.leases.get(key)
+    }
+
+    /// The lease authority this server grants from.
+    pub fn authority(&self) -> &Arc<LeaseAuthority> {
+        &self.leases
+    }
+
+    /// Queues a message to one worker's session without waiting. Messages
+    /// the server alone may send (`Welcome`, `Grants`, `HeartbeatAck`,
+    /// `Renewed`, `RenewRefused`, `Stop`, `Accepted`) are refused, as is
+    /// anything over a protocol limit. Pace large transfers (snapshots) by
+    /// their acknowledgements: a full queue is [`SendError::Full`].
+    pub fn send(&self, worker: WorkerId, msg: ToWorker) -> Result<(), SendError> {
+        if !Self::sendable(&msg) {
+            return Err(SendError::Invalid);
+        }
+        let fleet = lock(&self.fleet);
+        let slot = fleet
+            .workers
+            .get(&worker)
+            .and_then(|s| s.session.as_ref())
+            .ok_or(SendError::NotConnected)?;
+        slot.try_send(msg)
+    }
+
+    /// Queues a message to every connected worker; returns the workers it
+    /// couldn't be queued to (full queues), for the caller to retry.
+    pub fn broadcast(&self, msg: &ToWorker) -> Result<Vec<WorkerId>, SendError> {
+        if !Self::sendable(msg) {
+            return Err(SendError::Invalid);
+        }
+        let fleet = lock(&self.fleet);
+        let mut missed = Vec::new();
+        for (&w, state) in &fleet.workers {
+            if let Some(slot) = &state.session
+                && slot.try_send(msg.clone()).is_err()
+            {
+                missed.push(w);
+            }
+        }
+        missed.sort();
+        Ok(missed)
+    }
+
+    /// Bytes queued to a worker's session and not yet on the wire (at most
+    /// [`ServerConfig::session_queue_bytes`]); `None` if it isn't connected.
+    pub fn queued_bytes(&self, worker: WorkerId) -> Option<usize> {
+        let fleet = lock(&self.fleet);
+        let slot = fleet.workers.get(&worker)?.session.as_ref()?;
+        Some(slot.budget.saturating_sub(slot.bytes.available_permits()))
+    }
+
+    fn sendable(msg: &ToWorker) -> bool {
+        msg.validate()
+            && matches!(
+                msg,
+                ToWorker::Assign(_)
+                    | ToWorker::Drain
+                    | ToWorker::HaveSnapshot(_)
+                    | ToWorker::HaveDelta(_)
+                    | ToWorker::Update(_)
+                    | ToWorker::Hints(_)
+                    | ToWorker::Snapshot(_)
+                    | ToWorker::Reverify(_)
+            )
+    }
+
+    /// Relays peer hints to the worker holding `key` under `token` (in
+    /// memory only, §18.7): the built-in worker's go to the sink, a remote
+    /// worker's to its session. Best effort: a hint that doesn't fit, or
+    /// whose lease has moved, is dropped. `true` if it was passed on.
+    pub fn relay_hints(
+        &self,
+        key: InfoHash,
+        token: Token,
+        hints: Vec<std::net::SocketAddr>,
+    ) -> bool {
+        if hints.is_empty() {
+            return false;
+        }
+        let Some(holder) = self.leases.current(&key, token).map(|l| l.holder) else {
+            return false;
+        };
+        let mut hints = hints;
+        hints.retain(usable_hint);
+        hints.truncate(MAX_HINTS);
+        if hints.is_empty() {
+            return false;
+        }
+        let item = HintItem {
+            key: key.0,
+            token: token.0,
+            hints,
+        };
+        let sent = if holder == WorkerId::LOCAL {
+            match &self.sink {
+                Some(sink) => {
+                    sink.local_hints(vec![item]);
+                    true
+                }
+                None => false,
+            }
+        } else {
+            let fleet = lock(&self.fleet);
+            fleet
+                .workers
+                .get(&holder)
+                .and_then(|s| s.session.as_ref())
+                .is_some_and(|slot| slot.try_send_spare(ToWorker::Hints(vec![item])))
+        };
+        if sent {
+            bump(&self.counters.hints_relayed);
+        }
+        sent
     }
 
     /// Stops the listener, the ticks and every session.
+    /// A connection still in its handshake when this runs gets no session
+    /// and redeems no token afterwards: the flag is set under the fleet
+    /// lock, which registration checks it under.
     pub fn shutdown(&self) {
-        self.shutdown.send_replace(true);
         let fleet = lock(&self.fleet);
+        self.shutdown.send_replace(true);
         for state in fleet.workers.values() {
             if let Some(slot) = &state.session {
                 slot.stop(StopReason::Shutdown);
@@ -543,27 +841,29 @@ impl ClusterServer {
     }
 
     /// Serves the cluster port until [`shutdown`](Self::shutdown), ticking
-    /// every heartbeat unless `auto_tick` is off.
+    /// every heartbeat unless `auto_tick` is off. It returns once the
+    /// listener is closed and no tick is running.
     pub async fn serve(self: Arc<Self>, listener: TcpListener) {
         let mut stop = self.shutdown.subscribe();
+        let mut ticks = None;
         if self.config.auto_tick {
             let me = self.clone();
             let mut stop = self.shutdown.subscribe();
-            tokio::spawn(async move {
+            ticks = Some(tokio::spawn(async move {
                 let mut every = tokio::time::interval(me.config.heartbeat);
                 every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 every.tick().await;
                 loop {
                     tokio::select! {
-                        _ = stop.changed() => return,
+                        _ = stopped(&mut stop) => return,
                         _ = every.tick() => me.tick().await,
                     }
                 }
-            });
+            }));
         }
         loop {
             let accepted = tokio::select! {
-                _ = stop.changed() => return,
+                _ = stopped(&mut stop) => break,
                 a = listener.accept() => a,
             };
             let (tcp, addr) = match accepted {
@@ -581,6 +881,12 @@ impl ClusterServer {
             };
             let me = self.clone();
             tokio::spawn(async move { me.connection(tcp, permit).await });
+        }
+        // A tick under way (an hourly `maintain` writing the PKI) finishes
+        // before this returns, so a caller that waits for `serve` (a
+        // secrets-key reseal) knows nothing writes the PKI after.
+        if let Some(ticks) = ticks {
+            let _ = ticks.await;
         }
     }
 
@@ -676,6 +982,9 @@ impl ClusterServer {
     }
 
     async fn redeem(&self, token: JoinToken, public_key: [u8; 32]) -> JoinReply {
+        if *self.shutdown.borrow() {
+            return JoinReply::Refused;
+        }
         let now = self.clock.now_secs();
         let grant = self
             .with_pki(move |p| {
@@ -748,11 +1057,18 @@ impl ClusterServer {
         let id = self.next_session.fetch_add(1, Ordering::Relaxed);
         peer.session = id;
         let (ctl_tx, mut ctl) = mpsc::channel(self.config.session_queue.max(1));
+        let budget = self.config.session_queue_bytes.clamp(1, u32::MAX as usize);
         let (stop_tx, mut stop) = mpsc::channel(1);
+        let (drain_tx, mut drain) = mpsc::channel(1);
         let now_ms = self.clock.now_ms();
         let state_draining;
         {
             let mut fleet = lock(&self.fleet);
+            if *self.shutdown.borrow() {
+                drop(fleet);
+                self.finish(&mut link, Some(StopReason::Shutdown)).await;
+                return;
+            }
             let state = fleet
                 .workers
                 .entry(peer.worker)
@@ -773,14 +1089,17 @@ impl ClusterServer {
             state.session = Some(SessionSlot {
                 id,
                 ctl: ctl_tx,
+                bytes: Arc::new(Semaphore::new(budget)),
+                budget,
                 stop: stop_tx,
+                drain: drain_tx,
             });
             state.identity = peer.identity.clone();
             state.last_seen_ms = now_ms;
             // A drain survives a reconnect: it's asked for again below.
             state.last_ack = None;
             state.capabilities = hello.capabilities;
-            fleet.leases.heartbeat(peer.worker, now_ms.div_euclid(1000));
+            self.leases.heartbeat(peer.worker, now_ms.div_euclid(1000));
             state_draining = fleet.workers.get(&peer.worker).is_some_and(|s| s.draining);
         }
         bump(&self.counters.sessions);
@@ -799,7 +1118,7 @@ impl ClusterServer {
             greeting.push(ToWorker::Drain);
         }
         for msg in greeting {
-            greeted = greeted && self.send(&mut link, msg).await;
+            greeted = greeted && self.send_on(&mut link, msg).await;
         }
         // A re-grant may have waited for this worker.
         {
@@ -807,7 +1126,7 @@ impl ClusterServer {
             self.regrant(&mut fleet, self.clock.now_secs());
         }
         let reason = if greeted {
-            self.serve_session(&peer, &mut link, &mut ctl, &mut stop)
+            self.serve_session(&peer, &mut link, &mut ctl, &mut stop, &mut drain)
                 .await
         } else {
             None
@@ -827,16 +1146,23 @@ impl ClusterServer {
         &self,
         peer: &Peer,
         link: &mut CoordinatorLink,
-        ctl: &mut mpsc::Receiver<ToWorker>,
+        ctl: &mut mpsc::Receiver<Queued>,
         stop: &mut mpsc::Receiver<StopReason>,
+        drain: &mut mpsc::Receiver<()>,
     ) -> Option<StopReason> {
         loop {
             tokio::select! {
                 biased;
                 r = stop.recv() => return Some(r.unwrap_or(StopReason::Shutdown)),
+                Some(()) = drain.recv() => {
+                    if !self.send_on(link, ToWorker::Drain).await {
+                        return None;
+                    }
+                }
                 m = ctl.recv() => match m {
-                    Some(msg) => {
-                        if !self.send(link, msg).await {
+                    // The permit is held until the message is on the wire.
+                    Some((msg, _permit)) => {
+                        if !self.send_on(link, msg).await {
                             return None;
                         }
                     }
@@ -860,7 +1186,7 @@ impl ClusterServer {
 
     /// Sends one message, giving up on a peer that doesn't read for three
     /// heartbeats.
-    async fn send(&self, link: &mut CoordinatorLink, msg: ToWorker) -> bool {
+    async fn send_on(&self, link: &mut CoordinatorLink, msg: ToWorker) -> bool {
         matches!(
             timeout(self.send_timeout(), link.send(msg)).await,
             Ok(Ok(()))
@@ -869,7 +1195,7 @@ impl ClusterServer {
 
     async fn finish(&self, link: &mut CoordinatorLink, reason: Option<StopReason>) {
         if let Some(reason) = reason {
-            let _ = self.send(link, ToWorker::Stop(reason)).await;
+            let _ = self.send_on(link, ToWorker::Stop(reason)).await;
         }
         let _ = timeout(self.send_timeout(), link.close()).await;
     }
@@ -888,7 +1214,7 @@ impl ClusterServer {
                 };
                 self.reply(link, ToWorker::HeartbeatAck(ack)).await
             }
-            ToCoordinator::Claim(batch) => {
+            ToCoordinator::Claim(mut batch) => {
                 if batch
                     .items
                     .iter()
@@ -897,6 +1223,9 @@ impl ClusterServer {
                     bump(&self.counters.protocol_errors);
                     return Flow::Stop(StopReason::Protocol);
                 }
+                // Commits from here on are remembered, so one racing the
+                // store check is still caught (`claim_batch`).
+                let checked_at = self.leases.commit_seq();
                 let stored = match &self.stored {
                     Some(check) => {
                         let check = check.clone();
@@ -909,7 +1238,7 @@ impl ClusterServer {
                     }
                     None => vec![false; batch.items.len()],
                 };
-                let items = self.claim(peer, &batch.items, &stored);
+                let items = self.claim(peer, &mut batch.items, &stored, checked_at);
                 self.reply(
                     link,
                     ToWorker::Grants(GrantBatch {
@@ -935,18 +1264,59 @@ impl ClusterServer {
                 if !fleet.is_current(peer) {
                     return Flow::Stop(StopReason::Drained);
                 }
-                let left = fleet.leases.evict(w);
-                fleet.pending.extend(left);
+                self.leases.evict(w);
                 self.regrant(&mut fleet, self.clock.now_secs());
                 Flow::Stop(StopReason::Drained)
             }
-            // Later slices; their types exist so the layout is fixed.
-            ToCoordinator::Results(_) | ToCoordinator::Counters(_) => Flow::Continue,
+            ToCoordinator::Results(batch) | ToCoordinator::Counters(batch)
+                if !lock(&self.fleet).is_current(peer) =>
+            {
+                // A replaced or revoked session's payload isn't taken; the
+                // worker sends it again on its current session.
+                let _ = batch;
+                Flow::Continue
+            }
+            ToCoordinator::Results(batch) => {
+                let id = batch.batch;
+                let accepted = self.sink.as_ref().is_some_and(|s| s.results(w, batch));
+                self.accepted(link, id, accepted).await
+            }
+            ToCoordinator::Counters(batch) => {
+                let id = batch.batch;
+                let accepted = self.sink.as_ref().is_some_and(|s| s.counters(w, batch));
+                self.accepted(link, id, accepted).await
+            }
+            // As for payloads: a replaced or revoked session's answers
+            // aren't taken.
+            ToCoordinator::SnapshotAck(ack) => {
+                if let Some(sink) = &self.sink
+                    && lock(&self.fleet).is_current(peer)
+                {
+                    sink.snapshot_ack(w, ack);
+                }
+                Flow::Continue
+            }
+            ToCoordinator::Reverified(reply) => {
+                if let Some(sink) = &self.sink
+                    && lock(&self.fleet).is_current(peer)
+                {
+                    sink.reverified(w, reply);
+                }
+                Flow::Continue
+            }
         }
     }
 
+    async fn accepted(&self, link: &mut CoordinatorLink, batch: u64, accepted: bool) -> Flow {
+        if !accepted {
+            bump(&self.counters.inbound_refused);
+        }
+        self.reply(link, ToWorker::Accepted { batch, accepted })
+            .await
+    }
+
     async fn reply(&self, link: &mut CoordinatorLink, msg: ToWorker) -> Flow {
-        if self.send(link, msg).await {
+        if self.send_on(link, msg).await {
             Flow::Continue
         } else {
             Flow::Stop(StopReason::Protocol)
@@ -966,8 +1336,8 @@ impl ClusterServer {
         if !fleet.is_current(peer) {
             return None;
         }
-        fleet.leases.heartbeat(w, t1.div_euclid(1000));
-        let leases = u32::try_from(fleet.leases.held_by(w)).unwrap_or(u32::MAX);
+        self.leases.heartbeat(w, t1.div_euclid(1000));
+        let leases = u32::try_from(self.leases.held_by(w)).unwrap_or(u32::MAX);
         let state = fleet.workers.get_mut(&w)?;
         let forward = i128::from(hb.sent_ms) - i128::from(t1);
         let offset = match (hb.last_ack, state.last_ack) {
@@ -998,48 +1368,83 @@ impl ClusterServer {
     /// Grants or denies each claimed key. A session that is no longer the
     /// worker's current one (revoked, replaced or stopped while the claim
     /// waited on the store check) gets no lease: every key is denied as if
-    /// draining, and the session is about to stop.
-    fn claim(&self, peer: &Peer, items: &[ClaimItem], stored: &[bool]) -> Vec<GrantItem> {
+    /// draining, and the session is about to stop. Keys over what the
+    /// [`GrantAdmission`] hook allows are denied as busy. A key held by
+    /// another worker has its source merged into that lease and its peer
+    /// hints relayed to the holder (§19.3).
+    fn claim(
+        &self,
+        peer: &Peer,
+        items: &mut [ClaimItem],
+        stored: &[bool],
+        checked_at: u64,
+    ) -> Vec<GrantItem> {
         let w = peer.worker;
-        let now = self.clock.now_secs();
-        let mut fleet = lock(&self.fleet);
+        let now_ms = self.clock.now_ms();
+        let now = now_ms.div_euclid(1000);
+        let skew = self.config.max_skew_ms.abs();
+        let (earliest, latest) = (now_ms.saturating_sub(skew), now_ms.saturating_add(skew));
+        let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
+        let fleet = lock(&self.fleet);
         let current = fleet.is_current(peer);
         let (draining, offset) = fleet
             .workers
             .get(&w)
             .map_or((true, 0), |s| (s.draining || !current, s.offset_ms));
-        let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
-        let mut out = Vec::with_capacity(items.len());
-        for (item, &stored) in items.iter().zip(stored) {
+        let mut out: Vec<Option<GrantItem>> = vec![None; items.len()];
+        let mut asks: Vec<(usize, Claim)> = Vec::with_capacity(items.len());
+        for (i, (item, &stored)) in items.iter().zip(stored).enumerate() {
             let key = item.key;
+            let deny = |reason| Some(GrantItem::Denied { key, reason });
             if draining {
-                out.push(GrantItem::Denied {
-                    key,
-                    reason: DenyReason::Draining,
-                });
-                continue;
+                out[i] = deny(DenyReason::Draining);
+            } else if stored {
+                out[i] = deny(DenyReason::Stored);
+            } else if let Some(source) = SourceId::new(item.source) {
+                // Discovery times are the worker's clock; correct them (§19.3).
+                // Then clamped to now ± the skew limit: a worker's clock
+                // never puts a key in another hour's cohort (§10.9.3).
+                let at = clamp(i128::from(item.discovered_ms) - i128::from(offset))
+                    .clamp(earliest, latest)
+                    .div_euclid(1000);
+                let claim = Claim {
+                    key: InfoHash(key),
+                    source,
+                    strategy: item.strategy,
+                    at,
+                };
+                asks.push((i, claim));
             }
-            if stored {
-                out.push(GrantItem::Denied {
-                    key,
-                    reason: DenyReason::Stored,
-                });
-                continue;
-            }
-            let Some(source) = SourceId::new(item.source) else {
-                continue;
-            };
-            // Discovery times are the worker's clock; correct them (§19.3).
-            let at = clamp(i128::from(item.discovered_ms) - i128::from(offset)).div_euclid(1000);
-            let claim = Claim {
-                key: InfoHash(key),
-                source,
-                strategy: item.strategy,
-                at,
-            };
-            out.push(match fleet.leases.claim(w, claim, now) {
-                Claimed::Granted(token) => {
-                    bump(&self.counters.harvested);
+        }
+        let claims: Vec<Claim> = asks.iter().map(|(_, c)| *c).collect();
+        // Admission applies to new leases only, under the authority's lock;
+        // keys held elsewhere still merge their source and relay hints.
+        let admit = self
+            .admission
+            .as_ref()
+            .map(|gate| move |wanted: usize| gate.admit(w, wanted));
+        let admit_ref = admit.as_ref().map(|f| f as &dyn Fn(usize) -> usize);
+        let answers = self
+            .leases
+            .claim_batch(w, &claims, now, admit_ref, Some(checked_at));
+        // Hints per holder, one message each.
+        let mut relays: HashMap<WorkerId, Vec<HintItem>> = HashMap::new();
+        for (&(i, claim), answer) in asks.iter().zip(answers) {
+            let key = claim.key.0;
+            let deny = |reason| GrantItem::Denied { key, reason };
+            out[i] = Some(match answer {
+                BatchAnswer::Busy => {
+                    bump(&self.counters.busy);
+                    deny(DenyReason::Busy)
+                }
+                BatchAnswer::Committed => deny(DenyReason::Stored),
+                BatchAnswer::Claimed {
+                    claimed: Claimed::Granted(token),
+                    harvested,
+                } => {
+                    if harvested {
+                        bump(&self.counters.harvested);
+                    }
                     GrantItem::Granted {
                         key,
                         token: token.0,
@@ -1048,44 +1453,96 @@ impl ClusterServer {
                 }
                 // A repeated claim by the holder (after a reconnect, say)
                 // gets its lease back.
-                Claimed::Held { holder, token } if holder == w => GrantItem::Granted {
+                BatchAnswer::Claimed {
+                    claimed: Claimed::Held { holder, token },
+                    ..
+                } if holder == w => GrantItem::Granted {
                     key,
                     token: token.0,
                     ttl_secs,
                 },
-                Claimed::Held { .. } => GrantItem::Denied {
-                    key,
-                    reason: DenyReason::HeldElsewhere,
-                },
+                BatchAnswer::Claimed {
+                    claimed: Claimed::Held { holder, token },
+                    ..
+                } => {
+                    let mut hints = std::mem::take(&mut items[i].hints);
+                    hints.retain(usable_hint);
+                    if !hints.is_empty() {
+                        let list = relays.entry(holder).or_default();
+                        if list.len() < MAX_HINT_BATCH {
+                            list.push(HintItem {
+                                key,
+                                token: token.0,
+                                hints,
+                            });
+                        }
+                    }
+                    deny(DenyReason::HeldElsewhere)
+                }
             });
         }
-        out
+        let local_hints = relays.remove(&WorkerId::LOCAL);
+        for (holder, hints) in relays {
+            let n = hints.len() as u64;
+            let sent = fleet
+                .workers
+                .get(&holder)
+                .and_then(|s| s.session.as_ref())
+                .is_some_and(|slot| slot.try_send_spare(ToWorker::Hints(hints)));
+            if sent {
+                self.counters.hints_relayed.fetch_add(n, Ordering::Relaxed);
+            }
+        }
+        drop(fleet);
+        if let Some(hints) = local_hints
+            && let Some(sink) = &self.sink
+        {
+            self.counters
+                .hints_relayed
+                .fetch_add(hints.len() as u64, Ordering::Relaxed);
+            sink.local_hints(hints);
+        }
+        out.into_iter().flatten().collect()
     }
 
-    /// Accepts terminal outcomes. One counts only with the current token
-    /// from the current holder; anything else is stale and ignored, so a
-    /// key is never counted twice (§19.3).
+    /// Accepts outcomes. One counts only with the current token from the
+    /// current holder; anything else is stale and ignored, so a key is
+    /// never counted twice (§19.3). `PeerFound` and `Lost` are terminal
+    /// losses (their reason is the funnel's loss code) and end the lease.
+    /// `Fetched` is progress: the lease stays until its result is committed
+    /// under the same token (the commit ends it, as for the built-in
+    /// worker), so the funnel gets its stored or lost row. Accepted ones go
+    /// to the sink.
     ///
     /// This doesn't ask whether the session is still current: a report from
     /// an older connection of the same worker, with a token that is still
     /// current, is a real outcome (dropping it would strand a lease the new
     /// session's heartbeats keep renewing). A revoked worker's leases were
-    /// evicted under the same lock, so its tokens are already stale.
+    /// evicted when it was revoked, so its tokens are already stale.
     fn outcome(&self, peer: &Peer, items: &[OutcomeItem]) {
         let w = peer.worker;
-        let mut fleet = lock(&self.fleet);
+        let mut accepted = Vec::new();
         for item in items {
             let key = InfoHash(item.key);
             let token = Token(item.token);
-            let holds = fleet
-                .leases
-                .get(&key)
-                .is_some_and(|l| l.holder == w && l.token == token);
-            if holds && fleet.leases.release(&key, token).is_some() {
-                bump(&self.counters.outcomes);
-            } else {
-                bump(&self.counters.stale_reports);
+            let lease = match item.outcome {
+                Outcome::Fetched => self.leases.held(w, &key, token).inspect(|_| {
+                    bump(&self.counters.fetched);
+                }),
+                Outcome::PeerFound { reason } | Outcome::Lost { reason } => self
+                    .leases
+                    .report(w, &key, token, Some(reason))
+                    .inspect(|_| bump(&self.counters.outcomes)),
+            };
+            match lease {
+                Some(lease) => accepted.push((key, lease, item.outcome)),
+                None => bump(&self.counters.stale_reports),
             }
+        }
+        if !accepted.is_empty()
+            && let Some(sink) = &self.sink
+        {
+            sink.outcomes(w, accepted);
         }
     }
 
@@ -1125,8 +1582,7 @@ impl ClusterServer {
         }
         let mut fleet = lock(&self.fleet);
         self.sweep(&mut fleet, now_ms);
-        let expired = fleet.leases.expire(now);
-        fleet.pending.extend(expired);
+        self.leases.expire(now);
         self.regrant(&mut fleet, now);
     }
 
@@ -1159,8 +1615,7 @@ impl ClusterServer {
             }
         }
         for w in revoked {
-            let leases = fleet.leases.evict(w);
-            fleet.pending.extend(leases);
+            self.leases.evict(w);
             // Its certificates are gone, so it can't come back under this
             // id: forget it rather than check it every tick.
             fleet.workers.remove(&w);
@@ -1170,54 +1625,32 @@ impl ClusterServer {
 
     /// Grants keys whose lease ended without an outcome to the connected,
     /// non-draining workers holding the fewest leases, as unsolicited
-    /// `Grants` (batch 0). Keys wait while no worker is available.
+    /// `Grants` (batch 0). Keys wait while no worker is available, or go
+    /// back to waiting if a worker's queue is full.
     fn regrant(&self, fleet: &mut Fleet, now: i64) {
-        if fleet.pending.is_empty() {
-            return;
-        }
-        let mut targets: Vec<(usize, WorkerId)> = fleet
+        let targets: Vec<WorkerId> = fleet
             .workers
             .iter()
             .filter(|(_, s)| s.session.is_some() && !s.draining)
-            .map(|(&w, _)| (fleet.leases.held_by(w), w))
+            .map(|(&w, _)| w)
             .collect();
-        if targets.is_empty() {
+        if targets.is_empty() || self.leases.pending() == 0 {
             return;
         }
         let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
-        let mut batches: HashMap<WorkerId, Vec<GrantItem>> = HashMap::new();
-        let mut waiting = VecDeque::new();
-        while let Some((key, lease)) = fleet.pending.pop_front() {
-            if fleet.leases.get(&key).is_some() {
-                // Claimed again in the meantime: that lease stands.
-                continue;
-            }
-            targets.sort();
-            let Some((held, w)) = targets
-                .iter_mut()
-                .find(|(_, w)| batches.get(w).map_or(0, Vec::len) < MAX_GRANT_BATCH)
-            else {
-                waiting.push_back((key, lease));
-                continue;
-            };
-            let token = fleet.leases.regrant(*w, key, lease, now);
-            *held += 1;
-            batches.entry(*w).or_default().push(GrantItem::Granted {
-                key: key.0,
-                token: token.0,
-                ttl_secs,
-            });
-        }
-        fleet.pending = waiting;
-        for (w, items) in batches {
-            let slot = fleet.workers.get(&w).and_then(|s| s.session.as_ref());
+        for (w, keys) in self.leases.regrant_pending(&targets, MAX_GRANT_BATCH, now) {
+            let items: Vec<GrantItem> = keys
+                .iter()
+                .map(|&(key, token)| GrantItem::Granted {
+                    key: key.0,
+                    token: token.0,
+                    ttl_secs,
+                })
+                .collect();
             let n = items.len() as u64;
+            let slot = fleet.workers.get(&w).and_then(|s| s.session.as_ref());
             let sent = slot.is_some_and(|slot| {
-                slot.ctl
-                    .try_send(ToWorker::Grants(GrantBatch {
-                        batch: 0,
-                        items: items.clone(),
-                    }))
+                slot.try_send(ToWorker::Grants(GrantBatch { batch: 0, items }))
                     .is_ok()
             });
             if sent {
@@ -1225,13 +1658,8 @@ impl ClusterServer {
                 continue;
             }
             // The worker's queue is full: take the leases back.
-            for item in items {
-                if let GrantItem::Granted { key, token, .. } = item {
-                    let key = InfoHash(key);
-                    if let Some(lease) = fleet.leases.release(&key, Token(token)) {
-                        fleet.pending.push_back((key, lease));
-                    }
-                }
+            for (key, token) in keys {
+                self.leases.requeue(&key, token);
             }
         }
     }

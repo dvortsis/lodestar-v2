@@ -6,6 +6,9 @@
 //!   substance. Raising it shows the notice again to every admin at their
 //!   next request; an editorial change that leaves it alone never does.
 //!   It matches the "Version N" line at the top of the text (a test checks).
+//!   One sanctioned exception: it also rises, without a text change, to stay
+//!   above every number a release branch's copy has shown, so an upgrade
+//!   from a release never skips a notice (X-notice-v4).
 //! - **The text** is `docs/legal/legal-notice.md` on this branch, copied
 //!   here so the crate builds without the docs folder (the Docker build
 //!   copies only `crates/`). A test keeps the two the same.
@@ -20,7 +23,7 @@ use crate::error::{ApiResult, internal};
 use crate::extract::{ClientIp, Json, same_origin_json};
 
 /// The Legal Notice's version. See the module docs before changing it.
-pub const NOTICE_VERSION: u32 = 3;
+pub const NOTICE_VERSION: u32 = 4;
 
 /// The Legal Notice, as Markdown.
 pub const NOTICE: &str = include_str!("legal/notice.md");

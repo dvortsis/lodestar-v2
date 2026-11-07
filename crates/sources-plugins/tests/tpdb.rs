@@ -383,7 +383,8 @@ fn manifest_and_policy() {
     assert_eq!(limits.per_host.burst, 1);
     assert!(limits.per_host.interval >= floors::HOST_INTERVAL);
     let schema: serde_json::Value = serde_json::from_str(policy.config_schema).unwrap();
-    assert_eq!(schema["properties"]["api_key"]["writeOnly"], true);
+    // The key is a declared credential, never a setting.
+    assert!(schema["properties"].get("api_key").is_none());
     assert_eq!(schema["additionalProperties"], false);
 }
 

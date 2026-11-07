@@ -372,6 +372,10 @@ impl EgressCredentials for Creds {
         });
         Box::pin(async move { Ok(auth) })
     }
+
+    fn source_enabled<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        Box::pin(async { Ok(true) })
+    }
 }
 
 struct BrokenStore;
@@ -381,6 +385,10 @@ impl EgressCredentials for BrokenStore {
         &'a self,
         _: &'a str,
     ) -> BoxFuture<'a, Result<Option<SocksAuth>, CredentialError>> {
+        Box::pin(async { Err(CredentialError) })
+    }
+
+    fn source_enabled<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<bool, CredentialError>> {
         Box::pin(async { Err(CredentialError) })
     }
 }
@@ -1038,6 +1046,29 @@ async fn refusals_while_down_are_paced_and_bounded() {
 // ---------------------------------------------------------------- policy
 
 #[tokio::test]
+async fn a_redirect_to_another_port_on_the_listed_host_is_refused() {
+    // Another service on the same loopback host: reachable by address, but
+    // not one of the plugin's endpoints.
+    let other = serve(|_| ok("other")).await;
+    let to = other.url("/");
+    let server = serve(move |_| redirect(302, &to)).await;
+    let egress = Arc::new(
+        factory(Scripted::new(&[]))
+            .build("p", &Egress::Direct, lan().only_origins(&[server.url("/")]))
+            .await,
+    );
+    let client = Client::new(Arc::clone(&egress), HostLimiter::new(fast_limits()));
+    let err = transport(send_following(&client, Request::get(server.url("/start"))).await);
+    assert!(
+        err.contains("the address isn't one of the plugin's endpoints"),
+        "{err}"
+    );
+    assert_eq!(egress.status().counters.answered, 1, "the first hop went");
+    assert_eq!(egress.status().counters.policy_refusals, 1);
+    assert_eq!(other.conns(), 0, "the other port was never connected to");
+}
+
+#[tokio::test]
 async fn redirects_to_forbidden_addresses_are_refused_before_connecting() {
     let server = serve(|line| {
         if line.contains("/meta") {
@@ -1130,6 +1161,78 @@ async fn manifest_endpoints_are_public_only_and_limited_to_declared_hosts() {
     let err = transport(egress.fetch(&Request::get("http://nyaa.si/")).await);
     assert!(err.contains("isn't one of the plugin's endpoints"), "{err}");
     assert_eq!(resolver.lookups(), 1);
+}
+
+#[test]
+fn a_host_list_is_keyed_on_scheme_host_and_port() {
+    let listed = |e: &Endpoints, url: &str| match e.check(url) {
+        Ok(()) => true,
+        Err(err) => {
+            assert!(
+                err.to_string()
+                    .contains("isn't one of the plugin's endpoints"),
+                "{url}: {err}"
+            );
+            false
+        }
+    };
+    // A user-entered address on loopback: another service on the same
+    // host (another port) isn't reachable through it.
+    let e = Endpoints::user_entered(NetPolicy::download_client())
+        .only_origins(&["http://127.0.0.1:9696/sub"]);
+    assert!(listed(&e, "http://127.0.0.1:9696/api/v1/search"));
+    assert!(listed(&e, "http://[::ffff:127.0.0.1]:9696/"));
+    assert!(e.permits("http://127.0.0.1:9696/"));
+    assert!(!e.permits("http://127.0.0.1:9697/"));
+    for url in [
+        "http://127.0.0.1/",
+        "http://127.0.0.1:80/",
+        "http://127.0.0.1:9697/",
+        "http://127.0.0.1:6379/",
+        "https://127.0.0.1:9696/",
+    ] {
+        assert!(!listed(&e, url), "{url}");
+    }
+    let e =
+        Endpoints::user_entered(NetPolicy::download_client()).only_origins(&["http://[::1]:9696/"]);
+    assert!(listed(&e, "http://[::1]:9696/x"));
+    assert!(listed(&e, "http://[0:0::1]:9696/x"));
+    assert!(!listed(&e, "http://[::1]:9697/"));
+    assert!(!listed(&e, "http://127.0.0.1:9696/"));
+    // No port given: the scheme's default, written or not.
+    let e = Endpoints::user_entered(NetPolicy::download_client())
+        .only_origins(&["http://nas.lan", "https://Client.LAN./x"]);
+    for url in [
+        "http://nas.lan/",
+        "http://nas.lan:80/",
+        "https://client.lan/",
+        "https://client.lan:443/",
+    ] {
+        assert!(listed(&e, url), "{url}");
+    }
+    for url in [
+        "http://nas.lan:8080/",
+        "https://nas.lan/",
+        "http://client.lan/",
+        "https://client.lan:8443/",
+    ] {
+        assert!(!listed(&e, url), "{url}");
+    }
+    // An explicit default port in the list matches a URL without one.
+    let e = Endpoints::user_entered(NetPolicy::download_client())
+        .only_origins(&["https://client.lan:443/"]);
+    assert!(listed(&e, "https://client.lan/"));
+    // Something that isn't an http(s) URL adds nothing.
+    let e = Endpoints::user_entered(NetPolicy::download_client())
+        .only_origins(&["client.lan", "ftp://client.lan/"]);
+    assert!(!listed(&e, "http://client.lan/"));
+    // A manifest's hosts are on their scheme's default port only.
+    let e = Endpoints::manifest(&[Endpoint {
+        protocol: "https",
+        host: "nyaa.si",
+    }]);
+    assert!(listed(&e, "https://nyaa.si:443/"));
+    assert!(!listed(&e, "https://nyaa.si:8443/"));
 }
 
 #[tokio::test]
@@ -1265,6 +1368,46 @@ async fn redirects_drop_credentials_across_origins_and_refuse_downgrades() {
     // 303 turns it into a GET without a body.
     assert_eq!(hops[3].method, Method::Get);
     assert!(hops[3].body.is_empty());
+
+    // Every header the request set goes across origins, under any name
+    // (StashDB's `ApiKey`, a cookie, a custom one), and stays gone if a
+    // later hop comes back; only the non-credential ones are kept.
+    let (client, t) = table(&[
+        ("https://a.example/1", moved(307, "https://b.example/2")),
+        ("https://b.example/2", moved(302, "https://a.example/3")),
+    ]);
+    let mut req = Request::get("https://a.example/1")
+        .header("ApiKey", "stash-secret")
+        .header("apikey", "lower")
+        .header("Cookie", "s=1")
+        .header("Proxy-Authorization", "Basic x")
+        .header("X-Plugin-Token", "t")
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", "Lodestar");
+    req.method = Method::Post;
+    req.body = b"{}".to_vec();
+    send_following(&client, req).await.unwrap();
+    let hops = seen(&t);
+    assert_eq!(hops.len(), 3);
+    assert_eq!(hops[0].headers.len(), 8);
+    let kept = vec![
+        ("Accept".to_owned(), "application/json".to_owned()),
+        ("Content-Type".to_owned(), "application/json".to_owned()),
+        ("User-Agent".to_owned(), "Lodestar".to_owned()),
+    ];
+    assert_eq!(hops[1].headers, kept);
+    assert_eq!(hops[1].body, b"{}");
+    // 302 makes it a GET and drops the body's headers; back on the first
+    // origin, nothing that was dropped returns.
+    assert_eq!(hops[2].url, "https://a.example/3");
+    assert_eq!(
+        hops[2].headers,
+        vec![
+            ("Accept".to_owned(), "application/json".to_owned()),
+            ("User-Agent".to_owned(), "Lodestar".to_owned()),
+        ]
+    );
 
     let (client, _) = table(&[("https://a.example/", moved(302, "http://a.example/"))]);
     let err = transport(send_following(&client, Request::get("https://a.example/")).await);
@@ -1902,4 +2045,287 @@ async fn a_refusal_comes_back_within_the_streams_timeout() {
             .state(&host_key(&url).unwrap(), Instant::now()),
         crate::http::HostState::Ready
     );
+}
+
+// ---------------------------------------------------------------- source state
+
+/// A store of source states a test switches: `on`, or unreadable.
+struct States {
+    on: AtomicBool,
+    broken: AtomicBool,
+}
+
+impl EgressCredentials for States {
+    fn socks5<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SocksAuth>, CredentialError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn source_enabled<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        let r = if self.broken.load(Ordering::SeqCst) {
+            Err(CredentialError)
+        } else {
+            Ok(self.on.load(Ordering::SeqCst))
+        };
+        Box::pin(async move { r })
+    }
+}
+
+/// Defence in depth behind stopping a source when it's switched off
+/// (X-tcache-recheck): a client the factory built sends nothing while the
+/// store says its source is off, or can't say, whether the request is
+/// buffered or streamed. Nothing connects.
+#[tokio::test]
+async fn a_source_switched_off_sends_nothing() {
+    let server = serve(|_| ok("hello")).await;
+    let states = Arc::new(States {
+        on: AtomicBool::new(true),
+        broken: AtomicBool::new(false),
+    });
+    let egress = EgressFactory::with_resolver(states.clone(), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let req = Request::get(server.url("/"));
+    assert_eq!(egress.fetch(&req).await.unwrap().status, 200);
+    assert_eq!(server.conns(), 1);
+
+    states.on.store(false, Ordering::SeqCst);
+    assert!(matches!(egress.fetch(&req).await, Err(HttpError::NoEgress)));
+    let limits = StreamLimits {
+        max_bytes: 1024,
+        timeout: Duration::from_secs(10),
+        idle: Duration::from_secs(5),
+    };
+    assert!(matches!(
+        egress.fetch_stream(&req, limits).await,
+        Err(HttpError::NoEgress)
+    ));
+    states.on.store(true, Ordering::SeqCst);
+    states.broken.store(true, Ordering::SeqCst);
+    assert!(matches!(egress.fetch(&req).await, Err(HttpError::NoEgress)));
+    assert_eq!(server.conns(), 1, "a switched-off source connected");
+    assert_eq!(egress.status().counters.policy_refusals, 3);
+}
+
+/// A database file of its own, removed when dropped.
+struct TempDb(std::path::PathBuf);
+
+impl TempDb {
+    fn new(tag: &str) -> TempDb {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("lodestar-egress-{tag}-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TempDb(dir)
+    }
+
+    fn path(&self) -> std::path::PathBuf {
+        self.0.join("lodestar.db")
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The host's wiring (X-egress-state-watch): the shared writer store
+/// behind a mutex, with plugin `p` registered Enabled, and source states
+/// read on a read-only connection of their own.
+fn store_states(
+    db: &TempDb,
+) -> (
+    Arc<std::sync::Mutex<lodestar_store::Store>>,
+    lodestar_store::SourceId,
+    crate::consent::SourceCredentials,
+) {
+    use lodestar_store::{SourceState, Store, StoreConfig};
+    let mut writer = Store::open(db.path(), StoreConfig::default()).unwrap();
+    let id = writer
+        .register_source_as("p", "1", SourceState::Disabled, 0)
+        .unwrap();
+    writer.enable_source(id, None).unwrap();
+    let reader = Store::open_reader(db.path(), StoreConfig::default()).unwrap();
+    let shared = Arc::new(std::sync::Mutex::new(writer));
+    let keys = Arc::new(crate::consent::SecretStore::from_key(&[5; 32]));
+    let creds = crate::consent::SourceCredentials::with_keys(shared.clone(), keys)
+        .reading_states_from(Arc::new(std::sync::Mutex::new(reader)));
+    (shared, id, creds)
+}
+
+/// Holds `store`'s lock on a thread of its own, as a long API or Control
+/// operation would, until the returned sender is dropped or sent to.
+fn hold_lock(
+    store: &Arc<std::sync::Mutex<lodestar_store::Store>>,
+) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+    let store = store.clone();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let t = std::thread::spawn(move || {
+        let _guard = store.lock().unwrap();
+        held_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the lock wasn't taken");
+    (release_tx, t)
+}
+
+/// While the shared store's lock is held past `STATE_WAIT`, an enabled
+/// source's requests still go out: the check reads its own connection
+/// (X-egress-state-watch). The same check on the shared lock refuses,
+/// which is what this slice fixes.
+#[tokio::test]
+async fn a_held_store_lock_does_not_hold_back_an_enabled_source() {
+    let server = serve(|_| ok("hello")).await;
+    let db = TempDb::new("held");
+    let (shared, _, creds) = store_states(&db);
+    let egress = EgressFactory::with_resolver(Arc::new(creds), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let req = Request::get(server.url("/"));
+
+    let (release, holder) = hold_lock(&shared);
+    let held_since = Instant::now();
+    for _ in 0..3 {
+        assert_eq!(egress.fetch(&req).await.unwrap().status, 200);
+    }
+    // The old wiring, the check on the shared lock, for contrast: it
+    // waits out `STATE_WAIT` and refuses.
+    let keys = Arc::new(crate::consent::SecretStore::from_key(&[5; 32]));
+    let on_shared = EgressFactory::with_resolver(
+        Arc::new(crate::consent::SourceCredentials::with_keys(
+            shared.clone(),
+            keys,
+        )),
+        Scripted::new(&[]),
+    )
+    .with_timeout(DEADLINE)
+    .build("p", &Egress::Direct, lan())
+    .await;
+    assert!(matches!(
+        on_shared.fetch(&req).await,
+        Err(HttpError::NoEgress)
+    ));
+    let held = held_since.elapsed();
+    assert!(held > STATE_WAIT, "the lock was held for only {held:?}");
+    // Still held, and still answered.
+    assert_eq!(egress.fetch(&req).await.unwrap().status, 200);
+    drop(release);
+    holder.join().unwrap();
+    assert_eq!(server.conns(), 4);
+    assert_eq!(egress.status().counters.policy_refusals, 0);
+}
+
+/// A state any writer commits on the shared store is read by the very
+/// next request: off is refused at the transport and nothing connects;
+/// on again sends. A missing row refuses too (X-egress-state-watch).
+#[tokio::test]
+async fn the_states_reader_sees_each_commit_at_once() {
+    use lodestar_store::SourceState;
+    let server = serve(|_| ok("hello")).await;
+    let db = TempDb::new("commit");
+    let (shared, id, creds) = store_states(&db);
+    // Credentials are still read from the shared store.
+    assert!(matches!(creds.socks5_now("p"), Ok(None)));
+    let creds = Arc::new(creds);
+    let egress = EgressFactory::with_resolver(creds.clone(), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let req = Request::get(server.url("/"));
+    assert_eq!(egress.fetch(&req).await.unwrap().status, 200);
+
+    for state in [
+        SourceState::Disabled,
+        SourceState::Paused,
+        SourceState::Purged,
+    ] {
+        shared.lock().unwrap().set_source_state(id, state).unwrap();
+        assert!(
+            matches!(egress.fetch(&req).await, Err(HttpError::NoEgress)),
+            "{state:?}"
+        );
+        shared.lock().unwrap().enable_source(id, None).unwrap();
+        assert_eq!(egress.fetch(&req).await.unwrap().status, 200, "{state:?}");
+    }
+    assert_eq!(server.conns(), 4, "a switched-off source connected");
+
+    // No row for the plugin: refused.
+    let nobody = EgressFactory::with_resolver(creds, Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("nobody", &Egress::Direct, lan())
+        .await;
+    assert!(matches!(nobody.fetch(&req).await, Err(HttpError::NoEgress)));
+    assert_eq!(server.conns(), 4);
+    assert_eq!(egress.status().counters.policy_refusals, 3);
+    assert_eq!(nobody.status().counters.policy_refusals, 1);
+}
+
+/// A states connection that can't be read refuses every request
+/// (X-egress-state-watch keeps #525's fail-closed rule): a row the
+/// reader can't decode, then a reader whose lock is poisoned.
+#[tokio::test]
+async fn an_unreadable_states_reader_sends_nothing() {
+    use lodestar_store::{Store, StoreConfig};
+    let server = serve(|_| ok("hello")).await;
+    let db = TempDb::new("broken");
+    let (shared, id, creds) = store_states(&db);
+    let egress = EgressFactory::with_resolver(Arc::new(creds), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    let req = Request::get(server.url("/"));
+
+    // A state no build knows: the reader's read fails, not just a lock.
+    shared
+        .lock()
+        .unwrap()
+        .connection()
+        .execute(
+            "UPDATE sources SET state = 99 WHERE id = ?1",
+            [i64::from(id.get())],
+        )
+        .unwrap();
+    assert!(matches!(egress.fetch(&req).await, Err(HttpError::NoEgress)));
+    assert_eq!(server.conns(), 0);
+    assert_eq!(egress.status().counters.policy_refusals, 1);
+
+    // A reader poisoned by a panic while it was held can't be read. Its
+    // own database, with a valid Enabled row, so only the poison refuses.
+    let db = TempDb::new("poisoned");
+    let (shared, _, _) = store_states(&db);
+    let reader = Arc::new(std::sync::Mutex::new(
+        Store::open_reader(db.path(), StoreConfig::default()).unwrap(),
+    ));
+    let keys = Arc::new(crate::consent::SecretStore::from_key(&[5; 32]));
+    let creds = crate::consent::SourceCredentials::with_keys(shared, keys)
+        .reading_states_from(reader.clone());
+    let poisoned = EgressFactory::with_resolver(Arc::new(creds), Scripted::new(&[]))
+        .with_timeout(DEADLINE)
+        .build("p", &Egress::Direct, lan())
+        .await;
+    assert_eq!(poisoned.fetch(&req).await.unwrap().status, 200);
+    assert_eq!(server.conns(), 1);
+    let poison = reader.clone();
+    let _ = std::thread::spawn(move || {
+        let _g = poison.lock().unwrap();
+        panic!("poisons the states reader");
+    })
+    .join();
+    assert!(reader.is_poisoned());
+    assert!(matches!(
+        poisoned.fetch(&req).await,
+        Err(HttpError::NoEgress)
+    ));
+    assert_eq!(server.conns(), 1, "a poisoned reader connected");
+    assert_eq!(poisoned.status().counters.policy_refusals, 1);
 }

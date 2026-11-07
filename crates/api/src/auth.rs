@@ -1078,30 +1078,30 @@ mod tests {
         assert!(!auth.notice_pending(), "kept across a change and a restart");
     }
 
-    /// A v0.5.1 install accepted notice 2 (LEGAL-1r) and stored it as
-    /// `notice_version: 2`. This build's notice is 3: it shows once at
-    /// sign-in, accepting it records 3 in the same field, and it stays
+    /// A v0.5.1 install accepted notice 3 (R-rc5-notice) and stored it as
+    /// `notice_version: 3`. This build's notice is 4: it shows once at
+    /// sign-in, accepting it records 4 in the same field, and it stays
     /// accepted across a restart.
     #[test]
-    fn a_v0_5_1_install_sees_version_3_once() {
-        assert_eq!(crate::legal::NOTICE_VERSION, 3);
+    fn a_v0_5_1_install_sees_version_4_once() {
+        assert_eq!(crate::legal::NOTICE_VERSION, 4);
         let (dir, auth) = fresh();
         let path = dir.path().join("auth.json");
         let token = auth.setup_token().unwrap();
         auth.setup(IP, &token, "correct horse battery").unwrap();
         let mut file: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        file["notice_version"] = serde_json::json!(2);
+        file["notice_version"] = serde_json::json!(3);
         std::fs::write(&path, file.to_string()).unwrap();
 
         let auth = Auth::load(&path, false).unwrap();
-        assert!(auth.notice_pending(), "version 2 accepted, 3 shown");
-        assert_eq!(auth.accept_notice(2), Err(AuthError::NoticeRequired));
-        auth.accept_notice(3).unwrap();
+        assert!(auth.notice_pending(), "version 3 accepted, 4 shown");
+        assert_eq!(auth.accept_notice(3), Err(AuthError::NoticeRequired));
+        auth.accept_notice(4).unwrap();
         assert!(!auth.notice_pending());
         let file: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(file["notice_version"], 3, "the same field, raised");
+        assert_eq!(file["notice_version"], 4, "the same field, raised");
         let auth = Auth::load(&path, false).unwrap();
         assert!(!auth.notice_pending(), "shown once, not again");
     }

@@ -8,7 +8,7 @@ Chromium only. Locally it is the preinstalled one in `/opt/pw-browsers`: **never
 **Cloud sessions:** the preinstalled Chromium is a different build from the one `@playwright/test` pins, so point Playwright at it with `PW_CHROMIUM_PATH` (no symlink folder, no `PLAYWRIGHT_BROWSERS_PATH`):
 
 ```sh
-PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-1243/chrome-linux64/chrome npx playwright test e2e/boot-shell.routes.test.ts --project=core
+PW_CHROMIUM_PATH=/opt/pw-browsers/chromium npx playwright test e2e/boot-shell.routes.test.ts --project=core
 ```
 
 CI never sets it, so CI's browser and screenshots are unchanged. Local screenshots are not authoritative: they can differ from the baselines on this build; CI's are.

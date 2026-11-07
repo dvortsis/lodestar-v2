@@ -18,6 +18,13 @@
 //!   `private_source` flag come from the store
 //!   ([`torrent_cache::interest`]), never from the caller, and a key the
 //!   store doesn't know isn't looked up.
+//! - **Checked when queued and again right before it's sent**
+//!   ([`StoreRecheck`], X-tcache-recheck): the cursor, interest and the
+//!   plugin's send all run the pipeline's `torrent_cache::Gate`, so a key
+//!   that joins the floor, a dropping list or a tombstone, or whose source
+//!   is switched off, while it waits in the queue is never sent. Each
+//!   check is one read on the cache's own reader connection, with no
+//!   transaction left open across the send.
 //! - **Every verified file goes to the pipeline** (`Pipeline::torrent_cache_feed`),
 //!   which judges it through the full filter and stores it through the
 //!   writer's lease-free entry.
@@ -28,9 +35,11 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_pipeline::torrent_cache::{self, Cursor, Feed, Fetched, PAGE};
+use lodestar_filter::Handle;
+use lodestar_pipeline::torrent_cache::{self, Cursor, Feed, Fetched, Gate, PAGE};
+use lodestar_sources::BoxFuture;
 use lodestar_sources_plugins::torrent_cache::{
-    Config, Lookup, Queue, Stats, TorrentCache, Verified, Why,
+    Config, Lookup, Queue, Recheck, Stats, TorrentCache, Verified, Why,
 };
 use lodestar_store::{SourceSetting, Store};
 use tokio::sync::{mpsc, watch};
@@ -98,8 +107,52 @@ impl InterestHints {
     }
 }
 
+/// The plugin's send-time check ([`Recheck`]): the pipeline's
+/// [`Gate::check`] under the filter's current rules, as one read on the
+/// cache's reader connection, on the blocking pool. A store error or a
+/// failed task sends nothing.
+pub struct StoreRecheck {
+    reader: Arc<Mutex<Store>>,
+    filter: Arc<Handle>,
+}
+
+impl StoreRecheck {
+    pub fn new(reader: Arc<Mutex<Store>>, filter: Arc<Handle>) -> StoreRecheck {
+        StoreRecheck { reader, filter }
+    }
+
+    /// The check, blocking: what [`Recheck::allows`] runs.
+    pub fn allows_now(&self, lookup: Lookup) -> bool {
+        let engine = self.filter.current();
+        let gate = Gate {
+            engine: &engine,
+            plugin: ID,
+        };
+        let store = self.reader.lock().unwrap_or_else(|e| e.into_inner());
+        matches!(gate.check(&store, lookup.key()), Ok(Ok(())))
+    }
+}
+
+impl Recheck for StoreRecheck {
+    fn allows(&self, lookup: Lookup) -> BoxFuture<'_, bool> {
+        let this = StoreRecheck {
+            reader: self.reader.clone(),
+            filter: self.filter.clone(),
+        };
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || this.allows_now(lookup))
+                .await
+                .unwrap_or(false)
+        })
+    }
+}
+
 /// What [`run`] works with.
 pub struct Wiring {
+    /// The plugin: [`run`] installs its send-time check.
+    pub plugin: Arc<TorrentCache>,
+    /// The filter, for every check's floor and blocking lists.
+    pub filter: Arc<Handle>,
     /// The pipeline's side: where verified files go.
     pub feed: Feed,
     pub verified: mpsc::Receiver<Verified>,
@@ -111,11 +164,18 @@ pub struct Wiring {
 }
 
 /// Feeds the plugin's queue and hands its verified files to the pipeline,
-/// until `stop` is set or the pipeline closes. Store reads run on the
-/// blocking pool.
+/// until `stop` is set or the pipeline closes, and installs the plugin's
+/// send-time check ([`StoreRecheck`]) on the same reader. Store reads run
+/// on the blocking pool.
 pub fn run(w: Wiring, mut stop: watch::Receiver<bool>) -> JoinHandle<()> {
+    w.plugin.set_recheck(Arc::new(StoreRecheck::new(
+        w.reader.clone(),
+        w.filter.clone(),
+    )));
     tokio::spawn(async move {
         let Wiring {
+            plugin: _,
+            filter,
             feed,
             mut verified,
             queue,
@@ -140,10 +200,11 @@ pub fn run(w: Wiring, mut stop: watch::Receiver<bool>) -> JoinHandle<()> {
                     }
                 }
                 Some(id) = interest.recv() => {
-                    let reader = reader.clone();
+                    let (reader, engine) = (reader.clone(), filter.current());
                     let found = tokio::task::spawn_blocking(move || {
                         let store = reader.lock().unwrap_or_else(|e| e.into_inner());
-                        torrent_cache::interest(&store, id)
+                        let gate = Gate { engine: &engine, plugin: ID };
+                        torrent_cache::interest(&store, &gate, id)
                     })
                     .await;
                     // A store error or an unknown id: nothing is looked up.
@@ -168,12 +229,13 @@ pub fn run(w: Wiring, mut stop: watch::Receiver<bool>) -> JoinHandle<()> {
                     if room == 0 {
                         continue;
                     }
-                    let reader = reader.clone();
+                    let (reader, engine) = (reader.clone(), filter.current());
                     let mut c = cursor;
                     let now = crate::unix_now();
                     let page = tokio::task::spawn_blocking(move || {
                         let store = reader.lock().unwrap_or_else(|e| e.into_inner());
-                        let page = c.next(&store, room.min(PAGE), now);
+                        let gate = Gate { engine: &engine, plugin: ID };
+                        let page = c.next(&store, &gate, room.min(PAGE), now);
                         (c, page)
                     })
                     .await;
@@ -217,6 +279,7 @@ pub fn stats_json(s: &Stats, c: &torrent_cache::CacheStats) -> serde_json::Value
         "missed": s.missed.load(Relaxed),
         "skipped": s.skipped.load(Relaxed),
         "dropped": s.dropped.load(Relaxed),
+        "withheld": s.withheld.load(Relaxed),
         "stored": c.stored.load(Relaxed),
         "promoted": c.promoted.load(Relaxed),
         "existing": c.existing.load(Relaxed),
@@ -313,6 +376,46 @@ mod tests {
         store.unverified(Network::Bt, &key).unwrap().unwrap().id
     }
 
+    fn filter() -> Arc<Handle> {
+        use lodestar_filter::{Core, CsList, Engine, Lists, Switches};
+        Arc::new(Handle::new(Engine::new(Core::new(
+            Lists::shipped().unwrap(),
+            CsList::default(),
+            Switches::default(),
+        ))))
+    }
+
+    /// The plugin running on `fake`, as the pipeline runs it.
+    fn running(
+        plugin: &Arc<TorrentCache>,
+        fake: Arc<Empty>,
+    ) -> (
+        watch::Sender<bool>,
+        JoinHandle<Result<(), lodestar_sources::PluginError>>,
+    ) {
+        let (stop_plugin, shutdown) = Shutdown::new();
+        let (emit, _found) = mpsc::channel(4);
+        let source = lodestar_store::SourceId::new(9).unwrap();
+        let ctx = SourceCtx {
+            source,
+            emitter: Emitter::new(source, emit),
+            peer_requests: None,
+            peer_replies: None,
+            shutdown,
+            kit: lodestar_sources::Kit::for_plugin(
+                &**plugin,
+                Arc::new(MemoryState::new()),
+                fake,
+                &UserLimits::default(),
+            ),
+        };
+        let plugin = plugin.clone();
+        (
+            stop_plugin,
+            tokio::spawn(async move { plugin.run(ctx).await }),
+        )
+    }
+
     async fn until(what: &str, mut f: impl FnMut() -> bool) {
         // Polls with a 20 s deadline (standards §2).
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
@@ -349,33 +452,21 @@ mod tests {
             stored(&mut store, "Public.Partial", flags::FILES_PARTIAL);
         // A complete torrent: a cache has nothing to add.
         let (complete, complete_key) = stored(&mut store, "Complete", 0);
+        store
+            .register_source_as(ID, "1", SourceState::Enabled, T)
+            .unwrap();
         let reader = Arc::new(Mutex::new(store));
 
         let built = build(Config::new(&["https://c.example/{hash}"]).unwrap());
         let fake = Arc::new(Empty::default());
-        let (stop_plugin, shutdown) = Shutdown::new();
-        let (emit, _found) = mpsc::channel(4);
-        let source = lodestar_store::SourceId::new(9).unwrap();
-        let ctx = SourceCtx {
-            source,
-            emitter: Emitter::new(source, emit),
-            peer_requests: None,
-            peer_replies: None,
-            shutdown,
-            kit: lodestar_sources::Kit::for_plugin(
-                &*built.plugin,
-                Arc::new(MemoryState::new()),
-                fake.clone(),
-                &UserLimits::default(),
-            ),
-        };
-        let plugin = built.plugin.clone();
-        let running = tokio::spawn(async move { plugin.run(ctx).await });
+        let (stop_plugin, running) = running(&built.plugin, fake.clone());
         let (feed, _fetched) = torrent_cache::feed();
         let (hints, interest) = InterestHints::new();
         let (stop, stopped) = watch::channel(false);
         let task = run(
             Wiring {
+                plugin: built.plugin.clone(),
+                filter: filter(),
                 feed,
                 verified: built.verified,
                 queue: built.queue,
@@ -412,6 +503,69 @@ mod tests {
         assert_eq!(fake.0.lock().unwrap().len(), 1);
         assert_eq!(built.stats.lookups.load(Ordering::Relaxed), 1);
         let _ = public_item;
+        let _ = stop.send(true);
+        task.await.unwrap();
+        let _ = stop_plugin.send(true);
+        running.await.unwrap().unwrap();
+    }
+
+    /// The runner's check for X-tcache-recheck: a key queued while it
+    /// could be sent, then put on the floor (in the store, or only in the
+    /// filter) before its turn, is never sent. Asserted at the transport:
+    /// the fake records every address the plugin's egress was asked for.
+    #[tokio::test]
+    async fn a_key_floored_after_it_is_queued_is_never_sent() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        store
+            .register_source_as(ID, "1", SourceState::Enabled, T)
+            .unwrap();
+        let (floored, listed, sent) = ([0x31; 20], [0x32; 20], [0x33; 20]);
+        for k in [floored, listed, sent] {
+            item(&mut store, k, false);
+        }
+        let reader = Arc::new(Mutex::new(store));
+        let filter = filter();
+        let built = build(Config::new(&["https://c.example/{hash}"]).unwrap());
+        // Queued while each may be sent, as the cursor or interest queues it.
+        for k in [floored, listed, sent] {
+            let l = Lookup::new(InfoHash(k), Why::Unverified, false).unwrap();
+            assert!(built.queue.push(l));
+        }
+        // Then the floor: one in the store (the item goes with it), one
+        // only in the filter's rules so far.
+        reader
+            .lock()
+            .unwrap()
+            .add_cs_hashes(&[floored], 0, T)
+            .unwrap();
+        filter.update(|c| c.cs.add_hash(listed, lodestar_filter::Origin::Confirmed));
+
+        let fake = Arc::new(Empty::default());
+        let (feed, _fetched) = torrent_cache::feed();
+        let (_hints, interest) = InterestHints::new();
+        let (stop, stopped) = watch::channel(false);
+        let (stats, plugin) = (built.stats.clone(), built.plugin.clone());
+        let task = run(
+            Wiring {
+                plugin: built.plugin.clone(),
+                filter,
+                feed,
+                verified: built.verified,
+                queue: built.queue,
+                reader,
+                interest,
+                page_every: Duration::from_secs(3600),
+            },
+            stopped,
+        );
+        let (stop_plugin, running) = running(&plugin, fake.clone());
+        until("the last key's lookup to end", || {
+            stats.missed.load(Ordering::Relaxed) == 1
+        })
+        .await;
+        let urls = fake.0.lock().unwrap().clone();
+        assert_eq!(urls, [format!("https://c.example/{}", InfoHash(sent))]);
+        assert_eq!(stats.withheld.load(Ordering::Relaxed), 2);
         let _ = stop.send(true);
         task.await.unwrap();
         let _ = stop_plugin.send(true);

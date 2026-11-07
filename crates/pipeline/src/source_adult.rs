@@ -24,7 +24,7 @@
 
 use lodestar_classify::Correction;
 use lodestar_filter::reclassify::rule_fix;
-use lodestar_filter::{Engine, Facts, Item, Verdict};
+use lodestar_filter::{Engine, Facts, Item, Trail, Verdict};
 use lodestar_store::SourceId;
 
 /// The registered sources whose manifests say `always_adult`, as a bitset
@@ -100,10 +100,24 @@ pub fn judge_maybe(
     adult: bool,
     now: i64,
 ) -> (Verdict, Option<bool>) {
+    judge_kept(engine, item, facts, adult, now, None)
+}
+
+/// [`judge_maybe`], keeping what the judgment found above the pack layer
+/// in `trail`, for the writer's second judgment of the commit
+/// ([`Engine::judge_at_commit_reusing`]).
+pub fn judge_kept(
+    engine: &Engine,
+    item: &Item<'_>,
+    facts: &Facts<'_>,
+    adult: bool,
+    now: i64,
+    trail: Option<&mut Trail>,
+) -> (Verdict, Option<bool>) {
     if adult {
-        judge(engine, item, facts, now)
+        lodestar_filter::reclassify::judge_source_adult_with(engine, item, facts, now, trail)
     } else {
-        let (v, says) = engine.judge_classified(item, Some(facts), now);
+        let (v, says) = engine.judge_classified_with(item, Some(facts), now, false, trail);
         (v, rule_fix(says, facts.class))
     }
 }

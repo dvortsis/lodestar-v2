@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc d64eb69b0737d64bd602fc5f2a2d96f69fea901a1c732a77c88d04a2b7bfb2af # shrinks to segments = [[[0]]], unbucketed = [], lo = Some(12288), hi = Some(0), piece_docs = 2097152
+cc 41cc21197478859ea7d0bcd7d43bff704b5fbaf58694a3a828ef55ef24de17b1 # shrinks to segments = [[(5, true, true), (1, false, false), (5, true, false)]], deleted = 0

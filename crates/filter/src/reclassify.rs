@@ -167,7 +167,39 @@ pub fn judge_source_adult(
     facts: &Facts<'_>,
     now: i64,
 ) -> (Verdict, Option<bool>) {
-    let (v, says) = engine.judge_classified(item, Some(facts), now);
+    judge_source_adult_with(engine, item, facts, now, None)
+}
+
+/// [`judge_source_adult`], keeping what it found above the pack layer in
+/// `trail` for the writer's second judgment
+/// ([`Engine::judge_at_commit_reusing`]). The Adult reading shares what
+/// the reading as found read ([`Engine::judge_classified_with`]).
+pub fn judge_source_adult_with(
+    engine: &Engine,
+    item: &Item<'_>,
+    facts: &Facts<'_>,
+    now: i64,
+    trail: Option<&mut crate::engine::Trail>,
+) -> (Verdict, Option<bool>) {
+    // The engine judges it as adult unless detection or an Is adult rule
+    // already did, or the floor decided, as before.
+    // (`item.content_type` is `facts.class`'s.)
+    let (v, _) = engine.judge_classified_with(item, Some(facts), now, true, trail);
+    let detected = facts.class.content_type == ContentType::Adult;
+    (v, (!detected).then_some(true))
+}
+
+/// [`judge_source_adult`] as it judged before X-commit-rejudge-reuse: the
+/// Adult reading on a torrent prepared afresh. The differential tests'
+/// oracle.
+#[doc(hidden)]
+pub fn judge_source_adult_unshared(
+    engine: &Engine,
+    item: &Item<'_>,
+    facts: &Facts<'_>,
+    now: i64,
+) -> (Verdict, Option<bool>) {
+    let (v, says) = engine.judge_classified_unshared(item, Some(facts), now);
     let detected = facts.class.content_type == ContentType::Adult;
     let fix = (!detected).then_some(true);
     // The engine judged it as adult already: detection or an Is adult

@@ -76,6 +76,8 @@ pub struct Handles {
     storage: (watch::Sender<bool>, JoinHandle<()>),
     /// The torrent cache's feeder (SRC-13b), while it's enabled.
     torrent_cache: Option<(watch::Sender<bool>, JoinHandle<()>)>,
+    /// The cluster port (WK-1), stopped before the pipeline.
+    cluster: crate::cluster::Cluster,
 }
 
 impl Services {
@@ -309,6 +311,8 @@ impl Services {
             );
         }
         let filter = pipeline_config.filter.clone();
+        // The torrent cache's checks read the same rules (X-tcache-recheck).
+        let cache_filter = filter.clone();
         let held = pipeline_config.held.clone();
         let sealer = pipeline_config.sealer.clone();
         let reenrich = pipeline_config.reenrich.clone();
@@ -318,20 +322,44 @@ impl Services {
         // setting, with its SOCKS5 credentials from the per-source store
         // (SRC-4, SRC-5). A fixture is served offline: plugins get no
         // egress, so nothing leaves the machine.
-        pipeline_config.egress = (!crate::fixture::active()).then(|| {
-            lodestar_sources::EgressFactory::new(Arc::new(
+        // Whether a source is on is read before each request on a
+        // read-only connection of its own, so a long hold of the shared
+        // store's lock can't stall plugins' requests (X-egress-state-watch).
+        pipeline_config.egress = if crate::fixture::active() {
+            None
+        } else {
+            let (db, store_config) = (config.db_path(), config.store_config());
+            let states =
+                tokio::task::spawn_blocking(move || Store::open_reader(db, store_config)).await??;
+            Some(lodestar_sources::EgressFactory::new(Arc::new(
                 lodestar_sources::consent::SourceCredentials::new(
                     control.clone(),
                     config.data_dir.clone(),
-                ),
-            ))
-        });
+                )
+                .reading_states_from(Arc::new(Mutex::new(states))),
+            )))
+        };
         // The setup hold (LEGAL-2): until someone sets the instance up,
         // no source starts (the DHT doesn't even bind), no tracker is
         // scraped and nothing is fetched. An instance with a password
         // starts as before; one without waits for `POST /setup`.
         pipeline_config.setup_done = Some(auth.watch_set_up());
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
+        // The cluster port (WK-1, §19.6, plan Q3): until "Allow workers" is
+        // on, nothing is bound and no cluster CA is opened or created. A
+        // fixture is served offline, so never there.
+        let cluster = crate::cluster::Cluster::start(crate::cluster::Wiring {
+            db: config.db_path(),
+            store: config.store_config(),
+            data_dir: config.data_dir.clone(),
+            authority: pipeline.monitor().lease_authority().clone(),
+            settings: crate::config::Cluster {
+                enabled: config.cluster.enabled && !crate::fixture::active(),
+                ..config.cluster.clone()
+            },
+            clock: Arc::new(lodestar_cluster::SystemClock),
+        })
+        .await?;
         // Fed and drained only while it's enabled at this start with a
         // cache listed: with none, it stops at "needs setup".
         let cache_feed = pipeline
@@ -384,6 +412,8 @@ impl Services {
                 let (stop, stopped) = watch::channel(false);
                 let task = crate::torrent_cache::run(
                     crate::torrent_cache::Wiring {
+                        plugin: cache.plugin.clone(),
+                        filter: cache_filter,
                         feed,
                         verified: cache.verified,
                         queue: cache.queue,
@@ -492,6 +522,7 @@ impl Services {
             filter: api.filters.as_ref().map(|f| f.engine.clone()),
             torrent_cache: cache_task.as_ref().map(|_| cache.stats.clone()),
             crawl: Some(paused_now.clone()),
+            cluster: Some(cluster.handle()),
         };
         // The live stream (§9): new torrents from the serving index's
         // commits, crawler snapshots from the status page's counters, and
@@ -590,6 +621,7 @@ impl Services {
                 updates: updates.task,
                 storage: (stop_storage, sampler),
                 torrent_cache: cache_task,
+                cluster,
             },
             listener,
             system,
@@ -761,6 +793,8 @@ impl Handles {
             let _ = stop.send(true);
             let _ = task.await;
         }
+        // No remote session outlives the pipeline's save.
+        self.cluster.shutdown().await;
         let mut store = self.pipeline.shutdown().await?;
         // A failed snapshot only costs a rebuild from SQLite at the next
         // start; the indexer still gets to stop cleanly.

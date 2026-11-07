@@ -470,6 +470,131 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     2. **A dashboard alarm,** "free slots, work ready", built by the dashboard session from `slices.yaml` `owns` against the running slices.
     3. **An hourly check to the runner** from the dashboard session until the cut. On each one, the runner launches a ready slice that fits, or replies with one line giving the reason.
 
+42. **At most four slots from 2026-11-06T00:00Z** (owner, 2026-11-04, runner chat): "Automatically change max number of slots to 4 slots at 5 MST on 11/5". Asked to confirm, the owner confirmed the cut is 2026-11-06T00:00Z and said that sessions running beyond four at the cut are let finish.
+    - **At most four slice sessions at once,** replacing §2.36's twelve (and §2.43's interim eight). `runner/slices.yaml` records it as `limits.phase_total: 4`. §2.41's standing fill rule and hourly check end at the cut.
+    - **Nothing is stopped.** Slices running at the cut finish normally, through review and merge. The runner launches nothing new until fewer than four are running.
+    - §2.36's other terms stand: filling every slot isn't required, a slot stays empty rather than overlap a running slice's `owns`, and §2.33's auto-approval and "still for the owner" list are unchanged.
+
+43. **An interim limit of eight** (owner, 2026-11-05T16:15Z): "Let's bring the slots down to 8. Complete the existing slices."
+    - **At most eight slices at once until the cut,** down from §2.36's twelve. Running slices completed; nothing new launched while eight or more were running. §2.42 supersedes it at 2026-11-06T00:00Z.
+
+44. **Keep running** (owner, 2026-11-05T23:25Z, relayed to the runner by the dashboard session): "Keep running. We have usage available."
+    - **The runner's hold on launches is lifted.** The runner had held new launches only to save the weekly usage budget, which was at its warning level until 2026-11-06T00:00Z. X-claim-store-polish launched under this decision, at 23:26Z.
+
+45. **A no-limit window until about 2026-11-06T00:15Z** (owner, 2026-11-05T23:35Z, relayed by the dashboard session): "Use as many resources as needed to get as much done in the next 30 mins as possible." Then, about 23:45Z, in the runner chat: "There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress."
+    - **For those 30 minutes, no slot limit applied** to slices or sub-agents that were useful to overall progress. The rules that keep quality stayed: disjoint `owns`, a fresh Opus review before merge, and the order of authority.
+    - **Launched in the window:** P-v07, P-v06-workers, P-v06-companions, P-m6-audit, P-v052-manifest, P-m8, P-v08, X-tcache-recheck, X-sources-low, RP-G and X-sp4-followups, plus a read-only security pre-audit of the v0.6 sources code.
+    - **They run to completion under §2.42.** No new slice launches until fewer than four are running.
+
+46. **The runner decides the planning-wave questions on performance and UX** (owner, 2026-11-06T04:26Z, relayed to the runner by the dashboard session): "Have the runner decide based on what's best for performance and UX. Provide a summary of the decisions." It answers owner-queue item 10, the planning-wave list (v0.7 Q1–Q6 and Q10(d), companions cq1–cq6, Q20 and Q21, M8 OQ1–OQ6, M6 Q6, Q8, Q10, Q13 and Q14, workers wkq1–3, v0.8 Q1, Q3 and Q4). Each question's decision and reason are in `docs/decisions/2026-11-06-runner-planning-wave-answers.md`.
+    - **Decided by the runner under this delegation,** each as the plan's own recommendation. None of them loosens an owner decision, weakens security or content safety, or changes an owner-set number:
+      - v0.7 Q5 (`owner-v07-q5`), except debrid's hash lookups, which go with Q4, and Q6 (`owner-v07-q6`);
+      - companions cq1 (`owner-cq1`), cq2 (`owner-cq2`, with the pin-time signature check flagged under §2.19) and Q20 (`owner-cq7`: no relaxation; each item CMP-G's smoke finds comes back to the owner);
+      - workers wkq3 (`owner-wkq3`; back to the owner if a worker measures over 256 MB at the owner's corpus);
+      - M8 OQ2 (`owner-m8-q2`), OQ3 (`owner-m8-q3`), OQ4 (`owner-m8-q4`) and OQ5 (it gates nothing);
+      - M6 Q10;
+      - v0.8 Q3's drafting.
+
+      Those conditions hold.
+    - **Not covered by this reply, so they stay with the owner** (CLAUDE.md: the runner doesn't loosen owner decisions, weaken security or content safety, decide a source's terms or consent, or change an owner-set number on its own). The dashboard session asks the owner to confirm each one by name:
+      - v0.7 Q1 (the Stremio addon: a URL-path token and CORS, and whether it ships at all);
+      - v0.7 Q2, Q3 and Q4 (source terms);
+      - companions cq3 (a companion under Lodestar's own account can read its secrets), cq4 (every option loosens §1.7.2's automatic installs on Windows), cq5 (revealing a generated credential), cq6 (whose third-party binaries run) and Q21 (FlareSolverr);
+      - M8 OQ1 (a self-hosted runner on a public repository) and OQ6 (disclosure and the `SECURITY.md` contact);
+      - M6 Q13 (the privileged MSI helper);
+      - workers wkq1 (it widens §19.6's list and leaves sealed names of child-safety matches on a worker's disk) and wkq2 (accepting the join token from the environment);
+      - v0.8 Q1 (Nostr and Lemmy terms) and Q4 (third-party adult claims).
+    - **v0.7 Q10(d) isn't needed yet.** Steps (a)–(c) shrink the producers first, under §2.26. If they don't bring the torrent index under 512 B, step (d) trades one owner number for another (trigrams off by default against "Regex < 500 ms"), so it comes back to the owner by name, with the measured numbers.
+    - **v0.8 Q3:** the runner drafts the per-worker consent wording. Approving the text stays with the owner, as for the Q1 consent texts, so `owner-v08-q3` stays unmet.
+    - **Still the owner's own steps:** M6 Q6 (winget, after 1.0 if wanted), Q8 (the nightly signing key, owner-queue item 5) and Q14 (the G-m6 manual installs and the release approval, `owner-m6-manual`).
+
+47. **The runner's recommendation on every question §2.46 left with the owner** (owner, 2026-11-06T05:23Z, relayed by the dashboard session): "Go with the runner's recommendation on all". The dashboard session showed each of the 16 questions with the plan's recommendation. The owner then confirmed it directly to the runner (runner chat, about 2026-11-06T05:26Z), with the security and content-safety loosenings named: "Yes, record all 16". The owner also confirmed the five largest loosenings by name, relayed by the dashboard session at about 05:27Z: "I confirm these: * The Stremio CORS rule and URL-path token. * The privileged MSI updater helper. * `LODESTAR_TOKEN` accepted from the environment on Docker and Unraid. * Sealed names kept on worker disks. * The companion running under Lodestar's own account." Each question is now decided as **the plan's recommendation in full, as its plan row gives it**: `docs/plan/2026-11-05-v07-m7.md` §6 Q1–Q4, `docs/plan/2026-11-06-v06-companions.md` §5 Q3–Q5, Q15 and Q21, `docs/plan/2026-11-06-v06-workers.md` §5 Q1–Q2, `docs/plan/2026-11-06-m8-hardening.md` §5 OQ1 and OQ6, `docs/plan/2026-11-06-m6-gap-audit.md` §5 Q13, and `docs/plan/2026-11-06-v08.md` §6 Q-o1 and Q-o4. **The plan row is the decision.** The bullets below are short summaries: they name the main safeguards, but not every one. Where a bullet and a plan row differ, or a bullet leaves something out, the plan row wins.
+    - **v0.7:**
+      - **Q1:** the Stremio addon ships, off by default.
+        - A dedicated `stremio` key scope: read-only, shown once and revocable.
+        - The token appears only in the addon's own paths (`/stremio/{token}/…`) and is redacted from logs.
+        - CORS `*` on those paths only, never with credentials.
+        - The user guide says HTTPS needs the user's own reverse proxy, and recommends LAN only.
+        - Inducement guard: the addon's catalogues and help text never suggest infringing use, and every filter and pack applies.
+      - **Q2:** private-tracker IRC announces ship off, with Account consent and `private_source`.
+        - There's no shipped definition for a tracker whose published rules forbid announce bots.
+        - The settings text and the user guide tell the user to follow their tracker's rules.
+        - `.torrent` files are fetched only on explicit interest.
+      - **Q3:** IRC-3 ships a network and channel only if its operators publish that read-only clients are fine, recorded in IRC-3's decisions file. Otherwise the user enters their own, and the text says to check the channel's rules.
+      - **Q4:** yes for the four grey enrichment services, each slice recording its terms check.
+        - AniDB: a registered client, at most 1 request every 2 s, interest-only.
+        - srrDB and PreDB: at most 1 a second, user interest first.
+        - Debrid: only for a provider that offers a cache check today and whose terms allow it, otherwise dropped from v0.7. Its hash lookups of verified public items are allowed (v0.7 Q5's exception).
+    - **Companions:**
+      - **cq3:** the same account, sandboxed. A plain warning shows where no sandbox applies. Never root or administrator.
+      - **cq4:** a guided install for qBittorrent on Windows only, as the one exception to §1.7.2's fully automatic installs.
+      - **cq5:** a credential can be revealed after the password is re-entered, as a logged event. It never appears in exports, backups or support bundles.
+      - **cq6:** every binary pinned by SHA-256 or image digest, from these sources:
+        - the userdocs static `qbittorrent-nox` builds on Linux;
+        - Prowlarr from upstream;
+        - linuxserver.io's qBittorrent and Prowlarr images over hotio's;
+        - gluetun and FlareSolverr from their own projects.
+      - **Q21:** FlareSolverr is opt-in only.
+    - **Workers:**
+      - **wkq1:** drop happens on the worker; the other actions are marked there and applied at commit. Sealed names may sit in the spool up to 1 GB or 24 h. This widens architecture §19.6's list.
+      - **wkq2:** `LODESTAR_TOKEN` is accepted only for the first join, while no credentials exist.
+        - Afterwards it's ignored, with a warning to remove it.
+        - Its value is never logged.
+        - The token is single-use, bound to a name, and expires in 15 minutes.
+    - **M8:**
+      - **OQ1:** the self-hosted bench runner, with mitigations (a)–(d).
+      - **OQ6:** GitHub private vulnerability reporting. Unfixed blocking or important details are kept in draft security advisories the owner opens, and fix PRs describe the fix without a proof of concept until the release ships. **The contact** (owner, relayed about 05:28Z): "GitHub private vulnerability reporting only. This should have been activated." So `SECURITY.md` names no email address and points to the repository's "Report a vulnerability" button. The runner checked on 2026-11-06: the repository's private vulnerability reporting is on (`GET /repos/dvortsis/lodestar-v2/private-vulnerability-reporting` returns `enabled: true`).
+    - **M6 Q13:** the privileged MSI helper with its six rules, so the PK plan's main branch stands.
+    - **v0.8:**
+      - **Q-o1:** both lists are the user's and start empty.
+        - Nostr may suggest general-purpose relays, each only after a recorded check of its published policy.
+        - Lemmy suggests nothing: the user enters their own instance and communities, and accepts that instance's terms.
+        - Relays that need auth or payment show "blocked by source".
+      - **Q-o4:** yes, narrowly (ADH-0). A third-party adult claim may only hide an item, pending local detection, and only while Show adult content is off.
+        - It never feeds CS-5 or tombstones.
+        - It never moves a title that detection reads as mainstream into Adult.
+        - It never touches a torrent another source found.
+
+    These conditions hold: `owner-v07-q1`–`q4`, `owner-cq3`, `owner-cq4`, `owner-cq5`, `owner-cq6`, `owner-cq8`, `owner-wkq1`, `owner-wkq2`, `owner-m8-q1`, `owner-m8-q6`, `owner-m6q13`, `owner-v08-q1` and `owner-v08-q4`. The owner's own steps M6 Q6, Q8 and Q14 are unchanged.
+
+48. **Legal documents are kept current with each release, and content reports never go to the maintainers** (owner, 2026-11-06, legal-notice session). After reviewing the version-3 notice against `main` (private findings can become public on a public sighting; the backup leaves out `secrets.key`; the torrent cache and the Sonarr/Radarr webhooks are built, not planned; log and restart-witness locations; the peer table's 30-minute refresh; the notice and the operator guidance disagreed on filter availability): "Tell the runner to ensure the legal documents are up to date before publishing versions."
+    - **The reporting text is the owner's** (2026-11-06): users are told not to send reports of suspected illegal content to Lodestar's maintainers, who develop the software and neither operate independently hosted instances, investigate their indexed material nor handle removal requests for them; removal requests go to the instance's operator, suspected child sexual exploitation to the NCMEC CyberTipline in the United States or the appropriate authority elsewhere, other suspected crimes to law enforcement; no suspected illegal files, screenshots, magnet links, hashes or identifying descriptions to the maintainers, and bug or security reports use harmless synthetic examples; these directions override no independently applicable legal obligation. Notice section 9 carries it.
+    - **The notice names the software it applies to** separately from its own version (the line under the version heading), and "this version" means that software.
+    - **The publisher's reading of AGPL §16 is removed** from notice section 8 (owner, 2026-11-06): the summary stays, and the licence text controls.
+    - **Runner addition (§2.19, §2.26):** before any version is tagged, the Legal Notice and the operator guidance are checked against that build and share one release baseline; a substantive change raises `NOTICE_VERSION` (the substance test is X-legal-docs', `docs/decisions/2026-11-04-X-legal-docs.md`; §2.33 covers who makes the call). The runner adds the step to the release checklist (build-plan §0). v0.5.1: the owner chose (2026-11-06, directly to the runner): "No, do the text-only rc.5 (a)". Version 2 on `release/v0.5.1` is corrected in rc.5 before the `v0.5.1` tag (the data-folder sentence, "within half an hour", the §8 reading of AGPL §16, the older section 9; slice `R-rc5-notice`). `docs/decisions/2026-11-06-X-legal-docs-r2.md` specifies a `LEGAL-3` slice that checks the notice's factual claims against the code in CI.
+
+49. **The SRC-4 consent texts are approved (Q1)** (owner, 2026-11-06T16:20Z, relayed by the dashboard session): "https://github.com/dvortsis/lodestar-v2/blob/main/docs/decisions/2026-11-02-SRC-4.md?plain=1#L79 looks good". The link is the "Draft consent texts" section. Approving them lifts a consent gate, so the runner confirmed it with the owner directly (runner chat, about 2026-11-06T16:35Z). The owner chose: "Approve, bound that sentence (Recommended)".
+    - **What's approved:** all four drafts (External, Account, Restricted and Overlay) as written in `docs/decisions/2026-11-02-SRC-4.md`, unchanged since `f3222361`, with one bounded change to the Account text. **That section is the approved text,** with this change applied:
+      - Before: "Results found through your account stay on this server: Lodestar never shares them through Torznab, Stremio, exports or public peer finding, because private trackers usually forbid it."
+      - After: "Results found only through your account stay on this server: Lodestar never shares them through Torznab, Stremio, exports or public peer finding, because private trackers usually forbid it. If a public source reports the same torrent, it's treated as public."
+      - The change matches the narrowing in Legal Notice version 3 (§2.48, #534): a private finding can become public on a public sighting.
+    - **Who uses them:** SRC-15b shows these texts verbatim, with the Account change, and its PR checks its strings against this section. Where an approved text differs in substance from an earlier draft, `consent::text_version` rises for its class, as SRC-4 sets out.
+    - **X-consent-gate-052 (#537) stays.** A source class is let through only once SRC-15b's dialog shows its approved text.
+
+    This condition holds: `owner-q1`.
+
+50. **Soak screening: find problems sooner, keep the 24 h gate** (owner, about 2026-11-07T00:30Z, relayed by the dashboard session): "I'll go with your recommendations. Let's write really good tests that are able to catch any issues if they become apparent." The answer is to the runner's shorter-soaks message, and the owner's words decide it.
+    - **What's approved:**
+      - **a pre-soak memory sweep,** about 1 h, in CI on every release candidate;
+      - **an in-run screen,** at baseline hours 3, 6 and 12, on structural counters, with thresholds frozen before each run.
+
+      Together they're slice **X-soak-screen**. A screen trip means stop and investigate. It can never pass a run.
+    - **An accelerated pre-filled-store run** comes only if those two miss something.
+    - **Unchanged:** the 24 h memory gate (CR-0, `docs/decisions/2026-10-30-CR-0-acceptance.md`) and CR-SPEC (§2.34), including its 6 h segments and at least two blocks per treatment. Nothing is loosened.
+    - **"Really good tests":** X-soak-screen's tests reproduce the r3 and r4 failures and fail loudly. They show that a clean r5-shaped run doesn't trip, and that the screen can't change a gate verdict. The full list is in its brief and decisions file.
+
+51. **The crawler experiment host is the Unraid box, with the DHT port not forwarded** (owner, about 2026-11-07T00:35Z, relayed by the dashboard session): "Unraid as host" and "Port is not forwarded".
+    - **Runner addition (§2.19): one network setup for every run,** from the comparator through CR-COMB:
+      - the DHT UDP port isn't forwarded;
+      - Lodestar's UPnP stays off (the Docker default);
+      - the router and its UPnP state don't change;
+      - the LAN and the public IP stay the same.
+
+      A change to any of these is a network change, and the runner re-runs the comparator before the next run. That is stricter than CR-SPEC rule 6.8, which asks for it only before CR-COMB. The box's addresses aren't recorded here (CR-SPEC rule 7.4).
+    - **Runner addition: what the results can claim.** Checkpoint 1 projects the rate of one node behind NAT with no port forwarding, measured beside bitmagnet on the same network. It doesn't claim what a forwarded install reaches. Forwarding is one of the options the runner puts to the owner if the projection falls short.
+    - **Runner addition: runs never overlap the soaks** on the same box (build-plan §0.7, "The owner's machines"). The runner reads the plan's "not the soak PC" as the Windows PC that ran CR-0.
+    - **Bookings:** `ext:experiment-host` still holds per booked run, from the owner's start time for that run. Naming the host doesn't make it hold.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

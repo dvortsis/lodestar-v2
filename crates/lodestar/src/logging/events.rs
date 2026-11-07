@@ -888,4 +888,32 @@ lodestar_log::catalogue! {
         message: "stopped cleanly: the queue, the DHT state and the index are saved",
         fields: {},
     }
+
+    // ── Cluster port (WK-1, §19.2, §19.6) ──
+    /// "Allow workers" is on: the cluster port is listening.
+    CLUSTER_LISTENING {
+        id: "cluster.listening",
+        component: Workers,
+        level: Info,
+        message: "Allow workers is on: the cluster port is listening",
+        fields: { address: Label },
+    }
+    /// The cluster port closed ("Allow workers" turned off, a reseal, or
+    /// shutdown). Connected workers reconnect when it opens again.
+    CLUSTER_CLOSED {
+        id: "cluster.closed",
+        component: Workers,
+        level: Info,
+        message: "The cluster port is closed",
+        fields: { reason: Label },
+    }
+    /// The cluster port couldn't open: binding it, or opening the cluster
+    /// PKI, failed. Nothing listens until the next change.
+    CLUSTER_START_FAILED {
+        id: "cluster.start_failed",
+        component: Workers,
+        level: Error,
+        message: "The cluster port couldn't open; workers can't connect",
+        fields: { step: Label, error: Error },
+    }
 }

@@ -8,10 +8,10 @@
 //! version this install applied is recorded and resolved by [`upgrade`]
 //! (RP-0, §20.6 "signed, versioned", §20.10).
 //!
-//! Not yet built, because they need data that doesn't exist yet: FK-3
-//! (pre-release fakes need a TMDB release date) and SP-4 (clones of
-//! hidden spam need a signature index of hidden items). SP-3, flooding,
-//! is judged in the writer from per-publisher rates ([`sp3`]).
+//! Not yet built, because it needs data that doesn't exist yet: FK-3
+//! (pre-release fakes need a TMDB release date). SP-3, flooding, is
+//! judged in the writer from per-publisher rates ([`sp3`]); SP-4, clones
+//! of hidden spam, from the signatures of what spam rules hid ([`sp4`]).
 //!
 //! A CSX-5 *Neutralize term* stops a word counting as evidence in the
 //! rules that read keyword lists (MW-3, MW-6, LU-2, LU-4, SC-1, SC-2, UC-1,
@@ -26,6 +26,7 @@
 pub mod manifest;
 pub mod overrides;
 pub mod sp3;
+pub mod sp4;
 pub mod unauthorised_copy;
 pub mod upgrade;
 
@@ -109,11 +110,14 @@ pub enum PackRule {
     /// Flooding: near-duplicate names from one publisher above a rate,
     /// judged in the writer ([`sp3`], RP-4). Added after RP-0.
     Sp3,
+    /// Clones of hidden spam: the payload signature of a torrent SP-2 or
+    /// SP-3 hid, judged in the writer ([`sp4`], RP-5). Added after RP-0.
+    Sp4,
 }
 
 impl PackRule {
     /// In evaluation order: the strongest action within a pack first.
-    pub const ALL: [PackRule; 22] = [
+    pub const ALL: [PackRule; 23] = [
         PackRule::Mw4,
         PackRule::Mw1,
         PackRule::Mw2,
@@ -128,6 +132,9 @@ impl PackRule {
         PackRule::Fk1,
         PackRule::Fk5,
         PackRule::Fk2,
+        // SP-4 first in its pack: on a tie it never takes a decision from
+        // a rule that matches the torrent on its own.
+        PackRule::Sp4,
         PackRule::Sp2,
         PackRule::Sp1,
         PackRule::Sp3,
@@ -170,6 +177,7 @@ impl PackRule {
             PackRule::Uc2 => "UC-2",
             PackRule::Uc3 => "UC-3",
             PackRule::Sp3 => "SP-3",
+            PackRule::Sp4 => "SP-4",
         }
     }
 
@@ -183,7 +191,7 @@ impl PackRule {
             Mw1 | Mw2 | Mw3 | Mw4 | Mw5 | Mw6 => Pack::Malware,
             Lu1 | Lu2 | Lu3 | Lu4 => Pack::Lures,
             Fk1 | Fk2 | Fk4 | Fk5 => Pack::Fakes,
-            Sp1 | Sp2 | Sp3 => Pack::Spam,
+            Sp1 | Sp2 | Sp3 | Sp4 => Pack::Spam,
             Sc1 | Sc2 => Pack::Scams,
             Uc1 | Uc2 | Uc3 => Pack::UnauthorisedCopy,
         }
@@ -194,9 +202,10 @@ impl PackRule {
         use PackRule::*;
         match self {
             Mw4 | Fk4 => Action::Drop,
-            Mw1 | Mw2 | Mw3 | Mw5 | Mw6 | Lu1 | Lu4 | Fk1 | Sp2 | Sc1 | Sc2 | Uc1 | Uc2 | Uc3 => {
-                Action::Hide
-            }
+            // SP-4's clone inherits its original's action, demote or hide
+            // ([`sp4::cap`]): hide is the most it applies.
+            Mw1 | Mw2 | Mw3 | Mw5 | Mw6 | Lu1 | Lu4 | Fk1 | Sp2 | Sp4 | Sc1 | Sc2 | Uc1 | Uc2
+            | Uc3 => Action::Hide,
             Lu2 | Lu3 | Fk5 | Sp1 | Sp3 => Action::Demote,
             Fk2 => Action::Flag,
         }
@@ -288,6 +297,15 @@ fn media(t: ContentType) -> bool {
     )
 }
 
+/// What a [`Ctx`] read from a torrent's name and files alone
+/// ([`Ctx::into_text`]).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CtxText {
+    exts: Vec<Option<Ext>>,
+    name_words: std::cell::OnceCell<Vec<String>>,
+    name_evidence: std::cell::OnceCell<Vec<String>>,
+}
+
 /// One torrent's pack inputs, computed once for all the pack rules:
 /// extensions per file, and words only for the few files rules read.
 pub struct Ctx<'a> {
@@ -303,6 +321,9 @@ pub struct Ctx<'a> {
     /// SP-3's level, from the writer's count ([`sp3`]): `None` in
     /// prepare and wherever the writer counted nothing.
     flood: Option<crate::flood::Level>,
+    /// SP-4's original, from the writer's signature set ([`sp4`]):
+    /// `None` in prepare and wherever the torrent isn't a clone.
+    clone_of: Option<crate::spam_sigs::Original>,
 }
 
 impl std::fmt::Debug for Ctx<'_> {
@@ -336,6 +357,79 @@ impl<'a> Ctx<'a> {
             name_words: std::cell::OnceCell::new(),
             name_evidence: std::cell::OnceCell::new(),
             flood: None,
+            clone_of: None,
+        }
+    }
+
+    /// [`Ctx::new`] with nothing read from the files: for SP-3 and SP-4
+    /// alone, whose every version reads only what the writer found
+    /// ([`Ctx::with_flood`], [`Ctx::with_clone`]), at commit
+    /// (`Engine::judge_at_commit_reusing`).
+    pub(crate) fn for_state(
+        item: &'a Item<'a>,
+        facts: &'a Facts<'a>,
+        neutral: &'a [String],
+    ) -> Ctx<'a> {
+        Ctx {
+            item,
+            facts,
+            neutral,
+            files: Vec::new(),
+            name_words: std::cell::OnceCell::new(),
+            name_evidence: std::cell::OnceCell::new(),
+            flood: None,
+            clone_of: None,
+        }
+    }
+
+    /// What this reading read from the name and files, for the same
+    /// torrent read again as Adult ([`Ctx::with_text`]).
+    pub(crate) fn into_text(self) -> CtxText {
+        CtxText {
+            exts: self.files.into_iter().map(|(_, e)| e).collect(),
+            name_words: self.name_words,
+            name_evidence: self.name_evidence,
+        }
+    }
+
+    /// [`Ctx::new`] for a torrent another reading read (`text`, from
+    /// [`Ctx::into_text`]): the same name and files, and the same
+    /// Neutralize entries (`neutral`), read again as Adult
+    /// (`engine::Adult`). Only the item's content type and the facts
+    /// differ, and nothing in `text` reads them.
+    pub(crate) fn with_text(
+        item: &'a Item<'a>,
+        facts: &'a Facts<'a>,
+        neutral: &'a [String],
+        text: CtxText,
+    ) -> Ctx<'a> {
+        let files: Vec<_> = item
+            .files
+            .iter()
+            .take(crate::MAX_FILES)
+            .filter(|x| !x.padding)
+            .zip(text.exts)
+            .collect();
+        debug_assert!(
+            files.len()
+                == item
+                    .files
+                    .iter()
+                    .take(crate::MAX_FILES)
+                    .filter(|x| !x.padding)
+                    .count()
+                && files.iter().all(|(f, e)| *e == ext(f)),
+            "another torrent's text"
+        );
+        Ctx {
+            item,
+            facts,
+            neutral,
+            files,
+            name_words: text.name_words,
+            name_evidence: text.name_evidence,
+            flood: None,
+            clone_of: None,
         }
     }
 
@@ -513,6 +607,7 @@ impl<'a> Ctx<'a> {
             Uc1 => self.uc1(),
             Uc3 => self.uc3(),
             Sp3 => self.sp3(),
+            Sp4 => self.sp4(),
         }
     }
 

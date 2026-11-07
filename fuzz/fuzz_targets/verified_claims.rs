@@ -223,8 +223,10 @@ fuzz_target!(|data: &[u8]| {
             Some(host),
             "a udp tracker was kept with a host other than the one judged"
         );
-        // Guarded and canonical: the guard keeps the stored form as it
-        // is, so the pipeline stores it unchanged (X-claim-store).
+        // Guarded and canonical: the guard maps the kept form to itself
+        // (X-claim-store). This target doesn't call the pipeline; the
+        // pipeline's own check that it stores such forms is the property
+        // test in `crates/pipeline/tests/claim_trackers.rs`.
         assert_eq!(
             public_tracker_url(tr).as_deref(),
             Some(tr.as_str()),

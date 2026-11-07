@@ -366,6 +366,18 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_app_stopped_cleanly_n,
 		m.settings_logging_ev_app_stopped_cleanly_h
 	],
+	'cluster.listening': [
+		m.settings_logging_ev_cluster_listening_n,
+		m.settings_logging_ev_cluster_listening_h
+	],
+	'cluster.closed': [
+		m.settings_logging_ev_cluster_closed_n,
+		m.settings_logging_ev_cluster_closed_h
+	],
+	'cluster.start_failed': [
+		m.settings_logging_ev_cluster_start_failed_n,
+		m.settings_logging_ev_cluster_start_failed_h
+	],
 	'api.internal_error': [
 		m.settings_logging_ev_api_internal_error_n,
 		m.settings_logging_ev_api_internal_error_h
@@ -764,5 +776,9 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'update.probation_failed': [
 		m.settings_logging_ev_update_probation_failed_n,
 		m.settings_logging_ev_update_probation_failed_h
+	],
+	'companions.catalogue_invalid': [
+		m.settings_logging_ev_companions_catalogue_invalid_n,
+		m.settings_logging_ev_companions_catalogue_invalid_h
 	]
 };

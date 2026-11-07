@@ -141,6 +141,15 @@ pub trait EgressCredentials: Send + Sync {
         &'a self,
         source: &'a str,
     ) -> BoxFuture<'a, Result<Option<SocksAuth>, CredentialError>>;
+
+    /// Whether `source`'s stored state is Enabled, read now. A client the
+    /// factory built refuses every request while it isn't, or while this
+    /// can't be read (X-tcache-recheck): defence in depth behind stopping
+    /// the plugin when it's switched off.
+    fn source_enabled<'a>(
+        &'a self,
+        source: &'a str,
+    ) -> BoxFuture<'a, Result<bool, CredentialError>>;
 }
 
 /// The store couldn't produce a credential. Carries nothing secret.
@@ -167,37 +176,72 @@ impl EgressCredentials for NoCredentials {
     ) -> BoxFuture<'a, Result<Option<SocksAuth>, CredentialError>> {
         Box::pin(async { Ok(None) })
     }
+
+    /// No store of source states: every source counts as enabled. Only
+    /// for tests and tools; the host's factory uses the store's
+    /// (`consent::SourceCredentials`).
+    fn source_enabled<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<bool, CredentialError>> {
+        Box::pin(async { Ok(true) })
+    }
 }
 
 /// Where a plugin may send requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints {
     policy: NetPolicy,
-    /// The hosts ([`host_key`]) the plugin may reach, each with the one
-    /// scheme it may use (`None`: http or https); `None` for any host.
-    hosts: Option<Vec<(Option<&'static str>, String)>>,
+    /// The origins the plugin may reach; `None` for any host.
+    origins: Option<Vec<Origin>>,
     /// The hosts are the manifest's own ([`Endpoints::manifest`]), not ones
     /// the user entered.
     pinned: bool,
 }
 
+/// One entry of an [`Endpoints`] list: a scheme, a host ([`host_key`]) and
+/// a port, the scheme's default when the URL names none. A request must
+/// match all three, so another service on the same host (another port)
+/// or the same host over the other scheme isn't reachable through it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Origin {
+    scheme: &'static str,
+    host: String,
+    port: u16,
+}
+
+impl Origin {
+    /// The origin of an `http`/`https` URL; `None` for any other URL.
+    fn of(url: &str) -> Option<Origin> {
+        let parsed = url::Url::parse(url).ok()?;
+        let scheme = match parsed.scheme() {
+            "http" => "http",
+            "https" => "https",
+            _ => return None,
+        };
+        Some(Origin {
+            scheme,
+            host: host_key(url)?,
+            port: parsed.port_or_known_default()?,
+        })
+    }
+}
+
 impl Endpoints {
     /// A plugin's built-in public endpoints: public addresses only, and
     /// only the `http`/`https` hosts its manifest declares (exactly, no
-    /// subdomains), each over the scheme it's declared with.
+    /// subdomains), each over the scheme it's declared with, on that
+    /// scheme's default port.
     pub fn manifest(endpoints: &[Endpoint]) -> Endpoints {
-        let hosts = endpoints
+        let origins = endpoints
             .iter()
             .filter_map(|e| {
                 let scheme = ["http", "https"]
                     .into_iter()
                     .find(|s| e.protocol.eq_ignore_ascii_case(s))?;
-                Some((Some(scheme), host_key(&format!("http://{}/", e.host))?))
+                Origin::of(&format!("{scheme}://{}/", e.host))
             })
             .collect();
         Endpoints {
             policy: NetPolicy::notification(false),
-            hosts: Some(hosts),
+            origins: Some(origins),
             pinned: true,
         }
     }
@@ -207,20 +251,24 @@ impl Endpoints {
     pub fn user_entered(policy: NetPolicy) -> Endpoints {
         Endpoints {
             policy,
-            hosts: None,
+            origins: None,
             pinned: false,
         }
     }
 
-    /// Narrows these endpoints to the given hosts.
-    pub fn only_hosts<S: AsRef<str>>(mut self, hosts: &[S]) -> Endpoints {
-        self.hosts = Some(
-            hosts
-                .iter()
-                .filter_map(|h| Some((None, host_key(&format!("http://{}/", h.as_ref()))?)))
-                .collect(),
-        );
+    /// Narrows these endpoints to the origins of the given URLs: each
+    /// one's scheme, host and port (the scheme's default when it names
+    /// none). A URL that isn't `http`/`https` adds nothing.
+    pub fn only_origins<S: AsRef<str>>(mut self, urls: &[S]) -> Endpoints {
+        self.origins = Some(urls.iter().filter_map(|u| Origin::of(u.as_ref())).collect());
         self
+    }
+
+    /// Whether a request to `url` passes these endpoints' DNS-free checks:
+    /// the guard's URL rules and the origin list. What [`PluginEgress`]
+    /// checks first; a resolved address can still be refused after.
+    pub fn permits(&self, url: &str) -> bool {
+        self.check(url).is_ok()
     }
 
     pub fn policy(&self) -> NetPolicy {
@@ -237,14 +285,11 @@ impl Endpoints {
     fn check(&self, url: &str) -> Result<(), NetError> {
         let parsed = url::Url::parse(url).map_err(|_| NetError::InvalidUrl("it doesn't parse"))?;
         net::check_url(&parsed, self.policy)?;
-        if let Some(hosts) = &self.hosts {
-            let key = host_key(url).ok_or(NetError::InvalidUrl("it has no host"))?;
-            let listed = hosts
-                .iter()
-                .any(|(scheme, host)| *host == key && scheme.is_none_or(|s| s == parsed.scheme()));
-            if !listed {
+        if let Some(origins) = &self.origins {
+            let origin = Origin::of(url).ok_or(NetError::InvalidUrl("it has no host"))?;
+            if !origins.contains(&origin) {
                 return Err(NetError::InvalidUrl(
-                    "the host isn't one of the plugin's endpoints",
+                    "the address isn't one of the plugin's endpoints",
                 ));
             }
         }
@@ -382,6 +427,10 @@ pub const MAX_REDIRECTS: usize = 5;
 /// up. This paces a plugin's retry loop while the kill switch is down
 /// (SRC-14b), which a host's back-off can't: the host isn't at fault.
 pub const DOWN_DELAY_MIN: Duration = Duration::from_secs(1);
+/// The longest a client waits for its source's stored state before each
+/// request ([`EgressCredentials::source_enabled`]); no answer in time is
+/// a refusal.
+pub const STATE_WAIT: Duration = Duration::from_secs(2);
 /// The longest a refusal waits before it comes back.
 pub const DOWN_DELAY_MAX: Duration = Duration::from_secs(30);
 
@@ -445,6 +494,7 @@ impl EgressFactory {
         let mut built =
             PluginEgress::new(plugin, egress.kind(), client, Arc::new(probe), endpoints);
         built.notice = notice(egress);
+        built.states = Some(Arc::clone(&self.credentials));
         built
     }
 
@@ -673,6 +723,9 @@ pub struct PluginEgress {
     /// Refusals before sending since the route last let a request
     /// through, for [`down_delay`].
     down_streak: AtomicU32,
+    /// Where the source's stored state is read before each request
+    /// ([`EgressCredentials::source_enabled`]); set by the factory.
+    states: Option<Arc<dyn EgressCredentials>>,
 }
 
 impl fmt::Debug for PluginEgress {
@@ -705,6 +758,7 @@ impl PluginEgress {
             notice: None,
             counters: Arc::default(),
             down_streak: Default::default(),
+            states: None,
         };
         match egress.client {
             Err(reason) => egress.publish(RouteState::Down(reason)),
@@ -814,6 +868,7 @@ impl PluginEgress {
         match self.gate().await {
             Ok(c) => {
                 self.down_streak.store(0, Ordering::Relaxed);
+                self.source_on(pace_by).await?;
                 Ok(c)
             }
             Err(reason) => {
@@ -839,6 +894,27 @@ impl PluginEgress {
                 Err(HttpError::EgressDown(reason.to_string()))
             }
         }
+    }
+
+    /// The source's stored state, after the kill switch let the request
+    /// through: a source that's off, or a state that can't be read, sends
+    /// nothing. The refusal is paced by [`DOWN_DELAY_MIN`] (or `pace_by`,
+    /// sooner), so a plugin that retries at once can't spin on the store.
+    async fn source_on(&self, pace_by: Option<Instant>) -> Result<(), HttpError> {
+        let Some(states) = &self.states else {
+            return Ok(());
+        };
+        // Bounded: this runs after the plugin's own send-time check, so a
+        // store that's slow to answer must not widen the gap between that
+        // check and the send. No answer in time sends nothing.
+        let answer = tokio::time::timeout(STATE_WAIT, states.source_enabled(&self.plugin)).await;
+        if matches!(answer, Ok(Ok(true))) {
+            return Ok(());
+        }
+        Counters::bump(&self.counters.policy_refusals);
+        let paced = Instant::now() + DOWN_DELAY_MIN;
+        tokio::time::sleep_until(pace_by.map_or(paced, |by| by.min(paced))).await;
+        Err(HttpError::NoEgress)
     }
 
     async fn send(&self, req: &Request) -> Result<Response, HttpError> {
@@ -1144,13 +1220,27 @@ impl Fetch for PluginEgress {
     }
 }
 
+/// The headers a redirect to another origin keeps: content negotiation and
+/// the body's description, none of which can carry a credential. Every
+/// other header goes (an allow list, so a credential header under a name
+/// nobody listed can't leak).
+const CROSS_ORIGIN_HEADERS: [&str; 5] = [
+    "accept",
+    "accept-language",
+    "content-type",
+    "content-length",
+    "user-agent",
+];
+
 /// Sends `req` through the plugin's [`Client`], following at most
 /// [`MAX_REDIRECTS`] redirects. Each hop is a new request: paced for its
 /// host and checked by the plugin's egress and endpoint policy like the
 /// first. 307 and 308 keep the method and body; 301, 302 and 303 become a
 /// `GET` without a body (`HEAD` stays `HEAD`). A redirect from `https` to
-/// `http` is refused, and `Authorization`, `Cookie`, `Proxy-Authorization`
-/// and `X-Api-Key` are dropped when a hop changes origin.
+/// `http` is refused, and when a hop changes origin every header the
+/// request set is dropped except `CROSS_ORIGIN_HEADERS`, so no
+/// credential (`Authorization`, `Cookie`, `X-Api-Key`, StashDB's `ApiKey`,
+/// or one a later plugin names) follows it to another party.
 pub async fn send_following<F: Fetch>(
     client: &Client<F>,
     mut req: Request,
@@ -1177,14 +1267,9 @@ pub async fn send_following<F: Fetch>(
         }
         if to.origin() != from.origin() {
             req.headers.retain(|(name, _)| {
-                ![
-                    "authorization",
-                    "cookie",
-                    "proxy-authorization",
-                    "x-api-key",
-                ]
-                .iter()
-                .any(|h| name.eq_ignore_ascii_case(h))
+                CROSS_ORIGIN_HEADERS
+                    .iter()
+                    .any(|h| name.eq_ignore_ascii_case(h))
             });
         }
         if matches!(resp.status, 301..=303) && req.method != Method::Head {

@@ -380,6 +380,18 @@ fn config_refuses_private_local_and_unscrapable_trackers() {
         https.trackers()[0].scrape_url(),
         "https://open.example:8443/scrape.php"
     );
+    // The egress admits the scrape URL's origin, port included, and no
+    // other port on the host.
+    let e = FullScrape::new(
+        https,
+        Arc::new(StaticPrivateTrackers::none()),
+        Arc::new(TokioClock::starting_at(0)),
+    )
+    .endpoints()
+    .unwrap();
+    assert!(e.permits("https://open.example:8443/scrape.php"));
+    assert!(!e.permits("https://open.example/scrape.php"));
+    assert!(!e.permits("https://open.example:8444/scrape.php"));
 
     for bad in [
         "udp://tracker.example:1337/announce",

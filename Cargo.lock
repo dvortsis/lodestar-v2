@@ -1506,6 +1506,8 @@ dependencies = [
  "lodestar-api",
  "lodestar-bench",
  "lodestar-classify",
+ "lodestar-cluster",
+ "lodestar-companions",
  "lodestar-dht",
  "lodestar-filter",
  "lodestar-integrations",
@@ -1631,6 +1633,19 @@ dependencies = [
  "tokio-tungstenite",
  "zeroize",
  "zstd",
+]
+
+[[package]]
+name = "lodestar-companions"
+version = "0.5.0"
+dependencies = [
+ "lodestar-companions",
+ "lodestar-integrations",
+ "lodestar-log",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

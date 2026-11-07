@@ -31,8 +31,10 @@ pub mod log_events;
 mod rollups;
 mod setup_hold;
 pub mod source_adult;
+pub mod stages;
 pub mod torrent_cache;
 pub mod unverified;
+pub mod wire;
 mod worker;
 mod writer;
 
@@ -42,16 +44,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use lodestar_cluster::{Claim, Claimed, RestoredLease, WorkerId};
+use lodestar_cluster::{Claim, Claimed, LeaseAuthority, RestoredLease, WorkerId};
 use lodestar_dht::node::NodeHandle;
 use lodestar_filter::{
     Core, CoreRule, CsList, Engine, Handle, HeldSet, Lists, Origin, Sealer, Switches,
 };
 use lodestar_peer_wire::FetchOptions;
-use lodestar_sources::pool::{self, PeerWireFetcher};
+use lodestar_sources::pool::PeerWireFetcher;
 use lodestar_sources::{
     Discovery, Emitter, Fetcher, FunnelCounts, Kind, Loss, Manifest, PluginError, PoolConfig,
-    PoolHandle, PoolIo, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
+    PoolHandle, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
 };
 use lodestar_store::{
     Event, FilterState, HotColumns, QueuedKey, RuleSet, SourceId, SourceState, Store, StoreConfig,
@@ -63,7 +65,8 @@ use tokio::task::JoinHandle;
 
 use crate::coordinator::Coordinator;
 use crate::health::{HealthConfig, HealthHandle};
-use crate::worker::{PrepareStage, WorkerFunnel, WorkerLeases};
+use crate::stages::{Queues, WorkerStages};
+use crate::worker::WorkerLeases;
 
 pub use control::Control;
 pub use coordinator::LeaseStats;
@@ -226,7 +229,8 @@ pub fn default_filter() -> Handle {
 
 /// What the filter is built from in the store: CS-1 entries, CS-8
 /// signatures and your switches ([`FilterState`]), packs and your rules,
-/// and your classification rules. The floor's config files and the
+/// your classification rules, and SP-4's signature rows (RP-5). The
+/// floor's config files and the
 /// subscribed lists are synced into the store and applied before this
 /// (the binary does that, at the server's start and in `lodestar import`).
 #[derive(Debug, Clone)]
@@ -234,6 +238,9 @@ pub struct StoreFilter {
     pub state: FilterState,
     pub rules: RuleSet,
     pub class_rules: Vec<(i64, String, bool)>,
+    /// SP-4's signature rows, as stored: a row that isn't text is kept as
+    /// its bytes, so it's reported as unreadable and spoils no other.
+    pub spam_sigs: Vec<lodestar_store::RawSetting>,
 }
 
 impl StoreFilter {
@@ -242,6 +249,7 @@ impl StoreFilter {
             state: store.filter_state()?,
             rules: store.rule_set()?,
             class_rules: store.class_rules()?,
+            spam_sigs: store.settings_with_prefix_raw(lodestar_filter::spam_sigs::PREFIX)?,
         })
     }
 }
@@ -276,6 +284,7 @@ pub fn load_filter(filter: &Handle, from: &StoreFilter) -> Vec<String> {
     filter.update_engine(|e| {
         let mut notes = e.load_rules(&from.rules);
         notes.extend(e.load_class_rules(&from.class_rules));
+        notes.extend(e.load_spam_sigs(&from.spam_sigs));
         notes
     })
 }
@@ -388,6 +397,7 @@ pub struct Monitor {
     intake: Arc<IntakeStats>,
     writer: Arc<WriterStats>,
     leases: Arc<LeaseStats>,
+    authority: Arc<LeaseAuthority>,
     have: Arc<Have>,
     sources: Arc<Vec<SourceEntry>>,
     stored_at_start: u64,
@@ -465,6 +475,14 @@ impl Monitor {
     /// The coordinator's in-flight leases.
     pub fn lease_stats(&self) -> &LeaseStats {
         &self.leases
+    }
+
+    /// The coordinator's one lease authority (§19.3), for the cluster
+    /// server once remote workers are allowed (`ClusterServer::with_hooks`).
+    /// The built-in worker uses it directly; nothing here opens a cluster
+    /// CA or binds a port.
+    pub fn lease_authority(&self) -> &Arc<LeaseAuthority> {
+        &self.authority
     }
 
     pub fn have(&self) -> &Have {
@@ -729,8 +747,7 @@ impl Pipeline {
         let claims_budget = Arc::new(tokio::sync::Semaphore::new(
             unverified::CLAIMS_BUDGET_KIB as usize,
         ));
-        // Small: each entry holds a whole info dictionary or prepared row.
-        let (out_tx, out_rx) = mpsc::channel(64);
+        // Small: each entry holds a whole prepared row.
         let (results_tx, results_rx) = mpsc::channel(64);
         let (queue_tx, queue_rx) = mpsc::channel(1);
         let (finish_tx, finish_rx) = oneshot::channel();
@@ -892,24 +909,28 @@ impl Pipeline {
         // Held until setup, the pool starts paused; `Control` lifts it.
         let mut pool_config = config.pool.clone();
         pool_config.paused |= setup_hold::held(config.setup_done.as_ref());
-        let (pool, pool_task) = pool::spawn(
-            pool_config,
+        // The pool, the prepare stage and the worker's funnel, built as a
+        // remote worker builds them (WK-7), on today's queues.
+        let writer_stats = Arc::new(WriterStats::default());
+        let stages = WorkerStages {
+            worker: WorkerId::LOCAL,
+            pool: pool_config,
             fetcher,
-            PoolIo {
-                discoveries: pool_rx,
-                peer_finders: finders,
-                out: out_tx,
-                funnel: Arc::new(WorkerFunnel {
-                    counts: funnel.clone(),
-                    coordinator: coordinator.clone(),
-                    leases: leases.clone(),
-                    gate: gate.clone(),
-                }),
-                shutdown: pool_shutdown,
-            },
+            peer_finders: finders,
             weights,
-            queue,
-        );
+            restore: queue,
+            preparer,
+            filter: config.filter.clone(),
+            reports: coordinator.clone(),
+            leases: leases.clone(),
+            funnel: funnel.clone(),
+            gate: gate.clone(),
+            stats: writer_stats.clone(),
+            adult,
+            queues: Queues::local(),
+        }
+        .spawn(pool_rx, pool_shutdown, results_tx);
+        let (pool, pool_task, prepare) = (stages.pool, stages.pool_task, stages.prepare);
 
         let intake_stats = Arc::new(IntakeStats::default());
         let intake = tokio::spawn(intake(
@@ -932,34 +953,17 @@ impl Pipeline {
             intake_shutdown,
         ));
 
-        let writer_stats = Arc::new(WriterStats::default());
-        let prepare = tokio::spawn(
-            PrepareStage {
-                preparer,
-                filter: config.filter.clone(),
-                coordinator: coordinator.clone(),
-                leases: leases.clone(),
-                stats: writer_stats.clone(),
-                gate: gate.clone(),
-                adult,
-                batch_max: 64,
-                batch_wait: Duration::from_millis(20),
-            }
-            .run(out_rx, results_tx),
-        );
-
-        // The built-in worker's heartbeat. It can't really go silent, but
-        // if its leases ever expired they'd come straight back to it.
+        // The built-in worker's heartbeat, and the authority's expiry tick
+        // (the built-in worker's own leases never expire).
         let heartbeat = {
             let coordinator = coordinator.clone();
-            let leases = leases.clone();
             tokio::spawn(async move {
                 loop {
                     let now = unix_now();
                     coordinator.heartbeat(WorkerId::LOCAL, now);
-                    for (key, token) in coordinator.expire_to(WorkerId::LOCAL, now) {
-                        leases.insert(key, token);
-                    }
+                    // Remote workers' expired leases wait in the authority
+                    // for the cluster server to grant them again.
+                    coordinator.expire(now);
                     tokio::time::sleep(HEARTBEAT_EVERY).await;
                 }
             })
@@ -1035,6 +1039,7 @@ impl Pipeline {
         });
         drop(cache_tx);
         let lease_stats = coordinator.stats.clone();
+        let authority = coordinator.authority().clone();
         let rollups_handle = rollups.clone();
         let writer = writer::Writer {
             store: Some(store),
@@ -1096,6 +1101,7 @@ impl Pipeline {
                 intake: intake_stats,
                 writer: writer_stats,
                 leases: lease_stats,
+                authority,
                 have,
                 sources: Arc::new(sources),
                 stored_at_start,
@@ -1295,20 +1301,7 @@ fn prepare(
     // (§18.7, §18.9): one whose consent text or endpoints changed since
     // it was acknowledged, whose credentials are gone, or that was
     // enabled some other way, is switched off before it can run.
-    let rows = store.sources()?;
-    for (r, id) in manifests.iter().zip(&ids) {
-        let enabled = rows
-            .iter()
-            .any(|row| row.id == *id && row.state == SourceState::Enabled);
-        if enabled && lodestar_sources::consent::need_in(&store, &r.manifest)?.is_some() {
-            store.set_source_state(*id, SourceState::Disabled)?;
-            lodestar_log::log_event!(
-                log_events::SOURCE_STATE_CHANGED,
-                plugin = r.manifest.id,
-                state = log_events::state(SourceState::Disabled)
-            );
-        }
-    }
+    control::switch_off_unapproved(&mut store, manifests.iter().map(|r| &r.manifest).zip(&ids))?;
     let states: HashMap<SourceId, SourceState> = store
         .sources()?
         .into_iter()
@@ -1505,10 +1498,11 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
                 io.leases.insert(d.found.key, token);
                 io.stats.to_pool.fetch_add(1, Ordering::Relaxed);
             }
-            // Leased already (in M3 always to this worker): its source is
-            // on the lease, and its peers go to the holder's pool as a
+            // Leased already, to this worker or a remote one: its source is
+            // on the lease, and its peers go to this worker's pool as a
             // reply, so the pool merges them but never admits the key
-            // again once it has left.
+            // again once it has left (relaying them to a remote holder is
+            // the intake's, WK-9).
             Claimed::Held { .. } => d.reply = true,
         }
         // Waiting here backs up into the emitters: live sources drop and

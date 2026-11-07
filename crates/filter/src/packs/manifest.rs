@@ -36,6 +36,7 @@ pub const ADDED_AFTER_RP0: &[PackRule] = &[
     PackRule::Uc2,
     PackRule::Uc3,
     PackRule::Sp3,
+    PackRule::Sp4,
 ];
 
 /// What a version changed against the one before it.
@@ -657,6 +658,8 @@ mod tests {
         ("FK-5@1 demote", 29, 8441971907697171463),
         ("FK-2@1 flag", 16, 1128617146480757237),
         ("FK-2@2 flag", 16, 1128617146480757237),
+        // Every third item of the set, those marked clones.
+        ("SP-4@1 hide", 1005, 6807693018257710652),
         ("SP-2@1 hide", 162, 11973947260632497437),
         ("SP-1@1 demote", 426, 419072724506069972),
         // Every other item of the set, those marked flooded.
@@ -713,7 +716,15 @@ mod tests {
             // SP-3 matches where the writer counted a flood: every other
             // item here, which leaves every other rule as it is.
             let flood = (i % 2 == 0).then_some(crate::flood::Level::Flag);
-            let ctx = Ctx::new(&item, &facts, &[]).with_flood(flood);
+            // SP-4 matches where the writer found a clone: every third
+            // item here.
+            let clone = (i % 3 == 0).then_some(crate::spam_sigs::Original {
+                rule: PackRule::Sp2,
+                action: Action::Hide,
+            });
+            let ctx = Ctx::new(&item, &facts, &[])
+                .with_flood(flood)
+                .with_clone(clone);
             // SC-1 ∪ SC-2 is SC-1 as it was before RP-0 split them.
             assert_eq!(
                 ctx.scam(|_| true),

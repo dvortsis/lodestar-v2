@@ -31,7 +31,7 @@ use lodestar_classify::{Classification, FileInfo};
 use lodestar_filter::{Action, Engine, Facts, Item, Sealer, Verdict};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_store::unverified::{MAX_PAGE, Network};
-use lodestar_store::{Prepared, Preparer, SourceId, Store};
+use lodestar_store::{Prepared, Preparer, SourceId, SourceState, Store};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::unverified::VERIFY_ROUND_SECS;
@@ -58,23 +58,188 @@ pub struct Cursor {
 /// One page of eligible keys.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Page {
-    /// Keys that may be looked up: never a `private_source` one.
+    /// Keys that may be looked up now ([`Gate::check`]): never a
+    /// `private_source` one.
     pub keys: Vec<InfoHash>,
-    /// Items passed over because they're `private_source`.
+    /// Items passed over because they're `private_source`, or a torrent
+    /// stored under the key is private.
     pub private: usize,
+    /// Items passed over for any other reason [`Gate::check`] gives.
+    pub withheld: usize,
+}
+
+/// Why a key isn't sent to a cache now ([`Gate::check`]). The strictest
+/// reason is the one given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Withheld {
+    /// The cache plugin's own source isn't enabled.
+    CacheOff,
+    /// On the floor's hash list, or a subscribed list that drops.
+    Blocked,
+    /// Tombstoned or quarantined.
+    Held,
+    /// Only private sources found it, or a torrent stored under it is
+    /// private (BEP 27) or `private_source` (§18.7).
+    Private,
+    /// A torrent stored under it is hidden by your filters.
+    Hidden,
+    /// The unverified item's source is disabled or purged.
+    SourceOff,
+    /// The store no longer has it: promoted, dropped or purged.
+    Gone,
+    /// Stored with its whole file list: a cache has nothing to add.
+    Complete,
+}
+
+/// The check every key passes, read from the store and the filter now:
+/// when it's queued ([`Cursor::next`], [`interest`]) and again right
+/// before it's sent (`docs/decisions/2026-11-06-X-tcache-recheck.md`).
+/// A key can join the floor, a dropping list or a tombstone, or its
+/// source can be switched off, in the hours it waits in the plugin's
+/// queue; the send-time check is what keeps it from being sent then, as
+/// ENR-1's `adult_enrich::check` does for every adult lookup.
+#[derive(Clone, Copy)]
+pub struct Gate<'a> {
+    pub engine: &'a Engine,
+    /// The cache plugin's id in the store (`sources.plugin`).
+    pub plugin: &'a str,
+}
+
+impl std::fmt::Debug for Gate<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Gate")
+            .field("plugin", &self.plugin)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Gate<'_> {
+    /// Whether `key` may be sent to a cache now. Reads only: no
+    /// transaction is open when it returns, so none is held across the
+    /// send. Every hash of a torrent stored under the key is checked,
+    /// found by either of a hybrid's hashes (`Store::find`), so an item
+    /// under one swarm hash sees a private torrent stored under the other.
+    pub fn check(
+        &self,
+        store: &Store,
+        key: InfoHash,
+    ) -> Result<Result<(), Withheld>, lodestar_store::Error> {
+        let sources = store.sources()?;
+        if !cache_on(&sources, self.plugin) {
+            return Ok(Err(Withheld::CacheOff));
+        }
+        key_check(store, self.engine, &sources, key)
+    }
+}
+
+/// Whether any of `hashes` is on the store's floor list (`cs_hashes`).
+/// `Store::held_among` reads tombstones and quarantine only, and the
+/// filter's copy of the floor can trail the store's: confirming a held
+/// hash writes the store's list, releases the hold, and only then updates
+/// the filter, in separate steps.
+fn floored(store: &Store, hashes: &[[u8; 20]]) -> Result<bool, lodestar_store::Error> {
+    let mut stmt = store
+        .connection()
+        .prepare_cached("SELECT 1 FROM cs_hashes WHERE hash = ?1")?;
+    for h in hashes {
+        if stmt.exists([&h[..]])? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn cache_on(sources: &[lodestar_store::SourceRow], plugin: &str) -> bool {
+    sources
+        .iter()
+        .any(|s| s.plugin == plugin && s.state == SourceState::Enabled)
+}
+
+/// [`Gate::check`] for one key, with the sources already read.
+fn key_check(
+    store: &Store,
+    engine: &Engine,
+    sources: &[lodestar_store::SourceRow],
+    key: InfoHash,
+) -> Result<Result<(), Withheld>, lodestar_store::Error> {
+    use lodestar_store::flags;
+    let stored = match store.find(&key)? {
+        Some(id) => match (store.torrent(id)?, store.torrent_swarm_hashes(id)?) {
+            (Some(row), Some(hashes)) => Some((row, hashes)),
+            // Deleted between the two reads: a store with nothing under
+            // the key is checked as one.
+            _ => return Ok(Err(Withheld::Gone)),
+        },
+        None => None,
+    };
+    let mut hashes = vec![key.0];
+    if let Some((_, h)) = &stored {
+        hashes.extend(h.iter().filter(|h| **h != key.0));
+    }
+    if engine.blocked_hash(&hashes).is_some() {
+        return Ok(Err(Withheld::Blocked));
+    }
+    if store.held_among(&hashes)?.into_iter().any(|h| h) || floored(store, &hashes)? {
+        return Ok(Err(Withheld::Held));
+    }
+    if let Some((row, _)) = stored {
+        if row.flags & (flags::PRIVATE_SOURCE | flags::PRIVATE) != 0 {
+            return Ok(Err(Withheld::Private));
+        }
+        // An item a private source reported under any of its hashes keeps
+        // the key private, even beside a public import (`Store::insert`
+        // leaves the item where it is), as `interest` always held.
+        for h in &hashes {
+            if store
+                .unverified(Network::Bt, h)?
+                .is_some_and(|i| i.private_source)
+            {
+                return Ok(Err(Withheld::Private));
+            }
+        }
+        if row.flags & flags::HIDDEN != 0 {
+            return Ok(Err(Withheld::Hidden));
+        }
+        if row.flags & flags::FILES_PARTIAL == 0 {
+            return Ok(Err(Withheld::Complete));
+        }
+        return Ok(Ok(()));
+    }
+    let Some(item) = store.unverified(Network::Bt, &key.0)? else {
+        return Ok(Err(Withheld::Gone));
+    };
+    if item.private_source {
+        return Ok(Err(Withheld::Private));
+    }
+    // As `Store::pending_keys_after` reads them: the item's source must
+    // be enabled or paused.
+    let live = sources.iter().any(|s| {
+        s.id == item.source && matches!(s.state, SourceState::Enabled | SourceState::Paused)
+    });
+    if !live {
+        return Ok(Err(Withheld::SourceOff));
+    }
+    Ok(Ok(()))
 }
 
 impl Cursor {
     /// The next page, at most `limit` keys (capped at [`PAGE`]). Empty
-    /// while the round is resting. Only items whose source is enabled or
-    /// paused are read (`Store::pending_keys_after`).
+    /// while the round is resting, and while the cache plugin is off (the
+    /// cursor then stays where it is). Only items whose source is enabled
+    /// or paused are read (`Store::pending_keys_after`), and each key
+    /// offered has passed [`Gate::check`].
     pub fn next(
         &mut self,
         store: &Store,
+        gate: &Gate<'_>,
         limit: usize,
         now: i64,
     ) -> Result<Page, lodestar_store::Error> {
         if now < self.resume_at {
+            return Ok(Page::default());
+        }
+        let sources = store.sources()?;
+        if !cache_on(&sources, gate.plugin) {
             return Ok(Page::default());
         }
         let rows = store.pending_keys_after(self.after, limit.clamp(1, PAGE.min(MAX_PAGE)))?;
@@ -84,7 +249,7 @@ impl Cursor {
             self.resume_at = now.saturating_add(VERIFY_ROUND_SECS);
             return Ok(Page::default());
         };
-        self.after = last.id;
+        let after = last.id;
         let mut page = Page::default();
         for row in rows {
             if row.private_source {
@@ -95,14 +260,24 @@ impl Cursor {
             if row.network != Network::Bt {
                 continue;
             }
+            let Ok(k) = <[u8; 20]>::try_from(row.key.as_slice()) else {
+                continue;
+            };
+            let key = InfoHash(k);
             // One lookup per key, however many rows hold it: each costs a
             // cache's once-a-minute slot.
-            if let Ok(k) = <[u8; 20]>::try_from(row.key.as_slice())
-                && !page.keys.contains(&InfoHash(k))
-            {
-                page.keys.push(InfoHash(k));
+            if page.keys.contains(&key) {
+                continue;
+            }
+            match key_check(store, gate.engine, &sources, key)? {
+                Ok(()) => page.keys.push(key),
+                Err(Withheld::Private) => page.private += 1,
+                Err(_) => page.withheld += 1,
             }
         }
+        // Only once the whole page was read: on a store error the cursor
+        // stays where it was.
+        self.after = after;
         Ok(page)
     }
 }
@@ -276,46 +451,51 @@ impl std::fmt::Debug for Interest {
 /// What interest in item or torrent `id` (a search hit, a detail view)
 /// may look up, from the store alone. `None` when there's nothing a cache
 /// could add, or the store doesn't know the id:
-/// - **an unverified item** gives its key, private when the item is, or
-///   when a torrent stored under the key is;
-/// - **a stored torrent** only when its file list is partial (an import),
-///   private when it's `private_source` or marked private (BEP 27);
+/// - **an unverified item** gives its key;
+/// - **a stored torrent** only when its file list is partial (an import);
 /// - anything else (a complete torrent, an unknown id, a non-BitTorrent
 ///   item) gives `None`: it isn't looked up.
-pub fn interest(store: &Store, id: i64) -> Result<Option<Interest>, lodestar_store::Error> {
+///
+/// The key then passes [`Gate::check`], as it does again before it's
+/// sent: a private key (§18.7) gives `private_source`, which the host
+/// passes to the plugin's `Lookup::new`, which refuses it; any other
+/// reason gives `None`.
+pub fn interest(
+    store: &Store,
+    gate: &Gate<'_>,
+    id: i64,
+) -> Result<Option<Interest>, lodestar_store::Error> {
     use lodestar_store::flags;
-    let private_flags = flags::PRIVATE_SOURCE | flags::PRIVATE;
-    if let Some(row) = store.torrent(id)? {
+    let key = if let Some(row) = store.torrent(id)? {
         if row.flags & flags::FILES_PARTIAL == 0 {
             return Ok(None);
         }
-        return Ok(Some(Interest {
-            key: row.info_hash,
-            private_source: row.flags & private_flags != 0,
-        }));
-    }
-    let Some(item) = store
-        .pending_keys_after(id.saturating_sub(1), 1)?
-        .into_iter()
-        .next()
-        .filter(|i| i.id == id && i.network == Network::Bt)
-    else {
-        return Ok(None);
+        row.info_hash
+    } else {
+        let Some(item) = store
+            .pending_keys_after(id.saturating_sub(1), 1)?
+            .into_iter()
+            .next()
+            .filter(|i| i.id == id && i.network == Network::Bt)
+        else {
+            return Ok(None);
+        };
+        let Ok(k) = <[u8; 20]>::try_from(item.key.as_slice()) else {
+            return Ok(None);
+        };
+        InfoHash(k)
     };
-    let Ok(k) = <[u8; 20]>::try_from(item.key.as_slice()) else {
-        return Ok(None);
-    };
-    let key = InfoHash(k);
-    let stored_private = match store.find(&key)? {
-        Some(t) => store
-            .torrent(t)?
-            .is_none_or(|t| t.flags & private_flags != 0),
-        None => false,
-    };
-    Ok(Some(Interest {
-        key,
-        private_source: item.private_source || stored_private,
-    }))
+    Ok(match gate.check(store, key)? {
+        Ok(()) => Some(Interest {
+            key,
+            private_source: false,
+        }),
+        Err(Withheld::Private) => Some(Interest {
+            key,
+            private_source: true,
+        }),
+        Err(_) => None,
+    })
 }
 
 /// A verified file from the plugin, as the host hands it to the pipeline

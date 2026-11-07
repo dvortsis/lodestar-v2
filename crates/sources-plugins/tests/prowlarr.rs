@@ -297,7 +297,8 @@ fn manifest_and_policy() {
     assert!(limits.poll_interval >= POLL);
     assert!(limits.per_host.interval >= floors::HOST_INTERVAL);
     let schema: serde_json::Value = serde_json::from_str(policy.config_schema).unwrap();
-    assert_eq!(schema["properties"]["api_key"]["writeOnly"], true);
+    // The key is a declared credential, never a setting.
+    assert!(schema["properties"].get("api_key").is_none());
     assert!(p.endpoints().is_none(), "nothing reachable before setup");
 }
 
@@ -339,8 +340,14 @@ fn endpoints_are_the_configured_host_only() {
         lodestar_sources::Endpoints::user_entered(
             lodestar_integrations::net::NetPolicy::download_client()
         )
-        .only_hosts(&["prowlarr.example"])
+        .only_origins(&["http://prowlarr.example:9696"])
     );
+    // The plugin's own requests pass; another port or scheme doesn't.
+    assert!(e.permits("http://prowlarr.example:9696/sub/api/v1/indexer"));
+    assert!(e.permits("http://prowlarr.example:9696/sub/api/v1/search?query=x"));
+    assert!(!e.permits("http://prowlarr.example:9697/sub/api/v1/indexer"));
+    assert!(!e.permits("http://prowlarr.example/sub/api/v1/indexer"));
+    assert!(!e.permits("https://prowlarr.example:9696/sub/api/v1/indexer"));
 }
 
 #[test]

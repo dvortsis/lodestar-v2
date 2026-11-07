@@ -513,6 +513,10 @@ pub struct SourceView {
     /// Its saved settings differ from the ones it was built with at this
     /// start: they apply at the next one.
     pub config_pending: bool,
+    /// Its plugin was stopped since this start, because it was turned off
+    /// or purged (X-tcache-recheck). Turned on again, it runs only from
+    /// the next start.
+    pub stopped: bool,
 }
 
 /// `HTTPS_PROXY` or `ALL_PROXY` is set while a source connects directly.
@@ -566,6 +570,97 @@ pub fn egress_warnings(
         out.push(WARN_LAN_PROXY_DNS);
     }
     out
+}
+
+/// Why enabling a source whose class needs consent is refused, as the
+/// API's message says it (X-consent-gate-052).
+pub const CONSENT_GATE_REASON: &str = "this source asks for your consent before it's turned \
+     on, and this version of Lodestar can't show you an approved consent text yet, so it stays \
+     off. It can be turned on in a later version";
+
+/// Whether this build may turn on a source of `class` through
+/// [`Control::update_source`], and keep one on at a start. Only None,
+/// which shows no consent dialog, may. Every other class is turned on
+/// through a dialog whose text the owner approves (§2.49): External,
+/// Restricted and Overlay by accepting a consent text
+/// ([`consent::needs_ack`]), Account by its credentials dialog. None of
+/// those dialogs ships in this build, so those classes stay off until one
+/// does (`docs/plan/2026-11-06-v052-feature-manifest.md` §3.4,
+/// `docs/decisions/2026-11-06-X-consent-gate-052.md`,
+/// `docs/decisions/2026-11-06-X-consent-gate-polish.md`).
+/// X-consent-gate-lift changes this function, and only for the classes
+/// whose approved dialog has shipped.
+pub const fn consent_text_approved(class: Consent) -> bool {
+    matches!(class, Consent::None)
+}
+
+/// Why a start switched a source off, as its
+/// `pipeline.source_state_changed` event's `reason`: its class's consent
+/// text isn't approved in this build ([`consent_text_approved`]).
+pub const REASON_TEXT_UNAPPROVED: &str = "consent_text_unapproved";
+/// Why a start switched a source off: its class condition no longer
+/// holds (§18.7, §18.9; [`consent::need_in`]): the consent text or
+/// endpoints changed since it was acknowledged, its credentials are gone,
+/// or it was enabled some other way.
+pub const REASON_LAPSED: &str = "consent_lapsed";
+
+/// Switches off, at a start and before anything runs, every enabled
+/// source that may not run (both start checks live here; the name is
+/// from when it held only the class check), and logs `pipeline.source_state_changed` with
+/// the reason:
+/// - [`REASON_TEXT_UNAPPROVED`]: its class's consent text isn't approved
+///   ([`consent_text_approved`]), so one turned on by a build before the
+///   gate (a nightly, or a backup restored from one) doesn't run. Its
+///   stored acknowledgement is left as it is: once the approved text
+///   ships, `consent::need_in` decides whether it covers it (blocking).
+/// - [`REASON_LAPSED`]: its class condition no longer holds
+///   ([`consent::need_in`], §18.7, §18.9).
+///
+/// The class check comes first, so a source that fails both is logged
+/// once, as unapproved.
+pub(crate) fn switch_off_unapproved<'a>(
+    store: &mut Store,
+    sources: impl IntoIterator<Item = (&'a lodestar_sources::Manifest, &'a SourceId)>,
+) -> Result<(), lodestar_store::Error> {
+    let rows = store.sources()?;
+    for (manifest, id) in sources {
+        let enabled = rows
+            .iter()
+            .any(|r| r.id == *id && r.state == SourceState::Enabled);
+        if !enabled {
+            continue;
+        }
+        let approved = consent_text_approved(manifest.consent);
+        let need = if approved {
+            consent::need_in(store, manifest)?
+        } else {
+            None
+        };
+        let Some(reason) = off_reason(approved, need) else {
+            continue;
+        };
+        store.set_source_state(*id, SourceState::Disabled)?;
+        lodestar_log::log_event!(
+            crate::log_events::SOURCE_STATE_CHANGED,
+            plugin = manifest.id,
+            state = crate::log_events::state(SourceState::Disabled),
+            reason = reason
+        );
+    }
+    Ok(())
+}
+
+/// Why a start switches off an enabled source, if it does: `approved` is
+/// [`consent_text_approved`] for its class, `need` what
+/// [`consent::need_in`] says it still needs.
+fn off_reason(approved: bool, need: Option<Need>) -> Option<&'static str> {
+    if !approved {
+        Some(REASON_TEXT_UNAPPROVED)
+    } else if need.is_some() {
+        Some(REASON_LAPSED)
+    } else {
+        None
+    }
 }
 
 /// The largest settings document `PATCH /sources/{id}` takes, in bytes.
@@ -691,6 +786,10 @@ struct State {
     /// The last intensity recorded, so a repeat writes no event.
     intensity: Intensity,
     priorities: HashMap<SourceId, Priority>,
+    /// Sources whose plugin was stopped since this start (turned off or
+    /// purged): one runs again only from the next start
+    /// ([`SourceView::stopped`]).
+    stopped: std::collections::HashSet<SourceId>,
 }
 
 struct Inner {
@@ -791,6 +890,7 @@ impl Control {
                     since,
                     intensity,
                     priorities,
+                    stopped: Default::default(),
                 }),
                 samples: Mutex::default(),
             }),
@@ -1051,7 +1151,10 @@ impl Control {
                 .collect::<Result<HashMap<_, _>, Error>>()?;
             (store.sources()?, store.cohorts(hour - 23, hour + 1)?, gates)
         };
-        let priorities = self.state().priorities.clone();
+        let (priorities, stopped) = {
+            let state = self.state();
+            (state.priorities.clone(), state.stopped.clone())
+        };
         let started_at = self.inner.monitor.started_at();
         let proxy_env = crate::egress::proxy_env_set();
         Ok(statuses
@@ -1100,6 +1203,7 @@ impl Control {
                     egress_warnings,
                     purge_pending,
                     config_pending,
+                    stopped: stopped.contains(&status.id),
                     status,
                 }
             })
@@ -1107,8 +1211,9 @@ impl Control {
     }
 
     /// Enables or disables a source and sets its priority. The priority
-    /// applies at once; whether the source runs changes at the next
-    /// start. Enabling checks the source's class condition (§18.7,
+    /// applies at once. Disabling stops its plugin at once
+    /// ([`stop_disabled`](Self::stop_disabled)); enabling it takes effect
+    /// at the next start. Enabling checks the source's class condition (§18.7,
     /// [`consent::need`]) against the store under the store's lock, and
     /// writes a new acknowledgement and the state in one transaction:
     /// - External, Restricted and Overlay need `change.consent` and
@@ -1117,6 +1222,12 @@ impl Control {
     ///   and Overlay also need `change.password_confirmed`, every time
     ///   they're enabled.
     /// - Account needs credentials stored ([`Control::update_credentials`]).
+    ///
+    /// Until a class's consent text is owner-approved
+    /// ([`consent_text_approved`]), enabling a source of that class is
+    /// refused before anything else is checked, credentials included, as
+    /// an invalid `enabled` naming [`CONSENT_GATE_REASON`]: today every
+    /// class but None, so only None sources can be turned on.
     pub async fn update_source(
         &self,
         id: SourceId,
@@ -1147,7 +1258,8 @@ impl Control {
             ),
         };
         let this = self.clone();
-        tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Handle::current();
+        let disabled = tokio::task::spawn_blocking(move || {
             let mut store = this.inner.store.lock().expect("store lock");
             let current = store
                 .sources()?
@@ -1157,6 +1269,16 @@ impl Control {
             let mut ack = None;
             let state = match change.enabled {
                 Some(true) if current != SourceState::Enabled => {
+                    // No consent text is owner-approved yet: a source of
+                    // any class but None is refused, with or without a
+                    // stored acknowledgement or credentials
+                    // (X-consent-gate-052, X-consent-gate-polish).
+                    if !consent_text_approved(manifest.consent) {
+                        return Err(SourceError::Invalid {
+                            field: "enabled",
+                            reason: CONSENT_GATE_REASON.into(),
+                        });
+                    }
                     // A purge under way finishes first (SRC-14b).
                     if store.source_purge_started(manifest.id)?.is_some() {
                         return Err(SourceError::Invalid {
@@ -1230,10 +1352,17 @@ impl Control {
                     state = crate::log_events::state(state)
                 );
             }
-            Ok::<_, SourceError>(())
+            // Spawned here, right after the commit, so the stop runs even
+            // if the caller goes away while this waits.
+            Ok::<_, SourceError>(
+                (state == Some(SourceState::Disabled)).then(|| this.stop_disabled(&rt, id)),
+            )
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;
+        if let Some(stop) = disabled {
+            let _ = stop.await;
+        }
         if let Some(p) = priority {
             self.state().priorities.insert(id, p);
             self.inner.monitor.pool().set_weight(id, p.weight()).await;
@@ -1260,7 +1389,8 @@ impl Control {
         }
         let this = self.clone();
         let sealer = sealer.clone();
-        tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Handle::current();
+        let disabled = tokio::task::spawn_blocking(move || {
             // Sealed before the store's lock is taken: it may create the
             // key file.
             let mut set = Vec::new();
@@ -1312,11 +1442,41 @@ impl Control {
                     state = crate::log_events::state(state)
                 );
             }
-            Ok::<_, SourceError>(())
+            // As in `update_source`: spawned right after the commit.
+            Ok::<_, SourceError>(lapses.then(|| this.stop_disabled(&rt, id)))
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))??;
+        if let Some(stop) = disabled {
+            let _ = stop.await;
+        }
         self.view(id).await
+    }
+
+    /// Stops source `id`'s plugin now that it's Disabled, as
+    /// [`begin_purge`](Self::begin_purge) does but with no purge
+    /// (X-tcache-recheck): its stop, up to the plugin stop timeout, then
+    /// an abort, and its keys dropped from the fetch pool. The store
+    /// already says Disabled, so a key it emits meanwhile isn't written
+    /// (SRC-14b). Enabling it again isn't blocked by this: it runs from
+    /// the next start, as every enable does.
+    ///
+    /// Spawned on `rt`, not awaited in place, so a dropped request can't
+    /// leave a Disabled source running. Called from the blocking pool
+    /// right after the write commits.
+    fn stop_disabled(
+        &self,
+        rt: &tokio::runtime::Handle,
+        id: SourceId,
+    ) -> tokio::task::JoinHandle<usize> {
+        let this = self.clone();
+        rt.spawn(async move { this.stop_now(id).await })
+    }
+
+    /// Stops `id`'s plugin and remembers it stopped, for the view.
+    async fn stop_now(&self, id: SourceId) -> usize {
+        self.state().stopped.insert(id);
+        self.inner.monitor.stop_source(id).await
     }
 
     /// Starts purging source `id` (§18.1, SRC-14b), or starts it over: the
@@ -1348,7 +1508,7 @@ impl Control {
             plugin = manifest.id,
             state = crate::log_events::state(SourceState::Disabled)
         );
-        Ok(self.inner.monitor.stop_source(id).await as u64)
+        Ok(self.stop_now(id).await as u64)
     }
 
     /// One step of the purge: at most `MAX_PURGE_STEP` rows, in one
@@ -1544,6 +1704,49 @@ mod tests {
                 routing_nodes,
             }),
         }
+    }
+
+    #[test]
+    fn only_a_class_with_no_consent_dialog_can_be_turned_on() {
+        for (class, allowed) in [
+            (Consent::None, true),
+            // Its credentials dialog isn't approved text yet (§2.49).
+            (Consent::Account, false),
+            (Consent::External, false),
+            (Consent::Restricted, false),
+            (Consent::Overlay, false),
+        ] {
+            assert_eq!(consent_text_approved(class), allowed, "{class:?}");
+            // Every class that's refused is one with a dialog to show.
+            assert_eq!(
+                !allowed,
+                consent::needs_ack(class) || consent::needs_credentials(class),
+                "{class:?}"
+            );
+        }
+        // The message names no address and no version.
+        assert!(!CONSENT_GATE_REASON.contains("://"));
+        assert!(!CONSENT_GATE_REASON.ends_with('.'), "the API adds the stop");
+    }
+
+    #[test]
+    fn a_start_names_why_it_switches_a_source_off() {
+        // The class check comes first: an unapproved class is logged as
+        // that, whatever else it lacks.
+        for need in [
+            None,
+            Some(Need::Credentials),
+            Some(Need::Endpoints),
+            Some(Need::Consent),
+        ] {
+            assert_eq!(off_reason(false, need), Some("consent_text_unapproved"));
+        }
+        for need in [Need::Credentials, Need::Endpoints, Need::Consent] {
+            assert_eq!(off_reason(true, Some(need)), Some("consent_lapsed"));
+        }
+        assert_eq!(off_reason(true, None), None, "it stays on");
+        assert_eq!(REASON_TEXT_UNAPPROVED, "consent_text_unapproved");
+        assert_eq!(REASON_LAPSED, "consent_lapsed");
     }
 
     #[test]

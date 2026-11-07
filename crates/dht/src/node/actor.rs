@@ -20,6 +20,7 @@ use super::prefixes::Prefixes;
 use super::proof::Proof;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
+use super::shard::Shard;
 use super::stream::{LookupEnd, SessionAdmit, Stream};
 use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
@@ -451,8 +452,11 @@ struct Actor {
     proof: Proof,
     /// CR-1a-H: `None` unless `dht.responder_hints` is on.
     hints: Option<Hints>,
-    /// CR-1b: `None` unless `dht.target_prefixes` is on.
+    /// CR-1b: `None` unless `dht.target_prefixes` is on or a sub-range
+    /// shard narrows it (WK-4).
     prefixes: Option<Prefixes>,
+    /// WK-4: the keyspace shard, `None` for no shard or the full one.
+    shard: Option<Shard>,
 }
 
 pub(crate) async fn run(
@@ -539,8 +543,17 @@ async fn recv_second(
 }
 
 /// Saved ids if they still suit the saved external address, else random
-/// ones until the network tells us our address.
-fn initial_ids(cfg: &Config, saved: Option<&State>, rng: &mut StdRng) -> Vec<NodeId> {
+/// ones until the network tells us our address. A sub-range shard has its
+/// own rules ([`sharded_ids`]).
+fn initial_ids(
+    cfg: &Config,
+    shard: Option<&Shard>,
+    saved: Option<&State>,
+    rng: &mut StdRng,
+) -> Vec<NodeId> {
+    if let Some(shard) = shard {
+        return sharded_ids(cfg, shard, saved, rng);
+    }
     let want = cfg.virtual_ids.clamp(1, 64);
     if let Some(s) = saved {
         let valid = s
@@ -559,6 +572,53 @@ fn initial_ids(cfg: &Config, saved: Option<&State>, rng: &mut StdRng) -> Vec<Nod
         }
     }
     (0..want).map(|_| NodeId(rng.random())).collect()
+}
+
+/// WK-4: a sub-range shard's starting ids, at most one per slot. With a
+/// saved public address, the saved ids are kept only if the first `want`
+/// are all valid for it and in the shard's slots; otherwise all are
+/// regenerated in the shard's slots. Without one (none saved, or an
+/// exempt one), ids aren't BEP 42 yet: the saved ones are kept, as
+/// [`initial_ids`] does, and the vote for our address re-ids in the shard
+/// ([`Actor::on_external_ip`]).
+fn sharded_ids(
+    cfg: &Config,
+    shard: &Shard,
+    saved: Option<&State>,
+    rng: &mut StdRng,
+) -> Vec<NodeId> {
+    let want = shard.id_cap(cfg.virtual_ids.clamp(1, 64));
+    let Some(s) = saved.filter(|s| !s.ids.is_empty()) else {
+        return (0..want).map(|_| NodeId(rng.random())).collect();
+    };
+    match s.external_ip.filter(|ip| !secure_id::is_exempt(ip)) {
+        Some(ip) => {
+            let first = s.ids.get(..want).unwrap_or_default();
+            // Valid, in the shard, and one per slot (a hand-edited or
+            // corrupt state file could repeat one).
+            let mut used = 0u8;
+            let keep = first.len() == want
+                && first.iter().all(|id| {
+                    let bit = 1 << secure_id::slot(id);
+                    let fresh = used & bit == 0;
+                    used |= bit;
+                    fresh && secure_id::is_valid(id, &ip) && shard.has_slot(secure_id::slot(id))
+                });
+            if keep {
+                first.to_vec()
+            } else {
+                secure_id::virtual_ids_in(&ip, shard.id_slots(), want, rng)
+            }
+        }
+        None => {
+            let mut ids = s.ids.clone();
+            ids.truncate(want);
+            while ids.len() < want {
+                ids.push(NodeId(rng.random()));
+            }
+            ids
+        }
+    }
 }
 
 async fn resolve(hosts: &[String]) -> Vec<SocketAddr> {
@@ -593,7 +653,9 @@ impl Actor {
         now: Instant,
         mut rng: StdRng,
     ) -> Self {
-        let ids = initial_ids(&cfg, saved, &mut rng);
+        // WK-4: the full shard is no shard, byte for byte.
+        let shard = cfg.shard.filter(|s| !s.is_full());
+        let ids = initial_ids(&cfg, shard.as_ref(), saved, &mut rng);
         let family_count = local_addrs.len();
         let families = local_addrs
             .iter()
@@ -653,7 +715,13 @@ impl Actor {
             unsolicited_from: UnsolicitedFrom::default(),
             paused: cfg.paused,
             hints: cfg.responder_hints.then(Hints::default),
-            prefixes: cfg.target_prefixes.then(|| Prefixes::new(family_count)),
+            // A shard narrower than the 256 prefixes walks its range
+            // whatever the switch says; otherwise the switch decides.
+            prefixes: match shard.as_ref().map(Shard::prefixes) {
+                Some(r) if r != (0..256) => Some(Prefixes::in_range(family_count, r)),
+                _ => cfg.target_prefixes.then(|| Prefixes::new(family_count)),
+            },
+            shard,
             proof: Proof::new(
                 cfg.state_path.as_deref(),
                 cfg.restart.as_ref(),
@@ -1497,12 +1565,19 @@ impl Actor {
         let Some(ip) = self.external.vote(reporter, reported) else {
             return;
         };
-        if secure_id::is_exempt(&ip) || self.ids.iter().all(|id| secure_id::is_valid(id, &ip)) {
+        let fits = |id: &NodeId| {
+            secure_id::is_valid(id, &ip)
+                && self.shard.is_none_or(|s| s.has_slot(secure_id::slot(id)))
+        };
+        if secure_id::is_exempt(&ip) || self.ids.iter().all(fits) {
             return;
         }
-        // Our address changed: take BEP 42 ids for it and rebuild the tables
-        // around the new primary id.
-        self.ids = secure_id::virtual_ids(&ip, self.ids.len(), &mut self.rng);
+        // Our address changed: take BEP 42 ids for it (in the shard's
+        // slots, WK-4) and rebuild the tables around the new primary id.
+        self.ids = match self.shard {
+            None => secure_id::virtual_ids(&ip, self.ids.len(), &mut self.rng),
+            Some(s) => secure_id::virtual_ids_in(&ip, s.id_slots(), self.ids.len(), &mut self.rng),
+        };
         let now = self.now_secs();
         for f in &mut self.families {
             let old = std::mem::replace(&mut f.table, RoutingTable::new(self.ids[0], f.ipv6));
@@ -3799,3 +3874,7 @@ mod stream_tests;
 #[cfg(test)]
 #[path = "prefix_tests.rs"]
 mod prefix_tests;
+
+#[cfg(test)]
+#[path = "shard_tests.rs"]
+mod shard_tests;

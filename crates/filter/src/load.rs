@@ -400,6 +400,36 @@ impl Engine {
         self.unreadable = keep;
     }
 
+    /// Loads SP-4's signature set (RP-5) from its `settings` rows
+    /// ([`crate::spam_sigs::PREFIX`]), at start. The set is shared by every
+    /// version of the engine, so a rule reload doesn't load it again. A
+    /// row that doesn't read loses only its own signatures; it's kept as
+    /// it is and listed ([`Engine::spam_sig_labels`]) for `filter.stand_ins`
+    /// and the Filters & Safety notice. A row dropped because memory can't
+    /// hold that many rows (never, in practice) loses its signatures as the
+    /// cap drops the oldest. Returns a note for each.
+    pub fn load_spam_sigs(&self, rows: &[lodestar_store::RawSetting]) -> Vec<String> {
+        let loaded = self.spam_sigs.load(rows);
+        loaded
+            .lost
+            .iter()
+            .map(|n| format!("SP-4 signature row {n} skipped: unreadable"))
+            .chain(loaded.dropped.iter().map(|n| {
+                format!(
+                    "SP-4 signature row {n} dropped: {}",
+                    crate::spam_sigs::ROWS_FULL
+                )
+            }))
+            .collect()
+    }
+
+    /// The `filter.stand_ins` labels of SP-4's rows that didn't read
+    /// (`packs.sp4.row.<n>`): their signatures are lost, so clones of
+    /// what they held pass.
+    pub fn spam_sig_labels(&self) -> Vec<String> {
+        self.spam_sigs.labels()
+    }
+
     /// Loads the classification rules (`(id, query, adult)` rows, oldest
     /// first). Returns notes about rows that couldn't be read.
     ///

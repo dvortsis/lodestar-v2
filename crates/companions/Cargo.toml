@@ -1,0 +1,29 @@
+[package]
+name = "lodestar-companions"
+description = "Companion manager core: the closed input types templates use, the adapter traits and, from CMP-0, the compiled-in companion catalogue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[features]
+# Lets tests and later crates' dev-dependencies load a catalogue other than
+# the compiled-in one (`Catalogue::from_json`). Never enabled by a shipped
+# build: a release reads only `data/catalogue.json`.
+testing = []
+
+[dependencies]
+lodestar-integrations.workspace = true
+lodestar-log.workspace = true
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[dev-dependencies]
+lodestar-companions = { path = ".", features = ["testing"] }
+proptest = "=1.11.0"
+tokio = { version = "=1.54.0", features = ["rt", "macros"] }
+
+[lints]
+workspace = true

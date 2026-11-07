@@ -34,6 +34,13 @@
 //!   the trackers' rules forbid.
 //! - **Only user-interest and unverified items** are looked up ([`Why`]):
 //!   never the crawl's own keys, which BEP 9 fetches anyway.
+//! - **Checked again right before each request** ([`Recheck`],
+//!   X-tcache-recheck): a key can wait hours in the [`Queue`], and in that
+//!   time join the floor, a dropping list or a tombstone, or its source
+//!   can be switched off. The host's check reads the store and the filter
+//!   just before the request is built, after the plugin has waited out
+//!   the cache's poll interval itself, so the check isn't followed by
+//!   another wait. With no check installed nothing is sent (fail closed).
 //!
 //! **Politeness and caps.** Every request goes through `ctx.kit.http`
 //! (SRC-5's egress, narrowed to the listed hosts on public addresses by
@@ -60,6 +67,7 @@
 //! `private_source` taken from the store, and takes each [`Verified`]'s
 //! raw info dict to the pipeline's judge.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -186,7 +194,7 @@ pub struct Cache {
     /// The template after it.
     tail: String,
     upper: bool,
-    /// The limiter's, the poll unit's and the egress host list's key.
+    /// The limiter's and the poll unit's key.
     host: String,
     /// The template as entered, trimmed: what's saved, what the consent
     /// dialog shows and what an acknowledgement covers
@@ -517,6 +525,18 @@ pub struct Stats {
     pub skipped: AtomicU64,
     /// Lookups dropped because their lane was full.
     pub dropped: AtomicU64,
+    /// Lookups the host's check ([`Recheck`]) refused right before a
+    /// request: nothing was sent for them.
+    pub withheld: AtomicU64,
+}
+
+/// The host's check, run right before each request is built: whether
+/// `lookup`'s key may still be sent, read from the store and the filter
+/// now (held, on the floor or a blocking list, hidden, private, or its
+/// source switched off: `lodestar_pipeline::torrent_cache::Gate`). Any
+/// answer but `true`, a store error included, sends nothing.
+pub trait Recheck: Send + Sync {
+    fn allows(&self, lookup: Lookup) -> BoxFuture<'_, bool>;
 }
 
 /// A cached `.torrent` whose info dict hashes to its lookup's key. Made
@@ -670,6 +690,10 @@ pub enum Miss {
     Failed,
     /// The plugin's egress is down: no cache can be asked.
     EgressDown,
+    /// The host's check refused the key right before the request
+    /// ([`Recheck`]), or no check is installed: nothing was sent, and no
+    /// other cache is asked.
+    Withheld,
 }
 
 /// The torrent-cache plugin.
@@ -680,6 +704,12 @@ pub struct TorrentCache {
     lanes: Arc<Mutex<Lanes>>,
     out: mpsc::Sender<Verified>,
     stats: Arc<Stats>,
+    /// The host's send-time check; until it's installed nothing is sent.
+    recheck: std::sync::OnceLock<Arc<dyn Recheck>>,
+    /// When each cache's host may next be polled, as the plugin paced it:
+    /// waited out before the check, so the kit's own poll gate doesn't
+    /// add a wait between the check and the request.
+    next_poll: std::sync::Mutex<HashMap<String, tokio::time::Instant>>,
 }
 
 impl std::fmt::Debug for TorrentCache {
@@ -717,8 +747,17 @@ impl TorrentCache {
             })),
             out,
             stats,
+            recheck: std::sync::OnceLock::new(),
+            next_poll: std::sync::Mutex::new(HashMap::new()),
         };
         (plugin, queue, verified)
+    }
+
+    /// Installs the host's send-time check. Once only: `false` if one
+    /// was already installed (the first stays). Until one is, every
+    /// lookup is withheld.
+    pub fn set_recheck(&self, recheck: Arc<dyn Recheck>) -> bool {
+        self.recheck.set(recheck).is_ok()
     }
 
     pub fn stats(&self) -> &Stats {
@@ -735,14 +774,19 @@ impl TorrentCache {
     }
 
     /// Where the plugin's egress may send requests (SRC-5): the listed
-    /// caches' hosts, on public addresses only. `None` while the list is
+    /// caches' origins (scheme, host and port), on public addresses only. `None` while the list is
     /// empty, so nothing may be reached.
     pub fn endpoints(&self) -> Option<Endpoints> {
         if self.config.caches.is_empty() {
             return None;
         }
-        let hosts: Vec<&str> = self.config.caches.iter().map(|c| c.host.as_str()).collect();
-        Some(Endpoints::user_entered(NetPolicy::notification(false)).only_hosts(&hosts))
+        let urls: Vec<&str> = self
+            .config
+            .caches
+            .iter()
+            .map(|c| c.same.0.as_str())
+            .collect();
+        Some(Endpoints::user_entered(NetPolicy::notification(false)).only_origins(&urls))
     }
 
     /// The request for `lookup` at `cache`. It takes a [`Lookup`], so it
@@ -770,7 +814,7 @@ impl TorrentCache {
             }
             match self.ask(http, cache, lookup).await {
                 Ok(v) => return Ok(v),
-                Err(Miss::EgressDown) => return Err(Miss::EgressDown),
+                Err(m @ (Miss::EgressDown | Miss::Withheld)) => return Err(m),
                 Err(m) => last = m,
             }
         }
@@ -778,13 +822,44 @@ impl TorrentCache {
     }
 
     async fn ask(&self, http: &Client, cache: &Cache, lookup: &Lookup) -> Result<Verified, Miss> {
+        // The cache's poll interval, waited out here rather than in the
+        // kit's poll gate, so the check below is the last thing before
+        // the request.
+        let due = self
+            .next_poll
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&cache.host)
+            .copied();
+        if let Some(due) = due {
+            tokio::time::sleep_until(due).await;
+        }
+        let allowed = match self.recheck.get() {
+            Some(r) => r.allows(*lookup).await,
+            None => false,
+        };
+        if !allowed {
+            self.stats.withheld.fetch_add(1, Ordering::Relaxed);
+            return Err(Miss::Withheld);
+        }
+        {
+            let mut next = self.next_poll.lock().unwrap_or_else(|e| e.into_inner());
+            // At most one entry per listed cache.
+            if next.len() > MAX_CACHES {
+                next.clear();
+            }
+            next.insert(
+                cache.host.clone(),
+                tokio::time::Instant::now() + http.limiter().limits().poll_interval,
+            );
+        }
         let req = TorrentCache::request(cache, lookup);
         let fail = |m: Miss| {
             let c = match m {
                 Miss::Mismatch => &self.stats.mismatched,
                 Miss::Invalid => &self.stats.invalid,
                 Miss::Failed | Miss::EgressDown => &self.stats.failed,
-                Miss::NotFound => return m,
+                Miss::NotFound | Miss::Withheld => return m,
             };
             c.fetch_add(1, Ordering::Relaxed);
             m
@@ -927,7 +1002,7 @@ impl SourcePlugin for TorrentCache {
         &POLICY
     }
 
-    /// The listed caches' hosts, public addresses only; `None` while the
+    /// The listed caches' origins, public addresses only; `None` while the
     /// list is empty, so nothing is reachable.
     fn endpoints(&self) -> Option<Endpoints> {
         TorrentCache::endpoints(self)

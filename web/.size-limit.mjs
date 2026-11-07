@@ -488,6 +488,14 @@ const filtersLater = [
 	/features\/filters\/screens\/packs\/PackImpact\.svelte$/
 ];
 const filtersBody = /features\/filters\/screens\/FiltersScreen\.svelte$/;
+// Sources' consent and purge dialogs (SRC-15b) load on first use. They share modules with the
+// screen, which the bundler keeps in the screen's chunk, so their import of it is of code already
+// loaded.
+const sourcesLater = [
+	/features\/sources\/(?:Consent|Purge)Dialog\.svelte$/,
+	/features\/sources\/dialogs-root\.ts$/
+];
+const sourcesBody = /features\/sources\/SourcesScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
 		.filter(
@@ -501,6 +509,7 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 		// The same for Updates' parts: they load from its body, whose chunk holds what they share.
 		.filter((key) => !(settingsUpdatesParts.some((re) => re.test(from)) && updatesBody.test(key)))
 		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
+		.filter((key) => !(sourcesLater.some((re) => re.test(from)) && sourcesBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
 );
 if (staticHits.length)
@@ -569,7 +578,9 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsBodyInteractions,
 					...appearanceLater,
 					// Filters' own dialogs and queue stop only Filters' first view.
-					...(/FiltersScreen\.svelte$/.test(key) ? [...filtersDialogs, ...filtersLater] : [])
+					...(/FiltersScreen\.svelte$/.test(key) ? [...filtersDialogs, ...filtersLater] : []),
+					// Sources' dialogs stop only Sources' first view.
+					...(/SourcesScreen\.svelte$/.test(key) ? sourcesLater : [])
 				],
 				false,
 				settingsShellView
@@ -764,6 +775,11 @@ const filtersPackPanelsLazy = filtersLazy({
 	name: 'Filters pack panels (on demand)',
 	keys: [filtersLater[3]],
 	stop: [...filtersDialogs, filtersLater[4]]
+});
+const sourcesDialogsLazy = filtersLazy({
+	name: 'Sources dialogs (on demand)',
+	keys: sourcesLater,
+	stop: []
 });
 const filtersPackImpactLazy = filtersLazy({
 	name: 'Filters pack impact (on demand)',
@@ -1240,6 +1256,8 @@ export default [
 	// and events clients (measured 31.08 KB). X-settings-trim brought NotificationsScreen (44.99 KB
 	// measured) back under the §10.1 45 KB route cap, so it has the default limit again.
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
+	// SRC-15b: the Sources first view measured 30.54 KB (was 29.97 KB: the dialogs' loader, their state
+	// and the purge button), limit = measured + ~1.2%; the dialogs load on demand, 36.2 KB, limit 37 KB.
 	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
@@ -1252,7 +1270,7 @@ export default [
 					: name === 'BlocklistsScreen'
 						? '30.4 KB'
 						: name === 'SourcesScreen'
-							? '30 KB'
+							? '30.9 KB'
 							: '45 KB'
 		)
 	),
@@ -1269,6 +1287,7 @@ export default [
 	entry('Filters packs list (on demand)', filtersPacksLazy, '1.85 KB'), // measured 1.27 KB + ~25% for later packs; RP-6: +0.38 KB for the mount of the pack panels (measured 1.68 KB; 1.79 KB with the {:catch})
 	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '9 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
+	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '37 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.

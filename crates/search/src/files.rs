@@ -30,7 +30,7 @@ use tantivy::index::SegmentId;
 use tantivy::postings::SegmentPostings;
 use tantivy::query::{
     AllQuery, BitSetDocSet, BooleanQuery, ConstScorer, EmptyQuery, EnableScoring, Explanation,
-    FuzzyTermQuery, Occur, Query, RangeQuery, RegexQuery, Scorer, TermQuery, Weight,
+    FuzzyTermQuery, Occur, Query, RangeQuery, RegexQuery, Scorer, TermQuery, TermSetQuery, Weight,
 };
 use tantivy::schema::{
     BytesOptions, FAST, Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing,
@@ -289,16 +289,71 @@ pub fn covered_buckets(tree: &FileTree) -> (Vec<u64>, Vec<String>) {
     (buckets, pairs)
 }
 
+/// The smallest sizes of the torrent's size codes, sorted and distinct:
+/// [`size_bucket`]'s floors (each power of two and one and a half times
+/// it, so a binary bound such as `size:>1GB` falls on one), and 5, 10,
+/// 20, 50, 100, 200 and 500 of each binary unit (B, KB, MB, GB, TB, PB,
+/// EB), so a decimal-looking bound such as `size:>100MB` (100 × 2^20)
+/// falls on one too (X-search-files-6). 1 and 2 of a unit are powers of
+/// two already.
+fn code_floors() -> &'static [u64] {
+    static FLOORS: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
+    FLOORS.get_or_init(|| {
+        let mut f: Vec<u64> = (0..128).map(bucket_floor).collect();
+        for unit in (0..64).step_by(10) {
+            for m in [5u64, 10, 20, 50, 100, 200, 500] {
+                if let Some(v) = m.checked_mul(1 << unit) {
+                    f.push(v);
+                }
+            }
+        }
+        f.sort_unstable();
+        f.dedup();
+        f
+    })
+}
+
+/// The floor of each [`size_code`] pair, for tests that probe their
+/// boundaries.
+pub fn code_floor(i: usize) -> Option<u64> {
+    code_floors().get(i).copied()
+}
+
+/// How many floors [`size_code`] has (its codes are `0..2 × that`).
+pub fn code_floor_count() -> usize {
+    code_floors().len()
+}
+
 /// A file's code in the torrent's `file_bucket` and `file_ext_bucket`:
-/// its [`size_bucket`] twice, plus one when it's above the bucket's floor.
-/// Splitting a bucket at its floor makes a range with a strict lower
-/// bound on a floor (`size:>1GiB`) or an upper bound on one (`size:<=1GiB`)
-/// whole codes, where it would otherwise check every file of the edge
-/// bucket in the file index (X-search-files-5). Sizes exactly on a floor
-/// are rare, so it costs almost no terms.
+/// the index of the largest [`code_floors`] entry at or below its size,
+/// twice, plus one when it's above that floor. Splitting at each floor
+/// makes a range with a strict lower bound on a floor (`size:>1GiB`,
+/// `size:>100MB`) or an upper bound on one (`size:<=1GiB`) whole codes,
+/// where it would otherwise check every file of the edge code in the
+/// file index (X-search-files-5). Sizes exactly on a floor are rare, so
+/// the split costs almost no terms. Monotonic: a larger size never has
+/// a smaller code.
+///
+/// Changing it changes what `file_bucket` and `file_ext_bucket` hold:
+/// bump both in [`crate::population::GENERATIONS`].
 pub fn size_code(size: u64) -> u64 {
-    let b = size_bucket(size);
-    b * 2 + u64::from(size > bucket_floor(b))
+    let floors = code_floors();
+    // `floors[0]` is 0, so there is always one at or below.
+    let i = floors.partition_point(|&f| f <= size) - 1;
+    i as u64 * 2 + u64::from(size > floors[i])
+}
+
+/// The sizes a [`size_code`] holds, as a closed range; `None` for the
+/// upper code of two adjacent floors, which holds none.
+fn code_range(code: u64) -> Option<(u64, u64)> {
+    let floors = code_floors();
+    let i = (code / 2) as usize;
+    let floor = *floors.get(i)?;
+    if code.is_multiple_of(2) {
+        return Some((floor, floor));
+    }
+    let ceil = floors.get(i + 1).map_or(u64::MAX, |n| n - 1);
+    (floor < ceil).then_some((floor + 1, ceil))
 }
 
 /// `file_ext_bucket`'s term for a file of extension `ext` and
@@ -309,49 +364,25 @@ pub fn ext_bucket_term(ext: &str, code: u64) -> String {
 }
 
 /// How the torrent's codes answer a size range: the [`size_code`]s the
-/// range holds whole, and the parts of it left for the file index (in at
-/// most two edge buckets, each within the bucket and not a whole code).
+/// range holds whole, and the parts of it left for the file index (at
+/// most two, the first and last codes it touches, each within one code
+/// and not all of it).
 pub(crate) fn code_plan(lo: u64, hi: u64) -> (Vec<u64>, Vec<(u64, u64)>) {
-    let (inner, edges) = split_range(lo, hi);
-    let mut codes: Vec<u64> = inner.iter().flat_map(|b| [b * 2, b * 2 + 1]).collect();
-    let mut left = Vec::new();
-    for (elo, ehi) in edges {
-        let b = size_bucket(elo);
-        let (floor, ceil) = (bucket_floor(b), bucket_ceil(b));
-        if elo == floor && ehi == floor {
-            codes.push(b * 2);
-        } else if elo == floor.saturating_add(1) && ehi == ceil && b >= 2 {
-            codes.push(b * 2 + 1);
-        } else {
-            left.push((elo, ehi));
-        }
-    }
-    codes.sort_unstable();
-    (codes, left)
-}
-
-/// A size range split at its buckets: those wholly inside it, and the
-/// part of it in each bucket it only partly covers (at most two, the
-/// first and the last), as closed ranges within those buckets.
-pub(crate) fn split_range(lo: u64, hi: u64) -> (Vec<u64>, Vec<(u64, u64)>) {
-    let range = SizeRange {
-        field: ABSENT,
-        bucket: ABSENT,
-        range: lo..=hi,
-    };
-    let mut inner = Vec::new();
-    let mut edges = Vec::new();
+    let (mut codes, mut left) = (Vec::new(), Vec::new());
     if lo > hi {
-        return (inner, edges);
+        return (codes, left);
     }
-    for (b, edge) in range.buckets() {
-        if edge {
-            edges.push((lo.max(bucket_floor(b)), hi.min(bucket_ceil(b))));
+    for c in size_code(lo)..=size_code(hi) {
+        let Some((a, b)) = code_range(c) else {
+            continue;
+        };
+        if lo <= a && b <= hi {
+            codes.push(c);
         } else {
-            inner.push(b);
+            left.push((lo.max(a), hi.min(b)));
         }
     }
-    (inner, edges)
+    (codes, left)
 }
 
 /// In a large pack, big files and media or software files are indexed;
@@ -1177,6 +1208,17 @@ impl PartialEq for IdSet {
 }
 
 impl IdSet {
+    /// Every id, sorted and distinct.
+    pub(crate) fn to_vec(&self) -> Vec<u64> {
+        let mut out = Vec::new();
+        for p in &self.parts {
+            p.for_each(|id| out.push(id));
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     pub fn contains(&self, id: u64) -> bool {
         self.parts.iter().any(|p| p.contains(id))
     }
@@ -1347,7 +1389,6 @@ impl IdPart {
     }
 
     /// Calls `f` with each id, in order.
-    #[cfg(test)]
     fn for_each(&self, mut f: impl FnMut(u64)) {
         match self {
             IdPart::List(ids) => ids.iter().for_each(|id| f(*id)),
@@ -2280,6 +2321,354 @@ impl Weight for IdsWeight {
     }
 }
 
+/// The negated words of a [`crate::compile::negated_words`] clause go
+/// through the file index's postings, not the extensions', only when
+/// their terms' files are at most this fraction of the extensions'
+/// files: the suspects' pass reads about as many files as the words
+/// have, and the whole clause's pass as many as the extensions have
+/// (X-search-files-6).
+pub(crate) const NEGATED_RATIO: u64 = 8;
+
+/// A [`crate::compile::negated_words`] clause goes to the file index
+/// whole when its undecided suspects (torrents no adjacent file
+/// rescues) are more than this fraction of the extensions' files: the
+/// exact check looks each one up by id, and the torrent query excludes
+/// each bad one by id, which past this costs more than reading the
+/// extensions' files. At 200k torrents a release group's name (every
+/// file of its torrents, ~2,800 bad) took 24 ms cold on the words' path
+/// and 9 ms whole (X-search-files-6).
+pub(crate) const UNDECIDED_RATIO: u64 = 1024;
+
+/// Up to this many undecided suspects always take the words' path, the
+/// exact check of that many costing well under a millisecond.
+const UNDECIDED_FLOOR: usize = 256;
+
+/// The bad torrents of a [`crate::compile::negated_words`] clause: those
+/// with a covered file of the extensions that has one of the words (the
+/// suspects), and none of the extensions without them. The clause's
+/// torrents are the candidates (`file_ext_bucket`) less these. `None`
+/// when the words aren't rare enough ([`NEGATED_RATIO`]) or compile to
+/// nothing: the clause then runs on the file index whole.
+///
+/// Each segment's suspects come from its files with an extension and a
+/// word, driven by the words' postings ([`undecided_in`]). A torrent's
+/// files are normally adjacent documents, so each suspect is rescued
+/// there when a neighbour of its own has an extension and no word; the
+/// rest are its *undecided* ones, cached per segment. Every undecided
+/// torrent is then checked exactly on all of its files, wherever they
+/// are (`torrent` terms), so the answer never depends on where they sit.
+pub(crate) fn bad_torrents(
+    searcher: &Searcher,
+    f: &FileFields,
+    neg: &crate::compile::NegatedWords,
+    cache: &FileSetCache,
+    cancel: &crate::CancelToken,
+) -> crate::index::Result<Option<IdSet>> {
+    bad_torrents_at(searcher, f, neg, cache, cancel, Limits::DEFAULT)
+}
+
+/// When a [`crate::compile::negated_words`] clause takes the words'
+/// path: the words' files at most a `ratio`th of the extensions', and
+/// the undecided suspects, past `floor` of them, at most an
+/// `undecided_ratio`th (0: whatever their number).
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    ratio: u64,
+    undecided_ratio: u64,
+    floor: usize,
+}
+
+impl Limits {
+    const DEFAULT: Limits = Limits {
+        ratio: NEGATED_RATIO,
+        undecided_ratio: UNDECIDED_RATIO,
+        floor: UNDECIDED_FLOOR,
+    };
+}
+
+/// [`bad_torrents`] at other [`Limits`], for tests.
+fn bad_torrents_at(
+    searcher: &Searcher,
+    f: &FileFields,
+    neg: &crate::compile::NegatedWords,
+    cache: &FileSetCache,
+    cancel: &crate::CancelToken,
+    limits: Limits,
+) -> crate::index::Result<Option<IdSet>> {
+    cancel.check()?;
+    if f.torrent == ABSENT || f.ext == ABSENT {
+        return Ok(None);
+    }
+    let ext = Node::Ext {
+        any: neg.exts.clone(),
+    };
+    let words = match neg.words.as_slice() {
+        [one] => one.clone(),
+        many => Node::Or { of: many.to_vec() },
+    };
+    let (Some(ext_q), Some(words_q)) = (compile_node(&ext, f), compile_node(&words, f)) else {
+        return Ok(None);
+    };
+    let ext_terms: Vec<Term> = neg
+        .exts
+        .iter()
+        .map(|e| Term::from_field_text(f.ext, e))
+        .collect();
+    let mut word_terms = Vec::new();
+    for w in &neg.words {
+        if let Node::Word { field, word } = w {
+            for (fld, _) in targets(*field, f, false) {
+                if fld != ABSENT {
+                    // The terms `word_query` reads: the word's units and
+                    // any compound it forms, not the parts of a unit.
+                    let toks = tokenizer::tokenize(word);
+                    let compounds = toks
+                        .iter()
+                        .filter(|t| t.kind == tokenizer::TokKind::Compound);
+                    word_terms.extend(
+                        units(&toks)
+                            .iter()
+                            .chain(compounds)
+                            .map(|t| Term::from_field_text(fld, &t.text)),
+                    );
+                }
+            }
+        }
+    }
+    let (exts, words_n) = (
+        doc_freq(searcher, &ext_terms)?,
+        doc_freq(searcher, &word_terms)?,
+    );
+    if words_n.saturating_mul(limits.ratio) > exts {
+        return Ok(None);
+    }
+    let scoring = EnableScoring::disabled_from_searcher(searcher);
+    let suspects = BooleanQuery::new(vec![
+        (Occur::Must, ext_q.box_clone()),
+        (Occur::Must, words_q.box_clone()),
+    ]);
+    let rescue = BooleanQuery::new(vec![(Occur::Must, ext_q), (Occur::MustNot, words_q)]);
+    let key = format!(
+        "{:?}@undecided",
+        Node::And {
+            of: vec![ext, words]
+        }
+    );
+    let segs = searcher.segment_readers();
+    let Some(first) = segs.first() else {
+        return Ok(Some(IdSet::default()));
+    };
+    // The bad set itself, for this snapshot: every segment and its
+    // deletes, so a warm query reads it whole (the exact check spans
+    // segments, so no one segment's entry could hold it).
+    let mut snapshot = format!("{key}@bad");
+    for seg in segs {
+        snapshot.push_str(&format!(
+            ";{}:{}",
+            seg.segment_id().uuid_string(),
+            seg.num_deleted_docs()
+        ));
+    }
+    let snapshot: CacheKey = (snapshot, first.segment_id(), 0);
+    if let Some(bad) = cache.get(&snapshot) {
+        return Ok(Some(IdSet {
+            parts: vec![bad],
+            union: OnceLock::new(),
+        }));
+    }
+    let keys: Vec<CacheKey> = segs
+        .iter()
+        .map(|seg| (key.clone(), seg.segment_id(), seg.num_deleted_docs()))
+        .collect();
+    let mut parts: Vec<Option<Arc<IdPart>>> = keys.iter().map(|k| cache.get(k)).collect();
+    let missed: Vec<usize> = (0..segs.len()).filter(|i| parts[*i].is_none()).collect();
+    if !missed.is_empty() {
+        let (suspects_w, rescue_w) = (suspects.weight(scoring)?, rescue.weight(scoring)?);
+        let failed = AtomicBool::new(false);
+        let found = searcher
+            .index()
+            .search_executor()
+            .map(
+                |i: usize| {
+                    undecided_in(
+                        &segs[i],
+                        suspects_w.as_ref(),
+                        rescue_w.as_ref(),
+                        cancel,
+                        &failed,
+                    )
+                    .inspect_err(|_| failed.store(true, Ordering::Release))
+                },
+                missed.iter().copied(),
+            )
+            .map_err(|e| crate::cancel::stopped_or(cancel, e))?;
+        cancel.check()?;
+        for (i, ids) in missed.into_iter().zip(found) {
+            let ids = Arc::new(IdPart::from_sorted(ids));
+            cache.insert(keys[i].clone(), ids.clone());
+            parts[i] = Some(ids);
+        }
+    }
+    let undecided = IdSet {
+        parts: parts.into_iter().flatten().collect(),
+        union: OnceLock::new(),
+    }
+    .to_vec();
+    if undecided.is_empty() {
+        return Ok(Some(IdSet::default()));
+    }
+    // Mostly bad suspects (a word under the ratio that most of its
+    // torrents' files carry) would make the exact check cost more than
+    // the whole clause.
+    if undecided.len() > limits.floor
+        && (undecided.len() as u64).saturating_mul(limits.undecided_ratio) > exts
+    {
+        return Ok(None);
+    }
+    // Each undecided torrent's files with an extension and no word, in
+    // every segment.
+    let theirs = TermSetQuery::new(
+        undecided
+            .iter()
+            .map(|&id| Term::from_field_u64(f.torrent, id)),
+    );
+    let exact = BooleanQuery::new(vec![
+        (Occur::Must, Box::new(theirs) as Q),
+        (Occur::Must, Box::new(rescue) as Q),
+    ]);
+    let rescued = exact_torrents(searcher, &exact, cancel)?;
+    cancel.check()?;
+    let bad = Arc::new(IdPart::from_sorted(
+        undecided
+            .into_iter()
+            .filter(|id| rescued.binary_search(id).is_err())
+            .collect(),
+    ));
+    cache.insert(snapshot, bad.clone());
+    Ok(Some(IdSet {
+        parts: vec![bad],
+        union: OnceLock::new(),
+    }))
+}
+
+/// One segment's undecided suspects of a negated-word clause, sorted and
+/// distinct: the torrents of its live files matching `suspects` (an
+/// extension and a word) none of whose adjacent files of the same
+/// torrent (its run of documents around them) matches `rescue` (an
+/// extension and no word). `rescue` is only ever sought forward, so a
+/// run is checked from the first document not checked before; a file of
+/// the torrent outside its run, or before that, leaves it undecided,
+/// for the exact check.
+fn undecided_in(
+    seg: &SegmentReader,
+    suspects: &dyn Weight,
+    rescue: &dyn Weight,
+    cancel: &crate::CancelToken,
+    failed: &AtomicBool,
+) -> tantivy::Result<Vec<u64>> {
+    let column = seg.fast_fields().u64("torrent")?;
+    let alive = |d: DocId| seg.alive_bitset().is_none_or(|a| a.is_alive(d));
+    let torrent = |d: DocId| column.first(d);
+    let mut sus = suspects.scorer(seg, 1.0)?;
+    let mut res = rescue.scorer(seg, 1.0)?;
+    let mut out = Vec::new();
+    // The first document not yet checked against `rescue`.
+    let mut next = 0;
+    let mut last: Option<u64> = None;
+    // Steps (suspect files and run documents), for the stop check.
+    let mut steps = 0u32;
+    let stop = |steps: &mut u32| {
+        *steps = steps.wrapping_add(1);
+        if steps.is_multiple_of(4096) && (cancel.is_stopped() || failed.load(Ordering::Acquire)) {
+            Err(crate::cancel::interrupted())
+        } else {
+            Ok(())
+        }
+    };
+    let mut doc = sus.doc();
+    while doc != TERMINATED {
+        stop(&mut steps)?;
+        if let Some(t) = torrent(doc).filter(|_| alive(doc))
+            && last != Some(t)
+        {
+            last = Some(t);
+            let mut d = doc;
+            while d > next && torrent(d - 1) == Some(t) {
+                stop(&mut steps)?;
+                d -= 1;
+            }
+            let mut rescued = false;
+            while d < seg.max_doc() && torrent(d) == Some(t) {
+                stop(&mut steps)?;
+                if d >= next {
+                    if res.doc() < d {
+                        res.seek(d);
+                    }
+                    if res.doc() == d && alive(d) {
+                        rescued = true;
+                        break;
+                    }
+                }
+                d += 1;
+            }
+            next = next.max(d);
+            if !rescued {
+                out.push(t);
+            }
+        }
+        doc = sus.advance();
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
+/// The documents holding any of `terms`, summed over the searcher's
+/// segments (deleted ones included): a bound on the postings a clause
+/// on them reads.
+fn doc_freq(searcher: &Searcher, terms: &[Term]) -> crate::index::Result<u64> {
+    let mut n = 0u64;
+    for seg in searcher.segment_readers() {
+        for t in terms {
+            let inv = seg.inverted_index(t.field())?;
+            n += u64::from(inv.doc_freq(t).map_err(tantivy::TantivyError::from)?);
+        }
+    }
+    Ok(n)
+}
+
+/// The torrent ids of the live documents matching `query`, sorted and
+/// distinct, a segment at a time, stopping within 4,096 documents of
+/// `cancel` stopping.
+fn exact_torrents(
+    searcher: &Searcher,
+    query: &dyn Query,
+    cancel: &crate::CancelToken,
+) -> crate::index::Result<Vec<u64>> {
+    let weight = query.weight(EnableScoring::disabled_from_searcher(searcher))?;
+    let mut out = Vec::new();
+    for seg in searcher.segment_readers() {
+        cancel.check()?;
+        let column = seg.fast_fields().u64("torrent")?;
+        let mut scorer = weight.scorer(seg, 1.0)?;
+        let mut doc = scorer.doc();
+        let mut n = 0u32;
+        while doc != TERMINATED {
+            n = n.wrapping_add(1);
+            if n.is_multiple_of(4096) {
+                cancel.check()?;
+            }
+            if seg.alive_bitset().is_none_or(|a| a.is_alive(doc)) {
+                out.extend(column.first(doc));
+            }
+            doc = scorer.advance();
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
 /// Collects the file positions of the matching documents.
 pub(crate) struct FileIndexes;
 
@@ -2500,55 +2889,39 @@ mod tests {
         );
     }
 
-    /// A strict lower bound on a bucket's floor, or an upper bound on one,
-    /// is whole codes; any other edge is left to the file index.
+    /// A strict lower bound on a floor, or an upper bound on one, is
+    /// whole codes, binary (`1GiB`) or decimal-looking (`100MiB`); any
+    /// other edge is left to the file index.
     #[test]
-    fn floors_split_buckets_into_whole_codes() {
-        let g = 1u64 << 30;
-        let b = size_bucket(g);
-        assert_eq!(bucket_floor(b), g);
-        assert_eq!((size_code(g), size_code(g + 1)), (b * 2, b * 2 + 1));
+    fn floors_split_ranges_into_whole_codes() {
         assert_eq!(size_code(0), 0);
         assert_eq!(size_code(1), 2);
-        // `size:>1GiB`: every code from b's upper half on, no file check.
-        let (codes, left) = code_plan(g + 1, u64::MAX);
-        assert!(left.is_empty());
-        assert_eq!(codes[0], b * 2 + 1);
-        assert_eq!(codes.len() as u64, 256 - (b * 2 + 1));
-        // `size:<=1GiB`: up to b's floor code.
-        let (codes, left) = code_plan(0, g);
-        assert!(left.is_empty());
-        assert_eq!(codes.last(), Some(&(b * 2)));
-        // `size:>100MiB`: mid-bucket, left to the file index.
-        let m = 100u64 << 20;
-        let (_, left) = code_plan(m + 1, u64::MAX);
-        assert_eq!(left, [(m + 1, bucket_ceil(size_bucket(m)))]);
-    }
-
-    /// A range splits into the buckets wholly inside it and its parts in
-    /// the (at most two) buckets it partly covers.
-    #[test]
-    fn a_range_splits_into_whole_buckets_and_edges() {
-        assert_eq!(split_range(5, 4), (vec![], vec![]));
-        // One bucket exactly: whole, no edges.
-        let (lo, hi) = (bucket_floor(20), bucket_floor(21) - 1);
-        assert_eq!(split_range(lo, hi), (vec![20], vec![]));
-        // Inside one bucket: an edge only.
-        assert_eq!(
-            split_range(lo + 1, hi - 1),
-            (vec![], vec![(lo + 1, hi - 1)])
-        );
-        // Across: edges at both ends, whole buckets between.
-        let (inner, edges) = split_range(lo + 1, bucket_floor(24) + 3);
-        assert_eq!(inner, [21, 22, 23]);
-        assert_eq!(
-            edges,
-            [(lo + 1, hi), (bucket_floor(24), bucket_floor(24) + 3)]
-        );
-        // Open at the top: bucket 127 runs to the end.
-        let (inner, edges) = split_range(bucket_floor(120), u64::MAX);
-        assert_eq!(inner, (120..=127).collect::<Vec<_>>());
-        assert!(edges.is_empty());
+        let last = code_floor_count() as u64 * 2 - 1;
+        assert_eq!(size_code(u64::MAX), last);
+        for g in [1u64 << 30, 100 << 20, 500 << 20, 3 << 29, 5 << 40] {
+            let c = size_code(g);
+            assert_eq!(c % 2, 0, "{g} is a floor");
+            assert_eq!(size_code(g + 1), c + 1);
+            assert_eq!(size_code(g - 1), c - 1);
+            // `size:>g`: every code from g's upper one on, no file check.
+            let (codes, left) = code_plan(g + 1, u64::MAX);
+            assert!(left.is_empty(), "{g}");
+            assert_eq!(codes[0], c + 1);
+            assert_eq!(*codes.last().unwrap(), last);
+            // `size:<=g`: up to g's floor code.
+            let (codes, left) = code_plan(0, g);
+            assert!(left.is_empty(), "{g}");
+            assert_eq!(codes.last(), Some(&c));
+        }
+        // `size:>700MiB`: inside a code, left to the file index up to
+        // the next floor (768 MiB).
+        let m = 700u64 << 20;
+        let (codes, left) = code_plan(m + 1, u64::MAX);
+        assert_eq!(left, [(m + 1, (768 << 20) - 1)]);
+        assert_eq!(codes[0], size_code(768 << 20));
+        // Inside one code: an edge only; empty: nothing.
+        assert_eq!(code_plan(m + 1, m + 2), (vec![], vec![(m + 1, m + 2)]));
+        assert_eq!(code_plan(5, 4), (vec![], vec![]));
     }
 
     #[test]
@@ -3474,6 +3847,8 @@ mod bucket_props {
     fn size() -> impl Strategy<Value = u64> {
         prop_oneof![
             (0u64..128, -2i64..=2).prop_map(|(b, d)| bucket_floor(b).saturating_add_signed(d)),
+            (0..code_floor_count(), -2i64..=2)
+                .prop_map(|(i, d)| code_floor(i).unwrap().saturating_add_signed(d)),
             Just(0u64),
             Just(u64::MAX),
             0u64..10_000,
@@ -3549,7 +3924,7 @@ mod bucket_props {
         .unwrap();
         let mut out = Vec::new();
         for p in &set.parts {
-            p.for_each(|id| out.push(id));
+            IdPart::for_each(p, |id| out.push(id));
         }
         out.sort_unstable();
         out.dedup();
@@ -3559,18 +3934,33 @@ mod bucket_props {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(512))]
 
+        /// Every size has one code, and codes are ordered: a larger size
+        /// never has a smaller code, the code's range holds the size,
+        /// and a floor starts its own code (X-search-files-6).
+        #[test]
+        fn codes_are_ordered_and_hold_their_sizes(a in size(), b in size()) {
+            let (a, b) = (a.min(b), a.max(b));
+            prop_assert!(size_code(a) <= size_code(b));
+            for s in [a, b] {
+                let (lo, hi) = code_range(size_code(s)).expect("a size's code holds it");
+                prop_assert!(lo <= s && s <= hi, "{} outside {}..={}", s, lo, hi);
+            }
+        }
+
         /// The torrent's codes and the file index's edges answer a range
         /// exactly: every size inside it is in a whole code or an edge,
         /// none outside is in either, an edge is never also a whole code,
-        /// and edges are inside the range, each within one bucket, at
-        /// most two (X-search-files-5).
+        /// and edges are inside the range, each within one code and not
+        /// all of it, at most two (X-search-files-5, -6).
         #[test]
         fn a_code_plan_covers_exactly_its_range(lo in size(), hi in size(), probes in prop::collection::vec(size(), 0..40)) {
             let (codes, edges) = code_plan(lo, hi);
+            prop_assert!(codes.windows(2).all(|w| w[0] < w[1]));
             prop_assert!(edges.len() <= 2);
             for &(a, b) in &edges {
                 prop_assert!(lo <= a && a <= b && b <= hi, "{a}..={b} outside {lo}..={hi}");
-                prop_assert_eq!(size_bucket(a), size_bucket(b));
+                prop_assert_eq!(size_code(a), size_code(b));
+                prop_assert_ne!(code_range(size_code(a)), Some((a, b)), "a whole code as an edge");
             }
             let near = |x: u64| [x.saturating_sub(1), x, x.saturating_add(1)];
             let mut sizes: Vec<u64> = probes;
@@ -3579,8 +3969,8 @@ mod bucket_props {
                 sizes.extend(near(a).into_iter().chain(near(b)));
             }
             for &c in &codes {
-                let f = bucket_floor(c / 2);
-                sizes.extend(near(f).into_iter().chain(near(bucket_ceil(c / 2))));
+                let (a, b) = code_range(c).expect("a whole code holds sizes");
+                sizes.extend(near(a).into_iter().chain(near(b)));
             }
             for s in sizes {
                 let coded = codes.binary_search(&size_code(s)).is_ok();
@@ -4081,5 +4471,231 @@ mod bucket_props {
             visited > 0 && visited <= crate::cancel::CHECK_EVERY as usize,
             "{visited}"
         );
+    }
+}
+
+#[cfg(test)]
+mod negated_props {
+    use super::*;
+    use proptest::prelude::*;
+
+    const EXTS: [&str; 3] = ["mkv", "mp4", "srt"];
+    /// The words' path whatever the counts.
+    const OPEN: Limits = Limits {
+        ratio: 0,
+        undecided_ratio: 0,
+        floor: 0,
+    };
+    /// The whole clause whenever a suspect is undecided.
+    const CAPPED: Limits = Limits {
+        ratio: 0,
+        undecided_ratio: u64::MAX,
+        floor: 0,
+    };
+
+    /// One file: its torrent (1..=6), its extension ([`EXTS`]), whether
+    /// it sits in `sample/`, and its name's kind: plain `f{i}`,
+    /// `f{i}.sample` or `extra.f{i}`.
+    type F = (u64, usize, bool, u8);
+
+    /// A segment: a torrent whose files are deleted before it's
+    /// written (a re-index: its later files stay), and its files.
+    type Seg = (Option<u64>, Vec<F>);
+
+    /// The file index of `segments`, and the live files.
+    fn index(segments: &[Seg]) -> (Searcher, FileFields, Vec<F>) {
+        let (schema, f) = schema();
+        let index = tantivy::Index::create_in_ram(schema);
+        index
+            .tokenizers()
+            .register(NAME_TOKENIZER, tokenizer::NameTokenizer::default());
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        let mut live: Vec<F> = Vec::new();
+        for (deleted, files) in segments {
+            if let Some(d) = deleted {
+                writer.delete_term(Term::from_field_u64(f.torrent, *d));
+                live.retain(|x| x.0 != *d);
+            }
+            for (i, &(torrent, ext, sample, kind)) in files.iter().enumerate() {
+                let name = match kind {
+                    0 => format!("f{i}"),
+                    1 => format!("f{i}.sample"),
+                    _ => format!("extra.f{i}"),
+                };
+                let doc = FileDoc {
+                    torrent,
+                    index: i as u64,
+                    name: format!("{name}.{}", EXTS[ext]),
+                    dirs: if sample {
+                        vec!["Sample".into()]
+                    } else {
+                        Vec::new()
+                    },
+                    ext: Some(EXTS[ext].into()),
+                    size: 10,
+                    category: Category::Other,
+                    pieces_root: None,
+                };
+                writer.add_document(doc.to_document(&f)).unwrap();
+                live.push((torrent, ext, sample, kind));
+            }
+            writer.commit().unwrap();
+        }
+        (index.reader().unwrap().searcher(), f, live)
+    }
+
+    fn segments() -> impl Strategy<Value = Vec<Seg>> {
+        prop::collection::vec(
+            (
+                prop::option::weighted(0.3, 1u64..=6),
+                prop::collection::vec((1u64..=6, 0usize..3, any::<bool>(), 0u8..3), 0..10),
+            ),
+            1..5,
+        )
+    }
+
+    fn word(field: TextField, w: &str) -> Node {
+        Node::Word {
+            field,
+            word: w.into(),
+        }
+    }
+
+    /// The negated words, and whether each file has one.
+    fn words(pick: u8) -> (Vec<Node>, fn(&F) -> bool) {
+        match pick {
+            0 => (vec![word(TextField::Path, "sample")], |x| x.2),
+            1 => (vec![word(TextField::Any, "sample")], |x| x.2 || x.3 == 1),
+            2 => (vec![word(TextField::Name, "sample")], |x| x.3 == 1),
+            _ => (
+                vec![
+                    word(TextField::Path, "sample"),
+                    word(TextField::Name, "extra"),
+                ],
+                |x| x.2 || x.3 == 2,
+            ),
+        }
+    }
+
+    /// The bad set cached for a file snapshot isn't served to a later
+    /// one that only deletes (same segments, more deleted documents):
+    /// a bad torrent deleted is bad no more (X-search-files-6).
+    #[test]
+    fn a_cached_bad_set_follows_a_delete() {
+        let (schema, f) = schema();
+        let index = tantivy::Index::create_in_ram(schema);
+        index
+            .tokenizers()
+            .register(NAME_TOKENIZER, tokenizer::NameTokenizer::default());
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        for (torrent, sample) in [(1, true), (2, false), (3, true)] {
+            let doc = FileDoc {
+                torrent,
+                index: 0,
+                name: "f.mkv".into(),
+                dirs: if sample {
+                    vec!["Sample".into()]
+                } else {
+                    Vec::new()
+                },
+                ext: Some("mkv".into()),
+                size: 10,
+                category: Category::Other,
+                pieces_root: None,
+            };
+            writer.add_document(doc.to_document(&f)).unwrap();
+        }
+        writer.commit().unwrap();
+        let reader = index.reader().unwrap();
+        let neg = crate::compile::NegatedWords {
+            exts: vec!["mkv".into()],
+            words: vec![word(TextField::Path, "sample")],
+        };
+        let cache = FileSetCache::default();
+        let bad = |s: &Searcher| {
+            bad_torrents_at(s, &f, &neg, &cache, &crate::CancelToken::new(), OPEN)
+                .unwrap()
+                .unwrap()
+                .to_vec()
+        };
+        assert_eq!(bad(&reader.searcher()), [1, 3]);
+        writer.delete_term(Term::from_field_u64(f.torrent, 1));
+        writer.commit().unwrap();
+        reader.reload().unwrap();
+        let searcher = reader.searcher();
+        assert_eq!(searcher.segment_readers().len(), 1);
+        assert_eq!(bad(&searcher), [3]);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// A negated-word clause's bad torrents are exactly the torrents
+        /// with a live file of the extensions that the whole clause on
+        /// the file index (`main`'s path) doesn't find, and exactly the
+        /// brute-force ones: those with such a file that has a word and
+        /// none without. Whatever the words' fields, several words or
+        /// extensions, a torrent's files spread over documents and
+        /// segments, a torrent re-indexed partway, and cold or from the
+        /// cache (X-search-files-6).
+        #[test]
+        fn bad_torrents_are_exact(segments in segments(), pick in 0u8..4, two in any::<bool>()) {
+            let (searcher, f, live) = index(&segments);
+            let exts: Vec<usize> = if two { vec![0, 1] } else { vec![0] };
+            let (words, has_word) = words(pick);
+            let neg = crate::compile::NegatedWords {
+                exts: exts.iter().map(|&e| EXTS[e].to_owned()).collect(),
+                words: words.clone(),
+            };
+            let of_ext = |x: &&F| exts.contains(&x.1);
+            let with_ext: Vec<u64> = {
+                let mut t: Vec<u64> = live.iter().filter(of_ext).map(|x| x.0).collect();
+                t.sort_unstable();
+                t.dedup();
+                t
+            };
+            let brute: Vec<u64> = with_ext
+                .iter()
+                .copied()
+                .filter(|&t| live.iter().filter(of_ext).all(|x| x.0 != t || has_word(x)))
+                .collect();
+            // `main`'s path: the whole clause on the file index.
+            let mut of = vec![Node::Ext { any: neg.exts.clone() }];
+            of.extend(words.into_iter().map(|w| Node::Not { of: Box::new(w) }));
+            let whole = Node::And { of };
+            let q = compile(&whole, &f).unwrap();
+            let found = torrent_ids(&searcher, q.as_ref(), "whole", &FileSetCache::default(), &crate::CancelToken::new())
+                .unwrap()
+                .to_vec();
+            let by_main: Vec<u64> = with_ext.iter().copied().filter(|t| found.binary_search(t).is_err()).collect();
+            prop_assert_eq!(&by_main, &brute);
+            let cache = FileSetCache::default();
+            for _ in 0..2 {
+                let got = bad_torrents_at(&searcher, &f, &neg, &cache, &crate::CancelToken::new(), OPEN)
+                    .unwrap()
+                    .expect("ratio 0 always reads the words")
+                    .to_vec();
+                prop_assert_eq!(&got, &brute);
+            }
+            // More undecided than allowed: the whole clause instead.
+            let capped = bad_torrents_at(&searcher, &f, &neg, &FileSetCache::default(), &crate::CancelToken::new(), CAPPED).unwrap();
+            // (Undecided ones include every bad one.)
+            if !brute.is_empty() {
+                prop_assert!(capped.is_none());
+            }
+            // A stopped search stops here too, rather than falling back.
+            let stopped = crate::CancelToken::new();
+            stopped.cancel();
+            prop_assert!(matches!(
+                bad_torrents_at(&searcher, &f, &neg, &FileSetCache::default(), &stopped, OPEN),
+                Err(crate::index::Error::Cancelled)
+            ));
+        }
     }
 }

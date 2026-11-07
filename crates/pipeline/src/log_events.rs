@@ -76,13 +76,17 @@ lodestar_log::catalogue! {
         message: "Crawler change applied, but recording it for Insights failed",
         fields: { what: Label, error: Error },
     }
-    /// A source was enabled or disabled.
+    /// A source was enabled or disabled. When a start switches one off,
+    /// `reason` says why: `consent_text_unapproved` (this build can't show
+    /// its class's consent dialog yet) or `consent_lapsed` (its class
+    /// condition no longer holds, §18.7). A change made through the API
+    /// carries none.
     SOURCE_STATE_CHANGED {
         id: "pipeline.source_state_changed",
         component: Pipeline,
         level: Info,
         message: "Source state changed",
-        fields: { plugin: Label, state: Label },
+        fields: { plugin: Label, state: Label, reason: Label },
     }
     /// The DHT node bound its sockets.
     DHT_STARTED {
@@ -109,8 +113,10 @@ lodestar_log::catalogue! {
         fields: { stored: Size, queued: Size },
     }
     /// A stored filter rule was skipped: `what` (`rule`, `override`,
-    /// `exception`, `always_allow`, `class_rule`) and its id, never its
-    /// terms.
+    /// `exception`, `always_allow`, `class_rule`, `pack_override`, or
+    /// `sp4_row` for a row of SP-4's signature set) and its id, never its
+    /// terms. `reason` is `rows_full` for an SP-4 row dropped because
+    /// memory held as many rows as it can, at start or after a flush.
     FILTER_RULE_SKIPPED {
         id: "pipeline.filter_rule_skipped",
         component: Filters,
@@ -314,13 +320,14 @@ pub fn state(s: lodestar_store::SourceState) -> &'static str {
 /// (`MW-1`) isn't a number, so it logs as 0; the Insights exception
 /// `filter_rows_unreadable` names the row.
 pub fn filter_note(note: &str) -> (&'static str, u64, &'static str) {
-    const WHAT: [(&str, &str); 6] = [
+    const WHAT: [(&str, &str); 7] = [
         ("pack override ", "pack_override"),
         ("classification rule ", "class_rule"),
         ("rule U-", "rule"),
         ("override O-", "override"),
         ("exception ", "exception"),
         ("always-allow ", "always_allow"),
+        ("SP-4 signature row ", "sp4_row"),
     ];
     let Some((what, rest)) = WHAT
         .iter()
@@ -337,6 +344,8 @@ pub fn filter_note(note: &str) -> (&'static str, u64, &'static str) {
         "no_longer_parses"
     } else if rest.ends_with("unreadable") {
         "unreadable"
+    } else if rest.ends_with(lodestar_filter::spam_sigs::ROWS_FULL) {
+        "rows_full"
     } else {
         "other"
     };
@@ -381,6 +390,14 @@ mod tests {
             (
                 "pack override MW-1 fails closed: unreadable",
                 ("pack_override", 0, "fails_closed"),
+            ),
+            (
+                "SP-4 signature row 12 skipped: unreadable",
+                ("sp4_row", 12, "unreadable"),
+            ),
+            (
+                "SP-4 signature row 3 dropped: more rows than memory holds",
+                ("sp4_row", 3, "rows_full"),
             ),
             ("rule about sometermhere", ("other", 0, "other")),
         ] {

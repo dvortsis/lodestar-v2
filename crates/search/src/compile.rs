@@ -8,7 +8,7 @@ use lodestar_store::{Col, HotColumns};
 use tantivy::Term;
 use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, FuzzyTermQuery, Occur,
-    PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery,
+    PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery, TermSetQuery,
 };
 use tantivy::schema::{Field, IndexRecordOption};
 
@@ -207,17 +207,101 @@ pub(crate) fn bucket_edges(of: &Node) -> Option<Node> {
     })
 }
 
+/// A `file:(…)` clause of one extension atom and negated words
+/// (`file:(ext:mkv,mp4,avi -path:sample)`), which the torrent index
+/// answers with the file index's help when the words are rare
+/// (X-search-files-6): a torrent matches when one of its covered files
+/// has one of the extensions and none of the words. So it matches
+/// exactly when it has a covered file with the extensions
+/// (`file_ext_bucket`, the candidates) and isn't one of the *bad*
+/// torrents: those with such a file that has a word (the suspects, read
+/// from the file index driven by the words' postings) and none without
+/// (checked in the file index on the suspects' files only). The file
+/// pass computes the bad set ([`crate::files::bad_torrents`]) and
+/// stores it under [`bad_key`]; when it doesn't (a common word, or
+/// the bucket terms not ready), the clause runs on the file index whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NegatedWords {
+    pub exts: Vec<String>,
+    /// The negated words, each a `Node::Word` that isn't on the title.
+    pub words: Vec<Node>,
+}
+
+pub(crate) fn negated_words(of: &Node) -> Option<NegatedWords> {
+    if !negated_shape(of) {
+        return None;
+    }
+    let Node::And { of } = of else {
+        return None;
+    };
+    let mut exts = None;
+    let mut words = Vec::new();
+    for n in of {
+        match n {
+            Node::Not { of: w } if matches!(**w, Node::Word { field, .. } if field != TextField::Title) =>
+            {
+                words.push((**w).clone());
+            }
+            n => match file_exts(n) {
+                Some(e) if exts.is_none() => exts = Some(e),
+                _ => return None,
+            },
+        }
+    }
+    let exts = exts?;
+    (!words.is_empty() && !exts.is_empty()).then_some(NegatedWords { exts, words })
+}
+
+/// Whether `of` is a [`negated_words`] clause, without building one:
+/// one extension atom and at least one negated word not on the title.
+fn negated_shape(of: &Node) -> bool {
+    fn exts_only(n: &Node) -> bool {
+        match n {
+            Node::Ext { any } => !any.is_empty(),
+            Node::Or { of } => !of.is_empty() && of.iter().all(exts_only),
+            _ => false,
+        }
+    }
+    let Node::And { of } = of else {
+        return false;
+    };
+    let (mut exts, mut words) = (0, 0);
+    for n in of {
+        match n {
+            Node::Not { of: w } if matches!(**w, Node::Word { field, .. } if field != TextField::Title) => {
+                words += 1
+            }
+            n if exts_only(n) => exts += 1,
+            _ => return false,
+        }
+    }
+    exts == 1 && words > 0
+}
+
+/// The [`FileSets`] key of a [`negated_words`] clause's bad torrents.
+pub(crate) fn bad_key(of: &Node) -> String {
+    format!("{of:?}@bad")
+}
+
 /// Whether the torrent index answers a `file:(…)` clause itself: a lone
 /// extension ([`file_exts`]), or a [`bucket_clause`] when its terms are
 /// complete.
+/// It also answers a [`negated_words`] clause whose bad torrents the
+/// file pass found.
 fn torrent_level(of: &Node, f: &Cx<'_>) -> bool {
-    file_exts(of).is_some() || (f.buckets && bucket_clause(of).is_some())
+    file_exts(of).is_some()
+        || (f.buckets
+            && (bucket_clause(of).is_some()
+                || (negated_shape(of) && f.files.contains_key(&bad_key(of)))))
 }
 
 /// The torrent-index query for a [`torrent_level`] clause, unscored.
 fn torrent_level_query(of: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
     if let Some(any) = file_exts(of) {
         return compile_opt(&Node::Ext { any }, f, now);
+    }
+    if let Some(neg) = negated_words(of) {
+        return Some(negated_query(&neg, f, f.files.get(&bad_key(of))?));
     }
     let b = bucket_clause(of)?;
     let (codes, _) = crate::files::code_plan(b.lo, b.hi);
@@ -258,6 +342,35 @@ fn torrent_level_query(of: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
     } else {
         Box::new(BooleanQuery::new(clauses))
     })
+}
+
+/// A [`negated_words`] clause on the torrent index: a covered file with
+/// one of the extensions (any of its `{ext}:{code}` terms), less the
+/// file pass's bad torrents (by their indexed `id`).
+fn negated_query(neg: &NegatedWords, f: &Cx<'_>, bad: &IdSet) -> Q {
+    if f.file_ext_bucket == ABSENT {
+        return Box::new(EmptyQuery);
+    }
+    let exts: Vec<String> = neg.exts.iter().map(|e| regex_escape(e)).collect();
+    let pattern = format!("({}):[0-9]+", exts.join("|"));
+    let candidates: Q = match RegexQuery::from_pattern(&pattern, f.file_ext_bucket) {
+        Ok(q) => Box::new(q),
+        Err(_) => return Box::new(EmptyQuery),
+    };
+    // Every index that opens has `id` (since v1); one without can't
+    // leave the bad torrents out, so it matches nothing.
+    if f.id == ABSENT {
+        return Box::new(EmptyQuery);
+    }
+    let bad = bad.to_vec();
+    if bad.is_empty() {
+        return candidates;
+    }
+    let ids = TermSetQuery::new(bad.into_iter().map(|id| Term::from_field_u64(f.id, id)));
+    Box::new(BooleanQuery::new(vec![
+        (Occur::Must, candidates),
+        (Occur::MustNot, Box::new(ids)),
+    ]))
 }
 
 /// A compiled query in its parts.
@@ -1150,5 +1263,47 @@ pub(crate) fn has_stem_alternative(node: &Node) -> bool {
             [one] if crate::stem::light_stem(&one.text).is_some()
         ),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod negated_tests {
+    use super::*;
+
+    fn inner(q: &str) -> Node {
+        match crate::parse(q).unwrap() {
+            Node::File { of } => *of,
+            n => panic!("{n:?}"),
+        }
+    }
+
+    /// One extension atom and negated words not on the title, in any
+    /// order; nothing else (X-search-files-6).
+    #[test]
+    fn negated_words_takes_only_its_shape() {
+        let n = negated_words(&inner("file:(ext:mkv,mp4 -path:sample)")).unwrap();
+        assert_eq!(n.exts, ["mkv", "mp4"]);
+        assert_eq!(n.words.len(), 1);
+        let n = negated_words(&inner("file:(-sample -name:x ext:mkv)")).unwrap();
+        assert_eq!(n.words.len(), 2);
+        assert!(negated_words(&inner("file:((ext:a | ext:b) -x)")).is_some());
+        for q in [
+            "file:(ext:mkv)",
+            "file:(-sample)",
+            "file:(-a -b)",
+            "file:(ext:mkv ext:mp4 -sample)",
+            "file:(ext:mkv -title:sample)",
+            "file:(ext:mkv -\"a sample\")",
+            "file:(ext:mkv -samp*)",
+            "file:(ext:mkv -sample size:>1MB)",
+            "file:(ext:mkv sample)",
+            "file:(ext:mkv -(a | b))",
+        ] {
+            // The parser refuses some of these already (`title:`).
+            let Ok(Node::File { of }) = crate::parse(q) else {
+                continue;
+            };
+            assert_eq!(negated_words(&of), None, "{q}");
+        }
     }
 }
