@@ -1031,14 +1031,36 @@ impl Store {
     }
 
     /// Swarm hashes of torrents whose file list is incomplete (imports past
-    /// bitmagnet's file threshold), oldest first, for re-fetching.
+    /// bitmagnet's file threshold), oldest first, for re-fetching through
+    /// public peer finding.
+    ///
+    /// Never a key any [`flags::PRIVACY`] bit is set on: a BEP 27 private
+    /// torrent, a private source's find or a remote row whose `PRIVATE`
+    /// isn't verified is never sent to the DHT or PEX (§18.7, BEP 27). Nor
+    /// one with an unverified item a private source reported under either
+    /// swarm hash: that keeps the key private even beside a public import,
+    /// as `Gate::check` and the writer's `stored_private` hold. They are
+    /// left out here, not after, so `limit` counts only keys that can be
+    /// refetched (`docs/decisions/2026-11-07-X-refetch-private.md`).
     pub fn partial_hashes(&self, limit: usize) -> Result<Vec<InfoHash>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT info_hash FROM torrents WHERE flags & ?1 != 0 ORDER BY id LIMIT ?2")?;
-        let rows = stmt.query_map(params![flags::FILES_PARTIAL, limit as i64], |r| {
-            r.get::<_, Vec<u8>>(0)
-        })?;
+        let mut stmt = self.conn.prepare(
+            "SELECT t.info_hash FROM torrents t \
+             WHERE t.flags & ?1 != 0 AND t.flags & ?2 = 0 \
+             AND NOT EXISTS (SELECT 1 FROM unverified_items u \
+                 WHERE u.network = ?3 AND u.flags & ?4 != 0 \
+                 AND u.key IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
+             ORDER BY t.id LIMIT ?5",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                flags::FILES_PARTIAL,
+                flags::PRIVACY,
+                unverified::Network::Bt as i64,
+                unverified::PRIVATE,
+                limit as i64
+            ],
+            |r| r.get::<_, Vec<u8>>(0),
+        )?;
         rows.map(|r| {
             let h = r?;
             Ok(InfoHash(
