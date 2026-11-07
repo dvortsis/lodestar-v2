@@ -216,6 +216,8 @@ struct Stages {
     stop: watch::Sender<bool>,
     pool: JoinHandle<Vec<QueuedKey>>,
     prepare: JoinHandle<()>,
+    /// The forwarder into the pool.
+    forward: JoinHandle<()>,
 }
 
 /// What the tasks and the message loop share.
@@ -246,6 +248,16 @@ struct Shared {
     /// "can a record be sealed now?"; it changes on every install.
     key_day: watch::Sender<u32>,
     sampler: Mutex<u64>,
+    /// The pool's controls, once it runs: paused while a result waits for
+    /// a key it can be sealed under, so no fetch is spent meanwhile.
+    pool: Mutex<Option<lodestar_sources::PoolHandle>>,
+    /// Results waiting for a sealable key.
+    waiting: std::sync::atomic::AtomicUsize,
+    /// A new session's first `Assign` applies whatever its revision: a
+    /// coordinator whose clock went back numbers its plans lower (WK-5).
+    fresh_session: AtomicBool,
+    /// Asks the session task to send everything it has now (a drain).
+    flush: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
 }
 
 /// The runtime (see the module docs).
@@ -294,6 +306,7 @@ impl Runtime {
         let (accepted, accepted_rx) = mpsc::unbounded_channel();
         let (loss_tx, loss_rx) = mpsc::unbounded_channel();
         let (found, found_rx) = mpsc::channel(FOUND_QUEUE);
+        let (flush, flush_rx) = mpsc::unbounded_channel();
         let (out, outbound) = byte_queue::<SealedRecord>(config.outbound_bytes, 4096);
         let counts = Arc::new(Counts::default());
         let shared = Arc::new(Shared {
@@ -324,6 +337,10 @@ impl Runtime {
             started: watch::channel(false).0,
             key_day: watch::channel(u32::MAX).0,
             sampler: Mutex::new(config.seed.unwrap_or_else(super::session::random_jitter)),
+            pool: Mutex::new(None),
+            waiting: std::sync::atomic::AtomicUsize::new(0),
+            fresh_session: AtomicBool::new(false),
+            flush,
             config,
         });
         let (stop_reports, reports_stopped) = watch::channel(false);
@@ -336,6 +353,7 @@ impl Runtime {
                 shared.clone(),
                 outbound,
                 accepted_rx,
+                flush_rx,
             ))),
             reporter: Some((
                 stop_reports,
@@ -380,7 +398,13 @@ impl Runtime {
         };
         let _ = stages.stop.send(true);
         let deadline = self.shared.config.drain_deadline;
-        let Stages { pool, prepare, .. } = stages;
+        let Stages {
+            pool,
+            prepare,
+            forward,
+            ..
+        } = stages;
+        forward.abort();
         let (pool_abort, prepare_abort) = (pool.abort_handle(), prepare.abort_handle());
         let both = async {
             let _ = pool.await;
@@ -435,7 +459,10 @@ impl Runtime {
                 // A payload that doesn't read changes nothing.
                 if let Ok(Some(new)) = Assignment::from_message(&a) {
                     let mut current = lock(&s.assignment);
-                    if current.is_none_or(|c| new.revision > c.revision) {
+                    // Only a newer revision, except a new session's first
+                    // (its coordinator's clock may have gone back, WK-5).
+                    let fresh = s.fresh_session.swap(false, Ordering::AcqRel);
+                    if fresh || current.is_none_or(|c| new.revision > c.revision) {
                         *current = Some(new);
                     }
                 }
@@ -478,6 +505,7 @@ impl Work for Runtime {
         // have-filter snapshot (WK-3). The coordinator starts the filter
         // and dictionary snapshots over by itself (WK-10a).
         let _ = self.shared.acks.send(self.shared.have.reconnected());
+        self.shared.fresh_session.store(true, Ordering::Release);
         self.shared.session.send_replace(Some(session));
     }
 
@@ -494,16 +522,33 @@ impl Work for Runtime {
     /// session task sent are committed by the coordinator; everything else
     /// goes back with `Drained`.
     async fn drain(&mut self) -> Vec<OutcomeItem> {
+        let started = std::time::Instant::now();
         self.stop_stages().await;
+        // What's fetched and sealed goes out before `Drained`, within what's
+        // left of the deadline: results travel on the same command channel,
+        // so the coordinator takes them first (no `Accepted` is awaited).
+        let left = self
+            .shared
+            .config
+            .drain_deadline
+            .saturating_sub(started.elapsed());
+        let (done, flushed) = tokio::sync::oneshot::channel();
+        if self.shared.flush.send(done).is_ok() {
+            let _ = tokio::time::timeout(left, flushed).await;
+        }
         self.take_outcomes().await
     }
 }
 
 impl Drop for Runtime {
     fn drop(&mut self) {
+        // A local stop drops the runtime (`Worker::run` owns it): everything
+        // stops at once, and the keys' leases go back to the coordinator.
         if let Some(stages) = lock(&self.shared.stages).take() {
             let _ = stages.stop.send(true);
             stages.prepare.abort();
+            stages.pool.abort();
+            stages.forward.abort();
         }
         self.abort_all();
     }
@@ -594,27 +639,34 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
     };
     let asked = {
         let mut snaps = lock(&s.snapshots);
-        snaps.asked += 1;
+        if kind == SnapshotKind::Filter {
+            snaps.asked += 1;
+        }
         snaps.asked
     };
     let s = s.clone();
-    // Decoding builds the engine: up to about 96 MiB at the caps.
+    // Decoding builds the engine: up to about 96 MiB at the caps. One at a
+    // time, under the install lock, and a transfer a newer one has already
+    // followed is skipped before it's built, so two never peak together.
     tokio::task::spawn_blocking(move || {
         let ok = match kind {
-            SnapshotKind::Filter => match complete.filter() {
-                Ok(snapshot) => {
-                    let mut done = lock(&s.install);
-                    // A later transfer was installed first: keep it.
-                    if *done < asked {
-                        *done = asked;
-                        let _notes = s.judge.install(&snapshot, complete.version);
-                        // Results waiting for a sealable key look again.
-                        s.key_day.send_replace(snapshot.key.id);
-                    }
+            SnapshotKind::Filter => {
+                let mut done = lock(&s.install);
+                if *done >= asked || asked < lock(&s.snapshots).asked {
                     true
+                } else {
+                    match complete.filter() {
+                        Ok(snapshot) => {
+                            *done = asked;
+                            let _notes = s.judge.install(&snapshot, complete.version);
+                            // Results waiting for a sealable key look again.
+                            s.key_day.send_replace(snapshot.key.id);
+                            true
+                        }
+                        Err(_) => false,
+                    }
                 }
-                Err(_) => false,
-            },
+            }
             _ => match complete.dict() {
                 Ok(d) => {
                     lock(&s.snapshots).dictionary = Some(d);
@@ -653,14 +705,16 @@ fn start_if_ready(s: &Arc<Shared>) {
         }
     };
     let mut stages = lock(&s.stages);
-    if stages.is_some() {
+    // Checked again under the lock: a drain that took the stages before
+    // this ran must not find them started after it.
+    if stages.is_some() || s.draining.load(Ordering::Acquire) {
         return;
     }
     let (Some(out), Some(pool_rx)) = (lock(&s.out).take(), lock(&s.pool_rx).take()) else {
         return;
     };
     let (discoveries, rx) = mpsc::channel(256);
-    tokio::spawn(forward(pool_rx, discoveries));
+    let forward = tokio::spawn(forward(pool_rx, discoveries));
     let (stop, shutdown): (watch::Sender<bool>, Shutdown) = Shutdown::new();
     let reports: Arc<dyn Reports> = s.losses.clone();
     let running = WorkerStages {
@@ -692,10 +746,12 @@ fn start_if_ready(s: &Arc<Shared>) {
             out,
         },
     );
+    *lock(&s.pool) = Some(running.pool);
     *stages = Some(Stages {
         stop,
         pool: running.pool_task,
         prepare: running.prepare,
+        forward,
     });
     s.started.send_replace(true);
 }
@@ -759,6 +815,11 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
         async move {
             if !s.sealable(unix_now()) {
                 bump(&s.counts.waited);
+                // No fetch is started while a result waits: they'd only
+                // spend their keys waiting on the pool's byte budget.
+                if s.waiting.fetch_add(1, Ordering::AcqRel) == 0 {
+                    s.pause_pool(true).await;
+                }
                 let mut installs = s.key_day.subscribe();
                 let ready = tokio::time::timeout(s.config.seal_wait, async {
                     while !s.sealable(unix_now()) {
@@ -769,8 +830,11 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                     }
                 })
                 .await;
+                if s.waiting.fetch_sub(1, Ordering::AcqRel) == 1 {
+                    s.pause_pool(false).await;
+                }
                 if ready.is_err() {
-                    bump(&s.counts.released);
+                    release(&s, &reports, item.key, item.token);
                     return Ok(());
                 }
             }
@@ -785,14 +849,42 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                     reports.lost(&key, token, Loss::Invalid);
                     Ok(())
                 }
-                // The day turned between the check and the judge: let it go
-                // unreported, as one that waited too long.
-                Judged::NotReady { .. } => {
-                    bump(&s.counts.released);
+                // The day turned between the check and the judge: released,
+                // as one that waited too long.
+                Judged::NotReady { key, token } => {
+                    release(&s, &reports, key, token);
                     Ok(())
                 }
             }
         }
+    }
+}
+
+/// Lets a result go that can't be sealed: its lease ends with a loss that
+/// isn't `Blocked` (`GaveUp`), so the key is never tombstoned and can be
+/// claimed again. Unreported, the lease would last as long as this worker
+/// heartbeats (runner, #592's B2: "released for a re-grant under a distinct
+/// reason that doesn't tombstone").
+fn release(s: &Shared, reports: &Arc<dyn Reports>, key: InfoHash, token: Token) {
+    bump(&s.counts.released);
+    reports.lost(&key, token, Loss::GaveUp);
+}
+
+impl Shared {
+    async fn pause_pool(&self, paused: bool) {
+        let pool = lock(&self.pool).clone();
+        if let Some(p) = pool {
+            p.set_paused(paused).await;
+        }
+    }
+}
+
+/// Aborts a task when dropped.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -849,7 +941,8 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
         return;
     }
     let (items, mut batches) = mpsc::channel::<(ClaimItem, Vec<std::net::SocketAddr>)>(1024);
-    tokio::spawn(check(s.clone(), found, items));
+    // Ends with this task (a stop aborts it).
+    let _check = AbortOnDrop(tokio::spawn(check(s.clone(), found, items)).abort_handle());
     // `next_claims` isn't cancel-safe: it's awaited to its end.
     while let Some(batch) = next_claims(&mut batches).await {
         if s.draining.load(Ordering::Acquire) {
@@ -882,7 +975,7 @@ async fn check(
     items: mpsc::Sender<(ClaimItem, Vec<std::net::SocketAddr>)>,
 ) {
     while let Some(f) = found.recv().await {
-        let (ready, maybe) = (s.have.is_ready(), s.have.might_be_stored(&f.key));
+        let (ready, maybe) = s.have.answer(&f.key);
         let Some(item) = sift(&s, f, ready, maybe) else {
             continue;
         };
@@ -974,6 +1067,45 @@ struct InFlight {
     sent: bool,
     /// Refused for now; sent again on the next retry tick.
     refused: bool,
+    /// Counted in `Counts::sent` already.
+    counted: bool,
+}
+
+/// Puts records into batches (`encode`) in flight. A record that can't be
+/// encoded is released, so its lease ends (it can't happen for a record
+/// the judge sealed).
+fn batch_up(
+    s: &Shared,
+    held: Vec<Held<SealedRecord>>,
+    next: &mut u64,
+    flight: &mut BTreeMap<u64, InFlight>,
+) {
+    if held.is_empty() {
+        return;
+    }
+    let (batches, refused) = encode(held, next);
+    for h in refused {
+        let r = h.get();
+        bump(&s.counts.released);
+        s.losses.lost(&r.key, r.token, Loss::GaveUp);
+    }
+    for (batch, payload, part) in batches {
+        let leases = part
+            .iter()
+            .map(|h| (h.get().key.0, h.get().token.0))
+            .collect();
+        flight.insert(
+            batch,
+            InFlight {
+                payload,
+                leases,
+                _held: part,
+                sent: false,
+                refused: false,
+                counted: false,
+            },
+        );
+    }
 }
 
 /// The session task: sealed results into `Results` batches, kept until
@@ -982,6 +1114,7 @@ async fn send_results(
     s: Arc<Shared>,
     mut outbound: ByteReceiver<SealedRecord>,
     mut accepted: mpsc::UnboundedReceiver<(u64, bool)>,
+    mut flush: mpsc::UnboundedReceiver<tokio::sync::oneshot::Sender<()>>,
 ) {
     let mut next_batch: u64 = 1;
     let mut flight: BTreeMap<u64, InFlight> = BTreeMap::new();
@@ -1001,9 +1134,13 @@ async fn send_results(
                     break;
                 }
                 f.sent = true;
-                s.counts
-                    .sent
-                    .fetch_add(f.leases.len() as u64, Ordering::Relaxed);
+                // Counted once, not on every resend.
+                if !f.counted {
+                    f.counted = true;
+                    s.counts
+                        .sent
+                        .fetch_add(f.leases.len() as u64, Ordering::Relaxed);
+                }
             }
         }
         tokio::select! {
@@ -1017,10 +1154,27 @@ async fn send_results(
                     size += more.get().weigh();
                     held.push(more);
                 }
-                for (batch, payload, part) in encode(held, &mut next_batch) {
-                    let leases = part.iter().map(|h| (h.get().key.0, h.get().token.0)).collect();
-                    flight.insert(batch, InFlight { payload, leases, _held: part, sent: false, refused: false });
+                batch_up(&s, held, &mut next_batch, &mut flight);
+            }
+            Some(done) = flush.recv() => {
+                // Everything queued now goes into batches, and every batch
+                // not on the wire goes out on the current session.
+                let mut held = Vec::new();
+                while let Ok(more) = Inbox::try_recv(&mut outbound) {
+                    held.push(more);
                 }
+                batch_up(&s, held, &mut next_batch, &mut flight);
+                let session = s.session.borrow().clone();
+                if let Some(h) = session.filter(|h| !h.is_closed()) {
+                    for (&batch, f) in flight.iter_mut().filter(|(_, f)| !f.sent) {
+                        let msg = ToCoordinator::Results(Payload { batch, bytes: f.payload.clone() });
+                        if h.send(msg).await.is_err() {
+                            break;
+                        }
+                        f.sent = true;
+                    }
+                }
+                let _ = done.send(());
             }
             Some((batch, ok)) = accepted.recv() => {
                 if ok {
@@ -1061,10 +1215,14 @@ async fn send_results(
 /// from `next` (never 0), splitting where needed: a sealed record always
 /// fits a batch alone (WK-8). Every record is sealed (`encode_with(&[],
 /// &sealed)`); nothing goes in clear.
-type Encoded = (u64, Vec<u8>, Vec<Held<SealedRecord>>);
+type Encoded<T> = (u64, Vec<u8>, Vec<T>);
 
-fn encode(held: Vec<Held<SealedRecord>>, next: &mut u64) -> Vec<Encoded> {
-    let sealed: Vec<SealedRecord> = held.iter().map(|h| h.get().clone()).collect();
+/// Returns the batches, and the records that won't encode even alone.
+fn encode<T: std::borrow::Borrow<SealedRecord>>(
+    held: Vec<T>,
+    next: &mut u64,
+) -> (Vec<Encoded<T>>, Vec<T>) {
+    let sealed: Vec<SealedRecord> = held.iter().map(|h| h.borrow().clone()).collect();
     let batch = ResultsBatch {
         batch: *next,
         records: Vec::new(),
@@ -1072,18 +1230,20 @@ fn encode(held: Vec<Held<SealedRecord>>, next: &mut u64) -> Vec<Encoded> {
     match batch.encode_with(&sealed) {
         Ok(bytes) if bytes.len() <= MAX_OPAQUE => {
             *next += 1;
-            vec![(batch.batch, bytes, held)]
+            (vec![(batch.batch, bytes, held)], Vec::new())
         }
         _ if held.len() > 1 => {
             let mut held = held;
             let rest = held.split_off(held.len() / 2);
-            let mut out = encode(held, next);
-            out.extend(encode(rest, next));
-            out
+            let (mut out, mut refused) = encode(held, next);
+            let (more, also) = encode(rest, next);
+            out.extend(more);
+            refused.extend(also);
+            (out, refused)
         }
         // One record that won't encode can't be sent; that can't happen
-        // for a record the judge sealed. Its lease ends when it expires.
-        _ => Vec::new(),
+        // for a record the judge sealed.
+        _ => (Vec::new(), held),
     }
 }
 
@@ -1100,6 +1260,8 @@ mod tests {
     use lodestar_cluster::assign::{Budget, Intensity, Politeness};
     use lodestar_cluster::proto::Assign;
     use lodestar_peer_wire::{FailureKind, Fetched};
+    #[allow(unused_imports)]
+    use lodestar_pipeline::wire::ResultsBatch;
     use lodestar_pipeline::wire::filter_snapshot::{
         FilterSnapshot, chunk, chunk_count, version_of,
     };
@@ -1420,21 +1582,20 @@ mod tests {
 
     /// A false positive (a new key the filter says may be stored) is
     /// claimed on a later sighting: the draw is per sighting, not per key.
-    #[test]
-    fn a_false_positive_is_claimed_on_a_later_sighting() {
+    #[tokio::test]
+    async fn a_false_positive_is_claimed_on_a_later_sighting() {
+        // The production draw, over many seeds: the same key, sighted again
+        // and again, is claimed within a few hundred sightings every time.
         for seed in 0..50u64 {
-            let mut state = seed;
-            let mut draw = || {
-                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-                let mut z = state;
-                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-                z ^ (z >> 31)
-            };
+            let rt = Runtime::start(Config {
+                seed: Some(seed),
+                ..Config::new(W, Arc::new(MapFetch::default()))
+            });
             let first = (1..=400)
-                .find(|_| rediscovery(true, true, draw()) == Sighting::Sampled)
+                .find(|_| sift(&rt.shared, found(9), true, true).is_some())
                 .unwrap_or_else(|| panic!("seed {seed}: never claimed in 400 sightings"));
             assert!(first <= 400);
+            rt.shutdown().await;
         }
         // The same key, the same answer from the filter: only the draw
         // decides.
@@ -1520,6 +1681,220 @@ mod tests {
         until("sealed", || (sealed() == 1, sealed())).await;
         assert_eq!(c.lost.load(Ordering::Relaxed), 0, "nothing reported lost");
         assert_eq!(c.released.load(Ordering::Relaxed), 0);
+        rt.shutdown().await;
+    }
+
+    /// A sealed record for `n`, as the judge would make it.
+    fn sealed(n: usize) -> SealedRecord {
+        use lodestar_pipeline::wire::ResultRecord;
+        use lodestar_pipeline::wire::filter_snapshot::WireKey;
+        let raw = info(&format!("record {n}"));
+        let parsed = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let torrent = Preparer::from_dict(None, 3, false)
+            .prepare(&parsed, Some(&raw))
+            .unwrap();
+        let record = ResultRecord {
+            key: torrent.info_hash,
+            token: Token(n as u64 + 1),
+            torrent,
+            sources: 0,
+            metadata_at: unix_now(),
+            action: None,
+            rule_version: 1,
+            fix: None,
+            private_source: false,
+            source_adult: false,
+        };
+        let day = u32::try_from(unix_now().div_euclid(DAY)).unwrap();
+        SealedRecord::seal(&record, &WireKey::new(day, [9; 32]), W).unwrap()
+    }
+
+    /// Batches stay within the wire's caps (`MAX_OPAQUE`, and the codec's
+    /// 1,024 records): more records split into several, numbered on from
+    /// `next`, every record in exactly one.
+    #[test]
+    fn batches_split_to_fit_and_count_up() {
+        let records: Vec<SealedRecord> = (0..1500).map(sealed).collect();
+        let mut next = 7;
+        let (batches, refused) = encode(records.clone(), &mut next);
+        assert!(refused.is_empty());
+        assert!(batches.len() >= 2, "{} batches", batches.len());
+        let ids: Vec<u64> = batches.iter().map(|b| b.0).collect();
+        assert_eq!(ids, (7..7 + batches.len() as u64).collect::<Vec<_>>());
+        assert_eq!(next, 7 + batches.len() as u64);
+        let mut keys = Vec::new();
+        for (id, bytes, part) in &batches {
+            assert!(bytes.len() <= MAX_OPAQUE);
+            let (clear, opened) = ResultsBatch::decode_with(bytes).unwrap();
+            assert!(clear.records.is_empty(), "nothing in clear");
+            assert_eq!(clear.batch, *id);
+            assert_eq!(opened.len(), part.len());
+            keys.extend(part.iter().map(|r| r.key));
+        }
+        assert_eq!(keys, records.iter().map(|r| r.key).collect::<Vec<_>>());
+    }
+
+    /// A result whose snapshot never comes is let go after the wait with a
+    /// loss that isn't `Blocked` (so its lease ends, and the key isn't
+    /// tombstoned), and a drain hands back the losses not reported yet.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_result_that_cant_be_sealed_is_released_not_blocked() {
+        let fetch = Arc::new(MapFetch::default());
+        let raw = info("Never sealable");
+        lock(&fetch.0).insert(key_of(&raw), raw.clone());
+        let mut rt = Runtime::start(Config {
+            seal_wait: Duration::from_millis(300),
+            ..config(fetch)
+        });
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks_at(unix_now() - DAY);
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        granted(
+            &rt.shared,
+            key_of(&raw),
+            Token(5),
+            vec!["203.0.113.9:6881".parse().unwrap()],
+            unix_now(),
+        );
+        let c = rt.counts();
+        until("released", || {
+            let n = c.released.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        // No session: the drain hands the loss back to report.
+        let outcomes = rt.drain().await;
+        assert_eq!(
+            outcomes,
+            vec![OutcomeItem {
+                key: key_of(&raw).0,
+                token: 5,
+                outcome: Outcome::Lost {
+                    reason: Loss::GaveUp as u8
+                },
+            }]
+        );
+        assert_ne!(Loss::GaveUp as u8, Loss::Blocked as u8);
+    }
+
+    /// A worker session over the in-process link, with the coordinator's
+    /// end returned for the test to drive.
+    async fn session_pair() -> (
+        lodestar_cluster::CoordinatorLink,
+        lodestar_cluster::WorkerSession,
+    ) {
+        use lodestar_cluster::proto::{
+            Capabilities, Hello, PROTOCOL_MAJOR, PROTOCOL_MINOR, ToWorker, Welcome,
+        };
+        let (mut coord, worker) = lodestar_cluster::local_pair(64);
+        let config = lodestar_cluster::WorkerConfig {
+            auto_heartbeat: false,
+            ..lodestar_cluster::WorkerConfig::default()
+        };
+        let clock = Arc::new(lodestar_cluster::ManualClock::new(1_000_000));
+        let (session, ()) = tokio::join!(
+            lodestar_cluster::WorkerSession::start(
+                worker,
+                Hello::new(W.0, Capabilities::default()),
+                clock,
+                config
+            ),
+            async {
+                let _ = coord.recv().await;
+                coord
+                    .send(ToWorker::Welcome(Welcome {
+                        major: PROTOCOL_MAJOR,
+                        minor: PROTOCOL_MINOR,
+                        worker: W.0,
+                        heartbeat_ms: 60_000,
+                        lease_ttl_secs: 600,
+                        renew_now: false,
+                    }))
+                    .await
+                    .unwrap();
+            }
+        );
+        (coord, session.unwrap())
+    }
+
+    /// The next `Results` the coordinator gets, skipping anything else.
+    async fn next_results(coord: &mut lodestar_cluster::CoordinatorLink) -> Payload {
+        tokio::time::timeout(DEADLINE, async {
+            loop {
+                match coord.recv().await {
+                    Ok(Some(ToCoordinator::Results(p))) => return p,
+                    Ok(Some(_)) => {}
+                    other => panic!("the link ended: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("a Results batch in time")
+    }
+
+    /// Results batches are kept until accepted: a refused one goes again on
+    /// the next retry tick, a new session gets every one not accepted, and
+    /// an accepted one is committed (and counted as sent once).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn results_are_kept_until_accepted() {
+        use lodestar_cluster::proto::ToWorker;
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (mut coord, mut session) = session_pair().await;
+        rt.connected(session.handle());
+        // A record, as the stages would queue it.
+        let out = lock(&rt.shared.out).take().unwrap();
+        out.send(sealed(1)).await.unwrap();
+        let first = next_results(&mut coord).await;
+        let (_, opened) = ResultsBatch::decode_with(&first.bytes).unwrap();
+        assert_eq!(opened.len(), 1);
+
+        // Refused for now: it goes again, the same batch, on a later tick.
+        coord
+            .send(ToWorker::Accepted {
+                batch: first.batch,
+                accepted: false,
+            })
+            .await
+            .unwrap();
+        let e = tokio::time::timeout(DEADLINE, session.next_event())
+            .await
+            .unwrap()
+            .unwrap();
+        rt.event(e);
+        let again = next_results(&mut coord).await;
+        assert_eq!((again.batch, &again.bytes), (first.batch, &first.bytes));
+
+        // A new session: what wasn't accepted goes on it.
+        rt.disconnected();
+        let (mut coord2, mut session2) = session_pair().await;
+        rt.connected(session2.handle());
+        let resent = next_results(&mut coord2).await;
+        assert_eq!(resent.batch, first.batch);
+
+        // Accepted: committed, and counted as sent once.
+        coord2
+            .send(ToWorker::Accepted {
+                batch: first.batch,
+                accepted: true,
+            })
+            .await
+            .unwrap();
+        let e = tokio::time::timeout(DEADLINE, session2.next_event())
+            .await
+            .unwrap()
+            .unwrap();
+        rt.event(e);
+        let c = rt.counts();
+        until("committed", || {
+            let n = c.committed.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(c.sent.load(Ordering::Relaxed), 1, "counted once");
+        drop(session);
         rt.shutdown().await;
     }
 

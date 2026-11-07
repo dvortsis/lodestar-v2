@@ -238,7 +238,12 @@ impl std::fmt::Debug for WorkerEvent {
                 .finish(),
             WorkerEvent::Regranted(items) => f.debug_tuple("Regranted").field(items).finish(),
             WorkerEvent::Drain => f.write_str("Drain"),
-            WorkerEvent::Hints(h) => f.debug_tuple("Hints").field(h).finish(),
+            // Peers are kept in memory only (§18.7): counts, not addresses.
+            WorkerEvent::Hints(h) => f
+                .debug_struct("Hints")
+                .field("keys", &h.len())
+                .field("peers", &h.iter().map(|i| i.hints.len()).sum::<usize>())
+                .finish(),
             WorkerEvent::Accepted { batch, accepted } => f
                 .debug_struct("Accepted")
                 .field("batch", batch)
