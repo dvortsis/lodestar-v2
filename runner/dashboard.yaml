@@ -1401,9 +1401,9 @@ gates:
   name: Sources gate (v0.6)
   plain: The blocklist and safety rules apply through every source plug-in.
   slice: SRC-G
-  measure: ''
+  measure: 'No property fails (9 plug-in kinds plus the DHT, 11 manifests). Ingest budget not decided in the sandbox: host baseline 948/s (median, sources off) under the line; with sources on 649/s, paired drop 15%; re-run on the soak host. Not yet built: Torznab, Stremio, unverified indexing (SRC-3b). Full scrape stays unwired until the owner 2.37 wording ships'
   target: See docs/plan/2026-11-01-v06-sources.md section 4.2
-  where: plan
+  where: docs/decisions/2026-11-07-SRC-G.md
 - id: G-import
   name: Import scale (1M, 10M, 50M)
   plain: Lodestar holds big libraries within its speed and size budgets.
