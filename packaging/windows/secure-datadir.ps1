@@ -137,7 +137,13 @@ function Invoke-Icacls([string[]]$arguments, [string]$fix) {
 }
 
 # Stops the install unless everything inside $folder is a real file or folder, owned by
-# SYSTEM, Administrators or the service, with entries only for those three (no Deny).
+# SYSTEM, Administrators or the service, with Allow entries only for those three, OWNER RIGHTS
+# (how the service locks its logs folder, granting only that trusted owner) and CREATOR OWNER
+# (which names only whoever creates an item there, and only those three can). No Deny.
+# Same rule as the service's log-folder check (windows/acl.rs, log_folder_private).
+$ownerSids = @(
+  (New-Object Security.Principal.SecurityIdentifier 'S-1-3-4'),   # OWNER RIGHTS
+  (New-Object Security.Principal.SecurityIdentifier 'S-1-3-0'))   # CREATOR OWNER
 function Assert-PrivateInside($folder) {
   # Fail closed: if the scan itself cannot run, the install stops (trap, exit 2).
   foreach ($item in @(Get-ChildItem -LiteralPath $folder -Force -Recurse -ErrorAction Stop)) {
@@ -150,7 +156,8 @@ function Assert-PrivateInside($folder) {
       Stop-Install "$($item.FullName) is owned by $o, not SYSTEM, Administrators or the Lodestar service. Someone else may have put it there: move the folder's contents somewhere else, check them, then install again."
     }
     foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-      if ($rule.AccessControlType -ne 'Allow' -or $trusted -notcontains $rule.IdentityReference) {
+      $who = $rule.IdentityReference
+      if ($rule.AccessControlType -ne 'Allow' -or ($trusted -notcontains $who -and $ownerSids -notcontains $who)) {
         Stop-Install "$($item.FullName) has its own permissions for $($rule.IdentityReference). Someone else may have changed it: move the folder's contents somewhere else, check them, then install again."
       }
     }

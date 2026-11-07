@@ -79,7 +79,9 @@ function Expect([string]$case, [int]$want, [int]$got) {
 
 try {
   # Re-secured: the administrator's entries go from the folder and everything in it.
+  # Its logs folder as the service locks it: OWNER RIGHTS and CREATOR OWNER are fine.
   $d = New-Secured 'admin-only'; Add-Me $d
+  Add-Entry (Join-Path $d 'logs') 'S-1-3-4'; Add-Entry (Join-Path $d 'logs') 'S-1-3-0'
   Expect 'only the installing administrator' 0 (Invoke-Secure $d $me)
   foreach ($p in @($d) + @(Get-ChildItem -LiteralPath $d -Force -Recurse | ForEach-Object FullName)) {
     if (Has-Me $p) { $failed += "the administrator's entry is still on $p" }
