@@ -3,7 +3,7 @@
   Build the Lodestar MSI with cargo-wix.
 
 .EXAMPLE
-  cargo build --release --locked -p lodestar --target x86_64-pc-windows-msvc
+  cargo build --release --locked -p lodestar --bin lodestar --no-default-features --features web --target x86_64-pc-windows-msvc
   packaging\windows\build-msi.ps1 -Version 0.5.0 -OutDir dist
 
   Needs WiX Toolset 3.x (candle.exe, light.exe on PATH or WIX set) and

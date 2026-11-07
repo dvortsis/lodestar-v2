@@ -36,9 +36,16 @@ function Remove-Scratch([string]$path) {
 
 function Test-Serve([string]$exe, [string]$dataDir) {
   # Releases are built without the `fixture` feature (`serve --fixture` test data).
-  # The flag always exists; a build without the feature refuses it ("no fixture backend").
-  $fx = (& $exe serve --fixture (Join-Path ([IO.Path]::GetTempPath()) 'lodestar-fixture-check') 2>&1 | Out-String)
-  Assert ($fx -match 'no fixture backend') 'this build has the fixture feature; release builds must not'
+  # The flag always exists; a build without the feature refuses it with exactly
+  # this line and exit status 2 (crates/lodestar/src/fixture.rs). Any other
+  # failure (a bad argument, a missing folder) must not pass for the refusal.
+  $refusal = 'lodestar serve --fixture: this build has no fixture backend (feature `fixture`)'
+  # Each stderr line arrives as an ErrorRecord; its string is the line itself.
+  $fxLines = @(& $exe serve --fixture (Join-Path ([IO.Path]::GetTempPath()) 'lodestar-fixture-check') 2>&1 |
+    ForEach-Object { "$_".TrimEnd() })
+  $fxStatus = $LASTEXITCODE
+  if ($fxStatus -ne 2 -or $fxLines -notcontains $refusal) { $fxLines | ForEach-Object { Write-Host $_ } }
+  Assert ($fxStatus -eq 2 -and $fxLines -contains $refusal) "serve --fixture didn't refuse with the no-fixture line and exit status 2 (got $fxStatus); release builds must leave out the fixture feature"
   New-Item -ItemType Directory -Force $dataDir | Out-Null
   $env:LODESTAR_DATA_DIR = $dataDir
   $env:LODESTAR_HTTP_BIND = "127.0.0.1:$Port"

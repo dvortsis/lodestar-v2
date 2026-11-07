@@ -33,10 +33,15 @@ if command -v file >/dev/null 2>&1 && file "$dir/lodestar" | grep -q 'dynamicall
 fi
 
 # Releases are built without the `fixture` feature (`serve --fixture` test data).
-# The flag always exists; a build without the feature refuses it ("no fixture backend").
-fixture_out=$("$dir/lodestar" serve --fixture "$work/fixture" 2>&1 || true)
-if ! printf '%s' "$fixture_out" | grep -q "no fixture backend"; then
-  echo "::error::this build has the fixture feature; release builds must not" >&2
+# The flag always exists; a build without the feature refuses it with exactly
+# this line and exit status 2 (crates/lodestar/src/fixture.rs). Any other
+# failure (a bad argument, a missing folder) must not pass for the refusal.
+fixture_refusal='lodestar serve --fixture: this build has no fixture backend (feature `fixture`)'
+fixture_status=0
+fixture_out=$("$dir/lodestar" serve --fixture "$work/fixture" 2>&1) || fixture_status=$?
+if [ "$fixture_status" -ne 2 ] || ! printf '%s\n' "$fixture_out" | grep -qxF "$fixture_refusal"; then
+  printf '%s\n' "$fixture_out" >&2
+  echo "::error::serve --fixture didn't refuse with the no-fixture line and exit status 2 (got $fixture_status); release builds must leave out the fixture feature" >&2
   exit 1
 fi
 
