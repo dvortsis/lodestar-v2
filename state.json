@@ -6628,7 +6628,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T22:46Z",
+    "updated": "2026-11-07T22:47Z",
     "items": [
       {
         "slot": 1,
@@ -6643,7 +6643,7 @@
         "slice": "CMP-3",
         "role": "build",
         "agent": "claude",
-        "doing": "launching (Opus); #596 X-web-hygiene-1107 merged 8c058910",
+        "doing": "session_01MMjhnA1oLZ56UoBFFMwUoU: CMP-3 companion credentials (Opus, /security-review)",
         "since": "2026-11-07T22:46Z"
       },
       {
