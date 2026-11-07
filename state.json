@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T16:35Z",
+  "updated_at": "2026-11-07T16:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3640,7 +3640,8 @@
       "state": "running",
       "brief": "briefs/WK-15.md",
       "since": "2026-11-07T14:43Z",
-      "session": "session_01MMjhn9mqDCgbWNwmfQuB9V"
+      "session": "session_01MMjhn9mqDCgbWNwmfQuB9V",
+      "notes": "16:2xZ: 8-worker after: worst single reads 38.4/40.5/48.0 ms (compacted, range=all), typical <=35; storage 7.36 MB realistic, 9.31 worst. Cache left out; ~1,700+356 lines accepted."
     },
     "X-gs-gate-polish": {
       "state": "merged",
@@ -5756,6 +5757,11 @@
     {
       "id": "X-smoke-ps1-case",
       "what": "smoke.ps1 -ccontains/-cnotcontains on main (from #582 review nit 2), if P-v052-cut doesn't carry it to main.",
+      "since": "2026-11-07"
+    },
+    {
+      "id": "X-insights-m18-cache",
+      "what": "cache metric-18 compacted-day totals (forget_days_before bumps cache generation); launch only if a CI/soak read >45 ms or post-merge 8-worker run >50 ms (WK-15).",
       "since": "2026-11-07"
     }
   ],
