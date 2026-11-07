@@ -536,7 +536,14 @@ P-v052-cut, 2026-11-07, under D2. The runner cut `release/v0.5.2` at **`045d4a38
 - the 24 h Docker soak on an upgraded folder with every pack on (SP-4 fed, #554 under load);
 - the ≥ 6 h Windows run on a fresh folder (packs on from the first start).
 
-Both must run the rc.1 build, which contains every merge above. The collector and analyzer should know the new series:
+Both must run the rc.1 build, which contains every merge above.
+
+**SP-4's writer memory is a reporting item:**
+- The run record reports the `filter.sp4.sigs.%` row count at the start, at hour 12 and at the end.
+- The memory verdict states whether the set reached its cap: 17–26 MB at the cap (runner, 2026-11-07).
+- No gauge reports the set's size yet (§9.5), so the row count is the evidence.
+
+The collector and analyzer should know the new series:
 - `fetch_held_bytes` and `fetch_held_full_total`;
 - `lodestar_mem_anon_mappings`;
 - the zero-valued `lodestar_cluster_*` and `lodestar_remote_*` families.
@@ -550,7 +557,7 @@ Both must run the rc.1 build, which contains every merge above. The collector an
 | G1 | `crates/lodestar/tests/webhooks_e2e.rs::the_binary_registers_only_the_dht_the_torrent_cache_and_the_webhooks`. It runs the real binary with the DHT on a loopback port and no bootstrap nodes. The whole `/api/v1/sources` list must be exactly `arr_webhooks` (off), `dht` (on) and `torrent_cache` (off) |
 | G2 | `crates/pipeline/tests/release_defaults.rs::no_adult_enricher_is_named_by_default`; `crates/lodestar/tests/release_defaults.rs::the_binary_wires_no_adult_enrichment_source` (no line of the binary's sources names `adult_enrichers`) |
 | G3 | `crates/pipeline/tests/release_defaults.rs::the_verification_cursor_is_off_by_default`; `crates/lodestar/tests/release_defaults.rs::the_binary_never_sets_the_verification_cursor`, `::a_config_key_for_the_verification_cursor_is_refused` (the binary refuses `[sources] verify_unverified` at start); the API's refusal was already tested |
-| G4 | `packaging/windows/build-msi.ps1`'s example builds `--no-default-features --features web`. The tarball and Windows binary check in `release.yml` waits on the runner (decisions file, D5) |
+| G4 | **Already covered at `63a2c6df`; §3.3 was wrong.** `release.yml`'s tarball "Smoke" runs `packaging/linux/smoke.sh`, whose lines 35-40 run `serve --fixture` and fail without "no fixture backend" (x86_64). The MSI smoke runs `packaging/windows/smoke.ps1:38-41`, the same check on the Windows exe. aarch64 can't run on the runner; its build command, `release.yml:478`, passes `--no-default-features --features web`. This PR fixes `packaging/windows/build-msi.ps1`'s manual build example to pass the same flags |
 | `409 notice_required` (§6) | `docs/soak/tools/linux/collect.py` stops the run as `collector_error` with a `notice_required` note and an error on stderr, instead of recording unavailable checks. `test_collect.py::NoticeRequiredTests` |
 
 **Left, for later slices:**
@@ -564,10 +571,17 @@ None of these is a way to turn something on. The decisions file lists them.
 
 ### 9.6 Release notes and the Legal Notice
 
-- **The Legal Notice is wrong at the cut.** §2 says the torrent cache "can only be turned on through the API". At the cut the screen exists (#552) and the gate refuses it everywhere (#537, #553). This is raised with the runner. The fix and any version raise are the runner's or the owner's call (decisions file, D6).
+- **The Legal Notice was wrong at the cut, and this PR fixes it.** §2 said the torrent cache "can only be turned on through the API". At the cut the screen exists (#552) and the gate refuses it everywhere (#537, #553).
+  - The sentence now says it can't be turned on in this version, and that a later version will let you turn it on after you accept the websites it contacts.
+  - `NOTICE_VERSION` stays 4 and the date moves to 2026-11-07 (runner, decisions file, D6).
+  - `crates/lodestar/tests/legal_facts.rs` ties the sentence to the gate.
+  - PR B carries the same change onto `release/v0.5.2`.
 - **Release notes:** P-v052-cut's PR B on `release/v0.5.2` adds:
   - SP-4;
   - "turning a source off stops it at once";
   - the privacy fix (#576).
 
   The Sonarr/Radarr switch is in Settings → Sources, but the token is API only, so the "advanced: API only" note covers the token.
+- **Two more default-on items, if material-composer's 450-word cap allows; otherwise they go in the rc delta report (runner, 2026-11-07):**
+  - the `/api/v1/workers` routes answer `409 workers_off`;
+  - turning a source off stops it at once, the DHT included (#525).
