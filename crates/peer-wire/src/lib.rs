@@ -24,7 +24,7 @@ pub mod testing;
 use std::fmt;
 use std::io;
 
-pub use fetch::{Deny, Encryption, FetchOptions, Fetched, fetch, fetch_on_stream};
+pub use fetch::{Deny, Encryption, FetchOptions, Fetched, Reserve, fetch, fetch_on_stream};
 /// The uTP crate, for building the socket `FetchOptions::utp` takes.
 pub use lodestar_utp as utp;
 pub use stats::{FetchStats, Transport};
