@@ -415,7 +415,12 @@ fn refuses_pins_from_another_source() {
         "https://github.com/userdocs/releases/download/",
         "https://github.com/userdocs/qbittorrent-nox-static/Releases/Download/",
     ] {
-        refused(Rule::Source, |v| qbit(v)["native"]["release"] = json!(bad));
+        // The pin moves into the bad folder too, so only the folder rule
+        // can refuse it.
+        refused(Rule::Source, |v| {
+            qbit(v)["native"]["release"] = json!(bad);
+            qbit_pin(v)["url"] = json!(format!("{bad}v1/x86_64-qbittorrent-nox"));
+        });
     }
     // A pin is one release's file, `<tag>/<file>`, nothing deeper.
     refused(Rule::Source, |v| {

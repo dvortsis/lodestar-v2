@@ -267,8 +267,8 @@ pub enum Method {
 /// `/api/v1/system/status?x=1`): `/` first, RFC 3986 characters, well-formed
 /// `%` escapes, no fragment, no `//`, no `.` or `..` segment (encoded or
 /// not), no `;` and no escaped `;`, `?`, `#`, `/`, `\`, `%` or byte from
-/// `0x80` in the path, no
-/// escaped control byte anywhere, at most 2048 bytes.
+/// `0x80` in the path, no escaped control byte anywhere, at most 2048
+/// bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestPath(String);
 

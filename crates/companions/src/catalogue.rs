@@ -611,8 +611,7 @@ impl std::error::Error for NotAvailable {}
 ///
 /// ```compile_fail,E0599
 /// let c = lodestar_companions::builtin().unwrap();
-/// let a = c.get("qbittorrent").unwrap().native.as_ref().unwrap().artifacts[0].clone();
-/// let _: lodestar_companions::catalogue::Artifact = a;
+/// let _ = c.get("qbittorrent").unwrap().native.as_ref().unwrap().artifacts[0].clone();
 /// ```
 ///
 /// An image can't be read before it's pinned, except through
@@ -1212,9 +1211,14 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
                     .is_some_and(|r| r.eq_ignore_ascii_case("flaresolverr"))
         });
     check(
-        !names_flaresolverr || (e.opt_in && e.needed_for == [Need::ChallengeSolver]),
+        !names_flaresolverr || e.opt_in,
         Rule::Need,
         &format!("{at}.opt_in"),
+    )?;
+    check(
+        !names_flaresolverr || e.needed_for == [Need::ChallengeSolver],
+        Rule::Need,
+        &at_need,
     )?;
     // The VPN route is gluetun in a container; the native VPN is v1.x
     // (plan §2).
