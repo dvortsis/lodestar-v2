@@ -214,8 +214,9 @@ pub const WORKER_HOURS_BACK: i64 = 24;
 /// the Insights pages read grows with these rows, the "all" ranges by the
 /// daily rows the nightly compaction leaves after 30 days. With a year of
 /// rows, 64 a day took the Discover page's "all" to 47 ms against its
-/// 50 ms budget (owner §1.6.4), and 32 kept it at 21–26 ms
-/// (`docs/decisions/2026-11-07-WK-9b.md`). A real fleet shares about 22,
+/// 50 ms budget (owner §1.6.4), and 32 kept it at 21.2–23.2 ms, rotating
+/// a new set each day or not (`docs/decisions/2026-11-07-WK-9b.md` and
+/// `-WK-9c.md`). A real fleet shares about 22,
 /// the same all day: every worker counts the same sources, strategies and
 /// lanes. A worker's `BY_WORKER` rows follow its fleet rows one to one,
 /// so this bounds them too.

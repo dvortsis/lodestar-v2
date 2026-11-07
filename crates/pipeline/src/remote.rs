@@ -69,6 +69,7 @@ use lodestar_store::{Preparer, QueuedKey, SourceId, flags};
 use tokio::sync::mpsc;
 
 use crate::rollups::{Admit, Rollups, metric};
+use crate::wire::filter_snapshot::WireKeys;
 use crate::wire::{CountersBatch, ResultRecord, ResultsBatch};
 use crate::worker::{Results, WorkerLeases};
 
@@ -169,6 +170,13 @@ pub struct RemoteStats {
     pub late_refused: AtomicU64,
     /// Results fetched before the worker's last purge.
     pub purged: AtomicU64,
+    /// Records refused because they came in clear: every remote record is
+    /// sealed (WK-8), so one in clear is a misbehaving worker.
+    pub clear: AtomicU64,
+    /// Sealed records refused because they didn't open: an unknown or
+    /// expired wire key, a seal that fails under the session's worker id,
+    /// or an inside that isn't its header's one record.
+    pub unopened: AtomicU64,
     /// Records refused for their content (counts, blob, dictionary, a
     /// hybrid hash naming another stored torrent).
     pub refused: AtomicU64,
@@ -372,6 +380,9 @@ pub struct SinkParts {
     /// machine holds no second copy of the dictionaries.
     pub preparer: Mutex<Preparer>,
     pub standing: Arc<dyn Standing>,
+    /// The wire keys sealed records open with (WK-8): today's and the
+    /// day before's. Empty, nothing opens, and every record is refused.
+    pub keys: Arc<WireKeys>,
     pub stored: Arc<dyn StoredKeys>,
     pub clocks: Arc<dyn Clocks>,
     /// `lodestar_network_policy::allows`' `allow_private` for hints.
@@ -578,11 +589,39 @@ impl RemoteIntake {
         parts: &SinkParts,
         now: i64,
     ) -> Option<Taken> {
-        let Ok(batch) = ResultsBatch::decode(payload) else {
+        let Ok((clear, sealed)) = ResultsBatch::decode_with(payload) else {
             bump(&self.stats.undecodable);
             return None;
         };
         bump(&self.stats.batches);
+        let n = (clear.records.len() + sealed.len()) as u64;
+        // Every remote record is sealed (WK-8): only the built-in worker,
+        // which never comes here, sends one in clear. One in clear is
+        // refused and counted, a signal for WK-13; one that doesn't open
+        // (an unknown or old key, a seal that fails under this session's
+        // worker id, or an inside that isn't the clear header's record)
+        // is refused alone and counted, never logged. Either ends its
+        // lease once, as any refused record does, if the sender holds it.
+        let refuse = |key: &InfoHash, token: Token, count: &AtomicU64| {
+            bump(count);
+            if epoch_of(token) == self.epoch {
+                self.authority
+                    .report(worker, key, token, Some(Loss::Invalid as u8));
+            }
+        };
+        for rec in &clear.records {
+            refuse(&rec.key, rec.token, &self.stats.clear);
+        }
+        drop(clear);
+        // Each seal is dropped as it's opened: its ciphertext isn't kept
+        // beside its plaintext.
+        let mut records = Vec::with_capacity(sealed.len());
+        for s in sealed {
+            match parts.keys.open(&s, worker) {
+                Ok(rec) => records.push(rec),
+                Err(_) => refuse(&s.key, s.token, &self.stats.unopened),
+            }
+        }
         let offset = parts.clocks.offset_ms(worker);
         let purge = parts.standing.last_purge(worker);
         let mut budget = Budget {
@@ -591,8 +630,7 @@ impl RemoteIntake {
             path_bytes: BATCH_PATH_BYTES,
         };
         let mut out = Taken::default();
-        let n = batch.records.len() as u64;
-        for rec in batch.records {
+        for rec in records {
             let fetched_at = corrected(rec.metadata_at, offset);
             let late = epoch_of(rec.token) < self.epoch;
             if late {

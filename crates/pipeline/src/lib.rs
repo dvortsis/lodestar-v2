@@ -652,7 +652,7 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, registered, queue, have, backfill_until, stored_at_start, store_filter) =
+        let (store, registered, mut queue, have, backfill_until, stored_at_start, store_filter) =
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
@@ -716,6 +716,15 @@ impl Pipeline {
         ));
         let leases = Arc::new(WorkerLeases::default());
         let mut prior = Vec::new();
+        // A saved key held (tombstoned or quarantined) or blocked by the
+        // filter's hash floor since it was saved is restored only to end
+        // as blocked, as the intake ends one it refuses: never fetched,
+        // and its funnel row is terminal (WK-9c).
+        let engine = config.filter.current();
+        let refuses = |key: &lodestar_metainfo::InfoHash| {
+            held.contains(&key.0) || engine.blocked_hash(&[key.0]).is_some()
+        };
+        let mut refused = std::collections::HashSet::new();
         for q in &queue {
             // A refetch has no discovery hour: it was found at this start.
             let discovered_at = if in_funnel(q.cohort) {
@@ -730,12 +739,18 @@ impl Pipeline {
                 strategy: q.strategy,
                 discovered_at,
             };
+            let token = coordinator.restore(WorkerId::LOCAL, q.info_hash, restored, started_at);
+            if refuses(&q.info_hash) {
+                coordinator.lost(&q.info_hash, token, Loss::Blocked);
+                refused.insert(q.info_hash);
+                continue;
+            }
             if config.remote_workers {
                 prior.push((q.info_hash, restored));
             }
-            let token = coordinator.restore(WorkerId::LOCAL, q.info_hash, restored, started_at);
             leases.insert(q.info_hash, token);
         }
+        queue.retain(|q| !refused.contains(&q.info_hash));
         let preparer = store.preparer();
         // The torrent-cache plugin's source, while it runs (SRC-13b).
         let cache_source = config.torrent_cache.and_then(|plugin| {
