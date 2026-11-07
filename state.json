@@ -5431,7 +5431,10 @@
     "#557 review nit 4: WK-2 and PK-cli both list cli/mod.rs and main.rs; never run them at once",
     "slices.yaml X-sources-api-spec owns: add crates/sources-plugins/src/{prowlarr,stashdb,tpdb,full_scrape,academic,nyaa,archive_org}.rs, crates/sources-plugins/tests/credential_spec.rs, crates/store/src/unverified.rs (purge_preview sharing purge predicates), crates/lodestar/src/ops/tests.rs (runner yes 2026-11-07T00:29Z); preview route GET session-only, no password",
     "Owner §2.19 flag at X-sources-api-spec merge: consent::need tightened for Account (declared required credentials must be stored exactly); purge preview without password, password only at commit",
-    "slices.yaml X-sources-api-spec owns: add crates/api/tests/ops.rs and web/src/lib/features/sources/fixtures.ts (fixture lines for required credential_spec/config_schema; runner yes 2026-11-07T00:30Z)"
+    "slices.yaml X-sources-api-spec owns: add crates/api/tests/ops.rs and web/src/lib/features/sources/fixtures.ts (fixture lines for required credential_spec/config_schema; runner yes 2026-11-07T00:30Z)",
+    "owner-decisions §2.50: owner 2026-11-07 ~00:30Z (relayed by dashboard): \"I'll go with your recommendations. Let's write really good tests that are able to catch any issues if they become apparent.\" = yes to X-soak-screen (a)1+(a)2, (a)3 only if needed; CR-0 24 h gate and CR-SPEC unchanged",
+    "slices.yaml NEW X-soak-screen (opus): owns docs/soak/tools/**, docs/soak/screen-thresholds.json, bench/tests/mmap_retention.rs, bench/examples/mem-cheap.rs, .github/workflows/ci.yml (new soak-screen job), crates/lodestar/src/memstats.rs, metrics.rs + docs/metrics.md (rows), decisions; deps []; before P-v052-cut's soak; + dashboard placement",
+    "v0.5.1 release verdict file (R1'' r5 PASS, R2 gluetun PASS, R-win PASS, R3''' rc.5 + R-legal #558) once CI/Release/E2E green on 12cd25ca"
    ],
    "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title); #557 (05986cde) did the rest up to 00:20Z"
   },
