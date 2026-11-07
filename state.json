@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T15:34Z",
+  "updated_at": "2026-11-07T15:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4039,7 +4039,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-07T15:14Z",
+  "last_heartbeat": "2026-11-07T15:39Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -6425,14 +6425,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T15:14Z",
+    "updated": "2026-11-07T15:39Z",
     "items": [
       {
         "slot": 1,
         "slice": "P-v052-cut",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABi9mwqkZULms8pjL: delta report 63a2c6df..045d4a38, G1-G4 tests, collector 409; cut release/v0.5.2 at 045d4a38; rc.1 PR",
+        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #582 PR A (delta addendum, G1-G4, notice fix, collector 409) CI running; then release/v0.5.2 at 045d4a38 and rc.1 PR",
         "since": "2026-11-07T14:43Z"
       },
       {
@@ -6456,7 +6456,7 @@
         "slice": "X-fetch-meta-reserve",
         "role": "build",
         "agent": "claude",
-        "doing": "reserve announced metadata size (session_01MMjhn9brSHY6bB2g5vzFqq)",
+        "doing": "session_01MMjhn9brSHY6bB2g5vzFqq: #579 fix round (lookups underflow + nits) after delta review CHANGES",
         "since": "2026-11-06T23:31Z"
       }
     ],
