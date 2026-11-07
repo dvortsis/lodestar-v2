@@ -139,5 +139,11 @@
 	"sources_cfg_choose": "Choose one of the options.",
 	"sources_cfg_min_items": "Add at least {min}.",
 	"sources_cfg_max_items": "Add {max} at most.",
-	"sources_cfg_duplicate": "This repeats another entry."
+	"sources_cfg_duplicate": "This repeats another entry.",
+	"sources_cx_credential_fix": "Fill in the marked fields and try again. Nothing was changed.",
+	"sources_cx_credential_keep": "Keep",
+	"sources_cx_credential_remove_yes": "Remove for good",
+	"sources_purge_confirm_count": "Delete {count} torrents found only by {name}",
+	"sources_cfg_not_set": "Not set",
+	"sources_cfg_save_off": "Saving is off: this screen can't show all of this source's settings, and saving would reset the ones it can't. Use the API to change them."
 }

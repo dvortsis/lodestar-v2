@@ -92,7 +92,7 @@
 {#snippet control(f: ScalarField, o: Record<string, string | boolean>, err: string, row: number)}
 	{#if f.kind === 'boolean'}
 		<Checkbox
-			label={f.label}
+			label={row ? m.sources_cfg_item({ label: f.label, n: row }) : f.label}
 			checked={o[f.name] === true}
 			onchange={(e) => (o[f.name] = e.currentTarget.checked)}
 		/>
@@ -108,7 +108,7 @@
 					<Select
 						{...c}
 						options={f.options.map((v) => ({ value: v, label: v }))}
-						placeholder={f.required ? undefined : ''}
+						placeholder={f.required ? undefined : m.sources_cfg_not_set()}
 						bind:value={o[f.name] as string}
 					/>
 				{:else}
@@ -194,6 +194,9 @@
 				{m.sources_cfg_unsupported({ label: f.label })}
 			</p>
 		{/each}
+		{#if skipped.length > 0}
+			<p class="text-small" data-testid="cfg-save-off">{m.sources_cfg_save_off()}</p>
+		{/if}
 		{#if fields.length === 0}
 			<p class="text-muted-text" data-testid="cfg-unsupported">{m.sources_cfg_none()}</p>
 		{/if}
@@ -208,7 +211,7 @@
 			type="submit"
 			form={formId}
 			loading={busy}
-			disabled={drawn.length === 0}
+			disabled={drawn.length === 0 || skipped.length > 0}
 			data-testid="cfg-save"
 		>
 			{m.sources_cfg_save()}

@@ -324,13 +324,43 @@ describe('account sources (SRC-15c)', () => {
 		expect(writes()).toHaveLength(0);
 	});
 
-	it('a stored credential is not asked for again, and can be removed', async () => {
+	it('a stored credential is not asked for again; Remove asks first, with focus on Keep', async () => {
 		setup(source({ ...withSpec, credentials: ['username', 'api_key'] }));
 		net.on('PATCH /sources/{id}/credentials', { body: withSpec });
 		await open(5);
 		await fireEvent.click(await screen.findByTestId('credential-api_key-remove'));
+		const keep = await screen.findByTestId('credential-api_key-keep');
+		await waitFor(() => expect(document.activeElement).toBe(keep));
+		await fireEvent.click(keep);
+		expect(writes()).toHaveLength(0);
+		await fireEvent.click(await screen.findByTestId('credential-api_key-remove'));
+		await fireEvent.click(await screen.findByTestId('credential-api_key-remove-yes'));
 		await waitFor(() => expect(writes()).toHaveLength(1));
 		expect(bodyOf(0)).toEqual({ credentials: { api_key: null } });
+	});
+
+	it('announces missing required fields and focuses the first', async () => {
+		setup(withSpec);
+		await open(5);
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		expect((await screen.findByTestId('consent-problem')).textContent).toContain('marked fields');
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByTestId('credential-username'))
+		);
+	});
+
+	it('turns Confirm off when the server says the notice changed', async () => {
+		setup(withSpec);
+		net.on('PATCH /sources/{id}/credentials', { body: withSpec });
+		net.error('PATCH /sources/{id}', 400, 'consent_required');
+		await open(5);
+		await type('credential-username', 'me');
+		await type('credential-api_key', KEY);
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		await screen.findByTestId('consent-problem');
+		await waitFor(() =>
+			expect((screen.getByTestId('consent-confirm') as HTMLButtonElement).disabled).toBe(true)
+		);
 	});
 
 	it('Escape closes it without sending anything', async () => {
@@ -395,6 +425,18 @@ describe('purge', () => {
 		expect(writes()).toHaveLength(0);
 		const sent = net.sent.find((x) => x.url.includes('/purge/preview'))!;
 		expect(sent.body ?? '').toBe('');
+	});
+
+	it('names the count on the purge button once it has loaded', async () => {
+		setup(nyaa);
+		net.on('GET /sources/{id}/purge/preview', { body: preview });
+		await screen.findByTestId('source-1');
+		await fireEvent.click(screen.getByTestId('source-1-purge'));
+		await waitFor(() =>
+			expect(screen.getByTestId('purge-confirm').textContent).toContain(
+				'Delete 1,204,331 torrents found only by Nyaa'
+			)
+		);
 	});
 
 	it('says the counts can grow while the source is on', async () => {
@@ -532,26 +574,41 @@ describe('settings form (SRC-15c)', () => {
 					maxItems: 2,
 					uniqueItems: true
 				},
-				level: { type: 'integer', minimum: 1, maximum: 5, default: 2 },
-				extra: { oneOf: [{ type: 'string' }], title: 'Extra' }
+				level: { type: 'integer', minimum: 1, maximum: 5, default: 2 }
 			}
 		}
 	});
-	const openSettings = async () => {
-		await screen.findByTestId('source-8');
-		await fireEvent.click(screen.getByTestId('source-8-settings'));
+	const odd = source({
+		...cache,
+		id: 9,
+		name: 'Odd',
+		config_schema: {
+			type: 'object',
+			properties: { extra: { oneOf: [{ type: 'string' }], title: 'Extra' }, n: { type: 'integer' } }
+		}
+	});
+	const openSettings = async (id = 8) => {
+		await screen.findByTestId(`source-${id}`);
+		await fireEvent.click(screen.getByTestId(`source-${id}-settings`));
 		return screen.findByRole('dialog');
 	};
 
 	it('draws the fields, notes what it cannot draw, and checks before sending', async () => {
 		setup(cache);
 		await openSettings();
-		expect(screen.getByTestId('cfg-unsupported').textContent).toContain('edit through the API');
 		await fireEvent.input(screen.getByLabelText(/level/i), { target: { value: '9' } });
 		await fireEvent.click(screen.getByTestId('cfg-save'));
 		await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('5 or less'));
 		expect(screen.getByTestId('cfg-problem')).toBeTruthy();
 		expect(writes()).toHaveLength(0);
+	});
+
+	it('turns Save off and says why when a setting cannot be drawn', async () => {
+		setup(odd);
+		await openSettings(9);
+		expect((screen.getByTestId('cfg-save') as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByTestId('cfg-save-off').textContent).toContain('Use the API');
+		expect(screen.getByTestId('cfg-unsupported').textContent).toContain('edit through the API');
 	});
 
 	it('sends the typed config and shows what the server then says', async () => {

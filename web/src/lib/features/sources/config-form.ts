@@ -124,10 +124,12 @@ const initial = (f: ScalarField): string | boolean =>
 			? ''
 			: String(f.default);
 
-/** A row nobody filled in: every cell still holds its default (or is empty). */
+/** A row nobody filled in: every cell still holds its field's default. */
 export const isBlankRow = (f: ListField, r: Row): boolean =>
 	f.item.every((i) =>
-		i.kind === 'boolean' ? r[i.name] === false : String(r[i.name] ?? '').trim() === ''
+		i.kind === 'boolean'
+			? r[i.name] === (i.default === true)
+			: String(r[i.name] ?? '').trim() === String(initial(i))
 	);
 
 export const blankRow = (f: ListField): Row =>
@@ -172,9 +174,9 @@ function checkScalar(f: ScalarField, v: string | boolean): string {
 		return '';
 	}
 	if (f.kind === 'enum') return f.options.includes(t) ? '' : m.sources_cfg_choose();
-	if (f.minLength !== undefined && t.length < f.minLength)
+	if (f.minLength !== undefined && [...t].length < f.minLength)
 		return m.sources_cfg_short({ min: f.minLength });
-	if (f.maxLength !== undefined && t.length > f.maxLength)
+	if (f.maxLength !== undefined && [...t].length > f.maxLength)
 		return m.sources_cfg_long({ max: f.maxLength });
 	return '';
 }

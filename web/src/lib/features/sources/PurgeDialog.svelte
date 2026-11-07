@@ -296,7 +296,11 @@
 				loading={busy}
 				data-testid="purge-confirm"
 			>
-				{m.sources_purge_confirm({ name: s.name })}
+				{#if previewState === 'ready' && preview}
+					{m.sources_purge_confirm_count({ count: count(preview.torrents_deleted), name: s.name })}
+				{:else}
+					{m.sources_purge_confirm({ name: s.name })}
+				{/if}
 			</Button>
 		{:else}
 			<Button id={cancelId} onclick={close} data-testid="purge-close">{m.sources_cx_close()}</Button

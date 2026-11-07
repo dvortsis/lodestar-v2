@@ -7,7 +7,7 @@
 	// write-only, never prefilled or read back, sent once to `PATCH /sources/{id}/credentials` and
 	// cleared from the component whether that worked or not. Enabling is then asked of the server,
 	// whose answer is shown as it is (the gate stays closed in v0.5.2: no client-side bypass).
-	import { untrack } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { api, ApiError } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
@@ -52,6 +52,8 @@
 	let creds = $state<Record<string, string>>({});
 	let credErrors = $state<Record<string, string>>({});
 	let saved = $state(false);
+	// The credential whose Remove awaits confirmation (removing is destructive and can't be undone).
+	let removing = $state<string | null>(null);
 	// A changed notice: Confirm stays off until the dialog is reopened, so the new list is read first.
 	let stale = $state(false);
 
@@ -63,6 +65,7 @@
 		creds = {};
 		credErrors = {};
 		saved = false;
+		removing = null;
 	}
 	// The password never outlives the dialog: opening and closing both start from an empty field.
 	$effect(() => {
@@ -80,7 +83,14 @@
 		for (const f of spec)
 			if (f.required && !storedHas(f.name) && (creds[f.name] ?? '') === '')
 				credErrors[f.name] = m.sources_cx_credential_needed();
-		if (Object.keys(credErrors).length > 0) return;
+		if (Object.keys(credErrors).length > 0) {
+			problem = m.sources_cx_credential_fix();
+			const first = Object.keys(credErrors)[0]!;
+			(
+				document.querySelector(`[data-testid="credential-${first}"]`) as HTMLElement | null
+			)?.focus();
+			return;
+		}
 		problem = '';
 		saved = false;
 		busy = true;
@@ -102,15 +112,28 @@
 			open = false;
 		} catch (err) {
 			// After a save the refusal is about turning on; "Nothing was changed" would contradict it.
-			problem = enableRefusal(err).text.replace(/ Nothing was changed\.$/, '');
+			const r = enableRefusal(err);
+			problem = r.text.replace(/ Nothing was changed\.$/, '');
+			if (r.stale) {
+				stale = true;
+				onstale();
+			}
 		} finally {
 			creds = {};
 			busy = false;
 		}
 	}
 
+	const cancelRemoveId = `${uid}-keep`;
+	async function askRemove(name: string) {
+		removing = name;
+		await tick();
+		document.getElementById(cancelRemoveId)?.focus();
+	}
+
 	async function remove(name: string) {
 		if (busy) return;
+		removing = null;
 		busy = true;
 		problem = '';
 		try {
@@ -219,10 +242,27 @@
 									spellcheck={false}
 									data-testid="credential-{f.name}"
 								/>
-								{#if storedHas(f.name)}
+								{#if storedHas(f.name) && removing === f.name}
+									<Button
+										id={cancelRemoveId}
+										dense
+										onclick={() => (removing = null)}
+										data-testid="credential-{f.name}-keep"
+									>
+										{m.sources_cx_credential_keep()}
+									</Button>
 									<Button
 										dense
+										variant="danger"
 										onclick={() => remove(f.name)}
+										data-testid="credential-{f.name}-remove-yes"
+									>
+										{m.sources_cx_credential_remove_yes()}<span class="sr-only"> {f.label}</span>
+									</Button>
+								{:else if storedHas(f.name)}
+									<Button
+										dense
+										onclick={() => askRemove(f.name)}
 										data-testid="credential-{f.name}-remove"
 									>
 										{m.sources_cx_credential_remove()}<span class="sr-only"> {f.label}</span>
