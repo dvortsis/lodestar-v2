@@ -3537,16 +3537,29 @@
    "session": "session_01MMjhnBWxp745BwvUruYDGs"
   },
   "X-win-log-held-open": {
-   "status": "running",
-   "session": "session_01MMjhnBTctxueTXBgxFSUev"
+   "status": "merged",
+   "session": "session_01MMjhnBTctxueTXBgxFSUev",
+   "pr": 555,
+   "merge": "1f4c24d1"
   },
   "X-fetch-meta-reserve": {
    "status": "running",
    "session": "session_01MMjhn9brSHY6bB2g5vzFqq"
   },
   "R-legal-status": {
+   "status": "merged",
+   "session": "session_01MMjhnBmc7zDQFpNVzgnVYD",
+   "pr": 558,
+   "merge": "12cd25ca",
+   "base": "release/v0.5.1"
+  },
+  "WK-5": {
    "status": "running",
-   "session": "session_01MMjhnBmc7zDQFpNVzgnVYD"
+   "session": "session_01MMjhnANUoXZj6CqJZWcoEQ"
+  },
+  "X-sources-api-spec": {
+   "status": "running",
+   "session": "session_01MMjhn9ARUjR5QVyemUwrx1"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5799,6 +5812,10 @@
     "detail": "MSI options pass (DEFENDER_EXCLUSION=1 WEB_FIREWALL=1, REMOVE_DATA=1) and reduced MSI-defaults pass both clean; firewall back to 739 rules"
    },
    "windows": "CLOSED 2026-10-31T18:10Z: portable PASS, MSI service-mode PASS (7h09m), MSI options + defaults passes PASS"
+  },
+  "v051_candidate": {
+   "sha": "12cd25ca38f8eac1a930316623dec742c1ba585d",
+   "note": "R-legal-status merged; CI+Release+E2E dispatched 00:19Z; go to owner on green"
   }
  },
  "owner_standing": {
@@ -6131,7 +6148,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-07T00:14Z",
+  "updated": "2026-11-07T00:22Z",
   "items": [
    {
     "slot": 1,
@@ -6143,19 +6160,19 @@
    },
    {
     "slot": 2,
-    "slice": "X-win-log-held-open",
-    "role": "build",
-    "agent": "claude",
-    "doing": "lodestar.log rotation retry delay (session_01MMjhnBTctxueTXBgxFSUev)",
-    "since": "2026-11-06T23:22Z"
+    "slice": "WK-5",
+    "role": "core (workers)",
+    "agent": "session_01MMjhnANUoXZj6CqJZWcoEQ",
+    "doing": "Assign v1 payload and placement planner",
+    "since": "2026-11-07T00:22Z"
    },
    {
     "slot": 3,
-    "slice": "R-legal-status",
-    "role": "release docs (§2.48)",
-    "agent": "session_01MMjhnBmc7zDQFpNVzgnVYD",
-    "doing": "operator-guidance baseline line, PR into release/v0.5.1",
-    "since": "2026-11-07T00:14Z"
+    "slice": "X-sources-api-spec",
+    "role": "core (sources API)",
+    "agent": "session_01MMjhn9ARUjR5QVyemUwrx1",
+    "doing": "credential spec, config_schema, purge dry-run count",
+    "since": "2026-11-07T00:22Z"
    },
    {
     "slot": 4,
