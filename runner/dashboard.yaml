@@ -340,6 +340,7 @@ placement:
   - X-claim-store-polish
   - X-fetch-pool-bytes
   - X-fetch-meta-reserve
+  - X-refetch-private
   - X-gs-gate-polish
   - X-soak-screen
   - X-soak-screen-polish
