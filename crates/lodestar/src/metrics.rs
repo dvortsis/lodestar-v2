@@ -364,7 +364,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     o.one(
         "remote_undecodable_total",
         "counter",
-        "Results payloads that didn't decode (answered, then dropped).",
+        "Results or Counters payloads that didn't decode (answered, then dropped).",
         get(&r.undecodable),
     );
     o.one(
@@ -383,6 +383,33 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "remote_hints_total",
         "outcome=\"dropped\"",
         get(&r.hints_dropped),
+    );
+    o.family(
+        "remote_counters_total",
+        "counter",
+        "Counters from remote workers, accepted or refused.",
+    );
+    o.value(
+        "remote_counters_total",
+        "outcome=\"accepted\"",
+        get(&r.counters),
+    );
+    o.value(
+        "remote_counters_total",
+        "outcome=\"refused\"",
+        get(&r.counters_refused),
+    );
+    o.one(
+        "remote_grants_held_back_total",
+        "counter",
+        "New leases not granted while the writer was behind (per key).",
+        get(&r.held_back),
+    );
+    o.one(
+        "remote_parked_total",
+        "counter",
+        "Waiting keys handed to the built-in worker while no cluster server ran.",
+        get(&r.parked),
     );
 
     let h = m.have();

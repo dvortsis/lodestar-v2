@@ -475,6 +475,7 @@ code has one, and a code with none is never compacted):
 | 14 | `FUNNEL_EVENTS` | Sum | the hours' sum |
 | 15 | `REMOVED` | Sum | the hours' sum |
 | 16 | `LATE_RESULTS` (by cohort) | Sum | the cohort day's count |
+| 17 | `BY_WORKER` | Sum | the hours' sum |
 | cohort rows | every stage and loss | Sum | the cohort day's counts |
 
 **New codes.**
@@ -484,6 +485,7 @@ code has one, and a code with none is never compacted):
 | 14 | `FUNNEL_EVENTS` | dim = `Stage` code, key = `Loss` code (0 for a stage reached) | the writer, from the funnel rows it flushes, at the flush hour. Crawl keys only: a start-time refetch of an incomplete import writes no funnel row (B-refetch-funnel) | Event time (within the 5 s flush) |
 | 15 | `REMOVED` | dim = content type, or 255 `UNCLASSIFIED`; key 0 | the store's `torrents_removed` trigger, for a searchable torrent deleted by any path | Event time (the delete) |
 | 16 | `LATE_RESULTS` | dim = the source that found the key first (the coordinator's own record); key 0 | the remote intake, when it commits a late result (plan Q7, [WK-9](decisions/2026-11-07-WK-9.md)): a key whose first lease already ended with a terminal outcome. The funnel then reconciles as harvested = Σ terminal − `LATE_RESULTS` + in flight | Discovery cohort |
+| 17 | `BY_WORKER` | dim = the remote worker's id, from its authenticated session (never its payload); key = `metric << 16 \| dim << 8 \| key` of the counter's own metric, dim and key | the remote intake, beside the fleet's own row for the same counter, under its bounds ([WK-9b](decisions/2026-11-07-WK-9b.md)): only `REDISCOVERED`, `DROPPED`, `SCRAPED` and `DHT_SCRAPES`, each in its own dim and key domain; hours from 24 back to now on the coordinator's clock after offset correction; at most 64 rows per worker per hour and 128 keys per worker per day; at most 2³² per row per worker per hour | Event time (the worker's hour, corrected) |
 
 **`insights_state`** (one row each): `compacted_before_day`,
 `last_compaction_at` (Unix seconds, 0 = never), `funnel_events_since_hour`
@@ -900,11 +902,14 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 
 ## Remote intake (WK-9, 2026-11-07)
 
-See [the decision](decisions/2026-11-07-WK-9.md). Remote workers' `Results` as the coordinator takes them. Every series renders on every install; on a single machine they're all 0. No series carries a worker name or address. Counters, grant backpressure and the fetch queue's remote rows follow in WK-9b.
+See the decisions for [WK-9](decisions/2026-11-07-WK-9.md) and [WK-9b](decisions/2026-11-07-WK-9b.md). Remote workers' `Results` and `Counters` as the coordinator takes them, grant backpressure, and parked keys. Every series renders on every install; on a single machine they're all 0. No series carries a worker id, name or address, and every `outcome` value is from the fixed list below.
 
 | Series | Type | Meaning |
 | --- | --- | --- |
 | `remote_records_total{outcome}` | counter | Records in remote workers' `Results` batches, by what became of them: `committed` (rebuilt and handed to the writer, which re-judges it; a resend read before the first copy's commit is handed over too, and stored once), `stale` (a token that isn't the sender's current lease; or a late result whose key is stored, in flight, or unknown to this run's fetch queue), `late` (a result from before a coordinator restart, committed under plan Q7; also in `committed`), `late_refused` (a late result from a quarantined, revoked or purged worker), `purged` (leased before the worker's last purge, by the coordinator's own time), `refused` (its size, file count, piece length or piece count doesn't follow from its file list, its blob doesn't decode within its caps (bytes, depth, files, path bytes, components) or names an unknown dictionary, or a hybrid's other hash names another stored torrent: the lease ends as `invalid`). |
-| `remote_undecodable_total` | counter | `Results` payloads that didn't decode. They're answered (so the worker drops them) and nothing in them is used. |
+| `remote_undecodable_total` | counter | `Results` or `Counters` payloads that didn't decode. They're answered (so the worker drops them) and nothing in them is used. |
 | `remote_backpressure_total` | counter | `Results` batches refused for now because the intake's queue in front of the writer was full; the worker sends them again later (§19.5). |
 | `remote_hints_total{outcome}` | counter | Peer hints for a key the built-in worker holds, or that it found for a key a remote worker holds: `relayed` (in memory) or `dropped` (refused by the network policy: loopback, private, link-local, documentation and other special-use addresses). Hints are never stored (§18.7). The server's `cluster_` series count the remote-to-remote relay. |
+| `remote_counters_total{outcome}` | counter | Counters in remote workers' `Counters` batches: `accepted` (added to the fleet's rollup row and to the worker's `BY_WORKER` row) or `refused` (a metric the coordinator counts itself, a dim or key outside its metric's domain, an hour outside the window, or over a row, hour or day cap). These two values only. |
+| `remote_grants_held_back_total` | counter | Keys denied a new lease because the writer's queue was at or past its high-water mark (three quarters full) or the intake's queue was full (§19.5 backpressure), per key. `cluster_busy_total` counts the same denials on the server's side. |
+| `remote_parked_total` | counter | Keys waiting for a re-grant that went to the built-in worker because no cluster server was running ("Allow workers" off). |

@@ -59,17 +59,18 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 
 use lodestar_cluster::proto::{HintItem, Outcome, Payload};
 use lodestar_cluster::{
-    ClusterServer, InboundSink, Lease, LeaseAuthority, RestoredLease, StoredKeys, Token, WorkerId,
+    ClusterServer, GrantAdmission, InboundSink, Lease, LeaseAuthority, RestoredLease, StoredKeys,
+    Token, WorkerId,
 };
 use lodestar_filter::{Trail, Verdict};
 use lodestar_metainfo::{InfoHash, Limits};
 use lodestar_sources::{Discovery, Found, Loss};
-use lodestar_store::{Preparer, SourceId, flags};
+use lodestar_store::{Preparer, QueuedKey, SourceId, flags};
 use tokio::sync::mpsc;
 
-use crate::rollups::{Rollups, metric};
-use crate::wire::{ResultRecord, ResultsBatch};
-use crate::worker::Results;
+use crate::rollups::{Admit, Rollups, metric};
+use crate::wire::{CountersBatch, ResultRecord, ResultsBatch};
+use crate::worker::{Results, WorkerLeases};
 
 /// Payloads waiting in front of the writer, at most (each ≤ 512 KiB).
 pub const INTAKE_QUEUE: usize = 16;
@@ -111,6 +112,9 @@ struct Budget {
 /// much and still be clamped at the claim (`ServerConfig::max_skew_ms`):
 /// the margin a purge cutoff allows for (seconds).
 const SKEW_SECS: i64 = 60;
+
+/// Parked keys handed to the built-in worker per heartbeat, at most.
+pub const PARKED_PER_BEAT: usize = 512;
 
 /// A late result is possible only while a spool can hold one (24 h,
 /// owner §2.17); the start's records are dropped after this.
@@ -178,6 +182,15 @@ pub struct RemoteStats {
     /// Peer hints relayed to a holder, and dropped by the network policy.
     pub hints: AtomicU64,
     pub hints_dropped: AtomicU64,
+    /// Counters accepted and refused (out of domain, out of the window,
+    /// over a row or day cap).
+    pub counters: AtomicU64,
+    pub counters_refused: AtomicU64,
+    /// New leases not granted while the writer was past its high-water
+    /// mark or the intake's queue was full (per key).
+    pub held_back: AtomicU64,
+    /// Waiting keys handed to the built-in worker while no server ran.
+    pub parked: AtomicU64,
 }
 
 fn bump(c: &AtomicU64) {
@@ -260,8 +273,9 @@ impl Prior {
         })
     }
 
-    fn remove(&mut self, key: &InfoHash) {
-        self.keys.remove(&key.0);
+    /// Takes the key's record: `false` if there was none (already used).
+    fn remove(&mut self, key: &InfoHash) -> bool {
+        self.keys.remove(&key.0).is_some()
     }
 }
 
@@ -279,6 +293,8 @@ pub struct RemoteParts {
     pub prior: Prior,
     /// Sources whose every find is private (`finds_private`), as a bitset.
     pub private_sources: u64,
+    /// The built-in worker's leases, for parked keys handed to it.
+    pub leases: Arc<WorkerLeases>,
 }
 
 impl std::fmt::Debug for RemoteParts {
@@ -300,6 +316,10 @@ pub struct RemoteIntake {
     epoch: u32,
     prior: Mutex<Prior>,
     private_sources: u64,
+    leases: Arc<WorkerLeases>,
+    /// Writer-queue fill at or past which no new lease is granted.
+    high_water: usize,
+    admit: Mutex<Admit>,
     /// The server running now, for hints the built-in worker found.
     server: RwLock<Option<(Weak<ClusterServer>, bool)>>,
     pub stats: Arc<RemoteStats>,
@@ -362,6 +382,7 @@ pub enum Refusal {
 
 impl RemoteIntake {
     pub fn new(p: RemoteParts) -> RemoteIntake {
+        let high_water = p.writer.max_capacity() * 3 / 4;
         RemoteIntake {
             authority: p.authority,
             writer: RwLock::new(Some(p.writer)),
@@ -370,8 +391,105 @@ impl RemoteIntake {
             epoch: p.epoch,
             prior: Mutex::new(p.prior),
             private_sources: p.private_sources,
+            high_water,
+            leases: p.leases,
+            admit: Mutex::new(Admit::default()),
             server: RwLock::new(None),
             stats: Arc::new(RemoteStats::default()),
+        }
+    }
+
+    /// Writer-queue entries waiting now (the built-in worker's included).
+    pub fn writer_fill(&self) -> usize {
+        self.writer().map_or(0, |w| w.max_capacity() - w.capacity())
+    }
+
+    /// Adds one `Counters` payload to the rollups, under [`Admit`]'s
+    /// bounds: the fleet's own row and the worker's [`metric::BY_WORKER`]
+    /// row, whose dim is `worker`, the authenticated session's. `false` if
+    /// it didn't decode (it's answered and dropped all the same).
+    pub fn counters(&self, worker: WorkerId, payload: &[u8], offset_ms: i64, now: i64) -> bool {
+        let Ok(batch) = CountersBatch::decode(payload) else {
+            bump(&self.stats.undecodable);
+            return false;
+        };
+        let mut admit = lock(&self.admit);
+        for c in batch.counters {
+            let Some(c) = admit.admit(worker, c, offset_ms, now) else {
+                bump(&self.stats.counters_refused);
+                continue;
+            };
+            bump(&self.stats.counters);
+            self.rollups
+                .add_dim(c.hour * 3600, c.metric, c.dim, c.key, c.value);
+            self.rollups.add_dim(
+                c.hour * 3600,
+                metric::BY_WORKER,
+                worker.0,
+                metric::by_worker_key(c.metric, c.dim, c.key),
+                c.value,
+            );
+        }
+        true
+    }
+
+    /// Remote and waiting leases as fetch-queue rows (§19.3: outstanding
+    /// leases are saved with the coordinator's fetch queue). After a
+    /// restart the built-in worker holds them, and a late result for one
+    /// finds its record (plan Q7).
+    pub fn queue_rows(&self) -> Vec<QueuedKey> {
+        self.authority
+            .outstanding_remote()
+            .into_iter()
+            .map(|(key, l)| QueuedKey {
+                info_hash: key,
+                source: l.source,
+                cohort: l.cohort,
+                strategy: l.strategy,
+                priority: 0,
+                attempts: 0,
+                private_source: self.private(l.sources | (1u64 << l.source.get())),
+            })
+            .collect()
+    }
+
+    /// While no cluster server runs (workers off, WK-1), keys waiting for a
+    /// re-grant go to the built-in worker instead of waiting for a remote
+    /// one: not a harvest, with their cohort and sources kept. A key the
+    /// pool has no room for goes back to wait.
+    pub fn hand_parked(&self, now: i64) {
+        let serving = self
+            .server
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|(s, _)| s.strong_count() > 0);
+        if serving || self.authority.pending() == 0 {
+            return;
+        }
+        let Some(pool) = self.pool() else { return };
+        for (_, keys) in self
+            .authority
+            .regrant_pending(&[WorkerId::LOCAL], PARKED_PER_BEAT, now)
+        {
+            for (key, token) in keys {
+                let Some(lease) = self.authority.current(&key, token) else {
+                    continue;
+                };
+                let d = Discovery {
+                    source: lease.source,
+                    found: Found::key(key, lease.strategy),
+                    at: lease.discovered_at,
+                    reply: false,
+                };
+                self.leases.insert(key, token);
+                if pool.try_send(d).is_err() {
+                    self.leases.take(&key);
+                    self.authority.requeue(&key, token);
+                } else {
+                    bump(&self.stats.parked);
+                }
+            }
         }
     }
 
@@ -524,12 +642,14 @@ impl RemoteIntake {
             strategy: record.strategy,
             discovered_at: record.discovered_at,
         };
-        // Its record is used up here, before the costly rebuild: a refused
-        // late result can't be replayed for another rebuild (each replay
-        // finds no record and is stale), and a committed one isn't late
-        // twice. Rebuilt before any lease exists, so a refusal counts
-        // nothing.
-        lock(&self.prior).remove(&key);
+        // Its record is used up here, before the costly rebuild, and taking
+        // it is the check: of any number of copies, however they arrive,
+        // one finds the record; the rest are stale and never rebuilt.
+        // Rebuilt before any lease exists, so a refusal counts nothing.
+        if !lock(&self.prior).remove(&key) {
+            bump(&self.stats.stale);
+            return None;
+        }
         let Ok(mut r) = self.rebuild(worker, rec, &lease, fetched_at, parts, budget, now) else {
             bump(&self.stats.refused);
             return None;
@@ -583,19 +703,18 @@ impl RemoteIntake {
             {
                 return Err(Refusal::UnknownDictionary);
             }
-            let cap = usize::try_from(torrent.info_size)
+            let own = usize::try_from(torrent.info_size)
                 .unwrap_or(usize::MAX)
                 .saturating_add(BLOB_SLACK)
-                .min(MAX_BLOB)
-                .min(budget.bytes);
+                .min(MAX_BLOB);
+            let cap = own.min(budget.bytes);
             // A refused blob may have taken its whole cap: charged as such,
             // so a batch of bombs costs the budget, not 1,024 caps. Its
-            // shape is read before any path is built, and its paths may
-            // copy no more than its own byte cap (and the batch's rest).
-            // Directory paths are copied into each child's, which the info
-            // dict doesn't spell out: an honest deep tree can outweigh it,
-            // so a record's paths are bounded by the largest dict, not its
-            // own (`MAX_BLOB`, 16 MiB), and the batch's rest.
+            // shape is read before any path is built. Directory paths are
+            // copied into each child's, which the info dict doesn't spell
+            // out: an honest deep tree can outweigh it, so a record's paths
+            // are bounded by the largest dict (`MAX_BLOB`, 16 MiB) and the
+            // batch's rest.
             let paths = budget.path_bytes.min(MAX_BLOB as u64);
             let measured = preparer.measure_files(&torrent.files, cap, budget.components, paths);
             let (raw, shape) = match measured {
@@ -603,8 +722,15 @@ impl RemoteIntake {
                 Err(e) => {
                     budget.bytes = budget.bytes.saturating_sub(cap);
                     // Over what the batch has left: refused before decoding.
-                    if matches!(e, lodestar_store::Error::Corrupt(why) if why == lodestar_store::OVER_BUDGET)
-                    {
+                    let over = match &e {
+                        lodestar_store::Error::Corrupt(why) => *why == lodestar_store::OVER_BUDGET,
+                        // Over a cap the batch's remaining bytes set.
+                        lodestar_store::Error::Compression(io) => {
+                            io.kind() == std::io::ErrorKind::InvalidData && cap < own
+                        }
+                        _ => false,
+                    };
+                    if over {
                         bump(&self.stats.over_budget);
                     }
                     return Err(Refusal::Blob);
@@ -851,6 +977,24 @@ impl RemoteSink {
     }
 }
 
+impl GrantAdmission for RemoteSink {
+    /// No new lease while the writer is past its high-water mark or the
+    /// intake's queue is full (§19.5): workers harvest less, and nothing
+    /// piles up. Keys already held aren't asked about, and late results
+    /// never come through a grant.
+    fn admit(&self, _worker: WorkerId, wanted: usize) -> usize {
+        if self.intake.writer_fill() >= self.intake.high_water || self.queue.capacity() == 0 {
+            self.intake
+                .stats
+                .held_back
+                .fetch_add(wanted as u64, Ordering::Relaxed);
+            0
+        } else {
+            wanted
+        }
+    }
+}
+
 impl InboundSink for RemoteSink {
     fn results(&self, worker: WorkerId, batch: Payload) -> bool {
         match self.queue.try_send((worker, batch)) {
@@ -862,6 +1006,15 @@ impl InboundSink for RemoteSink {
                 false
             }
         }
+    }
+
+    fn counters(&self, worker: WorkerId, batch: Payload) -> bool {
+        let offset = self.parts.clocks.offset_ms(worker);
+        self.intake
+            .counters(worker, &batch.bytes, offset, crate::unix_now());
+        // Answered even when refused or undecodable: nothing in it is kept
+        // for later, so the worker's spool can let it go.
+        true
     }
 
     /// The server ended their leases (losses) or kept them (`Fetched`,

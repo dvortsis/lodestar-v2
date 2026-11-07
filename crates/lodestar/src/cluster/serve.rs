@@ -349,8 +349,7 @@ impl Inner {
             authority: self.wiring.authority.clone(),
             stored: Some(check),
             sink: attached.as_ref().map(|a| a.sink.clone() as _),
-            // Grants held back while the writer is behind: WK-9b.
-            admission: None,
+            admission: attached.as_ref().map(|a| a.sink.clone() as _),
         };
         let server = ClusterServer::with_hooks(pki, self.wiring.clock.clone(), config, hooks)
             .map_err(|e| StartError::pki("server", &e))?;

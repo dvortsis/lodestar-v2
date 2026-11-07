@@ -13,7 +13,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use lodestar_store::filetree::{decode, encode, shape};
+use lodestar_store::filetree::{MORE_DIRS, MORE_FILES, decode, encode, shape};
 use lodestar_store::CodecError;
 use lodestar_store::{Codec, Compressed, Preparer};
 
@@ -31,7 +31,7 @@ fuzz_target!(|data: &[u8]| {
     // `decode` runs only on what the shape bounds, as `decode_files` does.
     match shape(body, COMPONENTS as usize, 200_000) {
         // Refused on its counts: a limit, not a reading; decode may read it.
-        Err(CodecError::Corrupt("more directories or files than allowed")) => {}
+        Err(CodecError::Corrupt(MORE_DIRS | MORE_FILES)) => {}
         Err(_) => assert!(decode(body).is_err(), "shape refused what decode reads"),
         Ok(s) if s.components <= COMPONENTS && s.path_bytes <= PATH_BYTES => match decode(body) {
             Ok(tree) => {
