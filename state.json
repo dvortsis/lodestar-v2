@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T15:14Z",
+  "updated_at": "2026-11-07T15:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5720,6 +5720,11 @@
       "id": "gs-polish-581",
       "added": "2026-11-07T15:14Z",
       "text": "#581 X-gs-gate-polish merged (709f2f1e) on runner review (12-line docs/timeout diff, base touched by nothing since); archived. Slot 2 -> SRC-G. P-v052-cut G4: smoke.sh/smoke.ps1 tightened (full refusal line + exit 2), release.yml unchanged; Docker job text-only check is a follow-up."
+    },
+    {
+      "id": "r579-delta-1525",
+      "added": "2026-11-07T15:25Z",
+      "text": "#579 delta review CHANGES: lookups underflow in pool.rs lose()/stream-end (pre-existing CR-1a-S bug on main, streaming switch off by default; PR widens it). Fix: lose() decrements only if requests.remove is_some; stream-end make_ready if has_untried else back_off; two tests. Nits: metrics.md:858 row, freed.notify at pool.rs:442, starved+partials push under one lock. Relayed; P-v052-cut told to list as known issue in inactive feature, backport after #579 merges."
     }
   ],
   "main_health": [
