@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T18:39Z",
+  "updated_at": "2026-11-07T18:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3545,8 +3545,10 @@
       "merge": "1f4c24d1"
     },
     "X-fetch-meta-reserve": {
-      "status": "running",
-      "session": "session_01MMjhn9brSHY6bB2g5vzFqq"
+      "status": "merged",
+      "session": "session_01MMjhn9brSHY6bB2g5vzFqq",
+      "pr": 579,
+      "merge": "30e956bf"
     },
     "R-legal-status": {
       "status": "merged",
@@ -3681,6 +3683,11 @@
     "X-wk15-nits": {
       "status": "running",
       "session": "session_01MMjhn9mqDCgbWNwmfQuB9V"
+    },
+    "WK-10": {
+      "status": "running",
+      "session": "session_01MMjhnAgARNjXHd2povCJ2f",
+      "brief": "briefs/WK-10.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5825,6 +5832,11 @@
       "id": "agent-mailbox-branch",
       "added": "2026-11-07T18:38Z",
       "text": "Orphan branch agent-mailbox (dashboard session <-> owner Antigravity agent message files), owner-approved per dashboard session 18:38Z. Not stray work: never merge, no PR, leave alone."
+    },
+    {
+      "id": "pool-579-nits",
+      "added": "2026-11-07T18:58Z",
+      "text": "#579 merged 30e956bf. Non-blocking from delta review: (1) starved-claim notify_waiters() in pool.rs ~456 has no test; (2) pre-existing missed wakeup ~474: granting a starved partial claim clears starved without notify (latency only). Fold into next pool.rs slice. rc.2 backport of #579 owed (P-v052-cut)."
     }
   ],
   "main_health": [
@@ -6520,7 +6532,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T18:39Z",
+    "updated": "2026-11-07T18:58Z",
     "items": [
       {
         "slot": 1,
@@ -6548,11 +6560,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-fetch-meta-reserve",
+        "slice": "WK-10",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9brSHY6bB2g5vzFqq: #579 fix round (lookups underflow + nits) after delta review CHANGES",
-        "since": "2026-11-06T23:31Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: worker runtime (sharded DHT, pool cap, claims, live Assign)",
+        "since": "2026-11-07T18:58Z"
       }
     ],
     "limit": 8,
