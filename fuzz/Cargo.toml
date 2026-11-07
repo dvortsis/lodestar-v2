@@ -142,6 +142,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "cluster_filter_snapshot"
+path = "fuzz_targets/cluster_filter_snapshot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "update"
 path = "fuzz_targets/update.rs"
 test = false

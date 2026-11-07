@@ -10,6 +10,7 @@
 //!
 //! Later slices add one `mod` line each here (placement, intake, ops…).
 
+pub mod filter;
 pub mod have;
 pub mod placement;
 pub mod serve;

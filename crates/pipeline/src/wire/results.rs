@@ -58,6 +58,17 @@
 //!           [enrich_version:ivar content_type:u8 junk_score:u8 comp:bytes data:bytes]
 //! ```
 //! A `[field]` is present exactly when its bit in `flags` is set ([`flag`]).
+//!
+//! A record the commit would hold back (WK-8) goes **sealed** instead,
+//! flags exactly `SEALED | ACTION` ([`flag::SEALED`]):
+//!
+//! ```text
+//! sealed  = flags:uvar info_hash:[20] token:uvar rule_version:uvar action:u8
+//!           key_id:uvar sealed:bytes
+//! ```
+//! `sealed` holds a whole version-1 batch of that one record, sealed
+//! (`crate::wire::filter_snapshot`). [`ResultsBatch::decode`] leaves sealed
+//! records out; [`ResultsBatch::decode_with`] returns them.
 
 use std::collections::HashSet;
 
@@ -68,6 +79,7 @@ use lodestar_metainfo::Limits;
 use lodestar_metainfo::{InfoHash, InfoHashV2, TextEncoding, info_without_pieces};
 use lodestar_store::{Codec, Compressed, Enriched, Prepared, flags};
 
+use super::filter_snapshot::SealedRecord;
 use super::{Error, MAX_PAYLOAD, Reader, Result, Writer};
 
 /// The format version this build writes and the only one it reads.
@@ -130,8 +142,13 @@ pub mod flag {
     pub const FIX_ADULT: u64 = 1 << 9;
     pub const PRIVATE_SOURCE: u64 = 1 << 10;
     pub const SOURCE_ADULT: u64 = 1 << 11;
-    /// Every bit version 1 defines; any other refuses the record.
+    /// Every bit a record in clear may set; any other refuses the record.
     pub const ALL: u64 = (1 << 12) - 1;
+    /// A held-back record, sealed (WK-8, [`SealedRecord`](super::super::filter_snapshot::SealedRecord)):
+    /// its flags are exactly `SEALED | ACTION`, and its layout is
+    /// `info_hash:[20] token:uvar rule_version:uvar action:u8 key_id:uvar
+    /// sealed:bytes`. Nothing else is in clear.
+    pub const SEALED: u64 = 1 << 12;
 }
 
 /// One `Results` message.
@@ -174,14 +191,21 @@ impl ResultsBatch {
     /// cap (split it), with a record that breaks a rule, or with a key
     /// twice.
     pub fn encode(&self) -> Result<Vec<u8>> {
-        if self.records.len() > MAX_RECORDS {
+        self.encode_with(&[])
+    }
+
+    /// The payload with held-back records sealed (WK-8) after the records
+    /// in clear; the caps and the one-key-once rule cover both.
+    pub fn encode_with(&self, sealed: &[SealedRecord]) -> Result<Vec<u8>> {
+        let n = self.records.len() + sealed.len();
+        if n > MAX_RECORDS {
             return Err(Error::TooLarge("records"));
         }
-        let mut seen = HashSet::with_capacity(self.records.len());
+        let mut seen = HashSet::with_capacity(n);
         let mut w = Writer::default();
         w.u8(VERSION);
         w.uvar(self.batch);
-        w.uvar(self.records.len() as u64);
+        w.uvar(n as u64);
         for r in &self.records {
             if !seen.insert(r.key) {
                 return Err(Error::Invalid("duplicate key"));
@@ -191,11 +215,28 @@ impl ResultsBatch {
                 return Err(Error::TooLarge("payload"));
             }
         }
+        for s in sealed {
+            if !seen.insert(s.key) {
+                return Err(Error::Invalid("duplicate key"));
+            }
+            s.write(&mut w);
+            if w.out.len() > MAX_PAYLOAD {
+                return Err(Error::TooLarge("payload"));
+            }
+        }
         Ok(w.out)
     }
 
-    /// The whole batch, or an error and nothing.
+    /// The whole batch, or an error and nothing. **Sealed records are left
+    /// out:** an intake that doesn't open them (`decode_with`) refuses them,
+    /// so their leases expire and their keys are fetched again (fail
+    /// closed, WK-8).
     pub fn decode(payload: &[u8]) -> Result<ResultsBatch> {
+        Ok(ResultsBatch::decode_with(payload)?.0)
+    }
+
+    /// The whole batch with its sealed records, or an error and nothing.
+    pub fn decode_with(payload: &[u8]) -> Result<(ResultsBatch, Vec<SealedRecord>)> {
         let mut r = Reader::new(payload)?;
         let version = r.u8()?;
         if version != VERSION {
@@ -204,17 +245,49 @@ impl ResultsBatch {
         let batch = r.uvar()?;
         let n = r.count(MAX_RECORDS, MIN_RECORD, "records")?;
         let mut records = Vec::with_capacity(n);
+        let mut sealed = Vec::new();
         let mut seen = HashSet::with_capacity(n);
         for _ in 0..n {
-            let rec = read_record(&mut r)?;
-            if !seen.insert(rec.key) {
+            let key = match read_any(&mut r)? {
+                Any::Clear(rec) => {
+                    let key = rec.key;
+                    records.push(rec);
+                    key
+                }
+                Any::Sealed(s) => {
+                    let key = s.key;
+                    sealed.push(s);
+                    key
+                }
+            };
+            if !seen.insert(key) {
                 return Err(Error::Invalid("duplicate key"));
             }
-            records.push(rec);
         }
         r.finish()?;
-        Ok(ResultsBatch { batch, records })
+        Ok((ResultsBatch { batch, records }, sealed))
     }
+}
+
+/// A record in clear, or sealed.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "made and matched at once, one per record"
+)]
+enum Any {
+    Clear(ResultRecord),
+    Sealed(SealedRecord),
+}
+
+fn read_any(r: &mut Reader<'_>) -> Result<Any> {
+    let flags = r.uvar()?;
+    if flags & flag::SEALED != 0 {
+        if flags != flag::SEALED | flag::ACTION {
+            return Err(Error::Invalid("flags"));
+        }
+        return Ok(Any::Sealed(SealedRecord::read(r)?));
+    }
+    Ok(Any::Clear(read_record(r, flags)?))
 }
 
 impl ResultRecord {
@@ -297,8 +370,7 @@ fn write_record(w: &mut Writer, r: &ResultRecord) -> Result<()> {
     Ok(())
 }
 
-fn read_record(r: &mut Reader<'_>) -> Result<ResultRecord> {
-    let flags = r.uvar()?;
+fn read_record(r: &mut Reader<'_>, flags: u64) -> Result<ResultRecord> {
     if flags & !flag::ALL != 0 {
         return Err(Error::Invalid("flags"));
     }
