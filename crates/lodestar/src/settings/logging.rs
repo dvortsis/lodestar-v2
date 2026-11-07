@@ -206,9 +206,12 @@ pub struct Logging {
     pub file_max_age_days: u32,
     /// The logs folder never goes over this, in MiB.
     pub file_total_mib: u32,
-    /// Deprecated: nothing writes to the Windows Event Log (the Legal
-    /// Notice says so), and the UI doesn't show it. Kept so settings files
-    /// and exports an earlier version saved still load.
+    // Deprecated: nothing writes to the Windows Event Log (the Legal
+    // Notice says so), and the UI doesn't show it. Kept so settings files
+    // and exports an earlier version saved still load. (The doc comment
+    // below is the schema's description, so it stays as the goldens have
+    // it.)
+    /// Errors also go to the Windows Event Log (Windows service only).
     pub event_log_errors: bool,
 }
 

@@ -71,10 +71,7 @@ afterEach(() => {
 describe('outputs', () => {
 	it('never shows the Windows Event Log setting, not even on a Windows service', async () => {
 		await start();
-		const { rerender } = render(Outputs, { form, deployment: 'docker' });
-		await screen.findByRole('heading', { name: 'Log file' });
-		expect(screen.queryByRole('heading', { name: 'Windows Event Log' })).toBeNull();
-		await rerender({ form, deployment: 'windows_service' });
+		render(Outputs, { form });
 		await screen.findByRole('heading', { name: 'Log file' });
 		expect(screen.queryByRole('heading', { name: 'Windows Event Log' })).toBeNull();
 		expect(screen.queryByRole('switch', { name: 'Errors to the Windows Event Log' })).toBeNull();

@@ -10,7 +10,6 @@
 	import type { FieldSpec, SettingsForm } from '../form';
 	import SettingField from '../form/SettingField.svelte';
 	import { loadMessages, messagesLoaded } from '../form/messages';
-	import type { DeploymentKind } from './catalog.svelte';
 	import Preview from './Preview.svelte';
 
 	let {
@@ -18,8 +17,6 @@
 		open = {}
 	}: {
 		form: SettingsForm;
-		/** Unused since the Event Log setting went; the screen still passes it. */
-		deployment?: DeploymentKind;
 		/** Disclosures to open. An Advanced field with an error also opens its own, so the error
 		 * summary's link to it lands on a shown field. */
 		open?: Record<string, boolean>;
