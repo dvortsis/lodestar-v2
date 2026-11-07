@@ -76,13 +76,17 @@ lodestar_log::catalogue! {
         message: "Crawler change applied, but recording it for Insights failed",
         fields: { what: Label, error: Error },
     }
-    /// A source was enabled or disabled.
+    /// A source was enabled or disabled. When a start switches one off,
+    /// `reason` says why: `consent_text_unapproved` (this build can't show
+    /// its class's consent dialog yet) or `consent_lapsed` (its class
+    /// condition no longer holds, §18.7). A change made through the API
+    /// carries none.
     SOURCE_STATE_CHANGED {
         id: "pipeline.source_state_changed",
         component: Pipeline,
         level: Info,
         message: "Source state changed",
-        fields: { plugin: Label, state: Label },
+        fields: { plugin: Label, state: Label, reason: Label },
     }
     /// The DHT node bound its sockets.
     DHT_STARTED {

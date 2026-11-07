@@ -446,7 +446,7 @@
 	"settings_logging_ev_pipeline_event_unrecorded_n": "Event not recorded",
 	"settings_logging_ev_pipeline_event_unrecorded_h": "A pipeline event couldn't be recorded.",
 	"settings_logging_ev_pipeline_source_state_changed_n": "Source state changed",
-	"settings_logging_ev_pipeline_source_state_changed_h": "A source started, stopped or changed state.",
+	"settings_logging_ev_pipeline_source_state_changed_h": "A source started, stopped or changed state. A start says why it turned one off.",
 	"settings_logging_ev_pipeline_dht_started_n": "DHT started",
 	"settings_logging_ev_pipeline_dht_started_h": "The DHT crawler began running.",
 	"settings_logging_ev_pipeline_cs_origin_unknown_n": "Unknown crowd-sourced origin",

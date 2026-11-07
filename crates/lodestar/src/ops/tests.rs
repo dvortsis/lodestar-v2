@@ -1298,17 +1298,23 @@ async fn no_class_can_be_enabled_past_its_condition() {
         "no acknowledgement recorded"
     );
 
-    // Account: refused until credentials are stored, whatever is sent.
+    // Account: refused like External, before credentials are looked at,
+    // until its credentials dialog ships approved text (§2.49,
+    // X-consent-gate-polish). It still says it needs them.
     for body in [
         json!({ "enabled": true }),
         json!({ "enabled": true, "consent": "account", "consent_version": "" }),
     ] {
-        let (status, e) = f.patch(&c, "account", body).await;
-        assert_eq!(
-            (status, e["error"]["code"].clone()),
-            (409, json!("credentials_required"))
+        assert_gated(
+            f.patch(&c, "account", body.clone()).await,
+            &body.to_string(),
         );
     }
+    let s = f.source(&c, "account").await;
+    assert_eq!(
+        (s["enabled"].clone(), s["needs"].clone()),
+        (json!(false), json!("credentials"))
+    );
     let id = f.source(&c, "account").await["id"].clone();
     let creds = |body: Value| {
         req(
@@ -1332,9 +1338,15 @@ async fn no_class_can_be_enabled_past_its_condition() {
         (status, e["error"]["code"].clone()),
         (400, json!("invalid_credentials"))
     );
+    // Stored credentials don't open it either.
+    assert_gated(
+        f.patch(&c, "account", json!({ "enabled": true })).await,
+        "account with credentials",
+    );
+    let s = f.source(&c, "account").await;
     assert_eq!(
-        f.patch(&c, "account", json!({ "enabled": true })).await.0,
-        200
+        (s["enabled"].clone(), s["needs"].clone()),
+        (json!(false), Value::Null)
     );
 
     // Restricted and Overlay: refused like External, with or without the
@@ -1391,7 +1403,20 @@ async fn no_class_can_be_enabled_past_its_condition() {
     assert_no_plaintext(f.dir.path());
 
     // Disabling keeps the acknowledgement; removing the credentials of an
-    // enabled Account source switches it off.
+    // enabled Account source switches it off. One a build before the gate
+    // turned on is seeded, as the API no longer can.
+    {
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let id = store
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.plugin == "account")
+            .unwrap()
+            .id;
+        store.enable_source(id, None).unwrap();
+    }
+    assert_eq!(f.source(&c, "account").await["enabled"], json!(true));
     let (status, s) = f
         .send(creds(json!({ "credentials": { "api_key": null } })))
         .await;

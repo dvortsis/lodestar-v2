@@ -8167,9 +8167,14 @@ export interface components {
             consent: "none" | "external" | "account" | "restricted" | "overlay";
             /**
              * @description Its class is enabled by acknowledging what's shown (`external`,
-             *     `restricted`, `overlay`): enabling it sends `"consent"` naming the
-             *     class and `"consent_version"`, unless that version is already
-             *     acknowledged.
+             *     `restricted`, `overlay`).
+             *
+             *     This build refuses to enable any source whose class isn't `none`
+             *     (`400 invalid_setting` on `enabled`), this one included, whatever
+             *     the request sends: it can't show its consent text yet. Once a
+             *     later version shows the class's consent text, enabling a source
+             *     with this set sends `"consent"` naming the class and
+             *     `"consent_version"`, unless that version is already acknowledged.
              */
             consent_required: boolean;
             /**
@@ -8496,8 +8501,14 @@ export interface components {
              */
             config?: Record<string, never>;
             /**
-             * @description The consent class you acknowledge; needed to enable a source whose
-             *     `needs` is `endpoints_ack` or `consent`, and must be its class.
+             * @description The consent class you acknowledge.
+             *
+             *     This build refuses to enable any source whose class isn't `none`
+             *     (`400 invalid_setting` on `enabled`), with or without this field: it
+             *     can't show its consent text yet, so nothing is acknowledged or
+             *     stored. Once a later version shows the class's consent text, this
+             *     is needed to enable a source whose `needs` is `endpoints_ack` or
+             *     `consent`, and must be its class.
              */
             consent?: "none" | "external" | "account" | "restricted" | "overlay";
             /** @description The `consent_version` you were shown, with `consent`. */

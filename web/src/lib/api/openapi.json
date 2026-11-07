@@ -19952,7 +19952,7 @@
           },
           "consent_required": {
             "type": "boolean",
-            "description": "Its class is enabled by acknowledging what's shown (`external`,\n`restricted`, `overlay`): enabling it sends `\"consent\"` naming the\nclass and `\"consent_version\"`, unless that version is already\nacknowledged."
+            "description": "Its class is enabled by acknowledging what's shown (`external`,\n`restricted`, `overlay`).\n\nThis build refuses to enable any source whose class isn't `none`\n(`400 invalid_setting` on `enabled`), this one included, whatever\nthe request sends: it can't show its consent text yet. Once a\nlater version shows the class's consent text, enabling a source\nwith this set sends `\"consent\"` naming the class and\n`\"consent_version\"`, unless that version is already acknowledged."
           },
           "consent_version": {
             "type": "string",
@@ -20446,7 +20446,7 @@
                 ]
               }
             ],
-            "description": "The consent class you acknowledge; needed to enable a source whose\n`needs` is `endpoints_ack` or `consent`, and must be its class."
+            "description": "The consent class you acknowledge.\n\nThis build refuses to enable any source whose class isn't `none`\n(`400 invalid_setting` on `enabled`), with or without this field: it\ncan't show its consent text yet, so nothing is acknowledged or\nstored. Once a later version shows the class's consent text, this\nis needed to enable a source whose `needs` is `endpoints_ack` or\n`consent`, and must be its class."
           },
           "consent_version": {
             "type": "string",

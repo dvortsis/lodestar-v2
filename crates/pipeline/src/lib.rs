@@ -1302,20 +1302,6 @@ fn prepare(
     // it was acknowledged, whose credentials are gone, or that was
     // enabled some other way, is switched off before it can run.
     control::switch_off_unapproved(&mut store, manifests.iter().map(|r| &r.manifest).zip(&ids))?;
-    let rows = store.sources()?;
-    for (r, id) in manifests.iter().zip(&ids) {
-        let enabled = rows
-            .iter()
-            .any(|row| row.id == *id && row.state == SourceState::Enabled);
-        if enabled && lodestar_sources::consent::need_in(&store, &r.manifest)?.is_some() {
-            store.set_source_state(*id, SourceState::Disabled)?;
-            lodestar_log::log_event!(
-                log_events::SOURCE_STATE_CHANGED,
-                plugin = r.manifest.id,
-                state = log_events::state(SourceState::Disabled)
-            );
-        }
-    }
     let states: HashMap<SourceId, SourceState> = store
         .sources()?
         .into_iter()
