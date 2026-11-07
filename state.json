@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-07T00:39Z",
+ "updated_at": "2026-11-07T02:58Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3556,8 +3556,10 @@
    "base": "release/v0.5.1"
   },
   "WK-5": {
-   "status": "running",
-   "session": "session_01MMjhnANUoXZj6CqJZWcoEQ"
+   "status": "merged",
+   "session": "session_01MMjhnANUoXZj6CqJZWcoEQ",
+   "pr": 560,
+   "merge": "62412a05"
   },
   "X-sources-api-spec": {
    "status": "running",
@@ -3566,6 +3568,10 @@
   "X-soak-screen": {
    "status": "running",
    "session": "session_01MMjhnAigUdTtQ5M3dobhaR"
+  },
+  "WK-3": {
+   "status": "running",
+   "session": "session_01MMjhnAxuW2sJ83mbnhLEYs"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6184,7 +6190,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-07T01:25Z",
+  "updated": "2026-11-07T02:58Z",
   "items": [
    {
     "slot": 1,
@@ -6196,11 +6202,11 @@
    },
    {
     "slot": 2,
-    "slice": "WK-5",
+    "slice": "WK-3",
     "role": "build",
     "agent": "claude",
-    "doing": "session_01MMjhnANUoXZj6CqJZWcoEQ: Assign v1 payload and placement planner",
-    "since": "2026-11-07T00:22Z"
+    "doing": "session_01MMjhnAxuW2sJ83mbnhLEYs: have-filter replication (keyed SipHash, snapshot/deltas, Q6 worker filter)",
+    "since": "2026-11-07T02:58Z"
    },
    {
     "slot": 3,
