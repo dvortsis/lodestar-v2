@@ -636,10 +636,13 @@ impl Assembly {
             let start = piece * METADATA_PIECE;
             let end = start + data.len();
             if self.buf.len() < end {
-                // Doubling as `Vec` does, but never past the announced
-                // size: `end` is at most `size`.
+                // Doubling as `Vec` does, but never past the pieces
+                // requested so far, which is what's reserved (the first
+                // window until a large dict's growth, then the whole
+                // size). `end` is within them: the piece was requested.
                 if self.buf.capacity() < end {
-                    let want = (self.buf.capacity() * 2).clamp(end, self.size);
+                    let requested = (self.next * METADATA_PIECE).min(self.size);
+                    let want = (self.buf.capacity() * 2).clamp(end, requested);
                     self.buf.reserve_exact(want - self.buf.len());
                 }
                 self.buf.resize(end, 0);
@@ -749,7 +752,25 @@ mod tests {
     }
 
     /// The buffer grows as pieces arrive, in any order, but never past
-    /// the announced size, which is what a `Reserve` covered.
+    /// the pieces requested so far, which is what a `Reserve` covered.
+    #[test]
+    fn assembly_never_grows_past_what_was_requested() {
+        // The review's case: a large dict, the first window's last pieces
+        // first, with only that window requested.
+        let size = METADATA_PIECE * 1024;
+        let mut a = Assembly::new(size);
+        let window: Vec<usize> = std::iter::from_fn(|| a.next_request()).collect();
+        assert_eq!(window.len() * METADATA_PIECE, FIRST_WINDOW);
+        for p in [62, 63, 0, 2, 3, 6, 12, 24, 48, 61] {
+            a.accept(p as i64, &vec![1; METADATA_PIECE]).unwrap();
+            assert!(
+                a.buf.capacity() <= FIRST_WINDOW,
+                "{p}: {}",
+                a.buf.capacity()
+            );
+        }
+    }
+
     #[test]
     fn assembly_never_grows_past_its_size() {
         for size in [
@@ -762,12 +783,21 @@ mod tests {
             let pieces: Vec<usize> = std::iter::from_fn(|| a.next_request()).collect();
             // Last first, then the rest in order.
             let order = pieces.iter().rev().take(1).chain(pieces.iter()).copied();
+            let requested = |a: &Assembly| (a.next * METADATA_PIECE).min(size);
             for p in order {
                 a.accept(p as i64, &vec![1; a.piece_len(p)]).unwrap();
-                assert!(a.buf.capacity() <= size, "{size}: {}", a.buf.capacity());
+                assert!(
+                    a.buf.capacity() <= requested(&a),
+                    "{size}: {}",
+                    a.buf.capacity()
+                );
                 while let Some(next) = a.next_request() {
                     a.accept(next as i64, &vec![2; a.piece_len(next)]).unwrap();
-                    assert!(a.buf.capacity() <= size, "{size}: {}", a.buf.capacity());
+                    assert!(
+                        a.buf.capacity() <= requested(&a),
+                        "{size}: {}",
+                        a.buf.capacity()
+                    );
                 }
             }
             assert!(a.is_complete());

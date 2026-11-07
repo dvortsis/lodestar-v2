@@ -849,7 +849,7 @@ The fetch pool holds info dicts to a byte budget, `max_held_bytes` (64 MiB by de
 | --- | --- | --- |
 | `fetch_held_bytes` | gauge | Bytes of finished fetches the pool holds: not yet joined, waiting for an output slot, or in the channel and not yet taken. |
 | `fetch_reserved_bytes` | gauge | Bytes that fetches in flight have reserved for their results. Held plus reserved is what the budget limits. |
-| `fetch_held_full_total` | counter | Times the budget (held plus reserved bytes) or a waiting reservation stopped the pool starting fetches. It counts each time the pool becomes stopped, not each round it stays stopped. A result waiting for an output slot also stops fetching (outbox backpressure), but isn't counted here. |
+| `fetch_held_full_total` | counter | Times the budget (held plus reserved bytes), or a waiting reservation of a whole dict or of a large dict's remainder, stopped the pool starting fetches. It counts each time the pool becomes stopped, not each round it stays stopped. A result waiting for an output slot also stops fetching (outbox backpressure), but isn't counted here. |
 | `fetch_reserve_timeouts_total` | counter | Fetches whose deadline ran out while they waited for a reservation. They aren't counted as failed fetches, and the peer is tried again later without using up an attempt. A steady rise means the budget is too small for the dicts being fetched. |
 
 ## Unreadable filter rows (F-filter-load-fail-closed, 2026-11-01)

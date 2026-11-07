@@ -1684,13 +1684,16 @@ async fn a_reservation_that_waits_out_its_deadline_is_freed_and_retried() {
     }
     let mut seen = std::collections::HashSet::new();
     while seen.len() < KEYS as usize {
-        let got = tokio::time::timeout(Duration::from_secs(60), h.out.recv())
+        // A key whose only peer waited out backs off `retry_backoff`
+        // (60 s here) before it's retried.
+        let got = tokio::time::timeout(Duration::from_secs(300), h.out.recv())
             .await
             .expect("the next result")
             .expect("the pool is running");
         assert!(seen.insert(got.key), "{:?} twice", got.key);
     }
     assert!(h.causes.lost.lock().unwrap().is_empty(), "nothing lost");
+    assert!(h.drain_lookups().is_empty(), "no lookup: no attempt used");
     // Retried with the same peer each time, as it was never charged.
     let started = h.fake.started.lock().unwrap().clone();
     for (k, p) in &started {

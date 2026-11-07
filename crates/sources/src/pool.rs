@@ -16,11 +16,11 @@
 //!
 //! Info dicts are held to a byte budget (`max_held_bytes`). A fetch
 //! reserves its result's bytes once the peer has announced the size, before
-//! it downloads any (X-fetch-meta-reserve), and waits while the budget is
+//! it downloads them (X-fetch-meta-reserve), and waits while the budget is
 //! full. The pool counts a finished result from then until the consumer
-//! takes it from the output channel, and starts no fetch while the budget
-//! is full, while a reservation waits or while a result waits for a
-//! channel slot.
+//! takes it from the output channel. It starts no fetch while the budget
+//! is full, while a whole reservation or a growth waits, or while a result
+//! waits for a channel slot.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
@@ -221,9 +221,14 @@ struct Budget {
 struct BudgetState {
     reserved: u64,
     held: u64,
-    /// Waiting first reservations, oldest first, by claim id. Only the
-    /// oldest may take room, so a large one isn't starved by small ones.
+    /// Waiting first reservations of whole results, oldest first, by claim
+    /// id. Only the oldest may take room, so a large one isn't starved by
+    /// small ones.
     queue: VecDeque<u64>,
+    /// Waiting first reservations of partial claims, oldest first. Apart
+    /// from `queue`, so a partial claim held back by its own rule (a liar's
+    /// claim, perhaps) never holds up a whole one that fits.
+    partials: VecDeque<u64>,
     /// Waiting growths, oldest first; they go before any first reservation.
     growth: VecDeque<u64>,
     /// Bytes held by partial claims, and the growth each still needs.
@@ -278,7 +283,10 @@ impl Budget {
         (s.held, s.reserved)
     }
 
-    /// Room for another fetch: under the budget and nothing waiting.
+    /// Room for another fetch: under the budget, and no whole reservation
+    /// or growth waiting. A waiting partial claim doesn't stop dispatch: it
+    /// may be a liar's, and the fetches started meanwhile can't take what
+    /// it waits for for long (their deadlines).
     fn has_room(&self) -> bool {
         let s = self.lock();
         s.queue.is_empty() && s.growth.is_empty() && s.reserved.saturating_add(s.held) < self.limit
@@ -369,6 +377,8 @@ impl Reservation {
                 let mut s = budget.lock();
                 if claim.bytes.load(Ordering::Relaxed) > 0 {
                     s.growth.push_back(claim.id);
+                } else if want < want_total {
+                    s.partials.push_back(claim.id);
                 } else {
                     s.queue.push_back(claim.id);
                 }
@@ -390,12 +400,16 @@ impl Reservation {
             return true;
         }
         let growing = mine > 0;
+        let partial = want < want_total;
         let first_in = |q: &VecDeque<u64>| q.front().is_none_or(|&id| id == claim.id);
-        if growing {
-            if !first_in(&s.growth) {
-                return false;
-            }
-        } else if !s.growth.is_empty() || !first_in(&s.queue) {
+        let in_turn = if growing {
+            first_in(&s.growth)
+        } else if partial {
+            s.growth.is_empty() && first_in(&s.partials)
+        } else {
+            s.growth.is_empty() && first_in(&s.queue)
+        };
+        if !in_turn {
             return false;
         }
         let used = s.reserved.saturating_add(s.held);
@@ -404,7 +418,6 @@ impl Reservation {
         if others > 0 && used.saturating_add(extra) > limit {
             return false;
         }
-        let partial = want < want_total;
         if partial && !growing && others > 0 {
             let need = s.largest_need().max(want_total - want);
             if s.partial.saturating_add(want).saturating_add(need) > limit {
@@ -474,6 +487,7 @@ impl Drop for Queued<'_> {
         let mut s = budget.lock();
         let id = self.0.id;
         s.queue.retain(|&q| q != id);
+        s.partials.retain(|&q| q != id);
         s.growth.retain(|&q| q != id);
         drop(s);
         budget.freed.notify_waiters();
@@ -2010,6 +2024,9 @@ impl Pool {
                     e.state = State::Backoff;
                     self.back_off(key);
                 }
+                // A key that backed off after waiting out a reservation
+                // still has its peer to try; otherwise it's due a lookup.
+                State::Backoff if e.has_untried() => self.make_ready(key),
                 State::Backoff => self.request_peers(key, WaitKind::Retry),
                 State::Ready | State::Fetching | State::LookupQueued => {}
             }
@@ -2215,16 +2232,25 @@ impl Pool {
             // not the peer's failure. The peer is tried again after the
             // key's other untried peers, and no attempt is used.
             self.stats.reserve_timeouts.fetch_add(1, Ordering::Relaxed);
-            // Last among its untried peers, so the others go first.
+            // Last among its untried peers, so the others go first. With
+            // none left, the key waits `retry_backoff` before it redials the
+            // same peer, rather than at once.
+            let others = e.has_untried();
             if let Some(i) = e.peers[..e.tried].iter().position(|p| *p == peer) {
                 e.peers.remove(i);
                 e.peers.push(peer);
                 e.tried -= 1;
             }
-            if e.has_untried() {
+            if others {
                 self.make_ready(key);
             } else {
-                self.back_off(key);
+                // A timer only, no lookup and no loss: the key keeps its
+                // attempts, as nothing failed.
+                e.state = State::Backoff;
+                e.generation = next_generation(&mut self.generations);
+                let generation = e.generation;
+                let at = Instant::now() + self.cfg.retry_backoff.max(Duration::from_millis(1));
+                self.schedule(at, key, generation);
             }
             return;
         }
@@ -2715,6 +2741,25 @@ mod budget {
 
     const KEY: u64 = std::mem::size_of::<FetchedKey>() as u64;
 
+    /// Polls `done` until it holds, for at most 10 s (paused or real time).
+    async fn until(what: &str, mut done: impl AsyncFnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done().await {
+            assert!(Instant::now() < deadline, "timed out waiting: {what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Waits until the budget's queues satisfy `done` (a waiter spawned
+    /// has queued), for at most 10 s.
+    async fn queued(b: &Budget, done: impl Fn(&BudgetState) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done(&b.lock()) {
+            assert!(Instant::now() < deadline, "the waiter never queued");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
     fn used(b: &Budget) -> u64 {
         let (held, reserved) = b.usage();
         held + reserved
@@ -2770,7 +2815,7 @@ mod budget {
             let big = big.clone();
             async move { big.reserve(KEY as usize + 40, KEY as usize + 40).await }
         });
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        queued(&b, |s| s.queue.len() == 1).await;
         let mut small_wait = tokio::spawn({
             let small = small.clone();
             async move { small.reserve(10, 10).await }
@@ -2853,12 +2898,28 @@ mod budget {
         assert_eq!(reserved, n * (KEY + 100));
         assert!(reserved + 4_900 <= limit, "room left for any one to grow");
         assert!(reserved + (KEY + 100) + 4_900 > limit, "and no more");
-        // A small dict reserves whole and fits beside them.
+        // One more keeps waiting, held back by its own rule...
+        let blocked = Reservation::new(b.clone());
+        let blocked_wait = tokio::spawn({
+            let blocked = blocked.clone();
+            async move { blocked.reserve(100, 5_000).await }
+        });
+        queued(&b, |s| s.partials.len() == 1).await;
+        // ...but holds up neither a small dict, which reserves whole beside
+        // them, nor dispatch.
+        assert!(
+            b.has_room(),
+            "a waiting partial claim doesn't stop dispatch"
+        );
         let small = Reservation::new(b.clone());
         tokio::time::timeout(Duration::from_secs(1), small.reserve(50, 50))
             .await
             .expect("a small dict isn't held up by the liars");
-        drop((liars, small));
+        assert!(!blocked_wait.is_finished());
+        // A liar's deadline ends: the blocked one gets its window.
+        drop(liars.pop());
+        blocked_wait.await.unwrap();
+        drop((liars, small, blocked));
         assert_eq!(used(&b), 0);
     }
 
@@ -2917,5 +2978,140 @@ mod budget {
         assert_eq!(used(&b), 0);
         assert_eq!(b.lock().partial, 0);
         assert!(b.lock().needs.is_empty());
+    }
+
+    /// A raw plaintext peer for one fetch: it announces `info`'s size and
+    /// serves it, or (with `stall`) announces it and never sends a piece.
+    async fn raw_peer(info: Vec<u8>, info_hash: [u8; 20], stall: bool) -> SocketAddr {
+        use lodestar_peer_wire::message;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let frame = |ext_id: u8, body: Vec<u8>| {
+                let mut f = ((body.len() + 2) as u32).to_be_bytes().to_vec();
+                f.extend([20, ext_id]);
+                f.extend(body);
+                f
+            };
+            let mut theirs = [0u8; message::HANDSHAKE_LEN];
+            s.read_exact(&mut theirs).await.unwrap();
+            s.write_all(&message::handshake(
+                &info_hash,
+                b"-RW0001-rawrawrawraw",
+                true,
+            ))
+            .await
+            .unwrap();
+            let hello = message::our_extended_handshake(Some(info.len()));
+            s.write_all(&frame(0, hello)).await.unwrap();
+            loop {
+                let mut len = [0u8; 4];
+                if s.read_exact(&mut len).await.is_err() {
+                    return;
+                }
+                let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+                if s.read_exact(&mut body).await.is_err() {
+                    return;
+                }
+                if stall || body.len() < 2 || body[0] != 20 || body[1] != message::OUR_UT_METADATA {
+                    continue;
+                }
+                if let Ok(message::MetadataMessage::Request { piece }) =
+                    message::parse_metadata_message(&body[2..])
+                {
+                    let start = piece as usize * message::METADATA_PIECE;
+                    let end = (start + message::METADATA_PIECE).min(info.len());
+                    let reply =
+                        message::metadata_data(piece as usize, info.len(), &info[start..end]);
+                    // The fetcher told us to use its `ut_metadata` id, 1.
+                    s.write_all(&frame(1, reply)).await.unwrap();
+                }
+            }
+        });
+        addr
+    }
+
+    /// The real fetcher, through the pool: a fetch reserves from the
+    /// pool's budget at the handshake, its success becomes held bytes the
+    /// consumer's take releases, and a stalled peer's reservation is
+    /// released at its deadline. Real time and TCP, with condition waits.
+    #[tokio::test]
+    async fn the_peer_wire_fetcher_reserves_from_the_pool_budget() {
+        let info =
+            b"d6:lengthi1e4:name4:test12:piece lengthi16384e6:pieces20:AAAAAAAAAAAAAAAAAAAAe"
+                .to_vec();
+        let key = lodestar_metainfo::Info::parse(&info)
+            .unwrap()
+            .primary_hash();
+        let honest = raw_peer(info.clone(), key.0, false).await;
+        let stalled_key = InfoHash([3; 20]);
+        let staller = raw_peer(vec![b'x'; 300_000], stalled_key.0, true).await;
+
+        let (disc_tx, discoveries) = mpsc::channel(16);
+        let (out_tx, mut out) = mpsc::channel(16);
+        let (stop, shutdown) = Shutdown::new();
+        let fetcher = PeerWireFetcher(FetchOptions {
+            allow_private: true,
+            encryption: lodestar_peer_wire::Encryption::Disable,
+            timeout: Duration::from_secs(3),
+            ..FetchOptions::default()
+        });
+        let (handle, task) = spawn(
+            PoolConfig::default(),
+            Arc::new(fetcher),
+            PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out: out_tx,
+                funnel: Arc::new(crate::FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        let source = SourceId::new(0).unwrap();
+        for (k, peer) in [(key, honest), (stalled_key, staller)] {
+            disc_tx
+                .send(Discovery {
+                    source,
+                    found: crate::Found::key(k, 0).with_peers(vec![peer]),
+                    at: 1_700_000_000,
+                    reply: false,
+                })
+                .await
+                .unwrap();
+        }
+        let stats = handle.stats();
+        let gauge = |g: &AtomicU64| g.load(Ordering::Relaxed);
+        // The staller's claim (its announced 300 KB, with the bound) shows.
+        until("the stalled fetch's reservation", async || {
+            handle.queued().await; // a round of the pool publishes its stats
+            gauge(&stats.reserved_bytes) >= 300_000
+        })
+        .await;
+        let got = tokio::time::timeout(Duration::from_secs(10), out.recv())
+            .await
+            .expect("the honest dict")
+            .unwrap();
+        assert_eq!(got.key, key);
+        assert_eq!(got.fetched.info, info);
+        // Taken by the consumer, and the staller ended at its deadline:
+        // nothing is held or reserved.
+        until("everything released", async || {
+            handle.queued().await;
+            gauge(&stats.held_bytes) == 0
+                && gauge(&stats.reserved_bytes) == 0
+                && stats.failure_count(FailureKind::TimedOut) == 1
+        })
+        .await;
+        assert_eq!(
+            gauge(&stats.reserve_timeouts),
+            0,
+            "a peer timeout, not a wait"
+        );
+        stop.send(true).unwrap();
+        task.await.unwrap();
     }
 }

@@ -579,7 +579,7 @@ async fn a_peer_announcing_max_metadata_reserves_exactly_its_bound() {
 /// most that. An honest peer's fetch grows to the whole bound before it
 /// requests past the window.
 #[tokio::test]
-async fn a_large_claim_reserves_its_first_window_until_a_piece_arrives() {
+async fn a_large_claim_reserves_its_first_window_until_the_window_arrives() {
     const WINDOW: usize = 64 * 16 * 1024;
     let pex_bound = 200 * std::mem::size_of::<SocketAddr>();
     let client = "FakePeer 1.0".len();
