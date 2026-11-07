@@ -5882,6 +5882,11 @@
       "id": "v052-rc2-scheduling",
       "at": "2026-11-07T20:15Z",
       "note": "Runner ruling (CR-SPEC 2.2 reading, \u00a72.26): no Lodestar on Unraid host or home public IP until cr-ab-comp-1 window ends (~14:01Z Nov 8; restore 14:10Z), Windows PC stays stopped even behind VPN; after 14:10Z B-E may run at home (the 12 h-after clause protects the next CR-AB window, not release checks; tell runner before booking the next CR run). B/C need no crawler; Windows B/C may run during comparator only fully offline; never on Unraid. Rented D/E on another public IP allowed now: x86_64 >=4 vCPU/8 GiB/SSD/NTP, record provider/instance/VPN; VPN ok for the memory gate, but if stored/h h12-24 < ~300 the runner judges load before accepting a pass; provider P2P ToS; encrypted disk, destroy after, raw data private."
+    },
+    {
+      "id": "X-fieldmenu-keyboard-focus",
+      "at": "2026-11-07T20:17Z",
+      "note": "From #594 (X-menu-keyboard-focus): FieldMenu has the same lazy-open keyboard-focus gap (first item not focused on keyboard open); listed in docs/decisions/2026-11-07-X-menu-keyboard-focus.md, not fixed there. Small web slice later."
     }
   ],
   "main_health": [
