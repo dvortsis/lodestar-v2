@@ -17,9 +17,9 @@ This chapter lists common problems with fixes, then says how to get help.
 | The database is slow or reports "database is locked" | The data folder is under `/mnt/user` or on a network share | Move the data folder to a pool path such as `/mnt/cache/appdata/lodestar` ([section 2.2](02-install-lodestar-on-unraid-and-docker.md#22-settings-in-the-unraid-template)). |
 | Your home network gets slow | The crawler fills the router's connection table | Set **Intensity** to `low` and raise it step by step. |
 | The gluetun variant stops after a [VPN](glossary.md#vpn) restart | A container that shares a network stays attached to the old one | Restart Lodestar after gluetun restarts. |
-
 | The Windows service won't start and Windows shows "service-specific error 3" | The data folder `C:\ProgramData\Lodestar` isn't private any more, most often because **Continue** was selected on its permission prompt in File Explorer | Follow [section 6.2](#62-fix-windows-service-error-3). |
 | Windows logs three failure events for one problem | Windows restarts the service twice after it stops with an error, 60 seconds apart, so one problem shows three times | Fix the cause once, as in [section 6.2](#62-fix-windows-service-error-3). The count starts again after a day. |
+| Lodestar logs the warning `logging.folder_shared` on Windows | The `logs` folder has an extra account in its permissions | Remove that account as in step 3 of [section 6.2](#62-fix-windows-service-error-3), then run `Restart-Service Lodestar` in the same [elevated PowerShell](glossary.md#elevated-powershell) window. |
 
 ## 6.2 Fix Windows service error 3
 <!-- index: error 3; Windows service; icacls; folder_shared; service-specific error 3 -->

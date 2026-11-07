@@ -109,7 +109,10 @@ To install the Windows service:
 ![Windows installer options showing both optional checkboxes left unchecked](images/windows-options-illustration.svg)
 *Figure 4.1: Recommended Windows installer options. Illustration, not a live screenshot.*
 
-The service uses its own unprivileged account. Only Administrators, SYSTEM and the service can read its data folder. Read logs from [elevated PowerShell](glossary.md#elevated-powershell); do not grant your regular account access through Explorer. If this already happened, follow [the error 3 fix](06-troubleshooting.md#62-fix-windows-service-error-3).
+The service uses its own unprivileged account. Only Administrators, SYSTEM and the service can read its data folder. Read logs from [elevated PowerShell](glossary.md#elevated-powershell).
+
+> [!WARNING]
+> Do not open `C:\ProgramData\Lodestar` in File Explorer, and never select **Continue** on its permission prompt. Doing so adds your account permanently, and the service then refuses to start. Use elevated PowerShell instead. If this already happened, follow [the error 3 fix](06-troubleshooting.md#62-fix-windows-service-error-3).
 
 The installer opens [DHT](glossary.md#dht) port `6881` over [UDP](glossary.md#udp) on private networks only. It opens `8090/tcp` to other computers only when you select the web-page option. Uninstalling keeps your data by default.
 

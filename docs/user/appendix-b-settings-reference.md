@@ -22,7 +22,7 @@ This reference covers v0.5.1. The Sources screen, pack-version controls and safe
 
 The templates do not include a Log level field. You can optionally add a custom
 container variable with key `LODESTAR_LOG` to set how much Lodestar logs on every output
-(`error`, `warn`, `info` or `debug`). While it is set, Logging verbosity in Settings can't be changed.
+(`error`, `warn`, `info` or `debug`). In v0.5.1, change this variable in the container configuration and restart to apply it.
 **Recommended:** leave it unset; the default is `info`.
 
 Transparent huge pages are a Linux feature that hands out memory in 2 MB pieces. They can make Lodestar's memory use creep up over days, so Lodestar turns them off for itself only.

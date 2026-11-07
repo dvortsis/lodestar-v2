@@ -116,7 +116,7 @@ How hard the crawler works: `low`, `balanced` or `aggressive`. Balanced opens ab
 
 The templates have no Log level field. The optional custom container variable
 `LODESTAR_LOG` sets how much Lodestar logs on every output: `error`, `warn`, `info` or `debug`.
-While it is set, you can't change Logging verbosity in Settings.
+In v0.5.1, change this variable in the container configuration and restart to apply it.
 If you add this variable to the container configuration, use `LODESTAR_LOG` as its key.
 
 **Recommended:** leave it unset; the default is `info`. Logs hold no torrent details by default.
@@ -215,6 +215,8 @@ To keep the data in a folder you own instead:
 Do not use `network_mode: host` unless you need it. It skips Docker's network translation for better DHT reach, but it exposes port `8090` on every host interface.
 
 Use `ghcr.io/dvortsis/lodestar-v2:0.5.1` in the `image:` field to update only when you decide.
+
+For an exact image that a moved tag cannot change, use `ghcr.io/dvortsis/lodestar-v2@sha256:2ffce5cb9988b3173a46aeafb2a62e24cf66962da39d3286da0adbbd5d864c17` instead. A digest identifies the image content; a tag can be moved.
 
 ## 2.5 Create the admin password
 <!-- index: setup token; admin password; first run; Legal Notice -->

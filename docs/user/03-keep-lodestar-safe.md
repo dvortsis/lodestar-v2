@@ -96,7 +96,7 @@ By default Lodestar's logs contain no torrent details. They record what Lodestar
 The setup token is the one secret that appears in the log. It stops working once the admin password exists.
 
 ## 3.5 Choose how updates work
-<!-- index: updates; fixes only; rollback -->
+<!-- index: updates -->
 
 Updates are off until you choose them, because checking contacts GitHub. Automatic updates are not available in this release.
 
