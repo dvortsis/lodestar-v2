@@ -153,11 +153,23 @@ struct Transfer {
 }
 
 /// One kind's current payload and its transfers.
-#[derive(Debug)]
 struct Sender {
     kind: SnapshotKind,
     current: Option<(u64, Arc<Vec<u8>>)>,
     transfers: BTreeMap<WorkerId, Transfer>,
+}
+
+/// The version, its length and the workers; never the bytes, which for the
+/// filter hold the wire key and every rule.
+impl std::fmt::Debug for Sender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sender")
+            .field("kind", &self.kind)
+            .field("version", &self.version())
+            .field("bytes", &self.current.as_ref().map(|c| c.1.len()))
+            .field("transfers", &self.transfers)
+            .finish()
+    }
 }
 
 impl Sender {
@@ -321,8 +333,10 @@ impl WorkerSnapshots {
     ) -> Result<(u64, u64), lodestar_pipeline::wire::Error> {
         let bytes = snapshot.encode()?;
         self.filter.set(version_of(&bytes), bytes);
-        if let Some(d) = dict {
-            self.dict.set(d.version(), d.encode()?);
+        match dict {
+            Some(d) => self.dict.set(d.version(), d.encode()?),
+            // No active dictionary any more: stop announcing one.
+            None => self.dict = Sender::new(SnapshotKind::Dictionary),
         }
         self.keys.set(wire_keys(seal_key, now));
         self.built = Some(Built {
@@ -331,6 +345,15 @@ impl WorkerSnapshots {
             dict: dict.map(|d| d.id),
         });
         Ok(self.versions())
+    }
+
+    /// Forgets `worker`'s transfers, so its next sync starts both snapshots
+    /// from chunk 0. Call it when a worker's session starts (WK-10): a
+    /// worker that restarted, or couldn't decode what it got, before the
+    /// fleet saw it disconnect would otherwise never be sent them again.
+    pub fn forget(&mut self, worker: WorkerId) {
+        self.filter.transfers.remove(&worker);
+        self.dict.transfers.remove(&worker);
     }
 
     /// Starts and continues transfers to the connected remote workers;
@@ -567,6 +590,80 @@ mod tests {
     fn the_dictionary_is_read_from_the_store() {
         let store = Store::open_in_memory(StoreConfig::default()).unwrap();
         assert_eq!(read_dict(&store).unwrap(), None);
+        // A store whose active dictionary is set, as training leaves it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let store = Store::open(&path, StoreConfig::default()).unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO zstd_dicts (id, kind, created_at, samples, data)
+                 VALUES (7, 'file_tree', 1, 400, x'0102030405')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO settings (key, value) VALUES ('file_dict', 7)",
+                [],
+            )
+            .unwrap();
+        drop(store);
+        let store = Store::open(&path, StoreConfig::default()).unwrap();
+        let d = read_dict(&store).unwrap().unwrap();
+        assert_eq!((d.id, d.bytes.as_slice()), (7, &[1u8, 2, 3, 4, 5][..]));
+        let mut s = WorkerSnapshots::new();
+        let snap = read_snapshot(&store, &SEAL, NOW).unwrap();
+        assert_eq!(s.install(1, NOW, &SEAL, &snap, Some(&d)).unwrap().0, 7);
+        // It goes out like the filter, and stops being announced once
+        // there's no active dictionary.
+        let mut sent = Sent::new();
+        s.sync_with(
+            &[status(3, true)],
+            Instant::now(),
+            &mut sink(&mut sent, None),
+        );
+        assert!(
+            sent.iter()
+                .any(|(_, c)| c.kind == SnapshotKind::Dictionary && c.version == 7)
+        );
+        s.install(2, NOW, &SEAL, &snap, None).unwrap();
+        assert_eq!(s.versions().0, 0);
+    }
+
+    /// Neither side's `Debug` shows the snapshot's bytes: the wire key and
+    /// the rules.
+    #[test]
+    fn debug_never_shows_the_key_or_a_rule() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        store
+            .add_rule("zebraquark", Action::Quarantine.code(), None, None)
+            .unwrap();
+        let snap = read_snapshot(&store, &SEAL, NOW).unwrap();
+        let mut s = WorkerSnapshots::new();
+        s.install(1, NOW, &SEAL, &snap, None).unwrap();
+        let mut sent = Sent::new();
+        s.sync_with(
+            &[status(3, true)],
+            Instant::now(),
+            &mut sink(&mut sent, None),
+        );
+        let mut inc = lodestar_pipeline::wire::filter_snapshot::Incoming::new(SnapshotKind::Filter);
+        let mut part = sent[0].1.clone();
+        part.total = 2;
+        part.bytes.resize(MAX_CHUNK, 0);
+        inc.take(part).unwrap();
+        let key = wire_key(&SEAL, day_of(NOW));
+        let text = format!(
+            "{s:?} {inc:?} {key:?} {:?}",
+            ToWorker::Snapshot(sent[0].1.clone())
+        );
+        assert!(!text.contains("zebraquark"), "{text}");
+        // The key's bytes, as Debug would print a byte list.
+        let bytes = &snap.encode().unwrap()[4..36];
+        let list = format!("{:?}", &bytes[..4]);
+        assert!(!text.contains(list.trim_matches(['[', ']'])), "{text}");
     }
 
     type Sent = Vec<(WorkerId, SnapshotChunk)>;
@@ -703,6 +800,11 @@ mod tests {
         let two = [status(3, true), status(4, true)];
         let full = s.sync_with(&two, t0, &mut sink(&mut sent, Some(WorkerId(4))));
         assert_eq!(full, vec![WorkerId(4)]);
+        // A worker whose session starts again gets both from chunk 0.
+        s.forget(WorkerId(3));
+        sent.clear();
+        s.sync_with(&workers, t0, &mut sink(&mut sent, None));
+        assert_eq!(sent.first().map(|(_, c)| c.seq), Some(0));
         // The built-in worker is never sent anything, nor its acks taken.
         s.ack_with(WorkerId::LOCAL, ack(0), t0, &mut sink(&mut sent, None));
         // The same content keeps its version and its transfers.

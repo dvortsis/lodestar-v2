@@ -90,6 +90,15 @@ impl Reports for Told {
     }
 }
 
+/// Today's wire-key id: a worker seals only under its own day's key.
+fn today() -> u32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    (secs / 86_400) as u32
+}
+
 fn source() -> SourceId {
     SourceId::new(1).unwrap()
 }
@@ -99,7 +108,7 @@ fn source() -> SourceId {
 /// rule that quarantines.
 fn coordinator_snapshot(cs1: InfoHash, sig: u64, listed: InfoHash) -> FilterSnapshot {
     FilterSnapshot {
-        key: WireKey::new(20_400, [9; 32]),
+        key: WireKey::new(today(), [9; 32]),
         filter: StoreFilter {
             state: FilterState {
                 cs_hashes: vec![(cs1.0, 0)],
@@ -313,7 +322,7 @@ async fn drops_stay_on_the_worker_and_quarantine_goes_sealed() {
     let (clear, sealed) = ResultsBatch::decode_with(&payload).unwrap();
     assert_eq!(clear.records.len(), 1);
     let keyring = WireKeys::default();
-    keyring.set(vec![WireKey::new(20_400, [9; 32])]);
+    keyring.set(vec![WireKey::new(today(), [9; 32])]);
     let opened = keyring.open(&sealed[0], WORKER).unwrap();
     assert_eq!(opened.torrent.name, format!("{SECRET} holiday video"));
     assert_eq!(opened.action, Some(Action::Quarantine));

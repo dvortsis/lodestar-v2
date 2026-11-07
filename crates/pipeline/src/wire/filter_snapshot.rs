@@ -76,7 +76,11 @@ pub const MAX_ROWS: usize = 1 << 20;
 /// Subscribed content lists.
 pub const MAX_LISTS: usize = 4096;
 /// A sealed record: one record of the `Results` codec, plus the seal.
-pub const MAX_SEALED: usize = super::MAX_PAYLOAD;
+pub const MAX_SEALED: usize = super::MAX_PAYLOAD - BATCH_HEADER - SEALED_HEADER;
+/// A `Results` batch's header at most: the version and two varints.
+const BATCH_HEADER: usize = 1 + 10 + 2;
+/// A sealed record's clear header at most, its length prefix included.
+const SEALED_HEADER: usize = 2 + 20 + 10 + 10 + 1 + 5 + 3;
 
 const _: () = assert!(MAX_SNAPSHOT.div_ceil(MAX_CHUNK) <= MAX_CHUNKS as usize);
 
@@ -195,6 +199,7 @@ impl FilterSnapshot {
             opt_ivar(&mut w, x.shadow_until);
             opt_text(&mut w, x.unless_query.as_deref())?;
         }
+        too_big(&w)?;
         switches(&mut w, &r.pack_switches)?;
         count(&mut w, r.overrides.len())?;
         for o in &r.overrides {
@@ -235,7 +240,9 @@ impl FilterSnapshot {
             text(&mut w, q, MAX_TEXT)?;
             w.u8((*adult).into());
         }
+        too_big(&w)?;
         settings(&mut w, &f.spam_sigs)?;
+        too_big(&w)?;
         if self.lists.len() > MAX_LISTS {
             return Err(Error::TooLarge("lists"));
         }
@@ -548,18 +555,38 @@ impl std::fmt::Debug for Complete {
 /// that doesn't follow the last refuses and drops the transfer, so a
 /// half-received snapshot is never used. What's installed stays in use
 /// until a new one is complete.
-#[derive(Debug)]
 pub struct Incoming {
     kind: SnapshotKind,
     transfer: Option<Transfer>,
 }
 
-#[derive(Debug)]
 struct Transfer {
     version: u64,
     total: u32,
     next: u32,
     buf: Vec<u8>,
+}
+
+/// The kind and the transfer's progress; never its bytes (the wire key).
+impl std::fmt::Debug for Incoming {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let t = self.transfer.as_ref();
+        f.debug_struct("Incoming")
+            .field("kind", &self.kind)
+            .field("version", &t.map(|t| t.version))
+            .field("chunks", &t.map(|t| (t.next, t.total)))
+            .field("bytes", &t.map(|t| t.buf.len()))
+            .finish()
+    }
+}
+
+impl Drop for Transfer {
+    /// A filter snapshot holds the wire key: the bytes received are
+    /// overwritten when a transfer is dropped (best effort, as [`WireKey`]).
+    fn drop(&mut self) {
+        self.buf.fill(0);
+        std::sync::atomic::compiler_fence(Ordering::SeqCst);
+    }
 }
 
 impl Incoming {
@@ -594,7 +621,7 @@ impl Incoming {
         let Some(t) = self.transfer.as_mut() else {
             return Err(Error::Invalid("snapshot chunk order"));
         };
-        let last = c.seq + 1 == t.total;
+        let last = c.seq.checked_add(1) == Some(t.total);
         let fits = if last {
             !c.bytes.is_empty() && c.bytes.len() <= MAX_CHUNK
         } else {
@@ -618,12 +645,12 @@ impl Incoming {
         if !last {
             return Ok(Step::Ack(ack));
         }
-        let t = self.transfer.take().expect("a transfer");
+        let mut t = self.transfer.take().expect("a transfer");
         Ok(Step::Done(
             ack,
             Complete {
                 version: t.version,
-                bytes: t.buf,
+                bytes: std::mem::take(&mut t.buf),
             },
         ))
     }
@@ -993,7 +1020,19 @@ impl Judge {
     /// Judges one prepared torrent (see the module docs). A result the
     /// prepare stage judged under an older engine is judged again with the
     /// installed one first, as the commit would.
-    pub fn judge(&self, mut r: Results) -> Judged {
+    pub fn judge(&self, r: Results) -> Judged {
+        self.judge_at(r, unix_now())
+    }
+
+    /// [`Judge::judge`] at Unix time `now` (the worker's clock).
+    ///
+    /// A record to seal is sealed only while `now` is still on the day of
+    /// the installed wire key (or earlier, for a clock behind the
+    /// coordinator's). The coordinator opens today's and yesterday's keys,
+    /// so a record a 24 h spool replays always opens. Past that day, until
+    /// the next snapshot brings the new key, a record to seal is refused
+    /// (`NotReady`: its lease ends and the key is fetched again).
+    pub fn judge_at(&self, mut r: Results, now: i64) -> Judged {
         let installed = self.installed.read().unwrap_or_else(|e| e.into_inner());
         let Some(inst) = installed.as_ref() else {
             self.counts.refused.fetch_add(1, Ordering::Relaxed);
@@ -1005,7 +1044,9 @@ impl Judge {
         if r.version != inst.engine {
             let engine = self.filter.current();
             let at = r.metadata_at;
-            r.verdict = crate::writer::rejudge(&engine, &mut r, at, unix_now());
+            // The worker's own time: the commit judges again with the
+            // lease's discovery time, which the worker doesn't have.
+            r.verdict = crate::writer::rejudge(&engine, &mut r, at, now);
             r.version = inst.engine;
             self.counts.rejudged.fetch_add(1, Ordering::Relaxed);
         }
@@ -1032,6 +1073,10 @@ impl Judge {
             };
             c.fetch_add(1, Ordering::Relaxed);
             return Judged::Send(Outbound::Record(record));
+        }
+        if now.div_euclid(86_400) > i64::from(sealing.id) {
+            self.counts.refused.fetch_add(1, Ordering::Relaxed);
+            return Judged::NotReady { key, token };
         }
         match SealedRecord::seal(&record, &sealing, self.worker) {
             Ok(s) => {
@@ -1116,6 +1161,13 @@ fn unix_now() -> i64 {
 }
 
 // --- field encodings ---------------------------------------------------
+
+fn too_big(w: &Writer) -> Result<()> {
+    if w.out.len() > MAX_SNAPSHOT {
+        return Err(Error::TooLarge("snapshot"));
+    }
+    Ok(())
+}
 
 fn count(w: &mut Writer, n: usize) -> Result<()> {
     if n > MAX_ROWS {
@@ -1269,6 +1321,12 @@ mod tests {
     use lodestar_store::Preparer;
 
     const WORKER: WorkerId = WorkerId(7);
+
+    /// Today's wire-key id, on this machine's clock.
+    fn today() -> u32 {
+        (unix_now() / 86_400) as u32
+    }
+
     /// A name only a rule of ours quarantines.
     const SECRET: &str = "zebraquark";
 
@@ -1285,7 +1343,7 @@ mod tests {
 
     fn snapshot(rules: Vec<RuleRow>) -> FilterSnapshot {
         FilterSnapshot {
-            key: WireKey::new(20_400, [9; 32]),
+            key: WireKey::new(today(), [9; 32]),
             filter: StoreFilter {
                 state: FilterState::default(),
                 rules: RuleSet {
@@ -1441,7 +1499,7 @@ mod tests {
         assert!(!text.contains("[9, 9"), "{text}");
         let keys = WireKeys::default();
         keys.set(vec![s.key.clone()]);
-        assert_eq!(format!("{keys:?}"), "WireKeys([20400])");
+        assert_eq!(format!("{keys:?}"), format!("WireKeys([{}])", today()));
     }
 
     #[test]
@@ -1729,17 +1787,129 @@ mod tests {
             panic!("the old rules let it through");
         };
         assert_eq!(rec.action, None);
-        // Today's rules quarantine it: the record the old worker sent,
-        // re-judged as the writer re-judges every remote result.
+        // Over the wire and back, as the coordinator receives it.
+        let wire = ResultsBatch {
+            batch: 1,
+            records: vec![rec],
+        }
+        .encode()
+        .unwrap();
+        let rec = ResultsBatch::decode(&wire).unwrap().records.pop().unwrap();
+        // The commit rebuilds the file list and classification from the
+        // record itself (as WK-9's intake does) and judges again with
+        // today's rules, which quarantine it.
         let today = judge_with(&snapshot(vec![rule(1, SECRET, Action::Quarantine)]))
             .filter()
             .current();
-        let mut at_commit = prepared(&today, &name, 1 << 20);
-        at_commit.verdict = Verdict::default();
-        at_commit.version = rec.rule_version;
+        let t = &rec.torrent.files;
+        let blob = lodestar_store::BlobCodec::new(3)
+            .decompress(t.codec, t.dict_id, &t.data)
+            .unwrap();
+        let tree = lodestar_store::filetree::decode(&blob).unwrap();
+        let files = crate::enrich::file_infos(&tree.files, tree.encoding);
+        let (_, class) = crate::enrich::enrich_infos(&rec.torrent.name, &files);
+        let mut at_commit = Results {
+            key: rec.key,
+            token: rec.token,
+            worker: WORKER,
+            torrent: rec.torrent,
+            sources: rec.sources,
+            metadata_at: rec.metadata_at,
+            files,
+            class,
+            verdict: Verdict::default(),
+            version: rec.rule_version,
+            trail: Default::default(),
+            fix: rec.fix,
+            private_source: rec.private_source,
+            source_adult: rec.source_adult,
+        };
+        // The writer keeps a verdict only for the built-in worker's result
+        // under its own engine version; a remote one is always re-judged.
+        assert!(at_commit.worker != WorkerId::LOCAL);
         let now = unix_now();
         let v = crate::writer::rejudge(&today, &mut at_commit, now, now);
         assert_eq!(v.decision.unwrap().action, Action::Quarantine);
+    }
+
+    /// Past the installed key's day, nothing is sealed under it: a 24 h
+    /// spool replays only what the coordinator still opens.
+    #[test]
+    fn nothing_is_sealed_past_its_keys_day() {
+        let s = snapshot(vec![rule(1, SECRET, Action::Quarantine)]);
+        let j = judge_with(&s);
+        let day = i64::from(s.key.id) * 86_400;
+        let name = format!("{SECRET} x");
+        let r = prepared(&j.filter().current(), &name, 1 << 20);
+        assert!(matches!(
+            j.judge_at(r, day + 86_399),
+            Judged::Send(Outbound::Sealed(_))
+        ));
+        let r = prepared(&j.filter().current(), &name, 1 << 20);
+        assert!(matches!(
+            j.judge_at(r, day + 86_400),
+            Judged::NotReady { .. }
+        ));
+        // Records in clear still go.
+        let r = prepared(&j.filter().current(), "plain", 1 << 20);
+        assert!(matches!(
+            j.judge_at(r, day + 86_400),
+            Judged::Send(Outbound::Record(_))
+        ));
+    }
+
+    /// The largest seal still fits a batch with its headers.
+    #[test]
+    fn the_largest_sealed_record_fits_a_batch() {
+        let big = SealedRecord {
+            key: InfoHash([1; 20]),
+            token: Token(u64::MAX),
+            rule_version: u64::MAX,
+            action: Action::Drop,
+            key_id: u32::MAX,
+            sealed: vec![0; MAX_SEALED],
+        };
+        let b = ResultsBatch {
+            batch: u64::MAX,
+            records: Vec::new(),
+        };
+        let wire = b.encode_with(std::slice::from_ref(&big)).unwrap();
+        assert!(wire.len() <= super::super::MAX_PAYLOAD);
+        assert_eq!(ResultsBatch::decode_with(&wire).unwrap().1, vec![big]);
+    }
+
+    /// A clear record after a sealed one is refused, so whatever decodes
+    /// re-encodes to the same bytes.
+    #[test]
+    fn sealed_records_come_last() {
+        let s = snapshot(vec![rule(1, SECRET, Action::Quarantine)]);
+        let j = judge_with(&s);
+        let r = prepared(&j.filter().current(), &format!("{SECRET} y"), 1 << 20);
+        let Judged::Send(Outbound::Sealed(sealed)) = j.judge(r) else {
+            panic!()
+        };
+        let clear = prepared(&j.filter().current(), "plain", 1 << 20).into_record();
+        let mut w = Writer::default();
+        w.u8(1);
+        w.uvar(1);
+        w.uvar(2);
+        sealed.write(&mut w);
+        super::super::results::write_record_for_tests(&mut w, &clear);
+        assert_eq!(
+            ResultsBatch::decode_with(&w.out).err(),
+            Some(Error::Invalid("record order"))
+        );
+    }
+
+    #[test]
+    fn an_assembly_never_shows_its_bytes() {
+        let mut inc = Incoming::new(SnapshotKind::Filter);
+        let mut c = chunk(SnapshotKind::Filter, 3, b"zebraquark", 0);
+        c.total = 2;
+        c.bytes.resize(MAX_CHUNK, b'z');
+        inc.take(c).unwrap();
+        let text = format!("{inc:?}");
+        assert!(!text.contains("zebra") && !text.contains("122"), "{text}");
     }
 
     /// A result prepared before a new snapshot came in is judged again

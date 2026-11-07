@@ -66,7 +66,8 @@
 //! sealed  = flags:uvar info_hash:[20] token:uvar rule_version:uvar action:u8
 //!           key_id:uvar sealed:bytes
 //! ```
-//! `sealed` holds a whole version-1 batch of that one record, sealed
+//! Sealed records follow every record in clear. `sealed` holds a whole
+//! version-1 batch of that one record, sealed
 //! (`crate::wire::filter_snapshot`). [`ResultsBatch::decode`] leaves sealed
 //! records out; [`ResultsBatch::decode_with`] returns them.
 
@@ -249,6 +250,11 @@ impl ResultsBatch {
         let mut seen = HashSet::with_capacity(n);
         for _ in 0..n {
             let key = match read_any(&mut r)? {
+                // Records in clear come first, so the batch re-encodes to
+                // the same bytes.
+                Any::Clear(_) if !sealed.is_empty() => {
+                    return Err(Error::Invalid("record order"));
+                }
                 Any::Clear(rec) => {
                     let key = rec.key;
                     records.push(rec);
@@ -298,6 +304,12 @@ impl ResultRecord {
         write_record(&mut w, self)?;
         Ok(w.out.len())
     }
+}
+
+/// [`write_record`] for other modules' tests.
+#[cfg(test)]
+pub(super) fn write_record_for_tests(w: &mut Writer, r: &ResultRecord) {
+    write_record(w, r).unwrap();
 }
 
 fn write_record(w: &mut Writer, r: &ResultRecord) -> Result<()> {
