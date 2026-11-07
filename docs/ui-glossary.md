@@ -60,6 +60,8 @@ Terms the core terms depend on, and the truthful-state strings from §10.14.
 | `in_library` | In library | Already in your download client or library. | 已在库中 (TBD) |
 | `safe_restart` | Safe restart | The switch (`[dht] safe_restart`, off by default) that lets a clean restart skip the six-hour sampling wait (CR-0d). | 安全重启 (TBD) |
 | `restart_record` | Restart record | What Lodestar writes at a clean stop so the next start can skip the wait: in the data folder, and in a restart record folder outside it that is never backed up with the data. | 重启记录 (TBD) |
+| `worker` | Worker | A machine that crawls for this server over the cluster port. "This server" is the built-in crawler (worker 0); others show as "Worker 3", or by name for an admin. | 工作节点 (TBD) |
+| `marginal_gain` | Marginal gain ≈ | Keys a worker found that no other worker claimed while they were in flight. Always shown as an estimate ("≈"); it mostly under-counts, and the latest hours fill in as leases end. | 边际增益 (TBD) |
 
 ## 3. File categories and groups
 

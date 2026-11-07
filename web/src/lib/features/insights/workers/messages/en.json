@@ -1,0 +1,22 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"insights_workers_pill_workers": "{count} workers",
+	"insights_workers_pill_workers_one": "{count} worker",
+	"insights_workers_pill_rate": "{rate}/h",
+	"insights_workers_pill_detail": "{workers} working, {paused} paused, {offline} offline.",
+	"insights_workers_this_server": "This server",
+	"insights_workers_worker": "Worker {id}",
+	"insights_workers_title": "By worker",
+	"insights_workers_note": "Counts for the chosen range. Workers are listed by id; this server's own crawler is first.",
+	"insights_workers_note_fetch": "The loss reason filter does not narrow this table.",
+	"insights_workers_col_worker": "Worker",
+	"insights_workers_col_granted": "Granted",
+	"insights_workers_col_rediscovered": "Rediscovered",
+	"insights_workers_col_dropped": "Dropped",
+	"insights_workers_col_committed": "Committed",
+	"insights_workers_col_lost": "Lost",
+	"insights_workers_col_share": "Share of granted ≈",
+	"insights_workers_marginal_title": "Marginal gain ≈",
+	"insights_workers_marginal_definition": "Keys a worker found that no other worker claimed while they were in flight. It mostly under-counts, and the latest hours fill in as leases end.",
+	"insights_workers_marginal_hint": "Workers on different networks usually add more."
+}

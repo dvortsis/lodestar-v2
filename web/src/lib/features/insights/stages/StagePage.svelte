@@ -594,6 +594,12 @@
 			</div>
 		</section>
 
+		{#if (stage === 'discover' || stage === 'fetch') && (data as { by_worker?: unknown[] }).by_worker?.length}
+			{#await import('../workers/WorkerBreakdown.svelte') then { default: WorkerBreakdown }}
+				<WorkerBreakdown {stage} byWorker={(data as { by_worker?: never }).by_worker} />
+			{/await}
+		{/if}
+
 		{#each [...model.tables, ...extraTables] as t (t.id)}
 			<section class="ins-section" aria-labelledby="ins-t-{t.id}">
 				<h2 id="ins-t-{t.id}" class="ins-heading">{t.title}</h2>

@@ -1,0 +1,22 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"insights_workers_pill_workers": "{count} 个工作节点",
+	"insights_workers_pill_workers_one": "{count} 个工作节点",
+	"insights_workers_pill_rate": "{rate}/小时",
+	"insights_workers_pill_detail": "{workers} 个工作中，{paused} 个已暂停，{offline} 个离线。",
+	"insights_workers_this_server": "本服务器",
+	"insights_workers_worker": "工作节点 {id}",
+	"insights_workers_title": "按工作节点",
+	"insights_workers_note": "所选范围内的计数。按编号列出；本服务器自带的爬虫排第一。",
+	"insights_workers_note_fetch": "失败原因筛选不会缩小此表。",
+	"insights_workers_col_worker": "工作节点",
+	"insights_workers_col_granted": "已分配",
+	"insights_workers_col_rediscovered": "重复发现",
+	"insights_workers_col_dropped": "已丢弃",
+	"insights_workers_col_committed": "已提交",
+	"insights_workers_col_lost": "已丢失",
+	"insights_workers_col_share": "占已分配比例 ≈",
+	"insights_workers_marginal_title": "边际增益 ≈",
+	"insights_workers_marginal_definition": "某个工作节点发现、且在处理期间没有其他工作节点认领的键。数值通常偏低，最近几小时会随租约结束而补全。",
+	"insights_workers_marginal_hint": "位于不同网络的工作节点通常贡献更多。"
+}

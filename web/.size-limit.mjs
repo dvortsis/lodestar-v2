@@ -50,7 +50,8 @@ if (preloaded.length)
 		`The search route's first load preloads JS it doesn't run yet:\n  ${preloaded.join('\n  ')}`
 	);
 
-const stageLazy = [/uplot/i];
+// uPlot, and the per-worker breakdown (WK-17), which loads only when the server sends `by_worker`.
+const stageLazy = [/uplot/i, /WorkerBreakdown/];
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
 
 // A route's own JS and CSS is its first view (runner decision, §2.19): static imports, plus dynamic
