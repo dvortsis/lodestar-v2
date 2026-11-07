@@ -30,6 +30,11 @@
 	// Opened by the keyboard (Shift+F10 and the menu key click the button with no pointer, `detail` 0; Enter and Space
 	// click it the same way): the menu lands on its first item, as the menu-button pattern asks.
 	let byKeyboard = $state(false);
+	// Only the first open is made here (later ones go through the mounted menu's own trigger, whose keyboard
+	// open Bits UI already handles), so a pointer open after a keyboard one must not inherit the flag.
+	$effect(() => {
+		if (!open) byKeyboard = false;
+	});
 	let sendLabel = $state<string | null>(null);
 	function more(event: MouseEvent) {
 		event.stopPropagation();

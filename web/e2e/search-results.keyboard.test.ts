@@ -86,6 +86,25 @@ test('Shift+F10 opens the row’s More menu; Copy info hash from the keyboard', 
 	await expect.poll(() => copied(page)).toBe(hashOf(1));
 });
 
+// No `kbd` here: this one needs a mouse click after a keyboard open.
+test('a pointer open of the More menu after a keyboard open does not focus the first item', async ({
+	page,
+	go
+}) => {
+	await go('/search?q=lantern');
+	await expect(rowOf(page, 1)).toBeVisible();
+	await rowOf(page, 1).focus();
+	await page.keyboard.press('Shift+F10');
+	const first = page.getByRole('menuitem', { name: 'Open in a new tab' });
+	await expect(first).toBeFocused();
+	await page.keyboard.press('Escape');
+	await expect(page.getByRole('menu')).toHaveCount(0);
+	await rowOf(page, 1).hover();
+	await rowOf(page, 1).locator('[data-row-more]').click();
+	await expect(page.getByRole('menu', { name: /More actions/ })).toBeVisible();
+	await expect(first).not.toBeFocused();
+});
+
 test('c copies the focused row’s magnet with the drawer closed', async ({ page, go, kbd }) => {
 	await recordClipboard(page);
 	await go('/search?q=lantern');

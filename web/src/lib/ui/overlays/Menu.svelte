@@ -48,7 +48,7 @@
 		const first = content?.querySelector<HTMLElement>('[role="menuitem"]:not([data-disabled])');
 		if (!first) return;
 		event.preventDefault();
-		first.focus();
+		first.focus({ preventScroll: true });
 	}
 </script>
 
