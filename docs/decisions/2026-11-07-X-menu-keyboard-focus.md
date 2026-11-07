@@ -1,0 +1,8 @@
+# X-menu-keyboard-focus decisions (PR number in the PR description)
+
+A row's "More actions" menu opened from the keyboard now focuses its first item (2026-11-07Z). Small UI fix; no owner decision touched.
+
+- **Cause:** Bits UI focuses the first item on open only once its keyboard tracker has seen a keydown, and that tracker's listener exists only while a Bits component is mounted. The row's Menu loads lazily, after the Shift+F10 keydown, so focus stayed on the menu container.
+- **Fix:** `RowActions` marks an open as keyboard-made when the click has `detail === 0` (Shift+F10, the menu key, Enter and Space all click the button that way; a pointer click has `detail >= 1`). `Menu` takes `autofocusFirst`, and its `onOpenAutoFocus` focuses the first enabled item. A pointer open is unchanged.
+- **Test:** `search-results.keyboard` pressed ArrowDown twice because focus began on the container; it now expects the first item focused and presses once (outside the brief's paths, a direct consequence of the fix). The filters-block keyboard spec now asserts the first item is focused after Shift+F10, then that End moves to "Block this…". The menu has no component test file, so none was added. The #590 nit (`.catch(() => false)` in the `expect.poll`) is applied in `shell.routes.test.ts`.
+- **Other lazy menus:** `FieldMenu` (settings, opened through `SettingField.openMenu`) mounts its Menu after the click in the same way, so a keyboard open there has the same gap. It is outside this slice's paths; it can pass `autofocusFirst` the same way. The shell's `OverflowMenu` mounts with the page, so Bits' own tracker is already running.

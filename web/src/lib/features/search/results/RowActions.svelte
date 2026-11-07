@@ -27,9 +27,13 @@
 	// results: it opens as it mounts, on the button that replaced the placeholder.
 	let Menu = $state<typeof import('$lib/ui/overlays/Menu.svelte').default>();
 	let open = $state(false);
+	// Opened by the keyboard (Shift+F10 and the menu key click the button with no pointer, `detail` 0; Enter and Space
+	// click it the same way): the menu lands on its first item, as the menu-button pattern asks.
+	let byKeyboard = $state(false);
 	let sendLabel = $state<string | null>(null);
 	function more(event: MouseEvent) {
 		event.stopPropagation();
+		byKeyboard = event.detail === 0;
 		void import('$lib/ui/overlays/Menu.svelte').then((mod) => {
 			Menu = mod.default;
 			open = true;
@@ -112,6 +116,7 @@
 {#if Menu}
 	<Menu
 		bind:open
+		autofocusFirst={byKeyboard}
 		label={m.search_results_more({ name })}
 		items={[
 			...(sendLabel ? [{ id: 'send', label: sendLabel }] : []),

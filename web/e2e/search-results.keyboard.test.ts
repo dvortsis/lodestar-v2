@@ -78,7 +78,8 @@ test('Shift+F10 opens the row’s More menu; Copy info hash from the keyboard', 
 	await kbd.press('Shift+F10');
 	const item = page.getByRole('menuitem', { name: 'Copy info hash' });
 	await expect(item).toBeVisible();
-	await kbd.press('ArrowDown'); // Open in a new tab
+	// Opened from the keyboard, the menu lands on its first item (Open in a new tab).
+	await expect(page.getByRole('menuitem', { name: 'Open in a new tab' })).toBeFocused();
 	await kbd.press('ArrowDown');
 	await expect(item).toBeFocused();
 	await kbd.press('Enter');
