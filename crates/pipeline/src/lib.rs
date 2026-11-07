@@ -1259,14 +1259,13 @@ impl Pipeline {
         self.intake.await.map_err(Error::Join)?;
         let _ = self.stop_pool.send(true);
         let mut queue = self.pool_task.await.map_err(Error::Join)?;
-        // Before the writer's last save: the heartbeat (which hands parked
-        // keys to the pool) is stopped below, and the intake already let go
-        // of the pool, so a key is either in the pool's queue or here.
+        // Before the writer's last save. The heartbeat (which hands parked
+        // keys to the pool) stopped above, and the intake let go of the
+        // pool, so a key is either in the pool's queue or here, once.
         queue.extend(self.monitor.remote.queue_rows());
         // Prepare finishes what the pool fetched, then closes the writer's
         // input.
         self.prepare.await.map_err(Error::Join)?;
-        self.heartbeat.abort();
         self.saver.abort();
         let _ = self.finish.send(queue);
         self.writer.await.map_err(Error::Join)

@@ -96,13 +96,16 @@ pub mod metric {
         ((metric as i64) << 16) | ((dim as i64) << 8) | key
     }
 
+    /// A metric a worker may send, with its dims and keys (inclusive).
+    pub type Domain = (u32, (u32, u32), (i64, i64));
+
     /// The metrics a remote worker may send, with their dim and key
     /// domains (inclusive). Everything else is the coordinator's own:
     /// harvests are counted at grant and stores at commit (§19.3), and
     /// search, scrape scheduling, coverage, lifecycle, late results and
     /// the per-worker rows themselves are coordinator work. Strategy codes
     /// are a plugin's own `u8`.
-    pub const FROM_WORKERS: [(u32, (u32, u32), (i64, i64)); 4] = [
+    pub const FROM_WORKERS: [Domain; 4] = [
         // dim = source, key = strategy.
         (REDISCOVERED, (0, 63), (0, 255)),
         // dim = source, key 0.
@@ -221,6 +224,9 @@ pub const WORKER_KEYS_PER_DAY: usize = 128;
 /// take a `rollup_hour` value (a STRICT INTEGER) out of range.
 pub const WORKER_ROW_CAP: i64 = 1 << 32;
 
+/// A counter's row: its metric, dim and key.
+type Row = (u32, u32, i64);
+
 /// What a remote worker's counters may do to the rollups (WK-9b; the
 /// WK-6 decisions' "bound what counters can do"):
 /// - only [`metric::FROM_WORKERS`], each with its own dim and key domain;
@@ -234,9 +240,9 @@ pub const WORKER_ROW_CAP: i64 = 1 << 32;
 pub struct Admit {
     /// What each (worker, hour, metric, dim, key) took so far, for hours
     /// still in the window.
-    taken: HashMap<(WorkerId, i64), HashMap<(u32, u32, i64), i64>>,
+    taken: HashMap<(WorkerId, i64), HashMap<Row, i64>>,
     /// The keys each worker counted on each UTC day still in the window.
-    days: HashMap<(WorkerId, i64), std::collections::HashSet<(u32, u32, i64)>>,
+    days: HashMap<(WorkerId, i64), std::collections::HashSet<Row>>,
 }
 
 impl Admit {
@@ -469,7 +475,7 @@ mod tests {
             a.admit(WorkerId(4), counter(HOUR, metric::DROPPED, 1, 0, 9), 0, NOW)
                 .is_some()
         );
-        assert!(i64::MAX / WORKER_ROW_CAP > 1 << 30);
+        const { assert!(i64::MAX / WORKER_ROW_CAP > 1 << 30) };
         let mut rows = 0;
         for source in 0..64 {
             for strategy in 0..4 {
