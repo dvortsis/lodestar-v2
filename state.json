@@ -5866,7 +5866,7 @@
     {
       "id": "X-facets-uncheck-flake",
       "at": "2026-11-07T19:30Z",
-      "note": "web/e2e/search-facets.fixture.test.ts:52 uncheck() on facet-type-movie: \"Clicking the checkbox did not change its state\" on E2E run 42404920557 attempt 1 (release/v0.5.2 192b52f0); attempt 2 green. Likely the facet rail re-rendering from the new /facets right after the query change. Fix once (wait for the rail to settle before unchecking) if it recurs or in the next e2e hygiene slice."
+      "note": "web/e2e/search-facets.fixture.test.ts:52 uncheck() on facet-type-movie: \"Clicking the checkbox did not change its state\" on E2E run 42404920557 attempt 1 (release/v0.5.2 192b52f0); attempt 2 green. Likely the facet rail re-rendering from the new /facets right after the query change. Fix once (wait for the rail to settle before unchecking) if it recurs or in the next e2e hygiene slice. -> X-web-hygiene-1107."
     },
     {
       "id": "v052-rc2-ready",
@@ -5886,7 +5886,7 @@
     {
       "id": "X-fieldmenu-keyboard-focus",
       "at": "2026-11-07T20:17Z",
-      "note": "From #594 (X-menu-keyboard-focus): FieldMenu has the same lazy-open keyboard-focus gap (first item not focused on keyboard open); listed in docs/decisions/2026-11-07-X-menu-keyboard-focus.md, not fixed there. Small web slice later."
+      "note": "From #594 (X-menu-keyboard-focus): FieldMenu has the same lazy-open keyboard-focus gap (first item not focused on keyboard open); listed in docs/decisions/2026-11-07-X-menu-keyboard-focus.md, not fixed there. Small web slice later. -> X-web-hygiene-1107."
     },
     {
       "id": "wk10b-runner-calls",
@@ -5897,6 +5897,11 @@
       "id": "X-flake-smoke-torrent-rose-pine",
       "at": "2026-11-07T20:46Z",
       "note": "#594 first playwright run: [sample-rose-pine-dark] smoke torrent screenshot diff 23,106 px (~2%) on torrent page (no row menu there); re-run passed. Unrelated to #594. Fix once if it recurs (snapshot determinism on torrent page)."
+    },
+    {
+      "id": "X-menu-keyboard-focus-merged",
+      "at": "2026-11-07T21:20Z",
+      "note": "#594 merged 46e5c803 on fresh Opus MERGE (2 non-blocking nits -> X-web-hygiene-1107). Slot 2 -> X-web-hygiene-1107 (same session): FieldMenu focus, nits, search-facets uncheck flake. Needs slices.yaml entries for X-menu-keyboard-focus + X-web-hygiene-1107 in next runner PR."
     }
   ],
   "main_health": [
@@ -6592,7 +6597,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T20:05Z",
+    "updated": "2026-11-07T21:20Z",
     "items": [
       {
         "slot": 1,
@@ -6604,11 +6609,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-menu-keyboard-focus",
+        "slice": "X-web-hygiene-1107",
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhnCVN68eUViVowdQeWw: keyboard-opened row menu focuses first item (Sonnet); after #590 merged 2bee902a",
-        "since": "2026-11-07T19:25Z"
+        "since": "2026-11-07T21:20Z"
       },
       {
         "slot": 3,
@@ -6681,5 +6686,5 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-07T20:40Z"
+  "heartbeat": "2026-11-07T21:20Z"
 }
