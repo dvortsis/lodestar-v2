@@ -15,7 +15,7 @@ bitmagnet crawls the DHT on your Unraid box for 25 hours: 60 min warm-up, then 2
 - [ ] Router and network unchanged since the last run. Do not touch the router during the run.
 - [ ] Port 3334 (bitmagnet's DHT port) is NOT forwarded. Do not publish it with `-p` either.
 - [ ] The box clock is synchronised (NTP on). The offset must be within 1 s.
-- [ ] `/mnt/user/appdata/bitmagnet-comp` does not exist yet, and `.../lodestar-soak/cr-ab-comp-1` does not exist yet. The evidence share has at least 50 GB free.
+- [ ] `/mnt/cache/appdata/bitmagnet-comp` does not exist yet, and `.../lodestar-soak/cr-ab-comp-1` does not exist yet. The evidence share has at least 50 GB free.
 - [ ] Time now (UTC) ____. Planned start (UTC) ____, at least 12 h after the last crawling stopped.
 
 ## 2. Pinned images (checked 2026-11-07 against the registries)
@@ -37,10 +37,10 @@ Settings, all by environment variable (the same rule as Lodestar: no config file
 
 ```sh
 docker network create bitmagnet-net
-mkdir -p /mnt/user/appdata/bitmagnet-comp/postgres      # fresh, empty
+mkdir -p /mnt/cache/appdata/bitmagnet-comp/postgres      # fresh, empty
 
 docker run -d --name bitmagnet-postgres --restart no --network bitmagnet-net --shm-size 1g \
-  -v /mnt/user/appdata/bitmagnet-comp/postgres:/var/lib/postgresql/data \
+  -v /mnt/cache/appdata/bitmagnet-comp/postgres:/var/lib/postgresql/data \
   -e POSTGRES_PASSWORD=<password> -e POSTGRES_DB=bitmagnet \
   postgres@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
 
@@ -54,7 +54,7 @@ Do not paste these yet; step 5 gives the order. The names `bitmagnet` and `bitma
 ## 3a. Before the day (during the 12 h wait)
 1. **The bitmagnet commit** for `--commit`: `docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' <bitmagnet pin>`. It prints a 40-character hex id; use it lowercase. If it prints nothing, tell the runner before the run.
 2. **Confirm the worker keys and settings:** `docker run --rm <bitmagnet pin> worker list` shows `http_server`, `queue_server` and `dht_crawler`; `docker run --rm -e TMDB_ENABLED=false <bitmagnet pin> config show` shows TMDB off and the DHT port 3334. If either differs, tell the runner.
-3. **A 15-minute rehearsal** (test data, never the run). Do step 5's order with the collector flags `--rehearsal --warmup-minutes 1 --baseline-hours 0.2 --root /evidence/cr-ab-comp-rehearsal`. It shows the `torrents` table appears and the first count reads 0 within 180 s, and that `--stop` stops bitmagnet cleanly. Then remove both containers and **delete** `/mnt/user/appdata/bitmagnet-comp/postgres`, so the real run starts from an empty store. The rehearsal is bitmagnet, not Lodestar, so it doesn't restart the 12 h clock; finish it at least 1 h before the planned start.
+3. **A 15-minute rehearsal** (test data, never the run). Do step 5's order with the collector flags `--rehearsal --warmup-minutes 1 --baseline-hours 1 --hour-seconds 600 --root /evidence/cr-ab-comp-rehearsal`. It shows the `torrents` table appears and the first count is taken within 180 s, and that `--stop` stops bitmagnet (pass: result.json `reason` is `baseline_window_complete` and `stop_mode` is `exited_<code>`; report the code to the runner, a non-zero code is not a void for the comparator). Then remove both containers and **delete** `/mnt/cache/appdata/bitmagnet-comp/postgres`, so the real run starts from an empty store. The rehearsal is bitmagnet, not Lodestar, so it doesn't restart the 12 h clock; finish it at least 1 h before the planned start.
 4. **Record the CPU model** in your own notes (`grep -m1 "model name" /proc/cpuinfo`).
 
 ## 4. The collector command
@@ -63,7 +63,7 @@ Put `collect.py` (from `docs/soak/tools/linux/`) at `/path/to/collect.py`. Fill 
 docker run -d --name cr-ab-comp-collector --restart no --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /sys/fs/cgroup:/host/cgroup:ro -v /proc:/host/proc:ro \
-  -v /mnt/user/appdata/lodestar-soak:/evidence \
+  -v /mnt/cache/appdata/lodestar-soak:/evidence \
   -v /path/to/collect.py:/collect.py:ro \
   python:3.12-slim python /collect.py --mode docker --container bitmagnet \
     --postgres-container bitmagnet-postgres \
@@ -88,10 +88,10 @@ Then leave it alone.
 ## 6. During the run
 - Do not restart, pause or touch either container. Do not run anything else that uses DHT on the box or the home IP.
 - When something happens on the host, write it down at that moment, with the collector's note command (the time is stamped for you):
-  `docker run --rm -v /mnt/user/appdata/lodestar-soak:/evidence -v /path/to/collect.py:/collect.py:ro python:3.12-slim python /collect.py note --root /evidence/cr-ab-comp-1 --category <category>`
+  `docker run --rm -v /mnt/cache/appdata/lodestar-soak:/evidence -v /path/to/collect.py:/collect.py:ro python:3.12-slim python /collect.py note --root /evidence/cr-ab-comp-1 --category <category>`
   Categories: `import`, `other_crawler`, `array_operation` (parity, rebuild, mover), `host_reboot`, `plugin_container_action`, `link_outage`, `router_outage`, `public_ip_change`, `power_event`, or `other` for a note that changes nothing. A note written late, or after you looked at data, does not count.
 - Do NOT open `samples.jsonl`, the `metrics/` folder or the `.prom` files. `status.json` shows progress only; that is fine to read.
-- If something goes wrong, `touch /mnt/user/appdata/lodestar-soak/cr-ab-comp-1/stop.request`. The run is then invalid and is repeated from fresh data (CR-SPEC 6.7). Never restart into the same folder.
+- If something goes wrong, `touch /mnt/cache/appdata/lodestar-soak/cr-ab-comp-1/stop.request`. The run is then invalid and is repeated from fresh data (CR-SPEC 6.7). Never restart into the same folder.
 
 ## 7. Length and the end
 - Total 25 h: 60 min warm-up, then 24 h measured. Planned end = start + 25 h (UTC) ____.
@@ -104,7 +104,7 @@ Send only these, as text:
 1. The bitmagnet start time (UTC) from `docker inspect`.
 2. The two digests from step 2, with tags, and the output of `docker image inspect` showing them.
 3. The analyzer output, produced by the runner's command or this one, from the repo:
-   `python3 docs/soak/tools/analyze_cr.py segment /mnt/user/appdata/lodestar-soak/cr-ab-comp-1 --output seg.json --publish bundle/`
+   `python3 docs/soak/tools/analyze_cr.py segment /mnt/cache/appdata/lodestar-soak/cr-ab-comp-1 --output seg.json --publish bundle/`
 The raw evidence folder stays private on the box. Do not send it, `samples.jsonl` or the logs.
 
 ## Settled by the runner (2026-11-07T00:45Z)
@@ -114,3 +114,10 @@ The raw evidence folder stays private on the box. Do not send it, `samples.jsonl
 - **Backup:** `not_applicable`, because Appdata Backup is disabled. Auto-updates are `excluded` with their next run time.
 - **Worker keys, the 180 s first count, `--stop` and the `/proc` mount:** checked by the rehearsal (3a.3) before the real run.
 - **The note command** runs in a container, because stock Unraid has no python3.
+
+## Corrections (runner, 2026-11-07T03:45Z, after reviewing the owner's scripts)
+- **Rehearsal window:** `--baseline-hours 0.2` is refused (windows are whole hours); use `--baseline-hours 1 --hour-seconds 600`.
+- **Paths:** `/mnt/cache/appdata/...` everywhere, the same disk path as the Lodestar runs, and Postgres not on shfs.
+- **First count:** the collector's first count is the one rule 5.4 checks (the analyzer voids on it). Scripts must not take their own count; they check that the torrents table does not exist before bitmagnet starts, and that status.json appears within 180 s of bitmagnet's StartedAt.
+- **End:** wait for the collector to exit before stopping Postgres or restoring schedules; the next Lodestar start is result.json `ended` + 12 h.
+- **Schedules:** restore from saved copies of exactly what was paused (parity, mover, auto-update, TRIM).
