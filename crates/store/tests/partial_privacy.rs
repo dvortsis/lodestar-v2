@@ -1,0 +1,87 @@
+//! X-refetch-private: `partial_hashes` feeds the start's refetch, which
+//! queues every key it returns for public peer finding. A key with any
+//! `flags::PRIVACY` bit must never be among them (§18.7, BEP 27), and the
+//! cap counts only keys that can be refetched.
+
+use lodestar_bencode::{OwnedValue, to_vec};
+use lodestar_metainfo::{Info, InfoHash};
+use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, flags};
+
+const DHT: SourceId = SourceId::new(0).unwrap();
+
+fn raw(name: &str) -> Vec<u8> {
+    let d = |e: Vec<(&str, OwnedValue)>| {
+        OwnedValue::Dict(
+            e.into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+        )
+    };
+    let file = d(vec![
+        ("length", OwnedValue::Int(7)),
+        (
+            "path",
+            OwnedValue::List(vec![OwnedValue::Bytes(b"a.mkv".to_vec())]),
+        ),
+    ]);
+    to_vec(&d(vec![
+        ("files", OwnedValue::List(vec![file])),
+        ("name", OwnedValue::Bytes(name.as_bytes().to_vec())),
+        ("piece length", OwnedValue::Int(16_384)),
+        ("pieces", OwnedValue::Bytes(vec![0; 20])),
+    ]))
+}
+
+/// Stores a partial import of `name` with `extra` flags (and the BEP 27
+/// bit when `bep27`), checks the row really carries them, and returns its
+/// hash.
+fn partial(store: &mut Store, name: &str, extra: i64, bep27: bool) -> InfoHash {
+    let mut info = Info::parse(&raw(name)).unwrap();
+    info.private = bep27;
+    info.files.clear();
+    let id = store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: None,
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_000,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL | extra,
+            source: DHT,
+        }])
+        .unwrap()[0]
+        .id();
+    let row = store.torrent(id).unwrap().unwrap();
+    let want = flags::FILES_PARTIAL | extra | if bep27 { flags::PRIVATE } else { 0 };
+    assert_eq!(row.flags & want, want, "{name} is stored as built");
+    row.info_hash
+}
+
+#[test]
+fn partial_hashes_never_returns_a_private_key() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    // The private ones first, so they'd be the oldest under the cap.
+    let private_source = partial(&mut store, "Private.Source", flags::PRIVATE_SOURCE, false);
+    let bep27 = partial(&mut store, "Bep27", 0, true);
+    let bep27_flag = partial(&mut store, "Bep27.Flag", flags::PRIVATE, false);
+    let remote = partial(&mut store, "Remote", flags::REMOTE_UNVERIFIED, false);
+    let public = partial(&mut store, "Public", 0, false);
+    let all = store.partial_hashes(10).unwrap();
+    assert_eq!(all, vec![public]);
+    for key in [private_source, bep27, bep27_flag, remote] {
+        assert!(!all.contains(&key));
+    }
+    // The cap counts only refetchable keys: four older private partials
+    // don't crowd out the public one.
+    assert_eq!(store.partial_hashes(1).unwrap(), vec![public]);
+}
+
+#[test]
+fn public_partials_are_returned_oldest_first_as_before() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let a = partial(&mut store, "A", 0, false);
+    let _private = partial(&mut store, "P", flags::PRIVATE_SOURCE, false);
+    let b = partial(&mut store, "B", 0, false);
+    assert_eq!(store.partial_hashes(10).unwrap(), vec![a, b]);
+    assert_eq!(store.partial_hashes(1).unwrap(), vec![a]);
+    assert!(store.partial_hashes(0).unwrap().is_empty());
+}

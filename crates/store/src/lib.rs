@@ -1022,14 +1022,23 @@ impl Store {
     }
 
     /// Swarm hashes of torrents whose file list is incomplete (imports past
-    /// bitmagnet's file threshold), oldest first, for re-fetching.
+    /// bitmagnet's file threshold), oldest first, for re-fetching through
+    /// public peer finding.
+    ///
+    /// Never a key any [`flags::PRIVACY`] bit is set on: a BEP 27 private
+    /// torrent, a private source's find or a remote row whose `PRIVATE`
+    /// isn't verified is never sent to the DHT or PEX (§18.7, BEP 27). They
+    /// are left out here, not after, so `limit` counts only keys that can
+    /// be refetched (`docs/decisions/2026-11-07-X-refetch-private.md`).
     pub fn partial_hashes(&self, limit: usize) -> Result<Vec<InfoHash>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT info_hash FROM torrents WHERE flags & ?1 != 0 ORDER BY id LIMIT ?2")?;
-        let rows = stmt.query_map(params![flags::FILES_PARTIAL, limit as i64], |r| {
-            r.get::<_, Vec<u8>>(0)
-        })?;
+        let mut stmt = self.conn.prepare(
+            "SELECT info_hash FROM torrents WHERE flags & ?1 != 0 AND flags & ?2 = 0 \
+             ORDER BY id LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![flags::FILES_PARTIAL, flags::PRIVACY, limit as i64],
+            |r| r.get::<_, Vec<u8>>(0),
+        )?;
         rows.map(|r| {
             let h = r?;
             Ok(InfoHash(

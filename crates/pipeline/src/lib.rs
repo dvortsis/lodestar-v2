@@ -1363,7 +1363,10 @@ fn prepare(
         .collect();
     queue.retain(|q| !saved_refetch(q, &finders));
     // Imports with incomplete file lists get their info dicts fetched, if
-    // there's a peer finder to find them peers.
+    // there's a peer finder to find them peers. Public ones only:
+    // `partial_hashes` never returns a key with a `flags::PRIVACY` bit
+    // (§18.7, BEP 27), so `private_source: false` below is true of every
+    // key it gives. A private partial import keeps its partial file list.
     if let Some(finder) = manifests
         .iter()
         .zip(&ids)
