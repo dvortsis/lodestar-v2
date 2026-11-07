@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T07:20Z",
+  "updated_at": "2026-11-07T07:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3786,7 +3786,6 @@
     "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land",
     "B-update_signing": "Owner-delegated 2026-10-23 (§2.21): separate stable/nightly signing keys; installs trust nightly key only on Nightly channel; RELEASE_SIGNING_KEY (tags, release env w/ owner reviewer) + NIGHTLY_SIGNING_KEY (nightly env); public keys in packaging/keys/; channel-scoped trust in verifier (§12.2). P-release adds environments to jobs. | Code signing deferred (owner 2026-10-23): Authenticode checked only on artifacts that carry a signature; SHA-256 pins + signed manifest are the trust.",
     "windows_acl": "auth.json (crates/api/src/auth.rs:424) and services.rs:326 0600 modes are cfg(unix) only: Windows needs an ACL on data files (M6-win locks the default folder; custom data dirs on Windows still inherit). Next auth/security slice.",
-    "b4b_swap_test_waits": "crates/search/src/live.rs the_swap_reports_its_adult_torrents (#104) uses two fixed 30 s waits (pattern X-flakes removed elsewhere); convert to condition waits in the next slice touching live.rs.",
     "adult_hash_names": "Adult detection for opaque/hash torrent names (folder signals): corpus-backed slice; positive-only folder signals; numbered/year prefixes before xxx (#105 review).",
     "backup_unused_mut_windows": "crates/lodestar/src/cli/backup.rs:132 unused mut shows only on Windows clippy (M6-win note).",
     "slices_yaml_B12_owns": "runner/slices.yaml B12 owns should add crates/api/src/auth/**, ClientIp in extract.rs, services.rs wiring (brief grants them). Fix in next runner PR.",
