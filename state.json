@@ -5902,6 +5902,11 @@
       "id": "X-menu-keyboard-focus-merged",
       "at": "2026-11-07T21:20Z",
       "note": "#594 merged 46e5c803 on fresh Opus MERGE (2 non-blocking nits -> X-web-hygiene-1107). Slot 2 -> X-web-hygiene-1107 (same session): FieldMenu focus, nits, search-facets uncheck flake. Needs slices.yaml entries for X-menu-keyboard-focus + X-web-hygiene-1107 in next runner PR."
+    },
+    {
+      "id": "wkg-notes-axe-wk17",
+      "at": "2026-11-07T21:25Z",
+      "note": "Next runner PR: WK-G notes += axe on insights-workers, insights-marginal and the status pill with a fleet present (text, tooltip, sr-only help) \u2014 from #593 review."
     }
   ],
   "main_health": [
