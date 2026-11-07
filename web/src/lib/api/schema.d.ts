@@ -6844,7 +6844,7 @@ export interface components {
          *     may remove more. Keys still in memory waiting to be fetched aren't
          *     counted: the purge reports them as `keys_dropped`.
          * @example {
-         *       "claims_deleted": 1204331,
+         *       "claims_deleted": 96402,
          *       "kept": 88120,
          *       "plugin": "nyaa",
          *       "queue_deleted": 12,
