@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T19:01Z",
+  "updated_at": "2026-11-07T19:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5842,6 +5842,11 @@
       "id": "wk10-split",
       "added": "2026-11-07T19:01Z",
       "text": "WK-10 split (runner-approved 19:0xZ): WK-10a coordinator tick in serve.rs (~600: Placement::sync per tick, WorkerFilter, WorkerSnapshots + wire keys, ack via InboundSink wrapper, pause-set seed, WK-2 nits); WK-10b worker runtime core (~1,300: session handle, have routing, off-thread install, Judge, claims/outcomes, pool cap + #579 reservation, drain deadline, sealing, floor-drop, WK-9c Invalid decision; gates e2e store + no seal before fresh snapshot); WK-10c sharded DHT (~800: live Assign shard restart, budget.rs, heartbeat, Hello caps, metrics.md target-prefix, measured RSS Q6). Same session/slot, sequential. Approved out-of-owns: cluster/src/client.rs handle() ~40, worker/session.rs Work widen ~30, services.rs Placement before Cluster::start ~5, logging/events.rs + registry incl web names file (not web/e2e). Next runner PR: add WK-10a/b/c to slices.yaml (WK-10 becomes epic-ish parent or replaced), deps chain, owns."
+    },
+    {
+      "id": "X-menu-shift-f10-focus",
+      "added": "2026-11-07T19:04Z",
+      "text": "From #590 (X-flakes-1107): a context menu opened with Shift+F10 focuses the menu container, not its first item (lazy-loaded Menu misses the keydown). Possible a11y product bug; reviewer assessing size. Candidate small Sonnet slice."
     }
   ],
   "main_health": [
