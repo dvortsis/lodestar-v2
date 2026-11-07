@@ -5524,7 +5524,9 @@
     "slices.yaml SRC-15c owns: add web/.size-limit.mjs (sourcesLater regex widened to ConfigDialog only; runner yes 03:30Z)",
     "X-soak-screen preconditions before relying on in-run screen (P-v052-cut soak): (1) read lodestar_mem_anon_mappings ~1 h in a musl+override container to calibrate the gauge's clean value; (2) owner replays new analyzer over private r4/r5 dirs, relays only 'screen:' lines; thresholds provisional until then"
    ],
-   "text": " | WK-3 owns: crates/cluster/src/proto.rs (manual Debug on ToWorker only, key-leak guard, \u00a72.33) and fuzz/README.md (cluster_have + cluster_assign rows), runner 03:56Z. | WK-9 owns (runner 04:4xZ, \u00a72.33): crates/cluster/src/{leases.rs,server.rs,worker.rs (held-set TTL prune only)}, crates/cluster/Cargo.toml (network-policy dep), crates/pipeline/src/{coordinator.rs,writer.rs (end_lease helper),lib.rs}, crates/lodestar/src/cluster/{mod.rs,serve.rs}, crates/lodestar/src/services.rs, metrics.rs + docs/metrics.md rows. New slice WK-9b (counters into rollups with worker dim, backpressure, fetch_queue), deps [WK-9], same session. + crates/store/src/{compress.rs,lib.rs} (Preparer::decode_files bounded streaming zstd + has_dict only; no format change). | WK-3 merged #566: size 2,900 accepted (half tests); WK-10 notes: log HaveSync::at_cap once; stored = Have::len(); call WorkerHave from one message loop. WK-9 #568 size ~2,600 accepted. | WK-9 owns + crates/pipeline/Cargo.toml (network-policy dep, approved after the fact). WK-13 notes REQUIREMENT: late-result purge cutoff by token grant sequence / coordinator grant time, never worker-supplied metadata_at (#568 review). | WK-8 owns (\u00a72.33): crates/filter/src/seal.rs (seal_bytes/open_bytes with AAD, seal/open delegate), crates/pipeline/src/wire/results.rs (SEALED flag). WK-9b deps += WK-8 (intake WireKeys::open). Owner \u00a72.19 flag at WK-8 merge: sealed records under coordinator-derived per-day wire key (stricter than Q1's worker-SecretStore sealing)."
+   "text": " | WK-3 owns: crates/cluster/src/proto.rs (manual Debug on ToWorker only, key-leak guard, \u00a72.33) and fuzz/README.md (cluster_have + cluster_assign rows), runner 03:56Z. | WK-9 owns (runner 04:4xZ, \u00a72.33): crates/cluster/src/{leases.rs,server.rs,worker.rs (held-set TTL prune only)}, crates/cluster/Cargo.toml (network-policy dep), crates/pipeline/src/{coordinator.rs,writer.rs (end_lease helper),lib.rs}, crates/lodestar/src/cluster/{mod.rs,serve.rs}, crates/lodestar/src/services.rs, metrics.rs + docs/metrics.md rows. New slice WK-9b (counters into rollups with worker dim, backpressure, fetch_queue), deps [WK-9], same session. + crates/store/src/{compress.rs,lib.rs} (Preparer::decode_files bounded streaming zstd + has_dict only; no format change). | WK-3 merged #566: size 2,900 accepted (half tests); WK-10 notes: log HaveSync::at_cap once; stored = Have::len(); call WorkerHave from one message loop. WK-9 #568 size ~2,600 accepted. | WK-9 owns + crates/pipeline/Cargo.toml (network-policy dep, approved after the fact). WK-13 notes REQUIREMENT: late-result purge cutoff by token grant sequence / coordinator grant time, never worker-supplied metadata_at (#568 review). | WK-8 owns (\u00a72.33): crates/filter/src/seal.rs (seal_bytes/open_bytes with AAD, seal/open delegate), crates/pipeline/src/wire/results.rs (SEALED flag). WK-9b deps += WK-8 (intake WireKeys::open). Owner \u00a72.19 flag at WK-8 merge: sealed records under coordinator-derived per-day wire key (stricter than Q1's worker-SecretStore sealing).",
+   "status": "done",
+   "done_by": "#569 merged 56f944df (2026-11-07T07:2xZ)"
   },
   {
    "id": "R4-v051-docs",
@@ -5556,6 +5558,14 @@
   {
    "id": "soak-screen-calibration",
    "text": "#562 merged 66e40b3b 04:31Z; soak-screen.yml dispatched on main; owner asked (optional) to replay analyze_cr0 over r4/r5 and relay screen: lines only. Expect r4 trips early, r5 doesn't; retune before v0.5.2 soak if not. Then read the gauge ~1 h on musl+override before the v0.5.2 soak."
+  },
+  {
+   "id": "runner-pr-next-1107b",
+   "items": [
+    "After cr-ab-comp-1 ends (~2026-11-08T14:01Z): dashboard ext:experiment-host back to met:false; slices.yaml comment back",
+    "Owner \u00a72.19 flag at WK-8 merge (sealed records, per-day wire key)",
+    "D-v051-main reduced brief after #565 merges"
+   ]
   }
  ],
  "main_health": [
