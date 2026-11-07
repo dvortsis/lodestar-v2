@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T12:58Z",
+  "updated_at": "2026-11-07T13:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5646,6 +5646,12 @@
       "id": "main-red-1107",
       "added": "2026-11-07T12:58Z",
       "text": "main 76189f4f+ red: E0063 missing WorkerStatus::paused at lodestar cluster/filter.rs:456 (#573 added field, #572 helper; both green on stale bases, merged back to back). Runner fix PR #578 (7ef35166); Opus review + CI. All slices told; cite #578 under \u00a72.18. LESSON: after a merge, re-check other ready PRs whose CI base predates it (or merge main into them) before merging, when they touch the same crate. #576 X-refetch-private (db444b20) under Opus security review; needs main brought in after #578."
+    },
+    "runner PR: WK-9c notes say 'restore check only' in pipeline lib.rs; correct to 'Pipeline::start lease-restore loop (~652-755)', approved 13:02Z \u00a72.33",
+    {
+      "id": "legal3a-577",
+      "added": "2026-11-07T13:02Z",
+      "text": "#577 LEGAL-3a open (613bb0f6); fmt+clippy red only from main break (#578). Waits for #578, then merges main and reports green. Notice untouched; all claims held."
     }
   ],
   "main_health": [
