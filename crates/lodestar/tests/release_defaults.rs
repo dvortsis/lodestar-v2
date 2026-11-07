@@ -21,14 +21,26 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
         let path = entry.unwrap().path();
         if path.is_dir() {
             sources(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+        } else if path.extension().is_some_and(|e| e == "rs")
+            && path.file_name().is_some_and(|n| n != "tests.rs" && n != "test_log.rs")
+        {
             out.push(path);
         }
     }
 }
 
-/// The `file:line`s of the binary's sources that name `field`.
+/// The `file:line`s of the binary's non-test sources that name `field`,
+/// once `field` is checked to still be the pipeline's name for it (a
+/// rename would make this guard pass vacuously).
 fn naming(field: &str) -> Vec<String> {
+    let pipeline = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pipeline/src/lib.rs"),
+    )
+    .unwrap();
+    assert!(
+        pipeline.contains(&format!("pub {field}:")),
+        "PipelineConfig no longer has `{field}`: point this guard at its new name"
+    );
     let mut files = Vec::new();
     sources(
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
@@ -96,5 +108,9 @@ fn a_config_key_for_the_verification_cursor_is_refused() {
     let mut err = String::new();
     std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut err).unwrap();
     assert!(!status.success(), "{err}");
-    assert!(err.contains("sources"), "names the key it refused: {err}");
+    // No config section reaches the cursor: `sources` is an unknown field.
+    assert!(
+        err.contains("unknown field") && err.contains("sources"),
+        "refused for the key, not another reason: {err}"
+    );
 }

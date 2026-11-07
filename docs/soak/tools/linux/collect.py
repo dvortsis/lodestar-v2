@@ -1251,9 +1251,7 @@ class LodestarAPI:
 
     def _login(self):
         password = Path(self.password_file).read_text(encoding="utf-8").strip()
-        status, headers, body = self.request("POST", self.base + "/login", {"password": password}, None)
-        if notice_required(status, body):
-            raise NoticeRequired()
+        status, headers, _ = self.request("POST", self.base + "/login", {"password": password}, None)
         cookie = re.search(r"(?:^|,\s*)(lodestar_session=[^;,\s]+)", headers.get("set-cookie", ""))
         if status != 200 or not cookie:
             raise ValueError("login refused")

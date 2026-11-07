@@ -294,7 +294,7 @@ Every other plugin in `crates/sources-plugins` is compiled in (`catalogue.rs:28-
 | #512 | X-claim-store | inactive | Claimed trackers stored canonical and guarded | claims only from sources (off) | `crates/pipeline/tests/claim_trackers.rs`; `fuzz/fuzz_targets/verified_claims.rs` |
 
 ### 3.3 Gaps: features with no test that proves they stay off
-P-v052-cut should close these before the freeze (decisions file, D4). Each one is a small test, not a behaviour change. **All four are closed at the cut; §9.5 names the tests.**
+P-v052-cut should close these before the freeze (decisions file, D4). Each one is a small test, not a behaviour change. **At the cut G1–G3 have tests, and G4 was already checked by the release smoke scripts, now made exact; §9.5 has the details.**
 - **G1:** the binary registers exactly the DHT, the torrent cache and the Sonarr/Radarr webhooks. One assert over the whole `/api/v1/sources` list in `crates/lodestar/tests/webhooks_e2e.rs`, which runs the real binary, closes it.
 - **G2:** the binary wires no adult-enrichment source (`adult_enrichers` is empty).
 - **G3:** `PipelineConfig::default().verify_unverified` is `false`, and no config or settings key sets it.
@@ -447,6 +447,7 @@ P-v052-cut, 2026-11-07, under D2. The runner cut `release/v0.5.2` at **`045d4a38
   - SP-4 writes `settings` rows `filter.sp4.sigs.<n>` (format byte 1, #510).
   - Claim encoding v3 (#542) is written only for claims from sources. Every such source is off.
   - The `cluster.*` and `workers.prefs.*` rows are written only with workers allowed.
+  - Insights rollup codes 16 `LATE_RESULTS` (#568) and 17 `BY_WORKER` (#571) are written only by remote intake (`crates/pipeline/src/remote.rs`), so never on one machine. `crates/api/src/insights*` reads neither, so Insights shows no new rows.
 - **Packaging and toolchain:** `packaging/docker/Dockerfile` (still `rust:1.97-bookworm`), the Unraid templates, `release.yml`, `crates/network-policy`, `crates/peer-wire` and `rust-version` are unchanged in the range. The workspace adds the `lodestar-companions` dependency (#543).
 
 ### 9.1 Enabled
@@ -454,7 +455,7 @@ P-v052-cut, 2026-11-07, under D2. The runner cut `release/v0.5.2` at **`045d4a38
 | PR | Slice | Behaviour on in the build | Acceptance | Note |
 |---|---|---|---|---|
 | #510 | RP-5 | **SP-4 ships:** clones of hidden spam (payload signature) inherit the original's demote or hide | `crates/filter/tests/sp4.rs::pending_on_an_upgraded_store_applied_on_a_fresh_one`, `::a_clone_of_what_sp2_hid_is_hidden`, `::the_set_survives_a_restart`, `::the_oldest_is_dropped_at_the_cap` | In `ADDED_AFTER_RP0` (`crates/filter/src/packs/manifest.rs:33-40`): applied on a fresh store, pending in shadow on an upgraded one. The set is fed whenever SP-2/SP-3 hide or demote a stored torrent, with SP-4 on or off (`crates/pipeline/src/writer.rs:1912-1923`). Cap 1M signatures (`crates/filter/src/spam_sigs.rs:80`), about 17–26 MB at the cap. **Writer-memory re-soak item (§9.4)** |
-| #524 | X-sp4-followups | SP-4's tighter index; row cap 524,288 with `rows_full` logged | `crates/filter/tests/sp4.rs::past_what_memory_holds_the_oldest_row_goes`, `::rows_of_removals_dont_outlive_what_they_cancel` | lowers #510's memory; the `memory_at_the_cap_*` tests are `#[ignore]` |
+| #524 | X-sp4-followups | SP-4's tighter index; row cap 524,288 with `rows_full` logged | `crates/filter/src/spam_sigs.rs` unit tests `past_what_memory_holds_the_oldest_row_goes`, `rows_of_removals_dont_outlive_what_they_cancel` | lowers #510's memory; the `memory_at_the_cap_*` tests are `#[ignore]` |
 | #525 | X-tcache-recheck | Turning a source off in Settings → Sources stops it **at once**, including the DHT; torrent-cache lookups re-checked at send | `crates/pipeline/tests/control.rs::turning_a_running_source_off_stops_it_at_once`, `::off_on_off_leaves_the_source_stopped` | user action only; the torrent-cache half is inactive (gated off) |
 | #527 | X-search-files-6 | `file:(ext:… -word)` fast path; finer size codes | `crates/search/tests/files.rs::negated_words_answer_as_the_file_index_does`, `::negated_words_wait_for_a_lagging_file_index`, `::a_generation_1_index_backfills_the_new_codes` | generation 1 → 2 backfill (above) |
 | #529 | X-net-redirect-allowlist | ntfy and webhook notifiers keep only allow-listed headers across a cross-origin redirect | `crates/integrations/src/net.rs` tests `a_cross_host_redirect_keeps_only_allow_listed_headers`, `the_cross_origin_list_drops_everything_else` | user-configured channels only; update checks and download clients don't follow redirects |
@@ -530,6 +531,7 @@ P-v052-cut, 2026-11-07, under D2. The runner cut `release/v0.5.2` at **`045d4a38
 | **Crawler lifecycle:** start-time refetch query | #576 | yes | Private partials excluded. Weak |
 | **Writer and memory:** SP-4 signature set | #510, #524 | yes, wherever the spam pack is on: a fresh store, or an upgraded one once packs are turned on | Up to about 17–26 MB at the cap. Nothing on `/metrics` reports the set's size yet (§9.5) |
 | **Writer:** reused second judgment | #532 | yes | One boxed trail per in-flight result. Weak |
+| Not a trigger: stop on switch-off | #525 | only when the user turns a source off; a soak doesn't | n/a |
 | Sampler: keyspace shard | #536 | no: `shard = None` is proven identical draw for draw | n/a |
 
 **What this means for the gate:** §6's plan already covers these triggers. They add no new soak leg:
@@ -556,7 +558,7 @@ The collector and analyzer should know the new series:
 |---|---|
 | G1 | `crates/lodestar/tests/webhooks_e2e.rs::the_binary_registers_only_the_dht_the_torrent_cache_and_the_webhooks`. It runs the real binary with the DHT on a loopback port and no bootstrap nodes. The whole `/api/v1/sources` list must be exactly `arr_webhooks` (off), `dht` (on) and `torrent_cache` (off) |
 | G2 | `crates/pipeline/tests/release_defaults.rs::no_adult_enricher_is_named_by_default`; `crates/lodestar/tests/release_defaults.rs::the_binary_wires_no_adult_enrichment_source` (no line of the binary's sources names `adult_enrichers`) |
-| G3 | `crates/pipeline/tests/release_defaults.rs::the_verification_cursor_is_off_by_default`; `crates/lodestar/tests/release_defaults.rs::the_binary_never_sets_the_verification_cursor`, `::a_config_key_for_the_verification_cursor_is_refused` (the binary refuses `[sources] verify_unverified` at start); the API's refusal was already tested |
+| G3 | `crates/pipeline/tests/release_defaults.rs::the_verification_cursor_is_off_by_default`; `crates/lodestar/tests/release_defaults.rs::the_binary_never_sets_the_verification_cursor`, `::a_config_key_for_the_verification_cursor_is_refused` (the binary refuses `[sources] verify_unverified` at start as an unknown field: no config section reaches the cursor); the API's refusal was already tested |
 | G4 | **Already covered at `63a2c6df`; §3.3 was wrong.** `release.yml`'s tarball "Smoke" runs `packaging/linux/smoke.sh`, whose lines 35-40 run `serve --fixture` and fail without "no fixture backend" (x86_64). The MSI smoke runs `packaging/windows/smoke.ps1:38-41`, the same check on the Windows exe. aarch64 can't run on the runner; its build command, `release.yml:478`, passes `--no-default-features --features web`. The Docker job (`release.yml:81-85`) matches the text only. This PR does two things: (1) both smoke checks now require the full refusal line from `crates/lodestar/src/fixture.rs:67` and exit status 2 (`:68`), so another failure can't pass for the refusal; (2) `packaging/windows/build-msi.ps1`'s manual build example passes the release flags |
 | `409 notice_required` (§6) | `docs/soak/tools/linux/collect.py` stops the run as `collector_error` with a `notice_required` note and an error on stderr, instead of recording unavailable checks. `test_collect.py::NoticeRequiredTests` |
 
