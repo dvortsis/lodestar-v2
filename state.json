@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T13:02Z",
+  "updated_at": "2026-11-07T13:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5652,6 +5652,11 @@
       "id": "legal3a-577",
       "added": "2026-11-07T13:02Z",
       "text": "#577 LEGAL-3a open (613bb0f6); fmt+clippy red only from main break (#578). Waits for #578, then merges main and reports green. Notice untouched; all claims held."
+    },
+    {
+      "id": "reviews-1320",
+      "added": "2026-11-07T13:25Z",
+      "text": "#576 MERGE (v2-hash test + nits on main merge, self-check). #577 CHANGES (Windows CRLF in item(), nits). #579 CHANGES (runner \u00a72.26: first window min(size,64 KiB); partial priority + attempt after K=3 reserve timeouts; lookup leak; fixed sleep; growth-halt cost + WK-10 sizing note) -> fresh delta review; owner flag at merge. #580 WK-9c MERGE (nits on main merge; unopened = Invalid now, WK-10 decides tomorrow-key vs requeue; out-of-owns approved). All wait for #578."
     }
   ],
   "main_health": [
