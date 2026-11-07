@@ -76,6 +76,12 @@ pub mod metric {
     /// store's `torrents_removed` trigger (V11), which has this code as a
     /// literal.
     pub const REMOVED: u32 = 15;
+    /// Late results committed (plan Q7, WK-9), **by discovery cohort**:
+    /// `hour` is the cohort (dim = the source that found it first, key 0).
+    /// Each is a key whose first lease ended with a terminal outcome and
+    /// whose late result then ended a second lease, so the funnel
+    /// reconciles as harvested = Σ terminal − late results + in flight.
+    pub const LATE_RESULTS: u32 = 16;
 
     /// How each code folds into a day (compaction, repair and day
     /// reads). **Every code has a kind;** a code with none is never
@@ -88,9 +94,9 @@ pub mod metric {
     }
 
     /// The highest code defined.
-    pub const LAST_CODE: u32 = REMOVED;
+    pub const LAST_CODE: u32 = LATE_RESULTS;
 
-    const AGGREGATION: [(u32, Aggregation); 15] = [
+    const AGGREGATION: [(u32, Aggregation); 16] = [
         (HARVESTED, Aggregation::Sum),
         (REDISCOVERED, Aggregation::Sum),
         (DROPPED, Aggregation::Sum),
@@ -106,6 +112,7 @@ pub mod metric {
         (SEARCHABLE, Aggregation::Last),
         (FUNNEL_EVENTS, Aggregation::Sum),
         (REMOVED, Aggregation::Sum),
+        (LATE_RESULTS, Aggregation::Sum),
     ];
 
     /// [`COVERAGE`] dims.

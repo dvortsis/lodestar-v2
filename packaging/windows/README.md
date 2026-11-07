@@ -47,13 +47,15 @@ it off: Lodestar still works, only slower. Remove the exclusion any time in
 
 ## Silent install and uninstall
 
+Run these commands in an administrator PowerShell window in the folder containing the verified MSI. The first command enables both optional settings; omit those properties to keep their defaults.
+
 ```powershell
-msiexec /i lodestar-0.5.0-x86_64.msi /qn DEFENDER_EXCLUSION=1 WEB_FIREWALL=1   # boxes ticked; leave them out for off
-msiexec /x lodestar-0.5.0-x86_64.msi /qn                        # uninstall, keep data
-msiexec /x lodestar-0.5.0-x86_64.msi /qn REMOVE_DATA=1          # uninstall and delete the data
+msiexec /i lodestar-0.5.1-x86_64.msi /qn DEFENDER_EXCLUSION=1 WEB_FIREWALL=1   # boxes ticked; leave them out for off
+msiexec /x lodestar-0.5.1-x86_64.msi /qn                        # uninstall, keep data
+msiexec /x lodestar-0.5.1-x86_64.msi /qn REMOVE_DATA=1          # uninstall and delete the data
+```
 
 `REMOVE_DATA=1` refuses, quietly, to delete a data folder that contains a link or junction (it never follows one); then the folder stays and the uninstall still succeeds. The reason is written to a log under `C:\Windows\Temp\lodestar-secure-*` (Administrators only).
-```
 
 ## Build it yourself
 
@@ -63,9 +65,9 @@ in `web/`), because it is embedded in the binary.
 
 ```powershell
 cargo build --release --locked -p lodestar --no-default-features --features web --target x86_64-pc-windows-msvc
-packaging\windows\build-portable.ps1 -Version 0.5.0 -OutDir dist
-packaging\windows\build-msi.ps1      -Version 0.5.0 -OutDir dist
-packaging\windows\smoke.ps1 -Msi dist\lodestar-0.5.0-x86_64.msi -Zip dist\lodestar-0.5.0-x86_64-windows-portable.zip
+packaging\windows\build-portable.ps1 -Version 0.5.1 -OutDir dist
+packaging\windows\build-msi.ps1      -Version 0.5.1 -OutDir dist
+packaging\windows\smoke.ps1 -Msi dist\lodestar-0.5.1-x86_64.msi -Zip dist\lodestar-0.5.1-x86_64-windows-portable.zip
 ```
 
 `smoke.ps1` changes the machine it runs on (installs and removes the product), so

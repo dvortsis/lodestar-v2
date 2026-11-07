@@ -319,6 +319,8 @@ impl WorkerSession {
             budget,
             leases: leases.clone(),
             held: HashMap::new(),
+            fetched: HashMap::new(),
+            ttl_ms: i64::from(welcome.lease_ttl_secs).saturating_mul(1000),
             claims: HashMap::new(),
             heartbeats: HashMap::new(),
             renewal: None,
@@ -467,6 +469,14 @@ struct Driver {
     leases: Arc<AtomicU32>,
     /// Leases held: key → fencing token.
     held: HashMap<[u8; 20], u64>,
+    /// Held keys reported `Fetched`, with when (this worker's clock, ms):
+    /// they wait for the coordinator's commit (`committed`). One still
+    /// waiting a lease TTL later is dropped from `held` (WK-9): its batch
+    /// was lost, or never accepted, and the coordinator's lease outlives it
+    /// only while this worker keeps it alive.
+    fetched: HashMap<[u8; 20], (u64, i64)>,
+    /// The lease TTL the coordinator stated (`Welcome`), in ms.
+    ttl_ms: i64,
     /// Claims awaiting their reply, with the keys each asked for.
     claims: HashMap<u64, (ClaimReply, Vec<[u8; 20]>)>,
     heartbeats: HashMap<u64, oneshot::Sender<HeartbeatAck>>,
@@ -550,7 +560,23 @@ impl Driver {
         }
     }
 
+    /// Forgets fetched keys whose commit never came within the lease TTL.
+    fn prune(&mut self) {
+        let oldest = self.clock.now_ms().saturating_sub(self.ttl_ms);
+        let held = &mut self.held;
+        self.fetched.retain(|key, &mut (token, at)| {
+            let waiting = held.get(key) == Some(&token);
+            if waiting && at < oldest {
+                held.remove(key);
+                return false;
+            }
+            waiting
+        });
+        self.sync_leases();
+    }
+
     async fn beat(&mut self, reply: Option<oneshot::Sender<HeartbeatAck>>) -> Step {
+        self.prune();
         self.seq += 1;
         if let Some(reply) = reply {
             self.heartbeats.insert(self.seq, reply);
@@ -582,8 +608,19 @@ impl Driver {
             Command::Report(items, reply) => {
                 // `Fetched` keeps the lease (the commit ends it), as on the
                 // coordinator; the losses end it.
-                for item in items.iter().filter(|i| i.outcome != Outcome::Fetched) {
-                    if self.held.get(&item.key) == Some(&item.token) {
+                let now = self.clock.now_ms();
+                for item in &items {
+                    if self.held.get(&item.key) != Some(&item.token) {
+                        continue;
+                    }
+                    if item.outcome == Outcome::Fetched {
+                        // Kept from the first report under this token; a
+                        // new token (a re-grant) starts its wait again.
+                        let stamp = self.fetched.entry(item.key).or_insert((item.token, now));
+                        if stamp.0 != item.token {
+                            *stamp = (item.token, now);
+                        }
+                    } else {
                         self.held.remove(&item.key);
                     }
                 }
@@ -608,6 +645,7 @@ impl Driver {
                 for (key, token) in leases {
                     if self.held.get(&key) == Some(&token) {
                         self.held.remove(&key);
+                        self.fetched.remove(&key);
                     }
                 }
                 self.sync_leases();
@@ -741,5 +779,96 @@ impl Driver {
                 Step::Continue
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod held_prune {
+    use super::*;
+    use crate::{ManualClock, local_pair};
+
+    /// A key reported `Fetched` whose commit never comes (its batch was
+    /// lost, or never accepted) is dropped from the held set a lease TTL
+    /// later, on the injected clock; one committed in time, or still being
+    /// fetched, isn't (WK-9, from WK-0's review).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unanswered_fetched_key_is_pruned_after_the_ttl() {
+        let (mut coord, worker) = local_pair(16);
+        let clock = Arc::new(ManualClock::new(1_000_000));
+        let config = WorkerConfig {
+            auto_heartbeat: false,
+            ..WorkerConfig::default()
+        };
+        let (session, ()) = tokio::join!(
+            WorkerSession::start(
+                worker,
+                Hello::new(0, Capabilities::default()),
+                clock.clone(),
+                config
+            ),
+            async {
+                assert!(matches!(
+                    coord.recv().await,
+                    Ok(Some(ToCoordinator::Hello(_)))
+                ));
+                coord
+                    .send(ToWorker::Welcome(Welcome {
+                        major: PROTOCOL_MAJOR,
+                        minor: PROTOCOL_MINOR,
+                        worker: 0,
+                        heartbeat_ms: 5_000,
+                        lease_ttl_secs: 600,
+                        renew_now: false,
+                    }))
+                    .await
+                    .unwrap();
+            }
+        );
+        let s = session.unwrap();
+        // The coordinator grants keys 1, 2 and 3 unasked (re-grants).
+        let grant = |n: u8| GrantItem::Granted {
+            key: [n; 20],
+            token: u64::from(n) + 10,
+            ttl_secs: 600,
+        };
+        coord
+            .send(ToWorker::Grants(GrantBatch {
+                batch: 0,
+                items: vec![grant(1), grant(2), grant(3)],
+            }))
+            .await
+            .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while s.leases() < 3 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "grants never arrived"
+            );
+            tokio::task::yield_now().await;
+        }
+        let fetched = |n: u8| OutcomeItem {
+            key: [n; 20],
+            token: u64::from(n) + 10,
+            outcome: Outcome::Fetched,
+        };
+        s.report(vec![fetched(1), fetched(2)]).await.unwrap();
+        // Key 2's batch is accepted; key 1's answer never comes; key 3 is
+        // still being fetched.
+        s.committed(vec![([2; 20], 12)]).await.unwrap();
+        clock.advance(Duration::from_secs(599));
+        let beat = |s: &WorkerSession| {
+            let s = s.commands.clone();
+            async move {
+                let (tx, _rx) = oneshot::channel();
+                s.send(Command::Heartbeat(tx)).await.unwrap();
+            }
+        };
+        beat(&s).await;
+        s.committed(vec![]).await.unwrap();
+        assert_eq!(s.leases(), 2, "within the TTL: kept");
+        clock.advance(Duration::from_secs(2));
+        beat(&s).await;
+        s.committed(vec![]).await.unwrap();
+        assert_eq!(s.leases(), 1, "key 1 pruned; key 3 still fetching");
     }
 }

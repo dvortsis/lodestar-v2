@@ -35,7 +35,7 @@ The document is at most 256 KiB and has 1–64 entries.
 | `needed_for` | 1–4 unique values from `download_client`, `indexer_manager`, `vpn_route`, `challenge_solver` |
 | `opt_in` | `true` for anything off and not installed by default. **Required for `challenge_solver`** (owner §2.47, Q21). An entry whose id, container name or image names FlareSolverr must be both `challenge_solver` and opt-in, however else it's labelled |
 | `hosts` | 0–8 unique hosts for downloads and their redirects. Each must be in `DOWNLOAD_HOSTS` (`github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`). Not empty if `native` is set; empty if it isn't |
-| `native` | `null`, or `{release, artifacts}`. `release` is the entry's release folder (`https://github.com/<owner>/<project>/releases/download/`): an `https` URL on one of the entry's hosts, at least two segments deep, ending in `/`. `artifacts` holds 1–8 artifacts, one per platform |
+| `native` | `null`, or `{release, artifacts}`. `release` is the entry's release folder (`https://github.com/<owner>/<project>/releases/download/`): an `https` URL on one of the entry's hosts, exactly `/<owner>/<project>/releases/download/`. Each pin URL inside it is exactly `<tag>/<file>`. `artifacts` holds 1–8 artifacts, one per platform |
 | `container` | `null`, or `{image, digest, name}` |
 | `ports` | 1–16 ports, each `{name, port, proto, exposure}`. Names are unique, and so are number and protocol pairs |
 | `health` | `null`, or `{port, path}`. `port` names an `internal` TCP port. `path` is an `adapter::RequestPath`, the same grammar every adapter request uses |

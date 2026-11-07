@@ -161,6 +161,119 @@ pub fn encode(files: &[File], encoding: TextEncoding) -> Result<Vec<u8>, CodecEr
     Ok(out)
 }
 
+/// What a file-tree blob would decode to, read without building any path
+/// ([`decode`] copies each directory's path into every child's, so a blob's
+/// decoded size can be far larger than the blob). For blobs from another
+/// machine (WK-9): check the shape, then decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shape {
+    pub dirs: usize,
+    pub files: usize,
+    /// The deepest path, in components (a file at the root is 1).
+    pub depth: usize,
+    /// Path components across every directory and file path.
+    pub components: u64,
+    /// The longest name (one component), and the longest path (the sum of
+    /// its components' names), in bytes.
+    pub longest_name: usize,
+    pub longest_path: u64,
+    /// Bytes of every directory and file path, summed: what [`decode`]
+    /// copies, before allocator overhead.
+    pub path_bytes: u64,
+}
+
+/// Reads a blob's [`Shape`]. Never builds a path. An error here means
+/// [`decode`] would fail too, or the blob claims more than `max_dirs`
+/// directories or `max_files` files, which is refused before anything is
+/// reserved for them.
+///
+/// Cost: one pass over the blob, linear in its bytes, with no recursion (a
+/// directory's depth and path length are its parent's plus its own, and
+/// parents come first), so a hostile depth can't grow the stack. It keeps
+/// 9 bytes per directory and 4 per file, for at most `max_dirs` and
+/// `max_files` of them.
+pub fn shape(blob: &[u8], max_dirs: usize, max_files: usize) -> Result<Shape, CodecError> {
+    let mut r = Reader { buf: blob, pos: 0 };
+    let version = r.u8()?;
+    if version != FORMAT_VERSION {
+        return Err(CodecError::UnsupportedFormat(version));
+    }
+    let flags = r.u8()?;
+    if flags & !KNOWN_FLAGS != 0 {
+        return Err(CodecError::Corrupt("unknown flags"));
+    }
+    TextEncoding::from_id(r.u8()?).ok_or(CodecError::Corrupt("encoding id"))?;
+    let dir_count = r.count()?;
+    let file_count = r.count()?;
+    if dir_count > max_dirs || file_count > max_files {
+        return Err(CodecError::Corrupt(
+            "more directories or files than allowed",
+        ));
+    }
+    let mut parents: Vec<u32> = Vec::with_capacity(dir_count);
+    for i in 0..dir_count {
+        let parent = r.varint()?;
+        if parent > i as u64 {
+            return Err(CodecError::Corrupt("directory parent order"));
+        }
+        // At most `i`, which a `usize` count below the blob's length bounds.
+        parents.push(u32::try_from(parent).map_err(|_| CodecError::Corrupt("parent"))?);
+    }
+    // Per directory, root first: depth (saturating) and path bytes
+    // (saturating; any path over metainfo's 4,096 bytes is refused anyway).
+    let mut depths: Vec<u8> = Vec::with_capacity(dir_count + 1);
+    let mut lens: Vec<u32> = Vec::with_capacity(dir_count + 1);
+    depths.push(0);
+    lens.push(0);
+    let mut out = Shape {
+        dirs: dir_count,
+        files: file_count,
+        depth: 0,
+        components: 0,
+        longest_name: 0,
+        longest_path: 0,
+        path_bytes: 0,
+    };
+    let mut name_bytes = 0usize;
+    for parent in parents {
+        let len = r.count()?;
+        name_bytes = name_bytes.saturating_add(len);
+        let p = parent as usize;
+        let d = depths[p].saturating_add(1);
+        let b = lens[p].saturating_add(u32::try_from(len).unwrap_or(u32::MAX));
+        out.note((d, u64::from(b)), len);
+        depths.push(d);
+        lens.push(b);
+    }
+    r.bytes(name_bytes)?;
+    let mut file_parents: Vec<u32> = Vec::with_capacity(file_count);
+    for _ in 0..file_count {
+        let parent = r.varint()?;
+        if parent > dir_count as u64 {
+            return Err(CodecError::Corrupt("file parent"));
+        }
+        file_parents.push(parent as u32);
+    }
+    for parent in file_parents {
+        let len = r.count()?;
+        let p = parent as usize;
+        let d = depths[p].saturating_add(1);
+        let b = u64::from(lens[p]).saturating_add(len as u64);
+        out.note((d, b), len);
+    }
+    Ok(out)
+}
+
+impl Shape {
+    fn note(&mut self, (depth, bytes): (u8, u64), name: usize) {
+        self.depth = self.depth.max(usize::from(depth));
+        self.components += u64::from(depth);
+        self.longest_name = self.longest_name.max(name);
+        self.longest_path = self.longest_path.max(bytes);
+        self.path_bytes = self.path_bytes.saturating_add(bytes);
+    }
+}
+
 /// Deserializes a file list. Never panics, whatever the input.
 pub fn decode(blob: &[u8]) -> Result<FileTree, CodecError> {
     let mut r = Reader { buf: blob, pos: 0 };
@@ -468,5 +581,85 @@ mod tests {
             assert_eq!(r.varint().unwrap(), v);
             assert_eq!(r.remaining(), 0);
         }
+    }
+
+    /// A deep chain of directories is cheap as a blob but expensive to
+    /// decode (each path is its parent's plus one): `shape` measures it
+    /// without building a path.
+    #[test]
+    fn shape_counts_components_without_building_paths() {
+        let mut blob = vec![FORMAT_VERSION, 0, TextEncoding::UTF8.id()];
+        let dirs = 60_000u64;
+        put_varint(&mut blob, dirs);
+        put_varint(&mut blob, 1);
+        for i in 0..dirs {
+            put_varint(&mut blob, i);
+        }
+        for _ in 0..dirs {
+            put_varint(&mut blob, 0);
+        }
+        put_varint(&mut blob, dirs);
+        put_varint(&mut blob, 0);
+        put_varint(&mut blob, 7);
+        assert!(blob.len() < 300 << 10);
+        let s = shape(&blob, usize::MAX, usize::MAX).unwrap();
+        assert_eq!((s.dirs, s.files), (60_000, 1));
+        assert!(s.depth >= 255, "saturated, not wrapped: {}", s.depth);
+        assert!(s.components > 255 * 59_000);
+        // A real tree agrees with what decode builds.
+        let files = vec![
+            File {
+                path: vec![b"a".to_vec(), b"b".to_vec(), b"c.mkv".to_vec()],
+                size: 1,
+                attrs: FileAttrs::empty(),
+                symlink_target: None,
+                pieces_root: None,
+                hashes: FileHashes::default(),
+            },
+            File {
+                path: vec![b"a".to_vec(), b"d.nfo".to_vec()],
+                size: 2,
+                attrs: FileAttrs::empty(),
+                symlink_target: None,
+                pieces_root: None,
+                hashes: FileHashes::default(),
+            },
+        ];
+        let blob = encode(&files, TextEncoding::UTF8).unwrap();
+        let s = shape(&blob, usize::MAX, usize::MAX).unwrap();
+        let tree = decode(&blob).unwrap();
+        assert_eq!(s.files, tree.files.len());
+        assert_eq!(s.depth, 3);
+        // Directories a, a/b; files a/b/c.mkv, a/d.nfo.
+        assert_eq!(s.components, 1 + 2 + 3 + 2);
+        // Their bytes: 1 + 2 + 7 + 6.
+        assert_eq!((s.path_bytes, s.longest_path, s.longest_name), (16, 7, 5));
+        for cut in 0..blob.len() {
+            let _ = shape(&blob[..cut], usize::MAX, usize::MAX);
+        }
+    }
+
+    /// A blob that claims millions of directories (cheap: a parent of 0 is
+    /// one byte, and zstd shrinks a run of them to almost nothing) is
+    /// refused by the count check itself, before `shape` reserves anything
+    /// for them; so is one that claims more files than allowed (WK-9, the
+    /// security review).
+    #[test]
+    fn shape_refuses_a_huge_claim_before_reserving() {
+        let claim = |dirs: u64, files: u64| {
+            let mut blob = vec![FORMAT_VERSION, 0, TextEncoding::UTF8.id()];
+            put_varint(&mut blob, dirs);
+            put_varint(&mut blob, files);
+            // Enough bytes for `count` to accept the claim.
+            blob.resize(blob.len() + (dirs + files) as usize * 2, 0);
+            blob
+        };
+        let over = claim(3_000_000, 0);
+        let refused = CodecError::Corrupt("more directories or files than allowed");
+        assert_eq!(shape(&over, 2_000_000, 200_000), Err(refused));
+        assert_eq!(shape(&claim(0, 200_001), 2_000_000, 200_000), Err(refused));
+        // With room for them, the same blob is read (and is valid: 3M
+        // empty-named directories under the root).
+        assert!(shape(&over, 3_000_000, 200_000).is_ok());
     }
 }

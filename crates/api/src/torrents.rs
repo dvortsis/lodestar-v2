@@ -755,7 +755,7 @@ fn adult_asked(adult_shown: bool, viewer: Viewer) -> bool {
 /// partial import, which the gate never looks up. The gate still decides;
 /// this only keeps items it would surely refuse out of the queue.
 fn lookup_wanted(row: &TorrentRow) -> bool {
-    row.flags & (store_flags::PRIVATE | store_flags::FILES_PARTIAL) == 0
+    row.flags & (store_flags::PRIVACY | store_flags::FILES_PARTIAL) == 0
 }
 
 /// The stored match the detail view shows, by ENR-1's rule so the drawer
@@ -1246,6 +1246,22 @@ pub(crate) mod tests {
         let admin = c.provenance(&r, &[], Viewer::Admin);
         assert!(admin.sources.iter().all(|s| s.private));
         assert_eq!(c.hit_source(&r, Viewer::Admin).unwrap().plugin, "dht");
+    }
+
+    /// ENR-1's queue skips what its gate refuses: a BEP 27 private row, a
+    /// remote worker's row whose BEP 27 bit isn't verified yet (WK-9), and
+    /// a partial import.
+    #[test]
+    fn enrichment_lookups_skip_private_and_unverified_remote_rows() {
+        assert!(lookup_wanted(&row(0b1, Some(0), 0)));
+        for f in [
+            store_flags::PRIVATE,
+            store_flags::REMOTE_UNVERIFIED,
+            store_flags::PRIVATE_SOURCE,
+            store_flags::FILES_PARTIAL,
+        ] {
+            assert!(!lookup_wanted(&row(0b1, Some(0), f)), "{f:#x}");
+        }
     }
 
     #[test]

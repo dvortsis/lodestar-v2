@@ -447,6 +447,32 @@ fn a_private_torrent_stored_after_a_key_was_queued_refuses_it() {
     assert_eq!(check(&store, &filter, key), Err(Withheld::Private));
 }
 
+/// The same, for a remote worker's row whose BEP 27 bit isn't verified
+/// yet (`REMOTE_UNVERIFIED`, WK-9): a cache lookup would leak its hash.
+#[test]
+fn a_remote_unverified_torrent_stored_after_a_key_was_queued_refuses_it() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    cache_on(&mut store);
+    let src = store.register_source("nyaa", "1", T).unwrap();
+    let raw = info_bytes("Later Remote");
+    let info = Info::parse(&raw).unwrap();
+    let key = info.primary_hash().0;
+    items(&mut store, src, &[key]);
+    let filter = stand_in();
+    assert_eq!(check(&store, &filter, key), Ok(()));
+    store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::FILES_PARTIAL | flags::REMOTE_UNVERIFIED,
+            source: src,
+        }])
+        .unwrap();
+    assert_eq!(check(&store, &filter, key), Err(Withheld::Private));
+}
+
 /// `?1` a hash, `?2` the test's clock.
 fn rusqlite_params(h: &[u8; 20]) -> (Vec<u8>, i64) {
     (h.to_vec(), T)

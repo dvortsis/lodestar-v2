@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 5eb507ec27108818954f1e3ad6ba697ba6ee7fa66d3b2862d74c7021e332a976 # shrinks to specs = [Spec { adult: true, masked: false, hidden: false, private: false, bep27: false, floor: false, not_adult: false, unverified: false, partial: false, rule: None }, Spec { adult: true, masked: false, hidden: false, private: false, bep27: false, floor: false, not_adult: false, unverified: false, partial: false, rule: None }], show_adult = false, tripped = false, enabled = false, consented = false
+cc c012434f0f9959ff109730b93de9ea4f44b1f0079dc819554e878e54a77a110d # shrinks to specs = [Spec { adult: true, masked: false, hidden: false, private: false, bep27: true, floor: false, not_adult: false, unverified: false, partial: false, rule: None }], show_adult = true, tripped = false, enabled = true, consented = true

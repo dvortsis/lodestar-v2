@@ -306,7 +306,8 @@ pub(crate) fn apply(tx: &Connection, u: &SwarmUpdate) -> Result<bool> {
 
 /// Torrents a scrape must never reach: a public tracker or DHT scrape
 /// would leak the hash (§18.7).
-const NEVER_SCRAPED: i64 = flags::PRIVATE | flags::PRIVATE_SOURCE;
+/// A remote row whose `PRIVATE` isn't verified yet counts as private.
+const NEVER_SCRAPED: i64 = flags::PRIVACY;
 /// A `swarm` row as hot columns need it: id, seeders, leechers, trackers
 /// reporting, the DHT estimate, flags, and whether anyone answered.
 type HotRow = (i64, u32, u32, u32, Option<u32>, i64, bool);

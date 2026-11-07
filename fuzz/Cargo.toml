@@ -149,6 +149,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "remote_blob"
+path = "fuzz_targets/remote_blob.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "update"
 path = "fuzz_targets/update.rs"
 test = false

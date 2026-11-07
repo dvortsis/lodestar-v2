@@ -236,7 +236,7 @@ fn visible(
     if crate::discover::withheld(&row, e.as_ref(), false, adult_shown) {
         return Ok(Err("not_found"));
     }
-    if row.flags & (flags::PRIVATE | flags::PRIVATE_SOURCE) != 0 {
+    if row.flags & flags::PRIVACY != 0 {
         return Ok(Err("private"));
     }
     let Some(xt) = topic(row.flags, &row.info_hash.0, row.info_hash_v2.map(|h| h.0)) else {
