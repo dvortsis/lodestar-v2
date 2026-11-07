@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T18:30Z",
+  "updated_at": "2026-11-07T18:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3642,7 +3642,9 @@
       "since": "2026-11-07T14:43Z",
       "session": "session_01MMjhn9mqDCgbWNwmfQuB9V",
       "notes": "16:2xZ: 8-worker after: worst single reads 38.4/40.5/48.0 ms (compacted, range=all), typical <=35; storage 7.36 MB realistic, 9.31 worst. Cache left out; ~1,700+356 lines accepted. | 17:58Z: PR #585 green at a532a4a6; fresh Opus review launched. Owner \u00a72.19 flag pending: marginal counted at lease end (under-counts only).",
-      "pr": 585
+      "pr": 585,
+      "status": "merged",
+      "merge": "044a32d6"
     },
     "X-gs-gate-polish": {
       "state": "merged",
@@ -3675,6 +3677,10 @@
       "session": "session_01MMjhnCVN68eUViVowdQeWw",
       "model": "sonnet",
       "brief": "briefs/X-flakes-1107.md"
+    },
+    "X-wk15-nits": {
+      "status": "running",
+      "session": "session_01MMjhn9mqDCgbWNwmfQuB9V"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5804,6 +5810,11 @@
       "id": "X-flakes-1107-launched",
       "added": "2026-11-07T18:30Z",
       "text": "X-flakes-1107 launched (slot 2, Sonnet) bundling X-flake-shell-unreachable + X-flake-filters-block-keyboard. Add slices.yaml entry in next runner PR."
+    },
+    {
+      "id": "X-wk15-nits",
+      "added": "2026-11-07T18:35Z",
+      "text": "#585 merged 044a32d6; X-wk15-nits (marginal wording, saturating_add) in same session; add slices.yaml entry in next runner PR. Reviewer nit 4 for future slices: worker-side claim suppression would inflate marginal; nit 5: sealed-vs-live test never reads an unsealed day (FakeSource now fixed) \u2014 candidate test addition."
     }
   ],
   "main_health": [
@@ -6499,7 +6510,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T18:30Z",
+    "updated": "2026-11-07T18:35Z",
     "items": [
       {
         "slot": 1,
@@ -6519,11 +6530,11 @@
       },
       {
         "slot": 3,
-        "slice": "WK-15",
+        "slice": "X-wk15-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9mqDCgbWNwmfQuB9V: Insights worker dimension, marginal gain, fleet summary",
-        "since": "2026-11-07T14:43Z"
+        "doing": "docs wording + saturating_add follow-up to #585",
+        "since": "2026-11-07T18:35Z"
       },
       {
         "slot": 4,
