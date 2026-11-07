@@ -104,12 +104,12 @@ fn qbittorrent_accepts_the_format() {
 
 #[test]
 fn qbittorrent_updates_only_its_keys() {
-    let existing = "[Application]\nFileLogger\\Enabled=true\n\n[BitTorrent]\nSession\\Port=6881\n\n[Preferences]\nGeneral\\Locale=en\nwebui\\address=*\nWebUI\\Port=8080\n; a comment\n\n[LegalNotice]\nAccepted=true\n";
+    let existing = "[Application]\nFileLogger\\Enabled=true\n\n[BitTorrent]\nSession\\Port=6881\n\n[Preferences]\nGeneral\\Locale=en\nWebUI\\Address=*\nWebUI\\Port=8080\n; a comment\n\n[LegalNotice]\nAccepted=true\n";
     let out = qbittorrent_conf(Some(existing), &Username::default(), fixed_hash()).unwrap();
     assert_eq!(
         out,
         format!(
-            "[Application]\nFileLogger\\Enabled=true\n\n[BitTorrent]\nSession\\Port=6881\n\n[Preferences]\nGeneral\\Locale=en\nwebui\\address=127.0.0.1\nWebUI\\Port=8080\nWebUI\\Password_PBKDF2={}\nWebUI\\Username=lodestar\n; a comment\n\n[LegalNotice]\nAccepted=true\n",
+            "[Application]\nFileLogger\\Enabled=true\n\n[BitTorrent]\nSession\\Port=6881\n\n[Preferences]\nGeneral\\Locale=en\nWebUI\\Address=127.0.0.1\nWebUI\\Port=8080\nWebUI\\Password_PBKDF2={}\nWebUI\\Username=lodestar\n; a comment\n\n[LegalNotice]\nAccepted=true\n",
             hash_value()
         )
     );
@@ -174,6 +174,15 @@ fn qbittorrent_refuses_malformed_files() {
         ("[Preferences]\nWebUI%5CAddress=*\n", Some(2)),
         ("[Pref%65rences]\nWebUI\\Address=*\n", Some(1)),
         ("[Preferences]\nWebUI\\Address=*\0\n", None),
+        // Qt is case-sensitive on Unix: these aren't qBittorrent's keys.
+        ("[Preferences]\nwebui\\address=*\n", Some(2)),
+        ("[preferences]\nFoo=1\n", Some(1)),
+        ("[General]\npreferences/WebUI/Address=*\n", Some(2)),
+        // A quoted value running on hides the lines inside it.
+        (
+            "[Preferences]\nWebUI\\Locale=\"x\nWebUI\\Address=0.0.0.0\n\"\n",
+            Some(2),
+        ),
     ] {
         match qbittorrent_conf(Some(bad), &Username::default(), fixed_hash()) {
             Err(ConfigError::Malformed { line: l, .. }) => assert_eq!(l, line, "{bad:?}"),
@@ -257,6 +266,11 @@ fn prowlarr_refuses_malformed_files_and_bad_keys() {
         "junk<Config></Config>",
         "<!DOCTYPE Config [<!ENTITY x \"y\">]><Config></Config>",
         "<Config><!-- a -- b --></Config>",
+        // Prowlarr reads `Descendants(key)` and resets a key it finds twice.
+        "<Config><X><BindAddress>*</BindAddress></X></Config>",
+        "<Config><X><ApiKey/></X></Config>",
+        "<Config><Config/></Config>",
+        "<Config xmlns=\"urn:x\"></Config>",
     ] {
         assert!(
             matches!(
@@ -438,7 +452,10 @@ impl lodestar_log::Sink for Capture {
 fn no_plaintext_reaches_logs_or_debug_output() {
     static SINK: OnceLock<Capture> = OnceLock::new();
     let sink = SINK.get_or_init(|| Capture(Mutex::new(Vec::new())));
-    let _ = lodestar_log::set_sink(sink);
+    assert!(
+        lodestar_log::set_sink(sink).is_ok(),
+        "a sink was already set"
+    );
 
     let dir = TestDir::new();
     let store = SecretStore::from_key(&[3; 32]);
@@ -493,7 +510,10 @@ fn no_plaintext_reaches_logs_or_debug_output() {
 
 // ---- Property tests ----
 
-/// The `(logical key, value)` entries of a Qt INI text, in order.
+/// The `(logical key, value)` entries of a Qt INI text, in order, read
+/// as Qt does on Unix: case-sensitive, `;` comments, `[General]` (any
+/// case, trimmed) the root. Panics on a quote left open at a line end,
+/// which Qt would carry onto the next line.
 fn ini_entries(text: &str) -> Vec<(String, String)> {
     let mut section = String::new();
     let mut out = Vec::new();
@@ -501,19 +521,24 @@ fn ini_entries(text: &str) -> Vec<(String, String)> {
     let trim = |s: &str| s.trim_matches(|c: char| c.is_ascii_whitespace()).to_owned();
     for line in text.lines() {
         let t = trim(line);
-        let t = t.as_str();
+        if t.starts_with(';') {
+            continue;
+        }
+        let quotes = t
+            .replace("\\\\", "")
+            .replace("\\\"", "")
+            .matches('"')
+            .count();
+        assert!(quotes % 2 == 0, "open quote in {line:?}");
         if let Some(rest) = t.strip_prefix('[') {
-            let name = rest.split_once(']').unwrap().0;
+            let name = trim(rest.split_once(']').unwrap().0);
             section = if name.eq_ignore_ascii_case("general") {
                 String::new()
             } else {
-                format!("{}\\", trim(name).replace('/', "\\").to_ascii_lowercase())
+                format!("{}\\", name.replace('/', "\\"))
             };
-        } else if let Some((k, v)) = t.split_once('=')
-            && !t.starts_with(';')
-            && !t.starts_with('#')
-        {
-            let k = trim(k).replace('/', "\\").to_ascii_lowercase();
+        } else if let Some((k, v)) = t.split_once('=') {
+            let k = trim(k).replace('/', "\\");
             out.push((format!("{section}{k}"), v.to_owned()));
         }
     }
@@ -521,25 +546,41 @@ fn ini_entries(text: &str) -> Vec<(String, String)> {
 }
 
 const OURS: [&str; 3] = [
-    "preferences\\webui\\address",
-    "preferences\\webui\\password_pbkdf2",
-    "preferences\\webui\\username",
+    "Preferences\\WebUI\\Address",
+    "Preferences\\WebUI\\Password_PBKDF2",
+    "Preferences\\WebUI\\Username",
 ];
+
+/// Our keys exactly once each, with no variant differing only in case.
+fn assert_ours_once(entries: &[(String, String)], out: &str) {
+    for k in OURS {
+        assert_eq!(entries.iter().filter(|(e, _)| e == k).count(), 1, "{out:?}");
+        assert!(
+            !entries
+                .iter()
+                .any(|(e, _)| e != k && e.eq_ignore_ascii_case(k)),
+            "{out:?}"
+        );
+    }
+}
 
 fn ini_line() -> impl Strategy<Value = String> {
     prop_oneof![
         Just(String::new()),
         "; [a-zA-Z0-9 =]{0,12}".prop_map(|s| s),
-        "\\[(Preferences|BitTorrent|Application|General|Core)\\]".prop_map(|s| s),
-        "(WebUI\\\\(Address|Port|Username|Password_PBKDF2|Locale)|Session\\\\Port|Accepted)=[a-zA-Z0-9*.,\" ]{0,12}"
+        "\\[ ?(Preferences|preferences|BitTorrent|General|general) ?\\]".prop_map(|s| s),
+        "(Session\\\\Port|Accepted|Preferences/WebUI/Address)=[a-zA-Z0-9*.\" ]{0,8}".prop_map(|s| s),
+        "(WebUI|webui)\\\\(Address|address|Port|Username|Password_PBKDF2|Locale)=[a-zA-Z0-9*.,\" ]{0,12}"
             .prop_map(|s| s),
     ]
 }
 
-/// A mini Prowlarr config: child elements with simple text.
-fn xml_children() -> impl Strategy<Value = Vec<(String, String)>> {
+/// A mini Prowlarr config: child elements with simple text, some nested
+/// one level down.
+fn xml_children() -> impl Strategy<Value = Vec<(bool, String, String)>> {
     prop::collection::vec(
         (
+            prop::bool::weighted(0.1),
             "(Port|ApiKey|BindAddress|Branch|LogLevel|UrlBase)",
             "[a-zA-Z0-9 *.]{0,10}",
         ),
@@ -547,24 +588,24 @@ fn xml_children() -> impl Strategy<Value = Vec<(String, String)>> {
     )
 }
 
-fn xml_children_of(text: &str) -> Vec<(String, String)> {
+/// Every element below the root, at any depth, with its text: what
+/// Prowlarr's `Descendants(key)` sees.
+fn xml_descendants(text: &str) -> Vec<(String, String)> {
     let mut r = Reader::from_str(text);
     let mut out = Vec::new();
     let mut depth = 0;
-    let mut name = String::new();
     loop {
         match r.read_event().unwrap() {
             Event::Start(e) => {
                 depth += 1;
-                if depth == 2 {
-                    name = e.name().into_inner().to_owned();
-                    out.push((name.clone(), String::new()));
+                if depth >= 2 {
+                    out.push((e.name().into_inner().to_owned(), String::new()));
                 }
             }
-            Event::Empty(e) if depth == 1 => {
+            Event::Empty(e) if depth >= 1 => {
                 out.push((e.name().into_inner().to_owned(), String::new()));
             }
-            Event::Text(t) if depth == 2 => {
+            Event::Text(t) if depth >= 2 => {
                 out.last_mut().unwrap().1 = t.xml10_content().into_owned();
             }
             Event::End(_) => depth -= 1,
@@ -572,8 +613,16 @@ fn xml_children_of(text: &str) -> Vec<(String, String)> {
             _ => {}
         }
     }
-    let _ = name;
     out
+}
+
+fn assert_prowlarr_keys_once(text: &str) {
+    let got = xml_descendants(text);
+    for (name, value) in [("BindAddress", "127.0.0.1"), ("ApiKey", KEY)] {
+        let found: Vec<_> = got.iter().filter(|(n, _)| n == name).collect();
+        assert_eq!(found.len(), 1, "{text}");
+        assert_eq!(found[0].1, value);
+    }
 }
 
 proptest! {
@@ -582,8 +631,13 @@ proptest! {
     #[test]
     fn qbittorrent_output_parses_with_our_keys_once(lines in prop::collection::vec(ini_line(), 0..20)) {
         let existing = lines.join("\n");
-        let out = qbittorrent_conf(Some(&existing), &Username::default(), fixed_hash()).unwrap();
+        let out = match qbittorrent_conf(Some(&existing), &Username::default(), fixed_hash()) {
+            Ok(out) => out,
+            Err(ConfigError::Malformed { .. }) => return Ok(()),
+            Err(e) => panic!("{e:?}"),
+        };
         let entries = ini_entries(&out);
+        assert_ours_once(&entries, &out);
         let want = ["127.0.0.1".to_owned(), hash_value(), "lodestar".to_owned()];
         for (k, v) in OURS.iter().zip(&want) {
             let found: Vec<_> = entries.iter().filter(|(e, _)| e == k).collect();
@@ -598,14 +652,11 @@ proptest! {
     #[test]
     fn qbittorrent_takes_any_bytes_or_refuses(text in prop_oneof![
         "(?s).{0,200}",
-        "(\\[|\\]|=|;|%|\\\\|/|\r|\n|\u{feff}| |Preferences|General|WebUI|Address|Username|Password_PBKDF2|x){0,60}",
+        "(\\[|\\]|=|;|%|\\\\|/|\"|\r|\n|\u{feff}| |Preferences|preferences|General|WebUI|webui|Address|Username|Password_PBKDF2|x){0,60}",
     ]) {
         if let Ok(out) = qbittorrent_conf(Some(&text), &Username::default(), fixed_hash()) {
             // Whatever it accepts, it can read back with our keys once.
-            let entries = ini_entries(&out);
-            for k in OURS {
-                prop_assert_eq!(entries.iter().filter(|(e, _)| e == k).count(), 1, "{:?}", out);
-            }
+            assert_ours_once(&ini_entries(&out), &out);
         }
     }
 
@@ -622,19 +673,32 @@ proptest! {
     #[test]
     fn prowlarr_output_parses_with_our_keys_once(children in xml_children()) {
         let mut existing = String::from("<Config>");
-        for (n, v) in &children {
-            existing.push_str(&format!("\n  <{n}>{v}</{n}>"));
+        for (nested, n, v) in &children {
+            if *nested {
+                existing.push_str(&format!("\n  <X><{n}>{v}</{n}></X>"));
+            } else {
+                existing.push_str(&format!("\n  <{n}>{v}</{n}>"));
+            }
         }
         existing.push_str("\n</Config>");
-        let out = prowlarr_config(Some(&existing), &Secret::new(KEY)).unwrap();
-        let got = xml_children_of(out.expose());
-        for (name, value) in [("BindAddress", "127.0.0.1"), ("ApiKey", KEY)] {
-            let found: Vec<_> = got.iter().filter(|(n, _)| n == name).collect();
-            prop_assert_eq!(found.len(), 1);
-            prop_assert_eq!(found[0].1.as_str(), value);
-        }
+        let nested_ours = children.iter().any(|(nested, n, _)| *nested && (n == "ApiKey" || n == "BindAddress"));
+        let out = match prowlarr_config(Some(&existing), &Secret::new(KEY)) {
+            Ok(out) => out,
+            Err(ConfigError::Malformed { .. }) if nested_ours => return Ok(()),
+            Err(e) => panic!("{e:?}"),
+        };
+        prop_assert!(!nested_ours);
+        assert_prowlarr_keys_once(out.expose());
         let others = |v: Vec<(String, String)>| v.into_iter().filter(|(n, _)| n != "ApiKey" && n != "BindAddress").collect::<Vec<_>>();
-        prop_assert_eq!(others(got), others(children));
+        let before = children.iter().flat_map(|(nested, n, v)| {
+            let mut e = Vec::new();
+            if *nested {
+                e.push(("X".to_owned(), String::new()));
+            }
+            e.push((n.clone(), v.clone()));
+            e
+        }).collect();
+        prop_assert_eq!(others(xml_descendants(out.expose())), others(before));
     }
 
     #[test]
@@ -643,15 +707,14 @@ proptest! {
         "(<|>|/|=|\"|&|;|!|-|\\?| |\n|Config|ApiKey|BindAddress|Port|amp|x){0,60}",
     ]) {
         if let Ok(out) = prowlarr_config(Some(&text), &Secret::new(KEY)) {
-            let got = xml_children_of(out.expose());
-            prop_assert_eq!(got.iter().filter(|(n, _)| n == "ApiKey").count(), 1);
+            assert_prowlarr_keys_once(out.expose());
         }
     }
 
     #[test]
     fn api_keys_are_refused_or_round_trip(s in "(?s).{0,40}") {
         if let Ok(out) = prowlarr_config(None, &Secret::new(s.clone())) {
-            let got = xml_children_of(out.expose());
+            let got = xml_descendants(out.expose());
             prop_assert!(got.contains(&("ApiKey".to_owned(), s.clone())));
         }
     }

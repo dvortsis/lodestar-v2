@@ -517,19 +517,4 @@ mod tests {
             CredentialError::WrongField
         );
     }
-
-    #[test]
-    fn errors_and_debug_show_no_plaintext() {
-        let store = SecretStore::from_key(&[7; 32]);
-        let issued = generate(&store, &key("prowlarr", Field::ApiKey)).unwrap();
-        let shown = format!("{issued:?}");
-        assert!(!shown.contains(issued.secret.expose()), "{shown}");
-        let e = accept_pasted(
-            &store,
-            &key("prowlarr", Field::ApiKey),
-            "not-a-key-SECRETVALUE".into(),
-        )
-        .unwrap_err();
-        assert!(!format!("{e} {e:?}").contains("SECRETVALUE"));
-    }
 }

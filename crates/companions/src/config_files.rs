@@ -172,17 +172,20 @@ impl fmt::Debug for PasswordHash {
 /// qBittorrent's keys, as logical paths (`/` and `\` alike), with the
 /// spelling written into `[Preferences]` when a key is missing.
 const QBIT_KEYS: [(&str, &str); 3] = [
-    ("preferences\\webui\\address", "WebUI\\Address"),
+    ("Preferences\\WebUI\\Address", "WebUI\\Address"),
     (
-        "preferences\\webui\\password_pbkdf2",
+        "Preferences\\WebUI\\Password_PBKDF2",
         "WebUI\\Password_PBKDF2",
     ),
-    ("preferences\\webui\\username", "WebUI\\Username"),
+    ("Preferences\\WebUI\\Username", "WebUI\\Username"),
 ];
 
 /// `qBittorrent.conf` with our three keys set, from the existing file's
-/// text if there is one (Qt's INI format: case-insensitive keys, sections
-/// as key prefixes, `[General]` for the root).
+/// text if there is one (Qt's INI format: sections as key prefixes,
+/// `[General]` for the root). Qt matches keys case-sensitively on Unix and
+/// case-insensitively on Windows, so a key or section that differs from
+/// ours only in case is refused: on either platform we'd write the wrong
+/// one.
 pub fn qbittorrent_conf(
     existing: Option<&str>,
     username: &Username,
@@ -224,6 +227,11 @@ pub fn qbittorrent_conf(
         if trailing % 2 == 1 && !t.starts_with(';') {
             return Err(malformed("a line continuation", line_no));
         }
+        // A quoted value may run on past the newline; refuse any line with
+        // an unbalanced unescaped `"` rather than track it.
+        if !t.starts_with(';') && unescaped_quotes(body) % 2 == 1 {
+            return Err(malformed("a quoted value spanning lines", line_no));
+        }
         if let Some(rest) = t.strip_prefix('[') {
             let name = rest
                 .split_once(']')
@@ -232,12 +240,19 @@ pub fn qbittorrent_conf(
             if name.contains('%') && name != "%General" {
                 return Err(malformed("a percent-encoded section name", line_no));
             }
+            let name = ascii_trim(name);
             section = if name.eq_ignore_ascii_case("general") {
                 String::new()
             } else {
                 normalize(name)
             };
-            in_first_prefs = !seen_prefs && section == "preferences";
+            if section != "Preferences" && section.eq_ignore_ascii_case("preferences") {
+                return Err(malformed(
+                    "a section differing from qBittorrent's in case",
+                    line_no,
+                ));
+            }
+            in_first_prefs = !seen_prefs && section == "Preferences";
             seen_prefs |= in_first_prefs;
             out.push(raw.to_owned());
             if in_first_prefs {
@@ -245,7 +260,7 @@ pub fn qbittorrent_conf(
             }
             continue;
         }
-        if t.is_empty() || t.starts_with(';') || t.starts_with('#') || !t.contains('=') {
+        if t.is_empty() || t.starts_with(';') || !t.contains('=') {
             out.push(raw.to_owned());
             continue;
         }
@@ -258,6 +273,15 @@ pub fn qbittorrent_conf(
         } else {
             format!("{section}\\{}", normalize(key_text))
         };
+        if QBIT_KEYS
+            .iter()
+            .any(|(k, _)| *k != logical && k.eq_ignore_ascii_case(&logical))
+        {
+            return Err(malformed(
+                "a key differing from qBittorrent's in case",
+                line_no,
+            ));
+        }
         match QBIT_KEYS.iter().position(|(k, _)| *k == logical) {
             Some(i) if written[i] => {} // a duplicate: dropped
             Some(i) => {
@@ -298,9 +322,26 @@ pub fn qbittorrent_conf(
     Ok(format!("{bom}{}", out.concat()))
 }
 
-/// Lower case, `/` as `\`: Qt's keys are case-insensitive in INI files.
+/// `/` as `\`: Qt reads both as the group separator.
 fn normalize(s: &str) -> String {
-    ascii_trim(s).replace('/', "\\").to_ascii_lowercase()
+    ascii_trim(s).replace('/', "\\")
+}
+
+/// `"` not escaped by a `\` (Qt reads `\` and the next character as a
+/// pair).
+fn unescaped_quotes(s: &str) -> usize {
+    let mut n = 0;
+    let mut bytes = s.bytes();
+    while let Some(c) = bytes.next() {
+        match c {
+            b'\\' => {
+                bytes.next();
+            }
+            b'"' => n += 1,
+            _ => {}
+        }
+    }
+    n
 }
 
 /// Qt trims only ASCII whitespace around sections, keys and values.
@@ -399,6 +440,12 @@ pub fn prowlarr_config(existing: Option<&str>, api_key: &Secret) -> Result<Secre
             Event::Empty(e) if depth == 1 && our_key(&e).is_some() => {
                 replace(&mut w, &e, &mut written, &values)?;
             }
+            Event::Start(e) | Event::Empty(e) if is_ours_or_root(&e) => {
+                // Prowlarr reads each key from `Descendants(key)` and resets
+                // it unless there's exactly one, so ours may appear only as
+                // children of the root.
+                return Err(malformed("a nested Config, ApiKey or BindAddress", None));
+            }
             Event::Start(e) => {
                 depth += 1;
                 xml(w.write_event(Event::Start(e)))?;
@@ -439,8 +486,13 @@ pub fn prowlarr_config(existing: Option<&str>, api_key: &Secret) -> Result<Secre
     into_secret(Zeroizing::new(w.into_inner()))
 }
 
+fn is_ours_or_root(e: &BytesStart<'_>) -> bool {
+    our_key(e).is_some() || e.name().into_inner() == "Config"
+}
+
+/// A root with attributes (a namespace above all) isn't one Prowlarr finds.
 fn check_root(e: &BytesStart<'_>) -> Result<(), ConfigError> {
-    if e.name().into_inner() == "Config" {
+    if e.name().into_inner() == "Config" && e.attributes().next().is_none() {
         Ok(())
     } else {
         Err(malformed("the root element isn't <Config>", None))
@@ -592,9 +644,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
         let _ = fs::remove_file(&tmp);
     }
     result?;
+    // Best effort, like the key file's: the rename has happened, so the
+    // file is in place and an error here would wrongly say it isn't.
     #[cfg(unix)]
-    File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(io_err("sync"))?;
+    let _ = File::open(dir).and_then(|d| d.sync_all());
     Ok(())
 }
