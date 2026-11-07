@@ -41,7 +41,8 @@ use lodestar_pipeline::wire::filter_snapshot::{
 use lodestar_store::{FloorSource, Store};
 use sha2::Sha256;
 
-/// Chunks in flight per worker: 2 MiB of its 8 MiB session queue.
+/// Chunks in flight per worker and kind: 2 MiB each, so 4 MiB of its
+/// 8 MiB session queue while the filter and the dictionary both travel.
 pub const WINDOW: u32 = 4;
 /// A transfer with no acknowledgement for this long starts over.
 pub const STALL: Duration = Duration::from_secs(60);
@@ -69,7 +70,10 @@ pub fn wire_key(seal_key: &[u8; 32], day: u32) -> WireKey {
 /// The keys a sealed record may be opened with at `now`: today's and the
 /// [`KEY_DAYS`] before it.
 pub fn wire_keys(seal_key: &[u8; 32], now: i64) -> Vec<WireKey> {
-    let today = day_of(now);
+    keys_for_day(seal_key, day_of(now))
+}
+
+fn keys_for_day(seal_key: &[u8; 32], today: u32) -> Vec<WireKey> {
     (today.saturating_sub(KEY_DAYS)..=today)
         .map(|d| wire_key(seal_key, d))
         .collect()
@@ -321,29 +325,43 @@ impl WorkerSnapshots {
     }
 
     /// Takes what was read: the filter snapshot under engine version
-    /// `engine`, and the dictionary. Sets the wire keys from `seal_key`.
+    /// `engine`, and the dictionary. The day it's built for is its wire
+    /// key's (the day it was read), so one read at 23:59:59Z and installed
+    /// after midnight is due again at once. Sets the wire keys for that day.
     /// Returns the (dictionary, filter) versions.
+    ///
+    /// **All or nothing:** both payloads are encoded before anything
+    /// changes. If either fails (a store past the caps), workers keep the
+    /// snapshots they have, the failed build is remembered so it isn't
+    /// read again until something changes, and the error is returned this
+    /// once, for the caller to log (it names a cap, never a rule).
     pub fn install(
         &mut self,
         engine: u64,
-        now: i64,
         seal_key: &[u8; 32],
         snapshot: &FilterSnapshot,
         dict: Option<&DictSnapshot>,
     ) -> Result<(u64, u64), lodestar_pipeline::wire::Error> {
-        let bytes = snapshot.encode()?;
-        self.filter.set(version_of(&bytes), bytes);
-        match dict {
-            Some(d) => self.dict.set(d.version(), d.encode()?),
+        let day = snapshot.key.id;
+        self.built = Some(Built {
+            engine,
+            day,
+            dict: dict.map(|d| d.id),
+        });
+        if snapshot.key != wire_key(seal_key, day) {
+            return Err(lodestar_pipeline::wire::Error::Invalid("wire key"));
+        }
+        let filter = snapshot.encode()?;
+        let encoded = dict
+            .map(|d| d.encode().map(|b| (d.version(), b)))
+            .transpose()?;
+        self.filter.set(version_of(&filter), filter);
+        match encoded {
+            Some((version, bytes)) => self.dict.set(version, bytes),
             // No active dictionary any more: stop announcing one.
             None => self.dict = Sender::new(SnapshotKind::Dictionary),
         }
-        self.keys.set(wire_keys(seal_key, now));
-        self.built = Some(Built {
-            engine,
-            day: day_of(now),
-            dict: dict.map(|d| d.id),
-        });
+        self.keys.set(keys_for_day(seal_key, day));
         Ok(self.versions())
     }
 
@@ -458,6 +476,73 @@ mod tests {
         assert_eq!(ids, [20_399, 20_400], "today and the day before");
         assert_eq!(day_of(-1), 0);
         assert!(!format!("{a:?}").contains("5, 5"));
+    }
+
+    /// Spooled records depend on the derivation staying the same across
+    /// upgrades: HMAC-SHA256 under the seal key of the label, a zero byte
+    /// and the day (little-endian u32), computed independently.
+    #[test]
+    fn the_wire_key_derivation_is_pinned() {
+        let expected = [
+            0x13, 0x56, 0x93, 0x9c, 0x6f, 0x03, 0xcb, 0xb3, 0x22, 0x0a, 0x49, 0xaa, 0x2e, 0xea,
+            0x6d, 0x05, 0x64, 0x44, 0x80, 0x7c, 0x16, 0xec, 0x1c, 0x95, 0x79, 0x6a, 0x41, 0x85,
+            0x04, 0x97, 0x32, 0x8b,
+        ];
+        assert_eq!(wire_key(&SEAL, 20_400), WireKey::new(20_400, expected));
+    }
+
+    /// A snapshot read before midnight and installed after it is built
+    /// for its own day, so the new day's snapshot is due at once; one
+    /// whose key isn't the seal key's for its day is refused.
+    #[test]
+    fn install_takes_its_day_from_the_snapshots_key() {
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let last_second = 20_401 * DAY - 1;
+        let snap = read_snapshot(&store, &SEAL, last_second).unwrap();
+        let mut s = WorkerSnapshots::new();
+        s.install(1, &SEAL, &snap, None).unwrap();
+        let w = [status(3, true)];
+        assert!(!s.due(&w, 1, last_second, None));
+        assert!(s.due(&w, 1, last_second + 1, None), "the next day is due");
+        assert_eq!(format!("{:?}", s.keys()), "WireKeys([20399, 20400])");
+        let mut other = snap.clone();
+        other.key = wire_key(&[6; 32], 20_400);
+        assert!(s.install(1, &SEAL, &other, None).is_err());
+    }
+
+    /// A build that can't be encoded changes nothing workers have, and
+    /// isn't due again until something changes.
+    #[test]
+    fn a_failed_install_keeps_what_workers_have() {
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let snap = read_snapshot(&store, &SEAL, NOW).unwrap();
+        let mut s = WorkerSnapshots::new();
+        let dict = DictSnapshot {
+            id: 7,
+            bytes: vec![1, 2, 3],
+        };
+        let before = s.install(1, &SEAL, &snap, Some(&dict)).unwrap();
+        let mut bad = snap.clone();
+        bad.filter.state.cs_sigs = vec![0; lodestar_pipeline::wire::filter_snapshot::MAX_ROWS + 1];
+        let bad_dict = DictSnapshot {
+            id: 8,
+            bytes: vec![],
+        };
+        assert!(s.install(2, &SEAL, &bad, Some(&bad_dict)).is_err());
+        assert_eq!(s.versions(), before, "both payloads kept");
+        let w = [status(3, true)];
+        assert!(
+            !s.due(&w, 2, NOW, Some(8)),
+            "not read again for the same state"
+        );
+        assert!(s.due(&w, 3, NOW, Some(8)), "a real change is");
+        // A dictionary that can't be encoded fails it too, filter unchanged.
+        let zero = DictSnapshot {
+            id: 0,
+            bytes: vec![],
+        };
+        assert!(s.install(4, &SEAL, &snap, Some(&zero)).is_err());
+        assert_eq!(s.versions(), before);
     }
 
     fn subscribe(store: &mut Store, url: &str, floor: bool, action: Action, hashes: &[[u8; 20]]) {
@@ -615,7 +700,7 @@ mod tests {
         assert_eq!((d.id, d.bytes.as_slice()), (7, &[1u8, 2, 3, 4, 5][..]));
         let mut s = WorkerSnapshots::new();
         let snap = read_snapshot(&store, &SEAL, NOW).unwrap();
-        assert_eq!(s.install(1, NOW, &SEAL, &snap, Some(&d)).unwrap().0, 7);
+        assert_eq!(s.install(1, &SEAL, &snap, Some(&d)).unwrap().0, 7);
         // It goes out like the filter, and stops being announced once
         // there's no active dictionary.
         let mut sent = Sent::new();
@@ -628,7 +713,7 @@ mod tests {
             sent.iter()
                 .any(|(_, c)| c.kind == SnapshotKind::Dictionary && c.version == 7)
         );
-        s.install(2, NOW, &SEAL, &snap, None).unwrap();
+        s.install(2, &SEAL, &snap, None).unwrap();
         assert_eq!(s.versions().0, 0);
     }
 
@@ -642,7 +727,7 @@ mod tests {
             .unwrap();
         let snap = read_snapshot(&store, &SEAL, NOW).unwrap();
         let mut s = WorkerSnapshots::new();
-        s.install(1, NOW, &SEAL, &snap, None).unwrap();
+        s.install(1, &SEAL, &snap, None).unwrap();
         let mut sent = Sent::new();
         s.sync_with(
             &[status(3, true)],
@@ -708,7 +793,7 @@ mod tests {
                 })
                 .collect(),
         }];
-        s.install(1, NOW, &SEAL, &snap, None).unwrap().1
+        s.install(1, &SEAL, &snap, None).unwrap().1
     }
 
     /// Nothing is built or sent while no remote worker is connected.

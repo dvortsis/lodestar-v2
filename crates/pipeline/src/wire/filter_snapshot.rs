@@ -17,13 +17,15 @@
 //!   - a **hash-list drop** (the floor's CS-1a/1b and CS-8a, a subscribed
 //!     list that drops) is dropped on the worker, counted and reported as
 //!     [`Loss::Blocked`]: never sent, never spooled;
-//!   - **anything else the commit would hold back** (quarantine, the
-//!     adult hold, a drop by one of your rules or a pack) goes to the
-//!     coordinator **sealed** ([`SealedRecord`]): the whole record, name,
-//!     file tree and all, under the snapshot's [`WireKey`], so it stays
-//!     reviewable and correctable at commit while its name is never in
-//!     clear on the wire or in the spool;
-//!   - **hide, demote and flag** are only marked; the record goes as is.
+//!   - **every other record goes to the coordinator sealed**
+//!     ([`SealedRecord`]): the whole record, name, file tree and all, under
+//!     the snapshot's [`WireKey`], with the worker's action (quarantine,
+//!     the adult hold, a rule's drop, hide, demote, flag, or none) in its
+//!     clear header. A quarantine stays reviewable and correctable at
+//!     commit, and no name is ever in clear on the wire or in the spool.
+//!     Even a record the worker sees as clean goes sealed, because some
+//!     holds are decided only at commit (an always-adult source the worker
+//!     doesn't know of, SP-3 and SP-4).
 //!
 //! The coordinator re-judges every remote result regardless (§19.4), so a
 //! stale snapshot, or a worker that lies, can't get a record past the
@@ -62,9 +64,13 @@ pub const VERSION: u8 = 1;
 /// The dictionary snapshot's format version.
 pub const DICT_VERSION: u8 = 1;
 
-/// The largest filter snapshot, assembled: 64 MiB, about three million
-/// listed hashes. A worker uses at most 256 MB in all (owner §1.6.5).
+/// The largest filter snapshot, assembled: 64 MiB. What it may hold once
+/// decoded is capped tighter, by [`MAX_DECODED`].
 pub const MAX_SNAPSHOT: usize = 64 << 20;
+/// What a decoded snapshot and the engine built from it may hold in
+/// memory, estimated as it's decoded ([`Budget`]): well inside a worker's
+/// 256 MB (owner §1.6.5). It allows about 1.5 million listed hashes.
+pub const MAX_DECODED: usize = 96 << 20;
 /// The largest dictionary (a trained one is about 110 KiB).
 pub const MAX_DICT: usize = 4 << 20;
 /// A query, a setting's value or an override's value.
@@ -263,9 +269,10 @@ impl FilterSnapshot {
                 return Err(Error::TooLarge("snapshot"));
             }
         }
-        if w.out.len() > MAX_SNAPSHOT {
-            return Err(Error::TooLarge("snapshot"));
-        }
+        too_big(&w)?;
+        // A worker decodes within its memory budget: never send what it
+        // would refuse.
+        FilterSnapshot::decode(&w.out)?;
         Ok(w.out)
     }
 
@@ -275,6 +282,7 @@ impl FilterSnapshot {
             return Err(Error::TooLarge("snapshot"));
         }
         let mut r = Reader { rest: payload };
+        let mut m = Budget::default();
         let v = r.u8()?;
         if v != VERSION {
             return Err(Error::Version(v));
@@ -282,38 +290,42 @@ impl FilterSnapshot {
         let id = u32::try_from(r.uvar()?).map_err(|_| Error::Invalid("key id"))?;
         let key = WireKey::new(id, r.fixed()?);
         let n = r.count(MAX_ROWS, 21, "cs hashes")?;
+        m.rows(n, 64)?;
         let mut cs_hashes = Vec::with_capacity(n);
         for _ in 0..n {
             cs_hashes.push((r.fixed()?, r.u8()?));
         }
         let n = r.count(MAX_ROWS, 1, "cs signatures")?;
+        m.rows(n, 32)?;
         let mut cs_sigs = Vec::with_capacity(n);
         for _ in 0..n {
             cs_sigs.push(r.uvar()?);
         }
-        let switches = read_switches(&mut r)?;
+        let switches = read_switches(&mut r, &mut m)?;
         let n = r.count(MAX_ROWS, 6, "rules")?;
+        m.rows(n, size_of::<RuleRow>() + 256)?;
         let mut rules = Vec::with_capacity(n);
         for _ in 0..n {
             rules.push(RuleRow {
                 id: r.ivar()?,
-                query: read_text(&mut r, MAX_TEXT, "query")?,
+                query: m.text(read_text(&mut r, MAX_TEXT, "query")?)?,
                 action: r.u8()?,
                 enabled: read_bool(&mut r)?,
                 shadow_until: read_opt_ivar(&mut r)?,
-                unless_query: read_opt_text(&mut r)?,
+                unless_query: read_opt_text(&mut r, &mut m)?,
             });
         }
-        let pack_switches = read_switches(&mut r)?;
+        let pack_switches = read_switches(&mut r, &mut m)?;
         let n = r.count(MAX_ROWS, 9, "overrides")?;
+        m.rows(n, size_of::<OverrideRow>() + 128)?;
         let mut overrides = Vec::with_capacity(n);
         for _ in 0..n {
             overrides.push(OverrideRow {
                 id: r.ivar()?,
                 kind: r.u8()?,
-                value: r.bytes(MAX_TEXT, "override")?.to_vec(),
+                value: m.bytes(r.bytes(MAX_TEXT, "override")?)?,
                 strength: r.u8()?,
-                scope: read_opt_text(&mut r)?,
+                scope: read_opt_text(&mut r, &mut m)?,
                 created_at: r.ivar()?,
                 expires_at: read_opt_ivar(&mut r)?,
                 shadow_until: read_opt_ivar(&mut r)?,
@@ -321,35 +333,38 @@ impl FilterSnapshot {
             });
         }
         let n = r.count(MAX_ROWS, 4, "exceptions")?;
+        m.rows(n, size_of::<ExceptionRow>() + 64)?;
         let mut exceptions = Vec::with_capacity(n);
         for _ in 0..n {
             exceptions.push(ExceptionRow {
                 id: r.ivar()?,
-                rule: read_text(&mut r, MAX_ID, "rule id")?,
+                rule: m.text(read_text(&mut r, MAX_ID, "rule id")?)?,
                 kind: r.u8()?,
-                value: r.bytes(MAX_TEXT, "exception")?.to_vec(),
+                value: m.bytes(r.bytes(MAX_TEXT, "exception")?)?,
             });
         }
         let n = r.count(MAX_ROWS, 2, "allow")?;
+        m.rows(n, 96)?;
         let mut allow = Vec::with_capacity(n);
         for _ in 0..n {
-            allow.push((r.ivar()?, read_text(&mut r, MAX_TEXT, "query")?));
+            allow.push((r.ivar()?, m.text(read_text(&mut r, MAX_TEXT, "query")?)?));
         }
         let pack_versions = PackVersionRows {
-            applied: [read_stored(&mut r)?, read_stored(&mut r)?],
-            seeded: read_stored(&mut r)?,
+            applied: [read_stored(&mut r, &mut m)?, read_stored(&mut r, &mut m)?],
+            seeded: read_stored(&mut r, &mut m)?,
         };
-        let pack_overrides = read_settings(&mut r)?;
+        let pack_overrides = read_settings(&mut r, &mut m)?;
         let n = r.count(MAX_ROWS, 3, "class rules")?;
+        m.rows(n, 64 + 256)?;
         let mut class_rules = Vec::with_capacity(n);
         for _ in 0..n {
             class_rules.push((
                 r.ivar()?,
-                read_text(&mut r, MAX_TEXT, "query")?,
+                m.text(read_text(&mut r, MAX_TEXT, "query")?)?,
                 read_bool(&mut r)?,
             ));
         }
-        let spam_sigs = read_settings(&mut r)?;
+        let spam_sigs = read_settings(&mut r, &mut m)?;
         let n = r.count(MAX_LISTS, 4, "lists")?;
         let mut lists = Vec::with_capacity(n);
         let mut ids = HashSet::with_capacity(n);
@@ -361,6 +376,8 @@ impl FilterSnapshot {
             let floor = read_bool(&mut r)?;
             let action = r.u8()?;
             let k = r.count(MAX_SNAPSHOT / 20, 20, "list hashes")?;
+            // The list, and the set the engine builds from it.
+            m.rows(k, 64)?;
             let mut hashes = Vec::with_capacity(k);
             for _ in 0..k {
                 hashes.push(r.fixed()?);
@@ -403,7 +420,9 @@ impl FilterSnapshot {
     /// [`crate::load_filter`], then the content lists as
     /// `lodestar_filter::lists::apply` sets them. Returns the loader's
     /// notes for rows that don't read (each fails closed, as it does on
-    /// the coordinator).
+    /// the coordinator). The notes are never logged as they are: they can
+    /// quote a rule (owner §1.8.8; the pipeline logs them by kind and id
+    /// only, `log_events::filter_note`).
     pub fn engine(&self) -> (Engine, Vec<String>) {
         let handle = crate::default_filter();
         let notes = crate::load_filter(&handle, &self.filter);
@@ -541,6 +560,25 @@ pub struct Complete {
     pub bytes: Vec<u8>,
 }
 
+impl Complete {
+    /// The filter snapshot, checked against the version it came under.
+    pub fn filter(&self) -> Result<FilterSnapshot> {
+        if version_of(&self.bytes) != self.version {
+            return Err(Error::Invalid("snapshot version"));
+        }
+        FilterSnapshot::decode(&self.bytes)
+    }
+
+    /// The dictionary, checked against the version (its id) it came under.
+    pub fn dict(&self) -> Result<DictSnapshot> {
+        let d = DictSnapshot::decode(&self.bytes)?;
+        if d.version() != self.version {
+            return Err(Error::Invalid("dictionary version"));
+        }
+        Ok(d)
+    }
+}
+
 impl std::fmt::Debug for Complete {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Complete")
@@ -598,7 +636,7 @@ impl Incoming {
     }
 
     /// Takes a chunk of this kind.
-    pub fn take(&mut self, c: SnapshotChunk) -> Result<Step> {
+    pub fn take(&mut self, mut c: SnapshotChunk) -> Result<Step> {
         let max = max_for(self.kind);
         if c.kind != self.kind || max == 0 {
             return Err(Error::Invalid("snapshot kind"));
@@ -615,7 +653,8 @@ impl Incoming {
                 version: c.version,
                 total: c.total,
                 next: 0,
-                buf: Vec::new(),
+                // Never reallocated, so no copy of the key is left behind.
+                buf: Vec::with_capacity((c.total as usize * MAX_CHUNK).min(max)),
             });
         }
         let Some(t) = self.transfer.as_mut() else {
@@ -636,6 +675,7 @@ impl Incoming {
             return Err(Error::TooLarge("snapshot"));
         }
         t.buf.extend_from_slice(&c.bytes);
+        c.bytes.fill(0);
         t.next += 1;
         let ack = SnapshotAck {
             kind: self.kind,
@@ -656,10 +696,11 @@ impl Incoming {
     }
 }
 
-/// A held-back record, sealed for the coordinator. In clear are only what
-/// the commit keeps of a held-back torrent in any case and what fencing
-/// needs: the leased key, the token, the rule-set version, the action and
-/// the wire key's id. The rest, name, file tree, extras and enrichment
+/// A record leaving a worker, sealed for the coordinator (every record but
+/// a hash-list drop, which never leaves). In clear are only what fencing
+/// needs and what the commit keeps of a held-back torrent in any case: the
+/// leased key, the token, the rule-set version, the worker's action if any
+/// and the wire key's id. The rest, name, file tree, extras and enrichment
 /// included, is one record of the `Results` codec sealed under a
 /// [`WireKey`], bound (as AAD) to that clear header and the worker's id, so
 /// it opens only under the same key, token, version, action and worker.
@@ -670,8 +711,9 @@ pub struct SealedRecord {
     pub key: InfoHash,
     pub token: Token,
     pub rule_version: u64,
-    /// Quarantine, or a rule's drop.
-    pub action: Action,
+    /// The worker's verdict, if any. The commit judges again whatever it
+    /// says.
+    pub action: Option<Action>,
     pub key_id: u32,
     sealed: Vec<u8>,
 }
@@ -692,13 +734,8 @@ pub const MIN_SEAL: usize = 24 + 16;
 
 impl SealedRecord {
     /// Seals `record` under `key` for `worker` (the id in its
-    /// certificate). Refuses a record the `Results` codec would refuse, or
-    /// one that isn't held back.
+    /// certificate). Refuses a record the `Results` codec would refuse.
     pub fn seal(record: &ResultRecord, key: &WireKey, worker: WorkerId) -> Result<SealedRecord> {
-        let action = record
-            .action
-            .filter(|a| *a >= Action::Quarantine)
-            .ok_or(Error::Invalid("sealed action"))?;
         let plain = ResultsBatch {
             batch: 0,
             records: vec![record.clone()],
@@ -708,7 +745,7 @@ impl SealedRecord {
             key: record.key,
             token: record.token,
             rule_version: record.rule_version,
-            action,
+            action: record.action,
             key_id: key.id,
             sealed: Vec::new(),
         };
@@ -731,11 +768,15 @@ impl SealedRecord {
     }
 
     fn write_header(&self, w: &mut Writer) {
-        w.uvar(super::results::flag::SEALED | super::results::flag::ACTION);
+        let flag =
+            super::results::flag::SEALED | self.action.map_or(0, |_| super::results::flag::ACTION);
+        w.uvar(flag);
         w.fixed(&self.key.0);
         w.uvar(self.token.0);
         w.uvar(self.rule_version);
-        w.u8(self.action.code());
+        if let Some(a) = self.action {
+            w.u8(a.code());
+        }
         w.uvar(u64::from(self.key_id));
     }
 
@@ -745,15 +786,17 @@ impl SealedRecord {
         w.bytes(&self.sealed);
     }
 
-    /// Reads one after its flags (`flags` already read and checked to be
-    /// exactly `SEALED | ACTION`).
-    pub(super) fn read(r: &mut Reader<'_>) -> Result<SealedRecord> {
+    /// Reads one after its flags (`SEALED`, with `ACTION` when
+    /// `has_action`; the caller has refused any other bit).
+    pub(super) fn read(r: &mut Reader<'_>, has_action: bool) -> Result<SealedRecord> {
         let key = InfoHash(r.fixed()?);
         let token = Token(r.uvar()?);
         let rule_version = r.uvar()?;
-        let action = Action::from_code(r.u8()?)
-            .filter(|a| *a >= Action::Quarantine)
-            .ok_or(Error::Invalid("sealed action"))?;
+        let action = if has_action {
+            Some(Action::from_code(r.u8()?).ok_or(Error::Invalid("action"))?)
+        } else {
+            None
+        };
         let key_id = u32::try_from(r.uvar()?).map_err(|_| Error::Invalid("key id"))?;
         let sealed = r.bytes(MAX_SEALED, "sealed record")?;
         if sealed.len() < MIN_SEAL {
@@ -767,6 +810,12 @@ impl SealedRecord {
             key_id,
             sealed: sealed.to_vec(),
         })
+    }
+}
+
+impl Weigh for SealedRecord {
+    fn weigh(&self) -> usize {
+        size_of::<Self>() + self.sealed.capacity()
     }
 }
 
@@ -795,10 +844,12 @@ impl WireKeys {
 
     /// The record inside, checked: its key id must be one of these, the
     /// seal intact under the clear header and `worker` (the authenticated
-    /// session's id, never one the payload names), the inside one valid
-    /// record whose key, token, rule version and action are the clear
-    /// ones. Every failure is the same few words, never content. The
-    /// record it returns is re-judged at commit like any remote record.
+    /// session's id, never one the payload names), and the inside exactly
+    /// one record in clear, in a batch numbered 0, whose key, token, rule
+    /// version and action are the clear ones. A sealed record nested
+    /// inside is refused. Every failure is the same few words, never
+    /// content. The record it returns is re-judged at commit like any
+    /// remote record.
     pub fn open(&self, s: &SealedRecord, worker: WorkerId) -> Result<ResultRecord> {
         let sealer = self
             .read()
@@ -809,15 +860,15 @@ impl WireKeys {
         let plain = sealer
             .open_bytes(&s.sealed, &s.aad(worker))
             .map_err(|_| Error::Invalid("seal"))?;
-        let mut batch = ResultsBatch::decode(&plain)?;
-        if batch.records.len() != 1 {
+        let (mut batch, nested) = ResultsBatch::decode_with(&plain)?;
+        if batch.batch != 0 || !nested.is_empty() || batch.records.len() != 1 {
             return Err(Error::Invalid("sealed record"));
         }
         let record = batch.records.pop().expect("one record");
         if record.key != s.key
             || record.token != s.token
             || record.rule_version != s.rule_version
-            || record.action != Some(s.action)
+            || record.action != s.action
         {
             return Err(Error::Invalid("sealed record"));
         }
@@ -825,68 +876,7 @@ impl WireKeys {
     }
 }
 
-/// What the worker queues for the coordinator (or its spool).
-#[derive(Clone, PartialEq, Eq)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "most are records in clear; boxing them would cost an allocation each"
-)]
-pub enum Outbound {
-    /// No decision, or only marks (hide, demote, flag).
-    Record(ResultRecord),
-    /// Held back at commit: quarantine, the adult hold, a rule's drop.
-    Sealed(SealedRecord),
-}
-
-impl Outbound {
-    pub fn key(&self) -> InfoHash {
-        match self {
-            Outbound::Record(r) => r.key,
-            Outbound::Sealed(s) => s.key,
-        }
-    }
-}
-
-impl std::fmt::Debug for Outbound {
-    /// The key and the shape; never a name, even of a record in clear.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Outbound::Record(r) => f
-                .debug_struct("Record")
-                .field("key", &r.key)
-                .field("action", &r.action)
-                .finish_non_exhaustive(),
-            Outbound::Sealed(s) => s.fmt(f),
-        }
-    }
-}
-
-impl Weigh for Outbound {
-    fn weigh(&self) -> usize {
-        size_of::<Self>()
-            + match self {
-                Outbound::Record(r) => {
-                    let t = &r.torrent;
-                    let vec = |v: &Option<Vec<u8>>| v.as_ref().map_or(0, Vec::capacity);
-                    t.name.capacity()
-                        + t.name_raw.as_ref().map_or(0, |(b, _)| b.capacity())
-                        + t.files.data.capacity()
-                        + vec(&t.extra)
-                        + vec(&t.raw)
-                        + t.enrichment
-                            .as_ref()
-                            .map_or(0, |e| e.comp.capacity() + e.data.capacity())
-                }
-                Outbound::Sealed(s) => s.sealed.capacity(),
-            }
-    }
-}
-
 /// What [`Judge::judge`] made of a prepared torrent.
-#[allow(
-    clippy::large_enum_variant,
-    reason = "made and matched at once, one per prepared torrent"
-)]
 pub enum Judged {
     /// A hash-list drop: never sent or spooled. Report the lease lost as
     /// [`Loss::Blocked`].
@@ -895,8 +885,8 @@ pub enum Judged {
         token: Token,
         rule: RuleRef,
     },
-    /// Queue it for the coordinator.
-    Send(Outbound),
+    /// Queue it, sealed, for the coordinator.
+    Send(SealedRecord),
     /// It breaks the `Results` codec's rules, so the coordinator would
     /// refuse it: report the lease lost as [`Loss::Invalid`].
     Invalid { key: InfoHash, token: Token },
@@ -926,8 +916,9 @@ impl std::fmt::Debug for Judged {
 pub struct JudgeCounts {
     /// Hash-list drops, never sent.
     pub dropped: AtomicU64,
-    /// Held-back records sent sealed.
-    pub sealed: AtomicU64,
+    /// Records sent that the commit would hold back (quarantine, the adult
+    /// hold, a rule's drop).
+    pub held: AtomicU64,
     /// Records sent with a mark (hide, demote, flag).
     pub marked: AtomicU64,
     /// Records sent with no decision.
@@ -998,7 +989,8 @@ impl Judge {
     /// Builds the engine from `snapshot` (version `version`) and swaps it
     /// in. Judgments already running finish on the old engine, and
     /// [`Judge::judge`] judges their results again. Returns the loader's
-    /// notes for rows that don't read.
+    /// notes for rows that don't read, which are never logged as they are
+    /// ([`FilterSnapshot::engine`]).
     pub fn install(&self, snapshot: &FilterSnapshot, version: u64) -> Vec<String> {
         let (built, notes) = snapshot.engine();
         let mut installed = self.installed.write().unwrap_or_else(|e| e.into_inner());
@@ -1026,11 +1018,11 @@ impl Judge {
 
     /// [`Judge::judge`] at Unix time `now` (the worker's clock).
     ///
-    /// A record to seal is sealed only while `now` is still on the day of
-    /// the installed wire key (or earlier, for a clock behind the
+    /// A record is sealed only while `now` is still on the day of the
+    /// installed wire key (or earlier, for a clock behind the
     /// coordinator's). The coordinator opens today's and yesterday's keys,
     /// so a record a 24 h spool replays always opens. Past that day, until
-    /// the next snapshot brings the new key, a record to seal is refused
+    /// the next snapshot brings the new key, a record is refused
     /// (`NotReady`: its lease ends and the key is fetched again).
     pub fn judge_at(&self, mut r: Results, now: i64) -> Judged {
         let installed = self.installed.read().unwrap_or_else(|e| e.into_inner());
@@ -1059,29 +1051,27 @@ impl Judge {
                 rule: d.rule,
             };
         }
-        let held_back = decision.is_some_and(|d| d.action >= Action::Quarantine);
-        let marked = decision.is_some();
+        let counter = match decision.map(|d| d.action) {
+            Some(a) if a >= Action::Quarantine => &self.counts.held,
+            Some(_) => &self.counts.marked,
+            None => &self.counts.clear,
+        };
         let (key, token, version, sealing) = (r.key, r.token, inst.version, inst.key.clone());
         drop(installed);
-        let mut record = r.into_record();
-        record.rule_version = version;
-        if !held_back {
-            let c = if marked {
-                &self.counts.marked
-            } else {
-                &self.counts.clear
-            };
-            c.fetch_add(1, Ordering::Relaxed);
-            return Judged::Send(Outbound::Record(record));
-        }
+        // Every record goes sealed (runner, §2.33): some holds are decided
+        // only at commit (an always-adult source the worker doesn't know
+        // of, SP-3 and SP-4), so a record the worker sees as clean can
+        // still be one the commit quarantines.
         if now.div_euclid(86_400) > i64::from(sealing.id) {
             self.counts.refused.fetch_add(1, Ordering::Relaxed);
             return Judged::NotReady { key, token };
         }
+        let mut record = r.into_record();
+        record.rule_version = version;
         match SealedRecord::seal(&record, &sealing, self.worker) {
             Ok(s) => {
-                self.counts.sealed.fetch_add(1, Ordering::Relaxed);
-                Judged::Send(Outbound::Sealed(s))
+                counter.fetch_add(1, Ordering::Relaxed);
+                Judged::Send(s)
             }
             Err(e) => self.invalid(key, token, e),
         }
@@ -1099,8 +1089,11 @@ impl Judge {
 }
 
 /// A drop by an exact hash or signature list: the floor (CS-1a, CS-1b,
-/// CS-8a) or a subscribed list. These need no tombstone on the
-/// coordinator: the list itself refuses the key again.
+/// CS-8a) or a subscribed list. A remote one leaves no tombstone on the
+/// coordinator: CS-1 and the lists refuse the key again before it's
+/// fetched, but a CS-8a repost (another key, the same payload) can be
+/// fetched and dropped again until WK-10's floor-drop report tombstones
+/// it.
 fn by_hash(rule: RuleRef) -> bool {
     match rule {
         RuleRef::Core(r) => r.floor(),
@@ -1127,7 +1120,7 @@ impl<O> std::fmt::Debug for Judging<O> {
     }
 }
 
-impl<O: Outbox<Outbound>> Outbox<Results> for Judging<O> {
+impl<O: Outbox<SealedRecord>> Outbox<Results> for Judging<O> {
     fn send(&self, item: Results) -> impl std::future::Future<Output = Result<(), Closed>> + Send {
         let judged = self.judge.judge(item);
         let lost = |key: &InfoHash, token: Token, loss: Loss| {
@@ -1161,6 +1154,37 @@ fn unix_now() -> i64 {
 }
 
 // --- field encodings ---------------------------------------------------
+
+/// What a decoded snapshot holds in memory, with the engine built from it,
+/// estimated as it's read and refused past [`MAX_DECODED`]: rows by their
+/// in-memory size plus what the engine adds per row, text at four times
+/// its length (the string and what the engine compiles from it).
+#[derive(Default)]
+struct Budget(usize);
+
+impl Budget {
+    fn charge(&mut self, n: usize) -> Result<()> {
+        self.0 = self.0.saturating_add(n);
+        if self.0 > MAX_DECODED {
+            return Err(Error::TooLarge("decoded snapshot"));
+        }
+        Ok(())
+    }
+
+    fn rows(&mut self, n: usize, each: usize) -> Result<()> {
+        self.charge(n.saturating_mul(each))
+    }
+
+    fn text(&mut self, s: String) -> Result<String> {
+        self.charge(s.len().saturating_mul(4))?;
+        Ok(s)
+    }
+
+    fn bytes(&mut self, b: &[u8]) -> Result<Vec<u8>> {
+        self.charge(b.len().saturating_mul(4))?;
+        Ok(b.to_vec())
+    }
+}
 
 fn too_big(w: &Writer) -> Result<()> {
     if w.out.len() > MAX_SNAPSHOT {
@@ -1265,9 +1289,9 @@ fn read_text(r: &mut Reader<'_>, cap: usize, what: &'static str) -> Result<Strin
         .map_err(|_| Error::Invalid(what))
 }
 
-fn read_opt_text(r: &mut Reader<'_>) -> Result<Option<String>> {
+fn read_opt_text(r: &mut Reader<'_>, m: &mut Budget) -> Result<Option<String>> {
     Ok(if read_bool(r)? {
-        Some(read_text(r, MAX_TEXT, "text")?)
+        Some(m.text(read_text(r, MAX_TEXT, "text")?)?)
     } else {
         None
     })
@@ -1277,37 +1301,39 @@ fn read_opt_ivar(r: &mut Reader<'_>) -> Result<Option<i64>> {
     Ok(if read_bool(r)? { Some(r.ivar()?) } else { None })
 }
 
-fn read_switches(r: &mut Reader<'_>) -> Result<Vec<(String, bool)>> {
+fn read_switches(r: &mut Reader<'_>, m: &mut Budget) -> Result<Vec<(String, bool)>> {
     let n = r.count(MAX_ROWS, 2, "switches")?;
+    m.rows(n, size_of::<(String, bool)>() + 32)?;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
-        out.push((read_text(r, MAX_ID, "switch")?, read_bool(r)?));
+        out.push((m.text(read_text(r, MAX_ID, "switch")?)?, read_bool(r)?));
     }
     Ok(out)
 }
 
-fn read_value(r: &mut Reader<'_>) -> Result<std::result::Result<String, Vec<u8>>> {
+fn read_value(r: &mut Reader<'_>, m: &mut Budget) -> Result<std::result::Result<String, Vec<u8>>> {
     match r.u8()? {
-        1 => Ok(Ok(read_text(r, MAX_TEXT, "value")?)),
-        2 => Ok(Err(r.bytes(MAX_TEXT, "value")?.to_vec())),
+        1 => Ok(Ok(m.text(read_text(r, MAX_TEXT, "value")?)?)),
+        2 => Ok(Err(m.bytes(r.bytes(MAX_TEXT, "value")?)?)),
         _ => Err(Error::Invalid("value tag")),
     }
 }
 
-fn read_stored(r: &mut Reader<'_>) -> Result<StoredText> {
+fn read_stored(r: &mut Reader<'_>, m: &mut Budget) -> Result<StoredText> {
     match r.u8()? {
         0 => Ok(None),
-        1 => Ok(Some(Ok(read_text(r, MAX_TEXT, "value")?))),
-        2 => Ok(Some(Err(r.bytes(MAX_TEXT, "value")?.to_vec()))),
+        1 => Ok(Some(Ok(m.text(read_text(r, MAX_TEXT, "value")?)?))),
+        2 => Ok(Some(Err(m.bytes(r.bytes(MAX_TEXT, "value")?)?))),
         _ => Err(Error::Invalid("value tag")),
     }
 }
 
-fn read_settings(r: &mut Reader<'_>) -> Result<Vec<RawSetting>> {
+fn read_settings(r: &mut Reader<'_>, m: &mut Budget) -> Result<Vec<RawSetting>> {
     let n = r.count(MAX_ROWS, 2, "settings")?;
+    m.rows(n, size_of::<RawSetting>())?;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
-        out.push((read_text(r, MAX_ID, "setting")?, read_value(r)?));
+        out.push((m.text(read_text(r, MAX_ID, "setting")?)?, read_value(r, m)?));
     }
     Ok(out)
 }
@@ -1322,10 +1348,10 @@ mod tests {
 
     const WORKER: WorkerId = WorkerId(7);
 
-    /// Today's wire-key id, on this machine's clock.
-    fn today() -> u32 {
-        (unix_now() / 86_400) as u32
-    }
+    /// One fixed clock for every test: noon on the key's day, so no test
+    /// depends on when it runs.
+    const DAY: u32 = 20_400;
+    const NOW: i64 = DAY as i64 * 86_400 + 43_200;
 
     /// A name only a rule of ours quarantines.
     const SECRET: &str = "zebraquark";
@@ -1343,7 +1369,7 @@ mod tests {
 
     fn snapshot(rules: Vec<RuleRow>) -> FilterSnapshot {
         FilterSnapshot {
-            key: WireKey::new(today(), [9; 32]),
+            key: WireKey::new(DAY, [9; 32]),
             filter: StoreFilter {
                 state: FilterState::default(),
                 rules: RuleSet {
@@ -1499,7 +1525,7 @@ mod tests {
         assert!(!text.contains("[9, 9"), "{text}");
         let keys = WireKeys::default();
         keys.set(vec![s.key.clone()]);
-        assert_eq!(format!("{keys:?}"), format!("WireKeys([{}])", today()));
+        assert_eq!(format!("{keys:?}"), format!("WireKeys([{DAY}])"));
     }
 
     #[test]
@@ -1610,7 +1636,7 @@ mod tests {
             worker: WORKER,
             torrent,
             sources: 1,
-            metadata_at: unix_now(),
+            metadata_at: NOW,
             files,
             class,
             verdict: Verdict::default(),
@@ -1620,7 +1646,7 @@ mod tests {
             private_source: false,
             source_adult: false,
         };
-        let now = unix_now();
+        let now = NOW;
         r.verdict = crate::writer::rejudge(engine, &mut r, now, now);
         r
     }
@@ -1642,7 +1668,7 @@ mod tests {
         let j = Judge::new(WORKER);
         assert_eq!(j.version(), 0);
         let r = prepared(&j.filter().current(), "plain", 1 << 20);
-        assert!(matches!(j.judge(r), Judged::NotReady { .. }));
+        assert!(matches!(j.judge_at(r, NOW), Judged::NotReady { .. }));
         assert_eq!(j.counts.refused.load(Ordering::Relaxed), 1);
     }
 
@@ -1657,7 +1683,7 @@ mod tests {
         s.filter.state.cs_sigs = vec![sig.sig];
         let j = judge_with(&s);
         let r = prepared(&j.filter().current(), "a repost", 60 << 20);
-        match j.judge(r) {
+        match j.judge_at(r, NOW) {
             Judged::Dropped { rule, token, .. } => {
                 assert_eq!(rule, RuleRef::Core(lodestar_filter::CoreRule::Cs8a));
                 assert_eq!(token, Token(42));
@@ -1676,7 +1702,7 @@ mod tests {
         let j = judge_with(&s);
         let r = prepared(&j.filter().current(), "listed", 1 << 20);
         assert!(matches!(
-            j.judge(r),
+            j.judge_at(r, NOW),
             Judged::Dropped {
                 rule: RuleRef::List(3),
                 ..
@@ -1690,10 +1716,10 @@ mod tests {
         let j = judge_with(&s);
         let name = format!("{SECRET} holiday video");
         let r = prepared(&j.filter().current(), &name, 1 << 20);
-        let Judged::Send(Outbound::Sealed(sealed)) = j.judge(r) else {
+        let Judged::Send(sealed) = j.judge_at(r, NOW) else {
             panic!("not sealed");
         };
-        assert_eq!(sealed.action, Action::Quarantine);
+        assert_eq!(sealed.action, Some(Action::Quarantine));
         assert_eq!(sealed.rule_version, 5);
         // On the wire: the name is nowhere in the payload, in Debug or in
         // the judge's own Debug.
@@ -1704,7 +1730,7 @@ mod tests {
         .encode_with(std::slice::from_ref(&sealed))
         .unwrap();
         assert!(!wire.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()));
-        let text = format!("{sealed:?} {:?} {j:?}", Outbound::Sealed(sealed.clone()));
+        let text = format!("{sealed:?} {j:?}");
         assert!(!text.contains(SECRET), "{text}");
         // An intake that doesn't open sealed records refuses it.
         assert!(ResultsBatch::decode(&wire).unwrap().records.is_empty());
@@ -1720,7 +1746,8 @@ mod tests {
         for tamper in [
             |s: &mut SealedRecord| s.token = Token(43),
             |s: &mut SealedRecord| s.rule_version = 6,
-            |s: &mut SealedRecord| s.action = Action::Drop,
+            |s: &mut SealedRecord| s.action = Some(Action::Drop),
+            |s: &mut SealedRecord| s.action = None,
             |s: &mut SealedRecord| s.key = InfoHash([0; 20]),
         ] {
             let mut t = got[0].clone();
@@ -1741,39 +1768,47 @@ mod tests {
             ..prepared(&coordinator, &name, 1 << 20)
         };
         back.verdict = Verdict::default();
-        let now = unix_now();
+        let now = NOW;
         let v = crate::writer::rejudge(&coordinator, &mut back, now, now);
         assert_eq!(v.decision.unwrap().action, Action::Quarantine);
     }
 
+    /// Every record leaves sealed, with the worker's action, if any, in
+    /// its clear header: marks, a rule's drop, and no decision at all.
     #[test]
-    fn marks_go_in_clear_and_a_rules_drop_goes_sealed() {
+    fn every_record_goes_sealed_with_its_action() {
         let s = snapshot(vec![
             rule(1, "cam", Action::Hide),
             rule(2, "spamword", Action::Drop),
         ]);
         let j = judge_with(&s);
-        let r = prepared(&j.filter().current(), "a cam rip", 1 << 20);
-        match j.judge(r) {
-            Judged::Send(Outbound::Record(rec)) => {
-                assert_eq!(rec.action, Some(Action::Hide));
-                assert_eq!(rec.rule_version, 5);
+        let k = keys(&s);
+        for (name, action) in [
+            ("a cam rip", Some(Action::Hide)),
+            ("spamword offer", Some(Action::Drop)),
+            ("plain", None),
+        ] {
+            let r = prepared(&j.filter().current(), name, 1 << 20);
+            let Judged::Send(sealed) = j.judge_at(r, NOW) else {
+                panic!("{name} not sent");
+            };
+            assert_eq!((sealed.action, sealed.rule_version), (action, 5), "{name}");
+            let wire = ResultsBatch {
+                batch: 1,
+                records: Vec::new(),
             }
-            other => panic!("{other:?}"),
+            .encode_with(std::slice::from_ref(&sealed))
+            .unwrap();
+            assert!(
+                !wire.windows(name.len()).any(|w| w == name.as_bytes()),
+                "{name}"
+            );
+            let (_, got) = ResultsBatch::decode_with(&wire).unwrap();
+            assert_eq!(k.open(&got[0], WORKER).unwrap().torrent.name, name);
         }
-        let r = prepared(&j.filter().current(), "spamword offer", 1 << 20);
-        assert!(matches!(
-            j.judge(r),
-            Judged::Send(Outbound::Sealed(SealedRecord {
-                action: Action::Drop,
-                ..
-            }))
-        ));
-        let r = prepared(&j.filter().current(), "plain", 1 << 20);
-        assert!(matches!(j.judge(r), Judged::Send(Outbound::Record(rec)) if rec.action.is_none()));
         let c = &j.counts;
         let n = |a: &AtomicU64| a.load(Ordering::Relaxed);
-        assert_eq!((n(&c.marked), n(&c.sealed), n(&c.clear)), (1, 1, 1));
+        assert_eq!((n(&c.marked), n(&c.held), n(&c.clear)), (1, 1, 1));
     }
 
     /// A worker judging with an old snapshot can't get a record past
@@ -1783,18 +1818,19 @@ mod tests {
         let old = judge_with(&snapshot(Vec::new()));
         let name = format!("{SECRET} holiday video");
         let r = prepared(&old.filter().current(), &name, 1 << 20);
-        let Judged::Send(Outbound::Record(rec)) = old.judge(r) else {
-            panic!("the old rules let it through");
+        let Judged::Send(sealed) = old.judge_at(r, NOW) else {
+            panic!("not sent");
         };
-        assert_eq!(rec.action, None);
-        // Over the wire and back, as the coordinator receives it.
+        assert_eq!(sealed.action, None, "the old rules let it through");
+        // Over the wire and opened, as the coordinator receives it.
         let wire = ResultsBatch {
             batch: 1,
-            records: vec![rec],
+            records: Vec::new(),
         }
-        .encode()
+        .encode_with(std::slice::from_ref(&sealed))
         .unwrap();
-        let rec = ResultsBatch::decode(&wire).unwrap().records.pop().unwrap();
+        let (_, got) = ResultsBatch::decode_with(&wire).unwrap();
+        let rec = keys(&snapshot(Vec::new())).open(&got[0], WORKER).unwrap();
         // The commit rebuilds the file list and classification from the
         // record itself (as WK-9's intake does) and judges again with
         // today's rules, which quarantine it.
@@ -1825,9 +1861,11 @@ mod tests {
             source_adult: rec.source_adult,
         };
         // The writer keeps a verdict only for the built-in worker's result
-        // under its own engine version; a remote one is always re-judged.
-        assert!(at_commit.worker != WorkerId::LOCAL);
-        let now = unix_now();
+        // under its own engine version; any other is judged again with
+        // `rejudge` (`writer.rs`, `judge`: `r.worker == WorkerId::LOCAL &&
+        // r.version == engine.version`), which is what runs here. WK-9's
+        // `remote_intake.rs` drives remote results through that writer.
+        let now = NOW;
         let v = crate::writer::rejudge(&today, &mut at_commit, now, now);
         assert_eq!(v.decision.unwrap().action, Action::Quarantine);
     }
@@ -1841,21 +1879,21 @@ mod tests {
         let day = i64::from(s.key.id) * 86_400;
         let name = format!("{SECRET} x");
         let r = prepared(&j.filter().current(), &name, 1 << 20);
-        assert!(matches!(
-            j.judge_at(r, day + 86_399),
-            Judged::Send(Outbound::Sealed(_))
-        ));
+        assert!(matches!(j.judge_at(r, day + 86_399), Judged::Send(_)));
         let r = prepared(&j.filter().current(), &name, 1 << 20);
         assert!(matches!(
             j.judge_at(r, day + 86_400),
             Judged::NotReady { .. }
         ));
-        // Records in clear still go.
+        // Nor a record with no decision: every record goes sealed.
         let r = prepared(&j.filter().current(), "plain", 1 << 20);
         assert!(matches!(
             j.judge_at(r, day + 86_400),
-            Judged::Send(Outbound::Record(_))
+            Judged::NotReady { .. }
         ));
+        // A clock behind the key's day still seals.
+        let r = prepared(&j.filter().current(), "plain", 1 << 20);
+        assert!(matches!(j.judge_at(r, day - 60), Judged::Send(_)));
     }
 
     /// The largest seal still fits a batch with its headers.
@@ -1865,7 +1903,7 @@ mod tests {
             key: InfoHash([1; 20]),
             token: Token(u64::MAX),
             rule_version: u64::MAX,
-            action: Action::Drop,
+            action: Some(Action::Drop),
             key_id: u32::MAX,
             sealed: vec![0; MAX_SEALED],
         };
@@ -1885,7 +1923,7 @@ mod tests {
         let s = snapshot(vec![rule(1, SECRET, Action::Quarantine)]);
         let j = judge_with(&s);
         let r = prepared(&j.filter().current(), &format!("{SECRET} y"), 1 << 20);
-        let Judged::Send(Outbound::Sealed(sealed)) = j.judge(r) else {
+        let Judged::Send(sealed) = j.judge_at(r, NOW) else {
             panic!()
         };
         let clear = prepared(&j.filter().current(), "plain", 1 << 20).into_record();
@@ -1923,11 +1961,12 @@ mod tests {
         j.install(&snapshot(vec![rule(1, SECRET, Action::Quarantine)]), 6);
         assert_eq!(j.version(), 6);
         assert!(matches!(
-            j.judge(r),
-            Judged::Send(Outbound::Sealed(SealedRecord {
+            j.judge_at(r, NOW),
+            Judged::Send(SealedRecord {
                 rule_version: 6,
+                action: Some(Action::Quarantine),
                 ..
-            }))
+            })
         ));
         assert_eq!(j.counts.rejudged.load(Ordering::Relaxed), 1);
     }
@@ -1940,7 +1979,7 @@ mod tests {
         let r = prepared(&j.filter().current(), &name, 1 << 20);
         let clear = r.into_record();
         let r = prepared(&j.filter().current(), &name, 1 << 20);
-        let Judged::Send(Outbound::Sealed(sealed)) = j.judge(r) else {
+        let Judged::Send(sealed) = j.judge_at(r, NOW) else {
             panic!()
         };
         // One key once, across clear and sealed.
@@ -1958,7 +1997,7 @@ mod tests {
         }
         .encode_with(std::slice::from_ref(&sealed))
         .unwrap();
-        // The flags are exactly SEALED | ACTION.
+        // The flags are SEALED, with ACTION or without, and nothing else.
         let flags_at = 3; // version, batch 1, count 1
         let mut bad = wire.clone();
         bad[flags_at] |= super::super::results::flag::V2 as u8;
@@ -1966,18 +2005,19 @@ mod tests {
             ResultsBatch::decode_with(&bad).err(),
             Some(Error::Invalid("flags"))
         );
-        // An action that isn't held back, and a seal too short to hold a
+        // An action code that isn't one, and a seal too short to hold a
         // nonce and tag, are refused.
         let mut w = Writer::default();
         w.u8(1);
         w.uvar(1);
         w.uvar(1);
-        let mut s2 = sealed.clone();
-        s2.action = Action::Hide;
-        s2.write(&mut w);
+        sealed.write(&mut w);
+        let at = w.out.len() - 1 - 1 - sealed.sealed.len() - 3 - 1;
+        assert_eq!(w.out[at], Action::Quarantine.code());
+        w.out[at] = 0xEE;
         assert_eq!(
             ResultsBatch::decode_with(&w.out).err(),
-            Some(Error::Invalid("sealed action"))
+            Some(Error::Invalid("action"))
         );
         let mut w = Writer::default();
         w.u8(1);
@@ -1991,14 +2031,181 @@ mod tests {
         for n in 0..wire.len() {
             assert!(ResultsBatch::decode_with(&wire[..n]).is_err());
         }
-        // A record in clear can't be sealed with an action that isn't held
-        // back.
+        // A sealed record without an action round-trips with its flag
+        // clear.
         let r = prepared(&j.filter().current(), "plain", 1 << 20);
-        let rec = r.into_record();
+        let Judged::Send(none) = j.judge_at(r, NOW) else {
+            panic!()
+        };
+        assert_eq!(none.action, None);
+        let wire = ResultsBatch {
+            batch: 2,
+            records: Vec::new(),
+        }
+        .encode_with(std::slice::from_ref(&none))
+        .unwrap();
+        // SEALED (1 << 12) alone, as a varint.
+        assert_eq!(wire[3..5], [0x80, 0x20]);
+        assert_eq!(ResultsBatch::decode_with(&wire).unwrap().1, vec![none]);
+    }
+
+    /// `open` takes only exactly one record in clear, in a batch numbered
+    /// 0, with no sealed record nested inside.
+    #[test]
+    fn open_refuses_what_a_worker_never_seals() {
+        let s = snapshot(Vec::new());
+        let j = judge_with(&s);
+        let k = keys(&s);
+        let r = prepared(&j.filter().current(), "plain", 1 << 20);
+        let Judged::Send(inner) = j.judge_at(r, NOW) else {
+            panic!()
+        };
+        let rec = k.open(&inner, WORKER).unwrap();
+        // Seal a chosen plaintext under the same header, as a worker that
+        // holds the key could.
+        let reseal = |plain: Vec<u8>| {
+            let mut out = inner.clone();
+            out.sealed = s.key.sealer().seal_bytes(&plain, &out.aad(WORKER)).unwrap();
+            out
+        };
+        let numbered = ResultsBatch {
+            batch: 1,
+            records: vec![rec.clone()],
+        }
+        .encode()
+        .unwrap();
         assert_eq!(
-            SealedRecord::seal(&rec, &s.key, WORKER).err(),
-            Some(Error::Invalid("sealed action"))
+            k.open(&reseal(numbered), WORKER).err(),
+            Some(Error::Invalid("sealed record"))
         );
+        let mut other = inner.clone();
+        other.key = InfoHash([7; 20]);
+        let nested = ResultsBatch {
+            batch: 0,
+            records: vec![rec.clone()],
+        }
+        .encode_with(&[other])
+        .unwrap();
+        assert_eq!(
+            k.open(&reseal(nested), WORKER).err(),
+            Some(Error::Invalid("sealed record"))
+        );
+        let two = ResultsBatch {
+            batch: 0,
+            records: vec![rec.clone(), {
+                let mut b = rec.clone();
+                b.key = InfoHash([8; 20]);
+                b.torrent.info_hash = b.key;
+                b
+            }],
+        }
+        .encode()
+        .unwrap();
+        assert_eq!(
+            k.open(&reseal(two), WORKER).err(),
+            Some(Error::Invalid("sealed record"))
+        );
+        let plain = ResultsBatch {
+            batch: 0,
+            records: vec![rec],
+        }
+        .encode()
+        .unwrap();
+        assert!(k.open(&reseal(plain), WORKER).is_ok());
+    }
+
+    /// A chunk that keeps its place but changes its transfer's version or
+    /// total mid-stream drops the transfer.
+    #[test]
+    fn a_chunk_from_another_transfer_mid_stream_is_refused() {
+        let payload = vec![7u8; 2 * MAX_CHUNK + 1];
+        for change in [
+            |c: &mut SnapshotChunk| c.version = 4,
+            |c: &mut SnapshotChunk| c.total = 4,
+        ] {
+            let cs = chunks(SnapshotKind::Filter, 3, &payload);
+            let mut inc = Incoming::new(SnapshotKind::Filter);
+            inc.take(cs[0].clone()).unwrap();
+            let mut c = cs[1].clone();
+            change(&mut c);
+            assert_eq!(
+                inc.take(c).err(),
+                Some(Error::Invalid("snapshot chunk order"))
+            );
+            assert!(inc.take(cs[1].clone()).is_err(), "the transfer was dropped");
+        }
+    }
+
+    /// Duplicate list ids in a payload are refused (the encoder never
+    /// writes them).
+    #[test]
+    fn a_payload_with_a_list_twice_is_refused() {
+        let s = full();
+        let mut b = s.encode().unwrap();
+        // The last list's id is the first byte after the first list.
+        let first = &s.lists[0];
+        let last_list = 1 + 1 + 1 + 1 + 20 * s.lists[1].hashes.len();
+        let at = b.len() - last_list;
+        assert_eq!(b[at] as u32, s.lists[1].id);
+        b[at] = first.id as u8;
+        assert_eq!(
+            FilterSnapshot::decode(&b).err(),
+            Some(Error::Invalid("duplicate list"))
+        );
+    }
+
+    /// What a snapshot holds once decoded is capped as it's read: rows at
+    /// their caps are refused before the engine is built.
+    #[test]
+    fn decoded_memory_is_capped() {
+        let mut s = snapshot(Vec::new());
+        s.lists = vec![ContentList {
+            id: 1,
+            floor: false,
+            action: Action::Drop.code(),
+            hashes: (0..(MAX_DECODED / 64 + 1) as u32)
+                .map(|i| {
+                    let mut h = [0u8; 20];
+                    h[..4].copy_from_slice(&i.to_le_bytes());
+                    h
+                })
+                .collect(),
+        }];
+        assert_eq!(
+            s.encode().err(),
+            Some(Error::TooLarge("decoded snapshot")),
+            "never sent"
+        );
+        s.lists[0].hashes.truncate(MAX_DECODED / 64 - 1_000);
+        assert!(FilterSnapshot::decode(&s.encode().unwrap()).is_ok());
+    }
+
+    /// An assembled payload is checked against the version it came under.
+    #[test]
+    fn a_complete_payload_matches_its_version() {
+        let b = full().encode().unwrap();
+        let ok = Complete {
+            version: version_of(&b),
+            bytes: b.clone(),
+        };
+        assert!(ok.filter().is_ok());
+        let wrong = Complete {
+            version: 1,
+            bytes: b,
+        };
+        assert_eq!(
+            wrong.filter().err(),
+            Some(Error::Invalid("snapshot version"))
+        );
+        let d = DictSnapshot {
+            id: 7,
+            bytes: vec![1],
+        };
+        let c = Complete {
+            version: 8,
+            bytes: d.encode().unwrap(),
+        };
+        assert_eq!(c.dict().err(), Some(Error::Invalid("dictionary version")));
     }
 
     /// Workers judge with exactly what the commit judges with: an engine

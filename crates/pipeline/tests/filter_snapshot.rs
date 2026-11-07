@@ -2,7 +2,7 @@
 //! end to end on the worker's side: the coordinator's snapshot travels in
 //! chunks, the worker builds its engine from it, and its real stages (pool,
 //! prepare, judge) decide what reaches the queue that feeds the wire and
-//! the spool. A hash-list drop never does; a quarantine does, sealed.
+//! the spool. A hash-list drop never does; everything else does, sealed.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -23,8 +23,8 @@ use lodestar_pipeline::stages::{
 };
 use lodestar_pipeline::wire::ResultsBatch;
 use lodestar_pipeline::wire::filter_snapshot::{
-    ContentList, DictSnapshot, FilterSnapshot, Incoming, Judge, Judging, Outbound, Step, WireKey,
-    WireKeys, chunk, chunk_count, version_of,
+    ContentList, DictSnapshot, FilterSnapshot, Incoming, Judge, Judging, SealedRecord, Step,
+    WireKey, WireKeys, chunk, chunk_count, version_of,
 };
 use lodestar_sources::{
     BoxFuture, Discovery, Fetcher, Found, FunnelCounts, Loss, PoolConfig, Shutdown,
@@ -37,6 +37,12 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
 const WORKER: WorkerId = WorkerId(7);
+
+thread_local! {
+    /// Read once per test thread, so the snapshot and the coordinator's
+    /// keyring agree.
+    static KEY_DAY: u32 = key_day();
+}
 /// A word only our own rule quarantines.
 const SECRET: &str = "zebraquark";
 
@@ -90,13 +96,15 @@ impl Reports for Told {
     }
 }
 
-/// Today's wire-key id: a worker seals only under its own day's key.
-fn today() -> u32 {
+/// The wire key's day. A worker seals while its clock is on that day or
+/// before it, so tomorrow's id keeps the test sealing even if it runs
+/// across midnight UTC (the stages judge on the real clock).
+fn key_day() -> u32 {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    (secs / 86_400) as u32
+    (secs / 86_400) as u32 + 1
 }
 
 fn source() -> SourceId {
@@ -108,7 +116,7 @@ fn source() -> SourceId {
 /// rule that quarantines.
 fn coordinator_snapshot(cs1: InfoHash, sig: u64, listed: InfoHash) -> FilterSnapshot {
     FilterSnapshot {
-        key: WireKey::new(today(), [9; 32]),
+        key: WireKey::new(KEY_DAY.with(|d| *d), [9; 32]),
         filter: StoreFilter {
             state: FilterState {
                 cs_hashes: vec![(cs1.0, 0)],
@@ -166,7 +174,7 @@ async fn until(what: &str, mut done: impl FnMut() -> bool, saw: impl Fn() -> Str
     }
 }
 
-async fn recv(rx: &mut ByteReceiver<Outbound>) -> Outbound {
+async fn recv(rx: &mut ByteReceiver<SealedRecord>) -> SealedRecord {
     tokio::time::timeout(Duration::from_secs(10), rx.recv())
         .await
         .expect("an outbound record within 10 s")
@@ -210,7 +218,7 @@ async fn drops_stay_on_the_worker_and_quarantine_goes_sealed() {
     let leases = Arc::new(WorkerLeases::default());
     let (tx, rx) = mpsc::channel(64);
     let (stop, shutdown): (watch::Sender<bool>, Shutdown) = Shutdown::new();
-    let (out, mut wire) = byte_queue::<Outbound>(OUTBOUND_BYTES, 64);
+    let (out, mut wire) = byte_queue::<SealedRecord>(OUTBOUND_BYTES, 64);
     let defaults = StoreConfig::default();
     let running = WorkerStages {
         worker: WORKER,
@@ -252,21 +260,22 @@ async fn drops_stay_on_the_worker_and_quarantine_goes_sealed() {
         .unwrap();
     }
 
-    // Exactly two reach the queue: the clean one in clear, the
-    // quarantined one sealed.
+    // Exactly two reach the queue, both sealed: the clean one with no
+    // action, the quarantined one with its action in the clear header.
     let mut outbound = vec![recv(&mut wire).await, recv(&mut wire).await];
-    outbound.sort_by_key(|o| keys.iter().position(|k| *k == o.key()));
-    let Outbound::Record(rec) = &outbound[0] else {
-        panic!("{:?}", outbound[0]);
-    };
+    outbound.sort_by_key(|o| keys.iter().position(|k| *k == o.key));
     assert_eq!(
-        (rec.key, rec.action, rec.rule_version),
+        (
+            outbound[0].key,
+            outbound[0].action,
+            outbound[0].rule_version
+        ),
         (keys[0], None, version)
     );
-    let Outbound::Sealed(sealed) = &outbound[1] else {
-        panic!("{:?}", outbound[1]);
-    };
-    assert_eq!((sealed.key, sealed.action), (keys[4], Action::Quarantine));
+    assert_eq!(
+        (outbound[1].key, outbound[1].action),
+        (keys[4], Some(Action::Quarantine))
+    );
 
     // The three drops are reported lost as blocked, under their tokens.
     until(
@@ -291,23 +300,26 @@ async fn drops_stay_on_the_worker_and_quarantine_goes_sealed() {
     // before parsing (the key alone decides); the repost (CS-8a), which
     // only its files show, by the judge.
     assert_eq!(
-        (n(&counts.dropped), n(&counts.sealed), n(&counts.clear)),
+        (n(&counts.dropped), n(&counts.held), n(&counts.clear)),
         (1, 1, 1)
     );
     assert!(leases.is_empty(), "no lease left behind");
 
     // On the wire: nothing of the dropped torrents, and the sealed name
     // nowhere, in the payload or in Debug.
-    let (Outbound::Record(rec), Outbound::Sealed(sealed)) = (&outbound[0], &outbound[1]) else {
-        unreachable!()
-    };
     let payload = ResultsBatch {
         batch: 1,
-        records: vec![rec.clone()],
+        records: Vec::new(),
     }
-    .encode_with(std::slice::from_ref(sealed))
+    .encode_with(&outbound)
     .unwrap();
-    for needle in [SECRET, "On the floor", "renamed repost", "On a list"] {
+    for needle in [
+        SECRET,
+        "A holiday video",
+        "On the floor",
+        "renamed repost",
+        "On a list",
+    ] {
         assert!(
             !payload
                 .windows(needle.len())
@@ -320,15 +332,19 @@ async fn drops_stay_on_the_worker_and_quarantine_goes_sealed() {
     // The coordinator opens it under the authenticated worker's id and
     // gets the whole record back, for the commit to re-judge.
     let (clear, sealed) = ResultsBatch::decode_with(&payload).unwrap();
-    assert_eq!(clear.records.len(), 1);
+    assert!(clear.records.is_empty(), "nothing leaves a worker in clear");
     let keyring = WireKeys::default();
-    keyring.set(vec![WireKey::new(today(), [9; 32])]);
-    let opened = keyring.open(&sealed[0], WORKER).unwrap();
+    keyring.set(vec![WireKey::new(KEY_DAY.with(|d| *d), [9; 32])]);
+    assert_eq!(
+        keyring.open(&sealed[0], WORKER).unwrap().torrent.name,
+        "A holiday video"
+    );
+    let opened = keyring.open(&sealed[1], WORKER).unwrap();
     assert_eq!(opened.torrent.name, format!("{SECRET} holiday video"));
     assert_eq!(opened.action, Some(Action::Quarantine));
-    assert!(keyring.open(&sealed[0], WorkerId(8)).is_err());
-    // An intake that doesn't open sealed records refuses it (fail closed).
-    assert_eq!(ResultsBatch::decode(&payload).unwrap().records.len(), 1);
+    assert!(keyring.open(&sealed[1], WorkerId(8)).is_err());
+    // An intake that doesn't open sealed records refuses them (fail closed).
+    assert!(ResultsBatch::decode(&payload).unwrap().records.is_empty());
 
     stop.send(true).unwrap();
     drop(tx);

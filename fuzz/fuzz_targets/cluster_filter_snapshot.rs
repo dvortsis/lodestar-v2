@@ -6,14 +6,16 @@
 //!
 //! The first byte picks the case: 0 the filter snapshot, 1 the dictionary,
 //! 2 a chunk sequence (each chunk a header byte, its sequence number, and a
-//! length byte, with the payload from the rest). Run it with a small
+//! length byte, with the payload from the rest; a chunk is padded to the
+//! full chunk size unless the header's top bit marks it the last, so a
+//! transfer can complete and its payload is decoded). Run it with a small
 //! allocation limit to check the caps hold:
 //! `cargo +nightly fuzz run cluster_filter_snapshot -- -malloc_limit_mb=128`.
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use lodestar_cluster::proto::{SnapshotChunk, SnapshotKind};
+use lodestar_cluster::proto::{MAX_CHUNK, SnapshotChunk, SnapshotKind};
 use lodestar_pipeline::wire::filter_snapshot::{
     DictSnapshot, FilterSnapshot, Incoming, MAX_DICT, MAX_SNAPSHOT, Step,
 };
@@ -39,14 +41,21 @@ fuzz_target!(|data: &[u8]| {
             }
         }
         _ => {
+            // Chunks are padded to `MAX_CHUNK` unless the header's top bit
+            // marks the last, so a multi-chunk transfer can complete, and
+            // what completes is decoded.
             let mut inc = Incoming::new(SnapshotKind::Filter);
             let mut rest = body;
             while let [head, seq, len, tail @ ..] = rest {
                 let n = usize::from(*len).min(tail.len());
                 let (bytes, after) = tail.split_at(n);
                 rest = after;
+                let mut bytes = bytes.to_vec();
+                if head & 0x80 == 0 {
+                    bytes.resize(MAX_CHUNK, 0);
+                }
                 let c = SnapshotChunk {
-                    kind: if head & 0x80 == 0 {
+                    kind: if head & 0x40 == 0 {
                         SnapshotKind::Filter
                     } else {
                         SnapshotKind::Dictionary
@@ -54,10 +63,13 @@ fuzz_target!(|data: &[u8]| {
                     version: u64::from(head & 0x03),
                     seq: u32::from(*seq),
                     total: u32::from((head >> 2) & 0x07),
-                    bytes: bytes.to_vec(),
+                    bytes,
                 };
                 match inc.take(c) {
-                    Ok(Step::Done(_, done)) => assert!(done.bytes.len() <= MAX_SNAPSHOT),
+                    Ok(Step::Done(_, done)) => {
+                        assert!(done.bytes.len() <= MAX_SNAPSHOT);
+                        let _ = done.filter();
+                    }
                     Ok(Step::Ack(a)) => assert_eq!(a.kind, SnapshotKind::Filter),
                     Err(_) => {}
                 }
