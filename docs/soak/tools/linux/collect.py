@@ -83,6 +83,8 @@ STORAGE = (
     "mem_mimalloc_committed_bytes", "mem_mimalloc_peak_committed_bytes",
     "mem_rss_anon_bytes", "mem_rss_file_bytes", "mem_anon_huge_bytes",
     "mem_sqlite_bytes", "mem_sqlite_highwater_bytes",
+    # X-soak-screen: the fetch pool's held bytes, a screen input.
+    "fetch_held_bytes",
 )
 # CR-COL-3: the crawler gate's evidence (docs/decisions/2026-11-02-CR-SPEC.md rules
 # 3, 4, 5 and 6.10). Each labelled series lists its label keys, in rendered order,
@@ -133,6 +135,8 @@ LABELLED = {
     "discovery_to_searchable_seconds_bucket": (("le", frozenset(LATENCY_EDGES)),),
     # X-mem-gauges: live segments per index.
     "search_segments": (("index", frozenset(("main", "files"))),),
+    # X-soak-screen: anonymous mappings outside the allocator's arenas, by size class.
+    "mem_anon_mappings": (("size", frozenset(("lt_128k", "128k_512k", "512k_2m", "ge_2m"))),),
 }
 # Gate series that carry no labels.
 PLAIN = frozenset((
@@ -150,6 +154,177 @@ SAFE_LABELS = re.compile(r'^\{[a-z_]+="[a-z_0-9]{1,24}"(,[a-z_]+="[a-z_0-9]{1,24
 LABEL_PAIR = re.compile(r'([a-z_]+)="([^"\\]*)"')
 FAMILY = re.compile(r'(?:^|[{,])(?:ip_)?family="(v4|v6|ipv4|ipv6)"')
 COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+# --- screen core (X-soak-screen). Identical in analyze_cr0.py and linux/collect.py;
+# test_screen.py fails if the two copies differ. Early warning only: it never
+# reads or changes the gate's inputs, window, bar or verdict.
+SCREEN_INPUT = re.compile(
+    r'^lodestar_(search_mmap_cache_entries|search_segments|mem_anon_mappings|mem_mimalloc_committed_bytes'
+    r'|fetch_held_bytes)(?:\{(index|size)="([a-z_0-9]{1,24})"\})? ([0-9]+(?:\.[0-9]+)?)\r?$')
+SCREEN_INDEXES = ("main", "files")
+
+
+def screen_inputs(values, text):
+    """One sample's screen inputs: {name: value}, a missing one left out."""
+    out = {}
+    for key, name in (("stored", "torrents"), ("fetch_pending", "fetch_pending")):
+        v = values.get(name)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+            out[key] = float(v)
+    for line in text.splitlines():
+        m = SCREEN_INPUT.fullmatch(line)
+        if not m:
+            continue
+        name, label, value, raw = m.groups()
+        key = {("search_mmap_cache_entries", "index"): "mmap_cache_entries",
+               ("search_segments", "index"): "segments",
+               ("mem_anon_mappings", "size"): "anon_mappings",
+               ("mem_mimalloc_committed_bytes", None): "mimalloc_committed_mib",
+               ("fetch_held_bytes", None): "fetch_held_mib"}.get((name, label))
+        if key is None or (label == "index" and value not in SCREEN_INDEXES):
+            continue
+        if label == "size":
+            if value != "128k_512k":
+                continue
+            key = "anon_mappings_128k_512k"
+        elif label == "index":
+            key = f"{key}[{value}]"
+        scale = 2**20 if key.endswith("_mib") else 1
+        out.setdefault(key, float(raw) / scale)
+    for index in SCREEN_INDEXES:
+        entries, segments = out.get(f"mmap_cache_entries[{index}]"), out.get(f"segments[{index}]")
+        if entries is not None and segments is not None:
+            out[f"mmap_cache_excess[{index}]"] = entries - SCREEN_FILES_PER_SEGMENT * segments
+    return out
+
+
+SCREEN_FILES_PER_SEGMENT = 8  # thresholds' in_run.files_per_segment; checked on load
+# Each in-run counter: (threshold key, kind, input). Growth is the OLS slope of the
+# input against stored torrents, per 1,000; a bound is the value at the checkpoint.
+SCREEN_COUNTERS = (
+    ("mmap_cache_entries_per_1000_stored", "growth", "mmap_cache_entries[]"),
+    ("mmap_cache_excess", "bound", "mmap_cache_excess[]"),
+    ("segments_per_1000_stored", "growth", "segments[]"),
+    ("segments", "bound", "segments[]"),
+    ("anon_mappings_128k_512k_per_1000_stored", "growth", "anon_mappings_128k_512k"),
+    ("anon_mappings_128k_512k", "bound", "anon_mappings_128k_512k"),
+    ("mimalloc_committed_mib_per_1000_stored", "growth", "mimalloc_committed_mib"),
+    ("mimalloc_committed_mib", "bound", "mimalloc_committed_mib"),
+    ("fetch_pending", "bound", "fetch_pending"),
+    ("fetch_held_mib", "bound", "fetch_held_mib"),
+)
+
+
+def screen_config(thresholds):
+    """The in-run part of a parsed thresholds file; ValueError if it isn't the schema."""
+    run = thresholds.get("in_run") if isinstance(thresholds, dict) else None
+    if (not isinstance(run, dict) or thresholds.get("schema_version") != 1
+            or run.get("files_per_segment") != SCREEN_FILES_PER_SEGMENT
+            or run.get("checkpoints_hours") != [3, 6, 12]):
+        raise ValueError("Unsupported screen thresholds")
+    for key in ("min_samples", "min_stored_spread", "checkpoint_tolerance_seconds"):
+        if not isinstance(run.get(key), (int, float)) or isinstance(run.get(key), bool) or run[key] <= 0:
+            raise ValueError(f"Invalid screen setting {key}")
+    counters = run.get("counters")
+    if not isinstance(counters, dict) or set(counters) != {c[0] for c in SCREEN_COUNTERS}:
+        raise ValueError("Screen counters don't match the screen")
+    for name, c in counters.items():
+        v = c.get("value") if isinstance(c, dict) else None
+        if (not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v)
+                or c.get("trips") != "above"):
+            raise ValueError(f"Invalid screen threshold {name}")
+    return run
+
+
+def screen_slope(pairs):
+    n = len(pairs)
+    mx, my = sum(x for x, _ in pairs) / n, sum(y for _, y in pairs) / n
+    sxx = sum((x - mx) ** 2 for x, _ in pairs)
+    return None if sxx == 0 else sum((x - mx) * (y - my) for x, y in pairs) / sxx
+
+
+def screen_checkpoint(points, last_hour, hour, run):
+    """One checkpoint. `points` are (baseline hours, inputs) of every usable baseline
+    sample of one process, in order; `last_hour` is the latest baseline row's hour,
+    usable or not. Only samples at or before `hour` count. A counter trips when its
+    value is strictly above its threshold."""
+    out = {"hour": hour, "status": "not_available", "counters": {}}
+    if last_hour is None or last_hour < hour:
+        out["reason"] = "not_reached"
+        return screen_line(out)
+    window = [(h, p) for h, p in points if h <= hour]
+    if not window or window[-1][0] < hour - run["checkpoint_tolerance_seconds"] / 3600:
+        out["reason"] = "no_sample_at_checkpoint"
+        return screen_line(out)
+    at = window[-1][1]
+    for name, kind, key in SCREEN_COUNTERS:
+        limit = run["counters"][name]["value"]
+        keys = ([(f"{name}[{i}]", key.replace("[]", f"[{i}]")) for i in SCREEN_INDEXES]
+                if key.endswith("[]") else [(name, key)])
+        for label, k in keys:
+            r = {"kind": kind, "threshold": limit, "value": None}
+            if not any(k in p for _, p in window):
+                r["status"] = "absent"
+            elif kind == "bound":
+                r["value"] = at.get(k)
+                r["status"] = "absent_at_checkpoint" if r["value"] is None else (
+                    "trip" if r["value"] > limit else "ok")
+            else:
+                pairs = [(p["stored"] / 1000, p[k]) for _, p in window if k in p and "stored" in p]
+                stored = [x * 1000 for x, _ in pairs]
+                if len(pairs) < run["min_samples"]:
+                    r["status"] = "too_few_samples"
+                elif max(stored) - min(stored) < run["min_stored_spread"]:
+                    r["status"] = "too_little_stored"
+                else:
+                    r["value"] = screen_slope(pairs)
+                    r["status"] = "trip" if r["value"] > limit else "ok"
+            out["counters"][label] = r
+    states = [(n, r["status"]) for n, r in out["counters"].items()]
+    trips = [n for n, s in states if s == "trip"]
+    if trips:
+        out.update(status="trip", counter=trips[0])
+    elif all(s == "ok" for _, s in states):
+        out["status"] = "ok"
+    else:
+        out["reason"] = next(f"{s}:{n}" for n, s in states if s != "ok")
+    return screen_line(out)
+
+
+def screen_line(out):
+    if out["status"] == "trip":
+        r = out["counters"][out["counter"]]
+        out["line"] = f"trip({out['counter']}, {r['value']:.2f}, {r['threshold']:g})"
+    elif out["status"] == "ok":
+        out["line"] = "ok"
+    else:
+        out["line"] = f"not_available({out['reason']})"
+    return out
+
+
+def screen_overall(checkpoints):
+    """The run so far: the first trip, else ok when every reached checkpoint is ok."""
+    reached = [c for c in checkpoints if c.get("reason") != "not_reached"]
+    trip = next((c for c in reached if c["status"] == "trip"), None)
+    if trip:
+        return {"status": "trip", "line": trip["line"], "hour": trip["hour"]}
+    if reached and all(c["status"] == "ok" for c in reached):
+        return {"status": "ok", "line": "ok"}
+    first = next((c for c in reached if c["status"] != "ok"), None)
+    reason = first["reason"] if first else "not_reached"
+    return {"status": "not_available", "line": f"not_available({reason})"}
+# --- end of screen core
+
+
+SCREEN_HOURS = (3, 6, 12)
+
+
+def default_screen_thresholds():
+    """docs/soak/screen-thresholds.json beside this checkout's copy, if there is one."""
+    parents = Path(os.path.abspath(__file__)).parents
+    path = parents[2] / "screen-thresholds.json" if len(parents) > 2 else None
+    return str(path) if path is not None and path.is_file() else None
 
 
 def utc_now():
@@ -1295,6 +1470,13 @@ class Collector:
                                  "use a loopback or private --url.")
             if os.stat(a.password_file).st_mode & 0o077:
                 raise SystemExit("--password-file must be readable by its owner only (chmod 600).")
+        self.screen_bytes = self.screen_run = None
+        if getattr(a, "screen_thresholds", None):
+            try:
+                self.screen_bytes = Path(a.screen_thresholds).read_bytes()
+                self.screen_run = screen_config(json.loads(self.screen_bytes.decode("utf-8")))
+            except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+                raise SystemExit("--screen-thresholds must name a valid screen thresholds file.") from None
         if self.root.exists() and (not self.root.is_dir() or any(self.root.iterdir())):
             raise SystemExit("Run directory is not empty; use a fresh directory.")
         if (a.stop and self.instance.kind == "native" and self.instance.real_signals
@@ -1415,6 +1597,9 @@ class Collector:
                 if identity is not None:
                     identity["config_file"] = self.config_file
                 run["config"] = identity
+        if self.screen_bytes is not None:  # frozen with the run; the analyzer checks the hash
+            self.write(self.root / "screen-thresholds.json", self.screen_bytes.decode("utf-8"))
+            run["screen_thresholds_sha256"] = hashlib.sha256(self.screen_bytes).hexdigest()
         self.run = {k: v for k, v in run.items() if v is not None}
         self.save(self.run, self.root / "run.json")
         write_text(self.root / "samples.jsonl", "")  # the analyzer requires it even if no sample lands
@@ -1651,12 +1836,16 @@ class Collector:
                         if self.kind != "comparator":
                             row["api"] = self.api_checks(values["start_time_seconds"], stamp)
                 self.write(self.root / "samples.jsonl", dumps(row), append=True)
+                if phase == "baseline" and getattr(self, "screen_run", None) is not None:
+                    self.screen_step(row, snapshot if metrics_ok and self.kind != "comparator" else "")
                 shown = row
                 if self.spec:  # rule 6.11: progress and checks only, never counts or rates
                     shown = {k: v for k, v in row.items()
                              if k not in ("values", "net", "api", "ip_family_counters", "volumes")}
                     shown["window"] = {"opened": self.suppression_end_at is not None,
                                        "boundaries_passed": next_k, "hours": a.baseline_hours}
+                if getattr(self, "screen_results", None):
+                    shown = dict(shown, screen=screen_overall(self.screen_results)["line"])
                 self.save({"state": "running", "phase": phase, "sample": self.sample, "latest": shown,
                            **self.memory_evidence(),
                            "suppression_ended": self.suppression_end_at, "baseline_started": self.baseline_start,
@@ -1690,6 +1879,34 @@ class Collector:
         finally:
             self.finish(status_path, started)
         return self.exit_code()
+
+    def screen_step(self, row, text):
+        """X-soak-screen at baseline hours 3, 6 and 12: written to screen.json and the
+        event log. A trip asks the owner to stop and investigate; it never stops the
+        run or changes the gate."""
+        if not hasattr(self, "screen_results"):
+            self.screen_t0, self.screen_points, self.screen_results = row["elapsed_seconds"], [], []
+        hour = (row["elapsed_seconds"] - self.screen_t0) / 3600
+        if row["metrics_ok"]:
+            self.screen_points.append((hour, screen_inputs(row["values"], text)))
+        for h in SCREEN_HOURS:
+            if hour < h or any(r["hour"] == h for r in self.screen_results):
+                continue
+            result = screen_checkpoint(self.screen_points, hour, h, self.screen_run)
+            recorded = self.run.get("screen_thresholds_sha256")
+            try:
+                now = {hashlib.sha256(Path(p).read_bytes()).hexdigest()
+                       for p in (self.args.screen_thresholds, self.root / "screen-thresholds.json")}
+            except OSError:
+                now = set()
+            result["thresholds_changed"] = now != {recorded}
+            self.screen_results.append(result)
+            self.save({"informational": True, "never_a_pass": True, "thresholds_sha256": recorded,
+                       "overall": screen_overall(self.screen_results), "checkpoints": self.screen_results},
+                      self.root / "screen.json")
+            self.note(f"screen baseline hour {h}: {result['line']}"
+                      + ("; thresholds file changed since start" if result["thresholds_changed"] else "")
+                      + ("; stop and investigate" if result["status"] == "trip" else ""))
 
     def api_checks(self, start_time, stamp):
         """Rule 5.5: imports and preset changes since the process started, and the
@@ -1833,6 +2050,9 @@ def build_parser():
     p.add_argument("--require-gluetun", action="store_true", help="Refuse to start unless gluetun is the network parent")
     p.add_argument("--intensity", choices=("low", "balanced", "aggressive"),
                    help="The intensity preset Lodestar runs at, recorded in run.json for the analyzer")
+    p.add_argument("--screen-thresholds", default=default_screen_thresholds(),
+                   help="X-soak-screen thresholds, frozen into the run (default: docs/soak/screen-thresholds.json "
+                        "beside this checkout, if present)")
     p.add_argument("--user-timezone", default="UTC")
     p.add_argument("--tick-seconds", type=float, default=1.0, help=argparse.SUPPRESS)
     return p

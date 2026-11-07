@@ -1409,6 +1409,16 @@ fn render_memory(o: &mut Out, m: &crate::memstats::Snapshot) {
             o.one(name, "gauge", help, v);
         }
     }
+    if let Some(counts) = m.anon_mappings {
+        o.family(
+            "mem_anon_mappings",
+            "gauge",
+            "Anonymous mappings outside allocator arenas, by size class, sampled; Linux only.",
+        );
+        for ((_, class), n) in crate::memstats::MAPPING_CLASSES.iter().zip(counts) {
+            o.value("mem_anon_mappings", &format!("size=\"{class}\""), n);
+        }
+    }
 }
 
 /// Stored filter rows the engine couldn't read, by kind: rules,
@@ -1567,9 +1577,24 @@ mod tests {
             rss_anon: Some(515_899_392),
             rss_file: Some(0),
             anon_huge: None,
+            anon_mappings: Some([3, 2085, 0, 34]),
         });
         let mut out = String::new();
         render_storage(&mut out, &g);
+        assert_eq!(
+            out.matches("# TYPE lodestar_mem_anon_mappings gauge\n")
+                .count(),
+            1,
+            "{out}"
+        );
+        for line in [
+            "lodestar_mem_anon_mappings{size=\"lt_128k\"} 3\n",
+            "lodestar_mem_anon_mappings{size=\"128k_512k\"} 2085\n",
+            "lodestar_mem_anon_mappings{size=\"512k_2m\"} 0\n",
+            "lodestar_mem_anon_mappings{size=\"ge_2m\"} 34\n",
+        ] {
+            assert_eq!(out.matches(line).count(), 1, "{line}: {out}");
+        }
         for family in MEMORY_FAMILIES {
             let ty = format!("# TYPE lodestar_{family} gauge\n");
             let want = usize::from(
@@ -1592,7 +1617,10 @@ mod tests {
     #[test]
     fn memory_and_segment_families_are_documented() {
         let doc = include_str!("../../../docs/metrics.md");
-        for family in MEMORY_FAMILIES.iter().chain(&["search_segments"]) {
+        for family in MEMORY_FAMILIES
+            .iter()
+            .chain(&["search_segments", "mem_anon_mappings"])
+        {
             let row = format!("| `{family}");
             assert!(
                 doc.lines().any(|l| l.starts_with(&row)),

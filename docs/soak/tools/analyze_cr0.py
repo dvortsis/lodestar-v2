@@ -2,6 +2,7 @@
 """Read aggregate CR-0 collector evidence; never contact or modify the crawler."""
 
 import argparse
+import hashlib
 from datetime import datetime, timezone
 from collections import Counter
 import json
@@ -131,6 +132,167 @@ MEMORY_SERIES = re.compile(
     r"^lodestar_(" + "|".join(MEMORY_GAUGES) + r") ([0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\r?$")
 
 
+# --- screen core (X-soak-screen). Identical in analyze_cr0.py and linux/collect.py;
+# test_screen.py fails if the two copies differ. Early warning only: it never
+# reads or changes the gate's inputs, window, bar or verdict.
+SCREEN_INPUT = re.compile(
+    r'^lodestar_(search_mmap_cache_entries|search_segments|mem_anon_mappings|mem_mimalloc_committed_bytes'
+    r'|fetch_held_bytes)(?:\{(index|size)="([a-z_0-9]{1,24})"\})? ([0-9]+(?:\.[0-9]+)?)\r?$')
+SCREEN_INDEXES = ("main", "files")
+
+
+def screen_inputs(values, text):
+    """One sample's screen inputs: {name: value}, a missing one left out."""
+    out = {}
+    for key, name in (("stored", "torrents"), ("fetch_pending", "fetch_pending")):
+        v = values.get(name)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+            out[key] = float(v)
+    for line in text.splitlines():
+        m = SCREEN_INPUT.fullmatch(line)
+        if not m:
+            continue
+        name, label, value, raw = m.groups()
+        key = {("search_mmap_cache_entries", "index"): "mmap_cache_entries",
+               ("search_segments", "index"): "segments",
+               ("mem_anon_mappings", "size"): "anon_mappings",
+               ("mem_mimalloc_committed_bytes", None): "mimalloc_committed_mib",
+               ("fetch_held_bytes", None): "fetch_held_mib"}.get((name, label))
+        if key is None or (label == "index" and value not in SCREEN_INDEXES):
+            continue
+        if label == "size":
+            if value != "128k_512k":
+                continue
+            key = "anon_mappings_128k_512k"
+        elif label == "index":
+            key = f"{key}[{value}]"
+        scale = 2**20 if key.endswith("_mib") else 1
+        out.setdefault(key, float(raw) / scale)
+    for index in SCREEN_INDEXES:
+        entries, segments = out.get(f"mmap_cache_entries[{index}]"), out.get(f"segments[{index}]")
+        if entries is not None and segments is not None:
+            out[f"mmap_cache_excess[{index}]"] = entries - SCREEN_FILES_PER_SEGMENT * segments
+    return out
+
+
+SCREEN_FILES_PER_SEGMENT = 8  # thresholds' in_run.files_per_segment; checked on load
+# Each in-run counter: (threshold key, kind, input). Growth is the OLS slope of the
+# input against stored torrents, per 1,000; a bound is the value at the checkpoint.
+SCREEN_COUNTERS = (
+    ("mmap_cache_entries_per_1000_stored", "growth", "mmap_cache_entries[]"),
+    ("mmap_cache_excess", "bound", "mmap_cache_excess[]"),
+    ("segments_per_1000_stored", "growth", "segments[]"),
+    ("segments", "bound", "segments[]"),
+    ("anon_mappings_128k_512k_per_1000_stored", "growth", "anon_mappings_128k_512k"),
+    ("anon_mappings_128k_512k", "bound", "anon_mappings_128k_512k"),
+    ("mimalloc_committed_mib_per_1000_stored", "growth", "mimalloc_committed_mib"),
+    ("mimalloc_committed_mib", "bound", "mimalloc_committed_mib"),
+    ("fetch_pending", "bound", "fetch_pending"),
+    ("fetch_held_mib", "bound", "fetch_held_mib"),
+)
+
+
+def screen_config(thresholds):
+    """The in-run part of a parsed thresholds file; ValueError if it isn't the schema."""
+    run = thresholds.get("in_run") if isinstance(thresholds, dict) else None
+    if (not isinstance(run, dict) or thresholds.get("schema_version") != 1
+            or run.get("files_per_segment") != SCREEN_FILES_PER_SEGMENT
+            or run.get("checkpoints_hours") != [3, 6, 12]):
+        raise ValueError("Unsupported screen thresholds")
+    for key in ("min_samples", "min_stored_spread", "checkpoint_tolerance_seconds"):
+        if not isinstance(run.get(key), (int, float)) or isinstance(run.get(key), bool) or run[key] <= 0:
+            raise ValueError(f"Invalid screen setting {key}")
+    counters = run.get("counters")
+    if not isinstance(counters, dict) or set(counters) != {c[0] for c in SCREEN_COUNTERS}:
+        raise ValueError("Screen counters don't match the screen")
+    for name, c in counters.items():
+        v = c.get("value") if isinstance(c, dict) else None
+        if (not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v)
+                or c.get("trips") != "above"):
+            raise ValueError(f"Invalid screen threshold {name}")
+    return run
+
+
+def screen_slope(pairs):
+    n = len(pairs)
+    mx, my = sum(x for x, _ in pairs) / n, sum(y for _, y in pairs) / n
+    sxx = sum((x - mx) ** 2 for x, _ in pairs)
+    return None if sxx == 0 else sum((x - mx) * (y - my) for x, y in pairs) / sxx
+
+
+def screen_checkpoint(points, last_hour, hour, run):
+    """One checkpoint. `points` are (baseline hours, inputs) of every usable baseline
+    sample of one process, in order; `last_hour` is the latest baseline row's hour,
+    usable or not. Only samples at or before `hour` count. A counter trips when its
+    value is strictly above its threshold."""
+    out = {"hour": hour, "status": "not_available", "counters": {}}
+    if last_hour is None or last_hour < hour:
+        out["reason"] = "not_reached"
+        return screen_line(out)
+    window = [(h, p) for h, p in points if h <= hour]
+    if not window or window[-1][0] < hour - run["checkpoint_tolerance_seconds"] / 3600:
+        out["reason"] = "no_sample_at_checkpoint"
+        return screen_line(out)
+    at = window[-1][1]
+    for name, kind, key in SCREEN_COUNTERS:
+        limit = run["counters"][name]["value"]
+        keys = ([(f"{name}[{i}]", key.replace("[]", f"[{i}]")) for i in SCREEN_INDEXES]
+                if key.endswith("[]") else [(name, key)])
+        for label, k in keys:
+            r = {"kind": kind, "threshold": limit, "value": None}
+            if not any(k in p for _, p in window):
+                r["status"] = "absent"
+            elif kind == "bound":
+                r["value"] = at.get(k)
+                r["status"] = "absent_at_checkpoint" if r["value"] is None else (
+                    "trip" if r["value"] > limit else "ok")
+            else:
+                pairs = [(p["stored"] / 1000, p[k]) for _, p in window if k in p and "stored" in p]
+                stored = [x * 1000 for x, _ in pairs]
+                if len(pairs) < run["min_samples"]:
+                    r["status"] = "too_few_samples"
+                elif max(stored) - min(stored) < run["min_stored_spread"]:
+                    r["status"] = "too_little_stored"
+                else:
+                    r["value"] = screen_slope(pairs)
+                    r["status"] = "trip" if r["value"] > limit else "ok"
+            out["counters"][label] = r
+    states = [(n, r["status"]) for n, r in out["counters"].items()]
+    trips = [n for n, s in states if s == "trip"]
+    if trips:
+        out.update(status="trip", counter=trips[0])
+    elif all(s == "ok" for _, s in states):
+        out["status"] = "ok"
+    else:
+        out["reason"] = next(f"{s}:{n}" for n, s in states if s != "ok")
+    return screen_line(out)
+
+
+def screen_line(out):
+    if out["status"] == "trip":
+        r = out["counters"][out["counter"]]
+        out["line"] = f"trip({out['counter']}, {r['value']:.2f}, {r['threshold']:g})"
+    elif out["status"] == "ok":
+        out["line"] = "ok"
+    else:
+        out["line"] = f"not_available({out['reason']})"
+    return out
+
+
+def screen_overall(checkpoints):
+    """The run so far: the first trip, else ok when every reached checkpoint is ok."""
+    reached = [c for c in checkpoints if c.get("reason") != "not_reached"]
+    trip = next((c for c in reached if c["status"] == "trip"), None)
+    if trip:
+        return {"status": "trip", "line": trip["line"], "hour": trip["hour"]}
+    if reached and all(c["status"] == "ok" for c in reached):
+        return {"status": "ok", "line": "ok"}
+    first = next((c for c in reached if c["status"] != "ok"), None)
+    reason = first["reason"] if first else "not_reached"
+    return {"status": "not_available", "line": f"not_available({reason})"}
+# --- end of screen core
+
+
 def parse_search(text):
     """CR-COL-4: the commit counter and the per-index mmap-cache gauge, if present.
 
@@ -202,11 +364,13 @@ def load_rows(root, issues):
                     text = prom.read_text(encoding="utf-8-sig")
                     row["search"] = parse_search(text)
                     row["memory"] = parse_memory(text)
+                    row["screen"] = screen_inputs(values, text)
                 except (ValueError, OSError):
                     issues["invalid_prom_snapshots"] += 1
                     # Keep the collector's JSON values, not partial Prom data.
             else:
                 issues["missing_prom_snapshots"] += 1
+        row.setdefault("screen", screen_inputs(values, ""))
         rows.append(row)
     return rows
 
@@ -778,7 +942,83 @@ def gate_verdict(identity_, covered_seconds):
     return not reasons, reasons
 
 
-def analyze(root, max_gap=90, now=None, intensity=None, allocator=None):
+SCREEN_THRESHOLDS = Path(__file__).resolve().parent.parent / "screen-thresholds.json"
+
+
+def screen_thresholds(root, run, current):
+    """The thresholds the screen judges by: the run's frozen copy when the collector
+    recorded one (and its hash still matches), else `current` (the checked-in file).
+    Returns (provenance, config or None, reason when None)."""
+    digest = lambda data: hashlib.sha256(data).hexdigest()
+    now = current.read_bytes() if current is not None and current.is_file() else None
+    out = {"source": None, "sha256": None, "recorded_sha256": None, "changed_since_start": None}
+    recorded = run.get("screen_thresholds_sha256")
+    if isinstance(recorded, str) and re.fullmatch(r"[0-9a-f]{64}", recorded):
+        out["recorded_sha256"] = recorded
+        copy = root / "screen-thresholds.json"
+        data = copy.read_bytes() if copy.is_file() else None
+        if data is None:
+            return out, None, "thresholds_missing"
+        if digest(data) != recorded:
+            return out, None, "thresholds_modified"
+        out["source"] = "frozen_with_run"
+        out["changed_since_start"] = None if now is None else digest(now) != recorded
+    elif now is not None:
+        data, out["source"] = now, "analyzer_not_frozen"
+    else:
+        return out, None, "no_thresholds"
+    out["sha256"] = digest(data)
+    try:
+        return out, screen_config(json.loads(data.decode("utf-8"))), None
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return out, None, "invalid_thresholds"
+
+
+def screen_report(root, run, rows, current=SCREEN_THRESHOLDS):
+    """X-soak-screen, apart from the gate: baseline hours 3, 6 and 12."""
+    provenance, config, reason = screen_thresholds(root, run, current)
+    baseline = [r for r in rows if r["phase"] == "baseline"]
+    hours = [3, 6, 12]
+    if config is None or not baseline:
+        reason = reason or "no_baseline"
+        checkpoints = [screen_line({"hour": h, "status": "not_available", "reason": reason, "counters": {}})
+                       for h in hours]
+    else:
+        t0 = baseline[0]["elapsed_seconds"]
+        timed = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
+        points = [(h, r["screen"]) for h, r in timed if usable(r)]
+        checkpoints = []
+        for hour in hours:
+            # The gate's identity check, over the rows up to this checkpoint.
+            upto = [r for h, r in timed if h <= hour]
+            ids = ({r["process_id"] for r in upto}, {r.get("process_identity") for r in upto},
+                   {identity(r)[1] for r in upto if usable(r)})
+            if any(len(i) > 1 for i in ids):
+                checkpoints.append(screen_line({"hour": hour, "status": "not_available",
+                                                "reason": "identity_change", "counters": {}}))
+            else:
+                checkpoints.append(screen_checkpoint(points, timed[-1][0], hour, config))
+    return {"informational": True, "never_a_pass": True, "thresholds": provenance,
+            "overall": screen_overall(checkpoints), "checkpoints": checkpoints}
+
+
+def screen_markdown(screen):
+    t = screen["thresholds"]
+    frozen = {"frozen_with_run": "frozen with the run", "analyzer_not_frozen":
+              "the checked-in file: this run recorded none, so they aren't frozen", None: "none usable"}[t["source"]]
+    out = ["", "## Screen (early warning, never a pass)", "",
+           f"screen: {screen['overall']['line']}", ""]
+    out += [f"- Baseline hour {c['hour']}: {c['line']}" for c in screen["checkpoints"]]
+    out += ["", f"Thresholds: {frozen}" + (f", sha256 `{t['sha256']}`" if t["sha256"] else "") + "."]
+    if t["changed_since_start"]:
+        out.append("The checked-in thresholds file has changed since this run started; the frozen copy is used.")
+    out += ["", "A trip means stop and investigate; the owner stops the run. ok never means the gate passed: "
+            "the memory gate above is the only verdict."]
+    return out
+
+
+def analyze(root, max_gap=90, now=None, intensity=None, allocator=None, screen=True,
+            screen_current=SCREEN_THRESHOLDS):
     run = read_json(root / "run.json")
     if not isinstance(run.get("settings", {}), dict):
         raise ValueError("Invalid run settings")
@@ -838,7 +1078,7 @@ def analyze(root, max_gap=90, now=None, intensity=None, allocator=None):
     evidence, reasons = gate_verdict(run_info, baseline["valid_interval_seconds"])
     run_info.update(baseline_measured_hours=baseline["valid_interval_seconds"] / 3600,
                     gate_evidence=evidence, gate_evidence_reasons=reasons)
-    return {
+    report = {
         "run": run_info,
         "schema_version": 2, "provenance": provenance, "intensity": intensity,
         "run_state": result_state(result),
@@ -873,6 +1113,9 @@ def analyze(root, max_gap=90, now=None, intensity=None, allocator=None):
             "Final shutdown metrics have no monotonic sample timestamp and are excluded from rates.",
         ],
     }
+    if screen:  # its own key, added last: nothing above reads it
+        report["screen"] = screen_report(root, run, rows, screen_current)
+    return report
 
 
 ATTRIBUTION_LABELS = {
@@ -1032,6 +1275,8 @@ def markdown(report):
         for name, b in p["bounds"].items():
             out.append(f"| {name} | {fmt(b['max'])} | {b['limit']} | {b['at_capacity_samples']} | {b['over_capacity_samples']} |")
     out += ["", "## Interpretation", ""] + [f"- {s}" for s in report["limitations"]]
+    if "screen" in report:  # after everything else, so the gate's lines are unchanged
+        out += screen_markdown(report["screen"])
     return "\n".join(out) + "\n"
 
 
@@ -1046,6 +1291,10 @@ def main():
     parser.add_argument("--c-allocator", choices=C_ALLOCATORS,
                         help="Who serves C's malloc, for the memory attribution only "
                              "(default: from run.json's build_target; unknown without one)")
+    parser.add_argument("--no-screen", action="store_true",
+                        help="Leave out the early-warning screen (it never changes the gate)")
+    parser.add_argument("--screen-thresholds", type=Path, default=SCREEN_THRESHOLDS,
+                        help="The checked-in thresholds, for runs without a frozen copy")
     args = parser.parse_args()
     if not math.isfinite(args.max_gap_seconds) or args.max_gap_seconds <= 0:
         parser.error("--max-gap-seconds must be positive and finite")
@@ -1053,7 +1302,8 @@ def main():
         parser.error("Report output must be outside the evidence directory")
     try:
         report = analyze(args.root, args.max_gap_seconds, intensity=args.intensity,
-                         allocator=args.c_allocator)
+                         allocator=args.c_allocator, screen=not args.no_screen,
+                         screen_current=args.screen_thresholds)
         rendered = (json.dumps(report, indent=2, allow_nan=False) + "\n"
                     if args.format == "json" else markdown(report))
         if args.output:

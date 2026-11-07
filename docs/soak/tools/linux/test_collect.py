@@ -1035,7 +1035,7 @@ class PublicationTests(Base):
         c = self.collector(instance, "--stop")
         c.run()
         expected = {"run.json", "samples.jsonl", "status.json", "result.json", "disk.jsonl", "events.log",
-                    "collector.py", "baseline-start.prom", "metrics"}
+                    "collector.py", "baseline-start.prom", "metrics", "screen-thresholds.json"}
         self.assertEqual({p.name for p in self.root.iterdir()}, expected)
         self.assertEqual([p for p in self.root.rglob("*") if p.name.endswith(".tmp")], [])
         for path in self.root.rglob("*"):
@@ -1228,3 +1228,82 @@ class PublicationTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScreenTests(Base):
+    """X-soak-screen in the collector: the thresholds frozen with the run, checkpoints
+    at baseline hours 3, 6 and 12 in screen.json and the event log, never a stop."""
+
+    def thresholds(self, **changes):
+        data = json.loads((HERE.parent.parent / "screen-thresholds.json").read_text())
+        # One stored torrent a minute and a sample every 10 min in this fake.
+        data["in_run"].update(min_samples=5, min_stored_spread=50, **changes)
+        path = self.tmp / "thresholds.json"
+        path.write_text(json.dumps(data))
+        return path
+
+    def screened(self, mappings_per_hour, path):
+        def metrics(t):
+            extra = "".join(f"lodestar_{k} {v:.0f}\n" for k, v in {
+                'search_mmap_cache_entries{index="main"}': 20, 'search_mmap_cache_entries{index="files"}': 60,
+                'search_segments{index="main"}': 4, 'search_segments{index="files"}': 12,
+                'mem_anon_mappings{size="128k_512k"}': 2 + mappings_per_hour * t / 3600,
+                "mem_mimalloc_committed_bytes": 568 * 2**20, "fetch_held_bytes": 2**24}.items())
+            return 200, metrics_text(t, extra=extra).encode()
+        self.lodestar.metrics = metrics
+        c = self.collector(self.docker(), "--screen-thresholds", str(path), "--sample-seconds", "600",
+                           "--tick-seconds", "30", baseline_hours=12.2)
+        return c, c.run()
+
+    def test_a_trip_is_written_and_never_stops_the_run(self):
+        path = self.thresholds()
+        c, rc = self.screened(360, path)  # 6 per stored torrent
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.result()["reason"], "baseline_window_complete")
+        run = json.loads((self.root / "run.json").read_text())
+        digest = collect.hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(run["screen_thresholds_sha256"], digest)
+        self.assertEqual((self.root / "screen-thresholds.json").read_bytes(), path.read_bytes())
+        screen = json.loads((self.root / "screen.json").read_text())
+        self.assertTrue(screen["never_a_pass"])
+        self.assertEqual([c["hour"] for c in screen["checkpoints"]], [3, 6, 12])
+        for checkpoint in screen["checkpoints"]:
+            self.assertEqual(checkpoint["counter"], "anon_mappings_128k_512k_per_1000_stored")
+            self.assertFalse(checkpoint["thresholds_changed"])
+        events = (self.root / "events.log").read_text()
+        self.assertIn("screen baseline hour 3: trip(anon_mappings_128k_512k_per_1000_stored, 6000.00, 20); "
+                      "stop and investigate", events)
+        # The analyzer reads the same evidence to the same checkpoints.
+        report = analyze_cr0.analyze(self.root, now=self.clock.now(), screen_current=path)
+        self.assertEqual(report["screen"]["thresholds"]["source"], "frozen_with_run")
+        self.assertEqual(report["screen"]["checkpoints"],
+                         [{k: v for k, v in c.items() if k != "thresholds_changed"} for c in screen["checkpoints"]])
+
+    def test_a_clean_run_is_ok_at_every_checkpoint(self):
+        self.screened(0, self.thresholds())
+        screen = json.loads((self.root / "screen.json").read_text())
+        self.assertEqual([c["line"] for c in screen["checkpoints"]], ["ok", "ok", "ok"])
+        self.assertIn("screen baseline hour 12: ok", (self.root / "events.log").read_text())
+
+    def test_a_thresholds_file_changed_mid_run_is_flagged(self):
+        path = self.thresholds()
+        self.clock.at(6 * 3600, lambda: path.write_text(path.read_text().replace('"value": 512', '"value": 9999')))
+        self.screened(0, path)
+        screen = json.loads((self.root / "screen.json").read_text())
+        self.assertEqual([c["thresholds_changed"] for c in screen["checkpoints"]], [False, True, True])
+        self.assertIn("thresholds file changed since start", (self.root / "events.log").read_text())
+        report = analyze_cr0.analyze(self.root, now=self.clock.now(), screen_current=path)
+        self.assertIs(report["screen"]["thresholds"]["changed_since_start"], True)
+
+    def test_without_thresholds_there_is_no_screen_and_an_invalid_file_is_refused(self):
+        c = self.collector(self.docker(), "--screen-thresholds", "")
+        c.run()
+        self.assertNotIn("screen_thresholds_sha256", json.loads((self.root / "run.json").read_text()))
+        self.assertFalse((self.root / "screen.json").exists())
+        bad = self.tmp / "bad.json"
+        bad.write_text('{"schema_version": 1}')
+        self.root = self.tmp / "run2"
+        with self.assertRaises(SystemExit) as refused:
+            self.collector(self.docker(), "--screen-thresholds", str(bad)).run()
+        self.assertIn("screen thresholds", str(refused.exception.code))
+        self.assertFalse(self.root.exists() and any(self.root.iterdir()))

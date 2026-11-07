@@ -9,8 +9,10 @@
 //! - **SQLite**, which counts its own heap: `sqlite3_memory_used` and its
 //!   high-water mark, through `lodestar_store::memstats`.
 //! - **The kernel's view** (Linux only): `RssAnon` and `RssFile` from
-//!   `/proc/self/status`, and `AnonHugePages` from
-//!   `/proc/self/smaps_rollup`.
+//!   `/proc/self/status`, `AnonHugePages` from `/proc/self/smaps_rollup`,
+//!   and the anonymous mappings outside the allocator's arenas by size
+//!   class from `/proc/self/maps` (X-soak-screen: soak r4's growth was in
+//!   128-512 KiB ones; [`anon_mappings`]).
 //!
 //! Where C code (SQLite, zstd) allocates depends on the build
 //! (`docs/metrics.md`, "Memory attribution"):
@@ -42,8 +44,10 @@
 //! **Cost per sample:** the SQLite reads take its memory-statistics mutex
 //! for one load each. mimalloc copies its statistics block and formats
 //! about 15 KB of JSON (mimalloc-allocated, freed at once), then this
-//! parses it: about 0.2 ms, measured in the decision. The two `/proc` reads
-//! are small text files; `smaps_rollup` walks the process's mappings in
+//! parses it: about 0.2 ms, measured in the decision. `status` is a small
+//! text file; `maps` is one line per mapping, read line by line, and costs
+//! what `docs/decisions/2026-11-07-X-soak-screen.md` measures at about
+//! 3,000 mappings; `smaps_rollup` walks the process's mappings in
 //! the kernel, which is why it runs on the 60 s sampler and never in a
 //! scrape. None of it takes a lock of the search index, the store or the
 //! writer.
@@ -63,7 +67,28 @@ pub struct Gauges {
     rss_anon: AtomicU64,
     rss_file: AtomicU64,
     anon_huge: AtomicU64,
+    anon_mappings: [AtomicU64; MAPPING_CLASSES.len()],
 }
+
+/// The size classes of the anonymous-mapping gauge, by the kernel's own
+/// mapping size: each class's upper bound (exclusive) and label, the last
+/// unbounded. The same classes as `bench/examples/mem-cheap.rs`, with its
+/// two largest joined.
+pub const MAPPING_CLASSES: [(u64, &str); 4] = [
+    (128 << 10, "lt_128k"),
+    (512 << 10, "128k_512k"),
+    (2 << 20, "512k_2m"),
+    (u64::MAX, "ge_2m"),
+];
+
+/// A run of adjacent anonymous mappings at least this big is taken to be
+/// an allocator arena (mimalloc reserves 1 GiB at a time) and isn't
+/// counted, as `mem-cheap` decides it.
+const ARENA_MIN: u64 = 256 << 20;
+
+/// More lines than this and the read gives up (absent): the kernel's
+/// default `vm.max_map_count` is 65,530, so this bounds the sample's cost.
+const MAX_MAPPINGS: usize = 1 << 17;
 
 impl Default for Gauges {
     fn default() -> Gauges {
@@ -75,6 +100,7 @@ impl Default for Gauges {
             rss_anon: AtomicU64::new(ABSENT),
             rss_file: AtomicU64::new(ABSENT),
             anon_huge: AtomicU64::new(ABSENT),
+            anon_mappings: std::array::from_fn(|_| AtomicU64::new(ABSENT)),
         }
     }
 }
@@ -89,6 +115,8 @@ pub struct Snapshot {
     pub rss_anon: Option<u64>,
     pub rss_file: Option<u64>,
     pub anon_huge: Option<u64>,
+    /// Anonymous mappings outside the arenas, by [`MAPPING_CLASSES`].
+    pub anon_mappings: Option<[u64; MAPPING_CLASSES.len()]>,
 }
 
 impl Gauges {
@@ -102,6 +130,10 @@ impl Gauges {
             rss_anon: get(&self.rss_anon),
             rss_file: get(&self.rss_file),
             anon_huge: get(&self.anon_huge),
+            anon_mappings: {
+                let v: Vec<u64> = self.anon_mappings.iter().filter_map(get).collect();
+                v.try_into().ok()
+            },
         }
     }
 
@@ -121,6 +153,10 @@ impl Gauges {
             // so it never reads as absent.
             gauge.store(v.map_or(ABSENT, |v| v.min(ABSENT - 1)), Ordering::Relaxed);
         }
+        for (i, gauge) in self.anon_mappings.iter().enumerate() {
+            let v = s.anon_mappings.map(|m| m[i].min(ABSENT - 1));
+            gauge.store(v.unwrap_or(ABSENT), Ordering::Relaxed);
+        }
     }
 }
 
@@ -132,6 +168,12 @@ pub fn sample(g: &Gauges) {
 fn read() -> Snapshot {
     let (mimalloc_committed, mimalloc_peak_committed) = mimalloc_commit();
     let (rss_anon, rss_file, anon_huge) = proc_self();
+    #[cfg(target_os = "linux")]
+    let anon_mappings = std::fs::File::open("/proc/self/maps")
+        .ok()
+        .and_then(|f| anon_mappings(std::io::BufReader::with_capacity(64 << 10, f)));
+    #[cfg(not(target_os = "linux"))]
+    let anon_mappings = None;
     Snapshot {
         mimalloc_committed,
         mimalloc_peak_committed,
@@ -140,7 +182,75 @@ fn read() -> Snapshot {
         rss_anon,
         rss_file,
         anon_huge,
+        anon_mappings,
     }
+}
+
+/// Anonymous mappings outside allocator arenas, by [`MAPPING_CLASSES`],
+/// from `/proc/<pid>/maps` text.
+///
+/// A mapping is anonymous when its inode is 0 and it has no path (so not
+/// `[heap]`, `[stack]` or a named one). Adjacent anonymous mappings form a
+/// run, whatever their permissions; a run spanning [`ARENA_MIN`] or more is
+/// an arena and none of its mappings count. Of the rest, only mappings
+/// that can be read, written or run count: a `---p` one is a guard page or
+/// reserved address space, not memory. Read one line at a time, so the
+/// cost is one line buffer whatever the count. `None` (absent) for any
+/// line that doesn't parse, a read error, or more than [`MAX_MAPPINGS`]
+/// lines: an odd file is absent, never a partial count.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn anon_mappings(maps: impl std::io::BufRead) -> Option<[u64; MAPPING_CLASSES.len()]> {
+    let mut total = [0u64; MAPPING_CLASSES.len()];
+    let mut run = total;
+    let mut span: Option<(u64, u64)> = None;
+    let mut flush = |run: &mut [u64; 4], span: Option<(u64, u64)>| {
+        if span.is_some_and(|(a, b)| b - a < ARENA_MIN) {
+            for (t, r) in total.iter_mut().zip(run.iter()) {
+                *t += r;
+            }
+        }
+        *run = [0; 4];
+    };
+    for (n, line) in maps.lines().enumerate() {
+        let line = line.ok()?;
+        if n >= MAX_MAPPINGS {
+            return None;
+        }
+        let mut f = line.split_ascii_whitespace();
+        let (Some(range), Some(perms), Some(_), Some(_), Some(inode)) =
+            (f.next(), f.next(), f.next(), f.next(), f.next())
+        else {
+            return None;
+        };
+        let (a, b) = range.split_once('-')?;
+        let (start, end) = (
+            u64::from_str_radix(a, 16).ok()?,
+            u64::from_str_radix(b, 16).ok()?,
+        );
+        if end <= start || perms.len() != 4 || !inode.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        if inode != "0" || f.next().is_some() {
+            continue;
+        }
+        match span {
+            Some((first, last)) if last == start => span = Some((first, end)),
+            _ => {
+                flush(&mut run, span);
+                span = Some((start, end));
+            }
+        }
+        if !perms.starts_with("---") {
+            let size = end - start;
+            let class = MAPPING_CLASSES
+                .iter()
+                .position(|(max, _)| size < *max)
+                .unwrap_or(MAPPING_CLASSES.len() - 1);
+            run[class] += 1;
+        }
+    }
+    flush(&mut run, span);
+    Some(total)
 }
 
 /// mimalloc's committed bytes now and at their peak, process-wide.
@@ -346,17 +456,178 @@ mod tests {
             rss_anon: Some(3),
             rss_file: Some(0),
             anon_huge: Some(u64::MAX),
+            anon_mappings: Some([0, 7, u64::MAX, 2]),
         };
         g.store(full);
         let got = g.snapshot();
         assert_eq!(got.rss_file, Some(0), "0 is a value, not absent");
         assert_eq!(got.anon_huge, Some(u64::MAX - 1));
+        assert_eq!(got.anon_mappings, Some([0, 7, u64::MAX - 1, 2]));
         g.store(Snapshot {
             rss_anon: None,
             ..full
         });
         assert_eq!(g.snapshot().rss_anon, None);
         assert_eq!(g.snapshot().mimalloc_committed, Some(1));
+        g.store(Snapshot {
+            anon_mappings: None,
+            ..full
+        });
+        assert_eq!(g.snapshot().anon_mappings, None);
+    }
+
+    /// One `/proc/<pid>/maps` line: `start`, `len` in KiB, perms, inode, path.
+    fn map(start: u64, kib: u64, perms: &str, inode: u64, path: &str) -> String {
+        format!(
+            "{start:x}-{:x} {perms} 00000000 00:00 {inode}    {path}\n",
+            start + (kib << 10)
+        )
+    }
+
+    fn mappings(lines: &[String]) -> Option<[u64; 4]> {
+        anon_mappings(lines.concat().as_bytes())
+    }
+
+    #[test]
+    fn anonymous_mappings_count_by_size_class() {
+        let g = 1 << 40;
+        let lines = [
+            // Each class's edges: just below, at (the next class), just above.
+            map(g, 124, "rw-p", 0, ""),
+            map(g + (1 << 30), 128, "rw-p", 0, ""),
+            map(g + (2 << 30), 508, "rw-p", 0, ""),
+            map(g + (3 << 30), 512, "rw-p", 0, ""),
+            map(g + (4 << 30), 2044, "r--p", 0, ""),
+            map(g + (5 << 30), 2048, "rw-p", 0, ""),
+            // Not anonymous: a path, a pseudo-path, an inode.
+            map(g + (6 << 30), 256, "rw-p", 0, "/data/index/x.idx"),
+            map(g + (7 << 30), 256, "rw-p", 0, "[heap]"),
+            map(g + (8 << 30), 256, "rw-p", 41, ""),
+            // A guard page or reserved space isn't memory.
+            map(g + (9 << 30), 256, "---p", 0, ""),
+        ];
+        assert_eq!(mappings(&lines), Some([1, 2, 2, 1]));
+        assert_eq!(mappings(&[]), Some([0; 4]));
+    }
+
+    #[test]
+    fn arena_runs_are_left_out_and_small_runs_are_not() {
+        let g = 1 << 40;
+        // A 1 GiB arena split by permissions, then a 256 KiB mapping right
+        // after it (part of the run, so left out), then a gap.
+        let arena = [
+            map(g, 64 << 10, "rw-p", 0, ""),
+            map(g + (64 << 20), 256, "rw-p", 0, ""),
+            map(
+                g + (64 << 20) + (256 << 10),
+                (1 << 20) - (64 << 10) - 256,
+                "---p",
+                0,
+                "",
+            ),
+        ];
+        assert_eq!(mappings(&arena), Some([0; 4]));
+        // Adjacent small mappings under the arena size still count, each
+        // in its own class (as r4 counted the kernel's mappings).
+        let small = [
+            map(g, 256, "rw-p", 0, ""),
+            map(g + (256 << 10), 256, "rw-p", 0, ""),
+            map(g + (512 << 10), 64, "rw-p", 0, ""),
+        ];
+        assert_eq!(mappings(&small), Some([1, 2, 0, 0]));
+        // Just under the arena size: counted.
+        let under = [
+            map(g, (256 << 10) - 256, "rw-p", 0, ""),
+            map(g + (256 << 20) - (256 << 10), 128, "rw-p", 0, ""),
+        ];
+        assert_eq!(mappings(&under), Some([0, 1, 0, 1]));
+        // A file mapping between two anonymous ones breaks the run.
+        let split = [
+            map(g, 200 << 10, "rw-p", 0, ""),
+            map(g + (200 << 20), 4, "r--p", 7, "/lib/x.so"),
+            map(g + (200 << 20) + (4 << 10), 200 << 10, "rw-p", 0, ""),
+        ];
+        assert_eq!(mappings(&split), Some([0, 0, 0, 2]));
+    }
+
+    #[test]
+    fn an_odd_maps_line_makes_the_gauge_absent() {
+        let good = map(1 << 40, 256, "rw-p", 0, "");
+        for bad in [
+            "zz-10 rw-p 00000000 00:00 0\n",
+            "10-zz rw-p 00000000 00:00 0\n",
+            "20-10 rw-p 00000000 00:00 0\n",
+            "10-20 rw- 00000000 00:00 0\n",
+            "10-20 rw-p 00000000 00:00\n",
+            "10-20 rw-p 00000000 00:00 x\n",
+            "garbage\n",
+        ] {
+            assert_eq!(mappings(&[good.clone(), bad.into()]), None, "{bad:?}");
+        }
+        let many = "1000-2000 rw-p 00000000 00:00 0\n".repeat(MAX_MAPPINGS + 1);
+        assert_eq!(anon_mappings(many.as_bytes()), None);
+    }
+
+    proptest! {
+        #[test]
+        fn anon_mappings_never_panics(text in "\\PC{0,400}") {
+            let _ = anon_mappings(text.as_bytes());
+        }
+    }
+
+    /// The sample's cost at about 3,000 mappings (X-soak-screen): 750
+    /// parked threads with small stacks, each its stack, guard page and
+    /// thread-local mappings.
+    /// Ignored in the workspace run; the soak-screen job runs it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "spawns 750 threads; run by the soak-screen CI job"]
+    fn anon_mappings_cost_at_3000_mappings() {
+        use std::sync::{Arc, Barrier};
+        let threads = 750;
+        let barrier = Arc::new(Barrier::new(threads + 1));
+        let ready = Arc::new(Barrier::new(threads + 1));
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let (b, r) = (barrier.clone(), ready.clone());
+                std::thread::Builder::new()
+                    .stack_size(64 << 10)
+                    .spawn(move || {
+                        r.wait();
+                        b.wait();
+                    })
+                    .expect("spawn")
+            })
+            .collect();
+        ready.wait();
+        let lines = std::fs::read_to_string("/proc/self/maps")
+            .unwrap()
+            .lines()
+            .count();
+        let mut took: Vec<std::time::Duration> = (0..51)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let f = std::fs::File::open("/proc/self/maps").unwrap();
+                let counts = anon_mappings(std::io::BufReader::with_capacity(64 << 10, f));
+                assert!(counts.is_some());
+                started.elapsed()
+            })
+            .collect();
+        barrier.wait();
+        for h in handles {
+            h.join().unwrap();
+        }
+        took.sort();
+        let median = took[took.len() / 2];
+        println!(
+            "SCREEN-COST anon_mappings: {lines} mappings, median {:.0} us, max {:.0} us per read",
+            median.as_secs_f64() * 1e6,
+            took[took.len() - 1].as_secs_f64() * 1e6
+        );
+        assert!(lines >= 2_500, "only {lines} mappings");
+        // Generous: a 60 s sampler can afford far more; this catches a
+        // quadratic read, not a slow runner.
+        assert!(median.as_millis() < 100, "median {median:?}");
     }
 
     /// The test binary runs on mimalloc (main.rs's global allocator).
@@ -380,6 +651,11 @@ mod tests {
         assert!(s.rss_file.is_some(), "{s:?}");
         // AnonHugePages is 0 without THP, but the field is always there.
         assert!(s.anon_huge.is_some(), "{s:?}");
+        // Thread stacks alone are anonymous mappings outside any arena.
+        assert!(
+            s.anon_mappings.is_some_and(|m| m.iter().sum::<u64>() > 0),
+            "{s:?}"
+        );
     }
 
     #[test]
@@ -408,6 +684,7 @@ mod tests {
         sample(&g);
         let s = g.snapshot();
         assert_eq!((s.rss_anon, s.rss_file, s.anon_huge), (None, None, None));
+        assert_eq!(s.anon_mappings, None);
         assert!(s.mimalloc_committed.is_some());
     }
 }

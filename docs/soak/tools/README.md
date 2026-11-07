@@ -75,6 +75,37 @@ torrents, or peer addresses. Keep original process logs private.
 The baseline must still be reviewed against the implementation plan and deployment
 requirements. This tool does not authorize restarting the older Docker crawler.
 
+## Screen
+
+An early warning, run before and during a soak (X-soak-screen,
+`docs/decisions/2026-11-07-X-soak-screen.md`). **It can fail a candidate early;
+it never passes one.** The memory gate above is the only verdict, and the screen
+never changes it.
+
+- **What it watches**, at baseline hours 3, 6 and 12, each per 1,000 stored
+  torrents and against a level: the search mmap-cache entries against the
+  segments, the segment count, the 128-512 KiB anonymous mappings outside the
+  allocator's arena (r4's growth), mimalloc's committed bytes, and the fetch
+  pool's size and held bytes against their caps. Memory itself isn't an input:
+  r5's early slope read 6.58 MiB/h and the run passed.
+- **Before a soak**, the `soak-screen` CI job (on a `release/**` push or by hand)
+  runs the dhat retention test and `mem-cheap` on musl, each with a control
+  arm that must still trip (mmap-cache pruning off; mimalloc's `override` off).
+- **During a soak**, the Linux collector writes `screen.json` and a
+  `screen baseline hour N:` line to `events.log`. The analyzer prints a
+  `screen:` line and a "Screen" section after everything else, under the
+  JSON key `screen`; `--no-screen` leaves it out.
+- **Reading it:** `ok`; `trip(<counter>, <value>, <threshold>)`: **stop the
+  run and investigate** (you stop it: the collector never does); or
+  `not_available(<reason>)`: an input is missing (an older binary, or Windows,
+  which has no mapping gauge), a checkpoint isn't reached, or the thresholds
+  aren't usable. **`ok` never means the soak passed.**
+- **The thresholds** are in `docs/soak/screen-thresholds.json`, each with its
+  reason, clean value and margin. The collector copies the file into the run
+  and records its SHA-256 in `run.json`; the analyzer judges by that copy,
+  refuses one that no longer matches its hash, and says when the checked-in
+  file has changed since the run started.
+
 ## Collector failure rehearsal
 
 Run these from the integration checkout in PowerShell 7:
