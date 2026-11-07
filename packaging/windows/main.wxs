@@ -14,6 +14,7 @@
     - registers the "Lodestar" Windows service (delayed automatic start) and starts it
     - opens 6881/udp (DHT), program-scoped, private networks only; 8090/tcp (web UI) only if asked
     - Start-menu shortcut that opens the web UI
+    - registers the "Lodestar" Event Log source, so a refused start's reason shows in Event Viewer
     - optional, off by default: a Windows Defender exclusion for the data folder
     - uninstall keeps the data unless run with REMOVE_DATA=1
 -->
@@ -44,6 +45,8 @@
     <Icon Id="LodestarIcon" SourceFile="$(env.LODESTAR_PACKAGING)\icons\lodestar.ico" />
     <Property Id="ARPPRODUCTICON" Value="LodestarIcon" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/dvortsis/lodestar-v2" />
+    <!-- AdminUser only for a real administrator (SetSecureDataFolderAdmin). -->
+    <Property Id="MSIUSEREALADMINDETECTION" Value="1" />
 
     <!-- Public properties, usable as `msiexec /i lodestar.msi DEFENDER_EXCLUSION=1`. -->
     <!-- Off unless ticked on the Options page or passed on the command line. -->
@@ -69,6 +72,7 @@
       <ComponentRef Id="FirewallRules" />
       <ComponentRef Id="FirewallWeb" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="EventSource" />
     </Feature>
 
     <!-- ===== Folders ===== -->
@@ -154,6 +158,19 @@
       </Component>
     </DirectoryRef>
 
+    <!-- ===== Event Log source ===== -->
+    <!-- The service writes why it refused to start (windows/service.rs, EVENT_SCRIPT) to the
+         Application log under this source; registering a source needs an administrator, so the
+         installer does it. The message file is .NET's generic one (it prints the text as given),
+         which every supported Windows has. Removed on uninstall. -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="EventSource" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A07" Win64="yes">
+        <RegistryKey Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\Lodestar" ForceDeleteOnUninstall="yes">
+          <RegistryValue Name="EventMessageFile" Type="expandable" Value="%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll" KeyPath="yes" />
+          <RegistryValue Name="TypesSupported" Type="integer" Value="7" />
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>
     <!-- ===== Start menu: opens the web UI ===== -->
     <DirectoryRef Id="StartMenuDir">
       <Component Id="StartMenuShortcut" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A05" Win64="yes">
@@ -172,6 +189,11 @@
          not secure, or contains a link. The MSI's ACL is what the service later
          verifies (windows/acl.rs). See secure-datadir.ps1. -->
     <CustomAction Id="SetSecureDataFolder" Property="SecureDataFolder" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
+    <!-- Owner §2.52: Repair may re-secure a folder whose one problem is the installing
+         administrator's own Allow entry (Explorer adds it on "Continue"), so an
+         administrator's install names that account. Only a real administrator's:
+         MSIUSEREALADMINDETECTION keeps AdminUser from being set for every user. -->
+    <CustomAction Id="SetSecureDataFolderAdmin" Property="SecureDataFolder" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot; -InstallerSid &quot;[UserSID]&quot;" />
     <CustomAction Id="SecureDataFolder" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="check" Impersonate="no" />
 
     <!-- Take privileges away from the service: with the defaults it also holds SeImpersonate
@@ -207,7 +229,8 @@
            through WixQuietExec64, so no console window opens on a desktop and their output lands in
            the MSI log. -->
       <Custom Action="SetSecureDataFolder" After="ServicePrivileges">NOT (REMOVE="ALL")</Custom>
-      <Custom Action="SecureDataFolder" After="SetSecureDataFolder">NOT (REMOVE="ALL")</Custom>
+      <Custom Action="SetSecureDataFolderAdmin" After="SetSecureDataFolder">NOT (REMOVE="ALL") AND AdminUser AND UserSID</Custom>
+      <Custom Action="SecureDataFolder" After="SetSecureDataFolderAdmin">NOT (REMOVE="ALL")</Custom>
       <!-- The exclusion goes in last, after the folder is known to be ours, and comes out again
            if a later step rolls the install back. -->
       <Custom Action="SetRemoveDefenderExclusionRollback" After="SecureDataFolder">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>

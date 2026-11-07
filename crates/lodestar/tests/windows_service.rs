@@ -352,7 +352,7 @@ fn runs_as_its_virtual_account_in_the_installers_folder() {
     let stopped = wait_until_stopped(&service);
     assert_eq!(
         field(&stopped, "SERVICE_EXIT_CODE").as_deref(),
-        Some("3"),
+        Some("536870915"),
         "{stopped}"
     );
     assert_eq!(std::fs::read_to_string(&log_path).unwrap(), before);

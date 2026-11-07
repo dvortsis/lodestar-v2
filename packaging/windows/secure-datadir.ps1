@@ -16,9 +16,15 @@
   Administrators and the service, and top-level entries owned by those. Then the
   same ACL is applied again.
 
+  One exception (owner decision 2.52): when the one problem with such a folder is an
+  Allow entry for the administrator running the install (Windows Explorer adds one,
+  on the folder and everything in it, when you click Continue on its permission
+  prompt), that entry is removed everywhere and the folder re-secured. The MSI passes
+  -InstallerSid only for a real administrator. Anything else still stops the install.
+
   Matches crates/lodestar/src/windows/acl.rs in the service.
 #>
-param([Parameter(Mandatory)][string]$Path, [string]$Service = 'Lodestar')
+param([Parameter(Mandatory)][string]$Path, [string]$Service = 'Lodestar', [string]$InstallerSid = '')
 $ErrorActionPreference = 'Stop'
 
 $system = New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'
@@ -100,6 +106,30 @@ function Get-NotPrivateReason($folder) {
   return $null
 }
 
+# The installing administrator's SID, when the one thing that keeps the folder from being
+# private is that account's own Allow entries; $null otherwise. Only a user account's SID
+# (S-1-5-21-...), never a well-known, built-in or domain group SID, never one already trusted.
+# Any Deny entry, inheritance or other account means $null.
+function Get-RepairableSid($folder) {
+  if (-not $InstallerSid) { return $null }
+  if ($InstallerSid -notmatch '^S-1-5-21(-\d+){4}$') { return $null }
+  $me = New-Object Security.Principal.SecurityIdentifier $InstallerSid
+  $rid = [long]($InstallerSid -split '-')[-1]
+  if ($rid -ge 512 -and $rid -le 527) { return $null }   # Domain Admins, Domain Users and the other domain groups
+  if ($trusted -contains $me) { return $null }
+  $acl = Get-Acl -LiteralPath $folder
+  if (-not $acl.AreAccessRulesProtected) { return $null }
+  $found = $false
+  foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($rule.AccessControlType -ne 'Allow') { return $null }
+    if ($trusted -contains $rule.IdentityReference) { continue }
+    if ($rule.IdentityReference -ne $me) { return $null }
+    $found = $true
+  }
+  if ($found) { return $me }
+  return $null
+}
+
 # Creates the folder with its descriptor, then checks that what is there is ours: if someone
 # created it in the meantime, its owner or its ACL will not be.
 function New-DataFolder {
@@ -157,8 +187,14 @@ if (Test-Path -LiteralPath $dir) {
     # it belongs to SYSTEM, Administrators or the service (same rules as the service's
     # start-up check, windows/acl.rs).
     $why = Get-NotPrivateReason $dir
+    $repairSid = $null
     if ($why) {
-      Stop-Install "$dir is not empty and $why, so other users may have put files in it. Move its contents somewhere else, check them, then install again."
+      $repairSid = Get-RepairableSid $dir
+      if (-not $repairSid) {
+        Log "not repairable (installer SID '$InstallerSid'): $why"
+        Stop-Install "$dir is not empty and $why, so other users may have put files in it. Move its contents somewhere else, check them, then install again."
+      }
+      Log "the only extra entries are the installing administrator's own ($repairSid): removing them"
     }
     foreach ($child in $inside) {
       $o = (Get-Acl -LiteralPath $child.FullName).GetOwner([Security.Principal.SecurityIdentifier])
@@ -170,6 +206,21 @@ if (Test-Path -LiteralPath $dir) {
   # Fail closed: if the scan itself cannot run, the install stops (trap, exit 2).
   $link = Get-ChildItem -LiteralPath $dir -Force -Recurse -Attributes ReparsePoint -ErrorAction Stop | Select-Object -First 1
   if ($link) { Stop-Install "$($link.FullName) is a link or junction inside the data folder. Remove it and install again." }
+  if ($repairSid) {
+    # As the user guide's fix does: that account's granted entries, on everything inside.
+    # No links inside (checked just above), so this stays in the folder.
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    # Its error output is read here, not thrown: Windows PowerShell turns a native tool's
+    # stderr into errors, which 'Stop' would make fatal before the exit code is seen.
+    $ErrorActionPreference = 'Continue'
+    $out = & $icacls $dir /remove:g "*$($repairSid.Value)" /T /C /Q 2>&1 | Out-String
+    $ErrorActionPreference = 'Stop'
+    if ($LASTEXITCODE -ne 0) {
+      Log "icacls failed ($LASTEXITCODE): $out"
+      Stop-Install "Could not remove $repairSid from $dir (icacls exit $LASTEXITCODE). As an administrator, run: icacls `"$dir`" /remove:g *$($repairSid.Value) /T /C"
+    }
+    Log "removed $repairSid from $dir and everything in it"
+  }
   Set-Acl -LiteralPath $dir -AclObject (New-DataSecurity)
   Log "re-secured $dir"
 } else {
