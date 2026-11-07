@@ -143,6 +143,22 @@ fn config() -> PipelineConfig {
     }
 }
 
+/// A sink on `pipeline`'s intake, as `serve` attaches one.
+fn sink_for(
+    pipeline: &Pipeline,
+    db: &Path,
+    standing: Arc<Fake>,
+    offset_ms: i64,
+) -> Arc<lodestar_pipeline::remote::RemoteSink> {
+    pipeline.monitor().remote().sink(SinkParts {
+        preparer: Mutex::new(reader(db).preparer()),
+        standing,
+        stored: Arc::new(Reader(Mutex::new(reader(db)))),
+        clocks: Arc::new(Offset(offset_ms)),
+        hints_allow_private: false,
+    })
+}
+
 /// A pipeline with no plugins, its store's path, a worker-side store for
 /// preparing records, and a sink for worker 7.
 struct Rig {
@@ -162,13 +178,7 @@ impl Rig {
         store.save_fetch_queue(queue).unwrap();
         let pipeline = Pipeline::start(config(), store, vec![]).await.unwrap();
         let standing = Arc::new(Fake::default());
-        let sink = pipeline.monitor().remote().sink(SinkParts {
-            preparer: Mutex::new(reader(&db).preparer()),
-            standing: standing.clone(),
-            stored: Arc::new(Reader(Mutex::new(reader(&db)))),
-            clocks: Arc::new(Offset(offset_ms)),
-            hints_allow_private: false,
-        });
+        let sink = sink_for(&pipeline, &db, standing.clone(), offset_ms);
         let worker_store =
             Store::open(dir.path().join("worker.db"), StoreConfig::default()).unwrap();
         Rig {
@@ -687,6 +697,8 @@ async fn a_bad_blob_is_refused_alone() {
     })
     .await;
     assert_eq!(stat(&rig.remote(), |s| &s.refused), 2);
+    // Over its own cap, with the batch's bytes to spare: not the budget.
+    assert_eq!(stat(&rig.remote(), |s| &s.over_budget), 0);
     assert!(rig.stored(&keys[1]).is_none() && rig.stored(&keys[2]).is_none());
     rig.pipeline.shutdown().await.unwrap();
 }
@@ -713,6 +725,8 @@ async fn a_batch_decompresses_at_most_its_budget() {
         rig.wait_stored(k).await;
     }
     assert_eq!(stat(&remote, |s| &s.refused), 1);
+    // Over the cap the batch's bytes left set (WK-9b): the budget's.
+    assert_eq!(stat(&remote, |s| &s.over_budget), 1);
     assert!(rig.stored(&keys[4]).is_none());
     assert_eq!(lodestar_pipeline::remote::BATCH_BLOBS, 64 << 20);
     rig.pipeline.shutdown().await.unwrap();
@@ -868,6 +882,8 @@ async fn path_components_are_budgeted_per_record_and_per_batch() {
         epoch,
         prior: Prior::default(),
         private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: None,
     });
     let parts = SinkParts {
         preparer: Mutex::new(store.preparer()),
@@ -1042,6 +1058,8 @@ async fn path_bytes_are_budgeted_per_batch() {
         epoch,
         prior: Prior::default(),
         private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: None,
     });
     let parts = SinkParts {
         preparer: Mutex::new(store.preparer()),
@@ -1125,6 +1143,8 @@ async fn a_blob_that_fails_to_decode_still_spends_the_batch() {
         epoch,
         prior: Prior::default(),
         private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: None,
     });
     let parts = SinkParts {
         preparer: Mutex::new(store.preparer()),
@@ -1230,4 +1250,579 @@ async fn a_refused_late_result_is_rebuilt_at_most_once() {
     assert_eq!(stat(&remote, |s| &s.late), 0);
     assert!(rig.stored(&key).is_none() && !authority.in_flight(&key));
     rig.pipeline.shutdown().await.unwrap();
+}
+
+/// Counters (WK-9b, requirement 2) reach the rollups twice, as the fleet's
+/// row and as the worker's `BY_WORKER` row, whose dim is the session's
+/// worker. They're accepted only within their metric's domain and the
+/// window. A worker can't write the coordinator's own metrics, or
+/// `BY_WORKER` rows, its own or another worker's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn counters_go_into_the_rollups_with_the_worker() {
+    use lodestar_pipeline::wire::CountersBatch;
+    use lodestar_store::Counter;
+    let rig = Rig::new(&[], 0).await;
+    let hour = now().div_euclid(3600);
+    let c = |hour, metric, dim, key, value| Counter {
+        hour,
+        metric,
+        dim,
+        key,
+        value,
+    };
+    let counters = vec![
+        c(hour, metric::REDISCOVERED, 3, 2, 40),
+        // Out of the metric's domain: its dim, then its key.
+        c(hour, metric::REDISCOVERED, 64, 2, 5),
+        c(hour, metric::REDISCOVERED, 3, 256, 5),
+        // The coordinator's own count.
+        c(hour, metric::HARVESTED, 3, 2, 1_000),
+        // Another worker's row, and one of its own: both written only here.
+        c(
+            hour,
+            metric::BY_WORKER,
+            8,
+            metric::by_worker_key(metric::REDISCOVERED, 3, 2),
+            99,
+        ),
+        c(
+            hour,
+            metric::BY_WORKER,
+            W.0,
+            metric::by_worker_key(metric::REDISCOVERED, 3, 2),
+            99,
+        ),
+        // Outside the window: older than a day, or ahead of the clock.
+        c(hour - 30, metric::REDISCOVERED, 3, 2, 5),
+        c(hour + 2, metric::REDISCOVERED, 3, 2, 5),
+    ];
+    let bytes = CountersBatch { batch: 1, counters }.encode().unwrap();
+    assert!(rig.sink.counters(W, Payload { batch: 1, bytes }));
+    let remote = rig.remote();
+    assert_eq!(stat(&remote, |s| &s.counters), 1);
+    assert_eq!(stat(&remote, |s| &s.counters_refused), 7);
+    // Undecodable: answered, and nothing kept.
+    assert!(rig.sink.counters(
+        W,
+        Payload {
+            batch: 2,
+            bytes: vec![0xff; 8]
+        }
+    ));
+    assert_eq!(stat(&remote, |s| &s.undecodable), 1);
+    let db = rig.db.clone();
+    let rows = move |m, from, to| reader(&db).rollup(m, from, to).unwrap();
+    until("the counters are flushed", || {
+        !rows(metric::BY_WORKER, hour, hour + 1).is_empty()
+    })
+    .await;
+    let by_worker: Vec<_> = rows(metric::BY_WORKER, 0, i64::MAX)
+        .iter()
+        .map(|c| (c.hour, c.dim, c.key, c.value))
+        .collect();
+    let key = metric::by_worker_key(metric::REDISCOVERED, 3, 2);
+    assert_eq!(by_worker, [(hour, W.0, key, 40)]);
+    let fleet: Vec<_> = rows(metric::REDISCOVERED, 0, i64::MAX)
+        .iter()
+        .map(|c| (c.hour, c.dim, c.key, c.value))
+        .collect();
+    assert_eq!(fleet, [(hour, 3, 2, 40)]);
+    assert!(rows(metric::HARVESTED, 0, i64::MAX).is_empty());
+    rig.pipeline.shutdown().await.unwrap();
+}
+
+/// Remote and waiting leases are saved with the fetch queue (§19.3), each
+/// once. With no server (workers off, WK-1), a revoked worker's key goes
+/// to the built-in worker within a heartbeat instead of waiting. After a
+/// restart, a late result for a key the remote worker held finds its
+/// record (plan Q7) and is stored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_leases_survive_a_restart_and_parked_ones_go_to_the_built_in_worker() {
+    let rig = Rig::new(&[], 0).await;
+    let t = prepared(&rig.worker_store, &info("Held.Over.Restart.2026.mkv", GIB));
+    let (held, parked) = (t.info_hash, InfoHash([2; 20]));
+    let token = rig.lease(W, held, 1);
+    rig.lease(WorkerId(8), parked, 2);
+    let authority = rig.authority();
+    let mut rows: Vec<_> = rig
+        .remote()
+        .queue_rows()
+        .into_iter()
+        .map(|q| (q.info_hash, q.source))
+        .collect();
+    rows.sort();
+    assert_eq!(rows, [(parked, src(2)), (held, src(1))]);
+    // Worker 8 is revoked: its key waits, then goes to the built-in worker.
+    assert_eq!(authority.evict(WorkerId(8)), 1);
+    until("the built-in worker holds the parked key", || {
+        authority
+            .get(&parked)
+            .is_some_and(|l| l.holder == WorkerId::LOCAL)
+    })
+    .await;
+    assert_eq!(stat(&rig.remote(), |s| &s.parked), 1);
+    assert_eq!(authority.get(&parked).unwrap().source, src(2), "kept");
+    let Rig { db, pipeline, .. } = rig;
+    let stopped = now();
+    let store = pipeline.shutdown().await.unwrap();
+    let queue = store.load_fetch_queue().unwrap();
+    let saved = |k: InfoHash| queue.iter().filter(|q| q.info_hash == k).count();
+    assert_eq!((saved(held), saved(parked)), (1, 1), "each once");
+    // A new epoch: the remote worker's token is from before it.
+    until("a new second", || now() > stopped).await;
+    let pipeline = Pipeline::start(config(), store, vec![]).await.unwrap();
+    let sink = sink_for(&pipeline, &db, Arc::new(Fake::default()), 0);
+    let authority = pipeline.monitor().lease_authority().clone();
+    let l = authority.get(&held).expect("the built-in worker holds it");
+    assert_eq!(l.holder, WorkerId::LOCAL);
+    assert!(authority.lost(&held, l.token, 1).is_some());
+    assert!(sink.results(W, payload(1, vec![record(t, token)])));
+    until("the late result is stored", || {
+        reader(&db).find(&held).unwrap().is_some()
+    })
+    .await;
+    assert_eq!(stat(pipeline.monitor().remote(), |s| &s.late), 1);
+    until("the late result's lease ends", || {
+        !authority.in_flight(&held)
+    })
+    .await;
+    // The funnel across both runs: two harvested (the remote grants; the
+    // parked key and the restart are re-grants), the held key lost then
+    // stored, one correction, the parked key in flight: 2 = 2 − 1 + 1.
+    let store = pipeline.shutdown().await.unwrap();
+    let funnel = store.cohorts(0, now().div_euclid(3600) + 1).unwrap();
+    let count = |stage: Stage| -> i64 {
+        funnel
+            .iter()
+            .filter(|c| c.stage == stage as u8)
+            .map(|c| c.count)
+            .sum()
+    };
+    let late_rows: i64 = store
+        .rollup(metric::LATE_RESULTS, 0, now().div_euclid(3600) + 1)
+        .unwrap()
+        .iter()
+        .map(|c| c.value)
+        .sum();
+    assert_eq!(count(Stage::Harvested), 2);
+    assert_eq!(
+        (count(Stage::Lost), count(Stage::Stored), late_rows),
+        (1, 1, 1)
+    );
+    assert_eq!(
+        count(Stage::Harvested),
+        count(Stage::Lost) + count(Stage::Stored) - late_rows + 1
+    );
+}
+
+/// Backpressure (§19.5): once the writer's queue reaches its high-water
+/// mark, no lease is granted however many are asked for; batches already
+/// harvested still queue, up to the intake's bound, then are refused for
+/// now (they stay in the worker's spool). Neither queue grows past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backpressure_bounds_the_writer_queue() {
+    use lodestar_cluster::GrantAdmission;
+    use lodestar_pipeline::remote::{INTAKE_QUEUE, NoStanding, Prior, RemoteParts};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("b.db"), StoreConfig::default()).unwrap();
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    // A writer that never reads, with a high-water mark of 6.
+    let (writer, _hold) = tokio::sync::mpsc::channel(8);
+    let (pool, _p) = tokio::sync::mpsc::channel(8);
+    let intake = Arc::new(RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: None,
+    }));
+    let sink = intake.sink(SinkParts {
+        preparer: Mutex::new(store.preparer()),
+        standing: Arc::new(NoStanding),
+        stored: Arc::new(Reader(Mutex::new(store))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    });
+    let ws = Store::open(dir.path().join("w.db"), StoreConfig::default()).unwrap();
+    let send = |n: u64| {
+        let t = prepared(&ws, &info(&format!("Batch.{n}.2020.mkv"), GIB));
+        let c = Claim {
+            key: t.info_hash,
+            source: src(1),
+            strategy: 0,
+            at: now(),
+        };
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(token),
+            ..
+        } = authority.claim_batch(W, &[c], now(), None, None)[0]
+        else {
+            panic!()
+        };
+        sink.results(W, payload(n, vec![record(t, token)]))
+    };
+    // Fill the writer's queue one batch at a time: grants go on below the
+    // mark and stop at it.
+    for n in 1..=8u64 {
+        assert_eq!(sink.admit(W, 10), if n <= 6 { 10 } else { 0 }, "{n}");
+        assert!(send(n));
+        until("the batch reaches the writer", || {
+            intake.writer_fill() == n as usize
+        })
+        .await;
+    }
+    // A flood of grant requests: none is admitted.
+    for _ in 0..1_000 {
+        assert_eq!(sink.admit(W, 64), 0);
+    }
+    assert_eq!(stat(&intake, |s| &s.held_back), 2 * 10 + 1_000 * 64);
+    // Harvested batches still queue, up to the intake's bound (and the one
+    // its feed holds for the writer), then wait in the worker's spool.
+    let mut n = 9;
+    while send(n) {
+        n += 1;
+        assert!(n < 9 + INTAKE_QUEUE as u64 + 2, "the intake's queue grew");
+    }
+    assert!(sink.queued() <= INTAKE_QUEUE);
+    assert_eq!(intake.writer_fill(), 8, "the writer's queue stayed bounded");
+    assert_eq!(stat(&intake, |s| &s.backpressure), 1);
+}
+
+/// A batch whose path components are spent refuses a tree claiming more
+/// directories than are left, by its count alone, as over the budget
+/// (WK-9b): a fresh batch reads the same claim and refuses it as corrupt,
+/// not over the budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tree_over_the_components_left_is_over_the_budget() {
+    use lodestar_pipeline::remote::{NoStanding, Prior, RemoteParts};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("d.db"), StoreConfig::default()).unwrap();
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, _p) = tokio::sync::mpsc::channel(8);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: None,
+    });
+    let parts = SinkParts {
+        preparer: Mutex::new(store.preparer()),
+        standing: Arc::new(NoStanding),
+        stored: Arc::new(Reader(Mutex::new(store))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    };
+    let ws = Store::open(dir.path().join("w.db"), StoreConfig::default()).unwrap();
+    let leased = |t: Prepared| {
+        let c = Claim {
+            key: t.info_hash,
+            source: src(1),
+            strategy: 0,
+            at: now(),
+        };
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(token),
+            ..
+        } = authority.claim_batch(W, &[c], now(), None, None)[0]
+        else {
+            panic!()
+        };
+        record(t, token)
+    };
+    // 1.2M components, of the batch's 2M.
+    let first = wide(&ws, "Spends.2024.mkv", 100_000, 12);
+    // A blob that claims 900,000 directories and no file.
+    let claim = |n: u8| {
+        let mut raw = vec![
+            lodestar_store::filetree::FORMAT_VERSION,
+            0,
+            lodestar_metainfo::TextEncoding::UTF8.id(),
+        ];
+        for mut v in [900_000u64, 0] {
+            while v >= 0x80 {
+                raw.push((v as u8) | 0x80);
+                v >>= 7;
+            }
+            raw.push(v as u8);
+        }
+        raw.resize(raw.len() + 1_800_000, 0);
+        let mut t = prepared(&ws, &info(&format!("Claim.{n}.2024.mkv"), GIB));
+        t.info_size = raw.len() as u64;
+        t.files = lodestar_store::BlobCodec::new(19).compress(&raw).unwrap();
+        t
+    };
+    let spent = ResultsBatch {
+        batch: 70,
+        records: vec![leased(first), leased(claim(1))],
+    }
+    .encode()
+    .unwrap();
+    let taken = intake.take(W, &spent, &parts, now()).unwrap();
+    assert_eq!(taken.results.len(), 1);
+    assert_eq!(stat(&intake, |s| &s.refused), 1);
+    assert_eq!(stat(&intake, |s| &s.over_budget), 1);
+    let fresh = ResultsBatch {
+        batch: 71,
+        records: vec![leased(claim(2))],
+    }
+    .encode()
+    .unwrap();
+    assert!(
+        intake
+            .take(W, &fresh, &parts, now())
+            .unwrap()
+            .results
+            .is_empty()
+    );
+    assert_eq!(stat(&intake, |s| &s.refused), 2);
+    assert_eq!(stat(&intake, |s| &s.over_budget), 1, "not the budget's");
+}
+
+/// Taking a late result's record is the check itself (WK-9b): two copies
+/// taken at once both find the record and pass the store check together
+/// (held here at the store check until both are in it); then one takes the
+/// record and is rebuilt, and the other finds it gone and is stale. The
+/// record is rebuilt once however batches are fed.
+#[test]
+fn copies_of_a_late_result_taken_at_once_are_rebuilt_once() {
+    use lodestar_cluster::RestoredLease;
+    use lodestar_pipeline::remote::{NoStanding, Prior, RemoteParts};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("p.db"), StoreConfig::default()).unwrap();
+    let ws = Store::open(dir.path().join("w.db"), StoreConfig::default()).unwrap();
+    let mut t = prepared(&ws, &info("Twice.Late.2026.mkv", GIB));
+    // Refused when rebuilt: its counts don't match its file list.
+    t.size += 1;
+    let key = t.info_hash;
+    let started = now() - 60;
+    let epoch = started as u32;
+    let restored = RestoredLease {
+        cohort: started.div_euclid(3600) - 1,
+        source: src(5),
+        sources: 1 << 5,
+        strategy: 3,
+        discovered_at: started - 3_600,
+    };
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, _p) = tokio::sync::mpsc::channel(8);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority,
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::new([(key, restored)], started),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: None,
+    });
+    let preparer = store.preparer();
+    let gate = Arc::new(Gate {
+        reader: Mutex::new(store),
+        entered: std::sync::atomic::AtomicUsize::new(0),
+        wanted: 2,
+        open: (Mutex::new(false), std::sync::Condvar::new()),
+    });
+    let parts = SinkParts {
+        preparer: Mutex::new(preparer),
+        standing: Arc::new(NoStanding),
+        stored: gate.clone(),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    };
+    let earlier = Token(((epoch as u64 - 3_600) << 32) | 9);
+    let bytes = |batch| {
+        ResultsBatch {
+            batch,
+            records: vec![record(t.clone(), earlier)],
+        }
+        .encode()
+        .unwrap()
+    };
+    let (one, two) = (bytes(1), bytes(2));
+    std::thread::scope(|s| {
+        let a = s.spawn(|| intake.take(W, &one, &parts, now()));
+        let b = s.spawn(|| intake.take(W, &two, &parts, now()));
+        assert!(a.join().unwrap().unwrap().results.is_empty());
+        assert!(b.join().unwrap().unwrap().results.is_empty());
+    });
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 2, "both were checked");
+    assert_eq!(stat(&intake, |s| &s.refused), 1, "rebuilt once");
+    assert_eq!(stat(&intake, |s| &s.stale), 1);
+    assert_eq!(stat(&intake, |s| &s.late), 0);
+}
+
+/// A store check that lets no caller through until `wanted` are in it,
+/// waiting at most [`WAIT`].
+struct Gate {
+    reader: Mutex<Store>,
+    entered: std::sync::atomic::AtomicUsize,
+    wanted: usize,
+    open: (Mutex<bool>, std::sync::Condvar),
+}
+impl StoredKeys for Gate {
+    fn stored(&self, keys: &[InfoHash]) -> Vec<bool> {
+        let (open, cv) = &self.open;
+        let mut is_open = open.lock().unwrap();
+        if self.entered.fetch_add(1, Ordering::SeqCst) + 1 >= self.wanted {
+            *is_open = true;
+            cv.notify_all();
+        }
+        let (is_open, timeout) = cv.wait_timeout_while(is_open, WAIT, |o| !*o).unwrap();
+        assert!(*is_open && !timeout.timed_out(), "timed out at the gate");
+        drop(is_open);
+        let r = self.reader.lock().unwrap();
+        keys.iter().map(|k| r.find(k).unwrap().is_some()).collect()
+    }
+}
+
+/// Parked keys handed to the built-in worker keep their privacy (§18.7,
+/// BEP 27: a key every source of which is private never reaches public
+/// peer finding), and one it refuses (held here) ends its lease as
+/// blocked and is never fetched (security review). A worker's hints for
+/// a key the built-in worker holds never make it public either.
+#[test]
+fn parked_keys_keep_their_privacy_and_refusals() {
+    use lodestar_pipeline::remote::{Prior, Refusals, RemoteParts};
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, mut to_pool) = tokio::sync::mpsc::channel(8);
+    let held = Arc::new(lodestar_filter::HeldSet::default());
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        // Source 3 finds only private keys.
+        private_sources: 1 << 3,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: Some(Refusals {
+            held: held.clone(),
+            filter: Arc::new(lodestar_pipeline::default_filter()),
+        }),
+    });
+    let (private, public, blocked) = (InfoHash([3; 20]), InfoHash([1; 20]), InfoHash([9; 20]));
+    for (key, s) in [(private, 3), (public, 1), (blocked, 1)] {
+        let c = Claim {
+            key,
+            source: src(s),
+            strategy: 0,
+            at: now(),
+        };
+        assert!(matches!(
+            authority.claim(WorkerId(8), c, now()),
+            Claimed::Granted(_)
+        ));
+    }
+    held.insert(blocked.0);
+    assert_eq!(authority.evict(WorkerId(8)), 3);
+    intake.hand_parked(now());
+    let mut handed = HashMap::new();
+    while let Ok(d) = to_pool.try_recv() {
+        assert!(!d.reply);
+        handed.insert(d.found.key, d.found.private_source);
+    }
+    assert_eq!(handed, HashMap::from([(private, true), (public, false)]));
+    assert!(!authority.in_flight(&blocked), "its lease ended as blocked");
+    assert_eq!(stat(&intake, |s| &s.parked), 2);
+    assert_eq!(stat(&intake, |s| &s.parked_refused), 1);
+    // A remote worker's hints for the private key, which the built-in
+    // worker holds now: a reply whose flag can't make it public.
+    let token = authority.get(&private).unwrap().token;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("h.db"), StoreConfig::default()).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let _guard = rt.enter();
+    let sink = Arc::new(intake).sink(SinkParts {
+        preparer: Mutex::new(store.preparer()),
+        standing: Arc::new(lodestar_pipeline::remote::NoStanding),
+        stored: Arc::new(Reader(Mutex::new(store))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    });
+    sink.local_hints(vec![HintItem {
+        key: private.0,
+        token: token.0,
+        hints: vec!["93.184.216.34:6881".parse().unwrap()],
+    }]);
+    let d = to_pool.try_recv().expect("the hint reached the pool");
+    assert!(d.reply && d.found.private_source, "{d:?}");
+}
+
+/// A saved row for a key that was stored after the row was taken (a
+/// remote result still in the writer's queue at shutdown, or a crash
+/// between a commit and the next save) isn't restored: the key is
+/// neither fetched again nor counted twice (security review).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_saved_row_for_a_stored_key_is_not_restored() {
+    let rig = Rig::new(&[], 0).await;
+    let t = prepared(&rig.worker_store, &info("Committed.Late.2026.mkv", GIB));
+    let key = t.info_hash;
+    let token = rig.lease(W, key, 1);
+    assert!(rig.sink.results(W, payload(1, vec![record(t, token)])));
+    rig.wait_stored(&key).await;
+    let authority = rig.authority();
+    until("its lease ends", || !authority.in_flight(&key)).await;
+    let Rig { db, pipeline, .. } = rig;
+    let mut store = pipeline.shutdown().await.unwrap();
+    // The row the race leaves: taken while the lease was still held.
+    store
+        .save_fetch_queue(&[QueuedKey {
+            info_hash: key,
+            source: src(1),
+            cohort: now().div_euclid(3600),
+            strategy: 3,
+            priority: 0,
+            attempts: 0,
+            private_source: false,
+        }])
+        .unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![]).await.unwrap();
+    let authority = pipeline.monitor().lease_authority().clone();
+    assert!(authority.get(&key).is_none(), "not restored");
+    assert_eq!(pipeline.monitor().remote().late_records(), 0);
+    let store = pipeline.shutdown().await.unwrap();
+    let funnel = store.cohorts(0, now().div_euclid(3600) + 1).unwrap();
+    let stored: i64 = funnel
+        .iter()
+        .filter(|c| c.stage == Stage::Stored as u8)
+        .map(|c| c.count)
+        .sum();
+    assert_eq!(stored, 1);
+    assert!(store.load_fetch_queue().unwrap().is_empty());
+    drop(db);
 }
