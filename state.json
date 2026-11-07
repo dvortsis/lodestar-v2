@@ -5481,7 +5481,8 @@
     "#557 nit: WK-2 and PK-cli share cli/mod.rs and main.rs; never run at once",
     "X-consent-gate-lift notes: step 1 = tighten consent::need to the declared credential spec (Account needs exactly the declared required credentials); call sites pipeline control.rs 635/1140/1291/1434, adult_enrich.rs 342, lib.rs 1259; add adult_enrich.rs and pipeline/src/lib.rs to its owns (runner 01:00Z, deferred from X-sources-api-spec); owner §2.19 flag moves to the lift",
     "slices.yaml X-sources-api-spec owns: add crates/sources-plugins/tests/{prowlarr,stashdb,tpdb}.rs (one assert each; runner yes 01:00Z)",
-    "WK-2 nits for a later slice (WK-10 or X-test-hygiene): ci.yml privdrop step grep should match 'test result: ok. 2 passed' with --exact; non-UTF-8 LODESTAR_TOKEN not stripped (harmless); hand-set LODESTAR_TOKEN_IGNORED prints misleading warning"
+    "WK-2 nits for a later slice (WK-10 or X-test-hygiene): ci.yml privdrop step grep should match 'test result: ok. 2 passed' with --exact; non-UTF-8 LODESTAR_TOKEN not stripped (harmless); hand-set LODESTAR_TOKEN_IGNORED prints misleading warning",
+    "dashboard.yaml ext:experiment-host: booked cr-ab-comp-1 (start 2026-11-07T13:00Z); met only for that run, back to false at its end"
    ]
   }
  ],
@@ -6222,7 +6223,18 @@
  "experiment_host": {
   "named": "Unraid box (owner §2.51, 2026-11-07T00:35Z)",
   "port_forwarded": false,
-  "bookings": [],
+  "bookings": [
+   {
+    "run": "cr-ab-comp-1",
+    "slice": "CR-AB-COMP",
+    "start": "2026-11-07T13:00:00Z",
+    "rehearsal_by": "2026-11-07T12:00:00Z",
+    "window": "2026-11-07T14:00Z to 2026-11-08T14:00Z (60 min warm-up + 24 h)",
+    "next_lodestar_window_not_before": "2026-11-09T02:00Z",
+    "booked_by": "owner ~01:25Z \"Start as soon as possible\", relayed by dashboard; runner reads it as the earliest start 13:00Z",
+    "holds": "ext:experiment-host for this run only"
+   }
+  ],
   "run_sheet": "briefs/CR-AB-COMP-run-sheet.md",
   "clear_down": {
    "unraid_last_lodestar_stop": "2026-11-07T00:37:17Z",
