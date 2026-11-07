@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T13:25Z",
+  "updated_at": "2026-11-07T13:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5657,6 +5657,11 @@
       "id": "reviews-1320",
       "added": "2026-11-07T13:25Z",
       "text": "#576 MERGE (v2-hash test + nits on main merge, self-check). #577 CHANGES (Windows CRLF in item(), nits). #579 CHANGES (runner \u00a72.26: first window min(size,64 KiB); partial priority + attempt after K=3 reserve timeouts; lookup leak; fixed sleep; growth-halt cost + WK-10 sizing note) -> fresh delta review; owner flag at merge. #580 WK-9c MERGE (nits on main merge; unopened = Invalid now, WK-10 decides tomorrow-key vs requeue; out-of-owns approved). All wait for #578."
+    },
+    {
+      "id": "main-green-1107",
+      "added": "2026-11-07T13:30Z",
+      "text": "#578 merged (e18fa870): main compiles again. All four sessions told to bring main in once. RULE for this batch: merge one at a time; before each next merge, check the PR's CI base includes the previous merge when both touch the lodestar or pipeline crates (#576, #580 both edit pipeline lib.rs Pipeline::start), else ask it to bring main in."
     }
   ],
   "main_health": [
