@@ -262,6 +262,9 @@ def screen_checkpoint(points, last_hour, hour, run):
                 else:
                     r["value"] = screen_slope(pairs)
                     r["status"] = "trip" if r["value"] > limit else "ok"
+            if r["value"] is not None and not math.isfinite(r["value"]):
+                # Sums of huge finite inputs overflow; a slope that isn't a number is no reading.
+                r.update(value=None, status="unusable")
             out["counters"][label] = r
     states = [(n, r["status"]) for n, r in out["counters"].items()]
     trips = [n for n, s in states if s == "trip"]
@@ -277,7 +280,9 @@ def screen_checkpoint(points, last_hour, hour, run):
 def screen_line(out):
     if out["status"] == "trip":
         r = out["counters"][out["counter"]]
-        out["line"] = f"trip({out['counter']}, {r['value']:.2f}, {r['threshold']:g})"
+        v = r["value"]
+        shown = f"{v:.2f}" if abs(v) < 1e9 else f"{v:.3e}"  # a short line, whatever the value
+        out["line"] = f"trip({out['counter']}, {shown}, {r['threshold']:g})"
     elif out["status"] == "ok":
         out["line"] = "ok"
     else:
@@ -333,7 +338,12 @@ def parse_memory(text):
     return out
 
 
-def load_rows(root, issues):
+# The prefixes of the series the screen reads (SCREEN_INPUT); only these lines are kept.
+SCREEN_PREFIXES = ("lodestar_search_mmap_cache_entries", "lodestar_search_segments", "lodestar_mem_anon_mappings",
+                   "lodestar_mem_mimalloc_committed_bytes", "lodestar_fetch_held_bytes")
+
+
+def load_rows(root, issues, screen=False):
     # One read captures a bounded snapshot even while the collector appends.
     lines = (root / "samples.jsonl").read_bytes().decode("utf-8-sig").splitlines(True)
     rows = []
@@ -371,15 +381,17 @@ def load_rows(root, issues):
                     text = prom.read_text(encoding="utf-8-sig")
                     row["search"] = parse_search(text)
                     row["memory"] = parse_memory(text)
-                    screen_text = text
+                    if screen:  # only its own lines, and nothing at all with the screen off
+                        screen_text = "\n".join(line for line in text.splitlines()
+                                                if line.startswith(SCREEN_PREFIXES))
                 except (ValueError, OSError):
                     issues["invalid_prom_snapshots"] += 1
                     # Keep the collector's JSON values, not partial Prom data.
             else:
                 issues["missing_prom_snapshots"] += 1
-        # Kept for the screen, which reads it only when it's on (screen_report);
-        # the gate never does.
-        row["screen_text"] = screen_text
+        # The screen's lines, kept only when it's on (screen_report); the gate never reads them.
+        if screen:
+            row["screen_text"] = screen_text
         rows.append(row)
     return rows
 
@@ -989,7 +1001,9 @@ def screen_report(root, run, rows, current=SCREEN_THRESHOLDS):
     """X-soak-screen, apart from the gate: baseline hours 3, 6 and 12. Any error
     in it is the screen's own (`not_available(screen_error)`), never the report's."""
     try:
-        return screen_evaluate(root, run, rows, current)
+        result = screen_evaluate(root, run, rows, current)
+        json.dumps(result, allow_nan=False)  # what the CLI writes: fail here, inside the screen
+        return result
     except Exception:  # noqa: BLE001: whatever the evidence holds, the gate report stands
         line = {"status": "not_available", "line": "not_available(screen_error)"}
         return {"informational": True, "never_a_pass": True, "thresholds": {
@@ -1066,7 +1080,7 @@ def analyze(root, max_gap=90, now=None, intensity=None, allocator=None, screen=T
             issues["finalization_incomplete"] += 1
         if result.get("publication_failures"):
             issues["publication_failures"] += 1
-    rows = load_rows(root, issues)
+    rows = load_rows(root, issues, screen)
     phases, intervals = summarize(rows, max_gap, intensity)
     issues.update(intervals)
     hours = run.get("settings", {}).get("baseline_hours", 24)

@@ -1300,6 +1300,7 @@ class ScreenTests(Base):
         self.assertIn("screen off after an error (TypeError); the run continues",
                       (self.root / "events.log").read_text())
         self.assertFalse((self.root / "screen.json").exists())
+        self.assertEqual(c.screen_results, [])  # nothing stale left for status.json
 
     def test_screen_json_that_cant_be_written_never_ends_the_run(self):
         path = self.thresholds()

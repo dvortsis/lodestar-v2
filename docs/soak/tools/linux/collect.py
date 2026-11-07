@@ -286,6 +286,9 @@ def screen_checkpoint(points, last_hour, hour, run):
                 else:
                     r["value"] = screen_slope(pairs)
                     r["status"] = "trip" if r["value"] > limit else "ok"
+            if r["value"] is not None and not math.isfinite(r["value"]):
+                # Sums of huge finite inputs overflow; a slope that isn't a number is no reading.
+                r.update(value=None, status="unusable")
             out["counters"][label] = r
     states = [(n, r["status"]) for n, r in out["counters"].items()]
     trips = [n for n, s in states if s == "trip"]
@@ -301,7 +304,9 @@ def screen_checkpoint(points, last_hour, hour, run):
 def screen_line(out):
     if out["status"] == "trip":
         r = out["counters"][out["counter"]]
-        out["line"] = f"trip({out['counter']}, {r['value']:.2f}, {r['threshold']:g})"
+        v = r["value"]
+        shown = f"{v:.2f}" if abs(v) < 1e9 else f"{v:.3e}"  # a short line, whatever the value
+        out["line"] = f"trip({out['counter']}, {shown}, {r['threshold']:g})"
     elif out["status"] == "ok":
         out["line"] = "ok"
     else:
@@ -1850,7 +1855,7 @@ class Collector:
                     try:  # the screen never ends or changes a run
                         self.screen_step(row, snapshot if metrics_ok and self.kind != "comparator" else "")
                     except Exception as error:  # noqa: BLE001: screen.json too, unlike the evidence
-                        self.screen_run = None
+                        self.screen_run, self.screen_results = None, []  # no stale line in status.json
                         self.note(f"screen off after an error ({type(error).__name__}); the run continues")
                 shown = row
                 if self.spec:  # rule 6.11: progress and checks only, never counts or rates

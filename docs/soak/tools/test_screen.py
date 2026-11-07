@@ -375,6 +375,62 @@ class NeverAPassTests(Base):
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertEqual("screen" in json.loads(done.stdout), not extra)
 
+    def test_overflowing_sums_are_unusable_not_ok_and_the_exit_code_holds(self):
+        """The runner's repro: finite 308-digit counts whose slope sums overflow."""
+        import subprocess
+        import sys
+        def huge(h):
+            s = r5(h)
+            s["prom"]['mem_anon_mappings{size="128k_512k"}'] = 1e307 * (1 + h)
+            return s
+        root = self.run_dir(huge)
+        c = self.screen(root)["checkpoints"][0]["counters"]["anon_mappings_128k_512k_per_1000_stored"]
+        self.assertEqual((c["status"], c["value"]), ("unusable", None))
+        outs = {}
+        for extra in ([], ["--no-screen"]):
+            done = subprocess.run([sys.executable, "-I", str(HERE / "analyze_cr0.py"), str(root), "--format", "json",
+                                   *extra], capture_output=True, text=True, timeout=120)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            outs[bool(extra)] = json.loads(done.stdout)
+        on, off = outs[False], outs[True]
+        for report in (on, off):
+            report.pop("observation_state")  # the CLI reads the wall clock
+        self.assertEqual(json.dumps(self.gate(on), sort_keys=True), json.dumps(off, sort_keys=True))
+        # The level bound is a real reading (about 4e307 > 512) and trips, shown short.
+        self.assertEqual(on["screen"]["overall"]["line"], "trip(anon_mappings_128k_512k, 4.000e+307, 512)")
+        # Without the bound tripping, an unusable growth is never ok.
+        out = screen_checkpoint([(i / 10, {"stored": 1000.0 * i, "anon_mappings_128k_512k": 1e307 * (1 + i)})
+                                 for i in range(41)], 4.0, 3,
+                                dict(config(), counters={**config()["counters"], "anon_mappings_128k_512k":
+                                                         {"value": float("inf"), "trips": "above"}}))  # bound off
+        self.assertEqual(out["counters"]["anon_mappings_128k_512k_per_1000_stored"]["status"], "unusable")
+        self.assertNotEqual(out["status"], "ok")
+
+    def test_a_result_the_cli_cant_write_is_a_screen_error(self):
+        root = self.run_dir(r5)
+        real = analyze_cr0.screen_evaluate
+        def nan(*args):
+            out = real(*args)
+            out["checkpoints"][0]["counters"]["segments[main]"]["value"] = float("nan")
+            return out
+        analyze_cr0.screen_evaluate = nan
+        try:
+            report = analyze(root, now=NOW)
+        finally:
+            analyze_cr0.screen_evaluate = real
+        self.assertEqual(report["screen"]["overall"]["line"], "not_available(screen_error)")
+        json.dumps(report, allow_nan=False)
+
+    def test_with_the_screen_off_no_snapshot_text_is_kept(self):
+        root = self.run_dir(r5, hours=1.0)
+        issues = analyze_cr0.Counter()
+        self.assertFalse(any("screen_text" in r for r in analyze_cr0.load_rows(root, issues)))
+        kept = [r["screen_text"] for r in analyze_cr0.load_rows(root, issues, screen=True)]
+        self.assertTrue(all(line.startswith(analyze_cr0.SCREEN_PREFIXES)
+                            for text in kept for line in text.splitlines()))
+        self.assertTrue(any("mem_anon_mappings" in text for text in kept))
+        self.assertFalse(any("lodestar_torrents" in text for text in kept))
+
     def test_ok_never_implies_a_gate_pass(self):
         report = analyze(self.run_dir(failing_gate), now=NOW)
         self.assertEqual(report["screen"]["overall"]["line"], "ok")
