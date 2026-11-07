@@ -163,6 +163,7 @@ impl Rig {
         let pipeline = Pipeline::start(config(), store, vec![]).await.unwrap();
         let standing = Arc::new(Fake::default());
         let sink = pipeline.monitor().remote().sink(SinkParts {
+            preparer: Mutex::new(reader(&db).preparer()),
             standing: standing.clone(),
             stored: Arc::new(Reader(Mutex::new(reader(&db)))),
             clocks: Arc::new(Offset(offset_ms)),
@@ -787,7 +788,11 @@ async fn a_purged_record_ends_its_lease() {
     let key = t.info_hash;
     let token = rig.lease(W, key, 1);
     rig.standing.purged.lock().unwrap().insert(W, now() + 10);
-    assert!(rig.sink.results(W, payload(51, vec![record(t, token)])));
+    // The worker claims a fetch far after the purge: the cutoff is the
+    // coordinator's own time for the lease, so it doesn't help.
+    let mut r = record(t, token);
+    r.metadata_at = now() + 1_000_000;
+    assert!(rig.sink.results(W, payload(51, vec![r])));
     let authority = rig.authority();
     until("its lease ends", || !authority.in_flight(&key)).await;
     assert_eq!(stat(&rig.remote(), |s| &s.purged), 1);
@@ -817,10 +822,19 @@ fn wide(store: &Store, name: &str, files: usize, depth: usize) -> Prepared {
         .collect();
     let raw =
         lodestar_store::filetree::encode(&list, lodestar_metainfo::TextEncoding::UTF8).unwrap();
-    t.info_size = raw.len() as u64;
+    // What the info dict would weigh: it spells out every full path,
+    // plus about 30 bytes of bencode per file.
+    let spelled: usize = list
+        .iter()
+        .map(|f| f.path.iter().map(|p| p.len() + 3).sum::<usize>() + 30)
+        .sum();
+    t.info_size = spelled as u64;
     t.files = lodestar_store::BlobCodec::new(19).compress(&raw).unwrap();
     t.size = files as u64;
     t.file_count = files as u64;
+    // A multi-file torrent's row, as its own dict derives it.
+    t.piece_count = (files as u64).div_ceil(t.piece_len);
+    t.flags &= !lodestar_store::flags::SINGLE_FILE;
     t
 }
 
@@ -846,12 +860,12 @@ async fn path_components_are_budgeted_per_record_and_per_batch() {
         writer,
         pool,
         rollups: Arc::new(lodestar_pipeline::Rollups::default()),
-        preparer: store.preparer(),
         epoch,
         prior: Prior::default(),
         private_sources: 0,
     });
     let parts = SinkParts {
+        preparer: Mutex::new(store.preparer()),
         standing: Arc::new(NoStanding),
         stored: Arc::new(Reader(Mutex::new(store))),
         clocks: Arc::new(Offset(0)),
@@ -909,4 +923,50 @@ async fn path_components_are_budgeted_per_record_and_per_batch() {
         intake.take(W, &three, &parts, now()).unwrap().results.len(),
         1
     );
+}
+
+/// The row's other fields are checked or rebuilt from the decoded list
+/// (the security review): a `piece_count` that doesn't follow from the
+/// files and `piece_len`, a `piece_len` metainfo refuses, or `SINGLE_FILE`
+/// on a list that can't be one refuses the record; `PADDING` and
+/// `SYMLINKS` are stored as the list says, whatever the worker sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_row_follows_the_file_list() {
+    let rig = Rig::new(&[], 0).await;
+    // One 1 MiB piece, as its one piece hash says (no metainfo warning).
+    let mut count = prepared(&rig.worker_store, &info("Count.2025.mkv", 1 << 20));
+    assert_eq!(count.flags & lodestar_store::flags::WARNINGS, 0);
+    count.piece_count += 1;
+    let mut zero = prepared(&rig.worker_store, &info("Zero.2025.mkv", GIB));
+    zero.piece_len = 0;
+    let mut single = prepared(&rig.worker_store, &big_info("Single.2025", 2, 10));
+    single.flags |= lodestar_store::flags::SINGLE_FILE;
+    let mut flagged = prepared(&rig.worker_store, &info("Flagged.2025.mkv", GIB));
+    flagged.flags |= lodestar_store::flags::PADDING | lodestar_store::flags::SYMLINKS;
+    let keys: Vec<InfoHash> = [&count, &zero, &single, &flagged]
+        .iter()
+        .map(|t| t.info_hash)
+        .collect();
+    let records = [count, zero, single, flagged]
+        .into_iter()
+        .map(|t| {
+            let token = rig.lease(W, t.info_hash, 1);
+            record(t, token)
+        })
+        .collect();
+    assert!(rig.sink.results(W, payload(70, records)));
+    let id = rig.wait_stored(&keys[3]).await;
+    let row = reader(&rig.db).torrent(id).unwrap().unwrap();
+    let both = lodestar_store::flags::PADDING | lodestar_store::flags::SYMLINKS;
+    assert_eq!(row.flags & both, 0, "rebuilt from the list");
+    let authority = rig.authority();
+    until("the refused records' leases end", || {
+        keys[..3].iter().all(|k| !authority.in_flight(k))
+    })
+    .await;
+    assert_eq!(stat(&rig.remote(), |s| &s.refused), 3);
+    for k in &keys[..3] {
+        assert!(rig.stored(k).is_none());
+    }
+    rig.pipeline.shutdown().await.unwrap();
 }

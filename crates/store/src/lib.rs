@@ -324,16 +324,19 @@ impl Preparer {
 
     /// Decodes a file-tree blob prepared elsewhere (a remote worker's,
     /// WK-9), refusing one that decompresses to more than `max` bytes, or
-    /// whose paths would hold more than `max_components` components in
-    /// all, nest deeper than metainfo allows or list more files than it
-    /// allows (checked by [`filetree::shape`] before any path is built).
-    /// Also returns how many bytes it decompressed to and its components.
+    /// whose [`filetree::shape`] (read before any path is built) is over
+    /// metainfo's limits (depth, files, a name's or a path's bytes) or over
+    /// the caller's budgets: `max_components` path components and
+    /// `max_path_bytes` bytes of paths in all, which is what decoding
+    /// copies. Also returns how many bytes it decompressed to, and the
+    /// shape.
     pub fn decode_files(
         &self,
         blob: &Compressed,
         max: usize,
         max_components: u64,
-    ) -> Result<(FileTree, usize, u64)> {
+        max_path_bytes: u64,
+    ) -> Result<(FileTree, usize, filetree::Shape)> {
         let raw = self
             .codec
             .decompress_capped(blob.codec, blob.dict_id, &blob.data, max)?;
@@ -341,11 +344,14 @@ impl Preparer {
         let limits = lodestar_metainfo::Limits::DEFAULT;
         if shape.depth > limits.max_path_depth
             || shape.files > limits.max_files
+            || shape.longest_name > limits.max_name_bytes
+            || shape.longest_path > limits.max_path_bytes as u64
             || shape.components > max_components
+            || shape.path_bytes > max_path_bytes
         {
             return Err(Error::Corrupt("file tree over its limits"));
         }
-        Ok((filetree::decode(&raw)?, raw.len(), shape.components))
+        Ok((filetree::decode(&raw)?, raw.len(), shape))
     }
 
     /// Whether raw info dicts are kept (`archive_raw`).
@@ -1601,25 +1607,31 @@ mod tests {
         let p = Preparer::from_dict(None, 3, false);
         let deep = |d: usize| raw(&[file((0..d).map(|i| vec![b'a' + (i % 26) as u8]).collect())]);
         let max = 64 << 20;
-        let (tree, _, parts) = p.decode_files(&deep(64), max, u64::MAX).unwrap();
+        let any = u64::MAX;
+        let (tree, _, shape) = p.decode_files(&deep(64), max, any, any).unwrap();
         assert_eq!(tree.files[0].path.len(), 64, "depth 64 is accepted");
+        let parts = shape.components;
         assert_eq!(parts, (1..=63).sum::<u64>() + 64);
         assert!(
-            p.decode_files(&deep(65), max, u64::MAX).is_err(),
+            p.decode_files(&deep(65), max, any, any).is_err(),
             "depth 65 isn't"
         );
-        // Exactly the components allowed, then one fewer.
-        assert!(p.decode_files(&deep(64), max, parts).is_ok());
-        assert!(p.decode_files(&deep(64), max, parts - 1).is_err());
+        // Exactly the components allowed, then one fewer; the same for bytes.
+        assert!(p.decode_files(&deep(64), max, parts, any).is_ok());
+        assert!(p.decode_files(&deep(64), max, parts - 1, any).is_err());
+        let bytes = shape.path_bytes;
+        assert_eq!(bytes, (1..=64).sum::<u64>(), "one byte a name");
+        assert!(p.decode_files(&deep(64), max, any, bytes).is_ok());
+        assert!(p.decode_files(&deep(64), max, any, bytes - 1).is_err());
         let many = |n: usize| {
             let files: Vec<File> = (0..n)
                 .map(|i| file(vec![format!("{i}").into_bytes()]))
                 .collect();
             raw(&files)
         };
-        assert!(p.decode_files(&many(200_000), max, u64::MAX).is_ok());
+        assert!(p.decode_files(&many(200_000), max, any, any).is_ok());
         assert!(
-            p.decode_files(&many(200_001), max, u64::MAX).is_err(),
+            p.decode_files(&many(200_001), max, any, any).is_err(),
             "200,001 files"
         );
         // A 60,000-deep chain in under 300 KB: refused by its shape.
@@ -1647,7 +1659,63 @@ mod tests {
             dict_id: None,
             data: chain,
         };
-        assert!(p.decode_files(&blob, max, u64::MAX).is_err());
+        assert!(p.decode_files(&blob, max, any, any).is_err());
+    }
+
+    /// One long directory name under many files is cheap as a blob and
+    /// costly to decode (every file copies it): a name or path over
+    /// metainfo's 4,096 bytes is refused by its shape, and so is a tree
+    /// whose paths sum past the caller's budget, raw or zstd at the 16 MiB
+    /// cap (WK-9, from the security review).
+    #[test]
+    fn a_long_directory_name_times_many_files_is_refused() {
+        use lodestar_metainfo::{File, FileAttrs, FileHashes, TextEncoding};
+        let tree = |dir_len: usize, files: usize| {
+            let dir = vec![b'x'; dir_len];
+            let files: Vec<File> = (0..files)
+                .map(|i| File {
+                    path: vec![dir.clone(), format!("{i}").into_bytes()],
+                    size: 1,
+                    attrs: FileAttrs::empty(),
+                    symlink_target: None,
+                    pieces_root: None,
+                    hashes: FileHashes::default(),
+                })
+                .collect();
+            filetree::encode(&files, TextEncoding::UTF8).unwrap()
+        };
+        let p = Preparer::from_dict(None, 3, false);
+        let any = u64::MAX;
+        let cap = 16 << 20;
+        // A 400 KB name under 2,000 files: 800 MB of paths from 413 KB.
+        let long = tree(400_000, 2_000);
+        assert!(long.len() < 420_000, "{} bytes", long.len());
+        let shape = filetree::shape(&long).unwrap();
+        assert!(shape.path_bytes > 800_000_000);
+        let raw = Compressed {
+            codec: Codec::Raw,
+            dict_id: None,
+            data: long,
+        };
+        assert!(
+            p.decode_files(&raw, cap, any, any).is_err(),
+            "a name over 4,096 bytes"
+        );
+        // Names within the limit, but 30,000 files under a 4,000-byte
+        // directory: 120 MB of paths in about 150 KB, compressed to less.
+        let wide = tree(4_000, 30_000);
+        let shape = filetree::shape(&wide).unwrap();
+        assert!(shape.path_bytes > 120_000_000 && shape.longest_path <= 4_096);
+        let z = BlobCodec::new(19).compress(&wide).unwrap();
+        assert!(z.data.len() < 64 << 10);
+        assert!(
+            p.decode_files(&z, cap, any, cap as u64).is_err(),
+            "over the record's budget"
+        );
+        assert!(
+            p.decode_files(&z, cap, any, any).is_ok(),
+            "only the budget refuses it"
+        );
     }
 
     /// A preparer built from the active dictionary's bytes prepares the
@@ -1716,10 +1784,12 @@ mod tests {
                 assert_eq!(b.raw.is_some(), archive_raw);
                 // A worker's blob decodes, under the coordinator's
                 // dictionaries, to the tree the local path stores (WK-9).
-                let (tree, took, parts) = ours.decode_files(&b.files, 1 << 20, 1 << 20).unwrap();
-                assert_eq!(parts, 6, "six files, one component each");
+                let (tree, took, shape) = ours
+                    .decode_files(&b.files, 1 << 20, 1 << 20, 1 << 20)
+                    .unwrap();
+                assert_eq!(shape.components, 6, "six files, one component each");
                 assert!(
-                    ours.decode_files(&b.files, 1 << 20, 5).is_err(),
+                    ours.decode_files(&b.files, 1 << 20, 5, 1 << 20).is_err(),
                     "over its components"
                 );
                 assert_eq!(
@@ -1736,7 +1806,8 @@ mod tests {
                         .len()
                 );
                 assert!(
-                    ours.decode_files(&b.files, took - 1, 1 << 20).is_err(),
+                    ours.decode_files(&b.files, took - 1, 1 << 20, 1 << 20)
+                        .is_err(),
                     "over its cap"
                 );
             }

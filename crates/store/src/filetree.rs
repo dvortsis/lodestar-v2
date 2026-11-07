@@ -162,7 +162,7 @@ pub fn encode(files: &[File], encoding: TextEncoding) -> Result<Vec<u8>, CodecEr
 }
 
 /// What a file-tree blob would decode to, read without building any path
-/// ([`decode`] clones each directory's path for every child, so a blob's
+/// ([`decode`] copies each directory's path into every child's, so a blob's
 /// decoded size can be far larger than the blob). For blobs from another
 /// machine (WK-9): check the shape, then decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,15 +173,23 @@ pub struct Shape {
     pub depth: usize,
     /// Path components across every directory and file path.
     pub components: u64,
+    /// The longest name (one component), and the longest path (the sum of
+    /// its components' names), in bytes.
+    pub longest_name: usize,
+    pub longest_path: u64,
+    /// Bytes of every directory and file path, summed: what [`decode`]
+    /// copies, before allocator overhead.
+    pub path_bytes: u64,
 }
 
-/// Reads a blob's [`Shape`]. Allocates one byte per directory, never a
-/// path. An error here means [`decode`] would fail too.
+/// Reads a blob's [`Shape`]. Never builds a path. An error here means
+/// [`decode`] would fail too.
 ///
-/// Cost: one pass over the blob, linear in its bytes, with no recursion
-/// (a directory's depth is its parent's plus one, and parents come first),
-/// so a hostile depth can't grow the stack; the depth table is one byte per
-/// directory, and the directory count is bounded by the blob's length.
+/// Cost: one pass over the blob, linear in its bytes, with no recursion (a
+/// directory's depth and path length are its parent's plus its own, and
+/// parents come first), so a hostile depth can't grow the stack. It keeps
+/// a few bytes per directory and per file, and both counts are bounded by
+/// the blob's length.
 pub fn shape(blob: &[u8]) -> Result<Shape, CodecError> {
     let mut r = Reader { buf: blob, pos: 0 };
     let version = r.u8()?;
@@ -195,42 +203,60 @@ pub fn shape(blob: &[u8]) -> Result<Shape, CodecError> {
     TextEncoding::from_id(r.u8()?).ok_or(CodecError::Corrupt("encoding id"))?;
     let dir_count = r.count()?;
     let file_count = r.count()?;
-    // Depths saturate at 255: the caller's depth limit is far below.
-    let mut depths: Vec<u8> = Vec::with_capacity(dir_count + 1);
-    depths.push(0);
-    let mut components = 0u64;
-    let mut deepest = 0usize;
+    let mut parents = Vec::with_capacity(dir_count);
     for i in 0..dir_count {
         let parent = r.varint()?;
         if parent > i as u64 {
             return Err(CodecError::Corrupt("directory parent order"));
         }
-        let d = depths[parent as usize].saturating_add(1);
-        deepest = deepest.max(usize::from(d));
-        components += u64::from(d);
-        depths.push(d);
+        parents.push(parent as usize);
     }
-    // The directory names: a column of lengths, then their bytes.
-    let mut names = 0usize;
-    for _ in 0..dir_count {
-        names = names.saturating_add(r.count()?);
+    // Per directory, root first: depth (saturating) and path bytes.
+    let mut dirs: Vec<(u8, u64)> = Vec::with_capacity(dir_count + 1);
+    dirs.push((0, 0));
+    let mut out = Shape {
+        dirs: dir_count,
+        files: file_count,
+        depth: 0,
+        components: 0,
+        longest_name: 0,
+        longest_path: 0,
+        path_bytes: 0,
+    };
+    let mut name_bytes = 0usize;
+    for parent in parents {
+        let len = r.count()?;
+        name_bytes = name_bytes.saturating_add(len);
+        let (d, b) = dirs[parent];
+        let here = (d.saturating_add(1), b.saturating_add(len as u64));
+        out.note(here, len);
+        dirs.push(here);
     }
-    r.bytes(names)?;
+    r.bytes(name_bytes)?;
+    let mut file_parents = Vec::with_capacity(file_count);
     for _ in 0..file_count {
         let parent = r.varint()?;
         if parent > dir_count as u64 {
             return Err(CodecError::Corrupt("file parent"));
         }
-        let d = usize::from(depths[parent as usize]) + 1;
-        deepest = deepest.max(d);
-        components += d as u64;
+        file_parents.push(parent as usize);
     }
-    Ok(Shape {
-        dirs: dir_count,
-        files: file_count,
-        depth: deepest,
-        components,
-    })
+    for parent in file_parents {
+        let len = r.count()?;
+        let (d, b) = dirs[parent];
+        out.note((d.saturating_add(1), b.saturating_add(len as u64)), len);
+    }
+    Ok(out)
+}
+
+impl Shape {
+    fn note(&mut self, (depth, bytes): (u8, u64), name: usize) {
+        self.depth = self.depth.max(usize::from(depth));
+        self.components += u64::from(depth);
+        self.longest_name = self.longest_name.max(name);
+        self.longest_path = self.longest_path.max(bytes);
+        self.path_bytes = self.path_bytes.saturating_add(bytes);
+    }
 }
 
 /// Deserializes a file list. Never panics, whatever the input.
@@ -591,6 +617,8 @@ mod tests {
         assert_eq!(s.depth, 3);
         // Directories a, a/b; files a/b/c.mkv, a/d.nfo.
         assert_eq!(s.components, 1 + 2 + 3 + 2);
+        // Their bytes: 1 + 2 + 7 + 6.
+        assert_eq!((s.path_bytes, s.longest_path, s.longest_name), (16, 7, 5));
         for cut in 0..blob.len() {
             let _ = shape(&blob[..cut]);
         }

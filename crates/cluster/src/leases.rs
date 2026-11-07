@@ -557,9 +557,10 @@ impl LeaseAuthority {
         token
     }
 
-    /// [`restore`](Self::restore), only if `key` is neither leased nor
-    /// waiting for a re-grant, checked and done under one lock: the token,
-    /// or `None` and nothing changed. For a late result (plan Q7, WK-9),
+    /// [`restore`](Self::restore), only if `key` is neither leased, nor
+    /// waiting for a re-grant, nor committed recently (a commit since the
+    /// caller's store check: [`RECENT_COMMITS`]), checked and done under one
+    /// lock: the token, or `None` and nothing changed. For a late result (plan Q7, WK-9),
     /// which may never take over a key in flight.
     pub fn restore_if_free(
         &self,
@@ -569,7 +570,11 @@ impl LeaseAuthority {
         now: i64,
     ) -> Option<Token> {
         let mut s = self.lock();
-        if s.table.get(&key).is_some() || s.pending.contains_key(&key) {
+        let committed = s
+            .recent
+            .as_ref()
+            .is_some_and(|(seqs, _)| seqs.contains_key(&key));
+        if s.table.get(&key).is_some() || s.pending.contains_key(&key) || committed {
             return None;
         }
         let token = s.table.restore(worker, key, lease, now);
@@ -1298,5 +1303,34 @@ mod tests {
         assert_eq!(run(false), (true, 0));
         // The atomic path: refused, and the key still waits for a re-grant.
         assert_eq!(run(true), (false, 1));
+    }
+
+    /// A key granted, harvested and committed between the late-result
+    /// intake's store check and its lease (WK-9, from the security review):
+    /// injected step by step. The commit is remembered, so the lease is
+    /// refused and nothing is restored or corrected.
+    #[test]
+    fn a_late_lease_never_follows_a_commit_since_the_check() {
+        let (a, ev) = counted();
+        a.serve_remote();
+        let lease = RestoredLease {
+            cohort: 2,
+            source: src(1),
+            sources: 2,
+            strategy: 0,
+            discovered_at: 7_200,
+        };
+        let key = InfoHash([6; 20]);
+        // 1. The intake's checks: not stored, not in flight.
+        assert!(!a.in_flight(&key));
+        // 2. Another worker is granted it (a harvest) and commits it.
+        let Claimed::Granted(t) = a.claim(B, claim(6, 1), 0) else {
+            panic!()
+        };
+        assert!(a.commit(B, &key, t).is_some());
+        // 3. The intake's lease: refused.
+        assert_eq!(a.restore_if_free(A, key, lease, 1), None);
+        assert!(!a.in_flight(&key));
+        assert_eq!(get(&ev.harvested), 1);
     }
 }

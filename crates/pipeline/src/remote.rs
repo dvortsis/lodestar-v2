@@ -64,7 +64,7 @@ use lodestar_cluster::{
 use lodestar_filter::{Trail, Verdict};
 use lodestar_metainfo::{InfoHash, Limits};
 use lodestar_sources::{Discovery, Found, Loss};
-use lodestar_store::{Preparer, SourceId};
+use lodestar_store::{Preparer, SourceId, flags};
 use tokio::sync::mpsc;
 
 use crate::rollups::{Rollups, metric};
@@ -92,12 +92,25 @@ pub const BATCH_BLOBS: usize = 64 << 20;
 /// (`filetree::decode` copies a directory's path into each child's).
 pub const BATCH_COMPONENTS: u64 = 2_000_000;
 
+/// Bytes of paths one batch's file trees may hold in all (what decoding
+/// copies). With the per-record cap (the record's own byte cap: an info
+/// dict spells out every path in full, so a real tree's paths fit in it),
+/// a remote result's decoded paths are bounded as tightly as a fetched
+/// one's (`docs/decisions/2026-11-07-WK-9.md` has the arithmetic).
+pub const BATCH_PATH_BYTES: u64 = 64 << 20;
+
 /// What the rest of one batch may still decode.
 #[derive(Debug, Clone, Copy)]
 struct Budget {
     bytes: usize,
     components: u64,
+    path_bytes: u64,
 }
+
+/// A remote worker's timestamps may be ahead of the coordinator's by this
+/// much and still be clamped at the claim (`ServerConfig::max_skew_ms`):
+/// the margin a purge cutoff allows for (seconds).
+const SKEW_SECS: i64 = 60;
 
 /// A late result is possible only while a spool can hold one (24 h,
 /// owner §2.17); the start's records are dropped after this.
@@ -136,7 +149,8 @@ pub trait Clocks: Send + Sync + 'static {
 /// Counters for metrics.
 #[derive(Debug, Default)]
 pub struct RemoteStats {
-    /// `Results` payloads read, and records in them.
+    /// `Results` payloads decoded, and records in them (counted once the
+    /// whole batch has been taken).
     pub batches: AtomicU64,
     pub records: AtomicU64,
     /// Records handed to the writer (late ones included). A resend read
@@ -256,8 +270,6 @@ pub struct RemoteParts {
     /// The built-in worker's pool, for hints a remote worker found.
     pub pool: mpsc::Sender<Discovery>,
     pub rollups: Arc<Rollups>,
-    /// The store's dictionaries and `archive_raw`.
-    pub preparer: Preparer,
     /// This run's first epoch (its start time): a token from below it is
     /// a late result.
     pub epoch: u32,
@@ -282,8 +294,6 @@ pub struct RemoteIntake {
     writer: RwLock<Option<mpsc::Sender<Results>>>,
     pool: RwLock<Option<mpsc::Sender<Discovery>>>,
     rollups: Arc<Rollups>,
-    preparer: Mutex<Preparer>,
-    archive_raw: bool,
     epoch: u32,
     prior: Mutex<Prior>,
     private_sources: u64,
@@ -306,11 +316,21 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// What the cluster port gives the intake when it opens.
 pub struct SinkParts {
+    /// The store's dictionaries and `archive_raw`, from the connection the
+    /// port opened: built only once workers are allowed, so a single
+    /// machine holds no second copy of the dictionaries.
+    pub preparer: Mutex<Preparer>,
     pub standing: Arc<dyn Standing>,
     pub stored: Arc<dyn StoredKeys>,
     pub clocks: Arc<dyn Clocks>,
     /// `lodestar_network_policy::allows`' `allow_private` for hints.
     pub hints_allow_private: bool,
+}
+
+impl SinkParts {
+    fn preparer_archive_raw(&self) -> bool {
+        lock(&self.preparer).archive_raw()
+    }
 }
 
 impl std::fmt::Debug for SinkParts {
@@ -339,14 +359,11 @@ pub enum Refusal {
 
 impl RemoteIntake {
     pub fn new(p: RemoteParts) -> RemoteIntake {
-        let archive_raw = p.preparer.archive_raw();
         RemoteIntake {
             authority: p.authority,
             writer: RwLock::new(Some(p.writer)),
             pool: RwLock::new(Some(p.pool)),
             rollups: p.rollups,
-            preparer: Mutex::new(p.preparer),
-            archive_raw,
             epoch: p.epoch,
             prior: Mutex::new(p.prior),
             private_sources: p.private_sources,
@@ -410,26 +427,20 @@ impl RemoteIntake {
         let mut budget = Budget {
             bytes: BATCH_BLOBS,
             components: BATCH_COMPONENTS,
+            path_bytes: BATCH_PATH_BYTES,
         };
         let mut out = Taken::default();
+        let n = batch.records.len() as u64;
         for rec in batch.records {
-            bump(&self.stats.records);
             let fetched_at = corrected(rec.metadata_at, offset);
-            if purge.is_some_and(|p| fetched_at <= p) {
-                bump(&self.stats.purged);
-                // A current lease of the sender's ends once, so the key
-                // isn't stranded once the worker forgets it.
-                self.authority
-                    .report(worker, &rec.key, rec.token, Some(Loss::Invalid as u8));
-                continue;
-            }
             let late = epoch_of(rec.token) < self.epoch;
             if late {
                 if parts.standing.refuses_late(worker) {
                     bump(&self.stats.late_refused);
                     continue;
                 }
-                if let Some(r) = self.late(worker, rec, fetched_at, parts, &mut budget, now) {
+                if let Some(r) = self.late(worker, rec, fetched_at, purge, parts, &mut budget, now)
+                {
                     out.results.push(r);
                 }
                 continue;
@@ -438,6 +449,17 @@ impl RemoteIntake {
                 bump(&self.stats.stale);
                 continue;
             };
+            // Before the worker's last purge, by the coordinator's own time
+            // for the lease (its discovery, clamped to the claim's clock),
+            // never a time the worker chose.
+            if purged(purge, lease.discovered_at) {
+                bump(&self.stats.purged);
+                // Ends once, so the key isn't stranded once the worker
+                // forgets it.
+                self.authority
+                    .report(worker, &rec.key, rec.token, Some(Loss::Invalid as u8));
+                continue;
+            }
             let (key, token) = (rec.key, rec.token);
             match self.rebuild(worker, rec, &lease, fetched_at, parts, &mut budget, now) {
                 Ok(r) => {
@@ -452,16 +474,21 @@ impl RemoteIntake {
                 }
             }
         }
+        // Counted once each has its outcome, so a reader of the counters
+        // sees every record's outcome with its count.
+        self.stats.records.fetch_add(n, Ordering::Relaxed);
         Some(out)
     }
 
     /// A late result (Q7): committed under the coordinator's own record of
     /// the key, only when it's neither stored nor in flight now.
+    #[allow(clippy::too_many_arguments)]
     fn late(
         &self,
         worker: WorkerId,
         rec: ResultRecord,
         fetched_at: i64,
+        purge: Option<i64>,
         parts: &SinkParts,
         budget: &mut Budget,
         now: i64,
@@ -472,6 +499,11 @@ impl RemoteIntake {
             bump(&self.stats.stale);
             return None;
         };
+        // Discovered (by our own record) before the worker's last purge.
+        if purged(purge, record.discovered_at) {
+            bump(&self.stats.purged);
+            return None;
+        }
         if self.authority.in_flight(&key) || parts.stored.stored(&[key])[0] {
             bump(&self.stats.stale);
             return None;
@@ -530,8 +562,8 @@ impl RemoteIntake {
         now: i64,
     ) -> Result<Results, Refusal> {
         let mut torrent = rec.torrent;
-        let files = {
-            let preparer = lock(&self.preparer);
+        let (files, derived) = {
+            let preparer = lock(&parts.preparer);
             if let Some(id) = torrent.files.dict_id
                 && !preparer.has_dict(id)
             {
@@ -543,14 +575,26 @@ impl RemoteIntake {
                 .min(MAX_BLOB)
                 .min(budget.bytes);
             // A refused blob may have taken its whole cap: charged as such,
-            // so a batch of bombs costs the budget, not 1,024 caps.
-            // Its shape is read before any path is built.
-            let decoded = preparer.decode_files(&torrent.files, cap, budget.components);
-            let (took, parts) = decoded.as_ref().map_or((cap, 0), |(_, b, c)| (*b, *c));
+            // so a batch of bombs costs the budget, not 1,024 caps. Its
+            // shape is read before any path is built, and its paths may
+            // copy no more than its own byte cap (and the batch's rest).
+            let paths = budget.path_bytes.min(cap as u64);
+            let decoded = preparer.decode_files(&torrent.files, cap, budget.components, paths);
+            let (took, shape) = match &decoded {
+                Ok((_, took, shape)) => (*took, Some(*shape)),
+                Err(_) => (cap, None),
+            };
             budget.bytes = budget.bytes.saturating_sub(took);
-            budget.components = budget.components.saturating_sub(parts);
+            if let Some(shape) = shape {
+                budget.components = budget.components.saturating_sub(shape.components);
+                budget.path_bytes = budget.path_bytes.saturating_sub(shape.path_bytes);
+            }
             let (tree, _, _) = decoded.map_err(|_| Refusal::Blob)?;
-            crate::enrich::file_infos(&tree.files, tree.encoding)
+            let derived = derived_flags(&tree.files);
+            let infos = crate::enrich::file_infos(&tree.files, tree.encoding);
+            // The tree goes here: only the file list is kept.
+            drop(tree);
+            (infos, derived)
         };
         let content = files.iter().filter(|f| !f.padding);
         let size = content
@@ -560,13 +604,19 @@ impl RemoteIntake {
         if size != torrent.size || content.count() as u64 != torrent.file_count {
             return Err(Refusal::Counts);
         }
+        check_pieces(&torrent, &files)?;
+        // The file-list flags are rebuilt, never taken as sent.
+        if !derived.single_file && torrent.flags & flags::SINGLE_FILE != 0 {
+            return Err(Refusal::Counts);
+        }
+        torrent.flags = (torrent.flags & !(flags::PADDING | flags::SYMLINKS)) | derived.bits;
         // A hybrid's other hash is the worker's word: a record that would
         // merge into another stored torrent through it is refused.
         let other: Vec<InfoHash> = torrent.swarm_hashes().filter(|h| *h != rec.key).collect();
         if !other.is_empty() && parts.stored.stored(&other).iter().any(|s| *s) {
             return Err(Refusal::OtherHashStored);
         }
-        if !self.archive_raw {
+        if !parts.preparer_archive_raw() {
             torrent.raw = None;
         }
         // Content safety: the coordinator's own enrichment, never the
@@ -649,6 +699,70 @@ impl RemoteIntake {
         *self.server.write().unwrap_or_else(PoisonError::into_inner) =
             server.map(|s| (Arc::downgrade(s), hints_allow_private));
     }
+}
+
+/// Whether a lease discovered at `at` (the coordinator's own time) comes
+/// from before the worker's last purge, allowing for the skew a claim may
+/// carry.
+fn purged(purge: Option<i64>, at: i64) -> bool {
+    purge.is_some_and(|p| at <= p.saturating_add(SKEW_SECS))
+}
+
+/// The file-list flags as `Preparer` derives them, from the decoded list.
+struct Derived {
+    bits: i64,
+    /// The list can be a single-file torrent's (one file whose path is a
+    /// single name), as `SINGLE_FILE` needs.
+    single_file: bool,
+}
+
+fn derived_flags(files: &[lodestar_metainfo::File]) -> Derived {
+    let mut bits = 0;
+    if files.iter().any(lodestar_metainfo::File::is_padding) {
+        bits |= flags::PADDING;
+    }
+    if files
+        .iter()
+        .any(|f| f.attrs.contains(lodestar_metainfo::FileAttrs::SYMLINK))
+    {
+        bits |= flags::SYMLINKS;
+    }
+    Derived {
+        bits,
+        single_file: files.len() == 1 && files[0].path.len() == 1,
+    }
+}
+
+/// `piece_len` as metainfo accepts it, and `piece_count` as it follows
+/// from it and the file list: exactly for v2 (per file), and for v1 unless
+/// metainfo flagged a mismatch in the dict (`WARNINGS`), as it keeps the
+/// dict's own count then.
+fn check_pieces(
+    t: &lodestar_store::Prepared,
+    files: &[lodestar_classify::FileInfo],
+) -> Result<(), Refusal> {
+    let v2 = t.flags & flags::V2 != 0;
+    let hybrid = t.flags & flags::HYBRID != 0;
+    if t.piece_len == 0 || (v2 && (t.piece_len < 16 << 10 || !t.piece_len.is_power_of_two())) {
+        return Err(Refusal::Counts);
+    }
+    let expected = if v2 && !hybrid {
+        files
+            .iter()
+            .filter(|f| !f.padding)
+            .map(|f| f.size.div_ceil(t.piece_len))
+            .try_fold(0u64, u64::checked_add)
+    } else {
+        files
+            .iter()
+            .try_fold(0u64, |s, f| s.checked_add(f.size))
+            .map(|all| all.div_ceil(t.piece_len))
+    }
+    .ok_or(Refusal::Counts)?;
+    if t.piece_count != expected && (t.flags & flags::WARNINGS == 0 || v2 && !hybrid) {
+        return Err(Refusal::Counts);
+    }
+    Ok(())
 }
 
 /// A worker's timestamp on the coordinator's clock (§19.3).

@@ -333,14 +333,18 @@ impl Inner {
         let (pki, check) = tokio::task::spawn_blocking(move || open_pki(&w, errors))
             .await
             .map_err(|_| StartError::task())??;
+        let preparer = check
+            .reader
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .preparer();
         let check: Arc<dyn StoredKeys> = Arc::new(check);
         let config = server_config(&self.wiring.settings);
-        // The intake and the writer's backpressure (WK-9).
-        let attached = self
-            .wiring
-            .remote
-            .as_ref()
-            .map(|r| super::intake::attach(r, check.clone(), config.hints_allow_private));
+        // The intake (WK-9); the writer's backpressure is WK-9b's.
+        let attached =
+            self.wiring.remote.as_ref().map(|r| {
+                super::intake::attach(r, preparer, check.clone(), config.hints_allow_private)
+            });
         let hooks = ServerHooks {
             authority: self.wiring.authority.clone(),
             stored: Some(check),

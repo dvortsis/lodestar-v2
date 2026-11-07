@@ -736,7 +736,6 @@ impl Pipeline {
             leases.insert(q.info_hash, token);
         }
         let preparer = store.preparer();
-        let remote_preparer = store.preparer();
         // The torrent-cache plugin's source, while it runs (SRC-13b).
         let cache_source = config.torrent_cache.and_then(|plugin| {
             registered
@@ -949,7 +948,6 @@ impl Pipeline {
             writer: results_tx,
             pool: pool_tx.clone(),
             rollups: rollups.clone(),
-            preparer: remote_preparer,
             epoch: started_at as u32,
             prior: remote::Prior::new(prior, started_at),
             private_sources: remote::private_sources(

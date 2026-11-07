@@ -8,10 +8,11 @@
 //! server it's about to be given to), and the workers' standing (quarantine
 //! and purge, which WK-13 adds; until then none is refused).
 
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use lodestar_cluster::{ClusterServer, StoredKeys, WorkerId};
 use lodestar_pipeline::remote::{Clocks, NoStanding, RemoteIntake, RemoteSink, SinkParts};
+use lodestar_store::Preparer;
 
 /// Each worker's offset as the server measured it from its heartbeats.
 /// Before the server exists, or for a worker it doesn't know, 0.
@@ -50,13 +51,17 @@ impl std::fmt::Debug for Attached {
 /// The sink and admission hook for the server about to be built.
 /// `hints_allow_private` is the server's own (`ServerConfig`), so hints
 /// pass the same network policy whichever way they're relayed.
+/// `preparer` comes from the port's own store connection, so the
+/// dictionaries are copied only once workers are allowed.
 pub(crate) fn attach(
     remote: &Arc<RemoteIntake>,
+    preparer: Preparer,
     stored: Arc<dyn StoredKeys>,
     hints_allow_private: bool,
 ) -> Attached {
     let clocks = Arc::new(ServerClocks::default());
     let sink = remote.sink(SinkParts {
+        preparer: Mutex::new(preparer),
         standing: Arc::new(NoStanding),
         stored,
         clocks: clocks.clone(),
