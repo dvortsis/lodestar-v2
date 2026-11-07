@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T15:25Z",
+  "updated_at": "2026-11-07T15:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5725,6 +5725,11 @@
       "id": "r579-delta-1525",
       "added": "2026-11-07T15:25Z",
       "text": "#579 delta review CHANGES: lookups underflow in pool.rs lose()/stream-end (pre-existing CR-1a-S bug on main, streaming switch off by default; PR widens it). Fix: lose() decrements only if requests.remove is_some; stream-end make_ready if has_untried else back_off; two tests. Nits: metrics.md:858 row, freed.notify at pool.rs:442, starved+partials push under one lock. Relayed; P-v052-cut told to list as known issue in inactive feature, backport after #579 merges."
+    },
+    {
+      "id": "status-1534",
+      "added": "2026-11-07T15:34Z",
+      "text": "#582 P-v052-cut PR A open (a9fc74d8), CI running; D6 NOTICE_VERSION stays 4 (owner told), D7 collector uses existing collector_error stop reason (runner accepts); docs/legal/README.md phrase table edited (accepted). WK-15: Discover 30d broke 50 ms (51.3) from per-row metric-17 read; fix = grouped SQL in store insights.rs; runner asked full test incl compacted, headroom (<~40 ms), equality test. SRC-G: dev-deps in sources-plugins and bench approved; e2e renamed sources-gate.routes.test.ts; \u00a72.37 wording missing = wiring blocker."
     }
   ],
   "main_health": [
