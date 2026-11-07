@@ -32,6 +32,7 @@ mod web;
 #[cfg(test)]
 mod web_build;
 mod windows;
+mod worker;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -78,11 +79,26 @@ fn main() -> ExitCode {
         | Command::Rollback(_)
         | Command::Vacuum
         | Command::Reindex
-        | Command::Rollup(_) => Some(privdrop::Scope::DataDir),
+        | Command::Rollup(_)
+        | Command::Worker(_) => Some(privdrop::Scope::DataDir),
         Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
         Command::Lists => None,
     };
-    let dropped = match scope.map(|s| privdrop::run(s, |k| std::env::var(k).ok())) {
+    // `lodestar worker --data <dir>`: that folder is the one to own, through
+    // the same checks as LODESTAR_DATA_DIR (it's passed to the drop as that
+    // variable); `prepare` refuses what can't be checked the same way.
+    let worker_data = match &command {
+        Command::Worker(a) => match cli::worker::prepare(a) {
+            Ok(d) => d,
+            Err(code) => return code,
+        },
+        _ => None,
+    };
+    let env = |k: &str| match (k, &worker_data) {
+        ("LODESTAR_DATA_DIR", Some(d)) => Some(d.clone()),
+        _ => std::env::var(k).ok(),
+    };
+    let dropped = match scope.map(|s| privdrop::run(s, env)) {
         Some(Ok(report)) => report,
         Some(Err(e)) => {
             eprintln!("PUID/PGID: {e}");
