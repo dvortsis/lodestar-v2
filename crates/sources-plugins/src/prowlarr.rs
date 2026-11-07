@@ -138,7 +138,6 @@ const POLICY: Policy = Policy {
         kind: CredentialKind::Secret,
         required: true,
     }],
-    ..Policy::STRICT
 };
 
 /// Which indexer manager is at the address.

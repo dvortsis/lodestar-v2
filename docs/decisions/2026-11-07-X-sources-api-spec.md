@@ -26,7 +26,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
   - `tests/{prowlarr,stashdb,tpdb}.rs` each now assert it's absent.
   - `credential_spec.rs` checks that no plugin's schema shares a name with its declared credentials or lists a write-only field.
 - **All the others declare none.** They're built without a credential store, so they can't read one. That includes the download clients (`clients.rs`): their credentials are Settings → Integrations', handed to the plugin in its `ClientConfig`.
-- **Four plugin files gained only `..Policy::STRICT`:** `full_scrape.rs`, `academic.rs`, `nyaa.rs` and `archive_org.rs`. Their `POLICY` listed every field, so the new field didn't compile without it. Prowlarr gained it along with its declaration. Runner approval: see "Files outside the slice's owns".
+- **Four plugin files gained only `..Policy::STRICT`:** `full_scrape.rs`, `academic.rs`, `nyaa.rs` and `archive_org.rs`. Their `POLICY` listed every field, so the new field didn't compile without it. Prowlarr, which also listed every field, now sets `credentials` itself (its declaration), so it needs no `..Policy::STRICT`. Runner approval: see "Files outside the slice's owns".
 
 ## Checked against `consent::need` and what the plugins read
 - **`consent::check_spec(manifest, spec)`** checks four things:
@@ -104,7 +104,7 @@ Runner approval, in the runner's replies to this session (2026-11-07T00:29Z, 00:
 - `crates/sources-plugins/src/{prowlarr,stashdb,tpdb}.rs`: the `api_key` declaration, and `CONFIG_SCHEMA` without `api_key`.
 - `crates/sources-plugins/tests/{prowlarr,stashdb,tpdb}.rs`: the one assert each about `api_key` in the schema.
 - `crates/lodestar/src/ops/tests.rs`: the end-to-end preview test.
-- `crates/sources-plugins/src/{full_scrape,academic,nyaa,archive_org,prowlarr}.rs`: `..Policy::STRICT`.
+- `crates/sources-plugins/src/{full_scrape,academic,nyaa,archive_org}.rs`: `..Policy::STRICT`.
 - `crates/sources-plugins/tests/credential_spec.rs`: new.
 - `crates/store/src/unverified.rs`: `PurgePreview` and `Store::purge_preview` only.
 - `crates/store/tests/unverified.rs`: the preview assertions in `purge_removes_only_what_the_source_alone_found`.
