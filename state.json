@@ -3533,8 +3533,10 @@
    "merge": "35494b21"
   },
   "WK-2": {
-   "status": "running",
-   "session": "session_01MMjhnBWxp745BwvUruYDGs"
+   "status": "merged",
+   "session": "session_01MMjhnBWxp745BwvUruYDGs",
+   "pr": 556,
+   "merge": "d39bb965"
   },
   "X-win-log-held-open": {
    "status": "merged",
@@ -3560,6 +3562,10 @@
   "X-sources-api-spec": {
    "status": "running",
    "session": "session_01MMjhn9ARUjR5QVyemUwrx1"
+  },
+  "X-soak-screen": {
+   "status": "running",
+   "session": "session_01MMjhnAigUdTtQ5M3dobhaR"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5841,7 +5847,9 @@
    "note": "R-legal-status merged; CI+Release+E2E dispatched 00:19Z; go to owner on green",
    "checks": "CI 42317461111, Release 42317463756, E2E 42317466554 all success by 00:53Z",
    "go_sent": "2026-11-07T00:55Z",
-   "next": "owner tags v0.5.1 on 12cd25ca, approves release env, publishes; runner verifies digests/assets then R4"
+   "next": "owner tags v0.5.1 on 12cd25ca, approves release env, publishes; runner verifies digests/assets then R4",
+   "tag": "v0.5.1 annotated f4e4e665 -> 12cd25ca, pushed ~01:35Z (owner)",
+   "release_run": "42322636882 (MSI job waiting on release env approval)"
   }
  },
  "owner_standing": {
@@ -6174,15 +6182,15 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-07T00:39Z",
+  "updated": "2026-11-07T01:25Z",
   "items": [
    {
     "slot": 1,
-    "slice": "WK-2",
+    "slice": "X-soak-screen",
     "role": "build",
     "agent": "claude",
-    "doing": "lodestar worker join/connect/renew/drain (session_01MMjhnBWxp745BwvUruYDGs)",
-    "since": "2026-11-06T23:08Z"
+    "doing": "session_01MMjhnAigUdTtQ5M3dobhaR: pre-soak sweep + in-run screen (§2.50)",
+    "since": "2026-11-07T01:25Z"
    },
    {
     "slot": 2,
