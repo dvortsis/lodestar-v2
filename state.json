@@ -5825,7 +5825,8 @@
     {
       "id": "X-wk15-nits",
       "added": "2026-11-07T18:35Z",
-      "text": "#585 merged 044a32d6; X-wk15-nits (marginal wording, saturating_add) in same session; add slices.yaml entry in next runner PR. Reviewer nit 4 for future slices: worker-side claim suppression would inflate marginal; nit 5: sealed-vs-live test never reads an unsealed day (FakeSource now fixed) \u2014 candidate test addition."
+      "text": "#585 merged 044a32d6; X-wk15-nits (marginal wording, saturating_add) in same session; add slices.yaml entry in next runner PR. Reviewer nit 4 for future slices: worker-side claim suppression would inflate marginal; nit 5: sealed-vs-live test never reads an unsealed day (FakeSource now fixed) \u2014 candidate test addition.",
+      "note": " MERGED #589 (58a85f75) 2026-11-07T19:27Z."
     },
     {
       "id": "next-runner-pr-owner-queue",
@@ -5861,6 +5862,11 @@
       "id": "merged-1915",
       "added": "2026-11-07T19:09Z",
       "text": "#587 X-v052-nits-forward merged aa7a1691; #584 rc.1 merged into release/v0.5.2 at 82076831. Owner long runs on rc.2 (runner call; owner told via dashboard, est. 22:00Z-00:00Z)."
+    },
+    {
+      "id": "X-facets-uncheck-flake",
+      "at": "2026-11-07T19:30Z",
+      "note": "web/e2e/search-facets.fixture.test.ts:52 uncheck() on facet-type-movie: \"Clicking the checkbox did not change its state\" on E2E run 42404920557 attempt 1 (release/v0.5.2 192b52f0); attempt 2 green. Likely the facet rail re-rendering from the new /facets right after the query change. Fix once (wait for the rail to settle before unchecking) if it recurs or in the next e2e hygiene slice."
     }
   ],
   "main_health": [
@@ -6556,7 +6562,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T19:25Z",
+    "updated": "2026-11-07T19:30Z",
     "items": [
       {
         "slot": 1,
@@ -6576,11 +6582,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-wk15-nits",
+        "slice": "WK-17",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9mqDCgbWNwmfQuB9V: X-wk15-nits, marginal wording + saturating_add after #585 merged",
-        "since": "2026-11-07T18:35Z"
+        "doing": "session_01MMjhnBbYe9ernDLKKvnSSv",
+        "since": "2026-11-07T19:30Z"
       },
       {
         "slot": 4,
@@ -6644,5 +6650,6 @@
       "ref": "\u00a72.52 (runner PR #588)",
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
-  ]
+  ],
+  "heartbeat": "2026-11-07T19:30Z"
 }
