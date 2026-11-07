@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T12:42Z",
+  "updated_at": "2026-11-07T12:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5640,7 +5640,7 @@
     {
       "id": "runner-pr-575",
       "added": "2026-11-07T12:42Z",
-      "text": "#574 D-v051-main merged (76189f4f). Runner PR #575 (043b3680): WK-9c, X-refetch-private, WK-10 deps WK-9c, WK-10/13/15 notes; Opus review + CI running. Still queued for a later runner PR: size reasons (WK-3/9/8/14), FlareSolverr placement, ext:experiment-host back to false after cr-ab-comp-1 (~2026-11-08T14:01Z), v0.5.1.md frontmatter cites rc4-delta not on main."
+      "text": "#574 D-v051-main merged (76189f4f). Runner PR #575 (043b3680): WK-9c, X-refetch-private, WK-10 deps WK-9c, WK-10/13/15 notes; Opus review + CI running. Still queued for a later runner PR: size reasons (WK-3/9/8/14), FlareSolverr placement, ext:experiment-host back to false after cr-ab-comp-1 (~2026-11-08T14:01Z), v0.5.1.md frontmatter cites rc4-delta not on main. | 12:5xZ #575 merged (781b32df) after CHANGES fix f6108503 (WK-9c shares pipeline lib.rs restore check; roadmap member)."
     }
   ],
   "main_health": [
