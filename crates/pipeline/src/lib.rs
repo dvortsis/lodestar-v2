@@ -28,6 +28,7 @@ pub mod gate;
 mod have;
 pub mod health;
 pub mod log_events;
+pub mod marginal;
 pub mod remote;
 mod rollups;
 mod setup_hold;
@@ -709,10 +710,11 @@ impl Pipeline {
         // The coordinator's lease table. Keys saved in the queue were
         // leased in the last run; they're leased again here, without
         // counting a new harvest.
-        let coordinator = Arc::new(Coordinator::new(
+        let coordinator = Arc::new(Coordinator::with_rollups(
             started_at as u32,
             LEASE_TTL_SECS,
             funnel.clone(),
+            rollups.clone(),
         ));
         let leases = Arc::new(WorkerLeases::default());
         let mut prior = Vec::new();

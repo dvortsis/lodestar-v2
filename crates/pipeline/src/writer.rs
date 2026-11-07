@@ -303,6 +303,7 @@ impl Committing {
                 sources: bit(source),
                 strategy: 0,
                 discovered_at: at,
+                finder: None,
             },
             leased: false,
             verdict: None,
@@ -2839,6 +2840,7 @@ mod tests {
             sources: bit(dht),
             strategy: 0,
             discovered_at: 0,
+            finder: None,
         };
         let mut w = writer(store, coordinator, gate);
         w.adult = AdultSources(bit(adult));
@@ -4848,6 +4850,7 @@ mod tests {
                 sources: bit(source),
                 strategy: 0,
                 discovered_at: 0,
+                finder: None,
             },
             leased: true,
             verdict: None,

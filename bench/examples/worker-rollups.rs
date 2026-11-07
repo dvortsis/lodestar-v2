@@ -55,7 +55,10 @@ fn wide_hour() -> Rows {
     r
 }
 
-/// Each worker's `BY_WORKER` row for each fleet row.
+/// Each worker's `BY_WORKER` row for each fleet row, and WK-15's
+/// `WORKER_LEASES` rows: granted, marginal, committed and lost for the
+/// built-in worker, and those plus rediscovered and dropped for each
+/// remote one.
 fn by_worker(fleet: &Rows) -> Rows {
     let mut r = fleet.clone();
     for w in 0..WORKERS {
@@ -67,6 +70,10 @@ fn by_worker(fleet: &Rows) -> Rows {
                 v,
             ));
         }
+    }
+    r.extend((0..4).map(|k| (metric::WORKER_LEASES, 0, k, 5)));
+    for w in 0..WORKERS {
+        r.extend((0..6).map(|k| (metric::WORKER_LEASES, 100 + w, k, 5)));
     }
     r
 }

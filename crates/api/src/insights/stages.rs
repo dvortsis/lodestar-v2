@@ -27,11 +27,11 @@ use super::{
     read_period, sources, stale_of, type_lists, window, windows,
 };
 use crate::dto::insights::{
-    DiscoverKpi, DiscoverPoint, DiscoverPrevious, DiscoverSource, FetchKpi, FetchPoint,
-    FetchPrevious, FetchResponse, IndexKpi, IndexPoint, IndexPrevious, IndexResponse,
-    InsightsDiscoverResponse, LossCount, RemovedCount, ServeKpi, ServePoint, ServePrevious,
-    ServeResponse, StageQuery, StrategyCount, UnderstandKpi, UnderstandPoint, UnderstandPrevious,
-    UnderstandResponse,
+    DiscoverKpi, DiscoverPoint, DiscoverPrevious, DiscoverSource, DiscoverWorker, FetchKpi,
+    FetchPoint, FetchPrevious, FetchResponse, FetchWorker, IndexKpi, IndexPoint, IndexPrevious,
+    IndexResponse, InsightsDiscoverResponse, LossCount, RemovedCount, ServeKpi, ServePoint,
+    ServePrevious, ServeResponse, StageQuery, StrategyCount, UnderstandKpi, UnderstandPoint,
+    UnderstandPrevious, UnderstandResponse,
 };
 use crate::extract::Query;
 
@@ -137,7 +137,8 @@ fn sealed_metric(
 }
 
 /// The metrics the stage pages read by day: summed, and gauges.
-const SUMMED: [u32; 8] = [
+const SUMMED: [u32; 9] = [
+    codes::metric::WORKER_LEASES,
     codes::metric::COVERAGE,
     codes::metric::HARVESTED,
     codes::metric::REDISCOVERED,
@@ -431,6 +432,114 @@ fn discover(
     Ok((kpi, trend, by_source, by_strategy))
 }
 
+/// Each worker's `WORKER_LEASES` sums in a window, by worker and key.
+///
+/// Window totals only, so each span is grouped by (worker, key) in SQL
+/// rather than read bucket by bucket as [`read_metric`] does: a year of
+/// compacted days would otherwise bring back every day's rows (the 50 ms
+/// budget). Sealed days come from the cache, as there.
+fn worker_leases(c: &Ctx<'_>) -> lodestar_store::Result<BTreeMap<u32, [u64; 6]>> {
+    const M: u32 = codes::metric::WORKER_LEASES;
+    let (store, w) = (c.store, &c.w);
+    let (cb, split) = spans(c);
+    let mut sums: BTreeMap<(u32, i64), i64> = BTreeMap::new();
+    let mut rows = Vec::new();
+    if cb > w.from_h {
+        rows.extend(store.rollup_day_sums(
+            M,
+            w.from_h.div_euclid(24),
+            cb.div_euclid(24),
+            RollupBy::DimKey,
+        )?);
+        rows.extend(store.rollup_straggler_sums(M, w.from_h, cb, RollupBy::DimKey)?);
+    }
+    rows.extend(store.rollup_sums(M, split, w.to_h, RollupBy::DimKey)?);
+    for r in rows {
+        *sums.entry((r.dim, r.key)).or_default() += r.value;
+    }
+    if split > cb {
+        for (_, day) in sealed_metric(store, &c.sealed, M, false, cb, split)? {
+            for (&k, &v) in day.iter() {
+                *sums.entry(k).or_default() += v;
+            }
+        }
+    }
+    let mut out: BTreeMap<u32, [u64; 6]> = BTreeMap::new();
+    for ((dim, key), v) in sums {
+        if let Some(slot) = usize::try_from(key).ok().filter(|&k| k < 6) {
+            // Every key only ever adds; a negative sum would be a bad row.
+            out.entry(dim).or_default()[slot] = v.max(0) as u64;
+        }
+    }
+    Ok(out)
+}
+
+/// Discover's `by_worker` (WK-15), all from `WORKER_LEASES`: granted and
+/// marginal for every worker, and remote workers' own rediscovered and
+/// dropped (the remote intake sums them there beside `BY_WORKER`, whose
+/// packed rows are too many to read within the budget). The built-in
+/// crawler's rediscovered and dropped are the fleet's totals less the
+/// remote ones. Empty unless a remote worker counted something in the
+/// window (a single machine, or a cluster no worker has joined yet).
+fn discover_workers(
+    c: &Ctx<'_>,
+    rediscovered: u64,
+    dropped: u64,
+) -> lodestar_store::Result<Vec<DiscoverWorker>> {
+    let mut leases = worker_leases(c)?;
+    if !leases.keys().any(|&w| w != 0) {
+        return Ok(Vec::new());
+    }
+    let (red, drop) = (
+        codes::WORKER_REDISCOVERED as usize,
+        codes::WORKER_DROPPED as usize,
+    );
+    let remote = |i: usize| -> u64 {
+        leases
+            .iter()
+            .filter(|(w, _)| **w != 0)
+            .map(|(_, l)| l[i])
+            .sum()
+    };
+    let (remote_red, remote_drop) = (remote(red), remote(drop));
+    let local = leases.entry(0).or_default();
+    local[red] = rediscovered.saturating_sub(remote_red);
+    local[drop] = dropped.saturating_sub(remote_drop);
+    Ok(leases
+        .into_iter()
+        .map(|(worker, l)| DiscoverWorker {
+            dropped: l[drop],
+            granted: l[codes::WORKER_GRANTED as usize],
+            marginal: l[codes::WORKER_MARGINAL as usize],
+            rediscovered: l[red],
+            worker,
+        })
+        .collect())
+}
+
+/// Fetch's `by_worker` (WK-15): each worker's leases that ended, on the
+/// same condition as Discover's.
+fn fetch_workers(c: &Ctx<'_>) -> lodestar_store::Result<Vec<FetchWorker>> {
+    let leases = worker_leases(c)?;
+    if !leases.keys().any(|&w| w != 0) {
+        return Ok(Vec::new());
+    }
+    let (committed, lost) = (
+        codes::WORKER_COMMITTED as usize,
+        codes::WORKER_LOST as usize,
+    );
+    Ok(leases
+        .into_iter()
+        // A worker that only sent counters ended no lease here.
+        .filter(|(_, l)| l[committed] + l[lost] > 0)
+        .map(|(worker, l)| FetchWorker {
+            committed: l[committed],
+            lost: l[lost],
+            worker,
+        })
+        .collect())
+}
+
 /// Fetches and losses by event time, for Fetch and Understand: the rows
 /// of `FUNNEL_EVENTS`.
 fn funnel_events(c: &Ctx<'_>) -> lodestar_store::Result<BTreeMap<(i64, u32, i64), i64>> {
@@ -703,6 +812,7 @@ fn build(
     Ok(match stage {
         Stage::Discover => {
             let (kpi, trend, by_source, by_strategy) = discover(&cur)?;
+            let by_worker = discover_workers(&cur, kpi.rediscovered, kpi.dropped)?;
             let previous = prev
                 .map(|p| -> lodestar_store::Result<_> {
                     let (kpi, trend, ..) = discover(&ctx(p))?;
@@ -717,6 +827,7 @@ fn build(
                 by_ip_family: None,
                 by_source,
                 by_strategy,
+                by_worker,
                 kpi,
                 previous,
                 range: w.dto(),
@@ -738,6 +849,7 @@ fn build(
                 })
                 .transpose()?;
             StagePage::Fetch(FetchResponse {
+                by_worker: fetch_workers(&cur)?,
                 funnel,
                 funnel_total,
                 kpi,

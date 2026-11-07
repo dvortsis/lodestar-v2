@@ -2792,6 +2792,35 @@
         ]
       }
     },
+    "/insights/workers/summary": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "The fleet for the status pill: how many remote workers are working,\nin each state, and the torrents the fleet stored in the last full UTC\nhour.\n`fleet` is `null` when no worker has joined (a single machine).",
+        "operationId": "insightsFleetSummary",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/jobs": {
       "get": {
         "tags": [
@@ -12265,6 +12294,49 @@
           }
         }
       },
+      "DiscoverWorker": {
+        "type": "object",
+        "description": "One worker on Discover (WK-15).",
+        "required": [
+          "dropped",
+          "granted",
+          "marginal",
+          "rediscovered",
+          "worker"
+        ],
+        "properties": {
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys it dropped because its pipeline was full. Event time.",
+            "minimum": 0
+          },
+          "granted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys first granted to it (its harvest), by discovery time.",
+            "minimum": 0
+          },
+          "marginal": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Marginal gain, ≈: the keys it found that no other worker, the\nbuilt-in crawler included, claimed while they were in flight,\ncounted as their leases end (keys still in flight aren't in it yet).\nAn approximation of \"keys only it would have seen\": a key found\nagain after its commit is a rediscovery, not a claim. By discovery\ntime.",
+            "minimum": 0
+          },
+          "rediscovered": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys stored already that it saw again. Event time.",
+            "minimum": 0
+          },
+          "worker": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The worker's id; 0 is this server's own crawler.",
+            "minimum": 0
+          }
+        }
+      },
       "DownloadClientDraft": {
         "type": "object",
         "description": "A download client's settings as the form has them, unsaved.",
@@ -13385,6 +13457,13 @@
           "updated_at"
         ],
         "properties": {
+          "by_worker": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FetchWorker"
+            },
+            "description": "Each worker's leases that ended, the built-in crawler (worker 0)\nfirst (§19.7). Left out on a single machine. Counts only."
+          },
           "funnel": {
             "type": "array",
             "items": {
@@ -13468,6 +13547,35 @@
             "type": "integer",
             "format": "int64",
             "description": "Keys waiting for a fetch slot or for peers.",
+            "minimum": 0
+          }
+        }
+      },
+      "FetchWorker": {
+        "type": "object",
+        "description": "One worker on Fetch (WK-15): its leases that ended in the range.",
+        "required": [
+          "committed",
+          "lost",
+          "worker"
+        ],
+        "properties": {
+          "committed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Results it fetched that were committed. Event time.",
+            "minimum": 0
+          },
+          "lost": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys it lost, for any reason (`reason` doesn't narrow it). Event\ntime.",
+            "minimum": 0
+          },
+          "worker": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The worker's id; 0 is this server's own crawler.",
             "minimum": 0
           }
         }
@@ -13710,6 +13818,89 @@
           },
           "packs": {
             "$ref": "#/components/schemas/PackCorpus"
+          }
+        }
+      },
+      "Fleet": {
+        "type": "object",
+        "description": "The fleet's counts.",
+        "required": [
+          "draining",
+          "offline",
+          "online",
+          "paused",
+          "stored_per_hour",
+          "workers"
+        ],
+        "properties": {
+          "draining": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Finishing their leases, then stopping.",
+            "minimum": 0
+          },
+          "offline": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Joined, not connected now.",
+            "minimum": 0
+          },
+          "online": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Connected and taking work.",
+            "minimum": 0
+          },
+          "paused": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Connected, taking no new work until resumed.",
+            "minimum": 0
+          },
+          "stored_per_hour": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents the whole fleet (the coordinator's own crawler included)\nnewly stored in the last full UTC hour, as the overview's\n`ingest_per_hour`; `null` when that hour wasn't measured.",
+            "minimum": 0
+          },
+          "workers": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Remote workers doing work now: `online` plus `draining` (the pill's\n\"3 workers\").",
+            "minimum": 0
+          }
+        }
+      },
+      "FleetSummary": {
+        "type": "object",
+        "description": "`GET /insights/workers/summary`.",
+        "required": [
+          "fleet"
+        ],
+        "properties": {
+          "fleet": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Fleet",
+                "description": "`null` when no remote worker has joined: the pill shows nothing\nnew."
+              }
+            ]
+          }
+        },
+        "example": {
+          "fleet": {
+            "draining": 1,
+            "offline": 0,
+            "online": 2,
+            "paused": 1,
+            "stored_per_hour": 4200,
+            "workers": 3
           }
         }
       },
@@ -14716,6 +14907,13 @@
               "$ref": "#/components/schemas/StrategyCount"
             },
             "description": "Keys reported, by harvest strategy: the DHT's (BEP 51 sample,\nget_peers, announce, lookup), refetch, and each other source's own\ncodes. Event time: volume, not yield."
+          },
+          "by_worker": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoverWorker"
+            },
+            "description": "Each worker's keys, the built-in crawler (worker 0) first, then\nremote workers by id (§19.7). Left out on a single machine, where\nno worker has counted anything. Counts only."
           },
           "kpi": {
             "$ref": "#/components/schemas/DiscoverKpi"
@@ -24087,6 +24285,10 @@
     {
       "name": "insights",
       "description": "The Insights dashboard's rollups (§10.9)."
+    },
+    {
+      "name": "insights",
+      "description": "Insights (§10.9)."
     },
     {
       "name": "export",

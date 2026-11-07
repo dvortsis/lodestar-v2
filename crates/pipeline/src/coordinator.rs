@@ -22,6 +22,9 @@ use lodestar_cluster::{
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Funnel, FunnelCounts, Loss, Stage};
 
+use crate::marginal::Marginal;
+use crate::rollups::Rollups;
+
 /// Counters for metrics and the status page.
 #[derive(Debug, Default)]
 pub struct LeaseStats {
@@ -53,10 +56,12 @@ pub(crate) fn loss_from_code(code: u8) -> Loss {
     }
 }
 
-/// The funnel accounting on the authority's events.
+/// The funnel accounting on the authority's events, and each worker's
+/// lease counts for Insights ([`Marginal`], WK-15).
 struct FunnelEvents {
     funnel: Arc<FunnelCounts>,
     stats: Arc<LeaseStats>,
+    marginal: Arc<Marginal>,
 }
 
 impl LeaseEvents for FunnelEvents {
@@ -64,10 +69,12 @@ impl LeaseEvents for FunnelEvents {
         self.stats.granted.fetch_add(1, Ordering::Relaxed);
         self.funnel
             .record(lease.cohort, lease.source, Stage::Harvested, None);
+        self.marginal.granted(lease);
     }
 
     /// A refetch's loss ends its lease but isn't the funnel's.
     fn lost(&self, _key: &InfoHash, lease: &Lease, reason: u8) {
+        self.marginal.lost(lease, crate::unix_now());
         if crate::in_funnel(lease.cohort) {
             self.funnel.record(
                 lease.cohort,
@@ -86,25 +93,53 @@ impl LeaseEvents for FunnelEvents {
     fn expired(&self, n: usize) {
         self.stats.expired.fetch_add(n as u64, Ordering::Relaxed);
     }
+
+    fn serving(&self) {
+        self.marginal.serve();
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct Coordinator {
     authority: Arc<LeaseAuthority>,
     pub stats: Arc<LeaseStats>,
+    pub marginal: Arc<Marginal>,
 }
 
 impl Coordinator {
+    /// With rollups of its own, unread (tests).
+    #[cfg(test)]
     pub fn new(epoch: u32, ttl_secs: i64, funnel: Arc<FunnelCounts>) -> Coordinator {
+        Coordinator::with_rollups(epoch, ttl_secs, funnel, Arc::default())
+    }
+
+    /// Each worker's lease counts go to `rollups` ([`Marginal`]).
+    pub fn with_rollups(
+        epoch: u32,
+        ttl_secs: i64,
+        funnel: Arc<FunnelCounts>,
+        rollups: Arc<Rollups>,
+    ) -> Coordinator {
         let stats = Arc::new(LeaseStats::default());
+        let marginal = Arc::new(Marginal::new(rollups));
         let events = Arc::new(FunnelEvents {
             funnel,
             stats: stats.clone(),
+            marginal: marginal.clone(),
         });
         Coordinator {
             authority: Arc::new(LeaseAuthority::new(epoch, ttl_secs, events)),
             stats,
+            marginal,
         }
+    }
+
+    /// A commit ended `lease`: counted for its holder.
+    fn committed(&self, lease: Option<Lease>) -> Option<Lease> {
+        if let Some(l) = &lease {
+            self.marginal.committed(l, crate::unix_now());
+        }
+        lease
     }
 
     /// The authority, for the cluster server once workers are allowed.
@@ -145,7 +180,7 @@ impl Coordinator {
 
     /// Ends a lease whose key was committed. `None` if it was stale.
     pub fn complete(&self, key: &InfoHash, token: Token) -> Option<Lease> {
-        self.stale(self.authority.release(key, token))
+        self.committed(self.stale(self.authority.release(key, token)))
     }
 
     /// Ends the lease of a committed result from `worker`. A remote
@@ -156,7 +191,7 @@ impl Coordinator {
         if worker == WorkerId::LOCAL {
             return self.complete(key, token);
         }
-        self.stale(self.authority.commit(worker, key, token))
+        self.committed(self.stale(self.authority.commit(worker, key, token)))
     }
 
     /// [`lost`](Self::lost) for a result from `worker`: a remote worker's

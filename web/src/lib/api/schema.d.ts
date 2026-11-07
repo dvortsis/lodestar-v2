@@ -884,6 +884,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/insights/workers/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The fleet for the status pill: how many remote workers are working,
+         *     in each state, and the torrents the fleet stored in the last full UTC
+         *     hour.
+         *     `fleet` is `null` when no worker has joined (a single machine).
+         */
+        get: operations["insightsFleetSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs": {
         parameters: {
             query?: never;
@@ -4281,6 +4303,39 @@ export interface components {
             /** Format: int64 */
             reported: number;
         };
+        /** @description One worker on Discover (WK-15). */
+        DiscoverWorker: {
+            /**
+             * Format: int64
+             * @description Keys it dropped because its pipeline was full. Event time.
+             */
+            dropped: number;
+            /**
+             * Format: int64
+             * @description Keys first granted to it (its harvest), by discovery time.
+             */
+            granted: number;
+            /**
+             * Format: int64
+             * @description Marginal gain, ≈: the keys it found that no other worker, the
+             *     built-in crawler included, claimed while they were in flight,
+             *     counted as their leases end (keys still in flight aren't in it yet).
+             *     An approximation of "keys only it would have seen": a key found
+             *     again after its commit is a rediscovery, not a claim. By discovery
+             *     time.
+             */
+            marginal: number;
+            /**
+             * Format: int64
+             * @description Keys stored already that it saw again. Event time.
+             */
+            rediscovered: number;
+            /**
+             * Format: int32
+             * @description The worker's id; 0 is this server's own crawler.
+             */
+            worker: number;
+        };
         /** @description A download client's settings as the form has them, unsaved. */
         DownloadClientDraft: {
             client: components["schemas"]["DownloadClientKind"];
@@ -4831,6 +4886,11 @@ export interface components {
         /** @description `GET /insights/fetch`. */
         FetchResponse: {
             /**
+             * @description Each worker's leases that ended, the built-in crawler (worker 0)
+             *     first (§19.7). Left out on a single machine. Counts only.
+             */
+            by_worker?: components["schemas"]["FetchWorker"][];
+            /**
              * @description The discovery-cohort funnel, as the overview's (with `reason`, only
              *     that loss).
              */
@@ -4868,6 +4928,25 @@ export interface components {
              * @description Keys waiting for a fetch slot or for peers.
              */
             queued: number;
+        };
+        /** @description One worker on Fetch (WK-15): its leases that ended in the range. */
+        FetchWorker: {
+            /**
+             * Format: int64
+             * @description Results it fetched that were committed. Event time.
+             */
+            committed: number;
+            /**
+             * Format: int64
+             * @description Keys it lost, for any reason (`reason` doesn't narrow it). Event
+             *     time.
+             */
+            lost: number;
+            /**
+             * Format: int32
+             * @description The worker's id; 0 is this server's own crawler.
+             */
+            worker: number;
         };
         /**
          * @description How a value is written after `name:`.
@@ -4957,6 +5036,58 @@ export interface components {
         Fixtures: {
             core: components["schemas"]["FixtureCounts"][];
             packs: components["schemas"]["PackCorpus"];
+        };
+        /** @description The fleet's counts. */
+        Fleet: {
+            /**
+             * Format: int32
+             * @description Finishing their leases, then stopping.
+             */
+            draining: number;
+            /**
+             * Format: int32
+             * @description Joined, not connected now.
+             */
+            offline: number;
+            /**
+             * Format: int32
+             * @description Connected and taking work.
+             */
+            online: number;
+            /**
+             * Format: int32
+             * @description Connected, taking no new work until resumed.
+             */
+            paused: number;
+            /**
+             * Format: int64
+             * @description Torrents the whole fleet (the coordinator's own crawler included)
+             *     newly stored in the last full UTC hour, as the overview's
+             *     `ingest_per_hour`; `null` when that hour wasn't measured.
+             */
+            stored_per_hour: number | null;
+            /**
+             * Format: int32
+             * @description Remote workers doing work now: `online` plus `draining` (the pill's
+             *     "3 workers").
+             */
+            workers: number;
+        };
+        /**
+         * @description `GET /insights/workers/summary`.
+         * @example {
+         *       "fleet": {
+         *         "draining": 1,
+         *         "offline": 0,
+         *         "online": 2,
+         *         "paused": 1,
+         *         "stored_per_hour": 4200,
+         *         "workers": 3
+         *       }
+         *     }
+         */
+        FleetSummary: {
+            fleet: null | components["schemas"]["Fleet"];
         };
         /** @description One discovery cohort (or a UTC day of them) in the funnel (§10.9.3). */
         FunnelCohort: {
@@ -5405,6 +5536,12 @@ export interface components {
              *     codes. Event time: volume, not yield.
              */
             by_strategy: components["schemas"]["StrategyCount"][];
+            /**
+             * @description Each worker's keys, the built-in crawler (worker 0) first, then
+             *     remote workers by id (§19.7). Left out on a single machine, where
+             *     no worker has counted anything. Counts only.
+             */
+            by_worker?: components["schemas"]["DiscoverWorker"][];
             kpi: components["schemas"]["DiscoverKpi"];
             previous?: components["schemas"]["DiscoverPrevious"];
             range: components["schemas"]["InsightsRange"];
@@ -11853,6 +11990,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnderstandResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    insightsFleetSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetSummary"];
                 };
             };
             default: components["responses"]["Error"];
