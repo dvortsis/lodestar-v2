@@ -94,6 +94,10 @@ pub struct Worker {
     /// coordinator has no certificate on record for it.
     #[schema(required = true)]
     pub name: Option<String>,
+    /// Paused by the admin: it gets no new work until resumed, and stays
+    /// paused across reconnects and restarts. Set while offline too, when
+    /// `status` can only say `offline`.
+    pub paused: bool,
     /// Fetch-pool cap in keys, 1–1,000,000.
     pub pool_cap: u32,
     /// Torrents processed, as the worker last reported.
@@ -134,7 +138,8 @@ pub struct JoinCommands {
     pub cli: String,
     /// A compose service.
     pub compose: String,
-    /// A `docker run` line.
+    /// A `docker run` line. Remove `LODESTAR_TOKEN` once the worker has
+    /// joined (it's spent; the worker warns about it at each start).
     pub docker_run: String,
     /// What to enter in the Unraid "Lodestar Worker" template.
     pub unraid: String,
@@ -171,7 +176,8 @@ pub struct WorkerRevoked {
     pub name: Option<String>,
 }
 
-/// `PATCH /workers/{id}`: any of these; absent fields are kept.
+/// `PATCH /workers/{id}`: any of these; absent fields are kept. `budget`
+/// is sent whole, all four fields.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerPatch {

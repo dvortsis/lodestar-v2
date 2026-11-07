@@ -640,6 +640,10 @@ impl ClusterServer {
         let mut fleet = lock(&self.fleet);
         let leases = self.leases.evict(worker);
         self.sweep(&mut fleet, self.clock.now_ms());
+        // `sweep` forgets a revoked worker it saw connect; an entry `pause`
+        // made before it ever connected has no identity to check, so it
+        // goes here (it can't come back under this id).
+        fleet.workers.remove(&worker);
         Ok((certificates, leases))
     }
 

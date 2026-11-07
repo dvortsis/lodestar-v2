@@ -327,19 +327,24 @@ fn request_host(headers: &HeaderMap) -> String {
 fn join_commands(address: &str, token: &str, name: &str) -> JoinCommands {
     JoinCommands {
         cli: format!("printf '%s\\n' '{token}' | lodestar worker --join {address} --token-file -"),
+        // The DHT port as the Unraid worker template maps it: 6882 on the
+        // host, beside a main Lodestar on 6881.
         docker_run: format!(
             "docker run -d --name lodestar-{name} --restart unless-stopped \
+             -p 6882:6881/udp \
              -e LODESTAR_JOIN={address} -e LODESTAR_TOKEN={token} \
              -v lodestar-{name}:/data {IMAGE} worker"
         ),
         compose: format!(
             "services:\n  lodestar-{name}:\n    image: {IMAGE}\n    command: worker\n    \
-             restart: unless-stopped\n    environment:\n      LODESTAR_JOIN: \"{address}\"\n      \
+             restart: unless-stopped\n    ports:\n      - \"6882:6881/udp\"\n    \
+             environment:\n      LODESTAR_JOIN: \"{address}\"\n      \
+             # Used once to join; remove it after the worker has joined.\n      \
              LODESTAR_TOKEN: \"{token}\"\n    volumes:\n      - lodestar-{name}:/data\n\
              volumes:\n  lodestar-{name}:\n"
         ),
         unraid: format!(
-            "In the Lodestar Worker template, set Coordinator to {address} and Join token to \
+            "In the Lodestar Worker template, set Join address to {address} and Join token to \
              the token above. After it joins, clear the Join token field."
         ),
         windows: format!(
@@ -453,7 +458,7 @@ pub(crate) async fn revoke_worker(
     request_body = WorkerPatch,
     responses(
         (status = 200, body = Worker),
-        (status = 422, description = "`out_of_range` (with the field) or `bad_body`.", body = ErrorEnvelope),
+        (status = 422, description = "`invalid_value` (with the field) or `bad_body`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_worker`.", body = ErrorEnvelope),
         (status = 409, description = "`too_many_workers`.", body = ErrorEnvelope),
     )
@@ -473,7 +478,7 @@ pub(crate) async fn update_worker(
 fn out_of_range(field: &'static str, low: u64, high: u64) -> ApiError {
     ApiError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
-        "out_of_range",
+        "invalid_value",
         format!("{field} must be between {low} and {high}."),
     )
     .field(field)
@@ -596,7 +601,7 @@ mod tests {
                 (e.status(), e.code(), e.error_body().field.as_deref()),
                 (
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    "out_of_range",
+                    "invalid_value",
                     Some(field)
                 )
             );

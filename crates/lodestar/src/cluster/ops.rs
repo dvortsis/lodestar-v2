@@ -181,6 +181,10 @@ pub struct Workers {
     saved: Mutex<BTreeMap<WorkerId, Saved>>,
     /// The server saved pauses were last applied to.
     applied_to: Mutex<Weak<ClusterServer>>,
+    /// Held across every change to a worker's settings, from reading them
+    /// to the row being written, so concurrent PATCH, pause, resume and
+    /// revoke calls can't lose each other's changes or land out of order.
+    edits: tokio::sync::Mutex<()>,
 }
 
 impl std::fmt::Debug for Workers {
@@ -247,6 +251,7 @@ impl Workers {
             store: Arc::new(Mutex::new(store)),
             saved: Mutex::new(saved),
             applied_to: Mutex::new(Weak::new()),
+            edits: tokio::sync::Mutex::new(()),
         });
         let weak = Arc::downgrade(&workers);
         tokio::spawn(async move {
@@ -283,8 +288,10 @@ impl Workers {
         &self.placement
     }
 
+    /// The cluster server, or `Off` while "Allow workers" is off: there's
+    /// nothing to act on then (turn workers on to revoke one).
     fn server(&self) -> Result<Arc<ClusterServer>, WorkersError> {
-        self.follow().ok_or(WorkersError::UnknownWorker)
+        self.follow().ok_or(WorkersError::Off)
     }
 
     fn saved(&self, w: WorkerId) -> Saved {
@@ -312,11 +319,6 @@ impl Workers {
     async fn known(&self, server: &ClusterServer) -> BTreeMap<WorkerId, Known> {
         let mut out: BTreeMap<WorkerId, Known> = BTreeMap::new();
         let certs: Vec<IssuedCert> = server.certificates().await;
-        let revoked: Vec<WorkerId> = certs
-            .iter()
-            .filter(|c| c.revoked)
-            .map(|c| c.worker)
-            .collect();
         for c in certs.into_iter().filter(|c| !c.revoked) {
             // Sorted by expiry: the last is the newest.
             out.entry(c.worker).or_default().name = Some(c.name);
@@ -325,7 +327,10 @@ impl Workers {
             if s.worker == WorkerId::LOCAL {
                 continue;
             }
-            if revoked.contains(&s.worker) && !out.contains_key(&s.worker) {
+            // Connected now, or holding a certificate that stands: an entry
+            // with neither (revoked, expired, or a saved pause for a worker
+            // whose certificate is gone) isn't a worker any more.
+            if !s.connected && !out.contains_key(&s.worker) {
                 continue;
             }
             let w = s.worker;
@@ -372,6 +377,7 @@ impl Workers {
             last_seen_at: live.map(|s| s.last_seen_ms.div_euclid(1000)),
             leases: st.map_or(0, |s| s.leases as u64),
             name: k.name.clone(),
+            paused: s.paused || st.is_some_and(|s| s.paused),
             pool_cap: s.pool_cap,
             processed: live.map(|s| s.stats.processed),
             rss_mb: live.map(|s| s.stats.rss_mb),
@@ -443,22 +449,27 @@ impl Workers {
 
     /// Pauses a known worker, connected or not, and saves it.
     async fn pause_now(&self, w: WorkerId) -> Result<Worker, WorkersError> {
+        let _edit = self.edits.lock().await;
         let server = self.server()?;
         self.check(&server, w).await?;
         self.set_paused(w, true).await?;
-        server.pause(w);
+        // The server serving now: one built meanwhile already had the
+        // saved pause applied by `follow`.
+        self.server()?.pause(w);
         self.one(&server, w).await
     }
 
     /// Ends a drain and a pause, and saves it.
     async fn resume_now(&self, w: WorkerId) -> Result<Worker, WorkersError> {
+        let _edit = self.edits.lock().await;
         let server = self.server()?;
         self.check(&server, w).await?;
         self.set_paused(w, false).await?;
-        server.resume(w);
+        self.server()?.resume(w);
         self.one(&server, w).await
     }
 
+    /// Saves a pause or its end. The caller holds `edits`.
     async fn set_paused(&self, w: WorkerId, paused: bool) -> Result<(), WorkersError> {
         let mut s = self.saved(w);
         if s.paused == paused {
@@ -474,6 +485,7 @@ impl Workers {
     }
 
     async fn revoke_now(&self, w: WorkerId) -> Result<WorkerRevoked, WorkersError> {
+        let _edit = self.edits.lock().await;
         let server = self.server()?;
         let known = self.check(&server, w).await?;
         // Disconnect (and take the leases back) first, then forget: a sync
@@ -501,6 +513,7 @@ impl Workers {
     }
 
     async fn update_now(&self, w: WorkerId, patch: WorkerPatch) -> Result<Worker, WorkersError> {
+        let _edit = self.edits.lock().await;
         let server = self.server()?;
         self.check(&server, w).await?;
         let mut s = self.saved(w);
@@ -734,9 +747,9 @@ mod tests {
                 .await
                 .unwrap_err(),
         ] {
-            assert_eq!(e, WorkersError::UnknownWorker);
+            assert_eq!(e, WorkersError::Off);
         }
-        assert!(c.workers.revoke(1).await.is_err());
+        assert_eq!(c.workers.revoke(1).await.unwrap_err(), WorkersError::Off);
         // Nothing was created: no settings rows, no PKI.
         let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
         assert!(store.settings_with_prefix(PREFS_PREFIX).unwrap().is_empty());
@@ -748,7 +761,7 @@ mod tests {
     async fn drain_pause_resume_on_a_real_worker() {
         let dir = tempfile::tempdir().unwrap();
         let c = coordinator(dir.path(), true).await;
-        let (creds, _) = c.join("w1").await;
+        let (creds, token) = c.join("w1").await;
         let w = creds.worker();
         let s = c.connect(&creds).await;
         let online = c.wait_status(w, StatusDto::Online).await;
@@ -814,6 +827,23 @@ mod tests {
             c.workers.drain(99).await.unwrap_err(),
             WorkersError::UnknownWorker
         );
+        // No response but the create carries the token: every action's,
+        // from the real binary.
+        let patch = WorkerPatch {
+            pool_cap: Some(9),
+            ..WorkerPatch::default()
+        };
+        let mut bodies = vec![
+            serde_json::to_string(&c.workers.list().await.unwrap()).unwrap(),
+            serde_json::to_string(&c.workers.pause(w.0).await.unwrap()).unwrap(),
+            serde_json::to_string(&c.workers.resume(w.0).await.unwrap()).unwrap(),
+            serde_json::to_string(&c.workers.drain(w.0).await.unwrap()).unwrap(),
+            serde_json::to_string(&c.workers.update(w.0, patch).await.unwrap()).unwrap(),
+        ];
+        bodies.push(serde_json::to_string(&c.workers.revoke(w.0).await.unwrap()).unwrap());
+        for b in &bodies {
+            assert!(!b.contains(&token) && !b.contains(&token[4..60]), "{b}");
+        }
         c.stop().await;
     }
 
@@ -962,6 +992,52 @@ mod tests {
         let a = c.workers.placement().assignment(w).expect("planned");
         assert_eq!((a.pool_cap, a.dht), (1234, None));
         assert_eq!(a.budget.up_kbps, 1000);
+        c.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_new_cluster_server_gets_saved_pauses_without_an_api_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        c.workers.pause(w.0).await.unwrap();
+        // Workers off, then on: a new cluster server with an empty fleet.
+        let h = c.cluster.handle();
+        let old = h.server().unwrap();
+        h.set_allowed(false);
+        until("off", || {
+            let h = h.clone();
+            async move { (h.server().is_none(), ()) }
+        })
+        .await;
+        h.set_allowed(true);
+        let new = until("on again", || {
+            let h = h.clone();
+            async move {
+                let s = h.server();
+                (s.is_some(), s)
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!Arc::ptr_eq(&old, &new));
+        // No `Workers` call from here: only the follower can pause it.
+        until("pause re-applied", || {
+            let new = new.clone();
+            async move {
+                let paused = new
+                    .snapshot()
+                    .workers
+                    .iter()
+                    .any(|s| s.worker == w && s.paused);
+                (paused, ())
+            }
+        })
+        .await;
+        let s = c.connect(&creds).await;
+        assert!(!granted(&s.claim(claim(5)).await.unwrap()));
+        drop(s);
         c.stop().await;
     }
 

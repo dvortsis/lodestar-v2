@@ -384,6 +384,7 @@ impl Planner {
     /// Takes at most `n` members (at most [`MAX_WORKERS`]), so a caller's
     /// handling of a refused join can be tested without thousands of
     /// re-plans.
+    #[doc(hidden)]
     pub fn limit_members(&mut self, n: usize) {
         self.max_members = n.min(MAX_WORKERS);
     }

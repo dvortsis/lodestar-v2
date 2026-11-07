@@ -72,6 +72,7 @@ fn worker(id: u32) -> Worker {
         last_seen_at: Some(1_792_677_600),
         leases: 2,
         name: Some("nas".into()),
+        paused: false,
         pool_cap: 50_000,
         processed: Some(8),
         rss_mb: Some(120),
@@ -572,7 +573,7 @@ async fn patch_ranges_are_enforced() {
         )
         .await;
         assert_eq!(r.status, 422, "{body}: {}", r.text);
-        assert_eq!(r.body["error"]["code"], "out_of_range");
+        assert_eq!(r.body["error"]["code"], "invalid_value");
         assert_eq!(r.body["error"]["field"], field);
     }
     for body in [

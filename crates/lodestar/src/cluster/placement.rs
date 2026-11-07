@@ -240,13 +240,15 @@ impl Placement {
     fn update(&self, workers: &[WorkerStatus]) -> Option<Replan> {
         let mut st = self.state();
         // A draining worker stays a member: it's still fetching the keys it
-        // holds, so its IP's per-peer connections stay divided (§19.6).
+        // holds, so its IP's per-peer connections stay divided (§19.6). A
+        // paused one is planned the same way: it takes no new keys, so its
+        // DHT shard goes to the others rather than going uncovered.
         let now: BTreeMap<WorkerId, (Vec<IpAddr>, bool)> = workers
             .iter()
             .filter(|w| {
                 w.connected && w.worker != WorkerId::LOCAL && !st.forgotten.contains(&w.worker)
             })
-            .map(|w| (w.worker, (w.external_ips.clone(), w.draining)))
+            .map(|w| (w.worker, (w.external_ips.clone(), w.draining || w.paused)))
             .collect();
         let mut last = None;
         let gone: Vec<WorkerId> = st
@@ -504,6 +506,19 @@ mod tests {
             "not connected: no plan"
         );
     }
+    #[test]
+    fn a_paused_worker_hands_its_dht_shard_over() {
+        let p = Placement::new(true);
+        p.set_coordinator_ips(vec![HOME]);
+        let mut w = status(4, true, false, vec![AWAY]);
+        p.update(std::slice::from_ref(&w)).unwrap();
+        assert!(p.assignment(WorkerId(4)).unwrap().dht.is_some());
+        w.paused = true;
+        p.update(std::slice::from_ref(&w)).unwrap();
+        assert_eq!(p.assignment(WorkerId(4)).unwrap().dht, None);
+        assert_eq!(p.coordinator().dht, Some(ShardSpec::FULL));
+    }
+
     #[test]
     fn a_forgotten_worker_isnt_rejoined_by_an_older_snapshot() {
         let p = Placement::new(true);
