@@ -457,6 +457,7 @@ mod tests {
             worker: WorkerId(id),
             connected,
             draining: false,
+            paused: false,
             offset_ms: 0,
             skewed: false,
             leases: 0,
