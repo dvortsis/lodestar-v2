@@ -1326,7 +1326,7 @@ def api_request(method, url, body, cookie, timeout=10):
     except urllib.error.HTTPError as error:
         try:
             body = error.read(1 << 16)
-        except OSError:
+        except (OSError, http.client.IncompleteRead):
             body = b""
         return error.code, {}, body
 

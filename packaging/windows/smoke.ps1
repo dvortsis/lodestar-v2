@@ -44,8 +44,8 @@ function Test-Serve([string]$exe, [string]$dataDir) {
   $fxLines = @(& $exe serve --fixture (Join-Path ([IO.Path]::GetTempPath()) 'lodestar-fixture-check') 2>&1 |
     ForEach-Object { "$_".TrimEnd() })
   $fxStatus = $LASTEXITCODE
-  if ($fxStatus -ne 2 -or $fxLines -notcontains $refusal) { $fxLines | ForEach-Object { Write-Host $_ } }
-  Assert ($fxStatus -eq 2 -and $fxLines -contains $refusal) "serve --fixture didn't refuse with the no-fixture line and exit status 2 (got $fxStatus); release builds must leave out the fixture feature"
+  if ($fxStatus -ne 2 -or $fxLines -cnotcontains $refusal) { $fxLines | ForEach-Object { Write-Host $_ } }
+  Assert ($fxStatus -eq 2 -and $fxLines -ccontains $refusal) "serve --fixture didn't refuse with the no-fixture line and exit status 2 (got $fxStatus); release builds must leave out the fixture feature"
   New-Item -ItemType Directory -Force $dataDir | Out-Null
   $env:LODESTAR_DATA_DIR = $dataDir
   $env:LODESTAR_HTTP_BIND = "127.0.0.1:$Port"
