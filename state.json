@@ -5513,7 +5513,7 @@
     "slices.yaml SRC-15c owns: add web/.size-limit.mjs (sourcesLater regex widened to ConfigDialog only; runner yes 03:30Z)",
     "X-soak-screen preconditions before relying on in-run screen (P-v052-cut soak): (1) read lodestar_mem_anon_mappings ~1 h in a musl+override container to calibrate the gauge's clean value; (2) owner replays new analyzer over private r4/r5 dirs, relays only 'screen:' lines; thresholds provisional until then"
    ],
-   "text": " | WK-3 owns: crates/cluster/src/proto.rs (manual Debug on ToWorker only, key-leak guard, \u00a72.33) and fuzz/README.md (cluster_have + cluster_assign rows), runner 03:56Z."
+   "text": " | WK-3 owns: crates/cluster/src/proto.rs (manual Debug on ToWorker only, key-leak guard, \u00a72.33) and fuzz/README.md (cluster_have + cluster_assign rows), runner 03:56Z. | WK-9 owns (runner 04:4xZ, \u00a72.33): crates/cluster/src/{leases.rs,server.rs,worker.rs (held-set TTL prune only)}, crates/cluster/Cargo.toml (network-policy dep), crates/pipeline/src/{coordinator.rs,writer.rs (end_lease helper),lib.rs}, crates/lodestar/src/cluster/{mod.rs,serve.rs}, crates/lodestar/src/services.rs, metrics.rs + docs/metrics.md rows. New slice WK-9b (counters into rollups with worker dim, backpressure, fetch_queue), deps [WK-9], same session."
   },
   {
    "id": "R4-v051-docs",
