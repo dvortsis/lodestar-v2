@@ -333,6 +333,9 @@ pub struct WorkerStatus {
     pub leases: usize,
     pub last_seen_ms: i64,
     pub stats: Stats,
+    /// The public addresses the worker reported in `Hello` (at most
+    /// `MAX_EXTERNAL_IPS`): a placement hint, its own word (WK-5).
+    pub external_ips: Vec<IpAddr>,
 }
 
 /// A consistent view of the fleet and the server's counters.
@@ -672,6 +675,7 @@ impl ClusterServer {
                     leases,
                     last_seen_ms: s.last_seen_ms,
                     stats: s.stats,
+                    external_ips: s.capabilities.external_ips.clone(),
                 }
             })
             .collect();
