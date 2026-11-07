@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T11:44Z",
+  "updated_at": "2026-11-07T11:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5623,6 +5623,11 @@
       "id": "slices-wk10-dep-wk9b",
       "added": "2026-11-07T11:44Z",
       "text": "Next runner PR: runner/slices.yaml WK-10 deps add WK-9b (and WK-G transitively). WK-8 seals every remote record and ResultsBatch::decode leaves sealed records out, so WK-10 before WK-9b's WireKeys::open = remote worker commits nothing (lease expiry/refetch loop). Do not launch WK-10 until WK-9b's sealed-open PR merges."
+    },
+    {
+      "id": "wk15-notes-insights-page",
+      "added": "2026-11-07T11:54Z",
+      "text": "WK-15 notes: Insights overview compacted 'all' ~35 ms on busy-crawler year even without workers (WK-9b measurement, budget 50 ms, owner \u00a71.6.4) \u2014 watch before adding more rows. WK-9b fleet-wide caps now 32 new rows/day (Discover 'all' was 47 ms at 64/day). Reproduce: bench/examples/worker-rollups.rs and ignored test crates/api/tests/insights.rs a_year_of_rollups_with_eight_workers_answers_within_budget."
     }
   ],
   "main_health": [
