@@ -6202,5 +6202,18 @@
    "at": "2026-11-06T21:44Z",
    "item": "Delete branch wip/CMP-0-catalogue (pre-split CMP-0 work; #548 merged)"
   }
- ]
+ ],
+ "experiment_host": {
+  "named": "Unraid box (owner §2.51, 2026-11-07T00:35Z)",
+  "port_forwarded": false,
+  "bookings": [],
+  "run_sheet": "briefs/CR-AB-COMP-run-sheet.md",
+  "clear_down": {
+   "unraid_last_lodestar_stop": "2026-11-07T00:37:17Z",
+   "windows_service": "running behind VPN at 00:50Z; runner asked owner to stop it until the comparator window ends",
+   "earliest_start": "~13:00Z if Windows stopped by ~01:00Z, else 12:45Z",
+   "schedules": "CA Docker auto-update 11-08 11:00Z off for run (auto_update=not_applicable); SSD TRIM 07:00Z paused; others outside window",
+   "containers": "sonarr/radarr ok if not restarted; no torrent client; autoheal, qbitmanage, unpackerr, purgarr stay stopped; owner to confirm who stopped 10 containers 00:44-00:46Z"
+  }
+ }
 }
