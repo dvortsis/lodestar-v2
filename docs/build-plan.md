@@ -146,7 +146,7 @@ On 2026-11-02 the owner told the runner to take its recommendation on every ques
 |---|---|---|
 | 1 | Soak r4 on rc.3 failed (memory); soak r5 on rc.4 (§2.40: R-rc4-cut + LEGAL-1r) **passed** (2026-11-06). The Windows MSI smoke on rc.4 **passed** (2026-11-06). The gluetun leg **passed** (2026-11-06). Tag `v0.5.1` on `12cd25ca38f8eac1a930316623dec742c1ba585d` (rc.5, #540, plus the operator-guidance fix #558; never on `a0eb0a90`) once the runner gives the go after CI on that commit, and approve the release environment. (r1's upgrade still counts per §2.28 if rc.4 changes no migration code; LEGAL-1r stores the notice version in `auth.json`, not the database, a runner refinement recorded in §2.40.) | v0.5.1; the three held epics |
 | 2 | Name the **experiment host** for crawler A/B runs and book its calendar (about three weeks of exclusive use, §0.7) | Track C's live work (C2–C8) and the v0.6 tag |
-| 3 | Create the **nightly signing key** and its environment (optional; skipped for v0.5.1, §2.37) | update checks on the Nightly channel |
+| 3 | Create the **nightly signing key** and its environment (deferred, §2.52: before 1.0, only if the Nightly channel is offered) | update checks on the Nightly channel |
 | 4 | Add `web-ok` and `e2e-ok` (X-required-web-checks' aggregates) to the main ruleset's required checks; the owner said yes (§2.37) | safer merges |
 | 5 | The Unraid Community Apps submission, after the 1.0 release is complete (§2.37) | the Unraid app-store listing |
 | 6 | ✔ Approve the Q1 consent texts SRC-4 drafted (`docs/decisions/2026-11-02-SRC-4.md`, "Draft consent texts"): **approved** 2026-11-06, with the Account sentence bounded (`docs/owner-decisions.md` §2.49) | SRC-15b |

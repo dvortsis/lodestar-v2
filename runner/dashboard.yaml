@@ -709,7 +709,7 @@ conditions:
   import-host:
     met: false
     who: you
-    label: You name the import host and restore the Bitmagnet dump
+    label: You book each import pilot on the import host (the Unraid box, §2.52) and restore the Bitmagnet dump
   owner-50m-approval:
     met: false
     who: you
@@ -1363,6 +1363,11 @@ owner_queue:
   action: Delete branch wip/CMP-0-catalogue (pre-split CMP-0 work; #548 merged; §2.52)
   unblocks: Branch hygiene
   when: Any time
+- n: 9
+  type: action
+  action: Replace the published v0.5.1 release text with the runner's draft (runner-state notes/v051-release-body.md; §2.52)
+  unblocks: A release page that matches docs/releases/v0.5.1.md
+  when: Any time
 gates:
 - id: G-v05
   name: v0.5 MVP exit
@@ -1584,4 +1589,4 @@ notes:
   - label: The comparator run
     text: bitmagnet's 24-hour run (25 hours with warm-up) on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
   - label: Also for you
-    text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). The nightly signing key and the Unraid Backups share minimum free space are optional.
+    text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). Paste the new v0.5.1 release text. The nightly signing key is deferred (§2.52); the Unraid Backups share minimum free space is optional.

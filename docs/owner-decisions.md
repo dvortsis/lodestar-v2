@@ -596,8 +596,8 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Bookings:** `ext:experiment-host` still holds per booked run, from the owner's start time for that run. Naming the host doesn't make it hold.
 
 52. **The runner's recommendation on the remaining owner items; no more counsel reminders; package installers after 1.0** (owner, about 2026-11-07T18:00Z, relayed by the dashboard session): "Use runner recommendations for all those. Stop reminding me about counsel review. Yes, I register with winget and other package installers after 1.0."
-    - **The X-refetch-private backport:** yes. The fix (#576, mask `PRIVATE|PRIVATE_SOURCE`) is in the v0.5.2 cut, and v0.5.2 is the next v0.5.x patch, so it ships there. There's no separate v0.5.1 patch: v0.5.1's imports come only from the DHT, so the risk until v0.5.2 is low (runner).
-    - **The installer's Repair may re-secure a data folder whose only problem is an extra Allow entry for an administrator.** This applies to X-win-refusal-ux. The folder gets the installer's own access list back, and every other problem still refuses.
+    - **The X-refetch-private backport:** yes. v0.5.2 is the next v0.5.x patch and is cut from `main` after #576, so it ships the full fix: the refetch skips `flags::PRIVACY` (`PRIVATE | PRIVATE_SOURCE | REMOTE_UNVERIFIED`) and private unverified items. The cut-down `PRIVATE|PRIVATE_SOURCE` mask was only for a backport onto v0.5.1's code, and isn't needed. There's no separate v0.5.1 patch (runner). v0.5.1 has no private sources; its only partial rows come from the bitmagnet importer, whose hashes bitmagnet found on the public DHT. The practical risk until v0.5.2 is low, though it is still a BEP 27 violation (`docs/decisions/2026-11-07-X-refetch-private.md`).
+    - **The installer's Repair may re-secure a data folder whose only problem is an extra Allow entry for the administrator's own account, as Explorer's Continue adds.** This applies to X-win-refusal-ux. The folder gets the installer's own access list back, and every other problem still refuses.
     - **The published v0.5.1 release text** is replaced with the text of `docs/releases/v0.5.1.md`. The runner drafts it with dates in UTC, and the owner pastes it.
     - **Owner-side items, decided on the runner's recommendation:**
       - **Required checks:** `web-ok` and `e2e-ok` join `ci-ok` on the main ruleset (§2.37). The owner edits the ruleset.
@@ -606,7 +606,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - **The import host is the Unraid box,** the same machine as the experiment host (§2.51). Import pilots never overlap an A/B run, a comparator day or a soak. `ext:import-host` holds per booked run, from the owner's start time for that run (build-plan §0.7).
       - **The nightly signing key (Q8) is deferred.** Update checks on the Nightly channel stay off until it exists. The runner raises it again before 1.0 only if the Nightly channel is offered to users.
     - **Colorado counsel review** stays advisory (§2.38) and is no longer surfaced to the owner.
-    - **Package installers:** after 1.0 the owner registers Lodestar with winget and other package installers. That's a post-1.0 owner action, with no reminders before then.
+    - **Package installers:** after 1.0 the owner registers Lodestar with winget and other package installers. That's a post-1.0 owner action (M6 Q6); the owner queue lists it once.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
