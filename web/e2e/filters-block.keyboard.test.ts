@@ -79,12 +79,10 @@ test('from a result: Shift+F10, Block this…, preview, Apply adds one rule', as
 	await kbd.press('Shift+F10');
 	const item = page.getByRole('menuitem', { name: 'Block this…' });
 	await expect(item).toBeVisible();
-	// Bits UI moves focus into the menu a frame after it mounts (onto the menu, or its first item); a key
-	// pressed earlier lands on the row and is lost.
-	const menu = page.getByRole('menu', { name: /More/ });
-	await expect
-		.poll(() => menu.evaluate((el) => el.contains(document.activeElement)), { timeout: 15_000 })
-		.toBe(true);
+	// A menu opened from the keyboard lands on its first item (the menu-button pattern); a key pressed
+	// before focus is inside the menu would land on the row and be lost.
+	const menu = page.getByRole('menu', { name: /More actions/ });
+	await expect(menu.getByRole('menuitem').first()).toBeFocused();
 	await kbd.press('End');
 	await expect(item).toBeFocused();
 	await kbd.press('Enter');

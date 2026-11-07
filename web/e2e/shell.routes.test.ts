@@ -393,7 +393,11 @@ test.describe('full-page states', () => {
 		expect(back, 'no navigation before Try again').toBe(false);
 		await page.getByRole('button', { name: 'Try again' }).click();
 		// The answer must come from the reloaded document (only new documents get the init script).
-		await expect.poll(() => page.evaluate(() => !!window.__sse), { timeout: 15_000 }).toBe(true);
+		await expect
+			.poll(() => page.evaluate(() => !!window.__sse).catch(() => false), {
+				timeout: 15_000
+			})
+			.toBe(true);
 		expect(back).toBe(true);
 		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
 	});

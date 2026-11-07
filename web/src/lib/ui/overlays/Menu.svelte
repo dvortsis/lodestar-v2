@@ -24,8 +24,32 @@
 		label: string;
 		open?: boolean;
 		align?: 'start' | 'center' | 'end';
+		/**
+		 * Focus the first enabled item on open. For a menu opened from the keyboard but mounted after the
+		 * key (lazy): Bits UI only does this itself once its keyboard tracker has seen a keydown, and
+		 * that listener exists only while some Bits component is mounted.
+		 */
+		autofocusFirst?: boolean;
 	}
-	let { items, onSelect, trigger, label, open = $bindable(false), align = 'end' }: Props = $props();
+	let {
+		items,
+		onSelect,
+		trigger,
+		label,
+		open = $bindable(false),
+		align = 'end',
+		autofocusFirst = false
+	}: Props = $props();
+
+	let content = $state<HTMLElement | null>(null);
+
+	function openAutoFocus(event: Event) {
+		if (!autofocusFirst) return;
+		const first = content?.querySelector<HTMLElement>('[role="menuitem"]:not([data-disabled])');
+		if (!first) return;
+		event.preventDefault();
+		first.focus({ preventScroll: true });
+	}
 </script>
 
 <DropdownMenu.Root bind:open>
@@ -39,6 +63,8 @@
 			{align}
 			sideOffset={4}
 			aria-label={label}
+			bind:ref={content}
+			onOpenAutoFocus={openAutoFocus}
 			class="ls-pop z-50 min-w-max rounded-box border border-base-300 bg-base-100 p-1 text-body text-base-content"
 		>
 			{#each items as item (item.id)}
