@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T15:10Z",
+  "updated_at": "2026-11-07T15:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3640,6 +3640,17 @@
       "brief": "briefs/WK-15.md",
       "since": "2026-11-07T14:43Z",
       "session": "session_01MMjhn9mqDCgbWNwmfQuB9V"
+    },
+    "X-gs-gate-polish": {
+      "state": "merged",
+      "pr": 581,
+      "merge": "709f2f1e"
+    },
+    "SRC-G": {
+      "state": "running",
+      "brief": "briefs/SRC-G.md",
+      "session": "session_01MMjhnARrTCQPugwxwqfuCZ",
+      "since": "2026-11-07T15:13Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4028,7 +4039,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-07T14:44Z",
+  "last_heartbeat": "2026-11-07T15:14Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -5704,6 +5715,11 @@
       "id": "notice-v4-fix-1510",
       "added": "2026-11-07T15:10Z",
       "text": "P-v052-cut found Legal Notice v4 false at 045d4a38: says torrent cache can be turned on via API; #537/#553 refuse it. Runner call (\u00a72.33/\u00a72.48, owner FYI owed): cut stays 045d4a38; P-v052-cut fixes notice.md + docs/legal/legal-notice.md in PR A, NOTICE_VERSION stays 4 (no released build showed v4), date 2026-11-07, legal_facts.rs check ties sentence to the consent gate, full \u00a72.48 recheck of notice + operator-guidance, backport in PR B. G4 yes re-sent."
+    },
+    {
+      "id": "gs-polish-581",
+      "added": "2026-11-07T15:14Z",
+      "text": "#581 X-gs-gate-polish merged (709f2f1e) on runner review (12-line docs/timeout diff, base touched by nothing since); archived. Slot 2 -> SRC-G. P-v052-cut G4: smoke.sh/smoke.ps1 tightened (full refusal line + exit 2), release.yml unchanged; Docker job text-only check is a follow-up."
     }
   ],
   "main_health": [
@@ -6399,7 +6415,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T14:44Z",
+    "updated": "2026-11-07T15:14Z",
     "items": [
       {
         "slot": 1,
@@ -6411,11 +6427,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-gs-gate-polish",
+        "slice": "SRC-G",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9J1eP2czawieouHQW (Sonnet): size-gate follow-ups from #546",
-        "since": "2026-11-07T14:26Z"
+        "doing": "session_01MMjhnARrTCQPugwxwqfuCZ: v0.6 sources safety gate (tests + verdict)",
+        "since": "2026-11-07T15:13Z"
       },
       {
         "slot": 3,
