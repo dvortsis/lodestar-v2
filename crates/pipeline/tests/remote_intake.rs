@@ -2072,9 +2072,8 @@ async fn a_sealed_quarantine_reaches_the_quarantine_sealed() {
     let bytes = sealed_bytes(W, 1, vec![record(t, token)]);
     assert!(!bytes.windows(NAME.len()).any(|w| w == NAME.as_bytes()));
     assert!(sink.results(W, Payload { batch: 1, bytes }));
-    let stats = pipeline.writer_stats().clone();
     until("quarantined", || {
-        stats.quarantined.load(Ordering::Relaxed) == 1
+        pipeline.writer_stats().quarantined.load(Ordering::Relaxed) == 1
     })
     .await;
     until("its lease ends", || !authority.in_flight(&key)).await;
