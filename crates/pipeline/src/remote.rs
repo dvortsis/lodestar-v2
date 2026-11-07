@@ -310,6 +310,14 @@ pub struct Refusals {
     pub filter: Arc<Handle>,
 }
 
+impl std::fmt::Debug for Refusals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Refusals")
+            .field("held", &self.held.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Refusals {
     fn refuses(&self, key: &InfoHash) -> bool {
         self.held.contains(&key.0) || self.filter.current().blocked_hash(&[key.0]).is_some()
