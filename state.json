@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T12:21Z",
+  "updated_at": "2026-11-07T12:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3606,7 +3606,10 @@
     "WK-9b": {
       "state": "running",
       "session": "session_01MMjhn9UXuC8VxCmERMYLNB",
-      "since": "2026-11-07T09:15Z"
+      "since": "2026-11-07T09:15Z",
+      "status": "merged",
+      "pr": 571,
+      "merge": "faa96694"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5628,7 +5631,8 @@
       "id": "wk15-notes-insights-page",
       "added": "2026-11-07T11:54Z",
       "text": "WK-15 notes: Insights overview compacted 'all' ~35 ms on busy-crawler year even without workers (WK-9b measurement, budget 50 ms, owner \u00a71.6.4) \u2014 watch before adding more rows. WK-9b fleet-wide caps now 32 new rows/day (Discover 'all' was 47 ms at 64/day). Reproduce: bench/examples/worker-rollups.rs and ignored test crates/api/tests/insights.rs a_year_of_rollups_with_eight_workers_answers_within_budget."
-    }
+    },
+    "runner PR: add WK-9c to slices.yaml (sealed open + restore drops held/blocked; deps WK-9b, WK-8); WK-10 deps WK-9c not WK-9b"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6323,15 +6327,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T12:21Z",
+    "updated": "2026-11-07T12:30Z",
     "items": [
       {
         "slot": 1,
-        "slice": "WK-9b",
+        "slice": "WK-9c",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9UXuC8VxCmERMYLNB: coordinator intake part 2 (counters by worker, backpressure, fetch_queue, sealed open after WK-8)",
-        "since": "2026-11-07T09:15Z"
+        "doing": "session_01MMjhn9UXuC8VxCmERMYLNB: restore drops held/blocked keys, rotating-rows bench, blocked_hash test; then sealed open via WireKeys::open after WK-8 merges",
+        "since": "2026-11-07T12:30Z"
       },
       {
         "slot": 2,
