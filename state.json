@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T17:16Z",
+  "updated_at": "2026-11-07T17:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3634,7 +3634,7 @@
       "brief": "briefs/P-v052-cut.md",
       "since": "2026-11-07T14:43Z",
       "session": "session_01MMjhnABi9mwqkZULms8pjL",
-      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed. | 17:07Z: #584 head 2eb03f58 (bench fix + delta notes), workflows re-dispatched. #586 X-bench-notice-version on main (9c51caa3), 1 line, runner self-checked; merge on ci-ok + #584 reporting-overhead green."
+      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed. | 17:07Z: #584 head 2eb03f58 (bench fix + delta notes), workflows re-dispatched. #586 X-bench-notice-version on main (9c51caa3), 1 line, runner self-checked; merge on ci-ok + #584 reporting-overhead green. | 17:2xZ: #584 fresh Opus CHANGES at 87703908: B1 delta report wrongly says smoke.ps1/collect.py byte-identical to #582 (2d6f3a29 nits release-only). Relayed + soak-evidence section, notes Action Needed fixes, forward-port PR X-v052-nits-forward on main. Then delta check."
     },
     "WK-15": {
       "state": "running",
@@ -5758,11 +5758,6 @@
     {
       "id": "X-legal-account-wording",
       "what": "notice \u00a72 says no Account source 'is built yet'; Account-class plugins compiled in but unregistered. Reword in a later legal pass (from #582 review nit 6).",
-      "since": "2026-11-07"
-    },
-    {
-      "id": "X-smoke-ps1-case",
-      "what": "smoke.ps1 -ccontains/-cnotcontains on main (from #582 review nit 2), if P-v052-cut doesn't carry it to main.",
       "since": "2026-11-07"
     },
     {
