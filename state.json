@@ -5877,6 +5877,11 @@
       "id": "X-soak-screen-fixes",
       "at": "2026-11-07T20:05Z",
       "note": "soak-screen.yml red on every run since 66e40b3b: memstats anon_mappings_cost_at_3000_mappings setup assert (1605 < 2500 mappings on GH runner). Sweep itself fine. Slice in slot 1 (P-v052-cut session) on main, bundles X-soak-screen-polish (a)+(b). Backport to release/v0.5.2 = runner call. Needs a slices.yaml entry in next runner PR."
+    },
+    {
+      "id": "v052-rc2-scheduling",
+      "at": "2026-11-07T20:15Z",
+      "note": "Runner ruling (CR-SPEC 2.2 reading, \u00a72.26): no Lodestar on Unraid host or home public IP until cr-ab-comp-1 window ends (~14:01Z Nov 8; restore 14:10Z), Windows PC stays stopped even behind VPN; after 14:10Z B-E may run at home (the 12 h-after clause protects the next CR-AB window, not release checks; tell runner before booking the next CR run). B/C need no crawler; Windows B/C may run during comparator only fully offline; never on Unraid. Rented D/E on another public IP allowed now: x86_64 >=4 vCPU/8 GiB/SSD/NTP, record provider/instance/VPN; VPN ok for the memory gate, but if stored/h h12-24 < ~300 the runner judges load before accepting a pass; provider P2P ToS; encrypted disk, destroy after, raw data private."
     }
   ],
   "main_health": [
@@ -6661,5 +6666,5 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-07T20:05Z"
+  "heartbeat": "2026-11-07T20:15Z"
 }
