@@ -301,6 +301,7 @@ placement:
   - E-v06-workers
   - P-v06-workers
   - WK-*
+  - X-wk15-nits
 - ws: ws-web
   match:
   - W*

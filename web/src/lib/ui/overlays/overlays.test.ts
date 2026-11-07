@@ -4,6 +4,7 @@ import { stubLayout } from '../lists/testing/layout';
 import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import Dialog from './Dialog.svelte';
 import DialogHarness from './testing/DialogHarness.svelte';
+import AutofocusMenuHarness from './testing/AutofocusMenuHarness.svelte';
 import OverlayHarness from './testing/OverlayHarness.svelte';
 import DrawerHarness from './testing/DrawerHarness.svelte';
 
@@ -182,6 +183,31 @@ describe('Menu', () => {
 		await key(document.activeElement as Element, 'Escape');
 		await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
 		await waitFor(() => expect(document.activeElement).toBe(trigger));
+	});
+
+	describe('autofocusFirst, for a menu opened from code with no keydown first', () => {
+		async function openFromCode(props: { autofocusFirst?: boolean; firstDisabled?: boolean }) {
+			render(AutofocusMenuHarness, props);
+			await fireEvent.click(screen.getByRole('button', { name: 'Open from code' }));
+			await screen.findByRole('menu', { name: 'Row actions' });
+		}
+
+		it('focuses the first item', async () => {
+			await openFromCode({ autofocusFirst: true });
+			await waitFor(() => expect(document.activeElement).toBe(item('First')));
+		});
+
+		it('skips a disabled first item', async () => {
+			await openFromCode({ autofocusFirst: true, firstDisabled: true });
+			await waitFor(() => expect(document.activeElement).toBe(item('Second')));
+		});
+
+		it('leaves the first item unfocused when it is off', async () => {
+			await openFromCode({});
+			const menu = screen.getByRole('menu', { name: 'Row actions' });
+			await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+			expect(document.activeElement).not.toBe(item('First'));
+		});
 	});
 
 	it('marks disabled items', async () => {

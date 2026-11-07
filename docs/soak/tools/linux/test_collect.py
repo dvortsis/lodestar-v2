@@ -5,6 +5,7 @@ two subprocess tests poll for a condition with a 30 s deadline.
 """
 
 import json
+import math
 import os
 import signal
 import socketserver
@@ -1300,7 +1301,6 @@ class ScreenTests(Base):
         self.assertIn("screen off after an error (TypeError); the run continues",
                       (self.root / "events.log").read_text())
         self.assertFalse((self.root / "screen.json").exists())
-        self.assertEqual(c.screen_results, [])  # nothing stale left for status.json
 
     def test_screen_json_that_cant_be_written_never_ends_the_run(self):
         path = self.thresholds()
@@ -1314,6 +1314,22 @@ class ScreenTests(Base):
             c, rc = self.screened(0, path)
         self.assertEqual(self.result()["reason"], "baseline_window_complete")
         self.assertEqual(rc, 0)
+        # The checkpoint was appended before the write failed: the screen clears it,
+        # so status.json never shows a line screen.json doesn't hold.
+        self.assertEqual(c.screen_results, [])
+
+    def test_a_stored_spread_too_wide_to_square_is_unusable_not_an_error(self):
+        # (x - mx) ** 2 raised OverflowError past about 1e154, which turned the whole
+        # screen off; the counter is unusable and the screen carries on.
+        run = collect.screen_config(json.loads(self.thresholds().read_text()))
+        key = "anon_mappings_128k_512k"
+        run["counters"][key]["value"] = float("inf")  # the level bound off, so only the slope reads
+        out = collect.screen_checkpoint([(i / 10, {"stored": 1e158 * (1 + i), key: 1.0 * i})
+                                         for i in range(41)], 4.0, 3, run)
+        growth = out["counters"]["anon_mappings_128k_512k_per_1000_stored"]
+        self.assertEqual((growth["status"], growth["value"]), ("unusable", None))
+        self.assertNotEqual(out["status"], "ok")
+        self.assertTrue(math.isnan(collect.screen_slope([(1e155, 0.0), (3e155, 1.0)])))
 
     def test_without_thresholds_there_is_no_screen_and_an_invalid_file_is_refused(self):
         c = self.collector(self.docker(), "--screen-thresholds", "")
@@ -1327,7 +1343,6 @@ class ScreenTests(Base):
             self.collector(self.docker(), "--screen-thresholds", str(bad)).run()
         self.assertIn("screen thresholds", str(refused.exception.code))
         self.assertFalse(self.root.exists() and any(self.root.iterdir()))
-
 
 
 NOTICE_409 = json.dumps({"error": {"code": "notice_required", "message": "accept the notice"}}).encode()

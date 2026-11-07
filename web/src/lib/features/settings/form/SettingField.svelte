@@ -105,7 +105,11 @@
 	let menuParts = $state<typeof import('./menu')>();
 	let menuOpen = $state(false);
 	let menuFailed = $state(false);
-	async function openMenu() {
+	// A click with no pointer has `detail` 0: the menu's first open was by the keyboard (FieldMenu does the rest).
+	// svelte-ignore non_reactive_update (read once, when the menu mounts)
+	let menuByKeyboard = false;
+	async function openMenu(event: MouseEvent) {
+		menuByKeyboard = !event.detail;
 		try {
 			menuParts ??= await import('./menu');
 		} catch {
@@ -170,6 +174,7 @@
 							menuParts?.selectMenu(id, form, key, copy, () => (showKeys = !showKeys))}
 						label={m.settings_form_menu_label({ label })}
 						bind:open={menuOpen}
+						byKeyboard={menuByKeyboard}
 					/>
 				{:else}
 					<IconButton

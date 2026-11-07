@@ -1269,6 +1269,8 @@ export default [
 	// LEGAL-1 (runner §2.26): FiltersScreen +64 B again, for the Legal Notice gate in the shared API
 	// and events clients (measured 31.08 KB). X-settings-trim brought NotificationsScreen (44.99 KB
 	// measured) back under the §10.1 45 KB route cap, so it has the default limit again.
+	// X-web-hygiene-1107 (runner §2.26): NotificationsScreen 45 → 45.1 KB (+100 B), measured 45.01 KB, for the
+	// field menu's keyboard-open flag in the shared SettingField. No other budget moves.
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-15b: the Sources first view measured 30.54 KB (was 29.97 KB: the dialogs' loader, their state
 	// and the purge button), limit = measured + ~1.2%; the dialogs load on demand, 36.2 KB, limit 37 KB.
@@ -1285,7 +1287,9 @@ export default [
 						? '30.4 KB'
 						: name === 'SourcesScreen'
 							? '30.9 KB'
-							: '45 KB'
+							: name === 'NotificationsScreen'
+								? '45.1 KB'
+								: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
