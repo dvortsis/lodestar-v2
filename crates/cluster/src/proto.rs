@@ -403,7 +403,10 @@ pub enum ToCoordinator {
     Reverified(ReverifyReply),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `Debug` is written out below: the opaque payloads show only their
+/// length, so the have-filter key in a `HaveSnapshot` header can't reach
+/// a log (WK-3).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToWorker {
     Welcome(Welcome),
     Assign(Assign),
@@ -427,6 +430,46 @@ pub enum ToWorker {
     },
     Snapshot(SnapshotChunk),
     Reverify(ReverifyRequest),
+}
+
+impl std::fmt::Debug for ToWorker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bytes = |name: &str, b: &[u8], f: &mut std::fmt::Formatter<'_>| {
+            write!(f, "{name}({} bytes)", b.len())
+        };
+        match self {
+            ToWorker::Welcome(w) => f.debug_tuple("Welcome").field(w).finish(),
+            ToWorker::Assign(a) => f
+                .debug_struct("Assign")
+                .field("revision", &a.revision)
+                .field("payload_bytes", &a.payload.len())
+                .finish(),
+            ToWorker::HeartbeatAck(h) => f.debug_tuple("HeartbeatAck").field(h).finish(),
+            ToWorker::Grants(g) => f.debug_tuple("Grants").field(g).finish(),
+            ToWorker::Renewed(g) => f.debug_tuple("Renewed").field(g).finish(),
+            ToWorker::RenewRefused(r) => f.debug_tuple("RenewRefused").field(r).finish(),
+            ToWorker::Drain => f.write_str("Drain"),
+            ToWorker::Stop(r) => f.debug_tuple("Stop").field(r).finish(),
+            ToWorker::HaveSnapshot(b) => bytes("HaveSnapshot", b, f),
+            ToWorker::HaveDelta(b) => bytes("HaveDelta", b, f),
+            ToWorker::Update(b) => bytes("Update", b, f),
+            ToWorker::Hints(h) => f.debug_tuple("Hints").field(h).finish(),
+            ToWorker::Accepted { batch, accepted } => f
+                .debug_struct("Accepted")
+                .field("batch", batch)
+                .field("accepted", accepted)
+                .finish(),
+            ToWorker::Snapshot(c) => f
+                .debug_struct("Snapshot")
+                .field("kind", &c.kind)
+                .field("version", &c.version)
+                .field("seq", &c.seq)
+                .field("total", &c.total)
+                .field("bytes", &c.bytes.len())
+                .finish(),
+            ToWorker::Reverify(r) => f.debug_tuple("Reverify").field(r).finish(),
+        }
+    }
 }
 
 fn hints_valid(hints: &[SocketAddr]) -> bool {

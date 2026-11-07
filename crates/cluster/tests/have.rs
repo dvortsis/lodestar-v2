@@ -173,3 +173,53 @@ fn a_header_fits_a_message_and_the_largest_filter_fits_the_chunk_limit() {
     assert!(lodestar_cluster::proto::ToWorker::HaveSnapshot(h.encode()).validate());
     assert!(h.chunks <= lodestar_cluster::proto::MAX_CHUNKS);
 }
+
+/// A header's key never reaches `Debug` of the message carrying it, nor
+/// do the bytes of any opaque payload.
+#[test]
+fn messages_print_lengths_not_payloads() {
+    use lodestar_cluster::proto::{Assign, ToWorker};
+    let h = HaveHeader {
+        generation: 2,
+        serial: 3,
+        next_delta: 0,
+        key: HaveKey::from_bytes([0xA7; 16]),
+        bits: 1 << 20,
+        hashes: 7,
+        capacity: 1000,
+        count: 4,
+        chunks: chunks_for(1 << 20),
+    };
+    let header = h.encode();
+    let msgs = [
+        ToWorker::HaveSnapshot(header.clone()),
+        ToWorker::HaveDelta(
+            HaveDelta {
+                generation: 2,
+                seq: 0,
+                keys: vec![[0xA7; 20]],
+            }
+            .encode()
+            .unwrap(),
+        ),
+        ToWorker::Update(vec![0xA7; 9]),
+        ToWorker::Assign(Assign {
+            revision: 1,
+            payload: vec![0xA7; 9],
+        }),
+        ToWorker::Snapshot(SnapshotChunk {
+            kind: SnapshotKind::HaveFilter,
+            version: 3,
+            seq: 0,
+            total: 1,
+            bytes: vec![0xA7; 64],
+        }),
+    ];
+    for m in &msgs {
+        let shown = format!("{m:?} {m:#?}");
+        for needle in ["167", "a7", "A7", "[", "0x"] {
+            assert!(!shown.contains(needle), "{needle} in {shown}");
+        }
+    }
+    assert_eq!(format!("{:?}", msgs[0]), "HaveSnapshot(70 bytes)");
+}
