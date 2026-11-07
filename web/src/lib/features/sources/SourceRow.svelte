@@ -1,8 +1,7 @@
 <script lang="ts">
 	// One source (§18.8): name, status, risk and consent class, enable toggle, priority and the 24 h
-	// yield. Turning on a source that needs consent or a password opens its dialog, which sends the
-	// enable; the server's gate (§18.7) stays the only judge. An Account source that needs
-	// credentials waits for SRC-15c. While a change is in flight the controls stay focusable (a
+	// yield. Turning on a source that needs consent, a password or (Account) credentials opens its
+	// dialog, which sends the enable; the server's gate (§18.7) stays the only judge. While a change is in flight the controls stay focusable (a
 	// disabled control would drop the keyboard user's place) and simply ignore input.
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -34,8 +33,10 @@
 		/** Opens the consent dialog for this source's class. */
 		onsetup: () => void;
 		onpurge: () => void;
+		/** Opens the generated settings form. */
+		onsettings: () => void;
 	}
-	let { source: s, busy, onenable, onpriority, onsetup, onpurge }: Props = $props();
+	let { source: s, busy, onenable, onpriority, onsetup, onpurge, onsettings }: Props = $props();
 
 	const id = $derived(`source-${s.id}`);
 	const status = $derived(statusOf(s));
@@ -59,7 +60,7 @@
 		const el = e.currentTarget;
 		const want = el.checked;
 		// A source that needs setup opens its dialog; a change already in flight is ignored.
-		if (busy || (want && need !== null)) {
+		if (busy || (want && (need !== null || s.consent === 'account'))) {
 			el.checked = on = !want;
 			if (!busy) onsetup();
 			return;
@@ -94,7 +95,7 @@
 				label={m.sources_enable()}
 				aria-label={m.sources_toggle_name({ name: s.name })}
 				bind:checked={on}
-				disabled={!canEnable || (need === 'credentials' && !s.enabled)}
+				disabled={!canEnable}
 				aria-busy={busy}
 				aria-describedby={need !== null ? `${id}-need` : undefined}
 				onchange={toggled}
@@ -145,8 +146,18 @@
 		<span data-testid="{id}-found">{m.sources_found({ count: found })}</span>
 		<span aria-hidden="true">·</span>
 		<span data-testid="{id}-stored">{m.sources_stored({ count: stored })}</span>
+		{#if s.editable.includes('config') && s.state !== 'purged'}
+			<Button dense class="ms-auto" onclick={onsettings} data-testid="{id}-settings">
+				{m.sources_settings()}<span class="sr-only"> {s.name}</span>
+			</Button>
+		{/if}
 		{#if s.state !== 'purged'}
-			<Button dense class="ms-auto" onclick={onpurge} data-testid="{id}-purge">
+			<Button
+				dense
+				class={s.editable.includes('config') ? '' : 'ms-auto'}
+				onclick={onpurge}
+				data-testid="{id}-purge"
+			>
 				{m.sources_purge_action()}<span class="sr-only"> {s.name}</span>
 			</Button>
 		{/if}
