@@ -28,9 +28,9 @@ phases:
   tag: P0-P2 / M0-M5
 - id: ph-v051
   name: Release v0.5.1
-  badge: Closing
-  plain: The release you can install now. The code is built and the release candidate is signed. What is left is
-    the 24-hour memory test on your Unraid box, then you tag it.
+  badge: Shipped
+  plain: The release you can install now, published on 2026-11-07 from 12cd25ca. It passed the 24-hour memory test,
+    the VPN leg and the Windows check. Its release notes still come to main (D-v051-main).
   tag: v0.5.1
 - id: ph-crawler
   name: Discover faster
@@ -608,7 +608,7 @@ expanded:
 - E-v08
 - E-M8
 state_override:
-  G-v051: active
+  G-v051: done
   R-rc3-cut: done
   SRC-10b: closed
 conditions:
@@ -691,7 +691,7 @@ conditions:
     who: soak
     label: The 24-hour Unraid memory test gives its verdict
   v051-tagged:
-    met: false
+    met: true
     who: you
     label: You tag and publish v0.5.1
     auto: tag:v0.5.1
@@ -870,16 +870,16 @@ roadmap:
     members: []
     override: done
   - id: tag
-    label: Tag v0.5.1
-    plain: You tag the release and publish it.
+    label: v0.5.1 published
+    plain: 'You tagged and published v0.5.1 on 2026-11-07 (12cd25ca, signed checksums verified). Its release notes, the README status and the note that v0.5.0 was never released come to main next (D-v051-main, queued for the next free slot).'
     col: 2
     row: 2
     members:
     - D-v051-main
-    override: you
+    override: done
   - id: v052
     label: Cut v0.5.2
-    plain: A new release branch from main, soon after v0.5.1. First, a fix stops sources that need consent being turned on before the consent texts ship.
+    plain: A new release branch from main, now that v0.5.1 is out. The consent gate is in (sources that need consent stay off in v0.5.2); the feature manifest is frozen first, and the release notes are trimmed at the cut.
     col: 3
     row: 2
     members:
@@ -1320,45 +1320,40 @@ roadmap:
 owner_queue:
 - n: 1
   type: action
-  action: Every v0.5.1 leg passed (soak r5, the gluetun leg, the Windows MSI check, rc.5 and the legal check with #558). Tag v0.5.1 on 12cd25ca38f8eac1a930316623dec742c1ba585d, not on a0eb0a90, once the runner gives the go
-  unblocks: The v0.5.1 release
-  when: When the runner sends the go, after CI on 12cd25ca (2026-11-07)
-- n: 2
-  type: action
-  action: Book each crawler run on the experiment host (the Unraid box, §2.51), starting with the comparator
+  action: Book each crawler run on the experiment host (the Unraid box, §2.51). The comparator is booked from 2026-11-07T13:00Z
   unblocks: All live crawler measurement and the v0.6 tag
   when: Before CR-4 lands
-- n: 3
+- n: 2
   type: action
   action: Add web-ok and e2e-ok to the main ruleset's required checks, next to ci-ok (you said yes, §2.37)
   unblocks: Safer merges
   when: Any time
-- n: 4
+- n: 3
   type: action
   action: Create the nightly signing key and its environment (skipped for v0.5.1)
   unblocks: Update checks on the Nightly channel
   when: Optional
-- n: 5
+- n: 4
   type: decision
   action: 'Checkpoint 1: re-decide the crawler gate if the projection falls short'
   unblocks: The v0.6 tag
   when: After the A/B runs
-- n: 6
+- n: 5
   type: action
   action: Fix your Backups share minimum free space (500 GB) on the Unraid box
   unblocks: Appdata Backup protection for the soak
   when: Optional
-- n: 7
+- n: 6
   type: action
   action: Submit to Unraid Community Apps
   unblocks: The Unraid app-store listing
   when: After the 1.0 release is complete (§2.37)
-- n: 8
+- n: 7
   type: action
   action: Have Colorado counsel review docs/legal/legal-notice.md and docs/legal/operator-guidance.md (advisory, not a gate on the v0.5.1 tag; §2.38)
   unblocks: Counsel's comments on the Legal Notice
   when: When convenient
-- n: 9
+- n: 8
   type: action
   action: Submit Lodestar to winget, if you want it (M6 Q6)
   unblocks: A winget listing for Windows users
@@ -1382,7 +1377,7 @@ gates:
   name: v0.5.1 release
   plain: Memory test passes, VPN leg runs, you tag it.
   slice: G-v051
-  measure: 'Soak r5 on rc.4 PASSED: 0.91 MiB/h, upper bound 1.35 (docs/decisions/2026-11-06-soak-r5-verdict.md). Gluetun leg running from about 15:00Z; Windows MSI check to do'
+  measure: 'Passed. Soak r5 on rc.4: 0.91 MiB/h [0.47, 1.35] (docs/decisions/2026-11-06-soak-r5-verdict.md); gluetun leg and Windows MSI check passed; v0.5.1 published 2026-11-07 from 12cd25ca (images :0.5.1, :0.5, :latest = sha256:2ffce5cb...), verdict in docs/decisions/2026-11-07-v051-release-verdict.md'
   target: Memory slope upper 95% bound <= 2.0 MiB/h over hours 12-24
   where: build-plan 0.4
 - id: G-v06-crawler
@@ -1567,10 +1562,10 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-06'
+  updated: '2026-11-07'
   now:
-  - label: Soak r5 passed on release candidate 4
-    text: Release candidate 4's 24-hour memory test passed at 0.91 MiB an hour (upper bound 1.35, bar 2.0), clean for the full 24 hours. The VPN (gluetun) leg is running (about 8.5 h from about 15:00 UTC); then the Windows MSI check and the v0.5.1 tag. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
+  - label: v0.5.1 is published
+    text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
       The live tests wait for an experiment host you name.
@@ -1581,9 +1576,7 @@ notes:
   - label: Four slots
     text: 'By your instruction at most four worker slots run at once from 2026-11-06T00:00Z, filled only when ready work fits the plan (owner-decisions §2.42). The slices launched in your no-limit window (§2.45) finish under it, and nothing new launches until fewer than four are running. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
-  - label: Finish v0.5.1
-    text: Soak r5 on release candidate 4 passed. The VPN (gluetun) leg is running, about 8.5 h from about 2026-11-06T15:00Z (Appdata Backup stays off until it's done). Then the Windows MSI check on the rc.4 installer (at least 1 h), and the v0.5.1 tag once the runner gives the go.
-  - label: Name the experiment host
-    text: Every live crawler test and the v0.6 tag need a machine that is not the soak PC.
+  - label: The comparator run
+    text: bitmagnet's 25-hour run on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
   - label: Also for you
     text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). The nightly signing key and the Unraid Backups share minimum free space are optional.
