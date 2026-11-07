@@ -5489,7 +5489,8 @@
     "slices.yaml X-sources-api-spec owns: add crates/sources-plugins/tests/{prowlarr,stashdb,tpdb}.rs (one assert each; runner yes 01:00Z)",
     "WK-2 nits for a later slice (WK-10 or X-test-hygiene): ci.yml privdrop step grep should match 'test result: ok. 2 passed' with --exact; non-UTF-8 LODESTAR_TOKEN not stripped (harmless); hand-set LODESTAR_TOKEN_IGNORED prints misleading warning",
     "dashboard.yaml ext:experiment-host: booked cr-ab-comp-1 (start 2026-11-07T13:00Z); met only for that run, back to false at its end",
-    "slices.yaml X-soak-screen notes: replace 'one new soak-screen job in .github/workflows/ci.yml' with owns .github/workflows/soak-screen.yml (workflow_dispatch + push release/**; outside ci-ok; runner 01:45Z)"
+    "slices.yaml X-soak-screen notes: replace 'one new soak-screen job in .github/workflows/ci.yml' with owns .github/workflows/soak-screen.yml (workflow_dispatch + push release/**; outside ci-ok; runner 01:45Z)",
+    "WK-14 notes (from #560 delta review): persist worker prefs (pin, budget) and re-apply after restart; disconnect before Placement::forget (else next tick rejoins with defaults); warn + don't record addresses when a join is refused at MAX_WORKERS (4,096) so it is retried; prefs_mut cap refuses pin silently when full -> surface an error. is_public nit: add 2001:2::/48 and 3fff::/20"
    ]
   }
  ],
