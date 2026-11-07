@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T11:54Z",
+  "updated_at": "2026-11-07T12:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6323,7 +6323,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T09:39:30Z",
+    "updated": "2026-11-07T12:21Z",
     "items": [
       {
         "slot": 1,
@@ -6343,11 +6343,11 @@
       },
       {
         "slot": 3,
-        "slice": "WK-14",
+        "slice": "X-refetch-private",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnC7AMtBL224stKAMCf: Workers API (list, token, drain, pause, revoke, prefs, #560 hand-offs)",
-        "since": "2026-11-07T07:45Z"
+        "doing": "session_01MMjhnC4PRNxYDqwuczxBfJ: keep PRIVACY keys out of the start partial refetch (BEP 27 fix)",
+        "since": "2026-11-07T12:21Z"
       },
       {
         "slot": 4,
