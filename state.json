@@ -6527,15 +6527,15 @@
         "slice": "P-v052-cut",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #582 PR A (delta addendum, G1-G4, notice fix, collector 409) CI running; then release/v0.5.2 at 045d4a38 and rc.1 PR",
+        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #584 rc.1 into release/v0.5.2; CI dispatched (macOS utp_demux SIGSEGV re-run pending)",
         "since": "2026-11-07T14:43Z"
       },
       {
         "slot": 2,
         "slice": "X-flakes-1107",
-        "role": "author",
-        "agent": "session_01MMjhnCVN68eUViVowdQeWw",
-        "doing": "fix shell unreachable + filters-block keyboard e2e flakes",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnCVN68eUViVowdQeWw: fix shell unreachable + filters-block keyboard e2e flakes (Sonnet)",
         "since": "2026-11-07T18:30Z"
       },
       {
@@ -6543,7 +6543,7 @@
         "slice": "X-wk15-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "docs wording + saturating_add follow-up to #585",
+        "doing": "session_01MMjhn9mqDCgbWNwmfQuB9V: X-wk15-nits, marginal wording + saturating_add after #585 merged",
         "since": "2026-11-07T18:35Z"
       },
       {
