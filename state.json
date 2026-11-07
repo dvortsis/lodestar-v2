@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T16:13Z",
+  "updated_at": "2026-11-07T16:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3633,7 +3633,8 @@
       "state": "running",
       "brief": "briefs/P-v052-cut.md",
       "since": "2026-11-07T14:43Z",
-      "session": "session_01MMjhnABi9mwqkZULms8pjL"
+      "session": "session_01MMjhnABi9mwqkZULms8pjL",
+      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1."
     },
     "WK-15": {
       "state": "running",
@@ -5746,6 +5747,16 @@
       "id": "flake-shell-unreachable-confirmed",
       "added": "2026-11-07T16:07Z",
       "text": "Flake confirmed: shell.routes.test.ts:368 passed on #582 rerun. Queue X-flake-shell-unreachable (small, Sonnet ok: test-only; wait for/click Try again before restoring routes; no fixed sleeps) for the next free slot or bundle. #582 all green a9fc74d8 incl tarball x86_64 + Windows MSI smoke with tightened checks; Opus review running."
+    },
+    {
+      "id": "X-legal-account-wording",
+      "what": "notice \u00a72 says no Account source 'is built yet'; Account-class plugins compiled in but unregistered. Reword in a later legal pass (from #582 review nit 6).",
+      "since": "2026-11-07"
+    },
+    {
+      "id": "X-smoke-ps1-case",
+      "what": "smoke.ps1 -ccontains/-cnotcontains on main (from #582 review nit 2), if P-v052-cut doesn't carry it to main.",
+      "since": "2026-11-07"
     }
   ],
   "main_health": [
